@@ -1,0 +1,133 @@
+class: FullPowerSpectrumTemplate
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Full-fit parameterization
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+
+params:
+  h:
+    value: 0.6736
+    prior:
+      dist: uniform
+      limits: [0.4, 0.9]
+    latex: h
+  Omega_m:
+    value: 0.3
+    prior:
+      dist: uniform
+      limits: [0.05, 0.6]
+    latex: \Omega_{m}
+  omega_b:
+    value: 0.02237
+    fixed: True
+    prior:
+      dist: uniform
+      limits: [0.01, 0.03]
+    latex: \omega_{b}
+  A_s:
+    value: 2.083e-09
+    prior:
+      dist: uniform
+      limits: [1.8e-9, 3e-9]
+    latex: A_{s}
+  n_s:
+    value: 0.9649
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    latex: n_s
+  omega_ncdm:
+    value: 0.0006442
+    latex: \omega_{ncdm}
+    fixed: True
+  N_ur:
+    value: 2.0328
+    latex: N_{ur}
+    fixed: True
+  tau_reio:
+    value: 0.0544
+    latex: \tau
+    fixed: True
+  w0_fld:
+    value: -1.
+    latex: w_{0}
+    fixed: True
+  wa_fld:
+    value: 0.
+    latex: w_{a}
+    fixed: True
+
+---
+
+class: ShapeFitPowerSpectrumTemplate
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Shapefit-parameterized template power spectrum
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  fiducial: DESI
+  a: 0.6
+  kp: 0.03
+
+params:
+  dm:
+    value: 0.
+    prior:
+      dist: uniform
+      limits: [-3., 3.]
+    ref:
+      limits: [-0.01, 0.01]
+    latex: dm
+  dn:
+    value: 0.
+    fixed: True
+    prior:
+      dist: uniform
+      limits: [-0.5, 0.5]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: dn
+  Ap:
+    derived: True
+    latex: 'A_{p}'
+  kp_rs:
+    derived: True
+    latex: 'k_{p} r_{\mathrm{drag}}'
+  f_sqrt_Ap:
+    derived: True
+    latex: 'f A_{p}^{1/2}'
+  m:
+    derived: True
+    latex: 'm'
+  n:
+    derived: True
+    latex: 'n_{s}'
+  f:
+    value: 0.8
+    prior:
+      dist: uniform
+      limits: [0., 1.]
+    ref:
+      limits: [0.75, 0.85]
+    latex: 'f'

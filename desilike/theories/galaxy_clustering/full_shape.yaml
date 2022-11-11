@@ -1,0 +1,1040 @@
+class: LPTTracerPowerSpectrumMultipoles
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: 'Compute Lagrangian perturbation theory (LPT) power spectrum. Can be exactly marginalized over: alpha*, sn*'
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  ells: [0, 2, 4]
+
+params:
+  .fixed: ['b3']
+  b1:
+    value: 0.6
+    prior:
+      dist: uniform
+      limits: [-1., 4.0]
+    ref:
+      limits: [0., 1.]
+    latex: b_{1}
+  b2:
+    value: -3.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: -3.
+      scale: 0.5
+    latex: b_{2}
+  bs:
+    value: -0.71
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 1.
+      scale: 0.5
+    latex: b_{s}
+  b3:
+    value: -0.479
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.5
+    latex: b_{3}
+  alpha[0:7:2]:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{[]}
+  sn[:5:2]:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1e7
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: s_{n, []}
+
+---
+
+class: EPTMomentsTracerPowerSpectrumMultipoles
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Compute Eulerian perturbation theory (EPT) power spectrum
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  ells: [0, 2, 4]
+  beyond_gauss: True
+  reduced: True  # reduced set of parameters
+
+params:
+  b1:
+    value: 1.69
+    prior:
+      dist: uniform
+      limits: [-1., 4.0]
+    ref:
+      limits: [0., 1.]
+    latex: b_{1}
+    latex: 'b_{1}'
+  b2:
+    value: -1.17
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: -3.
+      scale: 0.5
+    latex: 'b_{2}'
+  bs:
+    value: -0.71
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 3.
+    ref:
+      dist: norm
+      loc: 1.
+      scale: 0.5
+    latex: 'b_{s}'
+  b3:
+    value: -0.479
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.5
+    latex: 'b_{3}'
+  alpha[0:7:2]:
+    value: 0.
+    latex: '\alpha_{[]}'
+  alpha*:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.0
+  sn[:5:2]:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: s_{n, []}
+  alpha:
+    value: 0.
+    latex: '\alpha'
+  alpha_v:
+    value: 0.
+    latex: '\alpha_{v}'
+  alpha_s0:
+    value: 0.
+    latex: '\alpha_{s,0}'
+  alpha_s2:
+    value: 0.
+    latex: '\alpha_{s,2}'
+  alpha_g1:
+    value: 0.
+    latex: '\alpha_{g,1}'
+  alpha_g3:
+    value: 0.
+    latex: '\alpha_{g,3}'
+  alpha_k2:
+    value: 0.
+    latex: '\alpha_{k,2}'
+  sv:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: 's_{v}'
+  sigma0:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: '\sigma_{0}'
+  stoch_k0:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: 's_{k,0}'
+  counterterm_c3:
+    value: 0.
+    fixed: True
+    latex: 'c_{3}'
+
+---
+
+class: EPTFullResummedTracerPowerSpectrumMultipoles
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Compute Eulerian perturbation theory (EPT) power spectrum
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  ells: [0, 2, 4]
+
+params:
+  b1:
+    value: 1.69
+    prior:
+      dist: uniform
+      limits: [-1., 4.0]
+    ref:
+      limits: [0., 1.]
+    latex: b_{1}
+    latex: 'b_{1}'
+  b2:
+    value: -1.17
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: -3.
+      scale: 0.5
+    latex: 'b_{2}'
+  bs:
+    value: -0.71
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 3.
+    ref:
+      dist: norm
+      loc: 1.
+      scale: 0.5
+    latex: 'b_{s}'
+  b3:
+    value: -0.479
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.5
+    latex: 'b_{3}'
+  alpha[0:7:2]:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.0
+    latex: '\alpha_{[]}'
+  sn[:5:2]:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: s_{n, []}
+  bFoG:
+    value: 0.
+    fixed: True
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    ref:
+      limits: [0, 2]
+    latex: s_{n, []}
+
+
+---
+
+class: LPTMomentsTracerPowerSpectrumMultipoles
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Compute Eulerian perturbation theory (EPT) power spectrum
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  ells: [0, 2, 4]
+  beyond_gauss: True
+  shear: True
+  third_order: True
+  reduced: True  # reduced set of parameters
+
+params:
+  b1:
+    value: 1.69
+    prior:
+      dist: uniform
+      limits: [-1., 4.0]
+    ref:
+      limits: [0., 1.]
+    latex: b_{1}
+    latex: 'b_{1}'
+  b2:
+    value: -1.17
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: -3.
+      scale: 0.5
+    latex: 'b_{2}'
+  bs:
+    value: -0.71
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 3.
+    ref:
+      dist: norm
+      loc: 1.
+      scale: 0.5
+    latex: 'b_{s}'
+  b3:
+    value: -0.479
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.5
+    latex: 'b_{3}'
+  alpha[0:7:2]:
+    value: 0.
+    latex: '\alpha_{[]}'
+  alpha*:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.0
+  sn[:5:2]:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: s_{n, []}
+  alpha:
+    value: 0.
+    latex: '\alpha'
+  alpha_v:
+    value: 0.
+    latex: '\alpha_{v}'
+  alpha_s0:
+    value: 0.
+    latex: '\alpha_{s,0}'
+  alpha_s2:
+    value: 0.
+    latex: '\alpha_{s,2}'
+  alpha_g1:
+    value: 0.
+    latex: '\alpha_{g,1}'
+  alpha_g3:
+    value: 0.
+    latex: '\alpha_{g,3}'
+  alpha_k2:
+    value: 0.
+    latex: '\alpha_{k,2}'
+  sv:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: 's_{v}'
+  sigma0:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: '\sigma_{0}'
+  sigma0_stoch:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: 's_{k,0}'
+  counterterm_c3:
+    value: 0.
+    fixed: True
+    latex: 'c_{3}'
+
+
+---
+
+class: LPTFourierStreamingTracerPowerSpectrumMultipoles
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Compute Lagrangian perturbation theory (LPT) power spectrum
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  ells: [0, 2, 4]
+  shear: True
+  third_order: True
+
+params:
+  b1:
+    value: 1.69
+    prior:
+      dist: uniform
+      limits: [-1., 4.0]
+    ref:
+      limits: [0., 1.]
+    latex: b_{1}
+    latex: 'b_{1}'
+  b2:
+    value: -1.17
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: -3.
+      scale: 0.5
+    latex: 'b_{2}'
+  bs:
+    value: -0.71
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 3.
+    ref:
+      dist: norm
+      loc: 1.
+      scale: 0.5
+    latex: 'b_{s}'
+  b3:
+    value: -0.479
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.5
+    latex: 'b_{3}'
+  sn0:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: s_{n, []}
+  alpha:
+    value: 0.
+    latex: '\alpha'
+  alpha_v:
+    value: 0.
+    latex: '\alpha_{v}'
+  sv:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: 's_{v}'
+  sigma0_stoch:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: 's_{k,0}'
+  counterterm_c3:
+    value: 0.
+    fixed: True
+    latex: 'c_{3}'
+
+
+---
+
+class: LPTGaussianStreamingTracerPowerSpectrumMultipoles
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Compute Lagrangian perturbation theory (LPT) correlation function
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  ells: [0, 2, 4]
+  shear: True
+  third_order: True
+
+params:
+  b1:
+    value: 1.69
+    prior:
+      dist: uniform
+      limits: [-1., 4.0]
+    ref:
+      limits: [0., 1.]
+    latex: b_{1}
+    latex: 'b_{1}'
+  b2:
+    value: -1.17
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: -3.
+      scale: 0.5
+    latex: 'b_{2}'
+  bs:
+    value: -0.71
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 3.
+    ref:
+      dist: norm
+      loc: 1.
+      scale: 0.5
+    latex: 'b_{s}'
+  b3:
+    value: -0.479
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.5
+    latex: 'b_{3}'
+  alpha:
+    value: 0.
+    latex: '\alpha'
+  alpha_v:
+    value: 0.
+    latex: '\alpha_{v}'
+  sv:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: 's_{v}'
+  s2FoG:
+    value: 0.
+    fixed: True
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    ref:
+      limits: [0, 2]
+    latex: s_{n, []}
+
+---
+
+class: KaiserTracerPowerSpectrumMultipoles
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Compute Kaiser power spectrum
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  ells: [0, 2, 4]
+
+params:
+  b1:
+    value: 1.69
+    prior:
+      dist: uniform
+      limits: [0., 4.0]
+    ref:
+      limits: [1.0, 2.0]
+    latex: b_{1}
+  sn0:
+    value: 0.
+    fixed: False
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    latex: s_{n, 0}
+
+---
+
+class: LPTTracerCorrelationFunctionMultipoles
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Compute Lagrangian perturbation theory (LPT) correlation function
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  ells: [0, 2, 4]
+
+params:
+  .fixed: ['b3']
+  b1:
+    value: 0.6
+    prior:
+      dist: uniform
+      limits: [-1., 4.0]
+    ref:
+      limits: [0., 1.]
+    latex: b_{1}
+  b2:
+    value: -3.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: -3.
+      scale: 0.5
+    latex: b_{2}
+  bs:
+    value: -0.71
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 3.
+    ref:
+      dist: norm
+      loc: 1.
+      scale: 0.5
+    latex: b_{s}
+  b3:
+    value: -0.479
+    fixed: True
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.5
+    latex: b_{3}
+  alpha[0:7:2]:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.0
+    latex: \alpha_{[]}
+  sn[:5:2]:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0
+      scale: 50.
+    latex: s_{n, []}
+
+---
+
+class: PyBirdTracerPowerSpectrumMultipoles
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: 'Compute PyBird power spectrum. Can be exactly marginalized over: c*'
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  ells: [0, 2, 4]
+
+params:
+  .fixed: ['b2m4']
+  b1:
+    value: 1.3
+    prior:
+      limits: [0., 4.0]
+    ref:
+      limits: [0., 1.]
+    latex: b_{1}
+  b3:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.5
+    latex: b_{3}
+  b2:
+    value: 0.
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{2}
+  b4:
+    value: 0.
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{4}
+  # west coast
+  b2p4:
+    value: 0.
+    prior:
+      limits: [-10., 10.]
+    latex: '(b_{2} + b_{4})/\sqrt{2}'
+  b2m4:
+    value: 0.
+    prior:
+      limits: [-10., 10.]
+    latex: '(b_{2} - b_{4})/\sqrt{2}'
+  cct:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{t}
+  cr1:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{r, 1}
+  cr2:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{r, 2}
+  cr4:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{r, 4}
+  cr6:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{r, 6}
+  ce[:3]:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{e, []}
+
+---
+
+class: PyBirdTracerCorrelationFunctionMultipoles
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: 'Compute PyBird correlation function. Can be exactly marginalized over: c*'
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  ells: [0, 2, 4]
+
+params:
+  .fixed: ['b2m4']
+  b1:
+    value: 1.3
+    prior:
+      limits: [0., 4.0]
+    ref:
+      limits: [0., 1.]
+    latex: b_{1}
+  b3:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.5
+    latex: b_{3}
+  b2:
+    value: 0.
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{2}
+  b4:
+    value: 0.
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{4}
+  # west coast
+  b2p4:
+    value: 0.
+    prior:
+      limits: [-10., 10.]
+    latex: '(b_{2} + b_{4})/\sqrt{2}'
+  b2m4:
+    value: 0.
+    prior:
+      limits: [-10., 10.]
+    latex: '(b_{2} - b_{4})/\sqrt{2}'
+  cct:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{t}
+  cr1:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{r, 1}
+  cr2:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{r, 2}
+  cr4:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{r, 4}
+  cr6:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{r, 6}
+  ce[:3]:
+    value: 0.
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{e, []}
+
+---
+
+class: KaiserTracerCorrelationFunctionMultipoles
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Compute Kaiser correlatiom function
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  ells: [0, 2, 4]
+
+params:
+  b1:
+    value: 1.69
+    prior:
+      dist: uniform
+      limits: [0., 4.0]
+    ref:
+      limits: [1.0, 2.0]
+    latex: b_{1}

@@ -1,0 +1,42 @@
+class: APEffect
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Alcock-Paczynski effect
+  url:
+  licence:
+  bibtex: [doi:10.1038/281358a0]
+  requirements: []
+  long_description:
+
+init:
+  fiducial: DESI
+
+params:
+  qpar:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    latex: '\alpha_{\parallel}'
+  qper:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    latex: '\alpha_{\perp}'
+  qiso:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    latex: '\alpha_{\mathrm{iso}}'
+  qap:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    latex: '\alpha_{\mathrm{ap}}'

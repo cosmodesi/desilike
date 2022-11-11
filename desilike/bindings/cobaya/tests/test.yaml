@@ -1,0 +1,31 @@
+likelihood:
+  desilike.bindings.cobaya.tests.TestSimpleLikelihood:
+
+params:
+  a:
+    latex: a
+    prior:
+      dist: norm
+      loc: 0.0
+      scale: 10.0
+    proposal: 10.0
+    ref:
+      dist: norm
+      loc: 0.0
+      scale: 10.0
+  b:
+    latex: b
+    prior:
+      dist: norm
+      loc: 0.0
+      scale: 10.0
+    proposal: 10.0
+    ref:
+      dist: norm
+      loc: 0.0
+      scale: 10.0
+
+sampler:
+  mcmc:
+
+output: _chains/gaussian

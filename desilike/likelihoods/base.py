@@ -4,38 +4,26 @@ from desilike.base import BaseCalculator
 from desilike import utils
 
 
-class GaussianSyntheticDataGenerator(BaseCalculator):
+class GaussianLikelihood(BaseCalculator):
 
-    def __init__(self, covariance, seed=None):
-        self.covariance = np.atleast_2d(covariance)
+    def __init__(self, observables, covariance=None, covariance_scale=1.):
+        self.observables = list(observables)
+        if covariance is None:
+            nmocks = [self.mpicomm.bcast(len(obs.mocks) if self.mpicomm.rank == 0 and obs.mocks is not None else 0) for obs in self.observables]
+            if not any(nmocks):
+                raise ValueError('Observables must have mocks if global covariance matrix not provided')
+            if not all(nmock == nmocks[0] for nmock in nmocks):
+                raise ValueError('Provide the same number of mocks for each observable, found {}'.format(nmocks))
+            if self.mpicomm.rank == 0:
+                list_y = [np.concatenate(y, axis=0) for y in zip(*[obs.mocks for obs in self.observables])]
+                covariance = np.cov(list_y, rowvar=False, ddof=1)
+        self.covariance = np.atleast_2d(self.mpicomm.bcast(covariance_scale * covariance if self.mpicomm.rank == 0 else None, root=0))
         if self.covariance.shape != (self.covariance.shape[0],) * 2:
             raise ValueError('Covariance must be a square matrix')
-        self.seed = seed
-        if self.seed is not None:
-            self.rng = np.random.RandomState(seed=self.seed)
-        self.zeros = np.zeros(self.covariance.shape[0], dtype='f8')
+        self.flatdata = np.concatenate([obs.flatdata for obs in self.observables], axis=0)
+        if self.covariance.shape != (self.flatdata.size,) * 2:
+            raise ValueError('Based on provided observables, covariance expected to be a matrix of shape ({0:d}, {0:d})'.format(self.flatdata.size))
 
-    def calculate(self):
-        if self.seed is not None:
-            self.flatdata = self.mpicomm.bcast(self.rng.multivariate_normal(self.zeros, self.covariance), root=0)
-        self.flatdata = self.zeros.copy()
-
-
-class BaseGaussianLikelihood(BaseCalculator):
-
-    def __init__(self, covariance, data=None, nobs=None, project=None):
-        self.covariance = np.atleast_2d(covariance)
-        if self.covariance.shape != (self.covariance.shape[0],) * 2:
-            raise ValueError('Covariance must be a square matrix')
-        self.flatdata = data
-        if data is not None:
-            self.flatdata = np.ravel(data)
-            if self.covariance.shape != (self.flatdata.size,) * 2:
-                raise ValueError('Based on provided data, covariance expected to be a matrix of shape ({0:d}, {0:d})'.format(self.flatdata.size))
-        self.nobs = nobs
-        if nobs is not None: self.nobs = int(nobs)
-
-    def initialize(self):
         self.precision = utils.inv(self.covariance)
         size = self.precision.shape[0]
         if self.nobs is not None:
@@ -46,17 +34,17 @@ class BaseGaussianLikelihood(BaseCalculator):
             self.precision *= self.hartlap
 
     def calculate(self):
-        if self.flatdata is None:
-            if self.mpicomm.rank == 0:
-                self.log_info('Using synthetic data.')
-            self.flatdata = self.synthetic.flatdata + self.flatmodel
         flatdiff = self.flatdiff
         self.loglikelihood = -0.5 * flatdiff.dot(self.precision).dot(flatdiff)
         return self.loglikelihood
 
     @property
+    def flatmodel(self):
+        return np.concatenate([obs.flatmodel for obs in self.observables], axis=0)
+
+    @property
     def flatdiff(self):
-        return (self.flatmodel - self.flatdata).dot(self.eigenvectors)
+        return self.flatmodel - self.flatdata
 
     def __getstate__(self):
         state = {}

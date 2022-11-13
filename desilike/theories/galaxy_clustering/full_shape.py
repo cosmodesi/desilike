@@ -9,13 +9,13 @@ class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
 
     config_fn = 'full_shape.yaml'
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, template=None, **kwargs):
         super(BasePTPowerSpectrumMultipoles, self).__init__(*args, **kwargs)
         self.kin = np.geomspace(min(1e-3, self.k[0] / 2), max(1., self.k[0] * 2), 600)  # margin for AP effect
-
-    def initialize(self):
-        if getattr(self, 'template', None) is None:
-            self.template = FullPowerSpectrumTemplate(k=self.kin)
+        if template is None:
+            template = FullPowerSpectrumTemplate(k=self.kin)
+        self.template = template
+        self.template.k = self.kin
 
 
 class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipoles):
@@ -31,10 +31,6 @@ class KaiserTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, TrapzTh
 
     def __init__(self, *args, mu=200, **kwargs):
         super(KaiserTracerPowerSpectrumMultipoles, self).__init__(*args, **kwargs)
-        self.mu = mu
-
-    def initialize(self):
-        super(KaiserTracerPowerSpectrumMultipoles, self).initialize()
         self.set_k_mu(k=self.k, mu=self.mu, ells=self.ells)
 
     def calculate(self, b1=1., sn0=0.):

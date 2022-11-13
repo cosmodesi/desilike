@@ -18,7 +18,7 @@ class ObservedPowerSpectrum(BaseCalculator):
             if self.mpicomm.rank == 0:
                 covariance = np.cov(self.mocks, rowvar=False, ddof=1)
             self.covariance = self.mpicomm.bcast(covariance, root=0)
-        self.wmatrix = WindowedPowerSpectrumMultipoles(k=self.k, ells=self.ells, wmatrix=wmatrix, shotnoise=shotnoise)
+        self.wmatrix = WindowedPowerSpectrumMultipoles(k=self.k, ells=self.ells, wmatrix=wmatrix, theory=theory, shotnoise=shotnoise)
         self.wmatrix.theory = theory
 
     def load_data(self, data=None, klim=None, kstep=None, krebin=None):
@@ -63,7 +63,7 @@ class ObservedPowerSpectrum(BaseCalculator):
             list_y, list_shotnoise = [], []
             for mocks in list_mocks:
                 if isinstance(mocks, str):
-                    mocks = [load_data(mock) for mock in glob.glob(mocks)]
+                    mocks = [load_data(mock) for mock in sorted(glob.glob(mocks))]
                 else:
                     mocks = [mocks]
                 for mock in mocks:
@@ -107,6 +107,32 @@ class ObservedPowerSpectrum(BaseCalculator):
         for ax in lax: ax.grid(True)
         lax[0].legend()
         lax[0].set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        if fn is not None:
+            plotting.savefig(fn, fig=fig, **(kw_save or {}))
+        return lax
+
+    def plot_bao(self, fn=None, kw_save=None):
+        from matplotlib import pyplot as plt
+        height_ratios = [1] * len(self.ells)
+        figsize = (6, 2 * sum(height_ratios))
+        fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
+        fig.subplots_adjust(hspace=0)
+        data, model, std = self.data, self.model, self.std
+        try:
+            mode = self.theory.theory.nowiggle
+        except AttributeError as exc:
+            raise ValueError('Theory {} has no mode nowiggle'.format(self.theory.theory.__class__)) from exc
+        self.theory.theory.nowiggle = True
+        for calc in self.runtime_info.pipeline.calculators: calc.runtime_info.torun = True
+        self.runtime_info.run()
+        nowiggle = self.model
+        self.theory.theory.nowiggle = mode
+        for ill, ell in enumerate(self.ells):
+            lax[ill].errorbar(self.k[ill], self.k[ill] * (data[ill] - nowiggle[ill]), yerr=self.k[ill] * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o')
+            lax[ill].plot(self.k[ill], self.k[ill] * (model[ill] - nowiggle[ill]), color='C{:d}'.format(ill))
+            lax[ill].set_ylabel(r'$k \Delta P_{{{:d}}}(k)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]'.format(ell))
+        for ax in lax: ax.grid(True)
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
         if fn is not None:
             plotting.savefig(fn, fig=fig, **(kw_save or {}))

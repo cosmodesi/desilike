@@ -107,7 +107,7 @@ class RuntimeInfo(BaseClass):
 
     """Information about calculator name, requirements, parameters values at a given step, etc."""
 
-    def __init__(self, calculator):
+    def __init__(self, calculator, init=None):
         """
         initialize :class:`RuntimeInfo`.
 
@@ -119,12 +119,15 @@ class RuntimeInfo(BaseClass):
         self.calculator = calculator
         self.monitor = Monitor()
         self.required_by = set()
+        self.init = dict(init or {})
 
     @property
     def requires(self):
         if getattr(self, '_requires', None) is None:
             self._requires = {}
+            print(self.calculator, self.calculator.__dict__.keys())
             for name, value in self.calculator.__dict__.items():
+                print(name, value, isinstance(value, BaseCalculator))
                 if isinstance(value, BaseCalculator):
                     self._requires[name] = value
             self.requires = self._requires
@@ -179,7 +182,7 @@ class RuntimeInfo(BaseClass):
             if self.derived_params:
                 state = self.calculator.__getstate__()
                 for param in self.derived_params:
-                    name = param.basename
+                    name = param.basenamclse
                     if name in state: value = state[name]
                     else: value = getattr(self.calculator, name)
                     self._derived.set(ParameterArray(np.asarray(value), param=param), output=True)
@@ -231,47 +234,55 @@ class RuntimeInfo(BaseClass):
 
 class BaseCalculator(BaseClass):
 
-    def __getattr__(self, name):
-        if name == 'runtime_info':
-            self.initialize()
-            return self.runtime_info
-        return super(BaseCalculator, self).__getattribute__(name)
-
-    def __setattr__(self, name, value):
-        super(BaseCalculator, self).__setattr__(name, value)
-        if 'runtime_info' in self.__dict__ and name in self.runtime_info.requires:
-            self.runtime_info.requires[name] = value
-            self.runtime_info.requires = self.runtime_info.requires
-            for calculator, name in self.runtime_info.required_by:
-                setattr(calculator.runtime_info, name, self)
-
     def __new__(cls, *args, **kwargs):
-        from functools import wraps
 
-        def initialize(func):
-            @wraps(func)
-            def wrapper(self, *args, **kwargs):
-                func(self, *args, **kwargs)
-                self.runtime_info = RuntimeInfo(self)
-            return wrapper
+        def __getattr__(self, name):
+            return super(RuntimeCalculator, self).__getattribute__(name)
 
-        cls.initialize = initialize(cls.initialize)
+        def __setattr__(self, name, value):
+            super(RuntimeCalculator, self).__setattr__(name, value)
+            if 'runtime_info' in self.__dict__ and name in self.runtime_info.requires:
+                self.runtime_info.requires[name] = value
+                self.runtime_info.requires = self.runtime_info.requires
+                for calculator, name in self.runtime_info.required_by:
+                    setattr(calculator.runtime_info, name, self)
 
-        cls.info = Info(**getattr(cls, 'info', {}))
-        cls.params = ParameterCollection()
+        class RuntimeCalculator(cls):
+
+            def __init__(self, **kwargs):
+                RuntimeCalculator.__setattr__ = __setattr__
+                RuntimeCalculator.__getattr__ = __getattr__
+                cls.__init__(self, **self.runtime_info.init)
+
+            def __call__(self, **params):
+                return self.runtime_info.pipeline.calculate(**params)
+
+            def __getattr__(self, name):
+                if name in self.runtime_info.init:
+                    return self.runtime_info.init[name]
+                self.__init__()
+                return super(RuntimeCalculator, self).__getattribute__(name)
+
+            def __setattr__(self, name, value):
+                self.runtime_info.init[name] = value
+
+        RuntimeCalculator.__name__ = cls.__name__
+        RuntimeCalculator.__module__ = cls.__module__
+
+        RuntimeCalculator.info = Info(**getattr(cls, 'info', {}))
+        RuntimeCalculator.params = ParameterCollection(getattr(cls, 'params', None))
         if hasattr(cls, 'config_fn'):
             dirname = os.path.dirname(sys.modules[cls.__module__].__file__)
             config = BaseConfig(os.path.join(dirname, cls.config_fn), index={'class': cls.__name__})
-            cls.info = Info(**{**config.get('info', {}), **cls.info})
+            RuntimeCalculator.info = Info(**{**config.get('info', {}), **RuntimeCalculator.info})
             params = ParameterCollection(config.get('params', {}))
-            params.update(cls.params)
-            cls.params = params
+            params.update(RuntimeCalculator.params)
+            RuntimeCalculator.params = params
             init = config.get('init', {})
             if init: kwargs = {**init, **kwargs}
-        return super(BaseCalculator, cls).__new__(cls)
-
-    def __call__(self, **params):
-        return self.runtime_info.pipeline.calculate(**params)
+        new = BaseClass.__new__(RuntimeCalculator)
+        new.__dict__['runtime_info'] = RuntimeInfo(new, init=kwargs)
+        return new
 
     def __getstate__(self):
         return {}

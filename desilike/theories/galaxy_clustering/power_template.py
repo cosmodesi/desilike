@@ -10,16 +10,14 @@ class BasePowerSpectrumExtractor(BaseCalculator):
 
     config_fn = 'power_template.yaml'
 
-    def __init__(self, z=1., with_now=False, fiducial='DESI'):
+    def __init__(self, z=1., with_now=False, cosmo=None, fiducial='DESI'):
         self.z = float(z)
         self.fiducial = get_cosmo(fiducial)
         self.with_now = with_now
-
-    def initialize(self):
         self.cosmo_requires = {'fourier': {'sigma8_z': {'z': self.z, 'of': ['delta_cb', 'theta_cb']},
                                            'pk': {'z': self.z, 'of': 'theta_cb'}}}
-        if getattr(self, 'cosmo', None) is None:
-            self.cosmo = self.fiducial
+        self.cosmo = cosmo
+        if cosmo is None: self.cosmo = self.fiducial
 
     def calculate(self):
         fo = self.cosmo.get_fourier()
@@ -44,12 +42,8 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
         if k is None:
             k = np.logspace(-3., 1., 400)
         self.k = np.array(k, dtype='f8')
-
-    def initialize(self):
         self.cosmo_requires = {'fourier': {'sigma8_z': {'z': self.z, 'of': ['delta_cb', 'theta_cb']},
                                            'pk': {'z': self.z, 'k': self.k, 'of': 'theta_cb'}}}
-        if getattr(self, 'cosmo', None) is None:
-            self.cosmo = self.fiducial
 
     def calculate(self):
         super(BasePowerSpectrumTemplate, self).calculate()
@@ -61,11 +55,9 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
 
 class FullPowerSpectrumTemplate(BasePowerSpectrumTemplate):
 
-    def initialize(self):
-        super(FullPowerSpectrumTemplate, self).initialize()
-        if getattr(self, 'apeffect', None) is None:
-            self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode='distances')
-            self.apeffect.initialize()
+    def __init__(self, *args, **kwargs):
+        super(FullPowerSpectrumTemplate, self).__init__(*args, **kwargs)
+        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, cosmo=self.cosmo, mode='distances')
 
     def calculate(self, **params):
         self.cosmo = self.cosmo.clone(**params)
@@ -79,13 +71,10 @@ class FullPowerSpectrumTemplate(BasePowerSpectrumTemplate):
 
 class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
 
-    def __init__(self, *args, kp=0.03, with_now='peakaverage', **kwargs):
+    def __init__(self, *args, kp=0.03, n_varied=False, with_now='peakaverage', **kwargs):
         super(ShapeFitPowerSpectrumExtractor, self).__init__(*args, with_now=with_now, **kwargs)
         self.kp = float(kp)
-
-    def initialize(self):
-        super(ShapeFitPowerSpectrumExtractor, self).initialize()
-        self.n_varied = getattr(self, 'n_varied', False)
+        self.n_varied = bool(n_varied)
 
     def calculate(self):
         super(ShapeFitPowerSpectrumExtractor, self).calculate()
@@ -107,13 +96,8 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
 
     def __init__(self, *args, a=0.6, apmode='qparqper', **kwargs):
         super(ShapeFitPowerSpectrumTemplate, self).__init__(*args, **kwargs)
-        self.apmode = apmode
         self.a = float(a)
-
-    def initialize(self):
-        super(ShapeFitPowerSpectrumTemplate, self).initialize()
-        if getattr(self, 'apeffect', None) is None:
-            self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=self.apmode)
+        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=self.apmode)
 
     def calculate(self, f=0.8, dm=0., dn=0.):
         self.n_varied = self.runtime_info.base_params['dn'].varied
@@ -135,14 +119,12 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
 
 class BAOExtractor(BaseCalculator):
 
-    def __init__(self, z=1., fiducial='DESI'):
+    def __init__(self, z=1., cosmo=None, fiducial='DESI'):
         self.z = float(z)
         self.fiducial = get_cosmo(fiducial)
-
-    def initialize(self):
         self.cosmo_requires = {'rs_drag': None, 'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
-        if getattr(self, 'cosmo', None) is None:
-            self.cosmo = self.fiducial
+        self.cosmo = cosmo
+        if cosmo is None: self.cosmo = self.fiducial
 
     def calculate(self):
         rd = self.cosmo.rs_drag

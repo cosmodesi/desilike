@@ -4,6 +4,7 @@ from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipo
 def test_base():
 
     theory = KaiserTracerPowerSpectrumMultipoles()
+    exit()
     print(theory.runtime_info.pipeline.params)
     theory(sigma8=0.9, b1=1.).power
     theory.template(b1=1.).pk_tt

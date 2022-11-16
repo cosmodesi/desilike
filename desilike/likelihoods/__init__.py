@@ -1,5 +1,7 @@
 import numpy as np
 
+from .base import GaussianLikelihood
+
 
 class TestLikelihood(object):
 

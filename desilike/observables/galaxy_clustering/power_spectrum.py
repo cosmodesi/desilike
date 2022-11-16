@@ -2,24 +2,23 @@ import glob
 
 import numpy as np
 
-from deslike import plotting, utils
+from desilike import plotting, utils
 from desilike.base import BaseCalculator
-from desilike.galaxy_clustering.base import WindowedPowerSpectrumMultipoles
+from desilike.theories.galaxy_clustering.base import WindowedPowerSpectrumMultipoles
 
 
-class ObservedPowerSpectrum(BaseCalculator):
+class ObservedTracerPowerSpectrum(BaseCalculator):
 
-    def __init__(self, data=None, mocks=None, wmatrix=None, theory=None, **kwargs):
+    def initialize(self, data=None, mocks=None, wmatrix=None, theory=None, **kwargs):
         self.k, self.ells = None, None
         self.flatdata, shotnoise = self.load_data(data=data, **kwargs)[:2]
-        self.mocks = self.load_data(mocks=mocks, **kwargs)[-1]
+        self.mocks = self.load_data(data=mocks, **kwargs)[-1]
         if self.mpicomm.bcast(self.mocks is not None, root=0):
             covariance = None
             if self.mpicomm.rank == 0:
                 covariance = np.cov(self.mocks, rowvar=False, ddof=1)
             self.covariance = self.mpicomm.bcast(covariance, root=0)
         self.wmatrix = WindowedPowerSpectrumMultipoles(k=self.k, ells=self.ells, wmatrix=wmatrix, theory=theory, shotnoise=shotnoise)
-        self.wmatrix.theory = theory
 
     def load_data(self, data=None, klim=None, kstep=None, krebin=None):
 
@@ -78,13 +77,13 @@ class ObservedPowerSpectrum(BaseCalculator):
                     list_shotnoise.append(mock_shotnoise)
             return list_y, list_shotnoise
 
-        if data is not None:
+        flatdata, shotnoise, list_y = None, None, None
+        if self.mpicomm.rank == 0 and data is not None:
             if not utils.is_sequence(data):
                 data = [data]
-            if self.mpicomm.rank == 0:
-                list_y, list_shotnoise = load_all(data)
-                flatdata = np.mean(list_y, axis=0)
-                shotnoise = np.mean(list_shotnoise, axis=0)
+            list_y, list_shotnoise = load_all(data)
+            flatdata = np.mean(list_y, axis=0)
+            shotnoise = np.mean(list_shotnoise, axis=0)
 
         self.k, self.ells, flatdata, shotnoise = self.mpicomm.bcast((self.k, self.ells, flatdata, shotnoise) if self.mpicomm.rank == 0 else None, root=0)
         return flatdata, shotnoise, list_y
@@ -149,11 +148,11 @@ class ObservedPowerSpectrum(BaseCalculator):
 
     @property
     def flatmodel(self):
-        return self.theory.flatpower
+        return self.wmatrix.flatpower
 
     @property
     def model(self):
-        return self.theory.power
+        return self.wmatrix.power
 
     @property
     def data(self):
@@ -164,7 +163,7 @@ class ObservedPowerSpectrum(BaseCalculator):
         return self.unpack(np.diag(self.covariance)**0.5)
 
     def __getstate__(self):
-        state = super(ObservedPowerSpectrum, self).__getstate__()
+        state = super(ObservedTracerPowerSpectrum, self).__getstate__()
         for name in ['k', 'ells']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)

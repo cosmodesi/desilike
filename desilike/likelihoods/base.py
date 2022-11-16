@@ -6,10 +6,14 @@ from desilike import utils
 
 class GaussianLikelihood(BaseCalculator):
 
-    def __init__(self, observables, covariance=None, covariance_scale=1.):
-        self.observables = list(observables)
+    def initialize(self, observables, covariance=None, covariance_scale=1.):
+        if not utils.is_sequence(observables):
+            observables = [observables]
+        self.nobs = None
+        self.observables = [obs.runtime_info.initialize() for obs in observables]
         if covariance is None:
             nmocks = [self.mpicomm.bcast(len(obs.mocks) if self.mpicomm.rank == 0 and obs.mocks is not None else 0) for obs in self.observables]
+            self.nobs = nmocks[0]
             if not any(nmocks):
                 raise ValueError('Observables must have mocks if global covariance matrix not provided')
             if not all(nmock == nmocks[0] for nmock in nmocks):
@@ -32,6 +36,7 @@ class GaussianLikelihood(BaseCalculator):
                 self.log_info('Covariance matrix with {:d} points built from {:d} observations.'.format(size, self.nobs))
                 self.log_info('...resulting in Hartlap factor of {:.4f}.'.format(self.hartlap))
             self.precision *= self.hartlap
+        self.runtime_info.requires = self.observables
 
     def calculate(self):
         flatdiff = self.flatdiff

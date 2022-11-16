@@ -1,0 +1,7 @@
+likelihood:
+  desilike.bindings.cobaya.tests.TestSimpleLikelihood:
+
+sampler:
+  mcmc:
+
+output: _chains/test

@@ -10,3 +10,7 @@ def get_cosmo(cosmo):
     if isinstance(cosmo, tuple):
         return getattr(cosmoprimo.fiducial, cosmo[0])(**cosmo[1])
     return cosmoprimo.Cosmology(**cosmo)
+
+
+def external_cosmo(cosmo):
+    return isinstance(cosmo, str) and cosmo == 'external'

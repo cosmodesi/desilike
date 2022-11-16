@@ -1,0 +1,8 @@
+# To be copy-pasted in the MontePython *.param file
+data.parameters['qpar'] = [1.0, 0.8, 1.2, 0.19999999999999996, 1.0, 'nuisance']
+data.parameters['qper'] = [1.0, 0.8, 1.2, 0.19999999999999996, 1.0, 'nuisance']
+data.parameters['dm'] = [0.0, -3.0, 3.0, 0.01, 1.0, 'nuisance']
+data.parameters['dn'] = [0.0, -0.5, 0.5, 0.0, 1.0, 'nuisance']
+data.parameters['f'] = [0.8, 0.0, 1.0, 0.04999999999999999, 1.0, 'nuisance']
+data.parameters['b1'] = [1.69, 0.0, 4.0, 0.5, 1.0, 'nuisance']
+data.parameters['sn0'] = [0.0, None, None, 1000.0, 1.0, 'nuisance']

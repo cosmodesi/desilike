@@ -1306,7 +1306,7 @@ class ParameterPrior(BaseClass):
     """
 
     def __init__(self, dist='uniform', limits=None, **kwargs):
-        """
+        r"""
         Initialize :class:`ParameterPrior`.
 
         Parameters

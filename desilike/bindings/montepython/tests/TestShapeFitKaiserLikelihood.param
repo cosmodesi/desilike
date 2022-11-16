@@ -1,0 +1,36 @@
+#------Experiments to test (separated with commas)-----
+
+# valid options are (so far): acbar, bicep, boomerang, cbi,
+# hst, quad, sn, spt, fake_planck_bluebook,
+# euclid_pk, euclid_lensing
+# and clik_fake_planck (for Planck members)
+
+data.experiments = ['TestShapeFitKaiserLikelihood']
+
+#------ Parameter list -------
+# data.parameters[class name] = [mean, min, max, 1-sigma, scale, role]
+# - if min max irrelevant, put to -1 or None (if you want a boundary of -1, use -1.0)
+# - if fixed, put 1-sigma to 0
+# - if scale irrelevant, put to 1, otherwise to the appropriate factor
+# - role is either 'cosmo', 'nuisance' or 'derived'
+
+
+# Cosmological parameters list
+
+# Nuisance
+data.parameters['qpar'] = [1.0, 0.8, 1.2, 0.19999999999999996, 1.0, 'nuisance']
+data.parameters['qper'] = [1.0, 0.8, 1.2, 0.19999999999999996, 1.0, 'nuisance']
+data.parameters['dm'] = [0.0, -3.0, 3.0, 0.01, 1.0, 'nuisance']
+data.parameters['dn'] = [0.0, -0.5, 0.5, 0.0, 1.0, 'nuisance']
+data.parameters['f'] = [0.8, 0.0, 1.0, 0.04999999999999999, 1.0, 'nuisance']
+data.parameters['b1'] = [1.69, 0.0, 4.0, 0.5, 1.0, 'nuisance']
+data.parameters['sn0'] = [0.0, None, None, 1000.0, 1.0, 'nuisance']
+
+# Derived parameter list
+
+#------ Mcmc parameters ----
+# Number of steps taken, by default (overwritten by the -N command)
+data.N = 10
+# Number of accepted steps before writing to file the chain. Larger means less
+# access to disc, but this is not so much time consuming.
+data.write_step = 5

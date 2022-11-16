@@ -166,9 +166,7 @@ def import_class(clsname, pythonpath=None, registry=None, install=None):
         Optionally, a set of class types to look into.
     """
     from .parameter import find_names
-    if isinstance(clsname, type):
-        cls = clsname
-    else:
+    if isinstance(clsname, str):
         if install is not None:
             exclude = install.get('exclude', [])
             if find_names(clsname, exclude): install = None
@@ -197,6 +195,8 @@ def import_class(clsname, pythonpath=None, registry=None, install=None):
                 sys.path.append(os.path.dirname(__file__))
             module = importlib.import_module(modname)
             cls = getattr(module, clsname)
+    else:
+        cls = clsname
     if install is not None and hasattr(cls, 'install'):
         from .install import InstallerConfig
         install = InstallerConfig(install)

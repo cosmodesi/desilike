@@ -16,6 +16,6 @@ setup(name=package_basename,
       description='Package for DESI likelihoods',
       license='BSD3',
       url='http://github.com/adematti/desilike',
-      install_requires=['numpy', 'scipy'],
+      install_requires=['numpy', 'scipy', 'yaml', 'cosmoprimo'],
       extras_require={},
       packages=[package_basename])

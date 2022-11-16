@@ -2,7 +2,7 @@ import numpy as np
 from scipy import special
 
 from desilike.utils import jnp
-from desilike.theories.utils import get_cosmo
+from desilike.theories.utils import get_cosmo, external_cosmo
 from desilike.base import BaseCalculator
 from desilike import plotting
 from . import utils
@@ -10,7 +10,7 @@ from . import utils
 
 class BaseTheoryPowerSpectrumMultipoles(BaseCalculator):
 
-    def __init__(self, k=None, ells=(0, 2, 4)):
+    def initialize(self, k=None, ells=(0, 2, 4)):
         if k is None: k = np.linspace(0.01, 0.2, 101)
         self.k = np.array(k, dtype='f8')
         self.ells = tuple(ells)
@@ -25,7 +25,7 @@ class BaseTheoryPowerSpectrumMultipoles(BaseCalculator):
 
 class BaseTheoryCorrelationFunctionMultipoles(BaseCalculator):
 
-    def __init__(self, s=None, ells=(0, 2, 4)):
+    def initialize(self, s=None, ells=(0, 2, 4)):
         if s is None: s = np.linspace(20., 200, 101)
         self.s = np.array(s, dtype='f8')
         self.ells = tuple(ells)
@@ -40,8 +40,8 @@ class BaseTheoryCorrelationFunctionMultipoles(BaseCalculator):
 
 class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrelationFunctionMultipoles):
 
-    def __init__(self, s=None, ells=(0, 2, 4), power=None, **kwargs):
-        super(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles, self).__init__(s=s, ells=ells, **kwargs)
+    def initialize(self, s=None, ells=(0, 2, 4), power=None, **kwargs):
+        super(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles, self).initialize(s=s, ells=ells, **kwargs)
         self.k = np.logspace(min(-3, - np.log10(self.s[-1]) - 0.1), max(2, - np.log10(self.s[0]) + 0.1), 2000)
         from cosmoprimo import PowerToCorrelation
         self.fftlog = PowerToCorrelation(self.k, ell=self.ells, q=0, lowring=False)
@@ -54,8 +54,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
             from .full_shape import KaiserTracerPowerSpectrumMultipoles
             power = KaiserTracerPowerSpectrumMultipoles(k=self.k, ells=self.ells)
         self.power = power
-        self.power.k = self.kin
-        self.power.ells = self.ells
+        self.power.update(k=self.kin, ells=self.ells)
 
     def calculate(self):
         power = [jnp.interp(np.log10(self.lowk), np.log10(self.kin), p) for p in self.power.power]
@@ -99,8 +98,8 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
 
 class TrapzTheoryPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
 
-    def __init__(self, *args, mu=200, **kwargs):
-        super(TrapzTheoryPowerSpectrumMultipoles, self).__init__(*args, **kwargs)
+    def initialize(self, *args, mu=200, **kwargs):
+        super(TrapzTheoryPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.set_k_mu(k=self.k, mu=mu, ells=self.ells)
 
     def set_k_mu(self, k, mu=200, ells=(0, 2, 4)):
@@ -120,7 +119,7 @@ class APEffect(BaseCalculator):
 
     config_fn = 'base.yaml'
 
-    def __init__(self, z=1., cosmo=None, fiducial='DESI', mode='distances', eta=1. / 3.):
+    def initialize(self, z=1., cosmo=None, fiducial='DESI', mode='distances', eta=1. / 3.):
         self.z = float(z)
         if fiducial is None:
             raise ValueError('Provide fiducial cosmology')
@@ -139,6 +138,8 @@ class APEffect(BaseCalculator):
             self.params = self.params.select(basename=['qpar', 'qper'])
         elif self.mode == 'distances':
             self.params = self.params.clear()
+            if external_cosmo(cosmo):
+                self.cosmo_requires = {'background': {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}}
         else:
             raise ValueError('mode must be one of ["qiso", "qap", "qisoqap", "qparqper", "distances"]')
         if cosmo is None: cosmo = self.fiducial
@@ -173,7 +174,7 @@ class APEffect(BaseCalculator):
 
 class WindowedPowerSpectrumMultipoles(BaseCalculator):
 
-    def __init__(self, k=None, ells=(0, 2, 4), ellsin=None, wmatrix=None, kinrebin=1, shotnoise=0., theory=None):
+    def initialize(self, k=None, ells=(0, 2, 4), ellsin=None, wmatrix=None, kinrebin=1, shotnoise=0., theory=None):
         if k is None: k = np.linspace(0.01, 0.2, 20)
         if np.ndim(k[0]) == 0:
             k = [k] * len(ells)
@@ -224,15 +225,14 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 if not np.allclose(wmatrix.xout[iout], kk):
                     raise ValueError('k-coordinates {} for ell = {:d} could not be found in input matrix (rebinning = {:d})'.format(kk, projout.ell, factorout))
             self.wmatrix = wmatrix.value
-        self.shotnoise = float(shotnoise)
-        self.shotnoise = np.array([self.shotnoise * (ell == 0) for ell in self.ellsin])
-        self.flatshotnoise = np.concatenate([np.full_like(k, self.shotnoise * (ell == 0), dtype='f8') for ell, k in zip(self.ells, self.k)])
+        shotnoise = float(shotnoise)
+        self.shotnoise = np.array([shotnoise * (ell == 0) for ell in self.ellsin])
+        self.flatshotnoise = np.concatenate([np.full_like(k, shotnoise * (ell == 0), dtype='f8') for ell, k in zip(self.ells, self.k)])
         if theory is None:
             from .full_shape import KaiserTracerPowerSpectrumMultipoles
             theory = KaiserTracerPowerSpectrumMultipoles(k=self.k, ells=self.ellsin)
         self.theory = theory
-        self.theory.k = self.kin
-        self.theory.ells = self.ellsin
+        self.theory.update(k=self.kin, ells=self.ellsin)
 
     def _apply(self, theory):
         theory = jnp.ravel(theory)
@@ -242,7 +242,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             return theory[self.kmask]
         return theory
 
-    def calculate(self, **params):
+    def calculate(self):
         self.flatpower = self._apply(self.theory.power + self.shotnoise[:, None]) - self.flatshotnoise
 
     @property
@@ -284,7 +284,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
 
 class WindowedCorrelationFunctionMultipoles(BaseCalculator):
 
-    def __init__(self, s=None, ells=(0, 2, 4), theory=None):
+    def initialize(self, s=None, ells=(0, 2, 4), theory=None):
         if s is None: s = np.linspace(20., 120., 101)
         if np.ndim(s[0]) == 0:
             s = [s] * len(ells)
@@ -304,10 +304,9 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
             from .full_shape import KaiserTracerCorrelationFunctionMultipoles
             theory = KaiserTracerCorrelationFunctionMultipoles(k=self.k, ells=self.ells)
         self.theory = theory
-        self.theory.s = self.sin
-        self.theory.ells = self.ells
+        self.theory.update(s=self.sin, ells=self.ells)
 
-    def run(self):
+    def calculate(self):
         theory = jnp.ravel(self.theory.corr)
         if self.smask is not None:
             self.flatcorr = theory[self.smask]

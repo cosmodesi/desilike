@@ -1,0 +1,7 @@
+likelihood:
+  desilike.bindings.cobaya.tests.TestShapeFitKaiserLikelihood: null
+
+sampler:
+  mcmc:
+
+output: _chains/test

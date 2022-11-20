@@ -41,6 +41,7 @@ def run_box_mock(power_fn=None, corr_fn=None, unitary_amplitude=False, seed=42):
                                            position_type='pos', mpicomm=data.mpicomm, mpiroot=None, nthreads=1)
         corr.save(corr_fn)
 
+
 def run_box_window(save_fn, poles_fn):
 
     edgesin = np.linspace(0., 0.5, 100)

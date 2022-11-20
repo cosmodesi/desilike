@@ -11,11 +11,11 @@ version = _version.__version__
 
 setup(name=package_basename,
       version=version,
-      author='adematti',
+      author='cosmodesi',
       author_email='',
       description='Package for DESI likelihoods',
       license='BSD3',
-      url='http://github.com/adematti/desilike',
+      url='http://github.com/cosmodesi/desilike',
       install_requires=['numpy', 'scipy', 'yaml', 'cosmoprimo'],
       extras_require={},
       packages=[package_basename])

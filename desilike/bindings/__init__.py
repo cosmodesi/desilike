@@ -37,3 +37,7 @@ class LikelihoodGenerator(BaseClass):
                 file.write(self.header + self.line_delimiter)
                 for line in txt[fn]:
                     file.write(line + self.line_delimiter)
+
+
+def get_params(like):
+    return like.runtime_info.pipeline.params.select(derived=False, solved=False)

@@ -4,7 +4,7 @@ import numpy as np
 from scipy import constants, stats
 
 from desilike import utils
-from desilike.bindings import LikelihoodGenerator
+from desilike.bindings import LikelihoodGenerator, get_likelihood_params
 
 from desilike.cosmo import ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, _make_list
 
@@ -67,10 +67,6 @@ class Fourier(Section):
         return self.sigma_rz(8., z, of=of)
 
 
-def get_params(like):
-    return like.runtime_info.pipeline.params.select(derived=False)
-
-
 desilike_name = 'desi'
 
 
@@ -81,7 +77,7 @@ def CosmoSISLikelihoodFactory(cls, module=None):
 
     def __init__(self, options):
         self.like = cls()
-        self._params = get_params(self.like)
+        self._params = get_likelihood_params(self.like)
         self._requires = self.like.runtime_info.pipeline.get_cosmo_requires()
 
     def do_likelihood(self, block):
@@ -166,10 +162,10 @@ class CosmoSISLikelihoodGenerator(LikelihoodGenerator):
             return prior, limits
 
         values, priors = {}, {}
-        for param in get_params(cls()):
+        for param in get_likelihood_params(cls()):
             prior, limits = decode_prior(param.prior, param.name)
             values[param] = [param.value]
-            if not param.fixed:
+            if param.varied:
                 values[param] = [limits[0], param.value, limits[1]]
             priors[param] = prior
 

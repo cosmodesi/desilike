@@ -1,0 +1,68 @@
+class: Cosmoprimo
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Compute primordial cosmology quantity
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  engine: class
+
+params:
+  h:
+    value: 0.6736
+    prior:
+      dist: uniform
+      limits: [0.4, 0.9]
+    latex: h
+  omega_cdm:
+    value: 0.12
+    prior:
+      dist: uniform
+      limits: [0.05, 0.2]
+    latex: \omega_{cdm}
+  omega_b:
+    value: 0.02237
+    prior:
+      dist: uniform
+      limits: [0.01, 0.03]
+    latex: \omega_{b}
+  A_s:
+    value: 2.083e-09
+    prior:
+      dist: uniform
+      limits: [1.8e-9, 3e-9]
+    latex: A_{s}
+  n_s:
+    value: 0.9649
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    latex: n_s
+  omega_ncdm:
+    value: 0.0006442
+    latex: \omega_{ncdm}
+    fixed: True
+  N_ur:
+    value: 2.0328
+    latex: N_{ur}
+    fixed: True
+  tau_reio:
+    value: 0.0544
+    latex: \tau
+    fixed: True
+  w0_fld:
+    value: -1.
+    latex: w_{0}
+    fixed: True
+  wa_fld:
+    value: 0.
+    latex: w_{a}
+    fixed: True

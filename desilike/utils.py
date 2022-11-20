@@ -18,12 +18,17 @@ from .mpi import CurrentMPIComm
 
 try:
     # raise ImportError
-    import jax
+    import jax, jaxlib
     from jax.config import config; config.update('jax_enable_x64', True)
     import jax.numpy as jnp
 except ImportError:
     jax = None
     import numpy as jnp
+
+
+def use_jax(array):
+    """Whether to use jax.numpy depending on whether array is jax's object"""
+    return jax and isinstance(array, (jaxlib.xla_extension.DeviceArrayBase, jax.core.Tracer))
 
 
 @CurrentMPIComm.enable
@@ -142,11 +147,7 @@ class BaseMetaClass(type):
 
 def serialize_class(cls):
     clsname = '.'.join([cls.__module__, cls.__name__])
-    try:
-        pythonpath = os.path.dirname(sys.modules[cls.__module__].__file__)
-    except AttributeError:
-        pythonpath = None
-    return (clsname, pythonpath)
+    return (clsname,)
 
 
 def import_class(clsname, pythonpath=None, registry=None, install=None):
@@ -351,13 +352,14 @@ class OrderedSet(collections.OrderedDict, collections.MutableSet):
 
 class NamespaceDict(BaseClass):
 
-    def __init__(self, conf=None, **kwargs):
-        if isinstance(conf, self.__class__):
-            self.__dict__.update(conf.__dict__)
-        elif isinstance(conf, dict):
-            kwargs = {**conf, **kwargs}
-        elif conf is not None:
-            raise ValueError('Unrecognized {} {}'.format(self.__class__.__name__, conf))
+    def __init__(self, *args, **kwargs):
+        if len(args) == 1:
+            if isinstance(args[0], self.__class__):
+                self.__dict__.update(args[0].__dict__)
+            elif args[0] is not None:
+                kwargs = {**args[0], **kwargs}
+        elif len(args):
+            raise ValueError('Unrecognized arguments {}'.format(args))
         for name, value in kwargs.items():
             self[name] = value
 
@@ -553,6 +555,14 @@ def txt_to_latex(txt):
             latex += '{'
             txt += '}'
     return latex
+
+
+def outputs_to_latex(name):
+    """Turn outputs ``name`` to latex string."""
+    toret = txt_to_latex(name)
+    for full, symbol in [('loglikelihood', 'L'), ('logposterior', '\\mathcal{L}'), ('logprior', 'p')]:
+        toret = toret.replace(full, symbol)
+    return toret
 
 
 class Monitor(BaseClass):

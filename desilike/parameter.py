@@ -10,7 +10,8 @@ import numpy as np
 from scipy import stats
 
 from .io import BaseConfig
-from . import utils
+from . import mpi, utils
+from .mpi import CurrentMPIComm
 from .utils import BaseClass, NamespaceDict, deep_eq
 
 
@@ -380,24 +381,7 @@ class Parameter(BaseClass):
                     self.proposal = self.ref.scale
                 elif self.ref.is_proper():
                     self.proposal = (self.ref.limits[1] - self.ref.limits[0]) / 2.
-        self._derived = derived
-        self.depends = {}
-        if isinstance(derived, str):
-            if self.solved:
-                allowed_dists = ['norm', 'uniform']
-                if self.prior.dist not in allowed_dists or self.prior.is_limited():
-                    raise ParameterError('Prior must be one of {}, with no limits, to use analytic marginalisation for {}'.format(allowed_dists, self))
-            else:
-                placeholders = re.finditer(r'\{.*?\}', derived)
-                for placeholder in placeholders:
-                    placeholder = placeholder.group()
-                    key = '_' * len(derived) + '{:d}_'.format(len(self.depends) + 1)
-                    assert key not in derived
-                    derived = derived.replace(placeholder, key)
-                    self.depends[key] = placeholder[1:-1]
-                self._derived = derived
-        else:
-            self._derived = bool(self._derived)
+        self.derived = derived
         if fixed is None:
             fixed = prior is None and ref is None
         self.fixed = bool(fixed)
@@ -421,6 +405,27 @@ class Parameter(BaseClass):
                 toret = toret.replace(k, '{{{}}}'.format(v))
             return toret
         return self._derived
+
+    @derived.setter
+    def derived(self, derived):
+        self._derived = derived
+        self.depends = {}
+        if isinstance(derived, str):
+            if self.solved:
+                allowed_dists = ['norm', 'uniform']
+                if self.prior.dist not in allowed_dists or self.prior.is_limited():
+                    raise ParameterError('Prior must be one of {}, with no limits, to use analytic marginalisation for {}'.format(allowed_dists, self))
+            else:
+                placeholders = re.finditer(r'\{.*?\}', derived)
+                for placeholder in placeholders:
+                    placeholder = placeholder.group()
+                    key = '_' * len(derived) + '{:d}_'.format(len(self.depends) + 1)
+                    assert key not in derived
+                    derived = derived.replace(placeholder, key)
+                    self.depends[key] = placeholder[1:-1]
+                self._derived = derived
+        else:
+            self._derived = bool(self._derived)
 
     @property
     def solved(self):
@@ -660,7 +665,7 @@ class BaseParameterCollection(BaseClass):
         if key is not None:
             self.data = [self[kk] for kk in key]
         else:
-            self.data = data.copy()
+            self.data = self.data.copy()
         return self
 
     def pop(self, name, *args, **kwargs):
@@ -838,7 +843,7 @@ class BaseParameterCollection(BaseClass):
         """Return this class state dictionary."""
         state = {'data': [item.__getstate__() for item in self.data]}
         for name in self._attrs:
-            #if hasattr(self, name):
+            # if hasattr(self, name):
             state[name] = getattr(self, name)
         return state
 
@@ -1348,7 +1353,10 @@ class ParameterPrior(BaseClass):
             if self.dist == 'uniform':
                 self.rv = dist(self.limits[0], self.limits[1] - self.limits[0])
             else:
-                self.rv = dist(*self.limits, **kwargs)
+                loc, scale = kwargs['loc'], kwargs['scale']
+                # See notes of https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.truncnorm.html
+                limits = tuple((lim - loc) / scale for lim in limits)
+                self.rv = dist(*limits, **kwargs)
         else:
             self.rv = getattr(stats, self.dist)(**kwargs)
         #self.limits = self.rv.support()
@@ -1456,18 +1464,34 @@ class ParameterPrior(BaseClass):
         return type(other) == type(self) and all(getattr(other, key) == getattr(self, key) for key in ['dist', 'limits', 'attrs'])
 
 
-class ParameterValues(BaseParameterCollection):
+def _reshape(array, shape, current=None):
+    if np.ndim(shape) == 0:
+        shape = (shape, )
+    shape = tuple(shape)
+    ashape = array.shape
+    if current is not None:
+        if np.ndim(current) == 0:
+            current = (current, )
+        return array.reshape(shape + ashape[len(current):])
+    for i in range(1, array.ndim + 1):
+        try:
+            return array.reshape(shape + ashape[i:])
+        except ValueError:
+            continue
+    raise ValueError('Cannot match array of shape {} into shape {}'.format(ashape, shape))
+
+
+class Samples(BaseParameterCollection):
 
     """Class that holds samples drawn from likelihood."""
 
     _type = ParameterArray
-    _attrs = BaseParameterCollection._attrs + ['_enforce', 'outputs']
+    _attrs = BaseParameterCollection._attrs + ['_enforce']
+    _derived = []
 
-    def __init__(self, data=None, params=None, enforce=None, outputs=None, attrs=None):
+    def __init__(self, data=None, params=None, enforce=None, attrs=None):
         self.attrs = dict(attrs or {})
         self.data = []
-        outputs = list(outputs or [])
-        self.outputs = set([str(name) for name in outputs])
         self._enforce = enforce or {'ndmin': 1}
         if params is not None:
             if len(params) != len(data):
@@ -1475,11 +1499,7 @@ class ParameterValues(BaseParameterCollection):
             for param, value in zip(params, data):
                 self[param] = value
         else:
-            super(ParameterValues, self).__init__(data=data, attrs=attrs)
-
-    @property
-    def inputs(self):
-        return [name for name in self.names() if name not in self.outputs]
+            super(Samples, self).__init__(data=data, attrs=attrs)
 
     @staticmethod
     def _get_param(item):
@@ -1487,23 +1507,32 @@ class ParameterValues(BaseParameterCollection):
 
     @property
     def shape(self):
-        if len(self.inputs):
-            return self[self.inputs[0]].shape
+        shapes = [array.shape for array in self.data]
+        if shapes:
+            ndim_max = max(map(len, shapes)) + 1
+            for idim in range(ndim_max):
+                if any(idim >= len(shape) or shape[idim] != shapes[0][idim] for shape in shapes):  # get maximum shared shape
+                    break
+            return shapes[0][:idim]
         return ()
 
     @shape.setter
     def shape(self, shape):
-        previous = self.shape or None
-        for array in self:
-            self.set(_reshape(array, shape, previous=previous))
+        self._reshape(shape)
 
-    def reshape(self, *args):
+    def _reshape(self, shape, current=None):
+        if current is None:
+            current = self.shape or None
+        for array in self:
+            self.set(_reshape(array, shape, current=current))
+
+    def reshape(self, *args, current=None):
         new = self.copy()
         if len(args) == 1:
             shape = args[0]
         else:
             shape = args
-        new.shape = shape
+        new._reshape(shape, current=current)
         return new
 
     def ravel(self):
@@ -1522,14 +1551,6 @@ class ParameterValues(BaseParameterCollection):
         if self.shape:
             return self.shape[0]
         return 0
-
-    def select(self, output=None, **kwargs):
-        toret = super(ParameterValues, self).select(**kwargs)
-        if output is not None:
-            for name in toret.names():
-                if (output and name not in self.outputs) or (not output and name in self.outputs):
-                    del toret[name]
-        return toret
 
     @classmethod
     def concatenate(cls, *others):
@@ -1553,23 +1574,14 @@ class ParameterValues(BaseParameterCollection):
             #print('2', param, new[param], [np.atleast_1d(other[param]) for other in others], len(others))
         return new
 
-    def set(self, item, output=None):
-        super(ParameterValues, self).set(item)
-        if output is None:
-            param = self._get_param(item)
-            output = param.derived and param.fixed
-        if output:
-            self.outputs.add(self._get_name(item))
-
     def update(self, *args, **kwargs):
         """Update collection with new one."""
         if len(args) == 1 and isinstance(args[0], self.__class__):
             other = args[0]
         else:
             other = self.__class__(*args, **kwargs)
-        self.outputs |= other.outputs
         for item in other:
-            self.set(item, output=False)
+            self.set(item)
 
     def __setitem__(self, name, item):
         """
@@ -1591,8 +1603,8 @@ class ParameterValues(BaseParameterCollection):
                 name = self.data[name].param  # list index
             except TypeError:
                 pass
-            is_output = str(name) in self.outputs
-            param = Parameter(name, latex=utils.outputs_to_latex(str(name)) if is_output else None, derived=is_output)
+            is_derived = str(name) in self._derived
+            param = Parameter(name, latex=utils.outputs_to_latex(str(name)) if is_derived else None, derived=is_derived)
             if param in self:
                 param = self[param].param.clone(param)
             item = ParameterArray(item, param, **self._enforce)
@@ -1655,10 +1667,50 @@ class ParameterValues(BaseParameterCollection):
 
     def match(self, other, eps=1e-8, params=None):
         if params is None:
-            params = set(self.names(output=False)) & set(other.names(output=False))
+            params = set(self.names(derived=False)) & set(other.names(derived=False))
         from scipy import spatial
         kdtree = spatial.cKDTree(np.column_stack([self[name].ravel() for name in params]), leafsize=16, compact_nodes=True, copy_data=False, balanced_tree=True, boxsize=None)
         array = np.column_stack([other[name].ravel() for name in params])
         dist, indices = kdtree.query(array, k=1, eps=0, p=2, distance_upper_bound=eps)
         mask = indices < self.size
         return np.unravel_index(np.flatnonzero(mask), shape=other.shape), np.unravel_index(indices[mask], shape=self.shape)
+
+    @classmethod
+    @CurrentMPIComm.enable
+    def bcast(cls, value, mpicomm=None, mpiroot=0):
+        state = None
+        if mpicomm.rank == mpiroot:
+            state = value.__getstate__()
+            state['data'] = [array['param'] for array in state['data']]
+        state = mpicomm.bcast(state, root=mpiroot)
+        for ivalue, param in enumerate(state['data']):
+            state['data'][ivalue] = {'value': mpi.bcast(value.data[ivalue] if mpicomm.rank == mpiroot else None, mpicomm=mpicomm, mpiroot=mpiroot), 'param': param}
+        return cls.from_state(state)
+
+    @CurrentMPIComm.enable
+    def send(self, dest, tag=0, mpicomm=None):
+        state = self.__getstate__()
+        state['data'] = [array['param'] for array in state['data']]
+        mpicomm.send(state, dest=dest, tag=tag)
+        for array in self:
+            mpi.send(array, dest=dest, tag=tag, mpicomm=mpicomm)
+
+    @classmethod
+    @CurrentMPIComm.enable
+    def recv(cls, source=mpi.ANY_SOURCE, tag=mpi.ANY_TAG, mpicomm=None):
+        state = mpicomm.recv(source=source, tag=tag)
+        for ivalue, param in enumerate(state['data']):
+            state['data'][ivalue] = {'value': mpi.recv(source, tag=tag, mpicomm=mpicomm), 'param': param}
+        return cls.from_state(state)
+
+    @classmethod
+    @CurrentMPIComm.enable
+    def sendrecv(cls, value, source=0, dest=0, tag=0, mpicomm=None):
+        if dest == source:
+            return value.copy()
+        if mpicomm.rank == source:
+            value.send(dest=dest, tag=tag, mpicomm=mpicomm)
+        toret = None
+        if mpicomm.rank == dest:
+            toret = cls.recv(source=source, tag=tag, mpicomm=mpicomm)
+        return toret

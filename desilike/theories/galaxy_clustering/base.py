@@ -2,7 +2,7 @@ import numpy as np
 from scipy import special
 
 from desilike.utils import jnp
-from desilike.theories.utils import get_cosmo, external_cosmo
+from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo
 from desilike.base import BaseCalculator
 from desilike import plotting
 from . import utils
@@ -55,13 +55,14 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
             power = KaiserTracerPowerSpectrumMultipoles(k=self.k, ells=self.ells)
         self.power = power
         self.power.update(k=self.kin, ells=self.ells)
+        self.power.params = self.params.copy()
+        self.params.clear()
 
     def calculate(self):
         power = [jnp.interp(np.log10(self.lowk), np.log10(self.kin), p) for p in self.power.power]
         power = jnp.vstack([jnp.concatenate([p, p[-1] * self.pad_highk], axis=-1) for p in power])
         s, corr = self.fftlog(power)
         self.corr = jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
-        return self
 
     def plot(self, fn=None, kw_save=None):
         # Comparison to brute-force (non-fftlog) computation
@@ -142,7 +143,7 @@ class APEffect(BaseCalculator):
                 self.cosmo_requires = {'background': {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}}
         else:
             raise ValueError('mode must be one of ["qiso", "qap", "qisoqap", "qparqper", "distances"]')
-        if cosmo is None: cosmo = self.fiducial
+        if cosmo is None: cosmo = Cosmoprimo(fiducial=self.fiducial)
         self.cosmo = cosmo
 
     def calculate(self, **params):
@@ -297,12 +298,12 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         if all(np.allclose(ss, self.sin) for ss in self.s):
             self.smask = None
         else:
-            self.smask = [np.searchsorted(self.sin, ss, side='left') for ss in self.k]
+            self.smask = [np.searchsorted(self.sin, ss, side='left') for ss in self.s]
             assert all(smask.min() >= 0 and smask.max() < ss.size for ss, smask in zip(self.s, self.smask))
             self.smask = np.concatenate(self.smask, axis=0)
         if theory is None:
             from .full_shape import KaiserTracerCorrelationFunctionMultipoles
-            theory = KaiserTracerCorrelationFunctionMultipoles(k=self.k, ells=self.ells)
+            theory = KaiserTracerCorrelationFunctionMultipoles(s=self.s, ells=self.ells)
         self.theory = theory
         self.theory.update(s=self.sin, ells=self.ells)
 

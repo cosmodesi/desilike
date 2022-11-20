@@ -3,7 +3,7 @@ import os
 import numpy as np
 
 from desilike import utils
-from desilike.bindings import LikelihoodGenerator
+from desilike.bindings import LikelihoodGenerator, get_likelihood_params
 
 
 from desilike.cosmo import ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, _make_list
@@ -76,10 +76,6 @@ class Fourier(Section):
         return self.sigma_rz(8., z, of=of)
 
 
-def get_params(like):
-    return like.runtime_info.pipeline.params.select(derived=False)
-
-
 def MontePythonLikelihoodFactory(cls, module=None):
 
     from montepython.likelihood_class import Likelihood
@@ -87,7 +83,7 @@ def MontePythonLikelihoodFactory(cls, module=None):
     def __init__(self, path, data, command_line):
         Likelihood.__init__(self, path, data, command_line)
         self.like = cls()
-        self._params = get_params(self.like)
+        self._params = get_likelihood_params(self.like)
         self.nuisance = self.use_nuisance = [param.name for param in self._params]  # required by MontePython
         self._requires = MontePythonEngine.get_requires(self.like.runtime_info.pipeline.get_cosmo_requires())
         # On two steps, otherwise z_max_pk and P_k_max_h become zero
@@ -135,7 +131,7 @@ class MontePythonLikelihoodGenerator(LikelihoodGenerator):
             return di
 
         parameters, likelihood_attrs = {}, {}
-        for param in get_params(cls()):
+        for param in get_likelihood_params(cls()):
             prior = decode_prior(param.prior)
             name = '{}.{}'.format(cls.__name__, param.name)
             for attr in ['center', 'variance']:

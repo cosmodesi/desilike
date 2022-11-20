@@ -4,7 +4,7 @@ import numpy as np
 
 from desilike import utils
 from desilike.io import BaseConfig
-from desilike.bindings import LikelihoodGenerator
+from desilike.bindings import LikelihoodGenerator, get_likelihood_params
 
 
 from desilike.cosmo import ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, _make_list
@@ -124,33 +124,6 @@ def CobayaLikelihoodFactory(cls, module=None):
         kwargs = {name: getattr(self, name) for name in inspect.getargspec(cls).args}
         self.like = cls(**kwargs)
         """
-        params = {}
-
-        def decode_prior(prior):
-            di = {}
-            di['dist'] = prior.dist
-            if prior.is_limited():
-                di['min'], di['max'] = prior.limits
-            for name in ['loc', 'scale']:
-                if hasattr(prior, name):
-                    di[name] = getattr(prior, name)
-            return di
-
-        for param in self.like.runtime_info.pipeline.params:
-            if param.derived:
-                continue
-            if param.fixed:
-                params[param.name] = param.value
-            else:
-                di = {'latex': param.latex()}
-                di['prior'] = decode_prior(param.prior)
-                if param.ref.is_proper():
-                    di['ref'] = decode_prior(param.ref)
-                if param.proposal is not None:
-                    di['proposal'] = param.proposal
-                params[param.name] = di
-
-        self._params = params
 
     def get_requirements(self):
         """Return dictionary specifying quantities calculated by a theory code are needed."""
@@ -183,9 +156,33 @@ class CobayaLikelihoodGenerator(LikelihoodGenerator):
     def get_code(self, likelihood):
         cls, fn, code = super(CobayaLikelihoodGenerator, self).get_code(likelihood)
         dirname = os.path.dirname(fn)
-        like = CobayaLikelihoodFactory(cls)()
-        like.initialize()
-        BaseConfig(dict(stop_at_error=True, params=like._params)).write(os.path.join(dirname, cls.__name__ + '.yaml'))
+        params = {}
+
+        def decode_prior(prior):
+            di = {}
+            di['dist'] = prior.dist
+            if prior.is_limited():
+                di['min'], di['max'] = prior.limits
+            for name in ['loc', 'scale']:
+                if hasattr(prior, name):
+                    di[name] = getattr(prior, name)
+            return di
+
+        for param in get_likelihood_params(cls()):
+            if param.derived or param.solved:
+                continue
+            if param.fixed:
+                params[param.name] = param.value
+            else:
+                di = {'latex': param.latex()}
+                di['prior'] = decode_prior(param.prior)
+                if param.ref.is_proper():
+                    di['ref'] = decode_prior(param.ref)
+                if param.proposal is not None:
+                    di['proposal'] = param.proposal
+                params[param.name] = di
+
+        BaseConfig(dict(stop_at_error=True, params=params)).write(os.path.join(dirname, cls.__name__ + '.yaml'))
         return cls, fn, code
 
 

@@ -111,9 +111,6 @@ params:
   Ap:
     derived: True
     latex: 'A_{p}'
-  kp_rs:
-    derived: True
-    latex: 'k_{p} r_{\mathrm{drag}}'
   f_sqrt_Ap:
     derived: True
     latex: 'f A_{p}^{1/2}'

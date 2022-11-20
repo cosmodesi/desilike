@@ -163,7 +163,7 @@ class Emulator(BaseClass):
 
         clsdict = {}
 
-        def new_initialize(self):
+        def new_initialize(self, **kwargs):
             pass
 
         def new_calculate(self, **params):

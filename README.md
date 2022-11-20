@@ -65,3 +65,14 @@ python setup.py develop --user
 ## License
 
 **desilike** is free software distributed under a BSD3 license. For details see the [LICENSE](https://github.com/cosmodesi/desilike/blob/main/LICENSE).
+
+
+## Acknowledgments
+
+- Stephen Chen, Mark Maus and Martin White for wrappers for velocileptors: https://github.com/sfschen/velocileptors, https://github.com/martinjameswhite/CobayaLSS
+- Cullan Howlett, Yan Xiang Lai for wrapper for pybird: https://github.com/pierrexyz/pybird, https://github.com/CullanHowlett/pybird
+- Samuel Brieden, Hector Gil-Marin for ShapeFit
+- Stephen Chen and Mark Maus for Taylor expansion emulator: https://github.com/sfschen/velocileptors_shapefit
+- Stephen Chen and Joe DeRose for MLP emulator: https://github.com/sfschen/EmulateLSS
+- Cobaya, CosmoSIS bindings inspired by firecrown: https://github.com/LSSTDESC/firecrown
+- Inspiration from cobaya: https://github.com/CobayaSampler/cobaya

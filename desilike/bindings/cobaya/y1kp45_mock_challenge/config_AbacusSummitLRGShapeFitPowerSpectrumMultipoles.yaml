@@ -1,0 +1,7 @@
+likelihood:
+  desilike.bindings.cobaya.tests.AbacusSummitShapeFitPowerSpectrumLikelihoodMultipoles: null
+
+sampler:
+  mcmc:
+
+output: _chains/test

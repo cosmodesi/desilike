@@ -15,16 +15,16 @@ def test_base():
     print(theory(dm=0.01, b1=1.).power)
     theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     print(theory.runtime_info.pipeline.params)
-    print(theory(A_s=2e-9, b1=1.).corr)
+    print(theory(dm=0.01, b1=1.).corr)
 
     from desilike.theories.galaxy_clustering import PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles
 
     theory = PyBirdTracerPowerSpectrumMultipoles()
     print(theory.runtime_info.pipeline.params)
-    print(theory(dm=0.01, b1=1.).power)
+    print(theory(A_s=2e-9, b1=1.).power)
     theory = PyBirdTracerCorrelationFunctionMultipoles()
     print(theory.runtime_info.pipeline.params)
-    print(theory(dm=0.01, b1=1.).corr)
+    print(theory(A_s=2e-9, b1=1.).corr)
 
 
 def test_likelihood():

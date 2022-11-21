@@ -181,6 +181,7 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
     def calculate(self):
         from velocileptors.LPT.lpt_rsd_fftw import LPT_RSD
         self.lpt = LPT_RSD(self.kin, self.template.pk_dd, **self.options)
+        # print(self.template.f, self.k.shape, self.template.qpar, self.template.qper, self.kin.shape, self.template.pk_dd.shape)
         self.lpt.make_pltable(self.template.f, kv=self.k, apar=self.template.qpar, aperp=self.template.qper, ngauss=3)
         lpttable = {0: self.lpt.p0ktable, 2: self.lpt.p2ktable, 4: self.lpt.p4ktable}
         self.lpttable = np.array([lpttable[ell] for ell in self.ells])

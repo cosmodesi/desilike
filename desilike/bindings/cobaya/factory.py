@@ -6,7 +6,7 @@ from desilike.io import BaseConfig
 from desilike.bindings.base import LikelihoodGenerator, get_likelihood_params
 
 
-from desilike.cosmo import ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, _make_list
+from desilike.cosmo import ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
 
 
 class CobayaEngine(ExternalEngine):
@@ -35,6 +35,9 @@ class CobayaEngine(ExternalEngine):
                         toret['rdrag'] = None
                 elif section == 'fourier':
                     tmp = {}
+                    if name == 'sigma8_z':
+                        name = 'pk_interpolator'
+                        attrs['non_linear'] = False
                     if name == 'pk_interpolator':
                         tmp['nonlinear'] = attrs['non_linear']
                         tmp['z'] = attrs['z']
@@ -65,15 +68,19 @@ class Section(BaseSection):
 
 class Background(Section):
 
+    @flatarray(dtype=np.float64)
     def efunc(self, z):
         return self.provider.get_Hubble(z) / (100. * self.h)
 
+    @flatarray(dtype=np.float64)
     def comoving_radial_distance(self, z):
         return self.provider.get_comoving_radial_distance(z) * self.h
 
+    @flatarray(dtype=np.float64)
     def angular_diameter_distance(self, z):
         return self.provider.get_angular_diameter_distance(z) * self.h
 
+    @flatarray(dtype=np.float64)
     def comoving_angular_distance(self, z):
         return self.angular_diameter_distance(z) * (1. + z)
 

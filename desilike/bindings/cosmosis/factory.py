@@ -6,7 +6,7 @@ from scipy import constants, stats
 from desilike import utils
 from desilike.bindings.base import LikelihoodGenerator, get_likelihood_params
 
-from desilike.cosmo import ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, _make_list
+from desilike.cosmo import ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
 
 
 class CosmoSISEngine(ExternalEngine):
@@ -23,12 +23,15 @@ class Section(BaseSection):
 
 class Background(Section):
 
+    @flatarray(dtype=np.float64)
     def efunc(self, z):
         return np.interp(z, self.block['distances', 'z'], (constants.c / 1e3) * self.block['distances', 'H'] / (100. * self.h))
 
+    @flatarray(dtype=np.float64)
     def angular_diameter_distance(self, z):
         return np.interp(z, self.block['distances', 'z'], self.block['distances', 'D_A'] * self.h)
 
+    @flatarray(dtype=np.float64)
     def comoving_angular_distance(self, z):
         return self.angular_diameter_distance(z) * (1. + z)
 

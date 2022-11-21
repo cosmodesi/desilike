@@ -4,6 +4,7 @@ from . import utils
 
 from cosmoprimo.cosmology import BaseEngine, BaseSection, CosmologyError
 from cosmoprimo.interpolator import PowerSpectrumInterpolator1D, PowerSpectrumInterpolator2D
+from cosmoprimo.utils import flatarray
 
 
 def _make_list(li, length=None, isinst=(list, tuple)):
@@ -59,4 +60,7 @@ class ExternalEngine(BaseEngine):
                         attrs['of'] = [tuple(_make_list(of, length=2)) for of in attrs['of']]
                         for a in ['z', 'k']: attrs[a] = concatenate(attrs[a])
                         attrs['non_linear'] = attrs.get('non_linear', False)
+                    if name == 'sigma8_z':
+                        attrs['of'] = [tuple(_make_list(of, length=2)) for of in attrs['of']]
+                        for a in ['z']: attrs[a] = concatenate(attrs[a])
         return requires

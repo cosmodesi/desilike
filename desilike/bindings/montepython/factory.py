@@ -6,7 +6,7 @@ from desilike import utils
 from desilike.bindings.base import LikelihoodGenerator, get_likelihood_params
 
 
-from desilike.cosmo import ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, _make_list
+from desilike.cosmo import ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
 
 
 class MontePythonEngine(ExternalEngine):
@@ -18,8 +18,10 @@ class MontePythonEngine(ExternalEngine):
             for name, attrs in names.items():
                 if section == 'fourier':
                     toret['output'].add('mPk')
+                    if name == 'sigma8_z':
+                        toret['z_max_pk'] = max(toret.get('z_max_pk', 0.), attrs['z'].max())
                     if name == 'pk_interpolator':
-                        toret['z_max_pk'] = attrs['z'].max()
+                        toret['z_max_pk'] = max(toret.get('z_max_pk', 0.), attrs['z'].max())
                         toret['P_k_max_h/Mpc'] = np.max(attrs.get('k', 1))
         toret['output'] = ' '.join(toret['output'])
         return toret
@@ -34,12 +36,15 @@ class Section(BaseSection):
 
 class Background(Section):
 
+    @flatarray(dtype=np.float64)
     def efunc(self, z):
         return self.classy.Hubble(z) / (100. * self.h)
 
+    @flatarray(dtype=np.float64)
     def angular_diameter_distance(self, z):
         return self.classy.angular_distance(z) * self.h
 
+    @flatarray(dtype=np.float64)
     def comoving_angular_distance(self, z):
         return self.angular_diameter_distance(z) * (1. + z)
 

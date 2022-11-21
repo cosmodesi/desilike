@@ -1,0 +1,35 @@
+theory:
+  camb:
+    stop_at_error: true
+    extra_args:
+      num_massive_neutrinos: 1
+      halofit_version: mead
+
+likelihood:
+  desilike.bindings.cobaya.y1kp45_mock_challenge.AbacusSummitLRGFullPowerSpectrumMultipoles: null
+
+params:
+  As:
+    prior:
+      min: 5.0e-10
+      max: 8.0e-09
+    ref: 2.0e-09
+    proposal: 1.0e-10
+  ombh2: 0.02242
+  omch2:
+    prior:
+      min: 0.05
+      max: 0.2
+    ref: 0.11933
+    proposal: 0.01
+  H0: 67.66
+  tau: 0.0561
+  mnu: 0.06
+  nnu: 3.046
+  ns: 0.9665
+  YHe: 0.2454
+
+sampler:
+  mcmc:
+
+output: _chains/test

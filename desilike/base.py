@@ -108,7 +108,7 @@ class BasePipeline(BaseClass):
     def calculate(self, **params):
         for name in params:
             if name not in self.varied_params:
-                raise PipelineError('Input parameter is not one of varied parameters: {}'.format(self.varied_params))
+                raise PipelineError('Input parameter {} is not one of varied parameters: {}'.format(name, self.varied_params))
         self.param_values.update(params)
         params = self.eval_params(params)
         self.derived = Samples()

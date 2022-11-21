@@ -1,3 +1,3 @@
-from .power_spectrum import ObservedTracerPowerSpectrum
-from .correlation_function import ObservedTracerCorrelationFunction
+from .power_spectrum import ObservedTracerPowerSpectrumMultipoles
+from .correlation_function import ObservedTracerCorrelationFunctionMultipoles
 from .compression import BAOCompression, ShapeFitCompression

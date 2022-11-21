@@ -30,11 +30,11 @@ def test_base():
 def test_likelihood():
 
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
-    from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrum
+    from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrumMultipoles
     from desilike.likelihoods import GaussianLikelihood
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    observable = ObservedTracerPowerSpectrum(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
+    observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
                                              data='_pk/data.npy', mocks='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
                                              theory=theory)
     likelihood = GaussianLikelihood(observables=[observable])
@@ -45,7 +45,7 @@ def test_likelihood():
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     for param in theory.params.select(basename=['alpha*', 'sn*']):
         param.derived = '.best'
-    observable = ObservedTracerPowerSpectrum(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
+    observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
                                              data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                              theory=theory)
     likelihood = GaussianLikelihood(observables=[observable])

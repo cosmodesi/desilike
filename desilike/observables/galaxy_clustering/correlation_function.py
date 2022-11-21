@@ -7,7 +7,7 @@ from desilike.base import BaseCalculator
 from desilike.theories.galaxy_clustering.base import WindowedCorrelationFunctionMultipoles
 
 
-class ObservedTracerCorrelationFunction(BaseCalculator):
+class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
 
     def initialize(self, data=None, mocks=None, wmatrix=None, theory=None, **kwargs):
         self.s, self.ells = None, None
@@ -123,7 +123,7 @@ class ObservedTracerCorrelationFunction(BaseCalculator):
         return self.unpack(np.diag(self.covariance)**0.5)
 
     def __getstate__(self):
-        state = super(ObservedTracerCorrelationFunction, self).__getstate__()
+        state = super(ObservedTracerCorrelationFunctionMultipoles, self).__getstate__()
         for name in ['s', 'ells']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)

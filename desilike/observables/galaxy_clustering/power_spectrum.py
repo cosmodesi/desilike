@@ -7,7 +7,7 @@ from desilike.base import BaseCalculator
 from desilike.theories.galaxy_clustering.base import WindowedPowerSpectrumMultipoles
 
 
-class ObservedTracerPowerSpectrum(BaseCalculator):
+class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
 
     def initialize(self, data=None, mocks=None, wmatrix=None, theory=None, **kwargs):
         self.k, self.ells = None, None
@@ -165,7 +165,7 @@ class ObservedTracerPowerSpectrum(BaseCalculator):
         return self.unpack(np.diag(self.covariance)**0.5)
 
     def __getstate__(self):
-        state = super(ObservedTracerPowerSpectrum, self).__getstate__()
+        state = super(ObservedTracerPowerSpectrumMultipoles, self).__getstate__()
         for name in ['k', 'ells']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)

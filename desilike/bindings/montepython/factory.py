@@ -3,7 +3,7 @@ import os
 import numpy as np
 
 from desilike import utils
-from desilike.bindings import LikelihoodGenerator, get_likelihood_params
+from desilike.bindings.base import LikelihoodGenerator, get_likelihood_params
 
 
 from desilike.cosmo import ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, _make_list

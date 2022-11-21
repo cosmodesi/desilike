@@ -75,7 +75,7 @@ class BasePipeline(BaseClass):
                 raise PipelineError('Parameter {} is not used by any calculator'.format(param))
         self.derived = None
         self._params = params
-        self._varied_params = ParameterCollection([param for param in self._params if param.varied and (not param.derived or param.solved)])
+        self._varied_params = params.select(varied=True, derived=False)
 
     @property
     def params(self):
@@ -107,8 +107,8 @@ class BasePipeline(BaseClass):
 
     def calculate(self, **params):
         for name in params:
-            if name not in self.varied_params:
-                raise PipelineError('Input parameter {} is not one of varied parameters: {}'.format(name, self.varied_params))
+            if name not in self.params:
+                raise PipelineError('Input parameter {} is not one of parameters: {}'.format(name, self.params))
         self.param_values.update(params)
         params = self.eval_params(params)
         self.derived = Samples()

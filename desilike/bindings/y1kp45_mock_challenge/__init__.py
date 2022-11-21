@@ -1,11 +1,5 @@
-import os
-
-import numpy as np
-
-
 def AbacusSummitLRG(cosmo='external', solve=None):
 
-    import desilike
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, FullPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrum
     from desilike.likelihoods import GaussianLikelihood
@@ -26,12 +20,9 @@ def AbacusSummitLRG(cosmo='external', solve=None):
 
 
 if __name__ == '__main__':
-    
-    from desilike import setup_logging
-    from desilike.bindings.cobaya.factory import CobayaLikelihoodGenerator
-    from desilike.bindings.cosmosis.factory import CosmoSISLikelihoodGenerator
-    from desilike.bindings.montepython.factory import MontePythonLikelihoodGenerator
 
+    from desilike import setup_logging
+    from desilike.bindings import CobayaLikelihoodGenerator, CosmoSISLikelihoodGenerator, MontePythonLikelihoodGenerator
 
     for cls in [AbacusSummitLRG]:
         setup_logging('info')

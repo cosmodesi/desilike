@@ -108,6 +108,10 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
         super(ShapeFitPowerSpectrumTemplate, self).initialize(*args, **kwargs)
         self.a = float(a)
         self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=apmode)
+        for param in list(self.params):
+            if param in self.apeffect.params:
+                self.apeffect.params.set(param)
+                del self.params[param]
         self.cosmo = self.fiducial
 
     def calculate(self, f=0.8, dm=0., dn=0.):

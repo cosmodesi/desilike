@@ -108,6 +108,18 @@ params:
       loc: 0.
       scale: 0.1
     latex: dn
+  qpar:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    latex: '\alpha_{\parallel}'
+  qper:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    latex: '\alpha_{\perp}'
   Ap:
     derived: True
     latex: 'A_{p}'

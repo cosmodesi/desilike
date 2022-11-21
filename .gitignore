@@ -17,7 +17,7 @@ doc/_build/
 **/_catalog
 **/_plots
 **/_results
-**/tests/_*
+**/tests/_*/
 **/tests/TestSimpleLikelihood*
 
 # Unit test / coverage reports

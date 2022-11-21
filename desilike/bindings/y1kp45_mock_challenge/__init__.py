@@ -1,6 +1,5 @@
 def AbacusSummitLRGFullPowerSpectrumMultipoles(cosmo='external', solve=None):
 
-    import desilike
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, FullPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrum
     from desilike.likelihoods import GaussianLikelihood
@@ -22,7 +21,6 @@ def AbacusSummitLRGFullPowerSpectrumMultipoles(cosmo='external', solve=None):
 
 def AbacusSummitLRGShapeFitPowerSpectrumMultipoles(solve=None):
 
-    import desilike
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrum
     from desilike.likelihoods import GaussianLikelihood

@@ -20,7 +20,7 @@ class BaseLikelihood(BaseCalculator):
         if not hasattr(self, 'all_params'):
             self.all_params = pipeline.params
             self.solved_params = self.all_params.select(solved=True)
-        sum_loglikelihood = self.loglikelihood
+        sum_loglikelihood = float(self.loglikelihood)
         sum_logprior = 0.
         indices_best, indices_marg = [], []
         for iparam, param in enumerate(self.solved_params):

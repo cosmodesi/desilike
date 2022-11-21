@@ -1,0 +1,4 @@
+TestSimpleLikelihood.a_prior_center = 0.0
+TestSimpleLikelihood.a_prior_variance = 100.0
+TestSimpleLikelihood.b_prior_center = 0.0
+TestSimpleLikelihood.b_prior_variance = 100.0

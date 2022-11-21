@@ -35,7 +35,7 @@ Only strict requirements are:
   - numpy
   - scipy
   - mpi4py (should be optional in the future)
-  - yaml
+  - pyyaml
   - cosmoprimo
 
 ## Installation

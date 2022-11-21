@@ -1,5 +1,5 @@
 likelihood:
-  desilike.bindings.cobaya.tests.AbacusSummitShapeFitPowerSpectrumLikelihoodMultipoles: null
+  desilike.bindings.cobaya.y1kp45_mock_challenge.AbacusSummitLRGShapeFitPowerSpectrumMultipoles: null
 
 sampler:
   mcmc:

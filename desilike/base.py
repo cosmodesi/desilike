@@ -165,6 +165,7 @@ class BasePipeline(BaseClass):
         for calculator in self.calculators:
             if getattr(calculator, 'cosmo_requires', None):
                 calculator.cosmo = cosmo
+                calculator.runtime_info._updated_param_values = True
 
     def jac(self, getter, params=None):
 

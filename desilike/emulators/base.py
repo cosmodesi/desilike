@@ -247,7 +247,7 @@ class Emulator(BaseClass):
 
         fns, names = fn, name
         if names is None:
-            names = self.engines.keys()
+            names = list(self.engines.keys())
         if utils.is_sequence(names):
             if fns is None:
                 fns = [None] * len(names)

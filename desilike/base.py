@@ -4,7 +4,7 @@ import sys
 import numpy as np
 
 from . import mpi
-from .utils import BaseClass, NamespaceDict, Monitor, OrderedSet, jax, use_jax, deep_eq
+from .utils import BaseClass, NamespaceDict, Monitor, OrderedSet, jax, deep_eq
 from .io import BaseConfig
 from .parameter import Parameter, ParameterCollection, ParameterCollectionConfig, ParameterArray, Samples
 
@@ -75,7 +75,7 @@ class BasePipeline(BaseClass):
                 raise PipelineError('Parameter {} is not used by any calculator'.format(param))
         self.derived = None
         self._params = params
-        self._varied_params = self._params.select(varied=True, derived=False)
+        self._varied_params = ParameterCollection([param for param in self._params if param.varied and (not param.derived or param.solved)])
 
     @property
     def params(self):
@@ -536,10 +536,12 @@ class BaseCalculator(BaseClass):
             cls.info = Info({**config.get('info', {}), **cls.info})
             params = ParameterCollectionConfig(config.get('params', {})).init()
             params.update(cls.params)
-            cls.params = params
             init = config.get('init', {})
             if init: kwargs = {**init, **kwargs}
+        else:
+            params = cls.params.deepcopy()
         new = super(BaseCalculator, cls).__new__(cls)
+        new.params = params
         new.runtime_info = RuntimeInfo(new, init=((), kwargs))
         new.mpicomm = mpi.COMM_WORLD
         return new

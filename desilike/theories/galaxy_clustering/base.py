@@ -191,6 +191,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 self.kmask = [np.searchsorted(self.kin, kk, side='left') for kk in self.k]
                 assert all(kmask.min() >= 0 and kmask.max() < kk.size for kk, kmask in zip(self.k, self.kmask))
                 self.kmask = np.concatenate(self.kmask, axis=0)
+            self.wmatrix = None
         else:
             if isinstance(wmatrix, str):
                 from pypower import MeshFFTWindow, BaseMatrix

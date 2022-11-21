@@ -35,7 +35,7 @@ def test_likelihood():
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     observable = ObservedTracerPowerSpectrum(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
-                                             data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
+                                             data='_pk/data.npy', mocks='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
                                              theory=theory)
     likelihood = GaussianLikelihood(observables=[observable])
     print(likelihood(dm=0.), likelihood(dm=0.01), likelihood(b1=2., dm=0.02))

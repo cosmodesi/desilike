@@ -39,5 +39,5 @@ class LikelihoodGenerator(BaseClass):
                     file.write(line + self.line_delimiter)
 
 
-def get_params(like):
+def get_likelihood_params(like):
     return like.runtime_info.pipeline.params.select(derived=False, solved=False)

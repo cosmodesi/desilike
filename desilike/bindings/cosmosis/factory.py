@@ -72,9 +72,6 @@ desilike_name = 'desi'
 
 def CosmoSISLikelihoodFactory(cls, module=None):
 
-    from cosmosis.datablock import SectionOptions
-    from cosmosis.runtime import FunctionModule
-
     def __init__(self, options):
         self.like = cls()
         self._params = get_likelihood_params(self.like)
@@ -102,6 +99,8 @@ def CosmoSISLikelihoodFactory(cls, module=None):
 
     @classmethod
     def build_module(cls):
+        
+        from cosmosis.datablock import SectionOptions
 
         def setup(options):
             options = SectionOptions(options)
@@ -122,6 +121,7 @@ def CosmoSISLikelihoodFactory(cls, module=None):
 
     @classmethod
     def as_module(cls, name):
+        from cosmosis.runtime import FunctionModule
         setup, execute, cleanup = cls.build_module()
         return FunctionModule(name, setup, execute, cleanup)
 

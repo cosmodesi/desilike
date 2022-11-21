@@ -113,8 +113,6 @@ class Fourier(Section):
 
 def CobayaLikelihoodFactory(cls, module=None):
 
-    from cobaya.likelihood import Likelihood
-
     def initialize(self):
         """Prepare any computation, importing any necessary code, files, etc."""
 
@@ -145,6 +143,7 @@ def CobayaLikelihoodFactory(cls, module=None):
     d = {'initialize': initialize, 'get_requirements': get_requirements, 'logp': logp}
     if module is not None:
         d['__module__'] = module
+    from cobaya.likelihood import Likelihood
     return type(Likelihood)(cls.__name__, (Likelihood,), d)
 
 

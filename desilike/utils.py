@@ -27,7 +27,7 @@ except ImportError:
 
 
 def use_jax(array):
-    """Whether to use jax.numpy depending on whether array is jax's object"""
+    """Whether to use jax.numpy depending on whether array is jax object"""
     return jax and isinstance(array, (jaxlib.xla_extension.DeviceArrayBase, jax.core.Tracer))
 
 

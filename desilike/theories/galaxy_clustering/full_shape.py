@@ -175,8 +175,7 @@ class BaseVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelation
 class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMultipoles):
 
     _default_options = dict(kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5)
-    _bias_indices = dict(zip(['alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2', 'sn4'], range(12, 19)))
-    # Slow, ~ 2 sec per iteration
+    # Slow, ~ 4 sec per iteration
 
     def calculate(self):
         from velocileptors.LPT.lpt_rsd_fftw import LPT_RSD

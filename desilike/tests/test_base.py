@@ -1,4 +1,5 @@
 def test_base():
+
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, FullPowerSpectrumTemplate
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
 
@@ -8,7 +9,6 @@ def test_base():
     theory = KaiserTracerCorrelationFunctionMultipoles()
     print(theory.runtime_info.pipeline.params)
     theory(A_s=2e-9, b1=1.).corr
-
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     print(theory.runtime_info.pipeline.params)
@@ -35,8 +35,8 @@ def test_likelihood():
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
-                                             data='_pk/data.npy', mocks='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
-                                             theory=theory)
+                                                       data='_pk/data.npy', mocks='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
+                                                       theory=theory)
     likelihood = GaussianLikelihood(observables=[observable])
     print(likelihood(dm=0.), likelihood(dm=0.01), likelihood(b1=2., dm=0.02))
     #observable.plot(show=False)
@@ -46,8 +46,8 @@ def test_likelihood():
     for param in theory.params.select(basename=['alpha*', 'sn*']):
         param.derived = '.best'
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
-                                             data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
-                                             theory=theory)
+                                                       data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
+                                                       theory=theory)
     likelihood = GaussianLikelihood(observables=[observable])
     print(likelihood.runtime_info.pipeline.params.select(solved=True))
     print(likelihood.varied_params)

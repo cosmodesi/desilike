@@ -90,3 +90,17 @@ def suplabel(axis, label, shift=0, labelpad=5, ha='center', va='center', **kwarg
     else:
         raise Exception('Unexpected axis {}; chose between x and y'.format(axis))
     plt.text(x, y, label, rotation=rotation, transform=fig.transFigure, ha=ha, va=va, **kwargs)
+
+
+def plotter(func):
+    from functools import wraps
+
+    wraps(func)
+    def wrapper(self, fn=None, kw_save=None, show=False, **kwargs):
+        toret = func(self, **kwargs)
+        if fn is not None:
+            savefig(fn, fig=plt.gcf(), **(kw_save or {}))
+        if show: plt.show()
+        return toret
+
+    return wrapper

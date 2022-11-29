@@ -242,7 +242,7 @@ class Emulator(BaseClass):
 
         return self.mpicomm.bcast(toret, root=0)
 
-    def plot(self, fn=None, name=None, kw_save=None, nmax=100, **kwargs):
+    def plot(self, fn=None, name=None, kw_save=None, nmax=100, show=False, **kwargs):
         from matplotlib import pyplot as plt
 
         fns, names = fn, name
@@ -283,6 +283,8 @@ class Emulator(BaseClass):
                         toret.append(lax)
                         if fn is not None:
                             plotting.savefig(fn, fig=fig, **(kw_save or {}))
+                        if show is None:
+                            plt.show()
         return toret
 
     def __getstate__(self):

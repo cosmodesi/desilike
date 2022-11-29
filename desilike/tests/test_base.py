@@ -1,7 +1,10 @@
-def test_base():
+import numpy as np
 
-    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, FullPowerSpectrumTemplate
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
+
+def test_galaxy_clustering():
+
+    from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, FullPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles, PNGTracerPowerSpectrumMultipoles
 
     theory = KaiserTracerPowerSpectrumMultipoles()
     print(theory.runtime_info.pipeline.params)
@@ -25,6 +28,25 @@ def test_base():
     theory = PyBirdTracerCorrelationFunctionMultipoles()
     print(theory.runtime_info.pipeline.params)
     print(theory(A_s=2e-9, b1=1.).corr)
+
+    theory = PNGTracerPowerSpectrumMultipoles(method='prim')
+    print(theory.runtime_info.pipeline.params)
+    params = dict(fnl_loc=100., b1=2.)
+    theory2 = PNGTracerPowerSpectrumMultipoles(method='matter')
+    assert np.allclose(theory2(**params).power[0], theory(**params).power[0], rtol=2e-3)
+    assert not np.allclose(theory2(fnl_loc=0.).power[0], theory().power[0], rtol=2e-3)
+
+
+def test_observable():
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrumMultipoles
+
+    theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
+                                                       data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
+                                                       theory=theory)
+    observable()
+    observable.wmatrix.plot(show=True)
 
 
 def test_likelihood():
@@ -67,6 +89,7 @@ def test_cosmo():
 
 if __name__ == '__main__':
 
-    test_base()
-    #test_likelihood()
-    #test_cosmo()
+    test_galaxy_clustering()
+    test_observable()
+    test_likelihood()
+    test_cosmo()

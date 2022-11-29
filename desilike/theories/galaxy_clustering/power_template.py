@@ -64,6 +64,24 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
         return self.apeffect.ap_k_mu(k, mu)
 
 
+class FixedPowerSpectrumTemplate(BasePowerSpectrumTemplate):
+
+    def initialize(self, *args, **kwargs):
+        super(FixedPowerSpectrumTemplate, self).initialize(*args, cosmo=None, **kwargs)
+        self.cosmo = self.fiducial
+
+    @property
+    def qpar(self):
+        return 1.
+
+    @property
+    def qper(self):
+        return 1.
+
+    def ap_k_mu(self, k, mu):
+        return 1., k[..., None], mu
+
+
 class FullPowerSpectrumTemplate(BasePowerSpectrumTemplate):
 
     def initialize(self, *args, **kwargs):
@@ -105,7 +123,7 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
 class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpectrumExtractor):
 
     def initialize(self, *args, a=0.6, apmode='qparqper', **kwargs):
-        super(ShapeFitPowerSpectrumTemplate, self).initialize(*args, **kwargs)
+        super(ShapeFitPowerSpectrumTemplate, self).initialize(*args, cosmo=None, **kwargs)
         self.a = float(a)
         self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=apmode)
         for param in list(self.params):

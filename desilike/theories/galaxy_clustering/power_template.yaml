@@ -1,3 +1,23 @@
+class: FixedPowerSpectrumTemplate
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Fixed power spectrum template
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+
+params:
+
+---
+
 class: FullPowerSpectrumTemplate
 
 info:

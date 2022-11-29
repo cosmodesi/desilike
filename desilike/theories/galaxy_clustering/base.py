@@ -64,7 +64,8 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         s, corr = self.fftlog(power)
         self.corr = jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
 
-    def plot(self, fn=None, kw_save=None):
+    @plotting.plotter
+    def plot(self):
         # Comparison to brute-force (non-fftlog) computation
         # Convergence towards brute-force when decreasing damping sigma
         # Difference between fftlog and brute-force: ~ effect of truncation / damping
@@ -92,8 +93,6 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         lax[0].legend()
         lax[0].set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
         lax[-1].set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
-        if fn is not None:
-            plotting.savefig(fn, fig=fig, **(kw_save or {}))
         return lax
 
 
@@ -142,7 +141,7 @@ class APEffect(BaseCalculator):
             if external_cosmo(cosmo):
                 self.cosmo_requires = {'background': {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}}
         else:
-            raise ValueError('mode must be one of ["qiso", "qap", "qisoqap", "qparqper", "distances"]')
+            raise ValueError('Unknown mode {}; it must be one of ["qiso", "qap", "qisoqap", "qparqper", "distances"]'.format(self.mode))
         if cosmo is None: cosmo = Cosmoprimo(fiducial=self.fiducial)
         self.cosmo = cosmo
 
@@ -264,7 +263,8 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 state[name] = getattr(self, name)
         return state
 
-    def plot(self, fn=None, kw_save=None):
+    @plotting.plotter
+    def plot(self):
         from matplotlib import pyplot as plt
         fig, ax = plt.subplots()
         ax.plot([], [], linestyle='--', color='k', label='theory')
@@ -279,8 +279,6 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         ax.legend()
         ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        if fn is not None:
-            plotting.savefig(fn, fig=fig, **(kw_save or {}))
         return ax
 
 

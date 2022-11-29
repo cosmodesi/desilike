@@ -88,7 +88,8 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
         self.k, self.ells, flatdata, shotnoise = self.mpicomm.bcast((self.k, self.ells, flatdata, shotnoise) if self.mpicomm.rank == 0 else None, root=0)
         return flatdata, shotnoise, list_y
 
-    def plot(self, fn=None, kw_save=None, show=False):
+    @plotting.plotter
+    def plot(self):
         from matplotlib import pyplot as plt
         height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
         figsize = (6, 1.5 * sum(height_ratios))
@@ -107,12 +108,10 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
         lax[0].legend()
         lax[0].set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        if fn is not None:
-            plotting.savefig(fn, fig=fig, **(kw_save or {}))
-        if show: plt.show()
         return lax
 
-    def plot_bao(self, fn=None, kw_save=None, show=False):
+    @plotting.plotter
+    def plot_bao(self):
         from matplotlib import pyplot as plt
         height_ratios = [1] * len(self.ells)
         figsize = (6, 2 * sum(height_ratios))
@@ -134,9 +133,6 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
             lax[ill].set_ylabel(r'$k \Delta P_{{{:d}}}(k)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]'.format(ell))
         for ax in lax: ax.grid(True)
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        if fn is not None:
-            plotting.savefig(fn, fig=fig, **(kw_save or {}))
-        if show: plt.show()
         return lax
 
     def unpack(self, array):

@@ -73,7 +73,8 @@ class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
         self.s, self.ells, flatdata = self.mpicomm.bcast((self.s, self.ells, flatdata) if self.mpicomm.rank == 0 else None, root=0)
         return flatdata, list_y
 
-    def plot(self, fn=None, kw_save=None, show=False):
+    @plotting.plotter
+    def plot(self):
         from matplotlib import pyplot as plt
         height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
         figsize = (6, 1.5 * sum(height_ratios))
@@ -92,9 +93,6 @@ class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
         lax[0].legend()
         lax[0].set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
         lax[-1].set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
-        if fn is not None:
-            plotting.savefig(fn, fig=fig, **(kw_save or {}))
-        if show: plt.show()
         return lax
 
     def unpack(self, array):

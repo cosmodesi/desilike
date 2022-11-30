@@ -37,6 +37,7 @@ Only strict requirements are:
   - mpi4py (should be optional in the future)
   - pyyaml
   - cosmoprimo
+  - tabulate
 
 ## Installation
 

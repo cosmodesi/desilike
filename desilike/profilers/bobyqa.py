@@ -1,7 +1,7 @@
 import numpy as np
 
-from cosmofit import utils
-from cosmofit.samples.profiles import Profiles, ParameterValues, ParameterBestFit, ParameterCovariance
+from desilike import utils
+from desilike.samples.profiles import Profiles, Samples, ParameterBestFit, ParameterCovariance
 
 from .base import BaseProfiler
 
@@ -49,7 +49,7 @@ class BOBYQAProfiler(BaseProfiler):
             return profiles
         profiles.set(bestfit=ParameterBestFit(list(result.x) + [- 0.5 * result.f], params=self.varied_params + ['logposterior']))
         cov = utils.inv(result.hessian)
-        profiles.set(error=ParameterValues(np.diag(cov)**0.5, params=self.varied_params))
+        profiles.set(error=Samples(np.diag(cov)**0.5, params=self.varied_params))
         profiles.set(covariance=ParameterCovariance(cov, params=self.varied_params))
         print(profiles.error)
         return profiles

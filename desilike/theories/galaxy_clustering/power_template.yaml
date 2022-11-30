@@ -160,3 +160,70 @@ params:
     ref:
       limits: [0.75, 0.85]
     latex: 'f'
+
+---
+
+class: BAOPowerSpectrumParameterization
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Power spectrum parameterization for BAO
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  fiducial: DESI
+
+params:
+  qpar:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      dist: norm
+      loc: 1.
+      scale: 0.02
+    latex: '\alpha_{\parallel}'
+  qper:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    latex: '\alpha_{\perp}'
+  qiso:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    latex: '\alpha_{\mathrm{iso}}'
+  qap:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    latex: '\alpha_{\mathrm{ap}}'
+  DM_over_rd:
+    derived: True
+    latex: 'D_{\mathrm{M}}/r_{d}'
+  DH_over_rd:
+    derived: True
+    latex: 'D_{\mathrm{H}}/r_{d}'
+  DH_over_DM:
+    derived: True
+    latex: 'D_{\mathrm{H}}/D_{\mathrm{M}}'
+  DV_over_rd:
+    derived: True
+    latex: '(D_{\mathrm{H}} D_{\mathrm{M}}^{2} z)^{1/3}/r_{d}'

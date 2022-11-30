@@ -51,6 +51,15 @@ class BasePipeline(BaseClass):
         for calculator in self.calculators:
             calculator.mpicomm = mpicomm
 
+    @property
+    def tocalculate(self):
+        return any(calculator.runtime_info.tocalculate for calculator in self.calculators)
+
+    @tocalculate.setter
+    def tocalculate(self, tocalculate):
+        for calculator in self.calculators:
+            calculator.runtime_info.tocalculate = True
+
     def _set_params(self, params=None, quiet=False):
         params_from_calculator = {}
         ref_params = ParameterCollection(params)
@@ -165,7 +174,7 @@ class BasePipeline(BaseClass):
         for calculator in self.calculators:
             if getattr(calculator, 'cosmo_requires', None):
                 calculator.cosmo = cosmo
-                calculator.runtime_info._updated_param_values = True
+                calculator.runtime_info.tocalculate = True
 
     def jac(self, getter, params=None):
 
@@ -177,7 +186,7 @@ class BasePipeline(BaseClass):
             for calculator in self.calculators:  # start by first calculator, and by the last one
                 runtime_info = calculator.runtime_info
                 runtime_info.set_param_values(params, full=True)
-                #runtime_info._updated_param_values = any(use_jax(value) for value in runtime_info.param_values.values())
+                #runtime_info._tocalculate = any(use_jax(value) for value in runtime_info.param_values.values())
                 runtime_info._calculate()
             return getter()
 
@@ -364,7 +373,7 @@ class RuntimeInfo(BaseClass):
         if init is None: init = ((), {})
         self.init = tuple(init)
         self.initialized, self.calculated = False, False
-        self._updated_param_values = True
+        self._tocalculate = True
 
     @property
     def requires(self):
@@ -449,7 +458,11 @@ class RuntimeInfo(BaseClass):
 
     @property
     def tocalculate(self):
-        return self._updated_param_values or any(require.runtime_info.calculated for require in self.requires)
+        return self._tocalculate or any(require.runtime_info.calculated for require in self.requires)
+
+    @tocalculate.setter
+    def tocalculate(self, tocalculate):
+        self._tocalculate = tocalculate
 
     def _calculate(self, **params):
         self.set_param_values(params)
@@ -464,7 +477,7 @@ class RuntimeInfo(BaseClass):
             self.calculated = True
         else:
             self.calculated = False
-        self._updated_param_values = False
+        self._tocalculate = False
 
     def calculate(self, **params):
         self._calculate(**params)
@@ -482,14 +495,14 @@ class RuntimeInfo(BaseClass):
                 if param in self.varied_params:
                     basename = self.varied_params[param].basename
                     if self.param_values[basename] != value or type(self.param_values[basename]) is not type(value):
-                        self._updated_param_values = True
+                        self._tocalculate = True
                     self._param_values[basename] = value
         else:
             for basename, value in param_values.items():
                 basename = str(basename)
                 if basename in self.param_values:
                     if self._param_values[basename] != value or type(self.param_values[basename]) is not type(value):
-                        self._updated_param_values = True
+                        self._tocalculate = True
                     self._param_values[basename] = value
 
     def __getstate__(self):

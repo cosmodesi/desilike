@@ -32,6 +32,7 @@ class PNGTracerPowerSpectrumMultipoles(TrapzTheoryPowerSpectrumMultipoles):
     def calculate(self, b1=2., sigmas=0., sn0=0., **params):
         pk_dd = self.template.pk_dd
         cosmo = self.template.cosmo
+        f = self.template.f
         pk_prim = cosmo.get_primordial(mode='scalar').pk_interpolator()(self.kin)  # power_prim is ~ k^(n_s - 1)
         if self.method == 'prim':
             pphi_prim = 9 / 25 * 2 * np.pi**2 / self.kin**3 * pk_prim / cosmo.h**3
@@ -58,5 +59,5 @@ class PNGTracerPowerSpectrumMultipoles(TrapzTheoryPowerSpectrumMultipoles):
         # bfnl_loc is typically 2 * delta_c * (b1 - p)
         bias = b1 + bfnl_loc * alpha
         fog = 1. / (1. + sigmas**2 * self.k[:, None]**2 * self.mu**2 / 2.)**2.
-        pkmu = fog * (bias[:, None] + self.template.f * self.mu**2)**2 * pk_dd[:, None] + sn0
+        pkmu = fog * (bias[:, None] + f * self.mu**2)**2 * pk_dd[:, None] + sn0
         self.power = self.to_poles(pkmu)

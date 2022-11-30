@@ -175,3 +175,29 @@ class BAOExtractor(BaseCalculator):
             self.qpar = self.DH_over_rd / self.DH_over_rd_fid
             self.qper = self.DM_over_rd / self.DM_over_rd_fid
             self.qiso = self.DV_over_rd / self.DV_over_rd_fid
+            self.qap = self.DH_over_DM / self.DH_over_DM_fid
+        return self
+
+
+class BAOPowerSpectrumTemplate(BasePowerSpectrumExtractor):
+
+    def initialize(self, *args, apmode='qparqper', with_now='peakaverage', **kwargs):
+        super(BAOPowerSpectrumTemplate, self).initialize(*args, cosmo=None, with_now=with_now, **kwargs)
+        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=apmode)
+        for param in list(self.params):
+            if param in self.apeffect.params:
+                self.apeffect.params.set(param)
+                del self.params[param]
+        self.cosmo = self.fiducial
+        # Set DM_over_rd, etc.
+        BAOExtractor.calculate(self)
+        for name in ['DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd']:
+            setattr(self, name + '_fid', getattr(self, name))
+        # No self.k defined
+
+    def get(self):
+        self.DH_over_rd = self.qpar * self.DH_over_rd_fid
+        self.DM_over_rd = self.qper * self.DM_over_rd_fid
+        self.DV_over_rd = self.apeffect.qiso * self.DV_over_rd_fid
+        self.DH_over_DM = self.apeffect.qap * self.DH_over_DM
+        return self

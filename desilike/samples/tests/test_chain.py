@@ -81,7 +81,7 @@ def test_stats():
 
 
 def test_bcast():
-    from cosmofit.parameter import ParameterArray
+    from desilike.parameter import ParameterArray
     import mpytools as mpy
 
     mpicomm = mpy.COMM_WORLD

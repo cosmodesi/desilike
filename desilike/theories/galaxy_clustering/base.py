@@ -203,6 +203,8 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                     wmatrix = wmatrix.poles
                 else:
                     wmatrix = BaseMatrix.load(fn)
+            else:
+                wmatrix = wmatrix.deepcopy()
             if ellsin is not None:
                 self.ellsin = list(ellsin)
             else:

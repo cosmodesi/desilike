@@ -89,16 +89,18 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
         return flatdata, shotnoise, list_y
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, scaling='kpk'):
+        """ scaling either 'kpk' or 'loglog' """
         from matplotlib import pyplot as plt
         height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
         figsize = (6, 1.5 * sum(height_ratios))
         fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
         fig.subplots_adjust(hspace=0)
         data, model, std = self.data, self.model, self.std
+        k_power = 1 if scaling == 'kpk' else 0
         for ill, ell in enumerate(self.ells):
-            lax[0].errorbar(self.k[ill], self.k[ill] * data[ill], yerr=self.k[ill] * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o', label=r'$\ell = {:d}$'.format(ell))
-            lax[0].plot(self.k[ill], self.k[ill] * model[ill], color='C{:d}'.format(ill))
+            lax[0].errorbar(self.k[ill], self.k[ill]**k_power * data[ill], yerr=self.k[ill]**k_power * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o', label=r'$\ell = {:d}$'.format(ell))
+            lax[0].plot(self.k[ill], self.k[ill]**k_power * model[ill], color='C{:d}'.format(ill))
         for ill, ell in enumerate(self.ells):
             lax[ill + 1].plot(self.k[ill], (data[ill] - model[ill]) / std[ill], color='C{:d}'.format(ill))
             lax[ill + 1].set_ylim(-4, 4)
@@ -106,7 +108,12 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
             lax[ill + 1].set_ylabel(r'$\Delta P_{{{0:d}}} / \sigma_{{ P_{{{0:d}}} }}$'.format(ell))
         for ax in lax: ax.grid(True)
         lax[0].legend()
-        lax[0].set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        if scaling == 'kpk':
+            lax[0].set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        if scaling == 'loglog':
+            lax[0].set_ylabel(r'$P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{3}$]')
+            lax[0].set_yscale('log')
+            lax[0].set_xscale('log')
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
         return lax
 

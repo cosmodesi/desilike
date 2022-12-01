@@ -119,7 +119,7 @@ def test_likelihood():
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.18]}, kstep=0.01,
                                                        data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                        theory=theory)
-    likelihood = GaussianLikelihood(observables=[observable])
+    likelihood = GaussianLikelihood(observables=[observable], scale_covariance=False)
     print(likelihood.runtime_info.pipeline.params.select(solved=True))
     print(likelihood.varied_params)
     print(likelihood(dm=0.), likelihood(dm=0.01), likelihood(dm=0.02))

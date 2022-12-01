@@ -111,8 +111,18 @@ class GaussianLikelihood(BaseLikelihood):
             if self.mpicomm.rank == 0:
                 list_y = [np.concatenate(y, axis=0) for y in zip(*[obs.mocks for obs in self.observables])]
                 covariance = np.cov(list_y, rowvar=False, ddof=1)
-            if isinstance(scale_covariance, bool) and scale_covariance:
-                covariance /= self.nobs
+            if isinstance(scale_covariance, bool):
+                if scale_covariance:
+                    scale_covariance = 1. / self.nobs
+                else:
+                    scale_covariance = 1.
+        if isinstance(scale_covariance, bool):
+            import warnings
+            if scale_covariance:
+                warnings.warn('Got scale_covariance = {} (boolean), but I do not know the number of realizations; defaults to scale_covariance = 1.'.format(scale_covariance))
+            else:
+                warnings.warn('Got scale_covariance = {} (boolean), why? defaults to scale_covariance = 1.'.format(scale_covariance))
+            scale_covariance = 1.
         self.covariance = np.atleast_2d(self.mpicomm.bcast(scale_covariance * covariance if self.mpicomm.rank == 0 else None, root=0))
         if self.covariance.shape != (self.covariance.shape[0],) * 2:
             raise ValueError('Covariance must be a square matrix')

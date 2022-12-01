@@ -90,7 +90,7 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
 
     @plotting.plotter
     def plot(self, scaling='kpk'):
-        """ scaling either 'kpk' or 'loglog' """
+        """Scaling either 'kpk' or 'loglog'."""
         from matplotlib import pyplot as plt
         height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
         figsize = (6, 1.5 * sum(height_ratios))

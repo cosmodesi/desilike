@@ -136,12 +136,6 @@ class BaseVelocileptorsPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
     def initialize(self, *args, **kwargs):
         super(BaseVelocileptorsPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.options['threads'] = self.options.pop('nthreads', 1)
-        if 'kmin' in self._default_options:
-            self._default_options['kmin'] = self.k[0] * 0.8
-        if 'kmax' in self._default_options:
-            self._default_options['kmax'] = self.k[-1] * 1.2
-        if 'nk' in self._default_options:
-            self._default_options['nk'] = int(len(self.k) * 1.4 + 0.5)
 
     def combine_bias_terms_poles(self, pars, **opts):
         tmp = np.array(self.pt.compute_redshift_space_power_multipoles(pars, self.template.f, apar=self.template.qpar, aperp=self.template.qper, **self.options, **opts)[1:])
@@ -168,7 +162,7 @@ class BaseVelocileptorsCorrelationFunctionMultipoles(BasePTCorrelationFunctionMu
 
     def initialize(self, *args, **kwargs):
         super(BaseVelocileptorsCorrelationFunctionMultipoles, self).initialize(*args, **kwargs)
-        self.options['threads'] = self.options.pop('nthreads')
+        self.options['threads'] = self.options.pop('nthreads', 1)
 
     def combine_bias_terms_poles(self, pars, **opts):
         return np.array([self.pt.compute_xi_ell(ss, self.template.f, *pars, apar=self.template.qpar, aperp=self.template.qper, **self.options, **opts) for ss in self.s]).T

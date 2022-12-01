@@ -29,8 +29,8 @@ def AbacusSummitLRGShapeFitPowerSpectrumMultipoles(solve=None, save_emulator=Fal
     template = ShapeFitPowerSpectrumTemplate(z=0.8)
     if save_emulator or emulator_fn is None:
         theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
-        # from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
-        # theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+        #from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
+        #theory = KaiserTracerPowerSpectrumMultipoles(template=template)
     else:
         theory = EmulatedCalculator.load(emulator_fn)
     if solve is None:

@@ -17,37 +17,38 @@ class BaseLikelihood(BaseCalculator):
 
     def get(self):
         pipeline = self.runtime_info.pipeline
-        if not hasattr(self, 'all_params'):
-            self.all_params = pipeline.params
-            self.solved_params = self.all_params.select(solved=True)
+        all_params = pipeline.params
         sum_loglikelihood = float(self.loglikelihood)
         sum_logprior = 0.
-        indices_best, indices_marg = [], []
-        for iparam, param in enumerate(self.solved_params):
+        solved_params, indices_best, indices_marg = [], [], []
+        for param in all_params:
             solved = param.derived
-            if solved == '.auto': solved = self.solved_default
-            if solved == '.best':
-                indices_best.append(iparam)
-            elif solved == '.marg':  # marg
-                indices_marg.append(iparam)
-            else:
-                raise ValueError('Unknown option for solved = {}'.format(solved))
+            if param.solved:
+                iparam = len(solved_params)
+                solved_params.append(param)
+                if solved == '.auto': solved = self.solved_default
+                if solved == '.best':
+                    indices_best.append(iparam)
+                elif solved == '.marg':  # marg
+                    indices_marg.append(iparam)
+                else:
+                    raise ValueError('Unknown option for solved = {}'.format(solved))
         flatdiff = self.flatdiff
-        if self.solved_params:
+        if solved_params:
 
             def getter():
                 return self.flatdiff
             # flatdiff is model - data
-            jac = pipeline.jac(getter, self.solved_params)
+            jac = pipeline.jac(getter, solved_params)
             zeros = np.zeros_like(self.precision, shape=self.precision.shape[0])
-            jac = np.column_stack([jac[param.name] if param.name in jac else zeros for param in self.solved_params])
+            jac = np.column_stack([jac[param.name] if param.name in jac else zeros for param in solved_params])
             projector = self.precision.dot(jac)
             projection = projector.T.dot(flatdiff)
             inverse_fisher = jac.T.dot(projector)
         dx, x = [], []
-        if self.solved_params:
+        if solved_params:
             inverse_priors, x0 = [], []
-            for param in self.solved_params:
+            for param in solved_params:
                 scale = getattr(param.prior, 'scale', None)
                 inverse_priors.append(0. if scale is None or param.fixed else scale**(-2))
                 x0.append(pipeline._param_values[param.name])
@@ -55,12 +56,11 @@ class BaseLikelihood(BaseCalculator):
             sum_inverse_fisher = inverse_fisher + np.diag(inverse_priors)
             dx = - np.linalg.solve(sum_inverse_fisher, projection)
             x = x0 + dx
-        for param, xx in zip(self.solved_params, x):
-            sum_logprior += self.all_params[param].prior(xx)
+        for param, xx in zip(solved_params, x):
+            sum_logprior += all_params[param].prior(xx)
             pipeline._param_values[param.name] = xx
             pipeline.derived.set(ParameterArray(xx, param))
         #if self.stop_at_inf_prior and not np.isfinite(sum_logprior): return
-
         if indices_best:
             sum_loglikelihood -= 1. / 2. * dx[indices_best].dot(inverse_fisher[np.ix_(indices_best, indices_best)]).dot(dx[indices_best])
             sum_loglikelihood -= projection[indices_best].dot(dx[indices_best])
@@ -79,7 +79,7 @@ class BaseLikelihood(BaseCalculator):
         self.loglikelihood = sum_loglikelihood
         self.logprior = sum_logprior
 
-        for param in self.all_params:
+        for param in all_params:
             if param.varied and not param.solved:
                 if param.derived and not param.drop:
                     array = self.derived[param]

@@ -30,6 +30,9 @@ class BaseTheoryCorrelationFunctionMultipoles(BaseCalculator):
         self.s = np.array(s, dtype='f8')
         self.ells = tuple(ells)
 
+    def get(self):
+        return self.power
+
     def __getstate__(self):
         state = {}
         for name in ['s', 'ells', 'corr', 'fiducial']:
@@ -40,8 +43,8 @@ class BaseTheoryCorrelationFunctionMultipoles(BaseCalculator):
 
 class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrelationFunctionMultipoles):
 
-    def initialize(self, s=None, ells=(0, 2, 4), power=None, **kwargs):
-        super(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles, self).initialize(s=s, ells=ells, **kwargs)
+    def initialize(self, s=None, ells=(0, 2, 4), power=None):
+        super(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles, self).initialize(s=s, ells=ells)
         self.k = np.logspace(min(-3, - np.log10(self.s[-1]) - 0.1), max(2, - np.log10(self.s[0]) + 0.1), 2000)
         from cosmoprimo import PowerToCorrelation
         self.fftlog = PowerToCorrelation(self.k, ell=self.ells, q=0, lowring=False)
@@ -184,11 +187,11 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         if wmatrix is None:
             self.ellsin = tuple(self.ells)
             self.kin = np.unique(np.concatenate(self.k, axis=0))
-            if all(np.allclose(kk, self.kin) for kk in self.k):
+            if all(kk.shape == self.kin.shape and np.allclose(kk, self.kin) for kk in self.k):
                 self.kmask = None
             else:
                 self.kmask = [np.searchsorted(self.kin, kk, side='left') for kk in self.k]
-                assert all(kmask.min() >= 0 and kmask.max() < kk.size for kk, kmask in zip(self.k, self.kmask))
+                assert all(np.allclose(self.kin[kmask], kk) for kk, kmask in zip(self.k, self.kmask))
                 self.kmask = np.concatenate(self.kmask, axis=0)
             self.wmatrix = None
         else:

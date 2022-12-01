@@ -60,7 +60,7 @@ class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
                         raise ValueError('{} does not have expected s-binning (based on previous data)'.format(mock))
                     if mock_ells != self.ells:
                         raise ValueError('{} does not have expected poles (based on previous data)'.format(mock))
-                    list_y.append(np.ravel(mock_y))
+                    list_y.append(np.concatenate(mock_y))
             return list_y
 
         flatdata, list_y = None, None

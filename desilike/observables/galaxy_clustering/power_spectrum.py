@@ -73,7 +73,7 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
                         raise ValueError('{} does not have expected k-binning (based on previous data)'.format(mock))
                     if mock_ells != self.ells:
                         raise ValueError('{} does not have expected poles (based on previous data)'.format(mock))
-                    list_y.append(np.ravel(mock_y))
+                    list_y.append(np.concatenate(mock_y))
                     list_shotnoise.append(mock_shotnoise)
             return list_y, list_shotnoise
 
@@ -126,7 +126,7 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
         self.runtime_info.pipeline.tocalculate = True
         self()
         nowiggle = self.model
-        self.theory.theory.wiggle = mode
+        self.wmatrix.theory.wiggle = mode
         for ill, ell in enumerate(self.ells):
             lax[ill].errorbar(self.k[ill], self.k[ill] * (data[ill] - nowiggle[ill]), yerr=self.k[ill] * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o')
             lax[ill].plot(self.k[ill], self.k[ill] * (model[ill] - nowiggle[ill]), color='C{:d}'.format(ill))

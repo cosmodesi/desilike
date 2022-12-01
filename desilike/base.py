@@ -370,10 +370,11 @@ class RuntimeInfo(BaseClass):
         self.speed = None
         self.monitor = Monitor()
         self.required_by = set()
-        if init is None: init = ((), {})
-        self.init = tuple(init)
-        self.initialized, self.calculated = False, False
+        if init is None: init = ((), {}, None)
+        self.init = list(init)
+        self._initialized = False
         self._tocalculate = True
+        self.calculated = False
 
     @property
     def requires(self):
@@ -389,6 +390,7 @@ class RuntimeInfo(BaseClass):
     def requires(self, requires):
         self._requires = list(requires)
         for require in self._requires:
+            require.runtime_info.initialize()  # otherwise runtime_info is cleared and required_by is lost
             require.runtime_info.required_by.add(self.calculator)
         self._pipeline = None
 
@@ -447,12 +449,26 @@ class RuntimeInfo(BaseClass):
         return self._derived
 
     @property
+    def initialized(self):
+        return self._initialized
+
+    @initialized.setter
+    def initialized(self, initialized):
+        self._initialized = initialized
+        self._pipeline = None
+        if not initialized:
+            for calculator in self.required_by:
+                calculator.runtime_info.initialized = False
+
+    @property
     def toinitialize(self):
-        return not self.initialized
+        return not self._initialized
 
     def initialize(self, **kwargs):
         if self.toinitialize:
-            self.clear(initialized=True)
+            self.clear(_initialized=True)
+            if self.init[2] is not None:
+                self.calculator.params = self.init[2]
             self.calculator.initialize(*self.init[0], **self.init[1])
         return self.calculator
 
@@ -556,7 +572,7 @@ class BaseCalculator(BaseClass):
             params = cls.params.deepcopy()
         new = super(BaseCalculator, cls).__new__(cls)
         new.params = params
-        new.runtime_info = RuntimeInfo(new, init=((), kwargs))
+        new.runtime_info = RuntimeInfo(new, init=((), kwargs, params))
         new.mpicomm = mpi.COMM_WORLD
         return new
 
@@ -571,7 +587,10 @@ class BaseCalculator(BaseClass):
         elif len(args):
             raise ValueError('Unrecognized arguments {}'.format(args))
         for name, value in kwargs.items():
-            self.runtime_info.init[1][name] = value
+            if name == 'params':
+                self.runtime_info.init[2] = ParameterCollection(value)
+            else:
+                self.runtime_info.init[1][name] = value
         self.runtime_info.initialized = False
 
     def __call__(self, **params):

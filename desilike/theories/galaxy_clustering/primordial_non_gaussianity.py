@@ -61,3 +61,6 @@ class PNGTracerPowerSpectrumMultipoles(TrapzTheoryPowerSpectrumMultipoles):
         fog = 1. / (1. + sigmas**2 * self.k[:, None]**2 * self.mu**2 / 2.)**2.
         pkmu = fog * (bias[:, None] + f * self.mu**2)**2 * pk_dd[:, None] + sn0
         self.power = self.to_poles(pkmu)
+
+    def get(self):
+        return self.power

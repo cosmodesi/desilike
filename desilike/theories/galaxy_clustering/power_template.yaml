@@ -163,14 +163,14 @@ params:
 
 ---
 
-class: BAOPowerSpectrumParameterization
+class: BAOPowerSpectrumTemplate
 
 info:
   version: 0.0.1
   date: 05/04/2022
   author: Arnaud de Mattia
   maintainer: Arnaud de Mattia
-  description: Power spectrum parameterization for BAO
+  description: Power spectrum template for BAO
   url:
   licence:
   bibtex: []

@@ -201,3 +201,14 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumExtractor):
         self.DV_over_rd = self.apeffect.qiso * self.DV_over_rd_fid
         self.DH_over_DM = self.apeffect.qap * self.DH_over_DM
         return self
+
+    @property
+    def qpar(self):
+        return self.apeffect.qpar
+
+    @property
+    def qper(self):
+        return self.apeffect.qper
+
+    def ap_k_mu(self, k, mu):
+        return self.apeffect.ap_k_mu(k, mu)

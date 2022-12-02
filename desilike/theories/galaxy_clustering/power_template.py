@@ -2,6 +2,7 @@ import numpy as np
 from scipy import constants
 
 from desilike.base import BaseCalculator
+from desilike.parameter import ParameterCollection
 from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo
 from .base import APEffect
 
@@ -69,6 +70,10 @@ class FixedPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     def initialize(self, *args, **kwargs):
         super(FixedPowerSpectrumTemplate, self).initialize(*args, cosmo=None, **kwargs)
         self.cosmo = self.fiducial
+        super(FixedPowerSpectrumTemplate, self).calculate()
+
+    def calculate(self):
+        pass
 
     @property
     def qpar(self):
@@ -92,7 +97,7 @@ class FullPowerSpectrumTemplate(BasePowerSpectrumTemplate):
                                                'pk_interpolator': {'z': self.z, 'k': self.k, 'of': [('delta_cb', 'delta_cb')]}}}
             self.cosmo_requires.update(self.apeffect.cosmo_requires)  # just background
         else:
-            self.cosmo.params = self.params.copy()
+            self.cosmo.update(params=self.params.copy())
         self.params.clear()
 
 
@@ -126,21 +131,25 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
         super(ShapeFitPowerSpectrumTemplate, self).initialize(*args, cosmo=None, **kwargs)
         self.a = float(a)
         self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=apmode)
+        ap_params = ParameterCollection()
         for param in list(self.params):
             if param in self.apeffect.params:
-                self.apeffect.params.set(param)
+                ap_params.set(param)
                 del self.params[param]
+        self.apeffect.update(params=ap_params)
         self.cosmo = self.fiducial
+        super(ShapeFitPowerSpectrumTemplate, self).calculate()
+        for name in ['n', 'm', 'pk_dd_interpolator', 'pk_dd'] + (['pknow_dd_interpolator', 'pknow_dd'] if self.with_now else []):
+            setattr(self, name + '_fid', getattr(self, name))
 
     def calculate(self, f=0.8, dm=0., dn=0.):
         self.n_varied = self.runtime_info.base_params['dn'].varied
-        super(ShapeFitPowerSpectrumTemplate, self).calculate()
         factor = np.exp(dm / self.a * np.tanh(self.a * np.log(self.k / self.kp)) + dn * np.log(self.k / self.kp))
-        self.pk_dd *= factor
+        self.pk_dd = self.pk_dd_fid * factor
         if self.with_now:
-            self.pknow_dd *= factor
-        self.n += dn
-        self.m += dm
+            self.pknow_dd = self.pknow_dd_fid * factor
+        self.n = self.n_fid + dn
+        self.m = self.m_fid + dm
         self.f = f
         self.f_sqrt_Ap = f * self.Ap**0.5
 
@@ -179,21 +188,29 @@ class BAOExtractor(BaseCalculator):
         return self
 
 
-class BAOPowerSpectrumTemplate(BasePowerSpectrumExtractor):
+class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
 
     def initialize(self, *args, apmode='qparqper', with_now='peakaverage', **kwargs):
         super(BAOPowerSpectrumTemplate, self).initialize(*args, cosmo=None, with_now=with_now, **kwargs)
         self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=apmode)
+        ap_params = ParameterCollection()
         for param in list(self.params):
             if param in self.apeffect.params:
-                self.apeffect.params.set(param)
+                ap_params.set(param)
                 del self.params[param]
+        self.apeffect.update(params=ap_params)
         self.cosmo = self.fiducial
+        # Set pk_dd_interpolator, pknow_dd_interpolator, etc.
+        BasePowerSpectrumTemplate.calculate(self)
         # Set DM_over_rd, etc.
         BAOExtractor.calculate(self)
-        for name in ['DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd']:
+        for name in ['DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd',
+                     'pk_dd_interpolator', 'pk_dd'] + (['pknow_dd_interpolator', 'pknow_dd'] if self.with_now else []):
             setattr(self, name + '_fid', getattr(self, name))
         # No self.k defined
+
+    def calculate(self):
+        pass
 
     def get(self):
         self.DH_over_rd = self.qpar * self.DH_over_rd_fid

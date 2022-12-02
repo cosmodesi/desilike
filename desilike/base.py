@@ -260,12 +260,12 @@ class BasePipeline(BaseClass):
     def _set_speed(self, niterations=10, override=False, seed=42):
         seed = mpi.bcast_seed(seed=seed, mpicomm=self.mpicomm, size=10000)[self.mpicomm.rank]  # to get different seeds on each rank
         rng = np.random.RandomState(seed=seed)
-        BasePipeline.run(self)  # to set _derived
+        self.calculate()  # to set _derived
         for calculator in self.calculators:
             calculator.runtime_info.monitor.reset()
         for ii in range(niterations):
             params = {str(param): param.ref.sample(random_state=rng) for param in self.params.select(varied=True, solved=False)}
-            BasePipeline.run(self, **params)
+            self.calculate(**params)
         if self.mpicomm.rank == 0:
             self.log_info('Found speeds:')
         for calculator in self.calculators:
@@ -289,7 +289,20 @@ class BasePipeline(BaseClass):
             self._set_speed(**kwargs)
             speeds = [calculator.runtime_info.speed for calculator in self.calculators]
 
-        footprints = [tuple(param in calculator.runtime_info.full_params for calculator in self.calculators) for param in params]
+        footprints = []
+        for param in params:
+            calculators_to_calculate = []
+
+            def callback(calculator):
+                for calculator in calculator.runtime_info.required_by:
+                    calculators_to_calculate.append(calculator)
+                    callback(calculator)
+
+            for calculator in self.calculators:
+                if param in calculator.runtime_info.full_params:
+                    callback(calculator)
+
+            footprints.append(tuple(calculator in calculators_to_calculate for calculator in self.calculators))
         unique_footprints = list(set(row for row in footprints))
         param_blocks = [[p for ip, p in enumerate(params) if footprints[ip] == uf] for uf in unique_footprints]
         param_block_sizes = [len(b) for b in param_blocks]
@@ -305,7 +318,9 @@ class BasePipeline(BaseClass):
                 return np.minimum(1, tri_lower.T.dot(footprints[ordering])).dot(costs)
 
             if oversample_power >= 1:
+                # Choose best ordering
                 orderings = [sort_parameter_blocks(footprints, block_sizes, speeds, oversample_power=1 - 1e-3)[0]]
+                # Then we will recompute costs and oversample_factors
             else:
                 orderings = list(permutations(np.arange(len(block_sizes))))
 
@@ -375,6 +390,7 @@ class RuntimeInfo(BaseClass):
         self._initialized = False
         self._tocalculate = True
         self.calculated = False
+        self.name = self.calculator.__class__.__name__
 
     @property
     def requires(self):
@@ -468,7 +484,7 @@ class RuntimeInfo(BaseClass):
         if self.toinitialize:
             self.clear(_initialized=True)
             if self.init[2] is not None:
-                self.calculator.params = self.init[2]
+                self.calculator.params = self.init[2].deepcopy()
             self.calculator.initialize(*self.init[0], **self.init[1])
         return self.calculator
 
@@ -607,3 +623,6 @@ class BaseCalculator(BaseClass):
 
     def __getstate__(self):
         return {}
+
+    def __repr__(self):
+        return '{}(name={})'.format(self.__class__.__name__, self.runtime_info.name)

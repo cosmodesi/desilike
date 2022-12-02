@@ -30,9 +30,6 @@ class BaseTheoryCorrelationFunctionMultipoles(BaseCalculator):
         self.s = np.array(s, dtype='f8')
         self.ells = tuple(ells)
 
-    def get(self):
-        return self.power
-
     def __getstate__(self):
         state = {}
         for name in ['s', 'ells', 'corr', 'fiducial']:
@@ -58,7 +55,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
             power = KaiserTracerPowerSpectrumMultipoles(k=self.k, ells=self.ells)
         self.power = power
         self.power.update(k=self.kin, ells=self.ells)
-        self.power.params = self.params.copy()
+        self.power.update(params=self.params.copy())
         self.params.clear()
 
     def calculate(self):

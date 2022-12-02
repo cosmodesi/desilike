@@ -2,32 +2,31 @@ import numpy as np
 
 
 def test_galaxy_clustering():
-
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, FullPowerSpectrumTemplate
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
     theory = KaiserTracerPowerSpectrumMultipoles()
     print(theory.runtime_info.pipeline.params)
-    theory(A_s=2e-9, b1=1.).power
+    theory(A_s=2e-9, b1=1.).shape
     theory = KaiserTracerCorrelationFunctionMultipoles()
     print(theory.runtime_info.pipeline.params)
-    theory(A_s=2e-9, b1=1.).corr
+    theory(A_s=2e-9, b1=1.).shape
 
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     print(theory.runtime_info.pipeline.params)
-    print(theory(dm=0.01, b1=1.).power)
+    theory(dm=0.01, b1=1.).shape
     theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     print(theory.runtime_info.pipeline.params)
-    print(theory(dm=0.01, b1=1.).corr)
+    theory(dm=0.01, b1=1.).shape
 
     from desilike.theories.galaxy_clustering import PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles
 
     theory = PyBirdTracerPowerSpectrumMultipoles()
     print(theory.runtime_info.pipeline.params)
-    print(theory(A_s=2e-9, b1=1.).power)
+    theory(A_s=2e-9, b1=1.).shape
     theory = PyBirdTracerCorrelationFunctionMultipoles()
     print(theory.runtime_info.pipeline.params)
-    print(theory(A_s=2e-9, b1=1.).corr)
+    theory(A_s=2e-9, b1=1.).shape
 
     from desilike.theories.galaxy_clustering import PNGTracerPowerSpectrumMultipoles
 
@@ -35,8 +34,8 @@ def test_galaxy_clustering():
     print(theory.runtime_info.pipeline.params)
     params = dict(fnl_loc=100., b1=2.)
     theory2 = PNGTracerPowerSpectrumMultipoles(method='matter')
-    assert np.allclose(theory2(**params).power[0], theory(**params).power[0], rtol=2e-3)
-    assert not np.allclose(theory2(fnl_loc=0.).power[0], theory().power[0], rtol=2e-3)
+    assert np.allclose(theory2(**params), theory(**params), rtol=2e-3)
+    assert not np.allclose(theory2(fnl_loc=0.), theory(), rtol=2e-3)
 
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles
@@ -106,7 +105,7 @@ def test_likelihood():
     print(likelihood.runtime_info.pipeline.params)
     print(likelihood(dm=0.), likelihood(dm=0.01), likelihood(b1=2., dm=0.02))
     theory.template.update(z=1.)
-    del theory.template.params['dm']
+    #del theory.template.params['dm']
     print(likelihood.runtime_info.pipeline.varied_params)
     likelihood()
     #observable.plot(show=False)

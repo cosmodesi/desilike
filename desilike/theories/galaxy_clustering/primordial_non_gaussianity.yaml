@@ -43,7 +43,7 @@ params:
     value: 0.
     prior:
       dist: uniform
-      limits: [-100, 100]
+      limits: [-1e3, 1e3]
     latex: b_{\phi}f_{NL}^{\mathrm{loc}}
   b1:
     value: 2.

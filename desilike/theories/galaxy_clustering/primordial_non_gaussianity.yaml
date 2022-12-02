@@ -25,7 +25,7 @@ params:
     value: 0.
     prior:
       dist: uniform
-      limits: [-100, 100]
+      limits: [-300, 300]
     latex: f_{NL}^{\mathrm{loc}}
   bphi:
     value: 0.

@@ -5,7 +5,6 @@ def test_galaxy_clustering():
 
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, FullPowerSpectrumTemplate
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
-    """
     theory = KaiserTracerPowerSpectrumMultipoles()
     print(theory.runtime_info.pipeline.params)
     theory(A_s=2e-9, b1=1.).power
@@ -38,7 +37,7 @@ def test_galaxy_clustering():
     theory2 = PNGTracerPowerSpectrumMultipoles(method='matter')
     assert np.allclose(theory2(**params).power[0], theory(**params).power[0], rtol=2e-3)
     assert not np.allclose(theory2(fnl_loc=0.).power[0], theory().power[0], rtol=2e-3)
-    """
+
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles
     theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
@@ -138,8 +137,6 @@ def test_cosmo():
 
 if __name__ == '__main__':
 
-    test_likelihood()
-    exit()
     test_galaxy_clustering()
     test_observable()
     test_likelihood()

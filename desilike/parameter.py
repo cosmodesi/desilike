@@ -1353,7 +1353,7 @@ class ParameterPrior(BaseClass):
             if self.dist == 'uniform':
                 self.rv = dist(self.limits[0], self.limits[1] - self.limits[0])
             else:
-                loc, scale = kwargs['loc'], kwargs['scale']
+                loc, scale = kwargs.get('loc', 0.), kwargs.get('scale', 1.)
                 # See notes of https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.truncnorm.html
                 limits = tuple((lim - loc) / scale for lim in limits)
                 self.rv = dist(*limits, **kwargs)

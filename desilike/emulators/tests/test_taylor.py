@@ -46,7 +46,7 @@ def test_taylor_power(plot=False):
 def test_taylor(plot=False):
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     calculator = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate())
-    power_bak = calculator().power.copy()
+    power_bak = calculator().copy()
     emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=1))
     emulator.set_samples()
     emulator.fit()
@@ -77,7 +77,7 @@ def test_likelihood():
                   data='../../tests/_pk/data.npy', mocks='../../tests/_pk/mock_*.npy', wmatrix='../../tests/_pk/window.npy')
     observable = ObservedTracerPowerSpectrumMultipoles(theory=theory, **kwargs)
     likelihood = GaussianLikelihood(observables=[observable])
-    likelihood() # needed to set everything up
+    likelihood()  # needed to set everything up
 
     emulator = Emulator(theory, engine=TaylorEmulatorEngine(order=2))
     emulator.set_samples()
@@ -97,6 +97,6 @@ def test_likelihood():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_taylor_power(plot=False)
-    #test_taylor(plot=False)
+    test_taylor_power(plot=False)
+    test_taylor(plot=False)
     test_likelihood()

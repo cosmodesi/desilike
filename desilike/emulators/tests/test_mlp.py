@@ -44,7 +44,7 @@ def test_mlp_linear(plot=False):
 def test_mlp(plot=False):
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     calculator = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate())
-    power_bak = calculator().power.copy()
+    power_bak = calculator().copy()
     emulator = Emulator(calculator, engine='mlp')
     emulator.set_samples(niterations=int(1e3))
     emulator.fit()

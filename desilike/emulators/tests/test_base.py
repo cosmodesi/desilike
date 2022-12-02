@@ -17,7 +17,7 @@ def test_base():
     calculator = emulator.to_calculator()
 
     emulator = EmulatedCalculator.load(fn)
-    emulator().power
+    emulator().shape
     emulator.save(fn)
 
     emulator = EmulatedCalculator.load(fn)

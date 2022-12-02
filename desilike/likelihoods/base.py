@@ -130,6 +130,14 @@ class GaussianLikelihood(BaseLikelihood):
         if self.covariance.shape != (self.flatdata.size,) * 2:
             raise ValueError('Based on provided observables, covariance expected to be a matrix of shape ({0:d}, {0:d})'.format(self.flatdata.size))
 
+        # Set each observable's covariance (for, e.g., plots)
+        start = 0
+        for obs in observables:
+            stop = start + len(obs.flatdata)
+            sl = slice(start, stop)
+            obs.covariance = self.covariance[sl, sl]
+            start = stop
+
         self.precision = utils.inv(self.covariance)
         size = self.precision.shape[0]
         if self.nobs is not None:

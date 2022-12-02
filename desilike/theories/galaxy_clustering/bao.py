@@ -143,6 +143,7 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
         super(BaseBAOWigglesTracerPowerSpectrumMultipoles, self).initialize(k=k, ells=ells)
         self.pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
         self.pt.update(k=self.k, ells=self.ells, **kwargs)
+        self.kp = 0.1  # pivot to noramlize broadband terms
         self.set_params()
 
     def set_params(self):
@@ -161,7 +162,7 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
                 ell = int(match.group(1))
                 pow = int(match.group(2))
                 if ell in self.ells:
-                    broadband_coeffs[ell][name] = self.k**pow
+                    broadband_coeffs[ell][name] = (self.k / self.kp)**pow
                 else:
                     del self_params[param]
             else:
@@ -227,12 +228,13 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
         super(BaseBAOWigglesTracerCorrelationFunctionMultipoles, self).initialize(s=s, ells=ells)
         self.pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
         self.pt.update(s=self.s, ells=self.ells, **kwargs)
+        self.sp = 60.  # pivot to noramlize broadband terms
         self.set_params()
 
     def set_params(self):
-        self.k = self.s
+        self.k, self.kp = self.s, self.sp
         BaseBAOWigglesTracerPowerSpectrumMultipoles.set_params(self)
-        del self.k
+        del self.k, self.kp
 
     def calculate(self, **params):
         values = jnp.array([params.get(name, 0.) for name in self.broadband_params])

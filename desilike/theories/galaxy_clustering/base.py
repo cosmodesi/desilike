@@ -251,6 +251,9 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
     def calculate(self):
         self.flatpower = self._apply(self.theory.power + self.shotnoise[:, None]) - self.flatshotnoise
 
+    def get(self):
+        return self.flatpower
+
     @property
     def power(self):
         toret = []
@@ -317,6 +320,9 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
             self.flatcorr = theory[self.smask]
         else:
             self.flatcorr = theory
+
+    def get(self):
+        return self.flatcorr
 
     @property
     def corr(self):

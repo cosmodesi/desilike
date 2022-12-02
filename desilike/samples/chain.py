@@ -247,7 +247,7 @@ class Chain(Samples):
         with open(ranges_fn, 'w') as file:
             file.write(output)
 
-    def to_getdist(self, params=None, label=None):
+    def to_getdist(self, params=None, label=None, **kwargs):
         """
         Return *GetDist* hook to samples.
 
@@ -267,10 +267,11 @@ class Chain(Samples):
         labels = [param.latex() for param in params]
         samples = self.to_array(params=params, struct=False).reshape(-1, self.size)
         names = [str(param) for param in params]
-        toret = MCSamples(samples=samples.T, weights=np.asarray(self.weight.ravel()), loglikes=-np.asarray(self.logposterior.ravel()), names=names, labels=labels, label=label)
+        ranges = {param.name: tuple('N' if limit is None or np.abs(limit) == np.inf else limit for limit in param.prior.limits) for param in params}
+        toret = MCSamples(samples=samples.T, weights=np.asarray(self.weight.ravel()), loglikes=-np.asarray(self.logposterior.ravel()), names=names, labels=labels, label=label, ranges=ranges, **kwargs)
         return toret
 
-    def to_anesthetic(self, params=None, label=None):
+    def to_anesthetic(self, params=None, label=None, **kwargs):
         """
         Return *GetDist* hook to samples.
 
@@ -290,7 +291,8 @@ class Chain(Samples):
         labels = [param.latex() for param in params]
         samples = self.to_array(params=params, struct=False).reshape(-1, self.size)
         names = [str(param) for param in params]
-        toret = MCMCSamples(samples=samples.T, columns=names, weights=np.asarray(self.weight.ravel()), logL=-np.asarray(self.logposterior.ravel()), labels=labels, label=label, logzero=-np.inf)
+        limits = {param.name: tuple('N' if limit is None or np.abs(limit) == np.inf else limit for limit in param.prior.limits) for param in params}
+        toret = MCMCSamples(samples=samples.T, columns=names, weights=np.asarray(self.weight.ravel()), logL=-np.asarray(self.logposterior.ravel()), labels=labels, label=label, logzero=-np.inf, limits=limits, **kwargs)
         return toret
 
     def choice(self, index='argmax', params=None, return_type='dict', **kwargs):

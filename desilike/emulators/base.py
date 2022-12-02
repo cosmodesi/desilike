@@ -188,13 +188,14 @@ class Emulator(BaseClass):
             return new
 
         calculator = from_state(new_cls, state)
-        calculator.params = self.params.deepcopy()
+        params = self.params.deepcopy()
 
         if derived is not None:
             for param in derived:
                 param = Parameter(param, derived=True)
-                if param not in calculator.params:
-                    calculator.params.set(param)
+                if param not in params:
+                    params.set(param)
+        calculator.update(params=params)
         return calculator
 
     def check(self, mse_stop=None, diagnostics=None, frac=0.1, **kwargs):

@@ -33,9 +33,13 @@ Only strict requirements are:
 
   - numpy
   - scipy
-  - mpi4py (should be optional in the future)
   - pyyaml
-  - cosmoprimo
+  - mpi4py
+  - cosmoprimo (currently with pyclass to compute DESI fiducial cosmology)
+
+Should be made optional in the future:
+  - mpi4py
+  - pyclass (by extending TabulatedDESI to power spectra)
 
 ## Installation
 
@@ -47,11 +51,11 @@ python -m pip install git+https://github.com/cosmodesi/desilike
 ```
 If you wish to use plotting routines (getdist, anesthetic), and tabulate for pretty tables:
 ```
-python -m pip install git+https://github.com/cosmodesi/desilike[plotting]
+python -m pip install git+https://github.com/cosmodesi/desilike#egg=desilike[plotting]
 ```
 If you addtionally wish to be able to use analytic marginalization with jax:
 ```
-python -m pip install git+https://github.com/cosmodesi/desilike[plotting,jax]
+python -m pip install git+https://github.com/cosmodesi/desilike#egg=desilike[plotting,jax]
 ```
 
 ### git
@@ -69,6 +73,13 @@ Or in development mode (any change to Python code will take place immediately):
 python setup.py develop --user
 ```
 
+## Other dependencies (theory codes, etc.)
+
+Just define your calculator (most commonly your likelihood), then in a python script:
+```
+from desilike import Installer
+Installer(user=True)(likelihood)
+```
 ## License
 
 **desilike** is free software distributed under a BSD3 license. For details see the [LICENSE](https://github.com/cosmodesi/desilike/blob/main/LICENSE).

@@ -369,6 +369,7 @@ class BasePipeline(BaseClass):
 class RuntimeInfo(BaseClass):
 
     """Information about calculator name, requirements, parameters values at a given step, etc."""
+    installer = None
 
     def __init__(self, calculator, init=None):
         """
@@ -391,6 +392,14 @@ class RuntimeInfo(BaseClass):
         self._tocalculate = True
         self.calculated = False
         self.name = self.calculator.__class__.__name__
+
+    def install(self):
+        if self.installer is not None:
+            try:
+                func = self.calculator.install
+            except AttributeError:
+                return
+            func(self.installer)
 
     @property
     def requires(self):
@@ -483,6 +492,7 @@ class RuntimeInfo(BaseClass):
     def initialize(self, **kwargs):
         if self.toinitialize:
             self.clear(_initialized=True)
+            self.install()
             if self.init[2] is not None:
                 self.calculator.params = self.init[2].deepcopy()
             self.calculator.initialize(*self.init[0], **self.init[1])

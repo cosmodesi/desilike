@@ -148,13 +148,13 @@ def test_install():
                                                        theory=theory)
     likelihood = GaussianLikelihood(observables=[observable], scale_covariance=False)
     from desilike import Installer
-    Installer(user=True)(likelihood)
-
+    Installer()(likelihood)
     from desilike.samplers import EmceeSampler
     Installer(EmceeSampler)
 
 
 if __name__ == '__main__':
+
     test_galaxy_clustering()
     test_observable()
     test_likelihood()

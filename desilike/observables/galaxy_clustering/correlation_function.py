@@ -126,3 +126,8 @@ class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
+
+    @classmethod
+    def install(cls, config):
+        # TODO: remove this dependency
+        config.pip('git+https://github.com/cosmodesi/pycorr')

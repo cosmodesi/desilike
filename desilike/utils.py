@@ -3,7 +3,6 @@
 import os
 import sys
 import time
-import psutil
 import logging
 import traceback
 import warnings
@@ -567,13 +566,21 @@ def outputs_to_latex(name):
 
 class Monitor(BaseClass):
 
-    def __init__(self, quantities=('time', 'mem'), pid=None):
-        self.proc = psutil.Process(os.getpid() if pid is None else pid)
+    def __init__(self, quantities=('time',)):
+        if not is_sequence(quantities):
+            quantities = (quantities,)
         self.quantities = list(quantities)
         self.reset()
 
     def time(self):
         return time.time()
+
+    @property
+    def proc(self):
+        if getattr(self, '_proc', None) is None:
+            import psutil
+            self._proc = psutil.Process(os.getpid())
+        return self._proc
 
     def mem(self):
         return self.proc.memory_info().rss / 1e6

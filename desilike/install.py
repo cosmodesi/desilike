@@ -1,6 +1,5 @@
 import os
 import sys
-import requests
 import logging
 
 from .io import BaseConfig
@@ -18,6 +17,7 @@ class InstallError(Exception):
 
 def download(url, target):
     logger.info('Downloading {} to {}.'.format(url, target))
+    import requests
     r = requests.get(url, allow_redirects=True)
     r.raise_for_status()
     utils.mkdir(os.path.dirname(target))
@@ -119,16 +119,11 @@ class Installer(BaseClass):
 
         from .base import BaseCalculator
         if isinstance(obj, BaseCalculator):
-            visited = []
-
-            def callback(calculator):
-                install(calculator)
-                visited.append(calculator)
-                calculator.runtime_info.initialize()
-                for calc in calculator.runtime_info.requires:
-                    if calc not in visited: callback(calc)
-
-            callback(obj)
+            from .base import RuntimeInfo
+            installer_bak = RuntimeInfo.installer
+            RuntimeInfo.installer = self
+            obj.runtime_info.pipeline
+            RuntimeInfo.installer = installer_bak
         else:
             install(obj)
 

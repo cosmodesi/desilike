@@ -5,7 +5,7 @@ import mpytools as mpy
 
 from desilike import utils
 from desilike.utils import BaseClass
-from desilike.samples import SourceConfig
+from desilike.samples import load_source
 from desilike.samples.profiles import Profiles, Samples, ParameterBestFit
 from desilike.parameter import ParameterArray, ParameterCollection
 from desilike.samplers.utils import TaskManager
@@ -69,9 +69,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             self.profiles = Profiles.load(profiles)
         self._set_rng(rng=rng, seed=seed)
         if self.mpicomm.rank == 0:
-            covariance = SourceConfig(covariance)
-            # Get the covariance for all parameters
-            covariance = covariance.cov(params=self.varied_params, return_type='nparray')
+            covariance = load_source(covariance, cov=True, params=self.varied_params, return_type='nparray')
         covariance = self.mpicomm.bcast(covariance, root=0)
         self._original_params = self.mpicomm.bcast(self.varied_params, root=0)
 

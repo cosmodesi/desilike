@@ -134,9 +134,29 @@ def test_cosmo():
     print(theory.runtime_info.pipeline.params)
 
 
-if __name__ == '__main__':
+def test_install():
 
+    from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrumMultipoles
+    from desilike.likelihoods import GaussianLikelihood
+    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, LPTVelocileptorsTracerPowerSpectrumMultipoles
+
+    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    for param in theory.params.select(basename=['alpha*', 'sn*']):
+        param.derived = '.best'
+    observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.18]}, kstep=0.01,
+                                                       data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
+                                                       theory=theory)
+    likelihood = GaussianLikelihood(observables=[observable], scale_covariance=False)
+    from desilike import Installer
+    Installer(user=True)(likelihood)
+
+    from desilike.samplers import EmceeSampler
+    Installer(EmceeSampler)
+
+
+if __name__ == '__main__':
     test_galaxy_clustering()
     test_observable()
     test_likelihood()
     test_cosmo()
+    test_install()

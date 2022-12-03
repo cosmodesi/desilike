@@ -6,7 +6,7 @@ from numpy import linalg
 from numpy.linalg import LinAlgError
 from scipy.stats import special_ortho_group
 
-from desilike.samples import Chain, SourceConfig
+from desilike.samples import Chain, load_source
 from .base import BaseBatchPosteriorSampler
 
 
@@ -372,7 +372,7 @@ class MCMCSampler(BaseBatchPosteriorSampler):
         else:
             covariance = {'source': covariance, 'burnin': burnin}
         if self.mpicomm.rank == 0:
-            covariance = SourceConfig(covariance).cov(params=self.varied_params, return_type='nparray')
+            covariance = load_source(covariance, cov=True, params=self.varied_params, return_type='nparray')
         covariance = self.mpicomm.bcast(covariance, root=0)
         self.proposer.set_covariance(covariance)
         self.learn_diagnostics = {}

@@ -14,9 +14,6 @@ from .utils import BaseClass
 __all__ = ['Samples', 'Chain', 'Profiles', 'ParameterBestFit', 'ParameterCovariance', 'ParameterContours', 'diagnostics']
 
 
-from desilike.io import BaseConfig
-
-
 def load_source(source, choice=None, cov=None, burnin=None, params=None, default=False, return_type=None):
     if not utils.is_sequence(source): fns = [source]
     else: fns = source
@@ -32,7 +29,7 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
         sources = [source.remove_burnin(burnin) if hasattr(source, 'remove_burnin') else source for source in sources]
 
     if choice is not None or cov is not None:
-        if not all(type(source) == type(sources[0]) for source in sources):
+        if not all(type(source) is type(sources[0]) for source in sources):
             raise ValueError('Sources must be of same type for "choice / cov"')
         source = sources[0].concatenate(sources) if sources[0] is not None else {}
 
@@ -89,19 +86,3 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
     if len(toret) == 1:
         return toret[0]
     return tuple(toret)
-
-
-class SourceConfig(BaseConfig):
-
-    def __init__(self, data=None, **kwargs):
-        if not isinstance(data, dict):
-            data = {'fn': data}
-        super(SourceConfig, self).__init__(data=data, **kwargs)
-        fn = self.pop('fn', self.pop('source', None))
-        self.source = load_source(fn, **{k: v for k, v in self.items() if k not in ['choice', 'cov']})
-
-    def choice(self, params=None, default=False, return_type='dict', **choice):
-        return load_source(self.source, choice={**self.get('choice', {}), **choice}, params=params, default=default, return_type=return_type)
-
-    def cov(self, params=None, default=False, return_type='nparray'):
-        return load_source(self.source, cov=True, params=params, default=default, return_type=return_type)

@@ -18,7 +18,6 @@ Example notebooks presenting most use cases are provided in directory nb/.
 
 ## TODO
 
-Convenient built-in installer to install required dependencies (e.g. theory codes), depending on the likelihood.
 .yaml or not .yaml file? e.g. parameter specifications could be given in docstrings, and automatically read out at runtime
 (but this will make very long docstrings...)
 Special treatment for sum of independent likelihoods?
@@ -37,7 +36,6 @@ Only strict requirements are:
   - mpi4py (should be optional in the future)
   - pyyaml
   - cosmoprimo
-  - tabulate
 
 ## Installation
 
@@ -46,6 +44,14 @@ Only strict requirements are:
 Simply run:
 ```
 python -m pip install git+https://github.com/cosmodesi/desilike
+```
+If you wish to use plotting routines (getdist, anesthetic), and tabulate for pretty tables:
+```
+python -m pip install git+https://github.com/cosmodesi/desilike[plotting]
+```
+If you addtionally wish to be able to use analytic marginalization with jax:
+```
+python -m pip install git+https://github.com/cosmodesi/desilike[plotting,jax]
 ```
 
 ### git

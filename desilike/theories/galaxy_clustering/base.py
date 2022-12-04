@@ -142,8 +142,12 @@ class APEffect(BaseCalculator):
                 self.cosmo_requires = {'background': {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}}
         else:
             raise ValueError('Unknown mode {}; it must be one of ["qiso", "qap", "qisoqap", "qparqper", "distances"]'.format(self.mode))
-        if cosmo is None: cosmo = Cosmoprimo(fiducial=self.fiducial)
         self.cosmo = cosmo
+        if self.mode == 'distances':
+            if cosmo is None:
+                self.cosmo = Cosmoprimo(fiducial=self.fiducial)
+        else:
+            self.cosmo = self.fiducial
 
     def calculate(self, **params):
         if self.mode == 'distances':

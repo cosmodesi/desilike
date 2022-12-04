@@ -392,6 +392,8 @@ class RuntimeInfo(BaseClass):
         self._tocalculate = True
         self.calculated = False
         self.name = self.calculator.__class__.__name__
+        #if self.calculator.__class__.__name__ == 'WindowedCorrelationFunctionMultipoles':
+        #    print('IIIIIIIIIIIIIIIIIII')
 
     def install(self):
         if self.installer is not None:
@@ -416,6 +418,7 @@ class RuntimeInfo(BaseClass):
         self._requires = list(requires)
         for require in self._requires:
             require.runtime_info.initialize()  # otherwise runtime_info is cleared and required_by is lost
+            #assert not require.runtime_info.toinitialize
             require.runtime_info.required_by.add(self.calculator)
         self._pipeline = None
 
@@ -491,11 +494,12 @@ class RuntimeInfo(BaseClass):
 
     def initialize(self, **kwargs):
         if self.toinitialize:
-            self.clear(_initialized=True)
+            self.clear()
             self.install()
             if self.init[2] is not None:
                 self.calculator.params = self.init[2].deepcopy()
             self.calculator.initialize(*self.init[0], **self.init[1])
+            self._initialized = True
         return self.calculator
 
     @property
@@ -614,7 +618,7 @@ class BaseCalculator(BaseClass):
             raise ValueError('Unrecognized arguments {}'.format(args))
         for name, value in kwargs.items():
             if name == 'params':
-                self.runtime_info.init[2] = ParameterCollection(value)
+                self.params = self.runtime_info.init[2] = ParameterCollection(value)
             else:
                 self.runtime_info.init[1][name] = value
         self.runtime_info.initialized = False
@@ -635,4 +639,4 @@ class BaseCalculator(BaseClass):
         return {}
 
     def __repr__(self):
-        return '{}(name={})'.format(self.__class__.__name__, self.runtime_info.name)
+        return self.runtime_info.name

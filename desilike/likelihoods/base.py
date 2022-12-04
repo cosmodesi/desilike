@@ -102,20 +102,31 @@ class GaussianLikelihood(BaseLikelihood):
         self.nobs = None
         self.observables = [obs.runtime_info.initialize() for obs in observables]
         if covariance is None:
-            nmocks = [self.mpicomm.bcast(len(obs.mocks) if self.mpicomm.rank == 0 and obs.mocks is not None else 0) for obs in self.observables]
+            nmocks = [self.mpicomm.bcast(len(obs.mocks) if self.mpicomm.rank == 0 and getattr(obs, 'mocks', None) is not None else 0) for obs in self.observables]
             self.nobs = nmocks[0]
-            if not any(nmocks):
+            if any(nmocks):
+                if not all(nmock == nmocks[0] for nmock in nmocks):
+                    raise ValueError('Provide the same number of mocks for each observable, found {}'.format(nmocks))
+                if self.mpicomm.rank == 0:
+                    list_y = [np.concatenate(y, axis=0) for y in zip(*[obs.mocks for obs in self.observables])]
+                    covariance = np.cov(list_y, rowvar=False, ddof=1)
+                if isinstance(scale_covariance, bool):
+                    if scale_covariance:
+                        scale_covariance = 1. / self.nobs
+                    else:
+                        scale_covariance = 1.
+            elif all(getattr(obs, 'covariance', None) is not None for obs in self.observables):
+                covariances = [obs.covariance for obs in self.observables]
+                size = sum(cov.shape[0] for cov in covariances)
+                covariance = np.zeros((size, size), dtype='f8')
+                start = 0
+                for cov in covariances:
+                    stop = start + cov.shape[0]
+                    sl = slice(start, stop)
+                    covariance[sl, sl] = cov
+                    start = stop
+            else:
                 raise ValueError('Observables must have mocks if global covariance matrix not provided')
-            if not all(nmock == nmocks[0] for nmock in nmocks):
-                raise ValueError('Provide the same number of mocks for each observable, found {}'.format(nmocks))
-            if self.mpicomm.rank == 0:
-                list_y = [np.concatenate(y, axis=0) for y in zip(*[obs.mocks for obs in self.observables])]
-                covariance = np.cov(list_y, rowvar=False, ddof=1)
-            if isinstance(scale_covariance, bool):
-                if scale_covariance:
-                    scale_covariance = 1. / self.nobs
-                else:
-                    scale_covariance = 1.
         if isinstance(scale_covariance, bool):
             import warnings
             if scale_covariance:

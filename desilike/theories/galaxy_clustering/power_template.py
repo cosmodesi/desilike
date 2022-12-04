@@ -9,8 +9,6 @@ from .base import APEffect
 
 class BasePowerSpectrumExtractor(BaseCalculator):
 
-    config_fn = 'power_template.yaml'
-
     def initialize(self, z=1., with_now=False, cosmo=None, fiducial='DESI'):
         self.z = float(z)
         self.fiducial = get_cosmo(fiducial)
@@ -39,6 +37,8 @@ class BasePowerSpectrumExtractor(BaseCalculator):
 
 
 class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
+
+    config_fn = 'power_template.yaml'
 
     def initialize(self, k=None, z=1., **kwargs):
         super(BasePowerSpectrumTemplate, self).initialize(z=z, **kwargs)
@@ -160,7 +160,8 @@ class BAOExtractor(BaseCalculator):
         self.z = float(z)
         self.fiducial = get_cosmo(fiducial)
         self.cosmo = cosmo
-        if cosmo is None: self.cosmo = self.fiducial
+        if cosmo is None:
+            self.cosmo = Cosmoprimo(fiducial=self.fiducial)
         if external_cosmo(self.cosmo):
             self.cosmo_requires = {'thermodynamics': {'rs_drag': None},
                                    'background': {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}}

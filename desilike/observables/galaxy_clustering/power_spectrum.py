@@ -9,16 +9,34 @@ from desilike.theories.galaxy_clustering.base import WindowedPowerSpectrumMultip
 
 class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
 
-    def initialize(self, data=None, mocks=None, wmatrix=None, theory=None, **kwargs):
-        self.k, self.ells = None, None
-        self.flatdata, shotnoise = self.load_data(data=data, **kwargs)[:2]
-        self.mocks = self.load_data(data=mocks, **kwargs)[-1]
+    def initialize(self, data=None, mocks=None, wmatrix=None, theory=None, klim=None, kstep=None, shotnoise=None, **kwargs):
+        self.k, self.ells, self.shotnoise = None, None, shotnoise
+        self.flatdata = self.load_data(data=data, klim=klim, kstep=kstep, **kwargs)[0]
+        self.mocks = self.load_data(data=mocks, klim=klim, kstep=kstep, **kwargs)[-1]
         if self.mpicomm.bcast(self.mocks is not None, root=0):
             covariance = None
             if self.mpicomm.rank == 0:
                 covariance = np.cov(self.mocks, rowvar=False, ddof=1)
             self.covariance = self.mpicomm.bcast(covariance, root=0)
-        self.wmatrix = WindowedPowerSpectrumMultipoles(k=self.k, ells=self.ells, wmatrix=wmatrix, theory=theory, shotnoise=shotnoise)
+        if self.k is None:
+            self.set_default_k_ells(klim=klim, kstep=kstep)
+        self.wmatrix = WindowedPowerSpectrumMultipoles(k=self.k, ells=self.ells, wmatrix=wmatrix, theory=theory, shotnoise=self.shotnoise)
+        if self.flatdata is None:
+            self.wmatrix()
+            self.flatdata = self.flatmodel.copy()
+
+    def set_default_k_ells(self, klim=None, kstep=None):
+        if not isinstance(klim, dict):
+            raise ValueError('Unknown klim format; provide e.g. {0: (0.01, 0.2), 2: (0.01, 0.15)}')
+        self.k, self.ells = [], []
+        for ell, lim in klim.items():
+            self.ells.append(ell)
+            if kstep is not None:
+                k = np.arange(*lim, step=kstep)
+            else:
+                k = np.array(lim, dtype='f8')
+            self.k.append(k)
+        self.ells = tuple(self.ells)
 
     def load_data(self, data=None, klim=None, kstep=None, krebin=None):
 
@@ -86,7 +104,8 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
             shotnoise = np.mean(list_shotnoise, axis=0)
 
         self.k, self.ells, flatdata, shotnoise = self.mpicomm.bcast((self.k, self.ells, flatdata, shotnoise) if self.mpicomm.rank == 0 else None, root=0)
-        return flatdata, shotnoise, list_y
+        if self.shotnoise is None: self.shotnoise = shotnoise
+        return flatdata, list_y
 
     @plotting.plotter
     def plot(self, scaling='kpk'):

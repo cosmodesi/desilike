@@ -40,6 +40,8 @@ def get_from_cosmo(cosmo, name):
 
 class Cosmoprimo(BasePrimordialCosmology):
 
+    config_fn = 'primordial_cosmology.yaml'
+
     def initialize(self, fiducial=None, **kwargs):
         # kwargs is engine, extra_params
         fiducial_input = bool(fiducial)

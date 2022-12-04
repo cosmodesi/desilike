@@ -33,6 +33,8 @@ class ParameterBestFit(Samples):
         di = {str(param): self[param][[index]] for param in params}
         if return_type == 'dict':
             return {k: v[0] for k, v in di.items()}
+        if return_type == 'nparray':
+            return np.array(di.values())
         toret = self.copy()
         toret.data = [ParameterArray(value, param=value.param) for value in di.values()]
         return toret

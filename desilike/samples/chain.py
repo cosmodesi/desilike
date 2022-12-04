@@ -307,6 +307,8 @@ class Chain(Samples):
             raise ValueError('Unknown "index" argument {}'.format(index))
         if return_type == 'dict':
             return di
+        if return_type == 'nparray':
+            return np.array(di.values())
         toret = self.copy()
         toret.data = [ParameterArray([value], param=value.param) for value in di.values()]
         return toret

@@ -9,16 +9,34 @@ from desilike.theories.galaxy_clustering.base import WindowedCorrelationFunction
 
 class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
 
-    def initialize(self, data=None, mocks=None, wmatrix=None, theory=None, **kwargs):
+    def initialize(self, data=None, mocks=None, theory=None, slim=None, sstep=None, **kwargs):
         self.s, self.ells = None, None
-        self.flatdata = self.load_data(data=data, **kwargs)[:1]
+        self.flatdata = self.load_data(data=data, **kwargs)[0]
         self.mocks = self.load_data(data=mocks, **kwargs)[-1]
         if self.mpicomm.bcast(self.mocks is not None, root=0):
             covariance = None
             if self.mpicomm.rank == 0:
                 covariance = np.cov(self.mocks, rowvar=False, ddof=1)
             self.covariance = self.mpicomm.bcast(covariance, root=0)
-        self.wmatrix = WindowedCorrelationFunctionMultipoles(s=self.s, ells=self.ells, wmatrix=wmatrix, theory=theory)
+        if self.s is None:
+            self.set_default_s_ells(slim=slim, sstep=sstep)
+        self.wmatrix = WindowedCorrelationFunctionMultipoles(s=self.s, ells=self.ells, theory=theory)
+        if self.flatdata is None:
+            self.wmatrix()
+            self.flatdata = self.flatmodel.copy()
+
+    def set_default_s_ells(self, slim=None, sstep=None):
+        if not isinstance(slim, dict):
+            raise ValueError('Unknown slim format; provide e.g. {0: (20, 150), 2: (20, 150)}')
+        self.s, self.ells = [], []
+        for ell, lim in slim.items():
+            self.ells.append(ell)
+            if sstep is not None:
+                s = np.arange(*lim, step=sstep)
+            else:
+                s = np.array(lim, dtype='f8')
+            self.s.append(s)
+        self.ells = tuple(self.ells)
 
     def load_data(self, data=None, slim=None, sstep=None, srebin=None):
 
@@ -35,7 +53,7 @@ class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
             if slim is None:
                 slim = {ell: [0, np.inf] for ell in (0, 2, 4)}
             elif not isinstance(slim, dict):
-                raise ValueError('Unknown slim format; provide e.g. {0: (0.01, 0.2), 2: (0.01, 0.15)}')
+                raise ValueError('Unknown slim format; provide e.g. {0: (20, 150), 2: (20, 150)}')
             ells = tuple(slim.keys())
             s, data = corr(ells=ells, return_sep=True, return_std=False)
             list_s, list_data = [], []
@@ -69,7 +87,6 @@ class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
                 data = [data]
             list_y = load_all(data)
             flatdata = np.mean(list_y, axis=0)
-
         self.s, self.ells, flatdata = self.mpicomm.bcast((self.s, self.ells, flatdata) if self.mpicomm.rank == 0 else None, root=0)
         return flatdata, list_y
 

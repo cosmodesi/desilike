@@ -150,7 +150,7 @@ def test_install():
     from desilike import Installer
     Installer()(likelihood)
     from desilike.samplers import EmceeSampler
-    Installer(EmceeSampler)
+    Installer()(EmceeSampler)
 
 
 if __name__ == '__main__':

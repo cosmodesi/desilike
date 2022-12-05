@@ -88,13 +88,14 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
                     idx = [params.index(param) for param in params_in_source]
                     index = np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx])
                     tmp[np.ix_(index, index)] = cov._value
-                idx = [params.index(param) for param in params_not_in_source]
-                indices = np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx])
-                indices = (indices,) * 2
-                if default is False:
-                    tmp[indices] = [param.proposal**2 if param.proposal is not None else np.nan for param in params_not_in_source]
-                else:
-                    tmp[indices] = default
+                if params_not_in_source:
+                    idx = [params.index(param) for param in params_not_in_source]
+                    indices = np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx])
+                    indices = (indices,) * 2
+                    if default is False:
+                        tmp[indices] = [param.proposal**2 if param.proposal is not None else np.nan for param in params_not_in_source]
+                    else:
+                        tmp[indices] = default
             source = ParameterCovariance(tmp, params=params, sizes=sizes)
         if source:
             tmp = source.cov(return_type=return_type)

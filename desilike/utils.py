@@ -491,12 +491,9 @@ def blockinv(blocks, inv=np.linalg.inv, check_valid='raise'):
     toret : 2D array
         Inverse of ``blocks`` matrix.
     """
-    def _inv(mat):
-        return inv(mat, check_valid=check_valid)
-
     A = blocks[0][0]
     if (len(blocks), len(blocks[0])) == (1, 1):
-        return _inv(A)
+        return inv(A)
     B = np.bmat(blocks[0][1:]).A
     C = np.bmat([b[0].T for b in blocks[1:]]).A.T
     invD = blockinv([b[1:] for b in blocks[1:]], inv=inv)
@@ -504,7 +501,7 @@ def blockinv(blocks, inv=np.linalg.inv, check_valid='raise'):
     def dot(*args):
         return np.linalg.multi_dot(args)
 
-    invShur = _inv(A - dot(B, invD, C))
+    invShur = inv(A - dot(B, invD, C))
     toret = np.bmat([[invShur, -dot(invShur, B, invD)], [-dot(invD, C, invShur), invD + dot(invD, C, invShur, B, invD)]]).A
     mat = np.bmat(blocks).A
     _check_valid_inv(mat, toret, check_valid=check_valid)

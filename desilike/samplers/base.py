@@ -8,7 +8,7 @@ from desilike import mpi
 from desilike.utils import BaseClass
 from desilike.samples import Chain, Samples, load_source
 from desilike.samples import diagnostics as sample_diagnostics
-from desilike.parameter import ParameterPriorError, ParameterArray
+from desilike.parameter import ParameterPriorError
 from .utils import TaskManager
 
 
@@ -211,7 +211,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
 
     def _set_derived(self, chain):
         for param in self.pipeline.params.select(fixed=True, derived=False):
-            chain.set(ParameterArray(np.full(chain.shape, param.value, dtype='f8'), param))
+            chain[param] = np.full(chain.shape, param.value, dtype='f8')
         indices_in_chain, indices = self.derived[0].match(chain, params=self.varied_params)
         assert indices_in_chain[0].size == chain.size, '{:d} != {:d}'.format(indices_in_chain[0].size, chain.size)
         for array in self.derived[1]:

@@ -34,6 +34,8 @@ def nsigmas_to_quantiles_1d_sym(nsigmas):
 
 def nsigmas_to_deltachi2(nsigmas, ddof=1):
     r"""Turn number of Gaussian sigmas ``nsigmas`` into :math:`\chi^{2}` levels at ``ddof`` degrees of freedom."""
+    if ddof == 1:
+        return np.array(nsigmas, dtype='f8')**2
     quantile = nsigmas_to_quantiles_1d(nsigmas)
     return stats.chi2.ppf(quantile, ddof)  # inverse of cdf
 

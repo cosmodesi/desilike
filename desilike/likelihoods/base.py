@@ -11,10 +11,6 @@ class BaseLikelihood(BaseCalculator):
     _loglikelihood_name = 'loglikelihood'
     _logprior_name = 'logprior'
 
-    @property
-    def varied_params(self):
-        return self.runtime_info.pipeline.varied_params
-
     def get(self):
         pipeline = self.runtime_info.pipeline
         all_params = pipeline.params
@@ -51,14 +47,14 @@ class BaseLikelihood(BaseCalculator):
             for param in solved_params:
                 scale = getattr(param.prior, 'scale', None)
                 inverse_priors.append(0. if scale is None or param.fixed else scale**(-2))
-                x0.append(pipeline._param_values[param.name])
+                x0.append(pipeline.param_values[param.name])
             inverse_priors = np.array(inverse_priors)
             sum_inverse_fisher = inverse_fisher + np.diag(inverse_priors)
             dx = - np.linalg.solve(sum_inverse_fisher, projection)
             x = x0 + dx
         for param, xx in zip(solved_params, x):
             sum_logprior += all_params[param].prior(xx)
-            pipeline._param_values[param.name] = xx
+            pipeline.param_values[param.name] = xx
             pipeline.derived.set(ParameterArray(xx, param))
         #if self.stop_at_inf_prior and not np.isfinite(sum_logprior): return
         if indices_best:
@@ -85,7 +81,7 @@ class BaseLikelihood(BaseCalculator):
                     array = self.derived[param]
                     self.logprior += array.param.prior(array)
                 else:
-                    self.logprior += param.prior(pipeline._param_values[param.name])
+                    self.logprior += param.prior(pipeline.param_values[param.name])
 
         param = Parameter(self._loglikelihood_name, latex=utils.outputs_to_latex(self._loglikelihood_name), derived=True)
         self.runtime_info.derived.set(ParameterArray(self.loglikelihood, param))
@@ -103,8 +99,8 @@ class GaussianLikelihood(BaseLikelihood):
         self.observables = [obs.runtime_info.initialize() for obs in observables]
         if covariance is None:
             nmocks = [self.mpicomm.bcast(len(obs.mocks) if self.mpicomm.rank == 0 and getattr(obs, 'mocks', None) is not None else 0) for obs in self.observables]
-            self.nobs = nmocks[0]
             if any(nmocks):
+                self.nobs = nmocks[0]
                 if not all(nmock == nmocks[0] for nmock in nmocks):
                     raise ValueError('Provide the same number of mocks for each observable, found {}'.format(nmocks))
                 if self.mpicomm.rank == 0:
@@ -142,14 +138,16 @@ class GaussianLikelihood(BaseLikelihood):
             raise ValueError('Based on provided observables, covariance expected to be a matrix of shape ({0:d}, {0:d})'.format(self.flatdata.size))
 
         # Set each observable's covariance (for, e.g., plots)
-        start = 0
+        start, slices = 0, []
         for obs in observables:
             stop = start + len(obs.flatdata)
             sl = slice(start, stop)
+            slices.append(sl)
             obs.covariance = self.covariance[sl, sl]
             start = stop
 
-        self.precision = utils.inv(self.covariance)
+        # Block-inversion is usually more numerically stable
+        self.precision = utils.blockinv([[self.covariance[sl1, sl2] for sl2 in slices] for sl1 in slices])
         size = self.precision.shape[0]
         if self.nobs is not None:
             self.hartlap = (self.nobs - size - 2.) / (self.nobs - 1.)

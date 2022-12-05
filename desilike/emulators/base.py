@@ -29,6 +29,27 @@ def get_subsamples(samples, frac=1., nmax=np.inf, seed=42, mpicomm=None):
     return toret
 
 
+class EmulatedCalculator(BaseCalculator):
+
+    def initialize(self, **kwargs):
+        for name, value in self.emulator.fixed.items():
+            setattr(self, name, value)
+
+    def calculate(self, **params):
+        predict = self.emulator.predict(**params)
+        state = {**self.emulator.fixed, **predict}
+        calc_state = {name: value for name, value in state.items() if name in self.emulator.in_calculator}
+        self.__dict__.update(state)
+        self.__setstate__(calc_state)
+
+    @classmethod
+    def load(cls, filename):
+        return Emulator.load(filename).to_calculator()
+
+    def save(self, fn):
+        return self.emulator.save(fn)
+
+
 class Emulator(BaseClass):
 
     def __init__(self, calculator, engine='taylor', mpicomm=None):
@@ -156,46 +177,25 @@ class Emulator(BaseClass):
     def to_calculator(self, derived=None):
 
         state = self.__getstate__()
-        Emulator = self.__class__
         Calculator = import_class(*state['calculator__class__'])
         new_name = Calculator.__name__
-        in_calculator = self.in_calculator
 
-        clsdict = {}
-
-        def new_initialize(self, **kwargs):
-            pass
-
-        def new_calculate(self, **params):
-            predict = Emulator.predict(self, **params)
-            state = {**self.fixed, **predict}
-            calc_state = {name: value for name, value in state.items() if name in in_calculator}
-            self.__dict__.update(state)
-            Calculator.__setstate__(self, calc_state)
-
-        clsdict = {'initialize': new_initialize, 'calculate': new_calculate, 'get': Calculator.get, '__module__': Calculator.__module__}
-
-        new_meta = type('MetaEmulatorCalculator', tuple(set([type(Emulator), type(Calculator)])), {})
-        new_cls = new_meta(new_name, (Emulator, Calculator), clsdict)
+        new_cls = type(EmulatedCalculator)(new_name, (EmulatedCalculator, Calculator),
+                                           {'__setstate__': Calculator.__setstate__, 'get': Calculator.get, '__module__': Calculator.__module__})
         try:
             new_cls.config_fn = Calculator.config_fn
         except AttributeError:
             pass
 
-        def from_state(cls, *args, **kwargs):
-            new = cls.__new__(cls)
-            new.__dict__.update(Emulator.from_state(*args, **kwargs).__dict__)  # should update config_fn
-            return new
-
-        calculator = from_state(new_cls, state)
+        calculator = new_cls()
+        calculator.emulator = self
         params = self.params.deepcopy()
-
         if derived is not None:
             for param in derived:
                 param = Parameter(param, derived=True)
                 if param not in params:
                     params.set(param)
-        calculator.update(params=params)
+        calculator.params = params
         return calculator
 
     def check(self, mse_stop=None, diagnostics=None, frac=0.1, **kwargs):
@@ -314,13 +314,6 @@ class Emulator(BaseClass):
         for name, state in self.engines.items():
             state = state.copy()
             self.engines[name] = import_class(*state.pop('__class__')).from_state(state)
-
-
-class EmulatedCalculator(BaseCalculator):
-
-    @classmethod
-    def load(cls, filename):
-        return Emulator.load(filename).to_calculator()
 
 
 class RegisteredEmulatorEngine(type(BaseClass)):

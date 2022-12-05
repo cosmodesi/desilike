@@ -151,7 +151,7 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
         pt_params = self.params.copy()
         for param in pt_params.names():
             if param in self_params: del pt_params[param]
-        self.pt.update(params=pt_params)
+        self.pt.params = pt_params
         broadband_coeffs = {}
         for ell in self.ells:
             broadband_coeffs[ell] = {}

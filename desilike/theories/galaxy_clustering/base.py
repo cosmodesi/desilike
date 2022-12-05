@@ -55,7 +55,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
             power = KaiserTracerPowerSpectrumMultipoles(k=self.k, ells=self.ells)
         self.power = power
         self.power.update(k=self.kin, ells=self.ells)
-        self.power.update(params=self.params.copy())
+        self.power.params = self.params.copy()
         self.params.clear()
 
     def calculate(self):

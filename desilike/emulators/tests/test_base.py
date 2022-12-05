@@ -17,6 +17,11 @@ def test_base():
     calculator = emulator.to_calculator()
 
     emulator = EmulatedCalculator.load(fn)
+    emulator.runtime_info.initialize()
+    print(emulator.runtime_info.varied_params)
+    print(emulator.runtime_info.param_values)
+    emulator()
+    #print(emulator.params, emulator.runtime_info.init[2], emulator.runtime_info.params)
     emulator().shape
     emulator.save(fn)
 

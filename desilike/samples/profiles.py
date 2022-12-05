@@ -34,7 +34,7 @@ class ParameterBestFit(Samples):
         if return_type == 'dict':
             return {k: v[0] for k, v in di.items()}
         if return_type == 'nparray':
-            return np.array(di.values())
+            return np.array(list(di.values()))
         toret = self.copy()
         toret.data = [ParameterArray(value, param=value.param) for value in di.values()]
         return toret

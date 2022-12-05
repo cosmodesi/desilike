@@ -1,4 +1,6 @@
 import numpy as np
+
+from desilike import setup_logging
 from desilike.likelihoods import GaussianLikelihood
 
 
@@ -59,9 +61,18 @@ def test_correlation_function():
 def test_compression():
 
     from desilike.observables.galaxy_clustering import BAOCompression, ShapeFitCompression
+    from desilike.emulators import Emulator, TaylorEmulatorEngine
 
     observable = BAOCompression(data=[1., 1.], covariance=np.diag([0.01, 0.01]), quantities=['qpar', 'qper'], z=2.)
     likelihood = GaussianLikelihood(observables=[observable])
+    print(likelihood.varied_params)
+    assert np.allclose(likelihood(), 0.)
+
+    observable = BAOCompression(data=np.array([1.]), covariance=np.diag([0.01]), quantities=['qiso'], z=2.)
+    emulator = Emulator(observable, engine=TaylorEmulatorEngine(order=2))
+    emulator.set_samples()
+    emulator.fit()
+    likelihood = GaussianLikelihood(observables=[emulator.to_calculator()])
     print(likelihood.varied_params)
     assert np.allclose(likelihood(), 0.)
 
@@ -70,9 +81,18 @@ def test_compression():
     likelihood()
     print(likelihood.varied_params)
 
+    observable = ShapeFitCompression(data=[1., 1., 0., 0.8], covariance=np.diag([0.01, 0.01, 0.0001, 0.01]), quantities=['qpar', 'qper', 'dm', 'f'], z=2.)
+    emulator = Emulator(observable, engine=TaylorEmulatorEngine(order=2))
+    emulator.set_samples()
+    emulator.fit()
+    likelihood = GaussianLikelihood(observables=[emulator.to_calculator()])
+    print(likelihood(A_s=1.5e-9), likelihood(A_s=2.5e-9))
+    print(likelihood.varied_params)
+
 
 if __name__ == '__main__':
 
-    test_power_spectrum()
-    test_correlation_function()
+    setup_logging()
+    #test_power_spectrum()
+    #test_correlation_function()
     test_compression()

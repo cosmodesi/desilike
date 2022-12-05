@@ -38,7 +38,7 @@ params:
     value: 2.083e-09
     prior:
       dist: uniform
-      limits: [1.8e-9, 3e-9]
+      limits: [1.5e-9, 3.5e-9]
     latex: A_{s}
   n_s:
     value: 0.9649

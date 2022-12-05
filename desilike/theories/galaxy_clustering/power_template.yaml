@@ -227,3 +227,67 @@ params:
   DV_over_rd:
     derived: True
     latex: '(D_{\mathrm{H}} D_{\mathrm{M}}^{2} z)^{1/3}/r_{d}'
+
+---
+
+class: BAOExtractor
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Extract BAO compressed parameter from cosmology
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+
+params:
+  Omega_m:
+    value: 0.3
+    prior:
+      limits: [0.05, 0.6]
+    ref:
+      limits: [0.2, 0.4]
+    latex: \Omega_{m}
+
+---
+
+class: ShapeFitPowerSpectrumExtractor
+
+info:
+  version: 0.0.1
+  date: 05/04/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Extract shapefit compressed parameters from cosmology
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+
+params:
+  Omega_m:
+    value: 0.3
+    prior:
+      limits: [0.05, 0.6]
+    ref:
+      limits: [0.2, 0.4]
+    latex: \Omega_{m}
+  A_s:
+    prior:
+      limits: [1.5e-9, 3e-9]
+    ref:
+      limits: [1.9e-9, 2.1e-9]
+  h:
+    prior:
+      limits: [0.4, 0.9]
+    ref:
+      limits: [0.65, 0.70]

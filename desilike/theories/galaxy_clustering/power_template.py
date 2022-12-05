@@ -9,17 +9,21 @@ from .base import APEffect
 
 class BasePowerSpectrumExtractor(BaseCalculator):
 
+    config_fn = 'power_template.yaml'
+
     def initialize(self, z=1., with_now=False, cosmo=None, fiducial='DESI'):
         self.z = float(z)
         self.fiducial = get_cosmo(fiducial)
         self.with_now = with_now
         self.cosmo_requires = {}
         self.cosmo = cosmo
-        if cosmo is None:
-            self.cosmo = Cosmoprimo(fiducial=self.fiducial)
         if external_cosmo(self.cosmo):
             self.cosmo_requires = {'fourier': {'sigma8_z': {'z': self.z, 'of': [('delta_cb', 'delta_cb'), ('theta_cb', 'theta_cb')]},
                                                'pk_interpolator': {'z': self.z, 'of': [('delta_cb', 'delta_cb')]}}}
+        elif cosmo is None:
+            self.cosmo = Cosmoprimo(fiducial=self.fiducial)
+            self.cosmo.params = self.params.copy()
+        self.params.clear()
 
     def calculate(self):
         fo = self.cosmo.get_fourier()
@@ -40,18 +44,31 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
 
     config_fn = 'power_template.yaml'
 
-    def initialize(self, k=None, z=1., **kwargs):
-        super(BasePowerSpectrumTemplate, self).initialize(z=z, **kwargs)
-        if k is None:
-            k = np.logspace(-3., 1., 400)
+    def initialize(self, k=None, z=1., with_now=False, apmode='qparqper', fiducial='DESI'):
+        self.z = float(z)
+        self.cosmo = self.fiducial = get_cosmo(fiducial)
+        self.with_now = with_now
+        if k is None: k = np.logspace(-3., 1., 400)
         self.k = np.array(k, dtype='f8')
         self.cosmo_requires = {}
+        super(BasePowerSpectrumTemplate, self).calculate()
+        for name in ['pk_dd_interpolator'] + (['pknow_dd_interpolator'] if self.with_now else []):
+            setattr(self, name + '_fid', getattr(self, name))
+        self.pk_dd_fid = self.pk_dd_interpolator(self.k)
+        if self.with_now:
+            self.pknow_dd_fid = self.pknow_dd_interpolator(self.k)
+        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=apmode)
+        ap_params = ParameterCollection()
+        for param in list(self.params):
+            if param in self.apeffect.params:
+                ap_params.set(param)
+                del self.params[param]
+        self.apeffect.params = ap_params
 
     def calculate(self):
-        super(BasePowerSpectrumTemplate, self).calculate()
-        self.pk_dd = self.pk_dd_interpolator(self.k)
+        self.pk_dd = self.pk_dd_fid
         if self.with_now:
-            self.pknow_dd = self.pknow_dd_interpolator(self.k)
+            self.pknow_dd = self.pknow_dd_fid
 
     @property
     def qpar(self):
@@ -68,37 +85,26 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
 class FixedPowerSpectrumTemplate(BasePowerSpectrumTemplate):
 
     def initialize(self, *args, **kwargs):
-        super(FixedPowerSpectrumTemplate, self).initialize(*args, cosmo=None, **kwargs)
-        self.cosmo = self.fiducial
-        super(FixedPowerSpectrumTemplate, self).calculate()
-
-    def calculate(self):
-        pass
-
-    @property
-    def qpar(self):
-        return 1.
-
-    @property
-    def qper(self):
-        return 1.
-
-    def ap_k_mu(self, k, mu):
-        return 1., k[..., None], mu
+        super(FixedPowerSpectrumTemplate, self).initialize(*args, **kwargs)
+        self.runtime_info.requires = []  # remove APEffect dependence
 
 
 class FullPowerSpectrumTemplate(BasePowerSpectrumTemplate):
 
-    def initialize(self, *args, **kwargs):
-        super(FullPowerSpectrumTemplate, self).initialize(*args, **kwargs)
+    def initialize(self, *args, k=None, **kwargs):
+        if k is None: k = np.logspace(-3., 1., 400)
+        self.k = np.array(k, dtype='f8')
+        BasePowerSpectrumExtractor.initialize(self, *args, **kwargs)
         self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, cosmo=self.cosmo, mode='distances').runtime_info.initialize()
         if external_cosmo(self.cosmo):
-            self.cosmo_requires = {'fourier': {'sigma8_z': {'z': self.z, 'of': [('delta_cb', 'delta_cb'), ('theta_cb', 'theta_cb')]},
-                                               'pk_interpolator': {'z': self.z, 'k': self.k, 'of': [('delta_cb', 'delta_cb')]}}}
+            self.cosmo_requires['fourier']['pk_interpolator']['k'] = self.k
             self.cosmo_requires.update(self.apeffect.cosmo_requires)  # just background
-        else:
-            self.cosmo.update(params=self.params.copy())
-        self.params.clear()
+
+    def calculate(self):
+        BasePowerSpectrumExtractor.calculate(self)
+        self.pk_dd = self.pk_dd_interpolator(self.k)
+        if self.with_now:
+            self.pknow_dd = self.pknow_dd_interpolator(self.k)
 
 
 class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
@@ -109,6 +115,13 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         self.n_varied = bool(n_varied)
         if external_cosmo(self.cosmo):
             self.cosmo_requires['primordial'] = {'pk_interpolator': {'k': self.k}}
+        if self.fiducial is not None:
+            cosmo = self.cosmo
+            self.cosmo = self.fiducial
+            self.calculate()
+            self.cosmo = cosmo
+            for name in ['Ap', 'm', 'n']:
+                setattr(self, name + '_fid', getattr(self, name))
 
     def calculate(self):
         super(ShapeFitPowerSpectrumExtractor, self).calculate()
@@ -124,26 +137,24 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
             pk_prim = 1.
         self.m = (np.diff(np.log(self.pknow_dd_interpolator(k) / pk_prim)) / np.diff(np.log(k)))[0]
 
+    def get(self):
+        self.dn = self.n - self.n_fid
+        self.dm = self.m - self.m_fid
+        self.df = self.f_sqrt_Ap / self.Ap_fid**0.5
+        return self
+
 
 class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpectrumExtractor):
 
-    def initialize(self, *args, a=0.6, apmode='qparqper', **kwargs):
-        super(ShapeFitPowerSpectrumTemplate, self).initialize(*args, cosmo=None, **kwargs)
+    def initialize(self, *args, kp=0.03, a=0.6, with_now='peakaverage', **kwargs):
+        self.kp = float(kp)
+        self.n_varied = self.params['dn'].varied
+        super(ShapeFitPowerSpectrumTemplate, self).initialize(*args, with_now=with_now, **kwargs)
         self.a = float(a)
-        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=apmode)
-        ap_params = ParameterCollection()
-        for param in list(self.params):
-            if param in self.apeffect.params:
-                ap_params.set(param)
-                del self.params[param]
-        self.apeffect.update(params=ap_params)
-        self.cosmo = self.fiducial
-        super(ShapeFitPowerSpectrumTemplate, self).calculate()
-        for name in ['n', 'm', 'pk_dd_interpolator', 'pk_dd'] + (['pknow_dd_interpolator', 'pknow_dd'] if self.with_now else []):
+        for name in ['n', 'm']:
             setattr(self, name + '_fid', getattr(self, name))
 
     def calculate(self, f=0.8, dm=0., dn=0.):
-        self.n_varied = self.runtime_info.base_params['dn'].varied
         factor = np.exp(dm / self.a * np.tanh(self.a * np.log(self.k / self.kp)) + dn * np.log(self.k / self.kp))
         self.pk_dd = self.pk_dd_fid * factor
         if self.with_now:
@@ -156,15 +167,19 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
 
 class BAOExtractor(BaseCalculator):
 
+    config_fn = 'power_template.yaml'
+
     def initialize(self, z=1., cosmo=None, fiducial='DESI'):
         self.z = float(z)
         self.fiducial = get_cosmo(fiducial)
         self.cosmo = cosmo
-        if cosmo is None:
-            self.cosmo = Cosmoprimo(fiducial=self.fiducial)
         if external_cosmo(self.cosmo):
             self.cosmo_requires = {'thermodynamics': {'rs_drag': None},
                                    'background': {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}}
+        elif cosmo is None:
+            self.cosmo = Cosmoprimo(fiducial=self.fiducial)
+            self.cosmo.params = self.params.copy()
+        self.params.clear()
         if self.fiducial is not None:
             cosmo = self.cosmo
             self.cosmo = self.fiducial
@@ -191,22 +206,11 @@ class BAOExtractor(BaseCalculator):
 
 class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
 
-    def initialize(self, *args, apmode='qparqper', with_now='peakaverage', **kwargs):
-        super(BAOPowerSpectrumTemplate, self).initialize(*args, cosmo=None, with_now=with_now, **kwargs)
-        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=apmode)
-        ap_params = ParameterCollection()
-        for param in list(self.params):
-            if param in self.apeffect.params:
-                ap_params.set(param)
-                del self.params[param]
-        self.apeffect.update(params=ap_params)
-        self.cosmo = self.fiducial
-        # Set pk_dd_interpolator, pknow_dd_interpolator, etc.
-        BasePowerSpectrumTemplate.calculate(self)
+    def initialize(self, *args, with_now='peakaverage', **kwargs):
+        super(BAOPowerSpectrumTemplate, self).initialize(*args, with_now=with_now, **kwargs)
         # Set DM_over_rd, etc.
         BAOExtractor.calculate(self)
-        for name in ['DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd',
-                     'pk_dd_interpolator', 'pk_dd'] + (['pknow_dd_interpolator', 'pknow_dd'] if self.with_now else []):
+        for name in ['DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd']:
             setattr(self, name + '_fid', getattr(self, name))
         # No self.k defined
 
@@ -219,14 +223,3 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.DV_over_rd = self.apeffect.qiso * self.DV_over_rd_fid
         self.DH_over_DM = self.apeffect.qap * self.DH_over_DM
         return self
-
-    @property
-    def qpar(self):
-        return self.apeffect.qpar
-
-    @property
-    def qper(self):
-        return self.apeffect.qper
-
-    def ap_k_mu(self, k, mu):
-        return self.apeffect.ap_k_mu(k, mu)

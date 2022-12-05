@@ -39,7 +39,33 @@ class BasePipeline(BaseClass):
         self.derived = None
         self.mpicomm = calculator.mpicomm
         for calculator in self.calculators:
-            calculator.runtime_info._param_values = None
+            calculator.runtime_info.tocalculate = True
+        self.params
+
+    @property
+    def params(self):
+        if getattr(self, '_params', None) is not None:
+            return self._params
+        params_from_calculator = {}
+        params = ParameterCollection()
+        for calculator in self.calculators:
+            for iparam, param in enumerate(calculator.runtime_info.params):
+                if param in params:
+                    if param.derived and param.fixed:
+                        msg = 'Derived parameter {} of {} is already derived in {}.'.format(param, calculator, params_from_calculator[param.name])
+                        if param.basename not in calculator.runtime_info.derived_auto and param.basename not in params_from_calculator[param.name].runtime_info.derived_auto:
+                            raise PipelineError(msg)
+                        elif self.mpicomm.rank == 0:
+                            self.log_warning(msg)
+                    elif param != params[param]:
+                        raise PipelineError('Parameter {} of {} is different from that of {}.'.format(param, calculator, params_from_calculator[param.name]))
+                params_from_calculator[param.name] = calculator
+                params.set(param)
+        self.derived = None
+        self._params = params
+        self.varied_params = params.select(varied=True, derived=False)
+        self.param_values = {param.name: param.value for param in self.params}
+        return self._params
 
     @property
     def mpicomm(self):
@@ -59,50 +85,6 @@ class BasePipeline(BaseClass):
     def tocalculate(self, tocalculate):
         for calculator in self.calculators:
             calculator.runtime_info.tocalculate = True
-
-    def _set_params(self, params=None, quiet=False):
-        params_from_calculator = {}
-        ref_params = ParameterCollection(params)
-        params = ParameterCollection()
-        for calculator in self.calculators:
-            for iparam, param in enumerate(calculator.runtime_info.full_params):
-                if param in ref_params:
-                    calculator.runtime_info.full_params[iparam] = param = ref_params[param]
-                if not quiet and param in params:
-                    if param.derived and param.fixed:
-                        msg = 'Derived parameter {} of {} is already derived in {}.'.format(param, calculator, params_from_calculator[param.name])
-                        if param.basename not in calculator.runtime_info.derived_auto and param.basename not in params_from_calculator[param.name].runtime_info.derived_auto:
-                            raise PipelineError(msg)
-                        elif self.mpicomm.rank == 0:
-                            self.log_warning(msg)
-                    elif param != params[param]:
-                        raise PipelineError('Parameter {} of {} is different from that of {}.'.format(param, calculator, params_from_calculator[param.name]))
-                params_from_calculator[param.name] = calculator
-                params.set(param)
-        for param in ref_params:
-            if param not in params:
-                raise PipelineError('Parameter {} is not used by any calculator'.format(param))
-        self.derived = None
-        self._params = params
-        self._varied_params = params.select(varied=True, derived=False)
-
-    @property
-    def params(self):
-        if getattr(self, '_params', None) is None:
-            self._set_params()
-        return self._params
-
-    @property
-    def varied_params(self):
-        if getattr(self, '_varied_params', None) is None:
-            self._set_params()
-        return self._varied_params
-
-    @property
-    def param_values(self):
-        if getattr(self, '_param_values', None) is None:
-            self._param_values = {param.name: param.value for param in self.params}
-        return self._param_values
 
     def eval_params(self, params):
         toret = {}
@@ -127,9 +109,9 @@ class BasePipeline(BaseClass):
             runtime_info.set_param_values(params, full=True)
             # print(calculator.__class__.__name__, runtime_info.tocalculate, runtime_info._param_values, params)
             result = runtime_info.calculate()
-            for param in runtime_info.full_params:
-                if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
             self.derived.update(runtime_info.derived)
+        for param in self.params:
+            if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
         return result
 
     def mpicalculate(self, **params):
@@ -193,9 +175,9 @@ class BasePipeline(BaseClass):
         jac = jax.jacfwd(fun, argnums=0, has_aux=False, holomorphic=False)
 
         if params is None:
-            params = self._param_values
+            params = self.param_values
         elif not isinstance(params, dict):
-            params = {str(param): self._param_values[str(param)] for param in params}
+            params = {str(param): self.param_values[str(param)] for param in params}
 
         jac = jac(params)
         fun(params)  # TODO find better fix
@@ -250,11 +232,12 @@ class BasePipeline(BaseClass):
                     derived_names.add(derived_name)
             calculator.runtime_info.derived_auto |= derived_names
             for name in derived_names:
-                if name not in calculator.runtime_info.base_params:
+                if name not in calculator.runtime_info.params.basenames():
                     param = Parameter(name, namespace=calculator.runtime_info.namespace, derived=True)
-                    calculator.runtime_info.full_params.set(param)
-                    calculator.runtime_info.full_params = calculator.runtime_info.full_params
+                    calculator.runtime_info.params.set(param)
+                    calculator.runtime_info.params = calculator.runtime_info.params
         self._params = None
+        self.params
         return calculators, fixed, varied
 
     def _set_speed(self, niterations=10, override=False, seed=42):
@@ -299,7 +282,7 @@ class BasePipeline(BaseClass):
                     callback(calculator)
 
             for calculator in self.calculators:
-                if param in calculator.runtime_info.full_params:
+                if param in calculator.runtime_info.params:
                     callback(calculator)
 
             footprints.append(tuple(calculator in calculators_to_calculate for calculator in self.calculators))
@@ -386,14 +369,13 @@ class RuntimeInfo(BaseClass):
         self.speed = None
         self.monitor = Monitor()
         self.required_by = set()
-        if init is None: init = ((), {}, None)
+        if init is None: init = ((), {}, ParameterCollection())
         self.init = list(init)
         self._initialized = False
         self._tocalculate = True
         self.calculated = False
+        self.params = ParameterCollection(init[2])
         self.name = self.calculator.__class__.__name__
-        #if self.calculator.__class__.__name__ == 'WindowedCorrelationFunctionMultipoles':
-        #    print('IIIIIIIIIIIIIIIIIII')
 
     def install(self):
         if self.installer is not None:
@@ -429,39 +411,16 @@ class RuntimeInfo(BaseClass):
         return self._pipeline
 
     @property
-    def full_params(self):
-        if getattr(self, '_full_params', None) is None:
-            self._full_params = ParameterCollection(self.calculator.params)
-        return self._full_params
+    def params(self):
+        return self._params
 
-    @full_params.setter
-    def full_params(self, full_params):
-        self._full_params = ParameterCollection(full_params)
-        self._base_params = self._solved_params = self._derived_params = self._varied_params = self._param_values = None
-
-    @property
-    def base_params(self):
-        if getattr(self, '_base_params', None) is None:
-            self._base_params = {param.basename: param for param in self.full_params}
-        return self._base_params
-
-    @property
-    def solved_params(self):
-        if getattr(self, '_solved_params', None) is None:
-            self._solved_params = self.full_params.select(solved=True)
-        return self._solved_params
-
-    @property
-    def derived_params(self):
-        if getattr(self, '_derived_params', None) is None:
-            self._derived_params = self.full_params.select(derived=True, solved=False, depends={})
-        return self._derived_params
-
-    @property
-    def varied_params(self):
-        if getattr(self, '_varied_params', None) is None:
-            self._varied_params = ParameterCollection([param for param in self.full_params if (not param.drop) and (param.depends or (not param.derived) or param.solved)])
-        return self._varied_params
+    @params.setter
+    def params(self, params):
+        self._params = params
+        self.base_params = {param.basename: param for param in self._params}
+        self.varied_params = ParameterCollection([param for param in self._params if (not param.drop) and (param.depends or (not param.derived) or param.solved)])
+        self.derived_params = self._params.select(derived=True, solved=False, depends={})
+        self.param_values = {param.basename: param.value for param in self.varied_params}
 
     @property
     def derived(self):
@@ -496,9 +455,11 @@ class RuntimeInfo(BaseClass):
         if self.toinitialize:
             self.clear()
             self.install()
-            if self.init[2] is not None:
-                self.calculator.params = self.init[2].deepcopy()
+            bak = self.init[2]
+            self.init[2] = ParameterCollection(self.init[2]).deepcopy()
             self.calculator.initialize(*self.init[0], **self.init[1])
+            self.params = self.init[2]
+            self.init[2] = bak
             self._initialized = True
         return self.calculator
 
@@ -529,12 +490,6 @@ class RuntimeInfo(BaseClass):
         self._calculate(**params)
         return self.calculator.get()
 
-    @property
-    def param_values(self):
-        if getattr(self, '_param_values', None) is None:
-            self._param_values = {param.basename: param.value for param in self.varied_params}
-        return self._param_values
-
     def set_param_values(self, param_values, full=False):
         if full:
             for param, value in param_values.items():
@@ -542,14 +497,14 @@ class RuntimeInfo(BaseClass):
                     basename = self.varied_params[param].basename
                     if self.param_values[basename] != value or type(self.param_values[basename]) is not type(value):
                         self._tocalculate = True
-                    self._param_values[basename] = value
+                    self.param_values[basename] = value
         else:
             for basename, value in param_values.items():
                 basename = str(basename)
                 if basename in self.param_values:
-                    if self._param_values[basename] != value or type(self.param_values[basename]) is not type(value):
+                    if self.param_values[basename] != value or type(self.param_values[basename]) is not type(value):
                         self._tocalculate = True
-                    self._param_values[basename] = value
+                    self.param_values[basename] = value
 
     def __getstate__(self):
         """Return this class state dictionary."""
@@ -581,29 +536,30 @@ class RuntimeInfo(BaseClass):
     def deepcopy(self):
         import copy
         new = self.copy()
-        new.full_params = copy.deepcopy(self.full_params)
+        new.params = copy.deepcopy(self.params)
         return new
 
 
 class BaseCalculator(BaseClass):
 
     def __new__(cls, *args, **kwargs):
-        cls.info = Info(getattr(cls, 'info', {}))
-        cls.params = ParameterCollection(getattr(cls, 'params', None))
+        cls_info = Info(getattr(cls, '_info', {}))
+        cls_params = ParameterCollection(getattr(cls, '_params', None))
         if hasattr(cls, 'config_fn'):
             dirname = os.path.dirname(sys.modules[cls.__module__].__file__)
             config = BaseConfig(os.path.join(dirname, cls.config_fn), index={'class': cls.__name__})
-            cls.info = Info({**config.get('info', {}), **cls.info})
+            cls_info = Info({**config.get('info', {}), **cls_info})
             params = ParameterCollectionConfig(config.get('params', {})).init()
-            params.update(cls.params)
+            params.update(cls_params)
             init = config.get('init', {})
             if init: kwargs = {**init, **kwargs}
         else:
-            params = cls.params.deepcopy()
+            params = cls_params.deepcopy()
         new = super(BaseCalculator, cls).__new__(cls)
-        new.params = params
+        new.info = cls_info
         new.runtime_info = RuntimeInfo(new, init=((), kwargs, params))
         new.mpicomm = mpi.COMM_WORLD
+
         return new
 
     def __init__(self, *args, **kwargs):
@@ -617,10 +573,7 @@ class BaseCalculator(BaseClass):
         elif len(args):
             raise ValueError('Unrecognized arguments {}'.format(args))
         for name, value in kwargs.items():
-            if name == 'params':
-                self.params = self.runtime_info.init[2] = ParameterCollection(value)
-            else:
-                self.runtime_info.init[1][name] = value
+            self.runtime_info.init[1][name] = value
         self.runtime_info.initialized = False
 
     def __call__(self, **params):
@@ -640,3 +593,18 @@ class BaseCalculator(BaseClass):
 
     def __repr__(self):
         return self.runtime_info.name
+
+    @property
+    def params(self):
+        if not self.runtime_info.initialized:
+            return self.runtime_info.init[2]
+        return self.runtime_info.pipeline.params
+
+    @property
+    def varied_params(self):
+        return self.runtime_info.pipeline.varied_params
+
+    @params.setter
+    def params(self, params):
+        self.runtime_info.init[2] = params
+        self.runtime_info.initialized = False

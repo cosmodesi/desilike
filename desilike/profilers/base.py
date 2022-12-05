@@ -7,7 +7,7 @@ from desilike import utils
 from desilike.utils import BaseClass
 from desilike.samples import load_source
 from desilike.samples.profiles import Profiles, Samples, ParameterBestFit
-from desilike.parameter import ParameterArray, ParameterCollection
+from desilike.parameter import ParameterCollection
 from desilike.samplers.utils import TaskManager
 
 
@@ -246,7 +246,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                     profiles.update(p)
                     profiles = self._profiles_transform(profiles)
                     for param in self.likelihood.params.select(fixed=True, derived=False):
-                        profiles.bestfit.set(ParameterArray(np.array(param.value, dtype='f8'), param))
+                        profiles.bestfit[param] = np.array(param.value, dtype='f8')
                     index_in_profile, index = self.derived[0].match(profiles.bestfit, params=profiles.start.params())
                     assert index_in_profile[0].size == 1
                     for array in self.derived[1]:

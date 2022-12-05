@@ -2,7 +2,7 @@ import itertools
 
 import numpy as np
 
-from desilike.parameter import ParameterArray, ParameterPriorError, Samples
+from desilike.parameter import ParameterPriorError, Samples
 from desilike.utils import BaseClass
 from .base import RegisteredSampler
 
@@ -81,7 +81,7 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
 
         if self.mpicomm.rank == 0:
             for param in self.pipeline.params.select(fixed=True, derived=False):
-                samples.set(ParameterArray(np.full(samples.shape, param.value, dtype='f8'), param))
+                samples[param] = np.full(samples.shape, param.value, dtype='f8')
             samples.update(self.pipeline.derived)
             self.samples = samples
             if self.save_fn is not None:

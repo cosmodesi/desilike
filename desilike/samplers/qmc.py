@@ -3,7 +3,7 @@ import numpy as np
 from scipy.stats import qmc
 from scipy.stats.qmc import Sobol, Halton, LatinHypercube
 
-from desilike.parameter import ParameterArray, ParameterPriorError, Samples
+from desilike.parameter import ParameterPriorError, Samples
 from desilike.utils import BaseClass
 from .base import RegisteredSampler
 
@@ -82,7 +82,7 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
 
         if self.mpicomm.rank == 0:
             for param in self.pipeline.params.select(fixed=True, derived=False):
-                samples.set(ParameterArray(np.full(samples.shape, param.value, dtype='f8'), param))
+                samples[param] = np.full(samples.shape, param.value, dtype='f8')
             samples.update(self.pipeline.derived)
             if self.samples is None:
                 self.samples = samples

@@ -4,9 +4,9 @@ import numpy as np
 from scipy import constants, stats
 
 from desilike import utils
-from desilike.bindings.base import LikelihoodGenerator, get_likelihood_params
+from desilike.bindings.base import LikelihoodGenerator, get_likelihood_params, ParameterCollection
 
-from desilike.cosmo import ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
+from desilike.cosmo import Cosmology, ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
 
 
 class CosmoSISEngine(ExternalEngine):
@@ -73,31 +73,57 @@ class Fourier(Section):
 desilike_name = 'desi'
 
 
-def CosmoSISLikelihoodFactory(cls, module=None):
+def cosmoprimo_to_cosmosis_params(params):
+    convert = {'H0': 'hubble', 'h': 'h0', 'A_s': 'A_s', 'ln10^{10}A_s': 'log1e10As', 'sigma8': 'sigma_8', 'n_s': 'n_s', 'omega_b': 'ombh2', 'Omega_b': 'omega_b',
+               'omega_cdm': 'omch2', 'Omega_cdm': 'omega_c', 'Omega_ncdm': 'omega_nu', 'omega_ncdm': 'omnuh2', 'm_ncdm': 'mnu', 'Omega_k': 'omega_k'}
+    toret = ParameterCollection()
+    for param in params:
+        if param.varied:
+            try:
+                name = convert[param.name]
+            except KeyError as exc:
+                raise ValueError('There is no translation for parameter {} to cosmosis; we can only translate {}'.format(param.name, list(convert.keys()))) from exc
+            param = param.clone(basename=name)
+            toret.set(param)
+    return toret
+
+
+def cosmosis_to_cosmoprimo(fiducial, cosmo_params, block):
+    if fiducial: cosmo = Cosmology.from_state(fiducial)
+    else: cosmo = Cosmology()
+    section = 'cosmological_parameters'
+    params = {name: block[section, name] for _, name in block.keys(section=section)}
+    state = dict(h=params['h0'],
+                 Omega_b=params['omega_b'],
+                 Omega_cdm=params['omega_c'],
+                 n_s=params.get('n_s', 0.96),
+                 Omega_k=params['omega_k'],
+                 N_eff=3.046 + params.get('delta_neff', 0.),
+                 w0_fld=params.get('w0', -1.),
+                 wa_fld=params.get('wa', 0.))
+    if 'sigma8' in cosmo_params:
+        state['sigma8'] = params['sigma8']
+    else:
+        state['A_s'] = params['a_s']
+    cosmo.clone(**state, engine=CosmoSISEngine)
+    cosmo._engine.block = block
+    return cosmo
+
+
+def CosmoSISLikelihoodFactory(cls, kw_like, module=None):
 
     def __init__(self, options):
-        self.like = cls()
-        self._params = get_likelihood_params(self.like)
-        self._requires = self.like.runtime_info.pipeline.get_cosmo_requires()
+        self.like = cls(**kw_like)
+        self._cosmo_params, self._nuisance_params = get_likelihood_params(self.like)  # nuisance params
+        requires = self.like.runtime_info.pipeline.get_cosmo_requires()
+        self._fiducial = requires.get('fiducial', {})
+        self._requires = requires
 
     def do_likelihood(self, block):
         if self._requires:
-            from cosmoprimo import Cosmology
-            section = 'cosmological_parameters'
-            params = {name: block[section, name] for _, name in block.keys(section=section)}
-            cosmo = Cosmology(h=params['h0'],
-                              Omega_b=params['omega_b'],
-                              Omega_cdm=params['omega_c'],
-                              sigma8=params.get('sigma_8', 0.8),
-                              n_s=params.get('n_s', 0.96),
-                              Omega_k=params['omega_k'],
-                              N_eff=3.046 + params.get('delta_neff', 0.),
-                              w0_fld=params.get('w0', -1.),
-                              wa_fld=params.get('wa', 0.),
-                              engine=CosmoSISEngine)
-            cosmo._engine.block = block
+            cosmo = cosmosis_to_cosmoprimo(self._fiducial, self._requires.get('params', {}), block)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
-        loglikelihood = self.like(**{param.name: block[desilike_name, param.name] for param in self._params})
+        loglikelihood = self.like(**{param.name: block[desilike_name, param.name] for param in self._nuisance_params})
         block['likelihoods', '{}_like'.format(desilike_name)] = loglikelihood
 
     @classmethod
@@ -139,8 +165,8 @@ class CosmoSISLikelihoodGenerator(LikelihoodGenerator):
     def __init__(self):
         super(CosmoSISLikelihoodGenerator, self).__init__(CosmoSISLikelihoodFactory)
 
-    def get_code(self, likelihood):
-        cls, fn, code = super(CosmoSISLikelihoodGenerator, self).get_code(likelihood)
+    def get_code(self, *args, **kwargs):
+        cls, fn, code = super(CosmoSISLikelihoodGenerator, self).get_code(*args, **kwargs)
         dirname = os.path.dirname(fn)
         fn = os.path.join(dirname, cls.__name__ + '.py')
 
@@ -165,12 +191,16 @@ class CosmoSISLikelihoodGenerator(LikelihoodGenerator):
             return prior, limits
 
         values, priors = {}, {}
-        for param in get_likelihood_params(cls()):
+        cosmo_params, nuisance_params = get_likelihood_params(cls(**self.kw_like))
+        #cosmo_params = cosmoprimo_to_cosmosis_params(cosmo_params)
+        for param in nuisance_params:
+            if param.depends:
+                raise ValueError('Cannot cope with parameter dependencies')
             prior, limits = decode_prior(param.prior, param.name)
-            values[param] = [param.value]
+            values[param.name] = [param.value]
             if param.varied:
-                values[param] = [limits[0], param.value, limits[1]]
-            priors[param] = prior
+                values[param.name] = [limits[0], param.value, limits[1]]
+            priors[param.name] = prior
 
         def tostr(li):
             return ' '.join(map(str, li))

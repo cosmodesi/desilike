@@ -1,0 +1,24 @@
+params:
+  b1:
+    latex: b_{1}
+    prior:
+      dist: uniform
+      max: 4.0
+      min: 0.0
+    proposal: 0.5
+    ref:
+      dist: uniform
+      max: 2.0
+      min: 1.0
+  sn0:
+    latex: s_{n, 0}
+    prior:
+      dist: norm
+      loc: 0.0
+      scale: 1000.0
+    proposal: 1000.0
+    ref:
+      dist: norm
+      loc: 0.0
+      scale: 1000.0
+stop_at_error: true

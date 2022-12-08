@@ -29,11 +29,13 @@ class BaseLikelihood(BaseCalculator):
                     indices_marg.append(iparam)
                 else:
                     raise ValueError('Unknown option for solved = {}'.format(solved))
-        flatdiff = self.flatdiff
+
         if solved_params:
 
             def getter():
                 return self.flatdiff
+
+            flatdiff = getter()
             # flatdiff is model - data
             jac = pipeline.jac(getter, solved_params)
             zeros = np.zeros_like(self.precision, shape=self.precision.shape[0])

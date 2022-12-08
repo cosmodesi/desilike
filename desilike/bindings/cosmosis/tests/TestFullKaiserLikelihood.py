@@ -2,7 +2,7 @@
 from desilike.bindings.cosmosis.factory import CosmoSISLikelihoodFactory
 
 from desilike.bindings.tests import TestFullKaiserLikelihood
-TestFullKaiserLikelihood = CosmoSISLikelihoodFactory(TestFullKaiserLikelihood, __name__)
+TestFullKaiserLikelihood = CosmoSISLikelihoodFactory(TestFullKaiserLikelihood, {}, __name__)
 
 setup, execute, cleanup = TestFullKaiserLikelihood.build_module()
 

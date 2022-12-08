@@ -29,18 +29,21 @@ def get_subsamples(samples, frac=1., nmax=np.inf, seed=42, mpicomm=None):
     return toret
 
 
+def _setstate(self, state):
+    calc_state = {name: value for name, value in state.items() if name in self.emulator.in_calculator}
+    self.__dict__.update(state)
+    self.__setstate__(calc_state)
+
+
 class EmulatedCalculator(BaseCalculator):
 
     def initialize(self, **kwargs):
-        for name, value in self.emulator.fixed.items():
-            setattr(self, name, value)
+        pass
 
     def calculate(self, **params):
         predict = self.emulator.predict(**params)
         state = {**self.emulator.fixed, **predict}
-        calc_state = {name: value for name, value in state.items() if name in self.emulator.in_calculator}
-        self.__dict__.update(state)
-        self.__setstate__(calc_state)
+        _setstate(self, state)
 
     @classmethod
     def load(cls, filename):
@@ -84,6 +87,9 @@ class Emulator(BaseClass):
         if mpicomm.rank == 0:
             self.log_info('Varied parameters: {}.'.format(self.varied_params))
             self.log_info('Found varying {} and fixed {} outputs.'.format(self.varied, list(self.fixed.keys())))
+
+        # Add in cosmo_requires
+        self.fixed['cosmo_requires'] = self.calculator.runtime_info.pipeline.get_cosmo_requires()
 
         if not isinstance(engine, dict):
             engine = {'*': engine}
@@ -196,6 +202,7 @@ class Emulator(BaseClass):
                 if param not in params:
                     params.set(param)
         calculator.params = params
+        _setstate(calculator, self.fixed)
         return calculator
 
     def check(self, mse_stop=None, diagnostics=None, frac=0.1, **kwargs):

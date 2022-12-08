@@ -151,7 +151,7 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
         self.n_varied = self.params['dn'].varied
         super(ShapeFitPowerSpectrumTemplate, self).initialize(*args, with_now=with_now, **kwargs)
         self.a = float(a)
-        for name in ['n', 'm']:
+        for name in ['n', 'm', 'Ap']:
             setattr(self, name + '_fid', getattr(self, name))
 
     def calculate(self, f=0.8, dm=0., dn=0.):
@@ -162,7 +162,10 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
         self.n = self.n_fid + dn
         self.m = self.m_fid + dm
         self.f = f
-        self.f_sqrt_Ap = f * self.Ap**0.5
+        self.f_sqrt_Ap = f * self.Ap_fid**0.5
+
+    def get(self):
+        return self
 
 
 class BAOExtractor(BaseCalculator):

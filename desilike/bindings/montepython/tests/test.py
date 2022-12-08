@@ -1,14 +1,13 @@
 from desilike import setup_logging
 
 from desilike.bindings.montepython.factory import MontePythonLikelihoodGenerator
-from desilike.bindings.tests import TestSimpleLikelihood, TestShapeFitKaiserLikelihood, TestFullKaiserLikelihood
+from desilike.bindings.tests import TestSimpleLikelihood, TestShapeFitKaiserLikelihood, TestFullKaiserLikelihood, TestEmulatedFullKaiserLikelihood
 
 
 def test_generate_likelihood():
 
-    for cls in [TestSimpleLikelihood, TestShapeFitKaiserLikelihood, TestFullKaiserLikelihood]:
-        setup_logging('warning')
-        MontePythonLikelihoodGenerator()(cls)
+    setup_logging('warning')
+    MontePythonLikelihoodGenerator()([TestSimpleLikelihood, TestShapeFitKaiserLikelihood, TestFullKaiserLikelihood, TestEmulatedFullKaiserLikelihood])
 
 
 if __name__ == '__main__':

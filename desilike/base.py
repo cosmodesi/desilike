@@ -154,8 +154,15 @@ class BasePipeline(BaseClass):
 
     def set_cosmo_requires(self, cosmo):
         for calculator in self.calculators:
-            if getattr(calculator, 'cosmo_requires', None):
-                calculator.cosmo = cosmo
+            cosmo_requires = getattr(calculator, 'cosmo_requires', {})
+            if cosmo_requires:
+                cosmo_params = cosmo_requires.get('params', {})
+                if cosmo_params:
+                    for basename, param in calculator.runtime_info.base_params.items():
+                        if basename in cosmo_params:
+                            self.param_values[param.name] = calculator.runtime_info.param_values[basename] = cosmo[basename]
+                if set(cosmo_requires.keys()) != {'params'}:
+                    calculator.cosmo = cosmo
                 calculator.runtime_info.tocalculate = True
 
     def jac(self, getter, params=None):

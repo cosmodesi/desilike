@@ -383,7 +383,7 @@ class Parameter(BaseClass):
                     self.proposal = (self.ref.limits[1] - self.ref.limits[0]) / 2.
         self.derived = derived
         if fixed is None:
-            fixed = prior is None and ref is None
+            fixed = prior is None and ref is None and not self.depends
         self.fixed = bool(fixed)
         self.saved = bool(saved)
         self.drop = bool(drop)

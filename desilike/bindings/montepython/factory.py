@@ -3,10 +3,10 @@ import os
 import numpy as np
 
 from desilike import utils
-from desilike.bindings.base import LikelihoodGenerator, get_likelihood_params
+from desilike.bindings.base import LikelihoodGenerator, get_likelihood_params, ParameterCollection
 
 
-from desilike.cosmo import ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
+from desilike.cosmo import Cosmology, ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
 
 
 class MontePythonEngine(ExternalEngine):
@@ -81,25 +81,48 @@ class Fourier(Section):
         return self.sigma_rz(8., z, of=of)
 
 
-def MontePythonLikelihoodFactory(cls, module=None):
+def cosmoprimo_to_montepython_params(params):
+    convert = {name: name for name in ['H0', 'h', 'A_s', 'ln10^{10}A_s', 'sigma8', 'n_s', 'omega_b', 'Omega_b', 'omega_cdm', 'Omega_cdm', 'omega_m', 'Omega_m', 'Omega_ncdm', 'omega_ncdm', 'm_ncdm', 'omega_k', 'Omega_k']}
+    toret = ParameterCollection()
+    for param in params:
+        if param.varied:
+            try:
+                name = convert[param.name]
+            except KeyError as exc:
+                raise ValueError('There is no translation for parameter {} to classy; we can only translate {}'.format(param.name, list(convert.keys()))) from exc
+            param = param.clone(basename=name)
+            toret.set(param)
+    return toret
+
+
+def montepython_to_cosmoprimo(fiducial, classy):
+    if fiducial: cosmo = Cosmology.from_state(fiducial)
+    else: cosmo = Cosmology()
+    convert = {name: name for name in ['H0', 'h', 'A_s', 'ln10^{10}A_s', 'sigma8', 'n_s', 'omega_b', 'Omega_b', 'omega_cdm', 'Omega_cdm', 'omega_m', 'Omega_m', 'Omega_ncdm', 'omega_ncdm', 'm_ncdm', 'omega_k', 'Omega_k']}
+    cosmo = cosmo.clone(**{convert[name]: value for name, value in classy.pars.items() if name in convert}, engine=MontePythonEngine)
+    cosmo._engine.classy = classy
+    return cosmo
+
+
+def MontePythonLikelihoodFactory(cls, kw_like, module=None):
 
     from montepython.likelihood_class import Likelihood
 
     def __init__(self, path, data, command_line):
         Likelihood.__init__(self, path, data, command_line)
-        self.like = cls()
-        self._params = get_likelihood_params(self.like)
-        self.nuisance = self.use_nuisance = [param.name for param in self._params]  # required by MontePython
-        self._requires = MontePythonEngine.get_requires(self.like.runtime_info.pipeline.get_cosmo_requires())
+        self.like = cls(**kw_like)
+        self._cosmo_params, self._nuisance_params = get_likelihood_params(self.like)
+        self.nuisance = self.use_nuisance = [param.name for param in self._nuisance_params]  # required by MontePython
+        requires = self.like.runtime_info.pipeline.get_cosmo_requires()
+        self._fiducial = requires.get('fiducial', {})
+        self._requires = MontePythonEngine.get_requires(requires)
         # On two steps, otherwise z_max_pk and P_k_max_h become zero
         self.need_cosmo_arguments(data, {'output': self._requires['output']})
         self.need_cosmo_arguments(data, {name: value for name, value in self._requires.items() if name != 'output'})
 
     def loglkl(self, classy, data):
         if self._requires:
-            from cosmoprimo import Cosmology
-            cosmo = Cosmology(engine=MontePythonEngine)
-            cosmo._engine.classy = classy
+            cosmo = montepython_to_cosmoprimo(self._fiducial, classy)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
         nuisance_parameter_names = data.get_mcmc_parameters(['nuisance'])
         loglikelihood = self.like(**{name: data.mcmc_parameters[name]['current'] * data.mcmc_parameters[name]['scale'] for name in nuisance_parameter_names})
@@ -116,8 +139,8 @@ class MontePythonLikelihoodGenerator(LikelihoodGenerator):
     def __init__(self):
         super(MontePythonLikelihoodGenerator, self).__init__(MontePythonLikelihoodFactory)
 
-    def get_code(self, likelihood):
-        cls, fn, code = super(MontePythonLikelihoodGenerator, self).get_code(likelihood)
+    def get_code(self, *args, **kwargs):
+        cls, fn, code = super(MontePythonLikelihoodGenerator, self).get_code(*args, **kwargs)
         dirname = os.path.join(os.path.dirname(fn), cls.__name__)
         fn = os.path.join(dirname, '__init__.py')
 
@@ -136,7 +159,11 @@ class MontePythonLikelihoodGenerator(LikelihoodGenerator):
             return di
 
         parameters, likelihood_attrs = {}, {}
-        for param in get_likelihood_params(cls()):
+        cosmo_params, nuisance_params = get_likelihood_params(cls(**self.kw_like))
+        #cosmo_params = cosmoprimo_to_montepython_params(cosmo_params)
+        for param in nuisance_params:
+            if param.depends:
+                raise ValueError('Cannot cope with parameter dependencies')
             prior = decode_prior(param.prior)
             name = '{}.{}'.format(cls.__name__, param.name)
             for attr in ['center', 'variance']:

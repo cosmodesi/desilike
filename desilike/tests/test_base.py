@@ -133,6 +133,10 @@ def test_cosmo():
     print(theory.runtime_info.pipeline.get_cosmo_requires())
     print(theory.runtime_info.pipeline.params)
 
+    theory = KaiserTracerPowerSpectrumMultipoles(template=FullPowerSpectrumTemplate(z=1.4))
+    print(theory.runtime_info.pipeline.get_cosmo_requires())
+    print(theory.runtime_info.pipeline.params)
+
 
 def test_install():
 
@@ -155,8 +159,8 @@ def test_install():
 
 if __name__ == '__main__':
 
-    test_galaxy_clustering()
-    test_observable()
-    test_likelihood()
+    #test_galaxy_clustering()
+    #test_observable()
+    #test_likelihood()
     test_cosmo()
-    test_install()
+    #test_install()

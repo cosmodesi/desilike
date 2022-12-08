@@ -2,7 +2,7 @@ import numpy as np
 
 from . import utils
 
-from cosmoprimo.cosmology import BaseEngine, BaseSection, CosmologyError
+from cosmoprimo.cosmology import Cosmology, BaseEngine, BaseSection, CosmologyError
 from cosmoprimo.interpolator import PowerSpectrumInterpolator1D, PowerSpectrumInterpolator2D
 from cosmoprimo.utils import flatarray
 
@@ -29,12 +29,12 @@ class ExternalEngine(BaseEngine):
     @classmethod
     def get_requires(cls, *requires):
 
-        def merge_dict(d1, d2):
+        def _merge_dict(d1, d2):
             toret = d1.copy()
             for name, value in d2.items():
                 if name in d1:
                     if isinstance(d1[name], dict) and isinstance(value, dict):
-                        toret[name] = merge_dict(d1[name], value)
+                        toret[name] = _merge_dict(d1[name], value)
                     else:
                         toret[name] = _make_list(d1[name], isinst=(list,)) + _make_list(value, isinst=(list,))
                 else:
@@ -42,8 +42,9 @@ class ExternalEngine(BaseEngine):
             return toret
 
         toret = {}
-        for req in requires: toret = merge_dict(toret, req or {})
+        for req in requires: toret = _merge_dict(toret, req or {})
         requires = toret
+        requires.setdefault('params', {})
 
         def concatenate(arrays):
             arrays = _make_list(arrays)

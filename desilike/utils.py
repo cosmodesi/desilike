@@ -6,7 +6,6 @@ import time
 import logging
 import traceback
 import warnings
-import collections
 import importlib
 
 import numpy as np
@@ -23,6 +22,12 @@ try:
 except ImportError:
     jax = None
     import numpy as jnp
+
+try:
+    from collections.abc import MutableSet  # >= 3.10
+except ImportError:
+    from collections import MutableSet
+from collections import OrderedDict
 
 
 def use_jax(array):
@@ -294,7 +299,7 @@ def deep_eq(obj1, obj2):
     return False
 
 
-class OrderedSet(collections.OrderedDict, collections.MutableSet):
+class OrderedSet(OrderedDict, MutableSet):
 
     """Adapted from https://stackoverflow.com/questions/1653970/does-python-have-an-ordered-set"""
 
@@ -303,7 +308,7 @@ class OrderedSet(collections.OrderedDict, collections.MutableSet):
             return
         if len(args) > 1:
             args = [args]
-        for elem in collections.OrderedDict.fromkeys(*args):
+        for elem in OrderedDict.fromkeys(*args):
             self.add(elem)
 
     def update(self, *args, **kwargs):

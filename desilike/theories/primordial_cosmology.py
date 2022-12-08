@@ -54,6 +54,7 @@ class Cosmoprimo(BasePrimordialCosmology):
             for param in self.params:
                 if not param.drop:
                     param.value = get_from_cosmo(self.fiducial, param.basename)
+        self.cosmo_requires = {'fiducial': self.fiducial.__getstate__(), 'params': dict.fromkeys(self.params.basenames())}
 
     def calculate(self, **params):
         self.cosmo = self.fiducial.clone(**params)

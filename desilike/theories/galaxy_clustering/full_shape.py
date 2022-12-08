@@ -44,11 +44,15 @@ class BaseTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
     config_fn = 'full_shape.yaml'
     _default_options = dict()
 
-    def initialize(self, *args, template=None, **kwargs):
+    def initialize(self, *args, pt=None, template=None, **kwargs):
         self.options = self._default_options.copy()
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
-        self.pt = globals()[self.__class__.__name__.replace('Tracer', '')](template=template)
+        if pt is None:
+            pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
+        self.pt = pt
+        if template is not None:
+            self.pt.update(template=template)
         for name, value in self.pt._default_options.items():
             if name in kwargs:
                 self.pt.update({name: kwargs.pop(name)})
@@ -71,11 +75,15 @@ class BaseTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMulti
     config_fn = 'full_shape.yaml'
     _default_options = dict()
 
-    def __init__(self, *args, template=None, **kwargs):
+    def __init__(self, *args, pt=None, template=None, **kwargs):
         self.options = self._default_options.copy()
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
-        self.pt = globals()[self.__class__.__name__.replace('Tracer', '')](template=template)
+        if pt is None:
+            pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
+        self.pt = pt
+        if template is not None:
+            self.pt.update(template=template)
         for name, value in self.pt._default_options.items():
             if name in kwargs:
                 self.pt.update({name: kwargs.pop(name)})
@@ -97,9 +105,10 @@ class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
 
     config_fn = 'full_shape.yaml'
 
-    def initialize(self, *args, template=None, **kwargs):
+    def initialize(self, *args, pt=None, template=None, **kwargs):
         power = globals()[self.__class__.__name__.replace('CorrelationFunction', 'PowerSpectrum')]()
-        power.update(template=template)
+        if pt is not None: power.update(pt=pt)
+        if template is not None: power.update(template=template)
         super(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles, self).initialize(*args, power=power, **kwargs)
 
     def get(self):

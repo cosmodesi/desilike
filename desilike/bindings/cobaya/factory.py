@@ -3,10 +3,10 @@ import os
 import numpy as np
 
 from desilike.io import BaseConfig
-from desilike.bindings.base import LikelihoodGenerator, get_likelihood_params
+from desilike.bindings.base import LikelihoodGenerator, get_likelihood_params, Parameter, ParameterCollection
 
 
-from desilike.cosmo import ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
+from desilike.cosmo import Cosmology, ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
 
 
 class CobayaEngine(ExternalEngine):
@@ -51,7 +51,7 @@ class CobayaEngine(ExternalEngine):
         if require_f:
             toret['fsigma8'] = {'z': require_f}
             toret['sigma8_z'] = {'z': require_f}
-        if toret:  # to get /h units
+        if toret or requires.get('params', {}):  # to get /h units
             if 'Hubble' in toret:
                 toret['Hubble']['z'] = np.unique(np.insert(tmp['z'], 0, 0.))
             else:
@@ -117,12 +117,66 @@ class Fourier(Section):
         return self.sigma_rz(8., z, of=of)
 
 
-def CobayaLikelihoodFactory(cls, module=None):
+def cosmoprimo_to_camb_params(params):
+    # TODO: use dynamical input parameters
+    convert = {'H0': 'H0', 'omega_b': 'ombh2', 'omega_cdm': 'omch2', 'A_s': 'As', 'n_s': 'ns', 'N_eff': 'nnu', 'm_ncdm': 'mnu', 'Omega_k': 'omk'}
+    toret = ParameterCollection()
+    params = params.copy()
+    name = 'h'
+    if name in params and params[name].varied:
+        toret[name] = params.pop(name).clone(drop=True)
+        toret.set(Parameter('H0', derived='100 * {h}'))
+    for name in ['Omega_b', 'Omega_cdm']:
+        if name in params and params[name].varied:
+            cname = convert[name.lower()]
+            toret.set(params.pop(name).clone(basename=name, drop=True))
+            toret.set(Parameter(cname, derived='{{{}}} * ({{H0}} / 100)**2'.format(name)))
+    for param in params:
+        if param.varied:
+            try:
+                name = convert[param.name]
+            except KeyError as exc:
+                raise ValueError('There is no translation for parameter {} to camb; we can only translate {}'.format(param.name, list(convert.keys()))) from exc
+            param = param.clone(basename=name)
+            toret.set(param)
+    return toret
+
+
+def cosmoprimo_to_classy_params(params):
+    convert = {name: name for name in ['H0', 'h', 'A_s', 'ln10^{10}A_s', 'sigma8', 'n_s', 'omega_b', 'Omega_b', 'omega_cdm', 'Omega_cdm', 'omega_m', 'Omega_m', 'Omega_ncdm', 'omega_ncdm', 'm_ncdm', 'omega_k', 'Omega_k']}
+    toret = ParameterCollection()
+    for param in params:
+        if param.varied:
+            try:
+                name = convert[param.name]
+            except KeyError as exc:
+                raise ValueError('There is no translation for parameter {} to classy; we can only translate {}'.format(param.name, list(convert.keys()))) from exc
+            param = param.clone(basename=name)
+            toret.set(param)
+    return toret
+
+
+def camb_or_classy_to_cosmoprimo(fiducial, provider, **params):
+    if fiducial: cosmo = Cosmology.from_state(fiducial)
+    else: cosmo = Cosmology()
+    params = {**provider.params, **params}
+    convert = {'H0': 'H0', 'As': 'A_s', 'ns': 'n_s', 'ombh2': 'omega_b', 'omch2': 'omega_cdm', 'nnu': 'N_eff', 'mnu': 'm_ncdm', 'omk': 'Omega_k'}
+    convert.update({name: name for name in ['H0', 'h', 'A_s', 'ln10^{10}A_s', 'sigma8', 'n_s', 'omega_b', 'Omega_b', 'omega_cdm', 'Omega_cdm', 'omega_m', 'Omega_m', 'Omega_ncdm', 'omega_ncdm', 'm_ncdm', 'omega_k', 'Omega_k']})
+    state = {convert[param]: value for param, value in params.items() if param in convert}  # NEED MORE CHECKS!
+    if not any(name in state for name in ['H0', 'h']):
+        state['H0'] = np.squeeze(provider.get_Hubble(0.))
+    cosmo = cosmo.clone(**state, engine=CobayaEngine)
+    cosmo._engine.provider = provider
+    return cosmo
+
+
+def CobayaLikelihoodFactory(cls, kwargs, module=None):
 
     def initialize(self):
         """Prepare any computation, importing any necessary code, files, etc."""
 
-        self.like = cls()
+        self.like = cls(**kwargs)
+        self._cosmo_params, self._nuisance_params = get_likelihood_params(self.like)
         """
         import inspect
         kwargs = {name: getattr(self, name) for name in inspect.getargspec(cls).args}
@@ -131,7 +185,10 @@ def CobayaLikelihoodFactory(cls, module=None):
 
     def get_requirements(self):
         """Return dictionary specifying quantities calculated by a theory code are needed."""
-        self._requires = CobayaEngine.get_requires(self.like.runtime_info.pipeline.get_cosmo_requires())
+        requires = self.like.runtime_info.pipeline.get_cosmo_requires()
+        self._fiducial = requires.get('fiducial', {})
+        self._requires = CobayaEngine.get_requires(requires)
+        self._requires
         return self._requires
 
     def logp(self, _derived=None, **params_values):
@@ -140,9 +197,7 @@ def CobayaLikelihoodFactory(cls, module=None):
         and return a log-likelihood.
         """
         if self._requires:
-            from cosmoprimo import Cosmology
-            cosmo = Cosmology(engine=CobayaEngine)
-            cosmo._engine.provider = self.provider
+            cosmo = camb_or_classy_to_cosmoprimo(self._fiducial, self.provider, **params_values)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
         return self.like(**params_values)
 
@@ -155,11 +210,11 @@ def CobayaLikelihoodFactory(cls, module=None):
 
 class CobayaLikelihoodGenerator(LikelihoodGenerator):
 
-    def __init__(self):
-        super(CobayaLikelihoodGenerator, self).__init__(CobayaLikelihoodFactory)
+    def __init__(self, **kwargs):
+        super(CobayaLikelihoodGenerator, self).__init__(CobayaLikelihoodFactory, **kwargs)
 
-    def get_code(self, likelihood):
-        cls, fn, code = super(CobayaLikelihoodGenerator, self).get_code(likelihood)
+    def get_code(self, *args, **kwargs):
+        cls, fn, code = super(CobayaLikelihoodGenerator, self).get_code(*args, **kwargs)
         dirname = os.path.dirname(fn)
         params = {}
 
@@ -173,18 +228,30 @@ class CobayaLikelihoodGenerator(LikelihoodGenerator):
                     di[name] = getattr(prior, name)
             return di
 
-        for param in get_likelihood_params(cls()):
-            if param.derived or param.solved:
-                continue
+        cosmo_params, nuisance_params = get_likelihood_params(cls(**self.kw_like))
+        #if self.engine == 'camb':
+        #    cosmo_params = cosmoprimo_to_camb_params(cosmo_params)
+        #elif self.engine == 'classy':
+        #    cosmo_params = cosmoprimo_to_classy_params(cosmo_params)
+        params = {}
+        for param in nuisance_params:
+            if param.solved or param.derived and not param.depends: continue
             if param.fixed:
                 params[param.name] = param.value
             else:
                 di = {'latex': param.latex()}
-                di['prior'] = decode_prior(param.prior)
-                if param.ref.is_proper():
-                    di['ref'] = decode_prior(param.ref)
-                if param.proposal is not None:
-                    di['proposal'] = param.proposal
+                if param.depends:
+                    names = param.depends.values()
+                    for name in names:
+                        derived = param.derived.replace('{{{}}}'.format(name), name)
+                    di['value'] = 'lambda {}: '.format(', '.join(names)) + derived
+                else:
+                    di['prior'] = decode_prior(param.prior)
+                    if param.ref.is_proper():
+                        di['ref'] = decode_prior(param.ref)
+                    if param.proposal is not None:
+                        di['proposal'] = param.proposal
+                if param.drop: di['drop'] = True
                 params[param.name] = di
 
         BaseConfig(dict(stop_at_error=True, params=params)).write(os.path.join(dirname, cls.__name__ + '.yaml'))

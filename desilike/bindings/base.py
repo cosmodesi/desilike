@@ -5,22 +5,40 @@ from desilike.parameter import ParameterCollection, Parameter
 from desilike.utils import BaseClass, import_class, is_sequence
 
 
+def load_from_file(fn, obj):
+
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('bindings', fn)
+    foo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(foo)
+    return getattr(foo, obj)
+
+
+
 class LikelihoodGenerator(BaseClass):
 
     line_delimiter = '\n\n'
 
-    def __init__(self, factory):
+    def __init__(self, factory, dirname='.'):
         self.factory = factory
         self.header = '# NOTE: This is automatically generated code by {}.{}\n'.format(self.__class__.__module__, self.__class__.__name__)
         self.header += 'from {} import {}'.format(self.factory.__module__, self.factory.__name__)
+        self.dirname = os.path.abspath(os.path.join(dirname, os.path.basename(os.path.dirname(sys.modules[self.factory.__module__].__file__))))
 
     def get_code(self, likelihood, kw_like=None):
         self.kw_like = kw_like = kw_like or {}
-        dirname = os.path.dirname(sys.modules[self.factory.__module__].__file__)
         cls = import_class(likelihood)
-        fn = sys.modules[cls.__module__].__file__
-        fn = os.path.join(dirname, os.path.relpath(fn, os.path.commonpath([dirname, fn])))
-        code = 'from {} import {}\n'.format(cls.__module__, cls.__name__)
+        src_fn = sys.modules[cls.__module__].__file__
+        src_dir = os.path.dirname(src_fn)
+        fn = os.path.join(self.dirname, os.path.relpath(src_fn, os.path.commonpath([self.dirname, src_fn])))
+        if os.path.isfile(os.path.join(src_dir, '__init__.py')):  # check if this is a package, then assumed in pythonpath
+            code = 'from {} import {}\n'.format(cls.__module__, cls.__name__)
+        else:
+            #code = 'import sys\n'
+            #code += "sys.path.insert(0, '{}')\n".format(src_dir)
+            #code += 'from {} import {}\n'.format(os.path.splitext(os.path.basename(fn))[0], cls.__name__)
+            code = 'from desilike.bindings.base import load_from_file\n'
+            code += "{} = load_from_file('{}', '{}')\n".format(cls.__name__, src_fn, cls.__name__)
         code += '{0} = {1}({0}, {2}, __name__)'.format(cls.__name__, self.factory.__name__, kw_like)
         return cls, fn, code
 

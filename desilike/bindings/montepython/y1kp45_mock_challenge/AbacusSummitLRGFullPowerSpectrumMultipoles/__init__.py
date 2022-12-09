@@ -2,5 +2,5 @@
 from desilike.bindings.montepython.factory import MontePythonLikelihoodFactory
 
 from desilike.bindings.y1kp45_mock_challenge import AbacusSummitLRGFullPowerSpectrumMultipoles
-AbacusSummitLRGFullPowerSpectrumMultipoles = MontePythonLikelihoodFactory(AbacusSummitLRGFullPowerSpectrumMultipoles, __name__)
+AbacusSummitLRGFullPowerSpectrumMultipoles = MontePythonLikelihoodFactory(AbacusSummitLRGFullPowerSpectrumMultipoles, {}, __name__)
 

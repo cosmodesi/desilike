@@ -273,7 +273,7 @@ class Chain(Samples):
 
     def to_anesthetic(self, params=None, label=None, **kwargs):
         """
-        Return *GetDist* hook to samples.
+        Return *anesthetic* hook to samples.
 
         Parameters
         ----------

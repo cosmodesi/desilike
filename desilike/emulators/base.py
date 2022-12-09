@@ -160,10 +160,12 @@ class Emulator(BaseClass):
     def fit(self, name=None, **kwargs):
 
         def _get_X_Y(samples, yname):
-            nsamples = samples.size
-            X = np.concatenate([samples[name].reshape(nsamples, 1) for name in self.varied_params], axis=-1)
-            self.varied_shape[name] = samples[yname].shape[samples.ndim:]
-            Y = samples[yname].reshape(nsamples, -1)
+            X, Y = None, None
+            if self.mpicomm.rank == 0:
+                nsamples = samples.size
+                X = np.concatenate([samples[name].reshape(nsamples, 1) for name in self.varied_params], axis=-1)
+                self.varied_shape[name] = samples[yname].shape[samples.ndim:]
+                Y = samples[yname].reshape(nsamples, -1)
             return X, Y
 
         if name is None:
@@ -178,6 +180,7 @@ class Emulator(BaseClass):
 
     def predict(self, **params):
         X = jnp.array([params[name] for name in self.varied_params])
+        print(self.varied_shape)
         return {name: engine.predict(X).reshape(self.varied_shape[name]) for name, engine in self.engines.items()}
 
     def to_calculator(self, derived=None):
@@ -407,7 +410,7 @@ class PointEmulatorEngine(BaseEmulatorEngine):
         return sampler.samples
 
     def fit(self, X, Y):
-        self.point = np.asarray(self.mpicomm.bcast(Y[0], root=0))
+        self.point = np.asarray(self.mpicomm.bcast(Y[0] if self.mpicomm.rank == 0 else None, root=0))
 
     def predict(self, X):
         # Dumb prediction

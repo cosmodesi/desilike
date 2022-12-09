@@ -217,8 +217,10 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             self.ellsin = [proj.ell for proj in projsin]
             wmatrix.select_proj(projsout=[(ell, None) for ell in self.ells], projsin=projsin)
             wmatrix.slice_x(slicein=slice(0, len(wmatrix.xin[0]) // kinrebin * kinrebin, kinrebin))
+            # print(wmatrix.xout[0], max(kk.max() for kk in self.k) * 1.2)
             wmatrix.select_x(xinlim=(0., max(kk.max() for kk in self.k) * 1.2))
             self.kin = wmatrix.xin[0]
+            # print(wmatrix.xout[0])
             assert all(np.allclose(xin, self.kin) for xin in wmatrix.xin)
             # TODO: implement best match BaseMatrix method
             for iout, (projout, kk) in enumerate(zip(wmatrix.projsout, self.k)):
@@ -229,7 +231,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 #wmatrix.rebin_x(factorout=factorout, projsout=projout)
                 istart = np.nanargmin(np.abs(wmatrix.xout[iout] - kk[0]))
                 wmatrix.slice_x(sliceout=slice(istart, istart + kk.size), projsout=projout)
-                if not np.allclose(wmatrix.xout[iout], kk):
+                if not np.allclose(wmatrix.xout[iout], kk, rtol=1e-4):
                     raise ValueError('k-coordinates {} for ell = {:d} could not be found in input matrix (rebinning = {:d})'.format(kk, projout.ell, factorout))
             self.wmatrix = wmatrix.value
         shotnoise = float(shotnoise)

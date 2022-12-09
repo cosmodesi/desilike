@@ -162,8 +162,8 @@ def CosmoSISLikelihoodFactory(cls, kw_like, module=None):
 
 class CosmoSISLikelihoodGenerator(LikelihoodGenerator):
 
-    def __init__(self):
-        super(CosmoSISLikelihoodGenerator, self).__init__(CosmoSISLikelihoodFactory)
+    def __init__(self, *args, **kwargs):
+        super(CosmoSISLikelihoodGenerator, self).__init__(CosmoSISLikelihoodFactory, *args, **kwargs)
 
     def get_code(self, *args, **kwargs):
         cls, fn, code = super(CosmoSISLikelihoodGenerator, self).get_code(*args, **kwargs)

@@ -89,7 +89,7 @@ params:
       dist: uniform
       limits: [-1., 4.0]
     ref:
-      limits: [0., 1.]
+      limits: [0.8, 1.2]
     latex: b_{1}
   b2:
     value: -3.
@@ -174,7 +174,7 @@ params:
       dist: uniform
       limits: [-1., 4.0]
     ref:
-      limits: [0., 1.]
+      limits: [0.8, 1.2]
     latex: b_{1}
   b2:
     value: -3.

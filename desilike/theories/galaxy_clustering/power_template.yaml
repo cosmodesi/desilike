@@ -41,12 +41,12 @@ params:
       dist: uniform
       limits: [0.4, 0.9]
     latex: h
-  Omega_cdm:
-    value: 0.25
+  Omega_m:
+    value: 0.3
     prior:
       dist: uniform
-      limits: [0.05, 0.6]
-    latex: \Omega_{cdm}
+      limits: [0.02, 0.8]
+    latex: \Omega_{m}
   omega_b:
     value: 0.02237
     fixed: True

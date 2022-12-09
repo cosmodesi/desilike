@@ -136,8 +136,8 @@ def MontePythonLikelihoodFactory(cls, kw_like, module=None):
 
 class MontePythonLikelihoodGenerator(LikelihoodGenerator):
 
-    def __init__(self):
-        super(MontePythonLikelihoodGenerator, self).__init__(MontePythonLikelihoodFactory)
+    def __init__(self, *args, **kwargs):
+        super(MontePythonLikelihoodGenerator, self).__init__(MontePythonLikelihoodFactory, *args, **kwargs)
 
     def get_code(self, *args, **kwargs):
         cls, fn, code = super(MontePythonLikelihoodGenerator, self).get_code(*args, **kwargs)

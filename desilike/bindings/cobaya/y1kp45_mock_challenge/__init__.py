@@ -2,8 +2,8 @@
 from desilike.bindings.cobaya.factory import CobayaLikelihoodFactory
 
 from desilike.bindings.y1kp45_mock_challenge import AbacusSummitLRGFullPowerSpectrumMultipoles
-AbacusSummitLRGFullPowerSpectrumMultipoles = CobayaLikelihoodFactory(AbacusSummitLRGFullPowerSpectrumMultipoles, __name__)
+AbacusSummitLRGFullPowerSpectrumMultipoles = CobayaLikelihoodFactory(AbacusSummitLRGFullPowerSpectrumMultipoles, {}, __name__)
 
 from desilike.bindings.y1kp45_mock_challenge import AbacusSummitLRGShapeFitPowerSpectrumMultipoles
-AbacusSummitLRGShapeFitPowerSpectrumMultipoles = CobayaLikelihoodFactory(AbacusSummitLRGShapeFitPowerSpectrumMultipoles, __name__)
+AbacusSummitLRGShapeFitPowerSpectrumMultipoles = CobayaLikelihoodFactory(AbacusSummitLRGShapeFitPowerSpectrumMultipoles, {}, __name__)
 

@@ -210,8 +210,8 @@ def CobayaLikelihoodFactory(cls, kwargs, module=None):
 
 class CobayaLikelihoodGenerator(LikelihoodGenerator):
 
-    def __init__(self, **kwargs):
-        super(CobayaLikelihoodGenerator, self).__init__(CobayaLikelihoodFactory, **kwargs)
+    def __init__(self, *args, **kwargs):
+        super(CobayaLikelihoodGenerator, self).__init__(CobayaLikelihoodFactory, *args, **kwargs)
 
     def get_code(self, *args, **kwargs):
         cls, fn, code = super(CobayaLikelihoodGenerator, self).get_code(*args, **kwargs)

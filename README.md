@@ -92,5 +92,7 @@ Installer(user=True)(likelihood)
 - Samuel Brieden, Hector Gil-Marin for ShapeFit
 - Stephen Chen and Mark Maus for Taylor expansion emulator: https://github.com/sfschen/velocileptors_shapefit
 - Stephen Chen and Joe DeRose for MLP emulator: https://github.com/sfschen/EmulateLSS
+- Pat McDonald, Eva Maria Mueller, Antony Lewis for thoughts
+- Edmond Chaussidon, for early debugging
 - Cobaya, CosmoSIS bindings inspired by firecrown: https://github.com/LSSTDESC/firecrown
 - Inspiration from cobaya: https://github.com/CobayaSampler/cobaya

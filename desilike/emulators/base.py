@@ -166,6 +166,7 @@ class Emulator(BaseClass):
                 X = np.concatenate([samples[name].reshape(nsamples, 1) for name in self.varied_params], axis=-1)
                 self.varied_shape[name] = samples[yname].shape[samples.ndim:]
                 Y = samples[yname].reshape(nsamples, -1)
+            self.varied_shape[name] = self.mpicomm.bcast(self.varied_shape[name], root=0)
             return X, Y
 
         if name is None:
@@ -180,7 +181,6 @@ class Emulator(BaseClass):
 
     def predict(self, **params):
         X = jnp.array([params[name] for name in self.varied_params])
-        print(self.varied_shape)
         return {name: engine.predict(X).reshape(self.varied_shape[name]) for name, engine in self.engines.items()}
 
     def to_calculator(self, derived=None):

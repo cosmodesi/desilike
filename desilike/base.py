@@ -1,12 +1,13 @@
 import os
 import sys
+import warnings
 
 import numpy as np
 
 from . import mpi
 from .utils import BaseClass, NamespaceDict, Monitor, OrderedSet, jax, deep_eq
 from .io import BaseConfig
-from .parameter import Parameter, ParameterCollection, ParameterCollectionConfig, ParameterArray, Samples
+from .parameter import Parameter, ParameterCollection, ParameterConfig, ParameterCollectionConfig, ParameterArray, Samples
 
 
 namespace_delimiter = '.'
@@ -40,32 +41,43 @@ class BasePipeline(BaseClass):
         self.mpicomm = calculator.mpicomm
         for calculator in self.calculators:
             calculator.runtime_info.tocalculate = True
-        self.params
+        self._set_params()
 
-    @property
-    def params(self):
-        if getattr(self, '_params', None) is not None:
-            return self._params
+    def _set_params(self, params=None):
         params_from_calculator = {}
-        params = ParameterCollection()
+        params = ParameterCollectionConfig(params)
+        self._params = ParameterCollection()
         for calculator in self.calculators:
             for iparam, param in enumerate(calculator.runtime_info.params):
                 if param in params:
+                    calculator.runtime_info.params[iparam] = param = param.clone(params[param])
+                if param in self._params:
                     if param.derived and param.fixed:
                         msg = 'Derived parameter {} of {} is already derived in {}.'.format(param, calculator, params_from_calculator[param.name])
                         if param.basename not in calculator.runtime_info.derived_auto and param.basename not in params_from_calculator[param.name].runtime_info.derived_auto:
                             raise PipelineError(msg)
                         elif self.mpicomm.rank == 0:
-                            self.log_warning(msg)
+                            warnings.warn(msg)
                     elif param != params[param]:
                         raise PipelineError('Parameter {} of {} is different from that of {}.'.format(param, calculator, params_from_calculator[param.name]))
                 params_from_calculator[param.name] = calculator
-                params.set(param)
+                self._params.set(param)
         self.derived = None
-        self._params = params
-        self.varied_params = params.select(varied=True, derived=False)
-        self.param_values = {param.name: param.value for param in self.params}
+        for param in params:
+            if param not in self._params:
+                raise PipelineError('Cannot attribute parameter {} to any calculator'.format(param))
+        self.varied_params = self._params.select(varied=True, derived=False)
+        self.param_values = {param.name: param.value for param in self._params}
+
+    @property
+    def params(self):
+        if getattr(self, '_params', None) is None:
+            self._set_params()
         return self._params
+
+    @params.setter
+    def params(self, params):
+        self._set_params(params)
 
     @property
     def mpicomm(self):
@@ -244,7 +256,7 @@ class BasePipeline(BaseClass):
                     calculator.runtime_info.params.set(param)
                     calculator.runtime_info.params = calculator.runtime_info.params
         self._params = None
-        self.params
+        self._set_params()
         return calculators, fixed, varied
 
     def _set_speed(self, niterations=10, override=False, seed=42):
@@ -605,13 +617,21 @@ class BaseCalculator(BaseClass):
     def params(self):
         if not self.runtime_info.initialized:
             return self.runtime_info.init[2]
-        return self.runtime_info.pipeline.params
-
-    @property
-    def varied_params(self):
-        return self.runtime_info.pipeline.varied_params
+        return self.runtime_info.params
 
     @params.setter
     def params(self, params):
         self.runtime_info.init[2] = params
         self.runtime_info.initialized = False
+
+    @property
+    def all_params(self):
+        return self.runtime_info.pipeline.params
+
+    @all_params.setter
+    def all_params(self, all_params):
+        self.runtime_info.pipeline.params = all_params
+
+    @property
+    def varied_params(self):
+        return self.runtime_info.pipeline.varied_params

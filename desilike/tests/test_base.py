@@ -75,8 +75,8 @@ def test_likelihood():
 
     from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrumMultipoles
     from desilike.likelihoods import GaussianLikelihood
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, BAOPowerSpectrumTemplate
 
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, BAOPowerSpectrumTemplate
     template = BAOPowerSpectrumTemplate(z=1.)
     theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
     for param in theory.params.select(basename=['sigma*', 'al*_-3', 'al*_-2']):
@@ -125,6 +125,29 @@ def test_likelihood():
     observable.plot(show=True)
 
 
+def test_params():
+
+    from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrumMultipoles
+    from desilike.likelihoods import GaussianLikelihood
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    template = ShapeFitPowerSpectrumTemplate(z=0.5)
+    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
+                                                       data='_pk/data.npy', mocks='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
+                                                       theory=theory)
+    likelihood = GaussianLikelihood(observables=[observable])
+    print(likelihood.runtime_info.pipeline.params)
+    print(likelihood(dm=0.), likelihood(dm=0.01), likelihood(b1=2., dm=0.02))
+    print(likelihood.varied_params)
+    likelihood.all_params = {'dm': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1}}}
+    print(likelihood.varied_params)
+    assert likelihood.varied_params['dm'].prior.scale == 1.
+    import pytest
+    from desilike.base import PipelineError
+    with pytest.raises(PipelineError):
+        likelihood.all_params = {'a': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1}}}
+
+
 def test_cosmo():
 
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, FullPowerSpectrumTemplate
@@ -162,5 +185,6 @@ if __name__ == '__main__':
     #test_galaxy_clustering()
     #test_observable()
     #test_likelihood()
-    test_cosmo()
+    test_params()
+    #test_cosmo()
     #test_install()

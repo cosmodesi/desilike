@@ -93,7 +93,6 @@ def test_likelihood():
             print(param, (likelihood(**params), likelihood2(**params)))
 
 
-
 if __name__ == '__main__':
 
     setup_logging()

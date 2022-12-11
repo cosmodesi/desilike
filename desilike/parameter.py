@@ -349,6 +349,9 @@ class Parameter(BaseClass):
         if isinstance(basename, ParameterConfig):
             self.__dict__.update(basename.init().__dict__)
             return
+        if isinstance(basename, dict):
+            self.__init__(**basename)
+            return
         self.namespace = namespace
         names = str(basename).split(base.namespace_delimiter)
         self.basename, namespace = names[-1], base.namespace_delimiter.join(names[:-1])
@@ -443,6 +446,8 @@ class Parameter(BaseClass):
         state = self.__getstate__()
         if len(args) == 1 and isinstance(args[0], self.__class__):
             state.update(args[0].__getstate__())
+        elif len(args) == 1 and isinstance(args[0], ParameterConfig):
+            state = ParameterConfig(self).clone(args[0]).init().__getstate__()
         elif len(args):
             raise ValueError('Unrecognized arguments {}'.format(args))
         state.update(kwargs)
@@ -1287,6 +1292,39 @@ class ParameterCollection(BaseParameterCollection):
 
     def params(self, **kwargs):
         return self.select(**kwargs)
+
+    def set(self, item):
+        if not isinstance(item, Parameter):
+            item = Parameter(item)
+        try:
+            self.data[self.index(item)] = item
+        except KeyError:
+            self.data.append(item)
+
+    def __setitem__(self, name, item):
+        """
+        Update parameter in collection (a parameter with same name must already exist).
+        See :meth:`set` to set a new parameter.
+
+        Parameters
+        ----------
+        name : Parameter, string, int
+            Parameter name.
+            If :class:`Parameter` instance, search for parameter with same name.
+            If integer, index in collection.
+
+        item : Parameter
+            Parameter.
+        """
+        if not isinstance(item, Parameter):
+            item = Parameter(item)
+        try:
+            self.data[name] = item
+        except TypeError:
+            item_name = str(self._get_name(item))
+            if str(name) != item_name:
+                raise KeyError('Parameter {} must be indexed by name (incorrect {})'.format(item_name, name))
+            self.data[self._index_name(name)] = item
 
 
 class ParameterPriorError(Exception):

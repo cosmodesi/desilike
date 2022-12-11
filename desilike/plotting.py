@@ -95,7 +95,7 @@ def suplabel(axis, label, shift=0, labelpad=5, ha='center', va='center', **kwarg
 def plotter(func):
     from functools import wraps
 
-    wraps(func)
+    @wraps(func)
     def wrapper(self, fn=None, kw_save=None, show=False, **kwargs):
         toret = func(self, **kwargs)
         if fn is not None:

@@ -2,7 +2,6 @@
 
 import re
 import fnmatch
-import functools
 import copy
 import numbers
 
@@ -308,10 +307,10 @@ class Parameter(BaseClass):
     latex : string, default=None
         Latex for parameter.
     """
-    _attrs = ['basename', 'namespace', 'value', 'fixed', '_derived', 'prior', 'ref', 'proposal', '_latex', 'depends', 'drop', 'saved']
+    _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'latex', 'depends', 'drop', 'save']
     _allowed_solved = ['.best', '.marg', '.auto']
 
-    def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, latex=None, drop=False, saved=True):
+    def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, latex=None, drop=False, save=True):
         """
         Initialize :class:`Parameter`.
 
@@ -349,86 +348,85 @@ class Parameter(BaseClass):
         if isinstance(basename, ParameterConfig):
             self.__dict__.update(basename.init().__dict__)
             return
-        if isinstance(basename, dict):
+        try:
             self.__init__(**basename)
-            return
-        self.namespace = namespace
+        except TypeError:
+            pass
+        self._namespace = namespace
         names = str(basename).split(base.namespace_delimiter)
-        self.basename, namespace = names[-1], base.namespace_delimiter.join(names[:-1])
-        if self.namespace:
+        self._basename, namespace = names[-1], base.namespace_delimiter.join(names[:-1])
+        if self._namespace:
             if namespace:
-                self.namespace = base.namespace_delimiter.join([self.namespace, namespace])
+                self._namespace = base.namespace_delimiter.join([self._namespace, namespace])
         else:
             if namespace:
-                self.namespace = namespace
-        self.value = float(value) if value is not None else None
-        self.prior = prior if isinstance(prior, ParameterPrior) else ParameterPrior(**(prior or {}))
-        if value is None:
-            if self.prior.is_proper():
-                self.value = np.mean(self.prior.limits)
+                self._namespace = namespace
+        self._value = float(value) if value is not None else None
+        self._prior = prior if isinstance(prior, ParameterPrior) else ParameterPrior(**(prior or {}))
         if ref is not None:
-            self.ref = ref if isinstance(ref, ParameterPrior) else ParameterPrior(**(ref or {}))
+            self._ref = ref if isinstance(ref, ParameterPrior) else ParameterPrior(**(ref or {}))
         else:
-            self.ref = self.prior.copy()
-        if value is None:
-            if (ref is not None or prior is not None):
-                if hasattr(self.ref, 'loc'):
-                    self.value = self.ref.loc
-                elif self.ref.is_proper():
-                    self.value = (self.ref.limits[1] - self.ref.limits[0]) / 2.
-        self.latex = latex
-        self.proposal = proposal
+            self._ref = self._prior.copy()
+        self._latex = latex
+        self._proposal = proposal
         if proposal is None:
             if (ref is not None or prior is not None):
-                if hasattr(self.ref, 'scale'):
-                    self.proposal = self.ref.scale
-                elif self.ref.is_proper():
-                    self.proposal = (self.ref.limits[1] - self.ref.limits[0]) / 2.
-        self.derived = derived
-        if fixed is None:
-            fixed = prior is None and ref is None and not self.depends
-        self.fixed = bool(fixed)
-        self.saved = bool(saved)
-        self.drop = bool(drop)
-
-    def eval(self, **values):
-        if isinstance(self._derived, str) and not self.solved:
-            try:
-                values = {k: values[n] for k, n in self.depends.items()}
-            except KeyError:
-                raise ParameterError('Parameter {} is derived from {}, following {}'.format(self, list(self.depends.values()), self.derived))
-            return utils.evaluate(self._derived, locals=values)
-        return values[self.name]
-
-    @property
-    def derived(self):
-        if isinstance(self._derived, str) and not self.solved:
-            toret = self._derived
-            for k, v in self.depends.items():
-                toret = toret.replace(k, '{{{}}}'.format(v))
-            return toret
-        return self._derived
-
-    @derived.setter
-    def derived(self, derived):
+                if hasattr(self._ref, 'scale'):
+                    self._proposal = self._ref.scale
+                elif self._ref.is_proper():
+                    self._proposal = (self._ref.limits[1] - self._ref.limits[0]) / 2.
         self._derived = derived
-        self.depends = {}
+        self._depends = {}
         if isinstance(derived, str):
             if self.solved:
                 allowed_dists = ['norm', 'uniform']
-                if self.prior.dist not in allowed_dists or self.prior.is_limited():
+                if self._prior.dist not in allowed_dists or self._prior.is_limited():
                     raise ParameterError('Prior must be one of {}, with no limits, to use analytic marginalisation for {}'.format(allowed_dists, self))
             else:
                 placeholders = re.finditer(r'\{.*?\}', derived)
                 for placeholder in placeholders:
                     placeholder = placeholder.group()
-                    key = '_' * len(derived) + '{:d}_'.format(len(self.depends) + 1)
+                    key = '_' * len(derived) + '{:d}_'.format(len(self._depends) + 1)
                     assert key not in derived
                     derived = derived.replace(placeholder, key)
-                    self.depends[key] = placeholder[1:-1]
+                    self._depends[key] = placeholder[1:-1]
                 self._derived = derived
         else:
             self._derived = bool(self._derived)
+        if fixed is None:
+            fixed = prior is None and ref is None and not self.depends
+        self._fixed = bool(fixed)
+        self._save = bool(save)
+        self._drop = bool(drop)
+        self.updated = True
+
+    def eval(self, **values):
+        if isinstance(self._derived, str) and not self.solved:
+            try:
+                values = {k: values[n] for k, n in self._depends.items()}
+            except KeyError:
+                raise ParameterError('Parameter {} is derived from {}, following {}'.format(self, list(self._depends.values()), self.derived))
+            return utils.evaluate(self._derived, locals=values)
+        return values[self.name]
+
+    @property
+    def value(self):
+        value = self._value
+        if value is None:
+            if hasattr(self._ref, 'loc'):
+                value = self._ref.loc
+            elif self._ref.is_proper():
+                value = np.mean(self._ref.limits)
+        return value
+
+    @property
+    def derived(self):
+        if isinstance(self._derived, str) and not self.solved:
+            toret = self._derived
+            for k, v in self._depends.items():
+                toret = toret.replace(k, '{{{}}}'.format(v))
+            return toret
+        return self._derived
 
     @property
     def solved(self):
@@ -437,9 +435,9 @@ class Parameter(BaseClass):
     @property
     def name(self):
         from . import base
-        if self.namespace:
-            return base.namespace_delimiter.join([self.namespace, self.basename])
-        return self.basename
+        if self._namespace:
+            return base.namespace_delimiter.join([self._namespace, self._basename])
+        return self._basename
 
     def update(self, *args, **kwargs):
         """Update parameter attributes with new arguments ``kwargs``."""
@@ -451,6 +449,7 @@ class Parameter(BaseClass):
         elif len(args):
             raise ValueError('Unrecognized arguments {}'.format(args))
         state.update(kwargs)
+        state.pop('updated', None)
         self.__init__(**state)
 
     def clone(self, *args, **kwargs):
@@ -461,38 +460,40 @@ class Parameter(BaseClass):
     @property
     def varied(self):
         """Whether parameter is varied (i.e. not fixed)."""
-        return (not self.fixed)
+        return (not self._fixed)
 
     @property
     def limits(self):
         """Parameter limits."""
-        return self.prior.limits
+        return self._prior.limits
 
     def __copy__(self):
         new = super(Parameter, self).__copy__()
-        new.depends = copy.copy(new.depends)
+        new._depends = copy.copy(new._depends)
         return new
 
     def __getstate__(self):
         """Return this class state dictionary."""
         state = {}
         for key in self._attrs:
-            state[key] = getattr(self, key)
+            state[key] = getattr(self, '_' + key)
             if hasattr(state[key], '__getstate__'):
                 state[key] = state[key].__getstate__()
-        state['latex'] = state.pop('_latex')
-        state.pop('_derived')
         state['derived'] = self.derived
         state.pop('depends')
+        state['updated'] = self.updated
         return state
 
     def __setstate__(self, state):
         """Set this class state dictionary."""
+        state = state.copy()
+        updated = state.pop('updated', True)
         self.__init__(**state)
+        self.updated = updated
 
     def __repr__(self):
         """Represent parameter as string (name and fixed or varied)."""
-        return '{}({}, {})'.format(self.__class__.__name__, self.name, 'fixed' if self.fixed else 'varied')
+        return '{}({}, {})'.format(self.__class__.__name__, self.name, 'fixed' if self._fixed else 'varied')
 
     def __str__(self):
         """Return parameter as string (name)."""
@@ -500,53 +501,44 @@ class Parameter(BaseClass):
 
     def __eq__(self, other):
         """Is ``self`` equal to ``other``, i.e. same type and attributes?"""
-        return type(other) == type(self) and all(getattr(other, name) == getattr(self, name) for name in self._attrs)
+        return type(other) == type(self) and all(deep_eq(getattr(other, '_' + name), getattr(self, '_' + name)) for name in self._attrs)
 
     def __hash__(self):
         return hash(str(self))
 
-
-class GetterSetter(object):
-
-    def __init__(self, setter, getter, doc=None):
-        self.setter = setter
-        self.getter = getter
-        self.__doc__ = doc if doc is not None else setter.__doc__
-
-    def __set__(self, obj, value):
-        return self.setter(obj, value)
-
-    def __get__(self, obj, cls):
-        return functools.partial(self.getter, obj)
-
-
-def latex_setter(self, latex):
-    self._latex = latex
-
-
-def latex_getter(self, namespace=False, inline=False):
-    """If :attr:`latex` is specified (i.e. not ``None``), return :attr:`latex` surrounded by '$' signs, else :attr:`name`."""
-    if namespace:
-        namespace = self.namespace
-    if self._latex is not None:
+    def latex(self, namespace=False, inline=False):
+        """If :attr:`latex` is specified (i.e. not ``None``), return :attr:`latex` surrounded by '$' signs, else :attr:`name`."""
         if namespace:
-            match1 = re.match('(.*)_(.)$', self._latex)
-            match2 = re.match('(.*)_{(.*)}$', self._latex)
-            if match1 is not None:
-                latex = r'%s_{%s,\mathrm{%s}}' % (match1.group(1), match1.group(2), namespace)
-            elif match2 is not None:
-                latex = r'%s_{%s,\mathrm{%s}}' % (match2.group(1), match2.group(2), namespace)
+            namespace = self._namespace
+        if self._latex is not None:
+            if namespace:
+                match1 = re.match('(.*)_(.)$', self._latex)
+                match2 = re.match('(.*)_{(.*)}$', self._latex)
+                if match1 is not None:
+                    latex = r'%s_{%s,\mathrm{%s}}' % (match1.group(1), match1.group(2), namespace)
+                elif match2 is not None:
+                    latex = r'%s_{%s,\mathrm{%s}}' % (match2.group(1), match2.group(2), namespace)
+                else:
+                    latex = r'%s_{\mathrm{%s}}' % (self._latex, namespace)
             else:
-                latex = r'%s_{\mathrm{%s}}' % (self._latex, namespace)
-        else:
-            latex = self._latex
-        if inline:
-            latex = '${}$'.format(latex)
-        return latex
-    return str(self)
+                latex = self._latex
+            if inline:
+                latex = '${}$'.format(latex)
+            return latex
+        return str(self)
 
 
-Parameter.latex = GetterSetter(latex_setter, latex_getter)
+def _make_property(name):
+
+    def getter(self):
+        return getattr(self, '_' + name)
+
+    return getter
+
+
+for name in Parameter._attrs:
+    if name not in ['value', 'derived', 'latex']:
+        setattr(Parameter, name, property(_make_property(name)))
 
 
 class BaseParameterCollection(BaseClass):
@@ -901,6 +893,7 @@ class ParameterConfig(NamespaceDict):
             conf = conf.__getstate__()
             if conf['namespace'] is None:
                 conf.pop('namespace')
+            conf.pop('updated', None)
         super(ParameterConfig, self).__init__(conf, **kwargs)
 
     def init(self):
@@ -1179,6 +1172,7 @@ class ParameterCollectionConfig(BaseParameterCollection):
 class ParameterCollection(BaseParameterCollection):
 
     """Class holding a collection of parameters."""
+    _attrs = ['_updated']
 
     def __init__(self, data=None, attrs=None):
         """
@@ -1209,6 +1203,7 @@ class ParameterCollection(BaseParameterCollection):
 
         self.attrs = dict(attrs or {})
         self.data = []
+        self._updated = True
         if data is None:
             return
 
@@ -1236,8 +1231,33 @@ class ParameterCollection(BaseParameterCollection):
                     param = Parameter(basename=name, latex=latex, **conf)
                     self.set(param)
 
+    @property
+    def updated(self):
+        return self._updated or any(param.updated for param in self.data)
+
+    @updated.setter
+    def updated(self, updated):
+        updated = bool(updated)
+        self._updated = updated
+        for param in self.data: param.updated = updated
+
+    def __delitem__(self, name):
+        """
+        Delete parameter ``name``.
+
+        Parameters
+        ----------
+        name : Parameter, string, int
+            Parameter name.
+            If :class:`Parameter` instance, search for parameter with same name.
+            If integer, index in collection.
+        """
+        self._updated = True
+        return super(ParameterCollection, self).__delitem__(name)
+
     def update(self, *args, name=None, basename=None, **kwargs):
         """Update collection with new one."""
+        self._updated = True
         if len(args) == 1 and isinstance(args[0], self.__class__):
             other = args[0]
             for item in other:
@@ -1294,6 +1314,7 @@ class ParameterCollection(BaseParameterCollection):
         return self.select(**kwargs)
 
     def set(self, item):
+        self._updated = True
         if not isinstance(item, Parameter):
             item = Parameter(item)
         try:
@@ -1316,6 +1337,7 @@ class ParameterCollection(BaseParameterCollection):
         item : Parameter
             Parameter.
         """
+        self._updated = True
         if not isinstance(item, Parameter):
             item = Parameter(item)
         try:

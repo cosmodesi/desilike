@@ -14,7 +14,6 @@ def load_from_file(fn, obj):
     return getattr(foo, obj)
 
 
-
 class LikelihoodGenerator(BaseClass):
 
     line_delimiter = '\n\n'

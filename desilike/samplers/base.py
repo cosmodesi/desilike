@@ -75,7 +75,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         self.mpicomm = mpicomm
         self.likelihood.solved_default = '.marg'
         self.varied_params = self.likelihood.varied_params.deepcopy()
-        for param in self.varied_params: param.ref = param.ref.affine_transform(scale=ref_scale)
+        for param in self.varied_params: param.update(ref=param.ref.affine_transform(scale=ref_scale))
         if self.mpicomm.rank == 0:
             self.log_info('Varied parameters: {}.'.format(self.varied_params.names()))
         if not self.varied_params:

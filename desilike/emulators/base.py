@@ -62,7 +62,7 @@ class Emulator(BaseClass):
         self.pipeline = self.calculator.runtime_info.pipeline
 
         self.params = self.pipeline.params.deepcopy()
-        for param in self.params: param.drop = False  # dropped params become actual params
+        for param in self.params: param.update(drop=False)  # dropped params become actual params
         self.varied_params = self.params.names(varied=True, derived=False)
         if not self.varied_params:
             raise ValueError('No parameters to be varied!')

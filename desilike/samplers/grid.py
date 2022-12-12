@@ -50,10 +50,22 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
                 ngrid = self.ngrid[iparam]
                 if ngrid == 1:
                     grid.append(np.array(param.value))
-                elif param.ref.is_proper():
+                elif param.ref.is_limited() and not hasattr(param.ref, 'scale'):
+                    limits = np.array(param.ref.limits)
+                    center = param.value
+                    limits = self.ref_scale * (limits - center) + center
+                    low, high = np.linspace(limits[0], center, ngrid // 2 + 1), np.linspace(center, limits[1], ngrid // 2 + 1)
+                    if ngrid % 2:
+                        tmp = np.concatenate([low, high[1:]])
+                    else:
+                        tmp = np.concatenate([low[:-1], high[1:]])
+                    if not np.all(np.diff(tmp) > 0):
+                        raise ParameterPriorError('Parameter {} value {} is not in reference limits {}'.format(param, param.value, param.ref.limits))
+                    grid.append(tmp)
+                elif param.proposal:
                     grid.append(np.linspace(param.value - self.ref_scale * param.proposal, param.value + self.ref_scale * param.proposal, ngrid))
                 else:
-                    raise ParameterPriorError('Provide parameter limits or proposal')
+                    raise ParameterPriorError('Provide parameter limited reference distribution or proposal')
             if self.sphere:
                 ndim = len(grid)
                 if any(len(g) % 2 == 0 for g in grid):

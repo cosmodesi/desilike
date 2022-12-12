@@ -58,7 +58,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         self.mpicomm = mpicomm
         self.likelihood.solved_default = '.best'
         self.varied_params = self.likelihood.varied_params.deepcopy()
-        for param in self.varied_params: param.ref = param.ref.affine_transform(scale=ref_scale)
+        for param in self.varied_params: param.update(ref=param.ref.affine_transform(scale=ref_scale))
         if self.mpicomm.rank == 0:
             self.log_info('Varied parameters: {}.'.format(self.varied_params.names()))
         if not self.varied_params:
@@ -86,7 +86,6 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
             self.varied_params = ParameterCollection()
             for param, loc, scale in zip(self._original_params, self._params_transform_loc, self._params_transform_scale):
-                print(param, loc, scale, param.prior, param.proposal)
                 loc, scale = - loc, 1. / scale
                 param = param.clone(prior=param.prior.affine_transform(loc=loc, scale=scale),
                                     ref=param.ref.affine_transform(loc=loc, scale=scale),

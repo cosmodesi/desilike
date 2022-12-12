@@ -145,7 +145,26 @@ def test_params():
     import pytest
     from desilike.base import PipelineError
     with pytest.raises(PipelineError):
-        likelihood.all_params = {'a': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1}}}
+        likelihood.all_params = {'a': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}}}
+    likelihood.all_params = 'test_params.yaml'
+    assert likelihood.varied_params['dm'].prior.scale == 2.
+    likelihood.all_params['dm'].update(prior={'dist': 'norm', 'loc': 0., 'scale': 100.})
+    assert likelihood.varied_params['dm'].prior.scale == 100.
+    likelihood.all_params = {'*': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}}}
+    assert likelihood.varied_params['dm'].prior.scale == 1.
+
+    theory = KaiserTracerPowerSpectrumMultipoles()
+    theory.params['b1'].update(prior={'dist': 'norm', 'loc': 0., 'scale': 1.})
+    theory.params = {'b1': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}}, 'sn0': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1e4}}}
+    theory.all_params['Omega_m'].update(prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.5})
+    theory.all_params = {'*mega_m': {'ref': {'dist': 'norm', 'loc': 0.3, 'scale': 0.5}}}
+    assert theory.template.cosmo.params['Omega_m'].ref.scale == 0.5
+    observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
+                                                       data='_pk/data.npy', mocks='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
+                                                       theory=theory)
+    likelihood = GaussianLikelihood(observables=[observable])
+    likelihood.all_params = {'sn0': {'derived': '.marg'}}
+    likelihood()
 
 
 def test_cosmo():

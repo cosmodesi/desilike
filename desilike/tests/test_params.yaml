@@ -1,0 +1,9 @@
+dm:
+  value: 0.
+  prior:
+    dist: norm
+    loc: 0.
+    scale: 2.
+  ref:
+    limits: [-0.01, 0.01]
+  latex: dm

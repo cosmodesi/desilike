@@ -46,11 +46,15 @@ def test_taylor_power(plot=False):
 def test_taylor(plot=False):
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     calculator = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate())
+    for param in calculator.params:
+        print(param, param.value)
     power_bak = calculator().copy()
     emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=1))
     emulator.set_samples()
     emulator.fit()
 
+    calculator(**{str(param): param.value for param in calculator.params if param.varied})
+    assert np.allclose(calculator.power, power_bak)
     calculator = emulator.to_calculator()
     calculator(**{str(param): param.value for param in calculator.params if param.varied})
     assert np.allclose(calculator.power, power_bak)

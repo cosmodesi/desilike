@@ -17,7 +17,7 @@ def AbacusSummitLRGFullPowerSpectrumMultipoles(cosmo='external', solve=None, sav
         from desilike.utils import jax
         solve = jax is not None
     if solve and not save_emulator:
-        for param in theory.params.select(name=['alpha*', 'sn*']): param.derived = '.marg'
+        for param in theory.params.select(name=['alpha*', 'sn*']): param.update(derived='.marg')
         theory.log_info('Use analytic marginalization for {}.'.format(theory.params.names(solved=True)))
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.02, 0.2], 2: [0.02, 0.2]}, kstep=0.005,
                                                        data='/global/cfs/cdirs/desi/cosmosim/KP45/MC/Clustering/AbacusSummit/CubicBox/LRG/Pk/Pre/jmena/nmesh_512/pypower_format/Pk_AbacusSummit_base_*.npy',
@@ -55,7 +55,7 @@ def AbacusSummitLRGShapeFitPowerSpectrumMultipoles(solve=None, save_emulator=Fal
         from desilike.utils import jax
         solve = jax is not None
     if solve and not save_emulator:
-        for param in theory.params.select(name=['alpha*', 'sn*']): param.derived = '.marg'
+        for param in theory.params.select(name=['alpha*', 'sn*']): param.update(derived='.marg')
         theory.log_info('Use analytic marginalization for {}.'.format(theory.params.names(solved=True)))
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.02, 0.2], 2: [0.02, 0.2]}, kstep=0.005,
                                                        data='/global/cfs/cdirs/desi/cosmosim/KP45/MC/Clustering/AbacusSummit/CubicBox/LRG/Pk/Pre/jmena/nmesh_512/pypower_format/Pk_AbacusSummit_base_*.npy',

@@ -22,13 +22,11 @@ init:
 
 params:
   fnl_loc:
-    value: 0.
     prior:
       dist: uniform
-      limits: [-300, 300]
+      limits: [-300., 300.]
     latex: f_{NL}^{\mathrm{loc}}
   bphi:
-    value: 0.
     prior:
       dist: uniform
       limits: [-10, 10]
@@ -38,6 +36,9 @@ params:
     prior:
       dist: uniform
       limits: [0, 3]
+    ref:
+      dist: uniform
+      limits: [0.5, 1.5]
     latex: p
   bfnl_loc:
     value: 0.
@@ -50,6 +51,9 @@ params:
     prior:
       dist: uniform
       limits: [0.1, 10]
+    ref:
+      dist: uniform
+      limits: [1.5, 2.5]
     latex: b
   sn0:
     value: 0.

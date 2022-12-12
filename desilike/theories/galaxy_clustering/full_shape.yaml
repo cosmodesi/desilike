@@ -17,7 +17,6 @@ init:
 
 params:
   b1:
-    value: 2.
     prior:
       dist: uniform
       limits: [0., 4.0]
@@ -25,7 +24,6 @@ params:
       limits: [1.0, 2.0]
     latex: b_{1}
   sn0:
-    value: 0.
     fixed: False
     prior:
       dist: norm
@@ -54,7 +52,6 @@ init:
 
 params:
   b1:
-    value: 2.
     prior:
       dist: uniform
       limits: [0., 4.0]
@@ -84,15 +81,13 @@ init:
 params:
   .fixed: ['b3']
   b1:
-    value: 0.6
     prior:
       dist: uniform
       limits: [-1., 4.0]
     ref:
-      limits: [0.8, 1.2]
+      limits: [0.4, 0.6]
     latex: b_{1}
   b2:
-    value: -3.
     prior:
       dist: norm
       loc: 0.
@@ -103,29 +98,26 @@ params:
       scale: 0.5
     latex: b_{2}
   bs:
-    value: -0.71
     prior:
       dist: norm
       loc: 0.
       scale: 15.
     ref:
       dist: norm
-      loc: 1.
+      loc: 0.
       scale: 0.5
     latex: b_{s}
   b3:
-    value: -0.479
     prior:
       dist: norm
       loc: 0.
       scale: 15.
     ref:
       dist: norm
-      loc: 1.0
+      loc: 0.
       scale: 0.5
     latex: b_{3}
   alpha[0:7:2]:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -136,7 +128,6 @@ params:
       scale: 1.
     latex: \alpha_{[]}
   sn[:5:2]:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -169,15 +160,13 @@ init:
 params:
   .fixed: ['b3']
   b1:
-    value: 0.6
     prior:
       dist: uniform
       limits: [-1., 4.0]
     ref:
-      limits: [0.8, 1.2]
+      limits: [0.4, 0.6]
     latex: b_{1}
   b2:
-    value: -3.
     prior:
       dist: norm
       loc: 0.
@@ -188,18 +177,16 @@ params:
       scale: 0.5
     latex: b_{2}
   bs:
-    value: -0.71
     prior:
       dist: norm
       loc: 0.
       scale: 3.
     ref:
       dist: norm
-      loc: 1.
+      loc: 0.
       scale: 0.5
     latex: b_{s}
   b3:
-    value: -0.479
     fixed: True
     prior:
       dist: norm
@@ -207,11 +194,10 @@ params:
       scale: 15.
     ref:
       dist: norm
-      loc: 1.0
+      loc: 0.
       scale: 0.5
     latex: b_{3}
   alpha[0:7:2]:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -222,7 +208,6 @@ params:
       scale: 1.0
     latex: \alpha_{[]}
   sn[:5:2]:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -255,32 +240,28 @@ init:
 params:
   .fixed: ['b2m4']
   b1:
-    value: 1.3
     prior:
       limits: [0., 4.0]
     ref:
-      limits: [0., 1.]
+      limits: [1.4, 1.6]
     latex: b_{1}
   b3:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
       scale: 15.
     ref:
       dist: norm
-      loc: 1.0
+      loc: 0.
       scale: 0.5
     latex: b_{3}
   b2:
-    value: 0.
     prior:
       limits: [-10., 10.]
     ref:
       limits: [-1., 1.]
     latex: b_{2}
   b4:
-    value: 0.
     prior:
       limits: [-10., 10.]
     ref:
@@ -288,52 +269,44 @@ params:
     latex: b_{4}
   # west coast
   b2p4:
-    value: 0.
     prior:
       limits: [-10., 10.]
     latex: '(b_{2} + b_{4})/\sqrt{2}'
   b2m4:
-    value: 0.
     prior:
       limits: [-10., 10.]
     latex: '(b_{2} - b_{4})/\sqrt{2}'
   cct:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
       scale: 100.
     latex: c_{t}
   cr1:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
       scale: 100.
     latex: c_{r, 1}
   cr2:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
       scale: 100.
     latex: c_{r, 2}
   cr4:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
       scale: 100.
     latex: c_{r, 4}
   cr6:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
       scale: 100.
     latex: c_{r, 6}
   ce[:3]:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -362,32 +335,28 @@ init:
 params:
   .fixed: ['b2m4']
   b1:
-    value: 1.3
     prior:
       limits: [0., 4.0]
     ref:
-      limits: [0., 1.]
+      limits: [1.4, 1.6]
     latex: b_{1}
   b3:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
       scale: 15.
     ref:
       dist: norm
-      loc: 1.0
+      loc: 0.
       scale: 0.5
     latex: b_{3}
   b2:
-    value: 0.
     prior:
       limits: [-10., 10.]
     ref:
       limits: [-1., 1.]
     latex: b_{2}
   b4:
-    value: 0.
     prior:
       limits: [-10., 10.]
     ref:
@@ -395,52 +364,44 @@ params:
     latex: b_{4}
   # west coast
   b2p4:
-    value: 0.
     prior:
       limits: [-10., 10.]
     latex: '(b_{2} + b_{4})/\sqrt{2}'
   b2m4:
-    value: 0.
     prior:
       limits: [-10., 10.]
     latex: '(b_{2} - b_{4})/\sqrt{2}'
   cct:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
       scale: 100.
     latex: c_{t}
   cr1:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
       scale: 100.
     latex: c_{r, 1}
   cr2:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
       scale: 100.
     latex: c_{r, 2}
   cr4:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
       scale: 100.
     latex: c_{r, 4}
   cr6:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
       scale: 100.
     latex: c_{r, 6}
   ce[:3]:
-    value: 0.
     prior:
       dist: norm
       loc: 0.

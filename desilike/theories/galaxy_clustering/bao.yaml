@@ -19,11 +19,12 @@ init:
 
 params:
   b1:
-    value: 2.
-    fixed: False
     prior:
       dist: uniform
       limits: [0.2, 4.]
+    ref:
+      dist: uniform
+      limits: [1.5, 2.5]
     latex: b
   sigmas:
     value: 0.
@@ -75,11 +76,12 @@ init:
 
 params:
   b1:
-    value: 2.
-    fixed: False
     prior:
       dist: uniform
       limits: [0.2, 4.]
+    ref:
+      dist: uniform
+      limits: [1.5, 2.5]
     latex: b
   sigmas:
     value: 0.
@@ -119,11 +121,12 @@ init:
 
 params:
   b1:
-    value: 2.
-    fixed: False
     prior:
       dist: uniform
       limits: [0.2, 4.]
+    ref:
+      dist: uniform
+      limits: [1.5, 2.5]
     latex: b
   sigmas:
     value: 0.
@@ -175,11 +178,12 @@ init:
 
 params:
   b1:
-    value: 2.
-    fixed: False
     prior:
       dist: uniform
       limits: [0.2, 4.]
+    ref:
+      dist: uniform
+      limits: [1.5, 2.5]
     latex: b
   sigmas:
     value: 0.

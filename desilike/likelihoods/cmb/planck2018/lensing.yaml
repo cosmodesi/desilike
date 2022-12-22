@@ -1,0 +1,19 @@
+class: LensingPlanck2018ClikLikelihood
+
+info:
+  version: 0.0.1
+  date: 10/09/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Planck 2018 release for high-ell, lensing likelihood power spectrum likelihood
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+init:
+  clik_fn: baseline/plc_3.0/lensing/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8.clik_lensing
+
+params:
+  .import: params.yaml::calib

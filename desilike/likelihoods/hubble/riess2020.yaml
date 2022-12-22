@@ -1,0 +1,44 @@
+class: Riess2020H0Likelihood
+
+info:
+  version: 0.0.1
+  date: 10/09/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Local H0 measurement from Riess 2020
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  mean: 73.2
+  std: 1.3
+
+---
+
+class: Riess2020MbLikelihood
+
+info:
+  version: 0.0.1
+  date: 10/09/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Local magnitude measurement from Riess 2020
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  mean: -19.263
+  std: 0.049
+
+params:
+  Mb:
+    value: -19.263
+    prior:
+      limits: [-20, -18]
+    latex: M_b

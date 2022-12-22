@@ -29,11 +29,11 @@ class BAOCompression(BaseCalculator):
 
     def calculate(self):
         bao = [getattr(self.bao, quantity) for quantity in self.bao_quantities]
-        self.flatmodel = np.array(bao)
+        self.flattheory = np.array(bao)
 
     def __getstate__(self):
         state = {}
-        for name in ['flatdata', 'covariance', 'flatmodel', 'bao_quantities']:
+        for name in ['flatdata', 'covariance', 'flattheory', 'bao_quantities']:
             state[name] = getattr(self, name)
         return state
 
@@ -71,10 +71,10 @@ class ShapeFitCompression(BaseCalculator):
     def calculate(self):
         bao = [getattr(self.bao, quantity) for quantity in self.bao_quantities]
         fs = [getattr(self.fs, quantity) for quantity in self.fs_quantities]
-        self.flatmodel = np.array(bao + fs)
+        self.flattheory = np.array(bao + fs)
 
     def __getstate__(self):
         state = {}
-        for name in ['flatdata', 'covariance', 'flatmodel', 'bao_quantities', 'fs_quantities']:
+        for name in ['flatdata', 'covariance', 'flattheory', 'bao_quantities', 'fs_quantities']:
             state[name] = getattr(self, name)
         return state

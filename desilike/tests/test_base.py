@@ -74,7 +74,7 @@ def test_observable():
 def test_likelihood():
 
     from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrumMultipoles
-    from desilike.likelihoods import GaussianLikelihood
+    from desilike.likelihoods import ObservablesGaussianLikelihood
 
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, BAOPowerSpectrumTemplate
     template = BAOPowerSpectrumTemplate(z=1.)
@@ -85,7 +85,7 @@ def test_likelihood():
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.08, 0.2]}, kstep=0.01,
                                                        data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                        theory=theory)
-    likelihood = GaussianLikelihood(observables=[observable])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
     #observable.plot(show=True)
     print(theory.pt.params)
@@ -101,7 +101,7 @@ def test_likelihood():
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
                                                        data='_pk/data.npy', mocks='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
                                                        theory=theory)
-    likelihood = GaussianLikelihood(observables=[observable])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
     print(likelihood.runtime_info.pipeline.params)
     print(likelihood(dm=0.), likelihood(dm=0.01), likelihood(b1=2., dm=0.02))
     theory.template.update(z=1.)
@@ -117,7 +117,7 @@ def test_likelihood():
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.18]}, kstep=0.01,
                                                        data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                        theory=theory)
-    likelihood = GaussianLikelihood(observables=[observable], scale_covariance=False)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=False)
     print(likelihood.runtime_info.pipeline.params.select(solved=True))
     print(likelihood.varied_params)
     print(likelihood(dm=0.), likelihood(dm=0.01), likelihood(dm=0.02))
@@ -128,14 +128,14 @@ def test_likelihood():
 def test_params():
 
     from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrumMultipoles
-    from desilike.likelihoods import GaussianLikelihood
+    from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
                                                        data='_pk/data.npy', mocks='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
                                                        theory=theory)
-    likelihood = GaussianLikelihood(observables=[observable])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
     print(likelihood.runtime_info.pipeline.params)
     print(likelihood(dm=0.), likelihood(dm=0.01), likelihood(b1=2., dm=0.02))
     print(likelihood.varied_params)
@@ -162,9 +162,10 @@ def test_params():
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
                                                        data='_pk/data.npy', mocks='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
                                                        theory=theory)
-    likelihood = GaussianLikelihood(observables=[observable])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood.all_params = {'sn0': {'derived': '.marg'}}
     likelihood()
+    print(likelihood.varied_params)
 
 
 def test_cosmo():
@@ -183,7 +184,7 @@ def test_cosmo():
 def test_install():
 
     from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrumMultipoles
-    from desilike.likelihoods import GaussianLikelihood
+    from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, LPTVelocileptorsTracerPowerSpectrumMultipoles
 
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
@@ -192,7 +193,7 @@ def test_install():
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.18]}, kstep=0.01,
                                                        data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                        theory=theory)
-    likelihood = GaussianLikelihood(observables=[observable], scale_covariance=False)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=False)
     from desilike import Installer
     Installer()(likelihood)
     from desilike.samplers import EmceeSampler

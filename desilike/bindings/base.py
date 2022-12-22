@@ -60,9 +60,9 @@ class LikelihoodGenerator(BaseClass):
                     file.write(line + self.line_delimiter)
 
 
-def get_likelihood_params(like):
-    all_params = like.runtime_info.pipeline.params.select(derived=False, solved=False)
-    cosmo_names = like.runtime_info.pipeline.get_cosmo_requires().get('params', {})
+def get_likelihood_params(likelihood):
+    all_params = likelihood.runtime_info.pipeline.params.select(derived=False, solved=False)
+    cosmo_names = likelihood.runtime_info.pipeline.get_cosmo_requires().get('params', {})
     cosmo_params, nuisance_params = ParameterCollection(), ParameterCollection()
     for param in all_params:
         if param.basename in cosmo_names:

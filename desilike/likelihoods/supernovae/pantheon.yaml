@@ -1,0 +1,23 @@
+class: PantheonSNLikelihood
+
+info:
+  version: 0.0.1
+  date: 10/09/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Pantheon type Ia supernova sample
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description:
+
+init:
+  config_fn: full_long.dataset
+
+params:
+  Mb:
+    value: -19.263
+    prior:
+      limits: [-20, -18]
+    latex: M_b

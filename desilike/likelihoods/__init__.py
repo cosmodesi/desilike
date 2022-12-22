@@ -1,1 +1,1 @@
-from .base import BaseLikelihood, GaussianLikelihood
+from .base import BaseLikelihood, BaseGaussianLikelihood, ObservablesGaussianLikelihood

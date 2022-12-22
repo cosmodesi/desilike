@@ -112,7 +112,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
             else:
                 self.derived = [Samples.concatenate([self.derived[0], points]),
                                 Samples.concatenate([self.derived[1], self.pipeline.derived])]
-            toret = self.pipeline.derived[self.likelihood._loglikelihood_name] + self.pipeline.derived[self.likelihood._logprior_name]
+            toret = self.pipeline.derived[self.likelihood._param_loglikelihood] + self.pipeline.derived[self.likelihood._param_logprior]
         else:
             self.derived = None
         toret = self.likelihood.mpicomm.bcast(toret, root=0)

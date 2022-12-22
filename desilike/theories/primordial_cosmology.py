@@ -68,5 +68,5 @@ class Cosmoprimo(BasePrimordialCosmology):
         raise AttributeError('{} has not attribute {}'.format(self, name))
 
     @classmethod
-    def install(cls, config):
-        config.pip('git+https://github.com/cosmodesi/cosmoprimo')
+    def install(cls, installer):
+        installer.pip('git+https://github.com/cosmodesi/cosmoprimo')

@@ -1,7 +1,7 @@
 def AbacusSummitLRGFullPowerSpectrumMultipoles(cosmo='external', solve=None, save_emulator=False, emulator_fn=None):
 
     from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrumMultipoles
-    from desilike.likelihoods import GaussianLikelihood
+    from desilike.likelihoods import ObservablesGaussianLikelihood
 
     if save_emulator or emulator_fn is None:
         from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, FullPowerSpectrumTemplate
@@ -24,7 +24,7 @@ def AbacusSummitLRGFullPowerSpectrumMultipoles(cosmo='external', solve=None, sav
                                                        mocks='/global/cfs/cdirs/desi/cosmosim/KP45/MC/Clustering/EZmock/CubicBox/LRG/Pk/jmena/nmesh_512/pypower_format/Pk_EZmock_B2000G512Z0.8N8015724_b0.385d4r169c0.3_seed*.npy',
                                                        wmatrix='/global/cfs/cdirs/desi/users/adematti/desi_mock_challenge/FirstGenMocks/AbacusSummit/CubicBox/ELG/z1.100/window_nmesh512_los-x.npy',
                                                        theory=theory)
-    likelihood = GaussianLikelihood(observables=[observable])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
     if save_emulator:
         from desilike.emulators import Emulator, TaylorEmulatorEngine
         likelihood()
@@ -39,7 +39,7 @@ def AbacusSummitLRGFullPowerSpectrumMultipoles(cosmo='external', solve=None, sav
 def AbacusSummitLRGShapeFitPowerSpectrumMultipoles(solve=None, save_emulator=False, emulator_fn=None):
 
     from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrumMultipoles
-    from desilike.likelihoods import GaussianLikelihood
+    from desilike.likelihoods import ObservablesGaussianLikelihood
 
     if save_emulator or emulator_fn is None:
         from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
@@ -62,7 +62,7 @@ def AbacusSummitLRGShapeFitPowerSpectrumMultipoles(solve=None, save_emulator=Fal
                                                        mocks='/global/cfs/cdirs/desi/cosmosim/KP45/MC/Clustering/EZmock/CubicBox/LRG/Pk/jmena/nmesh_512/pypower_format/Pk_EZmock_B2000G512Z0.8N8015724_b0.385d4r169c0.3_seed*.npy',
                                                        wmatrix='/global/cfs/cdirs/desi/users/adematti/desi_mock_challenge/FirstGenMocks/AbacusSummit/CubicBox/ELG/z1.100/window_nmesh512_los-x.npy',
                                                        theory=theory)
-    likelihood = GaussianLikelihood(observables=[observable])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
     if save_emulator:
         from desilike.emulators import Emulator, TaylorEmulatorEngine
         likelihood()

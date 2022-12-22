@@ -25,8 +25,39 @@ def download(url, target):
         file.write(r.content)
 
 
-def pip(package, install_dir=None, no_deps=False, force_reinstall=False, ignore_installed=False):
-    command = [sys.executable, '-m', 'pip', 'install', package, '--disable-pip-version-check']
+def extract(in_fn, out_fn, remove=True):
+    in_fn, out_fn = (os.path.normpath(fn) for fn in [in_fn, out_fn])
+    ext = os.path.splitext(in_fn)[-1][1:]
+    if ext == 'zip':
+        from zipfile import ZipFile
+        with ZipFile(in_fn, 'r') as zip:
+            zip.extractall(out_fn)
+    else:
+        import tarfile
+        if ext == 'tgz': ext = 'gz'
+        with tarfile.open(in_fn, 'r:' + ext) as tar:
+            tar.extractall(out_fn)
+    if remove and out_fn != in_fn:
+        os.remove(in_fn)
+
+
+def pip(pkgindex, pkgname=None, install_dir=None, no_deps=False, force_reinstall=False, ignore_installed=False):
+    if not force_reinstall:
+        # Check if package already installed (to cope with git-provided package)
+        if pkgname is None:
+            if 'https://' in pkgindex:
+                for pkgname in pkgindex.split('#')[0].split('/')[::-1]:
+                    if pkgname: break
+            else:
+                pkgname = pkgindex
+        try:
+            pkg = __import__(pkgname)
+        except ImportError:
+            pass
+        else:
+            logger.info('Requirement already satisfied: {} in {}'.format(pkgname, os.path.dirname(os.path.dirname(pkg.__file__))))
+            return  # already installed
+    command = [sys.executable, '-m', 'pip', 'install', pkgindex, '--disable-pip-version-check']
     if install_dir is not None:
         command = ['PYTHONUSERBASE={}'.format(install_dir)] + command + ['--user']
     if no_deps:
@@ -38,7 +69,7 @@ def pip(package, install_dir=None, no_deps=False, force_reinstall=False, ignore_
     command = ' '.join(command)
     logger.info(command)
     from subprocess import Popen, PIPE
-    proc = Popen(command, universal_newlines=True, stdout=PIPE, stderr=PIPE, shell=True)
+    result = Popen(command, universal_newlines=True, stdout=PIPE, stderr=PIPE, shell=True)
     out, err = proc.communicate()
     logger.info(out)
     if len(err):
@@ -51,6 +82,28 @@ def pip(package, install_dir=None, no_deps=False, force_reinstall=False, ignore_
             logger.warning(message)
         else:
             raise InstallError('potentially serious error detected during pip installation:\n' + err)
+
+
+def _insert_first(li, first):
+    try:
+        li.remove(first)
+    except ValueError:
+        pass
+    li.insert(0, first)
+    return li
+
+
+def source(fn):
+    import subprocess
+    result = subprocess.run(['bash', '-c', 'source {} && env'.format(fn)], capture_output=True, text=True)
+    for line in result.stdout.split('\n'):
+        try:
+            key, value = line.split('=')
+            if key == 'PYTHONPATH':
+                for path in value.split(':'): _insert_first(sys.path, path)
+            os.environ[key] = value
+        except ValueError:
+            pass
 
 
 class Installer(BaseClass):
@@ -77,15 +130,23 @@ class Installer(BaseClass):
             self.write({'install_dir': config['install_dir']})
         if install_dir is None:
             install_dir = config['install_dir']
+        self.config = config
         self.install_dir = install_dir
         self.no_deps = bool(no_deps)
         self.force_reinstall = bool(force_reinstall)
         self.ignore_installed = bool(ignore_installed)
-        default = {'lib_dir': os.path.join(self.install_dir, lib_rel_install_dir),
+        default = {'pylib_dir': os.path.join(self.install_dir, lib_rel_install_dir),
                    'bin_dir': os.path.join(self.install_dir, 'bin'),
-                   'data_dir': os.path.join(self.install_dir, 'data')}
+                   'include_dir': os.path.join(self.install_dir, 'include'),
+                   'dylib_dir': os.path.join(self.install_dir, 'lib')}
         for name, value in default.items():
             setattr(self, name, kwargs.get(name, value))
+
+    def get(self, *args, **kwargs):
+        return self.config.get(*args, **kwargs)
+
+    def __getitem__(self, name):
+        return self.get(name)
 
     @staticmethod
     def parser(parser=None):
@@ -127,9 +188,10 @@ class Installer(BaseClass):
         else:
             install(obj)
 
-    def pip(self, package):
-        pip(package, install_dir=self.install_dir, no_deps=self.no_deps, force_reinstall=self.force_reinstall, ignore_installed=self.ignore_installed)
-        self.write({name: getattr(self, name) for name in ['lib_dir', 'bin_dir']})
+    def pip(self, pkgindex, **kwargs):
+        kwargs = {**dict(no_deps=self.no_deps, force_reinstall=self.force_reinstall, ignore_installed=self.ignore_installed), **kwargs}
+        pip(pkgindex, install_dir=self.install_dir, **kwargs)
+        self.write({name: getattr(self, name) for name in ['pylib_dir', 'bin_dir']})
 
     def data_dir(self, section=None):
         base_dir = os.path.join(self.install_dir, 'data')
@@ -138,26 +200,31 @@ class Installer(BaseClass):
         return os.path.join(base_dir, section)
 
     def write(self, config, update=True):
+
+        def _make_list(li):
+            if not utils.is_sequence(li): li = [li]
+            return list(li)
+
         config = BaseConfig(config).copy()
+        dirs = ['pylib_dir', 'bin_dir', 'dylib_dir']
+        for key in dirs + ['source']:
+            if key in config: config[key] = _make_list(config[key])
         if update and os.path.isfile(self.config_fn):
             base_config = BaseConfig(self.config_fn)
             config = base_config.clone(config)
-            for key in ['lib_dir', 'bin_dir']:
-                paths = config.get(key, [])
-                if not utils.is_sequence(paths): paths = [paths]
-                config[key] = paths + [path for path in base_config.get(key, []) if path not in paths]
+            for key in dirs + ['source']:
+                paths = _make_list(config.get(key, []))
+                config[key] = paths + [path for path in _make_list(base_config.get(key, [])) if path not in paths]
         config.write(self.config_fn)
         utils.mkdir(os.path.dirname(self.profile_fn))
         with open(self.profile_fn, 'w') as file:
             file.write('#!/bin/bash\n')
-            for key, keybash in zip(['lib_dir', 'bin_dir'], ['PYTHONPATH', 'PATH']):
-                if key in config:
-                    file.write('export {}={}\n'.format(keybash, ':'.join(config[key] + [f'${keybash}'])))
+            for key, keybash in zip(dirs, ['PYTHONPATH', 'PATH', 'LD_LIBRARY_PATH']):
+                if key in config: file.write('export {}={}\n'.format(keybash, ':'.join(config[key] + [f'${keybash}'])))
+            for src in config.get('source', []):
+                file.write('source {}'.format(src))
 
     @classmethod
     def setenv(cls):
-        if os.path.isfile(cls.config_fn):
-            config = BaseConfig(cls.config_fn)
-            paths = config.get('lib_dir', [])
-            for path in paths:
-                sys.path.insert(0, path)
+        if os.path.isfile(cls.profile_fn):
+            source(cls.profile_fn)

@@ -23,7 +23,7 @@ class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
         self.wmatrix = WindowedCorrelationFunctionMultipoles(s=self.s, ells=self.ells, theory=theory)
         if self.flatdata is None:
             self.wmatrix()
-            self.flatdata = self.flatmodel.copy()
+            self.flatdata = self.flattheory.copy()
 
     def set_default_s_ells(self, slim=None, sstep=None):
         if not isinstance(slim, dict):
@@ -122,7 +122,7 @@ class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
         return toret
 
     @property
-    def flatmodel(self):
+    def flattheory(self):
         return self.wmatrix.flatcorr
 
     @property

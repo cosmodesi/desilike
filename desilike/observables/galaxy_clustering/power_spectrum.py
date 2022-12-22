@@ -23,7 +23,7 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
         self.wmatrix = WindowedPowerSpectrumMultipoles(k=self.k, ells=self.ells, wmatrix=wmatrix, theory=theory, shotnoise=self.shotnoise)
         if self.flatdata is None:
             self.wmatrix()
-            self.flatdata = self.flatmodel.copy()
+            self.flatdata = self.flattheory.copy()
 
     def set_default_k_ells(self, klim=None, kstep=None):
         if not isinstance(klim, dict):
@@ -171,7 +171,7 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
         return toret
 
     @property
-    def flatmodel(self):
+    def flattheory(self):
         return self.wmatrix.flatpower
 
     @property

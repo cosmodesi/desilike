@@ -5,7 +5,7 @@ import warnings
 import numpy as np
 
 from . import mpi
-from .utils import BaseClass, NamespaceDict, Monitor, OrderedSet, jax, deep_eq
+from .utils import BaseClass, NamespaceDict, Monitor, OrderedSet, jax, deep_eq, is_sequence
 from .io import BaseConfig
 from .parameter import Parameter, ParameterCollection, ParameterConfig, ParameterCollectionConfig, ParameterArray, Samples
 
@@ -44,33 +44,6 @@ class BasePipeline(BaseClass):
         self._set_params()
 
     def _set_params(self, params=None):
-        """
-        params_from_calculator = {}
-        params = ParameterCollectionConfig(params)
-        self._params = ParameterCollection()
-        for calculator in self.calculators:
-            for iparam, param in enumerate(calculator.runtime_info.params):
-                if param in params:
-                    calculator.runtime_info.params[iparam] = param = param.clone(params[param])
-                if param in self._params:
-                    if param.derived and param.fixed:
-                        msg = 'Derived parameter {} of {} is already derived in {}.'.format(param, calculator, params_from_calculator[param.name])
-                        if param.basename not in calculator.runtime_info.derived_auto and param.basename not in params_from_calculator[param.name].runtime_info.derived_auto:
-                            raise PipelineError(msg)
-                        elif self.mpicomm.rank == 0:
-                            warnings.warn(msg)
-                    elif param != params[param]:
-                        raise PipelineError('Parameter {} of {} is different from that of {}.'.format(param, calculator, params_from_calculator[param.name]))
-                params_from_calculator[param.name] = calculator
-                self._params.set(param)
-        self.derived = None
-        self._params.updated = False
-        for param in params:
-            if param not in self._params:
-                raise PipelineError('Cannot attribute parameter {} to any calculator'.format(param))
-        self._varied_params = self._params.select(varied=True, derived=False)
-        self.param_values = {param.name: param.value for param in self._params}
-        """
         params_from_calculator = {}
         params = ParameterCollectionConfig(params)
         self._params = ParameterCollection()
@@ -234,6 +207,8 @@ class BasePipeline(BaseClass):
 
         jac = jac(params)
         fun(params)  # TODO find better fix
+        if is_sequence(jac):
+            return [{k: np.asarray(v) for k, v in j.items()} for j in jac]
         return {k: np.asarray(v) for k, v in jac.items()}
 
     def _classify_derived_auto(self, calculators=None, niterations=3, seed=42):
@@ -437,6 +412,7 @@ class RuntimeInfo(BaseClass):
             except AttributeError:
                 return
             func(self.installer)
+            self.installer.setenv()
 
     @property
     def requires(self):
@@ -475,6 +451,7 @@ class RuntimeInfo(BaseClass):
         self.base_params = {param.basename: param for param in self._params}
         self.varied_params = ParameterCollection([param for param in self._params if (not param.drop) and (param.depends or (not param.derived) or param.solved)])
         self.derived_params = self._params.select(derived=True, solved=False, depends={})
+        self.solved_params = self._params.select(solved=True)
         self.param_values = {param.basename: param.value for param in self.varied_params}
 
     @property

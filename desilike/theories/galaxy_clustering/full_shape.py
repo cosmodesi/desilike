@@ -151,8 +151,8 @@ class BaseVelocileptorsPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         return interpolate.interp1d(self.pt.kv, tmp, kind='cubic', axis=-1, copy=False, bounds_error=True, assume_sorted=True)(self.k)
 
     @classmethod
-    def install(cls, config):
-        config.pip('git+https://github.com/sfschen/velocileptors')
+    def install(cls, installer):
+        installer.pip('git+https://github.com/sfschen/velocileptors')
 
 
 class BaseVelocileptorsTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
@@ -216,8 +216,8 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
         return state
 
     @classmethod
-    def install(cls, config):
-        config.pip('git+https://github.com/sfschen/velocileptors')
+    def install(cls, installer):
+        installer.pip('git+https://github.com/sfschen/velocileptors')
 
 
 class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPowerSpectrumMultipoles):
@@ -298,8 +298,8 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         self.bird.__dict__.update(state)
 
     @classmethod
-    def install(cls, config):
-        config.pip('git+https://github.com/adematti/pybird@dev')
+    def install(cls, installer):
+        installer.pip('git+https://github.com/adematti/pybird@dev')
 
 
 class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
@@ -394,8 +394,8 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
         self.bird.__dict__.update(state)
 
     @classmethod
-    def install(cls, config):
-        config.pip('git+https://github.com/adematti/pybird@dev')
+    def install(cls, installer):
+        installer.pip('git+https://github.com/adematti/pybird@dev')
 
 
 class PyBirdTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMultipoles):

@@ -1,0 +1,155 @@
+import os
+
+import numpy as np
+
+from desilike.likelihoods.base import BaseLikelihood
+from .base import ClTheory
+
+
+class BasePlanckClikLikelihood(BaseLikelihood):
+
+    def initialize(self, data_fn, theory=None, data_dir=None):
+        import clik
+        if data_dir is None:
+            from desilike.install import Installer
+            data_dir = Installer()['Planck2018ClikLikelihood']['data_dir']
+        data_fn = os.path.join(data_dir, data_fn)
+        self.lensing = clik.try_lensing(data_fn)
+        try:
+            if self.lensing:
+                self.clik = clik.clik_lensing(data_fn)
+            else:
+                self.clik = clik.clik(data_fn)
+        except clik.lkl.CError as exc:
+            if not os.path.exists(data_fn):
+                raise IOError('The path to the .clik file for the likelihood {} was not found at {}'.format(self.__class__.__name__, data_fn))
+            else:
+                raise exc
+        self.ells_max = self.clik.get_lmax()
+        self.nuisance_params = list(self.clik.extra_parameter_names)
+
+        requested_cls = ['tt', 'ee', 'bb', 'te', 'tb', 'eb']
+        if self.lensing:
+            has_cls = [ellmax != -1 for ellmax in self.ells_max]
+            requested_cls = ['pp'] + requested_cls
+        else:
+            has_cls = self.clik.get_has_cl()
+        self.requested_cls, sizes, cls = [], [], {}
+        for cl, ellmax, has_cl in zip(requested_cls, self.ells_max, has_cls):
+            if int(has_cl):
+                self.requested_cls.append(cl)
+                sizes.append(ellmax + 1)
+                if cl not in ['tb', 'eb']: cls[cl] = ellmax
+
+        # Placeholder for vector passed to clik
+        self.cumsizes = np.insert(np.cumsum(sizes), 0, 0)
+        self.vector = np.zeros(self.cumsizes[-1] + len(self.nuisance_params))
+        if theory is None:
+            theory = ClTheory()
+        self.theory = theory
+        self.theory.update(cls=cls, lensing=True, unit='muK')
+        basenames = [param.basename for param in self.params if not param.drop]
+        if set(basenames) != set(self.nuisance_params):
+            raise ValueError('Expected nuisance parameters {}, received {}'.format(self.nuisance_params, basenames))
+
+    def calculate(self, **params):
+        self.loglikelihood = -np.inf
+        for cl, start, stop in zip(self.requested_cls, self.cumsizes[:-1], self.cumsizes[1:]):
+            if cl in ['tb', 'eb']: continue
+            tmp = self.theory.cls[cl]
+            # Check for nan's: may produce a segfault in clik
+            if np.isnan(tmp).any():
+                return
+            self.vector[start:stop] = tmp
+
+        # Fill with likelihood parameters
+        self.vector[self.cumsizes[-1]:] = [params[p] for p in self.nuisance_params]
+        self.loglikelihood = self.clik(self.vector)[0]
+        # "zero" of clik, and sometimes nan's returned
+        if np.allclose(self.loglikelihood, -1e30) or np.isnan(self.loglikelihood):
+            self.loglikelihood = -np.inf
+
+
+class BasePlanck2018ClikLikelihood(BasePlanckClikLikelihood):
+
+    config_fn = 'planck2018_clik.yaml'
+
+    @classmethod
+    def install(cls, installer):
+        for pkg in ['cython', 'astropy']:
+            installer.pip(pkg, no_deps=False, force_reinstall=False, ignore_installed=False)
+        from desilike.install import download, extract, InstallError
+        data_dir = installer.data_dir('Planck2018ClikLikelihood')
+        # Install clik code
+        tar_base = 'COM_Likelihood_Code-v3.0_R3.10.tar.gz'
+        url = 'http://pla.esac.esa.int/pla/aio/product-action?COSMOLOGY.FILE_ID={}'.format(tar_base)
+        tar_fn = os.path.join(data_dir, tar_base)
+        download(url, tar_fn)
+        extract(tar_fn, data_dir)
+
+        def find_src_dir(root):
+            for path, dirs, files in os.walk(root):
+                if 'waf' in files:
+                    return path
+            raise InstallError('clik code not found in {}'.format(root))
+
+        src_dir = find_src_dir(os.path.join(data_dir, 'code'))
+        cwd = os.getcwd()
+        import sys, subprocess
+        os.chdir(src_dir)
+        #installer.write({'pylib_dir': os.path.join(src_dir, 'lib', 'python', 'site-packages'),
+        #                 'bin_dir': os.path.join(src_dir, 'bin'),
+        #                 'dylib_dir': os.path.join(src_dir, 'lib'),
+        #                 'clik_path': src_dir,
+        #                 'clik_data': os.path.join(src_dir, 'share', 'clik')})
+        installer.write({'source': os.path.join(src_dir, 'bin', 'clik_profile.sh')})
+
+        flags = ['--install_all_deps']
+        import sysconfig
+        include_dir, lib_dir = sysconfig.get_config_var('CONFINCLUDEDIR'), sysconfig.get_config_var('LIBDIR')
+        for name in ['cfitsio', 'lapack']:
+            if any(name in fn for fn in os.listdir(lib_dir)):
+                flags += ['--{}_include'.format(name), include_dir, '--{}_lib'.format(name), lib_dir]
+                installer.write({'dylib_dir': lib_dir})
+            else:
+                flags += ['--install_{}'.format(name)]
+
+        result = subprocess.run([sys.executable, 'waf', 'configure'] + flags, capture_output=True, text=True)
+        cls.log_info(result.stdout)
+        error_msg = 'cd {0}\n{1} waf configure\n### and ###\n{1} waf install\n'.format(src_dir, sys.executable)
+        if 'finished successfully' not in result.stdout:
+            print(result.stdout)
+            print(result.stderr)
+            raise InstallError('clik configuration failed, please do:\n' + error_msg)
+        result = subprocess.run([sys.executable, 'waf', 'install'], capture_output=True, text=True)
+        cls.log_info(result.stdout)
+        if 'finished successfully' not in result.stdout:
+            raise InstallError('clik installation failed, please do:\n' + error_msg)
+        os.chdir(cwd)
+        # Install data
+        tar_base = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
+        url = 'http://pla.esac.esa.int/pla/aio/product-action?COSMOLOGY.FILE_ID={}'.format(tar_base)
+        tar_fn = os.path.join(data_dir, tar_base)
+        download(url, tar_fn)
+        extract(tar_fn, data_dir)
+        installer.write({'Planck2018ClikLikelihood': {'data_dir': data_dir}})
+
+
+class TTHighlPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
+    r"""High-$\ell$ temperature-only \textsc{plik} likelihood of Planck's 2018 data release."""
+
+
+class TTTEEEHighlPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
+    r"""High-$\ell$ temperature and polarization \textsc{plik} likelihood of Planck's 2018 data release."""
+
+
+class LensingPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
+    r"""Lensing likelihood of Planck's 2018 data release based on temperature+polarization map-based lensing reconstruction."""
+
+
+class TTLowlPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
+    r"""Low-$\ell$ temperature-only \textsc{plik} likelihood of Planck's 2018 data release."""
+
+
+class EELowlPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
+    r"""Low-$\ell$ temperature and polarization \textsc{plik} likelihood of Planck's 2018 data release."""

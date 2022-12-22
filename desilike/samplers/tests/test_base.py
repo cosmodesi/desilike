@@ -6,7 +6,7 @@ def test_ensemble():
 
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrumMultipoles
-    from desilike.likelihoods import GaussianLikelihood
+    from desilike.likelihoods import ObservablesGaussianLikelihood
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
@@ -15,7 +15,8 @@ def test_ensemble():
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
                                                        data='../../tests/_pk/data.npy', mocks='../../tests/_pk/mock_*.npy', wmatrix='../../tests/_pk/window.npy',
                                                        theory=theory)
-    likelihood = GaussianLikelihood(observables=[observable])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
     for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler]:
         sampler = Sampler(likelihood, save_fn='./_tests/chain_*.npy')
         sampler.run(max_iterations=100, check=True)

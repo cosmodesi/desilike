@@ -352,6 +352,8 @@ class Parameter(BaseClass):
             self.__init__(**basename)
         except TypeError:
             pass
+        else:
+            return
         self._namespace = namespace
         names = str(basename).split(base.namespace_delimiter)
         self._basename, namespace = names[-1], base.namespace_delimiter.join(names[:-1])
@@ -1339,6 +1341,11 @@ class ParameterCollection(BaseParameterCollection):
         """
         self._updated = True
         if not isinstance(item, Parameter):
+            if not isinstance(item, ParameterConfig):
+                try:
+                    item = {'basename': name, **item}
+                except TypeError:
+                    pass
             item = Parameter(item)
         try:
             self.data[name] = item
@@ -1346,7 +1353,7 @@ class ParameterCollection(BaseParameterCollection):
             item_name = str(self._get_name(item))
             if str(name) != item_name:
                 raise KeyError('Parameter {} must be indexed by name (incorrect {})'.format(item_name, name))
-            self.data[self._index_name(name)] = item
+            self.set(item)
 
 
 class ParameterPriorError(Exception):

@@ -7,6 +7,8 @@ from desilike.likelihoods.supernovae import PantheonSNLikelihood
 
 def test_install():
     likelihood = PantheonSNLikelihood()
+    likelihood.params['pantheon.loglikelihood'] = {}
+    likelihood.params['pantheon.logprior'] = {}
     installer = Installer(user=True)
     installer(likelihood)
     likelihood()

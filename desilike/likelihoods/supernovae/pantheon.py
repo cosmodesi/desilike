@@ -12,6 +12,7 @@ class PantheonSNLikelihood(SNLikelihood):
     """Pantheon type Ia supernova sample."""
 
     config_fn = 'pantheon.yaml'
+    installer_section = 'PantheonSNLikelihood'
 
     def initialize(self, *args, **kwargs):
         super(PantheonSNLikelihood, self).initialize(*args, **kwargs)
@@ -47,15 +48,22 @@ class PantheonSNLikelihood(SNLikelihood):
 
     @classmethod
     def install(cls, installer):
-        from desilike.install import download
-        data_dir = installer.data_dir(cls.__name__)
-        github = 'https://raw.githubusercontent.com/dscolnic/Pantheon/master/'
-        for fn in ['full_long.dataset', 'lcparam_full_long.txt', 'lcparam_full_long_zhel.txt', 'sys_full_long.txt']:
-            download(os.path.join(github, fn), os.path.join(data_dir, fn))
+        try:
+            data_dir = installer[cls.installer_section]['data_dir']
+        except KeyError:
+            data_dir = installer.data_dir(cls.installer_section)
+
+        from desilike.install import exists_path, download
+
         config_fn = os.path.join(data_dir, 'full_long.dataset')
-        with open(config_fn, 'r') as file:
-            txt = file.read()
-        txt = txt.replace('/your-path/', '')
-        with open(config_fn, 'w') as file:
-            file.write(txt)
-        installer.write({cls.__name__: {'data_dir': data_dir}})
+
+        if installer.force_reinstall or not exists_path(config_fn):
+            github = 'https://raw.githubusercontent.com/dscolnic/Pantheon/master/'
+            for fn in ['full_long.dataset', 'lcparam_full_long.txt', 'lcparam_full_long_zhel.txt', 'sys_full_long.txt']:
+                download(os.path.join(github, fn), os.path.join(data_dir, fn))
+            with open(config_fn, 'r') as file:
+                txt = file.read()
+            txt = txt.replace('/your-path/', '')
+            with open(config_fn, 'w') as file:
+                file.write(txt)
+            installer.write({cls.__name__: {'data_dir': data_dir}})

@@ -1,4 +1,4 @@
-class: TTHighlPlanck2018ClikLikelihood
+class: TTHighlPlanck2018PlikLikelihood
 
 info:
   version: 0.0.1
@@ -12,15 +12,12 @@ info:
   requirements: []
   long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
 
-init:
-  data_fn: baseline/plc_3.0/hi_l/plik/plik_rd12_HM_v22_TT.clik
-
 params:
-  .import: planck2018_params.yaml::calib,calib_temp,TT,prior_SZ
+  .import: planck2018_clik_params.yaml::calib,calib_temp,TT,prior_SZ
 
 ---
 
-class: TTTEEEHighlPlanck2018ClikLikelihood
+class: TTHighlPlanck2018PlikUnbinnedLikelihood
 
 info:
   version: 0.0.1
@@ -34,11 +31,84 @@ info:
   requirements: []
   long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
 
-init:
-  data_fn: baseline/plc_3.0/hi_l/plik/plik_rd12_HM_v22b_TTTEEE.clik
+params:
+  .import: planck2018_clik_params.yaml::calib,calib_temp,TT,prior_SZ
+
+---
+
+class: TTHighlPlanck2018PlikLiteLikelihood
+
+info:
+  version: 0.0.1
+  date: 10/09/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Planck 2018 release for high-ell, TT+TE+EE power spectrum likelihood, marginalized over the foreground model (plik_lite)
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
 
 params:
-  .import: planck2018_params.yaml::calib,calib_temp,calib_pol,TT,TE,EE,prior_SZ
+  .import: planck2018_clik_params.yaml::calib
+
+---
+
+class: TTTEEEHighlPlanck2018PlikLikelihood
+
+info:
+  version: 0.0.1
+  date: 10/09/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Planck 2018 release for high-ell, TT+TE+EE power spectrum likelihood (plik)
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+params:
+  .import: planck2018_clik_params.yaml::calib,calib_temp,calib_pol,TT,TE,EE,prior_SZ
+
+---
+
+class: TTTEEEHighlPlanck2018PlikUnbinnedLikelihood
+
+info:
+  version: 0.0.1
+  date: 10/09/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Planck 2018 release for high-ell, TT+TE+EE power spectrum likelihood (plik)
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+params:
+  .import: planck2018_clik_params.yaml::calib,calib_temp,calib_pol,TT,TE,EE,prior_SZ
+
+---
+
+class: TTTEEEHighlPlanck2018PlikLiteLikelihood
+
+info:
+  version: 0.0.1
+  date: 10/09/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Planck 2018 release for high-ell, TT+TE+EE power spectrum likelihood, marginalized over the foreground model (plik_lite)
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+params:
+  .import: planck2018_clik_params.yaml::calib
 
 ---
 
@@ -56,11 +126,8 @@ info:
   requirements: []
   long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
 
-init:
-  data_fn: baseline/plc_3.0/lensing/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8.clik_lensing
-
 params:
-  .import: planck2018_params.yaml::calib
+  .import: planck2018_clik_params.yaml::calib
 
 ---
 
@@ -78,11 +145,8 @@ info:
   requirements: []
   long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
 
-init:
-  data_fn: baseline/plc_3.0/low_l/commander/commander_dx12_v3_2_29.clik
-
 params:
-  .import: planck2018_params.yaml::calib
+  .import: planck2018_clik_params.yaml::calib
 
 ---
 
@@ -100,8 +164,5 @@ info:
   requirements: []
   long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
 
-init:
-  data_fn: baseline/plc_3.0/low_l/simall/simall_100x143_offlike5_EE_Aplanck_B.clik
-
 params:
-  .import: planck2018_params.yaml::calib
+  .import: planck2018_clik_params.yaml::calib

@@ -20,7 +20,7 @@ class BaseLikelihood(BaseCalculator):
                 raise ValueError('Several parameters with name {:0} found. Which one is the {:0}?'.format(name))
             param = param[0]
             param.update(derived=True)
-            setattr(self, '_param_{}'.format(param), param)
+            setattr(self, '_param_{}'.format(name), param)
 
     def get(self):
         return self.loglikelihood
@@ -30,7 +30,7 @@ class BaseLikelihood(BaseCalculator):
         if len(others) == 1 and utils.is_sequence(others[0]):
             others = others[0]
         likelihoods = []
-        for likelihood in likelihoods: likelihoods += likelihood.likelihoods
+        for likelihood in others: likelihoods += getattr(likelihood, 'likelihoods', [likelihood])
         return SumLikelihood(likelihoods=likelihoods)
 
     def __add__(self, other):
@@ -275,6 +275,8 @@ class SumLikelihood(BaseLikelihood):
 
             def _solve():
                 return likelihood.loglikelihood
+
+            return _solve
 
         # Deactivate likelihood _solve(), as self._solve() will take care of everything
         for likelihood in self.likelihoods:

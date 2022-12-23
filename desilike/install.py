@@ -41,6 +41,20 @@ def extract(in_fn, out_fn, remove=True):
         os.remove(in_fn)
 
 
+def exists_package(pkgname):
+    try:
+        pkg = __import__(pkgname)
+    except ImportError:
+        return False
+    logger.info('Requirement already satisfied: {} in {}'.format(pkgname, os.path.dirname(os.path.dirname(pkg.__file__))))
+    del pkg
+    return True
+
+
+def exists_path(path):
+    return os.path.exists(path)
+
+
 def pip(pkgindex, pkgname=None, install_dir=None, no_deps=False, force_reinstall=False, ignore_installed=False):
     if not force_reinstall:
         # Check if package already installed (to cope with git-provided package)
@@ -50,13 +64,7 @@ def pip(pkgindex, pkgname=None, install_dir=None, no_deps=False, force_reinstall
                     if pkgname: break
             else:
                 pkgname = pkgindex
-        try:
-            pkg = __import__(pkgname)
-        except ImportError:
-            pass
-        else:
-            logger.info('Requirement already satisfied: {} in {}'.format(pkgname, os.path.dirname(os.path.dirname(pkg.__file__))))
-            return  # already installed
+        if exists_package(pkgname): return
     command = [sys.executable, '-m', 'pip', 'install', pkgindex, '--disable-pip-version-check']
     if install_dir is not None:
         command = ['PYTHONUSERBASE={}'.format(install_dir)] + command + ['--user']
@@ -144,6 +152,9 @@ class Installer(BaseClass):
 
     def get(self, *args, **kwargs):
         return self.config.get(*args, **kwargs)
+
+    def __contains__(self, name):
+        return name in self.config
 
     def __getitem__(self, name):
         return self.get(name)

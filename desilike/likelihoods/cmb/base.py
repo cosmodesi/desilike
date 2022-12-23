@@ -1,5 +1,3 @@
-import os
-
 import numpy as np
 
 from desilike.likelihoods.base import BaseCalculator

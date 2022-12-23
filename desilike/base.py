@@ -48,9 +48,9 @@ class BasePipeline(BaseClass):
         params = ParameterCollectionConfig(params)
         self._params = ParameterCollection()
         for calculator in self.calculators:
-            calculator_params = ParameterCollectionConfig(calculator.runtime_info.params).clone(params)
+            calculator_params = ParameterCollection(ParameterCollectionConfig(calculator.runtime_info.params).clone(params))
             for iparam, param in enumerate(calculator.runtime_info.params):
-                calculator.runtime_info.params[iparam] = param = calculator_params[param]
+                param = calculator.runtime_info.params[iparam] = calculator_params[param]
                 if param in self._params:
                     if param.derived and param.fixed:
                         msg = 'Derived parameter {} of {} is already derived in {}.'.format(param, calculator, params_from_calculator[param.name])
@@ -58,7 +58,7 @@ class BasePipeline(BaseClass):
                             raise PipelineError(msg)
                         elif self.mpicomm.rank == 0:
                             warnings.warn(msg)
-                    elif param != params[param]:
+                    elif param != self._params[param]:
                         raise PipelineError('Parameter {} of {} is different from that of {}.'.format(param, calculator, params_from_calculator[param.name]))
                 params_from_calculator[param.name] = calculator
                 self._params.set(param)

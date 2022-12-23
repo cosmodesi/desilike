@@ -2,16 +2,23 @@ import numpy as np
 
 from desilike import setup_logging
 from desilike.install import Installer
-from desilike.likelihoods.cmb import (TTHighlPlanck2018ClikLikelihood, TTTEEEHighlPlanck2018ClikLikelihood, LensingPlanck2018ClikLikelihood,
-                                      TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood)
+from desilike.likelihoods.cmb import (TTHighlPlanck2018PlikLikelihood, TTHighlPlanck2018PlikLiteLikelihood, TTHighlPlanck2018PlikUnbinnedLikelihood,
+                                      TTTEEEHighlPlanck2018PlikLikelihood, TTTEEEHighlPlanck2018PlikLiteLikelihood, TTTEEEHighlPlanck2018PlikUnbinnedLikelihood,
+                                      LensingPlanck2018ClikLikelihood, TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood)
 
 
 def test_install():
-    likelihood = TTHighlPlanck2018ClikLikelihood()
-    installer = Installer(user=True)
-    installer(likelihood)
-    likelihood()
-    assert np.allclose((likelihood + likelihood)(), 2. * likelihood())
+    for Likelihood in (TTHighlPlanck2018PlikLikelihood, TTHighlPlanck2018PlikLiteLikelihood, TTHighlPlanck2018PlikUnbinnedLikelihood,
+                       TTTEEEHighlPlanck2018PlikLikelihood, TTTEEEHighlPlanck2018PlikLiteLikelihood, TTTEEEHighlPlanck2018PlikUnbinnedLikelihood,
+                       LensingPlanck2018ClikLikelihood, TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood):
+        if 'Unbinned' in Likelihood.__name__: continue
+        if 'Lite' in Likelihood.__name__: continue
+        print(Likelihood.__name__)
+        likelihood = Likelihood()
+        likelihood.params['planck.loglikelihood'] = {}
+        installer = Installer(user=True)
+        installer(likelihood)
+        assert np.allclose((likelihood + likelihood)(), 2. * likelihood())
 
 
 if __name__ == '__main__':

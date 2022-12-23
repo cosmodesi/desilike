@@ -24,12 +24,15 @@ def test_power_spectrum():
                                                        mocks='../../tests/_pk/mock_*.npy', wmatrix='../../tests/_pk/window.npy', shotnoise=1e4,
                                                        theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood.params['pk.loglikelihood'] = {}
+    likelihood.params['pk.logprior'] = {}
     observable()
     #observable.wmatrix.plot(show=True)
     theory.template.update(z=1.)
     observable()
     print(observable.runtime_info.pipeline.varied_params)
     assert theory.template.z == 1.
+    likelihood()
     assert np.allclose((likelihood + likelihood)(), 2. * likelihood())
 
 

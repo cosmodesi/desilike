@@ -7,6 +7,8 @@ from desilike.likelihoods.hubble import Riess2020H0Likelihood
 
 def test_install():
     likelihood = Riess2020H0Likelihood()
+    likelihood.params['riess2020.loglikelihood'] = {}
+    likelihood.params['riess2020.logprior'] = {}
     installer = Installer(user=True)
     installer(likelihood)
     likelihood()

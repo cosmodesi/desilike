@@ -16,6 +16,7 @@ def test_install():
         print(Likelihood.__name__)
         likelihood = Likelihood()
         likelihood.params['planck.loglikelihood'] = {}
+        likelihood.params['planck.logprior'] = {}
         installer = Installer(user=True)
         installer(likelihood)
         assert np.allclose((likelihood + likelihood)(), 2. * likelihood())

@@ -7,7 +7,7 @@ from desilike import utils
 
 class BaseLikelihood(BaseCalculator):
 
-    _attrs = ['loglikelihood']
+    _attrs = ['loglikelihood', 'logprior']
 
     def initialize(self):
         for name in self._attrs:
@@ -23,7 +23,10 @@ class BaseLikelihood(BaseCalculator):
             setattr(self, '_param_{}'.format(name), param)
 
     def get(self):
-        return self.loglikelihood
+        self.logprior = 0.
+        for param in self.varied_params:
+            self.logprior += param.prior(self.pipeline.param_values[param])
+        return self.loglikelihood + self.logprior
 
     @classmethod
     def sum(cls, *others):
@@ -64,9 +67,9 @@ class BaseGaussianLikelihood(BaseLikelihood):
 
     def calculate(self):
         self.flatdiff = self.flattheory - self.flatdata
+        self.loglikelihood = -0.5 * self.flatdiff.dot(self.precision).dot(self.flatdiff)
 
     def get(self):
-        self.loglikelihood = -0.5 * self.flatdiff.dot(self.precision).dot(self.flatdiff)
         return self._solve()
 
     def _solve(self):
@@ -162,7 +165,6 @@ class BaseGaussianLikelihood(BaseLikelihood):
             sum_loglikelihood += 1. / 2. * np.sum(np.log(ip[ip > 0.]))  # logdet
             #sum_loglikelihood -= 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
 
-        toret = sum_logprior + sum_loglikelihood
         self.loglikelihood = sum_loglikelihood
         self.logprior = sum_logprior
 
@@ -176,7 +178,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
 
         self.runtime_info.derived.set(ParameterArray(self.loglikelihood, self._param_loglikelihood))
         self.runtime_info.derived.set(ParameterArray(self.logprior, self._param_logprior))
-        return toret
+        return self.loglikelihood + self.logprior
 
     def __getstate__(self):
         state = {}

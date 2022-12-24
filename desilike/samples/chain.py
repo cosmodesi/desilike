@@ -165,7 +165,7 @@ class Chain(Samples):
                             if lh == 'N': lh = li
                             else: lh = float(lh)
                             limits.append(lh)
-                        params[name.strip()].prior = ParameterPrior(limits=limits)
+                        params[name.strip()].update(prior=ParameterPrior(limits=limits))
             else:
                 self.log_info('Parameter ranges file {} does not exist.'.format(ranges_fn))
 
@@ -265,6 +265,7 @@ class Chain(Samples):
         if params is None: params = self.params(varied=True)
         else: params = [self[param].param for param in params]
         labels = [param.latex() for param in params]
+        print(self.size, self.shape)
         samples = self.to_array(params=params, struct=False).reshape(-1, self.size)
         names = [str(param) for param in params]
         ranges = {param.name: tuple('N' if limit is None or np.abs(limit) == np.inf else limit for limit in param.prior.limits) for param in params}
@@ -388,23 +389,23 @@ class Chain(Samples):
         return var
 
     def std(self, param, ddof=1):
-        return np.std(_reshape(self[param], self.size, current=self.shape), ddof=ddof, axis=0)
+        return np.std(_reshape(self[param], self.size), ddof=ddof, axis=0)
 
     def mean(self, param):
         """Return weighted mean."""
-        return np.average(_reshape(self[param], self.size, current=self.shape), weights=self.weight.ravel(), axis=0)
+        return np.average(_reshape(self[param], self.size), weights=self.weight.ravel(), axis=0)
 
     def argmax(self, param):
         """Return parameter value for maximum of ``cost.``"""
-        return _reshape(self[param], self.size, current=self.shape)[np.argmax(self.logposterior.ravel())]
+        return _reshape(self[param], self.size)[np.argmax(self.logposterior.ravel())]
 
     def median(self, param):
         """Return weighted quantiles."""
-        return utils.weighted_quantile(_reshape(self[param], self.size, current=self.shape), q=0.5, weights=self.weight.ravel(), axis=0)
+        return utils.weighted_quantile(_reshape(self[param], self.size), q=0.5, weights=self.weight.ravel(), axis=0)
 
     def quantile(self, param, q=(0.1587, 0.8413), method='linear'):
         """Return weighted quantiles."""
-        return utils.weighted_quantile(_reshape(self[param], self.size, current=self.shape), q=q, weights=self.weight.ravel(), axis=0, method=method)
+        return utils.weighted_quantile(_reshape(self[param], self.size), q=q, weights=self.weight.ravel(), axis=0, method=method)
 
     def interval(self, param, **kwargs):
         """

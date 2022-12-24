@@ -307,10 +307,10 @@ class Parameter(BaseClass):
     latex : string, default=None
         Latex for parameter.
     """
-    _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'latex', 'depends', 'drop', 'save']
+    _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'latex', 'depends', 'drop', 'save', 'ndim']
     _allowed_solved = ['.best', '.marg', '.auto']
 
-    def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, latex=None, drop=False, save=True):
+    def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, latex=None, drop=False, save=True, ndim=0):
         """
         Initialize :class:`Parameter`.
 
@@ -400,6 +400,7 @@ class Parameter(BaseClass):
         self._fixed = bool(fixed)
         self._save = bool(save)
         self._drop = bool(drop)
+        self._ndim = int(ndim)
         self.updated = True
 
     def eval(self, **values):
@@ -1531,21 +1532,22 @@ class ParameterPrior(BaseClass):
         return type(other) == type(self) and all(getattr(other, key) == getattr(self, key) for key in ['dist', 'limits', 'attrs'])
 
 
-def _reshape(array, shape, current=None):
+def _shape(array):
+    if array.param.ndim:
+        toret = array.shape[:-array.param.ndim]
+    else:
+        toret = array.shape
+    return toret
+
+
+def _reshape(array, shape):
     if np.ndim(shape) == 0:
         shape = (shape, )
     shape = tuple(shape)
-    ashape = array.shape
-    if current is not None:
-        if np.ndim(current) == 0:
-            current = (current, )
-        return array.reshape(shape + ashape[len(current):])
-    for i in range(1, array.ndim + 1):
-        try:
-            return array.reshape(shape + ashape[i:])
-        except ValueError:
-            continue
-    raise ValueError('Cannot match array of shape {} into shape {}'.format(ashape, shape))
+    ndim = array.param.ndim
+    if ndim:
+        return array.reshape(shape + array.shape[-ndim:])
+    return array.reshape(shape)
 
 
 class Samples(BaseParameterCollection):
@@ -1553,13 +1555,12 @@ class Samples(BaseParameterCollection):
     """Class that holds samples drawn from likelihood."""
 
     _type = ParameterArray
-    _attrs = BaseParameterCollection._attrs + ['_enforce']
+    _attrs = BaseParameterCollection._attrs + ['_derived']
     _derived = []
 
-    def __init__(self, data=None, params=None, enforce=None, attrs=None):
+    def __init__(self, data=None, params=None, attrs=None):
         self.attrs = dict(attrs or {})
         self.data = []
-        self._enforce = enforce or {'ndmin': 1}
         if params is not None:
             if len(params) != len(data):
                 raise ValueError('Provide as many parameters as arrays')
@@ -1574,32 +1575,27 @@ class Samples(BaseParameterCollection):
 
     @property
     def shape(self):
-        shapes = [array.shape for array in self.data]
-        if shapes:
-            ndim_max = max(map(len, shapes)) + 1
-            for idim in range(ndim_max):
-                if any(idim >= len(shape) or shape[idim] != shapes[0][idim] for shape in shapes):  # get maximum shared shape
-                    break
-            return shapes[0][:idim]
-        return ()
+        toret = ()
+        for array in self.data:
+            toret = _shape(array)
+            break
+        return toret
 
     @shape.setter
     def shape(self, shape):
         self._reshape(shape)
 
-    def _reshape(self, shape, current=None):
-        if current is None:
-            current = self.shape or None
+    def _reshape(self, shape):
         for array in self:
-            self.set(_reshape(array, shape, current=current))
+            self.set(_reshape(array, shape))
 
-    def reshape(self, *args, current=None):
+    def reshape(self, *args):
         new = self.copy()
         if len(args) == 1:
             shape = args[0]
         else:
             shape = args
-        new._reshape(shape, current=current)
+        new._reshape(shape)
         return new
 
     def ravel(self):
@@ -1636,9 +1632,7 @@ class Samples(BaseParameterCollection):
             if new_names and other_names and set(other_names) != set(new_names):
                 raise ValueError('Cannot concatenate values as parameters do not match: {} != {}.'.format(new_names, other_names))
         for param in new_params:
-            #print(param, [np.atleast_1d(other[param]) for other in others], len(others))
             new[param] = np.concatenate([np.atleast_1d(other[param]) for other in others], axis=0)
-            #print('2', param, new[param], [np.atleast_1d(other[param]) for other in others], len(others))
         return new
 
     def update(self, *args, **kwargs):
@@ -1649,6 +1643,15 @@ class Samples(BaseParameterCollection):
             other = self.__class__(*args, **kwargs)
         for item in other:
             self.set(item)
+
+    def set(self, item):
+        if self.data:
+            shape = self.shape
+        else:
+            shape = _shape(item)
+            if not shape: shape = (1,)
+        item = _reshape(item, shape)
+        super(Samples, self).set(item)
 
     def __setitem__(self, name, item):
         """
@@ -1674,7 +1677,7 @@ class Samples(BaseParameterCollection):
             param = Parameter(name, latex=utils.outputs_to_latex(str(name)) if is_derived else None, derived=is_derived)
             if param in self:
                 param = self[param].param.clone(param)
-            item = ParameterArray(item, param, **self._enforce)
+            item = ParameterArray(item, param)
         try:
             self.data[name] = item  # list index
         except TypeError:

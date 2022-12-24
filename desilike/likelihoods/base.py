@@ -24,8 +24,9 @@ class BaseLikelihood(BaseCalculator):
 
     def get(self):
         self.logprior = 0.
-        for param in self.varied_params:
-            self.logprior += param.prior(self.pipeline.param_values[param])
+        pipeline = self.runtime_info.pipeline
+        for param in pipeline.varied_params:
+            self.logprior += param.prior(pipeline.param_values[param.name])
         return self.loglikelihood + self.logprior
 
     @classmethod

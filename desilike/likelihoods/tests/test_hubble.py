@@ -12,7 +12,7 @@ def test_install():
     installer = Installer(user=True)
     installer(likelihood)
     likelihood()
-    assert np.allclose((likelihood + likelihood)(), 2. * likelihood())
+    assert np.allclose((likelihood + likelihood)(), 2. * likelihood() - likelihood.logprior)
 
 
 if __name__ == '__main__':

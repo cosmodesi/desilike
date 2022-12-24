@@ -33,7 +33,7 @@ def test_power_spectrum():
     print(observable.runtime_info.pipeline.varied_params)
     assert theory.template.z == 1.
     likelihood()
-    assert np.allclose((likelihood + likelihood)(), 2. * likelihood())
+    assert np.allclose((likelihood + likelihood)(), 2. * likelihood() - likelihood.logprior)
 
 
 def test_correlation_function():

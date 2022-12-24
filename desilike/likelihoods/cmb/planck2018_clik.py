@@ -53,7 +53,7 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
             theory = ClTheory()
         self.theory = theory
         self.theory.update(cls=cls, lensing=True, unit='muK')
-        basenames = [param.basename for param in self.params if not param.drop and param.name != self._param_loglikelihood.name]
+        basenames = [param.basename for param in self.params if not param.drop and param.name not in (self._param_loglikelihood.name, self._param_logprior.name)]
         if set(basenames) != set(self.nuisance_params):
             raise ValueError('Expected nuisance parameters {}, received {}'.format(self.nuisance_params, basenames))
 

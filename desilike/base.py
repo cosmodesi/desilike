@@ -45,10 +45,10 @@ class BasePipeline(BaseClass):
 
     def _set_params(self, params=None):
         params_from_calculator = {}
-        params = ParameterCollectionConfig(params)
+        params = ParameterCollectionConfig(params, identifier='name')
         self._params = ParameterCollection()
         for calculator in self.calculators:
-            calculator_params = ParameterCollection(ParameterCollectionConfig(calculator.runtime_info.params).clone(params))
+            calculator_params = ParameterCollection(ParameterCollectionConfig(calculator.runtime_info.params, identifier='name').clone(params))
             for iparam, param in enumerate(calculator.runtime_info.params):
                 param = calculator.runtime_info.params[iparam] = calculator_params[param]
                 if param in self._params:
@@ -164,7 +164,7 @@ class BasePipeline(BaseClass):
             derived = {}
             for state in states:
                 derived.update(state)
-            derived = Samples.concatenate([derived[i][None, ...] for i in range(cumsizes[-1])]).reshape(cshape, current=len(cumsizes))
+            derived = Samples.concatenate([derived[i] for i in range(cumsizes[-1])]).reshape(cshape)
         self.derived = derived
 
     def get_cosmo_requires(self):
@@ -464,7 +464,9 @@ class RuntimeInfo(BaseClass):
                     name = param.basename
                     if name in state: value = state[name]
                     else: value = getattr(self.calculator, name)
-                    self._derived.set(ParameterArray(np.asarray(value), param=param))
+                    value = np.asarray(value)
+                    param._ndim = value.ndim  # a bit hacky, but no need to update parameters for this...
+                    self._derived.set(ParameterArray(value, param=param))
         return self._derived
 
     @property

@@ -10,7 +10,7 @@ def get_profiles(params):
     profiles = Profiles()
     profiles.set(start=Samples([0. for param in params], params=params))
     params = profiles.start.params()
-    for param in params: param.fixed = False
+    for param in params: param.update(fixed=False)
     profiles.set(bestfit=ParameterBestFit([rng.normal(0., 0.1) for param in params] + [-0.5], params=params + ['logposterior']))
     profiles.set(error=Samples([0.5 for param in params], params=params))
     profiles.set(covariance=ParameterCovariance(np.eye(len(params)), params=params))

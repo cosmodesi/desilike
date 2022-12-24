@@ -76,20 +76,21 @@ def test_likelihood():
     theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
 
     from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrumMultipoles
-    from desilike.likelihoods import GaussianLikelihood
+    from desilike.likelihoods import ObservablesGaussianLikelihood
     kwargs = dict(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
                   data='../../tests/_pk/data.npy', mocks='../../tests/_pk/mock_*.npy', wmatrix='../../tests/_pk/window.npy')
     observable = ObservedTracerPowerSpectrumMultipoles(theory=theory, **kwargs)
-    likelihood = GaussianLikelihood(observables=[observable])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()  # needed to set everything up
 
     emulator = Emulator(theory, engine=TaylorEmulatorEngine(order=2))
     emulator.set_samples()
     emulator.fit()
+    emulator.check(frac=1.)
     theory = emulator.to_calculator()
 
     observable = ObservedTracerPowerSpectrumMultipoles(theory=theory, **kwargs)
-    likelihood2 = GaussianLikelihood(observables=[observable])
+    likelihood2 = ObservablesGaussianLikelihood(observables=[observable])
 
     for param in likelihood.varied_params:
         for scale in [-0.1, 0.1]:

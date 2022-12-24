@@ -202,8 +202,10 @@ class Emulator(BaseClass):
         if derived is not None:
             for param in derived:
                 param = Parameter(param, derived=True)
-                if param not in params:
-                    params.set(param)
+                # Remove derived parameters with same basename
+                for dparam in params.select(derived=True, solved=False, depends={}):
+                    if dparam.basename == param.basename: del params[dparam]
+                params.set(param)
         calculator.params = params
         _setstate(calculator, self.fixed)
         return calculator

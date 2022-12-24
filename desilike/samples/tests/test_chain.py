@@ -17,8 +17,7 @@ def get_chain(params, nwalkers=4, size=4000, seed=42):
     logposterior = -0.5 * np.sum(diff.dot(invcov) * diff, axis=-1)
     chain = Chain(list(array.T) + [logposterior], params=params + ['logposterior'])
     for iparam, param in enumerate(chain.params(derived=False)):
-        param.fixed = False
-        param.value = mean[iparam]
+        param.update(fixed=False, value=mean[iparam])
     return mean, cov, chain
 
 
@@ -28,11 +27,10 @@ def test_misc():
     params = ['like.a', 'like.b', 'like.c', 'like.d']
     mean, cov, chain = get_chain(params, nwalkers=10)
 
-    chain['like.a'].param.latex = 'a'
-    chain['like.a'].param.prior = ParameterPrior(limits=(-10., 10.))
+    chain['like.a'].param.update(latex='a', prior=ParameterPrior(limits=(-10., 10.)))
     assert isinstance(list(chain), list)
     pb = chain['like.b'].param
-    pb.prior = ParameterPrior(dist='norm', loc=1., limits=(-10., 10.))
+    pb.update(prior=ParameterPrior(dist='norm', loc=1., limits=(-10., 10.)))
     pb = Parameter.from_state(pb.__getstate__())
     chain['logposterior'] = np.zeros(chain.shape, dtype='f8')
     fn = os.path.join(chain_dir, 'chain.npy')
@@ -44,7 +42,7 @@ def test_misc():
     chain.interval('like.a')
     chain2 = chain.deepcopy()
     chain['like.a'] += 1
-    chain2['like.a'].param.latex = 'answer'
+    chain2['like.a'].param.update(latex='answer')
     assert np.allclose(chain2['like.a'], chain['like.a'] - 1)
     assert chain2['like.a'].param.latex() != chain['like.a'].param.latex()
     size = chain2.size * 2
@@ -53,7 +51,7 @@ def test_misc():
     assert chain == chain
     chain.bcast(chain)
     chain.sendrecv(chain, source=0, dest=0)
-    chain['like.a'].param.fixed = False
+    chain['like.a'].param.update(fixed=False)
     assert not chain[4:10]['like.a'].param.fixed
     assert not chain.concatenate(chain, chain)['like.a'].param.fixed
     assert np.all(chain.match(chain) == np.arange(len(chain)))

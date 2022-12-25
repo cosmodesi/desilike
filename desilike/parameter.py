@@ -307,10 +307,10 @@ class Parameter(BaseClass):
     latex : string, default=None
         Latex for parameter.
     """
-    _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'latex', 'depends', 'drop', 'save', 'ndim']
+    _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'latex', 'depends', 'ndim']
     _allowed_solved = ['.best', '.marg', '.auto']
 
-    def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, latex=None, drop=False, save=True, ndim=0):
+    def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, latex=None, ndim=0):
         """
         Initialize :class:`Parameter`.
 
@@ -398,8 +398,6 @@ class Parameter(BaseClass):
         if fixed is None:
             fixed = prior is None and ref is None and not self.depends
         self._fixed = bool(fixed)
-        self._save = bool(save)
-        self._drop = bool(drop)
         self._ndim = int(ndim)
         self.updated = True
 
@@ -408,7 +406,7 @@ class Parameter(BaseClass):
             try:
                 values = {k: values[n] for k, n in self._depends.items()}
             except KeyError:
-                raise ParameterError('Parameter {} is derived from {}, following {}'.format(self, list(self._depends.values()), self.derived))
+                raise ParameterError('Parameter {} is to be derived from parameters {}, as {}, but they are not provided'.format(self, list(self._depends.values()), self.derived))
             return utils.evaluate(self._derived, locals=values)
         return values[self.name]
 
@@ -929,13 +927,8 @@ class ParameterConfig(NamespaceDict):
                     value = {**self[name], 'rescale': value['rescale']}
                 self[name] = copy.copy(value)
 
-    def is_in_derived(self, name):
-        if self.get('derived', False) and isinstance(self.derived, str) and self.derived not in Parameter._allowed_solved:
-            return '{{{}}}'.format(str(name)) in self.derived
-        return
-
     def update_derived(self, oldname, newname):
-        if self.is_in_derived(oldname):
+        if self.get('derived', False) and isinstance(self.derived, str) and self.derived not in Parameter._allowed_solved:
             self.derived = self.derived.replace('{{{}}}'.format(str(oldname)), '{{{}}}'.format(str(newname)))
 
     @property
@@ -1100,7 +1093,7 @@ class ParameterCollectionConfig(BaseParameterCollection):
 
         for conf in other.wildcard:
             for tmpconf in self.select(**{self.identifier: conf[self.identifier]}):
-                self[tmpconf[self.identifier]] = tmpconf.clone(conf, exclude=(self.identifier,))
+                self[tmpconf[self.identifier]] = tmpconf.clone(conf, exclude=('basename',))
 
         for conf in other:
             new = self.pop(conf[self.identifier], ParameterConfig()).clone(conf)
@@ -1128,10 +1121,6 @@ class ParameterCollectionConfig(BaseParameterCollection):
                     dparam.update_derived(param.basename, param.name)
                 #self.namespace.pop(name, None)
                 #self.namespace[name] = namespace
-        for name, param in new.items():
-            if param.get('drop', None):
-                if any(p.is_in_derived(param) for p in new):
-                    param.drop = True
         return new
 
     def init(self, namespace=None):
@@ -1168,7 +1157,7 @@ class ParameterCollectionConfig(BaseParameterCollection):
         except TypeError:
             item_name = str(self._get_name(item))
             if str(name) != item_name:
-                raise KeyError('Parameter {} must be indexed by name (incorrect {})'.format(item_name, name))
+                raise KeyError('Parameter {} must be indexed by name (incorrect name {})'.format(item_name, name))
             self.data[self._index_name(name)] = item
 
 
@@ -1410,7 +1399,9 @@ class ParameterPrior(BaseClass):
             raise ParameterPriorError('ParameterPrior range {} has min greater than max'.format(limits))
         self.limits = limits
         self.dist = dist.lower()
-        self.attrs = kwargs
+        self.attrs = dict(kwargs)
+        for name, value in self.attrs.items():
+            if name in ['loc', 'scale', 'a', 'b']: self.attrs[name] = float(value)
 
         # improper prior
         if self.dist == 'uniform' and np.isinf(self.limits).any():
@@ -1421,7 +1412,7 @@ class ParameterPrior(BaseClass):
             if self.dist == 'uniform':
                 self.rv = dist(self.limits[0], self.limits[1] - self.limits[0])
             else:
-                loc, scale = kwargs.get('loc', 0.), kwargs.get('scale', 1.)
+                loc, scale = self.attrs.get('loc', 0.), self.attrs.get('scale', 1.)
                 # See notes of https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.truncnorm.html
                 limits = tuple((lim - loc) / scale for lim in limits)
                 self.rv = dist(*limits, **kwargs)
@@ -1524,8 +1515,7 @@ class ParameterPrior(BaseClass):
             attrs = object.__getattribute__(self, 'attrs')
             if name in attrs:
                 return attrs[name]
-            else:
-                raise exc
+            raise exc
 
     def __eq__(self, other):
         """Is ``self`` equal to ``other``, i.e. same type and attributes?"""

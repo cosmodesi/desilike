@@ -80,8 +80,7 @@ def test_likelihood():
     template = BAOPowerSpectrumTemplate(z=1.)
     theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
     for param in theory.params.select(basename=['sigma*', 'al*_-3', 'al*_-2']):
-        param.value = 0.
-        param.fixed = True
+        param.update(value=0., fixed=True)
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.08, 0.2]}, kstep=0.01,
                                                        data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                        theory=theory)
@@ -112,8 +111,7 @@ def test_likelihood():
 
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    for param in theory.params.select(basename=['alpha*', 'sn*']):
-        param.derived = '.best'
+    for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.18]}, kstep=0.01,
                                                        data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                        theory=theory)
@@ -164,8 +162,14 @@ def test_params():
                                                        theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood.all_params = {'sn0': {'derived': '.marg'}}
-    likelihood()
+    likelihood(b1=1.5)
+    bak = likelihood.loglikelihood
     print(likelihood.varied_params)
+    likelihood.all_params['b1'].update(derived='{b}**2', prior=None)
+    likelihood.all_params['b'] = {'prior': {'limits': [0., 2.]}}
+    print(likelihood.varied_params)
+    likelihood(b=1.5**0.5)
+    assert np.allclose(likelihood.loglikelihood, bak)
 
 
 def test_cosmo():
@@ -189,7 +193,7 @@ def test_install():
 
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     for param in theory.params.select(basename=['alpha*', 'sn*']):
-        param.derived = '.best'
+        param.update(derived='.best')
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.18]}, kstep=0.01,
                                                        data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                        theory=theory)

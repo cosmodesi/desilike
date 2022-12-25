@@ -41,17 +41,18 @@ class BasePipeline(BaseClass):
         self.mpicomm = calculator.mpicomm
         for calculator in self.calculators:
             calculator.runtime_info.tocalculate = True
+        self._params = ParameterCollection()
         self._set_params()
 
     def _set_params(self, params=None):
         params_from_calculator = {}
         params = ParameterCollectionConfig(params, identifier='name')
-        self._params = ParameterCollection()
+        new_params = ParameterCollection()
         for calculator in self.calculators:
             calculator_params = ParameterCollection(ParameterCollectionConfig(calculator.runtime_info.params, identifier='name').clone(params))
             for iparam, param in enumerate(calculator.runtime_info.params):
                 param = calculator.runtime_info.params[iparam] = calculator_params[param]
-                if param in self._params:
+                if param in new_params:
                     if param.derived and param.fixed:
                         msg = 'Derived parameter {} of {} is already derived in {}.'.format(param, calculator, params_from_calculator[param.name])
                         if param.basename not in calculator.runtime_info.derived_auto and param.basename not in params_from_calculator[param.name].runtime_info.derived_auto:
@@ -61,14 +62,22 @@ class BasePipeline(BaseClass):
                     elif param != self._params[param]:
                         raise PipelineError('Parameter {} of {} is different from that of {}.'.format(param, calculator, params_from_calculator[param.name]))
                 params_from_calculator[param.name] = calculator
-                self._params.set(param)
-        self.derived = None
-        self._params.updated = False
-        for param in params:
-            if param not in self._params:
+                new_params.set(param)
+        for param in ParameterCollection(params):
+            if any(param.name in p.depends.values() for p in new_params):
+                new_params.set(param)
+            if param not in new_params:
                 raise PipelineError('Cannot attribute parameter {} to any calculator'.format(param))
+        for param in self._params:
+            if param not in new_params:
+                # Add in previous parameters to be dropped
+                if any(param.name in p.depends.values() for p in new_params):
+                    new_params.set(param)
+        self._params = new_params
+        self._params.updated = False
         self._varied_params = self._params.select(varied=True, derived=False)
         self.param_values = {param.name: param.value for param in self._params}
+        self.derived = None
 
     @property
     def params(self):
@@ -122,6 +131,8 @@ class BasePipeline(BaseClass):
         self.param_values.update(params)
         params = self.eval_params(params)
         self.derived = Samples()
+        for param in self.params:
+            if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
         for icalc, calculator in enumerate(self.calculators):  # start by first calculator
             runtime_info = calculator.runtime_info
             # print(calculator.__class__.__name__, runtime_info._param_values)
@@ -129,8 +140,6 @@ class BasePipeline(BaseClass):
             # print(calculator.__class__.__name__, runtime_info.tocalculate, runtime_info._param_values, params)
             result = runtime_info.calculate()
             self.derived.update(runtime_info.derived)
-        for param in self.params:
-            if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
         return result
 
     def mpicalculate(self, **params):
@@ -264,7 +273,6 @@ class BasePipeline(BaseClass):
                     param = Parameter(name, namespace=calculator.runtime_info.namespace, derived=True)
                     calculator.runtime_info.params.set(param)
                     calculator.runtime_info.params = calculator.runtime_info.params
-        self._params = None
         self._set_params()
         return calculators, fixed, varied
 
@@ -449,8 +457,8 @@ class RuntimeInfo(BaseClass):
         self._params = ParameterCollection(params)
         self._params.updated = False
         self.base_params = {param.basename: param for param in self._params}
-        self.varied_params = ParameterCollection([param for param in self._params if (not param.drop) and (param.depends or (not param.derived) or param.solved)])
-        self.derived_params = self._params.select(derived=True, solved=False, depends={})
+        self.varied_params = ParameterCollection([param for param in self._params if (param.depends or (not param.derived) or param.solved)])
+        self.derived_params = self._params.select(derived=True)
         self.solved_params = self._params.select(solved=True)
         self.param_values = {param.basename: param.value for param in self.varied_params}
 

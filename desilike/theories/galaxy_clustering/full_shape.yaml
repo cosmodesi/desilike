@@ -134,7 +134,7 @@ params:
       scale: 1e7
     ref:
       dist: norm
-      loc: 0
+      loc: 0.
       scale: 50.
     latex: s_{n, []}
 
@@ -214,7 +214,7 @@ params:
       scale: 1000.
     ref:
       dist: norm
-      loc: 0
+      loc: 0.
       scale: 50.
     latex: s_{n, []}
 

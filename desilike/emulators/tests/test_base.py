@@ -12,6 +12,8 @@ def test_base():
 
     for Template in [FullPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate]:
         calculator = KaiserTracerPowerSpectrumMultipoles(template=Template())
+        calculator.all_params['b1'].update(derived='{b}**2', prior=None)
+        calculator.all_params['b'] = {'prior': {'limits': [0., 2.]}}
 
         emulator = Emulator(calculator, engine='point')
         emulator.set_samples()
@@ -21,8 +23,9 @@ def test_base():
 
         emulator = EmulatedCalculator.load(fn)
         emulator.runtime_info.initialize()
-        print(emulator.runtime_info.varied_params)
-        print(emulator.runtime_info.param_values)
+        #print(emulator.runtime_info.varied_params)
+        #print(emulator.runtime_info.param_values)
+        print(emulator.varied_params, emulator.all_params)
         print(emulator.runtime_info.pipeline.get_cosmo_requires())
         emulator()
         #print(emulator.params, emulator.runtime_info.init[2], emulator.runtime_info.params)

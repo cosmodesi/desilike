@@ -171,8 +171,8 @@ class BaseGaussianLikelihood(BaseLikelihood):
 
         for param in all_params:
             if param.varied and not param.solved:
-                if param.derived and not param.drop:
-                    array = self.derived[param]
+                if param.derived:
+                    array = pipeline.derived[param]
                     self.logprior += array.param.prior(array)
                 else:
                     self.logprior += param.prior(pipeline.param_values[param.name])

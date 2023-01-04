@@ -64,7 +64,7 @@ class Cosmoprimo(BasePrimordialCosmology):
     def __getattr__(self, name):
         if 'cosmo' in self.__dict__:
             return get_from_cosmo(self.cosmo, name)
-        raise AttributeError('{} has not attribute {}'.format(self, name))
+        raise AttributeError('{} has not attribute {}; try calling it first?'.format(self, name))
 
     @classmethod
     def install(cls, installer):

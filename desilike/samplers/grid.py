@@ -3,7 +3,7 @@ import itertools
 import numpy as np
 
 from desilike.parameter import ParameterPriorError, Samples
-from desilike.utils import BaseClass
+from desilike.utils import BaseClass, expand_dict
 from .base import RegisteredSampler
 
 
@@ -11,29 +11,14 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
 
     name = 'grid'
 
-    def __init__(self, calculator, mpicomm=None, ngrid=3, ref_scale=1., sphere=None, save_fn=None):
+    def __init__(self, calculator, mpicomm=None, save_fn=None, **kwargs):
         self.pipeline = calculator.runtime_info.pipeline
         if mpicomm is None:
             mpicomm = calculator.mpicomm
         self.mpicomm = mpicomm
         self.varied_params = self.pipeline.varied_params
-        self.ref_scale = float(ref_scale)
-        self.sphere = sphere
-        for name, item in zip(['ngrid', 'sphere'], [ngrid] + ([sphere] if sphere is not None else [])):
-            if not isinstance(item, dict):
-                item = {'*': item}
-            tmp = {str(param): None for param in self.varied_params}
-            for template, value in item.items():
-                for tmpname in self.varied_params.names(name=template):
-                    tmp[tmpname] = int(value)
-            for param, value in tmp.items():
-                if value is None:
-                    raise ValueError('{} not specified for parameter {}'.format(name, param))
-                elif value < 1:
-                    raise ValueError('{} is {:d} < 1 for parameter {}'.format(name, value, param))
-            tmp = [tmp[str(param)] for param in self.varied_params]
-            setattr(self, name, tmp)
         self.save_fn = save_fn
+        self.set_grid(**kwargs)
 
     @property
     def mpicomm(self):
@@ -43,53 +28,67 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
     def mpicomm(self, mpicomm):
         self.pipeline.mpicomm = mpicomm
 
-    def run(self):
-        if self.mpicomm.rank == 0:
-            grid = []
-            for iparam, (param, ngrid) in enumerate(zip(self.varied_params, self.ngrid)):
-                ngrid = self.ngrid[iparam]
-                if ngrid == 1:
-                    grid.append(np.array(param.value))
+    def set_grid(self, grid=None, size=1, ref_scale=1., sphere=None):
+        self.ref_scale = float(ref_scale)
+        self.sphere = sphere
+        self.grid = expand_dict(grid, self.varied_params.names())
+        for name, item in zip(['size', 'sphere'], [size] + ([sphere] if sphere is not None else [])):
+            tmp = expand_dict(item, self.varied_params.names())
+            for param, value in tmp.items():
+                if value is None:
+                    if name != 'size' or self.grid[param] is None:
+                        raise ValueError('{} not specified for parameter {}'.format(name, param))
+                value = int(value)
+                if name == 'size' and value < 1:
+                    raise ValueError('{} is {} < 1 for parameter {}'.format(name, value, param))
+                tmp[param] = value
+            tmp = [tmp[param] for param in self.varied_params.names()]
+            setattr(self, name, tmp)
+        for iparam, (param, size) in enumerate(zip(self.varied_params, self.size)):
+            grid = self.grid[param.name]
+            if grid is None:
+                if size == 1:
+                    grid = [param.value]
                 elif param.ref.is_limited() and not hasattr(param.ref, 'scale'):
                     limits = np.array(param.ref.limits)
                     center = param.value
                     limits = self.ref_scale * (limits - center) + center
-                    low, high = np.linspace(limits[0], center, ngrid // 2 + 1), np.linspace(center, limits[1], ngrid // 2 + 1)
-                    if ngrid % 2:
-                        tmp = np.concatenate([low, high[1:]])
+                    low, high = np.linspace(limits[0], center, size // 2 + 1), np.linspace(center, limits[1], size // 2 + 1)
+                    if size % 2:
+                        grid = np.concatenate([low, high[1:]])
                     else:
-                        tmp = np.concatenate([low[:-1], high[1:]])
-                    if not np.all(np.diff(tmp) > 0):
+                        grid = np.concatenate([low[:-1], high[1:]])
+                    if not np.all(np.diff(grid) > 0):
                         raise ParameterPriorError('Parameter {} value {} is not in reference limits {}'.format(param, param.value, param.ref.limits))
-                    grid.append(tmp)
                 elif param.proposal:
-                    grid.append(np.linspace(param.value - self.ref_scale * param.proposal, param.value + self.ref_scale * param.proposal, ngrid))
+                    grid = np.linspace(param.value - self.ref_scale * param.proposal, param.value + self.ref_scale * param.proposal, size)
                 else:
                     raise ParameterPriorError('Provide parameter limited reference distribution or proposal')
+            self.grid[param.name] = np.array(grid)
+        self.grid = [self.grid[param] for param in self.varied_params.names()]
+        self.samples = None
+        if self.mpicomm.rank == 0:
             if self.sphere:
-                ndim = len(grid)
-                if any(len(g) % 2 == 0 for g in grid):
+                ndim = len(self.grid)
+                if any(len(g) % 2 == 0 for g in self.grid):
                     raise ValueError('Number of grid points along each axis must be odd to use sphere option')
                 samples = []
-                cidx = [len(g) // 2 for g in grid]
-                samples.append([g[c] for g, c in zip(grid, cidx)])
+                cidx = [len(g) // 2 for g in self.grid]
+                samples.append([g[c] for g, c in zip(self.grid, cidx)])
                 for ngrid in range(1, max(self.sphere) + 1):
                     for indices in itertools.product(range(ndim), repeat=ngrid):
                         indices = np.bincount(indices, minlength=ndim)
                         if all(i <= c for c, i in zip(cidx, indices)) and sum(indices) <= min(s for s, i in zip(self.sphere, indices) if i):
                             for signs in itertools.product(*[[-1, 1] if ind else [0] for ind in indices]):
-                                samples.append([g[c + s * i] for g, c, s, i in zip(grid, cidx, signs, indices)])
-                #for indices, values in zip(itertools.product(*igrid), itertools.product(*grid)):
-                #    if self.sphere and sum(indices) > min([self.sphere[ii] for ii, ngrid in enumerate(self.ngrid) if indices[ii]] or [0]):
-                #        continue
-                #    samples.append(values)
+                                samples.append([g[c + s * i] for g, c, s, i in zip(self.grid, cidx, signs, indices)])
                 samples = np.array(samples).T
             else:
-                samples = np.meshgrid(*grid, indexing='ij')
-            samples = Samples(samples, params=self.varied_params)
-            samples.attrs['ngrid'] = self.ngrid
+                samples = np.meshgrid(*self.grid, indexing='ij')
+            self.samples = Samples(samples, params=self.varied_params)
 
-        self.pipeline.mpicalculate(**(samples.to_dict() if self.mpicomm.rank == 0 else {}))
+    def run(self, **kwargs):
+        if kwargs: self.set_grid(**kwargs)
+        self.pipeline.mpicalculate(**(self.samples.to_dict(params=self.varied_params) if self.mpicomm.rank == 0 else {}))
 
         if self.mpicomm.rank == 0:
             for param in self.pipeline.params.select(fixed=True, derived=False):

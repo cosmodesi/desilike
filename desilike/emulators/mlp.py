@@ -1,7 +1,7 @@
 import numpy as np
 
 from desilike import utils
-from desilike.utils import jnp
+from desilike.jax import numpy as jnp
 from .base import BaseEmulatorEngine
 from desilike import mpi
 
@@ -34,15 +34,17 @@ class MLPEmulatorEngine(BaseEmulatorEngine):
 
     name = 'mlp'
 
-    def initialize(self, varied_params, nhidden=(100, 100, 100), ytransform='', npcs=None):
+    def initialize(self, varied_params, nhidden=(100, 100, 100), ytransform='', npcs=None, engine='rqrs', niterations=int(1e5)):
         self.nhidden = tuple(nhidden)
         self.npcs = npcs
         self.ytransform = str(ytransform)
+        self.sampler_options = dict(engine=engine, niterations=niterations)
 
-    def get_default_samples(self, calculator, engine='rqrs', niterations=int(1e5)):
+    def get_default_samples(self, calculator, **kwargs):
         from desilike.samplers import QMCSampler
-        sampler = QMCSampler(calculator, engine=engine)
-        sampler.run(niterations=niterations)
+        options = {**self.sampler_options, **kwargs}
+        sampler = QMCSampler(calculator, engine=options['engine'], mpicomm=self.mpicomm)
+        sampler.run(niterations=options['niterations'])
         return sampler.samples
 
     def fit(self, X, Y, validation_frac=0.2, optimizer='adam', batch_sizes=(320, 640, 1280, 2560, 5120), epochs=1000, learning_rates=(1e-2, 1e-3, 1e-4, 1e-5, 1e-6), seed=None):

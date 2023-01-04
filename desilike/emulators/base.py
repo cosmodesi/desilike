@@ -4,9 +4,10 @@ import numpy as np
 
 from desilike import utils, plotting
 from desilike.base import BaseCalculator
-from desilike.utils import BaseClass, OrderedSet, serialize_class, import_class, jnp
+from desilike.jax import numpy as jnp
+from desilike.utils import BaseClass, serialize_class, import_class, expand_dict
 from desilike.io import BaseConfig
-from desilike.parameter import Parameter, ParameterArray, Samples, ParameterCollection, ParameterConfig, find_names
+from desilike.parameter import Parameter, ParameterArray, Samples, ParameterCollection, ParameterConfig
 
 
 def find_uniques(li):
@@ -30,9 +31,8 @@ def get_subsamples(samples, frac=1., nmax=np.inf, seed=42, mpicomm=None):
 
 
 def _setstate(self, state):
-    calc_state = {name: value for name, value in state.items() if name in self.emulator.in_calculator}
     self.__dict__.update(state)
-    self.__setstate__(calc_state)
+    self.__setstate__({name: value for name, value in state.items() if name in self.emulator.in_calculator_state})
 
 
 class EmulatedCalculator(BaseCalculator):
@@ -62,26 +62,21 @@ class Emulator(BaseClass):
         self.pipeline = self.calculator.runtime_info.pipeline
 
         self.params = self.pipeline.params.deepcopy()
-        self.varied_params = self.params.names(varied=True, derived=False)
+        self.varied_params = self.pipeline.varied_params.names()
         if not self.varied_params:
             raise ValueError('No parameters to be varied!')
 
-        calculators = []
-        for calculator in self.pipeline.calculators:
-            if calculator.runtime_info.derived_params and calculator is not self.calculator:
-                calculators.append(calculator)
-
-        self.calculator.runtime_info.derived_auto = OrderedSet('.fixed', '.varied')
-        calculators.append(self.calculator)
-        calculators, fixed, varied = self.pipeline._set_derived_auto(calculators)
-        self.fixed, self.varied = {}, OrderedSet()
+        calculators, fixed, varied = self.pipeline._classify_derived(self.pipeline.calculators)
+        self.pipeline._set_derived(calculators[-1:], params=varied[-1:])
+        self.fixed, self.varied = {}, {}
 
         for cc, ff, vv in zip(calculators, fixed, varied):
             bp = cc.runtime_info.base_params
             self.fixed.update({k: v for k, v in ff.items() if k in bp and bp[k].derived})
-            self.varied |= OrderedSet(k for k in vv if k in bp and bp[k].derived)
-        self.in_calculator = set(ff.keys()) | set(vv)
+            self.varied.update({k: None for k in vv if k in bp and bp[k].derived})
         self.varied = list(self.varied)
+
+        self.in_calculator_state = list((set(self.fixed) | set(self.varied)) & set(self.calculator.__getstate__()))
 
         if mpicomm.rank == 0:
             self.log_info('Varied parameters: {}.'.format(self.varied_params))
@@ -90,14 +85,11 @@ class Emulator(BaseClass):
         # Add in cosmo_requires
         self.fixed['cosmo_requires'] = self.calculator.runtime_info.pipeline.get_cosmo_requires()
 
-        if not isinstance(engine, dict):
+        if not hasattr(engine, 'items'):
             engine = {'*': engine}
-
-        self.engines = {name: None for name in self.varied}
         for template, engine in engine.items():
             engine = get_engine(engine)
-            for tmpname in find_names(self.varied, template):
-                self.engines[tmpname] = engine
+        self.engines = expand_dict(engine, self.varied)
         for name, engine in self.engines.items():
             if engine is None:
                 raise ValueError('Engine not specified for varying attribute {}'.format(name))
@@ -148,7 +140,7 @@ class Emulator(BaseClass):
         tmp = None
         if self.mpicomm.rank == 0:
             tmp = Samples(attrs=samples.attrs)
-            for param in self.pipeline.params.select(varied=True, derived=False):
+            for param in self.pipeline.varied_params:
                 tmp.set(ParameterArray(samples[param], param=param))
             for param in self.pipeline.params.select(name=list(self.engines.keys()), derived=True):
                 tmp.set(ParameterArray(samples[param], param=param))
@@ -163,9 +155,9 @@ class Emulator(BaseClass):
             if self.mpicomm.rank == 0:
                 nsamples = samples.size
                 X = np.concatenate([samples[name].reshape(nsamples, 1) for name in self.varied_params], axis=-1)
-                self.varied_shape[name] = samples[yname].shape[samples.ndim:]
+                self.varied_shape[yname] = samples[yname].shape[samples.ndim:]
                 Y = samples[yname].reshape(nsamples, -1)
-            self.varied_shape[name] = self.mpicomm.bcast(self.varied_shape[name], root=0)
+            self.varied_shape[yname] = self.mpicomm.bcast(self.varied_shape[yname], root=0)
             return X, Y
 
         if name is None:
@@ -197,16 +189,10 @@ class Emulator(BaseClass):
 
         calculator = new_cls()
         calculator.emulator = self
-        params = self.params.deepcopy()
-        if derived is not None:
-            for param in derived:
-                param = Parameter(param, derived=True)
-                # Remove derived parameters with same basename
-                for dparam in params.select(derived=True):
-                    if dparam.basename == param.basename: del params[dparam]
-                params.set(param)
-        calculator.params = params
+        calculator.params = self.params.deepcopy()
         _setstate(calculator, self.fixed)
+        if derived is not None:
+            calculator.runtime_info.pipeline._set_derived([calculator], params=[derived])
         return calculator
 
     def check(self, mse_stop=None, diagnostics=None, frac=0.1, **kwargs):
@@ -303,7 +289,7 @@ class Emulator(BaseClass):
         state = {'engines': {}}
         for name, engine in self.engines.items():
             state['engines'][name] = {'__class__': serialize_class(engine.__class__), **engine.__getstate__()}
-        for name in ['varied_params', 'fixed', 'varied_shape', 'in_calculator', 'calculator__class__']:
+        for name in ['varied_params', 'fixed', 'varied_shape', 'in_calculator_state', 'calculator__class__']:
             state[name] = getattr(self, name)
         state['yaml_data'] = self.yaml_data.data
         state['params'] = self.params.__getstate__()

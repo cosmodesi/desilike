@@ -1,6 +1,8 @@
 from ._version import __version__
 from .utils import setup_logging
 from .parameter import Parameter, ParameterPrior, ParameterCollection, ParameterArray, Samples
+from .differentiation import Differentiation
+from .fisher import Fisher
 
 
 from .install import Installer

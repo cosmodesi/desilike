@@ -1,7 +1,7 @@
 import numpy as np
 from scipy import interpolate
 
-from desilike.utils import jnp
+from desilike.jax import numpy as jnp
 from .base import TrapzTheoryPowerSpectrumMultipoles
 from .base import BaseTheoryPowerSpectrumMultipoles, BaseTheoryCorrelationFunctionMultipoles, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
 from .power_template import FullPowerSpectrumTemplate  # to add calculator in the registry

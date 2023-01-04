@@ -1,7 +1,8 @@
 import numpy as np
 
 from desilike.base import BaseCalculator, Parameter, ParameterArray
-from desilike.utils import jnp
+from desilike.differentiation import Differentiation
+from desilike.jax import numpy as jnp
 from desilike import utils
 
 
@@ -23,10 +24,8 @@ class BaseLikelihood(BaseCalculator):
             setattr(self, '_param_{}'.format(name), param)
 
     def get(self):
-        self.logprior = 0.
         pipeline = self.runtime_info.pipeline
-        for param in pipeline.varied_params:
-            self.logprior += param.prior(pipeline.param_values[param.name])
+        self.logprior = pipeline.params.prior(**pipeline.param_values)
         return self.loglikelihood + self.logprior
 
     @classmethod
@@ -71,12 +70,18 @@ class BaseGaussianLikelihood(BaseLikelihood):
         self.loglikelihood = -0.5 * self.flatdiff.dot(self.precision).dot(self.flatdiff)
 
     def get(self):
-        return self._solve()
+        pipeline = self.runtime_info.pipeline
+        self.logprior = pipeline.params.prior(**pipeline.param_values)  # does not include solved params
+        self._solve()
+        return self.loglikelihood + self.logprior
 
     def _solve(self):
+        if getattr(self, '_this_call', None):
+            return
+        self._this_call = True
         # Analytic marginalization, to be called, if desired, in get()
         pipeline = self.runtime_info.pipeline
-        all_params = self.all_params
+        all_params = pipeline.params
         likelihoods = getattr(self, 'likelihoods', [self])
 
         solved_params, indices_best, indices_marg = [], [], []
@@ -97,7 +102,6 @@ class BaseGaussianLikelihood(BaseLikelihood):
         dx, x, solve_likelihoods = [], [], []
 
         if solved_params:
-
             solve_likelihoods = [likelihood for likelihood in likelihoods if any(param.solved for param in likelihood.all_params)]
 
             def getter():
@@ -110,14 +114,27 @@ class BaseGaussianLikelihood(BaseLikelihood):
                         raise AttributeError('{} must have both flatdiff and precision attributes to perform analytic marginalization'.format(likelihood))
                 return toret  # jax understands lists
 
-            flatdiffs = getter()
+            self.differentiation = getattr(self, 'differentiation', None)
+            if self.differentiation is None:
+                varied_params_bak = pipeline.varied_params
+                pipeline._varied_params = varied_params_bak + solved_params
+                self.differentiation = Differentiation(self, getter, method='auto', order={str(param): 1 for param in solved_params})
+                pipeline._varied_params = varied_params_bak
+
+            derivatives = self.mpicomm.bcast(self.differentiation(), root=0)
             # flatdiff is model - data
-            jacs = pipeline.jac(getter, solved_params)
             projections, inverse_fishers = [], []
 
-            for likelihood, flatdiff, jac in zip(solve_likelihoods, flatdiffs, jacs):
+            for likelihood, derivative in zip(solve_likelihoods, derivatives):
+                flatdiff = derivative[()]
                 zeros = np.zeros_like(likelihood.precision, shape=likelihood.precision.shape[0])
-                jac = np.column_stack([jac[param.name] if param.name in jac else zeros for param in solved_params])
+                jac = []
+                for param in solved_params:
+                    try:
+                        jac.append(derivative[param.name])
+                    except KeyError:
+                        jac.append(zeros)
+                jac = np.column_stack(jac)
                 projector = likelihood.precision.dot(jac)
                 projection = projector.T.dot(flatdiff)
                 invfisher = jac.T.dot(projector)
@@ -141,11 +158,11 @@ class BaseGaussianLikelihood(BaseLikelihood):
         for param, xx in zip(solved_params, x):
             sum_logprior += all_params[param].prior(xx)
             pipeline.param_values[param.name] = xx
-            pipeline.derived.set(ParameterArray(xx, param))
+            pipeline.derived.set(ParameterArray(xx, param=param))
 
         for likelihood in likelihoods:
-            # Modify derived loglikelihood in-place
             loglikelihood = float(likelihood.loglikelihood)
+            # Modify derived loglikelihood in-place
             if likelihood in solve_likelihoods:
                 index = solve_likelihoods.index(likelihood)
                 # Note: priors of solved params have already been added
@@ -155,7 +172,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
                 if indices_marg:
                     loglikelihood += 1. / 2. * dx[indices_marg].dot(inverse_fishers[index][np.ix_(indices_marg, indices_marg)]).dot(dx[indices_marg])
             # Set derived values
-            likelihood.runtime_info.derived.set(ParameterArray(loglikelihood, likelihood._param_loglikelihood))
+            likelihood.runtime_info.derived.set(ParameterArray(loglikelihood, param=likelihood._param_loglikelihood))
             sum_loglikelihood += loglikelihood
         if indices_marg:
             sum_loglikelihood -= 1. / 2. * np.linalg.slogdet(sum_inverse_fishers[np.ix_(indices_marg, indices_marg)])[1]
@@ -167,19 +184,11 @@ class BaseGaussianLikelihood(BaseLikelihood):
             #sum_loglikelihood -= 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
 
         self.loglikelihood = sum_loglikelihood
-        self.logprior = sum_logprior
+        self.logprior += sum_logprior
 
-        for param in all_params:
-            if param.varied and not param.solved:
-                if param.derived:
-                    array = pipeline.derived[param]
-                    self.logprior += array.param.prior(array)
-                else:
-                    self.logprior += param.prior(pipeline.param_values[param.name])
-
-        self.runtime_info.derived.set(ParameterArray(self.loglikelihood, self._param_loglikelihood))
-        self.runtime_info.derived.set(ParameterArray(self.logprior, self._param_logprior))
-        return self.loglikelihood + self.logprior
+        self.runtime_info.derived.set(ParameterArray(self.loglikelihood, param=self._param_loglikelihood))
+        self.runtime_info.derived.set(ParameterArray(self.logprior, param=self._param_logprior))
+        self._this_call = None
 
     def __getstate__(self):
         state = {}
@@ -277,7 +286,7 @@ class SumLikelihood(BaseLikelihood):
         def _make_solve(likelihood):
 
             def _solve():
-                return likelihood.loglikelihood
+                pass
 
             return _solve
 

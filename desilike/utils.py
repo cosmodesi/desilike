@@ -6,33 +6,16 @@ import time
 import logging
 import traceback
 import warnings
+import functools
 import importlib
+from collections import UserDict
 
 import numpy as np
 from numpy.linalg import LinAlgError
 import scipy as sp
 
 from .mpi import CurrentMPIComm
-
-try:
-    # raise ImportError
-    import jax, jaxlib
-    from jax.config import config; config.update('jax_enable_x64', True)
-    import jax.numpy as jnp
-except ImportError:
-    jax = None
-    import numpy as jnp
-
-try:
-    from collections.abc import MutableSet  # >= 3.10
-except ImportError:
-    from collections import MutableSet
-from collections import OrderedDict
-
-
-def use_jax(array):
-    """Whether to use jax.numpy depending on whether array is jax object"""
-    return jax and isinstance(array, (jaxlib.xla_extension.DeviceArrayBase, jax.core.Tracer))
+from . import jax
 
 
 @CurrentMPIComm.enable
@@ -62,7 +45,9 @@ def mkdir(dirname):
 
 def evaluate(value, type=None, locals=None):
     if isinstance(value, str):
-        value = eval(value, {'np': np, 'sp': sp}, locals)
+        from .jax import numpy as jnp
+        from .jax import scipy as jsp
+        value = eval(value, {'np': jnp, 'sp': jsp}, locals)
     if type is not None:
         value = type(value)
     return value
@@ -257,7 +242,7 @@ class BaseClass(object, metaclass=BaseMetaClass):
 
 def is_sequence(item):
     """Whether input item is a tuple or list."""
-    return isinstance(item, (list, tuple, set, OrderedSet))
+    return isinstance(item, (list, tuple, set, frozenset))
 
 
 def dict_to_yaml(d):
@@ -292,66 +277,11 @@ def deep_eq(obj1, obj2):
         elif isinstance(obj1, (tuple, list)):
             if len(obj2) == len(obj1):
                 return all(deep_eq(o1, o2) for o1, o2 in zip(obj1, obj2))
-        elif isinstance(obj1, (np.ndarray, jnp.ndarray)):
+        elif isinstance(obj1, (np.ndarray,) + jax.array_types):
             return np.all(obj2 == obj1)
         else:
             return obj2 == obj1
     return False
-
-
-class OrderedSet(OrderedDict, MutableSet):
-
-    """Adapted from https://stackoverflow.com/questions/1653970/does-python-have-an-ordered-set"""
-
-    def __init__(self, *args):
-        if not args:
-            return
-        if len(args) > 1:
-            args = [args]
-        for elem in OrderedDict.fromkeys(*args):
-            self.add(elem)
-
-    def update(self, *args, **kwargs):
-        if kwargs:
-            raise TypeError("update() takes no keyword arguments")
-
-        for s in args:
-            for e in s:
-                self.add(e)
-
-    def add(self, elem):
-        self[elem] = None
-
-    def discard(self, elem):
-        self.pop(elem, None)
-
-    def __le__(self, other):
-        return all(e in other for e in self)
-
-    def __lt__(self, other):
-        return self <= other and self != other
-
-    def __ge__(self, other):
-        return all(e in self for e in other)
-
-    def __gt__(self, other):
-        return self >= other and self != other
-
-    def __repr__(self):
-        return 'OrderedSet([%s])' % (', '.join(map(repr, self.keys())))
-
-    def __str__(self):
-        return '{%s}' % (', '.join(map(repr, self.keys())))
-
-    difference = property(lambda self: self.__sub__)
-    difference_update = property(lambda self: self.__isub__)
-    intersection = property(lambda self: self.__and__)
-    intersection_update = property(lambda self: self.__iand__)
-    issubset = property(lambda self: self.__le__)
-    issuperset = property(lambda self: self.__ge__)
-    symmetric_difference = property(lambda self: self.__xor__)
-    symmetric_difference_update = property(lambda self: self.__ixor__)
-    union = property(lambda self: self.__or__)
 
 
 class NamespaceDict(BaseClass):
@@ -418,6 +348,27 @@ class NamespaceDict(BaseClass):
 
     def __repr__(self):
         return str(self.__getstate__())
+
+
+class MutableDict(UserDict):
+
+    def clone(self, *args, **kwargs):
+        new = self.copy()
+        new.update(*args, **kwargs)
+        return new
+
+
+def _make_wrapper(func):
+
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        self.updated = True
+        return self.func(*args, **kwargs)
+
+
+for name in ['__init__', '__delitem__', '__getitem__', '__setitem__', 'clear', 'fromkeys', 'pop', 'popitem', 'setdefault', 'update']:
+
+    setattr(MutableDict, name, _make_wrapper(getattr(UserDict, name)))
 
 
 def _check_valid_inv(mat, invmat, rtol=1e-04, atol=1e-05, check_valid='raise'):
@@ -619,3 +570,14 @@ class Monitor(BaseClass):
     def __exit__(self, exc_type, exc_value, exc_traceback):
         """Exit context."""
         self()
+
+
+def expand_dict(di, names):
+    toret = dict.fromkeys(names)
+    if not hasattr(di, 'items'):
+        di = {'*': di}
+    from .parameter import find_names
+    for template, value in di.items():
+        for tmpname in find_names(names, template):
+            toret[tmpname] = value
+    return toret

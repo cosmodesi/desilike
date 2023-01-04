@@ -7,7 +7,7 @@ from scipy import special, integrate
 
 from desilike.base import BaseCalculator
 from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo
-from desilike.utils import jnp
+from desilike.jax import numpy as jnp
 from .power_template import BAOPowerSpectrumTemplate
 from .base import (BaseTheoryPowerSpectrumMultipoles, TrapzTheoryPowerSpectrumMultipoles,
                    BaseTheoryCorrelationFunctionMultipoles, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles)

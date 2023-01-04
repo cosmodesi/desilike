@@ -44,7 +44,7 @@ class ParameterCovariance(BaseClass):
 
     """Class that represents a parameter covariance."""
 
-    def __init__(self, covariance, params=None, sizes=None):
+    def __init__(self, covariance, params=None):
         """
         Initialize :class:`ParameterCovariance`.
 
@@ -68,13 +68,9 @@ class ParameterCovariance(BaseClass):
         if params is None:
             raise ValueError('Provide covariance parameters')
         self._params = ParameterCollection(params)
-        if sizes is None:
-            sizes = [1] * len(self._params)
-        self._sizes = [int(size) for size in sizes]
-        if len(self._sizes) != len(self._params):
-            raise ValueError('Provide as many sizes as params')
+        self._sizes = [max(param.size, 1) for param in self._params]
         if sum(self._sizes) != self._value.shape[0]:
-            raise ValueError('Input sizes / number of params must match input covariance shape')
+            raise ValueError('number * size of input params must match input covariance shape')
 
     def params(self, *args, **kwargs):
         return self._params.params(*args, **kwargs)

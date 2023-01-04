@@ -4,9 +4,13 @@ import re
 import fnmatch
 import copy
 import numbers
+from collections import Counter
 
 import numpy as np
-from scipy import stats
+import scipy as sp
+from .jax import numpy as jnp
+from .jax import scipy as jsp
+from .jax import rv_frozen, dist_name
 
 from .io import BaseConfig
 from . import mpi, utils
@@ -187,9 +191,19 @@ class ParameterError(Exception):
     """Exception raised when issue with :class:`ParameterError`."""
 
 
+def _make_counter(counter):
+    if isinstance(counter, Counter):
+        return counter
+    deriv_types = (Parameter, str)
+    counter = (counter,) if not utils.is_sequence(counter) else counter
+    if all(isinstance(param, deriv_types) for param in counter):
+        return Counter(str(param) for param in counter)
+    raise ValueError('Unable to make counter from {}'.format(counter))
+
+
 class ParameterArray(np.ndarray):
 
-    def __new__(cls, value, param, copy=False, dtype=None, **kwargs):
+    def __new__(cls, value, param=None, derivs=None, copy=False, dtype=None, **kwargs):
         """
         Initalize :class:`array`.
 
@@ -206,11 +220,13 @@ class ParameterArray(np.ndarray):
         """
         value = np.array(value, copy=copy, dtype=dtype, **kwargs)
         obj = value.view(cls)
-        obj.param = param
+        obj.param = None if param is None else Parameter(param)
+        obj.derivs = None if derivs is None else [_make_counter(deriv) for deriv in derivs]
         return obj
 
     def __array_finalize__(self, obj):
         self.param = getattr(obj, 'param', None)
+        self.derivs = getattr(obj, 'derivs', None)
 
     def __array_ufunc__(self, ufunc, method, *inputs, out=None, **kwargs):
         args = []
@@ -239,6 +255,7 @@ class ParameterArray(np.ndarray):
         if method == 'at':
             if isinstance(inputs[0], ParameterArray):
                 inputs[0].param = self.param
+                inputs[0].derivs = self.derivs
             return
 
         if ufunc.nout == 1:
@@ -251,32 +268,53 @@ class ParameterArray(np.ndarray):
         for result in results:
             if isinstance(result, ParameterArray):
                 result.param = self.param
+                result.derivs = self.derivs
 
         return results[0] if len(results) == 1 else results
 
     def __repr__(self):
-        return '{}({}, {})'.format(self.__class__.__name__, self.param, self)
+        return '{}({}, {}, {})'.format(self.__class__.__name__, self.param, self.derivs, self)
 
     def __reduce__(self):
         # See https://stackoverflow.com/questions/26598109/preserve-custom-attributes-when-pickling-subclass-of-numpy-array
         # Get the parent's __reduce__ tuple
         pickled_state = super(ParameterArray, self).__reduce__()
         # Create our own tuple to pass to __setstate__
-        new_state = pickled_state[2] + (self.param.__getstate__(),)
+        new_state = pickled_state[2] + (None if self.param is None else self.param.__getstate__(), self.derivs)
         # Return a tuple that replaces the parent's __setstate__ tuple with our own
         return (pickled_state[0], pickled_state[1], new_state)
 
     def __setstate__(self, state):
-        self.param = Parameter.from_state(state[-1])  # Set the info attribute
+        self.param = None if state[-2] is None else Parameter.from_state(state[-2])  # Set the info attribute
+        self.derivs = state[-1]
         # Call the parent's __setstate__ with the other tuple elements.
-        super(ParameterArray, self).__setstate__(state[:-1])
+        super(ParameterArray, self).__setstate__(state[:-2])
 
     def __getstate__(self):
-        return {'value': self.view(np.ndarray), 'param': self.param.__getstate__()}
+        return {'value': self.view(np.ndarray), 'param': None if self.param is None else self.param.__getstate__(), 'derivs': self.derivs}
+
+    def _index(self, deriv):
+        if self.derivs is not None:
+            try:
+                counter_deriv = _make_counter(deriv)
+            except ValueError:
+                pass
+            else:
+                try:
+                    deriv = self.derivs.index(counter_deriv)
+                except ValueError as exc:
+                    raise KeyError('{} is not in computed derivatives: {}'.format(counter_deriv, self.derivs)) from exc
+        return deriv
+
+    def __getitem__(self, deriv):
+        return super(ParameterArray, self).__getitem__(self._index(deriv))
+
+    def __setitem__(self, deriv, item):
+        return super(ParameterArray, self).__setitem__(self._index(deriv), item)
 
     @classmethod
     def from_state(cls, state):
-        return cls(state['value'], Parameter.from_state(state['param']))
+        return cls(state['value'], None if state.get('param', None) is None else Parameter.from_state(state['param']), state.get('derivs', None))
 
 
 class Parameter(BaseClass):
@@ -307,10 +345,10 @@ class Parameter(BaseClass):
     latex : string, default=None
         Latex for parameter.
     """
-    _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'latex', 'depends', 'ndim']
+    _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'latex', 'depends', 'shape']
     _allowed_solved = ['.best', '.marg', '.auto']
 
-    def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, latex=None, ndim=0):
+    def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, latex=None, shape=()):
         """
         Initialize :class:`Parameter`.
 
@@ -345,11 +383,13 @@ class Parameter(BaseClass):
         if isinstance(basename, Parameter):
             self.__dict__.update(basename.__dict__)
             return
+        di = dict(basename=basename, namespace=namespace, value=value, fixed=fixed, derived=derived,
+                  prior=prior, ref=ref, proposal=proposal, latex=latex, shape=shape)
         if isinstance(basename, ParameterConfig):
-            self.__dict__.update(basename.init().__dict__)
+            self.__dict__.update(ParameterConfig(di).clone(basename).init().__dict__)
             return
         try:
-            self.__init__(**basename)
+            self.__init__(**{**di, **basename})
         except TypeError:
             pass
         else:
@@ -372,17 +412,14 @@ class Parameter(BaseClass):
         self._latex = latex
         self._proposal = proposal
         if proposal is None:
-            if (ref is not None or prior is not None):
-                if hasattr(self._ref, 'scale'):
-                    self._proposal = self._ref.scale
-                elif self._ref.is_proper():
-                    self._proposal = (self._ref.limits[1] - self._ref.limits[0]) / 2.
+            if (ref is not None or prior is not None) and self._ref.is_proper():
+                self._proposal = self._ref.std()
         self._derived = derived
         self._depends = {}
         if isinstance(derived, str):
             if self.solved:
                 allowed_dists = ['norm', 'uniform']
-                if self._prior.dist not in allowed_dists or self._prior.is_limited():
+                if self._prior.name not in allowed_dists or self._prior.is_limited():
                     raise ParameterError('Prior must be one of {}, with no limits, to use analytic marginalisation for {}'.format(allowed_dists, self))
             else:
                 placeholders = re.finditer(r'\{.*?\}', derived)
@@ -398,8 +435,16 @@ class Parameter(BaseClass):
         if fixed is None:
             fixed = prior is None and ref is None and not self.depends
         self._fixed = bool(fixed)
-        self._ndim = int(ndim)
+        self._shape = tuple(int(s) for s in (shape if utils.is_sequence(shape) else (shape,)))
         self.updated = True
+
+    @property
+    def size(self):
+        return np.prod(self._shape, dtype='i')
+
+    @property
+    def ndim(self):
+        return len(self._shape)
 
     def eval(self, **values):
         if isinstance(self._derived, str) and not self.solved:
@@ -472,6 +517,17 @@ class Parameter(BaseClass):
         new = super(Parameter, self).__copy__()
         new._depends = copy.copy(new._depends)
         return new
+
+    def __deepcopy__(self, memo):
+        state = self.__getstate__()
+        for name in ['prior', 'ref']:
+            state[name] = copy.deepcopy(getattr(self, name))
+        toret = self.from_state(state)
+        memo[id(self)] = toret
+        return toret
+
+    def deepcopy(self):
+        return copy.deepcopy(self)
 
     def __getstate__(self):
         """Return this class state dictionary."""
@@ -876,8 +932,21 @@ class BaseParameterCollection(BaseClass):
         new.update(*args, **kwargs)
         return new
 
+    def keys(self, **kwargs):
+        return [self._get_name(item) for item in self.select(**kwargs)]
+
+    def values(self, **kwargs):
+        return [item for item in self.select(**kwargs)]
+
     def items(self, **kwargs):
         return [(self._get_name(item), item) for item in self.select(**kwargs)]
+
+    def __deepcopy__(self, memo):
+        state = self.__getstate__()
+        toret = self.from_state(state)
+        toret.data = [copy.deepcopy(item) for item in self.data]
+        memo[id(self)] = toret
+        return toret
 
     def deepcopy(self):
         return copy.deepcopy(self)
@@ -890,12 +959,26 @@ class BaseParameterCollection(BaseClass):
 class ParameterConfig(NamespaceDict):
 
     def __init__(self, conf=None, **kwargs):
+
+        def prior_state(prior):
+            state = prior.__getstate__()
+            state['dist'] = prior.dist
+            return state
+
         if isinstance(conf, Parameter):
-            conf = conf.__getstate__()
+            state = conf.__getstate__()
+            for name in ['prior', 'ref']:
+                state[name] = prior_state(getattr(conf, name))
+            conf = state
             if conf['namespace'] is None:
                 conf.pop('namespace')
             conf.pop('updated', None)
+
         super(ParameterConfig, self).__init__(conf, **kwargs)
+        for name in ['prior', 'ref']:
+            if name in self:
+                if isinstance(self[name], ParameterPrior):
+                    self[name] = prior_state(self[name])
 
     def init(self):
         state = self.__getstate__()
@@ -948,12 +1031,25 @@ class ParameterConfig(NamespaceDict):
         else:
             self.basename = names[0]
 
+    def __deepcopy__(self, memo):
+        state = self.__getstate__()
+        for name in ['prior', 'ref']:
+            if name in state:
+                s = dict(state[name])
+                if 'dist' in s:
+                    dist = s.pop('dist')
+                    state[name] = {'dist': dist, **copy.deepcopy(s)}
+                else:
+                    state[name] = copy.deepcopy(s)
+        toret = self.from_state(state)
+        memo[id(self)] = toret
+        return toret
+
 
 class ParameterCollectionConfig(BaseParameterCollection):
 
     _type = ParameterConfig
     _attrs = ['fixed', 'derived', 'namespace', 'delete', 'wildcard', 'identifier']
-    #_keywords = {'fixed': [], 'derived': ['.fixed', '.varied'], 'namespace': []}
 
     def _get_name(self, item):
         from . import base
@@ -1345,6 +1441,23 @@ class ParameterCollection(BaseParameterCollection):
                 raise KeyError('Parameter {} must be indexed by name (incorrect {})'.format(item_name, name))
             self.set(item)
 
+    def eval(self, **params):
+        toret = {}
+        for param in params:
+            try:
+                toret[param] = self[param].eval(**params)
+            except KeyError:
+                pass
+        return toret
+
+    def prior(self, **params):
+        eval_params = self.eval(**params)
+        toret = 0.
+        for param in self.data:
+            if param.name in eval_params and param.varied and (param.depends or (not param.derived)):
+                toret += param.prior(eval_params[param.name])
+        return toret
+
 
 class ParameterPriorError(Exception):
 
@@ -1398,44 +1511,49 @@ class ParameterPrior(BaseClass):
         if limits[1] <= limits[0]:
             raise ParameterPriorError('ParameterPrior range {} has min greater than max'.format(limits))
         self.limits = limits
-        self.dist = dist.lower()
         self.attrs = dict(kwargs)
         for name, value in self.attrs.items():
             if name in ['loc', 'scale', 'a', 'b']: self.attrs[name] = float(value)
 
-        # improper prior
-        if self.dist == 'uniform' and np.isinf(self.limits).any():
-            return
+        if isinstance(dist, str):
+            self.name = dist
+            if self.is_limited():
+                dist = dist if dist.startswith('trunc') or dist == 'uniform' else 'trunc{}'.format(dist)
+            dist = getattr(jsp.stats, dist)
+        else:
+            self.name = dist_name(dist)  # tackle scipy and jax
+        self.dist = dist
 
-        if not np.isinf(self.limits).all():
-            dist = getattr(stats, self.dist if self.dist.startswith('trunc') or self.dist == 'uniform' else 'trunc{}'.format(self.dist))
-            if self.dist == 'uniform':
-                self.rv = dist(self.limits[0], self.limits[1] - self.limits[0])
+        if self.is_limited():
+            if self.name == 'uniform':
+                args = (self.limits[0], self.limits[1] - self.limits[0])
+                kwargs = {}
             else:
                 loc, scale = self.attrs.get('loc', 0.), self.attrs.get('scale', 1.)
                 # See notes of https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.truncnorm.html
                 limits = tuple((lim - loc) / scale for lim in limits)
-                self.rv = dist(*limits, **kwargs)
+                args = limits
+        elif self.name == 'uniform':  # improper prior
+            return
         else:
-            self.rv = getattr(stats, self.dist)(**kwargs)
+            args = ()
+        self.rv = rv_frozen(self.dist, *args, **kwargs)
         #self.limits = self.rv.support()
 
     def isin(self, x):
         """Whether ``x`` is within prior, i.e. within limits - strictly positive probability."""
-        x = np.asarray(x)
+        x = jnp.asarray(x)
         return (self.limits[0] < x) & (x < self.limits[1])
 
     def __call__(self, x, remove_zerolag=True):
         """Return probability density at ``x``."""
         if not self.is_proper():
-            toret = np.full_like(x, -np.inf)
-            toret[self.isin(x)] = 0.
-            return toret
-        toret = self.logpdf(x)
+            return jnp.where(self.isin(x), 0, -np.inf)
+        toret = self.rv.logpdf(x)
         if remove_zerolag:
             loc = self.attrs.get('loc', None)
             if loc is None: loc = np.mean(self.limits)
-            toret -= self.logpdf(loc)
+            toret -= self.rv.logpdf(loc)
         return toret
 
     def sample(self, size=None, random_state=None):
@@ -1464,9 +1582,9 @@ class ParameterPrior(BaseClass):
 
     def __str__(self):
         """Return string with distribution name, limits, and attributes (e.g. ``loc`` and ``scale``)."""
-        base = self.dist
+        base = self.name
         if self.is_limited():
-            base = '{}[{}, {}]'.format(self.dist, *self.limits)
+            base = '{}[{}, {}]'.format(base, *self.limits)
         return '{}({})'.format(base, self.attrs)
 
     def __setstate__(self, state):
@@ -1475,15 +1593,18 @@ class ParameterPrior(BaseClass):
 
     def __getstate__(self):
         """Return this class state dictionary."""
-        state = {}
-        for key in ['dist', 'limits']:
-            state[key] = getattr(self, key)
+        state = {'dist': self.name, 'limits': self.limits}
         state.update(self.attrs)
         return state
 
+    def __deepcopy__(self, memo):
+        toret = self.__class__(dist=self.dist, limits=self.limits, **self.attrs)
+        memo[id(self)] = toret
+        return toret
+
     def is_proper(self):
         """Whether distribution is proper, i.e. has finite integral."""
-        return self.dist != 'uniform' or not np.isinf(self.limits).any()
+        return self.name != 'uniform' or not np.isinf(self.limits).any()
 
     def is_limited(self):
         """Whether distribution has (at least one) finite limit."""
@@ -1519,7 +1640,7 @@ class ParameterPrior(BaseClass):
 
     def __eq__(self, other):
         """Is ``self`` equal to ``other``, i.e. same type and attributes?"""
-        return type(other) == type(self) and all(getattr(other, key) == getattr(self, key) for key in ['dist', 'limits', 'attrs'])
+        return type(other) == type(self) and all(getattr(other, key) == getattr(self, key) for key in ['name', 'limits', 'attrs'])
 
 
 def _shape(array):
@@ -1534,7 +1655,7 @@ def _reshape(array, shape):
     if np.ndim(shape) == 0:
         shape = (shape, )
     shape = tuple(shape)
-    ndim = array.param.ndim
+    ndim = array.param.ndim + int(array.derivs is not None)
     if ndim:
         return array.reshape(shape + array.shape[-ndim:])
     return array.reshape(shape)

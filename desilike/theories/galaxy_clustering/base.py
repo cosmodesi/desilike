@@ -1,7 +1,7 @@
 import numpy as np
 from scipy import special
 
-from desilike.utils import jnp
+from desilike.jax import numpy as jnp
 from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo
 from desilike.base import BaseCalculator
 from desilike import plotting

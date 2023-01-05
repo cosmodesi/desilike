@@ -43,7 +43,7 @@ class BasePipeline(BaseClass):
             calculator.runtime_info.tocalculate = True
         self._params = ParameterCollection()
         self._set_params()
-        self.more_derived = None
+        self.more_derived, self.more_calculate = None, None
 
     def _set_params(self, params=None):
         params_from_calculator = {}
@@ -133,6 +133,12 @@ class BasePipeline(BaseClass):
             # print(calculator.__class__.__name__, runtime_info.tocalculate, runtime_info._param_values, params)
             result = runtime_info.calculate()
             self.derived.update(runtime_info.derived)
+            if self.more_derived:
+                tmp = self.more_derived(0)
+                if tmp is not None: self.derived.update(tmp)
+        if self.more_calculate:
+            toret = self.more_calculate()
+            if toret is not None: result = toret
         return result
 
     def mpicalculate(self, **params):
@@ -153,17 +159,17 @@ class BasePipeline(BaseClass):
             except (AttributeError, TypeError, IndexError):
                 self.derived = Samples()
             return
-        mpicomm = self.mpicomm
+        mpicomm, more_derived = self.mpicomm, self.more_derived
+        self.mpicomm, self.more_derived = mpi.COMM_SELF, None
         states = {}
         for ivalue in range(size):
-            self.mpicomm = mpi.COMM_SELF
             self.calculate(**{name: value[ivalue] for name, value in params.items()})
             istate = ivalue + cumsizes[mpicomm.rank]
             states[istate] = self.derived
-            if self.more_derived:
-                tmp = self.more_derived(istate)
-                if tmp is not None: states[istate] = states[istate].clone(tmp)
-        self.mpicomm = mpicomm
+            if more_derived:
+                tmp = more_derived(istate)
+                if tmp is not None: states[istate].update(tmp)
+        self.mpicomm, self.more_derived = mpicomm, more_derived
         derived = None
         states = self.mpicomm.gather(states, root=0)
         if self.mpicomm.rank == 0:
@@ -190,16 +196,16 @@ class BasePipeline(BaseClass):
                 calculator.runtime_info.tocalculate = True
 
     def _classify_derived(self, calculators=None, niterations=3, seed=42):
+        if niterations < 1:
+            raise ValueError('Need at least 1 iteration to classify between fixed and varied parameters')
         if calculators is None:
             calculators = self.calculators
 
         states = [{} for i in range(len(calculators))]
         rng = np.random.RandomState(seed=seed)
+        param_values = {param.name: self.param_values[param.name] for param in self.varied_params}
         if calculators:
-            for ii in range(niterations):
-                for param in self.params.select(varied=True):
-                    param.ref.sample(random_state=rng)
-                params = {str(param): param.ref.sample(random_state=rng) for param in self.params.select(varied=True)}
+            for params in [{str(param): param.ref.sample(random_state=rng) for param in self.varied_params} for ii in range(niterations)] + [param_values]:
                 self.calculate(**params)
                 for calculator, state in zip(calculators, states):
                     calcstate = calculator.__getstate__()
@@ -228,9 +234,12 @@ class BasePipeline(BaseClass):
         for calculator, params in zip(calculators, params):
             for param in params:
                 # Remove derived parameters with same basename
+                if hasattr(param, 'setdefault'):
+                    param = param.copy()
+                    param.setdefault('namespace', calculator.runtime_info.namespace)
+                param = Parameter(param).clone(derived=True)
                 for dparam in calculator.runtime_info.derived_params.names(basename=param.basename):
                     calculator.runtime_info.params[dparam]
-                param = Parameter(param, namespace=calculator.runtime_info.namespace, derived=True)
                 calculator.runtime_info.params.set(param)
         self._set_params()
 
@@ -470,7 +479,7 @@ class RuntimeInfo(BaseClass):
     def tocalculate(self, tocalculate):
         self._tocalculate = tocalculate
 
-    def _calculate(self, **params):
+    def calculate(self, **params):
         self.initialize()
         self.set_param_values(params)
         if self.tocalculate:
@@ -485,9 +494,6 @@ class RuntimeInfo(BaseClass):
         else:
             self.calculated = False
         self._tocalculate = False
-
-    def calculate(self, **params):
-        self._calculate(**params)
         return self.calculator.get()
 
     def set_param_values(self, param_values, full=False, force=None):
@@ -601,7 +607,9 @@ class BaseCalculator(BaseClass):
             new.runtime_info.clear(params=self.runtime_info.params.deepcopy(),
                                    _requires=self.runtime_info.requires.copy(),
                                    _initialized=True)
-            new.runtime_info.pipeline._set_params(self.runtime_info.pipeline.params.deepcopy())  # to preserve depends
+            if getattr(self.runtime_info, '_pipeline', None) is not None:
+                new.runtime_info.pipeline._set_params(self.runtime_info.pipeline.params.deepcopy())  # to preserve depends
+                new(**self.runtime_info.pipeline.param_values)
         else:
             new.runtime_info.clear()
         return new
@@ -625,6 +633,7 @@ class BaseCalculator(BaseClass):
             self.runtime_info.params = self.runtime_info.params.deepcopy()
             if getattr(self.runtime_info, '_pipeline', None) is not None:  # no need if self.runtime_info.pipeline isn't created
                 new.runtime_info.pipeline._set_params(self.runtime_info.pipeline.params.deepcopy())  # to preserve depends
+                new(**self.runtime_info.pipeline.param_values)
         else:
             self.runtime_info.clear()
         return new

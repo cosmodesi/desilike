@@ -20,7 +20,7 @@ def find_uniques(li):
 
 def get_subsamples(samples, frac=1., nmax=np.inf, seed=42, mpicomm=None):
     nsamples = mpicomm.bcast(samples.size if mpicomm.rank == 0 else None)
-    size = min(int(nsamples * frac + 0.5), nmax)
+    size = min(max(int(nsamples * frac + 0.5), 1), nmax)
     if size > nsamples:
         raise ValueError('Cannot use {:d} subsamples (> {:d} total samples)'.format(size, nsamples))
     rng = np.random.RandomState(seed=seed)
@@ -67,16 +67,22 @@ class Emulator(BaseClass):
             raise ValueError('No parameters to be varied!')
 
         calculators, fixed, varied = self.pipeline._classify_derived(self.pipeline.calculators)
-        self.pipeline._set_derived(calculators[-1:], params=varied[-1:])
         self.fixed, self.varied = {}, {}
 
-        for cc, ff, vv in zip(calculators, fixed, varied):
+        params = []
+        for cc, ff, vv in zip(calculators[:-1], fixed, varied):
             bp = cc.runtime_info.base_params
-            self.fixed.update({k: v for k, v in ff.items() if k in bp and bp[k].derived})
-            self.varied.update({k: None for k in vv if k in bp and bp[k].derived})
+            ff = {k: v for k, v in ff.items() if k in bp and bp[k].derived}
+            vv = {k: None for k in vv if k in bp and bp[k].derived}
+            self.fixed.update(ff)
+            self.varied.update(vv)
+            params.append(list(vv))
+        self.fixed.update(fixed[-1])
+        self.varied.update(dict.fromkeys(varied[-1]))
+        params.append(varied[-1])
+        self.pipeline._set_derived(calculators, params=params)
+        self.in_calculator_state = list(fixed[-1]) + varied[-1]
         self.varied = list(self.varied)
-
-        self.in_calculator_state = list((set(self.fixed) | set(self.varied)) & set(self.calculator.__getstate__()))
 
         if mpicomm.rank == 0:
             self.log_info('Varied parameters: {}.'.format(self.varied_params))
@@ -140,23 +146,31 @@ class Emulator(BaseClass):
         tmp = None
         if self.mpicomm.rank == 0:
             tmp = Samples(attrs=samples.attrs)
-            for param in self.pipeline.varied_params:
-                tmp.set(ParameterArray(samples[param], param=param))
-            for param in self.pipeline.params.select(name=list(self.engines.keys()), derived=True):
-                tmp.set(ParameterArray(samples[param], param=param))
+            for param in self.pipeline.varied_params + self.pipeline.params.select(name=list(self.engines.keys()), derived=True):
+                tmp[param] = samples[param.name]
         for name, eng in self.engines.items():
             if eng is engine:
                 self.samples[name] = tmp
 
     def fit(self, name=None, **kwargs):
 
-        def _get_X_Y(samples, yname):
+        def _get_X_Y(samples, yname, with_deriv=False):
             X, Y = None, None
             if self.mpicomm.rank == 0:
                 nsamples = samples.size
                 X = np.concatenate([samples[name].reshape(nsamples, 1) for name in self.varied_params], axis=-1)
-                self.varied_shape[yname] = samples[yname].shape[samples.ndim:]
-                Y = samples[yname].reshape(nsamples, -1)
+                Y = samples[yname]
+                yshape = Y.shape[Y.andim:]
+                if Y.derivs is not None:
+                    yshape = yshape[1:]
+                    if with_deriv:
+                        Y = Y.reshape((nsamples, Y.shape[Y.andim], -1))
+                    else:
+                        Y = Y.zero.reshape(nsamples, -1)
+                else:
+                    Y = Y.reshape(nsamples, -1)
+                Y.param = Y.param.clone(shape=np.prod(yshape))
+                self.varied_shape[yname] = yshape
             self.varied_shape[yname] = self.mpicomm.bcast(self.varied_shape[yname], root=0)
             return X, Y
 
@@ -168,7 +182,7 @@ class Emulator(BaseClass):
 
         for name in names:
             self.engines[name] = engine = self.engines[name].copy()
-            engine.fit(*_get_X_Y(self.samples[name], name), **kwargs)
+            engine.fit(*_get_X_Y(self.samples[name], name, getattr(engine, '_samples_with_derivs', False)), **kwargs)
 
     def predict(self, **params):
         X = jnp.array([params[name] for name in self.varied_params])
@@ -191,6 +205,7 @@ class Emulator(BaseClass):
         calculator.emulator = self
         calculator.params = self.params.deepcopy()
         _setstate(calculator, self.fixed)
+        calculator.runtime_info.initialize()  # to initialize
         if derived is not None:
             calculator.runtime_info.pipeline._set_derived([calculator], params=[derived])
         return calculator
@@ -226,7 +241,7 @@ class Emulator(BaseClass):
                 mse = {}
                 for name in self.samples:
                     if self.samples[name] is samples:
-                        mse[name] = np.mean((derived['emulator.' + name] - subsamples[name])**2)
+                        mse[name] = np.mean((derived['emulator.' + name] - subsamples[name].zero**2))
                         msg = '{}mse of {} is {:.3g} (square root = {:.3g})'.format(item, name, mse[name], np.sqrt(mse[name]))
                         if mse_stop is not None:
                             test = mse[name] < mse_stop
@@ -272,7 +287,7 @@ class Emulator(BaseClass):
                         plt.close(plt.gcf())
                         fig, lax = plt.subplots(2, sharex=True, sharey=False, gridspec_kw={'height_ratios': (2, 1)}, figsize=(6, 6), squeeze=True)
                         fig.subplots_adjust(hspace=0)
-                        for d, s in zip(derived['emulator.' + name], subsamples[name]):
+                        for d, s in zip(derived['emulator.' + name].zero, subsamples[name].zero):
                             lax[0].plot(d.ravel(), color='k', marker='+', markersize=1, alpha=0.2)
                             lax[1].plot((d - s).ravel(), color='k', marker='+', markersize=1, alpha=0.2)
                         lax[0].set_ylabel(name)
@@ -392,7 +407,7 @@ class PointEmulatorEngine(BaseEmulatorEngine):
 
     def get_default_samples(self, calculator):
         from desilike.samplers import GridSampler
-        sampler = GridSampler(calculator, ngrid=2)
+        sampler = GridSampler(calculator, size=1)
         sampler.run()
         return sampler.samples
 

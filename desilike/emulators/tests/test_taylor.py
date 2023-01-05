@@ -12,7 +12,7 @@ class PowerModel(BaseCalculator):
         self.x = np.linspace(0.1, 1.1, 11)
         self.order = order
         for i in range(self.order):
-            self.params.set(Parameter('a{:d}'.format(i), value=0.5, ref={'limits': [-2., 2.]}))
+            self.params.set(Parameter('a{:d}'.format(i), value=0., ref={'limits': [-2., 2.]}))
 
     def calculate(self, **kwargs):
         self.model = sum(kwargs['a{:d}'.format(i)] * self.x**i for i in range(self.order))
@@ -35,8 +35,8 @@ def test_taylor_power(plot=False):
             from matplotlib import pyplot as plt
             ax = plt.gca()
             for i, dx in enumerate(np.linspace(-1., 1., 5)):
-                calculator(**{str(param): param.value + dx for param in calculator.runtime_info.full_params if param.varied})
-                emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.runtime_info.full_params if param.varied})
+                calculator(**{str(param): param.value + dx for param in calculator.runtime_info.params if param.varied})
+                emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.runtime_info.params if param.varied})
                 color = 'C{:d}'.format(i)
                 ax.plot(calculator.x, calculator.model, color=color, linestyle='--')
                 ax.plot(emulated_calculator.x, emulated_calculator.model, color=color, linestyle='-')
@@ -46,8 +46,6 @@ def test_taylor_power(plot=False):
 def test_taylor(plot=False):
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     calculator = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate())
-    for param in calculator.params:
-        print(param, param.value)
     power_bak = calculator().copy()
     emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=1))
     emulator.set_samples()
@@ -101,6 +99,6 @@ def test_likelihood():
 if __name__ == '__main__':
 
     setup_logging()
-    test_taylor_power(plot=False)
-    test_taylor(plot=False)
+    #test_taylor_power(plot=True)
+    #test_taylor(plot=True)
     test_likelihood()

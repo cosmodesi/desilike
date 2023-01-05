@@ -81,7 +81,7 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
                     cov = source.cov(params=params_in_source, return_type=None)
                     params = [cov._params[param] if params in params_in_source else param for param in params]
                 params_not_in_source = [param for param in params if param not in params_in_source]
-                sizes = [1 if param in params_not_in_source else cov._sizes[params_in_source.index(param)] for param in params]
+                sizes = [param.size if param in params_not_in_source else cov._sizes[params_in_source.index(param)] for param in params]
                 tmp = np.zeros((len(sizes),) * 2, dtype='f8')
                 cumsizes = np.cumsum([0] + sizes)
                 if params_in_source:
@@ -96,7 +96,7 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
                         tmp[indices] = [param.proposal**2 if param.proposal is not None else np.nan for param in params_not_in_source]
                     else:
                         tmp[indices] = default
-            source = ParameterCovariance(tmp, params=params, sizes=sizes)
+            source = ParameterCovariance(tmp, params=params)
         if source:
             tmp = source.cov(return_type=return_type)
         toret.append(tmp)

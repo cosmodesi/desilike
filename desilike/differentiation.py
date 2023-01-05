@@ -2,7 +2,7 @@ import itertools
 
 import numpy as np
 
-from .parameter import Parameter, ParameterCollection, ParameterArray, Samples, Counter
+from .parameter import Parameter, ParameterCollection, ParameterArray, Samples, Deriv
 from .utils import BaseClass, expand_dict, is_sequence
 from .jax import jax
 from .jax import numpy as jnp
@@ -205,6 +205,8 @@ class Differentiation(BaseClass):
 
         from desilike.samplers import GridSampler
         sampler = GridSampler(self.calculator, size=size, ref_scale=ref_scale, sphere=sphere, mpicomm=self.mpicomm)
+        # sphere is not None, so samples will *end* with the central point, making sure param_values correspond to the user last run(**params) call
+        self._grid_center = {param.name: param.value for param in sampler.varied_params}
         self._grid_samples = sampler.samples.deepcopy() if self.mpicomm.rank == 0 else None
 
         autoparams, autoorder, self.autoderivs = [], [], []
@@ -268,7 +270,7 @@ class Differentiation(BaseClass):
         if self.mpicomm.rank == 0:
             samples = self._grid_samples.copy()
             for param in self.varied_params:
-                offset = self.center[param.name] - param.value
+                offset = self.center[param.name] - self._grid_center[param.name]
                 samples[param] = self._grid_samples[param] + offset
         nsamples = self.mpicomm.bcast(samples.size if self.mpicomm.rank == 0 else None, root=0)
         self._getter_samples = {}
@@ -306,13 +308,13 @@ class Differentiation(BaseClass):
                 cidx = tuple(cidx)
             else:
                 cidx = (0,)
-            autodegrees, autoindices = [Counter()], [()]
+            autodegrees, autoindices = [Deriv()], [()]
             for autoorder, autoderiv in enumerate(self.autoderivs):
                 nautodegrees, nautoindices = [], []
                 for autodegree, autoindex in zip(autodegrees, autoindices):
                     for iautoparam, autoparam in enumerate(autoderiv or (None,)):
                         if autoorder > 0:
-                            nautodegree = autodegree + Counter([autoparam])
+                            nautodegree = autodegree + Deriv([autoparam])
                             nautoindex = autoindex + (iautoparam,)
                         else:
                             nautodegree = autodegree
@@ -332,7 +334,7 @@ class Differentiation(BaseClass):
                                 orders = np.bincount(indices, minlength=ndim).astype('i4')
                                 if sum(orders) + autoorder > min(order for o, order in zip(orders, finiteorder) if o):
                                     continue
-                                degree = nautodegree + Counter(dict(zip(finiteparams, orders)))
+                                degree = nautodegree + Deriv(dict(zip(finiteparams, orders)))
                                 if degree in degrees:
                                     continue
                                 orders = [(iparam, order, accuracy) for iparam, (order, accuracy) in enumerate(zip(orders, finiteaccuracy)) if order > 0]
@@ -343,7 +345,7 @@ class Differentiation(BaseClass):
                                 for iy, (ddx, yshape) in enumerate(zip(dx, yshapes)): derivatives[iy].append(ddx.reshape(yshape))
                 autodegrees = nautodegrees
                 autoindices = nautoindices
-            toret = derivatives = [ParameterArray(derivative, derivs=degrees) for derivative in derivatives]
+            toret = derivatives = [ParameterArray(derivative, derivs=degrees, param=Parameter('param_{:d}'.format(ideriv), shape=derivative[0].shape)) for ideriv, derivative in enumerate(derivatives)]
             if isinstance(self.getter_inst, dict):
                 toret = Samples()
                 for param in self.varied_params:

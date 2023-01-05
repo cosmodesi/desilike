@@ -74,13 +74,13 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
                     raise ValueError('Number of grid points along each axis must be odd to use sphere option')
                 samples = []
                 cidx = [len(g) // 2 for g in self.grid]
-                samples.append([g[c] for g, c in zip(self.grid, cidx)])
                 for ngrid in range(1, max(self.sphere) + 1):
                     for indices in itertools.product(range(ndim), repeat=ngrid):
                         indices = np.bincount(indices, minlength=ndim)
                         if all(i <= c for c, i in zip(cidx, indices)) and sum(indices) <= min(s for s, i in zip(self.sphere, indices) if i):
                             for signs in itertools.product(*[[-1, 1] if ind else [0] for ind in indices]):
                                 samples.append([g[c + s * i] for g, c, s, i in zip(self.grid, cidx, signs, indices)])
+                samples.append([g[c] for g, c in zip(self.grid, cidx)])  # finish with the central point
                 samples = np.array(samples).T
             else:
                 samples = np.meshgrid(*self.grid, indexing='ij')
@@ -92,9 +92,8 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
 
         if self.mpicomm.rank == 0:
             for param in self.pipeline.params.select(fixed=True, derived=False):
-                samples[param] = np.full(samples.shape, param.value, dtype='f8')
-            samples.update(self.pipeline.derived)
-            self.samples = samples
+                self.samples[param] = np.full(self.samples.shape, param.value, dtype='f8')
+            self.samples.update(self.pipeline.derived)
             if self.save_fn is not None:
                 self.samples.save(self.save_fn)
         else:

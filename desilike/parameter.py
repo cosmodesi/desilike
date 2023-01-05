@@ -10,7 +10,7 @@ import numpy as np
 import scipy as sp
 from .jax import numpy as jnp
 from .jax import scipy as jsp
-from .jax import rv_frozen, dist_name
+from .jax import rv_frozen
 
 from .io import BaseConfig
 from . import mpi, utils
@@ -191,14 +191,257 @@ class ParameterError(Exception):
     """Exception raised when issue with :class:`ParameterError`."""
 
 
-def _make_counter(counter):
-    if isinstance(counter, Counter):
-        return counter
+from collections.abc import Mapping
+
+from itertools import chain as _chain
+from itertools import repeat as _repeat
+from itertools import starmap as _starmap
+from operator import itemgetter as _itemgetter
+
+
+class Deriv(dict):
+    """
+    This class is a modification of https://github.com/python/cpython/blob/main/Lib/collections/__init__.py,
+    restricting to positive elements.
+    """
+    # References:
+    #   http://en.wikipedia.org/wiki/Multiset
+    #   http://www.gnu.org/software/smalltalk/manual-base/html_node/Bag.html
+    #   http://www.demo2s.com/Tutorial/Cpp/0380__set-multiset/Catalog0380__set-multiset.htm
+    #   http://code.activestate.com/recipes/259174/
+    #   Knuth, TAOCP Vol. II section 4.6.3
+
+    def __init__(self, iterable=None, /, **kwds):
+        """Create a new, empty Deriv object.  And if given, count elements
+        from an input iterable.  Or, initialize the count from another mapping
+        of elements to their counts.
+        >>> c = Deriv()                           # a new, empty counter
+        >>> c = Deriv('gallahad')                 # a new counter from an iterable
+        >>> c = Deriv({'a': 4, 'b': 2})           # a new counter from a mapping
+        >>> c = Deriv(a=4, b=2)                   # a new counter from keyword args
+        """
+        super().__init__()
+        self.update(iterable, **kwds)
+
+    # ADM changes
+    def __setitem__(self, name, item):
+        if item > 0:
+            super(Deriv, self).__setitem__(name, item)
+
+    def setdefault(self, name, item):
+        if item > 0:
+            super(Deriv, self).setdefault(name, item)
+
+    def __missing__(self, key):
+        """The count of elements not in the Deriv is zero."""
+        # Needed so that self[missing_item] does not raise KeyError
+        return 0
+
+    def total(self):
+        """Sum of the counts."""
+        return sum(self.values())
+
+    def most_common(self, n=None):
+        """List the n most common elements and their counts from the most
+        common to the least.  If n is None, then list all element counts.
+        >>> Deriv('abracadabra').most_common(3)
+        [('a', 5), ('b', 2), ('r', 2)]
+        """
+        # Emulate Bag.sortedByCount from Smalltalk
+        if n is None:
+            return sorted(self.items(), key=_itemgetter(1), reverse=True)
+
+        # Lazy import to speedup Python startup time
+        import heapq
+        return heapq.nlargest(n, self.items(), key=_itemgetter(1))
+
+    def elements(self):
+        """Iterator over elements repeating each as many times as its count.
+        >>> c = Deriv('ABCABC')
+        >>> sorted(c.elements())
+        ['A', 'A', 'B', 'B', 'C', 'C']
+        # Knuth's example for prime factors of 1836:  2**2 * 3**3 * 17**1
+        >>> import math
+        >>> prime_factors = Deriv({2: 2, 3: 3, 17: 1})
+        >>> math.prod(prime_factors.elements())
+        1836
+        Note, if an element's count has been set to zero or is a negative
+        number, elements() will ignore it.
+        """
+        # Emulate Bag.do from Smalltalk and Multiset.begin from C++.
+        return _chain.from_iterable(_starmap(_repeat, self.items()))
+
+    def update(self, iterable=None, /, **kwds):
+        """Like dict.update() but add counts instead of replacing them.
+        Source can be an iterable, a dictionary, or another Deriv instance.
+        >>> c = Deriv('which')
+        >>> c.update('witch')           # add elements from another iterable
+        >>> d = Deriv('watch')
+        >>> c.update(d)                 # add elements from another counter
+        >>> c['h']                      # four 'h' in which, witch, and watch
+        4
+        """
+        # The regular dict.update() operation makes no sense here because the
+        # replace behavior results in the some of original untouched counts
+        # being mixed-in with all of the other counts for a mismash that
+        # doesn't have a straight-forward interpretation in most counting
+        # contexts.  Instead, we implement straight-addition.  Both the inputs
+        # and outputs are allowed to contain zero and negative counts.
+
+        if iterable is not None:
+            if isinstance(iterable, Mapping):
+                if self:
+                    self_get = self.get
+                    for elem, count in iterable.items():
+                        self[elem] = count + self_get(elem, 0)
+                else:
+                    # fast path when counter is empty
+                    super().update(iterable)
+            else:
+                for elem in iterable:
+                    self[elem] = self.get(elem, 0) + 1
+        # ADM changes
+        self._keep_positive()
+        if kwds:
+            self.update(kwds)
+
+    def copy(self):
+        """Return a shallow copy."""
+        return self.__class__(self)
+
+    def __reduce__(self):
+        return self.__class__, (dict(self),)
+
+    def __delitem__(self, elem):
+        """Like dict.__delitem__() but does not raise KeyError for missing values."""
+        if elem in self:
+            super().__delitem__(elem)
+
+    def __repr__(self):
+        if not self:
+            return f'{self.__class__.__name__}()'
+        try:
+            # dict() preserves the ordering returned by most_common()
+            d = dict(self.most_common())
+        except TypeError:
+            # handle case where values are not orderable
+            d = dict(self)
+        return f'{self.__class__.__name__}({d!r})'
+
+    # Multiset-style mathematical operations discussed in:
+    #       Knuth TAOCP Volume II section 4.6.3 exercise 19
+    #       and at http://en.wikipedia.org/wiki/Multiset
+    #
+    # Outputs guaranteed to only include positive counts.
+    #
+    # To strip negative and zero counts, add-in an empty counter:
+    #       c += Deriv()
+    #
+    # Results are ordered according to when an element is first
+    # encountered in the left operand and then by the order
+    # encountered in the right operand.
+    #
+    # When the multiplicities are all zero or one, multiset operations
+    # are guaranteed to be equivalent to the corresponding operations
+    # for regular sets.
+    #     Given counter multisets such as:
+    #         cp = Deriv(a=1, b=0, c=1)
+    #         cq = Deriv(c=1, d=0, e=1)
+    #     The corresponding regular sets would be:
+    #         sp = {'a', 'c'}
+    #         sq = {'c', 'e'}
+    #     All of the following relations would hold:
+    #         set(cp + cq) == sp | sq
+    #         set(cp - cq) == sp - sq
+    #         set(cp | cq) == sp | sq
+    #         set(cp & cq) == sp & sq
+    #         (cp == cq) == (sp == sq)
+    #         (cp != cq) == (sp != sq)
+    #         (cp <= cq) == (sp <= sq)
+    #         (cp < cq) == (sp < sq)
+    #         (cp >= cq) == (sp >= sq)
+    #         (cp > cq) == (sp > sq)
+
+    def __eq__(self, other):
+        """True if all counts agree. Missing counts are treated as zero."""
+        if not isinstance(other, Deriv):
+            return NotImplemented
+        return all(self[e] == other[e] for c in (self, other) for e in c)
+
+    def __ne__(self, other):
+        """True if any counts disagree. Missing counts are treated as zero."""
+        if not isinstance(other, Deriv):
+            return NotImplemented
+        return not self == other
+
+    def __le__(self, other):
+        """True if all counts in self are a subset of those in other."""
+        if not isinstance(other, Deriv):
+            return NotImplemented
+        return all(self[e] <= other[e] for c in (self, other) for e in c)
+
+    def __lt__(self, other):
+        """True if all counts in self are a proper subset of those in other."""
+        if not isinstance(other, Deriv):
+            return NotImplemented
+        return self <= other and self != other
+
+    def __ge__(self, other):
+        """True if all counts in self are a superset of those in other."""
+        if not isinstance(other, Deriv):
+            return NotImplemented
+        return all(self[e] >= other[e] for c in (self, other) for e in c)
+
+    def __gt__(self, other):
+        """True if all counts in self are a proper superset of those in other."""
+        if not isinstance(other, Deriv):
+            return NotImplemented
+        return self >= other and self != other
+
+    def __add__(self, other):
+        """Add counts from two counters.
+        >>> Deriv('abbb') + Deriv('bcc')
+        Deriv({'b': 4, 'c': 2, 'a': 1})
+        """
+        if not isinstance(other, Deriv):
+            return NotImplemented
+        result = Deriv()
+        for elem, count in self.items():
+            newcount = count + other[elem]
+            if newcount > 0:
+                result[elem] = newcount
+        for elem, count in other.items():
+            if elem not in self and count > 0:
+                result[elem] = count
+        return result
+
+    def _keep_positive(self):
+        """Internal method to strip elements with a negative or zero count"""
+        nonpositive = [elem for elem, count in self.items() if not count > 0]
+        for elem in nonpositive:
+            del self[elem]
+        return self
+
+    def __iadd__(self, other):
+        """Inplace add from another counter, keeping only positive counts.
+        >>> c = Deriv('abbb')
+        >>> c += Deriv('bcc')
+        >>> c
+        Deriv({'b': 4, 'c': 2, 'a': 1})
+        """
+        for elem, count in other.items():
+            self[elem] += count
+        return self._keep_positive()
+
+
+def _make_deriv(deriv):
+    if isinstance(deriv, Deriv):
+        return deriv
     deriv_types = (Parameter, str)
-    counter = (counter,) if not utils.is_sequence(counter) else counter
-    if all(isinstance(param, deriv_types) for param in counter):
-        return Counter(str(param) for param in counter)
-    raise ValueError('Unable to make counter from {}'.format(counter))
+    deriv = (deriv,) if not utils.is_sequence(deriv) else deriv
+    if all(isinstance(param, deriv_types) for param in deriv):
+        return Deriv(str(param) for param in deriv)
+    raise ValueError('Unable to make deriv from {}'.format(deriv))
 
 
 class ParameterArray(np.ndarray):
@@ -221,7 +464,7 @@ class ParameterArray(np.ndarray):
         value = np.array(value, copy=copy, dtype=dtype, **kwargs)
         obj = value.view(cls)
         obj.param = None if param is None else Parameter(param)
-        obj.derivs = None if derivs is None else [_make_counter(deriv) for deriv in derivs]
+        obj.derivs = None if derivs is None else [_make_deriv(deriv) for deriv in derivs]
         return obj
 
     def __array_finalize__(self, obj):
@@ -294,17 +537,44 @@ class ParameterArray(np.ndarray):
         return {'value': self.view(np.ndarray), 'param': None if self.param is None else self.param.__getstate__(), 'derivs': self.derivs}
 
     def _index(self, deriv):
+        ideriv = deriv
         if self.derivs is not None:
             try:
-                counter_deriv = _make_counter(deriv)
+                deriv = _make_deriv(deriv)
             except ValueError:
                 pass
             else:
                 try:
-                    deriv = self.derivs.index(counter_deriv)
+                    ideriv = self.derivs.index(deriv)
                 except ValueError as exc:
-                    raise KeyError('{} is not in computed derivatives: {}'.format(counter_deriv, self.derivs)) from exc
-        return deriv
+                    raise KeyError('{} is not in computed derivatives: {}'.format(deriv, self.derivs)) from exc
+                else:
+                    ideriv = (Ellipsis, ideriv)
+                    if self.param is not None:
+                        ideriv += (slice(None),) * self.param.ndim
+        return ideriv
+
+    @property
+    def zero(self):
+        if self.derivs is not None:
+            return self[()]
+        return self
+
+    @property
+    def pndim(self):
+        return (1 if self.derivs is not None else 0) + (self.param.ndim if self.param is not None else 0)
+
+    @property
+    def andim(self):
+        return self.ndim - self.pndim
+
+    @property
+    def ashape(self):
+        return self.shape[:self.andim]
+
+    @property
+    def pshape(self):
+        return self.shape[self.andim:]
 
     def __getitem__(self, deriv):
         return super(ParameterArray, self).__getitem__(self._index(deriv))
@@ -383,13 +653,11 @@ class Parameter(BaseClass):
         if isinstance(basename, Parameter):
             self.__dict__.update(basename.__dict__)
             return
-        di = dict(basename=basename, namespace=namespace, value=value, fixed=fixed, derived=derived,
-                  prior=prior, ref=ref, proposal=proposal, latex=latex, shape=shape)
         if isinstance(basename, ParameterConfig):
-            self.__dict__.update(ParameterConfig(di).clone(basename).init().__dict__)
+            self.__dict__.update(basename.init().__dict__)
             return
         try:
-            self.__init__(**{**di, **basename})
+            self.__init__(**basename)
         except TypeError:
             pass
         else:
@@ -419,7 +687,7 @@ class Parameter(BaseClass):
         if isinstance(derived, str):
             if self.solved:
                 allowed_dists = ['norm', 'uniform']
-                if self._prior.name not in allowed_dists or self._prior.is_limited():
+                if self._prior.dist not in allowed_dists or self._prior.is_limited():
                     raise ParameterError('Prior must be one of {}, with no limits, to use analytic marginalisation for {}'.format(allowed_dists, self))
             else:
                 placeholders = re.finditer(r'\{.*?\}', derived)
@@ -517,14 +785,6 @@ class Parameter(BaseClass):
         new = super(Parameter, self).__copy__()
         new._depends = copy.copy(new._depends)
         return new
-
-    def __deepcopy__(self, memo):
-        state = self.__getstate__()
-        for name in ['prior', 'ref']:
-            state[name] = copy.deepcopy(getattr(self, name))
-        toret = self.from_state(state)
-        memo[id(self)] = toret
-        return toret
 
     def deepcopy(self):
         return copy.deepcopy(self)
@@ -941,13 +1201,6 @@ class BaseParameterCollection(BaseClass):
     def items(self, **kwargs):
         return [(self._get_name(item), item) for item in self.select(**kwargs)]
 
-    def __deepcopy__(self, memo):
-        state = self.__getstate__()
-        toret = self.from_state(state)
-        toret.data = [copy.deepcopy(item) for item in self.data]
-        memo[id(self)] = toret
-        return toret
-
     def deepcopy(self):
         return copy.deepcopy(self)
 
@@ -960,16 +1213,8 @@ class ParameterConfig(NamespaceDict):
 
     def __init__(self, conf=None, **kwargs):
 
-        def prior_state(prior):
-            state = prior.__getstate__()
-            state['dist'] = prior.dist
-            return state
-
         if isinstance(conf, Parameter):
-            state = conf.__getstate__()
-            for name in ['prior', 'ref']:
-                state[name] = prior_state(getattr(conf, name))
-            conf = state
+            conf = conf.__getstate__()
             if conf['namespace'] is None:
                 conf.pop('namespace')
             conf.pop('updated', None)
@@ -978,7 +1223,7 @@ class ParameterConfig(NamespaceDict):
         for name in ['prior', 'ref']:
             if name in self:
                 if isinstance(self[name], ParameterPrior):
-                    self[name] = prior_state(self[name])
+                    self[name] = self[name].__getstate__()
 
     def init(self):
         state = self.__getstate__()
@@ -1030,20 +1275,6 @@ class ParameterConfig(NamespaceDict):
             self.basename, self.namespace = names[-1], base.namespace_delimiter.join(names[:-1])
         else:
             self.basename = names[0]
-
-    def __deepcopy__(self, memo):
-        state = self.__getstate__()
-        for name in ['prior', 'ref']:
-            if name in state:
-                s = dict(state[name])
-                if 'dist' in s:
-                    dist = s.pop('dist')
-                    state[name] = {'dist': dist, **copy.deepcopy(s)}
-                else:
-                    state[name] = copy.deepcopy(s)
-        toret = self.from_state(state)
-        memo[id(self)] = toret
-        return toret
 
 
 class ParameterCollectionConfig(BaseParameterCollection):
@@ -1515,17 +1746,13 @@ class ParameterPrior(BaseClass):
         for name, value in self.attrs.items():
             if name in ['loc', 'scale', 'a', 'b']: self.attrs[name] = float(value)
 
-        if isinstance(dist, str):
-            self.name = dist
-            if self.is_limited():
-                dist = dist if dist.startswith('trunc') or dist == 'uniform' else 'trunc{}'.format(dist)
-            dist = getattr(jsp.stats, dist)
-        else:
-            self.name = dist_name(dist)  # tackle scipy and jax
-        self.dist = dist
+        self.dist = str(dist)
+        if self.is_limited():
+            dist = dist if dist.startswith('trunc') or dist == 'uniform' else 'trunc{}'.format(dist)
+        dist = getattr(jsp.stats, dist)
 
         if self.is_limited():
-            if self.name == 'uniform':
+            if self.dist == 'uniform':
                 args = (self.limits[0], self.limits[1] - self.limits[0])
                 kwargs = {}
             else:
@@ -1533,11 +1760,11 @@ class ParameterPrior(BaseClass):
                 # See notes of https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.truncnorm.html
                 limits = tuple((lim - loc) / scale for lim in limits)
                 args = limits
-        elif self.name == 'uniform':  # improper prior
+        elif self.dist == 'uniform':  # improper prior
             return
         else:
             args = ()
-        self.rv = rv_frozen(self.dist, *args, **kwargs)
+        self.rv = rv_frozen(dist, *args, **kwargs)
         #self.limits = self.rv.support()
 
     def isin(self, x):
@@ -1582,7 +1809,7 @@ class ParameterPrior(BaseClass):
 
     def __str__(self):
         """Return string with distribution name, limits, and attributes (e.g. ``loc`` and ``scale``)."""
-        base = self.name
+        base = self.dist
         if self.is_limited():
             base = '{}[{}, {}]'.format(base, *self.limits)
         return '{}({})'.format(base, self.attrs)
@@ -1593,18 +1820,13 @@ class ParameterPrior(BaseClass):
 
     def __getstate__(self):
         """Return this class state dictionary."""
-        state = {'dist': self.name, 'limits': self.limits}
+        state = {'dist': self.dist, 'limits': self.limits}
         state.update(self.attrs)
         return state
 
-    def __deepcopy__(self, memo):
-        toret = self.__class__(dist=self.dist, limits=self.limits, **self.attrs)
-        memo[id(self)] = toret
-        return toret
-
     def is_proper(self):
         """Whether distribution is proper, i.e. has finite integral."""
-        return self.name != 'uniform' or not np.isinf(self.limits).any()
+        return self.dist != 'uniform' or not np.isinf(self.limits).any()
 
     def is_limited(self):
         """Whether distribution has (at least one) finite limit."""
@@ -1626,7 +1848,7 @@ class ParameterPrior(BaseClass):
                 state[name] = tuple((lim - center) * scale + center + loc for lim in value)
             elif name in ['scale']:
                 state[name] = value * scale
-        return self.__class__(**state)
+        return self.from_state(state)
 
     def __getattr__(self, name):
         """Make :attr:`rv` attributes directly available in :class:`ParameterPrior`."""
@@ -1643,22 +1865,11 @@ class ParameterPrior(BaseClass):
         return type(other) == type(self) and all(getattr(other, key) == getattr(self, key) for key in ['name', 'limits', 'attrs'])
 
 
-def _shape(array):
-    if array.param.ndim:
-        toret = array.shape[:-array.param.ndim]
-    else:
-        toret = array.shape
-    return toret
-
-
 def _reshape(array, shape):
     if np.ndim(shape) == 0:
-        shape = (shape, )
+        shape = (shape,)
     shape = tuple(shape)
-    ndim = array.param.ndim + int(array.derivs is not None)
-    if ndim:
-        return array.reshape(shape + array.shape[-ndim:])
-    return array.reshape(shape)
+    return array.reshape(shape + array.pshape)
 
 
 class Samples(BaseParameterCollection):
@@ -1688,7 +1899,7 @@ class Samples(BaseParameterCollection):
     def shape(self):
         toret = ()
         for array in self.data:
-            toret = _shape(array)
+            toret = array.ashape
             break
         return toret
 
@@ -1759,7 +1970,10 @@ class Samples(BaseParameterCollection):
         if self.data:
             shape = self.shape
         else:
-            shape = _shape(item)
+            try:
+                shape = item.ashape
+            except AttributeError:
+                shape = item.shape
             if not shape: shape = (1,)
         item = _reshape(item, shape)
         super(Samples, self).set(item)
@@ -1785,9 +1999,12 @@ class Samples(BaseParameterCollection):
             except TypeError:
                 pass
             is_derived = str(name) in self._derived
-            param = Parameter(name, latex=utils.outputs_to_latex(str(name)) if is_derived else None, derived=is_derived)
-            if param in self:
-                param = self[param].param.clone(param)
+            if isinstance(name, Parameter):
+                param = name
+            else:
+                param = Parameter(name, latex=utils.outputs_to_latex(str(name)) if is_derived else None, derived=is_derived)
+                if param in self:
+                    param = param.clone(self[param].param)
             item = ParameterArray(item, param)
         try:
             self.data[name] = item  # list index
@@ -1805,12 +2022,10 @@ class Samples(BaseParameterCollection):
         if isinstance(name, (Parameter, str)):
             return self.get(name)
         new = self.copy()
-        params = self.params()
         try:
             new.data = [column[name] for column in self.data]
         except IndexError as exc:
             raise IndexError('Unrecognized indices {}'.format(name)) from exc
-        new.data = [ParameterArray(array, param=param) for array, param in zip(new.data, params)]
         return new
 
     def __repr__(self):

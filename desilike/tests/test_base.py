@@ -246,7 +246,7 @@ def test_copy():
     likelihood.all_params['sn0'].update(derived=False)
     print(likelihood.varied_params)
     print(likelihood2.varied_params)
-    likelihood2()
+    assert np.allclose(likelihood2(), SumLikelihood(likelihoods=likelihood2)())
 
 
 def test_fisher():

@@ -72,13 +72,11 @@ class BaseGaussianLikelihood(BaseLikelihood):
     def get(self):
         pipeline = self.runtime_info.pipeline
         self.logprior = pipeline.params.prior(**pipeline.param_values)  # does not include solved params
-        self._solve()
+        if pipeline.more_calculate is None:
+            pipeline.more_calculate = self._solve
         return self.loglikelihood + self.logprior
 
     def _solve(self):
-        if getattr(self, '_this_call', None):
-            return
-        self._this_call = True
         # Analytic marginalization, to be called, if desired, in get()
         pipeline = self.runtime_info.pipeline
         all_params = pipeline.params
@@ -114,6 +112,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
                         raise AttributeError('{} must have both flatdiff and precision attributes to perform analytic marginalization'.format(likelihood))
                 return toret  # jax understands lists
 
+            pipeline.more_calculate = lambda: None
             self.differentiation = getattr(self, 'differentiation', None)
             if self.differentiation is None:
                 varied_params_bak = pipeline.varied_params
@@ -122,6 +121,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
                 pipeline._varied_params = varied_params_bak
 
             derivatives = self.mpicomm.bcast(self.differentiation(), root=0)
+            pipeline.more_calculate = self._solve
             # flatdiff is model - data
             projections, inverse_fishers = [], []
 
@@ -188,7 +188,8 @@ class BaseGaussianLikelihood(BaseLikelihood):
 
         self.runtime_info.derived.set(ParameterArray(self.loglikelihood, param=self._param_loglikelihood))
         self.runtime_info.derived.set(ParameterArray(self.logprior, param=self._param_logprior))
-        self._this_call = None
+
+        return self.loglikelihood + self.logprior
 
     def __getstate__(self):
         state = {}
@@ -282,18 +283,6 @@ class SumLikelihood(BaseLikelihood):
     def initialize(self, likelihoods):
         if not utils.is_sequence(likelihoods): likelihoods = [likelihoods]
         self.likelihoods = list(likelihoods)
-
-        def _make_solve(likelihood):
-
-            def _solve():
-                pass
-
-            return _solve
-
-        # Deactivate likelihood _solve(), as self._solve() will take care of everything
-        for likelihood in self.likelihoods:
-            setattr(likelihood, '_solve', _make_solve(likelihood))
-
         super(SumLikelihood, self).initialize()
         self.runtime_info.requires = self.likelihoods
 
@@ -301,7 +290,7 @@ class SumLikelihood(BaseLikelihood):
         self.loglikelihood = sum(likelihood.loglikelihood for likelihood in self.likelihoods)
 
     def get(self):
-        return self._solve()
+        return BaseGaussianLikelihood.get(self)
 
     def _solve(self):
         return BaseGaussianLikelihood._solve(self)

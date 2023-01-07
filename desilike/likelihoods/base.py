@@ -55,8 +55,8 @@ class BaseGaussianLikelihood(BaseLikelihood):
     _attrs = ['loglikelihood', 'logprior']
     solved_default = '.marg'
 
-    def initialize(self, flatdata, covariance=None, precision=None):
-        self.flatdata = np.ravel(flatdata)
+    def initialize(self, data, covariance=None, precision=None):
+        self.flatdata = np.ravel(data)
         if precision is None:
             if covariance is None:
                 raise ValueError('Provide either precision or covariance matrix to {}'.format(self.__class__))
@@ -153,7 +153,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
             x = x0 + dx
 
         sum_loglikelihood = 0.
-        self.logprior = sum_logprior = 0.
+        sum_logprior = 0.
 
         for param, xx in zip(solved_params, x):
             sum_logprior += all_params[param].prior(xx)

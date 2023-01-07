@@ -303,7 +303,7 @@ def plot_triangle(chains, params=None, labels=None, fn=None, kw_save=None, **kwa
     lax = g.triangle_plot(chains, [str(param) for param in params], **kwargs)
     if fn is not None:
         savefig(fn, **(kw_save or {}))
-    return lax
+    return g
 
 
 def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None, errors='error',

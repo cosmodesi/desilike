@@ -1,6 +1,7 @@
 import numpy as np
 
 from .differentiation import Differentiation
+from .parameter import ParameterPrecision
 from .base import BaseCalculator
 from .utils import BaseClass
 from . import utils
@@ -73,12 +74,9 @@ class Fisher(BaseClass):
         self._finalize = finalize
 
     def run(self, **params):
-        derivs = self.prior_differentiation(**params)
-        self.prior_precision = np.array([[derivs[param1, param2] for param2 in self.varied_params] for param1 in self.varied_params])
-        self.precision = self._finalize(self.differentiation(**params))
-        from desilike.samples import ParameterCovariance
-        self.covariance = ParameterCovariance(utils.inv(self.prior_precision + self.precision), params=self.varied_params)
+        self.prior_precision = ParameterPrecision(self.prior_differentiation(**params), params=self.varied_params, center=[self.prior_differentiation.center[str(param)] for param in self.varied_params])
+        self.precision = ParameterPrecision(self._finalize(self.differentiation(**self.prior_differentiation.center)), params=self.varied_params, center=self.prior_precision._center)
 
     def __call__(self, **params):
         self.run(**params)
-        return self.covariance
+        return self.prior_precision + self.precision

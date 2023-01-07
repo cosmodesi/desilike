@@ -1749,7 +1749,13 @@ class ParameterPrior(BaseClass):
         self.dist = str(dist)
         if self.is_limited():
             dist = dist if dist.startswith('trunc') or dist == 'uniform' else 'trunc{}'.format(dist)
-        dist = getattr(jsp.stats, dist)
+        try:
+            dist = getattr(jsp.stats, dist)
+        except AttributeError:
+            try:
+                dist = getattr(sp.stats, dist)
+            except AttributeError:
+                raise AttributeError('Neither jax.scipy.stats nor scipy.stats have {} for attribute'.format(dist))
 
         if self.is_limited():
             if self.dist == 'uniform':
@@ -2110,3 +2116,232 @@ class Samples(BaseParameterCollection):
         if mpicomm.rank == dest:
             toret = cls.recv(source=source, tag=tag, mpicomm=mpicomm)
         return toret
+
+
+class BaseParameterMatrix(BaseClass):
+
+    _fill_value = np.nan
+
+    """Class that represents a parameter matrix."""
+
+    def __init__(self, matrix, params=None, center=None):
+        """
+        Initialize :class:`BaseParameterMatrix`.
+
+        Parameters
+        ----------
+        matrix : array
+            2D array representing matrix.
+
+        params : list, ParameterCollection
+            Parameters corresponding to input ``matrix``.
+        """
+        if isinstance(matrix, self.__class__):
+            self.__dict__.update(matrix.__dict__)
+            return
+        if params is None:
+            raise ValueError('Provide matrix parameters')
+        self._params = ParameterCollection(params)
+        if isinstance(matrix, ParameterArray):
+            matrix = np.array([[matrix[param1, param2] for param2 in self._params] for param1 in self._params])
+        self._value = np.atleast_2d(matrix)
+        if self._value.ndim != 2:
+            raise ValueError('Input matrix must be 2D')
+        shape = self._value.shape
+        if shape[1] != shape[0]:
+            raise ValueError('Input matrix must be square')
+        if center is None:
+            center = [param.value for param in self._params]
+        self._center = np.array([np.ravel(c) for c in center])
+        if self._center.size != shape[0]:
+            raise ValueError('Input center and matrix have different sizes: {:d} vs {:d}'.format(self._center.size, shape))
+        self._sizes
+
+    def params(self, *args, **kwargs):
+        return self._params.params(*args, **kwargs)
+
+    def select(self, params=None, **kwargs):
+        if params is None: params = self._params.select(**kwargs)
+        return self.view(params=params, return_type=None)
+
+    @property
+    def _sizes(self):
+        toret = [max(param.size, 1) for param in self._params]
+        if sum(toret) != self._value.shape[0]:
+            raise ValueError('number * size of input params must match input matrix shape')
+        return toret
+
+    def view(self, params=None, return_type='nparray'):
+        """Return matrix for input parameters ``params``."""
+        if params is None:
+            params = self._params
+        isscalar = not isinstance(params, ParameterCollection) and not utils.is_sequence(params)
+        if isscalar:
+            params = [params]
+        params = [self._params[param] if param in self._params else Parameter(param) for param in params]
+        params_in_self = [param for param in params if param in self._params]
+        params_not_in_self = [param for param in params if param not in params_in_self]
+        sizes = [max(param.size, 1) for param in params]
+        toret = self.__class__(np.zeros((sum(sizes),) * 2, dtype='f8'), params=params)
+        if params_in_self:
+            index = toret._index(params_in_self)
+            toret._value[np.ix_(index, index)] = self._value
+            toret._center[index] = self._center
+        if params_not_in_self:
+            index = toret._index(params_not_in_self)
+            toret._value[np.ix_(index, index)] = self._fill_value
+            toret._center[index] = np.nan
+        if return_type == 'nparray':
+            toret = toret._value
+            if isscalar and not params[0].size:
+                toret = toret[0, 0]
+            return toret
+        return toret
+
+    def _index(self, params):
+        cumsizes = np.cumsum([0] + self._sizes)
+        idx = [params.index(param) for param in params]
+        return np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx])
+
+    def __contains__(self, name):
+        """Has this parameter?"""
+        return name in self._params
+
+    def __getstate__(self):
+        """Return this class state dictionary."""
+        state = {}
+        for name in ['value', 'center']: state[name] = getattr(self, '_' + name)
+        state['params'] = self._params.__getstate__()
+        return state
+
+    def __setstate__(self, state):
+        """Set this class state dictionary."""
+        self._params = ParameterCollection.from_state(state['params'])
+        for name in ['value', 'center']: setattr(self, '_' + name, state[name])
+
+    def __repr__(self):
+        """Return string representation of parameter matrix, including parameters."""
+        return '{}({})'.format(self.__class__.__name__, self._params)
+
+    def __eq__(self, other):
+        """Is ``self`` equal to ``other``, i.e. same type and attributes?"""
+        return type(other) == type(self) and all(np.all(getattr(other, name) == getattr(self, name)) for name in ['_params', '_value', '_center'])
+
+    @classmethod
+    @CurrentMPIComm.enable
+    def bcast(cls, value, mpicomm=None, mpiroot=0):
+        state = None
+        if mpicomm.rank == mpiroot:
+            state = value.__getstate__()
+            state['value'] = None
+        state = mpicomm.bcast(state, root=mpiroot)
+        state['value'] = mpi.bcast(value._value if mpicomm.rank == mpiroot else None, mpicomm=mpicomm, mpiroot=mpiroot)
+        return cls.from_state(state)
+
+    def deepcopy(self):
+        return copy.deepcopy(self)
+
+
+class ParameterCovariance(BaseParameterMatrix):
+
+    """Class that represents a parameter covariance."""
+
+    def view(self, params=None, return_type='nparray', fill=None):
+        """Return matrix for input parameters ``params``."""
+        new = super(ParameterCovariance, self).view(params=params, return_type=return_type)
+        if fill == 'proposal':
+            params_not_in_self = [param for param in new._params if param not in self._params and param.proposal is not None]
+            index = new._index(params_not_in_self)
+            new._value[index, index] = [param.proposal**2 for param in params_not_in_source]
+            new._center[index] = [param.value for param in params_not_in_source]
+        return new
+
+    cov = view
+
+    def corrcoef(self, params=None):
+        """Return correlation matrix for input parameters ``params``."""
+        return utils.cov_to_corrcoef(self.cov(params=params, return_type='nparray'))
+
+    def invcov(self, params=None, return_type='nparray'):
+        """Return inverse covariance (precision) matrix for input parameters ``params``."""
+        return self.to_precision(params=params, return_type=return_type)
+
+    def to_precision(self, params=None, return_type=None):
+        if params is None: params = self._params
+        view = self.view(params, return_type=None)
+        invcov = utils.inv(view._value)
+        if return_type == 'nparray':
+            return invcov
+        return ParameterPrecision(invcov, params=params, center=view._center)
+
+    def to_stats(self, params=None, sigfigs=2, tablefmt='latex_raw', fn=None):
+        import tabulate
+        if params is None: params = self._params
+        else: params = [self._params[param] for param in params]
+        data = []
+        is_latex = 'latex_raw' in tablefmt
+
+        headers = [param.latex(inline=True) if is_latex else str(param) for param in params]
+        data = [[utils.round_measurement(value, value, sigfigs=sigfigs)[0] for value in row] for row in self.view(params, return_type='nparray')]
+
+        tab = tabulate.tabulate(data, headers=headers, tablefmt=tablefmt)
+        if fn is not None:
+            utils.mkdir(os.path.dirname(fn))
+            self.log_info('Saving to {}.'.format(fn))
+            with open(fn, 'w') as file:
+                file.write(tab)
+        return tab
+
+    def to_getdist(self, params=None, label=None, mean=None, **kwargs):
+        from getdist.gaussian_mixtures import Mixture2D
+        toret = None
+        if params is None: params = self._params
+        else: params = [self._params[param] for param in params]
+        labels = [param.latex() for param in params]
+        names = [str(param) for param in params]
+        ranges = {str(param): tuple('N' if limit is None or np.abs(limit) == np.inf else limit for limit in param.prior.limits) for param in params}
+        cov = self.view(params, return_type=None)
+        return Mixture2D([cov._center if mean is None else np.asarray(mean)], [cov._value], lims=ranges, names=names, labels=labels, label=label)
+
+
+class ParameterPrecision(BaseParameterMatrix):
+
+    _fill_value = 0.
+
+    def cov(self, params=None, return_type='nparray'):
+        return self.to_covariance(params=params, return_type=return_type)
+
+    def to_covariance(self, params=None, return_type=None):
+        if params is None: params = self._params
+        cov = utils.inv(self.view(params, return_type='nparray'))
+        if return_type == 'nparray':
+            return cov
+        toret = ParameterCovariance(cov, params=params, center=self.center)
+        if return_type is not None:
+            toret = toret.view(return_type=return_type)
+        return toret
+
+    @classmethod
+    def sum(cls, *others):
+        if len(others) == 1 and utils.is_sequence(others[0]):
+            others = others[0]
+        params = ParameterCollection.concatenate([other._params for other in others])
+        new = others[0].view(params, return_type=None)
+        centers = []
+        for other in others:
+            view = other.view(new._params, return_type=None)
+            new._value += view._value
+            centers.append(view._center)
+        new._center = np.nanmean(centers, axis=0)
+        return new
+
+    def __add__(self, other):
+        return self.sum(self, other)
+
+    def __radd__(self, other):
+        if other == 0: return self.deepcopy()
+        return self.__add__(other)
+
+    def __iadd__(self, other):
+        if other == 0: return self.deepcopy()
+        return self.__add__(other)

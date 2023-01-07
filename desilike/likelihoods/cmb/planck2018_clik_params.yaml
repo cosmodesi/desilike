@@ -292,4 +292,3 @@ prior_SZ:
       dist: 'norm'
       loc: 9.5
       scale: 3.
-    drop: True

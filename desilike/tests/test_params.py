@@ -1,6 +1,6 @@
 import numpy as np
 
-from desilike.parameter import Parameter, Deriv, ParameterArray, Samples
+from desilike.parameter import Parameter, Deriv, ParameterArray, Samples, ParameterPrecision, ParameterCovariance
 
 
 def test_deriv():
@@ -33,7 +33,15 @@ def test_param_array():
     print(samples[:10]['a'].derivs)
 
 
+def test_matrix():
+    params = ['a', 'b']
+    precision = ParameterPrecision(np.eye(len(params)), params=params)
+    covariance = (precision + precision).to_covariance()
+
+
+
 if __name__ == '__main__':
 
-    test_param_array()
     #test_deriv()
+    #test_param_array()
+    test_matrix()

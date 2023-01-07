@@ -15,14 +15,30 @@ class InstallError(Exception):
     pass
 
 
-def download(url, target):
+def download(url, target, size=None):
+    # Adapted from https://stackoverflow.com/questions/15644964/python-progress-bar-and-downloads
     logger.info('Downloading {} to {}.'.format(url, target))
     import requests
-    r = requests.get(url, allow_redirects=True)
-    r.raise_for_status()
     utils.mkdir(os.path.dirname(target))
+    # See https://stackoverflow.com/questions/61991164/python-requests-missing-content-length-response
+    if size is None:
+        size = requests.head(url, headers={'Accept-Encoding': None}).headers.get('content-length')
+    r = requests.get(url, allow_redirects=True, stream=True)
+
     with open(target, 'wb') as file:
-        file.write(r.content)
+        if size is None or int(size) < 0: # no content length header
+            file.write(r.content)
+        else:
+            import shutil
+            width = shutil.get_terminal_size((80, 20))[0] - 9 # pass fallback
+            dl, size = 0, int(size)
+            for data in r.iter_content(chunk_size=4096):
+                dl += len(data)
+                file.write(data)
+                frac = min(dl / size, 1.)
+                done = int(width * frac)
+                print('\r[{}{}] [{:3.0%}]'.format('#' * done, ' ' * (width - done), frac), end='', flush=True)
+            print('')
 
 
 def extract(in_fn, out_fn, remove=True):
@@ -157,7 +173,7 @@ class Installer(BaseClass):
         return name in self.config
 
     def __getitem__(self, name):
-        return self.get(name)
+        return self.config[name]
 
     @staticmethod
     def parser(parser=None):

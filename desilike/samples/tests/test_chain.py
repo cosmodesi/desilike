@@ -30,7 +30,7 @@ def test_misc():
     chain['like.a'].param.update(latex='a', prior=ParameterPrior(limits=(-10., 10.)))
     assert isinstance(list(chain), list)
     pb = chain['like.b'].param
-    pb.update(prior=ParameterPrior(dist='norm', loc=1., limits=(-10., 10.)))
+    pb.update(prior=ParameterPrior(dist='norm', loc=1.))
     pb = Parameter.from_state(pb.__getstate__())
     chain['logposterior'] = np.zeros(chain.shape, dtype='f8')
     fn = os.path.join(chain_dir, 'chain.npy')

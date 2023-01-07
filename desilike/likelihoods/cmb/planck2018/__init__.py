@@ -1,3 +1,0 @@
-from .highl import TTHighlPlanck2018ClikLikelihood, TTTEEEHighlPlanck2018ClikLikelihood
-from .lensing import LensingPlanck2018ClikLikelihood
-from .lowl import TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood

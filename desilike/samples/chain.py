@@ -264,11 +264,10 @@ class Chain(Samples):
         toret = None
         if params is None: params = self.params(varied=True)
         else: params = [self[param].param for param in params]
-        labels = [param.latex() for param in params]
-        print(self.size, self.shape)
         samples = self.to_array(params=params, struct=False).reshape(-1, self.size)
+        labels = [param.latex() for param in params]
         names = [str(param) for param in params]
-        ranges = {param.name: tuple('N' if limit is None or np.abs(limit) == np.inf else limit for limit in param.prior.limits) for param in params}
+        ranges = {str(param): tuple('N' if limit is None or np.abs(limit) == np.inf else limit for limit in param.prior.limits) for param in params}
         toret = MCSamples(samples=samples.T, weights=np.asarray(self.weight.ravel()), loglikes=-np.asarray(self.logposterior.ravel()), names=names, labels=labels, label=label, ranges=ranges, **kwargs)
         return toret
 
@@ -475,10 +474,9 @@ class Chain(Samples):
 
         for iparam, param in enumerate(params):
             row = []
-            if is_latex: row.append(param.latex(inline=True))
-            else: row.append(str(param.name))
+            row.append(param.latex(inline=True) if is_latex else str(param))
             ref_center = self.mean(param)
-            ref_error = self.var(param) ** 0.5
+            ref_error = self.var(param)**0.5
             for quantity in quantities:
                 if quantity in ['argmax', 'mean', 'median', 'std']:
                     value = getattr(self, quantity)(param)

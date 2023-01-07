@@ -6,7 +6,7 @@ import numpy as np
 
 from desilike.mpi import CurrentMPIComm
 from desilike.utils import BaseClass
-from desilike.parameter import Parameter, ParameterArray, ParameterCollection, BaseParameterCollection, Samples
+from desilike.parameter import Parameter, ParameterArray, ParameterCollection, BaseParameterCollection, ParameterCovariance, Samples
 from desilike import mpi
 from . import utils
 
@@ -38,115 +38,6 @@ class ParameterBestFit(Samples):
         toret = self.copy()
         toret.data = [ParameterArray(value, param=value.param) for value in di.values()]
         return toret
-
-
-class ParameterCovariance(BaseClass):
-
-    """Class that represents a parameter covariance."""
-
-    def __init__(self, covariance, params=None):
-        """
-        Initialize :class:`ParameterCovariance`.
-
-        Parameters
-        ----------
-        covariance : array
-            2D array representing covariance.
-
-        params : list, ParameterCollection
-            Parameters corresponding to input ``covariance``.
-        """
-        if isinstance(covariance, self.__class__):
-            self.__dict__.update(covariance.__dict__)
-            return
-        self._value = np.atleast_2d(covariance)
-        if self._value.ndim != 2:
-            raise ValueError('Input covariance must be 2D')
-        shape = self._value.shape
-        if shape[1] != shape[0]:
-            raise ValueError('Input covariance must be square')
-        if params is None:
-            raise ValueError('Provide covariance parameters')
-        self._params = ParameterCollection(params)
-        self._sizes = [max(param.size, 1) for param in self._params]
-        if sum(self._sizes) != self._value.shape[0]:
-            raise ValueError('number * size of input params must match input covariance shape')
-
-    def params(self, *args, **kwargs):
-        return self._params.params(*args, **kwargs)
-
-    def select(self, params=None, **kwargs):
-        new = self.copy()
-        if params is None:
-            params = self._params.select(**kwargs)
-        new._value = self.cov(params=params)
-        new._params = params
-        return new
-
-    def cov(self, params=None, return_type='nparray'):
-        """Return covariance matrix for input parameters ``params``."""
-        if params is None:
-            params = self._params
-        isscalar = not utils.is_sequence(params)
-        if isscalar:
-            params = [params]
-        idx = np.array([self._params.index(param) for param in params])
-        cumsizes = np.cumsum([0] + self._sizes)
-        index = np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx])
-        toret = self._value[np.ix_(index, index)]
-        if return_type == 'nparray':
-            if isscalar:
-                toret = toret[0, 0]
-            return toret
-        return ParameterCovariance(toret, params=[self._params[ii] for ii in idx], sizes=[self._sizes[ii] for ii in idx])
-
-    def invcov(self, params=None):
-        """Return inverse covariance matrix for input parameters ``params``."""
-        return utils.inv(self.cov(params))
-
-    def corrcoef(self, params=None):
-        """Return correlation matrix for input parameters ``params``."""
-        return utils.cov_to_corrcoef(self.cov(params=params))
-
-    def __contains__(self, name):
-        """Has this parameter?"""
-        return name in self._params
-
-    def __getstate__(self):
-        """Return this class state dictionary."""
-        state = {}
-        for name in ['value', 'sizes']: state[name] = getattr(self, '_{}'.format(name))
-        state['params'] = self._params.__getstate__()
-        return state
-
-    def __setstate__(self, state):
-        """Set this class state dictionary."""
-        self._params = ParameterCollection.from_state(state['params'])
-        # Backward-compatibility
-        state.setdefault('sizes', [1] * len(self._params))
-        for name in ['value', 'sizes']:
-            setattr(self, '_{}'.format(name), state[name])
-
-    def __repr__(self):
-        """Return string representation of parameter covariance, including parameters."""
-        return '{}({})'.format(self.__class__.__name__, self._params)
-
-    def __eq__(self, other):
-        """Is ``self`` equal to ``other``, i.e. same type and attributes?"""
-        return type(other) == type(self) and other.params() == self.params() and np.all(other._value == self._value)
-
-    @classmethod
-    def bcast(cls, value, mpicomm=None, mpiroot=0):
-        import mpytools as mpy
-        if mpicomm is None:
-            mpicomm = mpy.CurrentMPIComm.get()
-        state = None
-        if mpicomm.rank == mpiroot:
-            state = value.__getstate__()
-            state['value'] = None
-        state = mpicomm.bcast(state, root=mpiroot)
-        state['value'] = mpy.bcast(value._value if mpicomm.rank == mpiroot else None, mpicomm=mpicomm, mpiroot=mpiroot)
-        return cls.from_state(state)
 
 
 class ParameterContours(BaseParameterCollection):

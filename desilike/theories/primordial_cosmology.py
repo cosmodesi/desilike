@@ -66,6 +66,9 @@ class Cosmoprimo(BasePrimordialCosmology):
             return get_from_cosmo(self.cosmo, name)
         raise AttributeError('{} has not attribute {}; try calling it first?'.format(self, name))
 
+    def __getitem__(self, name):
+        return self.cosmo.__getitem__(name)
+
     @classmethod
     def install(cls, installer):
         installer.pip('git+https://github.com/cosmodesi/cosmoprimo')

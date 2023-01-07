@@ -49,11 +49,10 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
         # Placeholder for vector passed to clik
         self.cumsizes = np.insert(np.cumsum(sizes), 0, 0)
         self.vector = np.zeros(self.cumsizes[-1] + len(self.nuisance_params))
-        if theory is None:
-            theory = ClTheory()
+        if theory is None: theory = ClTheory()
         self.theory = theory
         self.theory.update(cls=cls, lensing=True, unit='muK')
-        basenames = [param.basename for param in self.params if not param.drop and param.name not in (self._param_loglikelihood.name, self._param_logprior.name)]
+        basenames = [param.basename for param in self.params if param.name not in (self._param_loglikelihood.name, self._param_logprior.name) and param.basename not in ['SZ']]
         if set(basenames) != set(self.nuisance_params):
             raise ValueError('Expected nuisance parameters {}, received {}'.format(self.nuisance_params, basenames))
 
@@ -81,7 +80,7 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
         except KeyError:
             data_dir = installer.data_dir(cls.installer_section)
 
-        from desilike.install import  exists_package, exists_path, download, extract, InstallError
+        from desilike.install import exists_package, exists_path, download, extract, InstallError
 
         if installer.force_reinstall or not exists_package('clik'):
 
@@ -141,7 +140,7 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
             tar_fn = os.path.join(data_dir, tar_base)
             download(url, tar_fn)
             extract(tar_fn, data_dir)
-            installer.write({'Planck2018ClikLikelihood': {'data_dir': data_dir}})
+            installer.write({cls.installer_section: {'data_dir': data_dir}})
 
     def __del__(self):
         del self.clik

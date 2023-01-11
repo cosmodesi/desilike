@@ -3,7 +3,7 @@ import numpy as np
 from desilike.base import BaseCalculator, Parameter, ParameterArray
 from desilike.differentiation import Differentiation
 from desilike.jax import numpy as jnp
-from desilike import utils
+from desilike import plotting, utils
 
 
 class BaseLikelihood(BaseCalculator):
@@ -270,6 +270,14 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
     @property
     def flattheory(self):
         return jnp.concatenate([obs.flattheory for obs in self.observables], axis=0)
+
+    @plotting.plotter
+    def plot_covariance_matrix(self, corrcoef=True):
+        from desilike.observables.plotting import plot_covariance_matrix
+        cumsize = np.insert(np.cumsum([len(obs.flatdata) for obs in self.observables]), 0, 0)
+        mat = [[self.covariance[start1:stop1, start2:stop2] for start2, stop2 in zip(cumsize[:-1], cumsize[1:])] for start1, stop1 in zip(cumsize[:-1], cumsize[1:])]
+        return plot_covariance_matrix(mat, corrcoef=corrcoef)
+
 
 
 # For backward-compatibility

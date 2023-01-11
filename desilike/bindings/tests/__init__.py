@@ -41,14 +41,14 @@ def TestShapeFitKaiserLikelihood():
     return GaussianLikelihood(observables=[observable])
 
 
-def TestFullKaiserLikelihood():
+def TestDirectKaiserLikelihood():
 
     import desilike
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, FullPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrumMultipoles
     from desilike.likelihoods import GaussianLikelihood
 
-    theory = KaiserTracerPowerSpectrumMultipoles(template=FullPowerSpectrumTemplate(z=1.4, cosmo='external'))
+    theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=1.4, cosmo='external'))
     dirname = os.path.join(os.path.dirname(desilike.__file__), 'tests', '_pk')
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
                                                        data=os.path.join(dirname, 'data.npy'),
@@ -58,14 +58,14 @@ def TestFullKaiserLikelihood():
     return GaussianLikelihood(observables=[observable])
 
 
-def TestEmulatedFullKaiserLikelihood():
+def TestEmulatedDirectKaiserLikelihood():
 
     import desilike
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, FullPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import ObservedTracerPowerSpectrumMultipoles
     from desilike.likelihoods import GaussianLikelihood
 
-    theory = KaiserTracerPowerSpectrumMultipoles(template=FullPowerSpectrumTemplate(z=1.4))
+    theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=1.4))
     dirname = os.path.join(os.path.dirname(desilike.__file__), 'tests', '_pk')
     observable = ObservedTracerPowerSpectrumMultipoles(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
                                                        data=os.path.join(dirname, 'data.npy'),

@@ -27,16 +27,20 @@ class Info(UserDict):
 class BasePipeline(BaseClass):
 
     def __init__(self, calculator):
-        self.calculators = [calculator.runtime_info.initialize()]
+        self.calculators = []
 
         def callback(calculator):
+            self.calculators.append(calculator.runtime_info.initialize())
             for require in calculator.runtime_info.requires:
                 if require in self.calculators:
                     del self.calculators[self.calculators.index(require)]  # we want first dependencies at the end
-                self.calculators.append(require.runtime_info.initialize())
                 callback(require)
 
-        callback(self.calculators[0])
+        callback(calculator)
+        # To avoid loops created by one calculator, which when updated, requests reinitialization of the calculators
+        # which depends on it
+        for calculator in self.calculators:
+            calculator.runtime_info.initialized = True
         self.calculators = self.calculators[::-1]
         self.mpicomm = calculator.mpicomm
         for calculator in self.calculators:
@@ -130,7 +134,7 @@ class BasePipeline(BaseClass):
             runtime_info = calculator.runtime_info
             # print(calculator.__class__.__name__, runtime_info._param_values)
             runtime_info.set_param_values(params, full=True)
-            # print(calculator.__class__.__name__, runtime_info.tocalculate, runtime_info._param_values, params)
+            # print(calculator.__class__.__name__, id(calculator), runtime_info.toinitialize, runtime_info.tocalculate, params)
             result = runtime_info.calculate()
             self.derived.update(runtime_info.derived)
             if self.more_derived:

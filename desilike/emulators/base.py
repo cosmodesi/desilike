@@ -241,7 +241,7 @@ class Emulator(BaseClass):
                 mse = {}
                 for name in self.samples:
                     if self.samples[name] is samples:
-                        mse[name] = np.mean((derived['emulator.' + name] - subsamples[name].zero**2))
+                        mse[name] = np.mean((derived['emulator.' + name] - subsamples[name].zero)**2)
                         msg = '{}mse of {} is {:.3g} (square root = {:.3g})'.format(item, name, mse[name], np.sqrt(mse[name]))
                         if mse_stop is not None:
                             test = mse[name] < mse_stop

@@ -9,9 +9,11 @@ from desilike.theories.galaxy_clustering.base import WindowedPowerSpectrumMultip
 
 class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
 
-    def initialize(self, data=None, mocks=None, wmatrix=None, theory=None, klim=None, kstep=None, shotnoise=None, **kwargs):
-        self.k, self.ells, self.shotnoise = None, None, shotnoise
-        self.flatdata = self.load_data(data=data, klim=klim, kstep=kstep, **kwargs)[0]
+    def initialize(self, data=None, mocks=None, wmatrix=None, theory=None, klim=None, kstep=None, shotnoise=0., **kwargs):
+        self.k, self.kedges, self.ells, self.shotnoise = None, None, None, shotnoise
+        self.flatdata = None
+        if not isinstance(data, dict):
+            self.flatdata = self.load_data(data=data, klim=klim, kstep=kstep, **kwargs)[0]
         self.mocks = self.load_data(data=mocks, klim=klim, kstep=kstep, **kwargs)[-1]
         if self.mpicomm.bcast(self.mocks is not None, root=0):
             covariance = None
@@ -22,20 +24,21 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
             self.set_default_k_ells(klim=klim, kstep=kstep)
         self.wmatrix = WindowedPowerSpectrumMultipoles(k=self.k, ells=self.ells, wmatrix=wmatrix, theory=theory, shotnoise=self.shotnoise)
         if self.flatdata is None:
-            self.wmatrix()
+            self.wmatrix(**data)
             self.flatdata = self.flattheory.copy()
 
     def set_default_k_ells(self, klim=None, kstep=None):
         if not isinstance(klim, dict):
             raise ValueError('Unknown klim format; provide e.g. {0: (0.01, 0.2), 2: (0.01, 0.15)}')
-        self.k, self.ells = [], []
+        self.k, self.kedges, self.ells = [], [], []
         for ell, lim in klim.items():
             self.ells.append(ell)
             if kstep is not None:
-                k = np.arange(*lim, step=kstep)
+                kedges = np.arange(*lim, step=kstep)
             else:
-                k = np.array(lim, dtype='f8')
-            self.k.append(k)
+                kedges = np.array(lim, dtype='f8')
+            self.k.append((kedges[:-1] + kedges[1:]) / 2.)
+            self.kedges.append(kedges)
         self.ells = tuple(self.ells)
 
     def load_data(self, data=None, klim=None, kstep=None, krebin=None):
@@ -68,13 +71,15 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
                 klim = {ell: klim[ill] for ill, ell in enumerate(power.ells)}
             elif not isinstance(klim, dict):
                 raise ValueError('Unknown klim format; provide e.g. {0: (0.01, 0.2), 2: (0.01, 0.15)}')
-            list_k, list_data, ells = [], [], []
+            list_k, list_kedges, list_data, ells = [], [], [], []
             for ell, lim in klim.items():
                 mask = (power.k >= lim[0]) & (power.k < lim[1])
+                index = np.flatnonzero(mask)
                 list_k.append(power.k[mask])
+                list_kedges.append(power.kedges[np.append(index, index[-1] + 1)])
                 list_data.append(data[power.ells.index(ell)][mask])
                 ells.append(ell)
-            return list_k, tuple(ells), list_data, shotnoise
+            return list_k, list_kedges, tuple(ells), list_data, shotnoise
 
         def load_all(list_mocks):
             list_y, list_shotnoise = [], []
@@ -84,9 +89,9 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
                 else:
                     mocks = [mocks]
                 for mock in mocks:
-                    mock_k, mock_ells, mock_y, mock_shotnoise = lim_data(mock)
+                    mock_k, mock_kedges, mock_ells, mock_y, mock_shotnoise = lim_data(mock)
                     if self.k is None:
-                        self.k, self.ells = mock_k, mock_ells
+                        self.k, self.kedges, self.ells = mock_k, mock_kedges, mock_ells
                     if not all(np.allclose(sk, mk, atol=0., rtol=1e-3) for sk, mk in zip(self.k, mock_k)):
                         raise ValueError('{} does not have expected k-binning (based on previous data)'.format(mock))
                     if mock_ells != self.ells:
@@ -103,7 +108,7 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
             flatdata = np.mean(list_y, axis=0)
             shotnoise = np.mean(list_shotnoise, axis=0)
 
-        self.k, self.ells, flatdata, shotnoise = self.mpicomm.bcast((self.k, self.ells, flatdata, shotnoise) if self.mpicomm.rank == 0 else None, root=0)
+        self.k, self.kedges, self.ells, flatdata, shotnoise = self.mpicomm.bcast((self.k, self.kedges, self.ells, flatdata, shotnoise) if self.mpicomm.rank == 0 else None, root=0)
         if self.shotnoise is None: self.shotnoise = shotnoise
         return flatdata, list_y
 
@@ -161,14 +166,12 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
         return lax
 
-    def unpack(self, array):
-        toret = []
-        nout = 0
-        for k in self.k:
-            sl = slice(nout, nout + len(k))
-            toret.append(array[sl])
-            nout = sl.stop
-        return toret
+    @plotting.plotter
+    def plot_covariance_matrix(self, corrcoef=True):
+        from desilike.observables.plotting import plot_covariance_matrix
+        cumsize = np.insert(np.cumsum([len(k) for k in self.k]), 0, 0)
+        mat = [[self.covariance[start1:stop1, start2:stop2] for start2, stop2 in zip(cumsize[:-1], cumsize[1:])] for start1, stop1 in zip(cumsize[:-1], cumsize[1:])]
+        return plot_covariance_matrix(mat, x1=self.k, xlabel1=r'$k$ [$h/\mathrm{Mpc}$]', label1=[r'$\ell = {:d}$'.format(ell) for ell in self.ells], corrcoef=corrcoef)
 
     @property
     def flattheory(self):
@@ -180,11 +183,14 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
 
     @property
     def data(self):
-        return self.unpack(self.flatdata)
+        cumsize = np.insert(np.cumsum([len(k) for k in self.k]), 0, 0)
+        return [self.flatdata[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
 
     @property
     def std(self):
-        return self.unpack(np.diag(self.covariance)**0.5)
+        cumsize = np.insert(np.cumsum([len(k) for k in self.k]), 0, 0)
+        diag = np.diag(self.covariance)**0.5
+        return [diag[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
 
     def __getstate__(self):
         state = super(ObservedTracerPowerSpectrumMultipoles, self).__getstate__()

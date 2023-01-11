@@ -5,7 +5,7 @@
 # euclid_pk, euclid_lensing
 # and clik_fake_planck (for Planck members)
 
-data.experiments = ['AbacusSummitLRGFullPowerSpectrumMultipoles']
+data.experiments = ['AbacusSummitLRGDirectPowerSpectrumMultipoles']
 
 #------ Parameter list -------
 # data.parameters[class name] = [mean, min, max, 1-sigma, scale, role]

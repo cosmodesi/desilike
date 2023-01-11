@@ -4,8 +4,8 @@ def AbacusSummitLRGFullPowerSpectrumMultipoles(cosmo='external', solve=None, sav
     from desilike.likelihoods import ObservablesGaussianLikelihood
 
     if save_emulator or emulator_fn is None:
-        from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, FullPowerSpectrumTemplate
-        template = FullPowerSpectrumTemplate(z=0.8, cosmo=None if save_emulator and cosmo == 'external' else cosmo)
+        from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate
+        template = DirectPowerSpectrumTemplate(z=0.8, cosmo=None if save_emulator and cosmo == 'external' else cosmo)
         theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
         #from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
         #theory = KaiserTracerPowerSpectrumMultipoles(template=template)

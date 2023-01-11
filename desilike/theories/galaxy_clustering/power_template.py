@@ -89,7 +89,7 @@ class FixedPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.runtime_info.requires = []  # remove APEffect dependence
 
 
-class FullPowerSpectrumTemplate(BasePowerSpectrumTemplate):
+class DirectPowerSpectrumTemplate(BasePowerSpectrumTemplate):
 
     def initialize(self, *args, k=None, **kwargs):
         if k is None: k = np.logspace(-3., 1., 400)

@@ -4,7 +4,7 @@ from scipy import interpolate
 from desilike.jax import numpy as jnp
 from .base import TrapzTheoryPowerSpectrumMultipoles
 from .base import BaseTheoryPowerSpectrumMultipoles, BaseTheoryCorrelationFunctionMultipoles, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
-from .power_template import FullPowerSpectrumTemplate  # to add calculator in the registry
+from .power_template import DirectPowerSpectrumTemplate  # to add calculator in the registry
 
 
 class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
@@ -16,11 +16,11 @@ class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
         super(BasePTPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
-        self.kin = np.geomspace(min(1e-3, self.k[0] / 2), max(1., self.k[0] * 2), 600)  # margin for AP effect
+        kin = np.geomspace(min(1e-3, self.k[0] / 2), max(1., self.k[0] * 2), 600)  # margin for AP effect
         if template is None:
-            template = FullPowerSpectrumTemplate(k=self.kin)
+            template = DirectPowerSpectrumTemplate(k=kin)
         self.template = template
-        self.template.update(k=self.kin)
+        self.template.update(k=kin)
 
 
 class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipoles):
@@ -32,11 +32,11 @@ class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipole
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
         super(BasePTCorrelationFunctionMultipoles, self).initialize(*args, **kwargs)
-        self.kin = np.geomspace(min(1e-3, 1 / self.s[-1] / 2), max(2., 1 / self.s[0] * 2), 1000)  # margin for AP effect
+        kin = np.geomspace(min(1e-3, 1 / self.s[-1] / 2), max(2., 1 / self.s[0] * 2), 1000)  # margin for AP effect
         if template is None:
-            template = FullPowerSpectrumTemplate(k=self.kin)
+            template = DirectPowerSpectrumTemplate(k=kin)
         self.template = template
-        self.template.update(k=self.kin)
+        self.template.update(k=kin)
 
 
 class BaseTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
@@ -126,7 +126,7 @@ class KaiserTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, TrapzTh
     def calculate(self, b1=1., sn0=0.):
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
-        pkmu = (b1 + f * muap**2)**2 * np.interp(np.log10(kap), np.log10(self.kin), self.template.pk_dd) + sn0
+        pkmu = (b1 + f * muap**2)**2 * np.interp(np.log10(kap), np.log10(self.template.k), self.template.pk_dd) + sn0
         self.power = self.to_poles(pkmu)
 
     def get(self):
@@ -194,8 +194,8 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
 
     def calculate(self):
         from velocileptors.LPT.lpt_rsd_fftw import LPT_RSD
-        self.lpt = LPT_RSD(self.kin, self.template.pk_dd, **self.options)
-        # print(self.template.f, self.k.shape, self.template.qpar, self.template.qper, self.kin.shape, self.template.pk_dd.shape)
+        self.lpt = LPT_RSD(self.template.k, self.template.pk_dd, **self.options)
+        # print(self.template.f, self.k.shape, self.template.qpar, self.template.qper, self.template.k.shape, self.template.pk_dd.shape)
         self.lpt.make_pltable(self.template.f, kv=self.k, apar=self.template.qpar, aperp=self.template.qper, ngauss=3)
         lpttable = {0: self.lpt.p0ktable, 2: self.lpt.p2ktable, 4: self.lpt.p4ktable}
         self.lpttable = np.array([lpttable[ell] for ell in self.ells])
@@ -262,7 +262,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
     def calculate(self):
         import pybird_dev as pybird
-        cosmo = {'k11': self.kin, 'P11': self.template.pk_dd, 'f': self.template.f, 'DA': 1., 'H': 1.}
+        cosmo = {'k11': self.template.k, 'P11': self.template.pk_dd, 'f': self.template.f, 'DA': 1., 'H': 1.}
         self.bird = pybird.Bird(cosmo, with_bias=False, eft_basis='eftoflss', with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
 
         if self.nnlo_counterterm is not None:  # we use smooth power spectrum since we don't want spurious BAO signals
@@ -358,7 +358,7 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
 
     def calculate(self):
         import pybird_dev as pybird
-        cosmo = {'k11': self.kin, 'P11': self.template.pk_dd, 'f': self.template.f, 'DA': 1., 'H': 1.}
+        cosmo = {'k11': self.template.k, 'P11': self.template.pk_dd, 'f': self.template.f, 'DA': 1., 'H': 1.}
         self.bird = pybird.Bird(cosmo, with_bias=False, eft_basis='eftoflss', with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
 
         if self.nnlo_counterterm is not None:  # we use smooth power spectrum since we don't want spurious BAO signals

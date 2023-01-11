@@ -2,7 +2,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib import gridspec, transforms
 
-from desilike.plotting import savefig
+from desilike import plotting
 from . import diagnostics, utils
 
 
@@ -54,7 +54,8 @@ def _get_default_profiles_params(profiles, params=None, of='bestfit', varied=Tru
     return [params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])]
 
 
-def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, fn=None, kw_plot=None, kw_save=None):
+@plotting.plotter
+def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, kw_plot=None):
     """
     Make trace plot.
 
@@ -94,13 +95,11 @@ def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, f
             ax.plot(steps[:len(tmp)], tmp, color=colors[ichain], **kw_plot)
 
     lax[-1].set_xlabel('step', fontsize=labelsize)
-
-    if fn is not None:
-        savefig(fn, **(kw_save or {}))
     return lax
 
 
-def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, slices=None, labelsize=None, ax=None, fn=None, kw_save=None, **kwargs):
+@plotting.plotter
+def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, slices=None, labelsize=None, ax=None, **kwargs):
     """
     Plot Gelman-Rubin statistics.
 
@@ -156,12 +155,11 @@ def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, s
     if threshold is not None: ax.axhline(y=threshold, xmin=0., xmax=1., linestyle='--', linewidth=1, color='k')
     ax.legend()
 
-    if fn is not None:
-        savefig(fn, fig=fig, **(kw_save or {}))
     return ax
 
 
-def plot_geweke(chains, params=None, threshold=None, slices=None, labelsize=None, ax=None, fn=None, kw_save=None, **kwargs):
+@plotting.plotter
+def plot_geweke(chains, params=None, threshold=None, slices=None, labelsize=None, ax=None, **kwargs):
     """
     Plot Geweke statistics.
 
@@ -210,12 +208,11 @@ def plot_geweke(chains, params=None, threshold=None, slices=None, labelsize=None
     if threshold is not None: ax.axhline(y=threshold, xmin=0., xmax=1., linestyle='--', linewidth=1, color='k')
     ax.legend()
 
-    if fn is not None:
-        savefig(fn, fig=fig, **(kw_save or {}))
     return ax
 
 
-def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, labelsize=None, ax=None, fn=None, kw_save=None):
+@plotting.plotter
+def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, labelsize=None, ax=None):
     r"""
     Plot integrated autocorrelation time.
 
@@ -269,12 +266,11 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
         ax.plot(slices, slices * 1. / threshold, label='$N/{:d}$'.format(threshold), linestyle='--', linewidth=1, color='k')
     ax.legend()
 
-    if fn is not None:
-        savefig(fn, fig=fig, **(kw_save or {}))
     return ax
 
 
-def plot_triangle(chains, params=None, labels=None, fn=None, kw_save=None, **kwargs):
+@plotting.plotter
+def plot_triangle(chains, params=None, labels=None, **kwargs):
     """
     Triangle plot.
 
@@ -301,14 +297,13 @@ def plot_triangle(chains, params=None, labels=None, fn=None, kw_save=None, **kwa
     params = _get_default_chain_params(chains, params=params)
     chains = [chain.to_getdist(label=label, params=params) for chain, label in zip(chains, labels)]
     lax = g.triangle_plot(chains, [str(param) for param in params], **kwargs)
-    if fn is not None:
-        savefig(fn, **(kw_save or {}))
     return g
 
 
+@plotting.plotter
 def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None, errors='error',
                  labelsize=None, ticksize=None, kw_scatter=None, yband=None, kw_mean=None, kw_truth=None, kw_yband=None,
-                 kw_legend=None, ax=None, fn=None, kw_save=None):
+                 kw_legend=None, ax=None):
     """
     Plot best fit estimates for single parameter.
 
@@ -405,12 +400,11 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
     ax.set_ylabel(profiles[0].bestfit[param].param.latex(inline=True), fontsize=labelsize)
     ax.tick_params(labelsize=ticksize)
     if add_legend: ax.legend(**{**{'ncol': maxpoints}, **kw_legend})
-    if fn is not None:
-        savefig(fn, fig=fig, **(kw_save or {}))
     return ax
 
 
-def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=None, ybands=None, ylimits=None, figsize=None, fn=None, kw_save=None, **kwargs):
+@plotting.plotter
+def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=None, ybands=None, ylimits=None, figsize=None, **kwargs):
     """
     Plot best fit estimates for several parameters.
 
@@ -474,14 +468,13 @@ def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=No
             if leg is not None: leg.remove()
         lax.append(ax)
 
-    if fn is not None:
-        savefig(fn, fig=fig, **(kw_save or {}))
     return np.array(lax)
 
 
+@plotting.plotter
 def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors=None, linestyles=None,
                  cl=(1, 2, 3), labelsize=None, ticksize=None, kw_profile=None, kw_cl=None,
-                 kw_legend=None, figsize=None, fn=None, kw_save=None, **kwargs):
+                 kw_legend=None, figsize=None, **kwargs):
 
     profiles = _make_list(profiles)
     params = _get_default_profiles_params(profiles, params=params, of='profile')
@@ -524,8 +517,7 @@ def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors
         if iparam1 == 0: ax.set_ylabel(r'$\Delta \chi^{2}$', fontsize=labelsize)
         if add_legend and iparam1 == 0: ax.legend(**kw_legend)
 
-    if fn is not None:
-        savefig(fn, fig=fig, **(kw_save or {}))
+    return gs
 
 
 def plot_profile_comparison(profiles, profiles_ref, params=None, labels=None, colors=None, **kwargs):

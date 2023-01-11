@@ -6,7 +6,7 @@ theory:
       halofit_version: mead
 
 likelihood:
-  desilike.bindings.cobaya.y1kp45_mock_challenge.AbacusSummitLRGFullPowerSpectrumMultipoles: null
+  desilike.bindings.cobaya.y1kp45_mock_challenge.AbacusSummitLRGDirectPowerSpectrumMultipoles: null
 
 params:
   As:

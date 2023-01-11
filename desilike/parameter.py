@@ -1868,7 +1868,7 @@ class ParameterPrior(BaseClass):
 
     def __eq__(self, other):
         """Is ``self`` equal to ``other``, i.e. same type and attributes?"""
-        return type(other) == type(self) and all(getattr(other, key) == getattr(self, key) for key in ['name', 'limits', 'attrs'])
+        return type(other) == type(self) and all(getattr(other, key) == getattr(self, key) for key in ['dist', 'limits', 'attrs'])
 
 
 def _reshape(array, shape):

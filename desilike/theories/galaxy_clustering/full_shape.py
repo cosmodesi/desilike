@@ -20,7 +20,7 @@ class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         if template is None:
             template = DirectPowerSpectrumTemplate(k=kin)
         self.template = template
-        self.template.update(k=kin)
+        self.template.init.setdefault('k', kin)
 
 
 class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipoles):
@@ -36,7 +36,7 @@ class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipole
         if template is None:
             template = DirectPowerSpectrumTemplate(k=kin)
         self.template = template
-        self.template.update(k=kin)
+        self.template.init.setdefault('k', kin)
 
 
 class BaseTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
@@ -52,15 +52,15 @@ class BaseTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
             pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
         self.pt = pt
         if template is not None:
-            self.pt.update(template=template)
+            self.pt.init.update(template=template)
         for name, value in self.pt._default_options.items():
             if name in kwargs:
-                self.pt.update({name: kwargs.pop(name)})
+                self.pt.init.update({name: kwargs.pop(name)})
             elif name in self.options:
-                self.pt.update({name: self.options[name]})
+                self.pt.init.update({name: self.options[name]})
         self.required_bias_params, self.optional_bias_params = {}, {}
         super(BaseTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
-        self.pt.update(k=self.k, ells=self.ells)
+        self.pt.init.update(k=self.k, ells=self.ells)
         self.set_params()
 
     def set_params(self):
@@ -83,15 +83,15 @@ class BaseTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMulti
             pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
         self.pt = pt
         if template is not None:
-            self.pt.update(template=template)
+            self.pt.init.update(template=template)
         for name, value in self.pt._default_options.items():
             if name in kwargs:
-                self.pt.update({name: kwargs.pop(name)})
+                self.pt.init.update({name: kwargs.pop(name)})
             elif name in self.options:
-                self.pt.update({name: self.options[name]})
+                self.pt.init.update({name: self.options[name]})
         self.required_bias_params, self.optional_bias_params = {}, {}
         super(BaseTracerCorrelationFunctionMultipoles, self).initialize(*args, **kwargs)
-        self.pt.update(s=self.s, ells=self.ells)
+        self.pt.init.update(s=self.s, ells=self.ells)
         self.set_params()
 
     def set_params(self):
@@ -107,8 +107,8 @@ class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
 
     def initialize(self, *args, pt=None, template=None, **kwargs):
         power = globals()[self.__class__.__name__.replace('CorrelationFunction', 'PowerSpectrum')]()
-        if pt is not None: power.update(pt=pt)
-        if template is not None: power.update(template=template)
+        if pt is not None: power.init.update(pt=pt)
+        if template is not None: power.init.update(template=template)
         super(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles, self).initialize(*args, power=power, **kwargs)
 
     def get(self):

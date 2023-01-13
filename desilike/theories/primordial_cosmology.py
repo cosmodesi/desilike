@@ -8,6 +8,13 @@ class BasePrimordialCosmology(BaseCalculator):
     pass
 
 
+conversions = {'logA': 'ln10^10A_s'}
+
+
+def convert(params):
+    return {conversions.get(name, name): value for name, value in params.items()}
+
+
 def get_cosmo(cosmo):
     if cosmo is None:
         return cosmo
@@ -18,7 +25,7 @@ def get_cosmo(cosmo):
         cosmo = (cosmo, {})
     if isinstance(cosmo, tuple):
         return getattr(cosmoprimo.fiducial, cosmo[0])(**cosmo[1])
-    return cosmoprimo.Cosmology(**cosmo)
+    return cosmoprimo.Cosmology(**convert(cosmo))
 
 
 def external_cosmo(cosmo):
@@ -26,13 +33,17 @@ def external_cosmo(cosmo):
 
 
 def get_from_cosmo(cosmo, name):
+    name = conversions.get(name, name)
     if name.lower().startswith('omega_'):
         name = name[:5] + '0' + name[5:]
     if name.startswith('omega'):
         return get_from_cosmo(cosmo, 'O' + name[1:]) * cosmo.h ** 2
     if name == 'k_pivot':
         return cosmo.k_pivot * cosmo.h
-    toret = getattr(cosmo, name)
+    try:
+        toret = getattr(cosmo, name)
+    except AttributeError:
+        toret = cosmo[name]
     if not toret:
         return 0.
     return toret
@@ -45,10 +56,10 @@ class Cosmoprimo(BasePrimordialCosmology):
     def initialize(self, fiducial=None, **kwargs):
         # kwargs is engine, extra_params
         fiducial_input = bool(fiducial)
-        if fiducial is not None:
-            fiducial = get_cosmo(fiducial)
-        else:
+        if fiducial is None:
             fiducial = Cosmology()
+        else:
+            fiducial = get_cosmo(fiducial)
         self.fiducial = fiducial.clone(**kwargs)
         if fiducial_input:
             for param in self.params:
@@ -56,7 +67,7 @@ class Cosmoprimo(BasePrimordialCosmology):
         self.cosmo_requires = {'fiducial': self.fiducial.__getstate__(), 'params': dict.fromkeys(self.params.basenames())}
 
     def calculate(self, **params):
-        self.cosmo = self.fiducial.clone(**params)
+        self.cosmo = self.fiducial.clone(**convert(params))
 
     def get(self):
         return self.cosmo

@@ -6,4 +6,4 @@ from .fisher import Fisher
 
 
 from .install import Installer
-Installer.setenv()
+Installer().setenv()

@@ -3,11 +3,12 @@ import glob
 import numpy as np
 
 from desilike import plotting, utils
+from desilike.utils import path_types
 from desilike.base import BaseCalculator
 from desilike.theories.galaxy_clustering.base import WindowedPowerSpectrumMultipoles
 
 
-class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
+class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
     def initialize(self, data=None, mocks=None, wmatrix=None, theory=None, klim=None, kstep=None, shotnoise=0., **kwargs):
         self.k, self.kedges, self.ells, self.shotnoise = None, None, None, shotnoise
@@ -84,7 +85,7 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
         def load_all(list_mocks):
             list_y, list_shotnoise = [], []
             for mocks in list_mocks:
-                if isinstance(mocks, str):
+                if isinstance(mocks, path_types):
                     mocks = [load_data(mock) for mock in sorted(glob.glob(mocks))]
                 else:
                     mocks = [mocks]
@@ -105,6 +106,7 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
             if not utils.is_sequence(data):
                 data = [data]
             list_y, list_shotnoise = load_all(data)
+            if not list_y: raise ValueError('No data/mocks could be obtained from {}'.format(data))
             flatdata = np.mean(list_y, axis=0)
             shotnoise = np.mean(list_shotnoise, axis=0)
 
@@ -193,7 +195,7 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
         return [diag[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
 
     def __getstate__(self):
-        state = super(ObservedTracerPowerSpectrumMultipoles, self).__getstate__()
+        state = super(TracerPowerSpectrumMultipolesObservable, self).__getstate__()
         for name in ['k', 'ells']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
@@ -202,4 +204,5 @@ class ObservedTracerPowerSpectrumMultipoles(BaseCalculator):
     @classmethod
     def install(cls, config):
         # TODO: remove this dependency
-        config.pip('git+https://github.com/cosmodesi/pypower')
+        #config.pip('git+https://github.com/cosmodesi/pypower')
+        pass

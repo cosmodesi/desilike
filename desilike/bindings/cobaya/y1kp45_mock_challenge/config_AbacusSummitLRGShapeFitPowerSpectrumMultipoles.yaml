@@ -1,7 +1,0 @@
-likelihood:
-  desilike.bindings.cobaya.y1kp45_mock_challenge.AbacusSummitLRGShapeFitPowerSpectrumMultipoles: null
-
-sampler:
-  mcmc:
-
-output: _chains/test

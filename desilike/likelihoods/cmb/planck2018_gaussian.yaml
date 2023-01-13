@@ -1,4 +1,21 @@
-class: Planck2018GaussianLikelihood
+class: BasePlanck2018GaussianLikelihood
+
+info:
+  version: 0.0.1
+  date: 10/09/2022
+  author: Arnaud de Mattia
+  maintainer: Arnaud de Mattia
+  description: Gaussian approximation to Planck likelihoods, based on the mean and covariance matrices released with Planck data
+  url:
+  licence:
+  bibtex: []
+  requirements: []
+  long_description: See http://pla.esac.esa.int/pla/#cosmology
+
+
+---
+
+class: FullGridPlanck2018GaussianLikelihood
 
 info:
   version: 0.0.1

@@ -34,12 +34,12 @@ params:
       dist: uniform
       limits: [0.01, 0.03]
     latex: \omega_{b}
-  A_s:
-    value: 2.083e-09
+  logA:
+    value: 3.036394
     prior:
       dist: uniform
-      limits: [1.5e-9, 3.5e-9]
-    latex: A_{s}
+      limits: [2.5, 3.5]
+    latex: \ln(10^{10} A_{s})
   n_s:
     value: 0.9649
     prior:

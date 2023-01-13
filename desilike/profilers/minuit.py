@@ -44,7 +44,8 @@ class MinuitProfiler(BaseProfiler):
         profiles.set(start=Samples(start, params=self.varied_params))
         profiles.set(bestfit=ParameterBestFit([self.minuit.values[str(param)] for param in self.varied_params] + [- 0.5 * self.minuit.fval], params=self.varied_params + ['logposterior']))
         profiles.set(error=Samples([self.minuit.errors[str(param)] for param in self.varied_params], params=self.varied_params))
-        profiles.set(covariance=ParameterCovariance(np.array(self.minuit.covariance), params=self.varied_params))
+        if self.minuit.covariance is not None:
+            profiles.set(covariance=ParameterCovariance(np.array(self.minuit.covariance), params=self.varied_params))
         return profiles
 
     def _interval_one(self, start, param, max_iterations=int(1e5), cl=None):

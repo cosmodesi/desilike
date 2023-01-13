@@ -8,6 +8,7 @@ import traceback
 import warnings
 import functools
 import importlib
+from pathlib import Path
 from collections import UserDict
 import math
 
@@ -17,6 +18,9 @@ import scipy as sp
 
 from .mpi import CurrentMPIComm
 from . import jax
+
+
+path_types = (str, Path)
 
 
 @CurrentMPIComm.enable
@@ -48,7 +52,7 @@ def evaluate(value, type=None, locals=None):
     if isinstance(value, str):
         from .jax import numpy as jnp
         from .jax import scipy as jsp
-        value = eval(value, {'np': jnp, 'sp': jsp}, locals)
+        value = eval(value, {'np': np, 'sp': sp, 'jnp': jnp, 'jsp': jsp}, locals)
     if type is not None:
         value = type(value)
     return value
@@ -349,27 +353,6 @@ class NamespaceDict(BaseClass):
 
     def __repr__(self):
         return str(self.__getstate__())
-
-
-class MutableDict(UserDict):
-
-    def clone(self, *args, **kwargs):
-        new = self.copy()
-        new.update(*args, **kwargs)
-        return new
-
-
-def _make_wrapper(func):
-
-    @functools.wraps(func)
-    def wrapper(self, *args, **kwargs):
-        self.updated = True
-        return self.func(*args, **kwargs)
-
-
-for name in ['__init__', '__delitem__', '__getitem__', '__setitem__', 'clear', 'fromkeys', 'pop', 'popitem', 'setdefault', 'update']:
-
-    setattr(MutableDict, name, _make_wrapper(getattr(UserDict, name)))
 
 
 def _check_valid_inv(mat, invmat, rtol=1e-04, atol=1e-05, check_valid='raise'):
@@ -754,11 +737,11 @@ def round_measurement(x, u=0.1, v=None, sigfigs=2, positive_sign=False, notation
         v = -abs(u)
     else:
         v = float(v)
-    if x == 0. or not np.isfinite(u): logx = 0
+    if x == 0. or not np.isfinite(x): logx = 0
     else: logx = math.floor(math.log10(abs(x)))
     if u == 0. or not np.isfinite(u): logu = logx
     else: logu = math.floor(math.log10(abs(u)))
-    if v == 0. or not np.isfinite(u): logv = logx
+    if v == 0. or not np.isfinite(v): logv = logx
     else: logv = math.floor(math.log10(abs(v)))
     if x == 0.: logx = max(logu, logv)
 

@@ -62,7 +62,7 @@ class Fisher(BaseClass):
         else:
 
             def getter():
-                return self.likelihood.loglikelihood
+                return - self.likelihood.loglikelihood
 
             order = 2
 
@@ -74,7 +74,7 @@ class Fisher(BaseClass):
         self._finalize = finalize
 
     def run(self, **params):
-        self.prior_precision = ParameterPrecision(self.prior_differentiation(**params), params=self.varied_params, center=[self.prior_differentiation.center[str(param)] for param in self.varied_params])
+        self.prior_precision = ParameterPrecision(- self.prior_differentiation(**params), params=self.varied_params, center=[self.prior_differentiation.center[str(param)] for param in self.varied_params])
         self.precision = ParameterPrecision(self._finalize(self.differentiation(**self.prior_differentiation.center)), params=self.varied_params, center=self.prior_precision._center)
 
     def __call__(self, **params):

@@ -5,7 +5,7 @@ from desilike.likelihoods.base import BaseCalculator
 
 class ClTheory(BaseCalculator):
 
-    def initialize(self, cls=None, lensing=None, non_linear=None, unit=None, cosmo=None):
+    def initialize(self, cls=None, lensing=None, non_linear=None, unit=None, cosmo=None, T0=None):
         self.requested_cls = dict(cls or {})
         self.ell_max_lensed_cls, self.ell_max_lens_potential_cls = 0, 0
         for cl, ellmax in self.requested_cls.items():
@@ -25,15 +25,18 @@ class ClTheory(BaseCalculator):
         allowed_units = [None, 'muK']
         if self.unit not in allowed_units:
             raise ValueError('Input unit must be one of {}, found {}'.format(allowed_units, self.unit))
+        self.T0 = T0
         if cosmo is None:
             from desilike.theories.primordial_cosmology import Cosmoprimo
             cosmo = Cosmoprimo()
         self.cosmo = cosmo
-        self.cosmo.update(lensing=lensing, ellmax_cl=ellmax, non_linear=non_linear)
+        self.cosmo.init.update(lensing=self.cosmo.init.get('lensing', False) or lensing,
+                               ellmax_cl=max(self.cosmo.init.get('ellmax_cl', 0), ellmax),
+                               non_linear=self.cosmo.init.get('non_linear', '') or non_linear)
 
     def calculate(self):
         self.cls = {}
-        T0_cmb = self.cosmo.T0_cmb
+        T0 = self.T0 if self.T0 is not None else self.cosmo.T0_cmb
         hr = self.cosmo.get_harmonic()
         if self.ell_max_lensed_cls:
             lensed_cl = hr.lensed_cl(ellmax=self.ell_max_lensed_cls)
@@ -48,7 +51,7 @@ class ClTheory(BaseCalculator):
                 tmp = lensed_cl[cl][:ellmax + 1]
             if self.unit == 'muK':
                 npotential = cl.count('p')
-                unit = (T0_cmb * 1e6)**(2 - npotential)
+                unit = (T0 * 1e6)**(2 - npotential)
                 tmp = tmp * unit
             self.cls[cl] = tmp
 

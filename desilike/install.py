@@ -31,13 +31,15 @@ def download(url, target, size=None):
         else:
             import shutil
             width = shutil.get_terminal_size((80, 20))[0] - 9 # pass fallback
-            dl, size = 0, int(size)
-            for data in r.iter_content(chunk_size=4096):
+            dl, size, current = 0, int(size), 0
+            for data in r.iter_content(chunk_size=2048):
                 dl += len(data)
                 file.write(data)
                 frac = min(dl / size, 1.)
                 done = int(width * frac)
-                print('\r[{}{}] [{:3.0%}]'.format('#' * done, ' ' * (width - done), frac), end='', flush=True)
+                if done > current:  # it seems, when content-length is not set iter_content does not care about chunk_size
+                    print('\r[{}{}] [{:3.0%}]'.format('#' * done, ' ' * (width - done), frac), end='', flush=True)
+                    current = done
             print('')
 
 
@@ -133,8 +135,6 @@ def source(fn):
 class Installer(BaseClass):
 
     home_dir = os.path.expanduser('~')
-    config_fn = os.path.join(home_dir, '.desilike', 'config.yaml')
-    profile_fn = os.path.join(home_dir, '.desilike', 'profile.sh')
 
     def __init__(self, install_dir=None, user=False, no_deps=False, force_reinstall=False, ignore_installed=False, **kwargs):
         import site
@@ -146,7 +146,20 @@ class Installer(BaseClass):
         lib_rel_install_dir = os.path.relpath(site.getsitepackages()[0], default_install_dir)
         if install_dir is not None:
             install_dir = str(install_dir)
-        config = BaseConfig(self.config_fn if os.path.isfile(self.config_fn) else {})
+
+        self.config_dir = os.getenv('DESILIKE_CONF_DIR', None)
+        if not self.config_dir:
+            self.config_dir = self.home_dir
+
+        config_fn = {}
+        if os.path.isfile(self.config_fn):
+            config_fn = self.config_fn
+            try:
+                with open(self.config_fn, 'a'): pass
+            except PermissionError:  # from now on, write to home
+                self.config_dir = self.home_dir
+        config = BaseConfig(config_fn)
+
         if 'install_dir' not in config:
             config['install_dir'] = default_install_dir
             if install_dir is not None:
@@ -165,6 +178,14 @@ class Installer(BaseClass):
                    'dylib_dir': os.path.join(self.install_dir, 'lib')}
         for name, value in default.items():
             setattr(self, name, kwargs.get(name, value))
+
+    @property
+    def config_fn(self):
+        return os.path.join(self.config_dir, '.desilike', 'config.yaml')
+
+    @property
+    def profile_fn(self):
+        return os.path.join(self.config_dir, '.desilike', 'profile.sh')
 
     def get(self, *args, **kwargs):
         return self.config.get(*args, **kwargs)
@@ -239,7 +260,7 @@ class Installer(BaseClass):
         if update and os.path.isfile(self.config_fn):
             base_config = BaseConfig(self.config_fn)
             config = base_config.clone(config)
-            for key in dirs + ['source']:
+            for keynew in dirs + ['source']:
                 paths = _make_list(config.get(key, []))
                 config[key] = paths + [path for path in _make_list(base_config.get(key, [])) if path not in paths]
         config.write(self.config_fn)
@@ -251,7 +272,6 @@ class Installer(BaseClass):
             for src in config.get('source', []):
                 file.write('source {}'.format(src))
 
-    @classmethod
-    def setenv(cls):
-        if os.path.isfile(cls.profile_fn):
-            source(cls.profile_fn)
+    def setenv(self):
+        if os.path.isfile(self.profile_fn):
+            source(self.profile_fn)

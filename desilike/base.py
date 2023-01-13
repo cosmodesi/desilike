@@ -2,11 +2,12 @@ import os
 import sys
 import copy
 import warnings
+import functools
 
 import numpy as np
 
 from . import mpi
-from .utils import BaseClass, UserDict, MutableDict, Monitor, deep_eq, is_sequence
+from .utils import BaseClass, UserDict, Monitor, deep_eq, is_sequence
 from .io import BaseConfig
 from .parameter import Parameter, ParameterCollection, ParameterConfig, ParameterCollectionConfig, ParameterArray, Samples
 
@@ -19,9 +20,75 @@ class PipelineError(Exception):
     """Exception raised when issue with pipeline."""
 
 
-class Info(UserDict):
+class Info(BaseConfig):
 
     """Namespace/dictionary holding calculator static attributes."""
+
+
+class InitConfig(BaseConfig):
+
+    _attrs = ['_args', '_params', '_updated']  # will be copied
+
+    def __init__(self, *arg, args=None, params=None, **kwargs):
+        self._args = args or ()
+        self._params = params or ParameterCollection()
+        self._updated = True
+        super(InitConfig, self).__init__(*arg, **kwargs)
+
+    @property
+    def updated(self):
+        return self._updated
+
+    @updated.setter
+    def updated(self, updated):
+        self._updated = bool(updated)
+        if self._updated:
+            runtime_info = getattr(self, 'runtime_info', None)
+            if runtime_info is not None:
+                runtime_info.initialized = False
+
+    @property
+    def args(self):
+        return self._args
+
+    @args.setter
+    def args(self, args):
+        self._args = tuple(args)
+        self.updated = True
+
+    @property
+    def params(self):
+        return self._params
+
+    @params.setter
+    def params(self, params):
+        self._params = ParameterCollection(params)
+        self.updated = True
+
+    def __getstate__(self):
+        return {name: getattr(self, name) for name in ['data', 'args', 'params', 'updated']}
+
+    def __setstate__(self, state):
+        for name, value in state.items():
+            if name == 'data':
+                self.data = state[name]
+            else:
+                setattr(self, '_' + name, value)
+
+
+def _make_wrapper(func):
+
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        self.updated = True
+        return func(self, *args, **kwargs)
+
+    return wrapper
+
+
+for name in ['__delitem__', '__getitem__', '__setitem__', 'clear', 'fromkeys', 'pop', 'popitem', 'setdefault', 'update']:
+
+    setattr(InitConfig, name, _make_wrapper(getattr(UserDict, name)))
 
 
 class BasePipeline(BaseClass):
@@ -137,12 +204,12 @@ class BasePipeline(BaseClass):
             # print(calculator.__class__.__name__, id(calculator), runtime_info.toinitialize, runtime_info.tocalculate, params)
             result = runtime_info.calculate()
             self.derived.update(runtime_info.derived)
-            if self.more_derived:
-                tmp = self.more_derived(0)
-                if tmp is not None: self.derived.update(tmp)
         if self.more_calculate:
             toret = self.more_calculate()
             if toret is not None: result = toret
+        if self.more_derived:
+            tmp = self.more_derived(0)
+            if tmp is not None: self.derived.update(tmp)
         return result
 
     def mpicalculate(self, **params):
@@ -375,12 +442,13 @@ class RuntimeInfo(BaseClass):
         self.speed = None
         self.monitor = Monitor()
         self.required_by = set()
-        if init is None: init = ((), {}, ParameterCollection())
-        self.init = list(init)
+        if init is None: init = InitConfig()
+        self.init = init
+        self.init.runtime_info = self
         self._initialized = False
         self._tocalculate = True
         self.calculated = False
-        self.params = ParameterCollection(init[2])
+        self.params = ParameterCollection(init.params)
         self.name = self.calculator.__class__.__name__
 
     def install(self):
@@ -454,25 +522,23 @@ class RuntimeInfo(BaseClass):
     @initialized.setter
     def initialized(self, initialized):
         self._initialized = initialized
-        if not initialized:
+        if initialized:
+            self.init._updated = False
+        else:
             self._pipeline = None
             for calculator in self.required_by:
                 calculator.runtime_info.initialized = False
 
-    @property
-    def toinitialize(self):
-        return not self._initialized
-
     def initialize(self, **kwargs):
-        if self.toinitialize:
+        if not self.initialized:
             self.clear()
             self.install()
-            bak = self.init[2]
-            self.init[2] = ParameterCollection(self.init[2]).deepcopy()
-            self.calculator.initialize(*self.init[0], **self.init[1])
-            self.params = self.init[2]
-            self.init[2] = bak
-            self._initialized = True
+            bak = self.init.params
+            self.init.params = ParameterCollection(self.init.params).deepcopy()
+            self.calculator.initialize(*self.init.args, **self.init)
+            self.params = self.init.params
+            self.init.params = bak
+            self.initialized = True
         return self.calculator
 
     @property
@@ -553,7 +619,7 @@ class BaseCalculator(BaseClass):
 
     def __new__(cls, *args, **kwargs):
         cls_info = Info(getattr(cls, '_info', {}))
-        cls_init = getattr(cls, '_init', {})
+        cls_init = InitConfig(data=getattr(cls, '_init', {}))
         cls_params = ParameterCollection(getattr(cls, '_params', None))
         if hasattr(cls, 'config_fn'):
             dirname = os.path.dirname(sys.modules[cls.__module__].__file__)
@@ -561,27 +627,26 @@ class BaseCalculator(BaseClass):
             cls_info = Info({**config.get('info', {}), **cls_info})
             params = ParameterCollectionConfig(config.get('params', {})).init()
             params.update(cls_params)
-            kwargs = {**cls_init, **(config.get('init', {}) or {}), **kwargs}
+            init = InitConfig(config.get('init', {}))
+            init.update(cls_init)
+            init.update(kwargs)
         else:
+            init = cls_init.deepcopy()
             params = cls_params.deepcopy()
         new = super(BaseCalculator, cls).__new__(cls)
         new.info = cls_info
-        new.runtime_info = RuntimeInfo(new, init=((), kwargs, params))
+        init.params = params
+        new.runtime_info = RuntimeInfo(new, init=init)
         new.mpicomm = mpi.COMM_WORLD
         return new
 
     def __init__(self, *args, **kwargs):
-        if args: raise SyntaxError('Provide named arguments')
-        self.update(**kwargs)
+        self.init.args = args
+        self.init.update(**kwargs)
 
-    def update(self, *args, **kwargs):
-        if len(args) == 1:
-            kwargs = {**args[0], **kwargs}
-        elif len(args):
-            raise ValueError('Unrecognized arguments {}'.format(args))
-        for name, value in kwargs.items():
-            self.runtime_info.init[1][name] = value
-        self.runtime_info.initialized = False
+    @property
+    def init(self):
+        return self.runtime_info.init
 
     def __call__(self, **params):
         return self.runtime_info.pipeline.calculate(**params)
@@ -648,13 +713,12 @@ class BaseCalculator(BaseClass):
     @property
     def params(self):
         if not self.runtime_info.initialized:
-            return self.runtime_info.init[2]
+            return self.runtime_info.init.params
         return self.runtime_info.params
 
     @params.setter
     def params(self, params):
-        self.runtime_info.init[2] = ParameterCollection(params)
-        self.runtime_info.initialized = False
+        self.runtime_info.init.params = ParameterCollection(params)
 
     @property
     def all_params(self):

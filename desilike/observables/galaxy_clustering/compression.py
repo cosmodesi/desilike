@@ -1,5 +1,4 @@
-import numpy as np
-
+from desilike.jax import numpy as jnp
 from desilike.parameter import Parameter
 from desilike.base import BaseCalculator
 from desilike.samples import load_source
@@ -15,7 +14,7 @@ class BAOCompression(BaseCalculator):
         self.bao = BAOExtractor(z=z, fiducial=fiducial, cosmo=cosmo)
 
     def load_data(self, data=None, covariance=None, quantities=None):
-        data = load_source(data, params=quantities, choice=True, return_type='dict')
+        data = load_source(data if data is not None else covariance, params=quantities, choice=True, return_type='dict')
         quantities = [Parameter(quantity) for quantity in data.keys()]
         allowed_bao_quantities = ['DM_over_rd', 'DH_over_rd', 'DM_over_DH', 'DV_over_rd', 'qpar', 'qper', 'qap', 'qiso']
         indices = []
@@ -24,12 +23,12 @@ class BAOCompression(BaseCalculator):
                 indices.append(iq)
         quantities = [quantities[iq] for iq in indices]
         flatdata = [data[quantity.name] for quantity in quantities]
-        covariance = load_source(covariance, params=quantities, cov=True, return_type='nparray')
+        covariance = load_source(covariance if covariance is not None else data, params=quantities, cov=True, return_type='nparray')
         return [quantity.basename for quantity in quantities], flatdata, covariance
 
     def calculate(self):
         bao = [getattr(self.bao, quantity) for quantity in self.bao_quantities]
-        self.flattheory = np.array(bao)
+        self.flattheory = jnp.array(bao)
 
     def __getstate__(self):
         state = {}
@@ -71,7 +70,7 @@ class ShapeFitCompression(BaseCalculator):
     def calculate(self):
         bao = [getattr(self.bao, quantity) for quantity in self.bao_quantities]
         fs = [getattr(self.fs, quantity) for quantity in self.fs_quantities]
-        self.flattheory = np.array(bao + fs)
+        self.flattheory = jnp.array(bao + fs)
 
     def __getstate__(self):
         state = {}

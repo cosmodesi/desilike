@@ -3,7 +3,7 @@ import os
 import numpy as np
 
 from desilike import utils
-from desilike.bindings.base import LikelihoodGenerator, get_likelihood_params, ParameterCollection
+from desilike.bindings.base import BaseLikelihoodGenerator, get_likelihood_params, ParameterCollection
 
 
 from desilike.cosmo import Cosmology, ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
@@ -134,7 +134,7 @@ def MontePythonLikelihoodFactory(cls, kw_like, module=None):
     return type(Likelihood)(cls.__name__, (Likelihood,), d)
 
 
-class MontePythonLikelihoodGenerator(LikelihoodGenerator):
+class MontePythonLikelihoodGenerator(BaseLikelihoodGenerator):
 
     def __init__(self, *args, **kwargs):
         super(MontePythonLikelihoodGenerator, self).__init__(MontePythonLikelihoodFactory, *args, **kwargs)
@@ -187,8 +187,3 @@ class MontePythonLikelihoodGenerator(LikelihoodGenerator):
                 file.write("data.parameters['{}'] = {}\n".format(name[len(cls.__name__) + 1:], value))
 
         return cls, fn, code
-
-
-if __name__ == '__main__':
-
-    MontePythonLikelihoodGenerator()()

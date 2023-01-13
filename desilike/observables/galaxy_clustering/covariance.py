@@ -2,11 +2,12 @@ import numpy as np
 from scipy import special
 
 from desilike.theories.galaxy_clustering.utils import weights_trapz
+from desilike.theories.primordial_cosmology import get_cosmo
 from desilike.base import BaseCalculator
 from desilike.utils import BaseClass
 from desilike import utils
-from .power_spectrum import ObservedTracerPowerSpectrumMultipoles
-from .correlation_function import ObservedTracerCorrelationFunctionMultipoles
+from .power_spectrum import TracerPowerSpectrumMultipolesObservable
+from .correlation_function import TracerCorrelationFunctionMultipolesObservable
 
 
 def integral_legendre_product(ells, range=(-1,1), norm=False):
@@ -92,21 +93,30 @@ class CutskyFootprint(BaseFootprint):
             raise ValueError('provide either "size" (number of objects) or "nbar" (angular density in (deg)^(-2))')
         if area is None or zrange is None:
             raise ValueError('provide area (in deg^2) and zrange (zmin, zmax)')
-        for name in ['area', 'zrange']:
-            value = locals()[name]
-            setattr(self, '_' + name, None if value is None else np.asarray(value))
-        for name in ['_area', '_nbar']:
-            value = getattr(self, name)
-            if value is not None and value.size == 1: setattr(self, name, value.item())
+        for name in ['area', 'zrange', 'nbar']:
+            value = np.asarray(locals()[name])
+            if value.size <= 1: value.shape = ()
+            setattr(self, '_' + name, value)
+        self._size = size
         argsort = np.argsort(self._zrange)
         self._zrange = self._zrange[argsort]
         if self._nbar.size == self._zrange.size: self._nbar = self._nbar[argsort]
-        self.cosmo = cosmo or Cosmoprimo()
+        self.cosmo = cosmo
+
+    @property
+    def cosmo(self):
+        if self._cosmo is None:
+            raise ValueError('Provide cosmology')
+        return self._cosmo
+
+    @cosmo.setter
+    def cosmo(self, cosmo):
+        self._cosmo = get_cosmo(cosmo)
 
     @property
     def volume(self):
-        volume = self.cosmo.comoving_radial_distance(self.zrange)**3
-        return - self.area / (180. / np.pi)**2 * np.diff(volume).sum()
+        volume = self.cosmo.comoving_radial_distance(self._zrange)**3
+        return self.area / (180. / np.pi)**2 * np.diff(volume).sum()
 
     @property
     def area(self):
@@ -115,11 +125,23 @@ class CutskyFootprint(BaseFootprint):
         return np.mean(self._area) * (180. / np.pi)**2 * (4. * np.pi)
 
     @property
+    def zavg(self):
+        z = (self._zrange[:-1] + self._zrange[1:]) / 2.
+        if self._nbar.ndim:
+            volume = np.diff(self.cosmo.comoving_radial_distance(self._zrange)**3)
+            nbar = (self._nbar[:-1] + self._nbar[1:]) / 2.
+            return np.average(z, weights=nbar * volume)
+        return np.mean(z)
+
+    @property
     def size(self):
         if self._size is not None:
             return self._size
-        volume = self.cosmo.comoving_radial_distance(self.zrange)**3
-        return - self.area / (180. / np.pi)**2 * np.diff(self._nbar * volume).sum()
+        if self._nbar.ndim:
+            volume = np.diff(self.cosmo.comoving_radial_distance(self._zrange)**3)
+            nbar = (self._nbar[:-1] + self._nbar[1:]) / 2.
+            return self.area / (180. / np.pi)**2 * np.sum(nbar * volume)
+        return self.area * self._nbar
 
     def __and__(self, other):
         if self._area.ndim == 0 or other._area.ndim == 0:
@@ -162,11 +184,15 @@ class ObservablesCovarianceMatrix(BaseClass):
     def run(self, **params):
         self.cosmo = None
         if any(isinstance(footprint, CutskyFootprint) for footprint in self.footprints):
-            for observable in self.observables:
-                for calculator in observable.runtime_info.pipeline.calculators:
-                    if isinstance(calculator, Cosmoprimo):
-                        self.cosmo = calculator
-                        break
+            for footprint in self.footprints:
+                self.cosmo = getattr(footprint, 'cosmo', None)
+                if self.cosmo is not None: break
+            if self.cosmo is None:
+                for observable in self.observables:
+                    for calculator in observable.runtime_info.pipeline.calculators:
+                        if isinstance(calculator, Cosmoprimo):
+                            self.cosmo = calculator
+                            break
         for footprint in self.footprints: footprint.cosmo = self.cosmo
         covariance = [[None for o in self.observables] for o in self.observables]
         for io1, o1 in enumerate(self.observables):
@@ -225,7 +251,7 @@ class ObservablesCovarianceMatrix(BaseClass):
 
         obs = [self.observables[io] for io in ios]
 
-        if all(isinstance(o, ObservedTracerPowerSpectrumMultipoles) for o in obs):
+        if all(isinstance(o, TracerPowerSpectrumMultipolesObservable) for o in obs):
 
             def get_bin_cov(obs, ells, ibins):
                 ills = [o.ells.index(ell) for o, ell in zip(obs, ells)]
@@ -236,7 +262,7 @@ class ObservablesCovarianceMatrix(BaseClass):
                 k = get_integ_points(bin)
                 return (2. * np.pi)**3 * np.mean(get_bin_volume(bin) / np.prod([get_bin_volume(bin) for bin in bins]) * get_sigma_k(*pks, *ells, k))
 
-        if isinstance(obs[0], ObservedTracerCorrelationFunctionMultipoles) and isinstance(obs[1], ObservedTracerPowerSpectrumMultipoles):
+        if isinstance(obs[0], TracerCorrelationFunctionMultipolesObservable) and isinstance(obs[1], TracerPowerSpectrumMultipolesObservable):
 
             def get_bin_cov(obs, ells, ibin):
                 ills = [o.ells.index(ell) for o, ell in zip(obs, ells)]
@@ -246,10 +272,10 @@ class ObservablesCovarianceMatrix(BaseClass):
                 sigmak = np.mean(get_sigma_k(*pks, *ells, k), axis=-1)
                 return np.sign(1j ** ells[0]).real * np.sum(sigmak * weights)
 
-        if isinstance(obs[1], ObservedTracerCorrelationFunctionMultipoles) and isinstance(obs[0], ObservedTracerPowerSpectrumMultipoles):
+        if isinstance(obs[1], TracerCorrelationFunctionMultipolesObservable) and isinstance(obs[0], TracerPowerSpectrumMultipolesObservable):
             return self._run(io2, io1).T
 
-        if all(isinstance(o, ObservedTracerCorrelationFunctionMultipoles) for o in obs):
+        if all(isinstance(o, TracerCorrelationFunctionMultipolesObservable) for o in obs):
 
             def get_bin_cov(obs, ells, ibin):
                 ills = [o.ells.index(ell) for o, ell in zip(obs, ells)]

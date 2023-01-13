@@ -3,11 +3,12 @@ import glob
 import numpy as np
 
 from desilike import plotting, utils
+from desilike.utils import path_types
 from desilike.base import BaseCalculator
 from desilike.theories.galaxy_clustering.base import WindowedCorrelationFunctionMultipoles
 
 
-class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
+class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
 
     def initialize(self, data=None, mocks=None, theory=None, slim=None, sstep=None, **kwargs):
         self.s, self.sedges, self.ells = None, None, None
@@ -71,7 +72,7 @@ class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
         def load_all(list_mocks):
             list_y = []
             for mocks in list_mocks:
-                if isinstance(mocks, str):
+                if isinstance(mocks, path_types):
                     mocks = [load_data(mock) for mock in glob.glob(mocks)]
                 else:
                     mocks = [mocks]
@@ -91,6 +92,7 @@ class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
             if not utils.is_sequence(data):
                 data = [data]
             list_y = load_all(data)
+            if not list_y: raise ValueError('No data/mocks could be obtained from {}'.format(data))
             flatdata = np.mean(list_y, axis=0)
         self.s, self.sedges, self.ells, flatdata = self.mpicomm.bcast((self.s, self.sedges, self.ells, flatdata) if self.mpicomm.rank == 0 else None, root=0)
         return flatdata, list_y
@@ -144,7 +146,7 @@ class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
         return [diag[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
 
     def __getstate__(self):
-        state = super(ObservedTracerCorrelationFunctionMultipoles, self).__getstate__()
+        state = super(TracerCorrelationFunctionMultipolesObservable, self).__getstate__()
         for name in ['s', 'ells']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
@@ -153,4 +155,5 @@ class ObservedTracerCorrelationFunctionMultipoles(BaseCalculator):
     @classmethod
     def install(cls, config):
         # TODO: remove this dependency
-        config.pip('git+https://github.com/cosmodesi/pycorr')
+        #config.pip('git+https://github.com/cosmodesi/pycorr')
+        pass

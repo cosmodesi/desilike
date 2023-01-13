@@ -11,7 +11,7 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
     config_fn = 'planck2018_clik.yaml'
     installer_section = 'Planck2018ClikLikelihood'
 
-    def initialize(self, theory=None, data_dir=None):
+    def initialize(self, theory=None, cosmo=None, data_dir=None):
         super(BasePlanck2018ClikLikelihood, self).initialize()
         import clik
         self.clik = clik
@@ -51,7 +51,8 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
         self.vector = np.zeros(self.cumsizes[-1] + len(self.nuisance_params))
         if theory is None: theory = ClTheory()
         self.theory = theory
-        self.theory.update(cls=cls, lensing=True, unit='muK')
+        self.theory.init.update(cls=cls, lensing=True, unit='muK', T0=2.7255)
+        if cosmo is not None: self.theory.init.update(cosmo=cosmo)
         basenames = [param.basename for param in self.params if param.name not in (self._param_loglikelihood.name, self._param_logprior.name) and param.basename not in ['SZ']]
         if set(basenames) != set(self.nuisance_params):
             raise ValueError('Expected nuisance parameters {}, received {}'.format(self.nuisance_params, basenames))

@@ -1,4 +1,4 @@
-from .power_spectrum import ObservedTracerPowerSpectrumMultipoles
-from .correlation_function import ObservedTracerCorrelationFunctionMultipoles
+from .power_spectrum import TracerPowerSpectrumMultipolesObservable
+from .correlation_function import TracerCorrelationFunctionMultipolesObservable
 from .compression import BAOCompression, ShapeFitCompression
 from .covariance import ObservablesCovarianceMatrix, BoxFootprint, CutskyFootprint

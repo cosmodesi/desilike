@@ -8,19 +8,20 @@ from ..parameter import Samples
 from .chain import Chain
 from .profiles import Profiles, ParameterBestFit, ParameterCovariance, ParameterContours
 from . import diagnostics, utils
-from .utils import BaseClass
+from .utils import BaseClass, path_types
 
 
 __all__ = ['Samples', 'Chain', 'Profiles', 'ParameterBestFit', 'ParameterCovariance', 'ParameterContours', 'diagnostics']
 
 
 def load_source(source, choice=None, cov=None, burnin=None, params=None, default=False, return_type=None):
-    if not utils.is_sequence(source) and not isinstance(source, np.ndarray): fns = [source]
+    is_not_sequence = not utils.is_sequence(source) and not isinstance(source, np.ndarray)
+    if is_not_sequence: fns = [source]
     else: fns = source
 
     sources = []
     for fn in fns:
-        if isinstance(fn, str):
+        if isinstance(fn, path_types):
             sources += [BaseClass.load(ff) for ff in glob.glob(fn)]
         else:
             sources.append(fn)
@@ -35,6 +36,8 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
             source = {}
         elif hasattr(sources[0], 'concatenate'):
             source = sources[0].concatenate(sources)
+        elif is_not_sequence and len(sources) == 1:
+            source = sources[0]
         else:
             source = np.array(sources)
 
@@ -54,6 +57,8 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
             else:
                 params_in_source = [param for param in params if param in source]
                 if params_in_source:
+                    if not choice and hasattr(source, 'center'):  # Covariance matrix
+                        tmp = source.center(params=params_in_source, return_type='dict')
                     tmp = source.choice(params=params_in_source, return_type='dict', **choice)
                 params_not_in_source = [param for param in params if param not in params_in_source]
                 for param in params_not_in_source:
@@ -61,7 +66,10 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
                 tmp = [tmp[str(param)] for param in params]
             source = ParameterBestFit(tmp, params=params)
         if source:
-            tmp = source.choice(params=source.params(), return_type=return_type, **choice)
+            if not choice and hasattr(source, 'center'):  # Covariance matrix
+                tmp = source.center(params=source.params(), return_type=return_type)
+            else:
+                tmp = source.choice(params=source.params(), return_type=return_type, **choice)
         toret.append(tmp)
 
     if cov is not None:

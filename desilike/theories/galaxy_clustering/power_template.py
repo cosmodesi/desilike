@@ -224,5 +224,5 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.DH_over_rd = self.qpar * self.DH_over_rd_fid
         self.DM_over_rd = self.qper * self.DM_over_rd_fid
         self.DV_over_rd = self.apeffect.qiso * self.DV_over_rd_fid
-        self.DH_over_DM = self.apeffect.qap * self.DH_over_DM
+        self.DH_over_DM = self.apeffect.qap * self.DH_over_DM_fid
         return self

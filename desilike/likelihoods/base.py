@@ -1,6 +1,6 @@
 import numpy as np
 
-from desilike.base import BaseCalculator, Parameter, ParameterArray
+from desilike.base import BaseCalculator, Parameter, ParameterCollection, ParameterArray
 from desilike.differentiation import Differentiation
 from desilike.jax import numpy as jnp
 from desilike import plotting, utils
@@ -116,7 +116,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
             self.differentiation = getattr(self, 'differentiation', None)
             if self.differentiation is None:
                 varied_params_bak = pipeline.varied_params
-                pipeline._varied_params = varied_params_bak + solved_params
+                pipeline._varied_params = ParameterCollection(solved_params)
                 self.differentiation = Differentiation(self, getter, method='auto', order={str(param): 1 for param in solved_params})
                 pipeline._varied_params = varied_params_bak
 
@@ -172,7 +172,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
                 if indices_marg:
                     loglikelihood += 1. / 2. * dx[indices_marg].dot(inverse_fishers[index][np.ix_(indices_marg, indices_marg)]).dot(dx[indices_marg])
             # Set derived values
-            likelihood.runtime_info.derived.set(ParameterArray(loglikelihood, param=likelihood._param_loglikelihood))
+            pipeline.derived.set(ParameterArray(loglikelihood, param=likelihood._param_loglikelihood))
             sum_loglikelihood += loglikelihood
         if indices_marg:
             sum_loglikelihood -= 1. / 2. * np.linalg.slogdet(sum_inverse_fishers[np.ix_(indices_marg, indices_marg)])[1]
@@ -186,9 +186,8 @@ class BaseGaussianLikelihood(BaseLikelihood):
         self.loglikelihood = sum_loglikelihood
         self.logprior += sum_logprior
 
-        self.runtime_info.derived.set(ParameterArray(self.loglikelihood, param=self._param_loglikelihood))
-        self.runtime_info.derived.set(ParameterArray(self.logprior, param=self._param_logprior))
-
+        pipeline.derived.set(ParameterArray(self.loglikelihood, param=self._param_loglikelihood))
+        pipeline.derived.set(ParameterArray(self.logprior, param=self._param_logprior))
         return self.loglikelihood + self.logprior
 
     def __getstate__(self):
@@ -277,11 +276,6 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
         cumsize = np.insert(np.cumsum([len(obs.flatdata) for obs in self.observables]), 0, 0)
         mat = [[self.covariance[start1:stop1, start2:stop2] for start2, stop2 in zip(cumsize[:-1], cumsize[1:])] for start1, stop1 in zip(cumsize[:-1], cumsize[1:])]
         return plot_covariance_matrix(mat, corrcoef=corrcoef)
-
-
-
-# For backward-compatibility
-GaussianLikelihood = ObservablesGaussianLikelihood
 
 
 class SumLikelihood(BaseLikelihood):

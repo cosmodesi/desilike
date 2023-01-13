@@ -1,7 +1,7 @@
 import os
 
 from desilike.theories.galaxy_clustering import (KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles,
-                                                 FullPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate)
+                                                 DirectPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate)
 from desilike.emulators.base import Emulator, EmulatedCalculator
 from desilike import setup_logging
 
@@ -10,7 +10,7 @@ def test_base():
     emulator_dir = '_tests'
     fn = os.path.join(emulator_dir, 'emu.npy')
 
-    for Template in [FullPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate]:
+    for Template in [DirectPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate]:
         calculator = KaiserTracerPowerSpectrumMultipoles(template=Template())
         calculator.all_params['b1'].update(derived='{b}**2', prior=None)
         calculator.all_params['b'] = {'prior': {'limits': [0., 2.]}}
@@ -42,7 +42,7 @@ def test_base():
     emulator.fit()
     emulator.save(fn)
     pt = EmulatedCalculator.load(fn)
-    calculator.update(pt=pt)
+    calculator.init.update(pt=pt)
     calculator(f=0.8)
 
 

@@ -54,12 +54,12 @@ params:
       dist: uniform
       limits: [0.01, 0.03]
     latex: \omega_{b}
-  A_s:
-    value: 2.083e-09
+  logA:
+    value: 3.036394
     prior:
       dist: uniform
-      limits: [1.8e-9, 3e-9]
-    latex: A_{s}
+      limits: [2.5, 3.5]
+    latex: \ln(10^{10} A_{s})
   n_s:
     value: 0.9649
     prior:
@@ -281,11 +281,12 @@ params:
     ref:
       limits: [0.2, 0.4]
     latex: \Omega_{m}
-  A_s:
+  logA:
+    value: 3.
     prior:
-      limits: [1.5e-9, 3e-9]
-    ref:
-      limits: [1.9e-9, 2.1e-9]
+      dist: uniform
+      limits: [2.5, 3.5]
+    latex: \ln(10^{10} A_{s})
   h:
     prior:
       limits: [0.4, 0.9]

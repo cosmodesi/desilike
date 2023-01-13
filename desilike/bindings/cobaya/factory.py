@@ -3,7 +3,7 @@ import os
 import numpy as np
 
 from desilike.io import BaseConfig
-from desilike.bindings.base import LikelihoodGenerator, get_likelihood_params, Parameter, ParameterCollection
+from desilike.bindings.base import BaseLikelihoodGenerator, get_likelihood_params, Parameter, ParameterCollection
 
 
 from desilike.cosmo import Cosmology, ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
@@ -124,12 +124,12 @@ def cosmoprimo_to_camb_params(params):
     params = params.copy()
     name = 'h'
     if name in params and params[name].varied:
-        toret[name] = params.pop(name).clone(drop=True)
+        toret[name] = params.pop(name).copy()#.clone(drop=True)
         toret.set(Parameter('H0', derived='100 * {h}'))
     for name in ['Omega_b', 'Omega_cdm']:
         if name in params and params[name].varied:
             cname = convert[name.lower()]
-            toret.set(params.pop(name).clone(basename=name, drop=True))
+            toret.set(params.pop(name).clone(basename=name))
             toret.set(Parameter(cname, derived='{{{}}} * ({{H0}} / 100)**2'.format(name)))
     for param in params:
         if param.varied:
@@ -170,12 +170,12 @@ def camb_or_classy_to_cosmoprimo(fiducial, provider, **params):
     return cosmo
 
 
-def CobayaLikelihoodFactory(cls, kwargs, module=None):
+def CobayaLikelihoodFactory(cls, kw_like, module=None):
 
     def initialize(self):
         """Prepare any computation, importing any necessary code, files, etc."""
 
-        self.like = cls(**kwargs)
+        self.like = cls(**kw_like)
         self._cosmo_params, self._nuisance_params = get_likelihood_params(self.like)
         """
         import inspect
@@ -208,7 +208,7 @@ def CobayaLikelihoodFactory(cls, kwargs, module=None):
     return type(Likelihood)(cls.__name__, (Likelihood,), d)
 
 
-class CobayaLikelihoodGenerator(LikelihoodGenerator):
+class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
 
     def __init__(self, *args, **kwargs):
         super(CobayaLikelihoodGenerator, self).__init__(CobayaLikelihoodFactory, *args, **kwargs)
@@ -251,13 +251,17 @@ class CobayaLikelihoodGenerator(LikelihoodGenerator):
                         di['ref'] = decode_prior(param.ref)
                     if param.proposal is not None:
                         di['proposal'] = param.proposal
-                if param.drop: di['drop'] = True
+                #if param.drop: di['drop'] = True
                 params[param.name] = di
 
         BaseConfig(dict(stop_at_error=True, params=params)).write(os.path.join(dirname, cls.__name__ + '.yaml'))
+
+        import_line = 'from .{} import *'.format(os.path.splitext(os.path.basename(fn))[0])
+        with open(os.path.join(dirname, '__init__.py'), 'a+') as file:
+            file.seek(0, 0)
+            lines = file.read()
+            if import_line not in lines:
+                if lines and lines[-1] != '\n': file.write('\n')
+                file.write(import_line + '\n')
+
         return cls, fn, code
-
-
-if __name__ == '__main__':
-
-    CobayaLikelihoodGenerator()()

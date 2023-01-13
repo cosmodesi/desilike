@@ -54,7 +54,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
             from .full_shape import KaiserTracerPowerSpectrumMultipoles
             power = KaiserTracerPowerSpectrumMultipoles(k=self.k, ells=self.ells)
         self.power = power
-        self.power.update(k=self.kin, ells=self.ells)
+        self.power.init.update(k=self.kin, ells=self.ells)
         self.power.params = self.params.copy()
         self.params.clear()
 
@@ -241,7 +241,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             from .full_shape import KaiserTracerPowerSpectrumMultipoles
             theory = KaiserTracerPowerSpectrumMultipoles(k=self.k, ells=self.ellsin)
         self.theory = theory
-        self.theory.update(k=self.kin, ells=self.ellsin)
+        self.theory.init.update(k=self.kin, ells=self.ellsin)
 
     def _apply(self, theory):
         theory = jnp.ravel(theory)
@@ -315,7 +315,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
             from .full_shape import KaiserTracerCorrelationFunctionMultipoles
             theory = KaiserTracerCorrelationFunctionMultipoles(s=self.s, ells=self.ells)
         self.theory = theory
-        self.theory.update(s=self.sin, ells=self.ells)
+        self.theory.init.update(s=self.sin, ells=self.ells)
 
     def calculate(self):
         theory = jnp.ravel(self.theory.corr)

@@ -267,7 +267,7 @@ class Chain(Samples):
         samples = self.to_array(params=params, struct=False).reshape(-1, self.size)
         labels = [param.latex() for param in params]
         names = [str(param) for param in params]
-        ranges = {str(param): tuple('N' if limit is None or np.abs(limit) == np.inf else limit for limit in param.prior.limits) for param in params}
+        ranges = {str(param): tuple('N' if limit is None or not np.isfinite(limit) else limit for limit in param.prior.limits) for param in params}
         toret = MCSamples(samples=samples.T, weights=np.asarray(self.weight.ravel()), loglikes=-np.asarray(self.logposterior.ravel()), names=names, labels=labels, label=label, ranges=ranges, **kwargs)
         return toret
 
@@ -336,13 +336,12 @@ class Chain(Samples):
         if not utils.is_sequence(params): params = [params]
         params = [self[param].param for param in params]
         values = [self[param].reshape(self.size, -1) for param in params]
-        sizes = [value.shape[-1] for value in values]
         values = np.concatenate(values, axis=-1)
         cov = np.atleast_2d(np.cov(values, rowvar=False, fweights=self.fweight.ravel(), aweights=self.aweight.ravel(), ddof=ddof))
         if return_type == 'nparray':
             return cov
         from .profiles import ParameterCovariance
-        return ParameterCovariance(cov, params=params, sizes=sizes)
+        return ParameterCovariance(cov, params=params)
 
     def invcov(self, params=None, ddof=1):
         """
@@ -463,7 +462,6 @@ class Chain(Samples):
         import tabulate
         if params is None: params = self.params(varied=True)
         else: params = [self[param].param for param in params]
-        data = []
         if quantities is None: quantities = ['argmax', 'mean', 'median', 'std', 'quantile:1sigma', 'interval:1sigma']
         is_latex = 'latex_raw' in tablefmt
 
@@ -472,6 +470,7 @@ class Chain(Samples):
             if is_latex: return '${{}}_{{{}}}^{{{}}}$'.format(low, up)
             return '{}/{}'.format(low, up)
 
+        data = []
         for iparam, param in enumerate(params):
             row = []
             row.append(param.latex(inline=True) if is_latex else str(param))

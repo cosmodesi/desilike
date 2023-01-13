@@ -6,7 +6,7 @@ import numpy as np
 import yaml
 
 from . import utils
-from .utils import BaseClass, deep_eq
+from .utils import BaseClass, deep_eq, path_types
 
 
 class YamlLoader(yaml.SafeLoader):
@@ -112,28 +112,28 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
         """
         if isinstance(data, self.__class__):
             self.__dict__.update(data.copy().__dict__)
-            return
 
-        self.parser = parser
-        if parser is None:
-            self.parser = yaml_parser
+        else:
+            self.parser = parser
+            if parser is None:
+                self.parser = yaml_parser
 
-        datad = {}
+            datad = {}
 
-        self.base_dir = base_dir
-        if isinstance(data, str):
-            if string is None: string = ''
-            if base_dir is None: self.base_dir = os.path.dirname(data)
-            with open(data, 'r') as file:
-                string += file.read()
-        elif data is not None:
-            datad = dict(data)
+            self.base_dir = base_dir
+            if isinstance(data, path_types):
+                if string is None: string = ''
+                if base_dir is None: self.base_dir = os.path.dirname(data)
+                with open(data, 'r') as file:
+                    string += file.read()
+            elif data is not None:
+                datad = dict(data)
 
-        if string is not None:
-            datad.update(self.parser(string, **kwargs))
+            if string is not None:
+                datad.update(self.parser(string, **kwargs))
 
-        self.data = datad
-        if decode: self.decode()
+            self.data = datad
+            if decode: self.decode()
 
     def decode(self):
 

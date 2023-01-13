@@ -31,6 +31,14 @@ def test_taylor_power(plot=False):
 
         emulated_calculator = emulator.to_calculator()
 
+        from desilike import Differentiation
+
+        def getter():
+            return emulated_calculator.model
+
+        d = Differentiation(emulated_calculator, getter, order=1)()
+        assert not np.isnan(d).any()
+
         if plot:
             from matplotlib import pyplot as plt
             ax = plt.gca()
@@ -99,6 +107,6 @@ def test_likelihood():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_taylor_power(plot=True)
+    test_taylor_power(plot=True)
     #test_taylor(plot=True)
-    test_likelihood()
+    #test_likelihood()

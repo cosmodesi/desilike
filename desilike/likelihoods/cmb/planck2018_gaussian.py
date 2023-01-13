@@ -5,12 +5,11 @@ from desilike.jax import numpy as jnp
 from desilike import utils
 
 
-class Planck2018GaussianLikelihood(BaseGaussianLikelihood):
+class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
 
     config_fn = 'planck2018_gaussian.yaml'
-    installer_section = 'Planck2018GaussianLikelihood'
+    installer_section = 'BasePlanck2018GaussianLikelihood'
     data_file_id = 'COM_CosmoParams_base-plikHM_R3.01.zip'
-    #data_file_id = ('COM_CosmoParams_fullGrid_R3.01.zip', 11e9)
 
     def initialize(self, cosmo=None, data_dir=None, basename='base_plikHM_TTTEEE_lowl_lowE_lensing'):
         if data_dir is None:
@@ -51,7 +50,7 @@ class Planck2018GaussianLikelihood(BaseGaussianLikelihood):
                         iline += 1
                     if line[0] == '#':
                         iline, col = 0, [line.index(param) - 1 for param in params]
-        super(Planck2018GaussianLikelihood, self).initialize(data=list(mean.values()), covariance=cov)
+        super(BasePlanck2018GaussianLikelihood, self).initialize(data=list(mean.values()), covariance=cov)
         self.cosmo_quantities = [convert_params[param] for param in params]
 
     @property
@@ -84,3 +83,10 @@ class Planck2018GaussianLikelihood(BaseGaussianLikelihood):
             download(url, tar_fn, size=size)
             extract(tar_fn, data_dir)
             installer.write({cls.installer_section: {'data_dir': data_dir}})
+
+
+class FullGridPlanck2018GaussianLikelihood(BaseGaussianLikelihood):
+
+    config_fn = 'planck2018_gaussian.yaml'
+    installer_section = 'FullGridPlanck2018GaussianLikelihood'
+    data_file_id = ('COM_CosmoParams_fullGrid_R3.01.zip', 11e9)

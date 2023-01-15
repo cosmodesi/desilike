@@ -1,7 +1,6 @@
 import numpy as np
 from scipy import special
 
-from desilike.theories.galaxy_clustering.utils import weights_trapz
 from desilike.theories.primordial_cosmology import get_cosmo
 from desilike.base import BaseCalculator
 from desilike.utils import BaseClass
@@ -10,7 +9,7 @@ from .power_spectrum import TracerPowerSpectrumMultipolesObservable
 from .correlation_function import TracerCorrelationFunctionMultipolesObservable
 
 
-def integral_legendre_product(ells, range=(-1,1), norm=False):
+def integral_legendre_product(ells, range=(-1, 1), norm=False):
     r"""
     Return integral of product of Legendre polynomials.
 
@@ -28,7 +27,7 @@ def integral_legendre_product(ells, range=(-1,1), norm=False):
     toret : float
         Integral of product of Legendre polynomials.
     """
-    poly = 1
+    poly = special.legendre(0)  # 1
     if np.ndim(ells) == 0: ells = [ells]
     for ell in ells:
         poly *= special.legendre(ell)
@@ -72,13 +71,11 @@ class BaseFootprint(BaseClass):
             return self._nbar * self.volume
 
     @property
-    def nbar(self):
-        if self.size == 0:
-            return 0.
-        return self.size / self.volume
+    def shotnoise(self):
+        return self.volume / self.size
 
     def __and__(self, other):
-        return self.__class__(nbar=self.nbar + other.nbar, volume=min(self.volume, other.volume))
+        return self.__class__(nbar=self._nbar + other._nbar, volume=min(self.volume, other.volume))
 
 
 class BoxFootprint(BaseFootprint):
@@ -116,7 +113,7 @@ class CutskyFootprint(BaseFootprint):
     @property
     def volume(self):
         volume = self.cosmo.comoving_radial_distance(self._zrange)**3
-        return self.area / (180. / np.pi)**2 * np.diff(volume).sum()
+        return self.area / (180. / np.pi)**2 / 3. * np.diff(volume).sum()
 
     @property
     def area(self):
@@ -152,7 +149,7 @@ class CutskyFootprint(BaseFootprint):
         mask = (zrange >= max(self._zrange[0], other._zrange[0])) & (zrange <= min(self._zrange[-1], other._zrange[-1]))
         zrange = zrange[mask]
         if self._size is not None or other._size is not None or self._nbar.ndim == 0 or other._nbar.ndim == 0:
-            nbar = self.nbar + other.nbar
+            nbar = self._nbar + other._nbar
         else:
             nbar = np.interp(zrange, self._zrange, self._nbar) + np.interp(zrange, other._zrange, other._nbar)
         if zrange.size < 2:
@@ -168,7 +165,7 @@ class ObservablesCovarianceMatrix(BaseClass):
     def __init__(self, observables, footprints=None, theories=None, resolution=1):
         if not utils.is_sequence(observables):
             observables = [observables]
-        self.observables = observables
+        self.observables = [obs.runtime_info.initialize() for obs in observables]
         if not utils.is_sequence(footprints):
             footprints = [footprints] * len(self.observables)
         self.footprints = []
@@ -180,6 +177,10 @@ class ObservablesCovarianceMatrix(BaseClass):
         self.resolution = int(resolution)
         if self.resolution <= 0:
             raise ValueError('resolution must be a strictly positive integer')
+
+    def __call__(self, **params):
+        self.run(**params)
+        return self.covariance
 
     def run(self, **params):
         self.cosmo = None
@@ -204,15 +205,11 @@ class ObservablesCovarianceMatrix(BaseClass):
                     covariance[io2][io1] = c.T
         self.covariance = np.bmat(covariance).A
 
-    def __call__(self, **params):
-        self.run(**params)
-        return self.covariance
-
     def _run(self, io1, io2):
         auto = io2 == io1
         ios = [io1, io2]
         volume = (self.footprints[io1] & self.footprints[io2]).volume
-        buffer = {}
+        cache = {}
 
         def get_pk(observable, footprint, theory=None):
             if theory is None:
@@ -222,7 +219,7 @@ class ObservablesCovarianceMatrix(BaseClass):
 
             def pk(k, ell=0):
                 ill = theory.ells.index(ell)
-                return np.interp(k, theory.k, theory.power[ill] + (ell == 0) / footprint.nbar).reshape(k.shape)
+                return np.interp(k, theory.k, theory.power[ill] + (ell == 0) * footprint.shotnoise).reshape(k.shape)
 
             pk.ells = theory.ells
             pk.k = theory.k
@@ -242,7 +239,7 @@ class ObservablesCovarianceMatrix(BaseClass):
             bin = np.asarray(bin)
             if edges:
                 return 4. / 3. * np.pi * (bin[1:]**3 - bin[:-1]**3)
-            return 4. * np.pi * bin**2 * weights_trapz(bin)
+            return 4. * np.pi * bin**2 * utils.weights_trapz(bin)
 
         pks = [get_pk(self.observables[io], self.footprints[io], theory=self.theories[io]) for io in ios]
 
@@ -280,16 +277,16 @@ class ObservablesCovarianceMatrix(BaseClass):
             def get_bin_cov(obs, ells, ibin):
                 ills = [o.ells.index(ell) for o, ell in zip(obs, ells)]
                 bins = [o.sedges[ill][i:i + 2] for o, ill, i in zip(obs, ills, ibin)]
-                if 'k' in buffer:
-                    k = buffer['k']
+                if 'k' in cache:
+                    k = cache['k']
                 else:
                     ks = [pk.k for pk in pks]
                     k = np.unique(np.concatenate(ks, axis=0))
-                    k = buffer['k'] = k[(k >= max(min(k) for k in ks)) & (k <= min(max(k) for k in ks))]
-                if ells in buffer:
-                    sigmak = buffer[ells]
+                    k = cache['k'] = k[(k >= max(min(k) for k in ks)) & (k <= min(max(k) for k in ks))]
+                if ells in cache:
+                    sigmak = cache[ells]
                 else:
-                    sigmak = buffer[ells] = get_sigma_k(*pks, *ells, k) * get_bin_volume(k, edges=False)
+                    sigmak = cache[ells] = get_sigma_k(*pks, *ells, k) * get_bin_volume(k, edges=False)
                 ss = [get_integ_points(bin) for bin in bins]
                 weights = np.prod([np.sum(s[:, None]**2 * special.spherical_jn(ell, s[:, None] * k), axis=0) / np.sum(s**2, axis=0) for s, ell in zip(ss, ells)], axis=0)
                 return np.sign(1j ** sum(ells)).real / (2. * np.pi)**3 * np.sum(sigmak * weights)

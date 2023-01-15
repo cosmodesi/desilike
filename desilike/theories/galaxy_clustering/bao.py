@@ -34,7 +34,7 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
         super(DampedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.set_k_mu(k=self.k, mu=mu, ells=self.ells)
 
-    def calculate(self, b1=1., sigmas=0., sigmapar=8., sigmaper=4., **kwargs):
+    def calculate(self, b1=1., sigmas=0., sigmapar=9., sigmaper=6., **kwargs):
         f = self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.template.pknow_dd_interpolator(kap)
@@ -45,6 +45,22 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
         sk = 0.
         if self.mode == 'reciso': sk = np.exp(-1. / 2. * (kap * self.smoothing_radius)**2)
         pkmu = jac * fog * (b1 + f * muap**2 * (1 - sk))**2 * (pknow + damped_wiggles)
+        self.power = self.to_poles(pkmu)
+
+
+class SimpleBAOWigglesPowerSpectrumMultipoles(DampedBAOWigglesPowerSpectrumMultipoles):
+
+    def calculate(self, b1=1., sigmas=0., sigmapar=9., sigmaper=6., **kwargs):
+        f = self.template.f
+        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        wiggles = self.template.pk_dd_interpolator(kap) / self.template.pknow_dd_interpolator(kap) if self.wiggle else 1.
+        pknow = self.template.pknow_dd_interpolator(self.k)[:, None]
+        sigmanl2 = self.k[:, None]**2 * (sigmapar**2 * self.mu**2 + sigmaper**2 * (1. - self.mu**2))
+        damping = np.exp(-sigmanl2 / 2.)
+        fog = 1. / (1. + (sigmas * kap * muap)**2 / 2.)**2.
+        sk = 0.
+        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (kap * self.smoothing_radius)**2)
+        pkmu = fog * (b1 + f * muap**2 * (1 - sk))**2 * damping * wiggles * pknow
         self.power = self.to_poles(pkmu)
 
 
@@ -198,6 +214,11 @@ class DampedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpe
     pass
 
 
+class SimpleBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpectrumMultipoles):
+
+    pass
+
+
 class ResummedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpectrumMultipoles):
 
     pass
@@ -253,6 +274,11 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
 
 
 class DampedBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCorrelationFunctionMultipoles):
+
+    pass
+
+
+class SimpleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCorrelationFunctionMultipoles):
 
     pass
 

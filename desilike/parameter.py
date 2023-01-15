@@ -2118,6 +2118,10 @@ class Samples(BaseParameterCollection):
         return toret
 
 
+def is_parameter_sequence(params):
+    return isinstance(params, ParameterCollection) or utils.is_sequence(params)
+
+
 class BaseParameterMatrix(BaseClass):
 
     _fill_value = np.nan
@@ -2176,7 +2180,7 @@ class BaseParameterMatrix(BaseClass):
     def center(self, params=None, return_type='nparray'):
         if params is None:
             params = self._params
-        isscalar = not isinstance(params, ParameterCollection) and not utils.is_sequence(params)
+        isscalar = not is_parameter_sequence(params)
         if isscalar:
             params = [params]
         center = self._center[self._index(params)]
@@ -2190,7 +2194,7 @@ class BaseParameterMatrix(BaseClass):
         """Return matrix for input parameters ``params``."""
         if params is None:
             params = self._params
-        isscalar = not isinstance(params, ParameterCollection) and not utils.is_sequence(params)
+        isscalar = not is_parameter_sequence(params)
         if isscalar:
             params = [params]
         params = [self._params[param] if param in self._params else Parameter(param) for param in params]
@@ -2256,6 +2260,22 @@ class BaseParameterMatrix(BaseClass):
     def deepcopy(self):
         return copy.deepcopy(self)
 
+    def __mul__(self, other):
+        new = self.deepcopy()
+        new._value *= other
+        return new
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
+
+    def __truediv__(self, other):
+        new = self.deepcopy()
+        new._value /= other
+        return new
+
+    def __rtruediv__(self, other):
+        return self.__truediv__(other)
+
 
 class ParameterCovariance(BaseParameterMatrix):
 
@@ -2263,22 +2283,34 @@ class ParameterCovariance(BaseParameterMatrix):
 
     def view(self, params=None, return_type='nparray', fill=None):
         """Return matrix for input parameters ``params``."""
-        new = super(ParameterCovariance, self).view(params=params, return_type=return_type)
+        new = super(ParameterCovariance, self).view(params=params, return_type=None)
         if fill == 'proposal':
             params_not_in_self = [param for param in new._params if param not in self._params and param.proposal is not None]
             index = new._index(params_not_in_self)
             new._value[index, index] = [param.proposal**2 for param in params_not_in_source]
             new._center[index] = [param.value if param.value is not None else np.nan for param in params_not_in_source]
-        return new
+        toret = super(ParameterCovariance, new).view(return_type=return_type)
+        if return_type == 'nparray' and params is not None and not is_parameter_sequence(params):
+            return toret[0, 0]
+        return toret
 
     cov = view
+
+    def normalize(self):
+        """Divide by center values."""
+        new = self.deepcopy()
+        new._value = self._value / (self._center[:, None] *  self._center)
+        new._center[:] = 1.
+        return new
 
     def corrcoef(self, params=None):
         """Return correlation matrix for input parameters ``params``."""
         return utils.cov_to_corrcoef(self.cov(params=params, return_type='nparray'))
 
     def std(self, params=None):
-        return np.diag(self.cov(params=params, return_type='nparray'))**0.5
+        cov = self.cov(params=params, return_type='nparray')
+        if np.ndim(cov) == 0: return cov**0.5  # single param
+        return np.diag(cov)**0.5
 
     def invcov(self, params=None, return_type='nparray'):
         """Return inverse covariance (precision) matrix for input parameters ``params``."""
@@ -2335,14 +2367,8 @@ class ParameterPrecision(BaseParameterMatrix):
         return self.to_covariance(params=params, return_type=return_type)
 
     def to_covariance(self, params=None, return_type=None):
-        if params is None: params = self._params
-        cov = utils.inv(self.view(params, return_type='nparray'))
-        if return_type == 'nparray':
-            return cov
-        toret = ParameterCovariance(cov, params=params, center=self._center)
-        if return_type is not None:
-            toret = toret.view(return_type=return_type)
-        return toret
+        cov = utils.inv(self._value)
+        return ParameterCovariance(cov, params=self._params, center=self._center).view(params=params, return_type=return_type)
 
     @classmethod
     def sum(cls, *others):

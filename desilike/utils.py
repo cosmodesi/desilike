@@ -460,6 +460,17 @@ def cov_to_corrcoef(cov):
     return c
 
 
+def weights_trapz(x):
+    """Return weights for trapezoidal integration."""
+    if x.size == 0:
+        return np.array(1.)
+    if x.size == 1:
+        return np.ones(x.size)
+    if x.size == 2:
+        return np.ones(x.size) / 2. * (x[1] - x[0])
+    return np.concatenate([[x[1] - x[0]], x[2:] - x[:-2], [x[-1] - x[-2]]]) / 2.
+
+
 def subspace(X, precision=None, npcs=None, chi2min=None, **kwargs):
     # See https://arxiv.org/pdf/2009.03311.pdf
     X = np.asarray(X)

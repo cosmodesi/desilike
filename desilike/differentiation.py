@@ -129,6 +129,7 @@ class Differentiation(BaseClass):
         self.calculator = calculator
         self.calculator()  # dry run
         self.pipeline = self.calculator.runtime_info.pipeline
+        self.all_params = self.calculator.all_params.select(derived=False)
         self.varied_params = self.calculator.varied_params
         if not self.varied_params:
             raise ValueError('No parameters to be varied!')
@@ -265,18 +266,21 @@ class Differentiation(BaseClass):
     def run(self, **params):
         # Getter, or calculator, dict[param1, param2]
         self.center = {}
-        for param in self.varied_params:
+        for param in self.all_params:
             self.center[param.name] = params.get(param.name, self.pipeline.param_values[param.name])
         if self.mpicomm.rank == 0:
             samples = self._grid_samples.copy()
-            for param in self.varied_params:
-                offset = self.center[param.name] - self._grid_center[param.name]
-                samples[param] = self._grid_samples[param] + offset
+            for param in self.all_params:
+                if param in self._grid_samples:
+                    offset = self.center[param.name] - self._grid_center[param.name]
+                    samples[param] = self._grid_samples[param] + offset
+                else:
+                    samples[param] = np.full(samples.shape, self.center[param.name])
         nsamples = self.mpicomm.bcast(samples.size if self.mpicomm.rank == 0 else None, root=0)
         self._getter_samples = {}
         calculate_bak, more_derived_bak = self.pipeline.calculate, self.pipeline.more_derived
         self.pipeline.calculate, self.pipeline.more_derived = self._calculate, self._more_derived
-        self.pipeline.mpicalculate(**(samples.to_dict(params=self.varied_params) if self.mpicomm.rank == 0 else {}))
+        self.pipeline.mpicalculate(**(samples.to_dict(params=self.all_params) if self.mpicomm.rank == 0 else {}))
         self.pipeline.calculate, self.pipeline.more_derived = calculate_bak, more_derived_bak
         states = self.mpicomm.gather(self._getter_samples, root=0)
 

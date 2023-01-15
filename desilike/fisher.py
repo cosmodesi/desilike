@@ -53,10 +53,11 @@ class Fisher(BaseClass):
             order = 1
 
             def finalize(derivs):
+                from desilike.likelihoods.base import chi2
                 loglikelihood = 0.
                 for likelihood, flatdiff in zip(likelihoods, derivs):
                     flatdiff = np.array([flatdiff[param] for param in self.varied_params])
-                    loglikelihood += flatdiff.dot(likelihood.precision).dot(flatdiff.T)
+                    loglikelihood += chi2(flatdiff, likelihood.precision)
                 return loglikelihood
 
         else:

@@ -6,6 +6,12 @@ from desilike.jax import numpy as jnp
 from desilike import plotting, utils
 
 
+def chi2(flatdiff, precision):
+    if precision.ndim == 1:
+        return (flatdiff * precision).dot(flatdiff.T)
+    return flatdiff.dot(precision).dot(flatdiff.T)
+
+
 class BaseLikelihood(BaseCalculator):
 
     _attrs = ['loglikelihood', 'logprior']
@@ -62,12 +68,12 @@ class BaseGaussianLikelihood(BaseLikelihood):
                 raise ValueError('Provide either precision or covariance matrix to {}'.format(self.__class__))
             self.precision = utils.inv(np.atleast_2d(np.array(covariance, dtype='f8')))
         else:
-            self.precision = np.atleast_2d(np.array(precision, dtype='f8'))
+            self.precision = np.atleast_1d(np.array(precision, dtype='f8'))
         super(BaseGaussianLikelihood, self).initialize()
 
     def calculate(self):
         self.flatdiff = self.flattheory - self.flatdata
-        self.loglikelihood = -0.5 * self.flatdiff.dot(self.precision).dot(self.flatdiff)
+        self.loglikelihood = -0.5 * chi2(self.flatdiff, self.precision)
 
     def get(self):
         pipeline = self.runtime_info.pipeline
@@ -127,7 +133,8 @@ class BaseGaussianLikelihood(BaseLikelihood):
 
             for likelihood, derivative in zip(solve_likelihoods, derivatives):
                 flatdiff = derivative[()]
-                zeros = np.zeros_like(likelihood.precision, shape=likelihood.precision.shape[0])
+                precision = likelihood.precision
+                zeros = np.zeros_like(precision, shape=precision.shape[0])
                 jac = []
                 for param in solved_params:
                     try:
@@ -135,11 +142,12 @@ class BaseGaussianLikelihood(BaseLikelihood):
                     except KeyError:
                         jac.append(zeros)
                 jac = np.column_stack(jac)
-                projector = likelihood.precision.dot(jac)
-                projection = projector.T.dot(flatdiff)
-                invfisher = jac.T.dot(projector)
-                projections.append(projection)
-                inverse_fishers.append(invfisher)
+                if precision.ndim == 2:
+                    projector = precision.dot(jac)
+                else:
+                    projector = precision[:, None] * jac
+                projections.append(projector.T.dot(flatdiff))
+                inverse_fishers.append(jac.T.dot(projector))
 
             inverse_priors, x0 = [], []
             for param in solved_params:

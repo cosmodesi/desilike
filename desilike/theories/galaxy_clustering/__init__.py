@@ -1,7 +1,7 @@
 from .base import APEffect, WindowedPowerSpectrumMultipoles, WindowedCorrelationFunctionMultipoles
-from .bao import (DampedBAOWigglesPowerSpectrumMultipoles, ResummedBAOWigglesPowerSpectrumMultipoles,
-                  DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles,
-                  DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles)
+from .bao import (DampedBAOWigglesPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles,
+                  SimpleBAOWigglesPowerSpectrumMultipoles, SimpleBAOWigglesTracerPowerSpectrumMultipoles, SimpleBAOWigglesTracerCorrelationFunctionMultipoles,
+                  ResummedBAOWigglesPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles)
 from .full_shape import (KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles,
                          LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles,
                          PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles)

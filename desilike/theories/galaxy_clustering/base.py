@@ -4,8 +4,7 @@ from scipy import special
 from desilike.jax import numpy as jnp
 from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo
 from desilike.base import BaseCalculator
-from desilike import plotting
-from . import utils
+from desilike import plotting, utils
 
 
 class BaseTheoryPowerSpectrumMultipoles(BaseCalculator):
@@ -168,7 +167,7 @@ class APEffect(BaseCalculator):
 
     def ap_k_mu(self, k, mu):
         jac = 1. / (self.qpar * self.qper**2)
-        factorap = np.sqrt(1 + mu**2 * (1. / self.qap**2 - 1))
+        factorap = jnp.sqrt(1 + mu**2 * (1. / self.qap**2 - 1))
         # Beutler 2016 (arXiv: 1607.03150v1) eq 44
         kap = k[..., None] / self.qper * factorap
         # Beutler 2016 (arXiv: 1607.03150v1) eq 45

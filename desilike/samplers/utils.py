@@ -76,8 +76,8 @@ NP_VERSION = 'MT19937'
 
 def numpy_to_python_random_state(npstate):
     """
-    Convert state of a NumPy RandomState object to a state
-    that can be used by Python's Random.
+    Convert state of a :class:`numpy.random.RandomState` object to a state
+    that can be used by Python's :mod:`random`.
     """
     version, keys, pos, has_gauss, cached_gaussian = npstate
     pystate = (
@@ -90,8 +90,8 @@ def numpy_to_python_random_state(npstate):
 
 def python_to_numpy_random_state(pystate):
     """
-    Convert state of a Python Random object to state usable
-    by NumPy RandomState.
+    Convert state of a Python's :mod:`random` object to a state
+    that can be used by :class:`numpy.random.RandomState`.
     """
     version, (*keys, pos), cached_gaussian = pystate
     has_gauss = cached_gaussian is not None

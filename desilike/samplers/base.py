@@ -68,6 +68,35 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
     _check_same_input = False
 
     def __init__(self, likelihood, rng=None, seed=None, max_tries=1000, chains=None, ref_scale=1., save_fn=None, mpicomm=None):
+        """
+        Initialize posterior sampler.
+
+        Parameters
+        ----------
+        likelihood : BaseLikelihood
+            Input likelihood.
+
+        rng : np.random.RandomState, default=None
+            Random state. If ``None``, ``seed`` is used to set random state.
+
+        seed : int, default=None
+            Random seed.
+
+        max_tries : int, default=1000
+            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
+
+        chains : str, Path, Chain
+            Path to or chains to resume from.
+
+        ref_scale : float, default=1.
+            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor
+
+        save_fn : str, Path, default=None
+            If not ``None``, save samples to this location.
+
+        mpicomm : mpi.COMM_WORLD, default=None
+            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
+        """
         if mpicomm is None:
             mpicomm = likelihood.mpicomm
         self.likelihood = likelihood
@@ -219,6 +248,14 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         return chain
 
     def run(self, **kwargs):
+        """
+        Run chains. Sampling can be interrupted anytime, and resumed by providing
+        the path to the saved chains in ``chains`` argument of :meth:`__init__`.
+
+        One will typically run sampling on ``nchains * nprocs_per_chain + 1`` processes,
+        with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max((mpicomm.size - 1) // nchains, 1)``
+        the number of processes per chain --- plus 1 root process to distribute the work.
+        """
         #self.derived = None
         nprocs_per_chain = max((self.mpicomm.size - 1) // self.nchains, 1)
         chains, ncalls = [[None] * self.nchains for i in range(2)]
@@ -263,7 +300,37 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
 
 class BaseBatchPosteriorSampler(BasePosteriorSampler):
 
+    """Base class for samplers which can run independent chains in parallel."""
+
     def run(self, min_iterations=0, max_iterations=sys.maxsize, check_every=300, check=None, **kwargs):
+        """
+        Run chains. Sampling can be interrupted anytime, and resumed by providing
+        the path to the saved chains in ``chains`` argument of :meth:`__init__`.
+
+        One will typically run sampling on ``nchains * nprocs_per_chain + 1`` processes,
+        with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max((mpicomm.size - 1) // nchains, 1)``
+        the number of processes per chain --- plus 1 root process to distribute the work.
+
+        Parameters
+        ----------
+        min_iterations : int, default=100
+            Minimum number of iterations (MCMC steps) to run (to avoid early stopping
+            if convergence criteria below are satisfied by chance at the beginning of the run).
+
+        max_iterations : int, default=sys.maxsize
+            Maximum number of iterations (MCMC steps) to run.
+
+        check_every : int, default=300
+            Samples are saved and convergence checks are run every ``check_every`` iterations.
+
+        check : bool, dict, default=None
+            If ``False``, no convergence checks are run.
+            If ``True`` or ``None``, convergence checks are run.
+            A dictionary of convergence criteria can be provided, see :meth:`check`.
+
+        **kwargs : dict
+            Optional sampler-specific arguments.
+        """
         #self.derived = None
         nprocs_per_chain = max((self.mpicomm.size - 1) // self.nchains, 1)
 
@@ -319,12 +386,60 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
 
         batch_iterate(_run_batch, min_iterations=min_iterations, max_iterations=max_iterations, check_every=check_every)
 
-    def check(self, nsplits=4, stable_over=2, burnin=0.5,
+    def check(self, nsplits=4, burnin=0.5, stable_over=2,
               max_eigen_gr=0.03, max_diag_gr=None, max_cl_diag_gr=None, nsigmas_cl_diag_gr=1., max_geweke=None, max_geweke_pvalue=None,
               min_iterations_over_iact=None, reliable_iterations_over_iact=50, max_dact=None,
               min_eigen_gr=None, min_diag_gr=None, min_cl_diag_gr=None, min_geweke=None, min_geweke_pvalue=None,
               max_iterations_over_iact=None, min_dact=None, diagnostics=None, quiet=False):
+        """
+        Run convergence checks.
 
+        Parameters
+        ----------
+        nsplits : int, default=4
+            Chains are divided into ``nsplits`` to run convergence tests.
+
+        burnin : float, int, default=0.5
+            Fraction of samples to remove from each chain for convergence tests.
+            If an integer, number of iterations (steps) to remove.
+
+        stable_over : int, default=2
+            Each criterion must be fulfilled for ``stable_over`` calls to :meth:`check` for convergence tests to pass.
+
+        max_eigen_gr : float, default=0.03
+            Gelman-Rubin criterion (on eigenvalues of the parameter covariance matrix) < ``max_eigen_gr``
+
+        max_diag_gr : float, default=None
+            Gelman-Rubin criterion (on diagonal of the parameter covariance matrix) < ``max_eigen_gr``
+
+        max_cl_diag_gr : float, default=None
+            Gelman-Rubin criterion on variance of ``nsigmas_cl_diag_gr``-sigma interval limits < ``max_cl_diag_gr``
+
+        nsigmas_cl_diag_gr : int, default=1
+            Number of sigmas for the interval of ``max_cl_diag_gr`` test.
+
+        min_iterations_over_iact : int, default=None
+            Minimal number of iterations over integrated auto-correlation time (~ # of independent samples). Typically of order ~ 1e3.
+
+        reliable_iterations_over_iact : int, default=50
+            After ``reliable_iterations_over_iact`` auto-correlation time estimation is considered reliable.
+
+        diagnostics : dict, default=None
+            Dictionary where computed statistics are added.
+            Default is :attr:`diagnostics`.
+
+        quiet : bool, default=False
+            If ``True``, no logging.
+
+        Note
+        ----
+        All max_* have a min_* counterpart, and vice-versa.
+
+        Returns
+        -------
+        convergence : bool
+            ``True`` if current chains pass convergence tests.
+        """
         toret = None
         if diagnostics is None:
             diagnostics = self.diagnostics

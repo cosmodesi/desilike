@@ -12,12 +12,96 @@ from .base import BasePosteriorSampler
 
 class PolychordSampler(BasePosteriorSampler):
 
+    """Wrapper for polychord nested sampler."""
     check = None
 
     def __init__(self, *args, blocks=None, oversample_power=0.4, nlive='25*ndim', nprior='10*nlive', nfail='1*nlive',
                  nrepeats='2*ndim', nlives=None, do_clustering=True, boost_posterior=0, compression_factor=np.exp(-1),
                  synchronous=True, seed=None, **kwargs):
+        """
+        Initialize polychord sampler.
 
+        Parameters
+        ----------
+        likelihood : BaseLikelihood
+            Input likelihood.
+
+        blocks : list, default=None
+            Parameter blocks are groups of parameters which are updated alltogether
+            with a frequency proportional to oversample_factor.
+            Typically, parameter blocks are chosen such that parameters in a given block
+            require the same evaluation time of the likelihood when updated.
+            If ``None`` these blocks are defined at runtime, based on (measured) speeds and oversample_power (below),
+            but can be specified there in the format:
+
+                - [oversample_factor1, [param1, param2]]
+                - [oversample_factor2, [param3, param4]]
+
+        oversample_power : float, default=0.4
+            If ``blocks`` is ``None``, i.e. parameter blocks are defined at runtime,
+            oversample factors are ``speed**oversample_power``.
+
+        nlive : int, str, default='25 * ndim'
+            Number of live points. Increasing nlive increases the accuracy of posteriors and evidences,
+            and proportionally increases runtime ~ O(nlive).
+
+        nprior : int, str, default='10*nlive'
+            The number of prior samples to draw before starting compression.
+
+        nfail : int, str, default='1*nlive'
+            The number of failed spawns before stopping nested sampling.
+
+        nrepeats : int, str, default='2*ndim'
+            The number of slice slice-sampling steps to generate a new point.
+            Increasing nrepeats increases the reliability of the algorithm.
+            Typically:
+
+                - for reliable evidences need nrepeats ~ O(5*ndims)
+                - for reliable posteriors need nrepeats ~ O(ndims)
+
+        nlives : dict, default=None
+            Variable number of live points option. This dictionary is a mapping
+            between loglikelihood contours and ``nlive``.
+            You should still set nlive to be a sensible number, as this indicates
+            how often to update the clustering, and to define the default value.
+
+        do_clustering : bool, default=True
+            Whether or not to explore multi-modality on the posterior.
+
+        boost_posterior : int, default=0
+            Increase the number of posterior samples produced. This can be set
+            arbitrarily high, but you will not be able to boost by more than nrepeats.
+            Warning: in high dimensions PolyChord produces *a lot* of posterior samples.
+            You probably do not need to change this.
+
+        synchronous : bool, default=True
+            Parallelise with synchronous workers, rather than asynchronous ones.
+            This can be set to ``False`` if the likelihood speed is known to be
+            approximately constant across the parameter space. Synchronous
+            parallelisation is less effective than asynchronous by a factor ~O(1)
+            for large parallelisation.
+
+        rng : np.random.RandomState, default=None
+            Random state. If ``None``, ``seed`` is used to set random state.
+
+        seed : int, default=None
+            Random seed.
+
+        max_tries : int, default=1000
+            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
+
+        chains : str, Path, Chain
+            Path to or chains to resume from.
+
+        ref_scale : float, default=1.
+            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor.
+
+        save_fn : str, Path, default=None
+            If not ``None``, save samples to this location.
+
+        mpicomm : mpi.COMM_WORLD, default=None
+            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
+        """
         super(PolychordSampler, self).__init__(*args, seed=seed, **kwargs)
         logzero = np.nan_to_num(-np.inf)
         di = {'ndim': len(self.varied_params)}
@@ -61,6 +145,38 @@ class PolychordSampler(BasePosteriorSampler):
 
     def _prepare(self):
         self.settings.read_resume = self.mpicomm.bcast(any(chain is not None for chain in self.chains), root=0)
+
+    def run(self, *args, **kwargs):
+        """
+        Run sampling. Sampling can be interrupted anytime, and resumed by providing
+        the path to the saved chains in ``chains`` argument of :meth:`__init__`.
+
+        One will typically run sampling on ``nchains * nprocs_per_chain + 1`` processes,
+        with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max((mpicomm.size - 1) // nchains, 1)``
+        the number of processes per chain --- plus 1 root process to distribute the work.
+
+        Parameters
+        ----------
+        min_iterations : int, default=100
+            Minimum number of iterations (MCMC steps) to run (to avoid early stopping
+            if convergence criteria below are satisfied by chance at the beginning of the run).
+
+        max_iterations : int, default=sys.maxsize
+            Maximum number of iterations (MCMC steps) to run.
+
+        compression_factor : float, default=np.exp(-1)
+            How often to update the files and do clustering.
+
+        check : bool, dict, default=None
+            If ``False``, no convergence checks are run.
+            If ``True`` or ``None``, convergence checks are run.
+            A dictionary of convergence criteria can be provided, with:
+
+                - precision_criterion : Nested sampling terminates when the evidence contained in the live points
+                  is precision_criterion fraction of the total evidence. Default is 0.001.
+
+        """
+        super(PolychordSampler, self).run(*args, **kwargs)
 
     def _run_one(self, start, min_iterations=0, max_iterations=sys.maxsize, check=None, **kwargs):
 

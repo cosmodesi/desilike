@@ -2170,6 +2170,9 @@ class BaseParameterMatrix(BaseClass):
         if params is None: params = self._params.select(**kwargs)
         return self.view(params=params, return_type=None)
 
+    def det(self, params=None):
+        return np.linalg.det(self.view(params=params, return_type='nparray'))
+
     @property
     def _sizes(self):
         toret = [max(param.size, 1) for param in self._params]
@@ -2296,7 +2299,10 @@ class ParameterCovariance(BaseParameterMatrix):
 
     cov = view
 
-    def normalize(self):
+    def fom(self, **params):
+        return self.det(**params)**(-0.5)
+
+    def rescale(self):
         """Divide by center values."""
         new = self.deepcopy()
         new._value = self._value / (self._center[:, None] *  self._center)
@@ -2362,6 +2368,9 @@ class ParameterCovariance(BaseParameterMatrix):
 class ParameterPrecision(BaseParameterMatrix):
 
     _fill_value = 0.
+
+    def fom(self, **params):
+        return self.to_covariance().fom(params=params)
 
     def cov(self, params=None, return_type='nparray'):
         return self.to_covariance(params=params, return_type=return_type)

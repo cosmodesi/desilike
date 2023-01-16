@@ -7,7 +7,7 @@ from desilike import utils
 from desilike.utils import BaseClass
 from desilike.samples import load_source
 from desilike.samples.profiles import Profiles, Samples, ParameterBestFit
-from desilike.parameter import ParameterCollection
+from desilike.parameter import ParameterCollection, is_parameter_sequence
 from desilike.samplers.utils import TaskManager
 
 
@@ -50,7 +50,45 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
     name = 'base'
     _check_same_input = False
 
-    def __init__(self, likelihood, rng=None, seed=None, max_tries=1000, profiles=None, covariance=None, transform=False, ref_scale=1., save_fn=None, mpicomm=None):
+    def __init__(self, likelihood, rng=None, seed=None, max_tries=1000, profiles=None, ref_scale=1., rescale=False, covariance=None, save_fn=None, mpicomm=None):
+        """
+        Initialize profiler.
+
+        Parameters
+        ----------
+        likelihood : BaseLikelihood
+            Input likelihood.
+
+        rng : np.random.RandomState, default=None
+            Random state. If ``None``, ``seed`` is used to set random state.
+
+        seed : int, default=None
+            Random seed.
+
+        max_tries : int, default=1000
+            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
+
+        profiles : str, Path, Profiles
+            Path to or profiles, to which new profiling results will be added.
+
+        ref_scale : float, default=1.
+            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor
+
+        rescale : bool, default=False
+            If ``True``, internally rescale parameters such their variation range is ~ unity.
+            Provide ``covariance`` to take parameter variations from;
+            else parameters' :attr:`Parameter.proposal` will be used.
+
+        covariance : str, Path, ParameterCovariance, Chain, default=None
+            If ``rescale``, path to or covariance or chain, which is used for rescaling parameters.
+            If ``None``, parameters' :attr:`Parameter.proposal` will be used instead.
+
+        save_fn : str, Path, default=None
+            If not ``None``, save profiles to this location.
+
+        mpicomm : mpi.COMM_WORLD, default=None
+            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`
+        """
         if mpicomm is None:
             mpicomm = likelihood.mpicomm
         self.likelihood = likelihood
@@ -73,7 +111,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         covariance = self.mpicomm.bcast(covariance, root=0)
         self._original_params = self.mpicomm.bcast(self.varied_params, root=0)
 
-        if transform:
+        if rescale:
 
             self._params_transform_loc = np.array([param.value for param in self.varied_params], dtype='f8')
             self._params_transform_scale = np.diag(covariance)**0.5
@@ -229,6 +267,27 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         return toret
 
     def maximize(self, niterations=None, **kwargs):
+        """
+        Maximize :attr:`likelihood`.
+        The following attributes are added to :attr:`profiles`:
+
+        - :attr:`Profiles.start`
+        - :attr:`Profiles.bestfit`
+        - :attr:`Profiles.error`  # parabolic errors at best fit (if made available by the profiler)
+        - :attr:`Profiles.covariance`  # parameter covariance at best fit (if made available by the profiler).
+
+        One will typically run several independent likelihood maximizations in parallel,
+        on number of MPI processes - 1 ranks (1 if single process), to make sure the global maximum is found.
+
+        Parameters
+        ----------
+        niterations : int, default=None
+            Number of iterations, i.e. of runs of the profiler from independent starting points.
+            If ``None``, defaults to :attr:`mpicomm.size - 1` (if > 0, else 1).
+
+        **kwargs : dict
+            Optional profiler-specific arguments.
+        """
         if niterations is None: niterations = max(self.mpicomm.size - 1, 1)
         niterations = int(niterations)
         nprocs_per_iteration = max((self.mpicomm.size - 1) // niterations, 1)
@@ -305,24 +364,69 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             self.profiles.save(self.save_fn)
 
     def interval(self, params=None, **kwargs):
+        """
+        Compute confidence intervals for :attr:`likelihood`.
+        The following attributes are added to :attr:`profiles`:
+
+        - :attr:`Profiles.interval`
+
+        Parameters
+        ----------
+        params : str, Parameter, list, ParameterCollection, default=None
+            Parameters for which to estimate confidence intervals.
+
+        **kwargs : dict
+            Optional arguments for specific profiler.
+        """
         if params is None:
             params = self.varied_params
         else:
+            if not is_parameter_sequence(params): params = [params]
             params = ParameterCollection([self.varied_params[param] for param in params])
         self._iterate_over_params(params, self._interval_one, **kwargs)
 
     def profile(self, params=None, **kwargs):
+        """
+        Compute 1D profiles for :attr:`likelihood`.
+        The following attributes are added to :attr:`profiles`:
+
+        - :attr:`Profiles.profile`
+
+        Parameters
+        ----------
+        params : str, Parameter, list, ParameterCollection, default=None
+            Parameters for which to compute 1D profiles.
+
+        **kwargs : dict
+            Optional arguments for specific profiler.
+        """
         if params is None:
             params = self.varied_params
         else:
+            if not is_parameter_sequence(params): params = [params]
             params = ParameterCollection([self.varied_params[param] for param in params])
         self._iterate_over_params(params, self._profile_one, **kwargs)
 
     def contour(self, params=None, **kwargs):
+        """
+        Compute 2D contours for :attr:`likelihood`.
+        The following attributes are added to :attr:`profiles`:
+
+        - :attr:`Profiles.contour`
+
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            List of tuples of parameters for which to compute 2D contours.
+            If a list of parameters is provided instead, contours are computed for unique tuples of parameters.
+
+        **kwargs : dict
+            Optional arguments for specific profiler.
+        """
         if params is None:
             params = self.varied_params
         params = list(params)
-        if not utils.is_sequence(params[0]):
+        if not is_parameter_sequence(params[0]):
             params = [(param1, param2) for iparam1, param1 in enumerate(params) for param2 in params[iparam1 + 1:]]
         params = [(self.varied_params[param1], self.varied_params[param2]) for param1, param2 in params]
         self._iterate_over_params(params, self._contour_one, **kwargs)

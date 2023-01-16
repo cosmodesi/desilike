@@ -9,9 +9,45 @@ from .base import RegisteredSampler
 
 class GridSampler(BaseClass, metaclass=RegisteredSampler):
 
+    """Evalue calculator on a grid."""
     name = 'grid'
 
     def __init__(self, calculator, mpicomm=None, save_fn=None, **kwargs):
+        r"""
+        Initialize grid.
+
+        Parameters
+        ----------
+        calculator : BaseCalculator
+            Input calculator.
+
+        mpicomm : mpi.COMM_WORLD, default=None
+            MPI communicator. If ``None``, defaults to ``calculator``'s :attr:`BaseCalculator.mpicomm`.
+
+        save_fn : str, Path, default=None
+            If not ``None``, save samples to this location.
+
+        size : int, dict, default=1
+            A dictionary mapping parameter name to grid size for this parameter.
+            Can be a single value, used for all parameters.
+
+        ref_scale : float, default=1.
+            Parameter grid ranges are inferred from parameters' :attr:`Parameter.ref.scale`
+            if exists, else limits of reference distribution if bounded, else :attr:`Parameter.proposal`.
+            These values are then scaled by ``ref_scale`` (< 1. means smaller ranges).
+
+        grid : array, dict, default=None
+            A dictionary mapping parameter name (including wildcard) to values.
+            If provided, ``size`` and ``ref_scale`` are ignored.
+
+        sphere : int, dict, default=None
+            A dictionary mappring parameter names to integers.
+            Limit grid to an "hypersphere", defined such that the (absolute) sum of indices from the grid center
+            is less than the minimum of ``sphere`` for the parameters at stake.
+            Useful e.g. for computing derivatives up to some order. As an example, to compute the Hessian of a likelihood :math:`L`,
+            i.e. :math:`\frac{\partial^{2} L}{\partial p_{1}^{2}}, \frac{\partial^{2} L}{\partial p_{1} \partial p_{2}}`, etc.,
+            (and not e.g. :math:`\frac{\partial^{4} L}{\partial p_{1}^{2} \partial p_{2}^{2}}`), ``sphere = 2`` would compute just enough points to evaluate the derivatives.
+        """
         self.pipeline = calculator.runtime_info.pipeline
         if mpicomm is None:
             mpicomm = calculator.mpicomm
@@ -28,7 +64,7 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
     def mpicomm(self, mpicomm):
         self.pipeline.mpicomm = mpicomm
 
-    def set_grid(self, grid=None, size=1, ref_scale=1., sphere=None):
+    def set_grid(self, size=1, ref_scale=1., grid=None, sphere=None):
         self.ref_scale = float(ref_scale)
         self.sphere = sphere
         self.grid = expand_dict(grid, self.varied_params.names())
@@ -87,6 +123,10 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
             self.samples = Samples(samples, params=self.varied_params)
 
     def run(self, **kwargs):
+        """
+        Run calculator evaluation on the grid.
+        A new grid can be set by providing arguments 'size', 'ref_scale', 'grid' or 'sphere', see :meth:`__init__`.
+        """
         if kwargs: self.set_grid(**kwargs)
         self.pipeline.mpicalculate(**(self.samples.to_dict(params=self.varied_params) if self.mpicomm.rank == 0 else {}))
 

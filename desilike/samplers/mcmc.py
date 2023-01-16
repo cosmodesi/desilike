@@ -22,7 +22,7 @@ class State(object):
 
 class MHSampler(object):
 
-    """We follow emcee interface."""
+    """Metropolis-Hasting MCMC algorithm, with dragging option, as in cobaya, following emcee interface."""
 
     def __init__(self, ndim, log_prob_fn, propose, nsteps_drag=None, max_tries=1000, vectorize=1, rng=None):
         self.ndim = ndim
@@ -207,19 +207,22 @@ class BlockProposer(object):
         blocks : array
             Number of parameters in each block, with blocks sorted by ascending speed.
 
-        oversample_factors : list
+        oversample_factors : list, default=None
             List of *int* oversampling factors *per parameter*,
             i.e. a factor of n for a block of dimension d would mean n*d jumps for that
             block per full cycle, whereas a factor of 1 for all blocks (default) means
             that all *directions* are treated equally (but the proposals are still
             block-wise).
 
-        last_slow_block_index : int
+        last_slow_block_index : int, default=None
             Index of the last block considered slow.
             By default, all blocks are considered slow.
 
-        proposal_scale : float
+        proposal_scale : float, default=2.4
             Overall scale for the proposal.
+
+        rng : np.random.RandomState, default=None
+            Random state.
         """
         self.rng = rng or np.random.RandomState()
         self.proposal_scale = float(proposal_scale)
@@ -325,7 +328,70 @@ def _format_blocks(blocks, params):
 
 class MCMCSampler(BaseBatchPosteriorSampler):
 
+    """Antony Lewis CosmoMC blocked fast-slow Metropolis sampler, wrapped for cobaya by Jesus Torrado."""
+
     def __init__(self, *args, blocks=None, oversample_power=0.4, covariance=None, proposal_scale=2.4, learn=True, drag=False, **kwargs):
+        """
+        Initialize MCMC sampler.
+
+        Parameters
+        ----------
+        likelihood : BaseLikelihood
+            Input likelihood.
+
+        blocks : list, default=None
+            Parameter blocks are groups of parameters which are updated alltogether
+            with a frequency proportional to oversample_factor.
+            Typically, parameter blocks are chosen such that parameters in a given block
+            require the same evaluation time of the likelihood when updated.
+            If ``None`` these blocks are defined at runtime, based on (measured) speeds and oversample_power (below),
+            but can be specified there in the format:
+
+            - [oversample_factor1, [param1, param2]]
+            - [oversample_factor2, [param3, param4]]
+
+        oversample_power : float, default=0.4
+            If ``blocks`` is ``None``, i.e. parameter blocks are defined at runtime,
+            oversample factors are ``speed**oversample_power``.
+
+        covariance : str, dict, Chain, Profiles, ParameterCovariance, default=None
+            (Initial) proposal covariance, to draw parameter jumps.
+            Can be previous samples e.g. ``({fn: chain.npy, burnin: 0.5})``,
+            or profiles (containing parameter covariance matrix), or parameter covariance.
+            If variance for a given parameter is not provided, parameter's attr:`Parameter.proposal` squared is used.
+
+        proposal_scale : float, default=2.4
+            Scale proposal by this value when drawing jumps.
+
+        learn : bool, default=True
+            If ``True``, learn proposal covariance matrix.
+            Can be a dictionary, specifying when to update covariance matrix, with same options as ``check``,
+            e.g. to update proposal when Gelman-Rubin is between 0.03 and 0.1: ``{'max_eigen_gr': 0.1, 'min_eigen_gr': 0.03}``.
+
+        drag : bool, default=False
+            Use dragging ("integrating out" fast parameters).
+
+        rng : np.random.RandomState, default=None
+            Random state. If ``None``, ``seed`` is used to set random state.
+
+        seed : int, default=None
+            Random seed.
+
+        max_tries : int, default=1000
+            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
+
+        chains : str, Path, Chain
+            Path to or chains to resume from.
+
+        ref_scale : float, default=1.
+            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor.
+
+        save_fn : str, Path, default=None
+            If not ``None``, save samples to this location.
+
+        mpicomm : mpi.COMM_WORLD, default=None
+            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`
+        """
         super(MCMCSampler, self).__init__(*args, **kwargs)
         if blocks is None:
             blocks, oversample_factors = self.pipeline.block_params(params=self.varied_params, nblocks=2 if drag else None, oversample_power=oversample_power)
@@ -407,6 +473,35 @@ class MCMCSampler(BaseBatchPosteriorSampler):
             else:
                 if self.mpicomm.rank == 0:
                     self.log_info('Updating proposal covariance.')
+
+    def run(self, *args, **kwargs):
+        """
+        Run chains. Sampling can be interrupted anytime, and resumed by providing the path to the saved chains in ``chains`` argument of :meth:`__init__`.
+
+        One will typically run sampling on ``nchains * nprocs_per_chain + 1`` processes, with ``nchains >= 1`` the number of chains
+        and ``nprocs_per_chain = max((mpicomm.size - 1) // nchains, 1)`` the number of processes per chain --- plus 1 root process to distribute the work.
+
+        Parameters
+        ----------
+        min_iterations : int, default=100
+            Minimum number of iterations (MCMC steps) to run (to avoid early stopping
+            if convergence criteria below are satisfied by chance at the beginning of the run).
+
+        max_iterations : int, default=sys.maxsize
+            Maximum number of iterations (MCMC steps) to run.
+
+        check_every : int, default=300
+            Samples are saved and convergence checks are run every ``check_every`` iterations.
+
+        check : bool, dict, default=None
+            If ``False``, no convergence checks are run.
+            If ``True`` or ``None``, convergence checks are run.
+            A dictionary of convergence criteria can be provided, see :meth:`check`.
+
+        thin_by : int, default=1
+            Thin samples by this factor.
+        """
+        super(MCMCSampler, self).run(*args, **kwargs)
 
     def _run_one(self, start, niterations=300, thin_by=1):
         self.sampler.vectorize = self.mpicomm.size

@@ -19,6 +19,7 @@ def find_uniques(li):
 
 
 def get_subsamples(samples, frac=1., nmax=np.inf, seed=42, mpicomm=None):
+    """Return a random fraction ``frac`` of input samples."""
     nsamples = mpicomm.bcast(samples.size if mpicomm.rank == 0 else None)
     size = min(max(int(nsamples * frac + 0.5), 1), nmax)
     if size > nsamples:
@@ -55,7 +56,33 @@ class EmulatedCalculator(BaseCalculator):
 
 class Emulator(BaseClass):
 
+    """
+    Class to emulate a :class:`BaseCalculator` instance.
+
+    For a :class:`BaseCalculator` to be emulated, it must implement:
+
+    - __getstate__(self): a method returning ``state`` a dictionary of attributes as basic python types and numpy arrays,
+                          everything required to replace a call to :meth:`BaseCalculator.calculate`
+    - __setstate__(self, state): a method setting calculator's state
+    """
+
     def __init__(self, calculator, engine='taylor', mpicomm=None):
+        """
+        Initialize calculator.
+
+        Parameters
+        ----------
+        calculator : BaseCalculator
+            Input calculator.
+
+        engine : str, dict, BaseEmulatorEngine, default='taylor'
+            A dictionary mapping calculator's derived attribute names (including wildcard) to emulator engine,
+            which can be a :class:`BaseEmulatorEngine` (type or instance) or one of ['taylor', 'mlp'].
+            A single emulator engine can be provided, and used for all calculator's derived attributes.
+
+        mpicomm : mpi.COMM_WORLD, default=None
+            MPI communicator.
+        """
         if mpicomm is None:
             mpicomm = calculator.mpicomm
         self.calculator = calculator
@@ -129,6 +156,22 @@ class Emulator(BaseClass):
             pass
 
     def set_samples(self, name=None, samples=None, **kwargs):
+        """
+        Set samples for :meth:`fit`.
+
+        Parameters
+        ----------
+        name : str, default=None
+            Name of calculator's derived attribute(s) (of :attr:`varied`) these samples apply to.
+            If ``None``, samples are set for all attributes.
+
+        samples : Samples, default=None
+            Samples containing ``calculator.varied_params`` and calculator's derived attributes :attr:`varied`.
+            If ``None``, samples will be generated using engines' :meth:`BaseEmulatorEngine.get_default_samples` methods.
+
+        **kwargs : dict
+            If ``samples`` is ``None``, optional arguments for :meth:`BaseEmulatorEngine.get_default_samples`.
+        """
         if name is None:
             unique_engines = find_uniques(self.engines.values())
             if len(unique_engines) == 1:
@@ -153,7 +196,18 @@ class Emulator(BaseClass):
                 self.samples[name] = tmp
 
     def fit(self, name=None, **kwargs):
+        """
+        Fit :class:`BaseEmulatorEngine` to samples.
 
+        Parameters
+        ----------
+        name : str, default=None
+            Name of calculator's derived attribute(s) (of :attr:`varied`) these samples apply to.
+            If ``None``, fits will be performed for all calculator's derived attributes.
+
+        **kwargs : dict
+            Optional arguments for :meth:`BaseEmulatorEngine.fit`.
+        """
         def _get_X_Y(samples, yname, with_deriv=False):
             X, Y = None, None
             if self.mpicomm.rank == 0:
@@ -189,7 +243,20 @@ class Emulator(BaseClass):
         return {name: engine.predict(X).reshape(self.varied_shape[name]) for name, engine in self.engines.items()}
 
     def to_calculator(self, derived=None):
+        """
+        Export new :class:`EmulatedCalculator` instance,
+        that can readily be used in replacement of input calculator.
 
+        Parameters
+        ----------
+        derived : list, ParameterCollection
+            List of parameters to set as derived in returned calculator.
+
+        Returns
+        -------
+        calculator : EmulatedCalculator
+            Emulated calculator.
+        """
         state = self.__getstate__()
         Calculator = import_class(*state['calculator__class__'])
         new_name = Calculator.__name__
@@ -211,7 +278,24 @@ class Emulator(BaseClass):
         return calculator
 
     def check(self, mse_stop=None, diagnostics=None, frac=0.1, **kwargs):
+        """
+        Check emulator against provided samples.
 
+        Parameters
+        ----------
+        mse_stop : float, default=None
+            Mean squared error (MSE).
+
+        diagnostics : default=None
+            Dictionary where computed statistics (MSE) are added.
+            Default is :attr:`diagnostics`.
+
+        frac : float, default=0.1
+            Fraction of samples to select for testing.
+
+        seed : int, default=None
+            Random seed for sample downsampling.
+        """
         if diagnostics is None:
             diagnostics = self.diagnostics
 
@@ -255,7 +339,31 @@ class Emulator(BaseClass):
 
         return self.mpicomm.bcast(toret, root=0)
 
-    def plot(self, fn=None, name=None, kw_save=None, nmax=100, show=False, **kwargs):
+    def plot(self, name=None, nmax=100, fn=None, kw_save=None, show=False, **kwargs):
+        """
+        Plot comparison between input calculator and its emulator.
+
+        Parameters
+        ----------
+        name : str, default=None
+            Name of calculator's derived attribute(s) (of :attr:`varied`) to plot.
+
+        nmax : int, default=100
+            Maximum number of samples to plot.
+
+        fn : str, Path, default=None
+            Figure path. Should be a list of paths if ``name`` refer to multiple attributes.
+
+        kw_save : dict, default=None
+            If ``fn`` is provided, dictionary of arguments to be passed
+            to :func:`matplotlib.pyplot.savefig`, e.g. 'dpi'.
+
+        show : bool, default=None
+            If ``True``, show figure.
+
+        seed : int, default=None
+            Random seed for sample downsampling.
+        """
         from matplotlib import pyplot as plt
 
         fns, names = fn, name
@@ -353,16 +461,16 @@ class RegisteredEmulatorEngine(type(BaseClass)):
 
 def get_engine(engine):
     """
-    Return engine (class) for cosmological calculation.
+    Return engine (class) for emulation.
 
     Parameters
     ----------
-    engine : BaseEngine, string
-        Engine or one of ['class', 'camb', 'eisenstein_hu', 'eisenstein_hu_nowiggle', 'eisenstein_hu_nowiggle_variants', 'bbks'].
+    engine : type, BaseEmulatorEngine, str
+        Engine (type or instance) or one of ['taylor', 'mlp'].
 
     Returns
     -------
-    engine : BaseEngine
+    engine : BaseEmulatorEngine
     """
     if isinstance(engine, str):
         engine = engine.lower()
@@ -403,6 +511,7 @@ class BaseEmulatorEngine(BaseClass, metaclass=RegisteredEmulatorEngine):
 
 class PointEmulatorEngine(BaseEmulatorEngine):
 
+    """Basic emulator that returns constant prediction."""
     name = 'point'
 
     def get_default_samples(self, calculator):

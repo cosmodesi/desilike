@@ -9,36 +9,60 @@ from .base import BaseBatchPosteriorSampler
 
 class PocoMCSampler(BaseBatchPosteriorSampler):
 
+    """Wrapper for PocoMC sampler (preconditioned Monte Carlo method), see https://github.com/minaskar/pocomc."""
+
     name = 'pocomc'
 
     def __init__(self, *args, nwalkers=None, threshold=1.0, scale=True, rescale=False, diagonal=True, flow_config=None, train_config=None, **kwargs):
         """
-        Wrapper for PocoMC sampler, see https://github.com/minaskar/pocomc.
+        Initialize PocoMC sampler.
 
         Parameters
         ----------
+        likelihood : BaseLikelihood
+            Input likelihood.
+
         nwalkers : int, str, default=None
             Number of walkers, defaults to 2 * max((int(2.5 * ndim) + 1) // 2, 2)
             Can be given in dimension units, e.g. '3 * ndim'.
 
         threshold : float, default=1.0
             The threshold value for the (normalised) proposal scale parameter below which normalising flow preconditioning (NFP) is enabled.
-            Default is threshold = 1.0, meaning that NFP is used all the time.
+            Default is 1.0, meaning that NFP is used all the time.
 
         scale : bool, default=True
             Whether to scale the distribution of particles to have zero mean and unit variance.
 
-        scale : bool, default=False
+        rescale : str, bool, default=False
             Whether to rescale the distribution of particles to have zero mean and unit variance in every iteration.
-
-        diagonal : bool, default=True
-            Use a diagonal covariance matrix when rescaling instead of a full covariance.
+            Pass 'diagonal' to use a diagonal covariance matrix when rescaling instead of a full covariance.
 
         flow_config : dict, default=None
             Configuration of the normalizing flow.
 
         train_config : dict, default=None
             Configuration for training the normalizing flow.
+
+        rng : np.random.RandomState, default=None
+            Random state. If ``None``, ``seed`` is used to set random state.
+
+        seed : int, default=None
+            Random seed.
+
+        max_tries : int, default=1000
+            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
+
+        chains : str, Path, Chain
+            Path to or chains to resume from.
+
+        ref_scale : float, default=1.
+            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor.
+
+        save_fn : str, Path, default=None
+            If not ``None``, save samples to this location.
+
+        mpicomm : mpi.COMM_WORLD, default=None
+            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
         """
         super(PocoMCSampler, self).__init__(*args, **kwargs)
         ndim = len(self.varied_params)
@@ -47,6 +71,8 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         self.nwalkers = utils.evaluate(nwalkers, type=int, locals={'ndim': ndim})
         bounds = np.array([tuple(None if np.isinf(lim) else lim for lim in param.prior.limits) for param in self.varied_params], dtype='f8')
         import pocomc
+        diagonal = rescale == 'diagonal'
+        rescale = bool(rescale)
         self.sampler = pocomc.Sampler(self.nwalkers, ndim, self.loglikelihood, self.logprior, bounds=bounds, threshold=threshold, scale=scale,
                                       rescale=rescale, diagonal=diagonal, flow_config=flow_config, train_config=train_config,
                                       vectorize_likelihood=True, vectorize_prior=True, infer_vectorization=False,

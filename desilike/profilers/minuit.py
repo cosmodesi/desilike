@@ -15,10 +15,10 @@ def _get_options(name, **kwargs):
 
 class MinuitProfiler(BaseProfiler):
 
+    """Wrapper for minuit profiler, used by the high-energy physics community for likelihood profiling."""
     name = 'minuit'
 
     def __init__(self, *args, **kwargs):
-        """Wrapper for minuit profiler, used by the high-energy physics community for likelihood profiling."""
         super(MinuitProfiler, self).__init__(*args, **kwargs)
         import iminuit
         minuit_params = {}
@@ -37,6 +37,30 @@ class MinuitProfiler(BaseProfiler):
         for param, value in zip(self.varied_params, start):
             self.minuit.values[str(param)] = value
 
+    def maximize(self, *args, **kwargs):
+        r"""
+        Maximize :attr:`likelihood`.
+        The following attributes are added to :attr:`profiles`:
+
+        - :attr:`Profiles.start`
+        - :attr:`Profiles.bestfit`
+        - :attr:`Profiles.error`  # parabolic errors at best fit
+        - :attr:`Profiles.covariance`  # parameter covariance at best fit
+
+        One will typically run several independent likelihood maximizations in parallel,
+        on number of MPI processes - 1 ranks (1 if single process), to make sure the global maximum is found.
+
+        Parameters
+        ----------
+        niterations : int, default=None
+            Number of iterations, i.e. of runs of the profiler from independent starting points.
+            If ``None``, defaults to :attr:`mpicomm.size - 1` (if > 0, else 1).
+
+        max_iterations : int, default=int(1e5)
+            Maximum number of likelihood evaluations.
+        """
+        super(MinuitProfiler, self).maximize(*args, **kwargs)
+
     def _maximize_one(self, start, max_iterations=int(1e5)):
         self._set_start(start)
         self.minuit.migrad(ncall=max_iterations)
@@ -48,16 +72,27 @@ class MinuitProfiler(BaseProfiler):
             profiles.set(covariance=ParameterCovariance(np.array(self.minuit.covariance), params=self.varied_params))
         return profiles
 
-    def _interval_one(self, start, param, max_iterations=int(1e5), cl=None):
+    def interval(self, *args, **kwargs):
         """
+        Compute confidence intervals for :attr:`likelihood`.
+        The following attributes are added to :attr:`profiles`:
+
+        - :attr:`Profiles.interval`
+
         Parameters
         ----------
+        params : str, Parameter, list, ParameterCollection, default=None
+            Parameters for which to estimate confidence intervals.
+
         cl : float, int, default=None
             Confidence level for the confidence interval.
             If not set or None, a standard 68.3 % confidence interval is produced.
             If 0 < cl < 1, the value is interpreted as the confidence level (a probability).
             If cl >= 1, it is interpreted as number of standard deviations. For example, cl = 3 produces a 3 sigma interval.
         """
+        super(MinuitProfiler, self).interval(*args, **kwargs)
+
+    def _interval_one(self, start, param, max_iterations=int(1e5), cl=None):
         self._set_start(start)
         profiles = Profiles()
         name = str(param)
@@ -67,10 +102,18 @@ class MinuitProfiler(BaseProfiler):
 
         return profiles
 
-    def _profile_one(self, start, param, size=30, grid=None, **kwargs):
+    def profile(self, *args, **kwargs):
         """
+        Compute 1D profiles for :attr:`likelihood`.
+        The following attributes are added to :attr:`profiles`:
+
+        - :attr:`Profiles.profile`
+
         Parameters
         ----------
+        params : str, Parameter, list, ParameterCollection, default=None
+            Parameters for which to compute 1D profiles.
+
         size : int, default=30
             Number of scanning points. Ignored if grid is set.
 
@@ -81,6 +124,9 @@ class MinuitProfiler(BaseProfiler):
         grid : array, default=None
             Parameter values on which to compute the profile. If grid is set, size and bound are ignored.
         """
+        super(MinuitProfiler, self).profile(*args, **kwargs)
+
+    def _profile_one(self, start, param, size=30, grid=None, **kwargs):
         self._set_start(start)
         profiles = Profiles()
         if 'cl' in kwargs:
@@ -92,8 +138,19 @@ class MinuitProfiler(BaseProfiler):
 
         return profiles
 
-    def _contour_one(self, start, param1, param2, cl=None, size=100, interpolated=0):
+    def contour(self, *args, **kwargs):
         """
+        Compute 2D contours for :attr:`likelihood`.
+        The following attributes are added to :attr:`profiles`:
+
+        - :attr:`Profiles.contour`
+
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            List of tuples of parameters for which to compute 2D contours.
+            If a list of parameters is provided instead, contours are computed for unique tuples of parameters.
+
         cl : float, int, default=None
             Confidence level for the confidence contour.
             If not set or None, a standard 68.3 % confidence contour is produced.
@@ -108,6 +165,9 @@ class MinuitProfiler(BaseProfiler):
             cubic spline interpolation is used to generate a smoother curve and the interpolated coordinates are returned.
             Values smaller than size are ignored. Good results can be obtained with size=20, interpolated=200.
         """
+        super(MinuitProfiler, self).contour(*args, **kwargs)
+
+    def _contour_one(self, start, param1, param2, cl=None, size=100, interpolated=0):
         self._set_start(start)
         profiles = Profiles()
         x1, x2 = self.minuit.mncontour(str(param1), str(param2), cl=cl, size=size, interpolated=interpolated)

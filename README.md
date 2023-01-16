@@ -1,11 +1,9 @@
 # desilike
 
-WARNING: this is ongoing work!
-
 **desilike** is an attempt to provide a common framework for writing DESI likelihoods,
 that can be imported in common cosmological inference codes (Cobaya, CosmoSIS, MontePython).
 
-Stricly required, to import likelihoods in these inference codes, are:
+Stricly required, to define and import likelihoods in these inference codes, are:
 
   - theories
   - observables
@@ -13,19 +11,19 @@ Stricly required, to import likelihoods in these inference codes, are:
   - bindings
   - (optionally: emulators)
 
-Directories samples, samplers and profilers are provided for self-contained tests of provided likelihoods.
+Directories samples, samplers and profilers are provided for self-contained sampling / profiling of provided likelihoods.
+**desilike** also provides utilities for easy Fisher analyses.
 Example notebooks presenting most use cases are provided in directory nb/.
 
 ## TODO
 
 .yaml or not .yaml file? e.g. parameter specifications could be given in docstrings, and automatically read out at runtime
-(but this will make very long docstrings...)
-Special treatment for sum of independent likelihoods?
+(but this would make very long docstrings...).
 Add curve_fit-type profiler.
 
 ## Documentation
 
-Documentation WILL BE hosted on Read the Docs, [desilike docs](https://desilike.readthedocs.io/).
+Documentation in construction on Read the Docs, [desilike docs](https://desilike.readthedocs.io/).
 
 ## Requirements
 

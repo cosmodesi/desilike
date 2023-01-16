@@ -7,18 +7,34 @@ from .base import BaseProfiler
 
 
 class BOBYQAProfiler(BaseProfiler):
-
-    name = 'bobyqa'
     """
     Designed for solving bound-constrained general objective minimization, without requiring derivatives of the objective.
     See https://github.com/numericalalgorithmsgroup/pybobyqa.
     """
-    def _maximize_one(self, start, max_iterations=int(1e5), **kwargs):
+    name = 'bobyqa'
+
+    def maximize(self, *args, **kwargs):
         r"""
-        Maximize.
+        Maximize :attr:`likelihood`.
+        The following attributes are added to :attr:`profiles`:
+
+        - :attr:`Profiles.start`
+        - :attr:`Profiles.bestfit`
+        - :attr:`Profiles.error`  # parabolic errors at best fit
+        - :attr:`Profiles.covariance`  # parameter covariance at best fit
+
+        One will typically run several independent likelihood maximizations in parallel,
+        on number of MPI processes - 1 ranks (1 if single process), to make sure the global maximum is found.
 
         Parameters
         ----------
+        niterations : int, default=None
+            Number of iterations, i.e. of runs of the profiler from independent starting points.
+            If ``None``, defaults to :attr:`mpicomm.size - 1` (if > 0, else 1).
+
+        max_iterations : int, default=int(1e5)
+            Maximum number of likelihood evaluations.
+
         npt : int, default=None
             The number of interpolation points to use; default is 2 * ndim + 1.
             Py-BOBYQA requires ndim + 1 <= npt <= (ndim + 1)(ndim + 2)/2. Larger values are particularly useful for noisy problems.
@@ -38,6 +54,9 @@ class BOBYQAProfiler(BaseProfiler):
             The method used is a multiple restart mechanism, where we repeatedly re-initialize Py-BOBYQA from the best point found so far,
             but where we use a larger trust reigon radius each time (note: this is different to more common multi-start approach to global optimization).
         """
+        super(BOBYQAProfiler, self).maximize(*args, **kwargs)
+
+    def _maximize_one(self, start, max_iterations=int(1e5), **kwargs):
         import pybobyqa
         infs = [- 1e20, 1e20]  # pybobyqa defaults
         bounds = np.array([[inf if np.isinf(lim) else lim for lim, inf in zip(param.prior.limits, infs)] for param in self.varied_params]).T
@@ -51,7 +70,6 @@ class BOBYQAProfiler(BaseProfiler):
         cov = utils.inv(result.hessian)
         profiles.set(error=Samples(np.diag(cov)**0.5, params=self.varied_params))
         profiles.set(covariance=ParameterCovariance(cov, params=self.varied_params))
-        print(profiles.error)
         return profiles
 
     @classmethod

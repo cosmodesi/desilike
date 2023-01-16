@@ -10,7 +10,10 @@ from .base import BaseEmulatorEngine
 
 
 class TaylorEmulatorEngine(BaseEmulatorEngine):
-
+    """
+    Taylor expansion emulator engine, based on Stephen Chen and Mark Maus' velocileptors' Taylor expansion:
+    https://github.com/cosmodesi/desi-y1-kp45/tree/main/ShapeFit_Velocileptors
+    """
     name = 'taylor'
     _samples_with_derivs = True
 
@@ -19,6 +22,25 @@ class TaylorEmulatorEngine(BaseEmulatorEngine):
         self.sampler_options = dict(order=order, accuracy=accuracy, ref_scale=ref_scale)
 
     def get_default_samples(self, calculator, **kwargs):
+        """
+        Returns samples with derivatives.
+
+        Parameters
+        ----------
+        order : int, dict, default=3
+            A dictionary mapping parameter name (including wildcard) to maximum derivative order.
+            If a single value is provided, applies to all varied parameters.
+
+        accuracy : int, dict, default=2
+            A dictionary mapping parameter name (including wildcard) to derivative accuracy (number of points used to estimate it).
+            If a single value is provided, applies to all varied parameters.
+            Not used if autodifferentiation is available.
+
+        ref_scale : float, default=0.5
+            Parameter grid ranges for the estimation of derivatives are inferred from parameters' :attr:`Parameter.ref.scale`
+            if exists, else limits of reference distribution if bounded, else :attr:`Parameter.proposal`.
+            These values are then scaled by ``ref_scale`` (< 1. means smaller ranges).
+        """
         from desilike import Differentiation
         options = {**self.sampler_options, **kwargs}
         differentiation = Differentiation(calculator, **options, mpicomm=self.mpicomm)

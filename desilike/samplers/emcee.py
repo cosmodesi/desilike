@@ -4,19 +4,46 @@ from .base import BaseBatchPosteriorSampler
 
 
 class EmceeSampler(BaseBatchPosteriorSampler):
+    """
+    Wrapper for the affine-invariant ensemble sampler for Markov chain Monte Carlo (MCMC) proposed by Goodman & Weare (2010),
+    see https://github.com/dfm/emcee.
+    """
 
     name = 'emcee'
 
     def __init__(self, *args, nwalkers=None, **kwargs):
         """
-        Wrapper for the affine-invariant ensemble sampler for Markov chain Monte Carlo (MCMC) proposed by Goodman & Weare (2010),
-        see https://github.com/dfm/emcee.
+        Initialize emcee sampler.
 
         Parameters
         ----------
+        likelihood : BaseLikelihood
+            Input likelihood.
+
         nwalkers : int, str, default=None
             Number of walkers, defaults to 2 * max((int(2.5 * ndim) + 1) // 2, 2)
             Can be given in dimension units, e.g. '3 * ndim'.
+
+        rng : np.random.RandomState, default=None
+            Random state. If ``None``, ``seed`` is used to set random state.
+
+        seed : int, default=None
+            Random seed.
+
+        max_tries : int, default=1000
+            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
+
+        chains : str, Path, Chain
+            Path to or chains to resume from.
+
+        ref_scale : float, default=1.
+            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor.
+
+        save_fn : str, Path, default=None
+            If not ``None``, save samples to this location.
+
+        mpicomm : mpi.COMM_WORLD, default=None
+            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
         """
         super(EmceeSampler, self).__init__(*args, **kwargs)
         ndim = len(self.varied_params)
@@ -25,6 +52,35 @@ class EmceeSampler(BaseBatchPosteriorSampler):
         self.nwalkers = utils.evaluate(nwalkers, type=int, locals={'ndim': len(self.varied_params)})
         import emcee
         self.sampler = emcee.EnsembleSampler(self.nwalkers, ndim, self.logposterior, vectorize=True)
+
+    def run(self, *args, **kwargs):
+        """
+        Run chains. Sampling can be interrupted anytime, and resumed by providing the path to the saved chains in ``chains`` argument of :meth:`__init__`.
+
+        One will typically run sampling on ``nchains * nprocs_per_chain + 1`` processes, with ``nchains >= 1`` the number of chains
+        and ``nprocs_per_chain = max((mpicomm.size - 1) // nchains, 1)`` the number of processes per chain --- plus 1 root process to distribute the work.
+
+        Parameters
+        ----------
+        min_iterations : int, default=100
+            Minimum number of iterations (MCMC steps) to run (to avoid early stopping
+            if convergence criteria below are satisfied by chance at the beginning of the run).
+
+        max_iterations : int, default=sys.maxsize
+            Maximum number of iterations (MCMC steps) to run.
+
+        check_every : int, default=300
+            Samples are saved and convergence checks are run every ``check_every`` iterations.
+
+        check : bool, dict, default=None
+            If ``False``, no convergence checks are run.
+            If ``True`` or ``None``, convergence checks are run.
+            A dictionary of convergence criteria can be provided, see :meth:`check`.
+
+        thin_by : int, default=1
+            Thin samples by this factor.
+        """
+        super(EmceeSampler, self).run(*args, **kwargs)
 
     def _run_one(self, start, niterations=300, thin_by=1, progress=False):
         self.sampler._random = self.rng

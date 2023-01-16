@@ -31,7 +31,23 @@ def _make_tuple(obj, length=None):
 
 
 class MLPEmulatorEngine(BaseEmulatorEngine):
+    """
+    Multi-layer perceptron emulator. Based on Joe DeRose and Stephen Chen's EmulateLSS code:
+    https://github.com/sfschen/EmulateLSS
 
+    Parameters
+    ----------
+    nhidden : tuple, default=(100, 100, 100)
+        Size of hidden layers.
+
+    ytransform : str, default=''
+        Transform to be applied to quantity to be emulated.
+        Can be "arcsinh".
+
+    npcs : int, default=None
+        Number of principal components (eigenvalues) in PCA.
+        By default, all components are kept.
+    """
     name = 'mlp'
 
     def initialize(self, varied_params, nhidden=(100, 100, 100), ytransform='', npcs=None, engine='rqrs', niterations=int(1e5)):
@@ -41,6 +57,21 @@ class MLPEmulatorEngine(BaseEmulatorEngine):
         self.sampler_options = dict(engine=engine, niterations=niterations)
 
     def get_default_samples(self, calculator, **kwargs):
+        """
+        Returns samples.
+
+        Parameters
+        ----------
+        order : int, dict, default=3
+            A dictionary mapping parameter name (including wildcard) to maximum derivative order.
+            If a single value is provided, applies to all varied parameters.
+
+        engine : str, default='rqrs'
+            QMC engine, to choose from ['sobol', 'halton', 'lhs', 'rqrs'].
+
+        niterations : int, default=300
+            Number of samples to draw.
+        """
         from desilike.samplers import QMCSampler
         options = {**self.sampler_options, **kwargs}
         sampler = QMCSampler(calculator, engine=options['engine'], mpicomm=self.mpicomm)
@@ -48,7 +79,29 @@ class MLPEmulatorEngine(BaseEmulatorEngine):
         return sampler.samples
 
     def fit(self, X, Y, validation_frac=0.2, optimizer='adam', batch_sizes=(320, 640, 1280, 2560, 5120), epochs=1000, learning_rates=(1e-2, 1e-3, 1e-4, 1e-5, 1e-6), seed=None):
+        """
+        Fit.
 
+        Parameters
+        ----------
+        validation_frac : float, default=0.2
+            Fraction of the training sample to use for validation.
+
+        optimizer : str, default='adam'
+            Tensorflow optimizer to use.
+
+        batch_sizes : tuple, list, default=(320, 640, 1280, 2560, 5120)
+            Optimization batch sizes.
+
+        epochs : int, tuple, list, default=1000
+            Number of optimization epochs or a list of such number for each batch.
+
+        learning_rates : float, tuple, list, default=(1e-2, 1e-3, 1e-4, 1e-5, 1e-6)
+            Learning rate, a float or a list of such float for each batch.
+
+        seed : int, default=None
+            Random seed.
+        """
         optimizer = str(optimizer)
         validation_frac = float(validation_frac)
         batch_sizes = _make_tuple(batch_sizes, length=1)

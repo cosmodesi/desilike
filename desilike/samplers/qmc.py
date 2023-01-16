@@ -16,7 +16,7 @@ class RQuasiRandomSequence(qmc.QMCEngine):
         phi = 1.0
         # This is the Newton's method, solving phi**(d+1) - phi - 1 = 0
         eq_check = phi**(self.d + 1) - phi - 1
-        while (np.abs(eq_check) > 1e-12):
+        while np.abs(eq_check) > 1e-12:
             phi -= (phi**(self.d + 1) - phi - 1) / ((self.d + 1) * phi**self.d - 1)
             eq_check = phi**(self.d + 1) - phi - 1
         self.inv_phi = [phi**(-(1 + d)) for d in range(self.d)]
@@ -41,9 +41,45 @@ def get_qmc_engine(engine):
 
 class QMCSampler(BaseClass, metaclass=RegisteredSampler):
 
+    """Quasi Monte-Carlo sequences, using :mod:`scipy.qmc` (+ RQuasiRandomSequence)."""
     name = 'qmc'
 
     def __init__(self, calculator, samples=None, mpicomm=None, engine='rqrs', save_fn=None, **kwargs):
+        """
+        Initialize QMC sampler.
+
+        Parameters
+        ----------
+        calculator : BaseCalculator
+            Input calculator.
+
+        rng : np.random.RandomState, default=None
+            Random state. If ``None``, ``seed`` is used to set random state.
+
+        seed : int, default=None
+            Random seed.
+
+        max_tries : int, default=1000
+            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
+
+        samples : str, Path, Samples
+            Path to or samples to resume from.
+
+        ref_scale : float, default=1.
+            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor
+
+        mpicomm : mpi.COMM_WORLD, default=None
+            MPI communicator. If ``None``, defaults to ``calculator``'s :attr:`BaseCalculator.mpicomm`.
+
+        engine : str, default='rqrs'
+            QMC engine, to choose from ['sobol', 'halton', 'lhs', 'rqrs'].
+
+        save_fn : str, Path, default=None
+            If not ``None``, save samples to this location.
+
+        **kwargs : dict
+            Optional engine-specific arguments.
+        """
         self.pipeline = calculator.runtime_info.pipeline
         if mpicomm is None:
             mpicomm = calculator.mpicomm
@@ -64,6 +100,15 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
         self.pipeline.mpicomm = mpicomm
 
     def run(self, niterations=300):
+        """
+        Run sampling. Sampling can be interrupted anytime, and resumed by providing
+        the path to the saved samples in ``samples`` argument of :meth:`__init__`.
+
+        Parameters
+        ----------
+        niterations : int, default=300
+            Number of samples to draw.
+        """
         lower, upper = [], []
         for param in self.varied_params:
             if param.ref.is_proper():

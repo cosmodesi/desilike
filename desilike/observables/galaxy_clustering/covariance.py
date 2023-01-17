@@ -2,7 +2,7 @@ import numpy as np
 from scipy import special
 
 from desilike.theories.primordial_cosmology import get_cosmo
-from desilike.base import BaseCalculator
+from desilike.base import BaseCalculator, EnsembleCalculator
 from desilike.utils import BaseClass
 from desilike import utils
 from .power_spectrum import TracerPowerSpectrumMultipolesObservable
@@ -165,7 +165,7 @@ class ObservablesCovarianceMatrix(BaseClass):
     def __init__(self, observables, footprints=None, theories=None, resolution=1):
         if not utils.is_sequence(observables):
             observables = [observables]
-        self.observables = [obs.runtime_info.initialize() for obs in observables]
+        self.observables = EnsembleCalculator(calculators=observables).runtime_info.initialize()
         if not utils.is_sequence(footprints):
             footprints = [footprints] * len(self.observables)
         self.footprints = []
@@ -183,6 +183,7 @@ class ObservablesCovarianceMatrix(BaseClass):
         return self.covariance
 
     def run(self, **params):
+        self.observables(**params)
         self.cosmo = None
         if any(isinstance(footprint, CutskyFootprint) for footprint in self.footprints):
             for footprint in self.footprints:
@@ -214,8 +215,11 @@ class ObservablesCovarianceMatrix(BaseClass):
         def get_pk(observable, footprint, theory=None):
             if theory is None:
                 for calculator in observable.runtime_info.pipeline.calculators[::-1]:
-                    if hasattr(calculator, 'power') and not isinstance(calculator.power, BaseCalculator):
+                    if hasattr(calculator, 'k') and hasattr(calculator, 'power') and not isinstance(calculator.power, BaseCalculator) and np.ndim(calculator.k) == 1:
                         theory = calculator
+                        break
+            if theory is None:
+                raise ValueError('Theory must be provided for observable {}'.format(observable))
 
             def pk(k, ell=0):
                 ill = theory.ells.index(ell)

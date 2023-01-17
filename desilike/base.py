@@ -731,3 +731,22 @@ class BaseCalculator(BaseClass):
     @property
     def varied_params(self):
         return self.runtime_info.pipeline.varied_params
+
+
+class EnsembleCalculator(BaseCalculator):
+
+    def initialize(self, calculators=None):
+        self.calculators = calculators
+        self.runtime_info.requires = calculators
+
+    def __getitem__(self, index):
+        return self.calculators[index]
+
+    def __setitem__(self, index, calculator):
+        self.calculators[index] = calculator
+
+    def __len__(self):
+        return len(self.calculators)
+
+    def __iter__(self):
+        return iter(self.calculators)

@@ -323,6 +323,6 @@ if __name__ == '__main__':
     #test_params()
     #test_copy()
     #test_differentiation()
-    test_fisher()
+    #test_fisher()
     #test_cosmo()
     #test_install()

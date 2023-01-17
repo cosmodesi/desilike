@@ -67,7 +67,7 @@ def test_footprint():
     from cosmoprimo.fiducial import DESI
     footprint = BoxFootprint(volume=1e10, nbar=1e-3)
     footprint = CutskyFootprint(nbar=2500., area=14000., zrange=(0.8, 1.6), cosmo=DESI())
-    print(footprint.zavg, footprint.size / 1e6, footprint.nbar, footprint.volume / 1e9)
+    print(footprint.zavg, footprint.size / 1e6, footprint.shotnoise, footprint.volume / 1e9)
 
 
 def test_covariance_matrix():
@@ -161,5 +161,5 @@ if __name__ == '__main__':
     #test_power_spectrum()
     #test_correlation_function()
     test_footprint()
-    #test_covariance_matrix()
+    test_covariance_matrix()
     #test_compression()

@@ -6,6 +6,9 @@ from desilike.likelihoods.base import BaseCalculator, BaseLikelihood
 from .base import ClTheory
 
 
+_cache = {}
+
+
 class BasePlanck2018ClikLikelihood(BaseLikelihood):
 
     config_fn = 'planck2018_clik.yaml'
@@ -14,22 +17,25 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
     def initialize(self, theory=None, cosmo=None, data_dir=None):
         super(BasePlanck2018ClikLikelihood, self).initialize()
         import clik
-        self.clik = clik
         if data_dir is None:
             from desilike.install import Installer
             data_dir = Installer()[self.installer_section]['data_dir']
         data_fn = os.path.join(data_dir, self.data_basename)
         self.lensing = clik.try_lensing(data_fn)
-        try:
-            if self.lensing:
-                self.clik = clik.clik_lensing(data_fn)
-            else:
-                self.clik = clik.clik(data_fn)
-        except clik.lkl.CError as exc:
-            if not os.path.exists(data_fn):
-                raise IOError('The path to the .clik file for the likelihood {} was not found at {}'.format(self.__class__.__name__, data_fn))
-            else:
-                raise exc
+        if data_fn in _cache:
+            self.clik = _cache[data_fn]
+        else:
+            try:
+                if self.lensing:
+                    self.clik = clik.clik_lensing(data_fn)
+                else:
+                    self.clik = clik.clik(data_fn)
+            except clik.lkl.CError as exc:
+                if not os.path.exists(data_fn):
+                    raise IOError('The path to the .clik file for the likelihood {} was not found at {}'.format(self.__class__.__name__, data_fn))
+                else:
+                    raise exc
+            _cache[data_fn] = self.clik
         self.ells_max = self.clik.get_lmax()
         self.nuisance_params = list(self.clik.extra_parameter_names)
 

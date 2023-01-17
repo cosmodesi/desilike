@@ -22,7 +22,14 @@ def test_install():
         assert np.allclose((likelihood + likelihood)(), 2. * likelihood() - likelihood.logprior)
 
 
+def test_clik():
+    likelihood = TTTEEEHighlPlanck2018PlikLiteLikelihood()
+    likelihood()
+    TTTEEEHighlPlanck2018PlikLiteLikelihood()()
+
+
 if __name__ == '__main__':
 
     setup_logging()
-    test_install()
+    #test_install()
+    test_clik()

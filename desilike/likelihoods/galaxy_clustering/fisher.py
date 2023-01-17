@@ -3,19 +3,9 @@ from scipy import special
 
 from desilike.jax import numpy as jnp
 from desilike.parameter import Parameter
-from desilike.base import BaseCalculator
+from desilike.base import EnsembleCalculator
 from desilike.likelihoods.base import BaseGaussianLikelihood
 from desilike import utils
-
-
-class Theories(BaseCalculator):
-
-    def initialize(self, theories=None):
-        self.theories = theories
-        self.runtime_info.requires = theories
-
-    def __iter__(self):
-        return iter(self.theories)
 
 
 class SNWeightedPowerSpectrumLikelihood(BaseGaussianLikelihood):
@@ -30,7 +20,7 @@ class SNWeightedPowerSpectrumLikelihood(BaseGaussianLikelihood):
         if klim is not None:
             k = np.linspace(*klim, num=100)
             for theory in self.theories: theory.init.update(k=k)
-        self.theories = Theories(theories=theories)
+        self.theories = EnsembleCalculator(calculators=theories)
         if np.ndim(mu) == 0:
             self.mu = np.linspace(0., 1., mu)
         else:

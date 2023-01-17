@@ -62,7 +62,7 @@ class Emulator(BaseClass):
     For a :class:`BaseCalculator` to be emulated, it must implement:
 
     - __getstate__(self): a method returning ``state`` a dictionary of attributes as basic python types and numpy arrays,
-                          everything required to replace a call to :meth:`BaseCalculator.calculate`
+      everything required to replace a call to :meth:`BaseCalculator.calculate`
     - __setstate__(self, state): a method setting calculator's state
     """
 

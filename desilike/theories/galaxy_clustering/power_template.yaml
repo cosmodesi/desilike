@@ -38,34 +38,48 @@ params:
   h:
     value: 0.6736
     prior:
-      dist: uniform
       limits: [0.4, 0.9]
+    ref:
+      dist: norm
+      loc: 0.6736
+      scale: 0.005
     latex: h
-  Omega_m:
-    value: 0.3
+  omega_cdm:
+    value: 0.12
     prior:
-      dist: uniform
-      limits: [0.02, 0.8]
-    latex: \Omega_{m}
+      limits: [0.05, 0.2]
+    ref:
+      dist: norm
+      loc: 0.12
+      scale: 0.0013
+    latex: \omega_{cdm}
   omega_b:
     value: 0.02237
-    fixed: True
     prior:
-      dist: uniform
       limits: [0.01, 0.03]
+    ref:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00014
     latex: \omega_{b}
   logA:
     value: 3.036394
     prior:
-      dist: uniform
       limits: [2.5, 3.5]
+    ref:
+      dist: norm
+      loc: 3.036394
+      scale: 0.005
     latex: \ln(10^{10} A_{s})
   n_s:
     value: 0.9649
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
-    latex: n_s
+    ref:
+      dist: norm
+      loc: 0.9649
+      scale: 0.0041
+    latex: n_{s}
   omega_ncdm:
     value: 0.0006442
     latex: \omega_{ncdm}
@@ -133,25 +147,25 @@ params:
     prior:
       dist: uniform
       limits: [0.8, 1.2]
-    latex: '\alpha_{\parallel}'
+    latex: \alpha_{\parallel}
   qper:
     value: 1.
     prior:
       dist: uniform
       limits: [0.8, 1.2]
-    latex: '\alpha_{\perp}'
+    latex: \alpha_{\perp}
   Ap:
     derived: True
-    latex: 'A_{p}'
+    latex: A_{p}
   f_sqrt_Ap:
     derived: True
-    latex: 'f A_{p}^{1/2}'
+    latex: f A_{p}^{1/2}
   m:
     derived: True
-    latex: 'm'
+    latex: m
   n:
     derived: True
-    latex: 'n_{s}'
+    latex: n
   f:
     value: 0.8
     prior:
@@ -159,7 +173,7 @@ params:
       limits: [0., 1.]
     ref:
       limits: [0.75, 0.85]
-    latex: 'f'
+    latex: f
 
 ---
 
@@ -190,7 +204,7 @@ params:
       dist: norm
       loc: 1.
       scale: 0.02
-    latex: '\alpha_{\parallel}'
+    latex: \alpha_{\parallel}
   qper:
     value: 1.
     prior:
@@ -198,7 +212,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    latex: '\alpha_{\perp}'
+    latex: \alpha_{\perp}
   qiso:
     value: 1.
     prior:
@@ -206,7 +220,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    latex: '\alpha_{\mathrm{iso}}'
+    latex: \alpha_{\mathrm{iso}}
   qap:
     value: 1.
     prior:
@@ -214,19 +228,19 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    latex: '\alpha_{\mathrm{ap}}'
+    latex: \alpha_{\mathrm{ap}}
   DM_over_rd:
     derived: True
-    latex: 'D_{\mathrm{M}}/r_{d}'
+    latex: D_{\mathrm{M}}/r_{d}
   DH_over_rd:
     derived: True
-    latex: 'D_{\mathrm{H}}/r_{d}'
+    latex: D_{\mathrm{H}}/r_{d}
   DH_over_DM:
     derived: True
-    latex: 'D_{\mathrm{H}}/D_{\mathrm{M}}'
+    latex: D_{\mathrm{H}}/D_{\mathrm{M}}
   DV_over_rd:
     derived: True
-    latex: '(D_{\mathrm{H}} D_{\mathrm{M}}^{2} z)^{1/3}/r_{d}'
+    latex: (D_{\mathrm{H}} D_{\mathrm{M}}^{2} z)^{1/3}/r_{d}
 
 ---
 

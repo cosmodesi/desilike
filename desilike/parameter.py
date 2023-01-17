@@ -2337,10 +2337,11 @@ class ParameterCovariance(BaseParameterMatrix):
         cov = self.view(params, return_type=None)
         headers = [param.latex(inline=True) if is_latex else str(param) for param in cov._params]
 
+        txt = tabulate.tabulate([['FoM', '{:.2f}'.format(self.fom())]], tablefmt=tablefmt) + '\n'
         errors = np.diag(cov._value)**0.5
         data = [('center', 'std')] + [utils.round_measurement(value, error, sigfigs=sigfigs)[:2] for value, error in zip(cov._center, errors)]
         data = list(zip(*data))
-        txt = tabulate.tabulate(data, headers=headers, tablefmt=tablefmt) + '\n'
+        txt += tabulate.tabulate(data, headers=headers, tablefmt=tablefmt) + '\n'
 
         data = [[str(param)] + [utils.round_measurement(value, value, sigfigs=sigfigs)[0] for value in row] for param, row in zip(cov._params, cov._value)]
         txt += tabulate.tabulate(data, headers=headers, tablefmt=tablefmt)

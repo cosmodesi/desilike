@@ -122,7 +122,45 @@ def deriv_nd(X, Y, orders, center=None):
 
 class Differentiation(BaseClass):
 
-    def __init__(self, calculator, getter=None, method=None, order=1, ref_scale=1e-1, accuracy=2, mpicomm=None):
+    """Estimate derivatives of ``calculator`` quantities, with auto- or finite-differentiation."""
+
+    def __init__(self, calculator, getter=None, order=1, method=None, accuracy=2, ref_scale=1e-1, mpicomm=None):
+        """
+        Initialize differentiation.
+
+        Parameters
+        ----------
+        calculator : BaseCalculator
+            Input calculator.
+
+        getter : callable, default=None
+            Function (without input arguments) that returns a quantity,
+            or a list or dictionary mapping names to quantities from ``calculator`` to be differentiated.
+            If ``None``, defaults to derived parameters.
+
+        order : int, dict, default=1
+            A dictionary mapping parameter name (including wildcard) to maximum derivative order.
+            If a single value is provided, applies to all varied parameters.
+
+        method : str, dict, default=None
+            A dictionary mapping parameter name (including wildcard) to method to use to estimate derivatives,
+            either 'auto' for automatic differentiation, or 'finite' for finite differentiation.
+            If ``None``, 'auto' will be used if possible, else 'finite'.
+            If a single value is provided, applies to all varied parameters.
+
+        accuracy : int, dict, default=2
+            A dictionary mapping parameter name (including wildcard) to derivative accuracy (number of points used to estimate it).
+            If a single value is provided, applies to all varied parameters.
+            Not used if autodifferentiation is available.
+
+        ref_scale : float, default=0.5
+            Parameter grid ranges for the estimation of derivatives are inferred from parameters' :attr:`Parameter.ref.scale`
+            if exists, else limits of reference distribution if bounded, else :attr:`Parameter.proposal`.
+            These values are then scaled by ``ref_scale`` (< 1. means smaller ranges).
+
+        mpicomm : mpi.COMM_WORLD, default=None
+            MPI communicator. If ``None``, defaults to ``calculator``'s :attr:`BaseCalculator.mpicomm`.
+        """
         if mpicomm is None:
             mpicomm = calculator.mpicomm
         self.mpicomm = mpicomm
@@ -136,7 +174,7 @@ class Differentiation(BaseClass):
         if self.mpicomm.rank == 0:
             self.log_info('Varied parameters: {}.'.format(self.varied_params.names()))
 
-        for name, item in zip(['method', 'order', 'accuracy'], [method, order, accuracy]):
+        for name, item in zip(['order', 'method', 'accuracy'], [order, method, accuracy]):
             setattr(self, name, expand_dict(item, self.varied_params.names()))
 
         for param, value in self.order.items():
@@ -362,5 +400,8 @@ class Differentiation(BaseClass):
             self.samples = toret
 
     def __call__(self, **params):
+        """
+        Return derivatives for input parameter values.
+        If ``getter`` returns a list (resp. dict), a list (resp. :class:`Samples`) of derivatives."""
         self.run(**params)
         return self.samples

@@ -2128,29 +2128,29 @@ class BaseParameterMatrix(BaseClass):
 
     """Class that represents a parameter matrix."""
 
-    def __init__(self, matrix, params=None, center=None):
+    def __init__(self, value, params=None, center=None):
         """
         Initialize :class:`BaseParameterMatrix`.
 
         Parameters
         ----------
-        matrix : array
+        value : array
             2D array representing matrix.
 
         params : list, ParameterCollection
-            Parameters corresponding to input ``matrix``.
+            Parameters corresponding to input ``value``.
         """
-        if isinstance(matrix, self.__class__):
-            self.__dict__.update(matrix.__dict__)
+        if isinstance(value, self.__class__):
+            self.__dict__.update(value.__dict__)
             return
         if params is None:
             raise ValueError('Provide matrix parameters')
         self._params = ParameterCollection(params)
         if not self._params:
             raise ValueError('Got no parameters')
-        if isinstance(matrix, ParameterArray):
-            matrix = np.array([[matrix[param1, param2] for param2 in self._params] for param1 in self._params])
-        self._value = np.atleast_2d(matrix)
+        if isinstance(value, ParameterArray):
+            value = np.array([[value[param1, param2] for param2 in self._params] for param1 in self._params])
+        self._value = np.atleast_2d(np.array(value))
         if self._value.ndim != 2:
             raise ValueError('Input matrix must be 2D')
         shape = self._value.shape
@@ -2166,6 +2166,9 @@ class BaseParameterMatrix(BaseClass):
     def params(self, *args, **kwargs):
         return self._params.params(*args, **kwargs)
 
+    def names(self, *args, **kwargs):
+        return self._params.names(*args, **kwargs)
+
     def select(self, params=None, **kwargs):
         if params is None: params = self._params.select(**kwargs)
         return self.view(params=params, return_type=None)
@@ -2180,6 +2183,14 @@ class BaseParameterMatrix(BaseClass):
             raise ValueError('number * size of input params must match input matrix shape')
         return toret
 
+    def clone(self, value=None, params=None, center=None):
+        new = self.view(params=params, return_type=None)
+        if value is not None:
+            new._value[...] = value
+        if center is not None:
+            new._center[...] = center
+        return new
+
     def center(self, params=None, return_type='nparray'):
         if params is None:
             params = self._params
@@ -2193,7 +2204,7 @@ class BaseParameterMatrix(BaseClass):
             return center
         return {str(param): value for param, value in zip(params, center)}
 
-    def view(self, params=None, return_type='nparray'):
+    def view(self, params=None, return_type=None):
         """Return matrix for input parameters ``params``."""
         if params is None:
             params = self._params
@@ -2284,7 +2295,7 @@ class ParameterCovariance(BaseParameterMatrix):
 
     """Class that represents a parameter covariance."""
 
-    def view(self, params=None, return_type='nparray', fill=None):
+    def view(self, params=None, return_type=None, fill=None):
         """Return matrix for input parameters ``params``."""
         new = super(ParameterCovariance, self).view(params=params, return_type=None)
         if fill == 'proposal':
@@ -2362,8 +2373,42 @@ class ParameterCovariance(BaseParameterMatrix):
         ranges = None
         if not ignore_limits:
             ranges = [tuple(None if limit is None or not np.isfinite(limit) else limit for limit in param.prior.limits) for param in cov._params]
-
         return MixtureND([cov._center if center is None else np.asarray(center)], [cov._value], lims=ranges, names=names, labels=labels, label=label)
+
+    @classmethod
+    def read_getdist(cls, base_fn):
+        mean = {}
+        col = None
+        stats_fn = '{}.margestats'.format(base_fn)
+        cls.log_info('Loading stats file: {}.'.format(stats_fn))
+        with open(stats_fn, 'r') as file:
+            for line in file:
+                line = [item.strip() for item in line.split()]
+                if line:
+                    if col is not None:
+                        name, value = line[0], float(line[col])
+                        if not name.endswith('*'):  # covmat is not provided for derived parameters
+                            param = Parameter(name, value=value, fixed=False)
+                            mean[param] = value
+                    if line[0] == 'parameter':
+                        # Let's get the column col where to find the mean
+                        for col, item in enumerate(line):
+                            if item.strip() == 'mean': break
+
+        params = list(mean.keys())
+        center = list(mean.values())
+        iline, col, covariance = 0, None, [None for p in params]
+        covmat_fn = '{}.covmat'.format(base_fn)
+        with open(covmat_fn, 'r') as file:
+            for line in file:
+                line = [item.strip() for item in line.split()]
+                if line:
+                    if col is not None and iline in col:
+                        covariance[col.index(iline)] = [float(line[i]) for i in col]
+                        iline += 1
+                    if line[0] == '#':
+                        iline, col = 0, [line.index(str(param)) - 1 for param in params]
+        return cls(covariance, params=params, center=center)
 
 
 class ParameterPrecision(BaseParameterMatrix):

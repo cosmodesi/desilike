@@ -58,6 +58,9 @@ def test_matrix():
     covariance = covariance.view(params=['a'])
     assert np.ndim(covariance.fom()) == 0
 
+    covariance = covariance.clone(center=[2.])
+    assert np.allclose(covariance.center(), 2.)
+
 
 if __name__ == '__main__':
 

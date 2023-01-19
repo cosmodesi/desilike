@@ -27,10 +27,18 @@ class Fisher(BaseClass):
         F_{ij} = \frac{\partial \Delta}{\partial p_{i}} C^{-1} \frac{\partial \Delta}{\partial p_{j}}
 
     where :math:`\Delta` is the model (or data - model), of parameters :math:`p_{i}`, and :math:`C^{-1}`
-    is the precision matrix.
+    is the data precision matrix.
     If input likelihood is not Gaussian, the second derivatives of the likelihood will be considered.
+
+    Attributes
+    ----------
+    prior_precision : ParameterPrecision
+        Prior precision.
+
+    precision : ParameterPrecision
+        Likelihood precision.
     """
-    def __init__(self, likelihood, method=None, ref_scale=0.5, accuracy=2, mpicomm=None):
+    def __init__(self, likelihood, method=None, accuracy=2, ref_scale=0.5, mpicomm=None):
         """
         Initialize Fisher estimation.
 
@@ -56,7 +64,7 @@ class Fisher(BaseClass):
             These values are then scaled by ``ref_scale`` (< 1. means smaller ranges).
 
         mpicomm : mpi.COMM_WORLD, default=None
-            MPI communicator.
+            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
         """
         if mpicomm is None:
             mpicomm = likelihood.mpicomm
@@ -108,8 +116,8 @@ class Fisher(BaseClass):
             def finalize(derivs):
                 return np.array([[derivs[param1, param2] for param2 in self.varied_params] for param1 in self.varied_params])
 
-        self.prior_differentiation = Differentiation(prior_calculator, getter=prior_getter, method=method, order=2, ref_scale=ref_scale, accuracy=accuracy, mpicomm=self.mpicomm)
-        self.differentiation = Differentiation(self.likelihood, getter=getter, method=method, order=order, ref_scale=ref_scale, accuracy=accuracy, mpicomm=self.mpicomm)
+        self.prior_differentiation = Differentiation(prior_calculator, getter=prior_getter, order=2, method=method, accuracy=accuracy, ref_scale=ref_scale, mpicomm=self.mpicomm)
+        self.differentiation = Differentiation(self.likelihood, getter=getter, order=order, method=method, accuracy=accuracy, ref_scale=ref_scale, mpicomm=self.mpicomm)
         self._finalize = finalize
 
     def run(self, **params):
@@ -117,6 +125,6 @@ class Fisher(BaseClass):
         self.precision = ParameterPrecision(self._finalize(self.differentiation(**self.prior_differentiation.center)), params=self.varied_params, center=self.prior_precision._center)
 
     def __call__(self, **params):
-        """Return Fisher matrix for input parameters."""
+        """Return Fisher matrix for input parameter values, as the sum of :attr:`prior_precision` and :attr:`precision`."""
         self.run(**params)
         return self.prior_precision + self.precision

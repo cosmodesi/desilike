@@ -126,7 +126,7 @@ class KaiserTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, TrapzTh
     def calculate(self, b1=1., sn0=0.):
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
-        pkmu = (b1 + f * muap**2)**2 * np.interp(np.log10(kap), np.log10(self.template.k), self.template.pk_dd) + sn0
+        pkmu = (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0
         self.power = self.to_poles(pkmu)
 
     def get(self):

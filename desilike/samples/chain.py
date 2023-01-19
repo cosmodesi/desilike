@@ -6,9 +6,21 @@ import glob
 
 import numpy as np
 
-from desilike.parameter import ParameterCollection, Parameter, ParameterPrior, ParameterArray, Samples, _reshape
+from desilike.parameter import ParameterCollection, Parameter, ParameterPrior, ParameterArray, Samples, _reshape, is_parameter_sequence
 
 from . import utils
+
+
+def vectorize(func):
+    from functools import wraps
+
+    @wraps(func)
+    def wrapper(self, param, *args, **kwargs):
+        if is_parameter_sequence(param):
+            return [func(self, param, *args, **kwargs) for param in param]
+        return func(self, param, *args, **kwargs)
+
+    return wrapper
 
 
 class Chain(Samples):
@@ -118,7 +130,7 @@ class Chain(Samples):
         return 'Chain(shape={}, params={})'.format(self.shape, self.params())
 
     @classmethod
-    def read_getdist(cls, base_fn, ichains=None):
+    def read_getdist(cls, base_fn, ichains=None, concatenate=False):
         """
         Load samples in *CosmoMC* format, i.e.:
 
@@ -139,58 +151,61 @@ class Chain(Samples):
         -------
         samples : Chain
         """
-        self = cls()
-
         params_fn = '{}.paramnames'.format(base_fn)
-        self.log_info('Loading params file: {}.'.format(params_fn))
+        cls.log_info('Loading params file: {}.'.format(params_fn))
         params = ParameterCollection()
         with open(params_fn) as file:
             for line in file:
-                name, latex = line.split()
-                name = name.strip()
-                if name.endswith('*'): name = name[:-1]
-                latex = latex.strip().replace('\n', '')
-                params.set(Parameter(basename=name.strip(), latex=latex, fixed=False))
+                line = [item.strip() for item in line.split(maxsplit=1)]
+                if line:
+                    name, latex = line
+                    derived = name.endswith('*')
+                    if derived: name = name[:-1]
+                    params.set(Parameter(basename=name, latex=latex.replace('\n', ''), fixed=False, derived=derived))
 
             ranges_fn = '{}.ranges'.format(base_fn)
             if os.path.exists(ranges_fn):
-                self.log_info('Loading parameter ranges from {}.'.format(ranges_fn))
+                cls.log_info('Loading parameter ranges from {}.'.format(ranges_fn))
                 with open(ranges_fn) as file:
                     for line in file:
-                        name, low, high = line.split()
+                        name, low, high = [item.strip() for item in line.split()]
                         latex = latex.replace('\n', '')
                         limits = []
                         for lh, li in zip([low, high], [-np.inf, np.inf]):
-                            lh = lh.strip()
                             if lh == 'N': lh = li
                             else: lh = float(lh)
                             limits.append(lh)
-                        params[name.strip()].update(prior=ParameterPrior(limits=limits))
+                        if name in params:
+                            params[name].update(prior=ParameterPrior(limits=limits))
             else:
-                self.log_info('Parameter ranges file {} does not exist.'.format(ranges_fn))
+                cls.log_info('Parameter ranges file {} does not exist.'.format(ranges_fn))
 
-        chain_fn = '{}{{}}.txt'.format(base_fn)
+        chain_fn = '{}_{{}}.txt'.format(base_fn)
+        isscalar = False
         chain_fns = []
         if ichains is not None:
-            if np.ndim(ichains) == 0:
+            isscalar = np.ndim(ichains) == 0
+            if isscalar:
                 ichains = [ichains]
             for ichain in ichains:
-                chain_fns.append(chain_fn.format('_{:d}'.format(ichain)))
+                chain_fns.append(chain_fn.format('{:d}'.format(ichain)))
         else:
-            chain_fns = glob.glob(chain_fn.format('*'))
+            chain_fns = glob.glob(chain_fn.format('[0-9]*'))
 
-        samples = []
+        toret = []
         for chain_fn in chain_fns:
-            self.log_info('Loading chain file: {}.'.format(chain_fn))
-            samples.append(np.loadtxt(chain_fn, unpack=True))
-
-        samples = np.concatenate(samples, axis=-1)
-        self.aweight = samples[0]
-        self.logposterior = -samples[1]
-        for param, values in zip(params, samples[2:]):
-            self.set(ParameterArray(values, param))
-
-        return self
+            cls.log_info('Loading chain file: {}.'.format(chain_fn))
+            array = np.loadtxt(chain_fn, unpack=True)
+            new = cls()
+            new.aweight, new.logposterior = array[0], -array[1]
+            for param, values in zip(params, array[2:]):
+                new.set(ParameterArray(values, param))
+            toret.append(new)
+        if isscalar:
+            return toret[0]
+        if concatenate:
+            return cls.concatenate(toret)
+        return toret
 
     def write_getdist(self, base_fn, params=None, ichain=None, fmt='%.18e', delimiter=' ', **kwargs):
         """
@@ -341,9 +356,9 @@ class Chain(Samples):
         if return_type == 'nparray':
             return cov
         from .profiles import ParameterCovariance
-        return ParameterCovariance(cov, params=params)
+        return ParameterCovariance(cov, params=params, center=self.mean(params))
 
-    def invcov(self, params=None, ddof=1):
+    def invcov(self, params=None, return_type='nparray', ddof=1):
         """
         Estimate weighted parameter inverse covariance.
 
@@ -362,8 +377,20 @@ class Chain(Samples):
             If single parameter provided as ``columns``, returns inverse variance for that parameter (scalar).
             Else returns inverse covariance (2D array).
         """
-        return utils.inv(self.cov(params, ddof=ddof))
+        incov = utils.inv(self.cov(params, ddof=ddof))
+        if return_type == 'nparray':
+            return invcov
+        from .profiles import ParameterPrecision
+        return ParameterPrecision(cov, params=params)
 
+    def corrcoef(self, params=None, **kwargs):
+        """
+        Estimate weighted parameter correlation matrix.
+        See :meth:`cov`.
+        """
+        return utils.cov_to_corrcoef(self.cov(params, **kwargs))
+
+    @vectorize
     def var(self, param, ddof=1):
         """
         Estimate weighted param variance.
@@ -386,25 +413,31 @@ class Chain(Samples):
         var.shape = self[param].shape[self.ndim:]
         return var
 
+    @vectorize
     def std(self, param, ddof=1):
         return np.std(_reshape(self[param], self.size), ddof=ddof, axis=0)
 
+    @vectorize
     def mean(self, param):
         """Return weighted mean."""
         return np.average(_reshape(self[param], self.size), weights=self.weight.ravel(), axis=0)
 
+    @vectorize
     def argmax(self, param):
         """Return parameter value for maximum of ``cost.``"""
         return _reshape(self[param], self.size)[np.argmax(self.logposterior.ravel())]
 
+    @vectorize
     def median(self, param):
         """Return weighted quantiles."""
         return utils.weighted_quantile(_reshape(self[param], self.size), q=0.5, weights=self.weight.ravel(), axis=0)
 
+    @vectorize
     def quantile(self, param, q=(0.1587, 0.8413), method='linear'):
         """Return weighted quantiles."""
         return utils.weighted_quantile(_reshape(self[param], self.size), q=q, weights=self.weight.ravel(), axis=0, method=method)
 
+    @vectorize
     def interval(self, param, **kwargs):
         """
         Return n-sigmas confidence interval(s).
@@ -422,13 +455,6 @@ class Chain(Samples):
         interval : array
         """
         return utils.interval(self[param].ravel(), self.weight.ravel(), **kwargs)
-
-    def corrcoef(self, params=None, **kwargs):
-        """
-        Estimate weighted parameter correlation matrix.
-        See :meth:`cov`.
-        """
-        return utils.cov_to_corrcoef(self.cov(params, **kwargs))
 
     def to_stats(self, params=None, quantities=None, sigfigs=2, tablefmt='latex_raw', fn=None):
         """

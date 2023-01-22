@@ -230,6 +230,7 @@ class BasePipeline(BaseClass):
             except (AttributeError, TypeError, IndexError):
                 self.derived = Samples()
             return
+        self.derived = Samples()
         mpicomm, more_derived = self.mpicomm, self.more_derived
         self.mpicomm, self.more_derived = mpi.COMM_SELF, None
         states = {}

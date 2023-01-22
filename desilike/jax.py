@@ -1,3 +1,4 @@
+# jax array types
 array_types = ()
 
 try:
@@ -12,14 +13,20 @@ except ImportError:
 
 
 def dist_name(dist):
+    """
+    Return distribution name, which should work with either scipy
+    (where dist is a :class:`rv_continuous` instance) or jax implementation (where dist is a module).
+    """
     name = getattr(dist, 'name', None)
     if name is None: name = dist.__name__.split('.')[-1]
     return name
 
 
-# Frozen RV class, using jax when possible
 class rv_frozen(object):
-
+    """
+    ``jax`` currently does not implement scipy's frozen random variate.
+    Here is an ersatz.
+    """
     def __init__(self, dist, *args, **kwds):
         self.dist = dist
         from scipy import stats

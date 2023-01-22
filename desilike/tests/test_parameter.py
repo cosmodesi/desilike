@@ -46,7 +46,10 @@ def test_matrix():
     #covariance.to_getdist()
 
     from desilike.samples import plotting
-    #plotting.plot_triangle(covariance, show=True)
+    plotting.plot_triangle(covariance, show=True)
+
+    from desilike.samples import plotting
+    plotting.plot_triangle([covariance, covariance.select(name=['a', 'b'])], params=covariance.params(), show=True)
 
     assert np.allclose(covariance.rescale().center(), 1.)
     assert np.ndim(covariance.std('a')) == 0

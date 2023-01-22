@@ -1875,7 +1875,10 @@ def _reshape(array, shape):
     if np.ndim(shape) == 0:
         shape = (shape,)
     shape = tuple(shape)
-    return array.reshape(shape + array.pshape)
+    try:
+        return array.reshape(shape + array.pshape)
+    except ValueError as exc:
+        raise ValueError('Error with array {}'.format(repr(array))) from exc
 
 
 class Samples(BaseParameterCollection):

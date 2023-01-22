@@ -16,6 +16,23 @@ class InstallError(Exception):
 
 
 def download(url, target, size=None):
+    """
+    Download file from input ``url``.
+
+    Parameters
+    ----------
+    url : str, Path
+        url to download file from.
+
+    target : str, Path
+        Path where to save the file, on disk.
+
+    size : int, default=None
+        Expected file size, in bytes, used to show progression bar.
+        If not provided, taken from header (if the file is larger than a couple of GBs,
+        it may be wrong due to integer overflow).
+        If a sensible file size is obtained, a progression bar is printed.
+    """
     # Adapted from https://stackoverflow.com/questions/15644964/python-progress-bar-and-downloads
     logger.info('Downloading {} to {}.'.format(url, target))
     import requests
@@ -44,6 +61,20 @@ def download(url, target, size=None):
 
 
 def extract(in_fn, out_fn, remove=True):
+    """
+    Extract ``in_fn`` to ``out_fn``.
+
+    Parameters
+    ----------
+    in_fn : str, Path
+        Path to input, compressed, filename.
+
+    out_fn : str, Path
+        Path to output file / directory.
+
+    remove : bool, default=True
+        If ``True``, remove input file ``in_fn``.
+    """
     in_fn, out_fn = (os.path.normpath(fn) for fn in [in_fn, out_fn])
     ext = os.path.splitext(in_fn)[-1][1:]
     if ext == 'zip':
@@ -60,6 +91,7 @@ def extract(in_fn, out_fn, remove=True):
 
 
 def exists_package(pkgname):
+    """Check wether package with name ``pkgname`` can be imported."""
     try:
         pkg = __import__(pkgname)
     except ImportError:
@@ -70,10 +102,38 @@ def exists_package(pkgname):
 
 
 def exists_path(path):
+    """Check whether this ``path`` exists on disk."""
     return os.path.exists(path)
 
 
 def pip(pkgindex, pkgname=None, install_dir=None, no_deps=False, force_reinstall=False, ignore_installed=False):
+    """
+    Install with PIP.
+
+    Parameter
+    ---------
+    pkgindex : str
+        Where to find the package.
+        A package name (if registered on pypi), or a url, if on github;
+        e.g. git+https://github.com/cosmodesi/desilike.
+
+    pkgname : str, default=None
+        Package name, to check whether the package is already installed.
+        If ``None``, defaults to ``pkgindex``, or the end of ``pkgindex``,
+        if 'https://' is found in it.
+
+    install_dir : str, Path, default=None
+        Installation directory. Defaults to PIP's default.
+
+    no_deps : bool, default=False
+        Does not install package's dependencies.
+
+    force_reinstall : bool, default=False
+        Force package's installation.
+
+    ignore_installed : bool, default=False
+        Ignore all (including e.g. package dependencies) previously installed packages.
+    """
     if not force_reinstall:
         # Check if package already installed (to cope with git-provided package)
         if pkgname is None:
@@ -120,6 +180,7 @@ def _insert_first(li, first):
 
 
 def source(fn):
+    """Source input file ``fn``, i.e. set associated environment variables."""
     import subprocess
     result = subprocess.run(['bash', '-c', 'source {} && env'.format(fn)], capture_output=True, text=True)
     for line in result.stdout.split('\n'):
@@ -133,10 +194,42 @@ def source(fn):
 
 
 class Installer(BaseClass):
+    """
+    Installer. Given some calculator one would like to install, the installer is typically used as:
 
+    >>> installer = Installer(user=True)
+    >>> installer(calculator)
+
+    To install a profiler (e.g. :class:`MinuitProfiler`), a sampler (e.g. :class:`EmceeSampler`),
+    or an emulator (e.g. :class:`MLPEmulatorEngine`):
+
+    >>> installer(MinuitProfiler)
+    >>> installer(EmceeSampler)
+    >>> installer(MLPEmulatorEngine)
+    """
     home_dir = os.path.expanduser('~')
 
     def __init__(self, install_dir=None, user=False, no_deps=False, force_reinstall=False, ignore_installed=False, **kwargs):
+        """
+        Initialize installer.
+
+        Parameters
+        ----------
+        install_dir : str, Path, default=None
+            Installation directory. Defaults to directory in :attr:`config_fn` if provided, else PIP's default.
+
+        user : bool, default=False
+            If ``True``, installation directory is home directory.
+
+        no_deps : bool, default=False
+            Does not install package's dependencies.
+
+        force_reinstall : bool, default=False
+            Force package's installation.
+
+        ignore_installed : bool, default=False
+            Ignore all (including e.g. package dependencies) previously installed packages.
+        """
         import site
         if user:
             if install_dir is not None:
@@ -181,44 +274,34 @@ class Installer(BaseClass):
 
     @property
     def config_fn(self):
+        """Path to .yaml configuration file."""
         return os.path.join(self.config_dir, '.desilike', 'config.yaml')
 
     @property
     def profile_fn(self):
+        """Path to .sh profile to be sourced to set all paths."""
         return os.path.join(self.config_dir, '.desilike', 'profile.sh')
 
     def get(self, *args, **kwargs):
+        """Get config option, e.g. ``install_dir``."""
         return self.config.get(*args, **kwargs)
 
     def __contains__(self, name):
         return name in self.config
 
     def __getitem__(self, name):
+        """Get config option, e.g. ``install_dir``."""
         return self.config[name]
 
-    @staticmethod
-    def parser(parser=None):
-        import argparse
-        if parser is None:
-            parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-        parser.add_argument('--install-dir', type=str, default=None, help='Installation directory')
-        parser.add_argument('--user', action='store_true', default=False, help='Install to the Python user install directory for your platform. Typically ~/.local/')
-        parser.add_argument('--no-deps', action='store_true', default=False, help='Do not install package dependencies.')
-        parser.add_argument('--force-reinstall', action='store_true', default=False, help='Reinstall all packages even if they are already up-to-date.')
-        parser.add_argument('--ignore-installed', action='store_true', default=False, help='Ignore the installed packages, overwriting them. '
-                            'This can break your system if the existing package is of a different version or was installed with a different package manager!')
-        return parser
-
-    @classmethod
-    def from_args(cls, args, **kwargs):
-        data = dict(user=args.user, no_deps=args.no_deps, force_reinstall=args.force_reinstall, ignore_installed=args.ignore_installed)
-        if args.install_dir is not None:
-            data['install_dir'] = args.install_dir
-        data.update(kwargs)
-        return cls(**data)
-
     def __call__(self, obj):
+        """
+        Install input object ``obj``, which can be:
 
+        - a calculator instance
+        - a Sampler, Profiler, Emulator class
+
+        More generally, whatever has an :meth:`install` method.
+        """
         def install(obj):
             try:
                 func = obj.install
@@ -237,18 +320,58 @@ class Installer(BaseClass):
             install(obj)
 
     def pip(self, pkgindex, **kwargs):
+        """
+        Install Python package with PIP.
+
+        Parameters
+        ----------
+        pkgindex : str
+            Where to find the package.
+            A package name (if registered on pypi), or a url, if on github;
+            e.g. git+https://github.com/cosmodesi/desilike.
+
+        **kwargs : dict
+            Optionally, one can provide ``no_deps``, ``force_reinstall``, ``ignore_installed``
+            to override :class:`Installer` attributes.
+        """
         kwargs = {**dict(no_deps=self.no_deps, force_reinstall=self.force_reinstall, ignore_installed=self.ignore_installed), **kwargs}
         pip(pkgindex, install_dir=self.install_dir, **kwargs)
         self.write({name: getattr(self, name) for name in ['pylib_dir', 'bin_dir']})
 
     def data_dir(self, section=None):
+        """
+        Return path to data directory, where one will typically save / install
+        specific calculator data or code.
+
+        Parameters
+        ----------
+        section : str, default=None
+            Section; typically this will be calculator's name.
+
+        Returns
+        -------
+        data_dir : str
+            Path to data directory.
+        """
         base_dir = os.path.join(self.install_dir, 'data')
         if section is None:
             return base_dir
         return os.path.join(base_dir, section)
 
     def write(self, config, update=True):
+        """
+        Write configuration to :attr:`config_fn`.
 
+        Parameters
+        ----------
+        config : dict
+            Configuration.
+
+        update : bool, default=True
+            If ``True``, insert new 'pylib_dir', 'bin_dir', 'dylib_dir', 'source' entries
+            on top of previous ones.
+            If ``False``, such entries are overriden.
+        """
         def _make_list(li):
             if not utils.is_sequence(li): li = [li]
             return list(li)
@@ -273,5 +396,6 @@ class Installer(BaseClass):
                 file.write('source {}'.format(src))
 
     def setenv(self):
+        """Set environment (i.e. set paths). Called in desilike's __init__.py."""
         if os.path.isfile(self.profile_fn):
             source(self.profile_fn)

@@ -296,6 +296,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
             if self.save_fn is not None:
                 for ichain, chain in enumerate(self.chains):
                     if chain is not None: chain.save(self.save_fn[ichain])
+        return self.chains
 
 
 class BaseBatchPosteriorSampler(BasePosteriorSampler):
@@ -385,6 +386,8 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
             return is_converged
 
         batch_iterate(_run_batch, min_iterations=min_iterations, max_iterations=max_iterations, check_every=check_every)
+        return self.chains
+
 
     def check(self, nsplits=4, burnin=0.5, stable_over=2,
               max_eigen_gr=0.03, max_diag_gr=None, max_cl_diag_gr=None, nsigmas_cl_diag_gr=1., max_geweke=None, max_geweke_pvalue=None,

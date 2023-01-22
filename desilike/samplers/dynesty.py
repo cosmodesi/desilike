@@ -216,7 +216,7 @@ class StaticDynestySampler(BaseDynestySampler):
               sampling will terminate. Default is inf.
 
         """
-        super(StaticDynestySampler, self).run(*args, **kwargs)
+        return super(StaticDynestySampler, self).run(*args, **kwargs)
 
     def _set_sampler(self, rstate, pool, use_pool):
         import dynesty
@@ -266,7 +266,7 @@ class DynamicDynestySampler(BaseDynestySampler):
               sampling will terminate. Default is ``max(10000, ndim**2)``.
 
         """
-        super(DynamicDynestySampler, self).run(*args, **kwargs)
+        return super(DynamicDynestySampler, self).run(*args, **kwargs)
 
     def _set_sampler(self, rstate, pool, use_pool):
         import dynesty

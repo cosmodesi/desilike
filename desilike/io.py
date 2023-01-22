@@ -62,8 +62,7 @@ class MetaClass(type(BaseClass), type(UserDict)):
 
 
 class ConfigError(Exception):
-
-    pass
+    """Exception raised when error in configuration."""
 
 
 class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
@@ -74,9 +73,6 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
     ----------
     data : dict
         Decoded configuration dictionary.
-
-    raw : dict
-        Raw (without decoding of template forms) configuration dictionary.
 
     filename : string
         Path to corresponding configuration file.
@@ -96,16 +92,20 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
         data : dict, string, default=None
             Dictionary or path to a configuration *yaml* file to decode.
 
-        string : string
+        string : str, default=None
             If not ``None``, *yaml* format string to decode.
             Added on top of ``data``.
 
-        parser : callable, default=yaml_parser
+        parser : callable, default=None
             Function that parses *yaml* string into a dictionary.
             Used when ``data`` is string, or ``string`` is not ``None``.
 
         decode : bool, default=True
             Whether to decode configuration dictionary, i.e. solve template forms.
+
+        base_dir : str, Path, default=None
+            Optionally, directory where config file is located.
+            This is typically used to solve reference to other files ("{path_to_file::section.name}"), or imports (".import: path_to_file::section").
 
         kwargs : dict
             Arguments for :func:`parser`.
@@ -136,7 +136,15 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
             if decode: self.decode()
 
     def decode(self):
+        """
+        Decode (in-place) patterns, namely:
 
+        - "e'np.log(2 + {section.name})'": evaluate ``np.log(2 + config[section][name])``
+        - "f'basename_{section.name}.npy'": replace {section.name} by the string config[section][name]
+        - ".import: path_to_file::section": import (in-place) configuration in section of the file located
+          in "path_to_file" (path relative to :attr:`base_dir`). The "path_to_file::section.name" syntax
+          can also be used for "evaluate" (e'...') and "format" (f'...') above.
+        """
         eval_re_pattern = re.compile("e'(.*?)'$")
         format_re_pattern = re.compile("f'(.*?)'$")
 
@@ -260,6 +268,23 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
         self.data = callback_import(self.data)
 
     def search(self, namespaces, delimiter=None, fn=None):
+        """
+        search value for input namespaces.
+
+        Parameters
+        ----------
+        namespaces : str, list
+            If string, can typically be "section.name", or "path_to_file::section.name".
+            The configuration in section, name of the file located in "path_to_file"
+            is returned.
+            If list, [section, name].
+
+        delimiter : str, default=None
+            Delimiter between different sections, defaults to ``base.namespace_delimiter`` ('.').
+
+        fn : str, Path, default=None
+            Optionally, path to configuration to read value from, if not provided in ``namespaces``.
+        """
         if isinstance(namespaces, str):
             if fn is None:
                 try:
@@ -291,18 +316,8 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
             return toret[0]
         return toret
 
-    def update_from_namespace(self, string, value, inherit_type=True, delimiter=None):
-        if delimiter is None:
-            from .base import namespace_delimiter as delimiter
-        namespaces = string.split(delimiter)
-        namespaces, basename = namespaces[:-1], namespaces[-1]
-        d = self.search(namespaces)
-        if inherit_type and basename in d:
-            d[basename] = type(d[basename])(value)
-        else:
-            d[basename] = value
-
     def __copy__(self):
+        """Return a copy, with attributes :attr:`_attrs` also copied."""
         import copy
         new = super(BaseConfig, self).__copy__()
         new.data = self.data.copy()
@@ -312,20 +327,24 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
         return new
 
     def deepcopy(self):
+        """Return a deep copy."""
         import copy
         return copy.deepcopy(self)
 
     def update(self, *args, **kwargs):
+        """Update this instance. A :class:`BaseConfig` can be provided as input."""
         super(BaseConfig, self).update(*args, **kwargs)
         if len(args) == 1 and isinstance(args[0], self.__class__):
             self.__dict__.update({name: value for name, value in args[0].__dict__.items() if name != 'data'})
 
     def clone(self, *args, **kwargs):
+        """Clone, i.e. copy and optionally update."""
         new = self.copy()
         new.update(*args, **kwargs)
         return new
 
     def select(self, keys=None):
+        """Select sections with name ``keys`` and return a new :class:`BaseConfig` instance."""
         toret = self.copy()
         if keys is not None:
             for key in list(toret.keys()):
@@ -334,9 +353,11 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
         return toret
 
     def __eq__(self, other):
+        """Test equality."""
         return type(other) == type(self) and deep_eq(self.data, other.data)
 
     def write(self, fn):
+        """Save to yaml file ``fn``."""
         self.log_info('Saving {}.'.format(fn))
         utils.mkdir(os.path.dirname(fn))
         data = utils.dict_to_yaml(self.data)

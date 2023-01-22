@@ -137,6 +137,7 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
                 self.samples.save(self.save_fn)
         else:
             self.samples = None
+        return self.samples
 
     def __enter__(self):
         return self

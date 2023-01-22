@@ -80,7 +80,7 @@ class EmceeSampler(BaseBatchPosteriorSampler):
         thin_by : int, default=1
             Thin samples by this factor.
         """
-        super(EmceeSampler, self).run(*args, **kwargs)
+        return super(EmceeSampler, self).run(*args, **kwargs)
 
     def _run_one(self, start, niterations=300, thin_by=1, progress=False):
         self.sampler._random = self.rng

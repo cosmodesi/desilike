@@ -93,6 +93,21 @@ def suplabel(axis, label, shift=0, labelpad=5, ha='center', va='center', **kwarg
 
 
 def plotter(func):
+    """
+    Return wrapper for plotting functions, that adds the following (optional) arguments to ``func``:
+
+    Parameters
+    ----------
+    fn : str, Path, default=None
+        Optioally, path where to save figure.
+        If not provided, figure is not saved.
+
+    kw_save : dict, default=None
+        Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+    show : bool, default=False
+        If ``True``, show figure.
+    """
     from functools import wraps
 
     @wraps(func)

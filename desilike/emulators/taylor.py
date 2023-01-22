@@ -17,9 +17,9 @@ class TaylorEmulatorEngine(BaseEmulatorEngine):
     name = 'taylor'
     _samples_with_derivs = True
 
-    def initialize(self, varied_params, order=3, accuracy=2, ref_scale=0.5):
+    def initialize(self, varied_params, order=3, accuracy=2, method=None, ref_scale=0.5):
         self.varied_params = varied_params
-        self.sampler_options = dict(order=order, accuracy=accuracy, ref_scale=ref_scale)
+        self.sampler_options = dict(order=order, accuracy=accuracy, method=method, ref_scale=ref_scale)
 
     def get_default_samples(self, calculator, **kwargs):
         """

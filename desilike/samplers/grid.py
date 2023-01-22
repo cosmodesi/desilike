@@ -39,14 +39,6 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
         grid : array, dict, default=None
             A dictionary mapping parameter name (including wildcard) to values.
             If provided, ``size`` and ``ref_scale`` are ignored.
-
-        sphere : int, dict, default=None
-            A dictionary mappring parameter names to integers.
-            Limit grid to an "hypersphere", defined such that the (absolute) sum of indices from the grid center
-            is less than the minimum of ``sphere`` for the parameters at stake.
-            Useful e.g. for computing derivatives up to some order. As an example, to compute the Hessian of a likelihood :math:`L`,
-            i.e. :math:`\frac{\partial^{2} L}{\partial p_{1}^{2}}, \frac{\partial^{2} L}{\partial p_{1} \partial p_{2}}`, etc.,
-            (and not e.g. :math:`\frac{\partial^{4} L}{\partial p_{1}^{2} \partial p_{2}^{2}}`), ``sphere = 2`` would compute just enough points to evaluate the derivatives.
         """
         self.pipeline = calculator.runtime_info.pipeline
         if mpicomm is None:
@@ -64,62 +56,46 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
     def mpicomm(self, mpicomm):
         self.pipeline.mpicomm = mpicomm
 
-    def set_grid(self, size=1, ref_scale=1., grid=None, sphere=None):
+    def set_grid(self, size=1, ref_scale=1., grid=None):
         self.ref_scale = float(ref_scale)
-        self.sphere = sphere
         self.grid = expand_dict(grid, self.varied_params.names())
-        for name, item in zip(['size', 'sphere'], [size] + ([sphere] if sphere is not None else [])):
-            tmp = expand_dict(item, self.varied_params.names())
-            for param, value in tmp.items():
-                if value is None:
-                    if name != 'size' or self.grid[param] is None:
-                        raise ValueError('{} not specified for parameter {}'.format(name, param))
-                value = int(value)
-                if name == 'size' and value < 1:
-                    raise ValueError('{} is {} < 1 for parameter {}'.format(name, value, param))
-                tmp[param] = value
-            tmp = [tmp[param] for param in self.varied_params.names()]
-            setattr(self, name, tmp)
-        for iparam, (param, size) in enumerate(zip(self.varied_params, self.size)):
-            grid = self.grid[param.name]
+        self.size = expand_dict(size, self.varied_params.names())
+        for param in self.varied_params:
+            grid, size = self.grid[param.name], self.size[param.name]
             if grid is None:
+                if size is None:
+                    raise ValueError('size (and grid) not specified for parameter {}'.format(param))
+                size = int(size)
+                if size < 1:
+                    raise ValueError('size is {} < 1 for parameter {}'.format(size, param))
+                center = param.value
+                limits = np.array(param.ref.limits)
+                if not limits[0] <= param.value <= limits[1]:
+                    raise ParameterPriorError('Parameter {} value {} is not in reference limits {}'.format(param, param.value, param.ref.limits))
                 if size == 1:
-                    grid = [param.value]
-                elif param.ref.is_limited() and not hasattr(param.ref, 'scale'):
-                    limits = np.array(param.ref.limits)
-                    center = param.value
-                    limits = self.ref_scale * (limits - center) + center
-                    low, high = np.linspace(limits[0], center, size // 2 + 1), np.linspace(center, limits[1], size // 2 + 1)
+                    grid = [center]
+                else:
+                    if param.ref.is_limited() and not hasattr(param.ref, 'scale'):
+                        edges = self.ref_scale * (limits - center) + center
+                    elif param.proposal:
+                        edges = self.ref_scale * np.array([-param.proposal, param.proposal]) + center
+                    else:
+                        raise ParameterPriorError('Provide proper parameter reference distribution or proposal for {}'.format(param))
+                    low, high = np.linspace(edges[0], center, size // 2 + 1), np.linspace(center, edges[1], size // 2 + 1)
                     if size % 2:
                         grid = np.concatenate([low, high[1:]])
                     else:
                         grid = np.concatenate([low[:-1], high[1:]])
-                    if not np.all(np.diff(grid) > 0):
-                        raise ParameterPriorError('Parameter {} value {} is not in reference limits {}'.format(param, param.value, param.ref.limits))
-                elif param.proposal:
-                    grid = np.linspace(param.value - self.ref_scale * param.proposal, param.value + self.ref_scale * param.proposal, size)
-                else:
-                    raise ParameterPriorError('Provide parameter limited reference distribution or proposal')
-            self.grid[param.name] = np.array(grid)
+                if self.mpicomm.rank == 0:
+                    self.log_info('{} grid is {}.'.format(param, grid))
+            else:
+                grid = np.sort(np.ravel(grid))
+            self.grid[param.name] = grid
         self.grid = [self.grid[param] for param in self.varied_params.names()]
+        del self.size
         self.samples = None
         if self.mpicomm.rank == 0:
-            if self.sphere:
-                ndim = len(self.grid)
-                if any(len(g) % 2 == 0 for g in self.grid):
-                    raise ValueError('Number of grid points along each axis must be odd to use sphere option')
-                samples = []
-                cidx = [len(g) // 2 for g in self.grid]
-                for ngrid in range(1, max(self.sphere) + 1):
-                    for indices in itertools.product(range(ndim), repeat=ngrid):
-                        indices = np.bincount(indices, minlength=ndim)
-                        if all(i <= c for c, i in zip(cidx, indices)) and sum(indices) <= min(s for s, i in zip(self.sphere, indices) if i):
-                            for signs in itertools.product(*[[-1, 1] if ind else [0] for ind in indices]):
-                                samples.append([g[c + s * i] for g, c, s, i in zip(self.grid, cidx, signs, indices)])
-                samples.append([g[c] for g, c in zip(self.grid, cidx)])  # finish with the central point
-                samples = np.array(samples).T
-            else:
-                samples = np.meshgrid(*self.grid, indexing='ij')
+            samples = np.meshgrid(*self.grid, indexing='ij')
             self.samples = Samples(samples, params=self.varied_params)
 
     def run(self, **kwargs):
@@ -138,6 +114,7 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
                 self.samples.save(self.save_fn)
         else:
             self.samples = None
+        return self.samples
 
     def __enter__(self):
         return self

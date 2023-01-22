@@ -9,6 +9,8 @@ from . import utils
 
 class PriorCalculator(BaseCalculator):
 
+    """Calculator that computes the logprior."""
+
     def calculate(self, **params):
         params = {self.runtime_info.base_params[basename].name: value for basename, value in params.items()}
         self.logprior = self.runtime_info.params.prior(**params)
@@ -121,8 +123,8 @@ class Fisher(BaseClass):
         self._finalize = finalize
 
     def run(self, **params):
-        self.prior_precision = ParameterPrecision(- self.prior_differentiation(**params), params=self.varied_params, center=[self.prior_differentiation.center[str(param)] for param in self.varied_params])
-        self.precision = ParameterPrecision(self._finalize(self.differentiation(**self.prior_differentiation.center)), params=self.varied_params, center=self.prior_precision._center)
+        self.prior_precision = ParameterPrecision(- self.mpicomm.bcast(self.prior_differentiation(**params), root=0), params=self.varied_params, center=[self.prior_differentiation.center[str(param)] for param in self.varied_params])
+        self.precision = ParameterPrecision(self._finalize(self.mpicomm.bcast(self.differentiation(**self.prior_differentiation.center), root=0)), params=self.varied_params, center=self.prior_precision._center)
 
     def __call__(self, **params):
         """Return Fisher matrix for input parameter values, as the sum of :attr:`prior_precision` and :attr:`precision`."""

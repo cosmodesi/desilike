@@ -67,7 +67,7 @@ class Cosmoprimo(BasePrimordialCosmology):
         self.cosmo_requires = {'fiducial': self.fiducial.__getstate__(), 'params': dict.fromkeys(self.params.basenames())}
 
     def calculate(self, **params):
-        self.cosmo = self.fiducial.clone(**convert(params))
+        self.cosmo = self.fiducial.clone(**{name: float(value) for name, value in convert(params).items()})
 
     def get(self):
         return self.cosmo

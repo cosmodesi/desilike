@@ -16,68 +16,98 @@ init:
   engine: class
 
 params:
+  # Using Planck priors
   h:
-    value: 0.6736
     prior:
-      limits: [0.4, 0.9]
+      limits: [0.1, 1.]
     ref:
       dist: norm
       loc: 0.6736
       scale: 0.005
     latex: h
   omega_cdm:
-    value: 0.12
     prior:
-      limits: [0.05, 0.2]
+      limits: [0.01, 0.99]
     ref:
       dist: norm
       loc: 0.12
-      scale: 0.0013
+      scale: 0.0012
     latex: \omega_{cdm}
   omega_b:
-    value: 0.02237
     prior:
-      limits: [0.01, 0.03]
+      limits: [0.005, 0.1]
     ref:
       dist: norm
       loc: 0.02237
-      scale: 0.00014
+      scale: 0.00015
     latex: \omega_{b}
   logA:
-    value: 3.036394
     prior:
-      limits: [2.5, 3.5]
+      limits: [1.61, 3.91]
     ref:
       dist: norm
       loc: 3.036394
-      scale: 0.005
+      scale: 0.014
     latex: \ln(10^{10} A_{s})
   n_s:
-    value: 0.9649
     prior:
       limits: [0.8, 1.2]
     ref:
       dist: norm
       loc: 0.9649
-      scale: 0.0041
+      scale: 0.0042
     latex: n_{s}
-  omega_ncdm:
-    value: 0.0006442
-    latex: \omega_{ncdm}
-    fixed: True
-  N_ur:
-    value: 2.0328
-    latex: N_{ur}
-    fixed: True
   tau_reio:
     value: 0.0544
+    prior:
+      limits: [0.01, 0.8]
+    ref:
+      dist: norm
+      loc: 0.0544
+      scale: 0.008
     latex: \tau
+  m_ncdm:
+    prior:
+      limits: [0., 5.]
+    ref:
+      dist: norm
+      loc: 0.06
+      scale: 0.12
+    latex: m_{ncdm}
+    fixed: True
+  N_ur:
+    prior:
+      limits: [0.05, 10.]
+    ref:
+      dist: norm
+      loc: 2.0328
+      scale: 0.32
+    latex: N_{ur}
     fixed: True
   w0_fld:
-    value: -1.
+    prior:
+      limits: [-3., 1.]
+    ref:
+      dist: norm
+      loc: -1
+      scale: 0.08
     latex: w_{0}
     fixed: True
   wa_fld:
-    value: 0.
+    prior:
+      limits: [-3., 2.]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.3
     latex: w_{a}
+    fixed: True
+  Omega_k:
+    prior:
+      limits: [-0.3, 0.3]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.0065
+    latex: \Omega_k
     fixed: True

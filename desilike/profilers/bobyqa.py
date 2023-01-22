@@ -54,7 +54,7 @@ class BOBYQAProfiler(BaseProfiler):
             The method used is a multiple restart mechanism, where we repeatedly re-initialize Py-BOBYQA from the best point found so far,
             but where we use a larger trust reigon radius each time (note: this is different to more common multi-start approach to global optimization).
         """
-        super(BOBYQAProfiler, self).maximize(*args, **kwargs)
+        return super(BOBYQAProfiler, self).maximize(*args, **kwargs)
 
     def _maximize_one(self, start, max_iterations=int(1e5), **kwargs):
         import pybobyqa

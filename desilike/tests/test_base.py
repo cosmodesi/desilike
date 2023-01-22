@@ -197,53 +197,7 @@ def test_params():
     likelihood.all_params['b'] = {'prior': {'limits': [0., 2.]}}
     print(likelihood.varied_params)
     likelihood(b=1.5**0.5)
-    assert np.allclose(likelihood.loglikelihood, bak)# XXX:
-
-
-def test_cosmo():
-
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate
-
-    theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=1.4, cosmo='external'))
-    print(theory.runtime_info.pipeline.get_cosmo_requires())
-    print(theory.runtime_info.pipeline.params)
-
-    theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=1.4))
-    print(theory.runtime_info.pipeline.get_cosmo_requires())
-    print(theory.runtime_info.pipeline.params)
-
-
-def test_differentiation():
-
-    import timeit
-    import numpy as np
-    from desilike.jax import jax
-    from desilike.jax import numpy as jnp
-
-    def f(a, b):
-        return jnp.sum(a * b)
-
-    jac = jax.jacrev(f)
-    jac(1., 3.)
-
-    a = np.arange(10)
-    number = 100000
-    d = {}
-    d['np-sum'] = {'stmt': "np.sum(a)", 'number': number}
-    d['jnp-sum'] = {'stmt': "jnp.sum(a)", 'number': number}
-
-    for key, value in d.items():
-        dt = timeit.timeit(**value, globals={**globals(), **locals()}) #/ value['number'] * 1e3
-        print('{} takes {: .3f} milliseconds'.format(key, dt))
-
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate
-
-    from desilike import Differentiation
-    theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.4))
-    theory.params['power'] = {'derived': True}
-    theory(sn0=100.)
-    diff = Differentiation(theory, method=None, order=2)
-    diff()
+    assert np.allclose(likelihood.loglikelihood, bak)
 
 
 def test_copy():
@@ -270,28 +224,17 @@ def test_copy():
     assert np.allclose(likelihood2(), SumLikelihood(likelihoods=likelihood2)())
 
 
-def test_fisher():
+def test_cosmo():
 
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
-    from desilike.likelihoods import ObservablesGaussianLikelihood, SumLikelihood
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate
 
-    theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=0.5))
-    for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2], 2: [0.05, 0.18]}, kstep=0.01,
-                                                         data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=False)
-    likelihood.all_params['logA'].update(derived='jnp.log(10 *  {A_s})', prior=None)
-    likelihood.all_params['A_s'] = {'prior': {'limits': [1.9, 2.2]}, 'ref': {'dist': 'norm', 'loc': 2.083, 'scale': 0.01}}
+    theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=1.4, cosmo='external'))
+    print(theory.runtime_info.pipeline.get_cosmo_requires())
+    print(theory.runtime_info.pipeline.params)
 
-    from desilike import Fisher
-    fisher = Fisher(likelihood)
-    matrix = fisher()
-    print(matrix.to_covariance().to_stats())
-
-    fisher = Fisher(likelihood)
-    matrix = fisher()
+    theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=1.4))
+    print(theory.runtime_info.pipeline.get_cosmo_requires())
+    print(theory.runtime_info.pipeline.params)
 
 
 def test_install():
@@ -322,7 +265,5 @@ if __name__ == '__main__':
     #test_likelihood()
     #test_params()
     #test_copy()
-    test_differentiation()
-    test_fisher()
     #test_cosmo()
     #test_install()

@@ -49,6 +49,25 @@ def mkdir(dirname):
 
 
 def evaluate(value, type=None, locals=None):
+    """
+    Evaluate input value.
+
+    Parameters
+    ----------
+    value : str, any type
+        If value is string, call ``eval``, with input ``locals`` (dictionary of local objects).
+        "np", "sp", "jnp", "jsp" are recognized as numpy, scipy, jax.numpy, jax.scipy (if jax is installed).
+
+    type : type, default=None
+        If not ``None``, cast output ``value`` with ``type``.
+
+    locals : dict, default=None
+        Dictionary of local objects to use when calling ``eval``.
+
+    Returns
+    -------
+    value : evaluated value.
+    """
     if isinstance(value, str):
         from .jax import numpy as jnp
         from .jax import scipy as jsp
@@ -140,21 +159,22 @@ class BaseMetaClass(type):
 
 
 def serialize_class(cls):
+    """Serialize input class (such that it can be loaded from scratch) as module_name.ClassName."""
     clsname = '.'.join([cls.__module__, cls.__name__])
     return (clsname,)
 
 
-def import_class(clsname, pythonpath=None, registry=None, install=None):
+def import_class(clsname, pythonpath=None, registry=None):
     """
     Import class from class name.
 
     Parameters
     ----------
-    clsname : string, type
-        Class name, as ``module.ClassName`` w.r.t. ``pythonpath``, or directly class type;
+    clsname : str, type
+        Class name, as ``module_name.ClassName`` w.r.t. ``pythonpath``, or directly class type;
         in this case, other arguments are ignored.
 
-    pythonpath : string, default=None
+    pythonpath : str, default=None
         Optionally, path where to find package/module where class is defined.
 
     registry : set, default=None
@@ -192,11 +212,6 @@ def import_class(clsname, pythonpath=None, registry=None, install=None):
             cls = getattr(module, clsname)
     else:
         cls = clsname
-    if install is not None and hasattr(cls, 'install'):
-        from .install import InstallerConfig
-        install = InstallerConfig(install)
-        if not find_names(serialize_class(cls)[0], install.get('exclude', [])):
-            cls.install(install)
     return cls
 
 
@@ -251,6 +266,10 @@ def is_sequence(item):
 
 
 def dict_to_yaml(d):
+    """
+    (Recursively) cast objects of input dictionary ``d`` to Python base types,
+    such that they can be understood by the base yaml.
+    """
     import numbers
     toret = {}
     for k, v in d.items():
@@ -275,6 +294,7 @@ def dict_to_yaml(d):
 
 
 def deep_eq(obj1, obj2):
+    """(Recursively) test equality between ``obj1`` and ``obj2``."""
     if type(obj2) is type(obj1):
         if isinstance(obj1, dict):
             if obj2.keys() == obj1.keys():
@@ -290,7 +310,10 @@ def deep_eq(obj1, obj2):
 
 
 class NamespaceDict(BaseClass):
-
+    """
+    Dict-like type, that allows access to items as attributes, i.e. d.name is d[name].
+    Should be removed soon (currently only used by :class:`ParameterConfig`.)
+    """
     def __init__(self, *args, **kwargs):
         if len(args) == 1:
             if isinstance(args[0], self.__class__):
@@ -357,9 +380,13 @@ class NamespaceDict(BaseClass):
 
 def _check_valid_inv(mat, invmat, rtol=1e-04, atol=1e-05, check_valid='raise'):
     """
-    Check input array ``mat`` and ``invmat`` are matrix inverse.
-    Raise :class:`LinAlgError` if input product of input arrays ``mat`` and ``invmat`` is not close to identity
-    within relative difference ``rtol`` and absolute difference ``atol``.
+    Check input array ``mat`` and ``invmat`` are matrix inverse within relative difference ``rtol`` and absolute difference ``atol``.
+    If inversion is inaccurate, and ``check_valid`` is:
+
+    - 'raise': raise a :class:`LinAlgError`
+    - 'warn': issue a warning
+    - 'ignore': ignore
+
     """
     tmp = mat.dot(invmat)
     ref = np.eye(tmp.shape[0], dtype=tmp.dtype)
@@ -385,8 +412,12 @@ def inv(mat, inv=np.linalg.inv, check_valid='raise'):
     inv : callable, default=np.linalg.inv
         Function that takes in 2D array and returns its inverse.
 
-    check_valid : bool, default=True
-        If inversion inaccurate, raise a :class:`LinAlgError` (see :func:`_check_valid_inv`).
+    check_valid : str, bool, default='raise'
+        If inversion is inaccurate, and ``check_valid`` is:
+
+        - 'raise': raise a :class:`LinAlgError`
+        - 'warn': issue a warning
+        - 'ignore': ignore
 
     Returns
     -------
@@ -423,8 +454,12 @@ def blockinv(blocks, inv=np.linalg.inv, check_valid='raise'):
     inv : callable, default=np.linalg.inv
         Function that takes in 2D array and returns its inverse.
 
-    check_valid : bool, default=True
-        If inversion inaccurate, raise a :class:`LinAlgError` (see :func:`_check_valid_inv`).
+    check_valid : str, bool, default='raise'
+        If inversion is inaccurate, and ``check_valid`` is:
+
+        - 'raise': raise a :class:`LinAlgError`
+        - 'warn': issue a warning
+        - 'ignore': ignore
 
     Returns
     -------
@@ -472,7 +507,10 @@ def weights_trapz(x):
 
 
 def subspace(X, precision=None, npcs=None, chi2min=None, **kwargs):
-    # See https://arxiv.org/pdf/2009.03311.pdf
+    """
+    Project input values ``X`` to a subspace.
+    See https://arxiv.org/pdf/2009.03311.pdf
+    """
     X = np.asarray(X)
     X = X.reshape(X.shape[0], -1)
     if precision is None:

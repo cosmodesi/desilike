@@ -21,14 +21,20 @@ def _make_list(li, length=None, isinst=(list, tuple)):
     return toret
 
 
-class ExternalEngine(BaseEngine):
-
+class BaseExternalEngine(BaseEngine):
+    """
+    A base cosmoprimo's engine class, to be extended for specific external provider of cosmological calculation.
+    Used in desilike's bindings to cosmological inference codes.
+    """
     def __init__(self, *args, **kwargs):
-        super(ExternalEngine, self).__init__(*args, **kwargs)
+        super(BaseExternalEngine, self).__init__(*args, **kwargs)
 
     @classmethod
     def get_requires(cls, *requires):
-
+        """
+        Merge input requirements as a dictionary mapping section to method's name and arguments,
+        e.g. 'background': {'comoving_radial_distance': {'z': z}}
+        """
         def _merge_dict(d1, d2):
             toret = d1.copy()
             for name, value in d2.items():

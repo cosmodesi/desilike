@@ -98,6 +98,7 @@ def test_plot():
     chains = [get_chain(params, seed=ii)[-1] for ii in range(4)]
     plotting.plot_triangle(chains[0], fn=os.path.join(chain_dir, 'triangle.png'))
     plotting.plot_triangle(chains[0], params='like.*', fn=os.path.join(chain_dir, 'triangle.png'))
+    plotting.plot_triangle([chains[0], chains[1].select(name=params[1:])], params=params, fn=os.path.join(chain_dir, 'triangle.png'))
     plotting.plot_trace(chains[0], fn=os.path.join(chain_dir, 'trace.png'))
     plotting.plot_autocorrelation_time(chains[0], fn=os.path.join(chain_dir, 'autocorrelation_time.png'))
     plotting.plot_gelman_rubin(chains, fn=os.path.join(chain_dir, 'gelman_rubin.png'))
@@ -109,6 +110,6 @@ if __name__ == '__main__':
     setup_logging()
 
     # test_bcast()
-    test_misc()
-    test_stats()
+    #test_misc()
+    #test_stats()
     test_plot()

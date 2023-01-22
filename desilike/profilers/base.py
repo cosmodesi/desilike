@@ -329,6 +329,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
         if self.mpicomm.rank == 0 and self.save_fn is not None:
             self.profiles.save(self.save_fn)
+        return self.profiles
 
     def _iterate_over_params(self, params, method, **kwargs):
         nparams = len(params)
@@ -362,6 +363,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
         if self.mpicomm.rank == 0 and self.save_fn is not None:
             self.profiles.save(self.save_fn)
+        return self.profiles
 
     def interval(self, params=None, **kwargs):
         """
@@ -383,7 +385,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         else:
             if not is_parameter_sequence(params): params = [params]
             params = ParameterCollection([self.varied_params[param] for param in params])
-        self._iterate_over_params(params, self._interval_one, **kwargs)
+        return self._iterate_over_params(params, self._interval_one, **kwargs)
 
     def profile(self, params=None, **kwargs):
         """
@@ -405,7 +407,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         else:
             if not is_parameter_sequence(params): params = [params]
             params = ParameterCollection([self.varied_params[param] for param in params])
-        self._iterate_over_params(params, self._profile_one, **kwargs)
+        return self._iterate_over_params(params, self._profile_one, **kwargs)
 
     def contour(self, params=None, **kwargs):
         """
@@ -429,4 +431,4 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         if not is_parameter_sequence(params[0]):
             params = [(param1, param2) for iparam1, param1 in enumerate(params) for param2 in params[iparam1 + 1:]]
         params = [(self.varied_params[param1], self.varied_params[param2]) for param1, param2 in params]
-        self._iterate_over_params(params, self._contour_one, **kwargs)
+        return self._iterate_over_params(params, self._contour_one, **kwargs)

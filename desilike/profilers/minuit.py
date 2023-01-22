@@ -59,7 +59,7 @@ class MinuitProfiler(BaseProfiler):
         max_iterations : int, default=int(1e5)
             Maximum number of likelihood evaluations.
         """
-        super(MinuitProfiler, self).maximize(*args, **kwargs)
+        return super(MinuitProfiler, self).maximize(*args, **kwargs)
 
     def _maximize_one(self, start, max_iterations=int(1e5)):
         self._set_start(start)
@@ -90,7 +90,7 @@ class MinuitProfiler(BaseProfiler):
             If 0 < cl < 1, the value is interpreted as the confidence level (a probability).
             If cl >= 1, it is interpreted as number of standard deviations. For example, cl = 3 produces a 3 sigma interval.
         """
-        super(MinuitProfiler, self).interval(*args, **kwargs)
+        return super(MinuitProfiler, self).interval(*args, **kwargs)
 
     def _interval_one(self, start, param, max_iterations=int(1e5), cl=None):
         self._set_start(start)
@@ -124,7 +124,7 @@ class MinuitProfiler(BaseProfiler):
         grid : array, default=None
             Parameter values on which to compute the profile. If grid is set, size and bound are ignored.
         """
-        super(MinuitProfiler, self).profile(*args, **kwargs)
+        return super(MinuitProfiler, self).profile(*args, **kwargs)
 
     def _profile_one(self, start, param, size=30, grid=None, **kwargs):
         self._set_start(start)
@@ -165,7 +165,7 @@ class MinuitProfiler(BaseProfiler):
             cubic spline interpolation is used to generate a smoother curve and the interpolated coordinates are returned.
             Values smaller than size are ignored. Good results can be obtained with size=20, interpolated=200.
         """
-        super(MinuitProfiler, self).contour(*args, **kwargs)
+        return super(MinuitProfiler, self).contour(*args, **kwargs)
 
     def _contour_one(self, start, param1, param2, cl=None, size=100, interpolated=0):
         self._set_start(start)

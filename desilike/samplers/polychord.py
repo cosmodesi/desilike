@@ -176,7 +176,7 @@ class PolychordSampler(BasePosteriorSampler):
                   is precision_criterion fraction of the total evidence. Default is 0.001.
 
         """
-        super(PolychordSampler, self).run(*args, **kwargs)
+        return super(PolychordSampler, self).run(*args, **kwargs)
 
     def _run_one(self, start, min_iterations=0, max_iterations=sys.maxsize, check=None, **kwargs):
 

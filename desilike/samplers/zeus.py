@@ -92,7 +92,7 @@ class ZeusSampler(BaseBatchPosteriorSampler):
         thin_by : int, default=1
             Thin samples by this factor.
         """
-        super(ZeusSampler, self).run(*args, **kwargs)
+        return super(ZeusSampler, self).run(*args, **kwargs)
 
     def _run_one(self, start, niterations=300, thin_by=1, progress=False):
         py_random_state_bak, np_random_state_bak = random.getstate(), np.random.get_state()

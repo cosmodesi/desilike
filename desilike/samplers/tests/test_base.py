@@ -1,5 +1,5 @@
 from desilike import setup_logging
-from desilike.samplers import EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler
+from desilike.samplers import EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler, GridSampler, QMCSampler
 
 
 def test_ensemble():
@@ -22,7 +22,18 @@ def test_ensemble():
         sampler.run(max_iterations=100, check=True)
 
 
+def test_fixed():
+
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    template = ShapeFitPowerSpectrumTemplate(z=0.5)
+    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    for Sampler in [GridSampler, QMCSampler]:
+        sampler = Sampler(theory)
+        sampler.run()
+
+
 if __name__ == '__main__':
 
     setup_logging()
-    test_ensemble()
+    #test_ensemble()
+    test_fixed()

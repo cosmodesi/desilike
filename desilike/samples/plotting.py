@@ -38,10 +38,10 @@ def _get_default_chain_params(chains, params=None, varied=True, derived=False, *
     chains = _make_list(chains)
     if params is not None:
         params = _make_list(params)
-        list_params = [chain.params(name=[str(param) for param in params]) for chain in chains]
-    else:
-        list_params = [chain.params(varied=varied, derived=derived, **kwargs) for chain in chains]
-    return [params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])]
+        return sum(chain.params(name=[str(param) for param in params]) for chain in chains)
+    list_params = [chain.params(varied=varied, derived=derived, **kwargs) for chain in chains]
+    from desilike.parameter import ParameterCollection
+    return ParameterCollection([params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])])
 
 
 def _get_default_profiles_params(profiles, params=None, of='bestfit', varied=True, derived=False, **kwargs):
@@ -295,7 +295,7 @@ def plot_triangle(chains, params=None, labels=None, **kwargs):
     chains = _make_list(chains)
     labels = _make_list(labels, length=len(chains), default=None)
     params = _get_default_chain_params(chains, params=params)
-    chains = [chain.to_getdist(label=label, params=params) for chain, label in zip(chains, labels)]
+    chains = [chain.to_getdist(label=label, params=chain.params(name=params.names())) for chain, label in zip(chains, labels)]
     lax = g.triangle_plot(chains, [str(param) for param in params], **kwargs)
     return g
 

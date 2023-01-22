@@ -6,10 +6,10 @@ from scipy import constants, stats
 from desilike import utils
 from desilike.bindings.base import BaseLikelihoodGenerator, get_likelihood_params, ParameterCollection
 
-from desilike.cosmo import Cosmology, ExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
+from desilike.cosmo import Cosmology, BaseExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
 
 
-class CosmoSISEngine(ExternalEngine):
+class CosmoSISEngine(BaseExternalEngine):
 
     pass
 

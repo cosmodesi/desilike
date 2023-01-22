@@ -501,7 +501,7 @@ class MCMCSampler(BaseBatchPosteriorSampler):
         thin_by : int, default=1
             Thin samples by this factor.
         """
-        super(MCMCSampler, self).run(*args, **kwargs)
+        return super(MCMCSampler, self).run(*args, **kwargs)
 
     def _run_one(self, start, niterations=300, thin_by=1):
         self.sampler.vectorize = self.mpicomm.size

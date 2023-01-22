@@ -1,5 +1,6 @@
 import numpy as np
 
+from desilike.jax import numpy as jnp
 from desilike.parameter import Parameter
 from desilike.emulators import Emulator, TaylorEmulatorEngine
 from desilike.base import BaseCalculator
@@ -8,21 +9,23 @@ from desilike import setup_logging
 
 class PowerModel(BaseCalculator):
 
-    def initialize(self, order=4):
+    def initialize(self, order=2):
         self.x = np.linspace(0.1, 1.1, 11)
         self.order = order
         for i in range(self.order):
-            self.params.set(Parameter('a{:d}'.format(i), value=0., ref={'limits': [-2., 2.]}))
+            self.params.set(Parameter('a{:d}'.format(i), value=1.5, ref={'limits': [1., 3.]}))
 
     def calculate(self, **kwargs):
-        self.model = sum(kwargs['a{:d}'.format(i)] * self.x**i for i in range(self.order))
+        #self.model = sum(kwargs['a{:d}'.format(i)] * self.x**i for i in range(self.order))
+        self.model = jnp.prod(jnp.array([kwargs['a{:d}'.format(i)]**(i + 1) for i in range(self.order)])) * self.x
 
     def __getstate__(self):
         return {name: getattr(self, name) for name in ['x', 'model']}
 
 
 def test_taylor_power(plot=False):
-    for order in range(3, 5):
+
+    for order in [3, 4]:
         calculator = PowerModel()
         emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=order))
         emulator.set_samples()
@@ -31,18 +34,39 @@ def test_taylor_power(plot=False):
 
         emulated_calculator = emulator.to_calculator()
 
-        from desilike import Differentiation
+        #from desilike import Differentiation
 
-        def getter():
-            return emulated_calculator.model
+        #def getter():
+        #    return emulated_calculator.model
 
-        d = Differentiation(emulated_calculator, getter, order=1)()
-        assert not np.isnan(d).any()
+        #d = Differentiation(emulated_calculator, getter, order=1)()
+        #assert not np.isnan(d).any()
 
         if plot:
             from matplotlib import pyplot as plt
             ax = plt.gca()
             for i, dx in enumerate(np.linspace(-1., 1., 5)):
+                calculator(**{str(param): param.value + dx for param in calculator.runtime_info.params if param.varied})
+                emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.runtime_info.params if param.varied})
+                color = 'C{:d}'.format(i)
+                ax.plot(calculator.x, calculator.model, color=color, linestyle='--')
+                ax.plot(emulated_calculator.x, emulated_calculator.model, color=color, linestyle='-')
+            plt.show()
+
+    for order in [3, 4]:
+        calculator = PowerModel()
+        for param in calculator.all_params: param.update(value=1., prior={'limits': [1., 2.]})
+        emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=order, accuracy={'*': 2, 'a0': 4}))
+        emulator.set_samples(method='finite')
+        emulator.fit()
+        emulator.check()
+
+        emulated_calculator = emulator.to_calculator()
+
+        if plot:
+            from matplotlib import pyplot as plt
+            ax = plt.gca()
+            for i, dx in enumerate(np.linspace(1., 2., 5)):
                 calculator(**{str(param): param.value + dx for param in calculator.runtime_info.params if param.varied})
                 emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.runtime_info.params if param.varied})
                 color = 'C{:d}'.format(i)

@@ -9,19 +9,19 @@ from .jax import numpy as jnp
 
 
 def deriv_ncoeffs(order, acc=2):
+    """Return number of coefficients given input derivative order and accuracy."""
     return 2 * ((order + 1) // 2) - 1 + acc
 
 
 def coefficients(order, acc, coords, idx):
     """
-    Calculates the finite difference coefficients for given derivative order and accuracy order.
-    Assumes that the underlying grid is non-uniform.
+    Calculate the finite difference coefficients for given derivative order and accuracy order.
+    Assume that the underlying grid is non-uniform.
 
     Taken from https://github.com/maroba/findiff/blob/master/findiff/coefs.py
 
     Parameters
     ----------
-
     order : int
         The derivative order (positive integer).
 
@@ -91,6 +91,29 @@ def coefficients(order, acc, coords, idx):
 
 
 def deriv_nd(X, Y, orders, center=None):
+    """
+    Compute n-dimensional derivative.
+
+    Parameters
+    ----------
+    X : array
+        Array of shape (nsamples, ndim), with ndim the number of variables.
+
+    Y : array
+        Array of shape (nsamples, ysize), with ysize the size of the vector to derive.
+
+    orders : list
+        List of tuples (derivation axis between 0 and ndim - 1, derivative order, derivative accuracy).
+
+    center : array, default=None
+        The center around which to take derivatives, of size ndim.
+        If ``None``, defaults to the median of input ``X``.
+
+    Returns
+    -------
+    deriv : array
+        Derivative of Y, of size ysize.
+    """
     uorders = []
     for axis, order, acc in orders:
         if not order: continue
@@ -115,8 +138,37 @@ def deriv_nd(X, Y, orders, center=None):
     toret = 0.
     for coeff, offset in zip(*coefficients(order, acc, coord, cidx)):
         mask = X[:, axis] == coord[cidx + offset]
-        y = deriv_nd(X[mask], Y[mask], orders[:-1])
+        ncenter = center.copy()
+        ncenter[axis] = coord[cidx + offset]
+        y = deriv_nd(X[mask], Y[mask], orders[:-1], center=ncenter)
         toret += y * coeff
+    return toret
+
+
+def deriv_grid(grids, current_order=0):
+    """
+    Return grid of points to compute to estimate derivatives.
+
+    Parameters
+    ----------
+    grids : list
+        List of tuples (1D grid coordinates, array of (minimum) derivative orders corresponding to 1D grid, derivative accuracy).
+
+    Returns
+    -------
+    grid : list
+        List of coordinates (list).
+    """
+    grid, orders, maxorder = grids[-1]
+    toret = []
+    for order in np.unique(orders)[::-1]:
+        if order == 0 or order + current_order <= maxorder:
+            mask = orders == order
+            if len(grids) > 1:
+                mgrid = deriv_grid(grids[:-1], current_order=order + current_order)
+            else:
+                mgrid = [[]]
+            toret += [mg + [gg] for mg in mgrid for gg in grid[mask]]
     return toret
 
 
@@ -233,20 +285,50 @@ class Differentiation(BaseClass):
                     raise ValueError('accuracy is {} for parameter {}, but it must be a positive EVEN integer'.format(value, param))
                 self.accuracy[param] = value
 
-        size, sphere = {}, {}
-        for param in self.varied_params.names():
-            if self.method[param] == 'finite':
-                size[param] = deriv_ncoeffs(self.order[param], acc=self.accuracy[param])
-                sphere[param] = self.order[param]
+        self._grid_center, grids = {}, []
+        for param in self.varied_params:
+            self._grid_center[param.name] = center = param.value
+            if self.method[param.name] == 'finite' and self.order[param.name]:
+                size = deriv_ncoeffs(self.order[param.name], acc=self.accuracy[param.name])
+                if param.ref.is_limited() and not hasattr(param.ref, 'scale'):
+                    edges = ref_scale * (np.array(param.ref.limits) - center) + center
+                elif param.proposal:
+                    edges = ref_scale * np.array([-param.proposal, param.proposal]) + center
+                else:
+                    raise ParameterPriorError('Provide proper parameter reference distribution or proposal for {}'.format(param))
+                # Stay in prior boundaries
+                edges = (max(edges[0], param.prior.limits[0]), min(edges[1], param.prior.limits[1]))
+                grid = None
+                # If center is super close from edges, put all points regularly on the other side
+                for e, cindex in zip(edges, [0, size]):
+                    if np.abs(center - e) < 1e-3 * np.abs(edges[1] - edges[0]):
+                        grid = np.linspace(*edges, num=size + 1)
+                        order = np.zeros(size + 1, dtype='i')
+                        for ord in range(self.order[param.name], 0, -1):
+                            s = deriv_ncoeffs(ord, acc=self.accuracy[param.name]) + 1
+                            order[max(cindex - s, 0):cindex + s] = ord
+                        order[cindex] = 0
+                        grid = (grid, order, self.order[param.name])
+                if grid is None:
+                    low, high = np.linspace(edges[0], center, size // 2 + 1), np.linspace(center, edges[1], size // 2 + 1)
+                    grid = np.concatenate([low, high[1:]])
+                    order = np.zeros(size, dtype='i')
+                    cindex = size // 2
+                    for ord in range(self.order[param.name], 0, -1):
+                        s = deriv_ncoeffs(ord, acc=self.accuracy[param.name])
+                        order[cindex - s // 2:cindex + s // 2 + 1] = ord
+                    order[cindex] = 0
+                    grid = (grid, order, self.order[param.name])
+                if self.mpicomm.rank == 0:
+                    self.log_info('{} grid is {}.'.format(param, grid[0]))
             else:
-                size[param] = 1
-                sphere[param] = 0
+                grid = (np.array([center]), np.array([0]), 0)
+            grids.append(grid)
 
-        from desilike.samplers import GridSampler
-        sampler = GridSampler(self.calculator, size=size, ref_scale=ref_scale, sphere=sphere, mpicomm=self.mpicomm)
-        # sphere is not None, so samples will *end* with the central point, making sure param_values correspond to the user last run(**params) call
-        self._grid_center = {param.name: param.value for param in sampler.varied_params}
-        self._grid_samples = sampler.samples.deepcopy() if self.mpicomm.rank == 0 else None
+        self._grid_samples = None
+        if self.mpicomm.rank == 0:
+            samples = np.array(deriv_grid(grids)).T
+            self._grid_samples = Samples(samples, params=self.varied_params)
 
         autoparams, autoorder, self.autoderivs = [], [], []
         for param, method in self.method.items():
@@ -397,7 +479,7 @@ class Differentiation(BaseClass):
                     toret[param] = derivative
             elif not self.getter_size:
                 toret = toret[0]
-            self.samples = toret
+        self.samples = toret
 
     def __call__(self, **params):
         """

@@ -85,7 +85,7 @@ class ScipyProfiler(BaseProfiler):
         kwargs : dict
             Solver-specific options.
         """
-        super(ScipyProfiler, self).maximize(*args, **kwargs)
+        return super(ScipyProfiler, self).maximize(*args, **kwargs)
 
     def _maximize_one(self, start, max_iterations=int(1e5), tol=None, **kwargs):
         from scipy import optimize

@@ -1,4 +1,7 @@
-"""A few utilities."""
+"""
+A few MPI utilities.
+TODO: write ersatz for all MPI functions used in the package, in case mpi4py is not available.
+"""
 
 import copy
 import logging
@@ -22,7 +25,7 @@ if use_mpi:
     ANY_SOURCE = MPI.ANY_SOURCE
     ANY_TAG = MPI.ANY_TAG
 else:
-
+    # Fake MPI
     class Comm(object):
         rank = 0
         size = 1
@@ -72,21 +75,7 @@ class CurrentMPIComm(object):
     def enter(cls, mpicomm):
         """
         Enter a context where the current default MPI communicator is modified to the
-        argument `comm`. After leaving the context manager the communicator is restored.
-
-        Example:
-
-        .. code:: python
-
-            with CurrentMPIComm.enter(comm):
-                cat = UniformCatalog(...)
-
-        is identical to
-
-        .. code:: python
-
-            cat = UniformCatalog(..., comm=comm)
-
+        argument ``mpicomm``. After leaving the context manager the communicator is restored.
         """
         cls.push(mpicomm)
 
@@ -944,7 +933,7 @@ class MPITaskManager(object):
 def barrier_idle(mpicomm, tag=0, sleep=0.01):
     """
     MPI barrier fonction that solves the problem that idle processes occupy 100% CPU.
-    See: https://goo.gl/NofOO9.
+    See https://goo.gl/NofOO9.
     """
     size = mpicomm.size
     if size == 1: return

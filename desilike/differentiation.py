@@ -18,7 +18,7 @@ def coefficients(order, acc, coords, idx):
     Calculate the finite difference coefficients for given derivative order and accuracy order.
     Assume that the underlying grid is non-uniform.
 
-    Taken from https://github.com/maroba/findiff/blob/master/findiff/coefs.py
+    Adapted from https://github.com/maroba/findiff/blob/master/findiff/coefs.py
 
     Parameters
     ----------

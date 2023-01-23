@@ -24,7 +24,7 @@ class Fisher(BaseClass):
     Estimate Fisher matrix. If input ``likelihood`` is a :class:`BaseGaussianLikelihood` instance,
     or a :class:`SumLikelihood` of such instances, then the Fisher matrix will be computed as:
 
-    ..math:
+    .. math::
 
         F_{ij} = \frac{\partial \Delta}{\partial p_{i}} C^{-1} \frac{\partial \Delta}{\partial p_{j}}
 

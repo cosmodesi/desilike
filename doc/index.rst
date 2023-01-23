@@ -31,24 +31,21 @@ Introduction
 that can be imported in common cosmological inference codes (`cobaya <https://github.com/CobayaSampler/cobaya>`_,
 `cosmosis <https://github.com/joezuntz/cosmosis>`_, `montepython <https://github.com/brinckmann/montepython_public>`_).
 
-Stricly required, to define likelihoods (including theories) and import them in these inference codes, are:
+**desilike** has the following structure:
 
-  - theories
-  - observables
-  - likelihoods
-  - bindings
-  - (optionally: emulators)
+* root directory: definition of parameters, base calculator classes, differentiation and Fisher routines, installation routines
+* theories: e.g. BAO, full-shape theory models
+* observables: e.g. power spectrum, correlation function
+* likelihoods: e.g. Gaussian likelihood of observables, a few external likelihoods (Pantheon, Planck) --- though we emphasize full cosmological inference is not desilike's purpose
+* bindings: automatic linkage with cobaya, cosmosis, montepython
+* emulators: emulate e.g. full-shape theory models, to speed up inference
+* samples: define chains, profiles data structures and plotting routines
+* samplers: many samplers for posterior sampling
+* profilers: profilers for posterior profiling
 
-Directories samples, samplers and profilers are provided for self-contained sampling / profiling of provided likelihoods, as discussed below.
+samples, samplers and profilers are provided for self-contained sampling / profiling of provided likelihoods.
 
-**desilike** provides:
-
-* tools to emulate calculators (in-place) at any step
-* profilers
-* samplers
-* Fisher analysis tools
-
-In detail, just as cosmological inference codes, **desilike** includes:
+In terms of capabilities, just as cosmological inference codes, **desilike** includes:
 
 * an advanced parameterization infrastructure (priors, reference distributions, derived parameters, etc.)
 * speed hierarchy between various parameters, exploited in some samplers (MCMCSampler, PolychordSampler)
@@ -56,7 +53,6 @@ In detail, just as cosmological inference codes, **desilike** includes:
 * tools to install external data/packages
 * convergence diagnostics
 * MPI support to run several chains in parallel
-* for convenience, some usual external likelihoods (Planck2018, SN, ...) --- though we emphasize full cosmological inference is not desilike's purpose
 
 In addition:
 
@@ -68,7 +64,7 @@ In addition:
 * double parallelization level (several chains, and several processes per chain), for all samplers
 * more likelihood profiling tools (1D and 2D profiles in addition to likelihood/posterior maximization)
 * the possibility to save any array (of any shape) quantity (and derivative) to disk, no matter the sampler/profiler under use,
-to facilitate debugging, set up model template bases, build emulators within the relevant parameter space, etc.
+  to facilitate debugging, set up model template bases, build emulators within the relevant parameter space, etc.
 
 Development so far has focused on galaxy clustering / compression techniques.
 

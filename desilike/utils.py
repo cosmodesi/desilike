@@ -506,10 +506,32 @@ def weights_trapz(x):
     return np.concatenate([[x[1] - x[0]], x[2:] - x[:-2], [x[-1] - x[-2]]]) / 2.
 
 
-def subspace(X, precision=None, npcs=None, chi2min=None, **kwargs):
-    """
+def subspace(X, precision=None, npcs=None, chi2min=None, fweights=None, aweights=None):
+    r"""
     Project input values ``X`` to a subspace.
     See https://arxiv.org/pdf/2009.03311.pdf
+
+    Parameters
+    ----------
+    X : array
+        Array of shape (number of samples, ndim).
+
+    precision : array, default=None
+        Optionally, precision matrix, to normalize ``X``.
+
+    npcs : int, default=None
+        Optionally, number (<= ndim) of principal components to keep.
+        If ``None``, number of components to be kept is fixed by ``chi2min``.
+
+    chi2min : int, default=None
+        In case ``npcs`` is provided, threshold for the maximum difference in :math:`\chi2`
+        w.r.t. keeping all components. If ``None``, all components are kept.
+
+    fweights : array, default=None
+        Optionally, integer frequency weights, of shape (number of samples,).
+
+    aweights : array, default=None
+        Optionally, observation weights.
     """
     X = np.asarray(X)
     X = X.reshape(X.shape[0], -1)
@@ -518,7 +540,7 @@ def subspace(X, precision=None, npcs=None, chi2min=None, **kwargs):
     else:
         L = np.linalg.cholesky(precision)
     X = X.dot(L)
-    cov = np.cov(X, rowvar=False, ddof=0, **kwargs)
+    cov = np.cov(X, rowvar=False, ddof=0, fweights=fweights, aweights=aweights)
     eigenvalues, eigenvectors = np.linalg.eigh(cov)
     if npcs is None:
         if chi2min is None:
@@ -526,7 +548,7 @@ def subspace(X, precision=None, npcs=None, chi2min=None, **kwargs):
         else:
             npcs = len(eigenvalues) - np.sum(np.cumsum(eigenvalues) < chi2min)
     if npcs > len(eigenvectors):
-        raise ValueError('Number of requested components is {0:d}, but dimension is already {1:d} < {0:d}.'.format(npcs, len(eigenvalues)))
+        raise ValueError('Number of requested components is {0:d}, but dimension is {1:d} < {0:d}.'.format(npcs, len(eigenvalues)))
     return L.dot(eigenvectors)[..., -npcs:]
 
 
@@ -543,7 +565,10 @@ def txt_to_latex(txt):
 
 
 def outputs_to_latex(name):
-    """Turn outputs ``name`` to latex string."""
+    """
+    Turn ``name`` to latex string,
+    with defaults for 'loglikelihood', 'logposterior' and 'logprior'.
+    """
     toret = txt_to_latex(name)
     for full, symbol in [('loglikelihood', 'L'), ('logposterior', '\\mathcal{L}'), ('logprior', 'p')]:
         toret = toret.replace(full, symbol)
@@ -551,8 +576,28 @@ def outputs_to_latex(name):
 
 
 class Monitor(BaseClass):
+    """
+    Class to monitor execution time (optionally, memory):
 
-    def __init__(self, quantities=('time',)):
+    >>> with Monitor() as mem:
+            ...
+            mem.stop()  # stop monitoring
+            ...
+            mem.start() # restart monitoring
+            ...
+            dt = mem.get('time')  # elapsed time
+            mem.reset()  # reset, i.e. forget about previous monitoring and start
+
+    """
+    def __init__(self, quantities='time'):
+        """
+        Initialize monitor.
+
+        Parameters
+        ----------
+        quantities : str, default='time'
+            Quantities to monitor: 'time', 'mem' (requires package psutil to be installed).
+        """
         if not is_sequence(quantities):
             quantities = (quantities,)
         self.quantities = list(quantities)
@@ -572,9 +617,11 @@ class Monitor(BaseClass):
         return self.proc.memory_info().rss / 1e6
 
     def start(self):
+        """Start monitoring."""
         self._start = {quantity: getattr(self, quantity)() for quantity in self.quantities}
 
     def stop(self):
+        """Stop monitoring."""
         stop = {quantity: getattr(self, quantity)() for quantity in self.quantities}
         self._counter += 1
         self._diffs = {quantity: stop[quantity] - self._start[quantity] + diff for quantity, diff in self._diffs.items()}
@@ -582,9 +629,11 @@ class Monitor(BaseClass):
 
     @property
     def counter(self):
+        """Number of data points."""
         return self._counter
 
     def get(self, quantity, average=True):
+        """Return time series of quantity ('time' or 'mem'), or, if ``average`` is ``True``, its average."""
         if average:
             if self._counter == 0:
                 return np.nan
@@ -592,6 +641,7 @@ class Monitor(BaseClass):
         return self._diffs[quantity]
 
     def reset(self):
+        """Reset, i.e. forget about previous monitoring and start."""
         self._diffs = {quantity: 0. for quantity in self.quantities}
         self._counter = 0
         self.start()
@@ -606,6 +656,14 @@ class Monitor(BaseClass):
 
 
 def expand_dict(di, names):
+    """
+    Expand input dictionary, taking care of wildcards, e.g.:
+
+    >>> expand_dict({'*': 2}, ['a', 'b'])
+    {'a': 2, 'b': 2}
+    >>> expand_dict({'a*': 2, 'b': 1}, ['a1', 'a2', 'b'])
+    {'a1': 2, 'a2': 2, 'b': 1}
+    """
     toret = dict.fromkeys(names)
     if not hasattr(di, 'items'):
         di = {'*': di}
@@ -770,13 +828,13 @@ def round_measurement(x, u=0.1, v=None, sigfigs=2, positive_sign=False, notation
 
     Returns
     -------
-    xr : string
+    xr : str
         String representation for central value ``x``.
 
-    ur : string
+    ur : str
         String representation for upper uncertainty ``u``.
 
-    vr : string
+    vr : str
         If ``v`` is not ``None``, string representation for lower uncertainty ``v``.
     """
     x, u = float(x), float(u)

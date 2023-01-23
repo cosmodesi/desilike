@@ -1,3 +1,21 @@
+Core
+====
+
+differentiation
+---------------
+.. automodule:: desilike.differentiation
+  :members:
+  :inherited-members:
+  :show-inheritance:
+
+fisher
+------
+.. automodule:: desilike.fisher
+  :members:
+  :inherited-members:
+  :show-inheritance:
+
+
 Profilers
 =========
 

@@ -3,16 +3,19 @@
 **desilike** is an attempt to provide a common framework for writing DESI likelihoods,
 that can be imported in common cosmological inference codes (Cobaya, CosmoSIS, MontePython).
 
-Stricly required, to define and import likelihoods in these inference codes, are:
+**desilike** has the following structure:
 
-  - theories
-  - observables
-  - likelihoods
-  - bindings
-  - (optionally: emulators)
+  - root directory: definition of parameters, base calculator classes, differentiation and Fisher routines, installation routines
+  - theories: e.g. BAO, full-shape theory models
+  - observables: e.g. power spectrum, correlation function
+  - likelihoods: e.g. Gaussian likelihood of observables, a few external likelihoods (Pantheon, Planck)
+  - bindings: automatic linkage with cobaya, cosmosis, montepython
+  - emulators: emulate e.g. full-shape theory models, to speed up inference
+  - samples: define chains, profiles data structures and plotting routines
+  - samplers: many samplers for posterior sampling
+  - profilers: profilers for posterior profiling
 
-Directories samples, samplers and profilers are provided for self-contained sampling / profiling of provided likelihoods.
-**desilike** also provides utilities for easy Fisher analyses.
+samples, samplers and profilers are provided for self-contained sampling / profiling of provided likelihoods.
 Example notebooks presenting most use cases are provided in directory nb/.
 
 ## TODO

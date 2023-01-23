@@ -2261,7 +2261,7 @@ class BaseParameterMatrix(BaseClass):
 
     def __eq__(self, other):
         """Is ``self`` equal to ``other``, i.e. same type and attributes?"""
-        return type(other) == type(self) and all(np.all(getattr(other, name) == getattr(self, name)) for name in ['_params', '_value', '_center'])
+        return type(other) == type(self) and all(deep_eq(getattr(other, name), getattr(self, name)) for name in ['_params', '_value', '_center'])
 
     @classmethod
     @CurrentMPIComm.enable

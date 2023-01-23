@@ -49,5 +49,5 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_install()
-    #test_clik()
-    test_gaussian_likelihood()
+    test_clik()
+    #test_gaussian_likelihood()

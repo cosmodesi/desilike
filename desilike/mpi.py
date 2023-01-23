@@ -461,7 +461,7 @@ def send(data, dest, tag=0, mpicomm=None):
 
 
 @CurrentMPIComm.enable
-def recv(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG, mpicomm=None):
+def recv(source=ANY_SOURCE, tag=ANY_TAG, mpicomm=None):
     """
     Receive array from process ``source``.
 

@@ -43,7 +43,7 @@ release = __version__
 
 html_theme = 'sphinx_rtd_theme'
 
-autodoc_mock_imports = []
+autodoc_mock_imports = ['cosmoprimo']
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']

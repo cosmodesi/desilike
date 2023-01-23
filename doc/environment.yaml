@@ -8,4 +8,5 @@ dependencies:
 - python=3.8
 - numpy
 - scipy
+- pyyaml
 - docutils=0.16

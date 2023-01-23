@@ -1,9 +1,8 @@
 import functools
 
 import numpy as np
-import mpytools as mpy
 
-from desilike import utils
+from desilike import mpi, utils
 from desilike.utils import BaseClass
 from desilike.samples import load_source
 from desilike.samples.profiles import Profiles, Samples, ParameterBestFit
@@ -197,7 +196,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
     def _set_rng(self, rng=None, seed=None):
         self.rng = self.mpicomm.bcast(rng, root=0)
         if self.rng is None:
-            seed = mpy.random.bcast_seed(seed=seed, mpicomm=self.mpicomm, size=None)
+            seed = mpi.bcast_seed(seed=seed, mpicomm=self.mpicomm, size=None)
         self.rng = np.random.RandomState(seed=seed)
 
     def _set_profiler(self):

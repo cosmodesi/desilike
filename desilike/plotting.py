@@ -3,8 +3,6 @@
 import os
 import logging
 
-from matplotlib import pyplot as plt
-
 from . import utils
 
 
@@ -71,6 +69,7 @@ def suplabel(axis, label, shift=0, labelpad=5, ha='center', va='center', **kwarg
     kwargs : dict
         Arguments for :func:`matplotlib.pyplot.text`.
     """
+    from matplotlib import pyplot as plt
     fig = plt.gcf()
     xmin = []
     ymin = []
@@ -112,6 +111,7 @@ def plotter(func):
 
     @wraps(func)
     def wrapper(*args, fn=None, kw_save=None, show=False, **kwargs):
+        from matplotlib import pyplot as plt
         toret = func(*args, **kwargs)
         if fn is not None:
             savefig(fn, fig=plt.gcf(), **(kw_save or {}))

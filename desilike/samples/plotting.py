@@ -1,5 +1,4 @@
 import numpy as np
-from matplotlib import pyplot as plt
 from matplotlib import gridspec, transforms
 
 from desilike import plotting
@@ -75,6 +74,7 @@ def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, k
     lax : array
         Array of axes.
     """
+    from matplotlib import pyplot as plt
     chains = _make_list(chains)
     params = _get_default_chain_params(chains, params=params)
     nparams = len(params)
@@ -131,6 +131,7 @@ def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, s
     -------
     ax : matplotlib.axes.Axes
     """
+    from matplotlib import pyplot as plt
     params = _get_default_chain_params(chains, params=params)
     if slices is None:
         nsteps = min(chain.size for chain in chains)
@@ -187,6 +188,7 @@ def plot_geweke(chains, params=None, threshold=None, slices=None, labelsize=None
     -------
     ax : matplotlib.axes.Axes
     """
+    from matplotlib import pyplot as plt
     params = _get_default_chain_params(chains, params=params)
     if slices is None:
         nsteps = min(chain.size for chain in chains)
@@ -241,6 +243,7 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
     -------
     ax : matplotlib.axes.Axes
     """
+    from matplotlib import pyplot as plt
     chains = _make_list(chains)
     params = _get_default_chain_params(chains, params=params)
     if slices is None:
@@ -342,6 +345,7 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
     -------
     ax : matplotlib.axes.Axes
     """
+    from matplotlib import pyplot as plt
     profiles = _make_list(profiles)
     if truth is True or (truth is None and kw_truth is not None):
         truth = profiles[0].bestfit[param].param.value
@@ -444,6 +448,7 @@ def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=No
     lax : array
         Array of axes.
     """
+    from matplotlib import pyplot as plt
     profiles = _make_list(profiles)
     params = _get_default_profiles_params(profiles, params=params)
     truths = _make_list(truths, length=len(params), default=None)
@@ -475,7 +480,7 @@ def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=No
 def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors=None, linestyles=None,
                  cl=(1, 2, 3), labelsize=None, ticksize=None, kw_profile=None, kw_cl=None,
                  kw_legend=None, figsize=None, **kwargs):
-
+    from matplotlib import pyplot as plt
     profiles = _make_list(profiles)
     params = _get_default_profiles_params(profiles, params=params, of='profile')
     nprofiles = len(profiles)

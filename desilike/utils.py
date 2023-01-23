@@ -524,7 +524,7 @@ def subspace(X, precision=None, npcs=None, chi2min=None, fweights=None, aweights
         If ``None``, number of components to be kept is fixed by ``chi2min``.
 
     chi2min : int, default=None
-        In case ``npcs`` is provided, threshold for the maximum difference in :math:`\chi2`
+        In case ``npcs`` is provided, threshold for the maximum difference in :math:`\chi^{2}`
         w.r.t. keeping all components. If ``None``, all components are kept.
 
     fweights : array, default=None

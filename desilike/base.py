@@ -251,8 +251,8 @@ class BasePipeline(BaseClass):
         self.derived = derived
 
     def get_cosmo_requires(self):
-        from .cosmo import ExternalEngine
-        return ExternalEngine.get_requires(*[getattr(calculator, 'cosmo_requires', {}) for calculator in self.calculators])
+        from .cosmo import BaseExternalEngine
+        return BaseExternalEngine.get_requires(*[getattr(calculator, 'cosmo_requires', {}) for calculator in self.calculators])
 
     def set_cosmo_requires(self, cosmo):
         for calculator in self.calculators:

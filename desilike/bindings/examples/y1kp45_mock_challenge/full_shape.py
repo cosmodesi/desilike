@@ -14,12 +14,12 @@ def AbacusSummitLRGDirectPowerSpectrumMultipoles(cosmo='external', solve=None, s
         pt = EmulatedCalculator.load(emulator_fn)
         theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(pt=pt)
     if solve is None:
-        from desilike.utils import jax
+        from desilike.jax import jax
         solve = jax is not None
     if solve and not save_emulator:
         for param in theory.params.select(name=['alpha*', 'sn*']): param.update(derived='.marg')
         theory.log_info('Use analytic marginalization for {}.'.format(theory.params.names(solved=True)))
-    """
+
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2], 2: [0.02, 0.2]}, kstep=0.005,
                                                          data='/global/cfs/cdirs/desi/cosmosim/KP45/MC/Clustering/AbacusSummit/CubicBox/LRG/Pk/Pre/jmena/nmesh_512/pypower_format/Pk_AbacusSummit_base_*.npy',
                                                          mocks='/global/cfs/cdirs/desi/cosmosim/KP45/MC/Clustering/EZmock/CubicBox/LRG/Pk/jmena/nmesh_512/pypower_format/Pk_EZmock_B2000G512Z0.8N8015724_b0.385d4r169c0.3_seed*.npy',
@@ -27,10 +27,11 @@ def AbacusSummitLRGDirectPowerSpectrumMultipoles(cosmo='external', solve=None, s
                                                          theory=theory)
     """
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2], 2: [0.02, 0.2]}, kstep=0.005,
-                                                         data='../../tests/_pk/data.npy',
-                                                         mocks='../../tests/_pk/mock_*.npy',
-                                                         wmatrix='../../tests/_pk/window.npy',
+                                                         data='../../../tests/_pk/data.npy',
+                                                         mocks='../../../tests/_pk/mock_*.npy',
+                                                         wmatrix='../../../tests/_pk/window.npy',
                                                          theory=theory)
+    """
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     if save_emulator:
         from desilike.emulators import Emulator, TaylorEmulatorEngine
@@ -59,12 +60,12 @@ def AbacusSummitLRGShapeFitPowerSpectrumMultipoles(solve=None, save_emulator=Fal
         pt = EmulatedCalculator.load(emulator_fn)
         theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(pt=pt)
     if solve is None:
-        from desilike.utils import jax
+        from desilike.jax import jax
         solve = jax is not None
     if solve and not save_emulator:
         for param in theory.params.select(name=['alpha*', 'sn*']): param.update(derived='.marg')
         theory.log_info('Use analytic marginalization for {}.'.format(theory.params.names(solved=True)))
-    """
+
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2], 2: [0.02, 0.2]}, kstep=0.005,
                                                          data='/global/cfs/cdirs/desi/cosmosim/KP45/MC/Clustering/AbacusSummit/CubicBox/LRG/Pk/Pre/jmena/nmesh_512/pypower_format/Pk_AbacusSummit_base_*.npy',
                                                          mocks='/global/cfs/cdirs/desi/cosmosim/KP45/MC/Clustering/EZmock/CubicBox/LRG/Pk/jmena/nmesh_512/pypower_format/Pk_EZmock_B2000G512Z0.8N8015724_b0.385d4r169c0.3_seed*.npy',
@@ -72,10 +73,11 @@ def AbacusSummitLRGShapeFitPowerSpectrumMultipoles(solve=None, save_emulator=Fal
                                                          theory=theory)
     """
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2], 2: [0.02, 0.2]}, kstep=0.005,
-                                                         data='../../tests/_pk/data.npy',
-                                                         mocks='../../tests/_pk/mock_*.npy',
-                                                         wmatrix='../../tests/_pk/window.npy',
+                                                         data='../../../tests/_pk/data.npy',
+                                                         mocks='../../../tests/_pk/mock_*.npy',
+                                                         wmatrix='../../../tests/_pk/window.npy',
                                                          theory=theory)
+    """
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     if save_emulator:
         from desilike.emulators import Emulator, TaylorEmulatorEngine

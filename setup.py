@@ -11,7 +11,7 @@ version = _version.__version__
 
 
 def get_yaml_files():
-    for section in ['likelihoods', 'observables', 'theories']:
+    for section in ['theories', 'observables', 'likelihoods', 'bindings']:
         for root, dirs, files in os.walk(os.path.join(package_dir, section)):
             for file in files:
                 if file.endswith('.yaml'):

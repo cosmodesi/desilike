@@ -26,10 +26,12 @@ def AbacusSummitLRGDirectPowerSpectrumMultipoles(cosmo='external', solve=None, s
                                                          wmatrix='/global/cfs/cdirs/desi/users/adematti/desi_mock_challenge/FirstGenMocks/AbacusSummit/CubicBox/ELG/z1.100/window_nmesh512_los-x.npy',
                                                          theory=theory)
     """
+    import os, desilike
+    data_dir = os.path.join(os.path.dirname(desilike.__file__), 'tests', '_pk')
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2], 2: [0.02, 0.2]}, kstep=0.005,
-                                                         data='../../../tests/_pk/data.npy',
-                                                         mocks='../../../tests/_pk/mock_*.npy',
-                                                         wmatrix='../../../tests/_pk/window.npy',
+                                                         data=os.path.join(data_dir, 'data.npy'),
+                                                         mocks=os.path.join(data_dir, 'mock_*.npy'),
+                                                         wmatrix=os.path.join(data_dir, 'window.npy'),
                                                          theory=theory)
     """
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
@@ -72,10 +74,12 @@ def AbacusSummitLRGShapeFitPowerSpectrumMultipoles(solve=None, save_emulator=Fal
                                                          wmatrix='/global/cfs/cdirs/desi/users/adematti/desi_mock_challenge/FirstGenMocks/AbacusSummit/CubicBox/ELG/z1.100/window_nmesh512_los-x.npy',
                                                          theory=theory)
     """
+    import os, desilike
+    data_dir = os.path.join(os.path.dirname(desilike.__file__), 'tests', '_pk')
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2], 2: [0.02, 0.2]}, kstep=0.005,
-                                                         data='../../../tests/_pk/data.npy',
-                                                         mocks='../../../tests/_pk/mock_*.npy',
-                                                         wmatrix='../../../tests/_pk/window.npy',
+                                                         data=os.path.join(data_dir, 'data.npy'),
+                                                         mocks=os.path.join(data_dir, 'mock_*.npy'),
+                                                         wmatrix=os.path.join(data_dir, 'window.npy'),
                                                          theory=theory)
     """
     likelihood = ObservablesGaussianLikelihood(observables=[observable])

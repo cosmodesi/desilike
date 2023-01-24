@@ -17,6 +17,7 @@ doc/_build/
 **/_catalog
 **/_plots
 **/_results
+**/_chains
 **/tests/_*/
 **/*.pyc
 

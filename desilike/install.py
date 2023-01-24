@@ -195,7 +195,10 @@ def source(fn):
 
 class Installer(BaseClass):
     """
-    Installer. Given some calculator one would like to install, the installer is typically used as:
+    Installer. desilike's configuration ('config.yaml' and 'profile.sh') is saved
+    under 'DESILIKE_CONFIG_DIR' environment variable if defined, else '~/.desilike'.
+
+    Given some calculator one would like to install, the installer is typically used as:
 
     >>> installer = Installer(user=True)
     >>> installer(calculator)
@@ -216,7 +219,8 @@ class Installer(BaseClass):
         Parameters
         ----------
         install_dir : str, Path, default=None
-            Installation directory. Defaults to directory in :attr:`config_fn` if provided, else PIP's default.
+            Installation directory. Defaults to directory in :attr:`config_fn` if provided,
+            else 'DESILIKE_INSTALL_DIR' environment variable if defined, else PIP's default.
 
         user : bool, default=False
             If ``True``, installation directory is home directory.
@@ -235,14 +239,17 @@ class Installer(BaseClass):
             if install_dir is not None:
                 raise ValueError('Cannot provide both user and install_dir')
             install_dir = os.getenv('PYTHONUSERBASE', site.getuserbase())
-        default_install_dir = os.path.dirname(os.path.dirname(os.path.dirname(site.getsitepackages()[0])))
+        default_install_dir = os.getenv('DESILIKE_INSTALL_DIR', None)
+        if not default_install_dir:
+            default_install_dir = os.path.dirname(os.path.dirname(os.path.dirname(site.getsitepackages()[0])))
         lib_rel_install_dir = os.path.relpath(site.getsitepackages()[0], default_install_dir)
         if install_dir is not None:
             install_dir = str(install_dir)
 
-        self.config_dir = os.getenv('DESILIKE_CONF_DIR', None)
+        self.config_dir = os.getenv('DESILIKE_CONFIG_DIR', None)
+        default_config_dir = os.path.join(self.home_dir, '.desilike')
         if not self.config_dir:
-            self.config_dir = self.home_dir
+            self.config_dir = default_config_dir
 
         config_fn = {}
         if os.path.isfile(self.config_fn):
@@ -250,7 +257,7 @@ class Installer(BaseClass):
             try:
                 with open(self.config_fn, 'a'): pass
             except PermissionError:  # from now on, write to home
-                self.config_dir = self.home_dir
+                self.config_dir = default_config_dir
         config = BaseConfig(config_fn)
 
         if 'install_dir' not in config:
@@ -275,12 +282,12 @@ class Installer(BaseClass):
     @property
     def config_fn(self):
         """Path to .yaml configuration file."""
-        return os.path.join(self.config_dir, '.desilike', 'config.yaml')
+        return os.path.join(self.config_dir, 'config.yaml')
 
     @property
     def profile_fn(self):
         """Path to .sh profile to be sourced to set all paths."""
-        return os.path.join(self.config_dir, '.desilike', 'profile.sh')
+        return os.path.join(self.config_dir, 'profile.sh')
 
     def get(self, *args, **kwargs):
         """Get config option, e.g. ``install_dir``."""

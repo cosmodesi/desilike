@@ -28,6 +28,12 @@ def test_clik():
     TTTEEEHighlPlanck2018PlikLiteLikelihood()()
 
 
+def test_sum():
+    from desilike.likelihoods import SumLikelihood
+    likelihood = SumLikelihood([Likelihood() for Likelihood in [TTTEEEHighlPlanck2018PlikLiteLikelihood, LensingPlanck2018ClikLikelihood]])
+    print(likelihood())
+
+
 def test_gaussian_likelihood():
 
     likelihood = BasePlanck2018GaussianLikelihood(source='covmat')
@@ -49,5 +55,6 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_install()
-    test_clik()
+    #test_clik()
+    test_sum()
     #test_gaussian_likelihood()

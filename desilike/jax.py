@@ -8,6 +8,7 @@ try:
     from jax import numpy, scipy
     array_types = (jaxlib.xla_extension.DeviceArrayBase, jax.core.Tracer)
 except ImportError:
+    jax = None
     import numpy
     import scipy
 

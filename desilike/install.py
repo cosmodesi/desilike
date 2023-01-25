@@ -43,11 +43,11 @@ def download(url, target, size=None):
     r = requests.get(url, allow_redirects=True, stream=True)
 
     with open(target, 'wb') as file:
-        if size is None or int(size) < 0: # no content length header
+        if size is None or int(size) < 0:  # no content length header
             file.write(r.content)
         else:
             import shutil
-            width = shutil.get_terminal_size((80, 20))[0] - 9 # pass fallback
+            width = shutil.get_terminal_size((80, 20))[0] - 9  # pass fallback
             dl, size, current = 0, int(size), 0
             for data in r.iter_content(chunk_size=2048):
                 dl += len(data)
@@ -155,14 +155,12 @@ def pip(pkgindex, pkgname=None, install_dir=None, no_deps=False, force_reinstall
     command = ' '.join(command)
     logger.info(command)
     from subprocess import Popen, PIPE
-    result = Popen(command, universal_newlines=True, stdout=PIPE, stderr=PIPE, shell=True)
+    proc = Popen(command, universal_newlines=True, stdout=PIPE, stderr=PIPE, shell=True)
     out, err = proc.communicate()
     logger.info(out)
     if len(err):
-        #
         # Pass STDERR messages to the user, but do not
         # raise an error unless the return code was non-zero.
-        #
         if proc.returncode == 0:
             message = ('pip emitted messages on STDERR; these can probably be ignored:\n' + err)
             logger.warning(message)

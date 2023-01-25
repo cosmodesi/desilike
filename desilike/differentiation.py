@@ -2,7 +2,7 @@ import itertools
 
 import numpy as np
 
-from .parameter import Parameter, ParameterCollection, ParameterArray, Samples, Deriv
+from .parameter import Parameter, ParameterCollection, ParameterArray, Samples, Deriv, ParameterPriorError
 from .utils import BaseClass, expand_dict, is_sequence
 from .jax import jax
 from .jax import numpy as jnp

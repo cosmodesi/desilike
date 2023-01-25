@@ -348,11 +348,11 @@ class Profiles(BaseClass):
             Number of significant digits.
             See :func:`utils.round_measurement`.
 
-        tablefmt : string, default='latex_raw'
+        tablefmt : str, default='latex_raw'
             Format for summary table.
             See :func:`tabulate.tabulate`.
 
-        fn : string default=None
+        fn : str, default=None
             If not ``None``, file name where to save summary table.
 
         Returns

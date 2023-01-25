@@ -1,10 +1,18 @@
 """Classes to handle parameters."""
 
+import os
 import re
 import fnmatch
 import copy
 import numbers
-from collections import Counter
+try:
+    from collections.abc import Mapping
+except ImportError:
+    from collections import Mapping
+from itertools import chain as _chain
+from itertools import repeat as _repeat
+from itertools import starmap as _starmap
+from operator import itemgetter as _itemgetter
 
 import numpy as np
 import scipy as sp
@@ -191,14 +199,6 @@ class ParameterError(Exception):
     """Exception raised when issue with :class:`ParameterError`."""
 
 
-from collections.abc import Mapping
-
-from itertools import chain as _chain
-from itertools import repeat as _repeat
-from itertools import starmap as _starmap
-from operator import itemgetter as _itemgetter
-
-
 class Deriv(dict):
     """
     This class encodes derivative orders.
@@ -220,7 +220,6 @@ class Deriv(dict):
         >>> c = Deriv({'x': 2, 'y': 1})           # a new derivative from a mapping: :math:`\partial_{x}^{2} \partial y`
         >>> c = Deriv(x=2, y=1)                   # a new derivative from keyword args
         """
-        from collections import Mapping
         super().__init__()
         if iterable is None or isinstance(iterable, (Deriv, Mapping)):
             self.update(iterable, **kwds)
@@ -1429,7 +1428,6 @@ class ParameterCollectionConfig(BaseParameterCollection):
                 toret[name] = value
             return toret
 
-        #self.delete = {}
         for meta_name in ['fixed', 'derived', 'namespace', 'delete']:
             setattr(self, meta_name, update_order(getattr(self, meta_name), getattr(other, meta_name)))
         self.wildcard = self.wildcard + other.wildcard
@@ -1443,8 +1441,6 @@ class ParameterCollectionConfig(BaseParameterCollection):
                 param.namespace = namespace
                 for dparam in new:
                     dparam.update_derived(param.basename, param.name)
-                #self.namespace.pop(name, None)
-                #self.namespace[name] = namespace
         return new
 
     def init(self, namespace=None):
@@ -1776,7 +1772,7 @@ class ParameterPrior(BaseClass):
         else:
             args = ()
         self.rv = rv_frozen(dist, *args, **kwargs)
-        #self.limits = self.rv.support()
+        # self.limits = self.rv.support()
 
     def isin(self, x):
         """Whether ``x`` is within prior, i.e. within limits - strictly positive probability."""
@@ -2213,6 +2209,7 @@ class BaseParameterMatrix(BaseClass):
             Parameters corresponding to input ``value``.
 
         center : array, list, default=None
+            Typically, mean associated with the covariance/precision matrix.
             TODO: remove.
         """
         if isinstance(value, self.__class__):
@@ -2239,26 +2236,67 @@ class BaseParameterMatrix(BaseClass):
         self._sizes
 
     def params(self, *args, **kwargs):
+        """Return parameters in matrix."""
         return self._params.params(*args, **kwargs)
 
     def names(self, *args, **kwargs):
+        """Return names of parameters in matrix."""
         return self._params.names(*args, **kwargs)
 
     def select(self, params=None, **kwargs):
+        """
+        Return a sub-matrix.
+        
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            Optionally, parameters to limit to.
+        
+        **kwargs : dict
+            If ``params`` is ``None``, optional arguments passed to :meth`ParameterCollection.select`
+            to select parameters (e.g. ``varied=True``).
+        
+        Returns
+        -------
+        new : BaseParameterMatrix
+            A sub-matrix.
+        """
         if params is None: params = self._params.select(**kwargs)
         return self.view(params=params, return_type=None)
 
     def det(self, params=None):
+        """Return matrix determinant, limiting to input parameters ``params`` if not ``None``."""
         return np.linalg.det(self.view(params=params, return_type='nparray'))
 
     @property
     def _sizes(self):
+        # Return parameter sizes
         toret = [max(param.size, 1) for param in self._params]
         if sum(toret) != self._value.shape[0]:
             raise ValueError('number * size of input params must match input matrix shape')
         return toret
 
     def clone(self, value=None, params=None, center=None):
+        """
+        Clone this matrix, i.e. copy and optionally update ``value``,
+        ``params``, and ``center``.
+
+        Parameters
+        ----------
+        value : array, default=None
+            2D array to replace matrix value with.
+        
+        params : list, ParameterCollection, default=None
+            New parameters.
+        
+        center : array, list
+            New matrix center.
+        
+        Returns
+        -------
+        new : BaseParameterMatrix
+            A new matrix, optionally with ``value``, ``params`` and ``center`` updated.
+        """
         new = self.view(params=params, return_type=None)
         if value is not None:
             new._value[...] = value
@@ -2267,6 +2305,22 @@ class BaseParameterMatrix(BaseClass):
         return new
 
     def center(self, params=None, return_type='nparray'):
+        """
+        Return matrix center, restricting to input ``params`` if provided.
+
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            If provided, restrict to these parameters.
+        
+        return_type : str, default='nparray'
+            If 'nparray', return a numpy array.
+            Else, return a dictionary mapping parameter names to center values.
+        
+        Returns
+        -------
+        center : array, dict
+        """
         if params is None:
             params = self._params
         isscalar = not is_parameter_sequence(params)
@@ -2280,7 +2334,25 @@ class BaseParameterMatrix(BaseClass):
         return {str(param): value for param, value in zip(params, center)}
 
     def view(self, params=None, return_type=None):
-        """Return matrix for input parameters ``params``."""
+        """
+        Return matrix for input parameters ``params``.
+        
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            If provided, restrict to these parameters.
+            If a single parameter is provided, and this parameter is a scalar, return a scalar.
+            If a parameter in ``params`` is not in matrix, add it, filling in the returned matrix with zeros,
+            except on the diagonal, which is filled with :attr:`_fill_value`; :attr:`center` is filled with nan.
+        
+        return_type : str, default=None
+            If 'nparray', return a numpy array.
+            Else, return a new :class:`BaseParameterMatrix`, restricting to ``params``.
+        
+        Returns
+        -------
+        new : array, float, BaseParameterMatrix
+        """
         if params is None:
             params = self._params
         isscalar = not is_parameter_sequence(params)
@@ -2301,12 +2373,13 @@ class BaseParameterMatrix(BaseClass):
             new._center[index_new] = np.nan
         if return_type == 'nparray':
             new = new._value
-            if isscalar and not params[0].size:
+            if isscalar and not params[0].ndim:
                 new = new[0, 0]
             return new
         return new
 
     def _index(self, params):
+        # Internal method to return indices in matrix array corresponding to input params.""""
         cumsizes = np.cumsum([0] + self._sizes)
         idx = [self._params.index(param) for param in params]
         return np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx])
@@ -2316,14 +2389,14 @@ class BaseParameterMatrix(BaseClass):
         return name in self._params
 
     def __getstate__(self):
-        """Return this class state dictionary."""
+        """Return this class' state dictionary."""
         state = {}
         for name in ['value', 'center']: state[name] = getattr(self, '_' + name)
         state['params'] = self._params.__getstate__()
         return state
 
     def __setstate__(self, state):
-        """Set this class state dictionary."""
+        """Set this class' state dictionary."""
         self._params = ParameterCollection.from_state(state['params'])
         for name in ['value', 'center']: setattr(self, '_' + name, state[name])
 
@@ -2338,6 +2411,7 @@ class BaseParameterMatrix(BaseClass):
     @classmethod
     @CurrentMPIComm.enable
     def bcast(cls, value, mpicomm=None, mpiroot=0):
+        """Broadcast input samples ``value`` from rank ``mpiroot``to other processes."""
         state = None
         if mpicomm.rank == mpiroot:
             state = value.__getstate__()
@@ -2347,9 +2421,11 @@ class BaseParameterMatrix(BaseClass):
         return cls.from_state(state)
 
     def deepcopy(self):
+        """Deep copy"""
         return copy.deepcopy(self)
 
     def __mul__(self, other):
+        """Multiply matrix by ``other`` (typically, a float)."""
         new = self.deepcopy()
         new._value *= other
         return new
@@ -2358,6 +2434,7 @@ class BaseParameterMatrix(BaseClass):
         return self.__mul__(other)
 
     def __truediv__(self, other):
+        """Divide matrix by ``other`` (typically, a float)."""
         new = self.deepcopy()
         new._value /= other
         return new
@@ -2368,16 +2445,34 @@ class BaseParameterMatrix(BaseClass):
 
 class ParameterCovariance(BaseParameterMatrix):
 
-    """Class that represents a parameter covariance."""
+    """Class that represents a parameter covariance matrix."""
 
     def view(self, params=None, return_type=None, fill=None):
-        """Return matrix for input parameters ``params``."""
+        """
+        Return matrix for input parameters ``params``.
+    
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            If provided, restrict to these parameters.
+            If a single parameter is provided, this parameter is a scalar, and ``return_type`` is 'nparray', return a scalar.
+            If a parameter in ``params`` is not in matrix, add it, filling in the returned matrix with zeros,
+            except on the diagonal, which is filled with :attr:`Parameter.proposal`; :attr:`center` is filled with :attr:`Parameter.value`.
+        
+        return_type : str, default=None
+            If 'nparray', return a numpy array.
+            Else, return a new :class:`ParameterCovariance`, restricting to ``params``.
+        
+        Returns
+        -------
+        new : array, float, ParameterCovariance
+        """
         new = super(ParameterCovariance, self).view(params=params, return_type=None)
         if fill == 'proposal':
             params_not_in_self = [param for param in new._params if param not in self._params and param.proposal is not None]
             index = new._index(params_not_in_self)
-            new._value[index, index] = [param.proposal**2 for param in params_not_in_source]
-            new._center[index] = [param.value if param.value is not None else np.nan for param in params_not_in_source]
+            new._value[index, index] = [param.proposal**2 for param in params_not_in_self]
+            new._center[index] = [param.value if param.value is not None else np.nan for param in params_not_in_self]
         toret = super(ParameterCovariance, new).view(return_type=return_type)
         if return_type == 'nparray' and params is not None and not is_parameter_sequence(params):
             return toret[0, 0]
@@ -2386,29 +2481,69 @@ class ParameterCovariance(BaseParameterMatrix):
     cov = view
 
     def fom(self, **params):
+        """Figure-of-Merit, as inverse square root of the matrix determinant (optionally restricted to input parameters)."""
         return self.det(**params)**(-0.5)
 
     def rescale(self):
-        """Divide by center values."""
+        """Return covariance matrix of the fractional parameter variations."""
         new = self.deepcopy()
-        new._value = self._value / (self._center[:, None] *  self._center)
+        new._value = self._value / (self._center[:, None] * self._center)
         new._center[:] = 1.
         return new
 
     def corrcoef(self, params=None):
-        """Return correlation matrix for input parameters ``params``."""
+        """Return correlation matrix (optionally restricted to input parameters)."""
         return utils.cov_to_corrcoef(self.cov(params=params, return_type='nparray'))
 
     def std(self, params=None):
+        """
+        Return standard deviation (optionally restricted to input parameters).
+        If a single parameter is given as input, return a scalar.
+        """
         cov = self.cov(params=params, return_type='nparray')
         if np.ndim(cov) == 0: return cov**0.5  # single param
         return np.diag(cov)**0.5
 
     def invcov(self, params=None, return_type='nparray'):
-        """Return inverse covariance (precision) matrix for input parameters ``params``."""
+        """
+        Return inverse covariance matrix (precision matrix) for input parameters ``params``.
+    
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            If provided, restrict to these parameters.
+            If a single parameter is provided, this parameter is a scalar, and ``return_type`` is 'nparray', return a scalar.
+            If a parameter in ``params`` is not in matrix, add it, filling in the returned matrix with zeros,
+            except on the diagonal, which is filled with :attr:`Parameter.proposal`; :attr:`center` is filled with :attr:`Parameter.value`.
+        
+        return_type : str, default=None
+            If 'nparray', return a numpy array.
+            Else, return a new :class:`ParameterCovariance`, restricting to ``params``.
+        
+        Returns
+        -------
+        new : array, float, ParameterCovariance
+        """
         return self.to_precision(params=params, return_type=return_type)
 
     def to_precision(self, params=None, return_type=None):
+        """
+        Return inverse covariance matrix (precision matrix) for input parameters ``params``.
+    
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            If provided, restrict to these parameters.
+            If a single parameter is provided, this parameter is a scalar, and ``return_type`` is 'nparray', return a scalar.
+
+        return_type : str, default=None
+            If 'nparray', return a numpy array.
+            Else, return a new :class:`ParameterPrecision`.
+        
+        Returns
+        -------
+        new : array, float, ParameterPrecision
+        """
         if params is None: params = self._params
         view = self.view(params, return_type=None)
         invcov = utils.inv(view._value)
@@ -2417,6 +2552,25 @@ class ParameterCovariance(BaseParameterMatrix):
         return ParameterPrecision(invcov, params=params, center=view._center)
 
     def to_stats(self, params=None, sigfigs=2, tablefmt='latex_raw', fn=None):
+        """
+        Export covariance matrix to string.
+
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            If provided, restrict to these parameters.
+        
+        sigfigs : int, default=2
+            Number of significant digits.
+            See :func:`utils.round_measurement`.
+
+        tablefmt : str, default='latex_raw'
+            Format for summary table.
+            See :func:`tabulate.tabulate`.
+
+        fn : str, default=None
+            If not ``None``, file name where to save summary table.
+        """
         import tabulate
         is_latex = 'latex_raw' in tablefmt
 
@@ -2439,8 +2593,29 @@ class ParameterCovariance(BaseParameterMatrix):
         return txt
 
     def to_getdist(self, params=None, label=None, center=None, ignore_limits=True, **kwargs):
+        """
+        Return *GetDist* hook to samples.
+
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            Parameters to share to *GetDist*. Defaults to all parameters.
+        
+        label : str, default=None
+            Name for this covariance matrix.
+        
+        center : list, array, default=None
+            Optionally, override :meth:`center`.
+        
+        ignore_limits : bool, default=True
+            *GetDist* does not seem to be able to integrate over distribution if bounded;
+            so drop parameter limits.
+
+        Returns
+        -------
+        samples : getdist.gaussian_mixtures.MixtureND
+        """
         from getdist.gaussian_mixtures import MixtureND
-        toret = None
         cov = self.view(params, return_type=None)
         labels = [param.latex() for param in cov._params]
         names = [str(param) for param in cov._params]

@@ -180,7 +180,6 @@ def import_class(clsname, pythonpath=None, registry=None):
     registry : set, default=None
         Optionally, a set of class types to look into.
     """
-    from .parameter import find_names
     if isinstance(clsname, str):
         tmp = clsname.rsplit('.', 1)
         if len(tmp) == 1:

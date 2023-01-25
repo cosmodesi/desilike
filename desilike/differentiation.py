@@ -206,8 +206,7 @@ class Differentiation(BaseClass):
             Not used if autodifferentiation is available.
 
         ref_scale : float, default=0.5
-            Parameter grid ranges for the estimation of derivatives are inferred from parameters' :attr:`Parameter.ref.scale`
-            if exists, else limits of reference distribution if bounded, else :attr:`Parameter.proposal`.
+            Parameter grid ranges for the estimation of derivatives are inferred from :attr:`Parameter.proposal`.
             These values are then scaled by ``ref_scale`` (< 1. means smaller ranges).
 
         mpicomm : mpi.COMM_WORLD, default=None
@@ -290,9 +289,7 @@ class Differentiation(BaseClass):
             self._grid_center[param.name] = center = param.value
             if self.method[param.name] == 'finite' and self.order[param.name]:
                 size = deriv_ncoeffs(self.order[param.name], acc=self.accuracy[param.name])
-                if param.ref.is_limited() and not hasattr(param.ref, 'scale'):
-                    edges = ref_scale * (np.array(param.ref.limits) - center) + center
-                elif param.proposal:
+                if param.proposal:
                     edges = ref_scale * np.array([-param.proposal, param.proposal]) + center
                 else:
                     raise ParameterPriorError('Provide proper parameter reference distribution or proposal for {}'.format(param))

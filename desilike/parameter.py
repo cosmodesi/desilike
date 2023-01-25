@@ -27,7 +27,7 @@ def decode_name(name, default_start=0, default_stop=None, default_step=1):
 
     Parameters
     ----------
-    name : string
+    name : str
         Parameter name, e.g. ``a_[-4:5:2]``.
 
     default_start : int, default=0
@@ -89,10 +89,10 @@ def yield_names_latex(name, latex=None, **kwargs):
 
     Parameters
     ----------
-    name : string
+    name : str
         Parameter name.
 
-    latex : string, default=None
+    latex : str, default=None
         Latex for parameter.
 
     kwargs : dict
@@ -100,10 +100,10 @@ def yield_names_latex(name, latex=None, **kwargs):
 
     Returns
     -------
-    name : string
+    name : str
         Parameter name with template forms ``[::]`` replaced.
 
-    latex : string, None
+    latex : str, None
         If input ``latex`` is ``None``, ``None``.
         Else latex string with template forms ``[::]`` replaced.
     """
@@ -140,7 +140,7 @@ def find_names(allnames, name, quiet=True):
     allnames : list
         List of parameter names (strings).
 
-    name : list, string
+    name : list, str
         List of parameter name(s) to match in ``allnames``.
 
     quiet : bool, default=True
@@ -201,7 +201,8 @@ from operator import itemgetter as _itemgetter
 
 class Deriv(dict):
     """
-    This class is a modification of https://github.com/python/cpython/blob/main/Lib/collections/__init__.py,
+    This class encodes derivative orders.
+    It is a modification of https://github.com/python/cpython/blob/main/Lib/collections/__init__.py,
     restricting to positive elements.
     """
     # References:
@@ -212,16 +213,23 @@ class Deriv(dict):
     #   Knuth, TAOCP Vol. II section 4.6.3
 
     def __init__(self, iterable=None, /, **kwds):
-        """Create a new, empty Deriv object.  And if given, count elements
-        from an input iterable.  Or, initialize the count from another mapping
-        of elements to their counts.
-        >>> c = Deriv()                           # a new, empty counter
-        >>> c = Deriv('gallahad')                 # a new counter from an iterable
-        >>> c = Deriv({'a': 4, 'b': 2})           # a new counter from a mapping
-        >>> c = Deriv(a=4, b=2)                   # a new counter from keyword args
+        r"""
+        Create a new, empty :class:`Deriv` object.
+        >>> c = Deriv()                           # a new, empty derivative object, i.e. zero lag
+        >>> c = Deriv(['x', Parameter('x'), 'y'])            # a new derivative from the list of parameters w.r.t. derivatives are taken
+        >>> c = Deriv({'x': 2, 'y': 1})           # a new derivative from a mapping: :math:`\partial_{x}^{2} \partial y`
+        >>> c = Deriv(x=2, y=1)                   # a new derivative from keyword args
         """
+        from collections import Mapping
         super().__init__()
-        self.update(iterable, **kwds)
+        if iterable is None or isinstance(iterable, (Deriv, Mapping)):
+            self.update(iterable, **kwds)
+        else:
+            iterable = (iterable,) if not utils.is_sequence(iterable) else iterable
+            if all(isinstance(param, (Parameter, str)) for param in iterable):
+                self.update((str(param) for param in iterable), **kwds)
+            else:
+                raise ValueError('Unable to make Deriv from {}'.format(iterable))
 
     # ADM changes
     def __setitem__(self, name, item):
@@ -233,19 +241,20 @@ class Deriv(dict):
             super(Deriv, self).setdefault(name, item)
 
     def __missing__(self, key):
-        """The count of elements not in the Deriv is zero."""
+        """The order of a derivative w.r.t. a parameter not in the :class:`Deriv` is zero."""
         # Needed so that self[missing_item] does not raise KeyError
         return 0
 
     def total(self):
-        """Sum of the counts."""
+        """Total derivative order."""
         return sum(self.values())
 
     def most_common(self, n=None):
-        """List the n most common elements and their counts from the most
-        common to the least.  If n is None, then list all element counts.
-        >>> Deriv('abracadabra').most_common(3)
-        [('a', 5), ('b', 2), ('r', 2)]
+        """
+        List the ``n`` most common derivatives and their orders from the most
+        common to the least.  If n is ``None``, then list all derivative orders.
+        >>> Deriv(['x', 'x', 'x', 'y', 'y', 'z', 'z', 't']).most_common(3)
+        [('x', 3), ('y', 2), ('z', 2)]
         """
         # Emulate Bag.sortedByCount from Smalltalk
         if n is None:
@@ -256,38 +265,26 @@ class Deriv(dict):
         return heapq.nlargest(n, self.items(), key=_itemgetter(1))
 
     def elements(self):
-        """Iterator over elements repeating each as many times as its count.
-        >>> c = Deriv('ABCABC')
+        """
+        Iterator over derivatives repeating each as many times as its order.
+        >>> c = Deriv('xxyyzz')
         >>> sorted(c.elements())
-        ['A', 'A', 'B', 'B', 'C', 'C']
-        # Knuth's example for prime factors of 1836:  2**2 * 3**3 * 17**1
-        >>> import math
-        >>> prime_factors = Deriv({2: 2, 3: 3, 17: 1})
-        >>> math.prod(prime_factors.elements())
-        1836
-        Note, if an element's count has been set to zero or is a negative
-        number, elements() will ignore it.
+        ['x', 'x', 'y', 'y', 'z', 'z']
         """
         # Emulate Bag.do from Smalltalk and Multiset.begin from C++.
         return _chain.from_iterable(_starmap(_repeat, self.items()))
 
     def update(self, iterable=None, /, **kwds):
-        """Like dict.update() but add counts instead of replacing them.
-        Source can be an iterable, a dictionary, or another Deriv instance.
-        >>> c = Deriv('which')
-        >>> c.update('witch')           # add elements from another iterable
-        >>> d = Deriv('watch')
-        >>> c.update(d)                 # add elements from another counter
-        >>> c['h']                      # four 'h' in which, witch, and watch
-        4
         """
-        # The regular dict.update() operation makes no sense here because the
-        # replace behavior results in the some of original untouched counts
-        # being mixed-in with all of the other counts for a mismash that
-        # doesn't have a straight-forward interpretation in most counting
-        # contexts.  Instead, we implement straight-addition.  Both the inputs
-        # and outputs are allowed to contain zero and negative counts.
-
+        Like :meth:`dict.update` but add derivative orders instead of replacing them.
+        Source can be an iterable, a dictionary, or another :class:`Deriv` instance.
+        >>> c = Deriv('xy')
+        >>> c.update('x')               # add derivatives from another iterable
+        >>> d = Deriv('xy')
+        >>> c.update(d)
+        >>> c['x']                      # 3 'x' in 'xy', 'x', 'xy'
+        3
+        """
         if iterable is not None:
             if isinstance(iterable, Mapping):
                 if self:
@@ -313,7 +310,7 @@ class Deriv(dict):
         return self.__class__, (dict(self),)
 
     def __delitem__(self, elem):
-        """Like dict.__delitem__() but does not raise KeyError for missing values."""
+        """Like :meth:`dict.__delitem__` but does not raise :class:`KeyError` for missing values."""
         if elem in self:
             super().__delitem__(elem)
 
@@ -328,80 +325,41 @@ class Deriv(dict):
             d = dict(self)
         return f'{self.__class__.__name__}({d!r})'
 
-    # Multiset-style mathematical operations discussed in:
-    #       Knuth TAOCP Volume II section 4.6.3 exercise 19
-    #       and at http://en.wikipedia.org/wiki/Multiset
-    #
-    # Outputs guaranteed to only include positive counts.
-    #
-    # To strip negative and zero counts, add-in an empty counter:
-    #       c += Deriv()
-    #
-    # Results are ordered according to when an element is first
-    # encountered in the left operand and then by the order
-    # encountered in the right operand.
-    #
-    # When the multiplicities are all zero or one, multiset operations
-    # are guaranteed to be equivalent to the corresponding operations
-    # for regular sets.
-    #     Given counter multisets such as:
-    #         cp = Deriv(a=1, b=0, c=1)
-    #         cq = Deriv(c=1, d=0, e=1)
-    #     The corresponding regular sets would be:
-    #         sp = {'a', 'c'}
-    #         sq = {'c', 'e'}
-    #     All of the following relations would hold:
-    #         set(cp + cq) == sp | sq
-    #         set(cp - cq) == sp - sq
-    #         set(cp | cq) == sp | sq
-    #         set(cp & cq) == sp & sq
-    #         (cp == cq) == (sp == sq)
-    #         (cp != cq) == (sp != sq)
-    #         (cp <= cq) == (sp <= sq)
-    #         (cp < cq) == (sp < sq)
-    #         (cp >= cq) == (sp >= sq)
-    #         (cp > cq) == (sp > sq)
-
     def __eq__(self, other):
-        """True if all counts agree. Missing counts are treated as zero."""
+        """``True`` if all derivative orders agree. Missing derivatives are treated as zero-order derivatives."""
         if not isinstance(other, Deriv):
             return NotImplemented
         return all(self[e] == other[e] for c in (self, other) for e in c)
 
-    def __ne__(self, other):
-        """True if any counts disagree. Missing counts are treated as zero."""
-        if not isinstance(other, Deriv):
-            return NotImplemented
-        return not self == other
-
     def __le__(self, other):
-        """True if all counts in self are a subset of those in other."""
+        """``True`` if all derivative orders in ``self`` are less than those in ``other``."""
         if not isinstance(other, Deriv):
             return NotImplemented
         return all(self[e] <= other[e] for c in (self, other) for e in c)
 
     def __lt__(self, other):
-        """True if all counts in self are a proper subset of those in other."""
+        """``True`` if all derivative orders in ``self`` are strictly less than those in ``other``."""
         if not isinstance(other, Deriv):
             return NotImplemented
         return self <= other and self != other
 
     def __ge__(self, other):
-        """True if all counts in self are a superset of those in other."""
+        """``True`` if all derivative orders in ``self`` are greater than those in ``other``."""
         if not isinstance(other, Deriv):
             return NotImplemented
         return all(self[e] >= other[e] for c in (self, other) for e in c)
 
     def __gt__(self, other):
-        """True if all counts in self are a proper superset of those in other."""
+        """``True`` if all derivative orders in ``self`` are strictly greater than those in ``other``."""
         if not isinstance(other, Deriv):
             return NotImplemented
         return self >= other and self != other
 
     def __add__(self, other):
-        """Add counts from two counters.
-        >>> Deriv('abbb') + Deriv('bcc')
-        Deriv({'b': 4, 'c': 2, 'a': 1})
+        """
+        Add derivative orders.
+        >>> Deriv('xxy') + Deriv('xyy')
+        Deriv({'x': 3, 'y': 3})
         """
         if not isinstance(other, Deriv):
             return NotImplemented
@@ -416,55 +374,57 @@ class Deriv(dict):
         return result
 
     def _keep_positive(self):
-        """Internal method to strip elements with a negative or zero count"""
+        """Internal method to strip derivatives with a negative or zero order"""
         nonpositive = [elem for elem, count in self.items() if not count > 0]
         for elem in nonpositive:
             del self[elem]
         return self
 
     def __iadd__(self, other):
-        """Inplace add from another counter, keeping only positive counts.
-        >>> c = Deriv('abbb')
-        >>> c += Deriv('bcc')
+        """
+        Inplace add from another derivative.
+        >>> c = Deriv('xxy')
+        >>> c += Deriv('xyy')
         >>> c
-        Deriv({'b': 4, 'c': 2, 'a': 1})
+        Deriv({'x': 3, 'y': 3})
         """
         for elem, count in other.items():
             self[elem] += count
         return self._keep_positive()
 
 
-def _make_deriv(deriv):
-    if isinstance(deriv, Deriv):
-        return deriv
-    deriv_types = (Parameter, str)
-    deriv = (deriv,) if not utils.is_sequence(deriv) else deriv
-    if all(isinstance(param, deriv_types) for param in deriv):
-        return Deriv(str(param) for param in deriv)
-    raise ValueError('Unable to make deriv from {}'.format(deriv))
-
-
 class ParameterArray(np.ndarray):
+
+    """Extend :class:`np.ndarray` with a parameter, and derivative orders."""
 
     def __new__(cls, value, param=None, derivs=None, copy=False, dtype=None, **kwargs):
         """
-        Initalize :class:`array`.
+        Initalize :class:`ParameterArray`.
 
         Parameters
         ----------
         value : array
-            Local array value.
+            Array value.
+
+        param : Parameter, str, default=None
+            Parameter.
+
+        derivs : list
+            List of derivatives (:class:`Deriv` instances).
 
         copy : bool, default=False
             Whether to copy input array.
 
         dtype : dtype, default=None
             If provided, enforce this dtype.
+
+        **kwargs : dict
+            Optional arguments for :func:`np.array`.
         """
         value = np.array(value, copy=copy, dtype=dtype, **kwargs)
         obj = value.view(cls)
         obj.param = None if param is None else Parameter(param)
-        obj.derivs = None if derivs is None else [_make_deriv(deriv) for deriv in derivs]
+        obj.derivs = None if derivs is None else [Deriv(deriv) for deriv in derivs]
         return obj
 
     def __array_finalize__(self, obj):
@@ -540,7 +500,7 @@ class ParameterArray(np.ndarray):
         ideriv = deriv
         if self.derivs is not None:
             try:
-                deriv = _make_deriv(deriv)
+                deriv = Deriv(deriv)
             except ValueError:
                 pass
             else:
@@ -556,34 +516,42 @@ class ParameterArray(np.ndarray):
 
     @property
     def zero(self):
+        """Return zero-order derivative."""
         if self.derivs is not None:
             return self[()]
         return self
 
     @property
     def pndim(self):
-        return (1 if self.derivs is not None else 0) + (self.param.ndim if self.param is not None else 0)
+        """Number of dimensions of stored parameter, plus 1 if derivatives."""
+        return int(self.derivs is not None) + (self.param.ndim if self.param is not None else 0)
 
     @property
     def andim(self):
+        """Number of dimensions of array, minus parameter dimensions and derivatives (if any)."""
         return self.ndim - self.pndim
 
     @property
-    def ashape(self):
-        return self.shape[:self.andim]
-
-    @property
     def pshape(self):
+        """Parameter shape, including derivatives along first dimension (if any)."""
         return self.shape[self.andim:]
 
+    @property
+    def ashape(self):
+        """Array shape, removing parameter shape and derivatives (if any)."""
+        return self.shape[:self.andim]
+
     def __getitem__(self, deriv):
+        """Derivative w.r.t. parameter 'a' can be obtained (if exists) as array[('a',)]."""
         return super(ParameterArray, self).__getitem__(self._index(deriv))
 
     def __setitem__(self, deriv, item):
+        """Derivative w.r.t. parameter 'a' can be set (if exists) as array[('a',)] = deriv."""
         return super(ParameterArray, self).__setitem__(self._index(deriv), item)
 
     @classmethod
     def from_state(cls, state):
+        """Create :class:`ParameterArray` for state (dictionary)."""
         return cls(state['value'], None if state.get('param', None) is None else Parameter.from_state(state['param']), state.get('derivs', None))
 
 
@@ -593,14 +561,20 @@ class Parameter(BaseClass):
 
     Attributes
     ----------
-    name : string
+    basename : str
+        Parameter base name (which defines parameter meaning).
+
+    namespace : str
+        Parameter namespace (to differentiate several occurences of the same parameter in the same pipeline).
+
+    name : str
         Parameter name.
 
     value : float
         Default value for parameter.
 
     fixed : bool
-        Whether parameter is fixed.
+        ``True`` if parameter is fixed.
 
     prior : ParameterPrior
         Prior distribution.
@@ -611,9 +585,6 @@ class Parameter(BaseClass):
 
     proposal : float
         Proposal uncertainty.
-
-    latex : string, default=None
-        Latex for parameter.
     """
     _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'latex', 'depends', 'shape']
     _allowed_solved = ['.best', '.marg', '.auto']
@@ -624,15 +595,28 @@ class Parameter(BaseClass):
 
         Parameters
         ----------
-        name : string, Parameter
+        basename : str
+            Parameter base name (which defines parameter meaning).
             If :class:`Parameter`, update ``self`` attributes.
 
-        value : float, default=False
+        namespace : str, default=''
+            Parameter namespace (to differentiate several occurences of the same parameter in the same pipeline).
+
+        value : float, default=None
             Default value for parameter.
 
         fixed : bool, default=None
             Whether parameter is fixed.
             If ``None``, defaults to ``True`` if ``prior`` or ``ref`` is not ``None``, else ``False``.
+
+        derived : bool, str, default=False
+            ``True`` if parameter is taken from a calulator's attributes (or :meth:`BaseCalculator.__getstate__` at run time).
+            '.best', '.marg', or '.auto' to solve for this parameter (given a Gaussian likelihood),
+            respectively taking the best-fit solution, performing analytic marginalization, or chosing
+            between these two options depending on whether a profiler ('.best') or a sampler ('.marg') is used.
+            One can also define the value of this parameter as a function of others (e.g. 'a', 'b'), by providing
+            e.g. the string '{a} + {b}' (or any other operation; numpy is available with 'np', scipy with 'sp',
+            and their jax version with 'jnp' and 'jsp').
 
         prior : ParameterPrior, dict, default=None
             Prior distribution for parameter, arguments for :class:`ParameterPrior`.
@@ -644,10 +628,13 @@ class Parameter(BaseClass):
 
         proposal : float, default=None
             Proposal uncertainty for parameter.
-            If ``None``, defaults to scale (or half of limiting range) of ``ref``.
+            If ``None``, defaults to ``ref.std()``.
 
-        latex : string, default=None
-            Latex for parameter.
+        latex : str, default=None
+            Latex string for parameter.
+
+        shape : tuple, default=()
+            Parameter shape; typically non-trivial when ``derived`` is ``True``.
         """
         from . import base
         if isinstance(basename, Parameter):
@@ -708,13 +695,20 @@ class Parameter(BaseClass):
 
     @property
     def size(self):
+        """Parameter size, typically non-zero when :attr:`derived` is ``True``."""
         return np.prod(self._shape, dtype='i')
 
     @property
     def ndim(self):
+        """Parameter dimension, typically non-trivial when :attr:`derived` is ``True``."""
         return len(self._shape)
 
     def eval(self, **values):
+        """
+        Return parameter value, given all parameter values, e.g. if :attr:`derived` is '{a} + {b}',
+        >>> param.eval(a=2., b=3.)
+        5.
+        """
         if isinstance(self._derived, str) and not self.solved:
             try:
                 values = {k: values[n] for k, n in self._depends.items()}
@@ -725,6 +719,7 @@ class Parameter(BaseClass):
 
     @property
     def value(self):
+        """Parameter default value."""
         value = self._value
         if value is None:
             if hasattr(self._ref, 'loc'):
@@ -735,6 +730,7 @@ class Parameter(BaseClass):
 
     @property
     def derived(self):
+        """If parameter is derived from others 'a', 'b', return e.g. '{a} * {b}'."""
         if isinstance(self._derived, str) and not self.solved:
             toret = self._derived
             for k, v in self._depends.items():
@@ -744,10 +740,12 @@ class Parameter(BaseClass):
 
     @property
     def solved(self):
+        """Whether parameter is solved, i.e. fixed at best fit or marginalized over."""
         return self._derived in self._allowed_solved
 
     @property
     def name(self):
+        """Return parameter name, as namespace.basename if :attr:`namespace` is not ``None``, else basename."""
         from . import base
         if self._namespace:
             return base.namespace_delimiter.join([self._namespace, self._basename])
@@ -767,6 +765,7 @@ class Parameter(BaseClass):
         self.__init__(**state)
 
     def clone(self, *args, **kwargs):
+        """Clone parameter, i.e. copy and update."""
         new = self.copy()
         new.update(*args, **kwargs)
         return new
@@ -782,11 +781,13 @@ class Parameter(BaseClass):
         return self._prior.limits
 
     def __copy__(self):
+        """Shallow copy."""
         new = super(Parameter, self).__copy__()
         new._depends = copy.copy(new._depends)
         return new
 
     def deepcopy(self):
+        """Deep copy."""
         return copy.deepcopy(self)
 
     def __getstate__(self):
@@ -860,7 +861,7 @@ for name in Parameter._attrs:
 
 class BaseParameterCollection(BaseClass):
 
-    """Class holding a collection of parameters."""
+    """Base class holding a collection of items identified by parameter."""
 
     _type = Parameter
     _attrs = ['attrs']
@@ -885,16 +886,14 @@ class BaseParameterCollection(BaseClass):
 
         Parameters
         ----------
-        data : list, tuple, string, dict, ParameterCollection
+        data : list, tuple, str, dict, ParameterCollection
             Can be:
+            - list (or tuple) of items
+            - dictionary mapping name to item
+            - :class:`BaseParameterCollection` instance
 
-            - list (or tuple) of parameters (:class:`Parameter` or dictionary to initialize :class:`Parameter`).
-            - dictionary of name: parameter
-            - :class:`ParameterCollection` instance
-
-        string : string
-            If not ``None``, *yaml* format string to decode.
-            Added on top of ``data``.
+        attrs : dict, default=None
+            Optionally, other attributes, stored in :attr:`attrs`.
         """
         if isinstance(data, self.__class__):
             self.__dict__.update(data.copy().__dict__)
@@ -917,11 +916,10 @@ class BaseParameterCollection(BaseClass):
     def __setitem__(self, name, item):
         """
         Update parameter in collection.
-        See :meth:`set` to set a new parameter.
 
         Parameters
         ----------
-        name : Parameter, string, int
+        name : Parameter, str, int
             Parameter name.
             If :class:`Parameter` instance, search for parameter with same name.
             If integer, index in collection.
@@ -941,18 +939,14 @@ class BaseParameterCollection(BaseClass):
 
     def __getitem__(self, name):
         """
-        Return parameter ``name``.
+        Return item corresponding to parameter ``name``.
 
         Parameters
         ----------
-        name : Parameter, string, int
+        name : Parameter, str, int
             Parameter name.
             If :class:`Parameter` instance, search for parameter with same name.
             If integer, index in collection.
-
-        Returns
-        -------
-        param : Parameter
         """
         try:
             return self.data[name]
@@ -965,7 +959,7 @@ class BaseParameterCollection(BaseClass):
 
         Parameters
         ----------
-        name : Parameter, string, int
+        name : Parameter, str, int
             Parameter name.
             If :class:`Parameter` instance, search for parameter with same name.
             If integer, index in collection.
@@ -976,6 +970,10 @@ class BaseParameterCollection(BaseClass):
             del self.data[self.index(name)]
 
     def sort(self, key=None):
+        """
+        Sort (in-place) collection, such that if follows the list of parameter names ``key``.
+        If ``None``, no sorting is performed.
+        """
         if key is not None:
             self.data = [self[kk] for kk in key]
         else:
@@ -983,6 +981,7 @@ class BaseParameterCollection(BaseClass):
         return self
 
     def pop(self, name, *args, **kwargs):
+        """Remove and return item indexed by ``name``."""
         toret = self.get(name, *args, **kwargs)
         try:
             del self[name]
@@ -992,17 +991,13 @@ class BaseParameterCollection(BaseClass):
 
     def get(self, name, *args, **kwargs):
         """
-        Return parameter of name ``name`` in collection.
+        Return item of parameter name ``name`` in collection.
 
         Parameters
         ----------
         name : Parameter, string
             Parameter name.
             If :class:`Parameter` instance, search for parameter with same name.
-
-        Returns
-        -------
-        param : Parameter
         """
         has_default = False
         if args:
@@ -1024,9 +1019,9 @@ class BaseParameterCollection(BaseClass):
 
     def set(self, item):
         """
-        Set parameter ``param`` in collection.
-        If there is already a parameter with same name in collection, replace this stored parameter by the input one.
-        Else, append parameter to collection.
+        Set item in collection.
+        If there is already a parameter with same name in collection, replace this stored item by the input one.
+        Else, append item to collection.
         """
         try:
             self.data[self.index(item)] = item
@@ -1034,7 +1029,7 @@ class BaseParameterCollection(BaseClass):
             self.data.append(item)
 
     def setdefault(self, item):
-        """Set parameter ``param`` in collection if not already in it."""
+        """Set item in collection if not already in it."""
         if not isinstance(item, self._type):
             raise TypeError('{} is not a {} instance.'.format(item, self._type))
         if item not in self:
@@ -1106,6 +1101,7 @@ class BaseParameterCollection(BaseClass):
         return toret
 
     def params(self, **kwargs):
+        """Return :class:`ParameterCollection`, collection of parameters corresponding to items stored in this collection."""
         return ParameterCollection([self._get_param(item) for item in self.select(**kwargs)])
 
     def names(self, **kwargs):
@@ -1179,7 +1175,10 @@ class BaseParameterCollection(BaseClass):
         return self
 
     def update(self, *args, **kwargs):
-        """Update collection with new one."""
+        """
+        Update collection with new one; arguments can be a :class:`BaseParameterCollection`
+        or arguments to instantiate such a class (see :meth:`__init__`).
+        """
         if len(args) == 1 and isinstance(args[0], self.__class__):
             other = args[0]
         else:
@@ -1188,20 +1187,25 @@ class BaseParameterCollection(BaseClass):
             self.set(item)
 
     def clone(self, *args, **kwargs):
+        """Clone collection, i.e. (shallow) copy and update."""
         new = self.copy()
         new.update(*args, **kwargs)
         return new
 
     def keys(self, **kwargs):
+        """Return parameter names."""
         return [self._get_name(item) for item in self.select(**kwargs)]
 
     def values(self, **kwargs):
+        """Return items."""
         return [item for item in self.select(**kwargs)]
 
     def items(self, **kwargs):
+        """Return list of tuples (parameter name, item)."""
         return [(self._get_name(item), item) for item in self.select(**kwargs)]
 
     def deepcopy(self):
+        """Deep copy."""
         return copy.deepcopy(self)
 
     def __eq__(self, other):
@@ -1210,6 +1214,8 @@ class BaseParameterCollection(BaseClass):
 
 
 class ParameterConfig(NamespaceDict):
+
+    """A convenient object, used internally by the code, to store configuration for a given parameter."""
 
     def __init__(self, conf=None, **kwargs):
 
@@ -1278,7 +1284,10 @@ class ParameterConfig(NamespaceDict):
 
 
 class ParameterCollectionConfig(BaseParameterCollection):
-
+    """
+    A collection of :class:`ParameterConfig` objects, used internally by the code.
+    TODO: As :class:`ParameterConfig`, should be either documented and/or simplified.
+    """
     _type = ParameterConfig
     _attrs = ['fixed', 'derived', 'namespace', 'delete', 'wildcard', 'identifier']
 
@@ -1368,18 +1377,6 @@ class ParameterCollectionConfig(BaseParameterCollection):
         return False
 
     def select(self, **kwargs):
-        """
-        Return new collection, after selection of parameters whose attribute match input values::
-
-            collection.select(fixed=True)
-
-        returns collection of fixed parameters.
-        If 'name' is provided, consider all matching parameters, e.g.::
-
-            collection.select(varied=True, name='a_[0:2]')
-
-        returns a collection of varied parameters, with name in ``['a_0', 'a_1']``.
-        """
         toret = self.copy()
         if not kwargs:
             return toret
@@ -1462,20 +1459,6 @@ class ParameterCollectionConfig(BaseParameterCollection):
             self.data.append(item)
 
     def __setitem__(self, name, item):
-        """
-        Update parameter in collection (a parameter with same name must already exist).
-        See :meth:`set` to set a new parameter.
-
-        Parameters
-        ----------
-        name : Parameter, string, int
-            Parameter name.
-            If :class:`Parameter` instance, search for parameter with same name.
-            If integer, index in collection.
-
-        item : Parameter
-            Parameter.
-        """
         if not isinstance(item, ParameterConfig):
             item = ParameterConfig(item)
             item.setdefault(self.identifier, name)
@@ -1489,8 +1472,11 @@ class ParameterCollectionConfig(BaseParameterCollection):
 
 
 class ParameterCollection(BaseParameterCollection):
-
-    """Class holding a collection of parameters."""
+    """
+    Class holding a collection of parameters.
+    It additionally keeps track whether the collection has been updated,
+    as used in :class:`BasePipeline`.
+    """
     _attrs = ['_updated']
 
     def __init__(self, data=None, attrs=None):
@@ -1499,16 +1485,16 @@ class ParameterCollection(BaseParameterCollection):
 
         Parameters
         ----------
-        data : list, tuple, string, dict, ParameterCollection
+        data : list, tuple, str, Path, dict, ParameterCollection
             Can be:
 
-            - list (or tuple) of parameters (:class:`Parameter` or dictionary to initialize :class:`Parameter`).
-            - dictionary of name: parameter
+            - list (or tuple) of parameters (:class:`Parameter` or dictionary to initialize :class:`Parameter`)
+            - path to *yaml* defining a list of parameters
+            - dictionary mapping name to parameter
             - :class:`ParameterCollection` instance
 
-        string : string
-            If not ``None``, *yaml* format string to decode.
-            Added on top of ``data``.
+        attrs : dict, default=None
+            Optionally, other attributes, stored in :attr:`attrs`.
         """
         if isinstance(data, path_types):
             data = ParameterCollectionConfig(data)
@@ -1552,10 +1538,12 @@ class ParameterCollection(BaseParameterCollection):
 
     @property
     def updated(self):
+        """Whether the collection (the list of parameters itself of any of these parameters) has just been updated."""
         return self._updated or any(param.updated for param in self.data)
 
     @updated.setter
     def updated(self, updated):
+        """Set the 'updated' status."""
         updated = bool(updated)
         self._updated = updated
         for param in self.data: param.updated = updated
@@ -1566,7 +1554,7 @@ class ParameterCollection(BaseParameterCollection):
 
         Parameters
         ----------
-        name : Parameter, string, int
+        name : Parameter, str, int
             Parameter name.
             If :class:`Parameter` instance, search for parameter with same name.
             If integer, index in collection.
@@ -1575,7 +1563,11 @@ class ParameterCollection(BaseParameterCollection):
         return super(ParameterCollection, self).__delitem__(name)
 
     def update(self, *args, name=None, basename=None, **kwargs):
-        """Update collection with new one."""
+        """
+        Update collection with new one.
+        To e.g. fix parameters whose name matches the pattern 'a*':
+        >>> params.update(name='a*', fixed=True)
+        """
         self._updated = True
         if len(args) == 1 and isinstance(args[0], self.__class__):
             other = args[0]
@@ -1618,6 +1610,7 @@ class ParameterCollection(BaseParameterCollection):
             raise ValueError('Unrecognized arguments {}'.format(args))
 
     def __add__(self, other):
+        """Concatenate two parameter collections."""
         return self.concatenate(self, self.__class__(other))
 
     def __radd__(self, other):
@@ -1630,9 +1623,15 @@ class ParameterCollection(BaseParameterCollection):
         return self
 
     def params(self, **kwargs):
+        """Return a collection of parameters :class:`ParameterCollection`, with optional selection. See :meth:`select`."""
         return self.select(**kwargs)
 
     def set(self, item):
+        """
+        Set parameter in collection.
+        If there is already a parameter with same name in collection, replace this stored parameter by the input one.
+        Else, append parameter to collection.
+        """
         self._updated = True
         if not isinstance(item, Parameter):
             item = Parameter(item)
@@ -1643,12 +1642,11 @@ class ParameterCollection(BaseParameterCollection):
 
     def __setitem__(self, name, item):
         """
-        Update parameter in collection (a parameter with same name must already exist).
-        See :meth:`set` to set a new parameter.
+        Update parameter in collection.
 
         Parameters
         ----------
-        name : Parameter, string, int
+        name : Parameter, str, int
             Parameter name.
             If :class:`Parameter` instance, search for parameter with same name.
             If integer, index in collection.
@@ -1673,6 +1671,12 @@ class ParameterCollection(BaseParameterCollection):
             self.set(item)
 
     def eval(self, **params):
+        """
+        Return parameter values, given all parameter values, e.g. if `c.derived` is '{a} + {b}',
+        >>> params.eval(a=2., b=3.)
+        {'a': 2., 'b': 3, 'c': 5}
+        See :meth:`Parameter.eval`.
+        """
         toret = {}
         for param in params:
             try:
@@ -1682,6 +1686,7 @@ class ParameterCollection(BaseParameterCollection):
         return toret
 
     def prior(self, **params):
+        """Compute total (log-)prior for input parameter values (except parameters that are solved)."""
         eval_params = self.eval(**params)
         toret = 0.
         for param in self.data:
@@ -1701,10 +1706,10 @@ class ParameterPrior(BaseClass):
 
     Parameters
     ----------
-    dist : string
+    dist : str
         Distribution name.
 
-    rv : scipy.stats.rv_continuous
+    rv : rv_continuous
         Random variate.
 
     attrs : dict
@@ -1717,8 +1722,8 @@ class ParameterPrior(BaseClass):
 
         Parameters
         ----------
-        dist : string
-            Distribution name in :mod:`scipy.stats`
+        dist : str
+            Distribution name in :mod:`jax.scipy.stats`, and as a fallback, :mod:`scipy.stats`.
 
         limits : tuple, default=None
             Tuple corresponding to lower, upper limits.
@@ -1726,8 +1731,8 @@ class ParameterPrior(BaseClass):
             Defaults to :math:`-\infty, \infty`.
 
         kwargs : dict
-            Arguments for :func:`scipy.stats.dist`, typically ``loc``, ``scale``
-            (mean and standard deviation in case of a normal distribution ``'dist' == 'norm'``)
+            Arguments for distribution, typically ``loc``, ``scale``
+            (mean and standard deviation in case of a normal distribution ``'dist' == 'norm'``).
         """
         if isinstance(dist, ParameterPrior):
             self.__dict__.update(dist.__dict__)
@@ -1779,7 +1784,10 @@ class ParameterPrior(BaseClass):
         return (self.limits[0] < x) & (x < self.limits[1])
 
     def __call__(self, x, remove_zerolag=True):
-        """Return probability density at ``x``."""
+        """
+        Return log-probability density at ``x``.
+        If ``remove_zerolag`` is ``True``, remove the maximum log-probability density.
+        """
         if not self.is_proper():
             return jnp.where(self.isin(x), 0, -np.inf)
         toret = self.rv.logpdf(x)
@@ -1821,11 +1829,11 @@ class ParameterPrior(BaseClass):
         return '{}({})'.format(base, self.attrs)
 
     def __setstate__(self, state):
-        """Set this class state dictionary."""
+        """Set this class' state dictionary."""
         self.__init__(**state)
 
     def __getstate__(self):
-        """Return this class state dictionary."""
+        """Return this class' state dictionary."""
         state = {'dist': self.dist, 'limits': self.limits}
         state.update(self.attrs)
         return state
@@ -1839,6 +1847,11 @@ class ParameterPrior(BaseClass):
         return not np.isinf(self.limits).all()
 
     def affine_transform(self, loc=0., scale=1.):
+        """
+        Apply affine transform to the distribution: shifted by ``loc``,
+        and dispersion multiplied by ``scale``.
+        Useful to e.g. normalize a parameter (together with its prior).
+        """
         state = self.__getstate__()
         try:
             center = self.loc
@@ -1883,13 +1896,30 @@ def _reshape(array, shape):
 
 class Samples(BaseParameterCollection):
 
-    """Class that holds samples drawn from likelihood."""
+    """Class that holds samples, as a collection of :class:`ParameterArray`."""
 
     _type = ParameterArray
     _attrs = BaseParameterCollection._attrs + ['_derived']
     _derived = []
 
     def __init__(self, data=None, params=None, attrs=None):
+        """
+        Initialize :class:`Samples`.
+
+        Parameters
+        ----------
+        data : list, dict, Samples
+            Can be:
+            - List of :class:`ParameterArray`, or :class:`np.ndarray` if list of parameters
+              (or :class:`ParameterCollection`) is provided in ``params``
+            - A dictionary mapping parameter to array
+
+        params : list, ParameterCollection
+            Optionally, list of parameters.
+
+        attrs : dict, default=None
+            Optionally, other attributes, stored in :attr:`attrs`.
+        """
         self.attrs = dict(attrs or {})
         self.data = []
         if params is not None:
@@ -1906,6 +1936,7 @@ class Samples(BaseParameterCollection):
 
     @property
     def shape(self):
+        """Shape of samples."""
         toret = ()
         for array in self.data:
             toret = array.ashape
@@ -1914,6 +1945,7 @@ class Samples(BaseParameterCollection):
 
     @shape.setter
     def shape(self, shape):
+        """Set samples shape."""
         self._reshape(shape)
 
     def _reshape(self, shape):
@@ -1921,6 +1953,7 @@ class Samples(BaseParameterCollection):
             self.set(_reshape(array, shape))
 
     def reshape(self, *args):
+        """Reshape samples (with shallow copy)."""
         new = self.copy()
         if len(args) == 1:
             shape = args[0]
@@ -1930,28 +1963,28 @@ class Samples(BaseParameterCollection):
         return new
 
     def ravel(self):
-        # Flatten along iteration axis
+        """Flatten samples."""
         return self.reshape(self.size)
 
     @property
     def ndim(self):
+        """Number of dimensions."""
         return len(self.shape)
 
     @property
     def size(self):
+        """Total number of samples."""
         return np.prod(self.shape, dtype='intp')
 
     def __len__(self):
+        """Length of samples."""
         if self.shape:
             return self.shape[0]
         return 0
 
     @classmethod
     def concatenate(cls, *others):
-        """
-        Concatenate input collections.
-        Unique items only are kept.
-        """
+        """Concatenate input samples, which requires all samples to hold same parameters."""
         if len(others) == 1 and utils.is_sequence(others[0]):
             others = others[0]
         if not others: return cls()
@@ -1967,7 +2000,10 @@ class Samples(BaseParameterCollection):
         return new
 
     def update(self, *args, **kwargs):
-        """Update collection with new one."""
+        """
+        Update samples with new one; arguments can be a :class:`Samples`
+        or arguments to instantiate such a class (see :meth:`__init__`).
+        """
         if len(args) == 1 and isinstance(args[0], self.__class__):
             other = args[0]
         else:
@@ -1976,31 +2012,28 @@ class Samples(BaseParameterCollection):
             self.set(item)
 
     def set(self, item):
+        """Add new :class:`ParameterArray` to samples."""
         if self.data:
             shape = self.shape
         else:
-            try:
-                shape = item.ashape
-            except AttributeError:
-                shape = item.shape
+            shape = item.ashape
             if not shape: shape = (1,)
         item = _reshape(item, shape)
         super(Samples, self).set(item)
 
     def __setitem__(self, name, item):
         """
-        Update parameter in collection (a parameter with same name must already exist).
-        See :meth:`set` to set a new parameter.
+        Update array in samples.
 
         Parameters
         ----------
-        name : Parameter, string, int
+        name : Parameter, str, int
             Parameter name.
             If :class:`Parameter` instance, search for parameter with same name.
             If integer, index in collection.
 
-        item : Parameter
-            Parameter.
+        item : ParameterArray, array
+            Array.
         """
         if not isinstance(item, self._type):
             try:
@@ -2038,7 +2071,7 @@ class Samples(BaseParameterCollection):
         return new
 
     def __repr__(self):
-        """Return string representation, including shape and columns."""
+        """Return string representation, including shape and parameters."""
         return '{}(shape={}, params={})'.format(self.__class__.__name__, self.shape, self.params())
 
     def to_array(self, params=None, struct=True):
@@ -2047,11 +2080,11 @@ class Samples(BaseParameterCollection):
 
         Parameters
         ----------
-        columns : list, default=None
-            Columns to use. Defaults to all columns.
+        params : ParameterCollection, list, default=None
+            Parameters to use. Defaults to all parameters.
 
         struct : bool, default=True
-            Whether to return structured array, with columns accessible through e.g. ``array['Position']``.
+            Whether to return structured array, with columns accessible through e.g. ``array['x']``.
             If ``False``, numpy will attempt to cast types of different columns.
 
         Returns
@@ -2067,10 +2100,41 @@ class Samples(BaseParameterCollection):
         return np.array([self[name] for name in names])
 
     def to_dict(self, params=None):
+        """
+        Return samples as a dictionary.
+
+        Parameters
+        ----------
+        params : ParameterCollection, list, default=None
+            Parameters to use. Defaults to all parameters.
+
+        Returns
+        -------
+        dict : dict
+            Dictionary mapping parameter name to array.
+        """
         if params is None: params = self.params()
         return {str(param): self[param] for param in params}
 
     def match(self, other, eps=1e-8, params=None):
+        """
+        Match other :class:`Samples` against ``self``, for parameters ``params``.
+
+        Parameters
+        ----------
+        other : Samples
+            Samples to match.
+
+        eps : float, default=1e-8
+            Distance upper bound above which samples are not considered equal.
+
+        params : ParameterCollection, list, default=None
+            Parameters to use. Defaults to all parameters that are not derived.
+
+        Returns
+        -------
+        index_in_other, index_in_self
+        """
         if params is None:
             params = set(self.names(derived=False)) & set(other.names(derived=False))
         from scipy import spatial
@@ -2083,6 +2147,7 @@ class Samples(BaseParameterCollection):
     @classmethod
     @CurrentMPIComm.enable
     def bcast(cls, value, mpicomm=None, mpiroot=0):
+        """Broadcast input samples ``value`` from rank ``mpiroot``to other processes."""
         state = None
         if mpicomm.rank == mpiroot:
             state = value.__getstate__()
@@ -2094,6 +2159,7 @@ class Samples(BaseParameterCollection):
 
     @CurrentMPIComm.enable
     def send(self, dest, tag=0, mpicomm=None):
+        """Send ``self`` to rank ``dest``."""
         state = self.__getstate__()
         state['data'] = [array['param'] for array in state['data']]
         mpicomm.send(state, dest=dest, tag=tag)
@@ -2103,6 +2169,7 @@ class Samples(BaseParameterCollection):
     @classmethod
     @CurrentMPIComm.enable
     def recv(cls, source=mpi.ANY_SOURCE, tag=mpi.ANY_TAG, mpicomm=None):
+        """Receive samples from rank ``source``."""
         state = mpicomm.recv(source=source, tag=tag)
         for ivalue, param in enumerate(state['data']):
             state['data'][ivalue] = {'value': mpi.recv(source, tag=tag, mpicomm=mpicomm), 'param': param}
@@ -2111,6 +2178,7 @@ class Samples(BaseParameterCollection):
     @classmethod
     @CurrentMPIComm.enable
     def sendrecv(cls, value, source=0, dest=0, tag=0, mpicomm=None):
+        """Send samples from rank ``source`` to rank ``dest`` and receive them here."""
         if dest == source:
             return value.copy()
         if mpicomm.rank == source:
@@ -2122,6 +2190,7 @@ class Samples(BaseParameterCollection):
 
 
 def is_parameter_sequence(params):
+    # ``True`` if ``params`` is a sequence of parameters."""
     return isinstance(params, ParameterCollection) or utils.is_sequence(params)
 
 
@@ -2129,7 +2198,7 @@ class BaseParameterMatrix(BaseClass):
 
     _fill_value = np.nan
 
-    """Class that represents a parameter matrix."""
+    """Base class representing a parameter matrix."""
 
     def __init__(self, value, params=None, center=None):
         """
@@ -2142,6 +2211,9 @@ class BaseParameterMatrix(BaseClass):
 
         params : list, ParameterCollection
             Parameters corresponding to input ``value``.
+
+        center : array, list, default=None
+            TODO: remove.
         """
         if isinstance(value, self.__class__):
             self.__dict__.update(value.__dict__)

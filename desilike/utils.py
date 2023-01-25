@@ -182,9 +182,6 @@ def import_class(clsname, pythonpath=None, registry=None):
     """
     from .parameter import find_names
     if isinstance(clsname, str):
-        if install is not None:
-            exclude = install.get('exclude', [])
-            if find_names(clsname, exclude): install = None
         tmp = clsname.rsplit('.', 1)
         if len(tmp) == 1:
             clsname = tmp[0]

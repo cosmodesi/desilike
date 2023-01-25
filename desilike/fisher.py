@@ -30,7 +30,7 @@ class Fisher(BaseClass):
 
     where :math:`\Delta` is the model (or data - model), of parameters :math:`p_{i}`, and :math:`C^{-1}`
     is the data precision matrix.
-    If input likelihood is not Gaussian, the second derivatives of the likelihood will be considered.
+    If input likelihood is not Gaussian, compute the second derivatives of the log-likelihood.
 
     Attributes
     ----------

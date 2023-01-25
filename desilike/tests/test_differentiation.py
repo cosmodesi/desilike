@@ -94,23 +94,28 @@ def test_fisher_galaxy():
 
 def test_fisher_cmb():
     from desilike import Fisher
-    from desilike.likelihoods.cmb import BasePlanck2018GaussianLikelihood, TTHighlPlanck2018PlikLiteLikelihood, TTTEEEHighlPlanck2018PlikLiteLikelihood, TTLowlPlanck2018ClikLikelihood,\
+    from desilike.likelihoods.cmb import BasePlanck2018GaussianLikelihood, TTTEEEHighlPlanck2018PlikLikelihood, TTHighlPlanck2018PlikLiteLikelihood, TTTEEEHighlPlanck2018PlikLiteLikelihood, TTLowlPlanck2018ClikLikelihood,\
                                          EELowlPlanck2018ClikLikelihood, LensingPlanck2018ClikLikelihood
     from desilike.likelihoods import SumLikelihood
     from desilike.theories.primordial_cosmology import Cosmoprimo
     # Now let's turn to Planck (lite) clik likelihoods
     cosmo = Cosmoprimo(fiducial='DESI')
+    print(TTTEEEHighlPlanck2018PlikLikelihood(cosmo=cosmo)(), TTTEEEHighlPlanck2018PlikLiteLikelihood(cosmo=cosmo)())
+    exit()
     likelihoods = [Likelihood(cosmo=cosmo) for Likelihood in [TTTEEEHighlPlanck2018PlikLiteLikelihood, TTLowlPlanck2018ClikLikelihood,\
                                                               EELowlPlanck2018ClikLikelihood, LensingPlanck2018ClikLikelihood]]
     likelihood_clik = SumLikelihood(likelihoods=likelihoods)
-    #for param in likelihood_clik.all_params:
-    #    param.update(fixed=True)
+    for param in likelihood_clik.all_params:
+        param.update(fixed=True)
     likelihood_clik.all_params['m_ncdm'].update(fixed=False)
     fisher_clik = Fisher(likelihood_clik)
     # Planck covariance matrix used above should roughly correspond to Fisher at the Planck posterior bestfit
     # at which logA ~= 3.044 (instead of logA = ln(1e10 2.0830e-9) = 3.036 assumed in the DESI fiducial cosmology)
     precision_clik = fisher_clik()
     print(precision_clik.to_covariance().to_stats(tablefmt='pretty'))
+    print(likelihood_clik())
+    for likelihood in likelihood_clik.likelihoods:
+        print(likelihood, likelihood.loglikelihood)
 
 
 if __name__ == '__main__':

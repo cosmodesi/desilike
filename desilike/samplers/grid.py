@@ -32,8 +32,8 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
             Can be a single value, used for all parameters.
 
         ref_scale : float, default=1.
-            Parameter grid ranges are inferred from parameters' :attr:`Parameter.ref.scale`
-            if exists, else limits of reference distribution if bounded, else :attr:`Parameter.proposal`.
+            Parameter grid ranges are inferred from limits of reference distribution if bounded (and has no scale),
+            else :attr:`Parameter.proposal`.
             These values are then scaled by ``ref_scale`` (< 1. means smaller ranges).
 
         grid : array, dict, default=None

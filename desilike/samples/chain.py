@@ -1,5 +1,3 @@
-"""Definition of :class:`Chain`, to hold products of likelihood sampling."""
-
 import os
 import re
 import glob
@@ -12,64 +10,123 @@ from . import utils
 
 
 def vectorize(func):
+    """Vectorize input function ``func`` for input parameters."""
     from functools import wraps
 
     @wraps(func)
-    def wrapper(self, param, *args, **kwargs):
-        if is_parameter_sequence(param):
-            return [func(self, param, *args, **kwargs) for param in param]
-        return func(self, param, *args, **kwargs)
+    def wrapper(self, params=None, *args, **kwargs):
+        if params is None:
+            params = self.params()
+
+        def _reshape(result, pshape):
+
+            def __reshape(array):
+                try:
+                    array.shape = array.shape[:array.ndim - len(pshape)] + pshape
+                except AttributeError:
+                    pass
+                return array
+
+            if isinstance(result, tuple):  # for :meth:`Chain.interval`
+                for res in result:
+                    __reshape(res)
+            else:
+                __reshape(result)
+            return result
+
+        if is_parameter_sequence(params):
+            params = [self[param].param for param in params]
+            return [_reshape(func(self, param, *args, **kwargs), param.shape) for param in params]
+        return _reshape(func(self, params, *args, **kwargs), self[params].param.shape)
 
     return wrapper
 
 
 class Chain(Samples):
 
-    """Class that holds samples drawn from likelihood."""
+    """Class that holds samples drawn from posterior (in practice, :class:`Samples` with a log-posterior and optional weights)."""
 
     _type = ParameterArray
     _attrs = Samples._attrs + ['_logposterior', '_aweight', '_fweight', '_weight']
 
-    def __init__(self, data=None, params=None, logposterior='logposterior', aweight='aweight', fweight='fweight', weight='weight', **kwargs):
+    def __init__(self, data=None, params=None, logposterior='logposterior', aweight='aweight', fweight='fweight', weight='weight', attrs=None):
+        """
+        Initialize :class:`Chain`.
+
+        Parameters
+        ----------
+        data : list, dict, Samples
+            Can be:
+
+            - list of :class:`ParameterArray`, or :class:`np.ndarray` if list of parameters
+              (or :class:`ParameterCollection`) is provided in ``params``
+            - dictionary mapping parameter to array
+
+        params : list, ParameterCollection
+            Optionally, list of parameters.
+        
+        logposterior : str, default='logposterior'
+            Name of log-posterior in ``data``.
+        
+        aweight : str, default='aweight'
+            Name of sample weights (which default to 1. if not provided in ``data``).
+        
+        fweight : str, default='fweight'
+            Name of sample frequency weights (which default to 1 if not provided in ``data``).
+        
+        weight : str, default='weight'
+            Name of sample total weight. It is defined as the product of :attr:`aweight` and :attr:`fweight`,
+            hence should not provided in ``data``.
+
+        attrs : dict, default=None
+            Optionally, other attributes, stored in :attr:`attrs`.
+        """
         self._logposterior = logposterior
         self._aweight = aweight
         self._fweight = fweight
         self._weight = weight
         self._derived = [self._logposterior, self._aweight, self._fweight, self._weight]
-        super(Chain, self).__init__(data=data, params=params, **kwargs)
+        super(Chain, self).__init__(data=data, params=params, attrs=attrs)
 
     @property
     def aweight(self):
+        """Sample weights (floats)."""
         if self._aweight not in self:
             self[self._aweight] = np.ones(self.shape, dtype='f8')
         return self[self._aweight]
 
     @property
     def fweight(self):
+        """Sample frequency weights (integers)."""
         if self._fweight not in self:
             self[self._fweight] = np.ones(self.shape, dtype='i8')
         return self[self._fweight]
 
     @property
     def logposterior(self):
+        """Log-posterior."""
         if self._logposterior not in self:
             self[self._logposterior] = np.zeros(self.shape, dtype='f8')
         return self[self._logposterior]
 
     @aweight.setter
     def aweight(self, item):
+        """Set weights (floats)."""
         self[self._aweight] = item
 
     @fweight.setter
     def fweight(self, item):
+        """Set frequency weights (integers)."""
         self[self._fweight] = item
 
     @logposterior.setter
     def logposterior(self, item):
+        """Set log-posterior."""
         self[self._logposterior] = item
 
     @property
     def weight(self):
+        """Return total weight, as the product of :attr:`aweight` and :attr:`fweight`."""
         return ParameterArray(self.aweight * self.fweight, Parameter(self._weight, latex=utils.outputs_to_latex(self._weight)))
 
     def remove_burnin(self, burnin=0):
@@ -79,8 +136,8 @@ class Chain(Samples):
         Parameters
         ----------
         burnin : float, int
-            If burnin between 0 and 1, remove that fraction of samples.
-            Else, remove burnin first points.
+            If ``burnin`` between 0 and 1, remove that fraction of samples.
+            Else, remove ``burnin`` (integer) first points.
 
         Returns
         -------
@@ -93,17 +150,17 @@ class Chain(Samples):
 
     def get(self, name, *args, **kwargs):
         """
-        Return parameter of name ``name`` in collection.
+        Return parameter array of name ``name`` in chain.
 
         Parameters
         ----------
-        name : Parameter, string
+        name : Parameter, str
             Parameter name.
             If :class:`Parameter` instance, search for parameter with same name.
 
         Returns
         -------
-        param : Parameter
+        array : ParameterArray
         """
         has_default = False
         if args:
@@ -125,10 +182,6 @@ class Chain(Samples):
                 return default
             raise KeyError('Column {} does not exist'.format(name))
 
-    def __repr__(self):
-        """Return string representation, including shape and columns."""
-        return 'Chain(shape={}, params={})'.format(self.shape, self.params())
-
     @classmethod
     def read_getdist(cls, base_fn, ichains=None, concatenate=False):
         """
@@ -138,18 +191,28 @@ class Chain(Samples):
         - '.paramnames' files for parameter names / latex
         - '.ranges' for parameter ranges
 
+        Note
+        ----
+        GetDist package *is not* required.
+
         Parameters
         ----------
-        base_fn : string
-            Base *CosmoMC* file name. Will be prepended by '_{ichain}.txt' for sample values,
+        base_fn : str, Path
+            Base *CosmoMC* file name. Will be appended by '_{ichain}.txt' for sample values,
             '.paramnames' for parameter names and '.ranges' for parameter ranges.
 
         ichains : int, tuple, list, default=None
-            Chain numbers to load. Defaults to all chains matching pattern '{base_fn}*.txt'
+            Chain numbers to load. Defaults to all chains matching pattern '{base_fn}*.txt'.
+            If a single number is provided, return a unique chain.
+            If multiple numbers are provided, or is ``None``, return a list of chains (see ``concatenate``).
+        
+        concatenate : bool, default=False
+            If ``True``, concatenate all chains in one.
 
         Returns
         -------
-        samples : Chain
+        samples : list, Chain
+            Chain or list of chains.
         """
         params_fn = '{}.paramnames'.format(base_fn)
         cls.log_info('Loading params file: {}.'.format(params_fn))
@@ -211,21 +274,34 @@ class Chain(Samples):
         """
         Save samples to disk in *CosmoMC* format.
 
+        Note
+        ----
+        GetDist package *is not* required.
+
         Parameters
         ----------
-        base_fn : string
+        base_fn : str, Path
             Base *CosmoMC* file name. Will be prepended by '_{ichain}.txt' for sample values,
             '.paramnames' for parameter names and '.ranges' for parameter ranges.
 
-        columns : list, ParameterCollection, default=None
-            Parameters to save samples of. Defaults to all parameters (weight and logposterior treated separatey).
+        params : list, ParameterCollection, default=None
+            Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
+        
+        ichain : int, default=None
+            If not ``None``, append '_{ichain:d}' to ``base_fn``.
+        
+        fmt : str, default='%.18e'
+            How to format floats.
+        
+        delimiter : str, default=' '
+            String or character separating columns.
 
         ichain : int, default=None
             Chain number to append to file name, i.e. sample values will be saved as '{base_fn}_{ichain}.txt'.
             If ``None``, does not append any number, sample values will be saved as '{base_fn}.txt'.
 
         kwargs : dict
-            Arguments for :func:`numpy.savetxt`.
+            Optional arguments for :func:`numpy.savetxt`.
         """
         if params is None: params = self.params()
         columns = list([str(param) for param in params])
@@ -264,12 +340,22 @@ class Chain(Samples):
 
     def to_getdist(self, params=None, label=None, **kwargs):
         """
-        Return *GetDist* hook to samples.
+        Return GetDist hook to samples.
+
+        Note
+        ----
+        GetDist package *is* required.
 
         Parameters
         ----------
-        columns : list, ParameterCollection, default=None
-            Parameters to share to *GetDist*. Defaults to all parameters (weight and logposterior treated separatey).
+        params : list, ParameterCollection, default=None
+            Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
+        
+        label : str, default=None
+            Name for  GetDist to use for these samples.
+        
+        **kwargs : dict
+            Optional arguments for :class:`getdist.MCSamples`.
 
         Returns
         -------
@@ -288,12 +374,22 @@ class Chain(Samples):
 
     def to_anesthetic(self, params=None, label=None, **kwargs):
         """
-        Return *anesthetic* hook to samples.
+        Return anesthetic hook to samples.
+
+        Note
+        ----
+         anesthetic package *is* required.
 
         Parameters
         ----------
-        columns : list, ParameterCollection, default=None
-            Parameters to share to *GetDist*. Defaults to all parameters (weight and logposterior treated separatey).
+        params : list, ParameterCollection, default=None
+            Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
+        
+        label : str, default=None
+            Name for  anesthetic to use for these samples.
+        
+        **kwargs : dict
+            Optional arguments for :class:`anesthetic.MCMCSamples`.
 
         Returns
         -------
@@ -311,6 +407,30 @@ class Chain(Samples):
         return toret
 
     def choice(self, index='argmax', params=None, return_type='dict', **kwargs):
+        """
+        Return parameter best fit(s), or mean(s).
+
+        Parameters
+        ----------
+        index : str, default='argmax'
+            'argmax' to return "best fit" (as defined by the point with maximum log-posterior in the chain).
+            'mean' to return mean of parameters (weighted by :attr:`weight`).
+
+        params :  list, ParameterCollection, default=None
+            Parameters to compute best fit / mean for. Defaults to all parameters.
+        
+        return_type : default='dict'
+            'dict' to return a dictionary mapping parameter names to best fit / mean;
+            'nparray' to return an array of parameter best fit / mean;
+            ``None`` to return a :class:`Chain` instance with a single value.
+        
+        **kwargs : dict
+            Optional arguments passed to :meth:`params` to select params to return, e.g. ``varied=True, derived=False``.
+
+        Returns
+        -------
+        toret : dict, array, Chain
+        """
         if params is None:
             params = self.params(**kwargs)
         if index == 'argmax':
@@ -330,25 +450,27 @@ class Chain(Samples):
 
     def cov(self, params=None, return_type='nparray', ddof=1):
         """
-        Estimate weighted param covariance.
+        Return parameter covariance computed from (weighted) samples.
 
         Parameters
         ----------
-        columns : list, ParameterCollection, default=None
-            Parameters to compute covariance for.
-            Defaults to all varied parameters.
+        params : list, ParameterCollection, default=None
+            Parameters to compute covariance for. Defaults to all parameters.
+            If a single parameter is provided, this parameter is a scalar, and ``return_type`` is 'nparray', return a scalar.
+        
+        return_type : str, default='nparray'
+            'nparray' to return matrix array;
+            ``None`` to return :class:`ParameterCovariance` instance.
 
         ddof : int, default=1
             Number of degrees of freedom.
 
         Returns
         -------
-        cov : scalar, array
-            If single parameter provided as ``columns``, returns variance for that parameter (scalar).
-            Else returns covariance (2D array).
+        cov : array, float, ParameterCovariance
         """
         if params is None: params = self.params()
-        if not utils.is_sequence(params): params = [params]
+        if not is_parameter_sequence(params): params = [params]
         params = [self[param].param for param in params]
         values = [self[param].reshape(self.size, -1) for param in params]
         values = np.concatenate(values, axis=-1)
@@ -360,111 +482,143 @@ class Chain(Samples):
 
     def invcov(self, params=None, return_type='nparray', ddof=1):
         """
-        Estimate weighted parameter inverse covariance.
+        Return inverse parameter covariance computed from (weighted) samples.
 
         Parameters
         ----------
-        columns : list, ParameterCollection, default=None
-            Parameters to compute inverse covariance for.
-            Defaults to all varied parameters.
+        params :  list, ParameterCollection, default=None
+            Parameters to compute covariance for. Defaults to all parameters.
+            If a single parameter is provided, this parameter is a scalar, and ``return_type`` is 'nparray', return a scalar.
+        
+         return_type : str, default='nparray'
+            'nparray' to return matrix array.
+            ``None`` to return a :class:`ParameterPrecision` instance.
 
         ddof : int, default=1
             Number of degrees of freedom.
 
         Returns
         -------
-        cov : scalar, array
-            If single parameter provided as ``columns``, returns inverse variance for that parameter (scalar).
-            Else returns inverse covariance (2D array).
+        cov : array, float, ParameterPrecision
         """
-        incov = utils.inv(self.cov(params, ddof=ddof))
+        invcov = utils.inv(self.cov(params, ddof=ddof))
         if return_type == 'nparray':
             return invcov
         from .profiles import ParameterPrecision
-        return ParameterPrecision(cov, params=params)
+        return ParameterPrecision(invcov, params=params)
 
-    def corrcoef(self, params=None, **kwargs):
-        """
-        Estimate weighted parameter correlation matrix.
-        See :meth:`cov`.
-        """
-        return utils.cov_to_corrcoef(self.cov(params, **kwargs))
+    def corrcoef(self, params=None):
+        """Return correlation matrix array computed from (weighted) samples (optionally restricted to input parameters)."""
+        return utils.cov_to_corrcoef(self.cov(params=params, return_type='nparray'))
 
     @vectorize
-    def var(self, param, ddof=1):
+    def var(self, params=None, ddof=1):
         """
-        Estimate weighted param variance.
+        Return variance computed from (weighted) samples (optionally restricted to input parameters).
+        If a single parameter is given as input and this parameter is a scalar, return a scalar.
+        ``ddof`` is the number of degrees of freedom.
+        """
+        cov = self.cov(params, ddof=ddof, return_type='nparray')
+        if np.ndim(cov) == 0: return cov  # single param
+        return np.diag(cov)
+
+    def std(self, params=None, ddof=1):
+        """
+        Return standard deviation computed from (weighted) samples (optionally restricted to input parameters).
+        If a single parameter is given as input and this parameter is a scalar, return a scalar.
+        ``ddof`` is the number of degrees of freedom.
+        """
+        return self.var(params=params)**0.5
+
+    @vectorize
+    def mean(self, params=None):
+        """
+        Return mean computed from (weighted) samples (optionally restricted to input parameters).
+        If a single parameter is given as input and this parameter is a scalar, return a scalar.
+        """
+        return np.average(_reshape(self[params], self.size), weights=self.weight.ravel(), axis=0)
+
+    @vectorize
+    def argmax(self, params=None):
+        """
+        Return parameter values for maximum of log-posterior (optionally restricted to input parameters).
+        If a single parameter is given as input and this parameter is a scalar, return a scalar.
+        """
+        return _reshape(self[params], self.size)[np.argmax(self.logposterior.ravel())]
+
+    @vectorize
+    def median(self, params=None):
+        """
+        Return parameter median of weighted parameter samples (optionally restricted to input parameters).
+        If a single parameter is given as input and this parameter is a scalar, return a scalar.
+        """
+        return utils.weighted_quantile(_reshape(self[params], self.size), q=0.5, weights=self.weight.ravel(), axis=0)
+
+    @vectorize
+    def quantile(self, params=None, q=(0.1587, 0.8413), method='linear'):
+        """
+        Compute the q-th quantile of the weighted parameter samples.
+        If a single parameter is given as input this parameter is a scalar, and a ``q`` is a scalar, return a scalar.
+
+        Note
+        ----
+        Adapted from https://github.com/minaskar/cronus/blob/master/cronus/plot.py.
 
         Parameters
         ----------
-        columns : list, ParameterCollection, default=None
-            Parameters to compute variance for.
+        params :  list, ParameterCollection, default=None
+            Parameters to compute quantiles for. Defaults to all parameters.
+    
+        q : tuple, list, array
+            Quantile or sequence of quantiles to compute, which must be between
+            0 and 1 inclusive.
 
-        ddof : int, default=1
-            Number of degrees of freedom.
+        method : {'linear', 'lower', 'higher', 'midpoint', 'nearest'}, default='linear'
+            This optional parameter specifies the method method to
+            use when the desired quantile lies between two data points
+            ``i < j``:
 
+            - linear: ``i + (j - i) * fraction``, where ``fraction``
+              is the fractional part of the index surrounded by ``i``
+              and ``j``.
+            - lower: ``i``.
+            - higher: ``j``.
+            - nearest: ``i`` or ``j``, whichever is nearest.
+            - midpoint: ``(i + j) / 2``.
+        
         Returns
         -------
-        var : scalar, array
-            If single parameter provided as ``columns``, returns variance for that parameter (scalar).
-            Else returns variance array.
+        quantiles : list, scalar, array
         """
-        var = np.diag(self.cov(param, ddof=1))
-        var.shape = self[param].shape[self.ndim:]
-        return var
+        return utils.weighted_quantile(_reshape(self[params], self.size), q=q, weights=self.weight.ravel(), axis=0, method=method)
 
     @vectorize
-    def std(self, param, ddof=1):
-        return np.std(_reshape(self[param], self.size), ddof=ddof, axis=0)
-
-    @vectorize
-    def mean(self, param):
-        """Return weighted mean."""
-        return np.average(_reshape(self[param], self.size), weights=self.weight.ravel(), axis=0)
-
-    @vectorize
-    def argmax(self, param):
-        """Return parameter value for maximum of ``cost.``"""
-        return _reshape(self[param], self.size)[np.argmax(self.logposterior.ravel())]
-
-    @vectorize
-    def median(self, param):
-        """Return weighted quantiles."""
-        return utils.weighted_quantile(_reshape(self[param], self.size), q=0.5, weights=self.weight.ravel(), axis=0)
-
-    @vectorize
-    def quantile(self, param, q=(0.1587, 0.8413), method='linear'):
-        """Return weighted quantiles."""
-        return utils.weighted_quantile(_reshape(self[param], self.size), q=q, weights=self.weight.ravel(), axis=0, method=method)
-
-    @vectorize
-    def interval(self, param, **kwargs):
+    def interval(self, params=None, nsigmas=1.):
         """
-        Return n-sigmas confidence interval(s).
+        Return n-sigma confidence interval(s).
 
         Parameters
         ----------
-        columns : list, ParameterCollection, default=None
-            Parameters to compute confidence interval for.
+        params : list, ParameterCollection, default=None
+            Parameters to compute confidence interval for. Defaults to all parameters.
 
         nsigmas : int
             Return interval for this number of sigmas.
 
         Returns
         -------
-        interval : array
+        interval : tuple, list
         """
-        return utils.interval(self[param].ravel(), self.weight.ravel(), **kwargs)
+        return utils.interval(self[params].ravel(), self.weight.ravel(), nsigmas=nsigmas)
 
     def to_stats(self, params=None, quantities=None, sigfigs=2, tablefmt='latex_raw', fn=None):
         """
-        Export samples summary quantities.
+        Export summary sampling quantities.
 
         Parameters
         ----------
-        columns : list, default=None
-            Parameters to export quantities for.
-            Defaults to all parameters.
+        params : list, ParameterCollection, default=None
+            Parameters to export quantities for. Defaults to all parameters.
 
         quantities : list, default=None
             Quantities to export. Defaults to ``['argmax', 'mean', 'median', 'std', 'quantile:1sigma', 'interval:1sigma']``.
@@ -477,12 +631,12 @@ class Chain(Samples):
             Format for summary table.
             See :func:`tabulate.tabulate`.
 
-        fn : string, default=None
+        fn : str, default=None
             If not ``None``, file name where to save summary table.
 
         Returns
         -------
-        tab : string
+        tab : str
             Summary table.
         """
         import tabulate

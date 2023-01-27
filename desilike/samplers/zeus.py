@@ -25,8 +25,8 @@ class ZeusSampler(BaseBatchPosteriorSampler):
             Input likelihood.
 
         nwalkers : int, str, default=None
-            Number of walkers, defaults to 2 * max((int(2.5 * ndim) + 1) // 2, 2)
-            Can be given in dimension units, e.g. '3 * ndim'.
+            Number of walkers, defaults to ``2 * max((int(2.5 * ndim) + 1) // 2, 2)``.
+            Can be given in dimension units, e.g. ``'3 * ndim'``.
 
         light_mode : bool, default=False
             If ``True`` then no expansions are performed after the tuning phase.

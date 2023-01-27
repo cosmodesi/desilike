@@ -6,12 +6,14 @@ import numpy as np
 
 from desilike.mpi import CurrentMPIComm
 from desilike.utils import BaseClass
-from desilike.parameter import Parameter, ParameterArray, ParameterCollection, BaseParameterCollection, ParameterCovariance, Samples
+from desilike.parameter import Parameter, ParameterArray, ParameterCollection, BaseParameterCollection, ParameterCovariance, Samples, is_parameter_sequence
 from desilike import mpi
 from . import utils
 
 
 class ParameterBestFit(Samples):
+
+    """Class holding parameter best fits (in practice, :class:`Samples` with a log-posterior)."""
 
     _attrs = Samples._attrs + ['_logposterior']
 
@@ -21,11 +23,35 @@ class ParameterBestFit(Samples):
 
     @property
     def logposterior(self):
+        """Log-posterior."""
         if self._logposterior not in self:
             self[self._logposterior] = np.zeros(self.shape, dtype='f8')
         return self[self._logposterior]
 
     def choice(self, index='argmax', params=None, return_type='dict', **kwargs):
+        """
+        Return parameter best fit(s).
+
+        Parameters
+        ----------
+        index : str, default='argmax'
+            'argmax' to return best fit (as defined by the point with maximum log-posterior in the samples).
+    
+        params : list, ParameterCollection, default=None
+            Parameters to compute best fit for. Defaults to all parameters.
+        
+        return_dict : default='dict'
+            'dict' to return a dictionary mapping parameter names to best fit;
+            'nparray' to return an array of parameter best fits;
+            ``None`` to return a :class:`ParameterBestFit` instance with a single value.
+        
+        **kwargs : dict
+            Optional arguments passed to :meth:`params` to select params to return, e.g. ``varied=True, derived=False``.
+
+        Returns
+        -------
+        toret : dict, array, ParameterBestFit
+        """
         if params is None:
             params = self.params(**kwargs)
         if index == 'argmax':
@@ -42,7 +68,7 @@ class ParameterBestFit(Samples):
 
 class ParameterContours(BaseParameterCollection):
 
-    """Class that holds samples drawn from likelihood."""
+    """Class holding parameter 2D contours (in practice, :class:`BaseParameterCollection` indexed by two parameters)."""
 
     _type = None
     _attrs = BaseParameterCollection._attrs
@@ -66,6 +92,24 @@ class ParameterContours(BaseParameterCollection):
         return (items[0].param, items[1].param)
 
     def __init__(self, data=None, params=None, attrs=None):
+        """
+        Initialize :class:`ParameterContours`.
+
+        Parameters
+        ----------
+        data : list, dict, ParameterContours
+            Can be:
+    
+            - list of tuples of arrays if list of parameters
+              (or :class:`ParameterCollection`) is provided in ``params``
+            - dictionary mapping tuple of parameters to tuple of arrays
+
+        params : list, ParameterCollection
+            Optionally, list of tuple of parameters.
+
+        attrs : dict, default=None
+            Optionally, other attributes, stored in :attr:`attrs`.
+        """
         self.attrs = dict(attrs or {})
         self.data = []
         if params is not None:
@@ -78,20 +122,17 @@ class ParameterContours(BaseParameterCollection):
 
     def __setitem__(self, name, item):
         """
-        Update parameter in collection (a parameter with same name must already exist).
-        See :meth:`set` to set a new parameter.
+        Update parameter contour in collection.
 
         Parameters
         ----------
-        name : Parameter, string, int
-            Parameter name.
-            If :class:`Parameter` instance, search for parameter with same name.
-            If integer, index in collection.
+        name : tuple, list of parameters
+            Parameter names.
 
-        item : Parameter
-            Parameter.
+        item : array, ParameterArray
+            Parameter array (with two columns).
         """
-        if not utils.is_sequence(item):
+        if not is_parameter_sequence(item):
             raise TypeError('{} is not a tuple')
         items, params = list(item), []
         for ii, item in enumerate(items):
@@ -116,15 +157,15 @@ class ParameterContours(BaseParameterCollection):
             self.set(item)
 
     def setdefault(self, item):
-        """Set parameter ``param`` in collection if not already in it."""
-        if not utils.is_sequence(item) or not all(isinstance(it, ParameterArray) for it in item):
+        """Set parameter contour in collection if not already in it."""
+        if not is_parameter_sequence(item) or not all(isinstance(it, ParameterArray) for it in item):
             raise TypeError('{} is not a tuple of {}.'.format(item, ParameterArray.__call__.__name__))
         item = tuple(item)
         if item not in self:
             self.set(item)
 
     def __getstate__(self):
-        """Return this class state dictionary."""
+        """Return this class' state dictionary."""
         state = {'data': [tuple(item.__getstate__() for item in items) for items in self]}
         for name in self._attrs:
             # if hasattr(self, name):
@@ -132,20 +173,21 @@ class ParameterContours(BaseParameterCollection):
         return state
 
     def __setstate__(self, state):
-        """Set this class state dictionary."""
+        """Set this class' state dictionary."""
         BaseClass.__setstate__(self, state)
         self.data = [tuple(ParameterArray.from_state(item) for item in items) for items in state['data']]
 
     def params(self, **kwargs):
+        """Return tuple of parameters."""
         self = self.select(**kwargs)
         return tuple(ParameterCollection([self._get_param(item)[i] for item in self]) for i in range(2))
 
     def names(self, **kwargs):
-        """Return parameter names in collection."""
+        """Return tuple of parameter names in collection."""
         return [tuple(param.name for param in params) for params in self.params(**kwargs)]
 
     def basenames(self, **kwargs):
-        """Return base parameter names in collection."""
+        """Return tuple of base parameter names in collection."""
         return [tuple(param.basename for param in params) for params in self.params(**kwargs)]
 
     def __repr__(self):
@@ -155,6 +197,7 @@ class ParameterContours(BaseParameterCollection):
     @classmethod
     @CurrentMPIComm.enable
     def bcast(cls, value, mpicomm=None, mpiroot=0):
+        """Broadcast input contours ``value`` from rank ``mpiroot`` to other processes."""
         state = None
         if mpicomm.rank == mpiroot:
             state = value.__getstate__()
@@ -166,6 +209,7 @@ class ParameterContours(BaseParameterCollection):
 
     @CurrentMPIComm.enable
     def send(self, dest, tag=0, mpicomm=None):
+        """Send ``self`` to rank ``dest``."""
         state = self.__getstate__()
         state['data'] = [tuple(array['param'] for array in arrays) for arrays in state['data']]
         mpicomm.send(state, dest=dest, tag=tag)
@@ -176,6 +220,7 @@ class ParameterContours(BaseParameterCollection):
     @classmethod
     @CurrentMPIComm.enable
     def recv(cls, source=mpi.ANY_SOURCE, tag=mpi.ANY_TAG, mpicomm=None):
+        """Receive contours from rank ``source``."""
         state = mpicomm.recv(source=source, tag=tag)
         for ivalue, params in enumerate(state['data']):
             state['data'][ivalue] = tuple({'value': mpi.recv(source, tag=tag, mpicomm=mpicomm), 'param': params[i]} for i in range(2))
@@ -184,6 +229,7 @@ class ParameterContours(BaseParameterCollection):
     @classmethod
     @CurrentMPIComm.enable
     def sendrecv(cls, value, source=0, dest=0, tag=0, mpicomm=None):
+        """Send samples from rank ``source`` to rank ``dest`` and receive them here."""
         if dest == source:
             return value.copy()
         if mpicomm.rank == source:
@@ -196,24 +242,30 @@ class ParameterContours(BaseParameterCollection):
 
 class Profiles(BaseClass):
     r"""
-    Class holding results of likelihood profiling.
+    Class holding results of posterior profiling.
 
     Attributes
     ----------
-    start : ParamDict
+    start : Samples
         Initial parameter values.
 
-    bestfit : ParamDict
+    bestfit : ParameterBestFit
         Best fit parameters.
 
-    error : ParamDict
+    error : Samples
         Parameter parabolic errors.
-
-    interval : ParamDict
-        Lower and upper errors corresponding to :math:`\Delta \chi^{2} = 1`.
 
     covariance : ParameterCovariance
         Parameter covariance at best fit.
+    
+    interval : Samples
+        Lower and upper errors corresponding to :math:`\Delta \chi^{2} = 1`.
+    
+    profile : Samples
+        Parameter 1D profiles.
+    
+    contour : ParameterContours
+        Parameter 2D contours.
     """
     _attrs = {'start': Samples, 'bestfit': ParameterBestFit, 'error': Samples, 'covariance': ParameterCovariance,
               'interval': Samples, 'profile': Samples, 'contour': ParameterContours}
@@ -225,12 +277,16 @@ class Profiles(BaseClass):
         Parameters
         ----------
         attrs : dict, default=None
-            Other attributes.
+            Optionally, other attributes, stored in :attr:`attrs`.
+        
+        **kwargs : dict
+            Name and attributes; pass e.g. ``bestfit=...``.
         """
         self.attrs = attrs or {}
         self.set(**kwargs)
 
     def set(self, **kwargs):
+        """Set attributes; pass e.g. ``bestfit=...``"""
         for name, cls in self._attrs.items():
             if name in kwargs:
                 item = cls(kwargs[name])
@@ -245,6 +301,7 @@ class Profiles(BaseClass):
         return hasattr(self, name)
 
     def __copy__(self):
+        """Shallow copy."""
         new = super(Profiles, self).__copy__()
         import copy
         for name in ['attrs'] + list(self._attrs.keys()):
@@ -253,10 +310,12 @@ class Profiles(BaseClass):
         return new
 
     def deepcopy(self):
+        """Deep copy."""
         import copy
         return copy.deepcopy(self)
 
     def update(self, other):
+        """Update ``self`` attributes with ``other`` :class:`Profiles` attributes (including :attr:`attrs`)."""
         self.attrs.update(other.attrs)
         for name in other._attrs:
             if name in other:
@@ -266,11 +325,13 @@ class Profiles(BaseClass):
                     self.set(**{name: other.get(name)})
 
     def clone(self, *args, **kwargs):
+        """Clone, i.e. copy and update."""
         new = self.copy()
         new.update(*args, **kwargs)
         return new
 
     def items(self):
+        """Return list of tuples (name, attribute)."""
         toret = []
         for name in self._attrs.keys():
             try:
@@ -316,7 +377,7 @@ class Profiles(BaseClass):
         self.__dict__.update(new.__dict__)
 
     def __getstate__(self):
-        """Return this class state dictionary."""
+        """Return this class' state dictionary."""
         state = {}
         state['attrs'] = self.attrs
         for name in self._attrs:
@@ -325,7 +386,7 @@ class Profiles(BaseClass):
         return state
 
     def __setstate__(self, state):
-        """Set this class state dictionary."""
+        """Set this class' state dictionary."""
         self.attrs = state.get('attrs', {})
         for name, cls in self._attrs.items():
             if name in state:
@@ -333,16 +394,15 @@ class Profiles(BaseClass):
 
     def to_stats(self, params=None, quantities=None, sigfigs=2, tablefmt='latex_raw', fn=None):
         """
-        Export profiling quantities.
+        Export summary profiling quantities.
 
         Parameters
         ----------
-        params : list, ParameterCollection
-            Parameters to export quantities for.
-            Defaults to all parameters.
+        params : list, ParameterCollection, default=None
+            Parameters to export quantities for. Defaults to all parameters.
 
         quantities : list, default=None
-            Quantities to export. Defaults to ``['bestfit','error','interval']``.
+            Quantities to export. Defaults to ``['bestfit', 'error', 'interval']``.
 
         sigfigs : int, default=2
             Number of significant digits.
@@ -351,13 +411,13 @@ class Profiles(BaseClass):
         tablefmt : str, default='latex_raw'
             Format for summary table.
             See :func:`tabulate.tabulate`.
-
+    
         fn : str, default=None
             If not ``None``, file name where to save summary table.
 
         Returns
         -------
-        tab : string
+        tab : str
             Summary table.
         """
         import tabulate
@@ -418,6 +478,7 @@ class Profiles(BaseClass):
     @classmethod
     @CurrentMPIComm.enable
     def bcast(cls, value, mpicomm=None, mpiroot=0):
+        """Broadcast input profiles ``value`` from rank ``mpiroot`` to other processes."""
         state = None
         if mpicomm.rank == mpiroot:
             state = value.__getstate__()

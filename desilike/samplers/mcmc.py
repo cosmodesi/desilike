@@ -352,7 +352,7 @@ class MCMCSampler(BaseBatchPosteriorSampler):
 
         oversample_power : float, default=0.4
             If ``blocks`` is ``None``, i.e. parameter blocks are defined at runtime,
-            oversample factors are ``speed**oversample_power``.
+            oversample factors are ~ ``speed**oversample_power``.
 
         covariance : str, dict, Chain, Profiles, ParameterCovariance, default=None
             (Initial) proposal covariance, to draw parameter jumps.

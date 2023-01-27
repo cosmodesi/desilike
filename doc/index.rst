@@ -9,7 +9,12 @@ Welcome to desilike's documentation!
   :caption: User documentation
 
   user/building
-  api/api
+  api/core
+  api/bindings
+  api/profilers
+  api/samplers
+  api/samples
+  api/emulators
 
 .. toctree::
   :maxdepth: 1

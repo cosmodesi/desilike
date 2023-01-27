@@ -98,7 +98,7 @@ def plotter(func):
     Parameters
     ----------
     fn : str, Path, default=None
-        Optioally, path where to save figure.
+        Optionally, path where to save figure.
         If not provided, figure is not saved.
 
     kw_save : dict, default=None

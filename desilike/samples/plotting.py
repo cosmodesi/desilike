@@ -56,18 +56,39 @@ def _get_default_profiles_params(profiles, params=None, of='bestfit', varied=Tru
 @plotting.plotter
 def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, kw_plot=None):
     """
-    Make trace plot.
+    Make trace plot as a function of steps, with a panel for each parameter.
 
     Parameters
     ----------
     chains : list, default=None
-        List of :class:`Chain` instances.
+        List of (or single) :class:`Chain` instance(s).
 
-    params : list, ParameterCollection
-        The parameter names.
+    params : list, ParameterCollection, default=None
+        Parameters to plot trace for.
+        Defaults to varied and not derived parameters.
+    
+    figsize : float, tuple, default=None
+        Figure size.
+    
+    colors : str, list
+        List of (or single) color(s) for chains.
+    
+    labelsize : int, default=None
+        Label sizes.
+    
+    kw_plot : dict, default=None
+        Optional arguments for :meth:`matplotlib.axes.Axes.plot`.
+        Defaults to ``{'alpha': 0.2}``.
 
-    fn : string, default=None
-        If not ``None``, file name where to save figure.
+    fn : str, Path, default=None
+        Optionally, path where to save figure.
+        If not provided, figure is not saved.
+
+    kw_save : dict, default=None
+        Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+    show : bool, default=False
+        If ``True``, show figure.
 
     Returns
     -------
@@ -101,31 +122,47 @@ def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, k
 @plotting.plotter
 def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, slices=None, labelsize=None, ax=None, **kwargs):
     """
-    Plot Gelman-Rubin statistics.
+    Plot Gelman-Rubin statistics as a function of steps.
 
     Parameters
     ----------
-    chains : list
-        List of :class:`Chain` instances.
+    chains : list, default=None
+        List of (or single) :class:`Chain` instance(s).
 
-    params : list, ParameterCollection
-        The parameter names.
+    params : list, ParameterCollection, default=None
+        Parameters to plot Gelman-Rubin statistics for.
+        Defaults to varied and not derived parameters.
 
     multivariate : bool, default=False
         If ``True``, add line for maximum of eigen value of Gelman-Rubin matrix.
-        See :meth:`Samples.gelman_rubin`.
+        See :func:`diagnostics.gelman_rubin`.
 
-    threshold : float, default=1.1
+    threshold : float, default=None
         If not ``None``, plot horizontal line at this value.
 
     slices : list, array
         List of increasing number of steps to include in calculation of Gelman-Rubin statistics.
+        Defaults to ``np.arange(100, nsteps, 500)``, where ``nsteps`` is the minimum size of input ``chains``:
+        Gelman-Rubin statistics is then plotted for chain slices (0, 100), (0, 600), ...
+    
+    labelsize : int, default=None
+        Label sizes.
 
     ax : matplotlib.axes.Axes, default=None
-        Axes where to plot samples. If ``None``, takes current axes.
+        Axes where to plot Gelman-Rubin statistics. If ``None``, take current axes.
 
-    fn : string, default=None
-        If not ``None``, file name where to save figure.
+    **kwargs : dict
+        Optional arguments for :func:`diagnostics.gelman_rubin` ('nsplits', 'check_valid').
+
+    fn : str, Path, default=None
+        Optionally, path where to save figure.
+        If not provided, figure is not saved.
+
+    kw_save : dict, default=None
+        Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+    show : bool, default=False
+        If ``True``, show figure.
 
     Returns
     -------
@@ -166,23 +203,39 @@ def plot_geweke(chains, params=None, threshold=None, slices=None, labelsize=None
 
     Parameters
     ----------
-    chains : list
-        List of :class:`Chain` instances.
+    chains : list, default=None
+        List of (or single) :class:`Chain` instance(s).
 
-    params : list, ParameterCollection
-        The parameter names.
+    params : list, ParameterCollection, default=None
+        Parameters to plot Geweke statistics for.
+        Defaults to varied and not derived parameters.
 
-    threshold : float, default=1.1
+    threshold : float, default=None
         If not ``None``, plot horizontal line at this value.
 
     slices : list, array
-        List of increasing number of steps to include in calculation of Gelman-Rubin statistics.
+        List of increasing number of steps to include in calculation of Geweke statistics.
+        Defaults to ``np.arange(100, nsteps, 500)``, where ``nsteps`` is the minimum size of input ``chains``:
+        Geweke statistics is then plotted for chain slices (0, 100), (0, 600), ...
+    
+    labelsize : int, default=None
+        Label sizes.
 
     ax : matplotlib.axes.Axes, default=None
-        Axes where to plot samples. If ``None``, takes current axes.
+        Axes where to plot Geweke statistics. If ``None``, take current axes.
 
-    fn : string, default=None
-        If not ``None``, file name where to save figure.
+    **kwargs : dict
+        Optional arguments for :func:`diagnostics.geweke` ('first', 'last').
+
+    fn : str, Path, default=None
+        Optionally, path where to save figure.
+        If not provided, figure is not saved.
+
+    kw_save : dict, default=None
+        Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+    show : bool, default=False
+        If ``True``, show figure.
 
     Returns
     -------
@@ -220,11 +273,12 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
 
     Parameters
     ----------
-    chains : list
-        List of :class:`Chain` instances.
+    chains : list, default=None
+        List of (or single) :class:`Chain` instance(s).
 
-    params : list, ParameterCollection
-        The parameter names.
+    params : list, ParameterCollection, default=None
+        Parameters to plot autocorrelation time for.
+        Defaults to varied and not derived parameters.
 
     threshold : float, default=50
         If not ``None``, plot :math:`y = x/\mathrm{threshold}` line.
@@ -232,12 +286,24 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
 
     slices : list, array
         List of increasing number of steps to include in calculation of autocorrelation time.
+        Defaults to ``np.arange(100, nsteps, 500)``, where ``nsteps`` is the minimum size of input ``chains``:
+        Autocorrelation time is then plotted for chain slices (0, 100), (0, 600), ...
+    
+    labelsize : int, default=None
+        Label sizes.
 
     ax : matplotlib.axes.Axes, default=None
-        Axes where to plot samples. If ``None``, takes current axes.
+        Axes where to plot autocorrelation time. If ``None``, take current axes.
 
-    fn : string, default=None
-        If not ``None``, file name where to save figure.
+    fn : str, Path, default=None
+        Optionally, path where to save figure.
+        If not provided, figure is not saved.
+
+    kw_save : dict, default=None
+        Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+    show : bool, default=False
+        If ``True``, show figure.
 
     Returns
     -------
@@ -276,17 +342,32 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
 def plot_triangle(chains, params=None, labels=None, **kwargs):
     """
     Triangle plot.
+    
+    Note
+    ----
+    *GetDist* package is required.
 
     Parameters
     ----------
-    chains : list
-        List of :class:`Chain` instances.
+    chains : list, default=None
+        List of (or single) :class:`Chain` instance(s).
 
-    params : list, ParameterCollection
-        The parameter names.
+    params : list, ParameterCollection, default=None
+        Parameters to plot distribution for.
+        Defaults to varied and not derived parameters.
+    
+    labels : str, list, default=None
+        Name for  *GetDist* to use for input chains.
 
-    fn : string, default=None
-        If not ``None``, file name where to save figure.
+    fn : str, Path, default=None
+        Optionally, path where to save figure.
+        If not provided, figure is not saved.
+
+    kw_save : dict, default=None
+        Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+    show : bool, default=False
+        If ``True``, show figure.
 
     Returns
     -------
@@ -299,12 +380,12 @@ def plot_triangle(chains, params=None, labels=None, **kwargs):
     labels = _make_list(labels, length=len(chains), default=None)
     params = _get_default_chain_params(chains, params=params)
     chains = [chain.to_getdist(label=label, params=chain.params(name=params.names())) for chain, label in zip(chains, labels)]
-    lax = g.triangle_plot(chains, [str(param) for param in params], **kwargs)
+    g.triangle_plot(chains, [str(param) for param in params], **kwargs)
     return g
 
 
 @plotting.plotter
-def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None, errors='error',
+def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None, error='error',
                  labelsize=None, ticksize=None, kw_scatter=None, yband=None, kw_mean=None, kw_truth=None, kw_yband=None,
                  kw_legend=None, ax=None):
     """
@@ -313,20 +394,38 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
     Parameters
     ----------
     profiles : list
-        List of :class:`Profiles` instances.
+        List of (or single) :class:`Profiles` instance(s).
 
-    param : Parameter, string
+    param : Parameter, str
         Parameter name.
 
-    ids : list, string
+    ids : list, str, default=None
         Label(s) for input profiles.
 
-    labels : list, string
+    labels : list, str, default=None
         Label(s) for best fits within each :class:`Profiles` instance.
+    
+    colors : list, str, default=None
+        Color(s) for best fits within each :class:`Profiles` instance.
 
-    truth : float, string, default=None
+    truth : float, bool, default=None
         Plot this truth / reference value for parameter.
-        If ``'value'``, take :attr:`Parameter.value`.
+        If ``True``, take :attr:`Parameter.value`.
+    
+    error : str, default='error'
+        What to take as error:
+        - 'error' for parabolic error
+        - 'interval' for lower and upper errors corresponding to :math:`\Delta \chi^{2} = 1`.
+    
+    labelsize : int, default=None
+        Label sizes.
+    
+    ticksize : int, default=None
+        Tick sizes.
+    
+    kw_scatter : dict, default=None
+        Optional arguments for :meth:`matplotlib.axes.Axes.scatter`.
+        Defaults to ``{'marker': 'o'}``.
 
     yband : float, tuple, default=None
         If not ``None``, plot horizontal band.
@@ -334,12 +433,35 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
         absolute lower and upper y-coordinates of band;
         lower and upper fraction around truth.
         If float, fraction around truth.
+    
+    kw_mean : dict, default=None
+        If ``None``, no mean is plotted.
+        Else, optional arguments for :meth:`matplotlib.axes.Axes.errorbar`.
+        Defaults to ``{'marker': 'o'}``.
+    
+    kw_truth : dict, default=None
+        If ``None``, and ``truth`` not provided, no truth is plotted.
+        Else, optional arguments for :meth:`matplotlib.axes.Axes.axhline`.
+        Defaults to ``{'color': 'k', 'linestyle': ':', 'linewidth': 2}``.
+    
+    kw_yband : dict, default=None
+        Optional arguments for :meth:`matplotlib.axes.Axes.axhspan`.
+    
+    kw_legend : dict, default=None
+        Optional arguments for :meth:`matplotlib.axes.Axes.legend`.
 
     ax : matplotlib.axes.Axes, default=None
         Axes where to plot profiles. If ``None``, takes current axes.
 
-    fn : string, default=None
-        If not ``None``, file name where to save figure.
+    fn : str, Path, default=None
+        Optionally, path where to save figure.
+        If not provided, figure is not saved.
+
+    kw_save : dict, default=None
+        Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+    show : bool, default=False
+        If ``True``, show figure.
 
     Returns
     -------
@@ -371,9 +493,9 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
         ibest = prof.bestfit.logposterior.argmax()
         for ipoint, point in enumerate(prof.bestfit[param]):
             yerr = None
-            if errors:
+            if error:
                 try:
-                    yerr = prof.get(errors)[param]
+                    yerr = prof.get(error)[param]
                 except KeyError:
                     yerr = None
                 else:
@@ -410,41 +532,49 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
 @plotting.plotter
 def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=None, ybands=None, ylimits=None, figsize=None, **kwargs):
     """
-    Plot best fit estimates for several parameters.
+    Plot best fits, with a panel for each parameter.
 
     Parameters
     ----------
-    profiles : list, default=None
-        List of :class:`Profiles` instances.
+    profiles : list
+        List of (or single) :class:`Profiles` instance(s).
 
-    param : Parameter, string
-        Parameter name.
+    params : list, ParameterCollection, default=None
+        Parameters to plot best fits for.
+        Defaults to varied and not derived parameters.
 
-    ids : list, string
+    ids : list, str
         Label(s) for input profiles.
 
-    labels : list, string
+    labels : list, str
         Label(s) for best fits within each :class:`Profiles` instance.
 
     truths : list, default=None
-        Plot this truths / reference values for parameters.
-        See :meth:`get_default_truths`.
+        Plot these truth / reference value for each parameter.
+        If ``True``, take :attr:`Parameter.value`.
 
     ybands : list, default=None
         If not ``None``, plot horizontal bands.
-        See :meth:`plot_aligned`.
+        See :func:`plot_aligned`.
 
     ylimits : list, default=None
-        If not ``None``, limits  for y axis.
+        If not ``None``, limits  for y-axis.
+    
+    figsize : float, tuple, default=None
+        Figure size.
 
-    filename : string, default=None
-        If not ``None``, file name where to save figure.
+    fn : str, Path, default=None
+        Optionally, path where to save figure.
+        If not provided, figure is not saved.
+
+    kw_save : dict, default=None
+        Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+    show : bool, default=False
+        If ``True``, show figure.
 
     Returns
     -------
-    fig : matplotlib.figure.Figure
-        Figure.
-
     lax : array
         Array of axes.
     """
@@ -459,7 +589,7 @@ def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=No
     nrows = len(params)
     ncols = len(profiles) if len(profiles) > 1 else maxpoints
     figsize = figsize or (ncols, 3. * nrows)
-    fig = plt.figure(figsize=figsize)
+    plt.figure(figsize=figsize)
     gs = gridspec.GridSpec(nrows, 1, wspace=0.1, hspace=0.1)
 
     lax = []
@@ -479,7 +609,72 @@ def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=No
 @plotting.plotter
 def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors=None, linestyles=None,
                  cl=(1, 2, 3), labelsize=None, ticksize=None, kw_profile=None, kw_cl=None,
-                 kw_legend=None, figsize=None, **kwargs):
+                 kw_legend=None, figsize=None):
+    """
+    Plot profiles, with a panel for each parameter.
+
+    Parameters
+    ----------
+    profiles : list
+        List of (or single) :class:`Profiles` instance(s).
+
+    params : list, ParameterCollection, default=None
+        Parameters to plot profiles for.
+        Defaults to varied and not derived parameters.
+
+    offsets : list, float, default=0
+        Vertical offset for each profile.
+    
+    nrows : int, default=1
+        Number of rows in figure.
+
+    labels : list, str
+        Label(s) for profiles within each :class:`Profiles` instance.
+
+    colors : list, str, default=None
+        Color(s) for profiles within each :class:`Profiles` instance.
+    
+    linestyles : list, str, default=None
+        Linestyle(s) for profiles within each :class:`Profiles` instance.
+    
+    cl : int, tuple, default=(1, 2, 3)
+        Confidence levels to plot.
+    
+    labelsize : int, default=None
+        Label sizes.
+    
+    ticksize : int, default=None
+        Tick sizes.
+    
+    kw_profile : dict, default=None
+        Optional arguments for :meth:`matplotlib.axes.Axes.plot`.
+        Defaults to ``{'marker': 'o'}``.
+    
+    kw_cl : dict, default=None
+        Optional arguments for :meth:`matplotlib.axes.Axes.axhline`.
+        Defaults to ``{'color': 'k', 'linestyle': ':', 'linewidth': 2}``.
+    
+    kw_legend : dict, default=None
+        Optional arguments for :meth:`matplotlib.axes.Axes.legend`.
+    
+    figsize : float, tuple, default=None
+        Figure size.
+
+    fn : str, Path, default=None
+        Optionally, path where to save figure.
+        If not provided, figure is not saved.
+
+    kw_save : dict, default=None
+        Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+    show : bool, default=False
+        If ``True``, show figure.
+
+    Returns
+    -------
+    lax : array
+        Array of axes.
+    """
     from matplotlib import pyplot as plt
     profiles = _make_list(profiles)
     params = _get_default_profiles_params(profiles, params=params, of='profile')
@@ -497,7 +692,7 @@ def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors
 
     ncols = int(len(params) * 1. / nrows + 1.)
     figsize = figsize or (4. * ncols, 4. * nrows)
-    fig = plt.figure(figsize=figsize)
+    plt.figure(figsize=figsize)
     gs = gridspec.GridSpec(nrows, ncols, wspace=0.2, hspace=0.2)
 
     def data_to_axis(ax, y):
@@ -526,7 +721,47 @@ def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors
 
 
 def plot_profile_comparison(profiles, profiles_ref, params=None, labels=None, colors=None, **kwargs):
+    r"""
+    Plot profile comparison, wrapping :func:`plot_profile`.
+    Profiles ``profiles`` and ``profiles_ref`` are both offset by ``profiles`` minimum :math:`\chi^{2}`.
 
+    Parameters
+    ----------
+    profiles : list
+        List of (or single) :class:`Profiles` instance(s).
+    
+    profiles_ref : list
+        List of (or single) :class:`Profiles` instance(s) to compare to.
+
+    params : list, ParameterCollection, default=None
+        Parameters to plot profiles for.
+        Defaults to varied and not derived parameters.
+
+    labels : list, str
+        Label(s) for profiles within each :class:`Profiles` instance.
+
+    colors : list, str, default=None
+        Color(s) for profiles within each :class:`Profiles` instance.
+    
+    **kwargs : dict
+        Optional arguments for :func:`plot_profile`
+        ('nrows', 'cl', 'labelsize', 'ticksize', 'kw_profile', 'kw_cl', 'kw_legend', 'figsize').
+
+    fn : str, Path, default=None
+        Optionally, path where to save figure.
+        If not provided, figure is not saved.
+
+    kw_save : dict, default=None
+        Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+    show : bool, default=False
+        If ``True``, show figure.
+
+    Returns
+    -------
+    lax : array
+        Array of axes.
+    """
     profiles = _make_list(profiles)
     profiles_ref = _make_list(profiles_ref)
     if len(profiles) != len(profiles_ref):

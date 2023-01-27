@@ -51,10 +51,25 @@ def test_gaussian_likelihood():
     plotting.plot_triangle([chains, covmat], labels=['chains', 'covmat'], show=True)
 
 
+def test_params():
+    from desilike.likelihoods.cmb import TTTEEEHighlPlanck2018PlikLiteLikelihood
+    from desilike.theories.primordial_cosmology import Cosmoprimo
+
+    planck_avg = {'h': 0.6736, 'omega_cdm': 0.1200, 'omega_b': 0.02237, 'logA': 3.044, 'n_s': 0.9649, 'tau_reio': 0.0544}
+
+    cosmo = Cosmoprimo()
+    for key, val in planck_avg.items(): cosmo.all_params[key].update(value=val)
+    testL = TTTEEEHighlPlanck2018PlikLiteLikelihood(cosmo=cosmo)
+    testL()
+    print(cosmo.varied_params['logA'].value)
+    print(testL.varied_params['logA'].value)
+
+
 if __name__ == '__main__':
 
     setup_logging()
     #test_install()
     #test_clik()
-    test_sum()
+    #test_sum()
     #test_gaussian_likelihood()
+    #test_params()

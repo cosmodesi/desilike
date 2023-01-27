@@ -15,6 +15,42 @@ __all__ = ['Samples', 'Chain', 'Profiles', 'ParameterBestFit', 'ParameterCovaria
 
 
 def load_source(source, choice=None, cov=None, burnin=None, params=None, default=False, return_type=None):
+    """
+    Internal function that from a source (:class:`Chain`, :class:`Profiles`, :class:`ParameterCovariance`, or path to these objects),
+    return best fit, mean, or covariance matrix.
+
+    Parameters
+    ----------
+    source : str, Path, :class:`Chain`, :class:`Profiles`, :class:`ParameterCovariance`
+        Source to take best fit / mean / covariance from.
+    
+    choice : dict, bool, default=None
+        If not ``None``, extract best fit {'index': 'argmax'} or mean {'index': 'mean'} from source.
+    
+    cov : bool, default=None
+        If ``True``, return covariance.
+    
+    burnin : float, int, default=None
+        If input is chains, remove burnin:
+        if between 0 and 1, remove that fraction of samples;
+        else, remove ``burnin`` first points.
+    
+    params : list, ParameterCollection, default=None
+        Parameters to compute best fit / mean / covariance for. Defaults to all parameters.
+    
+    default : bool, default=False
+        Default value for best fit / mean / covariance in case it is not in ``source``.
+    
+    return_type : str, default=None
+        If ``choice`` is desired and ``return_type`` is:
+        - 'dict' : return dictionary mapping parameter names to best fit / mean.
+        - 'nparray' : return array of parameter best fits / means.
+        - ``None``: return :class:`ParameterBestFit` instance.
+
+        If ``cov`` is desired and ``return_type`` is:
+        - 'nparray' : return matrix array
+        - ``None``: return :class:`ParameterCovariance` instance.
+    """
     is_not_sequence = not utils.is_sequence(source) and not isinstance(source, np.ndarray)
     if is_not_sequence: fns = [source]
     else: fns = source

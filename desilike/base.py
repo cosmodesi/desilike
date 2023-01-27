@@ -27,20 +27,32 @@ class Info(BaseConfig):
 
 class InitConfig(BaseConfig):
 
+    """Structure, used internally in the code, holding configuration (passed to :meth:`BaseCalculator.initialize`) and parameters at initialization."""
+
     _attrs = ['_args', '_params', '_updated']  # will be copied
 
     def __init__(self, *arg, args=None, params=None, **kwargs):
-        self._args = args or ()
-        self._params = params or ParameterCollection()
+        """
+        Initialize :class:`InitConfig`.
+
+        Parameters
+        ----------
+        params : list, ParameterCollection
+            Parameters at initialization.
+        """
+        self.args = args or ()
+        self.params = params or ParameterCollection()
         self._updated = True
         super(InitConfig, self).__init__(*arg, **kwargs)
 
     @property
     def updated(self):
+        """Whether the configuration parameters have been updated (which requires reinitialization of the calculator)."""
         return self._updated
 
     @updated.setter
     def updated(self, updated):
+        """Set the 'updated' status."""
         self._updated = bool(updated)
         if self._updated:
             runtime_info = getattr(self, 'runtime_info', None)
@@ -53,22 +65,27 @@ class InitConfig(BaseConfig):
 
     @args.setter
     def args(self, args):
+        """Positional arguments to be passed to calculator."""
         self._args = tuple(args)
         self.updated = True
 
     @property
     def params(self):
+        """Parameters."""
         return self._params
 
     @params.setter
     def params(self, params):
+        """Set parameters."""
         self._params = ParameterCollection(params)
         self.updated = True
 
     def __getstate__(self):
+        """Return state."""
         return {name: getattr(self, name) for name in ['data', 'args', 'params', 'updated']}
 
     def __setstate__(self, state):
+        """Set state."""
         for name, value in state.items():
             if name == 'data':
                 self.data = state[name]
@@ -92,8 +109,15 @@ for name in ['__delitem__', '__getitem__', '__setitem__', 'clear', 'fromkeys', '
 
 
 class BasePipeline(BaseClass):
-
+    """
+    Pipeline, used internally in the code, connecting all caclulators up to the calculator that it is attached to
+    (:attr:`calculator.runtime_info.pipeline`).
+    """
     def __init__(self, calculator):
+        """
+        Initialize pipeline for input ``calculator``.
+        Calculators ``calculator`` depends upon are initialized.
+        """
         self.calculators = []
 
         def callback(calculator):
@@ -104,8 +128,7 @@ class BasePipeline(BaseClass):
                 callback(require)
 
         callback(calculator)
-        # To avoid loops created by one calculator, which when updated, requests reinitialization of the calculators
-        # which depends on it
+        # To avoid loops created by one calculator, which when updated, requests reinitialization of the calculators which depends on it
         for calculator in self.calculators:
             calculator.runtime_info.initialized = True
         self.calculators = self.calculators[::-1]
@@ -117,11 +140,11 @@ class BasePipeline(BaseClass):
         self.more_derived, self.more_calculate = None, None
 
     def _set_params(self, params=None):
+        # Internal method to reset parameters, based on calculator's :class:`BaseCalculator.runtime_info.params`
         params_from_calculator = {}
         params = ParameterCollectionConfig(params, identifier='name')
         new_params = ParameterCollection()
         for calculator in self.calculators:
-            #if 'sn0' in calculator.runtime_info.params: print(id(calculator), calculator.runtime_info._params['sn0'].derived)
             calculator_params = ParameterCollection(ParameterCollectionConfig(calculator.runtime_info.params, identifier='name').clone(params))
             new_calculator_params = ParameterCollection()
             for iparam, param in enumerate(calculator.runtime_info.params):
@@ -137,6 +160,10 @@ class BasePipeline(BaseClass):
                 new_calculator_params.set(param)
                 new_params.set(param)
             calculator.runtime_info.params = new_calculator_params
+            for param in new_calculator_params:
+                if param.basename in calculator.runtime_info.init._params:
+                    calculator.runtime_info.init._params[param] = param
+                calculator.runtime_info.init.updated = False
         for param in ParameterCollection(params):
             if any(param.name in p.depends.values() for p in new_params):
                 new_params.set(param)
@@ -155,6 +182,7 @@ class BasePipeline(BaseClass):
 
     @property
     def params(self):
+        """Get pipeline parameters."""
         _params = getattr(self, '_params', None)
         if _params is None or _params.updated:
             self._set_params(_params)
@@ -162,33 +190,33 @@ class BasePipeline(BaseClass):
 
     @property
     def varied_params(self):
+        """Pipeline parameters that are varied (and not derived)."""
         self.params
         return self._varied_params
 
     @params.setter
     def params(self, params):
+        """Set pipeline parameters."""
         self._set_params(params)
 
     @property
     def mpicomm(self):
+        """MPI communicator."""
         return self._mpicomm
 
     @mpicomm.setter
     def mpicomm(self, mpicomm):
+        """Set MPI communicator."""
         self._mpicomm = mpicomm
         for calculator in self.calculators:
             calculator.mpicomm = mpicomm
 
-    @property
-    def tocalculate(self):
-        return any(calculator.runtime_info.tocalculate for calculator in self.calculators)
-
-    @tocalculate.setter
-    def tocalculate(self, tocalculate):
-        for calculator in self.calculators:
-            calculator.runtime_info.tocalculate = True
-
     def calculate(self, **params):
+        """
+        Calculate, i.e. call calculators' :meth:`BaseCalculator.calculate` if their parameters are updated,
+        or if they depend on previous calculation that has been updated.
+        Derived parameter values are stored in :attr:`derived`.
+        """
         for name in params:
             if name not in self.params:
                 raise PipelineError('Input parameter {} is not one of parameters: {}'.format(name, self.params))
@@ -199,9 +227,7 @@ class BasePipeline(BaseClass):
             if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
         for calculator in self.calculators:  # start by first calculator
             runtime_info = calculator.runtime_info
-            # print(calculator.__class__.__name__, runtime_info._param_values)
             runtime_info.set_param_values(params, full=True)
-            # print(calculator.__class__.__name__, id(calculator), runtime_info.toinitialize, runtime_info.tocalculate, params)
             result = runtime_info.calculate()
             self.derived.update(runtime_info.derived)
         if self.more_calculate:
@@ -213,6 +239,7 @@ class BasePipeline(BaseClass):
         return result
 
     def mpicalculate(self, **params):
+        """MPI-parallel version of the above: one can pass arrays as input parameter values."""
         size, cshape = 0, ()
         names = self.mpicomm.bcast(list(params.keys()) if self.mpicomm.rank == 0 else None, root=0)
         for name in names:
@@ -251,10 +278,13 @@ class BasePipeline(BaseClass):
         self.derived = derived
 
     def get_cosmo_requires(self):
+        """Return a dictionary mapping section to method's name and arguments,
+        e.g. 'background': {'comoving_radial_distance': {'z': z}}."""
         from .cosmo import BaseExternalEngine
         return BaseExternalEngine.get_requires(*[getattr(calculator, 'cosmo_requires', {}) for calculator in self.calculators])
 
     def set_cosmo_requires(self, cosmo):
+        """Set input :class:`cosmoprimo.Cosmology` instance."""
         for calculator in self.calculators:
             cosmo_requires = getattr(calculator, 'cosmo_requires', {})
             if cosmo_requires:
@@ -263,11 +293,39 @@ class BasePipeline(BaseClass):
                     for basename, param in calculator.runtime_info.base_params.items():
                         if basename in cosmo_params:
                             self.param_values[param.name] = calculator.runtime_info.param_values[basename] = cosmo[basename]
-                if set(cosmo_requires.keys()) != {'params'}:
+                if set(cosmo_requires.keys()) != {'params'}:  # requires a :class:`cosmoprimo.Cosmology` instance as ``cosmo`` attribute
                     calculator.cosmo = cosmo
                 calculator.runtime_info.tocalculate = True
 
     def _classify_derived(self, calculators=None, niterations=3, seed=42):
+        """
+        Internal method to classify calculators' derived parameters as
+        "fixed" (they do not vary when parameters are changed) or "varied" (they vary when parameters are changed)
+        
+        Parameters
+        ----------
+        calculators : list, default=None
+            List of calculators for which to classify derived parameters, 
+            as well as quantities returned by their :meth:`BaseCalculator.__getstate__` method.
+        
+        niterations : int, default=3
+            To test whether derived parameters are fixed or vary, the pipeline is run ``niterations`` times,
+            with varied parameters randomly varied (within their :attr:`Parameter.ref` reference distribution).
+        
+        seed : int, default=42
+            Random seed, used to sample varied parameters within their reference distribution.
+        
+        Returns
+        -------
+        calculators : list
+            List of calculators.
+        
+        fixed : list
+            List of dictionaries (one for each calculator) mapping names of derived quantities with their (constant) values.
+        
+        varied : list
+            List of list (one for each calculator) of derived quantities which vary.
+        """
         if niterations < 1:
             raise ValueError('Need at least 1 iteration to classify between fixed and varied parameters')
         if calculators is None:
@@ -303,6 +361,17 @@ class BasePipeline(BaseClass):
         return calculators, fixed, varied
 
     def _set_derived(self, calculators, params):
+        """
+        Internal method to set derived parameters.
+
+        Parameters
+        ----------
+        calculators : list
+            List of calculators for which to set derived parameters.
+        
+        params : list
+            List of :class:`ParameterCollection` to set as derived parameters, for each input calculator.
+        """
         for calculator, params in zip(calculators, params):
             for param in params:
                 # Remove derived parameters with same basename
@@ -316,6 +385,22 @@ class BasePipeline(BaseClass):
         self._set_params()
 
     def _set_speed(self, niterations=10, override=False, seed=42):
+        """
+        Internal method to compute and set calculators' speed (i.e. inverse of run time for one :meth:`BaseCalculator.calculate` call).
+
+        Parameters
+        ----------
+        niterations : int, default=10
+            To compute (average) execution time, the pipeline is run ``niterations`` times,
+            with varied parameters randomly varied (within their :attr:`Parameter.ref` reference distribution).
+        
+        override : bool, default=False
+            If ``False``, and :attr:`BaseCalculator.runtime_info.speed` is not ``None``, it is left untouched.
+            Else, :attr:`BaseCalculator.runtime_info.speed` is set to measured speed (as 1 / (average execution time)).
+        
+        seed : int, default=42
+            Random seed, used to sample varied parameters within their reference distribution. 
+        """
         seed = mpi.bcast_seed(seed=seed, mpicomm=self.mpicomm, size=10000)[self.mpicomm.rank]  # to get different seeds on each rank
         rng = np.random.RandomState(seed=seed)
         self.calculate()  # to set _derived
@@ -338,8 +423,40 @@ class BasePipeline(BaseClass):
                     self.log_info('- {}: {:.2f} iterations / second'.format(calculator, calculator.runtime_info.speed))
 
     def block_params(self, params=None, nblocks=None, oversample_power=0, **kwargs):
+        """
+        Group parameters together, and compute their ``oversample_factor``, indicative of the frequency
+        at which they should be updated altogether.
+    
+        Note
+        ----
+        Algorithm taken from Cobaya.
+        
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            Parameters to sort into blocks. Defaults to :attr:`varied_params`.
+        
+        nblocks : int, default=None
+            Number of blocks. If ``None``, parameters are grouped by "footprint",
+            i.e. the set of calculators that depend on them (either directly, or indirectly, through calculators' requirements).
+        
+        oversample_power : int, default=0
+            ``oversample_factor`` is proportional to ``speed ** oversample_power``.
+        
+        **kwargs : dict
+            Optional arguments for :meth:`_set_speed`, which is called if any :attr:`BaseCalculator.runtime_info.speed`
+            of :attr:`calculators` is not set.
+        
+        Returns
+        -------
+        sorted_blocks : list
+            List of list of parameter names.
+        
+        oversample_factors : list
+            List of corresponding oversample factor (for each block).
+        """
         from itertools import permutations, chain
-        if params is None: params = self.params.select(varied=True)
+        if params is None: params = self.varied_params
         else: params = [self.params[param] for param in params]
         # Using same algorithm as Cobaya
         speeds = [calculator.runtime_info.speed for calculator in self.calculators]
@@ -383,7 +500,7 @@ class BasePipeline(BaseClass):
                 orderings = list(permutations(np.arange(len(block_sizes))))
 
             permuted_costs_per_param_per_block = np.array([get_cost_per_param_per_block(list(o)) for o in orderings])
-            permuted_oversample_factors = (permuted_costs_per_param_per_block[..., [0]] / permuted_costs_per_param_per_block)**oversample_power
+            permuted_oversample_factors = (permuted_costs_per_param_per_block[..., [0]] / permuted_costs_per_param_per_block) ** oversample_power
             total_costs = np.array([(block_sizes[list(o)] * permuted_oversample_factors[i]).dot(permuted_costs_per_param_per_block[i]) for i, o in enumerate(orderings)])
             argmin = np.argmin(total_costs)
             optimal_ordering = orderings[argmin]
@@ -425,8 +542,17 @@ class BasePipeline(BaseClass):
 
 
 class RuntimeInfo(BaseClass):
+    """
+    Store information about calculator name, requirements, parameters values at a given step, etc.
 
-    """Information about calculator name, requirements, parameters values at a given step, etc."""
+    Attributes
+    ----------
+    calculator : BaseCalulator
+        Calculator this is attached to, as :attr:`BaseCalculator.runtime_info`.
+    
+    speed : float
+        Inverse of number of iterations per second.
+    """
     installer = None
 
     def __init__(self, calculator, init=None):
@@ -437,6 +563,9 @@ class RuntimeInfo(BaseClass):
         ----------
         calculator : BaseCalculator
             The calculator this :class:`RuntimeInfo` instance is attached to.
+        
+        init : InitConfig, default=None
+            Configuration at initialization.
         """
         self.calculator = calculator
         self.namespace = None
@@ -453,6 +582,7 @@ class RuntimeInfo(BaseClass):
         self.name = self.calculator.__class__.__name__
 
     def install(self):
+        """Install calculator, called by :class:`install.Installer`."""
         if self.installer is not None:
             try:
                 func = self.calculator.install
@@ -463,6 +593,10 @@ class RuntimeInfo(BaseClass):
 
     @property
     def requires(self):
+        """
+        Return list of calculators this calculator depends upon.
+        If not set, defaults to the :class:`BaseCalculator` instances in this calculator's ``__dict__``.
+        """
         if getattr(self, '_requires', None) is None:
             self._requires = []
             for name, value in self.calculator.__dict__.items():
@@ -473,6 +607,7 @@ class RuntimeInfo(BaseClass):
 
     @requires.setter
     def requires(self, requires):
+        """Set list of calculators this calculator depends upon."""
         self._requires = list(requires)
         for require in self._requires:
             require.runtime_info.initialize()  # otherwise runtime_info is cleared and required_by is lost
@@ -482,17 +617,20 @@ class RuntimeInfo(BaseClass):
 
     @property
     def pipeline(self):
+        """Return pipeline for this calculator."""
         if getattr(self, '_pipeline', None) is None:
             self._pipeline = BasePipeline(self.calculator)
         return self._pipeline
 
     @property
     def params(self):
+        """Return parameters specific to this calculator."""
         if self._params.updated: self.params = self._params
         return self._params
 
     @params.setter
     def params(self, params):
+        """Set parameters specific to this calculator."""
         self._params = ParameterCollection(params)
         self._params.updated = False
         self.base_params = {param.basename: param for param in self._params}
@@ -503,6 +641,7 @@ class RuntimeInfo(BaseClass):
 
     @property
     def derived(self):
+        """Return derived parameter values."""
         if getattr(self, '_derived', None) is None:
             self._derived = Samples()
             if self.derived_params:
@@ -518,6 +657,7 @@ class RuntimeInfo(BaseClass):
 
     @property
     def initialized(self):
+        """Has this calculator been initialized?"""
         return self._initialized
 
     @initialized.setter
@@ -531,6 +671,7 @@ class RuntimeInfo(BaseClass):
                 calculator.runtime_info.initialized = False
 
     def initialize(self, **kwargs):
+        """Initialize calculator (if not already initialized), calling :meth:`BaseCalculator.initialize` with :attr:`init` configuration."""
         if not self.initialized:
             self.clear()
             self.install()
@@ -544,6 +685,7 @@ class RuntimeInfo(BaseClass):
 
     @property
     def tocalculate(self):
+        """Should calculator's :class:`BaseCalculator.calculate` be called?"""
         return self._tocalculate or any(require.runtime_info.calculated for require in self.requires)
 
     @tocalculate.setter
@@ -551,6 +693,9 @@ class RuntimeInfo(BaseClass):
         self._tocalculate = tocalculate
 
     def calculate(self, **params):
+        """
+        If calculator's :class:`BaseCalculator.calculate` has not be called with input parameter values, call it,
+        keeping track of running time with :attr:`monitor`."""
         self.initialize()
         self.set_param_values(params)
         if self.tocalculate:
@@ -568,6 +713,7 @@ class RuntimeInfo(BaseClass):
         return self.calculator.get()
 
     def set_param_values(self, param_values, full=False, force=None):
+        """Update parameter values; if new, next :meth:`calculate` call will call calculator's :class:`BaseCalculator.calculate`."""
         self.params
         if full:
             for param, value in param_values.items():
@@ -617,7 +763,14 @@ class RuntimeInfo(BaseClass):
 
 
 class BaseCalculator(BaseClass):
+    """
+    Base calculator class, to be extended by any calculator, which will typically redefine:
 
+    - :meth:`initialize`: set meta parameters and other calculators it depends on
+    - :meth:`calculate`: takes in parameter values, and do some calculation
+    - :meth:`get`: returns the quantity of interest
+    
+    """
     def __new__(cls, *args, **kwargs):
         cls_info = Info(getattr(cls, '_info', {}))
         cls_init = InitConfig(data=getattr(cls, '_init', {}))
@@ -647,27 +800,39 @@ class BaseCalculator(BaseClass):
 
     @property
     def init(self):
+        """Return configuration at initialization."""
         return self.runtime_info.init
 
     def __call__(self, **params):
+        """Take all parameters as input, calculate, and return the result of :attr:`get`"""
         return self.runtime_info.pipeline.calculate(**params)
 
-    def initialize(self):
-        pass
+    def initialize(self, **kwargs):
+        """
+        Define this method, with takes meta parameters as input.
+        Parameters can be accessed through :attr:`params`.
+        """
 
-    def calculate(self):
-        pass
+    def calculate(self, **params):
+        """Define this method, which takes parameter values as input."""
 
     def get(self):
+        """Return quantity of main interest, e.g. loglikelihood + logprior if ``self`` is a likelihood."""
         return self
 
     def __getstate__(self):
+        """
+        Return this class state dictionary.
+        To be able to emulate this calculator, it should return all the quantities that can then be used by any other calculator.
+        """
         return {}
 
     def __repr__(self):
+        """Return string representation, i.e. calculator's name."""
         return self.runtime_info.name
 
     def __copy__(self):
+        """Shallow copy."""
         new = object.__new__(self.__class__)
         new.__dict__.update(self.__dict__)
         for name in ['info', 'runtime_info']:
@@ -689,8 +854,6 @@ class BaseCalculator(BaseClass):
         new.__dict__.update(self.__dict__)
         for name in ['info', 'runtime_info']:
             setattr(new, name, getattr(self, name).copy())
-        #state = self.__getstate__()
-        #new.__setstate__(copy.deepcopy(state))
         memo[id(self)] = new
         new.info = copy.deepcopy(self.info)
         new.runtime_info = self.runtime_info.copy()
@@ -709,32 +872,43 @@ class BaseCalculator(BaseClass):
         return new
 
     def deepcopy(self):
+        """Deep copy."""
         return copy.deepcopy(self)
 
     @property
     def params(self):
+        """This calculator's specific parameters."""
         if not self.runtime_info.initialized:
             return self.runtime_info.init.params
         return self.runtime_info.params
 
     @params.setter
     def params(self, params):
+        """
+        Set this calculator's specific parameters; which triggers an automatic call to :meth:`initialize`
+        before :meth:`calculate`.
+        """
         self.runtime_info.init.params = ParameterCollection(params)
 
     @property
     def all_params(self):
+        """All pipeline parameters."""
         return self.runtime_info.pipeline.params
 
     @all_params.setter
     def all_params(self, all_params):
+        """Set all pipeline parameters."""
         self.runtime_info.pipeline.params = all_params
 
     @property
     def varied_params(self):
+        """Varied pipeline parameters."""
         return self.runtime_info.pipeline.varied_params
 
 
 class EnsembleCalculator(BaseCalculator):
+
+    """A calculator to rule them all."""
 
     def initialize(self, calculators=None):
         self.calculators = calculators

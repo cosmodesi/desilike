@@ -9,6 +9,9 @@ from desilike.bindings.base import BaseLikelihoodGenerator, get_likelihood_param
 from desilike.cosmo import Cosmology, BaseExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
 
 
+"""Mock up cosmoprimo with cosmosis block quantities."""
+
+
 class CosmoSISEngine(BaseExternalEngine):
 
     pass
@@ -161,7 +164,10 @@ def CosmoSISLikelihoodFactory(cls, kw_like, module=None):
 
 
 class CosmoSISLikelihoodGenerator(BaseLikelihoodGenerator):
-
+    """
+    Extend :class:`CosmoSISLikelihoodGenerator` with support for cosmosis,
+    turning likelihood into a module, and writing parameter values and priors to .ini files.
+    """
     def __init__(self, *args, **kwargs):
         super(CosmoSISLikelihoodGenerator, self).__init__(CosmoSISLikelihoodFactory, *args, **kwargs)
 

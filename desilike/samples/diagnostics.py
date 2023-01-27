@@ -3,6 +3,7 @@ import warnings
 
 import numpy as np
 
+from desilike.parameter import is_parameter_sequence
 from . import utils
 
 
@@ -15,27 +16,41 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
 
     Parameters
     ----------
-    chains : list
-        List of :class:`Chain` instances.
+    chains : list, Chain
+        List of or single :class:`Chain` instance(s).
 
     params : list, ParameterCollection
         Parameters to compute Gelman-Rubin statistics for.
         Defaults to all parameters.
+    
+    nsplits : int, default=None
+        The Gelman-Rubin criterion requires at least 2 chains.
+        If provided, split input chains into ``nsplits`` parts.
 
-    statistic : string, callable, default='mean'
+    statistic : str, callable, default='mean'
         If 'mean', compares covariance of chain means to (mean of) intra-chain covariances.
         Else, must be a callable taking :class:`Chain` instance and parameter list as input
         and returning array of values (one for each parameter).
 
-    method : string, default='eigen'
+    method : str, default='eigen'
         If 'eigen', return eigenvalues of covariance ratios, else diagonal.
 
-    return_matrices : bool, default=True
-        If ``True``, also return pair of covariance matrices.
+    return_matrices : bool, default=False
+        If ``True``, also return pair of covariance matrices (of chain means and (mean of) intra-chain covariances).
 
-    check_valid : bool, default=True
-        Whether to check for reliable inverse of intra-chain covariances.
+    check_valid : str, default='raise'
+        If inversion of intra-chain covariances is inaccurate, and ``check_valid`` is:
 
+        - 'raise': raise a :class:`LinAlgError`
+        - 'warn': issue a warning
+        - 'ignore': ignore
+    
+    Returns
+    -------
+    gr : scalar, array, tuple
+        Gelman-Rubin statistics (scalar if single parameter provided, else array of size ``params``).
+        If ``return_matrices``, also return pair covariance matrices.
+    
     Reference
     ---------
     http://www.stat.columbia.edu/~gelman/research/published/brooksgelman2.pdf
@@ -50,7 +65,7 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
     if any(size < 2 for size in sizes):
         raise ValueError('Not enough samples ({}) to estimate Gelman-Rubin'.format(sizes))
     if params is None: params = chains[0].params(varied=True)
-    isscalar = not utils.is_sequence(params)
+    isscalar = not is_parameter_sequence(params)
     if isscalar: params = [params]
     nchains = len(chains)
 
@@ -67,12 +82,12 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
     Wn1 = np.average(covs, weights=wsums, axis=0)
     Wn = np.average(((wsums - w2sums / wsums) / wsums)[:, None, None] * covs, weights=wsums, axis=0)
     # B = "between"
-    # We don't weight with the number of samples in the chains here:
+    # We do not weight with the number of samples in the chains here:
     # shorter chains will likely be outliers, and we want to notice them
     B = np.cov(means.T, ddof=1)
     V = Wn + (nchains + 1.) / nchains * B
     if method == 'eigen':
-        # divide by stddev for numerical stability
+        # Divide by stddev for numerical stability
         stddev = np.sqrt(np.diag(V).real)
         V = V / stddev[:, None] / stddev[None, :]
         invWn1 = utils.inv(Wn1 / stddev[:, None] / stddev[None, :], check_valid=check_valid)
@@ -91,25 +106,29 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
 
 def autocorrelation(chains, params=None):
     """
-    Return weighted autocorrelation.
+    Estimate weighted autocorrelation.
     Adapted from https://github.com/dfm/emcee/blob/main/src/emcee/autocorr.py
 
     Parameters
     ----------
-    params : string, Parameter
-        Parameters to compute autocorrelation for.
+    chains : list, Chain
+        List of or single :class:`Chain` instance(s).
+
+    params : list, ParameterCollection
+        Parameters to compute autocorrelation statistics for.
         Defaults to all parameters.
 
     Returns
     -------
-    autocorr : array
+    autocorr : 1D or 2D array
+        Autocorrelation (array of size the number of samples if single parameter provided, else of shape (number of parameters, samples)).
     """
     if not utils.is_sequence(chains):
         chains = [chains]
 
     if params is None: params = chains[0].params(varied=True)
-    if utils.is_sequence(params):
-        return np.array([autocorrelation(chains[0], param) for param in params])
+    if is_parameter_sequence(params):
+        return np.array([autocorrelation(chains, param) for param in params])
 
     toret = 0
     for chain in chains:
@@ -122,22 +141,23 @@ def autocorrelation(chains, params=None):
 
 def integrated_autocorrelation_time(chains, params=None, min_corr=None, c=5, reliable=50, check_valid='warn'):
     """
-    Return integrated autocorrelation time.
+    Estimate integrated autocorrelation time (averaged over all chains).
     Adapted from https://github.com/dfm/emcee/blob/main/src/emcee/autocorr.py
 
     Parameters
     ----------
-    chains : list
-        List of :class:`Chain` instances.
+    chains : list, Chain
+        List of or single :class:`Chain` instance(s).
 
-    columns : list, ParameterCollection
+    params : list, ParameterCollection
         Parameters to compute integrated autocorrelation time for.
+        Defaults to all parameters.
 
     min_corr : float, default=None
         Integrate starting from this lower autocorrelation threshold.
         If ``None``, use ``c``.
 
-    c : float, int
+    c : float, int, default=5
         Step size for the window search.
 
     reliable : float, int, default=50
@@ -145,18 +165,23 @@ def integrated_autocorrelation_time(chains, params=None, min_corr=None, c=5, rel
         for it to be considered reliable.
 
     check_valid : bool, default=False
-        Whether to check for reliable estimate of autocorrelation time (based on ``reliable``).
+        If estimate of autocorrelation time (based on ``reliable``) is not reliable, and ``check_valid`` is:
+
+        - 'raise': raise a :class:`LinAlgError`
+        - 'warn': issue a warning
+        - 'ignore': ignore
 
     Returns
     -------
     iat : scalar, array
+        Integrated autocorrelation time (scalar if single parameter provided, else array of size ``params``).
     """
     if not utils.is_sequence(chains):
         chains = [chains]
 
     if params is None: params = chains[0].params(varied=True)
 
-    if utils.is_sequence(params):
+    if is_parameter_sequence(params):
         return np.array([integrated_autocorrelation_time(chains, param, min_corr=min_corr, c=c, reliable=reliable, check_valid=check_valid) for param in params])
 
     # Automated windowing procedure following Sokal (1989)
@@ -229,12 +254,35 @@ def _autocorrelation_1d(x):
 
 
 def geweke(chains, params=None, first=0.1, last=0.5):
+    """
+    Estimate Geweke statistics, i.e. the difference of chain averages in the first and last samples,
+    w.r.t. the sum of covariances in the first and last samples.
 
+    Parameters
+    ----------
+    chains : list, Chain
+        List of or single :class:`Chain` instance(s).
+
+    params : list, ParameterCollection
+        Parameters to compute Geweke statistics for.
+        Defaults to all parameters.
+    
+    first : float, default=0.1
+        Fraction of samples in the first part of the chain.
+    
+    last : float, default=0.5
+        Fraction of samples in the last part of the chain.
+    
+    Returns
+    -------
+    geweke : 2D or 1D array
+        Geweke statistics (array of size number of chains if single parameter provided, else array of shape (number of parameters, number of chains)).
+    """
     if not utils.is_sequence(chains):
         chains = [chains]
 
     if params is None: params = chains[0].params(varied=True)
-    if utils.is_sequence(params):
+    if is_parameter_sequence(params):
         return np.array([geweke(chains, param, first=first, last=last) for param in params])
 
     toret = []

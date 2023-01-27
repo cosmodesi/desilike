@@ -7,12 +7,6 @@ from scipy import stats
 from desilike.utils import *
 
 
-def is_sequence(item):
-    """Whether input item is a tuple or list."""
-    from desilike.parameter import ParameterCollection
-    return isinstance(item, (list, tuple, ParameterCollection))
-
-
 def nsigmas_to_quantiles_1d(nsigmas):
     r"""
     Turn number of Gaussian sigmas ``nsigmas`` into quantiles,
@@ -49,12 +43,15 @@ def outputs_to_latex(name):
 
 def interval(samples, weights=None, nsigmas=1.):
     """
-    Return n-sigmas confidence interval(s).
+    Estimate n-sigma confidence interval(s).
 
     Parameters
     ----------
-    columns : list, ParameterCollection, default=None
-        Parameters to compute confidence interval for.
+    samples : array
+        Samples. Confidence intervals are computed for axis 0.
+    
+    weights : array, default=None
+        Optionally, weights of same length as ``samples``.
 
     nsigmas : int
         Return interval for this number of sigmas.
@@ -62,6 +59,7 @@ def interval(samples, weights=None, nsigmas=1.):
     Returns
     -------
     interval : tuple
+        Tuple of lower and upper bounds (arrays of shape ``samples.shape[1:]``).
     """
     if weights is None:
         weights = np.ones_like(samples)
@@ -85,6 +83,10 @@ def interval(samples, weights=None, nsigmas=1.):
 def weighted_quantile(x, q, weights=None, axis=None, method='linear'):
     """
     Compute the q-th quantile of the weighted data along the specified axis.
+
+    Note
+    ----
+    Adapted from https://github.com/minaskar/cronus/blob/master/cronus/plot.py.
 
     Parameters
     ----------
@@ -114,13 +116,13 @@ def weighted_quantile(x, q, weights=None, axis=None, method='linear'):
         use when the desired quantile lies between two data points
         ``i < j``:
 
-        * linear: ``i + (j - i) * fraction``, where ``fraction``
+        - linear: ``i + (j - i) * fraction``, where ``fraction``
           is the fractional part of the index surrounded by ``i``
           and ``j``.
-        * lower: ``i``.
-        * higher: ``j``.
-        * nearest: ``i`` or ``j``, whichever is nearest.
-        * midpoint: ``(i + j) / 2``.
+        - lower: ``i``.
+        - higher: ``j``.
+        - nearest: ``i`` or ``j``, whichever is nearest.
+        - midpoint: ``(i + j) / 2``.
 
     Returns
     -------
@@ -133,13 +135,9 @@ def weighted_quantile(x, q, weights=None, axis=None, method='linear'):
         data-type is ``float64``. Otherwise, the output data-type is the
         same as that of the input. If ``out`` is specified, that array is
         returned instead.
-
-    Note
-    ----
-    Inspired from https://github.com/minaskar/cronus/blob/master/cronus/plot.py.
     """
     if weights is None:
-        # If no weights provided, this simply calls `np.percentile`.
+        # If no weights provided, this simply calls `np.quantile`.
         return np.quantile(x, q, axis=axis, method=method)
 
     # Initial check.

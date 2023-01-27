@@ -21,8 +21,8 @@ class EmceeSampler(BaseBatchPosteriorSampler):
             Input likelihood.
 
         nwalkers : int, str, default=None
-            Number of walkers, defaults to 2 * max((int(2.5 * ndim) + 1) // 2, 2)
-            Can be given in dimension units, e.g. '3 * ndim'.
+            Number of walkers, defaults to ``2 * max((int(2.5 * ndim) + 1) // 2, 2)``.
+            Can be given in dimension units, e.g. ``'3 * ndim'``.
 
         rng : np.random.RandomState, default=None
             Random state. If ``None``, ``seed`` is used to set random state.

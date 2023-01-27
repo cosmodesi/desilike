@@ -122,6 +122,6 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_misc()
-    #test_differentiation()
-    #test_fisher_galaxy()
+    test_differentiation()
+    test_fisher_galaxy()
     test_fisher_cmb()

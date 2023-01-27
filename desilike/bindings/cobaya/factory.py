@@ -9,6 +9,9 @@ from desilike.bindings.base import BaseLikelihoodGenerator, get_likelihood_param
 from desilike.cosmo import Cosmology, BaseExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
 
 
+"""Mock up cosmoprimo with cobaya's camb / classy provider."""
+
+
 class CobayaEngine(BaseExternalEngine):
 
     @classmethod
@@ -118,7 +121,6 @@ class Fourier(Section):
 
 
 def cosmoprimo_to_camb_params(params):
-    # TODO: use dynamical input parameters
     convert = {'H0': 'H0', 'omega_b': 'ombh2', 'omega_cdm': 'omch2', 'A_s': 'As', 'n_s': 'ns', 'N_eff': 'nnu', 'm_ncdm': 'mnu', 'Omega_k': 'omk'}
     toret = ParameterCollection()
     params = params.copy()
@@ -193,7 +195,7 @@ def CobayaLikelihoodFactory(cls, kw_like, module=None):
 
     def logp(self, _derived=None, **params_values):
         """
-        Taking a dictionary of (sampled) nuisance parameter values params_values
+        Take a dictionary of (sampled) nuisance parameter values params_values
         and return a log-likelihood.
         """
         if self._requires:
@@ -209,6 +211,8 @@ def CobayaLikelihoodFactory(cls, kw_like, module=None):
 
 
 class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
+    
+    """Extend :class:`BaseLikelihoodGenerator` with support for cobaya, writing parameters to a .yaml file."""
 
     def __init__(self, *args, **kwargs):
         super(CobayaLikelihoodGenerator, self).__init__(CobayaLikelihoodFactory, *args, **kwargs)
@@ -229,10 +233,10 @@ class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
             return di
 
         cosmo_params, nuisance_params = get_likelihood_params(cls(**self.kw_like))
-        #if self.engine == 'camb':
-        #    cosmo_params = cosmoprimo_to_camb_params(cosmo_params)
-        #elif self.engine == 'classy':
-        #    cosmo_params = cosmoprimo_to_classy_params(cosmo_params)
+        # if self.engine == 'camb':
+        #     cosmo_params = cosmoprimo_to_camb_params(cosmo_params)
+        # elif self.engine == 'classy':
+        #     cosmo_params = cosmoprimo_to_classy_params(cosmo_params)
         params = {}
         for param in nuisance_params:
             if param.solved or param.derived and not param.depends: continue

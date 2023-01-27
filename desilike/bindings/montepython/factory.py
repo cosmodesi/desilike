@@ -9,6 +9,9 @@ from desilike.bindings.base import BaseLikelihoodGenerator, get_likelihood_param
 from desilike.cosmo import Cosmology, BaseExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
 
 
+"""Mock up cosmoprimo with montepython classy."""
+
+
 class MontePythonEngine(BaseExternalEngine):
 
     @classmethod
@@ -135,7 +138,9 @@ def MontePythonLikelihoodFactory(cls, kw_like, module=None):
 
 
 class MontePythonLikelihoodGenerator(BaseLikelihoodGenerator):
-
+    
+    """Extend :class:`MontePythonLikelihoodGenerator` with support for montepython, generating .data and .param files."""
+    
     def __init__(self, *args, **kwargs):
         super(MontePythonLikelihoodGenerator, self).__init__(MontePythonLikelihoodFactory, *args, **kwargs)
 
@@ -160,7 +165,7 @@ class MontePythonLikelihoodGenerator(BaseLikelihoodGenerator):
 
         parameters, likelihood_attrs = {}, {}
         cosmo_params, nuisance_params = get_likelihood_params(cls(**self.kw_like))
-        #cosmo_params = cosmoprimo_to_montepython_params(cosmo_params)
+        # cosmo_params = cosmoprimo_to_montepython_params(cosmo_params)
         for param in nuisance_params:
             if param.depends:
                 raise ValueError('Cannot cope with parameter dependencies')

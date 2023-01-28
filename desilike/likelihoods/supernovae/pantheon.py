@@ -1,16 +1,25 @@
 import os
 
 import numpy as np
-import scipy as sp
 
 from desilike import plotting, utils
-from .base import SNLikelihood
+from .base import BaseSNLikelihood
 
 
-class PantheonSNLikelihood(SNLikelihood):
+class PantheonSNLikelihood(BaseSNLikelihood):
+    """
+    Likelihood for Pantheon type Ia supernovae sample.
 
-    """Pantheon type Ia supernova sample."""
+    Reference
+    ---------
+    https://arxiv.org/abs/1710.00845
 
+    Parameters
+    ----------
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+    """
     config_fn = 'pantheon.yaml'
     installer_section = 'PantheonSNLikelihood'
 
@@ -27,7 +36,21 @@ class PantheonSNLikelihood(SNLikelihood):
         self.flatdata = self.light_curve_params['mb'] - Mb - 5 * np.log10((1 + self.light_curve_params['zhel']) / (1 + z))
         super(PantheonSNLikelihood, self).calculate()
 
-    def plot(self, fn, kw_save=None):
+    @plotting.plotter
+    def plot(self):
+        """
+        Plot Hubble diagram: Hubble residuals as a function of distance.
+        
+        fn : str, Path, default=None
+        Optionally, path where to save figure.
+        If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+        """
         from matplotlib import pyplot as plt
         fig, lax = plt.subplots(2, sharex=True, sharey=False, gridspec_kw={'height_ratios': (3, 1)}, figsize=(6, 6), squeeze=True)
         fig.subplots_adjust(hspace=0)
@@ -42,8 +65,6 @@ class PantheonSNLikelihood(SNLikelihood):
         lax[0].set_ylabel(r'distance modulus [$\mathrm{mag}$]')
         lax[1].set_ylabel(r'Hubble res. [$\mathrm{mag}$]')
         lax[1].set_xlabel('$z$')
-        if fn is not None:
-            plotting.savefig(fn, fig=fig, **(kw_save or {}))
         return lax
 
     @classmethod

@@ -1,35 +1,11 @@
 class: TTHighlPlanck2018PlikLikelihood
 
-info:
-  version: 0.0.1
-  date: 10/09/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Planck 2018 release for high-ell, TT+TE+EE power spectrum likelihood (plik)
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
-
 params:
   .import: planck2018_clik_params.yaml::calib,calib_temp,TT,prior_SZ
 
 ---
 
 class: TTHighlPlanck2018PlikUnbinnedLikelihood
-
-info:
-  version: 0.0.1
-  date: 10/09/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Planck 2018 release for high-ell, TT+TE+EE power spectrum likelihood (plik)
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
 
 params:
   .import: planck2018_clik_params.yaml::calib,calib_temp,TT,prior_SZ
@@ -38,36 +14,12 @@ params:
 
 class: TTHighlPlanck2018PlikLiteLikelihood
 
-info:
-  version: 0.0.1
-  date: 10/09/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Planck 2018 release for high-ell, TT+TE+EE power spectrum likelihood, marginalized over the foreground model (plik_lite)
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
-
 params:
   .import: planck2018_clik_params.yaml::calib
 
 ---
 
 class: TTTEEEHighlPlanck2018PlikLikelihood
-
-info:
-  version: 0.0.1
-  date: 10/09/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Planck 2018 release for high-ell, TT+TE+EE power spectrum likelihood (plik)
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
 
 params:
   .import: planck2018_clik_params.yaml::calib,calib_temp,calib_pol,TT,TE,EE,prior_SZ
@@ -76,36 +28,12 @@ params:
 
 class: TTTEEEHighlPlanck2018PlikUnbinnedLikelihood
 
-info:
-  version: 0.0.1
-  date: 10/09/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Planck 2018 release for high-ell, TT+TE+EE power spectrum likelihood (plik)
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
-
 params:
   .import: planck2018_clik_params.yaml::calib,calib_temp,calib_pol,TT,TE,EE,prior_SZ
 
 ---
 
 class: TTTEEEHighlPlanck2018PlikLiteLikelihood
-
-info:
-  version: 0.0.1
-  date: 10/09/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Planck 2018 release for high-ell, TT+TE+EE power spectrum likelihood, marginalized over the foreground model (plik_lite)
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
 
 params:
   .import: planck2018_clik_params.yaml::calib
@@ -114,18 +42,6 @@ params:
 
 class: LensingPlanck2018ClikLikelihood
 
-info:
-  version: 0.0.1
-  date: 10/09/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Planck 2018 release for high-ell, lensing likelihood power spectrum likelihood
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
-
 params:
   .import: planck2018_clik_params.yaml::calib
 
@@ -133,36 +49,12 @@ params:
 
 class: TTLowlPlanck2018ClikLikelihood
 
-info:
-  version: 0.0.1
-  date: 10/09/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Planck 2018 release for low-ell, TT power spectrum likelihood
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
-
 params:
   .import: planck2018_clik_params.yaml::calib
 
 ---
 
 class: EELowlPlanck2018ClikLikelihood
-
-info:
-  version: 0.0.1
-  date: 10/09/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Planck 2018 release for low-ell, EE power spectrum likelihood
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description: See https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
 
 params:
   .import: planck2018_clik_params.yaml::calib

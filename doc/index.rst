@@ -10,6 +10,9 @@ Welcome to desilike's documentation!
 
   user/building
   api/core
+  api/theories
+  api/observables
+  api/likelihoods
   api/bindings
   api/profilers
   api/samplers

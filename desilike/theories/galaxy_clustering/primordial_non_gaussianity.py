@@ -1,16 +1,50 @@
 import numpy as np
 from scipy import constants
 
-from .base import TrapzTheoryPowerSpectrumMultipoles
+from .base import BaseTrapzTheoryPowerSpectrumMultipoles
 from .power_template import FixedPowerSpectrumTemplate
 
 
-class PNGTracerPowerSpectrumMultipoles(TrapzTheoryPowerSpectrumMultipoles):
+class PNGTracerPowerSpectrumMultipoles(BaseTrapzTheoryPowerSpectrumMultipoles):
+    r"""
+    Kaiser tracer power spectrum multipoles, with scale dependent bias sourced by local primordial non-Gaussianities.
 
+    Reference
+    ---------
+    https://arxiv.org/pdf/1904.08859.pdf
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+        
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+        
+    mu : int, default=200
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+        
+    method : str, default='prim'
+        Method to compute :math:`\alpha`, which relates primordial potential to current density contrast.
+
+        - "prim": :math:`\alpha` is the square root of the primordial power spectrum to the current density power spectrum
+        - else: :math:`\alpha` is the transfer function, rescaled by the factor in the Poisson equation, and the growth rate,
+          normalized to :math:`1 / (1 + z)` at :math:`z = 10` (in the matter dominated era).
+
+    mode : str, default='b-p'
+        fnl_loc is degenerate with PNG bias bphi.
+            
+        - "b-p": ``bphi = 2 * 1.686 * (b1 - p)``, p as a parameter
+        - "bphi": ``bphi`` as a parameter
+        - "bfnl_loc": ``bfnl_loc = bphi * fnl_loc`` as a parameter
+        
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`FixedPowerSpectrumTemplate`.
+    """
     config_fn = 'primordial_non_gaussianity.yaml'
 
-    def initialize(self, *args, template=None, method='prim', mode='b-p', **kwargs):
-        super(PNGTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
+    def initialize(self, *args, ells=(0, 2), method='prim', mode='b-p', template=None, **kwargs):
+        super(PNGTracerPowerSpectrumMultipoles, self).initialize(*args, ells=ells, **kwargs)
         kin = np.insert(self.k, 0, 1e-4)
         if template is None:
             template = FixedPowerSpectrumTemplate(k=kin)

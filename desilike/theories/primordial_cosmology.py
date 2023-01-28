@@ -5,7 +5,7 @@ from desilike.base import BaseCalculator
 
 class BasePrimordialCosmology(BaseCalculator):
 
-    pass
+    """Base primordial cosmology computation."""
 
 
 conversions = {'logA': 'ln10^10A_s'}
@@ -51,9 +51,27 @@ def get_from_cosmo(cosmo, name):
 
 class Cosmoprimo(BasePrimordialCosmology):
 
+    """Primordial cosmology calculation, based on :mod:`cosmoprimo`."""
     config_fn = 'primordial_cosmology.yaml'
 
     def initialize(self, fiducial=None, **kwargs):
+        """
+        Initialize :class:`Cosmoprimo`.
+        
+        Parameters
+        ----------
+        fiducial : str, tuple, dict, cosmoprimo.Cosmology
+            Specifications for fiducial cosmology, which is used to fill in parameter values :attr:`Parameter.value` if provided.
+            Either:
+
+            - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+            - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+            - dict: dictionary of parameters
+            - :class:`cosmoprimo.Cosmology`: Cosmology instance
+        
+        **kwargs : dict
+            Optionally, dictionary of parameters to update ``fiducial`` with.
+        """
         # kwargs is engine, extra_params
         fiducial_input = bool(fiducial)
         if fiducial is None:

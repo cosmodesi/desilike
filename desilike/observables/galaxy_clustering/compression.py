@@ -5,8 +5,45 @@ from desilike.samples import load_source
 from desilike.theories.galaxy_clustering.power_template import BAOExtractor, ShapeFitPowerSpectrumExtractor
 
 
-class BAOCompression(BaseCalculator):
+def _check_conflicts(quantities, conflicts):
+    for conflict in conflicts:
+        if all(c in quantities for c in conflict):
+            raise ValueError('Found conflicting quantities: {}'.format(conflict))
 
+
+class BAOCompression(BaseCalculator):
+    """
+    BAO observable: compare (compressed) BAO measurements
+    (in terms of ratios of distances to the sound horizon scale at the drag epoch) to theory predictions.
+
+    Parameters
+    ----------
+    data : str, Path, array, Profiles, Chain
+        BAO parameters. If array, provide corresponding ``quantities``.
+        Else, chain, profiles or path to such objects.
+    
+    covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
+        Covariance for BAO parameters. If 2D array, provide corresponding ``quantities``.
+        Else, chain, profiles, covariance or path to such objects.
+
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
+    
+    quantities : list, tuple
+        Quantities to take from ``data`` and ``covariance``:
+        chose from ``['DM_over_rd', 'DH_over_rd', 'DM_over_DH', 'DV_over_rd', 'qpar', 'qper', 'qap', 'qiso']``.
+
+    z : float, default=None
+        Effective redshift.
+    
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+    """
     def initialize(self, data=None, covariance=None, cosmo=None, quantities=None, z=None, fiducial='DESI'):
         self.bao_quantities, self.flatdata, self.covariance = self.load_data(data=data, covariance=covariance, quantities=quantities)
         if self.mpicomm.rank == 0:
@@ -22,6 +59,8 @@ class BAOCompression(BaseCalculator):
             if quantity.basename in allowed_bao_quantities:
                 indices.append(iq)
         quantities = [quantities[iq] for iq in indices]
+        conflicts = [('DM_over_rd', 'qper'), ('DH_over_rd', 'qper'), ('DM_over_DH', 'qap'), ('DV_over_rd', 'qsio')]
+        _check_conflicts(quantities, conflicts)
         flatdata = [data[quantity.name] for quantity in quantities]
         covariance = load_source(covariance if covariance is not None else data, params=quantities, cov=True, return_type='nparray')
         return [quantity.basename for quantity in quantities], flatdata, covariance
@@ -38,7 +77,41 @@ class BAOCompression(BaseCalculator):
 
 
 class ShapeFitCompression(BaseCalculator):
+    """
+    ShapeFit observable: compare ShapeFit measurements to theory predictions.
 
+    Reference
+    ---------
+    https://arxiv.org/abs/2106.07641
+
+    Parameters
+    ----------
+    data : str, Path, array, Profiles, Chain
+        ShapeFit parameters. If array, provide corresponding ``quantities``.
+        Else, chain, profiles or path to such objects.
+    
+    covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
+        Covariance for ShapeFit parameters. If 2D array, provide corresponding ``quantities``.
+        Else, chain, profiles, covariance or path to such objects.
+
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
+    
+    quantities : list, tuple
+        Quantities to take from ``data`` and ``covariance``:
+        chose from ``['m', 'n', 'f_sqrt_Ap', 'dm', 'dn', 'f', 'DM_over_rd', 'DH_over_rd', 'DM_over_DH', 'DV_over_rd', 'qpar', 'qper', 'qap', 'qiso']``.
+
+    z : float, default=None
+        Effective redshift.
+    
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+    """
     def initialize(self, data=None, covariance=None, cosmo=None, quantities=None, z=None, fiducial='DESI'):
         self.bao_quantities, self.fs_quantities, self.flatdata, self.covariance = self.load_data(data=data, covariance=covariance, quantities=quantities)
         if self.mpicomm.rank == 0:
@@ -60,7 +133,11 @@ class ShapeFitCompression(BaseCalculator):
             elif quantity.basename in allowed_fs_quantities:
                 fs_indices.append(iq)
         bao_quantities = [quantities[iq] for iq in bao_indices]
+        conflicts = [('DM_over_rd', 'qper'), ('DH_over_rd', 'qper'), ('DM_over_DH', 'qap'), ('DV_over_rd', 'qsio')]
+        _check_conflicts(bao_quantities, conflicts)
         fs_quantities = [quantities[iq] for iq in fs_indices]
+        conflicts = [('m', 'dm'), ('n', 'dn'), ('f_sqrt_Ap', 'f')]
+        _check_conflicts(fs_quantities, conflicts)
         quantities = bao_quantities + fs_quantities
         flatdata = [data[quantity.name] for quantity in quantities]
         covariance = load_source(covariance, params=quantities, cov=True, return_type='nparray')

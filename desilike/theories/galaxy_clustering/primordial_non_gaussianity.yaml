@@ -1,25 +1,5 @@
 class: PNGTracerPowerSpectrumMultipoles
 
-info:
-  version: 0.0.1
-  date: 05/04/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Compute primordial non-Gaussianity power spectrum multipoles
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description: 'fnl_loc is degenerate with PNG bias bphi. Parameterization is controlled by "mode".
-                     - "b-p": bphi = 2 * 1.686 * (b1 - p), p as a parameter
-                     - "bphi": bphi as a parameter
-                     - "bfnl_loc": bfnl_loc = bphi * fnl_loc as a parameter'
-
-init:
-  ells: [0, 2]
-  method: prim
-  mode: b-p
-
 params:
   fnl_loc:
     prior:

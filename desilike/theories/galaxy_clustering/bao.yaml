@@ -1,22 +1,5 @@
 class: DampedBAOWigglesTracerPowerSpectrumMultipoles
 
-info:
-  version: 0.0.1
-  date: 05/04/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Empirical model for BAO power spectrum multipoles
-  url:
-  licence:
-  bibtex: [arxiv:1607.03149]
-  requirements: []
-  long_description: BAO model used in the BOSS DR12 BAO analysis by Beutler et al. 2017; supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction
-
-init:
-  ells: [0, 2]
-  smoothing_radius: 15.
-  mode: ''  # '' for pre-recon, reciso, recsym
-
 params:
   b1:
     prior:
@@ -58,23 +41,6 @@ params:
 
 class: SimpleBAOWigglesTracerPowerSpectrumMultipoles
 
-info:
-  version: 0.0.1
-  date: 05/04/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Empirical model for BAO power spectrum multipoles
-  url:
-  licence:
-  bibtex: [arxiv:1607.03149]
-  requirements: []
-  long_description: A variation of above DampedBAOWigglesTracerPowerSpectrumMultipoles
-
-init:
-  ells: [0, 2]
-  smoothing_radius: 15.
-  mode: ''  # '' for pre-recon, reciso, recsym
-
 params:
   b1:
     prior:
@@ -115,23 +81,6 @@ params:
 
 class: ResummedBAOWigglesTracerPowerSpectrumMultipoles
 
-info:
-  version: 0.0.1
-  date: 07/04/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Model for BAO power spectrum multipoles with resummed BAO wiggles
-  url:
-  licence:
-  bibtex: [arxiv:1907.00043]
-  requirements: []
-  long_description: Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction
-
-init:
-  ells: [0, 2]
-  smoothing_radius: 15.
-  mode: ''  # '' for pre-recon, reciso, recsym
-
 params:
   b1:
     prior:
@@ -159,23 +108,6 @@ params:
 ---
 
 class: DampedBAOWigglesTracerCorrelationFunctionMultipoles
-
-info:
-  version: 0.0.1
-  date: 05/04/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Empirical model for BAO correlation function multipoles
-  url:
-  licence:
-  bibtex: [arxiv:1607.03149]
-  requirements: []
-  long_description: BAO model used in the BOSS DR12 BAO analysis by Beutler et al. 2017; supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction
-
-init:
-  ells: [0, 2]
-  smoothing_radius: 15.
-  mode: ''  # '' for pre-recon, reciso, recsym
 
 params:
   b1:
@@ -217,23 +149,6 @@ params:
 
 class: SimpleBAOWigglesTracerCorrelationFunctionMultipoles
 
-info:
-  version: 0.0.1
-  date: 05/04/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Empirical model for BAO correlation function multipoles
-  url:
-  licence:
-  bibtex: [arxiv:1607.03149]
-  requirements: []
-  long_description: A variation of above DampedBAOWigglesTracerCorrelationFunctionMultipoles
-
-init:
-  ells: [0, 2]
-  smoothing_radius: 15.
-  mode: ''  # '' for pre-recon, reciso, recsym
-
 params:
   b1:
     prior:
@@ -273,23 +188,6 @@ params:
 ---
 
 class: ResummedBAOWigglesTracerCorrelationFunctionMultipoles
-
-info:
-  version: 0.0.1
-  date: 07/04/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Model for BAO correlation function multipoles with resummed BAO wiggles
-  url:
-  licence:
-  bibtex: [arxiv:1907.00043]
-  requirements: []
-  long_description: Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction
-
-init:
-  ells: [0, 2]
-  smoothing_radius: 15.
-  mode: ''  # '' for pre-recon, reciso, recsym
 
 params:
   b1:

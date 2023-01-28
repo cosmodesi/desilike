@@ -14,6 +14,7 @@ def chi2(flatdiff, precision):
 
 class BaseLikelihood(BaseCalculator):
 
+    """Base class for likelihood."""
     _attrs = ['loglikelihood', 'logprior']
 
     def initialize(self):
@@ -36,6 +37,7 @@ class BaseLikelihood(BaseCalculator):
 
     @classmethod
     def sum(cls, *others):
+        """Sum likelihoods: return :class:`SumLikelihood` instance."""
         if len(others) == 1 and utils.is_sequence(others[0]):
             others = others[0]
         likelihoods = []
@@ -43,6 +45,7 @@ class BaseLikelihood(BaseCalculator):
         return SumLikelihood(likelihoods=likelihoods)
 
     def __add__(self, other):
+        """Sum likelihoods- ``self`` and ``other``: return :class:`SumLikelihood` instance."""
         return self.sum(self, other)
 
     def __radd__(self, other):
@@ -57,6 +60,21 @@ class BaseLikelihood(BaseCalculator):
 
 
 class BaseGaussianLikelihood(BaseLikelihood):
+
+    """
+    Base class for Gaussian likelihood, which allows parameters the theory is linear with to be analytically marginalized over.
+    
+    Parameters
+    ----------
+    data : array
+        Data.
+        
+    covariance : array, default=None
+        Covariance matrix (or its diagonal).
+        
+    precision : array, default=None
+        If ``covariance`` is not provided, precision matrix (or its diagonal).
+    """
 
     _attrs = ['loglikelihood', 'logprior']
     solved_default = '.marg'
@@ -114,7 +132,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
                     try:
                         toret.append(likelihood.flatdiff)
                         likelihood.precision
-                    except AttributeError as exc:
+                    except AttributeError:
                         raise AttributeError('{} must have both flatdiff and precision attributes to perform analytic marginalization'.format(likelihood))
                 return toret  # jax understands lists
 
@@ -184,12 +202,12 @@ class BaseGaussianLikelihood(BaseLikelihood):
             sum_loglikelihood += loglikelihood
         if indices_marg:
             sum_loglikelihood -= 1. / 2. * np.linalg.slogdet(sum_inverse_fishers[np.ix_(indices_marg, indices_marg)])[1]
-            #sum_loglikelihood += 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
+            # sum_loglikelihood += 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
             # Convention: in the limit of no likelihood constraint on dx, no change to the loglikelihood
             # This allows to ~ keep the interpretation in terms of -1./2. chi2
             ip = inverse_priors[indices_marg]
             sum_loglikelihood += 1. / 2. * np.sum(np.log(ip[ip > 0.]))  # logdet
-            #sum_loglikelihood -= 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
+            # sum_loglikelihood -= 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
 
         self.loglikelihood = sum_loglikelihood
         self.logprior += sum_logprior
@@ -208,6 +226,21 @@ class BaseGaussianLikelihood(BaseLikelihood):
 
 class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
 
+    """
+    Gaussian likelihood of observables.
+    
+    Parameters
+    ----------
+    observables : list, BaseCalculator
+        List of (or single) observable, e.g. :class:`TracerPowerSpectrumMultipolesObservable` or :class:`TracerCorrelationFunctionMultipolesObservable`.
+    
+    covariance : array, default=None
+        Covariance matrix (or its diagonal) for input ``observables``.
+        If ``None``, covariance matrix is computed on-the-fly using observables' mocks.
+    
+    scale_covariance : float, default=1.
+        Scale covariance by this value. If ``True``, scale covariance by the number of mocks.
+    """
     def initialize(self, observables, covariance=None, scale_covariance=1.):
         if not utils.is_sequence(observables):
             observables = [observables]

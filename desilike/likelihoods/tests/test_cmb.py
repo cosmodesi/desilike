@@ -65,6 +65,10 @@ def test_params():
     print(testL.varied_params['logA'].value)
 
 
+def test_help():
+    help(TTHighlPlanck2018PlikLikelihood)
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -73,3 +77,4 @@ if __name__ == '__main__':
     #test_sum()
     #test_gaussian_likelihood()
     #test_params()
+    test_help()

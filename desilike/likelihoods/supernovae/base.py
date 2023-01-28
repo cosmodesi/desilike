@@ -1,14 +1,27 @@
 import os
 from collections import UserDict
-from configparser import ConfigParser
 
 import numpy as np
 
 from desilike.likelihoods.base import BaseLikelihood, BaseGaussianLikelihood
 
 
-class SNLikelihood(BaseGaussianLikelihood):
+class BaseSNLikelihood(BaseGaussianLikelihood):
+    """
+    Base likelihood for supernovae.
 
+    Parameters
+    ----------
+    config_fn : str, Path
+        Configuration file.
+    
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+    
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo()``.
+    """
     def initialize(self, config_fn, data_dir=None, cosmo=None):
         if data_dir is None:
             from desilike.install import Installer

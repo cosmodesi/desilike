@@ -17,10 +17,12 @@ def integral_legendre_product(ells, range=(-1, 1), norm=False):
     ----------
     ells : int, list, tuple
         Order(s) of Legendre polynomials to multiply together.
-    range : tuple, default=(-1,1)
+
+    range : tuple, default=(-1, 1)
         :math:`\mu`-integration range.
+
     norm : bool, default=False
-        Whether to normalize integral by the :math:`\mu`-integration range.
+        If ``True``, normalize integral by the :math:`\mu`-integration range.
 
     Returns
     -------
@@ -49,8 +51,24 @@ def _interval_empty(interval):
 
 
 class BaseFootprint(BaseClass):
+    
+    """Base class to characterize 3D footprint: density and volume."""
 
     def __init__(self, nbar=None, size=None, volume=None):
+        r"""
+        Initialize footprint.
+
+        Parameters
+        ----------
+        nbar : float, default=None
+            Density, in :math:`(h / \mathrm{Mpc})^{3}`.
+        
+        size : float, default=None
+            If ``nbar`` is not provided, the number of objects.
+        
+        volume : float, default=None
+            Volume, in :math:`(\mathrm{Mpc} / h)^{3}`.
+        """
         if nbar is None and size is None:
             raise ValueError('provide either "size" (number of objects) or "nbar" (mean comoving density in (Mpc/h)^(-3))')
         for name in ['nbar', 'size', 'volume']:
@@ -59,22 +77,23 @@ class BaseFootprint(BaseClass):
 
     @property
     def volume(self):
+        r"""Volume, in :math:`(\mathrm{Mpc} / h)^{3}`."""
         return self._volume
 
     @property
     def size(self):
+        """Number of objects."""
         if self._size is not None:
             return self._size
-        try:
-            area = self.area
-        except AttributeError:
-            return self._nbar * self.volume
+        return self._nbar * self.volume
 
     @property
     def shotnoise(self):
+        """Shot noise, in :math:`(h / \mathrm{Mpc})^{3}`."""
         return self.volume / self.size
 
     def __and__(self, other):
+        """Intersection of footprints ``self`` with ``other``."""
         return self.__class__(nbar=self._nbar + other._nbar, volume=min(self.volume, other.volume))
 
 
@@ -85,7 +104,30 @@ class BoxFootprint(BaseFootprint):
 
 class CutskyFootprint(BaseFootprint):
 
+    """Extend :class:`BaseFootprint` to cutsky: surface area, redshift range and redshift density."""
+
     def __init__(self, nbar=None, size=None, area=None, zrange=None, cosmo=None):
+        r"""
+        Initialize footprint.
+
+        Parameters
+        ----------
+        nbar : float, array, default=None
+            If scalar, surface density, in :math:`\mathrm{deg}^{-2}`.
+            Else, for each redshift in ``zrange``, density, in :math:`(h / \mathrm{Mpc})^{3}`.
+        
+        size : float, default=None
+            If ``nbar`` is not provided, the number of objects.
+        
+        area : float, default=None
+            Area, in :math:`\mathrm{deg}^{2}`.
+
+        zrange : tuple, array, default=None
+            Redshift range, or array of redshifts where ``nbar`` is tabulated.
+        
+        cosmo : cosmoprimo.Cosmology
+            Cosmology instance, for redshift-to-distance conversion.
+        """
         if nbar is None and size is None:
             raise ValueError('provide either "size" (number of objects) or "nbar" (angular density in (deg)^(-2))')
         if area is None or zrange is None:
@@ -102,6 +144,7 @@ class CutskyFootprint(BaseFootprint):
 
     @property
     def cosmo(self):
+        """Fiducial cosmology."""
         if self._cosmo is None:
             raise ValueError('Provide cosmology')
         return self._cosmo
@@ -112,17 +155,20 @@ class CutskyFootprint(BaseFootprint):
 
     @property
     def volume(self):
+        r"""Volume, in :math:`(\mathrm{Mpc} / h)^{3}`."""
         volume = self.cosmo.comoving_radial_distance(self._zrange)**3
         return self.area / (180. / np.pi)**2 / 3. * np.diff(volume).sum()
 
     @property
     def area(self):
+        r"""Area, in :math:`\mathrm{deg}^{2}`."""
         if self._area.ndim == 0:
             return self._area
         return np.mean(self._area) * (180. / np.pi)**2 * (4. * np.pi)
 
     @property
     def zavg(self):
+        r"""Average redshift."""
         z = (self._zrange[:-1] + self._zrange[1:]) / 2.
         if self._nbar.ndim:
             volume = np.diff(self.cosmo.comoving_radial_distance(self._zrange)**3)
@@ -132,6 +178,7 @@ class CutskyFootprint(BaseFootprint):
 
     @property
     def size(self):
+        r"""Number of objects."""
         if self._size is not None:
             return self._size
         if self._nbar.ndim:
@@ -141,6 +188,7 @@ class CutskyFootprint(BaseFootprint):
         return self.area * self._nbar
 
     def __and__(self, other):
+        """Intersection of footprints ``self`` with ``other``."""
         if self._area.ndim == 0 or other._area.ndim == 0:
             area = min(self.area, other.area)
         else:
@@ -159,10 +207,28 @@ class CutskyFootprint(BaseFootprint):
 
 
 class ObservablesCovarianceMatrix(BaseClass):
-
-    """Warning: does not handle cross-correlations of different tracers!"""
-
+    """
+    Compute Gaussian covariance matrix for input observables.
+    Warning: does not handle cross-correlations of different tracers!
+    """
     def __init__(self, observables, footprints=None, theories=None, resolution=1):
+        """
+        Initialize :class:`ObservablesCovarianceMatrix`.
+
+        Parameters
+        ----------
+        observables : list, BaseCalculator
+            List of (or single) observable, e.g. :class:`TracerPowerSpectrumMultipolesObservable` or :class:`TracerCorrelationFunctionMultipolesObservable`.
+        
+        footprints : list, BaseFootprint
+            List of (or single) footprints for input ``observables``.
+        
+        theories : list, BaseCalculator
+            List of theories for input ``observables``. Defaults to first calculator in observable that has ``power`` attribute.
+        
+        resolution : int, default=1
+            Number of integration points in each bin.
+        """
         if not utils.is_sequence(observables):
             observables = [observables]
         self.observables = EnsembleCalculator(calculators=observables).runtime_info.initialize()
@@ -179,6 +245,7 @@ class ObservablesCovarianceMatrix(BaseClass):
             raise ValueError('resolution must be a strictly positive integer')
 
     def __call__(self, **params):
+        """Return covariance matrix for input parameters."""
         self.run(**params)
         return self.covariance
 
@@ -190,6 +257,7 @@ class ObservablesCovarianceMatrix(BaseClass):
                 self.cosmo = getattr(footprint, 'cosmo', None)
                 if self.cosmo is not None: break
             if self.cosmo is None:
+                from desilike.theories.primordial_cosmology import Cosmoprimo
                 for observable in self.observables:
                     for calculator in observable.runtime_info.pipeline.calculators:
                         if isinstance(calculator, Cosmoprimo):

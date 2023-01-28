@@ -808,13 +808,12 @@ class BaseCalculator(BaseClass):
         return self.runtime_info.pipeline.calculate(**params)
 
     def initialize(self, **kwargs):
-        """
-        Define this method, with takes meta parameters as input.
-        Parameters can be accessed through :attr:`params`.
-        """
+        # Define this method, with takes meta parameters as input. Parameters can be accessed through self.params.
+        pass
 
     def calculate(self, **params):
-        """Define this method, which takes parameter values as input."""
+        # Define this method, which takes parameter values as input.
+        pass
 
     def get(self):
         """Return quantity of main interest, e.g. loglikelihood + logprior if ``self`` is a likelihood."""
@@ -822,7 +821,7 @@ class BaseCalculator(BaseClass):
 
     def __getstate__(self):
         """
-        Return this class state dictionary.
+        Return this class' state dictionary.
         To be able to emulate this calculator, it should return all the quantities that can then be used by any other calculator.
         """
         return {}

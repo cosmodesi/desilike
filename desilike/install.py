@@ -296,7 +296,10 @@ class Installer(BaseClass):
 
     def __getitem__(self, name):
         """Get config option, e.g. ``install_dir``."""
-        return self.config[name]
+        try:
+            return self.config[name]
+        except KeyError as exc:
+            raise InstallError('Config option {} does not exist; maybe the corresponding calculator should be installed?'.format(name)) from exc
 
     def __call__(self, obj):
         """

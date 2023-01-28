@@ -9,11 +9,13 @@ from desilike.base import BaseCalculator
 from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo
 from desilike.jax import numpy as jnp
 from .power_template import BAOPowerSpectrumTemplate
-from .base import (BaseTheoryPowerSpectrumMultipoles, TrapzTheoryPowerSpectrumMultipoles,
+from .base import (BaseTheoryPowerSpectrumMultipoles, BaseTrapzTheoryPowerSpectrumMultipoles,
                    BaseTheoryCorrelationFunctionMultipoles, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles)
 
 
 class BaseBAOWigglesPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
+
+    """Base class for theory BAO power spectrum multipoles, without broadband terms."""
 
     def initialize(self, *args, template=None, mode='', wiggle=True, smoothing_radius=15., ells=(0, 2), **kwargs):
         super(BaseBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, ells=ells, **kwargs)
@@ -28,8 +30,16 @@ class BaseBAOWigglesPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         self.template = template
 
 
-class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, TrapzTheoryPowerSpectrumMultipoles):
+class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTrapzTheoryPowerSpectrumMultipoles):
+    """
+    Theory BAO power spectrum multipoles, without broadband terms,
+    used in the BOSS DR12 BAO analysis by Beutler et al. 2017.
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
 
+    Reference
+    ---------
+    https://arxiv.org/abs/1607.03149
+    """
     def initialize(self, *args, mu=200, **kwargs):
         super(DampedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.set_k_mu(k=self.k, mu=mu, ells=self.ells)
@@ -49,7 +59,10 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
 
 
 class SimpleBAOWigglesPowerSpectrumMultipoles(DampedBAOWigglesPowerSpectrumMultipoles):
-
+    r"""
+    As :class:`DampedBAOWigglesPowerSpectrumMultipoles`, but moving only BAO wiggles (and not damping or RSD terms)
+    with scaling parameters.
+    """
     def calculate(self, b1=1., sigmas=0., sigmapar=9., sigmaper=6., **kwargs):
         f = self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
@@ -57,15 +70,22 @@ class SimpleBAOWigglesPowerSpectrumMultipoles(DampedBAOWigglesPowerSpectrumMulti
         pknow = self.template.pknow_dd_interpolator(self.k)[:, None]
         sigmanl2 = self.k[:, None]**2 * (sigmapar**2 * self.mu**2 + sigmaper**2 * (1. - self.mu**2))
         damping = np.exp(-sigmanl2 / 2.)
-        fog = 1. / (1. + (sigmas * kap * muap)**2 / 2.)**2.
+        fog = 1. / (1. + (sigmas * self.k * self.mu[:, None])**2 / 2.)**2.
         sk = 0.
-        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (kap * self.smoothing_radius)**2)
-        pkmu = fog * (b1 + f * muap**2 * (1 - sk))**2 * damping * wiggles * pknow
+        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (self.k * self.smoothing_radius)**2)
+        pkmu = fog * (b1 + f * self.mu**2 * (1 - sk))**2 * damping * wiggles * pknow
         self.power = self.to_poles(pkmu)
 
 
 class ResummedPowerSpectrumWiggles(BaseCalculator):
+    r"""
+    Resummed BAO wiggles.
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
 
+    Reference
+    ---------
+    https://arxiv.org/abs/1907.00043
+    """
     def initialize(self, z=1., cosmo=None, fiducial='DESI', mode='', with_now='peakaverage', smoothing_radius=15.):
         self.z = float(z)
         self.mode = str(mode)
@@ -127,8 +147,16 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
         return resummed_wiggles * wiggles
 
 
-class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, TrapzTheoryPowerSpectrumMultipoles):
+class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTrapzTheoryPowerSpectrumMultipoles):
+    r"""
+    Theory BAO power spectrum multipoles, without broadband terms,
+    with resummation of BAO wiggles.
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
 
+    Reference
+    ---------
+    https://arxiv.org/abs/1907.00043
+    """
     def initialize(self, *args, mu=200, **kwargs):
         super(ResummedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.set_k_mu(k=self.k, mu=mu, ells=self.ells)
@@ -152,10 +180,40 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
 
 
 class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
+    """
+    Base class for theory BAO power spectrum multipoles, with broadband terms.
+    
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+        
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+        
+    mu : int, default=200
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+        
+    mode : str, default=''
+        Reconstruction mode:
+        
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+        
+    wiggle : bool, default=True
+        If ``False``, switch off BAO wiggles: model is computed with smooth power spectrum.
+        
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+        
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+    """
 
     config_fn = 'bao.yaml'
 
-    def initialize(self, k=None, ells=(0, 2, 4), **kwargs):
+    def initialize(self, k=None, ells=(0, 2), **kwargs):
         super(BaseBAOWigglesTracerPowerSpectrumMultipoles, self).initialize(k=k, ells=ells)
         self.pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
         self.pt.init.update(k=self.k, ells=self.ells, **kwargs)
@@ -225,7 +283,10 @@ class ResummedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerS
 
 
 class BaseBAOWigglesCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):
-
+    """
+    Base class that implements theory BAO correlation function multipoles, without broadband terms,
+    as Hankel transforms of the theory power spectrum multipoles.
+    """
     def initialize(self, s=None, ells=(0, 2), **kwargs):
         power = globals()[self.__class__.__name__.replace('CorrelationFunction', 'PowerSpectrum')](**kwargs)
         super(BaseBAOWigglesCorrelationFunctionMultipoles, self).initialize(s=s, ells=ells, power=power)
@@ -243,6 +304,7 @@ class ResummedBAOWigglesCorrelationFunctionMultipoles(BaseBAOWigglesCorrelationF
 
 class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipoles):
 
+    """Base class that implements theory BAO correlation function multipoles, with broadband terms."""
     config_fn = 'bao.yaml'
 
     def initialize(self, s=None, ells=(0, 2), **kwargs):

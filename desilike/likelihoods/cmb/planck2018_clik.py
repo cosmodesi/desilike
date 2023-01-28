@@ -2,7 +2,7 @@ import os
 
 import numpy as np
 
-from desilike.likelihoods.base import BaseCalculator, BaseLikelihood
+from desilike.likelihoods.base import BaseLikelihood
 from .base import ClTheory
 
 
@@ -10,7 +10,28 @@ _cache = {}
 
 
 class BasePlanck2018ClikLikelihood(BaseLikelihood):
+    r"""
+    Base class for clik likelihood of Planck's 2018 data release.
 
+    Reference
+    ---------
+    https://arxiv.org/abs/1807.06209
+
+    https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+    Parameters
+    ----------
+    theory : ClTheory, default=None
+        Theory calculator for CMB :math:`C_{\ell}^{xy}`.
+        If ``None``, instantiated using ``cosmo``.
+    
+    cosmo : BasePrimordialCosmology, default=None
+        Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
+    
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+    """
     config_fn = 'planck2018_clik.yaml'
     installer_section = 'Planck2018ClikLikelihood'
 
@@ -154,54 +175,243 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
 
 
 class TTHighlPlanck2018PlikLikelihood(BasePlanck2018ClikLikelihood):
-    r"""High-$\ell$ temperature-only \textsc{plik} likelihood of Planck's 2018 data release."""
+    r"""
+    High-:math:`\ell` temperature-only plik likelihood of Planck's 2018 data release.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1807.06209
+
+    https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+    Parameters
+    ----------
+    theory : ClTheory, default=None
+        Theory calculator for CMB :math:`C_{\ell}^{xy}`.
+        If ``None``, instantiated using ``cosmo``.
+    
+    cosmo : BasePrimordialCosmology, default=None
+        Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
+    
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+    """
     data_file_id = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
     data_basename = 'baseline/plc_3.0/hi_l/plik/plik_rd12_HM_v22_TT.clik'
 
 
 class TTHighlPlanck2018PlikLiteLikelihood(BasePlanck2018ClikLikelihood):
-    r"""High-$\ell$ temperature-only \textsc{plik} likelihood of Planck's 2018 data release, marginalized over the foreground model."""
+    r"""
+    High-:math:`\ell` temperature-only plik likelihood of Planck's 2018 data release, marginalized over the foreground model.
+    
+    Reference
+    ---------
+    https://arxiv.org/abs/1807.06209
+
+    https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+    Parameters
+    ----------
+    theory : ClTheory, default=None
+        Theory calculator for CMB :math:`C_{\ell}^{xy}`.
+        If ``None``, instantiated using ``cosmo``.
+    
+    cosmo : BasePrimordialCosmology, default=None
+        Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
+    
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+    """
     data_file_id = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
     data_basename = 'baseline/plc_3.0/hi_l/plik_lite/plik_lite_v22_TT.clik'
 
 
 class TTHighlPlanck2018PlikUnbinnedLikelihood(BasePlanck2018ClikLikelihood):
-    r"""High-$\ell$ temperature-only \textsc{plik} likelihood of Planck's 2018 data release."""
+    r"""
+    High-:math:`\ell` temperature-only plik likelihood of Planck's 2018 data release.
+    
+    Reference
+    ---------
+    https://arxiv.org/abs/1807.06209
+
+    https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+    Parameters
+    ----------
+    theory : ClTheory, default=None
+        Theory calculator for CMB :math:`C_{\ell}^{xy}`.
+        If ``None``, instantiated using ``cosmo``.
+    
+    cosmo : BasePrimordialCosmology, default=None
+        Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
+    
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+    """
     data_file_id = 'COM_Likelihood_Data-extra-plik-ext_R3.00.tar.gz'
     data_basename = 'extended_plik/plc_3.0/hi_l/plik/plik_rd12_HM_v22_TT_bin1.clik'
 
 
 class TTTEEEHighlPlanck2018PlikLikelihood(BasePlanck2018ClikLikelihood):
-    r"""High-$\ell$ temperature and polarization \textsc{plik} likelihood of Planck's 2018 data release."""
+    r"""
+    High-:math:`\ell` temperature and polarization plik likelihood of Planck's 2018 data release.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1807.06209
+
+    https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+    Parameters
+    ----------
+    theory : ClTheory, default=None
+        Theory calculator for CMB :math:`C_{\ell}^{xy}`.
+        If ``None``, instantiated using ``cosmo``.
+    
+    cosmo : BasePrimordialCosmology, default=None
+        Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
+    
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+    """
     data_file_id = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
     data_basename = 'baseline/plc_3.0/hi_l/plik/plik_rd12_HM_v22b_TTTEEE.clik'
 
 
 class TTTEEEHighlPlanck2018PlikLiteLikelihood(BasePlanck2018ClikLikelihood):
-    r"""High-$\ell$ temperature and polarization \textsc{plik} likelihood of Planck's 2018 data release, marginalized over the foreground model."""
+    r"""
+    High-:math:`\ell` temperature and polarization plik likelihood of Planck's 2018 data release, marginalized over the foreground model.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1807.06209
+
+    https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+    Parameters
+    ----------
+    theory : ClTheory, default=None
+        Theory calculator for CMB :math:`C_{\ell}^{xy}`.
+        If ``None``, instantiated using ``cosmo``.
+    
+    cosmo : BasePrimordialCosmology, default=None
+        Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
+    
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+    """
     data_file_id = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
     data_basename = 'baseline/plc_3.0/hi_l/plik_lite/plik_lite_v22_TTTEEE.clik'
 
 
 class TTTEEEHighlPlanck2018PlikUnbinnedLikelihood(BasePlanck2018ClikLikelihood):
-    r"""High-$\ell$ temperature and polarization \textsc{plik} likelihood of Planck's 2018 data release."""
+    r"""
+    High-:math:`\ell` temperature and polarization plik likelihood of Planck's 2018 data release.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1807.06209
+
+    https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+    Parameters
+    ----------
+    theory : ClTheory, default=None
+        Theory calculator for CMB :math:`C_{\ell}^{xy}`.
+        If ``None``, instantiated using ``cosmo``.
+    
+    cosmo : BasePrimordialCosmology, default=None
+        Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
+    
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+    """
     data_file_id = 'COM_Likelihood_Data-extra-plik-ext_R3.00.tar.gz'
     data_basename = 'extended_plik/plc_3.0/hi_l/plik/plik_rd12_HM_v22b_TTTEEE_bin1.clik'
 
 
 class LensingPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
-    r"""Lensing likelihood of Planck's 2018 data release based on temperature+polarization map-based lensing reconstruction."""
+    r"""
+    Lensing likelihood of Planck's 2018 data release based on temperature+polarization map-based lensing reconstruction.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1807.06209
+
+    https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+    Parameters
+    ----------
+    theory : ClTheory, default=None
+        Theory calculator for CMB :math:`C_{\ell}^{xy}`.
+        If ``None``, instantiated using ``cosmo``.
+    
+    cosmo : BasePrimordialCosmology, default=None
+        Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
+    
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+    """
     data_file_id = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
     data_basename = 'baseline/plc_3.0/lensing/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8.clik_lensing'
 
 
 class TTLowlPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
-    r"""Low-$\ell$ temperature-only \textsc{plik} likelihood of Planck's 2018 data release."""
+    r"""
+    Low-:math:`\ell` temperature-only plik likelihood of Planck's 2018 data release.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1807.06209
+
+    https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+    Parameters
+    ----------
+    theory : ClTheory, default=None
+        Theory calculator for CMB :math:`C_{\ell}^{xy}`.
+        If ``None``, instantiated using ``cosmo``.
+    
+    cosmo : BasePrimordialCosmology, default=None
+        Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
+    
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+    """
     data_file_id = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
     data_basename = 'baseline/plc_3.0/low_l/commander/commander_dx12_v3_2_29.clik'
 
 
 class EELowlPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
-    r"""Low-$\ell$ polarization \textsc{plik} likelihood of Planck's 2018 data release."""
+    r"""
+    Low-:math:`\ell` polarization plik likelihood of Planck's 2018 data release.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1807.06209
+
+    https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+    Parameters
+    ----------
+    theory : ClTheory, default=None
+        Theory calculator for CMB :math:`C_{\ell}^{xy}`.
+        If ``None``, instantiated using ``cosmo``.
+    
+    cosmo : BasePrimordialCosmology, default=None
+        Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
+    
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+    """
     data_file_id = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
     data_basename = 'baseline/plc_3.0/low_l/simall/simall_100x143_offlike5_EE_Aplanck_B.clik'

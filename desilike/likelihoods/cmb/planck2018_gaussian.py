@@ -5,13 +5,35 @@ from desilike.jax import numpy as jnp
 from desilike import utils
 
 
-class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):# WARNING:
-    """
-    Approximate Planck likelihood from marginalized mean and covariance.
+class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
+    r"""
+    Gaussian approximation of "base" likelihoods of Planck's 2018 data release.
 
-    Note
-    ----
-    *.covmat files are the covariance of the final chains, which are supposedly burnin-free.
+    Reference
+    ---------
+    https://arxiv.org/abs/1807.06209
+
+    https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+    Parameters
+    ----------    
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo()``.
+    
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+    
+    basename : str, default='base_plikHM_TTTEEE_lowl_lowE_lensing'
+        Likelihood base name, e.g. 'base_plikHM_TT', 'base_plikHM_TTTEEE', 'base_plikHM_TTTEEE_lowl_lowE_lensing'.
+    
+    source : str, default='covmat'
+        Source, either:
+
+        - 'covmat': use '.margestats' for mean and '.covmat' file as covariance.
+        - 'chains': compute mean and covariance from chains
+
+        Both options are very close (within precision in provided file).
     """
     config_fn = 'planck2018_gaussian.yaml'
     installer_section = 'BasePlanck2018GaussianLikelihood'
@@ -83,7 +105,35 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):# WARNING:
 
 
 class FullGridPlanck2018GaussianLikelihood(BaseGaussianLikelihood):
+    r"""
+    Gaussian approximation of the full grid of likelihoods of Planck's 2018 data release.
 
+    Reference
+    ---------
+    https://arxiv.org/abs/1807.06209
+
+    https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
+
+    Parameters
+    ----------    
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo()``.
+    
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+    
+    basename : str, default='base_plikHM_TTTEEE_lowl_lowE_lensing'
+        Likelihood base name, e.g. 'base_plikHM_TT', 'base_plikHM_TTTEEE', 'base_plikHM_TTTEEE_lowl_lowE_lensing', 'base_mnu_plikHM_TTTEEE_lowl_lowE_lensing'.
+    
+    source : str, default='covmat'
+        Source, either:
+
+        - 'covmat': use '.margestats' for mean and '.covmat' file as covariance.
+        - 'chains': compute mean and covariance from chains
+
+        Both options are very close (within precision in provided file).
+    """
     config_fn = 'planck2018_gaussian.yaml'
     installer_section = 'FullGridPlanck2018GaussianLikelihood'
     data_file_id = ('COM_CosmoParams_fullGrid_R3.01.zip', 11e9)

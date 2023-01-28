@@ -9,7 +9,35 @@ from desilike.theories.galaxy_clustering.base import WindowedPowerSpectrumMultip
 
 
 class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
+    """
+    Tracer power spectrum multipoles observable: compare measurement to theory.
 
+    Parameters
+    ----------
+    data : str, Path, list, pypower.PowerSpectrumMultipoles, dict, default=None
+        Data power spectrum measurement: :class:`pypower.PowerSpectrumMultipoles` instance,
+        or path to such instances, or list of such objects (in which case the average of them is taken).
+        If dict, parameters to be passed to theory to generate mock measurement.
+    
+    mocks : list, default=None
+        List of :class:`pypower.PowerSpectrumMultipoles` instance` instances, or paths to such instances;
+        these are used to compute the covariance matrix.
+    
+    wmatrix : str, Path, pypower.BaseMatrix, default=None
+        Optionally, window matrix.
+    
+    theory : BaseTheoryPowerSpectrumMultipoles
+        Theory. Defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
+
+    klim : dict, default=None
+        Wavenumber cuts: a dictionary mapping multipoles to (min separation, max separation), e.g. ``{0: (0.01, 0.2), 2: (0.01, 0.15)}``.
+    
+    kstep : float, default=None
+        Bin step, e.g. 0.01.
+    
+    krebin : int, default=None
+        Rebinning factor for the data (and mocks). If provided, use instead of ``kstep``.
+    """
     def initialize(self, data=None, mocks=None, wmatrix=None, theory=None, klim=None, kstep=None, shotnoise=0., **kwargs):
         self.k, self.kedges, self.ells, self.shotnoise = None, None, None, shotnoise
         self.flatdata = None
@@ -116,7 +144,24 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
     @plotting.plotter
     def plot(self, scaling='kpk'):
-        """Scaling either 'kpk' or 'loglog'."""
+        """
+        Plot data and theory power spectrum multipoles.
+
+        Parameters
+        ----------
+        scaling : str, default='kpk'
+            Either 'kpk' or 'loglog'.
+        
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+        """
         from matplotlib import pyplot as plt
         height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
         figsize = (6, 1.5 * sum(height_ratios))
@@ -144,7 +189,22 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         return lax
 
     @plotting.plotter
-    def plot_bao(self):
+    def plot_wiggles(self):
+        """
+        Plot data and theory BAO power spectrum wiggles.
+
+        Parameters
+        ----------
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+        """
         from matplotlib import pyplot as plt
         height_ratios = [1] * len(self.ells)
         figsize = (6, 2 * sum(height_ratios))

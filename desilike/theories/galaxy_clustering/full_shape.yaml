@@ -1,20 +1,5 @@
 class: KaiserTracerPowerSpectrumMultipoles
 
-info:
-  version: 0.0.1
-  date: 05/04/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Compute Kaiser power spectrum
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description:
-
-init:
-  ells: [0, 2, 4]
-
 params:
   b1:
     prior:
@@ -35,21 +20,6 @@ params:
 
 class: KaiserTracerCorrelationFunctionMultipoles
 
-info:
-  version: 0.0.1
-  date: 05/04/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Compute Kaiser correlatiom function
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description:
-
-init:
-  ells: [0, 2, 4]
-
 params:
   b1:
     prior:
@@ -63,23 +33,7 @@ params:
 
 class: LPTVelocileptorsTracerPowerSpectrumMultipoles
 
-info:
-  version: 0.0.1
-  date: 05/04/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: 'Compute Lagrangian perturbation theory (LPT) power spectrum. Can be exactly marginalized over: alpha*, sn*'
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description:
-
-init:
-  ells: [0, 2, 4]
-
 params:
-  .fixed: ['b3']
   b1:
     prior:
       dist: uniform
@@ -117,6 +71,7 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
+    fixed: True
   alpha[0:7:2]:
     prior:
       dist: norm
@@ -142,23 +97,7 @@ params:
 
 class: LPTVelocileptorsTracerCorrelationFunctionMultipoles
 
-info:
-  version: 0.0.1
-  date: 05/04/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Compute Lagrangian perturbation theory (LPT) correlation function
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description:
-
-init:
-  ells: [0, 2, 4]
-
 params:
-  .fixed: ['b3']
   b1:
     prior:
       dist: uniform
@@ -197,6 +136,7 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
+    fixed: True
   alpha[0:7:2]:
     prior:
       dist: norm
@@ -222,23 +162,7 @@ params:
 
 class: PyBirdTracerPowerSpectrumMultipoles
 
-info:
-  version: 0.0.1
-  date: 05/04/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: 'Compute PyBird power spectrum. Can be exactly marginalized over: c*'
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description:
-
-init:
-  ells: [0, 2, 4]
-
 params:
-  .fixed: ['b2m4']
   b1:
     prior:
       limits: [0., 4.0]
@@ -276,6 +200,7 @@ params:
     prior:
       limits: [-10., 10.]
     latex: '(b_{2} - b_{4})/\sqrt{2}'
+    fixed: True
   cct:
     prior:
       dist: norm
@@ -317,23 +242,7 @@ params:
 
 class: PyBirdTracerCorrelationFunctionMultipoles
 
-info:
-  version: 0.0.1
-  date: 05/04/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: 'Compute PyBird correlation function. Can be exactly marginalized over: c*'
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description:
-
-init:
-  ells: [0, 2, 4]
-
 params:
-  .fixed: ['b2m4']
   b1:
     prior:
       limits: [0., 4.0]
@@ -371,6 +280,7 @@ params:
     prior:
       limits: [-10., 10.]
     latex: '(b_{2} - b_{4})/\sqrt{2}'
+    fixed: True
   cct:
     prior:
       dist: norm

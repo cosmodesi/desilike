@@ -9,7 +9,32 @@ from desilike.theories.galaxy_clustering.base import WindowedCorrelationFunction
 
 
 class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
+    """
+    Tracer correlation function multipoles observable: compare measurement to theory.
 
+    Parameters
+    ----------
+    data : str, Path, list, pycorr.BaseTwoPointEstimator, dict, default=None
+        Data correlation function measurement: :class:`pycorr.BaseTwoPointEstimator` instance,
+        or path to such instances, or list of such objects (in which case the average of them is taken).
+        If dict, parameters to be passed to theory to generate mock measurement.
+    
+    mocks : list, default=None
+        List of :class:`pycorr.BaseTwoPointEstimator` instances, or paths to such instances;
+        these are used to compute the covariance matrix.
+    
+    theory : BaseTheoryCorrelationFunctionMultipoles
+        Theory. Defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
+
+    slim : dict, default=None
+        Separation cuts: a dictionary mapping multipoles to (min separation, max separation), e.g. ``{0: (30, 160), 2: (30, 160)}``.
+    
+    sstep : float, default=None
+        Bin step, e.g. 5.
+    
+    srebin : int, default=None
+        Rebinning factor for the data (and mocks). If provided, use instead of ``sstep``.
+    """
     def initialize(self, data=None, mocks=None, theory=None, slim=None, sstep=None, **kwargs):
         self.s, self.sedges, self.ells = None, None, None
         self.flatdata = None
@@ -30,7 +55,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
 
     def set_default_s_ells(self, slim=None, sstep=None):
         if not isinstance(slim, dict):
-            raise ValueError('Unknown klim format; provide e.g. {0: (0.01, 0.2), 2: (0.01, 0.15)}')
+            raise ValueError('Unknown klim format; provide e.g. {0: (30, 160), 2: (30, 160)}')
         self.s, self.sedges, self.ells = [], [], []
         for ell, lim in slim.items():
             self.ells.append(ell)
@@ -99,6 +124,21 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
 
     @plotting.plotter
     def plot(self):
+        """
+        Plot data and theory correlation function multipoles.
+
+        Parameters
+        ----------
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+        """
         from matplotlib import pyplot as plt
         height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
         figsize = (6, 1.5 * sum(height_ratios))

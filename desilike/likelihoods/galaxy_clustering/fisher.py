@@ -2,14 +2,33 @@ import numpy as np
 from scipy import special
 
 from desilike.jax import numpy as jnp
-from desilike.parameter import Parameter
 from desilike.base import EnsembleCalculator
 from desilike.likelihoods.base import BaseGaussianLikelihood
 from desilike import utils
 
 
 class SNWeightedPowerSpectrumLikelihood(BaseGaussianLikelihood):
+    r"""
+    Likelihood for Fisher forecasts, integrating anisotropic signal-to-noise
+    over cosine angle to the line-of-sight :math:`\mu` and wavenumber :math:`k`.
 
+    Parameters
+    ----------
+    data : dict, default=None
+        Parameters to be passed to ``theories`` to generate fiducial measurement.
+    
+    theories : list, BaseCalculator
+        List of theories.
+
+    footprints : list, BaseFootprint
+        List of (or single) footprints for input ``theories``.
+    
+    klim : dict, default=None
+        Wavenumber cut, e.g. ``(0.01, 0.2)``.
+    
+    mu : int, default=50
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+    """
     def initialize(self, data=None, theories=None, footprints=None, klim=None, mu=50):
         if not utils.is_sequence(theories):
             theories = [theories]

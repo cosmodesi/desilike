@@ -9,6 +9,7 @@ from .base import APEffect
 
 class BasePowerSpectrumExtractor(BaseCalculator):
 
+    """Base class to extract shape parameters from linear power spectrum."""
     config_fn = 'power_template.yaml'
 
     def initialize(self, z=1., with_now=False, cosmo=None, fiducial='DESI'):
@@ -42,6 +43,7 @@ class BasePowerSpectrumExtractor(BaseCalculator):
 
 class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
 
+    """Base class for linear power spectrum template."""
     config_fn = 'power_template.yaml'
 
     def initialize(self, k=None, z=1., with_now=False, apmode='qparqper', fiducial='DESI'):
@@ -83,7 +85,28 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
 
 
 class FixedPowerSpectrumTemplate(BasePowerSpectrumTemplate):
+    """
+    Fixed power spectrum template.
+    
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate linear power spectrum.
+    
+    z : float, default=1.
+        Effective redshift.
+    
+    with_now : str, default=False
+        If provided, also compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
+    
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
 
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+    """
     def initialize(self, *args, **kwargs):
         super(FixedPowerSpectrumTemplate, self).initialize(*args, **kwargs)
         self.runtime_info.requires = []  # remove APEffect dependence
@@ -108,7 +131,42 @@ class DirectPowerSpectrumTemplate(BasePowerSpectrumTemplate):
 
 
 class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
+    """
+    Extract ShapeFit parameters from linear power spectrum.
 
+    Reference
+    ---------
+    https://arxiv.org/abs/2106.07641
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate linear power spectrum.
+    
+    z : float, default=1.
+        Effective redshift.
+
+    kp : float, default=0.03
+        Pivot point in ShapeFit parameterization.
+    
+    n_varied : bool, default=False
+        Use second order ShapeFit parameter ``n``.
+        This choice changes the definition of parameter ``m``.
+
+    with_now : str, default='peakaverage'
+        Compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
+    
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+    
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
+    """
     def initialize(self, *args, kp=0.03, n_varied=False, with_now='peakaverage', **kwargs):
         super(ShapeFitPowerSpectrumExtractor, self).initialize(*args, with_now=with_now, **kwargs)
         self.kp = float(kp)
@@ -145,7 +203,41 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
 
 
 class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpectrumExtractor):
+    r"""
+    ShapeFit power spectrum template.
+    
+    Reference
+    ---------
+    https://arxiv.org/abs/2106.07641
 
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate linear power spectrum.
+    
+    z : float, default=1.
+        Effective redshift.
+    
+    kp : float, default=0.03
+        Pivot point in ShapeFit parameterization.
+    
+    a : float, default=0.6
+        :math:`a` parameter in ShapeFit parameterization.
+    
+    with_now : str, default='peakaverage'
+        Compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
+
+    apmode : str, default='qparqper'
+        Alcock-Paczynski parameterization:
+
+        - 'qiso': single istropic parameter 'qiso'
+        - 'qap': single, Alcock-Paczynski parameter 'qap'
+        - 'qisoqap': two parameters 'qiso', 'qap'
+        - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
+    
+    fiducial : str, default='DESI'
+        Fiducial cosmology, used to compute the power spectrum.
+    """
     def initialize(self, *args, kp=0.03, a=0.6, with_now='peakaverage', **kwargs):
         self.kp = float(kp)
         self.n_varied = self.params['dn'].varied
@@ -169,7 +261,25 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
 
 
 class BAOExtractor(BaseCalculator):
+    """
+    Extract BAO parameters from base cosmological parameters.
 
+    Parameters
+    ----------
+    z : float, default=1.
+        Effective redshift.
+
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
+    
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+    """
     config_fn = 'power_template.yaml'
 
     def initialize(self, z=1., cosmo=None, fiducial='DESI'):
@@ -208,7 +318,25 @@ class BAOExtractor(BaseCalculator):
 
 
 class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
+    """
+    BAO power spectrum template.
+    
+    Parameters
+    ----------
+    z : float, default=1.
+        Effective redshift.
+    
+    with_now : str, default='peakaverage'
+        Compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
+    
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
 
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+    """
     def initialize(self, *args, with_now='peakaverage', **kwargs):
         super(BAOPowerSpectrumTemplate, self).initialize(*args, with_now=with_now, **kwargs)
         # Set DM_over_rd, etc.

@@ -94,14 +94,13 @@ def test_fisher_galaxy():
 
 def test_fisher_cmb():
     from desilike import Fisher
-    from desilike.likelihoods.cmb import BasePlanck2018GaussianLikelihood, TTTEEEHighlPlanck2018PlikLikelihood, TTHighlPlanck2018PlikLiteLikelihood, TTTEEEHighlPlanck2018PlikLiteLikelihood, TTLowlPlanck2018ClikLikelihood,\
+    from desilike.likelihoods.cmb import BasePlanck2018GaussianLikelihood, TTTEEEHighlPlanck2018PlikLikelihood, TTHighlPlanck2018PlikLiteLikelihood,\
+                                         TTTEEEHighlPlanck2018PlikLiteLikelihood, TTLowlPlanck2018ClikLikelihood,\
                                          EELowlPlanck2018ClikLikelihood, LensingPlanck2018ClikLikelihood
     from desilike.likelihoods import SumLikelihood
     from desilike.theories.primordial_cosmology import Cosmoprimo
     # Now let's turn to Planck (lite) clik likelihoods
     cosmo = Cosmoprimo(fiducial='DESI')
-    print(TTTEEEHighlPlanck2018PlikLikelihood(cosmo=cosmo)(), TTTEEEHighlPlanck2018PlikLiteLikelihood(cosmo=cosmo)())
-    exit()
     likelihoods = [Likelihood(cosmo=cosmo) for Likelihood in [TTTEEEHighlPlanck2018PlikLiteLikelihood, TTLowlPlanck2018ClikLikelihood,\
                                                               EELowlPlanck2018ClikLikelihood, LensingPlanck2018ClikLikelihood]]
     likelihood_clik = SumLikelihood(likelihoods=likelihoods)

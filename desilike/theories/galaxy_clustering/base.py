@@ -9,6 +9,8 @@ from desilike import plotting, utils
 
 class BaseTheoryPowerSpectrumMultipoles(BaseCalculator):
 
+    """Base class for theory power spectrum multipoles."""
+
     def initialize(self, k=None, ells=(0, 2, 4)):
         if k is None: k = np.linspace(0.01, 0.2, 101)
         self.k = np.array(k, dtype='f8')
@@ -23,6 +25,8 @@ class BaseTheoryPowerSpectrumMultipoles(BaseCalculator):
 
 
 class BaseTheoryCorrelationFunctionMultipoles(BaseCalculator):
+
+    """Base class for theory correlation function multipoles."""
 
     def initialize(self, s=None, ells=(0, 2, 4)):
         if s is None: s = np.linspace(20., 200, 101)
@@ -39,13 +43,15 @@ class BaseTheoryCorrelationFunctionMultipoles(BaseCalculator):
 
 class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrelationFunctionMultipoles):
 
+    """Base class for theory correlation function from power spectrum multipoles."""
+
     def initialize(self, s=None, ells=(0, 2, 4), power=None):
         super(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles, self).initialize(s=s, ells=ells)
         self.k = np.logspace(min(-3, - np.log10(self.s[-1]) - 0.1), max(2, - np.log10(self.s[0]) + 0.1), 2000)
         from cosmoprimo import PowerToCorrelation
         self.fftlog = PowerToCorrelation(self.k, ell=self.ells, q=0, lowring=False)
         self.kin = np.geomspace(self.k[0], 1., 300)
-        #self.kin = np.linspace(self.k[0], 0.5, 200)
+        # self.kin = np.linspace(self.k[0], 0.5, 200)
         mask = self.k > self.kin[-1]
         self.lowk = self.k[~mask]
         self.pad_highk = np.exp(-(self.k[mask] - self.kin[-1])**2 / (2. * (0.5)**2))
@@ -65,9 +71,23 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
 
     @plotting.plotter
     def plot(self):
-        # Comparison to brute-force (non-fftlog) computation
-        # Convergence towards brute-force when decreasing damping sigma
-        # Difference between fftlog and brute-force: ~ effect of truncation / damping
+        """
+        Plot comparison to brute-force (non-fftlog) computation.
+        We see convergence towards brute-force when decreasing damping sigma.
+        Difference between fftlog and brute-force comes from the effect of truncation / damping.
+
+        Parameters
+        ----------
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+        """
         corr = []
         weights = utils.weights_trapz(np.log(self.kin))
         for ill, ell in enumerate(self.ells):
@@ -95,10 +115,12 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         return lax
 
 
-class TrapzTheoryPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
+class BaseTrapzTheoryPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
+
+    """Base class for theory correlation function multipoles computed from theory power spectrum multipoles."""
 
     def initialize(self, *args, mu=200, **kwargs):
-        super(TrapzTheoryPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
+        super(BaseTrapzTheoryPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.set_k_mu(k=self.k, mu=mu, ells=self.ells)
 
     def set_k_mu(self, k, mu=200, ells=(0, 2, 4)):
@@ -115,7 +137,43 @@ class TrapzTheoryPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
 
 
 class APEffect(BaseCalculator):
+    """
+    Alcock-Paczynski effect.
 
+    Reference
+    ---------
+    https://ui.adsabs.harvard.edu/abs/1979Natur.281..358A/abstract 
+    
+    Parameters
+    ----------
+    z : float, default=1.
+        Effective redshift.
+        
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator, required only if ``mode`` is 'distances';
+        defaults to ``Cosmoprimo(fiducial=fiducial)``.
+        
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+        
+    mode : str, default='distances'
+        Alcock-Paczynski parameterization:
+
+        - 'qiso': single istropic parameter 'qiso'
+        - 'qap': single, Alcock-Paczynski parameter 'qap'
+        - 'qisoqap': two parameters 'qiso', 'qap'
+        - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
+        - 'distances': scaling parameters computed from the ratio of ``cosmo`` to ``fiducial`` cosmologies.
+        
+    eta : float, default=1./3.
+        Relation between 'qpar', 'qper' and 'qiso', 'qap' parameters:
+        ``qiso = qpar ** eta * qper ** (1 - eta)``.  
+    """
     config_fn = 'base.yaml'
 
     def initialize(self, z=1., cosmo=None, fiducial='DESI', mode='distances', eta=1. / 3.):
@@ -176,7 +234,33 @@ class APEffect(BaseCalculator):
 
 
 class WindowedPowerSpectrumMultipoles(BaseCalculator):
+    """
+    Window effect on the power spectrum multipoles.
 
+    Parameters
+    ----------
+    k : array, default=None
+        Observed wavenumbers.
+
+    ells : tuple, default=(0, 2, 4)
+        Observed multipoles.
+        
+    ellsin : tuple, default=(0, 2, 4)
+        Input theory multipoles.
+        
+    wmatrix : str, Path, pypower.BaseMatrix, default=None
+        Optionally, window matrix.
+        
+    kinrebin : int, default=1
+        If ``wmatrix`` (which is defined for input theory wavenumbers) is provided,
+        rebin theory wavenumbers by this factor.
+        
+    shotnoise : float, default=0.
+        Shot noise (window matrix must be applied to power spectrum with shot noise).
+        
+    theory : BaseTheoryPowerSpectrumMultipoles
+        Theory power spectrum multipoles, defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
+    """
     def initialize(self, k=None, ells=(0, 2, 4), ellsin=None, wmatrix=None, kinrebin=1, shotnoise=0., theory=None):
         if k is None: k = np.linspace(0.01, 0.2, 20)
         if np.ndim(k[0]) == 0:
@@ -226,8 +310,8 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 nmk = np.sum((wmatrix.xout[iout] >= 2 * kk[0] - kk[1]) & (wmatrix.xout[iout] <= 2 * kk[-1] - kk[-2]))
                 factorout = nmk // kk.size
                 wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout, factorout), projsout=projout)
-                #wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout), projsout=projout)
-                #wmatrix.rebin_x(factorout=factorout, projsout=projout)
+                # wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout), projsout=projout)
+                # wmatrix.rebin_x(factorout=factorout, projsout=projout)
                 istart = np.nanargmin(np.abs(wmatrix.xout[iout] - kk[0]))
                 wmatrix.slice_x(sliceout=slice(istart, istart + kk.size), projsout=projout)
                 if not np.allclose(wmatrix.xout[iout], kk, rtol=1e-4):
@@ -275,6 +359,21 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
 
     @plotting.plotter
     def plot(self):
+        """
+        Plot window function effect on power spectrum multipoles.
+
+        Parameters
+        ----------
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+        """
         from matplotlib import pyplot as plt
         fig, ax = plt.subplots()
         ax.plot([], [], linestyle='--', color='k', label='theory')
@@ -293,7 +392,20 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
 
 
 class WindowedCorrelationFunctionMultipoles(BaseCalculator):
+    """
+    Window effect (for now, none) on correlation function multipoles.
 
+    Parameters
+    ----------
+    s : array, default=None
+        Observed separations.
+
+    ells : tuple, default=(0, 2, 4)
+        Observed multipoles.
+        
+    theory : BaseTheoryCorrelationFunctionMultipoles
+        Theory correlation function multipoles, defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
+    """
     def initialize(self, s=None, ells=(0, 2, 4), theory=None):
         if s is None: s = np.linspace(20., 120., 101)
         if np.ndim(s[0]) == 0:

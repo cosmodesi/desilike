@@ -22,7 +22,7 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
     Parameters
     ----------
     source : str, Path, :class:`Chain`, :class:`Profiles`, :class:`ParameterCovariance`
-        Source to take best fit / mean / covariance from.
+        Source to take best fit / mean / covariance from: chain, profiles, covariance, or path to such objects.
     
     choice : dict, bool, default=None
         If not ``None``, extract best fit {'index': 'argmax'} or mean {'index': 'mean'} from source.

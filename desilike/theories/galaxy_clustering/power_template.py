@@ -331,6 +331,14 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     with_now : str, default='peakaverage'
         Compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
     
+    apmode : str, default='qparqper'
+        Alcock-Paczynski parameterization:
+
+        - 'qiso': single istropic parameter 'qiso'
+        - 'qap': single, Alcock-Paczynski parameter 'qap'
+        - 'qisoqap': two parameters 'qiso', 'qap'
+        - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
+    
     fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
         Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
 

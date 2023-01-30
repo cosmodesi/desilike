@@ -2613,7 +2613,7 @@ class ParameterCovariance(BaseParameterMatrix):
         samples : getdist.gaussian_mixtures.MixtureND
         """
         from getdist.gaussian_mixtures import MixtureND
-        cov = self.view(params, return_type=None)
+        cov = self.view(params=params, return_type=None)
         labels = [param.latex() for param in cov._params]
         names = [str(param) for param in cov._params]
         # ignore_limits to avoid issue in GetDist with analytic marginalization
@@ -2728,7 +2728,7 @@ class ParameterPrecision(BaseParameterMatrix):
         params = ParameterCollection.concatenate([other._params for other in others])
         new = others[0].view(params, return_type=None)
         centers = []
-        for other in others:
+        for other in others[1:]:
             view = other.view(new._params, return_type=None)
             new._value += view._value
             centers.append(view._center)

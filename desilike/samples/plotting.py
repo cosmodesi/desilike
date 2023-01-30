@@ -2,6 +2,7 @@ import numpy as np
 from matplotlib import gridspec, transforms
 
 from desilike import plotting
+from desilike.parameter import is_parameter_sequence
 from . import diagnostics, utils
 
 
@@ -22,7 +23,7 @@ def _make_list(obj, length=None, default=None):
     -------
     toret : list
     """
-    if utils.is_sequence(obj):
+    if is_parameter_sequence(obj):
         obj = list(obj)
         if length is not None:
             obj += [default] * (length - len(obj))

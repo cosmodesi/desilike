@@ -73,7 +73,7 @@ def test_fisher_galaxy():
     theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=0.5))
     #for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
-                                                         data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
+                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=False)
     likelihood.all_params['logA'].update(derived='jnp.log(10 *  {A_s})', prior=None)

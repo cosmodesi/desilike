@@ -37,7 +37,9 @@ def test_matrix():
     params = {name: {'prior': {'dist': 'norm', 'loc': 1., 'scale': 10.}} for name in ['a', 'b', 'c']}
     #params = {name: {'prior': {'limits': [-1., 1.]}} for name in ['a', 'b']}
     precision = ParameterPrecision(np.eye(len(params)), params=params)
-    covariance = (precision + precision).to_covariance()
+    precision2 = precision + precision
+    assert np.allclose(precision2._value, 2. * precision._value)
+    covariance = precision2.to_covariance()
     print(covariance.to_stats())
     gd = covariance.to_getdist(center=[0.] * len(params))
 
@@ -49,7 +51,7 @@ def test_matrix():
     plotting.plot_triangle(covariance, show=True)
 
     from desilike.samples import plotting
-    plotting.plot_triangle([covariance, covariance.select(name=['a', 'b'])], params=covariance.params(), show=True)
+    plotting.plot_triangle([covariance, covariance.select(name=['a', 'b'])], show=True)
 
     assert np.allclose(covariance.rescale().center(), 1.)
     assert np.ndim(covariance.std('a')) == 0

@@ -364,12 +364,12 @@ class Differentiation(BaseClass):
         toret = []
         try:
             jac = __calculate
-            jacs = []
             for iautoderiv, autoderiv in enumerate(self.autoderivs[1:]):
                 if jax is None:
                     raise ValueError('jax is required to compute the Jacobian')
                 argnums = [params.index(p) for p in autoderiv]
-                jac = getattr(jax, 'jacfwd' if iautoderiv else 'jacrev')(jac, argnums=argnums, has_aux=False, holomorphic=False)
+                #jac = getattr(jax, 'jacfwd' if iautoderiv else 'jacrev')(jac, argnums=argnums, has_aux=False, holomorphic=False)
+                jac = getattr(jax, 'jacfwd')(jac, argnums=argnums, has_aux=False, holomorphic=False)
                 toret.append(jac(*values))
         except Exception as exc:
             raise exc

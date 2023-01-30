@@ -37,7 +37,7 @@ class SNWeightedPowerSpectrumLikelihood(BaseGaussianLikelihood):
             footprints = [footprints] * len(self.theories)
         self.footprints = footprints
         if klim is not None:
-            k = np.linspace(*klim, num=100)
+            k = np.linspace(*klim, num=500)  # above, jax takes *a lot* of memory in reverse mode
             for theory in self.theories: theory.init.update(k=k)
         self.theories = EnsembleCalculator(calculators=theories)
         if np.ndim(mu) == 0:

@@ -648,7 +648,6 @@ class Monitor(BaseClass):
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
         """Exit context."""
-        self()
 
 
 def expand_dict(di, names):

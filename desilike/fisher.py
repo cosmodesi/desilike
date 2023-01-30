@@ -4,7 +4,6 @@ from .differentiation import Differentiation
 from .parameter import ParameterPrecision
 from .base import BaseCalculator
 from .utils import BaseClass
-from . import utils
 
 
 class PriorCalculator(BaseCalculator):

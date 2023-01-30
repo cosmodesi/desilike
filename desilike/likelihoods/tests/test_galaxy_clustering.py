@@ -12,8 +12,10 @@ def test_fisher():
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
     footprint = BoxFootprint(volume=1e10, nbar=1e-3)
+    from desilike.utils import Monitor
+    
     likelihood = SNWeightedPowerSpectrumLikelihood(theories=theory, footprints=footprint, klim=(0.01, 0.5))
-    #likelihood()
+    likelihood()
     from desilike import Fisher
     fisher = Fisher(likelihood)
     fisher()

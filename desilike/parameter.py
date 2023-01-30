@@ -2460,7 +2460,7 @@ class ParameterCovariance(BaseParameterMatrix):
             new._center[index] = [param.value if param.value is not None else np.nan for param in params_not_in_self]
         toret = super(ParameterCovariance, new).view(return_type=return_type)
         if return_type == 'nparray' and params is not None and not is_parameter_sequence(params):
-            toret.shape = params.shape
+            toret.shape = new._params[params].shape
         return toret
 
     cov = view

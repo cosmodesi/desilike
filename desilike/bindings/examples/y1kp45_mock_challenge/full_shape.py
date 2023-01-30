@@ -20,17 +20,17 @@ def AbacusSummitLRGDirectPowerSpectrumMultipoles(cosmo='external', solve=None, s
         for param in theory.params.select(name=['alpha*', 'sn*']): param.update(derived='.marg')
         theory.log_info('Use analytic marginalization for {}.'.format(theory.params.names(solved=True)))
 
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2], 2: [0.02, 0.2]}, kstep=0.005,
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2, 0.005], 2: [0.02, 0.2, 0.005]},
                                                          data='/global/cfs/cdirs/desi/cosmosim/KP45/MC/Clustering/AbacusSummit/CubicBox/LRG/Pk/Pre/jmena/nmesh_512/pypower_format/Pk_AbacusSummit_base_*.npy',
-                                                         mocks='/global/cfs/cdirs/desi/cosmosim/KP45/MC/Clustering/EZmock/CubicBox/LRG/Pk/jmena/nmesh_512/pypower_format/Pk_EZmock_B2000G512Z0.8N8015724_b0.385d4r169c0.3_seed*.npy',
+                                                         covariance='/global/cfs/cdirs/desi/cosmosim/KP45/MC/Clustering/EZmock/CubicBox/LRG/Pk/jmena/nmesh_512/pypower_format/Pk_EZmock_B2000G512Z0.8N8015724_b0.385d4r169c0.3_seed*.npy',
                                                          wmatrix='/global/cfs/cdirs/desi/users/adematti/desi_mock_challenge/FirstGenMocks/AbacusSummit/CubicBox/ELG/z1.100/window_nmesh512_los-x.npy',
                                                          theory=theory)
     """
     import os, desilike
     data_dir = os.path.join(os.path.dirname(desilike.__file__), 'tests', '_pk')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2], 2: [0.02, 0.2]}, kstep=0.005,
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2, 0.005], 2: [0.02, 0.2, 0.005]},
                                                          data=os.path.join(data_dir, 'data.npy'),
-                                                         mocks=os.path.join(data_dir, 'mock_*.npy'),
+                                                         covariance=os.path.join(data_dir, 'mock_*.npy'),
                                                          wmatrix=os.path.join(data_dir, 'window.npy'),
                                                          theory=theory)
     """
@@ -68,17 +68,17 @@ def AbacusSummitLRGShapeFitPowerSpectrumMultipoles(solve=None, save_emulator=Fal
         for param in theory.params.select(name=['alpha*', 'sn*']): param.update(derived='.marg')
         theory.log_info('Use analytic marginalization for {}.'.format(theory.params.names(solved=True)))
 
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2], 2: [0.02, 0.2]}, kstep=0.005,
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2, 0.005], 2: [0.02, 0.2, 0.005]},
                                                          data='/global/cfs/cdirs/desi/cosmosim/KP45/MC/Clustering/AbacusSummit/CubicBox/LRG/Pk/Pre/jmena/nmesh_512/pypower_format/Pk_AbacusSummit_base_*.npy',
-                                                         mocks='/global/cfs/cdirs/desi/cosmosim/KP45/MC/Clustering/EZmock/CubicBox/LRG/Pk/jmena/nmesh_512/pypower_format/Pk_EZmock_B2000G512Z0.8N8015724_b0.385d4r169c0.3_seed*.npy',
+                                                         covariance='/global/cfs/cdirs/desi/cosmosim/KP45/MC/Clustering/EZmock/CubicBox/LRG/Pk/jmena/nmesh_512/pypower_format/Pk_EZmock_B2000G512Z0.8N8015724_b0.385d4r169c0.3_seed*.npy',
                                                          wmatrix='/global/cfs/cdirs/desi/users/adematti/desi_mock_challenge/FirstGenMocks/AbacusSummit/CubicBox/ELG/z1.100/window_nmesh512_los-x.npy',
                                                          theory=theory)
     """
     import os, desilike
     data_dir = os.path.join(os.path.dirname(desilike.__file__), 'tests', '_pk')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2], 2: [0.02, 0.2]}, kstep=0.005,
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2, 0.005], 2: [0.02, 0.2, 0.005]},
                                                          data=os.path.join(data_dir, 'data.npy'),
-                                                         mocks=os.path.join(data_dir, 'mock_*.npy'),
+                                                         covariance=os.path.join(data_dir, 'mock_*.npy'),
                                                          wmatrix=os.path.join(data_dir, 'window.npy'),
                                                          theory=theory)
     """

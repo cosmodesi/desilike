@@ -12,7 +12,7 @@ def test_profilers():
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
     #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
     for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data='../../tests/_pk/data.npy', mocks='../../tests/_pk/mock_*.npy', wmatrix='../../tests/_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1.)
@@ -39,9 +39,7 @@ def test_profilers():
     theory = PNGTracerPowerSpectrumMultipoles(template=template, mode='b-p')
     theory.params['p'].update(fixed=True)  # not fixing p biases fnl_loc posterior
     observable = TracerPowerSpectrumMultipolesObservable(data='../../tests/_pk/data.npy', mocks='../../tests/_pk/mock_*.npy',
-                                                         #klim={0: [0.005, 0.2]},
-                                                         klim={0: [0.02, 0.2], 2: [0.02, 0.2]},
-                                                         kstep=0.01, theory=theory)
+                                                         klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]}, theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     profiler = MinuitProfiler(likelihood)
     profiler.maximize(niterations=2)

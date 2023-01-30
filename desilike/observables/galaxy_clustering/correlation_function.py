@@ -2,10 +2,18 @@ import glob
 
 import numpy as np
 
-from desilike import plotting, utils
+from desilike import plotting, jax, utils
 from desilike.utils import path_types
 from desilike.base import BaseCalculator
-from desilike.theories.galaxy_clustering.base import WindowedCorrelationFunctionMultipoles
+from .window import WindowedCorrelationFunctionMultipoles
+
+
+def _is_array(data):
+    return isinstance(data, (np.ndarray,) + jax.array_types)
+
+
+def _is_from_pycorr(data):
+    return isinstance(data, path_types) or not _is_array(data)
 
 
 class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
@@ -15,83 +23,77 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
     Parameters
     ----------
     data : str, Path, list, pycorr.BaseTwoPointEstimator, dict, default=None
-        Data correlation function measurement: :class:`pycorr.BaseTwoPointEstimator` instance,
+        Data correlation function measurement: array, :class:`pycorr.BaseTwoPointEstimator` instance,
         or path to such instances, or list of such objects (in which case the average of them is taken).
         If dict, parameters to be passed to theory to generate mock measurement.
     
-    mocks : list, default=None
-        List of :class:`pycorr.BaseTwoPointEstimator` instances, or paths to such instances;
+    covariance : list, default=None
+        2D array, list of :class:`pycorr.BaseTwoPointEstimator` instances, or paths to such instances;
         these are used to compute the covariance matrix.
     
-    theory : BaseTheoryCorrelationFunctionMultipoles
-        Theory. Defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
-
     slim : dict, default=None
-        Separation cuts: a dictionary mapping multipoles to (min separation, max separation), e.g. ``{0: (30, 160), 2: (30, 160)}``.
+        Separation limits: a dictionary mapping multipoles to (min separation, max separation, step (float)),
+        e.g. ``{0: (30., 160., 5.), 2: (30., 160., 5.)}``.
     
-    sstep : float, default=None
-        Bin step, e.g. 5.
-    
-    srebin : int, default=None
-        Rebinning factor for the data (and mocks). If provided, use instead of ``sstep``.
+    **kwargs : dict
+        Optional arguments for :class:`WindowedCorrelationFunctionMultipoles`, e.g.:
+        
+        - theory: defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
+        - fiber_collisions
     """
-    def initialize(self, data=None, mocks=None, theory=None, slim=None, sstep=None, **kwargs):
+    def initialize(self, data=None, covariance=None, slim=None, wmatrix=None, **kwargs):
         self.s, self.sedges, self.ells = None, None, None
-        self.flatdata = None
+        self.flatdata, self.mocks, self.covariance = None, None, None
         if not isinstance(data, dict):
-            self.flatdata = self.load_data(data=data, **kwargs)[0]
-        self.mocks = self.load_data(data=mocks, **kwargs)[-1]
+            self.flatdata = self.load_data(data=data, slim=slim)[0]
+        if self.mpicomm.bcast(_is_array(covariance), root=0):
+            self.covariance = self.mpicomm.bcast(covariance, root=0)
+        else:
+            self.mocks = self.load_data(data=covariance, slim=slim)[-1]
         if self.mpicomm.bcast(self.mocks is not None, root=0):
             covariance = None
             if self.mpicomm.rank == 0:
                 covariance = np.cov(self.mocks, rowvar=False, ddof=1)
             self.covariance = self.mpicomm.bcast(covariance, root=0)
-        if self.s is None:
-            self.set_default_s_ells(slim=slim, sstep=sstep)
-        self.wmatrix = WindowedCorrelationFunctionMultipoles(s=self.s, ells=self.ells, theory=theory)
+        self.wmatrix = wmatrix
+        if not isinstance(wmatrix, WindowedCorrelationFunctionMultipoles):
+            self.wmatrix = WindowedCorrelationFunctionMultipoles()
+        if self.sedges is not None:  # set by data
+            slim = {ell: (edges[0], edges[-1], np.mean(np.diff(edges))) for ell, edges in zip(self.ells, self.sedges)}
+            self.wmatrix.init.update(s=self.s)
+        if slim is not None:
+            self.wmatrix.init.update(slim=slim)
+        self.wmatrix.init.update(kwargs)
         if self.flatdata is None:
             self.wmatrix(**data)
             self.flatdata = self.flattheory.copy()
+        else:
+            self.wmatrix.runtime_info.initialize()
+        for name in ['s', 'ells', 'sedges']:
+            setattr(self, name, getattr(self.wmatrix, name))
 
-    def set_default_s_ells(self, slim=None, sstep=None):
-        if not isinstance(slim, dict):
-            raise ValueError('Unknown klim format; provide e.g. {0: (30, 160), 2: (30, 160)}')
-        self.s, self.sedges, self.ells = [], [], []
-        for ell, lim in slim.items():
-            self.ells.append(ell)
-            if sstep is not None:
-                sedges = np.arange(*lim, step=sstep)
-            else:
-                sedges = np.array(lim, dtype='f8')
-            self.s.append((sedges[:-1] + sedges[1:]) / 2.)
-            self.sedges.append(sedges)
-        self.ells = tuple(self.ells)
-
-    def load_data(self, data=None, slim=None, sstep=None, srebin=None):
+    def load_data(self, data=None, slim=None):
 
         def load_data(fn):
             from pycorr import TwoPointCorrelationFunction
             return TwoPointCorrelationFunction.load(fn)
 
-        def lim_data(corr, slim=slim, sstep=sstep, srebin=srebin):
-            if srebin is None:
-                srebin = 1
-                if sstep is not None:
-                    srebin = int(np.rint(sstep / np.diff(corr.edges[0]).mean()))
-            corr = corr[:(corr.shape[0] // srebin) * srebin:srebin]
+        def lim_data(corr, slim=slim):
             if slim is None:
-                slim = {ell: [0, np.inf] for ell in (0, 2, 4)}
-            elif not isinstance(slim, dict):
-                raise ValueError('Unknown slim format; provide e.g. {0: (20, 150), 2: (20, 150)}')
-            ells = tuple(slim.keys())
-            s, data = corr(ells=ells, return_sep=True, return_std=False)
-            list_s, list_sedges, list_data = [], [], []
-            for ell, lim in slim.items():
-                mask = (s >= lim[0]) & (s < lim[1])
+                slim = {ell: (0, np.inf) for ell in (0, 2, 4)}
+            ells, list_s, list_sedges, list_data = [], [], [], []
+            for ell, (lo, hi, *step) in slim.items():
+                corr_slice = corr
+                if step:
+                    rebin = int(step / np.diff(corr.edges[0]).mean() + 0.5)  # nearest integer
+                    corr_slice = corr[:(corr.shape[0] // rebin) * rebin:rebin]
+                s, data = corr_slice(ells=ell, return_sep=True, return_std=False)
+                ells.append(ell)
+                mask = (s >= lo) & (s < hi)
                 index = np.flatnonzero(mask)
                 list_s.append(s[mask])
                 list_sedges.append(corr.edges[0][np.append(index, index[-1] + 1)])
-                list_data.append(data[ells.index(ell)][mask])
+                list_data.append(data[index])
             return list_s, list_sedges, ells, list_data
 
         def load_all(list_mocks):
@@ -116,8 +118,11 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         if self.mpicomm.rank == 0 and data is not None:
             if not utils.is_sequence(data):
                 data = [data]
-            list_y = load_all(data)
-            if not list_y: raise ValueError('No data/mocks could be obtained from {}'.format(data))
+            if any(_is_from_pycorr(dd) for dd in data):
+                list_y = load_all(data)
+                if not list_y: raise ValueError('no data/mocks could be obtained from {}'.format(data))
+            else:
+                list_y = list(data)
             flatdata = np.mean(list_y, axis=0)
         self.s, self.sedges, self.ells, flatdata = self.mpicomm.bcast((self.s, self.sedges, self.ells, flatdata) if self.mpicomm.rank == 0 else None, root=0)
         return flatdata, list_y

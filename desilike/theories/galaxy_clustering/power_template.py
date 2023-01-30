@@ -134,10 +134,6 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
     """
     Extract ShapeFit parameters from linear power spectrum.
 
-    Reference
-    ---------
-    https://arxiv.org/abs/2106.07641
-
     Parameters
     ----------
     k : array, default=None
@@ -166,6 +162,11 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
     
     cosmo : BasePrimordialCosmology, default=None
         Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
+
+
+    Reference
+    ---------
+    https://arxiv.org/abs/2106.07641
     """
     def initialize(self, *args, kp=0.03, n_varied=False, with_now='peakaverage', **kwargs):
         super(ShapeFitPowerSpectrumExtractor, self).initialize(*args, with_now=with_now, **kwargs)
@@ -205,10 +206,6 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
 class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpectrumExtractor):
     r"""
     ShapeFit power spectrum template.
-    
-    Reference
-    ---------
-    https://arxiv.org/abs/2106.07641
 
     Parameters
     ----------
@@ -237,6 +234,11 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
     
     fiducial : str, default='DESI'
         Fiducial cosmology, used to compute the power spectrum.
+
+
+    Reference
+    ---------
+    https://arxiv.org/abs/2106.07641
     """
     def initialize(self, *args, kp=0.03, a=0.6, with_now='peakaverage', **kwargs):
         self.kp = float(kp)

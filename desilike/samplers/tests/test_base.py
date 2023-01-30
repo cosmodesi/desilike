@@ -12,8 +12,9 @@ def test_ensemble():
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
     #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
     for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.marg')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
-                                                         data='../../tests/_pk/data.npy', mocks='../../tests/_pk/mock_*.npy', wmatrix='../../tests/_pk/window.npy',
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data='../../tests/_pk/data.npy', mocks='../../tests/_pk/mock_*.npy',
+                                                         wmatrix='../../tests/_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()

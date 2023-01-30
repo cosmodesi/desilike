@@ -11,7 +11,7 @@ def _check_conflicts(quantities, conflicts):
             raise ValueError('Found conflicting quantities: {}'.format(conflict))
 
 
-class BAOCompression(BaseCalculator):
+class BAOCompressionObservable(BaseCalculator):
     """
     BAO observable: compare (compressed) BAO measurements
     (in terms of ratios of distances to the sound horizon scale at the drag epoch) to theory predictions.
@@ -76,13 +76,9 @@ class BAOCompression(BaseCalculator):
         return state
 
 
-class ShapeFitCompression(BaseCalculator):
+class ShapeFitCompressionObservable(BaseCalculator):
     """
     ShapeFit observable: compare ShapeFit measurements to theory predictions.
-
-    Reference
-    ---------
-    https://arxiv.org/abs/2106.07641
 
     Parameters
     ----------
@@ -111,6 +107,11 @@ class ShapeFitCompression(BaseCalculator):
         - tuple: (name of fiducial cosmology, dictionary of parameters to update)
         - dict: dictionary of parameters
         - :class:`cosmoprimo.Cosmology`: Cosmology instance
+
+
+    Reference
+    ---------
+    https://arxiv.org/abs/2106.07641
     """
     def initialize(self, data=None, covariance=None, cosmo=None, quantities=None, z=None, fiducial='DESI'):
         self.bao_quantities, self.fs_quantities, self.flatdata, self.covariance = self.load_data(data=data, covariance=covariance, quantities=quantities)

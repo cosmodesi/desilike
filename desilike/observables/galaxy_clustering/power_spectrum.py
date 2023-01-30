@@ -2,10 +2,18 @@ import glob
 
 import numpy as np
 
-from desilike import plotting, utils
+from desilike import plotting, jax, utils
 from desilike.utils import path_types
 from desilike.base import BaseCalculator
-from desilike.theories.galaxy_clustering.base import WindowedPowerSpectrumMultipoles
+from .window import WindowedPowerSpectrumMultipoles
+
+
+def _is_array(data):
+    return isinstance(data, (np.ndarray,) + jax.array_types)
+
+
+def _is_from_pypower(data):
+    return isinstance(data, path_types) or not _is_array(data)
 
 
 class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
@@ -14,63 +22,64 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
     Parameters
     ----------
-    data : str, Path, list, pypower.PowerSpectrumMultipoles, dict, default=None
-        Data power spectrum measurement: :class:`pypower.PowerSpectrumMultipoles` instance,
+    data : array, str, Path, list, pypower.PowerSpectrumMultipoles, dict, default=None
+        Data power spectrum measurement: array, :class:`pypower.PowerSpectrumMultipoles` instance,
         or path to such instances, or list of such objects (in which case the average of them is taken).
         If dict, parameters to be passed to theory to generate mock measurement.
     
-    mocks : list, default=None
-        List of :class:`pypower.PowerSpectrumMultipoles` instance` instances, or paths to such instances;
+    covariance : array, list, default=None
+        2D array, list of :class:`pypower.PowerSpectrumMultipoles` instance` instances, or paths to such instances;
         these are used to compute the covariance matrix.
     
-    wmatrix : str, Path, pypower.BaseMatrix, default=None
+    klim : dict, default=None
+        Wavenumber limits: a dictionary mapping multipoles to (min separation, max separation, step (float)),
+        e.g. ``{0: (0.01, 0.2, 0.01), 2: (0.01, 0.15, 0.01)}``.
+    
+    wmatrix : str, Path, pypower.BaseMatrix, WindowedPowerSpectrumMultipoles, default=None
         Optionally, window matrix.
     
-    theory : BaseTheoryPowerSpectrumMultipoles
-        Theory. Defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
-
-    klim : dict, default=None
-        Wavenumber cuts: a dictionary mapping multipoles to (min separation, max separation), e.g. ``{0: (0.01, 0.2), 2: (0.01, 0.15)}``.
-    
-    kstep : float, default=None
-        Bin step, e.g. 0.01.
-    
-    krebin : int, default=None
-        Rebinning factor for the data (and mocks). If provided, use instead of ``kstep``.
+    **kwargs : dict
+        Optional arguments for :class:`WindowedPowerSpectrumMultipoles`, e.g.:
+        
+        - theory: defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
+        - shotnoise: take shot noise from ``data``, or ``covariance`` (mocks) if provided.
+        - fiber_collisions
     """
-    def initialize(self, data=None, mocks=None, wmatrix=None, theory=None, klim=None, kstep=None, shotnoise=0., **kwargs):
-        self.k, self.kedges, self.ells, self.shotnoise = None, None, None, shotnoise
-        self.flatdata = None
+    def initialize(self, data=None, covariance=None, klim=None, wmatrix=None, **kwargs):
+        self.k, self.kedges, self.ells, self.shotnoise = None, None, None, 0.
+        self.flatdata, self.mocks, self.covariance = None, None, None
         if not isinstance(data, dict):
-            self.flatdata = self.load_data(data=data, klim=klim, kstep=kstep, **kwargs)[0]
-        self.mocks = self.load_data(data=mocks, klim=klim, kstep=kstep, **kwargs)[-1]
+            self.flatdata = self.load_data(data=data, klim=klim)[0]
+        if self.mpicomm.bcast(_is_array(covariance), root=0):
+            self.covariance = self.mpicomm.bcast(covariance, root=0)
+        else:
+            self.mocks = self.load_data(data=covariance, klim=klim)[-1]
         if self.mpicomm.bcast(self.mocks is not None, root=0):
             covariance = None
             if self.mpicomm.rank == 0:
                 covariance = np.cov(self.mocks, rowvar=False, ddof=1)
             self.covariance = self.mpicomm.bcast(covariance, root=0)
-        if self.k is None:
-            self.set_default_k_ells(klim=klim, kstep=kstep)
-        self.wmatrix = WindowedPowerSpectrumMultipoles(k=self.k, ells=self.ells, wmatrix=wmatrix, theory=theory, shotnoise=self.shotnoise)
+        self.wmatrix = wmatrix
+        if not isinstance(wmatrix, WindowedPowerSpectrumMultipoles):
+            self.wmatrix = WindowedPowerSpectrumMultipoles()
+            if wmatrix is not None:
+                self.wmatrix.init.update(wmatrix=wmatrix)
+        if self.kedges is not None:  # set by data
+            klim = {ell: (edges[0], edges[-1], np.mean(np.diff(edges))) for ell, edges in zip(self.ells, self.kedges)}
+            self.wmatrix.init.update(k=self.k)
+        if klim is not None:
+            self.wmatrix.init.update(klim=klim)
+        self.wmatrix.init.update(kwargs)
+        self.wmatrix.init.setdefault('shotnoise', self.shotnoise)
         if self.flatdata is None:
             self.wmatrix(**data)
             self.flatdata = self.flattheory.copy()
+        else:
+            self.wmatrix.runtime_info.initialize()
+        for name in ['k', 'ells', 'kedges', 'shotnoise']:
+            setattr(self, name, getattr(self.wmatrix, name))
 
-    def set_default_k_ells(self, klim=None, kstep=None):
-        if not isinstance(klim, dict):
-            raise ValueError('Unknown klim format; provide e.g. {0: (0.01, 0.2), 2: (0.01, 0.15)}')
-        self.k, self.kedges, self.ells = [], [], []
-        for ell, lim in klim.items():
-            self.ells.append(ell)
-            if kstep is not None:
-                kedges = np.arange(*lim, step=kstep)
-            else:
-                kedges = np.array(lim, dtype='f8')
-            self.k.append((kedges[:-1] + kedges[1:]) / 2.)
-            self.kedges.append(kedges)
-        self.ells = tuple(self.ells)
-
-    def load_data(self, data=None, klim=None, kstep=None, krebin=None):
+    def load_data(self, data=None, klim=None):
 
         def load_data(fn):
             from pypower import MeshFFTPower, PowerSpectrumMultipoles
@@ -79,35 +88,24 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
                 return toret.poles
             return PowerSpectrumMultipoles.load(fn)
 
-        def lim_data(power, klim=klim, kstep=kstep, krebin=krebin):
+        def lim_data(power, klim=klim):
             if hasattr(power, 'poles'):
                 power = power.poles
             shotnoise = power.shotnoise
-            if krebin is None:
-                krebin = 1
-                if kstep is not None:
-                    krebin = int(np.rint(kstep / np.diff(power.kedges).mean()))
-            power = power[:(power.shape[0] // krebin) * krebin:krebin]
-            data = power.get_power(complex=False)
-            nells = len(power.ells)
             if klim is None:
-                klim = {ell: [0, np.inf] for ell in power.ells}
-            elif utils.is_sequence(klim):
-                if not utils.is_sequence(klim[0]):
-                    klim = [klim] * nells
-                if len(klim) > nells:
-                    raise ValueError('{:d} limits provided but only {:d} poles computed'.format(len(klim), nells))
-                klim = {ell: klim[ill] for ill, ell in enumerate(power.ells)}
-            elif not isinstance(klim, dict):
-                raise ValueError('Unknown klim format; provide e.g. {0: (0.01, 0.2), 2: (0.01, 0.15)}')
-            list_k, list_kedges, list_data, ells = [], [], [], []
-            for ell, lim in klim.items():
-                mask = (power.k >= lim[0]) & (power.k < lim[1])
-                index = np.flatnonzero(mask)
-                list_k.append(power.k[mask])
-                list_kedges.append(power.kedges[np.append(index, index[-1] + 1)])
-                list_data.append(data[power.ells.index(ell)][mask])
+                klim = {ell: (0, np.inf) for ell in power.ells}
+            ells, list_k, list_kedges, list_data = [], [], [], []
+            for ell, (lo, hi, *step) in klim.items():
+                power_slice = power
+                if step:
+                    rebin = int(step / np.diff(power.kedges).mean() + 0.5)  # nearest integer
+                    power_slice = power[:(power.shape[0] // rebin) * rebin:rebin]
                 ells.append(ell)
+                mask = (power_slice.k >= lo) & (power_slice.k < hi)
+                index = np.flatnonzero(mask)
+                list_k.append(power_slice.k[index])
+                list_kedges.append(power_slice.kedges[np.append(index, index[-1] + 1)])
+                list_data.append(power_slice(ell=ell, complex=False)[index])
             return list_k, list_kedges, tuple(ells), list_data, shotnoise
 
         def load_all(list_mocks):
@@ -133,10 +131,14 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         if self.mpicomm.rank == 0 and data is not None:
             if not utils.is_sequence(data):
                 data = [data]
-            list_y, list_shotnoise = load_all(data)
-            if not list_y: raise ValueError('No data/mocks could be obtained from {}'.format(data))
+            if any(_is_from_pypower(dd) for dd in data):
+                list_y, list_shotnoise = load_all(data)
+                if not list_y: raise ValueError('no data/mocks could be obtained from {}'.format(data))
+            else:
+                list_y = list(data)
             flatdata = np.mean(list_y, axis=0)
-            shotnoise = np.mean(list_shotnoise, axis=0)
+            if list_shotnoise:
+                shotnoise = np.mean(list_shotnoise, axis=0)
 
         self.k, self.kedges, self.ells, flatdata, shotnoise = self.mpicomm.bcast((self.k, self.kedges, self.ells, flatdata, shotnoise) if self.mpicomm.rank == 0 else None, root=0)
         if self.shotnoise is None: self.shotnoise = shotnoise
@@ -167,13 +169,13 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         figsize = (6, 1.5 * sum(height_ratios))
         fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
         fig.subplots_adjust(hspace=0)
-        data, model, std = self.data, self.model, self.std
-        k_power = 1 if scaling == 'kpk' else 0
+        data, theory, std = self.data, self.theory, self.std
+        k_exp = 1 if scaling == 'kpk' else 0
         for ill, ell in enumerate(self.ells):
-            lax[0].errorbar(self.k[ill], self.k[ill]**k_power * data[ill], yerr=self.k[ill]**k_power * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o', label=r'$\ell = {:d}$'.format(ell))
-            lax[0].plot(self.k[ill], self.k[ill]**k_power * model[ill], color='C{:d}'.format(ill))
+            lax[0].errorbar(self.k[ill], self.k[ill]**k_exp * data[ill], yerr=self.k[ill]**k_exp * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o', label=r'$\ell = {:d}$'.format(ell))
+            lax[0].plot(self.k[ill], self.k[ill]**k_exp * theory[ill], color='C{:d}'.format(ill))
         for ill, ell in enumerate(self.ells):
-            lax[ill + 1].plot(self.k[ill], (data[ill] - model[ill]) / std[ill], color='C{:d}'.format(ill))
+            lax[ill + 1].plot(self.k[ill], (data[ill] - theory[ill]) / std[ill], color='C{:d}'.format(ill))
             lax[ill + 1].set_ylim(-4, 4)
             for offset in [-2., 2.]: lax[ill + 1].axhline(offset, color='k', linestyle='--')
             lax[ill + 1].set_ylabel(r'$\Delta P_{{{0:d}}} / \sigma_{{ P_{{{0:d}}} }}$'.format(ell))
@@ -210,7 +212,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         figsize = (6, 2 * sum(height_ratios))
         fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
         fig.subplots_adjust(hspace=0)
-        data, model, std = self.data, self.model, self.std
+        data, theory, std = self.data, self.theory, self.std
         try:
             mode = self.wmatrix.theory.wiggle
         except AttributeError as exc:
@@ -218,11 +220,11 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         self.wmatrix.theory.wiggle = False
         self.runtime_info.pipeline.tocalculate = True
         self()
-        nowiggle = self.model
+        nowiggle = self.theory
         self.wmatrix.theory.wiggle = mode
         for ill, ell in enumerate(self.ells):
             lax[ill].errorbar(self.k[ill], self.k[ill] * (data[ill] - nowiggle[ill]), yerr=self.k[ill] * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o')
-            lax[ill].plot(self.k[ill], self.k[ill] * (model[ill] - nowiggle[ill]), color='C{:d}'.format(ill))
+            lax[ill].plot(self.k[ill], self.k[ill] * (theory[ill] - nowiggle[ill]), color='C{:d}'.format(ill))
             lax[ill].set_ylabel(r'$k \Delta P_{{{:d}}}(k)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]'.format(ell))
         for ax in lax: ax.grid(True)
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
@@ -240,7 +242,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         return self.wmatrix.flatpower
 
     @property
-    def model(self):
+    def theory(self):
         return self.wmatrix.power
 
     @property

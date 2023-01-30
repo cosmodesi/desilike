@@ -283,7 +283,7 @@ class ObservablesCovarianceMatrix(BaseClass):
         def get_pk(observable, footprint, theory=None):
             if theory is None:
                 for calculator in observable.runtime_info.pipeline.calculators[::-1]:
-                    if hasattr(calculator, 'k') and hasattr(calculator, 'power') and not isinstance(calculator.power, BaseCalculator) and np.ndim(calculator.k) == 1:
+                    if hasattr(calculator, 'k') and hasattr(calculator, 'power') and not isinstance(calculator.power, BaseCalculator) and np.ndim(calculator.k[0]) == 0:
                         theory = calculator
                         break
             if theory is None:

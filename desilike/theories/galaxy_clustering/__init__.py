@@ -1,4 +1,4 @@
-from .base import APEffect, WindowedPowerSpectrumMultipoles, WindowedCorrelationFunctionMultipoles
+from .base import APEffect
 from .bao import (DampedBAOWigglesPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles,
                   SimpleBAOWigglesPowerSpectrumMultipoles, SimpleBAOWigglesTracerPowerSpectrumMultipoles, SimpleBAOWigglesTracerCorrelationFunctionMultipoles,
                   ResummedBAOWigglesPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles)

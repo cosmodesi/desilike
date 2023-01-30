@@ -81,8 +81,8 @@ def test_observable():
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
-                                                         data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                          theory=theory)
     observable()
     #observable.wmatrix.plot(show=True)
@@ -103,8 +103,8 @@ def test_likelihood():
     theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
     for param in theory.params.select(basename=['sigma*', 'al*_-3', 'al*_-2']):
         param.update(value=0., fixed=True)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2], 2: [0.08, 0.2]}, kstep=0.01,
-                                                         data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.08, 0.2, 0.01]},
+                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
@@ -119,8 +119,8 @@ def test_likelihood():
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
-                                                         data='_pk/data.npy', mocks='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     print(likelihood.runtime_info.pipeline.params)
@@ -134,8 +134,8 @@ def test_likelihood():
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2], 2: [0.05, 0.18]}, kstep=0.01,
-                                                         data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
+                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=False)
     print(likelihood.runtime_info.pipeline.params.select(solved=True))
@@ -158,8 +158,8 @@ def test_params():
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
-                                                         data='_pk/data.npy', mocks='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     print(likelihood.runtime_info.pipeline.params)
@@ -185,8 +185,8 @@ def test_params():
     theory.all_params['Omega_m'].update(prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.5})
     theory.all_params = {'*mega_m': {'ref': {'dist': 'norm', 'loc': 0.3, 'scale': 0.5}}}
     assert theory.template.cosmo.params['Omega_m'].ref.scale == 0.5
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
-                                                         data='_pk/data.npy', mocks='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood.all_params = {'sn0': {'derived': '.marg'}}
@@ -208,8 +208,8 @@ def test_copy():
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=0.5))
     for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2], 2: [0.05, 0.18]}, kstep=0.01,
-                                                         data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
+                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=False)
     #likelihood()
@@ -246,8 +246,8 @@ def test_install():
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     for param in theory.params.select(basename=['alpha*', 'sn*']):
         param.update(derived='.best')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2], 2: [0.05, 0.18]}, kstep=0.01,
-                                                         data='_pk/data.npy', mocks='_pk/mock_*.npy', wmatrix='_pk/window.npy',
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
+                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=False)
     from desilike import Installer

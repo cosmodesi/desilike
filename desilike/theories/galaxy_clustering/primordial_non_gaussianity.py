@@ -9,10 +9,6 @@ class PNGTracerPowerSpectrumMultipoles(BaseTrapzTheoryPowerSpectrumMultipoles):
     r"""
     Kaiser tracer power spectrum multipoles, with scale dependent bias sourced by local primordial non-Gaussianities.
 
-    Reference
-    ---------
-    https://arxiv.org/pdf/1904.08859.pdf
-
     Parameters
     ----------
     k : array, default=None
@@ -40,6 +36,11 @@ class PNGTracerPowerSpectrumMultipoles(BaseTrapzTheoryPowerSpectrumMultipoles):
         
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`FixedPowerSpectrumTemplate`.
+
+
+    Reference
+    ---------
+    https://arxiv.org/pdf/1904.08859.pdf
     """
     config_fn = 'primordial_non_gaussianity.yaml'
 

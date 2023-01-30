@@ -18,6 +18,11 @@ galaxy clustering
   :inherited-members:
   :show-inheritance:
 
+.. automodule:: desilike.observables.galaxy_clustering.window
+  :members:
+  :inherited-members:
+  :show-inheritance:
+
 .. automodule:: desilike.observables.galaxy_clustering.covariance
   :members:
   :inherited-members:

@@ -70,9 +70,9 @@ class SimpleBAOWigglesPowerSpectrumMultipoles(DampedBAOWigglesPowerSpectrumMulti
         pknow = self.template.pknow_dd_interpolator(self.k)[:, None]
         sigmanl2 = self.k[:, None]**2 * (sigmapar**2 * self.mu**2 + sigmaper**2 * (1. - self.mu**2))
         damping = np.exp(-sigmanl2 / 2.)
-        fog = 1. / (1. + (sigmas * self.k * self.mu[:, None])**2 / 2.)**2.
+        fog = 1. / (1. + (sigmas * self.k[:, None] * self.mu)**2 / 2.)**2.
         sk = 0.
-        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (self.k * self.smoothing_radius)**2)
+        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (self.k * self.smoothing_radius)**2)[:, None]
         pkmu = fog * (b1 + f * self.mu**2 * (1 - sk))**2 * damping * wiggles * pknow
         self.power = self.to_poles(pkmu)
 

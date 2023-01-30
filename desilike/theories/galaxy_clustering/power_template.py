@@ -260,6 +260,38 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
 
     def get(self):
         return self
+    
+
+class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate):
+    r"""
+    Standard power spectrum template, in terms of :math:`f` and Alcock-Paczynski parameters.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate linear power spectrum.
+    
+    z : float, default=1.
+        Effective redshift.
+
+    apmode : str, default='qparqper'
+        Alcock-Paczynski parameterization:
+
+        - 'qiso': single istropic parameter 'qiso'
+        - 'qap': single, Alcock-Paczynski parameter 'qap'
+        - 'qisoqap': two parameters 'qiso', 'qap'
+        - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
+    
+    fiducial : str, default='DESI'
+        Fiducial cosmology, used to compute the power spectrum.
+    """
+    def calculate(self, f=0.8):
+        super(StandardPowerSpectrumTemplate, self).calculate()
+        self.f = f
+        self.f_sigma8 = f * self.sigma8
+
+    def get(self):
+        return self
 
 
 class BAOExtractor(BaseCalculator):
@@ -281,6 +313,7 @@ class BAOExtractor(BaseCalculator):
         - tuple: (name of fiducial cosmology, dictionary of parameters to update)
         - dict: dictionary of parameters
         - :class:`cosmoprimo.Cosmology`: Cosmology instance
+
     """
     config_fn = 'power_template.yaml'
 

@@ -6,18 +6,6 @@ params:
 
 class: DirectPowerSpectrumTemplate
 
-info:
-  version: 0.0.1
-  date: 05/04/2022
-  author: Arnaud de Mattia
-  maintainer: Arnaud de Mattia
-  description: Full-fit parameterization
-  url:
-  licence:
-  bibtex: []
-  requirements: []
-  long_description:
-
 init:
 
 params:
@@ -122,7 +110,6 @@ params:
 
 class: ShapeFitPowerSpectrumTemplate
 
-
 params:
   dm:
     value: 0.
@@ -148,13 +135,13 @@ params:
     prior:
       dist: uniform
       limits: [0.8, 1.2]
-    latex: \alpha_{\parallel}
+    latex: q_{\parallel}
   qper:
     value: 1.
     prior:
       dist: uniform
       limits: [0.8, 1.2]
-    latex: \alpha_{\perp}
+    latex: q_{\perp}
   Ap:
     derived: True
     latex: A_{p}
@@ -175,6 +162,36 @@ params:
     ref:
       limits: [0.75, 0.85]
     latex: f
+  
+
+---
+
+class: StandardPowerSpectrumTemplate
+
+params:
+  qpar:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    latex: q_{\parallel}
+  qper:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    latex: q_{\perp}
+  f:
+    value: 0.8
+    prior:
+      dist: uniform
+      limits: [0., 1.]
+    ref:
+      limits: [0.75, 0.85]
+    latex: f
+  f_sigma8:
+    derived: True
+    latex: f\sigma_{8}
 
 ---
 
@@ -190,7 +207,7 @@ params:
       dist: norm
       loc: 1.
       scale: 0.02
-    latex: \alpha_{\parallel}
+    latex: q_{\parallel}
   qper:
     value: 1.
     prior:
@@ -198,7 +215,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    latex: \alpha_{\perp}
+    latex: q_{\perp}
   qiso:
     value: 1.
     prior:
@@ -206,7 +223,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    latex: \alpha_{\mathrm{iso}}
+    latex: q_{\mathrm{iso}}
   qap:
     value: 1.
     prior:
@@ -214,7 +231,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    latex: \alpha_{\mathrm{ap}}
+    latex: q_{\mathrm{ap}}
   DM_over_rd:
     derived: True
     latex: D_{\mathrm{M}}/r_{d}

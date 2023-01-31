@@ -2,12 +2,12 @@ import functools
 
 import numpy as np
 
-from desilike import mpi, utils
+from desilike import mpi
 from desilike.utils import BaseClass
 from desilike.samples import load_source
 from desilike.samples.profiles import Profiles, Samples, ParameterBestFit
 from desilike.parameter import ParameterCollection, is_parameter_sequence
-from desilike.samplers.utils import TaskManager
+from desilike.utils import TaskManager
 
 
 class RegisteredProfiler(type(BaseClass)):

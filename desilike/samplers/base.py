@@ -9,7 +9,7 @@ from desilike.utils import BaseClass, path_types
 from desilike.samples import Chain, Samples, load_source
 from desilike.samples import diagnostics as sample_diagnostics
 from desilike.parameter import ParameterPriorError
-from .utils import TaskManager
+from desilike.utils import TaskManager
 
 
 class RegisteredSampler(type(BaseClass)):

@@ -1,10 +1,11 @@
 def AbacusSummitLRGDirectPowerSpectrumMultipoles(cosmo='external', solve=None, save_emulator=False, emulator_fn=None):
 
+    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
 
     if save_emulator or emulator_fn is None:
-        from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate
+        from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate
         template = DirectPowerSpectrumTemplate(z=0.8, cosmo=None if save_emulator and cosmo == 'external' else cosmo)
         theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
         #from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
@@ -47,11 +48,12 @@ def AbacusSummitLRGDirectPowerSpectrumMultipoles(cosmo='external', solve=None, s
 
 def AbacusSummitLRGShapeFitPowerSpectrumMultipoles(solve=None, save_emulator=False, emulator_fn=None):
 
+    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
 
     if save_emulator or emulator_fn is None:
-        from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+        from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
         template = ShapeFitPowerSpectrumTemplate(z=0.8)
         theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
         #from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles

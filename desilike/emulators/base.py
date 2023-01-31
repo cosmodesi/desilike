@@ -419,13 +419,14 @@ class Emulator(BaseClass):
         return state
 
     def save(self, filename, yaml=True):
-        self.log_info('Saving {}.'.format(filename))
-        utils.mkdir(os.path.dirname(filename))
         state = self.__getstate__()
-        if yaml:
-            state['config_fn'] = fn = os.path.splitext(filename)[0] + '.yaml'
-            self.yaml_data.write(fn)
-        np.save(filename, state, allow_pickle=True)
+        if self.mpicomm.rank == 0:
+            self.log_info('Saving {}.'.format(filename))
+            utils.mkdir(os.path.dirname(filename))
+            if yaml:
+                state['config_fn'] = fn = os.path.splitext(filename)[0] + '.yaml'
+                self.yaml_data.write(fn)
+            np.save(filename, state, allow_pickle=True)
 
     def __setstate__(self, state):
         super(Emulator, self).__setstate__(state)

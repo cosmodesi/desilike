@@ -107,5 +107,5 @@ params:
       loc: 0.
       scale: 0.0065
     delta: 0.002
-    latex: \Omega_k
+    latex: \Omega_{k}
     fixed: True

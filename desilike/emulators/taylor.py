@@ -85,8 +85,9 @@ class TaylorEmulatorEngine(BaseEmulatorEngine):
 
     def predict(self, X):
         diffs = jnp.array(X - self.center)
-        diffs = jnp.where(self.powers > 0, diffs, 0.)  # a trick to avoid NaNs in the derivation
-        powers = jnp.prod(jnp.power(diffs, self.powers), axis=-1)
+        #diffs = jnp.where(self.powers > 0, diffs, 0.)  # a trick to avoid NaNs in the derivation
+        #powers = jnp.prod(jnp.power(diffs, self.powers), axis=-1)
+        powers = jnp.prod(jnp.where(self.powers > 0, diffs ** self.powers, 1.), axis=-1)
         return jnp.tensordot(self.derivatives, powers, axes=(0, 0))
 
     def __getstate__(self):

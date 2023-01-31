@@ -186,7 +186,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
 
     @property
     def std(self):
-        cumsize = np.insert(np.cumsum([len(k) for k in self.k]), 0, 0)
+        cumsize = np.insert(np.cumsum([len(s) for s in self.s]), 0, 0)
         diag = np.diag(self.covariance)**0.5
         return [diag[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
 

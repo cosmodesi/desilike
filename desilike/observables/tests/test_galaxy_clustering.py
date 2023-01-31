@@ -33,6 +33,7 @@ def test_power_spectrum():
     likelihood.params['pk.loglikelihood'] = {}
     likelihood.params['pk.logprior'] = {}
     likelihood()
+    observable.plot(show=True)
     #observable()
     #observable.wmatrix.plot(show=True)
     theory.template.init.update(z=1.)
@@ -67,6 +68,7 @@ def test_correlation_function():
     likelihood()
     theory.power.template.init.update(z=1.)
     observable()
+    observable.plot(show=True)
     print(observable.runtime_info.pipeline.varied_params)
     assert theory.power.template.z == 1.
 
@@ -222,9 +224,9 @@ def test_fiber_collisions():
 if __name__ == '__main__':
 
     setup_logging()
-    # test_power_spectrum()
-    # test_correlation_function()
+    test_power_spectrum()
+    test_correlation_function()
     # test_footprint()
-    test_covariance_matrix()
+    # test_covariance_matrix()
     # test_compression()
     # test_fiber_collisions()

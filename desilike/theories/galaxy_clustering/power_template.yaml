@@ -17,15 +17,17 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
+    delta: 0.002
     latex: h
-  omega_cdm:
+  Omega_m:
     prior:
-      limits: [0.01, 0.99]
+      limits: [0.01, 1.]
     ref:
       dist: norm
-      loc: 0.12
-      scale: 0.0012
-    latex: \omega_{cdm}
+      loc: 0.3153
+      scale: 0.0073
+    delta: 0.001
+    latex: \Omega_{m}
   omega_b:
     prior:
       limits: [0.005, 0.1]
@@ -33,6 +35,7 @@ params:
       dist: norm
       loc: 0.02237
       scale: 0.00015
+    delta: 0.0001
     latex: \omega_{b}
   logA:
     prior:
@@ -41,6 +44,7 @@ params:
       dist: norm
       loc: 3.036394
       scale: 0.014
+    delta: 0.0014
     latex: \ln(10^{10} A_{s})
   n_s:
     prior:
@@ -49,6 +53,7 @@ params:
       dist: norm
       loc: 0.9649
       scale: 0.0042
+    delta: 0.004
     latex: n_{s}
   tau_reio:
     value: 0.0544
@@ -58,15 +63,16 @@ params:
       dist: norm
       loc: 0.0544
       scale: 0.008
+    delta: 0.012
     latex: \tau
-    fixed: True
   m_ncdm:
     prior:
       limits: [0., 5.]
     ref:
       dist: norm
       loc: 0.06
-      scale: 0.24
+      scale: 0.12
+    delta: 0.01
     latex: m_{ncdm}
     fixed: True
   N_ur:
@@ -85,6 +91,7 @@ params:
       dist: norm
       loc: -1
       scale: 0.08
+    delta: 0.01
     latex: w_{0}
     fixed: True
   wa_fld:
@@ -94,6 +101,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.3
+    delta: 0.01
     latex: w_{a}
     fixed: True
   Omega_k:
@@ -103,7 +111,8 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    latex: \Omega_k
+    delta: 0.002
+    latex: \Omega_{k}
     fixed: True
 
 ---
@@ -251,11 +260,13 @@ class: BAOExtractor
 
 params:
   Omega_m:
-    value: 0.3
     prior:
-      limits: [0.05, 0.6]
+      limits: [0.01, 1.]
     ref:
-      limits: [0.2, 0.4]
+      dist: norm
+      loc: 0.3153
+      scale: 0.0073
+    delta: 0.001
     latex: \Omega_{m}
 
 ---
@@ -263,21 +274,30 @@ params:
 class: ShapeFitPowerSpectrumExtractor
 
 params:
-  Omega_m:
-    value: 0.3
-    prior:
-      limits: [0.05, 0.6]
-    ref:
-      limits: [0.2, 0.4]
-    latex: \Omega_{m}
-  logA:
-    value: 3.
-    prior:
-      dist: uniform
-      limits: [2.5, 3.5]
-    latex: \ln(10^{10} A_{s})
   h:
     prior:
-      limits: [0.4, 0.9]
+      limits: [0.1, 1.]
     ref:
-      limits: [0.65, 0.70]
+      dist: norm
+      loc: 0.6736
+      scale: 0.005
+    delta: 0.002
+    latex: h
+  Omega_m:
+    prior:
+      limits: [0.01, 1.]
+    ref:
+      dist: norm
+      loc: 0.3153
+      scale: 0.0073
+    delta: 0.001
+    latex: \Omega_{m}
+  logA:
+    prior:
+      limits: [1.61, 3.91]
+    ref:
+      dist: norm
+      loc: 3.036394
+      scale: 0.014
+    delta: 0.0014
+    latex: \ln(10^{10} A_{s})

@@ -56,12 +56,19 @@ def test_taylor_power(plot=False):
     for order in [3, 4]:
         calculator = PowerModel()
         for param in calculator.all_params: param.update(value=1., prior={'limits': [1., 2.]})
-        emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=order, accuracy={'*': 2, 'a0': 4}))
+        emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=order, accuracy={'*': 2, 'a1': 4}))
         emulator.set_samples(method='finite')
         emulator.fit()
         emulator.check()
 
         emulated_calculator = emulator.to_calculator()
+        from desilike import Differentiation
+
+        def getter():
+            return emulated_calculator.model
+
+        deriv = Differentiation(emulated_calculator, getter, order=1)()
+        assert np.isfinite(deriv).all()
 
         if plot:
             from matplotlib import pyplot as plt
@@ -130,6 +137,6 @@ def test_likelihood():
 if __name__ == '__main__':
 
     setup_logging()
-    test_taylor_power(plot=True)
+    test_taylor_power(plot=False)
     test_taylor(plot=True)
     test_likelihood()

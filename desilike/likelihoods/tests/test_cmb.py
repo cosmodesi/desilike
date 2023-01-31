@@ -67,7 +67,6 @@ def test_params():
     t0 = time.time()
     testL()
     print('in desilike', time.time() - t0)
-
     from cosmoprimo.fiducial import DESI
     cosmo = DESI()
     t0 = time.time()

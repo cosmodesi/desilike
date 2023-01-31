@@ -677,11 +677,13 @@ class RuntimeInfo(BaseClass):
             self.install()
             bak = self.init.params
             self.init.params = ParameterCollection(self.init.params).deepcopy()
-            #self._initialized = True   # to avoid infinite loops
+            self._initialization = True   # to avoid infinite loops
             try:
                 self.calculator.initialize(*self.init.args, **self.init)
             except Exception as exc:
                 raise PipelineError('Error in method initialize of {}'.format(self.calculator)) from exc
+            finally:
+                self._initialization = False
             self.params = self.init.params
             self.init.params = bak
             self.initialized = True
@@ -823,9 +825,10 @@ class BaseCalculator(BaseClass):
         """Return quantity of main interest, e.g. loglikelihood + logprior if ``self`` is a likelihood."""
         return self
     
-    #def __getattr__(self, name):
-    #    self.runtime_info.initialize()
-    #    return object.__getattribute__(self, name)
+    def __getattr__(self, name):
+        if not getattr(self.runtime_info, '_initialization', False):
+            self.runtime_info.initialize()
+        return object.__getattribute__(self, name)
 
     def __getstate__(self):
         """

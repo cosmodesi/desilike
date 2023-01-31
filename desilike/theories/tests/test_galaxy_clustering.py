@@ -37,7 +37,7 @@ def test_full_shape():
     def test_emulator(theory):
         print('Emulating', theory)
         from desilike.emulators import Emulator, TaylorEmulatorEngine
-        theory()
+        #theory()
         calculator = theory.pt
         bak = theory()
         emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=0))
@@ -47,8 +47,7 @@ def test_full_shape():
         theory.init.update(pt=pt)
         assert np.allclose(theory(), bak)
 
-    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, DirectPowerSpectrumTemplate
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
+    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
     theory = KaiserTracerPowerSpectrumMultipoles()
     theory(logA=3.04, b1=1.).shape
     theory = KaiserTracerCorrelationFunctionMultipoles()

@@ -154,14 +154,14 @@ params:
   n:
     derived: True
     latex: n
-  f:
-    value: 0.8
+  df:
+    value: 1.
     prior:
       dist: uniform
-      limits: [0., 1.]
+      limits: [0., 2.]
     ref:
-      limits: [0.75, 0.85]
-    latex: f
+      limits: [0.95, 1.05]
+    latex: df
   
 
 ---
@@ -181,14 +181,14 @@ params:
       dist: uniform
       limits: [0.8, 1.2]
     latex: q_{\perp}
-  f:
-    value: 0.8
+  df:
+    value: 1.
     prior:
       dist: uniform
-      limits: [0., 1.]
+      limits: [0., 2.]
     ref:
-      limits: [0.75, 0.85]
-    latex: f
+      limits: [0.95, 1.05]
+    latex: df
   f_sigma8:
     derived: True
     latex: f\sigma_{8}

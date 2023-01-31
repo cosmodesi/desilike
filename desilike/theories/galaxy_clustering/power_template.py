@@ -54,7 +54,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
         self.k = np.array(k, dtype='f8')
         self.cosmo_requires = {}
         super(BasePowerSpectrumTemplate, self).calculate()
-        for name in ['pk_dd_interpolator'] + (['pknow_dd_interpolator'] if self.with_now else []):
+        for name in ['f', 'sigma8', 'pk_dd_interpolator'] + (['pknow_dd_interpolator'] if self.with_now else []):
             setattr(self, name + '_fid', getattr(self, name))
         self.pk_dd_fid = self.pk_dd_interpolator(self.k)
         if self.with_now:
@@ -179,7 +179,7 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
             self.cosmo = self.fiducial
             self.calculate()
             self.cosmo = cosmo
-            for name in ['Ap', 'm', 'n']:
+            for name in ['f', 'n', 'm', 'Ap']:
                 setattr(self, name + '_fid', getattr(self, name))
 
     def calculate(self):
@@ -199,7 +199,7 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
     def get(self):
         self.dn = self.n - self.n_fid
         self.dm = self.m - self.m_fid
-        self.df = self.f_sqrt_Ap / self.Ap_fid**0.5
+        self.df = self.f_sqrt_Ap / (self.f_fid * self.Ap_fid**0.5)
         return self
 
 
@@ -248,15 +248,15 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
         for name in ['n', 'm', 'Ap']:
             setattr(self, name + '_fid', getattr(self, name))
 
-    def calculate(self, f=0.8, dm=0., dn=0.):
+    def calculate(self, df=1., dm=0., dn=0.):
         factor = np.exp(dm / self.a * np.tanh(self.a * np.log(self.k / self.kp)) + dn * np.log(self.k / self.kp))
         self.pk_dd = self.pk_dd_fid * factor
         if self.with_now:
             self.pknow_dd = self.pknow_dd_fid * factor
         self.n = self.n_fid + dn
         self.m = self.m_fid + dm
-        self.f = f
-        self.f_sqrt_Ap = f * self.Ap_fid**0.5
+        self.f = self.f_fid * df
+        self.f_sqrt_Ap = self.f * self.Ap_fid**0.5
 
     def get(self):
         return self
@@ -285,10 +285,10 @@ class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     fiducial : str, default='DESI'
         Fiducial cosmology, used to compute the power spectrum.
     """
-    def calculate(self, f=0.8):
+    def calculate(self, df=1.):
         super(StandardPowerSpectrumTemplate, self).calculate()
-        self.f = f
-        self.f_sigma8 = f * self.sigma8
+        self.f = self.f_fid * df
+        self.f_sigma8 = self.f * self.sigma8_fid
 
     def get(self):
         return self

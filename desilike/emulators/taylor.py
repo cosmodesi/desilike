@@ -48,9 +48,9 @@ class TaylorEmulatorEngine(BaseEmulatorEngine):
     def fit(self, X, Y):
         if self.mpicomm.bcast(Y.derivs is None if self.mpicomm.rank == 0 else None, root=0):
             raise ValueError('Please provide samples with derivatives computed')
-        Y = Y[0]  # only need one element
         self.center, self.derivatives, self.powers = None, None, None
         if self.mpicomm.rank == 0:
+            Y = Y[0]  # only need one element
             self.derivatives, self.powers = [], []
             self.center = np.array([np.median(np.unique(xx)) for xx in X.T])
             ndim = len(self.varied_params)
@@ -63,7 +63,6 @@ class TaylorEmulatorEngine(BaseEmulatorEngine):
             for order in range(0, max_order + 1):
                 if order: prefactor /= order
                 for indices in itertools.product(range(ndim), repeat=order):
-                    powers = np.zeros(len(self.center), dtype='i4')
                     orders = np.bincount(indices, minlength=ndim).astype('i4')
                     if order and sum(orders) > min(order for o, order in zip(orders, max_param_order) if o):
                         continue

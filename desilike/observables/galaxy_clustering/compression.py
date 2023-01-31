@@ -126,7 +126,7 @@ class ShapeFitCompressionObservable(BaseCalculator):
         data = load_source(data, params=quantities, choice=True, return_type='dict')
         quantities = [Parameter(quantity) for quantity in data.keys()]
         allowed_bao_quantities = ['DM_over_rd', 'DH_over_rd', 'DM_over_DH', 'DV_over_rd', 'qpar', 'qper', 'qap', 'qiso']
-        allowed_fs_quantities = ['m', 'n', 'f_sqrt_Ap', 'dm', 'dn', 'f']
+        allowed_fs_quantities = ['m', 'n', 'f_sqrt_Ap', 'dm', 'dn', 'df']
         bao_indices, fs_indices = [], []
         for iq, quantity in enumerate(quantities):
             if quantity.basename in allowed_bao_quantities:
@@ -137,13 +137,12 @@ class ShapeFitCompressionObservable(BaseCalculator):
         conflicts = [('DM_over_rd', 'qper'), ('DH_over_rd', 'qper'), ('DM_over_DH', 'qap'), ('DV_over_rd', 'qsio')]
         _check_conflicts(bao_quantities, conflicts)
         fs_quantities = [quantities[iq] for iq in fs_indices]
-        conflicts = [('m', 'dm'), ('n', 'dn'), ('f_sqrt_Ap', 'f')]
+        conflicts = [('m', 'dm'), ('n', 'dn'), ('f_sqrt_Ap', 'df')]
         _check_conflicts(fs_quantities, conflicts)
         quantities = bao_quantities + fs_quantities
         flatdata = [data[quantity.name] for quantity in quantities]
         covariance = load_source(covariance, params=quantities, cov=True, return_type='nparray')
-        fs_convert = {'f': 'df'}
-        return [quantity.basename for quantity in bao_quantities], [fs_convert.get(quantity.basename, quantity.basename) for quantity in fs_quantities], flatdata, covariance
+        return [quantity.basename for quantity in bao_quantities], [quantity.basename for quantity in fs_quantities], flatdata, covariance
 
     def calculate(self):
         bao = [getattr(self.bao, quantity) for quantity in self.bao_quantities]

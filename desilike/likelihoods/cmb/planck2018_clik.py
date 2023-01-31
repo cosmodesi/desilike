@@ -171,7 +171,10 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
             installer.write({cls.installer_section: {'data_dir': data_dir}})
 
     def __del__(self):
-        del self.clik
+        try:
+            del self.clik
+        except AttributeError:
+            pass
 
 
 class TTHighlPlanck2018PlikLikelihood(BasePlanck2018ClikLikelihood):

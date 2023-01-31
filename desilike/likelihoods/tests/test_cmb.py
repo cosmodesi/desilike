@@ -69,6 +69,29 @@ def test_help():
     help(TTHighlPlanck2018PlikLikelihood)
 
 
+def test_copy():
+    from desilike import Fisher, setup_logging
+    from desilike.likelihoods.cmb import (BasePlanck2018GaussianLikelihood, TTHighlPlanck2018PlikLiteLikelihood, TTTEEEHighlPlanck2018PlikLiteLikelihood,
+                                          TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood, LensingPlanck2018ClikLikelihood)
+    from desilike.likelihoods import SumLikelihood
+    from desilike.theories.primordial_cosmology import Cosmoprimo
+
+    setup_logging()
+
+    Planckavg = {'h': 0.6736, 'omega_cdm': 0.1200, 'omega_b': 0.02237, 'logA': 3.044, 'n_s': 0.9649, 'tau_reio': 0.0544}
+    Planckbest = {'h': 0.6736, 'omega_cdm': 0.1200, 'omega_b': 0.02237, 'logA': 3.044, 'n_s': 0.9649, 'tau_reio': 0.0544}
+    cosmodefault = Cosmoprimo()
+    cosmo = cosmodefault.copy()
+    cosmoother = cosmodefault.copy()
+    cosmo(**Planckbest)
+    cosmoother(**Planckavg)
+
+    likelihoods = [Likelihood(cosmo=cosmo) for Likelihood in [TTTEEEHighlPlanck2018PlikLiteLikelihood, TTLowlPlanck2018ClikLikelihood,
+                                                              EELowlPlanck2018ClikLikelihood, LensingPlanck2018ClikLikelihood]]
+    likelihood_clik = SumLikelihood(likelihoods=likelihoods)
+    likelihood_clik()
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -77,4 +100,5 @@ if __name__ == '__main__':
     #test_sum()
     #test_gaussian_likelihood()
     #test_params()
-    test_help()
+    #test_help()
+    test_copy()

@@ -176,7 +176,7 @@ class Differentiation(BaseClass):
 
     """Estimate derivatives of ``calculator`` quantities, with auto- or finite-differentiation."""
 
-    def __init__(self, calculator, getter=None, order=1, method=None, accuracy=2, ref_scale=1e-1, mpicomm=None):
+    def __init__(self, calculator, getter=None, order=1, method=None, accuracy=2, delta_scale=1., mpicomm=None):
         """
         Initialize differentiation.
 
@@ -203,11 +203,11 @@ class Differentiation(BaseClass):
         accuracy : int, dict, default=2
             A dictionary mapping parameter name (including wildcard) to derivative accuracy (number of points used to estimate it).
             If a single value is provided, applies to all varied parameters.
-            Not used if autodifferentiation is available.
-
-        ref_scale : float, default=0.5
-            Parameter grid ranges for the estimation of derivatives are inferred from :attr:`Parameter.proposal`.
-            These values are then scaled by ``ref_scale`` (< 1. means smaller ranges).
+            Not used if ``method = 'auto'``  for this parameter.
+        
+        delta_scale : float, default=1.
+            Parameter grid ranges for the estimation of finite derivatives are inferred from parameters' :attr:`Parameter.delta`.
+            These values are then scaled by ``delta_scale`` (< 1. means smaller ranges).
 
         mpicomm : mpi.COMM_WORLD, default=None
             MPI communicator. If ``None``, defaults to ``calculator``'s :attr:`BaseCalculator.mpicomm`.
@@ -289,16 +289,12 @@ class Differentiation(BaseClass):
             self._grid_center[param.name] = center = param.value
             if self.method[param.name] == 'finite' and self.order[param.name]:
                 size = deriv_ncoeffs(self.order[param.name], acc=self.accuracy[param.name])
-                if param.proposal:
-                    edges = ref_scale * np.array([-param.proposal, param.proposal]) + center
-                else:
-                    raise ParameterPriorError('Provide proper parameter reference distribution or proposal for {}'.format(param))
-                # Stay in prior boundaries
-                edges = (max(edges[0], param.prior.limits[0]), min(edges[1], param.prior.limits[1]))
+                center, delta = param.value, param.delta
+                edges = [center - delta_scale * delta[0], center + delta_scale * delta[1]]
                 grid = None
                 # If center is super close from edges, put all points regularly on the other side
-                for e, cindex in zip(edges, [0, size]):
-                    if np.abs(center - e) < 1e-3 * np.abs(edges[1] - edges[0]):
+                for edge, cindex in zip(edges, [0, size]):
+                    if np.abs(center - edge) < 1e-3 * np.abs(edges[1] - edges[0]):
                         grid = np.linspace(*edges, num=size + 1)
                         order = np.zeros(size + 1, dtype='i')
                         for ord in range(self.order[param.name], 0, -1):

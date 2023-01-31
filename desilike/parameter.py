@@ -564,10 +564,10 @@ class Parameter(BaseClass):
     
     """Class that represents a parameter."""
 
-    _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'latex', 'depends', 'shape']
+    _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'delta', 'latex', 'depends', 'shape']
     _allowed_solved = ['.best', '.marg', '.auto']
 
-    def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, latex=None, shape=()):
+    def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, delta=None, latex=None, shape=()):
         """
         Initialize :class:`Parameter`.
 
@@ -607,6 +607,11 @@ class Parameter(BaseClass):
         proposal : float, default=None
             Proposal uncertainty for parameter.
             If ``None``, defaults to ``ref.std()``.
+        
+        delta : float, tuple, detault=None
+            Variation for finite-differentiation, w.r.t. ``value``.
+            If tuple, (variation below value, variation above value),
+            e.g.: ``(0.1, 0.2)``, with ``value = 1``, means a variation range ``(0.9, 1.2)``.
 
         latex : str, default=None
             Latex string for parameter.
@@ -644,9 +649,11 @@ class Parameter(BaseClass):
             self._ref = self._prior.copy()
         self._latex = latex
         self._proposal = proposal
-        if proposal is None:
-            if (ref is not None or prior is not None) and self._ref.is_proper():
-                self._proposal = self._ref.std()
+        self._delta = delta
+        if delta is not None:
+            if not utils.is_sequence(delta):
+                delta = (delta, ) * 2
+            self._delta = tuple(delta)
         self._derived = derived
         self._depends = {}
         if isinstance(derived, str):
@@ -698,14 +705,44 @@ class Parameter(BaseClass):
 
     @property
     def value(self):
-        """Parameter default value."""
+        """Default value for parameter; if not specified, defaults ``ref.center()``."""
         value = self._value
         if value is None:
-            if hasattr(self._ref, 'loc'):
-                value = self._ref.loc
-            elif self._ref.is_proper():
-                value = np.mean(self._ref.limits)
+            try:
+                value = self._ref.center()
+            except AttributeError as exc:
+                raise AttributeError('reference distribution has no center(), probably because it is not proper... provide value argument or proper reference distribution') from exc
         return value
+    
+    @property
+    def proposal(self):
+        """Proposal uncertainty for parameter; if not specified, defaults to ``ref.std()``."""
+        proposal = self._proposal
+        if proposal is None:
+            try:
+                proposal = self._ref.std()
+            except AttributeError as exc:
+                raise AttributeError('reference distribution has no std(), probably because it is not proper... provide proposal argument or proper reference distribution') from exc
+        return proposal
+    
+    @property
+    def delta(self):
+        """
+        Variation for finite-differentiation, w.r.t. :attr:`value`;
+        e.g.: ``(0.1, 0.2)``, with :attr:`value` ``1``, means a variation range ``(0.9, 1.2)``.
+        If not specified, defaults to ``(0.1 * proposal, 0.1 * proposal)`` (further limited by prior bounds if any).
+        """
+        delta = self._delta
+        proposal_scale = 1e-1
+        if delta is None:
+            try:
+                proposal = self.proposal
+            except AttributeError as exc:
+                raise AttributeError('reference distribution has no std(), probably because it is not proper... provide delta argument, or proposal, or proper reference distribution') from exc
+            delta = (proposal_scale * proposal, proposal_scale * proposal)
+            center = self.value
+            delta = (min(delta[0], center - self.prior.limits[0]), min(delta[1], self.prior.limits[1] - center))
+        return delta
 
     @property
     def derived(self):
@@ -834,7 +871,7 @@ def _make_property(name):
 
 
 for name in Parameter._attrs:
-    if name not in ['value', 'derived', 'latex']:
+    if name not in ['value', 'proposal', 'delta', 'derived', 'latex']:
         setattr(Parameter, name, property(_make_property(name)))
 
 
@@ -1825,6 +1862,16 @@ class ParameterPrior(BaseClass):
     def is_limited(self):
         """Whether distribution has (at least one) finite limit."""
         return not np.isinf(self.limits).all()
+    
+    def center(self):
+        try:
+            center = self.loc
+        except AttributeError:
+            if self.is_limited():
+                center = np.mean([lim for lim in self.limits if not np.isinf(lim)])
+            else:
+                center = 0.
+        return center
 
     def affine_transform(self, loc=0., scale=1.):
         """
@@ -1833,13 +1880,7 @@ class ParameterPrior(BaseClass):
         Useful to e.g. normalize a parameter (together with its prior).
         """
         state = self.__getstate__()
-        try:
-            center = self.loc
-        except AttributeError:
-            if self.is_limited():
-                center = np.mean([lim for lim in self.limits if not np.isinf(lim)])
-            else:
-                center = 0.
+        center = self.center
         for name, value in state.items():
             if name in ['loc']:
                 state[name] = center + loc
@@ -1854,6 +1895,8 @@ class ParameterPrior(BaseClass):
         try:
             return getattr(object.__getattribute__(self, 'rv'), name)
         except AttributeError as exc:
+            if object.__getattribute__(self, 'dist') == 'uniform':
+                raise AttributeError('uniform distribution has no {}'.format(name)) from exc
             attrs = object.__getattribute__(self, 'attrs')
             if name in attrs:
                 return attrs[name]
@@ -2727,7 +2770,7 @@ class ParameterPrecision(BaseParameterMatrix):
             others = others[0]
         params = ParameterCollection.concatenate([other._params for other in others])
         new = others[0].view(params, return_type=None)
-        centers = []
+        centers = [new._center]
         for other in others[1:]:
             view = other.view(new._params, return_type=None)
             new._value += view._value

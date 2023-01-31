@@ -573,7 +573,7 @@ class RuntimeInfo(BaseClass):
         self.monitor = Monitor()
         self.required_by = set()
         if init is None: init = InitConfig()
-        self.init = init
+        self.init = InitConfig(init)
         self.init.runtime_info = self
         self._initialized = False
         self._tocalculate = True
@@ -831,7 +831,12 @@ class BaseCalculator(BaseClass):
         return self.runtime_info.name
 
     def __copy__(self):
-        """Shallow copy."""
+        """
+        Copy this calculator only (not the calculators it may depend on).
+
+        >>> calculator2 = calculator1.copy()
+        # calculator2 will call calculator1 dependencies
+        """
         new = object.__new__(self.__class__)
         new.__dict__.update(self.__dict__)
         for name in ['info', 'runtime_info']:
@@ -871,7 +876,12 @@ class BaseCalculator(BaseClass):
         return new
 
     def deepcopy(self):
-        """Deep copy."""
+        """
+        Copy the calculator and full pipeline:
+
+        >>> calculator2 = calculator1.deepcopy()
+        # calculator2 lives independently from calculator1
+        """
         return copy.deepcopy(self)
 
     @property

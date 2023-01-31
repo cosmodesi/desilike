@@ -39,7 +39,7 @@ class Fisher(BaseClass):
     precision : ParameterPrecision
         Likelihood precision.
     """
-    def __init__(self, likelihood, method=None, accuracy=2, ref_scale=0.5, mpicomm=None):
+    def __init__(self, likelihood, method=None, accuracy=2, delta_scale=1., mpicomm=None):
         """
         Initialize Fisher estimation.
 
@@ -57,12 +57,11 @@ class Fisher(BaseClass):
         accuracy : int, dict, default=2
             A dictionary mapping parameter name (including wildcard) to derivative accuracy (number of points used to estimate it).
             If a single value is provided, applies to all varied parameters.
-            Not used if autodifferentiation is available.
+            Not used if ``method = 'auto'``  for this parameter.
 
-        ref_scale : float, default=0.5
-            Parameter grid ranges for the estimation of derivatives are inferred from parameters' :attr:`Parameter.ref.scale`
-            if exists, else limits of reference distribution if bounded, else :attr:`Parameter.proposal`.
-            These values are then scaled by ``ref_scale`` (< 1. means smaller ranges).
+        delta_scale : float, default=1.
+            Parameter grid ranges for the estimation of finite derivatives are inferred from parameters' :attr:`Parameter.delta`.
+            These values are then scaled by ``delta_scale`` (< 1. means smaller ranges).
 
         mpicomm : mpi.COMM_WORLD, default=None
             MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
@@ -117,8 +116,8 @@ class Fisher(BaseClass):
             def finalize(derivs):
                 return np.array([[derivs[param1, param2] for param2 in self.varied_params] for param1 in self.varied_params])
 
-        self.prior_differentiation = Differentiation(prior_calculator, getter=prior_getter, order=2, method=method, accuracy=accuracy, ref_scale=ref_scale, mpicomm=self.mpicomm)
-        self.differentiation = Differentiation(self.likelihood, getter=getter, order=order, method=method, accuracy=accuracy, ref_scale=ref_scale, mpicomm=self.mpicomm)
+        self.prior_differentiation = Differentiation(prior_calculator, getter=prior_getter, order=2, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=self.mpicomm)
+        self.differentiation = Differentiation(self.likelihood, getter=getter, order=order, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=self.mpicomm)
         self._finalize = finalize
 
     def run(self, **params):

@@ -1,6 +1,11 @@
 import numpy as np
 
-from desilike.parameter import Parameter, Deriv, ParameterArray, Samples, ParameterPrecision, ParameterCovariance
+from desilike.parameter import Parameter, ParameterPrior, Deriv, ParameterArray, Samples, ParameterPrecision, ParameterCovariance
+
+
+def test_prior():
+    prior = ParameterPrior(limits=(0., 1.))
+    print(prior.std())
 
 
 def test_deriv():
@@ -69,6 +74,7 @@ def test_matrix():
 
 if __name__ == '__main__':
 
+    test_prior()
     #test_deriv()
     #test_param_array()
-    test_matrix()
+    #test_matrix()

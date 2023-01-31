@@ -137,7 +137,7 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
                     indices = np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx])
                     indices = (indices,) * 2
                     if default is False:
-                        tmp[indices] = [param.proposal**2 if param.proposal is not None else np.nan for param in params_not_in_source]
+                        tmp[indices] = [getattr(param, 'proposal', np.nan)**2 for param in params_not_in_source]
                     else:
                         tmp[indices] = default
             source = ParameterCovariance(tmp, params=params)

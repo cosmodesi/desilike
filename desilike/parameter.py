@@ -1880,7 +1880,7 @@ class ParameterPrior(BaseClass):
         Useful to e.g. normalize a parameter (together with its prior).
         """
         state = self.__getstate__()
-        center = self.center
+        center = self.center()
         for name, value in state.items():
             if name in ['loc']:
                 state[name] = center + loc

@@ -657,7 +657,7 @@ class Parameter(BaseClass):
         self._derived = derived
         self._depends = {}
         if isinstance(derived, str):
-            if self.solved:
+            if self._derived in self._allowed_solved:
                 allowed_dists = ['norm', 'uniform']
                 if self._prior.dist not in allowed_dists or self._prior.is_limited():
                     raise ParameterError('Prior must be one of {}, with no limits, to use analytic marginalisation for {}'.format(allowed_dists, self))
@@ -695,7 +695,7 @@ class Parameter(BaseClass):
         >>> param.eval(a=2., b=3.)
         5.
         """
-        if isinstance(self._derived, str) and not self.solved:
+        if isinstance(self._derived, str) and self._derived not in self._allowed_solved:
             try:
                 values = {k: values[n] for k, n in self._depends.items()}
             except KeyError:
@@ -747,7 +747,7 @@ class Parameter(BaseClass):
     @property
     def derived(self):
         """If parameter is derived from others 'a', 'b', return e.g. '{a} * {b}'."""
-        if isinstance(self._derived, str) and not self.solved:
+        if isinstance(self._derived, str) and self._derived not in self._allowed_solved:
             toret = self._derived
             for k, v in self._depends.items():
                 toret = toret.replace(k, '{{{}}}'.format(v))
@@ -757,7 +757,7 @@ class Parameter(BaseClass):
     @property
     def solved(self):
         """Whether parameter is solved, i.e. fixed at best fit or marginalized over."""
-        return self._derived in self._allowed_solved
+        return not self._fixed and self._derived in self._allowed_solved
 
     @property
     def name(self):
@@ -2632,9 +2632,9 @@ class ParameterCovariance(BaseParameterMatrix):
                 file.write(txt)
         return txt
 
-    def to_getdist(self, params=None, label=None, center=None, ignore_limits=True, **kwargs):
+    def to_getdist(self, params=None, label=None, center=None, ignore_limits=True):
         """
-        Return GetDist hook to samples.
+        Return a GetDist Gaussian distribution, centered on :meth:`center`, with covariance matrix :meth:`cov`.
 
         Parameters
         ----------
@@ -2642,7 +2642,7 @@ class ParameterCovariance(BaseParameterMatrix):
             Parameters to share to GetDist. Defaults to all parameters.
         
         label : str, default=None
-            Name for  GetDist to use for this covariance matrix.
+            Name for GetDist to use for this distribution.
         
         center : list, array, default=None
             Optionally, override :meth:`center`.

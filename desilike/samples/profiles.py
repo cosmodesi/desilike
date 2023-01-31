@@ -60,7 +60,7 @@ class ParameterBestFit(Samples):
         if return_type == 'dict':
             return {k: v[0] for k, v in di.items()}
         if return_type == 'nparray':
-            return np.array(list(di.values()))
+            return np.array([value[0] for value in di.values()])
         toret = self.copy()
         toret.data = [ParameterArray(value, param=value.param) for value in di.values()]
         return toret
@@ -295,6 +295,9 @@ class Profiles(BaseClass):
     def get(self, *args, **kwargs):
         """Access attribute by name."""
         return getattr(self, *args, **kwargs)
+    
+    def params(self, *args, **kwargs):
+        return self.start.params(*args, **kwargs)
 
     def __contains__(self, name):
         """Has this attribute?"""
@@ -391,6 +394,37 @@ class Profiles(BaseClass):
         for name, cls in self._attrs.items():
             if name in state:
                 setattr(self, name, cls.from_state(state[name]))
+
+    def to_getdist(self, params=None, label=None, ignore_limits=True, **kwargs):
+        """
+        Return a GetDist Gaussian distribution, centered on :attr:`bestfit.choice`, with covariance matrix :attr:`covariance`.
+
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            Parameters to share to GetDist. Defaults to all parameters.
+        
+        label : str, default=None
+            Name for GetDist to use for this distribution.
+        
+        ignore_limits : bool, default=True
+            GetDist does not seem to be able to integrate over distribution if bounded;
+            so drop parameter limits.
+
+        Returns
+        -------
+        samples : getdist.gaussian_mixtures.MixtureND
+        """
+        from getdist.gaussian_mixtures import MixtureND
+        cov = self.covariance.view(params=params, return_type=None)
+        labels = [param.latex() for param in cov._params]
+        names = [str(param) for param in cov._params]
+        center = self.bestfit.choice(params=cov._params, return_type='nparray')
+        # ignore_limits to avoid issue in GetDist with analytic marginalization
+        ranges = None
+        if not ignore_limits:
+            ranges = [tuple(None if limit is None or not np.isfinite(limit) else limit for limit in param.prior.limits) for param in cov._params]
+        return MixtureND([center], [cov._value], lims=ranges, names=names, labels=labels, label=label)
 
     def to_stats(self, params=None, quantities=None, sigfigs=2, tablefmt='latex_raw', fn=None):
         """

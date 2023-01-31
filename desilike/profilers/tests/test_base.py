@@ -45,7 +45,34 @@ def test_profilers():
     profiler.maximize(niterations=2)
 
 
+def test_solve():
+
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, ObservablesCovarianceMatrix, BoxFootprint
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+
+    template = ShapeFitPowerSpectrumTemplate(z=0.5)
+    #theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
+    #for param in theory.params.select(basename=['df', 'dm', 'qpar', 'qper']): param.update(fixed=True)
+    for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data={'sn0': 1000.},
+                                                         theory=theory)
+    covariance = ObservablesCovarianceMatrix(observables=observable, footprints=BoxFootprint(volume=1e10, nbar=1e-2))
+    observable.init.update(covariance=covariance())
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    for param in likelihood.all_params.select(basename=['df', 'dm', 'qpar', 'qper']): param.update(fixed=True)
+
+    profiler = MinuitProfiler(likelihood)
+    profiles = profiler.maximize(niterations=2)
+    print(profiles.to_stats())
+    from desilike.samples import plotting
+    plotting.plot_triangle(profiles, show=True)
+
+
 if __name__ == '__main__':
 
     setup_logging()
-    test_profilers()
+    #test_profilers()
+    test_solve()

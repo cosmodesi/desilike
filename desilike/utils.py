@@ -234,9 +234,11 @@ class BaseClass(object, metaclass=BaseMetaClass):
         return new
 
     def save(self, filename):
-        self.log_info('Saving {}.'.format(filename))
-        mkdir(os.path.dirname(filename))
-        np.save(filename, {'__class__': serialize_class(self.__class__), **self.__getstate__()}, allow_pickle=True)
+        state = {'__class__': serialize_class(self.__class__), **self.__getstate__()}
+        if getattr(self, 'mpicomm', None) is None or self.mpicomm.rank == 0:
+            self.log_info('Saving {}.'.format(filename))
+            mkdir(os.path.dirname(filename))
+            np.save(filename, state, allow_pickle=True)
 
     @classmethod
     def load(cls, filename, fallback_class=None):

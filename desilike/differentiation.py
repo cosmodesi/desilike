@@ -351,10 +351,12 @@ class Differentiation(BaseClass):
         def __calculate(*values):
             self.pipeline.param_values.update(dict(zip(params, values)))
             values = self.pipeline.params.eval(**self.pipeline.param_values)
+
             for calculator in self.pipeline.calculators:  # start by first calculator, end by the last one
                 runtime_info = calculator.runtime_info
-                runtime_info.set_param_values(values, full=True, force=True)
-                result = runtime_info.calculate()
+                force = any(param.basename in runtime_info.param_values for param in self.varied_params)
+                runtime_info.set_param_values(values, full=True, force=force)
+                runtime_info.calculate()
             return getter()
 
         toret = []

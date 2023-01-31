@@ -293,6 +293,10 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     def set_params(self):
         self.required_bias_params = dict(b1=0.69, b2=-1.17, bs=-0.71, b3=0., alpha0=0., alpha2=0., alpha4=0., alpha6=0., sn0=0., sn2=0., sn4=0.)
         super(LPTVelocileptorsTracerPowerSpectrumMultipoles, self).set_params()
+        fix = []
+        if 4 not in self.ells: fix += ['alpha4', 'alpha6', 'sn4']
+        if 2 not in self.ells: fix += ['alpha2', 'sn2']
+        for name in fix: self.params[name].update(fixed=True)
 
     def calculate(self, **params):
         return super(LPTVelocileptorsTracerPowerSpectrumMultipoles, self).calculate(**params)

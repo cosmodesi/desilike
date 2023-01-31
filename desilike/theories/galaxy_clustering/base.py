@@ -45,7 +45,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
 
     """Base class for theory correlation function from power spectrum multipoles."""
 
-    def initialize(self, s=None, ells=(0, 2, 4), power=None):
+    def initialize(self, s=None, ells=(0, 2, 4), power=None, **kwargs):
         super(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles, self).initialize(s=s, ells=ells)
         self.k = np.logspace(min(-3, - np.log10(self.s[-1]) - 0.1), max(2, - np.log10(self.s[0]) + 0.1), 2000)
         from cosmoprimo import PowerToCorrelation
@@ -59,7 +59,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
             from .full_shape import KaiserTracerPowerSpectrumMultipoles
             power = KaiserTracerPowerSpectrumMultipoles(k=self.k, ells=self.ells)
         self.power = power
-        self.power.init.update(k=self.kin, ells=self.ells)
+        self.power.init.update(k=self.kin, ells=self.ells, **kwargs)
         self.power.params = self.params.copy()
         self.params.clear()
 

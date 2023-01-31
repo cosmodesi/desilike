@@ -78,7 +78,7 @@ class BaseTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMulti
     config_fn = 'full_shape.yaml'
     _default_options = dict()
 
-    def __init__(self, *args, pt=None, template=None, **kwargs):
+    def initialize(self, *args, pt=None, template=None, **kwargs):
         self.options = self._default_options.copy()
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
@@ -114,6 +114,14 @@ class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         if pt is not None: power.init.update(pt=pt)
         if template is not None: power.init.update(template=template)
         super(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles, self).initialize(*args, power=power, **kwargs)
+    
+    @property
+    def pt(self):
+        return self.power.pt
+    
+    @property
+    def template(self):
+        return self.power.template
 
     def get(self):
         return self.corr

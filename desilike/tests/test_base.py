@@ -11,70 +11,6 @@ def test_init():
     init = InitConfig(params=params)
 
 
-def test_galaxy_clustering():
-    """
-    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, DirectPowerSpectrumTemplate
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
-    theory = KaiserTracerPowerSpectrumMultipoles()
-    print(theory.runtime_info.pipeline.params)
-    theory(logA=3.04, b1=1.).shape
-    theory = KaiserTracerCorrelationFunctionMultipoles()
-    print(theory.runtime_info.pipeline.params)
-    theory(logA=3.04, b1=1.).shape
-
-    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
-    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    print(theory.runtime_info.pipeline.params)
-    theory(dm=0.01, b1=1.).shape
-    theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    print(theory.runtime_info.pipeline.params)
-    theory(dm=0.01, b1=1.).shape
-
-    from desilike.theories.galaxy_clustering import PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles
-
-    theory = PyBirdTracerPowerSpectrumMultipoles()
-    print(theory.runtime_info.pipeline.params)
-    theory(logA=3.04, b1=1.).shape
-    theory = PyBirdTracerCorrelationFunctionMultipoles()
-    print(theory.runtime_info.pipeline.params)
-    theory(logA=3.04, b1=1.).shape
-
-    from desilike.theories.galaxy_clustering import PNGTracerPowerSpectrumMultipoles
-
-    theory = PNGTracerPowerSpectrumMultipoles(method='prim')
-    print(theory.runtime_info.pipeline.params)
-    params = dict(fnl_loc=100., b1=2.)
-    theory2 = PNGTracerPowerSpectrumMultipoles(method='matter')
-    assert np.allclose(theory2(**params), theory(**params), rtol=2e-3)
-    assert not np.allclose(theory2(fnl_loc=0.), theory(), rtol=2e-3)
-
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles
-
-    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
-    print(theory.runtime_info.pipeline.params)
-    theory(qpar=1.1, sigmapar=3.)
-    theory = ResummedBAOWigglesTracerPowerSpectrumMultipoles()
-    print(theory.runtime_info.pipeline.params)
-    theory(qpar=1.1, sigmas=3.)
-    theory = DampedBAOWigglesTracerCorrelationFunctionMultipoles()
-    print(theory.runtime_info.pipeline.params)
-    theory(qpar=1.1, sigmapar=3.)
-    theory = ResummedBAOWigglesTracerCorrelationFunctionMultipoles()
-    print(theory.runtime_info.pipeline.params)
-    theory(qpar=1.1, sigmas=3.)
-    """
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles
-
-    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
-    theory(qpar=1.1, sigmapar=3.)
-
-    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate
-    template = BAOPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso')
-    theory.init.update(template=template)
-
-
 def test_observable():
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
@@ -95,7 +31,7 @@ def test_observable():
 
 def test_likelihood():
 
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
 
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, BAOPowerSpectrumTemplate
@@ -260,7 +196,6 @@ if __name__ == '__main__':
 
     setup_logging()
     test_init()
-    #test_galaxy_clustering()
     #test_observable()
     #test_likelihood()
     test_params()

@@ -41,7 +41,6 @@ def AbacusSummitLRGDirectPowerSpectrumMultipoles(cosmo='external', solve=None, s
         emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(order=4))
         emulator.set_samples()
         emulator.fit()
-        emulator.check()
         emulator.save(emulator_fn)
     return likelihood
 
@@ -89,7 +88,6 @@ def AbacusSummitLRGShapeFitPowerSpectrumMultipoles(solve=None, save_emulator=Fal
         emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(order=4))
         emulator.set_samples()
         emulator.fit()
-        emulator.check()
         emulator.save(emulator_fn)
     return likelihood
 

@@ -17,9 +17,9 @@ class TaylorEmulatorEngine(BaseEmulatorEngine):
     name = 'taylor'
     _samples_with_derivs = True
 
-    def initialize(self, varied_params, order=3, accuracy=2, method=None, ref_scale=0.5):
+    def initialize(self, varied_params, order=3, accuracy=2, method=None, delta_scale=0.5):
         self.varied_params = varied_params
-        self.sampler_options = dict(order=order, accuracy=accuracy, method=method, ref_scale=ref_scale)
+        self.sampler_options = dict(order=order, accuracy=accuracy, method=method, delta_scale=delta_scale)
 
     def get_default_samples(self, calculator, **kwargs):
         """
@@ -34,12 +34,11 @@ class TaylorEmulatorEngine(BaseEmulatorEngine):
         accuracy : int, dict, default=2
             A dictionary mapping parameter name (including wildcard) to derivative accuracy (number of points used to estimate it).
             If a single value is provided, applies to all varied parameters.
-            Not used if autodifferentiation is available.
-
-        ref_scale : float, default=0.5
-            Parameter grid ranges for the estimation of derivatives are inferred from parameters' :attr:`Parameter.ref.scale`
-            if exists, else limits of reference distribution if bounded, else :attr:`Parameter.proposal`.
-            These values are then scaled by ``ref_scale`` (< 1. means smaller ranges).
+            Not used if ``method = 'auto'``  for this parameter.
+        
+        delta_scale : float, default=1.
+            Parameter grid ranges for the estimation of finite derivatives are inferred from parameters' :attr:`Parameter.delta`.
+            These values are then scaled by ``delta_scale`` (< 1. means smaller ranges).
         """
         from desilike import Differentiation
         options = {**self.sampler_options, **kwargs}

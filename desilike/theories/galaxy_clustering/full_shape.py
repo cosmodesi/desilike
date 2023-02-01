@@ -114,11 +114,11 @@ class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         if pt is not None: power.init.update(pt=pt)
         if template is not None: power.init.update(template=template)
         super(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles, self).initialize(*args, power=power, **kwargs)
-    
+
     @property
     def pt(self):
         return self.power.pt
-    
+
     @property
     def template(self):
         return self.power.template
@@ -130,18 +130,18 @@ class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
 class KaiserTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTrapzTheoryPowerSpectrumMultipoles):
     r"""
     Kaiser tracer power spectrum multipoles.
-    
+
     Parameters
     ----------
     k : array, default=None
         Theory wavenumbers where to evaluate multipoles.
-        
+
     ells : tuple, default=(0, 2, 4)
         Multipoles to compute.
-        
+
     mu : int, default=200
         Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
-        
+
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
     """
@@ -151,10 +151,12 @@ class KaiserTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTra
         super(KaiserTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.set_k_mu(k=self.k, mu=self.mu, ells=self.ells)
 
-    def calculate(self, b1=1., sn0=0.):
+    def calculate(self, b1=1., sn0=0., sigmapar=0., sigmaper=0.):
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
-        pkmu = (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0
+        sigmanl2 = kap**2 * (sigmapar**2 * muap**2 + sigmaper**2 * (1. - muap**2))
+        fog = np.exp(-sigmanl2 / 2.)
+        pkmu = jac * fog * (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0
         self.power = self.to_poles(pkmu)
 
     def get(self):
@@ -169,13 +171,13 @@ class KaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFro
     ----------
     k : array, default=None
         Theory wavenumbers where to evaluate multipoles.
-        
+
     ells : tuple, default=(0, 2, 4)
         Multipoles to compute.
-        
+
     mu : int, default=200
         Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
-        
+
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
     """
@@ -271,18 +273,18 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     """
     Velocileptors Lagrangian perturbation theory (LPT) tracer power spectrum multipoles.
     Can be exactly marginalized over counter terms and shot noise parameters alpha*, sn*.
-    
+
     Parameters
     ----------
     k : array, default=None
         Theory wavenumbers where to evaluate multipoles.
-        
+
     ells : tuple, default=(0, 2, 4)
         Multipoles to compute.
-        
+
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
-    
+
     **kwargs : dict
         Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5``.
     """
@@ -306,18 +308,18 @@ class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationF
     """
     Velocileptors LPT tracer correlation function multipoles.
     Can be exactly marginalized over counter terms and shot noise parameters alpha*, sn*.
-    
+
     Parameters
     ----------
     s : array, default=None
         Theory separations where to evaluate multipoles.
-        
+
     ells : tuple, default=(0, 2, 4)
         Multipoles to compute.
-        
+
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
-    
+
     **kwargs : dict
         Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5``.
     """
@@ -391,21 +393,21 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     """
     Pybird tracer power spectrum multipoles.
     Can be exactly marginalized over counterterms c*.
-    
+
     Parameters
     ----------
     k : array, default=None
         Theory wavenumbers where to evaluate multipoles.
-        
+
     ells : tuple, default=(0, 2, 4)
         Multipoles to compute.
-        
+
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
-    
+
     shotnoise : float, default=1e4
         Shot noise (which is usually marginalized over).
-    
+
     **kwargs : dict
         Velocileptors options, defaults to: ``optiresum=True, nd=None, with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti', eft_basis='eftoflss'``.
     """
@@ -507,21 +509,21 @@ class PyBirdTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMul
     """
     Pybird tracer correlation function multipoles.
     Can be exactly marginalized over counterterms c*.
-    
+
     Parameters
     ----------
     s : array, default=None
         Theory separations where to evaluate multipoles.
-        
+
     ells : tuple, default=(0, 2, 4)
         Multipoles to compute.
-        
+
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
 
     shotnoise : float, default=1e4
         Shot noise (which is usually marginalized over).
-    
+
     **kwargs : dict
         Velocileptors options, defaults to: ``optiresum=True, nd=None, with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti', eft_basis='eftoflss'``.
     """

@@ -15,7 +15,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
     klim : dict, default=None
         Wavenumber limits: a dictionary mapping multipoles to (min separation, max separation, step (float)),
         e.g. ``{0: (0.01, 0.2, 0.01), 2: (0.01, 0.15, 0.01)}``.
-    
+
     k : array, default=None
         Optionally, observed wavenumbers.
         Taken from ``wmatrix`` if provided;
@@ -26,25 +26,25 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         Observed multipoles.
         Defaults to poles in ``klim``, if provided;
         else (0, 2, 4).
-        
+
     ellsin : tuple, default=None
         Optionally, input theory multipoles.
         Taken from ``wmatrix`` if provided;
         else (0, 2, 4).
-        
+
     wmatrix : str, Path, pypower.BaseMatrix, default=None
         Optionally, window matrix.
-        
+
     kinrebin : int, default=1
         If ``wmatrix`` (which is defined for input theory wavenumbers) is provided,
         rebin theory wavenumbers by this factor.
-        
+
     shotnoise : float, default=0.
         Shot noise (window matrix must be applied to power spectrum with shot noise).
-    
+
     fiber_collisions : BaseFiberCollisionsPowerSpectrumMultipoles
         Optionally, fiber collisions.
-        
+
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory power spectrum multipoles, defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
     """
@@ -73,13 +73,13 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 k = []
                 for edges in self.kedges:
                     k.append((edges[:-1] + edges[1:]) / 2.)
-            
+
         if np.ndim(k[0]) == 0:
             k = [k] * len(self.ells)
         self.k = [np.array(kk, dtype='f8') for kk in k]
         if len(self.k) != len(self.ells):
             raise ValueError("Provided as many k's as ells")
-        
+
         if theory is None:
             from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
             theory = KaiserTracerPowerSpectrumMultipoles()
@@ -128,7 +128,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             wmatrix.select_proj(projsout=[(ell, None) for ell in self.ells], projsin=projsin)
             wmatrix.slice_x(slicein=slice(0, len(wmatrix.xin[0]) // kinrebin * kinrebin, kinrebin))
             # print(wmatrix.xout[0], max(kk.max() for kk in self.k) * 1.2)
-            wmatrix.select_x(xinlim=(0., max(kk.max() for kk in self.k) * 1.2))
+            #wmatrix.select_x(xinlim=(0., max(kk.max() for kk in self.k) * 1.2))
             self.kin = wmatrix.xin[0]
             # print(wmatrix.xout[0])
             assert all(np.allclose(xin, self.kin) for xin in wmatrix.xin)
@@ -250,7 +250,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
 
     fiber_collisions : BaseFiberCollisionsPowerSpectrumMultipoles
         Optionally, fiber collisions.
-        
+
     theory : BaseTheoryCorrelationFunctionMultipoles
         Theory correlation function multipoles, defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
     """
@@ -281,7 +281,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
                 s = []
                 for edges in self.sedges:
                     s.append((edges[:-1] + edges[1:]) / 2.)
-            
+
         if np.ndim(s[0]) == 0:
             s = [s] * len(self.ells)
         self.s = [np.array(ss, dtype='f8') for ss in s]
@@ -314,10 +314,10 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
                 self.matrix_diag = self.matrix_diag[..., self.smask]
                 self.offset = self.offset[self.smask]
         self.theory.init.update(s=self.sin, ells=self.ellsin)
-    
+
     def _apply(self, theory):
         if self.matrix_diag is not None:
-            theory = jnp.sum(self.matrix_diag * theory[None, ...], axis=1)    
+            theory = jnp.sum(self.matrix_diag * theory[None, ...], axis=1)
         theory = jnp.ravel(theory)
         if self.matrix_full is not None:
             theory = jnp.dot(self.matrix_full, theory)
@@ -349,7 +349,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
-    
+
     @plotting.plotter
     def plot(self):
         """
@@ -409,7 +409,7 @@ class BaseFiberCollisionsPowerSpectrumMultipoles(BaseCalculator):
 
     def calculate(self):
         self.power = self.correlated(self.theory.power) + self.uncorrelated()
-    
+
     @plotting.plotter
     def plot(self):
         """
@@ -475,7 +475,7 @@ class FiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMul
     r"""
     Fiber collision effect on power spectrum multipoles.
     Contrary to Hahn et al. 2016:
-    
+
     - no top-hat shape is assumed for the kernel
     - no :math:`k D_{fc} \ll 1` approximation, where :math:`D_{fc}` is the fiber collision scale
 
@@ -486,7 +486,7 @@ class FiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMul
 
     ells : tuple, default=(0, 2, 4)
         Multipoles.
-    
+
     sep : array, default=None
         Transverse separation values for ``kernel``.
 
@@ -521,20 +521,20 @@ class FiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMul
             toret[nonzero] = np.diff(term1 + term2, axis=0)[0]
             toret[~nonzero] = np.diff(y[0] * x[:, None]**2 / 2. + a * x[:, None]**3 / 3., axis=0)[0]
             return toret
-        
+
         def kernel_fourier(k):
             toret = 0.
             for isep in range(len(sep) - 1):
                 toret += 2. * np.pi * trapz_j0(self.sep[isep:isep + 2], self.kernel[isep:isep + 2], k)
             return toret
-        
+
         self.kernel_uncorrelated = - np.array([np.pi * (2. * ellout + 1.) * special.legendre(ellout)(0.) for ellout in self.ells])[:, None] * kernel_fourier(self.k) / self.k
-        
+
         # phi: angle between k_perp and q_perp
         phi = np.linspace(0., np.pi, 100)
         k_perp = np.linspace(0., self.k[-1], len(self.k))
         q_perp = np.linspace(0., self.kin[-1], len(self.kin))
-    
+
         kk, qq = np.meshgrid(k_perp, q_perp, indexing='ij')
         integral_kernel = 0.
         for pp, ww in zip(phi, utils.weights_trapz(phi) / (2. * np.pi)):
@@ -542,7 +542,7 @@ class FiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMul
             integral_kernel += 2. * ww * kernel_fourier(kq_perp)
         from scipy.interpolate import RectBivariateSpline
         interp_kernel = RectBivariateSpline(k_perp, q_perp, integral_kernel, kx=3, ky=3, s=0)
-        
+
         wq = utils.weights_trapz(self.kin)
         diag = _interp_matrix(self.k, self.kin)
         self.kernel_correlated = []
@@ -576,7 +576,7 @@ class FiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMul
 class TopHatFiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMultipoles):
     r"""
     Fiber collision effect on power spectrum multipoles, exactly following Hahn et al. 2016:
-    
+
     - top-hat shape is assumed for the kernel
     - :math:`k D_{fc} \ll 1` approximation, where :math:`D_{fc}` is the fiber collision scale
 
@@ -584,19 +584,19 @@ class TopHatFiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpect
     ----------
     k : array, default=None
         Output wavenumbers.
-    
+
     ells : tuple, default=(0, 2, 4)
         Multipoles.
-    
+
     fs : float, default=1.
         Fraction of pairs lost below the fiber collision scale ``Dfc``.
-    
+
     Dfc : float, default=0.
         Fiber collision scale (transverse separation).
 
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory power spectrum multipoles, defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
-    
+
 
     Reference
     ---------
@@ -725,7 +725,7 @@ class FiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorrelatio
 
     ells : tuple, default=(0, 2, 4)
         Multipoles.
-    
+
     sep : array, default=None
         Transverse separation values for ``kernel``.
 
@@ -734,7 +734,7 @@ class FiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorrelatio
 
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory correlation function multipoles, defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
-    
+
 
     Reference
     ---------
@@ -745,7 +745,7 @@ class FiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorrelatio
         super(FiberCollisionsCorrelationFunctionMultipoles, self).initialize(*args, **kwargs)
 
         self.sep, self.kernel = _format_kernel(sep=sep, kernel=kernel)
-        
+
         # Let's perform *exact* trapezoidal integration over the kernel
         def integral_sqrt_mun(n=0, range=(-1, 1.)):
             range = np.arccos(range)
@@ -758,14 +758,14 @@ class FiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorrelatio
             term1 = y[0] / (n + 1) * (-mu_min**(n + 1) + (-mu_min)**(n + 1))
             term2 = np.array([a * self.s * (integral_sqrt_mun(n=n, range=(mum, np.ones_like(mum))) + integral_sqrt_mun(n=n, range=(-np.ones_like(mum), -mum))) for mum in mu_min])
             return np.diff(term1 + term2, axis=0)[0]
-        
+
         def trapz_poly(poly):
             toret = 0.
             for isep in range(len(sep) - 1):
                 for n, coeff in enumerate(poly.coeffs[::-1]):
                     toret += coeff * trapz_mun(self.sep[isep:isep + 2], self.kernel[isep:isep + 2], n=n)
             return toret
-        
+
         self.kernel_uncorrelated = - np.array([(2. * ellout + 1.) / 2. * trapz_poly(special.legendre(ellout)) for ellout in self.ells])
         self.kernel_correlated = []
         for ellout in self.ells:
@@ -793,10 +793,10 @@ class TopHatFiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorr
 
     ells : tuple, default=(0, 2, 4)
         Multipoles.
-    
+
     fs : float, default=1.
         Fraction of pairs lost below the fiber collision scale ``Dfc``.
-    
+
     Dfc : float, default=0.
         Fiber collision scale (transverse separation).
 
@@ -815,13 +815,13 @@ class TopHatFiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorr
         self.Dfc = float(Dfc)
 
         mu_min = np.sqrt(np.clip(1. - (self.Dfc / self.s)**2, 0., None))
-    
+
         self.kernel_uncorrelated = []
         for ellout in self.ells:
             integ = special.legendre(ellout).integ()
             self.kernel_uncorrelated.append((2 * ellout + 1.) / 2. * self.fs * (integ(1.) - integ(mu_min) + integ(-mu_min) - integ(-1.)))
         self.kernel_uncorrelated = - np.array(self.kernel_uncorrelated)
-       
+
         self.kernel_correlated = []
         for ellout in self.ells:
             self.kernel_correlated.append([])

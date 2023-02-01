@@ -11,30 +11,30 @@ params:
     latex: b
   sigmas:
     value: 0.
-    fixed: True
-    latex: \Sigma_{s}
     prior:
       limits: [0, 10]
+    latex: \Sigma_{s}
+    fixed: True
   sigmapar:
     value: 9.
-    fixed: True
-    latex: \Sigma_{\parallel}
     prior:
       limits: [0.1, 10]
+    latex: \Sigma_{\parallel}
+    fixed: True
   sigmaper:
     value: 6.
-    fixed: True
-    latex: \Sigma_{\perp}
     prior:
       limits: [0.1, 10]
+    latex: \Sigma_{\perp}
+    fixed: True
   al[:5:2]_[-3:2]:
     value: 0.
-    fixed: False
-    latex: a_{[], []}
     prior:
       limits: [-1e4, 1e4]
     ref:
       limits: [-1e2, 1e2]
+    latex: a_{[], []}
+    fixed: False
 
 
 ---
@@ -52,30 +52,30 @@ params:
     latex: b
   sigmas:
     value: 0.
-    fixed: True
-    latex: \Sigma_{s}
     prior:
       limits: [0, 10]
+    latex: \Sigma_{s}
+    fixed: True
   sigmapar:
     value: 9.
-    fixed: True
-    latex: \Sigma_{\parallel}
     prior:
       limits: [0.1, 10]
+    latex: \Sigma_{\parallel}
+    fixed: True
   sigmaper:
     value: 6.
-    fixed: True
-    latex: \Sigma_{\perp}
     prior:
       limits: [0.1, 10]
+    latex: \Sigma_{\perp}
+    fixed: True
   al[:5:2]_[-3:2]:
     value: 0.
-    fixed: False
-    latex: a_{[], []}
     prior:
       limits: [-1e4, 1e4]
     ref:
       limits: [-1e2, 1e2]
+    latex: a_{[], []}
+    fixed: False
 
 ---
 
@@ -92,18 +92,18 @@ params:
     latex: b
   sigmas:
     value: 0.
-    fixed: True
-    latex: \Sigma_{s}
     prior:
       limits: [0, 10]
+    latex: \Sigma_{s}
+    fixed: True
   al[:5:2]_[-3:2]:
     value: 0.
-    fixed: False
-    latex: a_{[], []}
     prior:
       limits: [-1e4, 1e4]
     ref:
       limits: [-1e2, 1e2]
+    latex: a_{[], []}
+    fixed: False
 
 ---
 
@@ -120,30 +120,30 @@ params:
     latex: b
   sigmas:
     value: 0.
-    fixed: True
-    latex: \Sigma_{s}
     prior:
       limits: [0, 10]
+    latex: \Sigma_{s}
+    fixed: True
   sigmapar:
     value: 9.
-    fixed: True
-    latex: \Sigma_{\parallel}
     prior:
       limits: [0.1, 10]
+    latex: \Sigma_{\parallel}
+    fixed: True
   sigmaper:
     value: 6.
-    fixed: True
-    latex: \Sigma_{\perp}
     prior:
       limits: [0.1, 10]
+    latex: \Sigma_{\perp}
+    fixed: True
   al[:5:2]_[-3:2]:
     value: 0.
-    fixed: False
-    latex: a_{[], []}
     prior:
       limits: [-1e4, 1e4]
     ref:
-      limits: [-0.1, 0.1]
+      limits: [-1e2, 1e2]
+    latex: a_{[], []}
+    fixed: False
 
 ---
 
@@ -160,30 +160,30 @@ params:
     latex: b
   sigmas:
     value: 0.
-    fixed: True
-    latex: \Sigma_{s}
     prior:
       limits: [0, 10]
+    latex: \Sigma_{s}
+    fixed: True
   sigmapar:
     value: 9.
-    fixed: True
-    latex: \Sigma_{\parallel}
     prior:
       limits: [0.1, 10]
+    latex: \Sigma_{\parallel}
+    fixed: True
   sigmaper:
     value: 6.
-    fixed: True
-    latex: \Sigma_{\perp}
     prior:
       limits: [0.1, 10]
+    latex: \Sigma_{\perp}
+    fixed: True
   al[:5:2]_[-3:2]:
     value: 0.
-    fixed: False
-    latex: a_{[], []}
     prior:
       limits: [-1e4, 1e4]
     ref:
       limits: [-1e2, 1e2]
+    latex: a_{[], []}
+    fixed: False
 
 ---
 
@@ -200,15 +200,15 @@ params:
     latex: b
   sigmas:
     value: 0.
-    fixed: True
-    latex: \Sigma_{s}
     prior:
       limits: [0, 10]
+    latex: \Sigma_{s}
+    fixed: True
   al[:5:2]_[-3:2]:
     value: 0.
-    fixed: False
-    latex: a_{[], []}
     prior:
       limits: [-1e4, 1e4]
     ref:
-      limits: [-0.1, 0.1]
+      limits: [-1e2, 1e2]
+    latex: a_{[], []}
+    fixed: False

@@ -51,7 +51,7 @@ def _interval_empty(interval):
 
 
 class BaseFootprint(BaseClass):
-    
+
     """Base class to characterize 3D footprint: density and volume."""
 
     def __init__(self, nbar=None, size=None, volume=None):
@@ -62,10 +62,10 @@ class BaseFootprint(BaseClass):
         ----------
         nbar : float, default=None
             Density, in :math:`(h / \mathrm{Mpc})^{3}`.
-        
+
         size : float, default=None
             If ``nbar`` is not provided, the number of objects.
-        
+
         volume : float, default=None
             Volume, in :math:`(\mathrm{Mpc} / h)^{3}`.
         """
@@ -115,16 +115,16 @@ class CutskyFootprint(BaseFootprint):
         nbar : float, array, default=None
             If scalar, surface density, in :math:`\mathrm{deg}^{-2}`.
             Else, for each redshift in ``zrange``, density, in :math:`(h / \mathrm{Mpc})^{3}`.
-        
+
         size : float, default=None
             If ``nbar`` is not provided, the number of objects.
-        
+
         area : float, default=None
             Area, in :math:`\mathrm{deg}^{2}`.
 
         zrange : tuple, array, default=None
             Redshift range, or array of redshifts where ``nbar`` is tabulated.
-        
+
         cosmo : cosmoprimo.Cosmology
             Cosmology instance, for redshift-to-distance conversion.
         """
@@ -184,7 +184,7 @@ class CutskyFootprint(BaseFootprint):
         if self._nbar.ndim:
             volume = np.diff(self.cosmo.comoving_radial_distance(self._zrange)**3)
             nbar = (self._nbar[:-1] + self._nbar[1:]) / 2.
-            return self.area / (180. / np.pi)**2 * np.sum(nbar * volume)
+            return self.area / (180. / np.pi)**2 / 3. * np.sum(nbar * volume)
         return self.area * self._nbar
 
     def __and__(self, other):
@@ -219,13 +219,13 @@ class ObservablesCovarianceMatrix(BaseClass):
         ----------
         observables : list, BaseCalculator
             List of (or single) observable, e.g. :class:`TracerPowerSpectrumMultipolesObservable` or :class:`TracerCorrelationFunctionMultipolesObservable`.
-        
+
         footprints : list, BaseFootprint
             List of (or single) footprints for input ``observables``.
-        
+
         theories : list, BaseCalculator
             List of theories for input ``observables``. Defaults to first calculator in observable that has ``power`` attribute.
-        
+
         resolution : int, default=1
             Number of integration points in each bin.
         """

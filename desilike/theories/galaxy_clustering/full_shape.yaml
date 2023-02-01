@@ -3,19 +3,41 @@ class: KaiserTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [0., 4.0]
     ref:
       limits: [1.0, 2.0]
     latex: b_{1}
   sn0:
-    fixed: False
     prior:
       dist: norm
       loc: 0.
-      scale: 1000.
+      scale: 1e7
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 100.
     latex: s_{n, 0}
-
+    fixed: False
+  sigmapar:
+    value: 0.
+    prior:
+      limits: [0., 10]
+    ref:
+      dist: norm
+      loc: 5.
+      scale: 2.
+    latex: \Sigma_{\parallel}
+    fixed: True
+  sigmaper:
+    value: 0.
+    prior:
+      limits: [0., 10]
+    ref:
+      dist: norm
+      loc: 5.
+      scale: 2.
+    latex: \Sigma_{\perp}
+    fixed: True
 ---
 
 class: KaiserTracerCorrelationFunctionMultipoles
@@ -28,7 +50,18 @@ params:
     ref:
       limits: [1.0, 2.0]
     latex: b_{1}
-
+  sigmapar:
+    value: 0.
+    latex: \Sigma_{\parallel}
+    prior:
+      limits: [0., 10]
+    fixed: True
+  sigmaper:
+    value: 0.
+    latex: \Sigma_{\perp}
+    prior:
+      limits: [0., 10]
+    fixed: True
 ---
 
 class: LPTVelocileptorsTracerPowerSpectrumMultipoles

@@ -178,9 +178,14 @@ def test_fiber_collisions():
     fiber_collisions = TopHatFiberCollisionsPowerSpectrumMultipoles(fs=fs, Dfc=Dfc, ells=ells)
     fiber_collisions()
     ax = fiber_collisions.plot()
-    
-    kernel = fs
-    sep = [0., Dfc]
+
+    #kernel = [fs, fs / 2., fs / 4.]
+    #sep = [0., Dfc / 2., Dfc]
+    #kernel = [fs] * 2
+    #sep = [0., Dfc]
+    n = 100
+    kernel = np.linspace(0.5, 0.5, n)
+    sep = np.linspace(0., 3., n)
     fiber_collisions = FiberCollisionsPowerSpectrumMultipoles(sep=sep, kernel=kernel, ells=ells)
     fiber_collisions()
 
@@ -189,13 +194,14 @@ def test_fiber_collisions():
         ax.plot(fiber_collisions.k, fiber_collisions.k * fiber_collisions.power[ill], color=color, linestyle=':', label=r'$\ell = {:d}$'.format(ell))
     ax.legend()
     plt.show()
-  
+    exit()
+
     s = np.linspace(1., 200., 200)
     fiber_collisions = TopHatFiberCollisionsCorrelationFunctionMultipoles(s=s, fs=fs, Dfc=Dfc, ells=ells)
     fiber_collisions()
     ax = fiber_collisions.plot()
     # ax.get_legend().remove()
-    
+
     kernel = fs
     sep = [0., Dfc]
     fiber_collisions = FiberCollisionsCorrelationFunctionMultipoles(s=s, sep=sep, kernel=kernel, ells=ells)
@@ -224,9 +230,9 @@ def test_fiber_collisions():
 if __name__ == '__main__':
 
     setup_logging()
-    test_power_spectrum()
-    test_correlation_function()
+    #test_power_spectrum()
+    #test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_compression()
-    # test_fiber_collisions()
+    test_fiber_collisions()

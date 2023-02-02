@@ -87,18 +87,18 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
 class FixedPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     """
     Fixed power spectrum template.
-    
+
     Parameters
     ----------
     k : array, default=None
         Theory wavenumbers where to evaluate linear power spectrum.
-    
+
     z : float, default=1.
         Effective redshift.
-    
+
     with_now : str, default=False
         If provided, also compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
-    
+
     fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
         Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
 
@@ -138,20 +138,20 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
     ----------
     k : array, default=None
         Theory wavenumbers where to evaluate linear power spectrum.
-    
+
     z : float, default=1.
         Effective redshift.
 
     kp : float, default=0.03
         Pivot point in ShapeFit parameterization.
-    
+
     n_varied : bool, default=False
         Use second order ShapeFit parameter ``n``.
         This choice changes the definition of parameter ``m``.
 
     with_now : str, default='peakaverage'
         Compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
-    
+
     fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
         Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
 
@@ -159,7 +159,7 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         - tuple: (name of fiducial cosmology, dictionary of parameters to update)
         - dict: dictionary of parameters
         - :class:`cosmoprimo.Cosmology`: Cosmology instance
-    
+
     cosmo : BasePrimordialCosmology, default=None
         Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
 
@@ -211,16 +211,16 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
     ----------
     k : array, default=None
         Theory wavenumbers where to evaluate linear power spectrum.
-    
+
     z : float, default=1.
         Effective redshift.
-    
+
     kp : float, default=0.03
         Pivot point in ShapeFit parameterization.
-    
+
     a : float, default=0.6
         :math:`a` parameter in ShapeFit parameterization.
-    
+
     with_now : str, default='peakaverage'
         Compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
 
@@ -231,7 +231,7 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
         - 'qap': single, Alcock-Paczynski parameter 'qap'
         - 'qisoqap': two parameters 'qiso', 'qap'
         - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
-    
+
     fiducial : str, default='DESI'
         Fiducial cosmology, used to compute the power spectrum.
 
@@ -260,7 +260,7 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
 
     def get(self):
         return self
-    
+
 
 class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     r"""
@@ -270,7 +270,7 @@ class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     ----------
     k : array, default=None
         Theory wavenumbers where to evaluate linear power spectrum.
-    
+
     z : float, default=1.
         Effective redshift.
 
@@ -281,16 +281,16 @@ class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         - 'qap': single, Alcock-Paczynski parameter 'qap'
         - 'qisoqap': two parameters 'qiso', 'qap'
         - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
-    
+
     fiducial : str, default='DESI'
         Fiducial cosmology, used to compute the power spectrum.
     """
     def calculate(self, df=1.):
         super(StandardPowerSpectrumTemplate, self).calculate()
         self.f = self.f_fid * df
-        self.f_sigma8 = self.f * self.sigma8_fid
 
     def get(self):
+        self.f_sigma8 = self.f * self.sigma8_fid
         return self
 
 
@@ -305,7 +305,7 @@ class BAOExtractor(BaseCalculator):
 
     cosmo : BasePrimordialCosmology, default=None
         Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
-    
+
     fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
         Specifications for fiducial cosmology. Either:
 
@@ -355,15 +355,15 @@ class BAOExtractor(BaseCalculator):
 class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     """
     BAO power spectrum template.
-    
+
     Parameters
     ----------
     z : float, default=1.
         Effective redshift.
-    
+
     with_now : str, default='peakaverage'
         Compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
-    
+
     apmode : str, default='qparqper'
         Alcock-Paczynski parameterization:
 
@@ -371,7 +371,7 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         - 'qap': single, Alcock-Paczynski parameter 'qap'
         - 'qisoqap': two parameters 'qiso', 'qap'
         - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
-    
+
     fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
         Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
 

@@ -409,6 +409,7 @@ class BaseFiberCollisionsPowerSpectrumMultipoles(BaseCalculator):
 
     def calculate(self):
         self.power = self.correlated(self.theory.power) + self.uncorrelated()
+        #self.power = self.theory.power + self.uncorrelated()
 
     @plotting.plotter
     def plot(self):
@@ -506,19 +507,31 @@ class FiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMul
         super(FiberCollisionsPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.sep, self.kernel = _format_kernel(sep=sep, kernel=kernel)
 
-        x_tab = np.linspace(0., 10., 1000)
+        x_tab = np.logspace(-5, 2., 1000)
         integrand_tab = x_tab**2 * special.j0(x_tab)
-        integral_x2j0_tab = np.array([np.trapz(integrand_tab[:ii], x=x_tab[:ii]) for ii in range(1, integrand_tab.size + 1)])
+        integral_x2j0_tab = np.array([0.] + [np.trapz(integrand_tab[:ii], x=x_tab[:ii]) for ii in range(1, integrand_tab.size + 1)])
+        #integrand_tab = x_tab * special.j0(x_tab)
+        #integral_xj0_tab = np.array([0.] + [np.trapz(integrand_tab[:ii], x=x_tab[:ii]) for ii in range(1, integrand_tab.size + 1)])
+        x_tab = np.insert(x_tab, 0, 0.)
 
         # Let's perform trapezoidal integration over the kernel
         def trapz_j0(x, y, k):
             a = (y[1] - y[0]) / (x[1] - x[0])
-            # y[0] * integral(r J0(k r) dr) + a * integral(r^2 J0(k r) dr)
+            # y[0] * integral(x J0(k x) dx) + a * integral(x^2 J0(k x) dx)
             toret = np.zeros_like(k)
             nonzero = k > 0.
             term1 = y[0] / k[nonzero] * x[:, None] * special.j1(k[nonzero] * x[:, None])
+            #term1 = y[0] / k[nonzero]**2 * np.interp(k[nonzero] * x[:, None], x_tab, integral_xj0_tab)
+            a = 0.
             term2 = a / k[nonzero]**3 * np.interp(k[nonzero] * x[:, None], x_tab, integral_x2j0_tab)
             toret[nonzero] = np.diff(term1 + term2, axis=0)[0]
+            #if np.any(toret < 0):
+            #    from matplotlib import pyplot as plt
+            #    print(toret[nonzero], x, y, a)
+            #    plt.plot(k, np.diff(term1, axis=0)[0])
+            #    plt.plot(k, np.diff(term2, axis=0)[0])
+            #    plt.show()
+            #    exit()
             toret[~nonzero] = np.diff(y[0] * x[:, None]**2 / 2. + a * x[:, None]**3 / 3., axis=0)[0]
             return toret
 
@@ -529,7 +542,6 @@ class FiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMul
             return toret
 
         self.kernel_uncorrelated = - np.array([np.pi * (2. * ellout + 1.) * special.legendre(ellout)(0.) for ellout in self.ells])[:, None] * kernel_fourier(self.k) / self.k
-
         # phi: angle between k_perp and q_perp
         phi = np.linspace(0., np.pi, 100)
         k_perp = np.linspace(0., self.k[-1], len(self.k))

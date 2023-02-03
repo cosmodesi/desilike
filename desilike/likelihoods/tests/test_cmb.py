@@ -101,6 +101,21 @@ def test_copy():
     likelihood_clik()
 
 
+def test_error():
+    from desilike import setup_logging
+    from desilike.likelihoods.cmb import TTTEEEHighlPlanck2018PlikLiteLikelihood, TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood
+    from desilike.likelihoods import SumLikelihood
+    from desilike.theories.primordial_cosmology import Cosmoprimo
+
+    setup_logging()
+    cosmo = Cosmoprimo(engine='camb')
+    likelihoods = [Likelihood(cosmo=cosmo) for Likelihood in [TTTEEEHighlPlanck2018PlikLiteLikelihood, TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood]]
+    likelihood_clik = SumLikelihood(likelihoods=likelihoods)
+
+    assert not np.isfinite(likelihood_clik(h=0.71845617, omega_cdm=0.11316231, omega_b=0.02500884, logA=3.25690416, n_s=0.97226037, tau_reio=0.17722994, A_planck=0.9907607))
+    assert likelihood_clik(**{param.name: param.value for param in likelihood_clik.varied_params}) > -np.inf
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -108,6 +123,7 @@ if __name__ == '__main__':
     #test_clik()
     #test_sum()
     #test_gaussian_likelihood()
-    test_params()
+    #test_params()
     #test_help()
     #test_copy()
+    test_error()

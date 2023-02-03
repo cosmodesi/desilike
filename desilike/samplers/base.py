@@ -89,7 +89,8 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
             Path to or chains to resume from.
 
         ref_scale : float, default=1.
-            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor
+            If no chains to resume from are provided, initial points are sampled from parameters' :attr:`Parameter.ref` reference distributions.
+            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor.
 
         save_fn : str, Path, default=None
             If not ``None``, save samples to this location.
@@ -148,7 +149,8 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         mask = np.isnan(toret)
         toret[mask] = -np.inf
         if mask.any() and self.mpicomm.rank == 0:
-            self.log_warning('loglikelihood is NaN for {}'.format({k: v[mask] for k, v in points.items()}))
+            import warnings
+            warnings.warn('loglikelihood is NaN for {}'.format({k: v[mask] for k, v in points.items()}))
         return toret
 
     @bcast_values

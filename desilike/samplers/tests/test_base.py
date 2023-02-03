@@ -13,7 +13,7 @@ def test_ensemble():
     #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
     for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.marg')
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='../../tests/_pk/data.npy', mocks='../../tests/_pk/mock_*.npy',
+                                                         data='../../tests/_pk/data.npy', covariance='../../tests/_pk/mock_*.npy',
                                                          wmatrix='../../tests/_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
@@ -36,5 +36,5 @@ def test_fixed():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_ensemble()
+    test_ensemble()
     test_fixed()

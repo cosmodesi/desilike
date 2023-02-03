@@ -24,16 +24,17 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
     theory : ClTheory, default=None
         Theory calculator for CMB :math:`C_{\ell}^{xy}`.
         If ``None``, instantiated using ``cosmo``.
-    
+
     cosmo : BasePrimordialCosmology, default=None
         Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
-    
+
     data_dir : str, Path, default=None
         Data directory. Defaults to path saved in desilike's configuration,
         as provided by :class:`Installer` if likelihood has been installed.
     """
     config_fn = 'planck2018_clik.yaml'
     installer_section = 'Planck2018ClikLikelihood'
+    catch_clik_errors = True
 
     def initialize(self, theory=None, cosmo=None, data_dir=None):
         super(BasePlanck2018ClikLikelihood, self).initialize()
@@ -96,7 +97,14 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
 
         # Fill with likelihood parameters
         self.vector[self.cumsizes[-1]:] = [params[p] for p in self.nuisance_params]
-        self.loglikelihood = self.clik(self.vector)[0]
+        import clik
+        try:
+            self.loglikelihood = self.clik(self.vector)[0]
+        except clik.lkl.CError as exc:
+            if self.catch_clik_errors:
+                self.loglikelihood = -np.inf
+            else:
+                raise ValueError('clik failed with input vector {}'.format(self.vector)) from exc
         # "zero" of clik, and sometimes nan's returned
         if np.allclose(self.loglikelihood, -1e30) or np.isnan(self.loglikelihood):
             self.loglikelihood = -np.inf
@@ -192,10 +200,10 @@ class TTHighlPlanck2018PlikLikelihood(BasePlanck2018ClikLikelihood):
     theory : ClTheory, default=None
         Theory calculator for CMB :math:`C_{\ell}^{xy}`.
         If ``None``, instantiated using ``cosmo``.
-    
+
     cosmo : BasePrimordialCosmology, default=None
         Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
-    
+
     data_dir : str, Path, default=None
         Data directory. Defaults to path saved in desilike's configuration,
         as provided by :class:`Installer` if likelihood has been installed.
@@ -207,7 +215,7 @@ class TTHighlPlanck2018PlikLikelihood(BasePlanck2018ClikLikelihood):
 class TTHighlPlanck2018PlikLiteLikelihood(BasePlanck2018ClikLikelihood):
     r"""
     High-:math:`\ell` temperature-only plik likelihood of Planck's 2018 data release, marginalized over the foreground model.
-    
+
     Reference
     ---------
     https://arxiv.org/abs/1807.06209
@@ -219,10 +227,10 @@ class TTHighlPlanck2018PlikLiteLikelihood(BasePlanck2018ClikLikelihood):
     theory : ClTheory, default=None
         Theory calculator for CMB :math:`C_{\ell}^{xy}`.
         If ``None``, instantiated using ``cosmo``.
-    
+
     cosmo : BasePrimordialCosmology, default=None
         Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
-    
+
     data_dir : str, Path, default=None
         Data directory. Defaults to path saved in desilike's configuration,
         as provided by :class:`Installer` if likelihood has been installed.
@@ -234,7 +242,7 @@ class TTHighlPlanck2018PlikLiteLikelihood(BasePlanck2018ClikLikelihood):
 class TTHighlPlanck2018PlikUnbinnedLikelihood(BasePlanck2018ClikLikelihood):
     r"""
     High-:math:`\ell` temperature-only plik likelihood of Planck's 2018 data release.
-    
+
     Reference
     ---------
     https://arxiv.org/abs/1807.06209
@@ -246,10 +254,10 @@ class TTHighlPlanck2018PlikUnbinnedLikelihood(BasePlanck2018ClikLikelihood):
     theory : ClTheory, default=None
         Theory calculator for CMB :math:`C_{\ell}^{xy}`.
         If ``None``, instantiated using ``cosmo``.
-    
+
     cosmo : BasePrimordialCosmology, default=None
         Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
-    
+
     data_dir : str, Path, default=None
         Data directory. Defaults to path saved in desilike's configuration,
         as provided by :class:`Installer` if likelihood has been installed.
@@ -273,10 +281,10 @@ class TTTEEEHighlPlanck2018PlikLikelihood(BasePlanck2018ClikLikelihood):
     theory : ClTheory, default=None
         Theory calculator for CMB :math:`C_{\ell}^{xy}`.
         If ``None``, instantiated using ``cosmo``.
-    
+
     cosmo : BasePrimordialCosmology, default=None
         Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
-    
+
     data_dir : str, Path, default=None
         Data directory. Defaults to path saved in desilike's configuration,
         as provided by :class:`Installer` if likelihood has been installed.
@@ -300,10 +308,10 @@ class TTTEEEHighlPlanck2018PlikLiteLikelihood(BasePlanck2018ClikLikelihood):
     theory : ClTheory, default=None
         Theory calculator for CMB :math:`C_{\ell}^{xy}`.
         If ``None``, instantiated using ``cosmo``.
-    
+
     cosmo : BasePrimordialCosmology, default=None
         Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
-    
+
     data_dir : str, Path, default=None
         Data directory. Defaults to path saved in desilike's configuration,
         as provided by :class:`Installer` if likelihood has been installed.
@@ -327,10 +335,10 @@ class TTTEEEHighlPlanck2018PlikUnbinnedLikelihood(BasePlanck2018ClikLikelihood):
     theory : ClTheory, default=None
         Theory calculator for CMB :math:`C_{\ell}^{xy}`.
         If ``None``, instantiated using ``cosmo``.
-    
+
     cosmo : BasePrimordialCosmology, default=None
         Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
-    
+
     data_dir : str, Path, default=None
         Data directory. Defaults to path saved in desilike's configuration,
         as provided by :class:`Installer` if likelihood has been installed.
@@ -354,10 +362,10 @@ class LensingPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
     theory : ClTheory, default=None
         Theory calculator for CMB :math:`C_{\ell}^{xy}`.
         If ``None``, instantiated using ``cosmo``.
-    
+
     cosmo : BasePrimordialCosmology, default=None
         Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
-    
+
     data_dir : str, Path, default=None
         Data directory. Defaults to path saved in desilike's configuration,
         as provided by :class:`Installer` if likelihood has been installed.
@@ -381,10 +389,10 @@ class TTLowlPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
     theory : ClTheory, default=None
         Theory calculator for CMB :math:`C_{\ell}^{xy}`.
         If ``None``, instantiated using ``cosmo``.
-    
+
     cosmo : BasePrimordialCosmology, default=None
         Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
-    
+
     data_dir : str, Path, default=None
         Data directory. Defaults to path saved in desilike's configuration,
         as provided by :class:`Installer` if likelihood has been installed.
@@ -408,10 +416,10 @@ class EELowlPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
     theory : ClTheory, default=None
         Theory calculator for CMB :math:`C_{\ell}^{xy}`.
         If ``None``, instantiated using ``cosmo``.
-    
+
     cosmo : BasePrimordialCosmology, default=None
         Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
-    
+
     data_dir : str, Path, default=None
         Data directory. Defaults to path saved in desilike's configuration,
         as provided by :class:`Installer` if likelihood has been installed.

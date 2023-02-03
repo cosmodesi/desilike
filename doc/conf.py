@@ -72,7 +72,7 @@ intersphinx_mapping = {
     'numpy': ('https://docs.scipy.org/doc/numpy/', None)
 }
 
-# thanks to: https://github.com/sphinx-doc/sphinx/issues/4054#issuecomment-329097229
+# Thanks to: https://github.com/sphinx-doc/sphinx/issues/4054#issuecomment-329097229
 def _replace(app, docname, source):
     result = source[0]
     for key in app.config.ultimate_replacements:
@@ -84,8 +84,32 @@ ultimate_replacements = {
     '{gitrepo}': git_repo
 }
 
+
+def skip_some_classes(app, what, name, obj, skip, options):
+    # Skip those objects that are not imported at top-leveld
+    import inspect
+    try:
+        fn = sys.modules[getattr(obj, '__module__')].__file__
+    except (KeyError, AttributeError):
+        return skip
+    init_fn = os.path.join(os.path.dirname(fn), '__init__.py')
+    try:
+        with open(init_fn, 'r') as file:
+            if name not in file.read():
+                # If a 'BaseClass' subclass and not imported in '__init__.py', skip
+                try:
+                    return any('BaseClass' in cls.__name__ for cls in inspect.getmro(obj))
+                except AttributeError:
+                    return skip
+    except FileNotFoundError:
+        return skip
+    return skip
+
+
 def setup(app):
     app.add_config_value('ultimate_replacements', {}, True)
-    app.connect('source-read',_replace)
+    app.connect('source-read', _replace)
+    app.connect('autodoc-skip-member', skip_some_classes)
+
 
 autoclass_content = 'both'

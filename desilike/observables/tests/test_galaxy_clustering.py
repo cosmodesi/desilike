@@ -28,7 +28,8 @@ def test_power_spectrum():
                                                          wmatrix='../../tests/_pk/window.npy',
                                                          shotnoise=1e4,
                                                          theory=theory,
-                                                         fiber_collisions=fiber_collisions)
+                                                         fiber_collisions=fiber_collisions,
+                                                         kinlim=(0., 0.24))
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood.params['pk.loglikelihood'] = {}
     likelihood.params['pk.logprior'] = {}
@@ -166,6 +167,18 @@ def test_compression():
     print(likelihood.varied_params)
 
 
+def test_integral_cosn():
+
+    from desilike.observables.galaxy_clustering.window import integral_cosn
+
+    for n in np.arange(6):
+        limits = (-0.3, 0.8)
+        x = np.linspace(*limits, num=1000)
+        ref = np.trapz(np.cos(x)**n, x=x)
+        test = integral_cosn(n=n, range=limits)
+        assert np.abs(test / ref - 1.) < 1e-6
+
+
 def test_fiber_collisions():
 
     from matplotlib import pyplot as plt
@@ -175,17 +188,14 @@ def test_fiber_collisions():
 
     fs, Dfc = 0.5, 3.
     ells = (0, 2, 4)
+
     fiber_collisions = TopHatFiberCollisionsPowerSpectrumMultipoles(fs=fs, Dfc=Dfc, ells=ells)
     fiber_collisions()
     ax = fiber_collisions.plot()
 
-    #kernel = [fs, fs / 2., fs / 4.]
-    #sep = [0., Dfc / 2., Dfc]
-    #kernel = [fs] * 2
-    #sep = [0., Dfc]
-    n = 100
-    kernel = np.linspace(0.5, 0.5, n)
-    sep = np.linspace(0., 3., n)
+    n = 10
+    sep = np.linspace(0., Dfc, n)
+    kernel = np.linspace(fs, 0., n)
     fiber_collisions = FiberCollisionsPowerSpectrumMultipoles(sep=sep, kernel=kernel, ells=ells)
     fiber_collisions()
 
@@ -194,7 +204,6 @@ def test_fiber_collisions():
         ax.plot(fiber_collisions.k, fiber_collisions.k * fiber_collisions.power[ill], color=color, linestyle=':', label=r'$\ell = {:d}$'.format(ell))
     ax.legend()
     plt.show()
-    exit()
 
     s = np.linspace(1., 200., 200)
     fiber_collisions = TopHatFiberCollisionsCorrelationFunctionMultipoles(s=s, fs=fs, Dfc=Dfc, ells=ells)
@@ -202,13 +211,14 @@ def test_fiber_collisions():
     ax = fiber_collisions.plot()
     # ax.get_legend().remove()
 
-    kernel = fs
-    sep = [0., Dfc]
+    n = 10
+    sep = np.linspace(0., Dfc, n)
+    kernel = np.linspace(fs, 0., n)
     fiber_collisions = FiberCollisionsCorrelationFunctionMultipoles(s=s, sep=sep, kernel=kernel, ells=ells)
     fiber_collisions()
     for ill, ell in enumerate(fiber_collisions.ells):
         color = 'C{:d}'.format(ill)
-        ax.plot(fiber_collisions.s, fiber_collisions.s**2 * fiber_collisions.corr[ill], color=color, linestyle=':', label=r'$\ell = {:d}$'.format(ell))
+        ax.plot(fiber_collisions.s, fiber_collisions.s**2 * fiber_collisions.corr[ill], color=color, linestyle=':')
     ax.legend()
     plt.show()
 
@@ -230,9 +240,10 @@ def test_fiber_collisions():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_power_spectrum()
+    test_power_spectrum()
     #test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_compression()
-    test_fiber_collisions()
+    # test_integral_cosn()
+    # test_fiber_collisions()

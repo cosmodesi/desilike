@@ -39,6 +39,10 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         If ``wmatrix`` (which is defined for input theory wavenumbers) is provided,
         rebin theory wavenumbers by this factor.
 
+    kinlim : tuple, default=None
+        If ``wmatrix`` (which is defined for input theory wavenumbers) is provided,
+        limit theory wavenumbers in the provided range.
+
     shotnoise : float, default=0.
         Shot noise (window matrix must be applied to power spectrum with shot noise).
 
@@ -48,7 +52,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory power spectrum multipoles, defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
     """
-    def initialize(self, klim=None, k=None, ells=None, ellsin=None, wmatrix=None, kinrebin=1, shotnoise=0., fiber_collisions=None, theory=None):
+    def initialize(self, klim=None, k=None, ells=None, ellsin=None, wmatrix=None, kinrebin=1, kinlim=None, shotnoise=0., fiber_collisions=None, theory=None):
         _default_step = 0.01
 
         if ells is None:
@@ -128,7 +132,8 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             wmatrix.select_proj(projsout=[(ell, None) for ell in self.ells], projsin=projsin)
             wmatrix.slice_x(slicein=slice(0, len(wmatrix.xin[0]) // kinrebin * kinrebin, kinrebin))
             # print(wmatrix.xout[0], max(kk.max() for kk in self.k) * 1.2)
-            #wmatrix.select_x(xinlim=(0., max(kk.max() for kk in self.k) * 1.2))
+            if kinlim is not None:
+                wmatrix.select_x(xinlim=kinlim)
             self.kin = wmatrix.xin[0]
             # print(wmatrix.xout[0])
             assert all(np.allclose(xin, self.kin) for xin in wmatrix.xin)
@@ -409,7 +414,7 @@ class BaseFiberCollisionsPowerSpectrumMultipoles(BaseCalculator):
 
     def calculate(self):
         self.power = self.correlated(self.theory.power) + self.uncorrelated()
-        #self.power = self.theory.power + self.uncorrelated()
+        # self.power = self.theory.power + self.uncorrelated()
 
     @plotting.plotter
     def plot(self):
@@ -477,7 +482,7 @@ class FiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMul
     Fiber collision effect on power spectrum multipoles.
     Contrary to Hahn et al. 2016:
 
-    - no top-hat shape is assumed for the kernel
+    - the kernel is assumed to be a sum of top-hat functions
     - no :math:`k D_{fc} \ll 1` approximation, where :math:`D_{fc}` is the fiber collision scale
 
     Parameters
@@ -507,38 +512,16 @@ class FiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMul
         super(FiberCollisionsPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.sep, self.kernel = _format_kernel(sep=sep, kernel=kernel)
 
-        x_tab = np.logspace(-5, 2., 1000)
-        integrand_tab = x_tab**2 * special.j0(x_tab)
-        integral_x2j0_tab = np.array([0.] + [np.trapz(integrand_tab[:ii], x=x_tab[:ii]) for ii in range(1, integrand_tab.size + 1)])
-        #integrand_tab = x_tab * special.j0(x_tab)
-        #integral_xj0_tab = np.array([0.] + [np.trapz(integrand_tab[:ii], x=x_tab[:ii]) for ii in range(1, integrand_tab.size + 1)])
-        x_tab = np.insert(x_tab, 0, 0.)
-
-        # Let's perform trapezoidal integration over the kernel
-        def trapz_j0(x, y, k):
-            a = (y[1] - y[0]) / (x[1] - x[0])
-            # y[0] * integral(x J0(k x) dx) + a * integral(x^2 J0(k x) dx)
-            toret = np.zeros_like(k)
-            nonzero = k > 0.
-            term1 = y[0] / k[nonzero] * x[:, None] * special.j1(k[nonzero] * x[:, None])
-            #term1 = y[0] / k[nonzero]**2 * np.interp(k[nonzero] * x[:, None], x_tab, integral_xj0_tab)
-            a = 0.
-            term2 = a / k[nonzero]**3 * np.interp(k[nonzero] * x[:, None], x_tab, integral_x2j0_tab)
-            toret[nonzero] = np.diff(term1 + term2, axis=0)[0]
-            #if np.any(toret < 0):
-            #    from matplotlib import pyplot as plt
-            #    print(toret[nonzero], x, y, a)
-            #    plt.plot(k, np.diff(term1, axis=0)[0])
-            #    plt.plot(k, np.diff(term2, axis=0)[0])
-            #    plt.show()
-            #    exit()
-            toret[~nonzero] = np.diff(y[0] * x[:, None]**2 / 2. + a * x[:, None]**3 / 3., axis=0)[0]
-            return toret
-
         def kernel_fourier(k):
             toret = 0.
             for isep in range(len(sep) - 1):
-                toret += 2. * np.pi * trapz_j0(self.sep[isep:isep + 2], self.kernel[isep:isep + 2], k)
+                x, yc = np.array(self.sep[isep:isep + 2]), np.mean(self.kernel[isep:isep + 2])
+                # yc * integral(x J0(k x) dx)
+                tmp = np.zeros_like(k)
+                nonzero = k > 0.
+                tmp[nonzero] = np.diff(yc / k[nonzero] * x[:, None] * special.j1(k[nonzero] * x[:, None]), axis=0)[0]
+                tmp[~nonzero] = np.diff(yc * x[:, None]**2 / 2., axis=0)[0]
+                toret += 2. * np.pi * tmp
             return toret
 
         self.kernel_uncorrelated = - np.array([np.pi * (2. * ellout + 1.) * special.legendre(ellout)(0.) for ellout in self.ells])[:, None] * kernel_fourier(self.k) / self.k
@@ -728,7 +711,7 @@ def integral_cosn(n=0, range=(-np.pi, np.pi)):
 class FiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorrelationFunctionMultipoles):
     r"""
     Fiber collision effect on correlation function multipoles.
-    Contrary to Hahn et al. 2016, no top-hat shape is assumed for the kernel.
+    Contrary to Hahn et al. 2016, the kernel is assumed to be a sum of top-hat functions.
 
     Parameters
     ----------
@@ -758,24 +741,13 @@ class FiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorrelatio
 
         self.sep, self.kernel = _format_kernel(sep=sep, kernel=kernel)
 
-        # Let's perform *exact* trapezoidal integration over the kernel
-        def integral_sqrt_mun(n=0, range=(-1, 1.)):
-            range = np.arccos(range)
-            return integral_cosn(n=n, range=range) - integral_cosn(n=n + 2, range=range)
-
-        def trapz_mun(x, y, n=0):
-            a = (y[1] - y[0]) / (x[1] - x[0])
-            # y[0] * integral(TH(s sqrt(1 - mu**2)) mu^n dmu) + a * integral(s sqrt(1 - mu**2) * TH(s sqrt(1 - mu**2)) mu^n dmu)
-            mu_min = np.sqrt(np.clip(1. - (np.array(x)[:, None] / self.s)**2, 0., None))
-            term1 = y[0] / (n + 1) * (-mu_min**(n + 1) + (-mu_min)**(n + 1))
-            term2 = np.array([a * self.s * (integral_sqrt_mun(n=n, range=(mum, np.ones_like(mum))) + integral_sqrt_mun(n=n, range=(-np.ones_like(mum), -mum))) for mum in mu_min])
-            return np.diff(term1 + term2, axis=0)[0]
-
         def trapz_poly(poly):
+            integ = poly.integ()
             toret = 0.
             for isep in range(len(sep) - 1):
-                for n, coeff in enumerate(poly.coeffs[::-1]):
-                    toret += coeff * trapz_mun(self.sep[isep:isep + 2], self.kernel[isep:isep + 2], n=n)
+                x, yc = np.array(self.sep[isep:isep + 2]), np.mean(self.kernel[isep:isep + 2])
+                mu_min = np.sqrt(np.clip(1. - (x[:, None] / self.s)**2, 0., None))
+                toret += yc * np.diff(integ(1.) - integ(mu_min) + integ(-mu_min) - integ(-1.), axis=0)[0]
             return toret
 
         self.kernel_uncorrelated = - np.array([(2. * ellout + 1.) / 2. * trapz_poly(special.legendre(ellout)) for ellout in self.ells])
@@ -828,17 +800,16 @@ class TopHatFiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorr
 
         mu_min = np.sqrt(np.clip(1. - (self.Dfc / self.s)**2, 0., None))
 
-        self.kernel_uncorrelated = []
-        for ellout in self.ells:
-            integ = special.legendre(ellout).integ()
-            self.kernel_uncorrelated.append((2 * ellout + 1.) / 2. * self.fs * (integ(1.) - integ(mu_min) + integ(-mu_min) - integ(-1.)))
-        self.kernel_uncorrelated = - np.array(self.kernel_uncorrelated)
+        def trapz_poly(poly):
+            integ = poly.integ()
+            return integ(1.) - integ(mu_min) + integ(-mu_min) - integ(-1.)
+
+        self.kernel_uncorrelated = - np.array([(2 * ellout + 1.) / 2. * self.fs * trapz_poly(special.legendre(ellout)) for ellout in self.ells])
 
         self.kernel_correlated = []
         for ellout in self.ells:
             self.kernel_correlated.append([])
             for ellin in self.ellsin:
-                integ = (special.legendre(ellout) * special.legendre(ellin)).integ()
-                fll = (2 * ellout + 1.) / 2. * self.fs * (integ(1.) - integ(mu_min) + integ(-mu_min) - integ(-1.))
+                fll = (2 * ellout + 1.) / 2. * self.fs * trapz_poly(special.legendre(ellout) * special.legendre(ellin))
                 self.kernel_correlated[-1].append((ellin == ellout) * 1. - fll)
         self.kernel_correlated = np.array(self.kernel_correlated)

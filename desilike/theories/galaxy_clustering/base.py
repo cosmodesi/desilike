@@ -138,17 +138,17 @@ class BaseTrapzTheoryPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
 
 class APEffect(BaseCalculator):
     """
-    Alcock-Paczynski effect. 
-    
+    Alcock-Paczynski effect.
+
     Parameters
     ----------
     z : float, default=1.
         Effective redshift.
-        
+
     cosmo : BasePrimordialCosmology, default=None
         Cosmology calculator, required only if ``mode`` is 'distances';
         defaults to ``Cosmoprimo(fiducial=fiducial)``.
-        
+
     fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
         Specifications for fiducial cosmology. Either:
 
@@ -156,7 +156,7 @@ class APEffect(BaseCalculator):
         - tuple: (name of fiducial cosmology, dictionary of parameters to update)
         - dict: dictionary of parameters
         - :class:`cosmoprimo.Cosmology`: Cosmology instance
-        
+
     mode : str, default='distances'
         Alcock-Paczynski parameterization:
 
@@ -165,7 +165,7 @@ class APEffect(BaseCalculator):
         - 'qisoqap': two parameters 'qiso', 'qap'
         - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
         - 'distances': scaling parameters computed from the ratio of ``cosmo`` to ``fiducial`` cosmologies.
-        
+
     eta : float, default=1./3.
         Relation between 'qpar', 'qper' and 'qiso', 'qap' parameters:
         ``qiso = qpar ** eta * qper ** (1 - eta)``.
@@ -232,4 +232,3 @@ class APEffect(BaseCalculator):
         # Beutler 2016 (arXiv: 1607.03150v1) eq 45
         muap = mu / self.qap / factorap
         return jac, kap, muap
-

@@ -738,7 +738,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
 class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
 
-    _default_options = dict(optiresum=True, nd=None, with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti')
+    _default_options = dict(optiresum=True, nd=None, with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=True, with_resum='opti')
     _pt_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
                  'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol']
 

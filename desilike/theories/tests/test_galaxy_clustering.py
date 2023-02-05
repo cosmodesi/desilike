@@ -51,17 +51,17 @@ def test_full_shape():
     def test_emulator_likelihood(theory, test_likelihood=True):
         print('Emulating', theory)
         if test_likelihood:
-            from desilike.observables.galaxy_clustering import BoxFootprint, TracerPowerSpectrumMultipolesObservable, TracerCorrelationFunctionMultipolesObservable, ObservablesCovarianceMatrix
+            from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TracerCorrelationFunctionMultipolesObservable, ObservablesCovarianceMatrix
             from desilike.likelihoods import ObservablesGaussianLikelihood
-            footprint = BoxFootprint(volume=1e10, nbar=1e-3)
             if 'Power' in theory.__class__.__name__:
                 observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                                      data={}, theory=theory)
             else:
                 observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20, 150, 4], 2: [20, 150, 4]},
                                                                            data={}, theory=theory)
-            cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)
-            likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov())
+            observable()
+            cov = np.eye(observable.flatdata.shape[0])
+            likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
             for param in likelihood.all_params.select(basename=['alpha*', 'sn*', 'c*']):
                 param.update(derived='.best')
             likelihood()
@@ -115,11 +115,11 @@ def test_full_shape():
 
     from desilike.theories.galaxy_clustering import PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles
 
-    theory = PyBirdTracerPowerSpectrumMultipoles()
+    theory = PyBirdTracerPowerSpectrumMultipoles(eft_basis='westcoast')
     test_emulator_likelihood(theory)
     theory(logA=3.04, b1=1.).shape
-    theory = PyBirdTracerCorrelationFunctionMultipoles()
-    test_emulator_likelihood(theory, test_likelihood=False)  # no P(k) computed
+    theory = PyBirdTracerCorrelationFunctionMultipoles(eft_basis='westcoast')
+    test_emulator_likelihood(theory)  # no P(k) computed
     theory(logA=3.04, b1=1.).shape
 
 

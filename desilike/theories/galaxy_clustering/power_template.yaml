@@ -26,7 +26,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.001
+    delta: 0.002
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -65,6 +65,7 @@ params:
       scale: 0.008
     delta: 0.012
     latex: \tau
+    fixed: True
   m_ncdm:
     prior:
       limits: [0., 5.]
@@ -171,7 +172,7 @@ params:
     ref:
       limits: [0.95, 1.05]
     latex: df
-  
+
 
 ---
 
@@ -266,7 +267,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.001
+    delta: 0.002
     latex: \Omega_{m}
 
 ---

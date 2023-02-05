@@ -2,7 +2,7 @@ import numpy as np
 from scipy import interpolate
 
 from desilike.jax import numpy as jnp
-from .base import BaseTrapzTheoryPowerSpectrumMultipoles
+from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
 from .base import BaseTheoryPowerSpectrumMultipoles, BaseTheoryCorrelationFunctionMultipoles, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
 from .power_template import DirectPowerSpectrumTemplate  # to add calculator in the registry
 
@@ -127,7 +127,7 @@ class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         return self.corr
 
 
-class KaiserTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTrapzTheoryPowerSpectrumMultipoles):
+class KaiserTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
     r"""
     Kaiser tracer power spectrum multipoles.
 
@@ -146,10 +146,6 @@ class KaiserTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTra
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
     """
     config_fn = 'full_shape.yaml'
-
-    def initialize(self, *args, **kwargs):
-        super(KaiserTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
-        self.set_k_mu(k=self.k, mu=self.mu, ells=self.ells)
 
     def calculate(self, b1=1., sn0=0., sigmapar=0., sigmaper=0.):
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
@@ -183,7 +179,7 @@ class KaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFro
     """
 
 
-class BaseVelocileptorsPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
+class BaseVelocileptorsPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
 
     """Base class for velocileptor-based matter power spectrum multipoles."""
     _default_options = dict()
@@ -192,13 +188,18 @@ class BaseVelocileptorsPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         super(BaseVelocileptorsPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.options['threads'] = self.options.pop('nthreads', 1)
 
-    def combine_bias_terms_poles(self, pars, **opts):
-        tmp = np.array(self.pt.compute_redshift_space_power_multipoles(pars, self.template.f, apar=self.template.qpar, aperp=self.template.qper, **self.options, **opts)[1:])
-        return interpolate.interp1d(self.pt.kv, tmp, kind='cubic', axis=-1, copy=False, bounds_error=True, assume_sorted=True)(self.k)
-
     @classmethod
     def install(cls, installer):
         installer.pip('git+https://github.com/sfschen/velocileptors')
+
+    def __getstate__(self):
+        state = {}
+        for name in self._pt_attrs:
+            if hasattr(self.pt, name):
+                state[name] = getattr(self.pt, name)
+        for name in ['wmu']:
+            state[name] = getattr(self, name)
+        return state
 
 
 class BaseVelocileptorsTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
@@ -241,25 +242,28 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
     _default_options = dict(kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5)
     # Slow, ~ 4 sec per iteration
 
+    def initialize(self, *args, mu=8, **kwargs):
+        super(LPTVelocileptorsPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
+
     def calculate(self):
         from velocileptors.LPT.lpt_rsd_fftw import LPT_RSD
-        self.lpt = LPT_RSD(self.template.k, self.template.pk_dd, **self.options)
+        self.pt = LPT_RSD(self.template.k, self.template.pk_dd, **self.options)
         # print(self.template.f, self.k.shape, self.template.qpar, self.template.qper, self.template.k.shape, self.template.pk_dd.shape)
-        self.lpt.make_pltable(self.template.f, kv=self.k, apar=self.template.qpar, aperp=self.template.qper, ngauss=3)
-        lpttable = {0: self.lpt.p0ktable, 2: self.lpt.p2ktable, 4: self.lpt.p4ktable}
-        self.lpttable = np.array([lpttable[ell] for ell in self.ells])
+        self.pt.make_pltable(self.template.f, kv=self.k, apar=self.template.qpar, aperp=self.template.qper, ngauss=len(self.mu) // 2)
+        pktable = {0: self.pt.p0ktable, 2: self.pt.p2ktable, 4: self.pt.p4ktable}
+        self.pktable = np.array([pktable[ell] for ell in self.ells])
 
     def combine_bias_terms_poles(self, pars):
         # bias = [b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4]
-        # pkells = self.lpt.combine_bias_terms_pkell(bias)[1:]
+        # pkells = self.pt.combine_bias_terms_pkell(bias)[1:]
         # return np.array([pkells[[0, 2, 4].index(ell)] for ell in self.ells])
         b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4 = pars
         bias_monomials = jnp.array([1, b1, b1**2, b2, b1 * b2, b2**2, bs, b1 * bs, b2 * bs, bs**2, b3, b1 * b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4])
-        return jnp.sum(self.lpttable * bias_monomials, axis=-1)
+        return jnp.sum(self.pktable * bias_monomials, axis=-1)
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'zeff', 'ells', 'lpttable']:
+        for name in ['k', 'zeff', 'ells', 'pktable']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
@@ -288,10 +292,6 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     **kwargs : dict
         Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5``.
     """
-
-    def initialize(self, *args, **kwargs):
-        super(LPTVelocileptorsTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
-
     def set_params(self):
         self.required_bias_params = dict(b1=0.69, b2=-1.17, bs=-0.71, b3=0., alpha0=0., alpha2=0., alpha4=0., alpha6=0., sn0=0., sn2=0., sn4=0.)
         super(LPTVelocileptorsTracerPowerSpectrumMultipoles, self).set_params()
@@ -325,11 +325,306 @@ class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationF
     """
 
 
+class EPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMultipoles):
+
+    # Original implementation does AP transform when combining with f and bias parameters
+    # Here we make the AP transform, then update bias parameters, which allows analytic marginalization
+
+    _default_options = dict(rbao=110, kmin=1e-2, kmax=0.5, nk=100, beyond_gauss=True,
+                            one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000,
+                            nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False)
+    _pt_attrs = ['pktable', 'vktable', 's0ktable', 's2ktable', 'g1ktable', 'g3ktable', 'k0', 'k2', 'k4', 'plin_ir', 'kap', 'muap', 'f']
+
+    def initialize(self, *args, mu=4, method='leggauss', **kwargs):
+        super(EPTMomentsVelocileptorsPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method=method, **kwargs)
+        self.template.init.update(with_now='peakaverage')
+
+    def calculate(self):
+        from velocileptors.EPT.moment_expansion_fftw import MomentExpansion
+        self.pt = MomentExpansion(self.template.k, self.template.pk_dd, pnw=self.template.pknow_dd, **self.options)
+        jac, self.kap, self.muap = self.template.ap_k_mu(self.k, self.mu)
+        self.f = self.template.f
+        for name in self._pt_attrs:
+            if name in ['kap', 'muap', 'f']:
+                setattr(self.pt, name, getattr(self, name))
+            else:
+                value = getattr(self.pt, name)
+                tmp = np.swapaxes(jac * interpolate.interp1d(self.pt.kv, value, kind='cubic', fill_value='extrapolate', axis=0)(self.kap), 1, -1)
+                setattr(self.pt, name, tmp)
+
+    def __setstate__(self, state):
+        from velocileptors.EPT.moment_expansion_fftw import MomentExpansion
+        self.pt = MomentExpansion.__new__(MomentExpansion)
+        self.pt.__dict__.update(state)
+
+    def combine_bias_terms_poles(self, pars, counterterm_c3=0, beyond_gauss=False, reduced=True):
+        if beyond_gauss:
+            if reduced:
+                b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn, sn2, sn4 = pars
+                alpha, alphav, alpha_s0, alpha_s2, alpha_g1, alpha_g3, alpha_k2 = alpha0, alpha2, 0, alpha4, 0, 0, alpha6
+                sn, sv, sigma0, stoch_k0 = sn, sn2, 0, sn4
+            else:
+                b1, b2, bs, b3, alpha, alphav, alpha_s0, alpha_s2, alpha_g1, alpha_g3, alpha_k2, sn, sv, sigma0, stoch_k0 = pars
+        else:
+            if reduced:
+                b1, b2, bs, b3, alpha0, alpha2, alpha4, sn, sn2 = pars
+                alpha, alphav, alpha_s0, alpha_s2 = alpha0, alpha2, 0, alpha4
+                sn, sv, sigma0 = sn, sn2, 0
+            else:
+                b1, b2, bs, b3, alpha, alphav, alpha_s0, alpha_s2, sn, sv, sigma0 = pars
+
+        pt = self.pt
+        kap, muap, f = pt.kap, pt.muap, pt.f
+        muap2 = muap**2
+
+        pk = pt.combine_bias_terms_pk(b1, b2, bs, b3, alpha, sn)
+        vk = pt.combine_bias_terms_vk(b1, b2, bs, b3, alphav, sv)
+        s0k, s2k = pt.combine_bias_terms_sk(b1, b2, bs, b3, alpha_s0, alpha_s2, sigma0)
+
+        pkmu = pk - f * kap * muap2 * vk - 0.5 * f**2 * kap**2 * muap2 * (s0k + 0.5 * s2k * (3 * muap2 - 1))
+
+        if beyond_gauss:
+            g1k, g3k = pt.combine_bias_terms_gk(b1, b2, bs, b3, alpha_g1, alpha_g3)
+            k0k, k2k, k4k = pt.combine_bias_terms_kk(b1, b2, bs, b3, alpha_k2, stoch_k0)
+            pkmu += 1. / 6. * self.f**3 * (kap * muap)**3 * (g1k * muap + g3k * muap**3)\
+                    + 1. / 24. * self.f**4 * (kap * muap)**4 * (k0k + k2k * muap2 + k4k * muap2**2)
+        else:
+            pkmu += 1. / 6. * counterterm_c3 * kap**2 * muap2**2 * pt.plin_ir
+
+        # Interpolate onto true wavenumbers
+        return self.to_poles(pkmu)
+
+
+class EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPowerSpectrumMultipoles):
+    """
+    Velocileptors Eulerian perturbation theory (EPT) tracer power spectrum multipoles with moment expansion.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    **kwargs : dict
+        Velocileptors options, defaults to: ``rbao=110, kmin=1e-2, kmax=0.5, nk=100, beyond_gauss=True,
+                                              one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000,
+                                              nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False, reduce=True)``.
+    """
+    _default_options = dict(beyond_gauss=True, reduced=True)
+
+    def set_params(self):
+        if self.options['beyond_gauss']:
+            if self.options['reduced']:
+                self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2', 'sn4']
+            else:
+                self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha', 'alpha_v', 'alpha_s0', 'alpha_s2', 'alpha_g1',\
+                                             'alpha_g3', 'alpha_k2', 'sn0', 'sv', 'sigma0', 'stoch_k0']
+        else:
+            if self.options['reduced']:
+                self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'sn0', 'sn2']
+            else:
+                self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha', 'alpha_v', 'alpha_s0', 'alpha_s2', 'sn0', 'sv', 'sigma0']
+
+        default_values = {'b1': 1.69, 'b2': -1.17, 'bs': -0.71, 'b3': -0.479, 'counterterm_c3': 0.}
+        self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
+        self.optional_bias_params = {name: default_values.get(name, 0.) for name in self.optional_bias_params}
+        self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
+
+
+class EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
+    """
+    Velocileptors EPT moments tracer correlation function multipoles.
+    Can be exactly marginalized over counter terms and shot noise parameters alpha*, sn*.
+
+    Parameters
+    ----------
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    **kwargs : dict
+        Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5``.
+    """
+
+
+class LPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMultipoles):
+
+    _default_options = dict(kmin=5e-3, kmax=0.3, nk=50, beyond_gauss=False, one_loop=True,
+                            shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=1,
+                            extrap_min=-5, extrap_max=3, import_wisdom=False)
+    _pt_attrs = ['pktable', 'vktable', 'stracektable', 'sparktable', 'gamma1ktable', 'kappaktable', 'kap', 'muap', 'f', 'third_order']
+
+    def initialize(self, *args, mu=8, method='leggauss', **kwargs):
+        super(LPTMomentsVelocileptorsPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method=method, **kwargs)
+
+    def calculate(self):
+        from velocileptors.LPT.moment_expansion_fftw import MomentExpansion
+        self.pt = MomentExpansion(self.template.k, self.template.pk_dd, **self.options)
+        jac, self.kap, self.muap = self.template.ap_k_mu(self.k, self.mu)
+        self.f = self.template.f
+        for name in self._pt_attrs:
+            if name in ['kap', 'muap', 'f']:
+                setattr(self.pt, name, getattr(self, name))
+            elif name not in ['third_order'] and hasattr(self.pt, name):
+                value = getattr(self.pt, name)
+                tmp = jac * interpolate.interp1d(self.pt.kv, value, kind='cubic', fill_value='extrapolate', axis=0)(self.kap.ravel())
+                setattr(self.pt, name, tmp)
+
+    def __setstate__(self, state):
+        from velocileptors.LPT.moment_expansion_fftw import MomentExpansion
+        self.pt = MomentExpansion.__new__(MomentExpansion)
+        self.pt.__dict__.update(state)
+        # This is very unfortunate, but otherwise jax arrays (generated by emulators) will fail when doing combine_bias_terms_sk, combine_bias_terms_gk,
+        # because of item assignments.
+        # It would be *really* nice that velocileptors is more jax-compatible...
+        for name in ['stracektable', 'sparktable', 'gamma1ktable']:
+            if name in state:
+                setattr(self.pt, name, np.asarray(state[name]))
+
+    def combine_bias_terms_poles(self, pars, counterterm_c3=0, beyond_gauss=False, reduced=True):
+        pt = self.pt
+        kap, muap, f, pktable = pt.kap, pt.muap, pt.f, pt.pktable
+        shape = kap.shape
+        kap, muap = (x.ravel() for x in np.broadcast_arrays(kap, muap))
+        muap2 = muap**2
+        from velocileptors.LPT import cleft_fftw, velocity_moments_fftw
+        cleft_fftw.np = velocity_moments_fftw.np = jnp
+
+        if beyond_gauss:
+            if reduced:
+                b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn, sn2, sn4 = pars
+
+                kv, pk = pt.combine_bias_terms_pk(b1, b2, bs, b3, alpha0, sn)
+                kv, vk = pt.combine_bias_terms_vk(b1, b2, bs, b3, alpha2, sn2)
+                kv, s0, s2 = pt.combine_bias_terms_sk(b1, b2, bs, b3, 0, alpha4, 0, basis='Polynomial')
+                kv, g1, g3 = pt.combine_bias_terms_gk(b1, b2, bs, b3, 0, alpha6)
+                kv, k0, k2, k4 = pt.combine_bias_terms_kk(0, sn4)
+
+            else:
+                b1, b2, bs, b3, alpha, alpha_v, alpha_s0, alpha_s2, alpha_g1, alpha_g3, alpha_k2, sn, sv, sigma0_stoch, sn4 = pars
+
+                kv, pk = pt.combine_bias_terms_pk(b1, b2, bs, b3, alpha, sn)
+                kv, vk = pt.combine_bias_terms_vk(b1, b2, bs, b3, alpha_v, sv)
+                kv, s0, s2 = pt.combine_bias_terms_sk(b1, b2, bs, b3, alpha_s0, alpha_s2, sigma0_stoch, basis='Polynomial')
+                kv, g1, g3 = pt.combine_bias_terms_gk(b1, b2, bs, b3, alpha_g1, alpha_g3)
+                kv, k0, k2, k4 = pt.combine_bias_terms_kk(alpha_k2, sn4)
+
+            pkmu = pk - f * kap * muap2 * vk -\
+                  1. / 2 * f**2 * kap**2 * muap2 * (s0 + s2 * muap2) +\
+                  1. / 6 * f**3 * kap**3 * muap**3 * (g1 + muap2 * g3) +\
+                  1. / 24 * f**4 * kv**4 * muap**4 * (k0 + muap2 * k2 + muap2**2 * k4)
+
+        else:
+            if reduced:
+                b1, b2, bs, b3, alpha0, alpha2, alpha4, sn, sn2 = pars
+                ct3 = alpha4
+
+                kv, pk = pt.combine_bias_terms_pk(b1, b2, bs, b3, alpha0, sn)
+                kv, vk = pt.combine_bias_terms_vk(b1, b2, bs, b3, alpha2, sn2)
+                kv, s0, s2 = pt.combine_bias_terms_sk(b1, b2, bs, b3, 0, 0, 0, basis='Polynomial')
+
+            else:
+                b1, b2, bs, b3, alpha, alpha_v, alpha_s0, alpha_s2, sn, sv, sigma0_stoch = pars
+                ct3 = counterterm_c3
+
+                kv, pk = pt.combine_bias_terms_pk(b1, b2, bs, b3, alpha, sn)
+                kv, vk = pt.combine_bias_terms_vk(b1, b2, bs, b3, alpha_v, sv)
+                kv, s0, s2 = pt.combine_bias_terms_sk(b1, b2, bs, b3, alpha_s0, alpha_s2, sigma0_stoch, basis='Polynomial')
+
+            pkmu = pk - f * kap * muap2 * vk -\
+                   0.5 * f**2 * kap**2 * muap2 * (s0 + s2 * muap2) +\
+                   ct3 / 6. * kap**2 * muap2**2 * pktable[:, -1]
+
+        cleft_fftw.np = velocity_moments_fftw.np = np
+        return self.to_poles(pkmu.reshape(shape))
+
+
+class LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPowerSpectrumMultipoles):
+    """
+    Velocileptors Lagrangian perturbation theory (LPT) tracer power spectrum multipoles with moment expansion.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    **kwargs : dict
+        Velocileptors options, defaults to: ``kmin=5e-3, kmax=0.3, nk=50, beyond_gauss=False, one_loop=True,
+                                              shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=1,
+                                              extrap_min=-5, extrap_max=3, import_wisdom=False``.
+    """
+    _default_options = dict(beyond_gauss=False, shear=True, third_order=True, reduced=True)
+
+    def set_params(self):
+        if self.options['beyond_gauss']:
+            if self.options['reduced']:
+                self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2', 'sn4']
+            else:
+                self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha', 'alpha_v', 'alpha_s0', 'alpha_s2', 'alpha_g1',\
+                                             'alpha_g3', 'alpha_k2', 'sn0', 'sv', 'sigma0_stoch', 'sn4']
+        else:
+            if self.options['reduced']:
+                self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'sn0', 'sn2']
+            else:
+                self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha', 'alpha_v', 'alpha_s0', 'alpha_s2',
+                                             'sn0', 'sv', 'sigma0_stoch']
+
+        self.optional_bias_params = ['counterterm_c3']
+        default_values = {'b1': 1.69, 'b2': -1.17, 'bs': -0.71, 'b3': -0.479}
+        self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
+        self.optional_bias_params = {name: default_values.get(name, 0.) for name in self.optional_bias_params}
+        if not self.options['shear']:
+            self.required_bias_params.pop('bs')
+        if not self.options['third_order']:
+            self.required_bias_params.pop('b3')
+        del self.options['shear'], self.options['third_order']
+        self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
+
+
+class LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
+    """
+    Velocileptors LPT moments tracer correlation function multipoles.
+    Can be exactly marginalized over counter terms and shot noise parameters alpha*, sn*.
+
+    Parameters
+    ----------
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    **kwargs : dict
+        Velocileptors options, defaults to: ``kmin=5e-3, kmax=0.3, nk=50, beyond_gauss=False, one_loop=True,
+                                              shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=1,
+                                              extrap_min=-5, extrap_max=3, import_wisdom=False``.
+    """
+
+
 class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
     _default_options = dict(optiresum=True, nd=None, with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti')
-    _bird_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
-                   'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol']
+    _pt_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
+                 'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol', 'bst']
 
     def initialize(self, *args, shotnoise=1e4, **kwargs):
         import pybird_dev as pybird
@@ -350,39 +645,39 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
     def calculate(self):
         import pybird_dev as pybird
         cosmo = {'k11': self.template.k, 'P11': self.template.pk_dd, 'f': self.template.f, 'DA': 1., 'H': 1.}
-        self.bird = pybird.Bird(cosmo, with_bias=False, eft_basis='eftoflss', with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
+        self.pt = pybird.Bird(cosmo, with_bias=False, eft_basis='eftoflss', with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
 
         if self.nnlo_counterterm is not None:  # we use smooth power spectrum since we don't want spurious BAO signals
-            self.nnlo_counterterm.Ps(self.bird, np.log(self.template.pknow_dd))
+            self.nnlo_counterterm.Ps(self.pt, np.log(self.template.pknow_dd))
 
-        self.nonlinear.PsCf(self.bird)
-        self.bird.setPsCfl()
+        self.nonlinear.PsCf(self.pt)
+        self.pt.setPsCfl()
 
         if self.options['with_resum']:
-            self.resum.Ps(self.bird)
+            self.resum.Ps(self.pt)
 
-        self.projection.AP(self.bird, q=(self.template.qper, self.template.qpar))
-        self.projection.xdata(self.bird)
+        self.projection.AP(self.pt, q=(self.template.qper, self.template.qpar))
+        self.projection.xdata(self.pt)
 
     def combine_bias_terms_poles(self, **params):
         from pybird_dev import bird
         bird.np = jnp
-        self.bird.setreducePslb(params, what='full')
+        self.pt.setreducePslb(params, what='full')
         bird.np = np
-        return self.bird.fullPs
+        return self.pt.fullPs
 
     def __getstate__(self):
         state = {}
-        for name in self._bird_attrs:
-            if hasattr(self.bird, name):
-                state[name] = getattr(self.bird, name)
+        for name in self._pt_attrs:
+            if hasattr(self.pt, name):
+                state[name] = getattr(self.pt, name)
         return state
 
     def __setstate__(self, state):
         import pybird_dev as pybird
-        self.bird = pybird.Bird.__new__(pybird.Bird)
-        self.bird.with_bias = False
-        self.bird.__dict__.update(state)
+        self.pt = pybird.Bird.__new__(pybird.Bird)
+        self.pt.with_bias = False
+        self.pt.__dict__.update(state)
 
     @classmethod
     def install(cls, installer):
@@ -411,7 +706,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     **kwargs : dict
         Velocileptors options, defaults to: ``optiresum=True, nd=None, with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti', eft_basis='eftoflss'``.
     """
-    _default_options = dict(with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, eft_basis='eftoflss')
+    _default_options = dict(with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=True, eft_basis='eftoflss')
 
     def set_params(self):
         self.required_bias_params = ['b1', 'b3', 'cct']
@@ -444,8 +739,8 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
 
     _default_options = dict(optiresum=True, nd=None, with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti')
-    _bird_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
-                   'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol']
+    _pt_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
+                 'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol']
 
     def initialize(self, *args, shotnoise=1e4, **kwargs):
         import pybird_dev as pybird
@@ -466,39 +761,39 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
     def calculate(self):
         import pybird_dev as pybird
         cosmo = {'k11': self.template.k, 'P11': self.template.pk_dd, 'f': self.template.f, 'DA': 1., 'H': 1.}
-        self.bird = pybird.Bird(cosmo, with_bias=False, eft_basis='eftoflss', with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
+        self.pt = pybird.Bird(cosmo, with_bias=False, eft_basis='eftoflss', with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
 
         if self.nnlo_counterterm is not None:  # we use smooth power spectrum since we don't want spurious BAO signals
-            self.nnlo_counterterm.Cf(self.bird, np.log(self.template.pknow_dd))
+            self.nnlo_counterterm.Cf(self.pt, np.log(self.template.pknow_dd))
 
-        self.nonlinear.PsCf(self.bird)
-        self.bird.setPsCfl()
+        self.nonlinear.PsCf(self.pt)
+        self.pt.setPsCfl()
 
         if self.options['with_resum']:
-            self.resum.PsCf(self.bird)
+            self.resum.PsCf(self.pt)
 
-        self.projection.AP(self.bird, q=(self.template.qper, self.template.qpar))
-        self.projection.xdata(self.bird)
+        self.projection.AP(self.pt, q=(self.template.qper, self.template.qpar))
+        self.projection.xdata(self.pt)
 
     def combine_bias_terms_poles(self, **params):
         from pybird_dev import bird
         bird.np = jnp
-        self.bird.setreduceCflb(params)
+        self.pt.setreduceCflb(params)
         bird.np = np
-        return self.bird.fullCf
+        return self.pt.fullCf
 
     def __getstate__(self):
         state = {}
-        for name in self._bird_attrs:
-            if hasattr(self.bird, name):
-                state[name] = getattr(self.bird, name)
+        for name in self._pt_attrs:
+            if hasattr(self.pt, name):
+                state[name] = getattr(self.pt, name)
         return state
 
     def __setstate__(self, state):
         import pybird_dev as pybird
-        self.bird = pybird.Bird.__new__(pybird.Bird)
-        self.bird.with_bias = False
-        self.bird.__dict__.update(state)
+        self.pt = pybird.Bird.__new__(pybird.Bird)
+        self.pt.with_bias = False
+        self.pt.__dict__.update(state)
 
     @classmethod
     def install(cls, installer):

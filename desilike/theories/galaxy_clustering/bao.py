@@ -9,7 +9,7 @@ from desilike.base import BaseCalculator
 from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo
 from desilike.jax import numpy as jnp
 from .power_template import BAOPowerSpectrumTemplate
-from .base import (BaseTheoryPowerSpectrumMultipoles, BaseTrapzTheoryPowerSpectrumMultipoles,
+from .base import (BaseTheoryPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges,
                    BaseTheoryCorrelationFunctionMultipoles, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles)
 
 
@@ -30,7 +30,7 @@ class BaseBAOWigglesPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         self.template = template
 
 
-class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTrapzTheoryPowerSpectrumMultipoles):
+class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
     """
     Theory BAO power spectrum multipoles, without broadband terms,
     used in the BOSS DR12 BAO analysis by Beutler et al. 2017.
@@ -40,9 +40,9 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
     ---------
     https://arxiv.org/abs/1607.03149
     """
-    def initialize(self, *args, mu=200, **kwargs):
+    def initialize(self, *args, mu=200, method='trapz', **kwargs):
         super(DampedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
-        self.set_k_mu(k=self.k, mu=mu, ells=self.ells)
+        self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
 
     def calculate(self, b1=1., sigmas=0., sigmapar=9., sigmaper=6., **kwargs):
         f = self.template.f
@@ -147,7 +147,7 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
         return resummed_wiggles * wiggles
 
 
-class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTrapzTheoryPowerSpectrumMultipoles):
+class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
     r"""
     Theory BAO power spectrum multipoles, without broadband terms,
     with resummation of BAO wiggles.
@@ -157,9 +157,9 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
     ---------
     https://arxiv.org/abs/1907.00043
     """
-    def initialize(self, *args, mu=200, **kwargs):
+    def initialize(self, *args, mu=200, method='trapz', **kwargs):
         super(ResummedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
-        self.set_k_mu(k=self.k, mu=mu, ells=self.ells)
+        self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
         self.template.init.update(with_now=False)
         self.template.runtime_info.initialize()
         if self.wiggle:
@@ -182,31 +182,31 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
 class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
     """
     Base class for theory BAO power spectrum multipoles, with broadband terms.
-    
+
     Parameters
     ----------
     k : array, default=None
         Theory wavenumbers where to evaluate multipoles.
-        
+
     ells : tuple, default=(0, 2)
         Multipoles to compute.
-        
+
     mu : int, default=200
         Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
-        
+
     mode : str, default=''
         Reconstruction mode:
-        
+
         - '': no reconstruction
         - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
         - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
-        
+
     wiggle : bool, default=True
         If ``False``, switch off BAO wiggles: model is computed with smooth power spectrum.
-        
+
     smoothing_radius : float, default=15
         Smoothing radius used in reconstruction.
-        
+
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
     """

@@ -3,6 +3,20 @@ import numpy as np
 from desilike import setup_logging
 
 
+def test_integ():
+    from desilike.theories.galaxy_clustering.base import BaseTheoryPowerSpectrumMultipolesFromWedges
+    from desilike.theories.galaxy_clustering import StandardPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles
+
+    topoles = BaseTheoryPowerSpectrumMultipolesFromWedges(mu=8)
+    mu, wmu = topoles.mu, topoles.wmu
+    assert np.isclose(np.sum(wmu), 1.)
+    template = StandardPowerSpectrumTemplate()
+    pk_trapz = KaiserTracerPowerSpectrumMultipoles(template=template, mu=100, method='trapz')()
+    pk_leggauss = KaiserTracerPowerSpectrumMultipoles(template=template, mu=20, method='leggauss')()
+    print(pk_trapz)
+    print(pk_leggauss)
+
+
 def test_bao():
 
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles
@@ -47,7 +61,9 @@ def test_full_shape():
         theory.init.update(pt=pt)
         assert np.allclose(theory(), bak)
 
-    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
+    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
+
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
     theory = KaiserTracerPowerSpectrumMultipoles()
     theory(logA=3.04, b1=1.).shape
     theory = KaiserTracerCorrelationFunctionMultipoles()
@@ -61,7 +77,24 @@ def test_full_shape():
     test_emulator(theory)
     theory(dm=0.01, b1=1.).shape
     theory.pt
-    exit()
+
+    from desilike.theories.galaxy_clustering import EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
+    theory = EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    test_emulator(theory)
+    theory(dm=0.01, b1=1.).shape
+    theory = EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    test_emulator(theory)
+    theory(dm=0.01, b1=1.).shape
+    theory.pt
+
+    from desilike.theories.galaxy_clustering import LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
+    theory = LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    test_emulator(theory)
+    theory(dm=0.01, b1=1.).shape
+    theory = LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    test_emulator(theory)
+    theory(dm=0.01, b1=1.).shape
+    theory.pt
 
     from desilike.theories.galaxy_clustering import PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles
 
@@ -86,8 +119,9 @@ def test_png():
 
 
 if __name__ == '__main__':
-    
+
     setup_logging()
+    test_integ()
     #test_bao()
     test_full_shape()
     #test_png()

@@ -13,7 +13,7 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
 
     name = 'pocomc'
 
-    def __init__(self, *args, nwalkers=None, threshold=1.0, scale=True, rescale=False, diagonal=True, flow_config=None, train_config=None, **kwargs):
+    def __init__(self, *args, nwalkers=None, threshold=1.0, scale=True, rescale=False, diagonal=True, flow_config=None, train_config=None, save_fn=None, **kwargs):
         """
         Initialize PocoMC sampler.
 
@@ -59,7 +59,7 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
             Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor.
 
         save_fn : str, Path, default=None
-            If not ``None``, save samples to this location.
+            Save samples to this location. This is mandatory, because as for now PocoMC does not provide proper __getstate__/__setstate__ methods.
 
         mpicomm : mpi.COMM_WORLD, default=None
             MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
@@ -78,7 +78,7 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
                                       vectorize_likelihood=True, vectorize_prior=True, infer_vectorization=False,
                                       output_dir=None, output_label=None, random_state=self.rng.randint(0, high=0xffffffff))
         if self.save_fn is None:
-            raise ValueError('save_fn must be provided to save pocomc state')
+            raise ValueError('save_fn must be provided, in order to save pocomc state')
         self.state_fn = [os.path.splitext(fn)[0] + '.pocomc.state' for fn in self.save_fn]
 
     def logprior(self, params, bounds=None):

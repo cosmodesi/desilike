@@ -16,20 +16,20 @@ class SNWeightedPowerSpectrumLikelihood(BaseGaussianLikelihood):
     ----------
     data : dict, default=None
         Parameters to be passed to ``theories`` to generate fiducial measurement.
-    
+
     theories : list, BaseCalculator
         List of theories.
 
     footprints : list, BaseFootprint
         List of (or single) footprints for input ``theories``.
-    
+
     klim : dict, default=None
         Wavenumber cut, e.g. ``(0.01, 0.2)``.
-    
-    mu : int, default=50
-        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`) in Gauss-Legendre integration.
     """
-    def initialize(self, data=None, theories=None, footprints=None, klim=None, mu=50):
+    def initialize(self, data=None, theories=None, footprints=None, klim=None, mu=20):
         if not utils.is_sequence(theories):
             theories = [theories]
         self.theories = theories
@@ -40,12 +40,8 @@ class SNWeightedPowerSpectrumLikelihood(BaseGaussianLikelihood):
             k = np.linspace(*klim, num=500)  # above, jax takes *a lot* of memory in reverse mode
             for theory in self.theories: theory.init.update(k=k)
         self.theories = EnsembleCalculator(calculators=theories)
-        if np.ndim(mu) == 0:
-            self.mu = np.linspace(0., 1., mu)
-        else:
-            self.mu = np.asarray(mu)
-        muw = utils.weights_trapz(self.mu)
-        prefactor = 4 * np.pi / (2 * (2 * np.pi)**3) * muw
+        mu, wmu = utils.weights_mu(mu=mu)
+        prefactor = 4 * np.pi / (2 * (2 * np.pi)**3) * wmu
         self.flatdata, self.precision = [], []
         self.theories(**(data or {}))
         for theory, footprint in zip(self.theories, self.footprints):

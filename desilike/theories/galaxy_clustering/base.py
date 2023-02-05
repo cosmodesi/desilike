@@ -115,25 +115,21 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         return lax
 
 
-class BaseTrapzTheoryPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
+class BaseTheoryPowerSpectrumMultipolesFromWedges(BaseTheoryPowerSpectrumMultipoles):
 
     """Base class for theory correlation function multipoles computed from theory power spectrum multipoles."""
 
-    def initialize(self, *args, mu=200, **kwargs):
-        super(BaseTrapzTheoryPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
-        self.set_k_mu(k=self.k, mu=mu, ells=self.ells)
+    def initialize(self, *args, mu=20, method='leggauss', **kwargs):
+        super(BaseTheoryPowerSpectrumMultipolesFromWedges, self).initialize(*args, **kwargs)
+        self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
 
-    def set_k_mu(self, k, mu=200, ells=(0, 2, 4)):
+    def set_k_mu(self, k, mu=20, method='leggauss', ells=(0, 2, 4)):
         self.k = np.asarray(k, dtype='f8')
-        if np.ndim(mu) == 0:
-            self.mu = np.linspace(0., 1., mu)
-        else:
-            self.mu = np.asarray(mu)
-        muw = utils.weights_trapz(self.mu)
-        self.muweights = np.array([muw * (2 * ell + 1) * special.legendre(ell)(self.mu) for ell in ells]) / (self.mu[-1] - self.mu[0])
+        self.mu, wmu = utils.weights_mu(mu, method=method)
+        self.wmu = np.array([wmu * (2 * ell + 1) * special.legendre(ell)(self.mu) for ell in ells])
 
     def to_poles(self, pkmu):
-        return np.sum(pkmu * self.muweights[:, None, :], axis=-1)
+        return np.sum(pkmu * self.wmu[:, None, :], axis=-1)
 
 
 class APEffect(BaseCalculator):

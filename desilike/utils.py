@@ -504,6 +504,27 @@ def weights_trapz(x):
     return np.concatenate([[x[1] - x[0]], x[2:] - x[:-2], [x[-1] - x[-2]]]) / 2.
 
 
+def weights_leggauss(nx, sym=False):
+    """Return weights for Gauss-Legendre integration."""
+    x, wx = np.polynomial.legendre.leggauss((1 + sym) * nx)
+    if sym:
+        x, wx = x[nx:], (wx[nx:] + wx[nx - 1::-1]) / 2.
+    return x, wx
+
+
+def weights_mu(mu, method='leggauss'):
+    if method == 'trapz':
+        if np.ndim(mu) == 0:
+            mu = np.linspace(0., 1., mu)
+        else:
+            mu = np.asarray(mu)
+        return mu, weights_trapz(mu) / (mu[-1] - mu[0])
+    if method == 'leggauss':
+        if np.ndim(mu) == 0:
+            return weights_leggauss(mu, sym=True)
+        raise ValueError('gauss integration does not array of mus')
+
+
 def subspace(X, precision=None, npcs=None, chi2min=None, fweights=None, aweights=None):
     r"""
     Project input values ``X`` to a subspace.

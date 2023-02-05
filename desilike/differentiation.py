@@ -204,7 +204,7 @@ class Differentiation(BaseClass):
             A dictionary mapping parameter name (including wildcard) to derivative accuracy (number of points used to estimate it).
             If a single value is provided, applies to all varied parameters.
             Not used if ``method = 'auto'``  for this parameter.
-        
+
         delta_scale : float, default=1.
             Parameter grid ranges for the estimation of finite derivatives are inferred from parameters' :attr:`Parameter.delta`.
             These values are then scaled by ``delta_scale`` (< 1. means smaller ranges).

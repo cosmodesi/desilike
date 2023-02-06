@@ -15,7 +15,14 @@ def _get_options(name, **kwargs):
 
 class MinuitProfiler(BaseProfiler):
 
-    """Wrapper for minuit profiler, used by the high-energy physics community for likelihood profiling."""
+    """
+    Wrapper for minuit profiler, used by the high-energy physics community for likelihood profiling.
+
+    Reference
+    ---------
+    - https://github.com/scikit-hep/iminuit
+    - https://ui.adsabs.harvard.edu/abs/1975CoPhC..10..343J/abstract
+    """
     name = 'minuit'
 
     def __init__(self, *args, **kwargs):

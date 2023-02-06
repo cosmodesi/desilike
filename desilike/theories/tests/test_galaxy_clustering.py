@@ -79,7 +79,7 @@ def test_full_shape():
             likelihood()
 
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
-    """
+
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
     theory = KaiserTracerPowerSpectrumMultipoles()
     theory(logA=3.04, b1=1.).shape
@@ -103,7 +103,6 @@ def test_full_shape():
     test_emulator_likelihood(theory)
     theory(dm=0.01, b1=1.).shape
     theory.pt
-    """
 
     from desilike.theories.galaxy_clustering import LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
     theory = LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))

@@ -18,3 +18,9 @@ parameter
 .. automodule:: desilike.parameter
   :members:
   :show-inheritance:
+
+installation
+------------
+.. automodule:: desilike.install
+  :members:
+  :show-inheritance:

@@ -14,11 +14,15 @@ class SNWeightedPowerSpectrumLikelihood(BaseGaussianLikelihood):
 
     Parameters
     ----------
+    theories : list, BaseCalculator
+        List of theories.
+
     data : dict, default=None
         Parameters to be passed to ``theories`` to generate fiducial measurement.
 
-    theories : list, BaseCalculator
-        List of theories.
+    covariance : dict, default=None
+        Parameters to be passed to ``theories`` to generate fiducial covariance.
+        If ``None``, defaults to ``data``.
 
     footprints : list, BaseFootprint
         List of (or single) footprints for input ``theories``.
@@ -29,7 +33,7 @@ class SNWeightedPowerSpectrumLikelihood(BaseGaussianLikelihood):
     mu : int, default=20
         Number of :math:`\mu`-bins to use (in :math:`[0, 1]`) in Gauss-Legendre integration.
     """
-    def initialize(self, data=None, theories=None, footprints=None, klim=None, mu=20):
+    def initialize(self, theories=None, data=None, covariance=None, footprints=None, klim=None, mu=20):
         if not utils.is_sequence(theories):
             theories = [theories]
         self.theories = theories
@@ -43,12 +47,15 @@ class SNWeightedPowerSpectrumLikelihood(BaseGaussianLikelihood):
         self.mu, wmu = utils.weights_mu(mu=mu)
         prefactor = 4 * np.pi / (2 * (2 * np.pi)**3) * wmu
         self.flatdata, self.precision = [], []
-        self.theories(**(data or {}))
+        self.theories(**(covariance or data or {}))
         for theory, footprint in zip(self.theories, self.footprints):
             pkmu = self._get_pkmu(theory)
             precision = prefactor * footprint.volume * (theory.k**2 * utils.weights_trapz(k))[:, None] * (pkmu + footprint.shotnoise)**(-2)
-            self.flatdata.append(pkmu.ravel())
             self.precision.append(precision.ravel())
+        self.theories(**(data or {}))
+        for theory in self.theories:
+            pkmu = self._get_pkmu(theory)
+            self.flatdata.append(pkmu.ravel())
         self.flatdata, self.precision = np.concatenate(self.flatdata), np.concatenate(self.precision)
         self.runtime_info.requires = self.theories
         super(SNWeightedPowerSpectrumLikelihood, self).initialize(data=self.flatdata, precision=self.precision)

@@ -327,9 +327,16 @@ def _format_blocks(blocks, params):
 
 
 class MCMCSampler(BaseBatchPosteriorSampler):
+    """
+    Antony Lewis CosmoMC blocked fast-slow Metropolis sampler, wrapped for cobaya by Jesus Torrado.
 
-    """Antony Lewis CosmoMC blocked fast-slow Metropolis sampler, wrapped for cobaya by Jesus Torrado."""
-
+    Reference
+    ---------
+    - https://github.com/CobayaSampler/cobaya/tree/master/cobaya/samplers/mcmc
+    - https://arxiv.org/abs/astro-ph/0205436
+    - https://arxiv.org/abs/1304.4473
+    - https://arxiv.org/abs/math/0502099
+    """
     def __init__(self, *args, blocks=None, oversample_power=0.4, covariance=None, proposal_scale=2.4, learn=True, drag=False, **kwargs):
         """
         Initialize MCMC sampler.

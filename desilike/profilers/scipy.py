@@ -7,7 +7,13 @@ from .base import BaseProfiler
 
 class ScipyProfiler(BaseProfiler):
 
-    """Wrapper for the collection of scipy's samplers."""
+    """
+    Wrapper for the collection of scipy's profilers.
+
+    Reference
+    ---------
+    https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html#scipy.optimize.minimize
+    """
 
     def __init__(self, *args, method=None, **kwargs):
         """

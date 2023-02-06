@@ -139,7 +139,7 @@ class KaiserTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
     ells : tuple, default=(0, 2, 4)
         Multipoles to compute.
 
-    mu : int, default=200
+    mu : int, default=20
         Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
 
     template : BasePowerSpectrumTemplate
@@ -171,7 +171,7 @@ class KaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFro
     ells : tuple, default=(0, 2, 4)
         Multipoles to compute.
 
-    mu : int, default=200
+    mu : int, default=20
         Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
 
     template : BasePowerSpectrumTemplate
@@ -291,6 +291,13 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
 
     **kwargs : dict
         Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5``.
+
+
+    Reference
+    ---------
+    - https://arxiv.org/abs/2005.00523
+    - https://arxiv.org/abs/2012.04636
+    - https://github.com/sfschen/velocileptors
     """
     def set_params(self):
         self.required_bias_params = dict(b1=0.69, b2=-1.17, bs=-0.71, b3=0., alpha0=0., alpha2=0., alpha4=0., alpha6=0., sn0=0., sn2=0., sn4=0.)
@@ -322,6 +329,13 @@ class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationF
 
     **kwargs : dict
         Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5``.
+
+
+    Reference
+    ---------
+    - https://arxiv.org/abs/2005.00523
+    - https://arxiv.org/abs/2012.04636
+    - https://github.com/sfschen/velocileptors
     """
 
 
@@ -412,8 +426,14 @@ class EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTrac
 
     **kwargs : dict
         Velocileptors options, defaults to: ``rbao=110, kmin=1e-2, kmax=0.5, nk=100, beyond_gauss=True,
-                                              one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000,
-                                              nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False, reduce=True)``.
+        one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000, nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False, reduce=True``.
+
+
+    Reference
+    ---------
+    - https://arxiv.org/abs/2005.00523
+    - https://arxiv.org/abs/2012.04636
+    - https://github.com/sfschen/velocileptors
     """
     _default_options = dict(beyond_gauss=True, reduced=True)
 
@@ -453,7 +473,15 @@ class EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorre
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
 
     **kwargs : dict
-        Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5``.
+        Velocileptors options, defaults to: ``rbao=110, kmin=1e-2, kmax=0.5, nk=100, beyond_gauss=True,
+        one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000, nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False, reduce=True``.
+
+
+    Reference
+    ---------
+    , rather use dynamic nested sampling- https://arxiv.org/abs/2005.00523
+    - https://arxiv.org/abs/2012.04636
+    - https://github.com/sfschen/velocileptors
     """
 
 
@@ -520,9 +548,9 @@ class LPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpect
                 kv, k0, k2, k4 = pt.combine_bias_terms_kk(alpha_k2, sn4)
 
             pkmu = pk - f * kap * muap2 * vk -\
-                  1. / 2 * f**2 * kap**2 * muap2 * (s0 + s2 * muap2) +\
-                  1. / 6 * f**3 * kap**3 * muap**3 * (g1 + muap2 * g3) +\
-                  1. / 24 * f**4 * kv**4 * muap**4 * (k0 + muap2 * k2 + muap2**2 * k4)
+                   1. / 2 * f**2 * kap**2 * muap2 * (s0 + s2 * muap2) +\
+                   1. / 6 * f**3 * kap**3 * muap**3 * (g1 + muap2 * g3) +\
+                   1. / 24 * f**4 * kv**4 * muap**4 * (k0 + muap2 * k2 + muap2**2 * k4)
 
         else:
             if reduced:
@@ -566,8 +594,14 @@ class LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTrac
 
     **kwargs : dict
         Velocileptors options, defaults to: ``kmin=5e-3, kmax=0.3, nk=50, beyond_gauss=False, one_loop=True,
-                                              shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=1,
-                                              extrap_min=-5, extrap_max=3, import_wisdom=False``.
+        shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False``.
+
+
+    Reference
+    ---------
+    , rather use dynamic nested sampling- https://arxiv.org/abs/2005.00523
+    - https://arxiv.org/abs/2012.04636
+    - https://github.com/sfschen/velocileptors
     """
     _default_options = dict(beyond_gauss=False, shear=True, third_order=True, reduced=True)
 
@@ -615,8 +649,14 @@ class LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorre
 
     **kwargs : dict
         Velocileptors options, defaults to: ``kmin=5e-3, kmax=0.3, nk=50, beyond_gauss=False, one_loop=True,
-                                              shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=1,
-                                              extrap_min=-5, extrap_max=3, import_wisdom=False``.
+        shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False``.
+
+
+    Reference
+    ---------
+    - https://arxiv.org/abs/2005.00523
+    - https://arxiv.org/abs/2012.04636
+    - https://github.com/sfschen/velocileptors
     """
 
 
@@ -704,7 +744,13 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         Shot noise (which is usually marginalized over).
 
     **kwargs : dict
-        Velocileptors options, defaults to: ``optiresum=True, nd=None, with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti', eft_basis='eftoflss'``.
+        Pybird options, defaults to: ``optiresum=True, nd=None, with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti', eft_basis='eftoflss'``.
+
+
+    Reference
+    ---------
+    - https://arxiv.org/abs/2003.07956
+    - https://github.com/pierrexyz/pybird
     """
     _default_options = dict(with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=True, eft_basis='eftoflss')
 
@@ -820,7 +866,7 @@ class PyBirdTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMul
         Shot noise (which is usually marginalized over).
 
     **kwargs : dict
-        Velocileptors options, defaults to: ``optiresum=True, nd=None, with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti', eft_basis='eftoflss'``.
+        Pybird options, defaults to: ``optiresum=True, nd=None, with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti', eft_basis='eftoflss'``.
     """
     _default_options = dict(with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, eft_basis='eftoflss')
 

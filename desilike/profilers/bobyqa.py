@@ -9,7 +9,12 @@ from .base import BaseProfiler
 class BOBYQAProfiler(BaseProfiler):
     """
     Designed for solving bound-constrained general objective minimization, without requiring derivatives of the objective.
-    See https://github.com/numericalalgorithmsgroup/pybobyqa.
+
+    Reference
+    ---------
+    - https://github.com/numericalalgorithmsgroup/pybobyqa
+    - https://arxiv.org/abs/1804.00154
+    - https://arxiv.org/abs/1812.11343
     """
     name = 'bobyqa'
 

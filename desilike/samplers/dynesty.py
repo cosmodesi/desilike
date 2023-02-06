@@ -176,6 +176,12 @@ class StaticDynestySampler(BaseDynestySampler):
     Wrapper for dynesty (static) nested sampler. Proper priors only are supported.
     Using less "informative" priors will increase the expected number of nested sampling iterations.
     Static nested sampling is designed to estimate the evidence. For posterior estimation, rather use dynamic nested sampling.
+
+    Reference
+    ---------
+    - https://github.com/joshspeagle/dynesty
+    - https://ui.adsabs.harvard.edu/abs/2020MNRAS.493.3132S/abstract
+    - https://zenodo.org/record/7600689#.Y-GI1RyZNkg
     """
     def run(self, *args, **kwargs):
         """
@@ -227,7 +233,15 @@ class StaticDynestySampler(BaseDynestySampler):
 
 
 class DynamicDynestySampler(BaseDynestySampler):
+    """
+    Wrapper for dynesty (dynamic) nested sampler, for posterior estimation.
 
+    Reference
+    ---------
+    - https://github.com/joshspeagle/dynesty
+    - https://ui.adsabs.harvard.edu/abs/2020MNRAS.493.3132S/abstract
+    - https://zenodo.org/record/7600689#.Y-GI1RyZNkg
+    """
     def run(self, *args, **kwargs):
         """
         Run sampling. Sampling can be interrupted anytime, and resumed by providing

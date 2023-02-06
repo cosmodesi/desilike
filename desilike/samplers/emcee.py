@@ -5,10 +5,13 @@ from .base import BaseBatchPosteriorSampler
 
 class EmceeSampler(BaseBatchPosteriorSampler):
     """
-    Wrapper for the affine-invariant ensemble sampler for Markov chain Monte Carlo (MCMC) proposed by Goodman & Weare (2010),
-    see https://github.com/dfm/emcee.
-    """
+    Wrapper for the affine-invariant ensemble sampler for Markov chain Monte Carlo (MCMC) proposed by Goodman & Weare (2010).
 
+    Reference
+    ---------
+    - https://github.com/dfm/emcee
+    - https://arxiv.org/abs/1202.3665
+    """
     name = 'emcee'
 
     def __init__(self, *args, nwalkers=None, **kwargs):

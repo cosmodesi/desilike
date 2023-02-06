@@ -51,9 +51,6 @@ Or in development mode (any change to Python code will take place immediately)::
 Pipeline dependencies, samplers, profilers, emulators
 -----------------------------------------------------
 Requirements for samplers, profilers, emulators can be installed within Python,
-with the provided installer:
+with the provided installer.
 
-.. automodule:: desilike.install
-  :members:
-  :inherited-members:
-  :show-inheritance:
+Any calculator, profiler, sampler, etc. can be installed with :class:`~desilike.install.Installer`.

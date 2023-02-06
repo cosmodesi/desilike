@@ -9,6 +9,7 @@ Welcome to desilike's documentation!
   :caption: User documentation
 
   user/building
+  user/getting_started
   api/core
   api/theories
   api/observables
@@ -75,13 +76,6 @@ In addition:
   to facilitate debugging, set up model template bases, build emulators within the relevant parameter space, etc.
 
 Development so far has focused on galaxy clustering / compression techniques.
-
-
-Quick start-up
-==============
-
-For a quick start-up, see `notebooks <https://github.com/cosmodesi/desilike/blob/main/nb>`_.
-
 
 Changelog
 =========

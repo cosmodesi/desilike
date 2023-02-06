@@ -12,7 +12,15 @@ from .base import BasePosteriorSampler
 
 class PolychordSampler(BasePosteriorSampler):
 
-    """Wrapper for polychord nested sampler."""
+    """
+    Wrapper for polychord nested sampler.
+
+    Reference
+    ---------
+    - https://github.com/PolyChord/PolyChordLite
+    - https://arxiv.org/abs/1502.01856
+    - https://arxiv.org/abs/1506.00171
+    """
     check = None
 
     def __init__(self, *args, blocks=None, oversample_power=0.4, nlive='25*ndim', nprior='10*nlive', nfail='1*nlive',

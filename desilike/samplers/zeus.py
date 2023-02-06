@@ -11,7 +11,15 @@ from .utils import numpy_to_python_random_state
 
 class ZeusSampler(BaseBatchPosteriorSampler):
 
-    """Wrapper for the zeus sampler (Ensemble Slice Sampling method), see https://github.com/minaskar/zeus."""
+    """
+    Wrapper for the zeus sampler (Ensemble Slice Sampling method).
+
+    Reference
+    ---------
+    - https://github.com/minaskar/zeus
+    - https://arxiv.org/abs/2002.06212
+    - https://arxiv.org/abs/2105.03468
+    """
 
     name = 'zeus'
 

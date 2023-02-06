@@ -149,8 +149,7 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
 
 class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
     r"""
-    Theory BAO power spectrum multipoles, without broadband terms,
-    with resummation of BAO wiggles.
+    Theory BAO power spectrum multipoles, without broadband terms, with resummation of BAO wiggles.
     Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
 
     Reference
@@ -180,7 +179,7 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
 
 
 class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
-    """
+    r"""
     Base class for theory BAO power spectrum multipoles, with broadband terms.
 
     Parameters
@@ -191,7 +190,7 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
     ells : tuple, default=(0, 2)
         Multipoles to compute.
 
-    mu : int, default=200
+    mu : int, default=20
         Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
 
     mode : str, default=''
@@ -268,18 +267,115 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
 
 
 class DampedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpectrumMultipoles):
+    r"""
+    Theory BAO power spectrum multipoles, with broadband terms, used in the BOSS DR12 BAO analysis by Beutler et al. 2017.
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
 
-    pass
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mode : str, default=''
+        Reconstruction mode:
+
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+
+    wiggle : bool, default=True
+        If ``False``, switch off BAO wiggles: model is computed with smooth power spectrum.
+
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1607.03149
+    """
 
 
 class SimpleBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpectrumMultipoles):
+    r"""
+    As :class:`DampedBAOWigglesTracerPowerSpectrumMultipoles`, but moving only BAO wiggles (and not damping or RSD terms)
+    with scaling parameters.
 
-    pass
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mode : str, default=''
+        Reconstruction mode:
+
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+
+    wiggle : bool, default=True
+        If ``False``, switch off BAO wiggles: model is computed with smooth power spectrum.
+
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+    """
 
 
 class ResummedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpectrumMultipoles):
+    r"""
+    Theory BAO power spectrum multipoles, with broadband terms, with resummation of BAO wiggles.
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
 
-    pass
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mode : str, default=''
+        Reconstruction mode:
+
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+
+    wiggle : bool, default=True
+        If ``False``, switch off BAO wiggles: model is computed with smooth power spectrum.
+
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1907.00043
+    """
 
 
 class BaseBAOWigglesCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):
@@ -336,15 +432,117 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
 
 
 class DampedBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCorrelationFunctionMultipoles):
+    r"""
+    Theory BAO correlation function multipoles, with broadband terms.
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
 
-    pass
+    Parameters
+    ----------
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mode : str, default=''
+        Reconstruction mode:
+
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+
+    wiggle : bool, default=True
+        If ``False``, switch off BAO wiggles: model is computed with smooth power spectrum.
+
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1607.03149
+    """
 
 
 class SimpleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCorrelationFunctionMultipoles):
+    r"""
+    As :class:`DampedBAOWigglesTracerCorrelationFunctionsMultipoles`, but moving only BAO wiggles (and not damping or RSD terms)
+    with scaling parameters.
 
-    pass
+    Parameters
+    ----------
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mode : str, default=''
+        Reconstruction mode:
+
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+
+    wiggle : bool, default=True
+        If ``False``, switch off BAO wiggles: model is computed with smooth power spectrum.
+
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1607.03149
+    """
 
 
 class ResummedBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCorrelationFunctionMultipoles):
+    r"""
+    Theory BAO correlation function multipoles, with broadband terms, with resummation of BAO wiggles.
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
 
-    pass
+    Parameters
+    ----------
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mode : str, default=''
+        Reconstruction mode:
+
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+
+    wiggle : bool, default=True
+        If ``False``, switch off BAO wiggles: model is computed with smooth power spectrum.
+
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1907.00043
+    """

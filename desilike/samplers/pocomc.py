@@ -8,9 +8,15 @@ from .base import BaseBatchPosteriorSampler
 
 
 class PocoMCSampler(BaseBatchPosteriorSampler):
+    """
+    Wrapper for PocoMC sampler (preconditioned Monte Carlo method).
 
-    """Wrapper for PocoMC sampler (preconditioned Monte Carlo method), see https://github.com/minaskar/pocomc."""
-
+    Reference
+    ---------
+    - https://github.com/minaskar/pocomc
+    - https://arxiv.org/abs/2207.05652
+    - https://arxiv.org/abs/2207.05660
+    """
     name = 'pocomc'
 
     def __init__(self, *args, nwalkers=None, threshold=1.0, scale=True, rescale=False, diagonal=True, flow_config=None, train_config=None, save_fn=None, **kwargs):

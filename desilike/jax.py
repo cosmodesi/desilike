@@ -6,7 +6,7 @@ try:
     import jax, jaxlib
     from jax.config import config; config.update('jax_enable_x64', True)
     from jax import numpy, scipy
-    array_types = (jaxlib.xla_extension.DeviceArrayBase, jax.core.Tracer)
+    array_types = (jaxlib.xla_extension.DeviceArrayBase, type(numpy.array(0)), jax.core.Tracer)
 except ImportError:
     jax = None
     import numpy

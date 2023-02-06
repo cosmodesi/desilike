@@ -301,28 +301,28 @@ class BasePipeline(BaseClass):
         """
         Internal method to classify calculators' derived parameters as
         "fixed" (they do not vary when parameters are changed) or "varied" (they vary when parameters are changed)
-        
+
         Parameters
         ----------
         calculators : list, default=None
-            List of calculators for which to classify derived parameters, 
+            List of calculators for which to classify derived parameters,
             as well as quantities returned by their :meth:`BaseCalculator.__getstate__` method.
-        
+
         niterations : int, default=3
             To test whether derived parameters are fixed or vary, the pipeline is run ``niterations`` times,
             with varied parameters randomly varied (within their :attr:`Parameter.ref` reference distribution).
-        
+
         seed : int, default=42
             Random seed, used to sample varied parameters within their reference distribution.
-        
+
         Returns
         -------
         calculators : list
             List of calculators.
-        
+
         fixed : list
             List of dictionaries (one for each calculator) mapping names of derived quantities with their (constant) values.
-        
+
         varied : list
             List of list (one for each calculator) of derived quantities which vary.
         """
@@ -351,7 +351,11 @@ class BasePipeline(BaseClass):
             fixed.append({})
             varied.append([])
             for name, values in state.items():
-                if all(deep_eq(value, values[0]) for value in values):
+                try:
+                    eq = all(deep_eq(value, values[0]) for value in values)
+                except Exception as exc:
+                    raise ValueError('unable to check equality of {} (type: {})'.format(name, type(values[0]))) from exc
+                if eq:
                     fixed[-1][name] = values[0]
                 else:
                     varied[-1].append(name)
@@ -368,7 +372,7 @@ class BasePipeline(BaseClass):
         ----------
         calculators : list
             List of calculators for which to set derived parameters.
-        
+
         params : list
             List of :class:`ParameterCollection` to set as derived parameters, for each input calculator.
         """
@@ -393,13 +397,13 @@ class BasePipeline(BaseClass):
         niterations : int, default=10
             To compute (average) execution time, the pipeline is run ``niterations`` times,
             with varied parameters randomly varied (within their :attr:`Parameter.ref` reference distribution).
-        
+
         override : bool, default=False
             If ``False``, and :attr:`BaseCalculator.runtime_info.speed` is not ``None``, it is left untouched.
             Else, :attr:`BaseCalculator.runtime_info.speed` is set to measured speed (as 1 / (average execution time)).
-        
+
         seed : int, default=42
-            Random seed, used to sample varied parameters within their reference distribution. 
+            Random seed, used to sample varied parameters within their reference distribution.
         """
         seed = mpi.bcast_seed(seed=seed, mpicomm=self.mpicomm, size=10000)[self.mpicomm.rank]  # to get different seeds on each rank
         rng = np.random.RandomState(seed=seed)
@@ -426,32 +430,32 @@ class BasePipeline(BaseClass):
         """
         Group parameters together, and compute their ``oversample_factor``, indicative of the frequency
         at which they should be updated altogether.
-    
+
         Note
         ----
         Algorithm taken from Cobaya.
-        
+
         Parameters
         ----------
         params : list, ParameterCollection, default=None
             Parameters to sort into blocks. Defaults to :attr:`varied_params`.
-        
+
         nblocks : int, default=None
             Number of blocks. If ``None``, parameters are grouped by "footprint",
             i.e. the set of calculators that depend on them (either directly, or indirectly, through calculators' requirements).
-        
+
         oversample_power : int, default=0
             ``oversample_factor`` is proportional to ``speed ** oversample_power``.
-        
+
         **kwargs : dict
             Optional arguments for :meth:`_set_speed`, which is called if any :attr:`BaseCalculator.runtime_info.speed`
             of :attr:`calculators` is not set.
-        
+
         Returns
         -------
         sorted_blocks : list
             List of list of parameter names.
-        
+
         oversample_factors : list
             List of corresponding oversample factor (for each block).
         """
@@ -549,7 +553,7 @@ class RuntimeInfo(BaseClass):
     ----------
     calculator : BaseCalulator
         Calculator this is attached to, as :attr:`BaseCalculator.runtime_info`.
-    
+
     speed : float
         Inverse of number of iterations per second.
     """
@@ -563,7 +567,7 @@ class RuntimeInfo(BaseClass):
         ----------
         calculator : BaseCalculator
             The calculator this :class:`RuntimeInfo` instance is attached to.
-        
+
         init : InitConfig, default=None
             Configuration at initialization.
         """
@@ -775,7 +779,7 @@ class BaseCalculator(BaseClass):
     - :meth:`initialize`: set meta parameters and other calculators it depends on
     - :meth:`calculate`: takes in parameter values, and do some calculation
     - :meth:`get`: returns the quantity of interest
-    
+
     """
     def __new__(cls, *args, **kwargs):
         cls_info = Info(getattr(cls, '_info', {}))
@@ -824,7 +828,7 @@ class BaseCalculator(BaseClass):
     def get(self):
         """Return quantity of main interest, e.g. loglikelihood + logprior if ``self`` is a likelihood."""
         return self
-    
+
     def __getattr__(self, name):
         if not getattr(self.runtime_info, '_initialization', False):
             self.runtime_info.initialize()

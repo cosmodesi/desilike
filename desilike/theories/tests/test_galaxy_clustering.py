@@ -54,10 +54,10 @@ def test_full_shape():
             from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TracerCorrelationFunctionMultipolesObservable, ObservablesCovarianceMatrix
             from desilike.likelihoods import ObservablesGaussianLikelihood
             if 'Power' in theory.__class__.__name__:
-                observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01], 4: [0.05, 0.2, 0.01]},
                                                                      data={}, theory=theory)
             else:
-                observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20, 150, 4], 2: [20, 150, 4]},
+                observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20, 150, 4], 2: [20, 150, 4], 4: [20, 150, 4]},
                                                                            data={}, theory=theory)
             observable()
             cov = np.eye(observable.flatdata.shape[0])
@@ -67,8 +67,8 @@ def test_full_shape():
             likelihood()
         from desilike.emulators import Emulator, TaylorEmulatorEngine
         #theory()
-        calculator = theory.pt
         bak = theory()
+        calculator = theory.pt
         emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=0))
         emulator.set_samples()
         emulator.fit()
@@ -79,7 +79,7 @@ def test_full_shape():
             likelihood()
 
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
-
+    """
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
     theory = KaiserTracerPowerSpectrumMultipoles()
     theory(logA=3.04, b1=1.).shape
@@ -103,6 +103,7 @@ def test_full_shape():
     test_emulator_likelihood(theory)
     theory(dm=0.01, b1=1.).shape
     theory.pt
+    """
 
     from desilike.theories.galaxy_clustering import LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
     theory = LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))

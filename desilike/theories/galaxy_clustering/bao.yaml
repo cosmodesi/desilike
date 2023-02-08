@@ -147,46 +147,6 @@ params:
 
 ---
 
-class: SimpleBAOWigglesTracerCorrelationFunctionMultipoles
-
-params:
-  b1:
-    prior:
-      dist: uniform
-      limits: [0.2, 4.]
-    ref:
-      dist: uniform
-      limits: [1.5, 2.5]
-    latex: b
-  sigmas:
-    value: 0.
-    prior:
-      limits: [0, 10]
-    latex: \Sigma_{s}
-    fixed: True
-  sigmapar:
-    value: 9.
-    prior:
-      limits: [0.1, 10]
-    latex: \Sigma_{\parallel}
-    fixed: True
-  sigmaper:
-    value: 6.
-    prior:
-      limits: [0.1, 10]
-    latex: \Sigma_{\perp}
-    fixed: True
-  al[:5:2]_[-3:2]:
-    value: 0.
-    prior:
-      limits: [-1e4, 1e4]
-    ref:
-      limits: [-1e2, 1e2]
-    latex: a_{[], []}
-    fixed: False
-
----
-
 class: ResummedBAOWigglesTracerCorrelationFunctionMultipoles
 
 params:

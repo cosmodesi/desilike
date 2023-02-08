@@ -24,3 +24,10 @@ galaxy clustering
 .. automodule:: desilike.theories.galaxy_clustering.power_template
   :members:
   :show-inheritance:
+
+
+lya
+---
+.. automodule:: desilike.theories.lya.power_template
+  :members:
+  :show-inheritance:

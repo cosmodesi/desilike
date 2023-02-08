@@ -4,7 +4,7 @@ from scipy import interpolate
 from desilike.jax import numpy as jnp
 from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
 from .base import BaseTheoryPowerSpectrumMultipoles, BaseTheoryCorrelationFunctionMultipoles, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
-from .power_template import DirectPowerSpectrumTemplate  # to add calculator in the registry
+from .power_template import DirectPowerSpectrumTemplate, StandardPowerSpectrumTemplate
 
 
 class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
@@ -19,7 +19,7 @@ class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         super(BasePTPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         kin = np.geomspace(min(1e-3, self.k[0] / 2), max(1., self.k[0] * 2), 600)  # margin for AP effect
         if template is None:
-            template = DirectPowerSpectrumTemplate(k=kin)
+            template = DirectPowerSpectrumTemplate()
         self.template = template
         self.template.init.setdefault('k', kin)
 
@@ -127,6 +127,43 @@ class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         return self.corr
 
 
+class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+    r"""
+    Kaiser tracer power spectrum multipoles, with fixed damping, essentially used for Fisher forecasts.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`StandardPowerSpectrumTemplate`.
+    """
+    config_fn = 'full_shape.yaml'
+
+    def initialize(self, *args, template=None, **kwargs):
+        if template is None:
+            template = StandardPowerSpectrumTemplate()
+        super(SimpleTracerPowerSpectrumMultipoles, self).initialize(*args, template=template, **kwargs)
+
+    def calculate(self, b1=1., sn0=0., sigmapar=0., sigmaper=0.):
+        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        f = self.template.f
+        sigmanl2 = self.k[:, None]**2 * (sigmapar**2 * self.mu**2 + sigmaper**2 * (1. - self.mu**2))
+        damping = np.exp(-sigmanl2 / 2.)
+        pkmu = jac * damping * (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0
+        self.power = self.to_poles(pkmu)
+
+    def get(self):
+        return self.power
+
+
 class KaiserTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
     r"""
     Kaiser tracer power spectrum multipoles.
@@ -147,12 +184,10 @@ class KaiserTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
     """
     config_fn = 'full_shape.yaml'
 
-    def calculate(self, b1=1., sn0=0., sigmapar=0., sigmaper=0.):
+    def calculate(self, b1=1., sn0=0.):
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
-        sigmanl2 = kap**2 * (sigmapar**2 * muap**2 + sigmaper**2 * (1. - muap**2))
-        fog = np.exp(-sigmanl2 / 2.)
-        pkmu = jac * fog * (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0
+        pkmu = jac * (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0
         self.power = self.to_poles(pkmu)
 
     def get(self):

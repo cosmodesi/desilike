@@ -22,3 +22,9 @@ galaxy clustering
 .. automodule:: desilike.observables.galaxy_clustering.covariance
   :members:
   :show-inheritance:
+
+lya
+---
+.. automodule:: desilike.observables.lya.compression
+  :members:
+  :show-inheritance:

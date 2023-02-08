@@ -316,7 +316,7 @@ These can be used with e.g.:
   profiles = profiler.maximize(niterations=5)
   profiles = profiler.interval(params=['b1'])
   # To print relevant information
-  profiles.to_stats(tablefmt='pretty')
+  print(profiles.to_stats(tablefmt='pretty'))
 
 See :class:`~desilike.samples.profiles.Profiles` to know more about this data class.
 
@@ -342,6 +342,6 @@ These can be used with e.g.:
   sampler = EmceeSampler(likelihood)
   chains = sampler.run(check={'max_eigen_gr': 0.05})  # run until Gelman-Rubin criterion < 0.05
   # To print relevant information
-  chains[0].to_stats(tablefmt='pretty')
+  print(chains[0].to_stats(tablefmt='pretty'))
 
 See :class:`~desilike.samples.chain.Chain` to know more about this data class.

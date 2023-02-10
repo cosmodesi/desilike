@@ -178,6 +178,8 @@ class BasePipeline(BaseClass):
         self._params.updated = False
         self._varied_params = self._params.select(varied=True, derived=False)
         self.param_values = {param.name: param.value for param in self._params}
+        for calculator in self.calculators:
+            self.param_values.update(calculator.runtime_info.param_values)
         self.derived = None
 
     @property

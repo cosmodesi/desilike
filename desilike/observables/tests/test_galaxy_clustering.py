@@ -6,8 +6,8 @@ from desilike.likelihoods import ObservablesGaussianLikelihood
 
 def test_power_spectrum():
 
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TopHatFiberCollisionsPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TopHatFiberCollisionsPowerSpectrumMultipoles, BoxFootprint, ObservablesCovarianceMatrix
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
@@ -43,6 +43,17 @@ def test_power_spectrum():
     assert theory.template.z == 1.
     likelihood()
     assert np.allclose((likelihood + likelihood)(), 2. * likelihood() - likelihood.logprior)
+
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
+    params = {'al0_1': 100., 'al0_-1': 100.}
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data=params,
+                                                         theory=theory)
+    footprint = BoxFootprint(volume=1e10, nbar=1e-3)
+    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)(**params)
+    likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
+    print(likelihood(**params))
+    observable.plot_wiggles(show=True)
 
 
 def test_correlation_function():
@@ -84,30 +95,30 @@ def test_footprint():
 
 def test_covariance_matrix():
 
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
+    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerCorrelationFunctionMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.observables.galaxy_clustering import TracerCorrelationFunctionMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
 
-    template = ShapeFitPowerSpectrumTemplate(z=0.5)
-    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-    footprint = BoxFootprint(volume=1e10, nbar=1e-3)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01], 4: [0.05, 0.2, 0.01]},
-                                                         data={}, #'../../tests/_xi/data.npy',
-                                                         theory=theory)
+    template = ShapeFitPowerSpectrumTemplate(z=1.1)
+    theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template)
+    footprint = BoxFootprint(volume=1e10, nbar=1e-4)
+    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [30., 150., 4.], 2: [30., 150., 4.], 4: [30., 150., 4.]},
+                                                               data={}, #'../../tests/_xi/data.npy',
+                                                               theory=theory)
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov())
     print(likelihood())
     #observable.plot(show=True)
     observable.plot_covariance_matrix(show=True, corrcoef=True)
 
-    from desilike.theories.galaxy_clustering import KaiserTracerCorrelationFunctionMultipoles, ShapeFitPowerSpectrumTemplate
-    from desilike.observables.galaxy_clustering import TracerCorrelationFunctionMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
-    theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
-    footprint = BoxFootprint(volume=1e10, nbar=1e-3)
-    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
-                                                               data={}, #'../../tests/_xi/data.npy',
-                                                               theory=theory)
+    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    footprint = BoxFootprint(volume=1e10, nbar=1e-5)
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01], 4: [0.05, 0.2, 0.01]},
+                                                         data={},  #'../../tests/_xi/data.npy',
+                                                         theory=theory)
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov())
     print(likelihood())
@@ -118,14 +129,14 @@ def test_covariance_matrix():
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TracerCorrelationFunctionMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
-    footprint = BoxFootprint(volume=1e10, nbar=1e-3)
+    footprint = BoxFootprint(volume=1e10, nbar=1e-5)
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
     observable1 = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                          data={}, #'../../tests/_xi/data.npy',
+                                                          data={},  #'../../tests/_xi/data.npy',
                                                           theory=theory)
     theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
     observable2 = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
-                                                                data={}, #'../../tests/_xi/data.npy',
+                                                                data={},  #'../../tests/_xi/data.npy',
                                                                 theory=theory)
     observables = [observable1, observable2]
     cov = ObservablesCovarianceMatrix(observables, footprints=footprint, resolution=3)()
@@ -240,10 +251,10 @@ def test_fiber_collisions():
 if __name__ == '__main__':
 
     setup_logging()
-    test_power_spectrum()
+    #test_power_spectrum()
     #test_correlation_function()
     # test_footprint()
-    # test_covariance_matrix()
+    test_covariance_matrix()
     # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()

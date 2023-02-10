@@ -26,21 +26,21 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         Data power spectrum measurement: array, :class:`pypower.PowerSpectrumMultipoles` instance,
         or path to such instances, or list of such objects (in which case the average of them is taken).
         If dict, parameters to be passed to theory to generate mock measurement.
-    
+
     covariance : array, list, default=None
         2D array, list of :class:`pypower.PowerSpectrumMultipoles` instance` instances, or paths to such instances;
         these are used to compute the covariance matrix.
-    
+
     klim : dict, default=None
         Wavenumber limits: a dictionary mapping multipoles to (min separation, max separation, step (float)),
         e.g. ``{0: (0.01, 0.2, 0.01), 2: (0.01, 0.15, 0.01)}``.
-    
+
     wmatrix : str, Path, pypower.BaseMatrix, WindowedPowerSpectrumMultipoles, default=None
         Optionally, window matrix.
-    
+
     **kwargs : dict
         Optional arguments for :class:`WindowedPowerSpectrumMultipoles`, e.g.:
-        
+
         - theory: defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
         - shotnoise: take shot noise from ``data``, or ``covariance`` (mocks) if provided.
         - fiber_collisions
@@ -153,7 +153,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         ----------
         scaling : str, default='kpk'
             Either 'kpk' or 'loglog'.
-        
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -218,8 +218,9 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         except AttributeError as exc:
             raise ValueError('Theory {} has no mode wiggle'.format(self.theory.theory.__class__)) from exc
         self.wmatrix.theory.wiggle = False
-        self.runtime_info.pipeline.tocalculate = True
-        self()
+        for calculator in self.runtime_info.pipeline.calculators:
+            calculator.runtime_info.tocalculate = True
+            calculator.runtime_info.calculate()
         nowiggle = self.theory
         self.wmatrix.theory.wiggle = mode
         for ill, ell in enumerate(self.ells):

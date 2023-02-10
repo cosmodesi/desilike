@@ -561,7 +561,7 @@ class ParameterArray(np.ndarray):
 
 
 class Parameter(BaseClass):
-    
+
     """Class that represents a parameter."""
 
     _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'delta', 'latex', 'depends', 'shape']
@@ -607,7 +607,7 @@ class Parameter(BaseClass):
         proposal : float, default=None
             Proposal uncertainty for parameter.
             If ``None``, defaults to ``ref.std()``.
-        
+
         delta : float, tuple, detault=None
             Variation for finite-differentiation, w.r.t. ``value``.
             If tuple, (variation below value, variation above value),
@@ -713,7 +713,7 @@ class Parameter(BaseClass):
             except AttributeError as exc:
                 raise AttributeError('reference distribution has no center(), probably because it is not proper... provide value argument or proper reference distribution') from exc
         return value
-    
+
     @property
     def proposal(self):
         """Proposal uncertainty for parameter; if not specified, defaults to ``ref.std()``."""
@@ -724,7 +724,7 @@ class Parameter(BaseClass):
             except AttributeError as exc:
                 raise AttributeError('reference distribution has no std(), probably because it is not proper... provide proposal argument or proper reference distribution') from exc
         return proposal
-    
+
     @property
     def delta(self):
         """
@@ -1862,7 +1862,7 @@ class ParameterPrior(BaseClass):
     def is_limited(self):
         """Whether distribution has (at least one) finite limit."""
         return not np.isinf(self.limits).all()
-    
+
     def center(self):
         try:
             center = self.loc
@@ -2274,16 +2274,16 @@ class BaseParameterMatrix(BaseClass):
     def select(self, params=None, **kwargs):
         """
         Return a sub-matrix.
-        
+
         Parameters
         ----------
         params : list, ParameterCollection, default=None
             Optionally, parameters to limit to.
-        
+
         **kwargs : dict
             If ``params`` is ``None``, optional arguments passed to :meth:`ParameterCollection.select`
             to select parameters (e.g. ``varied=True``).
-        
+
         Returns
         -------
         new : BaseParameterMatrix
@@ -2313,13 +2313,13 @@ class BaseParameterMatrix(BaseClass):
         ----------
         value : array, default=None
             2D array to replace matrix value with.
-        
+
         params : list, ParameterCollection, default=None
             New parameters.
-        
+
         center : array, list
             New matrix center.
-        
+
         Returns
         -------
         new : BaseParameterMatrix
@@ -2340,11 +2340,11 @@ class BaseParameterMatrix(BaseClass):
         ----------
         params : list, ParameterCollection, default=None
             If provided, restrict to these parameters.
-        
+
         return_type : str, default='nparray'
             If 'nparray', return a numpy array.
             Else, return a dictionary mapping parameter names to center values.
-        
+
         Returns
         -------
         center : array, dict
@@ -2364,7 +2364,7 @@ class BaseParameterMatrix(BaseClass):
     def view(self, params=None, return_type=None):
         """
         Return matrix for input parameters ``params``.
-        
+
         Parameters
         ----------
         params : list, ParameterCollection, default=None
@@ -2372,11 +2372,11 @@ class BaseParameterMatrix(BaseClass):
             If a single parameter is provided, and this parameter is a scalar, return a scalar.
             If a parameter in ``params`` is not in matrix, add it, filling in the returned matrix with zeros,
             except on the diagonal, which is filled with :attr:`_fill_value`; :attr:`center` is filled with nan.
-        
+
         return_type : str, default=None
             If 'nparray', return a numpy array.
             Else, return a new :class:`BaseParameterMatrix`, restricting to ``params``.
-        
+
         Returns
         -------
         new : array, float, BaseParameterMatrix
@@ -2478,7 +2478,7 @@ class ParameterCovariance(BaseParameterMatrix):
     def view(self, params=None, return_type=None, fill=None):
         """
         Return matrix for input parameters ``params``.
-    
+
         Parameters
         ----------
         params : list, ParameterCollection, default=None
@@ -2486,11 +2486,11 @@ class ParameterCovariance(BaseParameterMatrix):
             If a single parameter is provided, this parameter is a scalar, and ``return_type`` is 'nparray', return a scalar.
             If a parameter in ``params`` is not in matrix, add it, filling in the returned matrix with zeros,
             except on the diagonal, which is filled with :attr:`Parameter.proposal`; :attr:`center` is filled with :attr:`Parameter.value`.
-        
+
         return_type : str, default=None
             If 'nparray', return a numpy array.
             Else, return a new :class:`ParameterCovariance`, restricting to ``params``.
-        
+
         Returns
         -------
         new : array, float, ParameterCovariance
@@ -2542,7 +2542,7 @@ class ParameterCovariance(BaseParameterMatrix):
     def invcov(self, params=None, return_type='nparray'):
         """
         Return inverse covariance matrix (precision matrix) for input parameters ``params``.
-    
+
         Parameters
         ----------
         params : list, ParameterCollection, default=None
@@ -2550,11 +2550,11 @@ class ParameterCovariance(BaseParameterMatrix):
             If a single parameter is provided, this parameter is a scalar, and ``return_type`` is 'nparray', return a scalar.
             If a parameter in ``params`` is not in matrix, add it, filling in the returned matrix with zeros,
             except on the diagonal, which is filled with :attr:`Parameter.proposal`; :attr:`center` is filled with :attr:`Parameter.value`.
-        
+
         return_type : str, default=None
             If 'nparray', return a numpy array.
             Else, return a new :class:`ParameterCovariance`, restricting to ``params``.
-        
+
         Returns
         -------
         new : array, float, ParameterCovariance
@@ -2564,7 +2564,7 @@ class ParameterCovariance(BaseParameterMatrix):
     def to_precision(self, params=None, return_type=None):
         """
         Return inverse covariance matrix (precision matrix) for input parameters ``params``.
-    
+
         Parameters
         ----------
         params : list, ParameterCollection, default=None
@@ -2574,7 +2574,7 @@ class ParameterCovariance(BaseParameterMatrix):
         return_type : str, default=None
             If 'nparray', return a numpy array.
             Else, return a new :class:`ParameterPrecision`.
-        
+
         Returns
         -------
         new : array, float, ParameterPrecision
@@ -2594,7 +2594,7 @@ class ParameterCovariance(BaseParameterMatrix):
         ----------
         params : list, ParameterCollection, default=None
             If provided, restrict to these parameters.
-        
+
         sigfigs : int, default=2
             Number of significant digits.
             See :func:`utils.round_measurement`.
@@ -2605,7 +2605,7 @@ class ParameterCovariance(BaseParameterMatrix):
 
         fn : str, default=None
             If not ``None``, file name where to save summary table.
-        
+
         Returns
         -------
         txt : str
@@ -2640,13 +2640,13 @@ class ParameterCovariance(BaseParameterMatrix):
         ----------
         params : list, ParameterCollection, default=None
             Parameters to share to GetDist. Defaults to all parameters.
-        
+
         label : str, default=None
             Name for GetDist to use for this distribution.
-        
+
         center : list, array, default=None
             Optionally, override :meth:`center`.
-        
+
         ignore_limits : bool, default=True
             GetDist does not seem to be able to integrate over distribution if bounded;
             so drop parameter limits.
@@ -2725,7 +2725,7 @@ class ParameterPrecision(BaseParameterMatrix):
     def cov(self, params=None, return_type='nparray'):
         """
         Return inverse precision matrix (covariance matrix) for input parameters ``params``.
-    
+
         Parameters
         ----------
         params : list, ParameterCollection, default=None
@@ -2735,7 +2735,7 @@ class ParameterPrecision(BaseParameterMatrix):
         return_type : str, default='nparray'
             If 'nparray', return a numpy array.
             Else, return a new :class:`ParameterCovariance`.
-        
+
         Returns
         -------
         new : array, float, ParameterCovariance
@@ -2745,7 +2745,7 @@ class ParameterPrecision(BaseParameterMatrix):
     def to_covariance(self, params=None, return_type=None):
         """
         Return inverse precision matrix (covariance matrix) for input parameters ``params``.
-    
+
         Parameters
         ----------
         params : list, ParameterCollection, default=None
@@ -2755,7 +2755,7 @@ class ParameterPrecision(BaseParameterMatrix):
         return_type : str, default=None
             If 'nparray', return a numpy array.
             Else, return a new :class:`ParameterCovariance`.
-        
+
         Returns
         -------
         new : array, float, ParameterCovariance

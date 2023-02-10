@@ -130,8 +130,6 @@ params:
       limits: [-0.01, 0.01]
     latex: dm
   dn:
-    value: 0.
-    fixed: True
     prior:
       dist: uniform
       limits: [-0.5, 0.5]
@@ -140,17 +138,22 @@ params:
       loc: 0.
       scale: 0.1
     latex: dn
+    fixed: True
   qpar:
     value: 1.
     prior:
       dist: uniform
       limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
     latex: q_{\parallel}
   qper:
     value: 1.
     prior:
       dist: uniform
       limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
     latex: q_{\perp}
   Ap:
     derived: True
@@ -184,12 +187,16 @@ params:
     prior:
       dist: uniform
       limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
     latex: q_{\parallel}
   qper:
     value: 1.
     prior:
       dist: uniform
       limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
     latex: q_{\perp}
   qiso:
     value: 1.
@@ -230,9 +237,7 @@ params:
       dist: uniform
       limits: [0.8, 1.2]
     ref:
-      dist: norm
-      loc: 1.
-      scale: 0.02
+      limits: [0.99, 1.01]
     latex: q_{\parallel}
   qper:
     value: 1.

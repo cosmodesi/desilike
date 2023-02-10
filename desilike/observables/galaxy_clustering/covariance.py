@@ -295,16 +295,18 @@ class ObservablesCovarianceMatrix(BaseClass):
 
             pk.ells = theory.ells
             pk.k = theory.k
+            pk.shotnoise = footprint.shotnoise
 
             return pk
 
-        def get_sigma_k(pk1, pk2, ell1, ell2, k):
+        def get_sigma_k(pk1, pk2, ell1, ell2, k, remove_zero_lag=False):
             prefactor = (2 * ell1 + 1) * (2 * ell2 + 1) / volume
             toret = 0.
-            ells = [ell1, ell2]
+            ells = (ell1, ell2)
             for ell1 in pk1.ells:
                 for ell2 in pk2.ells:
-                    toret += pk1(k=k, ell=ell1) * pk2(k=k, ell=ell2) * integral_legendre_product([ell1, ell2] + ells, range=(-1, 1))
+                    zero_lag = remove_zero_lag * (ell1 == 0) * (ell2 == 0) * pk1.shotnoise * pk2.shotnoise
+                    toret += (pk1(k=k, ell=ell1) * pk2(k=k, ell=ell2) - zero_lag) * integral_legendre_product((ell1, ell2) + ells, range=(-1, 1))
             return prefactor * toret
 
         def get_bin_volume(bin, edges=True):
@@ -358,10 +360,16 @@ class ObservablesCovarianceMatrix(BaseClass):
                 if ells in cache:
                     sigmak = cache[ells]
                 else:
-                    sigmak = cache[ells] = get_sigma_k(*pks, *ells, k) * get_bin_volume(k, edges=False)
+                    sigmak = cache[ells] = get_sigma_k(*pks, *ells, k, remove_zero_lag=True) * get_bin_volume(k, edges=False)
                 ss = [get_integ_points(bin) for bin in bins]
                 weights = np.prod([np.sum(s[:, None]**2 * special.spherical_jn(ell, s[:, None] * k), axis=0) / np.sum(s**2, axis=0) for s, ell in zip(ss, ells)], axis=0)
-                return np.sign(1j ** sum(ells)).real / (2. * np.pi)**3 * np.sum(sigmak * weights)
+                toret = np.sign(1j ** sum(ells)).real / (2. * np.pi)**3 * np.sum(sigmak * weights)
+                bin = _interval_intersection(*bins)
+                if _interval_empty(bin):
+                    return toret
+                # Add in shot noise contribution
+                shotnoise = integral_legendre_product((0, 0) + ells, range=(-1, 1)) * pks[0].shotnoise * pks[1].shotnoise * (2 * ells[0] + 1) * (2 * ells[1] + 1) / volume
+                return toret + np.sign(1j ** sum(ells)).real * get_bin_volume(bin) / np.prod([get_bin_volume(bin) for bin in bins]) * shotnoise
 
         covariance = []
         for ill1, ell1 in enumerate(obs[0].ells):

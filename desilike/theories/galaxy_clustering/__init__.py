@@ -1,5 +1,6 @@
 from .base import APEffect
-from .bao import (SimpleBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles,
+from .bao import (SimpleBAOWigglesTracerPowerSpectrumMultipoles, SimpleBAOWigglesTracerCorrelationFunctionMultipoles,
+                  DampedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles,
                   ResummedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles)
 from .full_shape import (SimpleTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles,
                          LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles,

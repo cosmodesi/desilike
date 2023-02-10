@@ -74,18 +74,7 @@ params:
     ref:
       limits: [1.0, 2.0]
     latex: b_{1}
-  sigmapar:
-    value: 0.
-    latex: \Sigma_{\parallel}
-    prior:
-      limits: [0., 10]
-    fixed: True
-  sigmaper:
-    value: 0.
-    latex: \Sigma_{\perp}
-    prior:
-      limits: [0., 10]
-    fixed: True
+
 ---
 
 class: LPTVelocileptorsTracerPowerSpectrumMultipoles
@@ -105,7 +94,7 @@ params:
       scale: 15.
     ref:
       dist: norm
-      loc: -3.
+      loc: 0.
       scale: 0.5
     latex: b_{2}
   bs:
@@ -169,7 +158,7 @@ params:
       scale: 15.
     ref:
       dist: norm
-      loc: -3.
+      loc: 0.
       scale: 0.5
     latex: b_{2}
   bs:
@@ -234,7 +223,7 @@ params:
       scale: 15.
     ref:
       dist: norm
-      loc: -3.
+      loc: 0.
       scale: 0.5
     latex: b_{2}
   bs:
@@ -301,7 +290,6 @@ params:
     value: 0.
     latex: '\alpha_{k,2}'
   sv:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -312,7 +300,6 @@ params:
       scale: 50.
     latex: s_{v}
   sigma0:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -323,7 +310,6 @@ params:
       scale: 50.
     latex: \sigma_{0}
   stoch_k0:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -356,7 +342,7 @@ params:
       scale: 15.
     ref:
       dist: norm
-      loc: -3.
+      loc: 0.
       scale: 0.5
     latex: b_{2}
   bs:
@@ -423,7 +409,6 @@ params:
     value: 0.
     latex: '\alpha_{k,2}'
   sv:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -434,7 +419,6 @@ params:
       scale: 50.
     latex: s_{v}
   sigma0:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -445,7 +429,6 @@ params:
       scale: 50.
     latex: \sigma_{0}
   stoch_k0:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -478,7 +461,7 @@ params:
       scale: 15.
     ref:
       dist: norm
-      loc: -3.
+      loc: 0.
       scale: 0.5
     latex: b_{2}
   bs:
@@ -545,7 +528,6 @@ params:
     value: 0.
     latex: '\alpha_{k,2}'
   sv:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -556,7 +538,6 @@ params:
       scale: 50.
     latex: s_{v}
   sigma0:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -567,7 +548,6 @@ params:
       scale: 50.
     latex: \sigma_{0}
   sigma0_stoch:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -601,7 +581,7 @@ params:
       scale: 15.
     ref:
       dist: norm
-      loc: -3.
+      loc: 0.
       scale: 0.5
     latex: b_{2}
   bs:
@@ -668,7 +648,6 @@ params:
     value: 0.
     latex: '\alpha_{k,2}'
   sv:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -679,7 +658,6 @@ params:
       scale: 50.
     latex: s_{v}
   sigma0:
-    value: 0.
     prior:
       dist: norm
       loc: 0.
@@ -690,7 +668,6 @@ params:
       scale: 50.
     latex: \sigma_{0}
   sigma0_stoch:
-    value: 0.
     prior:
       dist: norm
       loc: 0.

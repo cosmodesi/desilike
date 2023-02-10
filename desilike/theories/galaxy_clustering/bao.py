@@ -44,7 +44,7 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
         super(DampedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
 
-    def calculate(self, b1=1., sigmas=0., sigmapar=9., sigmaper=6., **kwargs):
+    def calculate(self, b1=1., sigmas=0., sigmapar=9., sigmaper=6.):
         f = self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.template.pknow_dd_interpolator(kap)
@@ -63,7 +63,7 @@ class SimpleBAOWigglesPowerSpectrumMultipoles(DampedBAOWigglesPowerSpectrumMulti
     As :class:`DampedBAOWigglesPowerSpectrumMultipoles`, but moving only BAO wiggles (and not damping or RSD terms)
     with scaling parameters.
     """
-    def calculate(self, b1=1., sigmas=0., sigmapar=9., sigmaper=6., **kwargs):
+    def calculate(self, b1=1., sigmas=0., sigmapar=9., sigmaper=6.):
         f = self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         wiggles = self.template.pk_dd_interpolator(kap) / self.template.pknow_dd_interpolator(kap) if self.wiggle else 1.
@@ -393,6 +393,11 @@ class DampedBAOWigglesCorrelationFunctionMultipoles(BaseBAOWigglesCorrelationFun
     pass
 
 
+class SimpleBAOWigglesCorrelationFunctionMultipoles(BaseBAOWigglesCorrelationFunctionMultipoles):
+
+    pass
+
+
 class ResummedBAOWigglesCorrelationFunctionMultipoles(BaseBAOWigglesCorrelationFunctionMultipoles):
 
     pass
@@ -435,6 +440,45 @@ class DampedBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCo
     r"""
     Theory BAO correlation function multipoles, with broadband terms.
     Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
+
+    Parameters
+    ----------
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mode : str, default=''
+        Reconstruction mode:
+
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+
+    wiggle : bool, default=True
+        If ``False``, switch off BAO wiggles: model is computed with smooth power spectrum.
+
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1607.03149
+    """
+
+
+class SimpleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCorrelationFunctionMultipoles):
+    r"""
+    As :class:`DampedBAOWigglesTracerCorrelationFunctionMultipoles`, but moving only BAO wiggles (and not damping or RSD terms)
+    with scaling parameters; essentially used for Fisher forecasts.
 
     Parameters
     ----------

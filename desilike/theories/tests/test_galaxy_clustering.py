@@ -41,9 +41,14 @@ def test_bao():
     theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
     theory(qpar=1.1, sigmapar=3.)
 
-    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate
     template = BAOPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso')
     theory.init.update(template=template)
+    theory(df=0.8)
+
+    template = StandardPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso', with_now='peakaverage')
+    theory.init.update(template=template)
+    theory()
 
 
 def test_full_shape():
@@ -139,6 +144,6 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_integ()
-    #test_bao()
-    test_full_shape()
+    test_bao()
+    #test_full_shape()
     #test_png()

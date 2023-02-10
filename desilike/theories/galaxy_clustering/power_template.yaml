@@ -191,6 +191,22 @@ params:
       dist: uniform
       limits: [0.8, 1.2]
     latex: q_{\perp}
+  qiso:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    latex: q_{\mathrm{iso}}
+  qap:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    latex: q_{\mathrm{ap}}
   df:
     value: 1.
     prior:
@@ -242,6 +258,14 @@ params:
     ref:
       limits: [0.99, 1.01]
     latex: q_{\mathrm{ap}}
+  df:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0., 2.]
+    ref:
+      limits: [0.95, 1.05]
+    fixed: True
   DM_over_rd:
     derived: True
     latex: D_{\mathrm{M}}/r_{d}

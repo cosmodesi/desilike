@@ -388,8 +388,13 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
             setattr(self, name + '_fid', getattr(self, name))
         # No self.k defined
 
-    def calculate(self):
-        pass
+    def calculate(self, df=1.):
+        super(BAOPowerSpectrumTemplate, self).calculate()
+        self.f = self.f_fid * df
+
+    def get(self):
+        self.f_sigma8 = self.f * self.sigma8_fid
+        return self
 
     def get(self):
         self.DH_over_rd = self.qpar * self.DH_over_rd_fid

@@ -262,7 +262,58 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
         return self
 
 
-class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate):
+class StandardPowerSpectrumExtractor(BasePowerSpectrumExtractor):
+    r"""
+    Extract standard RSD parameters :math:`(q_{\parallel}, q_{\perp}, df)`.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate linear power spectrum.
+
+    z : float, default=1.
+        Effective redshift.
+
+    r : float, default=8.
+        Sphere radius to estimate the normalization of the linear power spectrum.
+
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
+    """
+    def initialize(self, *args, r=8., **kwargs):
+        self.r = float(r)
+        super(StandardPowerSpectrumExtractor, self).initialize(*args, **kwargs)
+        self.apeffect = APEffect(z=self.z, cosmo=self.cosmo, fiducial=self.fiducial, mode='distances')
+        if self.fiducial is not None:
+            cosmo = self.cosmo
+            self.cosmo = self.fiducial
+            self.apeffect.qiso = 1.
+            self.calculate()
+            self.cosmo = cosmo
+            for name in ['f', 'sigmar', 'fsigmar']:
+                setattr(self, name + '_fid', getattr(self, name))
+
+    def calculate(self):
+        r = self.r * self.apeffect.qiso
+        fo = self.cosmo.get_fourier()
+        self.sigmar = fo.sigma_rz(r, self.z, of='delta_cb')
+        self.fsigmar = fo.sigma_rz(r, self.z, of='theta_cb')
+        self.f = self.fsigmar / self.sigmar
+
+    def get(self):
+        self.df = self.fsigmar / self.fsigmar_fid
+        return self
+
+
+class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate, StandardPowerSpectrumExtractor):
     r"""
     Standard power spectrum template, in terms of :math:`f` and Alcock-Paczynski parameters.
 
@@ -273,6 +324,9 @@ class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate):
 
     z : float, default=1.
         Effective redshift.
+
+    r : float, default=8.
+        Sphere radius to estimate the normalization of the linear power spectrum.
 
     apmode : str, default='qparqper'
         Alcock-Paczynski parameterization:
@@ -285,12 +339,17 @@ class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     fiducial : str, default='DESI'
         Fiducial cosmology, used to compute the power spectrum.
     """
+    def initialize(self, *args, r=8., **kwargs):
+        self.r = float(r)
+        super(StandardPowerSpectrumTemplate, self).initialize(*args, **kwargs)
+        for name in ['f', 'sigmar', 'fsigmar']:
+            setattr(self, name + '_fid', getattr(self, name))
+
     def calculate(self, df=1.):
-        super(StandardPowerSpectrumTemplate, self).calculate()
         self.f = self.f_fid * df
 
     def get(self):
-        self.f_sigma8 = self.f * self.sigma8_fid
+        self.fsigmar = self.f * self.sigmar_fid
         return self
 
 
@@ -391,10 +450,6 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     def calculate(self, df=1.):
         super(BAOPowerSpectrumTemplate, self).calculate()
         self.f = self.f_fid * df
-
-    def get(self):
-        self.f_sigma8 = self.f * self.sigma8_fid
-        return self
 
     def get(self):
         self.DH_over_rd = self.qpar * self.DH_over_rd_fid

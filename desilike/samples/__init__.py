@@ -23,24 +23,24 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
     ----------
     source : str, Path, :class:`Chain`, :class:`Profiles`, :class:`ParameterCovariance`
         Source to take best fit / mean / covariance from: chain, profiles, covariance, or path to such objects.
-    
+
     choice : dict, bool, default=None
         If not ``None``, extract best fit {'index': 'argmax'} or mean {'index': 'mean'} from source.
-    
+
     cov : bool, default=None
         If ``True``, return covariance.
-    
+
     burnin : float, int, default=None
         If input is chains, remove burnin:
         if between 0 and 1, remove that fraction of samples;
         else, remove ``burnin`` first points.
-    
+
     params : list, ParameterCollection, default=None
         Parameters to compute best fit / mean / covariance for. Defaults to all parameters.
-    
+
     default : bool, default=False
         Default value for best fit / mean / covariance in case it is not in ``source``.
-    
+
     return_type : str, default=None
         If ``choice`` is desired and ``return_type`` is:
         - 'dict' : return dictionary mapping parameter names to best fit / mean.
@@ -95,7 +95,8 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
                 if params_in_source:
                     if not choice and hasattr(source, 'center'):  # Covariance matrix
                         tmp = source.center(params=params_in_source, return_type='dict')
-                    tmp = source.choice(params=params_in_source, return_type='dict', **choice)
+                    else:
+                        tmp = source.choice(params=params_in_source, return_type='dict', **choice)
                 params_not_in_source = [param for param in params if param not in params_in_source]
                 for param in params_not_in_source:
                     tmp[str(param)] = (param.value if default is False else default)

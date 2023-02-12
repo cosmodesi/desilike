@@ -148,7 +148,7 @@ def test_covariance_matrix():
 
 def test_compression():
 
-    from desilike.observables.galaxy_clustering import BAOCompressionObservable, ShapeFitCompressionObservable
+    from desilike.observables.galaxy_clustering import BAOCompressionObservable, ShapeFitCompressionObservable, StandardCompressionObservable
     from desilike.emulators import Emulator, TaylorEmulatorEngine
 
     observable = BAOCompressionObservable(data=[1., 1.], covariance=np.diag([0.01, 0.01]), quantities=['qpar', 'qper'], z=2.)
@@ -157,7 +157,7 @@ def test_compression():
     assert np.allclose(likelihood(), 0.)
 
     observable = BAOCompressionObservable(data=np.array([1.]), covariance=np.diag([0.01]), quantities=['qiso'], z=2.)
-    emulator = Emulator(observable, engine=TaylorEmulatorEngine(order=2))
+    emulator = Emulator(observable, engine=TaylorEmulatorEngine(order=1))
     emulator.set_samples()
     emulator.fit()
     likelihood = ObservablesGaussianLikelihood(observables=[emulator.to_calculator()])
@@ -169,12 +169,28 @@ def test_compression():
     likelihood()
     print(likelihood.varied_params)
 
-    observable = ShapeFitCompressionObservable(data=[1., 1., 0., 0.8], covariance=np.diag([0.01, 0.01, 0.0001, 0.01]), quantities=['qpar', 'qper', 'dm', 'f'], z=2.)
-    emulator = Emulator(observable, engine=TaylorEmulatorEngine(order=2))
+    observable = ShapeFitCompressionObservable(data=[1., 1., 0., 0.8], covariance=np.diag([0.01, 0.01, 0.0001, 0.01]), quantities=['qpar', 'qper', 'dm', 'df'], z=2.)
+    emulator = Emulator(observable, engine=TaylorEmulatorEngine(order=1))
     emulator.set_samples()
     emulator.fit()
     likelihood = ObservablesGaussianLikelihood(observables=[emulator.to_calculator()])
-    print(likelihood(A_s=1.5e-9), likelihood(A_s=2.5e-9))
+    print(likelihood(logA=3.), likelihood(logA=3.1))
+    print(likelihood.varied_params)
+
+    observable = StandardCompressionObservable(data=[1., 1., 0.8], covariance=np.diag([0.01, 0.01, 0.01]), quantities=['qpar', 'qper', 'df'], z=2.)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
+    print(likelihood.varied_params)
+
+    from desilike import ParameterCovariance
+    covariance = ParameterCovariance(value=np.diag([0.01, 0.01, 0.01]), center=[1., 1., 0.8], params=['qpar', 'qper', 'df'])
+    observable = StandardCompressionObservable(data=covariance, covariance=covariance, quantities=['qpar', 'qper', 'df'], z=2.)
+    emulator = Emulator(observable, engine=TaylorEmulatorEngine(order=1))
+    emulator.set_samples()
+    emulator.fit()
+    observable = emulator.to_calculator()
+    likelihood = ObservablesGaussianLikelihood(observables=[emulator.to_calculator()])
+    print(likelihood())
     print(likelihood.varied_params)
 
 
@@ -254,7 +270,7 @@ if __name__ == '__main__':
     #test_power_spectrum()
     #test_correlation_function()
     # test_footprint()
-    test_covariance_matrix()
-    # test_compression()
+    # test_covariance_matrix()
+    test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()

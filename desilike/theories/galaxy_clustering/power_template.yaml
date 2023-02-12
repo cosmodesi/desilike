@@ -222,9 +222,9 @@ params:
     ref:
       limits: [0.95, 1.05]
     latex: df
-  f_sigma8:
+  fsigmar:
     derived: True
-    latex: f\sigma_{8}
+    latex: f\sigma_{r}
 
 ---
 
@@ -302,6 +302,40 @@ params:
 ---
 
 class: ShapeFitPowerSpectrumExtractor
+
+params:
+  h:
+    prior:
+      limits: [0.1, 1.]
+    ref:
+      dist: norm
+      loc: 0.6736
+      scale: 0.005
+    delta: 0.002
+    latex: h
+  Omega_m:
+    prior:
+      limits: [0.01, 1.]
+    ref:
+      dist: norm
+      loc: 0.3153
+      scale: 0.0073
+    delta: 0.001
+    latex: \Omega_{m}
+  logA:
+    prior:
+      limits: [1.61, 3.91]
+    ref:
+      dist: norm
+      loc: 3.036394
+      scale: 0.014
+    delta: 0.0014
+    latex: \ln(10^{10} A_{s})
+
+
+---
+
+class: StandardPowerSpectrumExtractor
 
 params:
   h:

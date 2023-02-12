@@ -77,4 +77,4 @@ if __name__ == '__main__':
     test_prior()
     #test_deriv()
     #test_param_array()
-    #test_matrix()
+    test_matrix()

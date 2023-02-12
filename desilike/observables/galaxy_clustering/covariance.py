@@ -177,6 +177,10 @@ class CutskyFootprint(BaseFootprint):
         return np.mean(z)
 
     @property
+    def zlim(self):
+        return (self._zrange[0], self._zrange[1])
+
+    @property
     def size(self):
         r"""Number of objects."""
         if self._size is not None:

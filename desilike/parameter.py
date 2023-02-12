@@ -2224,7 +2224,7 @@ class BaseParameterMatrix(BaseClass):
 
     """Base class representing a parameter matrix."""
 
-    def __init__(self, value, params=None, center=None):
+    def __init__(self, value, params=None, center=None, attrs=None):
         """
         Initialize :class:`BaseParameterMatrix`.
 
@@ -2239,6 +2239,9 @@ class BaseParameterMatrix(BaseClass):
         center : array, list, default=None
             Typically, mean associated with the covariance/precision matrix.
             TODO: remove.
+
+        attrs : dict, default=None
+            Optionally, other attributes, stored in :attr:`attrs`.
         """
         if isinstance(value, self.__class__):
             self.__dict__.update(value.__dict__)
@@ -2262,6 +2265,7 @@ class BaseParameterMatrix(BaseClass):
         if self._center.size != shape[0]:
             raise ValueError('Input center and matrix have different sizes: {:d} vs {:d}'.format(self._center.size, shape[0]))
         self._sizes
+        self.attrs = dict(attrs or {})
 
     def params(self, *args, **kwargs):
         """Return parameters in matrix."""
@@ -2304,7 +2308,7 @@ class BaseParameterMatrix(BaseClass):
             raise ValueError('number * size of input params must match input matrix shape')
         return toret
 
-    def clone(self, value=None, params=None, center=None):
+    def clone(self, value=None, params=None, center=None, attrs=None):
         """
         Clone this matrix, i.e. copy and optionally update ``value``,
         ``params``, and ``center``.
@@ -2320,6 +2324,9 @@ class BaseParameterMatrix(BaseClass):
         center : array, list
             New matrix center.
 
+        attrs : dict, default=None
+            Optionally, other attributes, stored in :attr:`attrs`.
+
         Returns
         -------
         new : BaseParameterMatrix
@@ -2330,6 +2337,8 @@ class BaseParameterMatrix(BaseClass):
             new._value[...] = value
         if center is not None:
             new._center[...] = center
+        if attrs is not None:
+            new.attrs = attrs
         return new
 
     def center(self, params=None, return_type='nparray'):
@@ -2390,7 +2399,7 @@ class BaseParameterMatrix(BaseClass):
         params_in_self = [param for param in params if param in self._params]
         params_not_in_self = [param for param in params if param not in params_in_self]
         sizes = [max(param.size, 1) for param in params]
-        new = self.__class__(np.zeros((sum(sizes),) * 2, dtype='f8'), params=params)
+        new = self.__class__(np.zeros((sum(sizes),) * 2, dtype='f8'), params=params, attrs=self.attrs)
         if params_in_self:
             index_new, index_self = new._index(params_in_self), self._index(params_in_self)
             new._value[np.ix_(index_new, index_new)] = self._value[np.ix_(index_self, index_self)]
@@ -2421,12 +2430,14 @@ class BaseParameterMatrix(BaseClass):
         state = {}
         for name in ['value', 'center']: state[name] = getattr(self, '_' + name)
         state['params'] = self._params.__getstate__()
+        state['attrs'] = self.attrs
         return state
 
     def __setstate__(self, state):
         """Set this class' state dictionary."""
         self._params = ParameterCollection.from_state(state['params'])
         for name in ['value', 'center']: setattr(self, '_' + name, state[name])
+        self.attrs = state['attrs']
 
     def __repr__(self):
         """Return string representation of parameter matrix, including parameters."""
@@ -2584,7 +2595,7 @@ class ParameterCovariance(BaseParameterMatrix):
         invcov = utils.inv(view._value)
         if return_type == 'nparray':
             return invcov
-        return ParameterPrecision(invcov, params=params, center=view._center)
+        return ParameterPrecision(invcov, params=params, center=view._center, attrs=view.attrs)
 
     def to_stats(self, params=None, sigfigs=2, tablefmt='latex_raw', fn=None):
         """
@@ -2761,7 +2772,7 @@ class ParameterPrecision(BaseParameterMatrix):
         new : array, float, ParameterCovariance
         """
         cov = utils.inv(self._value)
-        return ParameterCovariance(cov, params=self._params, center=self._center).view(params=params, return_type=return_type)
+        return ParameterCovariance(cov, params=self._params, center=self._center, attrs=self.attrs).view(params=params, return_type=return_type)
 
     @classmethod
     def sum(cls, *others):

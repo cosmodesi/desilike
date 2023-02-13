@@ -41,7 +41,7 @@ class Background(Section):
 
     @flatarray(dtype=np.float64)
     def efunc(self, z):
-        return self.classy.Hubble(z) / (100. * self.h)
+        return self.classy.Hubble(z) * 2.99792458e5 / (100. * self.h)
 
     @flatarray(dtype=np.float64)
     def angular_diameter_distance(self, z):
@@ -128,7 +128,7 @@ def MontePythonLikelihoodFactory(cls, kw_like, module=None):
             cosmo = montepython_to_cosmoprimo(self._fiducial, classy)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
         nuisance_parameter_names = data.get_mcmc_parameters(['nuisance'])
-        loglikelihood = self.like(**{name: data.mcmc_parameters[name]['current'] * data.mcmc_parameters[name]['scale'] for name in nuisance_parameter_names})
+        loglikelihood = self.like(**{name: data.mcmc_parameters[name]['current'] * data.mcmc_parameters[name]['scale'] for name in self._nuisance_params})
         return loglikelihood
 
     d = {'__init__': __init__, 'loglkl': loglkl}
@@ -163,7 +163,7 @@ class MontePythonLikelihoodGenerator(BaseLikelihoodGenerator):
                 pass
             return di
 
-        parameters, likelihood_attrs = {}, {}
+        parameters, likelihood_attrs = {}, {'{}.name'.format(cls.__name__): cls.__name__}  # useless placeholder, just to avoid MontePython to complain
         cosmo_params, nuisance_params = get_likelihood_params(cls(**self.kw_like))
         # cosmo_params = cosmoprimo_to_montepython_params(cosmo_params)
         for param in nuisance_params:

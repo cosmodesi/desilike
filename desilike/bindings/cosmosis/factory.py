@@ -43,7 +43,7 @@ class Thermodynamics(Section):
 
     @property
     def rs_drag(self):
-        return self.block['distances', 'rs_drag'] * self.h
+        return self.block['distances', 'rs_zdrag'] * self.h
 
 
 class Fourier(Section):
@@ -108,7 +108,7 @@ def cosmosis_to_cosmoprimo(fiducial, cosmo_params, block):
         state['sigma8'] = params['sigma8']
     else:
         state['A_s'] = params['a_s']
-    cosmo.clone(**state, engine=CosmoSISEngine)
+    cosmo = cosmo.clone(**state, engine=CosmoSISEngine)
     cosmo._engine.block = block
     return cosmo
 
@@ -127,7 +127,7 @@ def CosmoSISLikelihoodFactory(cls, kw_like, module=None):
             cosmo = cosmosis_to_cosmoprimo(self._fiducial, self._requires.get('params', {}), block)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
         loglikelihood = self.like(**{param.name: block[desilike_name, param.name] for param in self._nuisance_params})
-        block['likelihoods', '{}_like'.format(desilike_name)] = loglikelihood
+        block['likelihoods', '{}_like'.format(desilike_name)] = float(loglikelihood)
 
     @classmethod
     def build_module(cls):

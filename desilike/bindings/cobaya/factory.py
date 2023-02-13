@@ -66,7 +66,7 @@ class Section(BaseSection):
 
     def __init__(self, engine):
         self.provider = engine.provider
-        self.h = self.provider.get_Hubble(0.) / 100.
+        self.h = np.squeeze(self.provider.get_Hubble(0.) / 100.)
 
 
 class Background(Section):
@@ -92,7 +92,7 @@ class Thermodynamics(Section):
 
     @property
     def rs_drag(self):
-        return self.provider.get_rdrag() * self.h
+        return self.provider.get_param('rdrag') * self.h
 
 
 class Fourier(Section):
@@ -190,7 +190,6 @@ def CobayaLikelihoodFactory(cls, kw_like, module=None):
         requires = self.like.runtime_info.pipeline.get_cosmo_requires()
         self._fiducial = requires.get('fiducial', {})
         self._requires = CobayaEngine.get_requires(requires)
-        self._requires
         return self._requires
 
     def logp(self, _derived=None, **params_values):
@@ -201,7 +200,7 @@ def CobayaLikelihoodFactory(cls, kw_like, module=None):
         if self._requires:
             cosmo = camb_or_classy_to_cosmoprimo(self._fiducial, self.provider, **params_values)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
-        return self.like(**params_values)
+        return self.like(**{name: value for name, value in params_values.items() if name in self._nuisance_params})
 
     d = {'initialize': initialize, 'get_requirements': get_requirements, 'logp': logp}
     if module is not None:

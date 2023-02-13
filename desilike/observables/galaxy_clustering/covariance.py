@@ -178,7 +178,7 @@ class CutskyFootprint(BaseFootprint):
 
     @property
     def zlim(self):
-        return (self._zrange[0], self._zrange[1])
+        return (self._zrange[0], self._zrange[-1])
 
     @property
     def size(self):

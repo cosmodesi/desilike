@@ -49,6 +49,7 @@ def test_bao():
     template = StandardPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso', with_now='peakaverage')
     theory.init.update(template=template)
     theory()
+    template.pk_dd
 
 
 def test_full_shape():
@@ -144,6 +145,6 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_integ()
-    test_bao()
-    #test_full_shape()
+    #test_bao()
+    test_full_shape()
     #test_png()

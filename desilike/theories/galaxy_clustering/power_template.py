@@ -53,12 +53,6 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
         if k is None: k = np.logspace(-3., 1., 400)
         self.k = np.array(k, dtype='f8')
         self.cosmo_requires = {}
-        super(BasePowerSpectrumTemplate, self).calculate()
-        for name in ['f', 'sigma8', 'pk_dd_interpolator'] + (['pknow_dd_interpolator'] if self.with_now else []):
-            setattr(self, name + '_fid', getattr(self, name))
-        self.pk_dd_fid = self.pk_dd_interpolator(self.k)
-        if self.with_now:
-            self.pknow_dd_fid = self.pknow_dd_interpolator(self.k)
         self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=apmode)
         ap_params = ParameterCollection()
         for param in list(self.params):
@@ -66,6 +60,12 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
                 ap_params.set(param)
                 del self.params[param]
         self.apeffect.params = ap_params
+        BasePowerSpectrumExtractor.calculate(self)
+        for name in ['f', 'sigma8', 'pk_dd_interpolator'] + (['pknow_dd_interpolator'] if self.with_now else []):
+            setattr(self, name + '_fid', getattr(self, name))
+        self.pk_dd_fid = self.pk_dd_interpolator(self.k)
+        if self.with_now:
+            self.pknow_dd_fid = self.pknow_dd_interpolator(self.k)
 
     def calculate(self):
         self.pk_dd = self.pk_dd_fid
@@ -241,10 +241,11 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
     https://arxiv.org/abs/2106.07641
     """
     def initialize(self, *args, kp=0.03, a=0.6, with_now='peakaverage', **kwargs):
+        self.a = float(a)
         self.kp = float(kp)
         self.n_varied = self.params['dn'].varied
         super(ShapeFitPowerSpectrumTemplate, self).initialize(*args, with_now=with_now, **kwargs)
-        self.a = float(a)
+        ShapeFitPowerSpectrumExtractor.calculate(self)
         for name in ['n', 'm', 'Ap']:
             setattr(self, name + '_fid', getattr(self, name))
 
@@ -342,10 +343,13 @@ class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate, StandardPowerSpec
     def initialize(self, *args, r=8., **kwargs):
         self.r = float(r)
         super(StandardPowerSpectrumTemplate, self).initialize(*args, **kwargs)
+        self.apeffect.qiso = 1.
+        StandardPowerSpectrumExtractor.calculate(self)
         for name in ['f', 'sigmar', 'fsigmar']:
             setattr(self, name + '_fid', getattr(self, name))
 
     def calculate(self, df=1.):
+        super(StandardPowerSpectrumTemplate, self).calculate()
         self.f = self.f_fid * df
 
     def get(self):

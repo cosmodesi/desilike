@@ -340,7 +340,7 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
 
 
 @plotting.plotter
-def plot_triangle(chains, params=None, labels=None, **kwargs):
+def plot_triangle(chains, params=None, labels=None, g=None, **kwargs):
     """
     Triangle plot.
     
@@ -366,6 +366,9 @@ def plot_triangle(chains, params=None, labels=None, **kwargs):
 
     kw_save : dict, default=None
         Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+        
+    g : getdist subplot_plotter()
+        can be created with `g = gdplt.get_subplot_plotter()` and can be modified with g.settings
 
     show : bool, default=False
         If ``True``, show figure.
@@ -376,7 +379,7 @@ def plot_triangle(chains, params=None, labels=None, **kwargs):
         Array of axes.
     """
     from getdist import plots
-    g = plots.get_subplot_plotter()
+    if g is None: g = plots.get_subplot_plotter()
     chains = _make_list(chains)
     labels = _make_list(labels, length=len(chains), default=None)
     params = _get_default_chain_params(chains, params=params)

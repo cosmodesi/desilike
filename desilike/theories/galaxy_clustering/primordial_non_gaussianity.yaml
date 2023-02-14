@@ -3,47 +3,46 @@ class: PNGTracerPowerSpectrumMultipoles
 params:
   fnl_loc:
     prior:
-      dist: uniform
       limits: [-300., 300.]
+    ref:
+      limits: [-10., 10.]
     latex: f_{NL}^{\mathrm{loc}}
   bphi:
     prior:
-      dist: uniform
       limits: [-10, 10]
+    ref:
+      limits: [3., 4.]
     latex: b_{\phi}
   p:
     value: 1.
     prior:
-      dist: uniform
       limits: [0, 3]
     ref:
-      dist: uniform
       limits: [0.5, 1.5]
     latex: p
   bfnl_loc:
     value: 0.
     prior:
-      dist: uniform
       limits: [-1e3, 1e3]
+    ref:
+      limits: [-50., 50.]
     latex: b_{\phi}f_{NL}^{\mathrm{loc}}
   b1:
     value: 2.
     prior:
-      dist: uniform
       limits: [0.1, 10]
     ref:
-      dist: uniform
       limits: [1.5, 2.5]
     latex: b
   sn0:
     value: 0.
     prior:
-      dist: uniform
       limits: [-1e5, 1e5]
     latex: s_{n, 0}
   sigmas:
     value: 0.
     prior:
-      dist: uniform
       limits: [0., 10]
+    ref:
+      limits: [1., 4.]
     latex: \Sigma_{s}

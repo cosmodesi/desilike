@@ -2437,7 +2437,7 @@ class BaseParameterMatrix(BaseClass):
         """Set this class' state dictionary."""
         self._params = ParameterCollection.from_state(state['params'])
         for name in ['value', 'center']: setattr(self, '_' + name, state[name])
-        self.attrs = state['attrs']
+        self.attrs = state.get('attrs', {})
 
     def __repr__(self):
         """Return string representation of parameter matrix, including parameters."""

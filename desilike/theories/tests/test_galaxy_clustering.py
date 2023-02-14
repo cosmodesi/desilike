@@ -96,6 +96,8 @@ def test_full_shape():
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     #test_emulator_likelihood(theory)
     theory(dm=0.01, b1=1.).shape
+    assert not np.allclose(theory(dm=-0.01), theory(dm=0.01))
+    assert not np.allclose(theory(qpar=0.99), theory(qper=1.01))
     theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=0.5))
     test_emulator_likelihood(theory)
     theory(dm=0.01, b1=1.).shape

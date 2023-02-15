@@ -17,7 +17,7 @@ class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
         super(BasePTPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
-        kin = np.geomspace(min(1e-3, self.k[0] / 2), max(1., self.k[0] * 2), 600)  # margin for AP effect
+        kin = np.geomspace(min(1e-3, self.k[0] / 2), max(1., self.k[-1] * 2), 3000)  # margin for AP effect
         if template is None:
             template = DirectPowerSpectrumTemplate()
         self.template = template
@@ -33,7 +33,7 @@ class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipole
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
         super(BasePTCorrelationFunctionMultipoles, self).initialize(*args, **kwargs)
-        kin = np.geomspace(min(1e-3, 1 / self.s[-1] / 2), max(2., 1 / self.s[0] * 2), 1000)  # margin for AP effect
+        kin = np.geomspace(min(1e-3, 1 / self.s[-1] / 2), max(2., 1 / self.s[0] * 2), 3000)  # margin for AP effect
         if template is None:
             template = DirectPowerSpectrumTemplate(k=kin)
         self.template = template
@@ -157,7 +157,8 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
         f = self.template.f
         sigmanl2 = self.k[:, None]**2 * (sigmapar**2 * self.mu**2 + sigmaper**2 * (1. - self.mu**2))
         damping = np.exp(-sigmanl2 / 2.)
-        pkmu = jac * damping * (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0
+        #pkmu = jac * damping * (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0
+        pkmu = jac * damping * (b1 + f * muap**2)**2 * interpolate.InterpolatedUnivariateSpline(np.log10(self.template.k), self.template.pk_dd, k=3, ext=2)(np.log10(kap)) + sn0
         self.power = self.to_poles(pkmu)
 
     def get(self):
@@ -187,7 +188,11 @@ class KaiserTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
     def calculate(self, b1=1., sn0=0.):
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
-        pkmu = jac * (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0
+        #pkmu = jac * (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0
+        pkmu = jac * (b1 + f * muap**2)**2 * interpolate.InterpolatedUnivariateSpline(np.log10(self.template.k), self.template.pk_dd, k=3, ext=2)(np.log10(kap)) + sn0
+        #qiso = self.template.apeffect.qiso
+        #pkmu = 1. / qiso**3 * (b1 + f * self.mu[None, :]**2)**2 * self.template.pk_dd_interpolator(self.k / qiso)[:, None] + sn0
+        #pkmu = 1. / qiso**3 * (b1 + f * self.mu[None, :]**2)**2 * jnp.interp(jnp.log10(self.k / qiso), jnp.log10(self.template.k), self.template.pk_dd)[:, None] + sn0
         self.power = self.to_poles(pkmu)
 
     def get(self):

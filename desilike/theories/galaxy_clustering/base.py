@@ -49,7 +49,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         super(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles, self).initialize(s=s, ells=ells)
         self.k = np.logspace(-4., 3., 2048)
         from cosmoprimo import PowerToCorrelation
-        self.fftlog = PowerToCorrelation(self.k, ell=self.ells, q=0, lowring=False)
+        self.fftlog = PowerToCorrelation(self.k, ell=self.ells, q=0, lowring=True)
         self.kin = np.geomspace(self.k[0], 1., 300)
         mask = self.k > self.kin[-1]
         self.k_high = np.log10(self.k[mask] / self.kin[-1])
@@ -230,3 +230,10 @@ class APEffect(BaseCalculator):
         # Beutler 2016 (arXiv: 1607.03150v1) eq 45
         muap = mu / self.qap / factorap
         return jac, kap, muap
+
+    def ap_s_mu(self, s, mu):
+        # Compared to Fourier space, qpar -> 1/qpar, qper -> 1/qper
+        factorap = jnp.sqrt(1 + mu**2 * (self.qap**2 - 1))
+        sap = s[..., None] * self.qper * factorap
+        muap = mu * self.qap / factorap
+        return 1., sap, muap

@@ -787,7 +787,7 @@ class BaseCalculator(BaseClass):
         cls_info = Info(getattr(cls, '_info', {}))
         cls_init = InitConfig(data=getattr(cls, '_init', {}))
         cls_params = ParameterCollection(getattr(cls, '_params', None))
-        if hasattr(cls, 'config_fn'):
+        if getattr(cls, 'config_fn', None):
             dirname = os.path.dirname(sys.modules[cls.__module__].__file__)
             config = BaseConfig(os.path.join(dirname, cls.config_fn), index={'class': cls.__name__})
             cls_info = Info({**config.get('info', {}), **cls_info})

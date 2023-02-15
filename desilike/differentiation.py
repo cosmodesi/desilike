@@ -262,7 +262,7 @@ class Differentiation(BaseClass):
             if method in [None, 'auto']:
                 try:
                     self.autoderivs = [(), (param,)]
-                    self._calculate()
+                    self._calculate()  # This takes time because the model is evaluated for each parameter
                 except Exception as exc:
                     if method is None:
                         method = 'finite'

@@ -47,14 +47,14 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
 
     def initialize(self, s=None, ells=(0, 2, 4), power=None, **kwargs):
         super(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles, self).initialize(s=s, ells=ells)
-        self.k = np.logspace(min(-3, - np.log10(self.s[-1]) - 0.1), max(2, - np.log10(self.s[0]) + 0.1), 2000)
+        self.k = np.logspace(-4., 3., 2048)
         from cosmoprimo import PowerToCorrelation
         self.fftlog = PowerToCorrelation(self.k, ell=self.ells, q=0, lowring=False)
         self.kin = np.geomspace(self.k[0], 1., 300)
-        # self.kin = np.linspace(self.k[0], 0.5, 200)
         mask = self.k > self.kin[-1]
-        self.lowk = self.k[~mask]
-        self.pad_highk = np.exp(-(self.k[mask] - self.kin[-1])**2 / (2. * (0.5)**2))
+        self.k_high = np.log10(self.k[mask] / self.kin[-1])
+        self.pad_high = np.exp(-(self.k[mask] / self.kin[-1] - 1.)**2 / (2. * (10.)**2))
+        self.k_mid = self.k[~mask]
         if power is None:
             from .full_shape import KaiserTracerPowerSpectrumMultipoles
             power = KaiserTracerPowerSpectrumMultipoles(k=self.k, ells=self.ells)
@@ -64,9 +64,11 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         self.params.clear()
 
     def calculate(self):
-        power = [jnp.interp(np.log10(self.lowk), np.log10(self.kin), p) for p in self.power.power]
-        power = jnp.vstack([jnp.concatenate([p, p[-1] * self.pad_highk], axis=-1) for p in power])
-        s, corr = self.fftlog(power)
+        power = []
+        for pk in self.power.power:
+            slope_high = (pk[-1] - pk[-2]) / np.log10(self.kin[-1] / self.kin[-2])
+            power.append(jnp.concatenate([jnp.interp(np.log10(self.k_mid), np.log10(self.kin), pk), (pk[-1] + slope_high * self.k_high) * self.pad_high], axis=-1))
+        s, corr = self.fftlog(jnp.vstack(power))
         self.corr = jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
 
     @plotting.plotter

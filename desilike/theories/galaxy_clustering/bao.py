@@ -40,7 +40,7 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
     ---------
     https://arxiv.org/abs/1607.03149
     """
-    def initialize(self, *args, mu=200, method='trapz', **kwargs):
+    def initialize(self, *args, mu=40, method='leggauss', **kwargs):
         super(DampedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
 
@@ -156,7 +156,7 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
     ---------
     https://arxiv.org/abs/1907.00043
     """
-    def initialize(self, *args, mu=200, method='trapz', **kwargs):
+    def initialize(self, *args, mu=20, method='leggauss', **kwargs):
         super(ResummedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
         self.template.init.update(with_now=False)
@@ -336,6 +336,7 @@ class SimpleBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpe
 
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
     """
 
 
@@ -412,7 +413,7 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
         super(BaseBAOWigglesTracerCorrelationFunctionMultipoles, self).initialize(s=s, ells=ells)
         self.pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
         self.pt.init.update(s=self.s, ells=self.ells, **kwargs)
-        self.sp = 60.  # pivot to noramlize broadband terms
+        self.sp = 60.  # pivot to normalize broadband terms
         self.set_params()
 
     def set_params(self):

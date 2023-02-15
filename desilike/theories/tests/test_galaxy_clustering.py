@@ -131,6 +131,51 @@ def test_full_shape():
     theory(logA=3.04, b1=1.).shape
 
 
+def test_pk_to_xi():
+
+    from matplotlib import pyplot as plt
+    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
+
+    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.1))
+    from cosmoprimo import PowerToCorrelation
+    k = np.logspace(-4.5, 3., 2048)
+    theory.init.update(k=np.geomspace(k[0], 1., 300))
+    fftlog = PowerToCorrelation(k, ell=theory.ells, q=0, lowring=False)
+
+    def interp(k, kin, pk):
+        mask = k > kin[-1]
+        k_high = np.log10(k[mask] / kin[-1])
+        pad_high = np.exp(-(k[mask] / kin[-1] - 1.)**2 / (2. * (10.)**2))
+        slope_high = (pk[-1] - pk[-2]) / np.log10(kin[-1] / kin[-2])
+        k_mid = k[~mask]
+        return np.concatenate([np.interp(np.log10(k_mid), np.log10(kin), pk), (pk[-1] + slope_high * k_high) * pad_high], axis=-1)
+
+    fig, lax = plt.subplots(1, 2, sharex=False, sharey=False, figsize=(10, 6), squeeze=True)
+    fig.subplots_adjust(hspace=0)
+    ax = plt.gca()
+    for qpar, dm in [(0.95, 0.01), (1., 0.02), (1.05, -0.01)][:1]:
+        pk = theory(b1=0.2, qpar=qpar, dm=dm)
+        pk = [interp(k, theory.k, pk) for pk in pk]
+        s, xi = fftlog(pk)
+        for ill, ell in enumerate(theory.ells):
+            lax[0].plot(k, pk[ill], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
+            si = s[ill]
+            mask = (si > 1.) & (si < 200.)
+            lax[1].plot(si[mask], si[mask]**2 * xi[ill][mask], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
+    lax[0].set_xscale('log')
+    lax[1].set_xscale('linear')
+    plt.show()
+
+    theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.1))
+    ax = plt.gca()
+    for qpar, dm in [(0.99, 0.01), (1., 0.01), (1.01, 0.01)]:
+        xi = theory(b1=0.2, qpar=qpar, dm=dm)
+        for ill, ell in enumerate(theory.ells):
+            ax.plot(theory.s, theory.s**2 * xi[ill], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
+    plt.show()
+
+
 def test_png():
 
     from desilike.theories.galaxy_clustering import PNGTracerPowerSpectrumMultipoles
@@ -149,4 +194,5 @@ if __name__ == '__main__':
     #test_integ()
     #test_bao()
     test_full_shape()
+    test_pk_to_xi()
     #test_png()

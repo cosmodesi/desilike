@@ -55,6 +55,18 @@ def test_power_spectrum():
     print(likelihood(**params))
     observable.plot_wiggles(show=True)
 
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
+    params = {'al0_1': 100., 'al0_-1': 100.}
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data=params,
+                                                         wmatrix='../../tests/_pk/window.npy',
+                                                         theory=theory)
+    footprint = BoxFootprint(volume=1e10, nbar=1e-3)
+    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)(**params)
+    likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
+    print(likelihood(**params))
+    observable.plot_wiggles(show=True)
+
 
 def test_correlation_function():
 
@@ -267,10 +279,10 @@ def test_fiber_collisions():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_power_spectrum()
-    #test_correlation_function()
+    # test_power_spectrum()
+    # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
-    test_compression()
+    # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()

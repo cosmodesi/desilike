@@ -180,14 +180,11 @@ class CorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionFromPowerSpectr
 
 
 def test_pk_to_xi():
-
     from matplotlib import pyplot as plt
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
-    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
     from desilike.emulators import Emulator, TaylorEmulatorEngine
 
-    #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.1))
     theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.1))
     from cosmoprimo import PowerToCorrelation
 
@@ -219,47 +216,6 @@ def test_pk_to_xi():
     lax[1].set_xscale('linear')
     plt.show()
 
-    theory = KaiserTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.1))
-    #theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.1))
-    ax = plt.gca()
-    for qpar, dm in [(0.95, 0.01), (1., 0.01), (1.01, 0.01)][:1]:
-        xi = theory(qpar=qpar, dm=dm)
-        for ill, ell in enumerate(theory.ells):
-            ax.plot(theory.s, theory.s**2 * xi[ill], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
-    plt.show()
-
-    theory = KaiserTracerCorrelationFunctionMultipoles(s=np.linspace(1., 200., 1000), template=ShapeFitPowerSpectrumTemplate(z=1.1))
-    ax = plt.gca()
-    xi_ref = theory()
-    for qpar in [0.999, 1., 1.001]:
-        xi = theory(qpar=qpar)
-        for ill, ell in enumerate(theory.ells):
-            ax.plot(theory.s, theory.s**2 * (xi[ill] - xi_ref[ill]), color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
-    plt.show()
-    #exit()
-
-    theory = KaiserTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.1))
-    #theory.all_params['b1'].update(fixed=True)
-    #theory.all_params['df'].update(fixed=True)
-    calculator = theory
-    emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=3))
-    emulator.set_samples(method='finite')
-    emulator.fit()
-    calculator = emulator.to_calculator()
-    ax = plt.gca()
-    for qpar, dm, df in [(0.95, -0.05, 0.95), (1., 0., 1.), (1.05, 0.05, 1.05)]:
-        params = dict(qpar=qpar, dm=0., df=1.)
-        #params = dict(qpar=1., dm=dm, df=1.)
-        #params = dict(qpar=1., dm=0., df=df)
-        xi = theory(**params)
-        for ill, ell in enumerate(theory.ells):
-            ax.plot(theory.s, theory.s**2 * xi[ill], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
-        xi = calculator(**params)
-        for ill, ell in enumerate(calculator.ells):
-            ax.plot(calculator.s, calculator.s**2 * xi[ill], color='C{:d}'.format(ill), linestyle='--')
-    plt.show()
-
-    """
     theory = CorrelationFunctionMultipoles(s=np.linspace(1., 200., 1000), template=ShapeFitPowerSpectrumTemplate(z=1.1))
     ax = plt.gca()
     xi_ref = theory()
@@ -290,16 +246,41 @@ def test_pk_to_xi():
         for ill, ell in enumerate(calculator.ells):
             ax.plot(calculator.s, calculator.s**2 * xi[ill], color='C{:d}'.format(ill), linestyle='--')
     plt.show()
-    """
 
-    theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.1))
-    ax = plt.gca()
-    pk_ref = theory()
-    for qpar in [0.999, 1., 1.001]:
-        pk = theory(qpar=qpar)
-        for ill, ell in enumerate(theory.ells):
-            ax.plot(theory.k, theory.k * (pk[ill] - pk_ref[ill]), color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
-    plt.show()
+
+def test_ap_diff():
+
+    from matplotlib import pyplot as plt
+    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import (KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles,
+                                                     LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles,
+                                                     EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles, LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles)
+    from desilike.emulators import Emulator, TaylorEmulatorEngine
+
+
+    for Theory in [KaiserTracerPowerSpectrumMultipoles][:0]:
+        theory = Theory(template=ShapeFitPowerSpectrumTemplate(z=1.1))
+        ax = plt.gca()
+        pk_ref = theory()
+        for qpar in [0.998, 1., 1.002]:
+            pk = theory(qpar=qpar)
+            for ill, ell in enumerate(theory.ells):
+                ax.plot(theory.k, theory.k * (pk[ill] - pk_ref[ill]), color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
+        plt.show()
+
+    for Theory in [KaiserTracerCorrelationFunctionMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles,
+                   PyBirdTracerCorrelationFunctionMultipoles, EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles,
+                   LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles][2:]:
+
+        theory = Theory(s=np.linspace(10., 200., 1000), template=ShapeFitPowerSpectrumTemplate(z=1.1))
+        ax = plt.gca()
+        xi_ref = theory()
+        for qpar in [0.998, 1., 1.002]:
+            xi = theory(qpar=qpar)
+            for ill, ell in enumerate(theory.ells):
+                ax.plot(theory.s, theory.s**2 * (xi[ill] - xi_ref[ill]), color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
+        plt.show()
+    exit()
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.1))
     theory.all_params['b1'].update(fixed=True)
@@ -322,6 +303,27 @@ def test_pk_to_xi():
             ax.plot(calculator.k, calculator.k * pk[ill], color='C{:d}'.format(ill), linestyle='--')
     plt.show()
 
+    theory = KaiserTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.1))
+    #theory.all_params['b1'].update(fixed=True)
+    #theory.all_params['df'].update(fixed=True)
+    calculator = theory
+    emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=3))
+    emulator.set_samples(method='finite')
+    emulator.fit()
+    calculator = emulator.to_calculator()
+    ax = plt.gca()
+    for qpar, dm, df in [(0.95, -0.05, 0.95), (1., 0., 1.), (1.05, 0.05, 1.05)]:
+        params = dict(qpar=qpar, dm=0., df=1.)
+        #params = dict(qpar=1., dm=dm, df=1.)
+        #params = dict(qpar=1., dm=0., df=df)
+        xi = theory(**params)
+        for ill, ell in enumerate(theory.ells):
+            ax.plot(theory.s, theory.s**2 * xi[ill], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
+        xi = calculator(**params)
+        for ill, ell in enumerate(calculator.ells):
+            ax.plot(calculator.s, calculator.s**2 * xi[ill], color='C{:d}'.format(ill), linestyle='--')
+    plt.show()
+
 
 def test_png():
 
@@ -339,6 +341,7 @@ if __name__ == '__main__':
     setup_logging()
     #test_integ()
     #test_bao()
-    test_full_shape()
+    #test_full_shape()
     #test_pk_to_xi()
+    test_ap_diff()
     #test_png()

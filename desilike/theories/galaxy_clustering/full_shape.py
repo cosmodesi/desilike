@@ -286,6 +286,13 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
         super(LPTVelocileptorsPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
 
     def calculate(self):
+
+        def interp1d(x, y):
+            return interpolate.interp1d(x, y, kind='cubic')
+
+        from velocileptors.LPT import lpt_rsd_fftw
+        lpt_rsd_fftw.interp1d = interp1d
+
         from velocileptors.LPT.lpt_rsd_fftw import LPT_RSD
         self.pt = LPT_RSD(self.template.k, self.template.pk_dd, **self.options)
         # print(self.template.f, self.k.shape, self.template.qpar, self.template.qper, self.template.k.shape, self.template.pk_dd.shape)

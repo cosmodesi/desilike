@@ -142,7 +142,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 ksize, factorout = None, 1
                 if klim is not None:
                     lo, hi, *step = klim[projout.ell]
-                    if step: ksize = int((hi - lo) / step + 0.5)  # nearest integer
+                    if step: ksize = int((hi - lo) / step[0] + 0.5)  # nearest integer
                 else:
                     lo, hi, ksize = 2 * kk[0] - kk[1], 2 * kk[-1] - kk[-2], kk.size
                 if ksize is not None:

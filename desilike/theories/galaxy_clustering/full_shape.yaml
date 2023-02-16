@@ -693,6 +693,12 @@ params:
     ref:
       limits: [1.4, 1.6]
     latex: b_{1}
+  b2:
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{2}
   b3:
     prior:
       dist: norm
@@ -703,12 +709,6 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-  b2:
-    prior:
-      limits: [-10., 10.]
-    ref:
-      limits: [-1., 1.]
-    latex: b_{2}
   b4:
     prior:
       limits: [-10., 10.]
@@ -719,10 +719,14 @@ params:
   b2p4:
     prior:
       limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
     latex: '(b_{2} + b_{4})/\sqrt{2}'
   b2m4:
     prior:
       limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
     latex: '(b_{2} - b_{4})/\sqrt{2}'
     fixed: True
   cct:

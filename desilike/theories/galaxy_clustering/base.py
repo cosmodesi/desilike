@@ -50,7 +50,8 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         self.k = np.logspace(-4., 3., 2048)
         from cosmoprimo import PowerToCorrelation
         self.fftlog = PowerToCorrelation(self.k, ell=self.ells, q=0, lowring=True)
-        self.kin = np.geomspace(self.k[0], 1., 300)
+        # Important to have high enough sampling, otherwise wiggles can be seen at small s
+        self.kin = np.geomspace(self.k[0], 0.6, 300)
         mask = self.k > self.kin[-1]
         self.k_high = np.log10(self.k[mask] / self.kin[-1])
         self.pad_high = np.exp(-(self.k[mask] / self.kin[-1] - 1.)**2 / (2. * (10.)**2))

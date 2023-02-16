@@ -138,6 +138,7 @@ from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, APE
 from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
 from desilike.theories.galaxy_clustering.full_shape import BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
 
+
 class CorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):
 
     config_fn = None
@@ -182,40 +183,47 @@ class CorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionFromPowerSpectr
 def test_pk_to_xi():
     from matplotlib import pyplot as plt
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
+    from desilike.theories.galaxy_clustering import (KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles,
+                                                     EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles)
     from desilike.emulators import Emulator, TaylorEmulatorEngine
 
-    theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.1))
     from cosmoprimo import PowerToCorrelation
 
-    k = np.logspace(-4.5, 3., 2048)
-    theory.init.update(k=np.geomspace(k[0], 1., 300))
-    fftlog = PowerToCorrelation(k, ell=theory.ells, q=0, lowring=False)
+    k = np.logspace(-4., 3., 2048)
+    ells = (0, 2, 4)
 
-    def interp(k, kin, pk):
-        mask = k > kin[-1]
-        k_high = np.log10(k[mask] / kin[-1])
-        pad_high = np.exp(-(k[mask] / kin[-1] - 1.)**2 / (2. * (10.)**2))
-        slope_high = (pk[-1] - pk[-2]) / np.log10(kin[-1] / kin[-2])
-        k_mid = k[~mask]
-        return np.concatenate([np.interp(np.log10(k_mid), np.log10(kin), pk), (pk[-1] + slope_high * k_high) * pad_high], axis=-1)
+    for Theory in [KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles,
+                   EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles]:
+        fftlog = PowerToCorrelation(k, ell=ells, q=0, lowring=True)
+        theory = Theory(template=ShapeFitPowerSpectrumTemplate(z=1.1))
+        theory.init.update(k=np.geomspace(k[0], 1., 300), ells=ells)
 
-    fig, lax = plt.subplots(1, 2, sharex=False, sharey=False, figsize=(10, 6), squeeze=True)
-    fig.subplots_adjust(hspace=0)
-    ax = plt.gca()
-    for qpar in [0.95, 1., 1.05]:
-        pk = theory(qpar=qpar, dm=0.)
+        def interp(k, kin, pk):
+            mask = k > kin[-1]
+            k_high = np.log10(k[mask] / kin[-1])
+            pad_high = np.exp(-(k[mask] / kin[-1] - 1.)**2 / (2. * (10.)**2))
+            slope_high = (pk[-1] - pk[-2]) / np.log10(kin[-1] / kin[-2])
+            k_mid = k[~mask]
+            return np.concatenate([np.interp(np.log10(k_mid), np.log10(kin), pk), (pk[-1] + slope_high * k_high) * pad_high], axis=-1)
+
+        fig, lax = plt.subplots(1, 2, sharex=False, sharey=False, figsize=(10, 6), squeeze=True)
+        fig.subplots_adjust(hspace=0)
+        pk = theory()
         pk = [interp(k, theory.k, pk) for pk in pk]
         s, xi = fftlog(pk)
         for ill, ell in enumerate(theory.ells):
             lax[0].plot(k, pk[ill], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
+            #mask = (k > 0.01) & (k < 0.3)
+            #lax[0].plot(k[mask], k[mask] * pk[ill][mask], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
             si = s[ill]
             mask = (si > 1.) & (si < 200.)
             lax[1].plot(si[mask], si[mask]**2 * xi[ill][mask], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
-    lax[0].set_xscale('log')
-    lax[1].set_xscale('linear')
-    plt.show()
-
+        lax[0].legend()
+        lax[0].set_xscale('log')
+        #lax[0].set_xscale('linear')
+        lax[1].set_xscale('linear')
+        plt.show()
+    """
     theory = CorrelationFunctionMultipoles(s=np.linspace(1., 200., 1000), template=ShapeFitPowerSpectrumTemplate(z=1.1))
     ax = plt.gca()
     xi_ref = theory()
@@ -246,41 +254,52 @@ def test_pk_to_xi():
         for ill, ell in enumerate(calculator.ells):
             ax.plot(calculator.s, calculator.s**2 * xi[ill], color='C{:d}'.format(ill), linestyle='--')
     plt.show()
+    """
 
 
 def test_ap_diff():
 
     from matplotlib import pyplot as plt
-    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
-    from desilike.theories.galaxy_clustering import (KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles,
-                                                     LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles,
-                                                     EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles, LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles)
+    from desilike.theories.galaxy_clustering import (ShapeFitPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles,
+                                                     PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles,
+                                                     LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles,
+                                                     EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles,
+                                                     LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles)
     from desilike.emulators import Emulator, TaylorEmulatorEngine
-
-
-    for Theory in [KaiserTracerPowerSpectrumMultipoles][:0]:
+    '''
+    for Theory in [KaiserTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles,
+                   EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles][2:]:
+        fig, lax = plt.subplots(2, sharex=True, sharey=False, figsize=(10, 6), squeeze=True)
+        fig.subplots_adjust(hspace=0)
         theory = Theory(template=ShapeFitPowerSpectrumTemplate(z=1.1))
-        ax = plt.gca()
         pk_ref = theory()
+        for ill, ell in enumerate(theory.ells):
+            lax[0].plot(theory.k, theory.k * pk_ref[ill], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
         for qpar in [0.998, 1., 1.002]:
             pk = theory(qpar=qpar)
             for ill, ell in enumerate(theory.ells):
-                ax.plot(theory.k, theory.k * (pk[ill] - pk_ref[ill]), color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
+                lax[1].plot(theory.k, theory.k * (pk[ill] - pk_ref[ill]), color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
         plt.show()
+    '''
 
+    # For pybird, chat with Pierre
     for Theory in [KaiserTracerCorrelationFunctionMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles,
                    PyBirdTracerCorrelationFunctionMultipoles, EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles,
-                   LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles][2:]:
-
+                   LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles]:
         theory = Theory(s=np.linspace(10., 200., 1000), template=ShapeFitPowerSpectrumTemplate(z=1.1))
-        ax = plt.gca()
         xi_ref = theory()
+        if hasattr(theory, 'plot'):
+            theory.plot(show=True)
+        fig, lax = plt.subplots(2, sharex=True, sharey=False, figsize=(10, 6), squeeze=True)
+        fig.subplots_adjust(hspace=0)
+        ax = plt.gca()
+        for ill, ell in enumerate(theory.ells):
+            lax[0].plot(theory.s, theory.s**2 * xi_ref[ill], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
         for qpar in [0.998, 1., 1.002]:
             xi = theory(qpar=qpar)
             for ill, ell in enumerate(theory.ells):
-                ax.plot(theory.s, theory.s**2 * (xi[ill] - xi_ref[ill]), color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
+                lax[1].plot(theory.s, theory.s**2 * (xi[ill] - xi_ref[ill]), color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
         plt.show()
-    exit()
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.1))
     theory.all_params['b1'].update(fixed=True)

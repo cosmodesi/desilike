@@ -391,7 +391,7 @@ class EPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpect
     # Original implementation does AP transform when combining with f and bias parameters
     # Here we make the AP transform, then update bias parameters, which allows analytic marginalization
 
-    _default_options = dict(rbao=110, kmin=1e-2, kmax=0.5, nk=100, beyond_gauss=True,
+    _default_options = dict(rbao=110, beyond_gauss=True,
                             one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000,
                             nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False)
     _pt_attrs = ['pktable', 'vktable', 's0ktable', 's2ktable', 'g1ktable', 'g3ktable', 'k0', 'k2', 'k4', 'plin_ir', 'kap', 'muap', 'f']
@@ -402,7 +402,8 @@ class EPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpect
 
     def calculate(self):
         from velocileptors.EPT.moment_expansion_fftw import MomentExpansion
-        self.pt = MomentExpansion(self.template.k, self.template.pk_dd, pnw=self.template.pknow_dd, **self.options)
+        # default is kmin=1e-2, kmax=0.5, nk=100
+        self.pt = MomentExpansion(self.template.k, self.template.pk_dd, pnw=self.template.pknow_dd, kmin=self.k[0], kmax=self.k[-1], nk=len(self.k), **self.options)
         jac, self.kap, self.muap = self.template.ap_k_mu(self.k, self.mu)
         self.f = self.template.f
         for name in self._pt_attrs:
@@ -534,7 +535,7 @@ class EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorre
 
 class LPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMultipoles):
 
-    _default_options = dict(kmin=5e-3, kmax=0.3, nk=50, beyond_gauss=False, one_loop=True,
+    _default_options = dict(beyond_gauss=False, one_loop=True,
                             shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=1,
                             extrap_min=-5, extrap_max=3, import_wisdom=False)
     _pt_attrs = ['pktable', 'vktable', 'stracektable', 'sparktable', 'gamma1ktable', 'kappaktable', 'kap', 'muap', 'f', 'third_order']
@@ -544,7 +545,8 @@ class LPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpect
 
     def calculate(self):
         from velocileptors.LPT.moment_expansion_fftw import MomentExpansion
-        self.pt = MomentExpansion(self.template.k, self.template.pk_dd, **self.options)
+        # default is kmin=5e-3, kmax=0.3, nk=50
+        self.pt = MomentExpansion(self.template.k, self.template.pk_dd, kmin=self.k[0], kmax=self.k[-1], nk=len(self.k), **self.options)
         jac, self.kap, self.muap = self.template.ap_k_mu(self.k, self.mu)
         self.f = self.template.f
         for name in self._pt_attrs:
@@ -717,6 +719,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         import pybird_dev as pybird
         super(PyBirdPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         if self.options['nd'] is None: self.options['nd'] = 1. / shotnoise
+        print(self.k[0] * 0.8, self.k[-1] * 1.2)
         self.co = pybird.Common(halohalo=True, with_time=True, exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False,
                                 Nl=len(self.ells), kmin=self.k[0] * 0.8, kmax=self.k[-1] * 1.2, optiresum=self.options['with_resum'] == 'opti',
                                 nd=self.options['nd'], with_cf=False)
@@ -841,9 +844,9 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
         if self.options['nd'] is None: self.options['nd'] = 1. / shotnoise
         self.co = pybird.Common(halohalo=True, with_time=True, exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False,
                                 Nl=len(self.ells), kmin=1e-3, kmax=0.25, optiresum=self.options['with_resum'] == 'opti',
-                                nd=self.options['nd'], with_cf=True)
-        self.nonlinear = pybird.NonLinear(load=False, save=False, co=self.co)
-        self.resum = pybird.Resum(co=self.co)
+                                nd=self.options['nd'], with_cf=True, accboost=1.)
+        self.nonlinear = pybird.NonLinear(load=False, save=False, co=self.co)  # NFFT=256, fftbias=-1.6
+        self.resum = pybird.Resum(co=self.co)  # LambdaIR=.2, NFFT=192
         self.nnlo_higher_derivative = self.nnlo_counterterm = None
         if self.options['with_nnlo_higher_derivative']:
             self.nnlo_higher_derivative = pybird.NNLO_higher_derivative(self.co.k, with_cf=True, co=self.co)
@@ -857,6 +860,7 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
         self.pt = pybird.Bird(cosmo, with_bias=False, eft_basis='eftoflss', with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
 
         if self.nnlo_counterterm is not None:  # we use smooth power spectrum since we don't want spurious BAO signals
+            assert np.allclose(self.template.k, self.pt.kin)
             self.nnlo_counterterm.Cf(self.pt, np.log(self.template.pknow_dd))
 
         self.nonlinear.PsCf(self.pt)

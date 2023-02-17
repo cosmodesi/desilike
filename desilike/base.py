@@ -683,13 +683,19 @@ class RuntimeInfo(BaseClass):
             self._initialization = True   # to avoid infinite loops
             self.install()
             bak = self.init.params
-            self.init.params = ParameterCollection(self.init.params).deepcopy()
+            params_with_namespace = ParameterCollection(self.init.params).deepcopy()
+            params_basenames = params_with_namespace.basenames()
+            # Pass parameters without namespace
+            self.init.params = params_with_namespace.clone(namespace=None)
             try:
                 self.calculator.initialize(*self.init.args, **self.init)
             except Exception as exc:
                 raise PipelineError('Error in method initialize of {}'.format(self.calculator)) from exc
             finally:
                 self._initialization = False
+            for param in self.init.params:
+                if param.namespace is None and param.basename in params_basenames:  # update namespace
+                    param.update(namespace=params_with_namespace[params_basenames.index(param.basename)].namespace)
             self.params = self.init.params
             self.init.params = bak
             self.initialized = True

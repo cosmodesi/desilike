@@ -118,122 +118,6 @@ params:
 
 ---
 
-class: ShapeFitPowerSpectrumTemplate
-
-params:
-  dm:
-    value: 0.
-    prior:
-      dist: uniform
-      limits: [-3., 3.]
-    ref:
-      limits: [-0.01, 0.01]
-    delta: 0.005
-    latex: dm
-  dn:
-    prior:
-      dist: uniform
-      limits: [-0.5, 0.5]
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.1
-    latex: dn
-    fixed: True
-  qpar:
-    value: 1.
-    prior:
-      dist: uniform
-      limits: [0.8, 1.2]
-    ref:
-      limits: [0.99, 1.01]
-    delta: 0.002
-    latex: q_{\parallel}
-  qper:
-    value: 1.
-    prior:
-      dist: uniform
-      limits: [0.8, 1.2]
-    ref:
-      limits: [0.99, 1.01]
-    delta: 0.002
-    latex: q_{\perp}
-  Ap:
-    derived: True
-    latex: A_{p}
-  f_sqrt_Ap:
-    derived: True
-    latex: f A_{p}^{1/2}
-  m:
-    derived: True
-    latex: m
-  n:
-    derived: True
-    latex: n
-  df:
-    value: 1.
-    prior:
-      dist: uniform
-      limits: [0., 2.]
-    ref:
-      limits: [0.95, 1.05]
-    latex: df
-
-
----
-
-class: StandardPowerSpectrumTemplate
-
-params:
-  qpar:
-    value: 1.
-    prior:
-      dist: uniform
-      limits: [0.8, 1.2]
-    ref:
-      limits: [0.99, 1.01]
-    latex: q_{\parallel}
-  qper:
-    value: 1.
-    prior:
-      dist: uniform
-      limits: [0.8, 1.2]
-    ref:
-      limits: [0.99, 1.01]
-    delta: 0.002
-    latex: q_{\perp}
-  qiso:
-    value: 1.
-    prior:
-      dist: uniform
-      limits: [0.8, 1.2]
-    ref:
-      limits: [0.99, 1.01]
-    delta: 0.002
-    latex: q_{\mathrm{iso}}
-  qap:
-    value: 1.
-    prior:
-      dist: uniform
-      limits: [0.8, 1.2]
-    ref:
-      limits: [0.99, 1.01]
-    delta: 0.002
-    latex: q_{\mathrm{ap}}
-  df:
-    value: 1.
-    prior:
-      dist: uniform
-      limits: [0., 2.]
-    ref:
-      limits: [0.95, 1.05]
-    latex: df
-  fsigmar:
-    derived: True
-    latex: f\sigma_{r}
-
----
-
 class: BAOPowerSpectrumTemplate
 
 params:
@@ -296,6 +180,142 @@ params:
 
 ---
 
+class: StandardPowerSpectrumTemplate
+
+params:
+  qpar:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    latex: q_{\parallel}
+  qper:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    delta: 0.002
+    latex: q_{\perp}
+  qiso:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    delta: 0.002
+    latex: q_{\mathrm{iso}}
+  qap:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    delta: 0.002
+    latex: q_{\mathrm{ap}}
+  df:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0., 2.]
+    ref:
+      limits: [0.95, 1.05]
+    latex: df
+  fsigmar:
+    derived: True
+    latex: f\sigma_{r}
+
+
+---
+
+class: ShapeFitPowerSpectrumTemplate
+
+params:
+  dm:
+    value: 0.
+    prior:
+      dist: uniform
+      limits: [-3., 3.]
+    ref:
+      limits: [-0.01, 0.01]
+    delta: 0.005
+    latex: dm
+  dn:
+    prior:
+      dist: uniform
+      limits: [-0.5, 0.5]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: dn
+    fixed: True
+  qpar:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    delta: 0.002
+    latex: q_{\parallel}
+  qper:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    delta: 0.002
+    latex: q_{\perp}
+  f_sqrt_Ap:
+    derived: True
+    latex: f A_{p}^{1/2}
+  m:
+    derived: True
+    latex: m
+  n:
+    derived: True
+    latex: n
+  df:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0., 2.]
+    ref:
+      limits: [0.95, 1.05]
+    latex: df
+
+---
+
+class: BandVelocityPowerSpectrumTemplate
+
+params:
+  qap:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    delta: 0.002
+    latex: q_{\mathrm{ap}}
+  df:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0., 2.]
+    ref:
+      limits: [0.95, 1.05]
+    latex: df
+
+---
+
 class: BAOExtractor
 
 params:
@@ -308,6 +328,39 @@ params:
       scale: 0.0073
     delta: 0.002
     latex: \Omega_{m}
+
+---
+
+class: StandardPowerSpectrumExtractor
+
+params:
+  h:
+    prior:
+      limits: [0.1, 1.]
+    ref:
+      dist: norm
+      loc: 0.6736
+      scale: 0.005
+    delta: 0.002
+    latex: h
+  Omega_m:
+    prior:
+      limits: [0.01, 1.]
+    ref:
+      dist: norm
+      loc: 0.3153
+      scale: 0.0073
+    delta: 0.001
+    latex: \Omega_{m}
+  logA:
+    prior:
+      limits: [1.61, 3.91]
+    ref:
+      dist: norm
+      loc: 3.036394
+      scale: 0.014
+    delta: 0.0014
+    latex: \ln(10^{10} A_{s})
 
 ---
 
@@ -342,10 +395,9 @@ params:
     delta: 0.0014
     latex: \ln(10^{10} A_{s})
 
-
 ---
 
-class: StandardPowerSpectrumExtractor
+class: BandVelocityPowerSpectrumExtractor
 
 params:
   h:

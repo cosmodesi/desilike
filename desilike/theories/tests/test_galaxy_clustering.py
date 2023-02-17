@@ -17,6 +17,24 @@ def test_integ():
     print(pk_leggauss)
 
 
+def test_templates():
+
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import BAOExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor
+    from desilike.theories.galaxy_clustering import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BAOPowerSpectrumTemplate,
+                                                     StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate)
+
+    for extractor in [BAOExtractor(), StandardPowerSpectrumExtractor(),
+                      ShapeFitPowerSpectrumExtractor(), BandVelocityPowerSpectrumExtractor(kp=np.linspace(0.01, 0.1, 10))]:
+        extractor()
+
+    for template in [FixedPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), BAOPowerSpectrumTemplate(),
+                     StandardPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), BandVelocityPowerSpectrumTemplate(kp=np.linspace(0.01, 0.1, 10))]:
+        print(template)
+        theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+        theory()
+
+
 def test_bao():
 
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles
@@ -268,7 +286,7 @@ def test_ap_diff():
                                                      EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles,
                                                      LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles)
     from desilike.emulators import Emulator, TaylorEmulatorEngine
-    '''
+    """
     for Theory in [KaiserTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles,
                    EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles][2:]:
         fig, lax = plt.subplots(2, sharex=True, sharey=False, figsize=(10, 6), squeeze=True)
@@ -282,7 +300,7 @@ def test_ap_diff():
             for ill, ell in enumerate(theory.ells):
                 lax[1].plot(theory.k, theory.k * (pk[ill] - pk_ref[ill]), color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
         plt.show()
-    '''
+    """
 
     for Theory in [DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles]:
         theory = Theory(s=np.linspace(10., 200., 1000), template=BAOPowerSpectrumTemplate(z=1.1))
@@ -378,5 +396,6 @@ if __name__ == '__main__':
     #test_bao()
     #test_full_shape()
     #test_pk_to_xi()
-    test_ap_diff()
+    #test_ap_diff()
     #test_png()
+    test_templates()

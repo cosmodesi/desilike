@@ -633,6 +633,8 @@ class Parameter(BaseClass):
         else:
             return
         self._namespace = namespace
+        if namespace is not None:
+            self._namespace = str(namespace)
         names = str(basename).split(base.namespace_delimiter)
         self._basename, namespace = names[-1], base.namespace_delimiter.join(names[:-1])
         if self._namespace:

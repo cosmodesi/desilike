@@ -8,5 +8,6 @@ from .full_shape import (SimpleTracerPowerSpectrumMultipoles, KaiserTracerPowerS
                          LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles,
                          PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles)
 from .primordial_non_gaussianity import PNGTracerPowerSpectrumMultipoles
-from .power_template import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BAOPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, StandardPowerSpectrumTemplate,
-                             BAOExtractor, ShapeFitPowerSpectrumExtractor, StandardPowerSpectrumExtractor)
+from .power_template import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate,
+                             BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate,
+                             BAOExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor)

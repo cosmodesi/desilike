@@ -283,6 +283,6 @@ if __name__ == '__main__':
     # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
-    # test_compression()
+    test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()

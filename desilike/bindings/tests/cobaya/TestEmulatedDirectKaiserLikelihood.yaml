@@ -15,10 +15,10 @@ params:
     prior:
       dist: norm
       loc: 0.0
-      scale: 1000.0
-    proposal: 1000.0
+      scale: 10000000.0
+    proposal: 100.0
     ref:
       dist: norm
       loc: 0.0
-      scale: 1000.0
+      scale: 100.0
 stop_at_error: true

@@ -10,6 +10,17 @@ params:
       dist: uniform
       max: 2.0
       min: 1.0
+  df:
+    latex: df
+    prior:
+      dist: uniform
+      max: 2.0
+      min: 0.0
+    proposal: 0.028867513459481315
+    ref:
+      dist: uniform
+      max: 1.05
+      min: 0.95
   dm:
     latex: dm
     prior:
@@ -22,48 +33,37 @@ params:
       max: 0.01
       min: -0.01
   dn: 0.0
-  f:
-    latex: f
-    prior:
-      dist: uniform
-      max: 1.0
-      min: 0.0
-    proposal: 0.02886751345948128
-    ref:
-      dist: uniform
-      max: 0.85
-      min: 0.75
   qpar:
-    latex: \alpha_{\parallel}
+    latex: q_{\parallel}
     prior:
       dist: uniform
       max: 1.2
       min: 0.8
-    proposal: 0.11547005383792512
+    proposal: 0.005773502691896262
     ref:
       dist: uniform
-      max: 1.2
-      min: 0.8
+      max: 1.01
+      min: 0.99
   qper:
-    latex: \alpha_{\perp}
+    latex: q_{\perp}
     prior:
       dist: uniform
       max: 1.2
       min: 0.8
-    proposal: 0.11547005383792512
+    proposal: 0.005773502691896262
     ref:
       dist: uniform
-      max: 1.2
-      min: 0.8
+      max: 1.01
+      min: 0.99
   sn0:
     latex: s_{n, 0}
     prior:
       dist: norm
       loc: 0.0
-      scale: 1000.0
-    proposal: 1000.0
+      scale: 10000000.0
+    proposal: 100.0
     ref:
       dist: norm
       loc: 0.0
-      scale: 1000.0
+      scale: 100.0
 stop_at_error: true

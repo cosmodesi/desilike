@@ -33,7 +33,7 @@ def TestShapeFitKaiserLikelihood():
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.4))
     dirname = os.path.join(os.path.dirname(desilike.__file__), 'tests', '_pk')
-    observable = TracerPowerSpectrumMultipolesObservable(slim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data=os.path.join(dirname, 'data.npy'),
                                                          covariance=os.path.join(dirname, 'mock_*.npy'),
                                                          wmatrix=os.path.join(dirname, 'window.npy'),
@@ -50,7 +50,7 @@ def TestDirectKaiserLikelihood():
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=1.4, cosmo='external'))
     dirname = os.path.join(os.path.dirname(desilike.__file__), 'tests', '_pk')
-    observable = TracerPowerSpectrumMultipolesObservable(slim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data=os.path.join(dirname, 'data.npy'),
                                                          covariance=os.path.join(dirname, 'mock_*.npy'),
                                                          wmatrix=os.path.join(dirname, 'window.npy'),
@@ -67,7 +67,7 @@ def TestEmulatedDirectKaiserLikelihood():
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=1.4))
     dirname = os.path.join(os.path.dirname(desilike.__file__), 'tests', '_pk')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2], 2: [0.05, 0.2]}, kstep=0.01,
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data=os.path.join(dirname, 'data.npy'),
                                                          covariance=os.path.join(dirname, 'mock_*.npy'),
                                                          wmatrix=os.path.join(dirname, 'window.npy'),

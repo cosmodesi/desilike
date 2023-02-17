@@ -44,7 +44,7 @@ class CobayaEngine(BaseExternalEngine):
                     if name == 'pk_interpolator':
                         tmp['nonlinear'] = attrs['non_linear']
                         tmp['z'] = attrs['z']
-                        tmp['k_max'] = np.max(attrs.get('k', 1.))  # 1/Mpc unit
+                        tmp['k_max'] = attrs['k'].max()  # 1/Mpc unit
                         tmp['vars_pairs'] = []
                         for pair in attrs['of']:
                             if any('theta' in p for p in pair):
@@ -210,7 +210,7 @@ def CobayaLikelihoodFactory(cls, kw_like, module=None):
 
 
 class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
-    
+
     """Extend :class:`BaseLikelihoodGenerator` with support for cobaya, writing parameters to a .yaml file."""
 
     def __init__(self, *args, **kwargs):

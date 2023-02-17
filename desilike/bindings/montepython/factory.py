@@ -25,7 +25,7 @@ class MontePythonEngine(BaseExternalEngine):
                         toret['z_max_pk'] = max(toret.get('z_max_pk', 0.), attrs['z'].max())
                     if name == 'pk_interpolator':
                         toret['z_max_pk'] = max(toret.get('z_max_pk', 0.), attrs['z'].max())
-                        toret['P_k_max_h/Mpc'] = np.max(attrs.get('k', 1))
+                        toret['P_k_max_h/Mpc'] = attrs['k'].max()
         toret['output'] = ' '.join(toret['output'])
         return toret
 
@@ -138,9 +138,9 @@ def MontePythonLikelihoodFactory(cls, kw_like, module=None):
 
 
 class MontePythonLikelihoodGenerator(BaseLikelihoodGenerator):
-    
+
     """Extend :class:`MontePythonLikelihoodGenerator` with support for montepython, generating .data and .param files."""
-    
+
     def __init__(self, *args, **kwargs):
         super(MontePythonLikelihoodGenerator, self).__init__(MontePythonLikelihoodFactory, *args, **kwargs)
 

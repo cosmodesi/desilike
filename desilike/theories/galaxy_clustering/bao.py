@@ -117,6 +117,7 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
         sk = 0.
         if self.mode: sk = np.exp(-1. / 2. * (k * self.smoothing_radius)**2)
         self.sigma_dd = 1. / (3. * np.pi**2) * integrate.simps((1. - j0) * (1. - sk)**2 * pklin, k)
+        #print(k.shape, self.sigma_dd.shape)
         if self.mode:
             self.sigma_ss = 1. / (3. * np.pi**2) * integrate.simps((1. - j0) * sk**2 * pklin, k)
             if self.mode == 'recsym':
@@ -132,6 +133,7 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
         sk = 0.
         if self.mode: sk = np.exp(-1. / 2. * (k * self.smoothing_radius)**2)
         ksq = (1 + f * (f + 2) * mu**2) * k**2
+        print(ksq.shape, self.sigma_dd.shape)
         damping_dd = np.exp(-1. / 2. * ksq * self.sigma_dd)
         resummed_wiggles = damping_dd * ((1 + f * mu**2) * (1 - sk) + b1)**2
         if self.mode == 'recsym':
@@ -170,7 +172,7 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
         f = self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.wiggles.pknow_dd_interpolator(kap)
-        wiggles = 0. if self.wiggle else self.wiggles.wiggles(kap, muap, b1=b1, **kwargs)
+        wiggles = self.wiggles.wiggles(kap, muap, b1=b1, **kwargs) if self.wiggle else 0.
         fog = 1. / (1. + (sigmas * kap * muap)**2 / 2.)**2.
         sk = 0.
         if self.mode == 'reciso': sk = np.exp(-1. / 2. * (kap * self.smoothing_radius)**2)
@@ -216,7 +218,7 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
         super(BaseBAOWigglesTracerPowerSpectrumMultipoles, self).initialize(k=k, ells=ells)
         self.pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
         self.pt.init.update(k=self.k, ells=self.ells, **kwargs)
-        self.kp = 0.1  # pivot to noramlize broadband terms
+        self.kp = 0.1  # pivot to normalize broadband terms
         self.set_params()
 
     def set_params(self):

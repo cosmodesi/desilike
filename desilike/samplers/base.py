@@ -292,9 +292,16 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
             for ichain, (chain, new_chain) in enumerate(zip(self.chains, chains)):
                 if new_chain is not None:
                     if chain is None:
-                        self.chains[ichain] = new_chain
+                        self.chains[ichain] = new_chain.deepcopy()
                     else:
                         self.chains[ichain] = Chain.concatenate(chain, new_chain)
+                    for name in ['size', 'nvaried', 'ndof']:
+                        try:
+                            value = getattr(self.likelihood, name)
+                        except AttributeError:
+                            pass
+                        else:
+                            self.chains[ichain].attrs[name] = value
             if self.save_fn is not None:
                 for ichain, chain in enumerate(self.chains):
                     if chain is not None: chain.save(self.save_fn[ichain])
@@ -378,6 +385,13 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
                             self.chains[ichain] = new_chain.deepcopy()
                         else:
                             self.chains[ichain] = Chain.concatenate(chain, new_chain)
+                        for name in ['size', 'nvaried', 'ndof']:
+                            try:
+                                value = getattr(self.likelihood, name)
+                            except AttributeError:
+                                pass
+                            else:
+                                self.chains[ichain].attrs[name] = value
                 if self.save_fn is not None:
                     for ichain, chain in enumerate(self.chains):
                         if chain is not None: chain.save(self.save_fn[ichain])

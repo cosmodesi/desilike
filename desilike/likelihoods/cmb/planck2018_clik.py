@@ -109,6 +109,11 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
         if np.allclose(self.loglikelihood, -1e30) or np.isnan(self.loglikelihood):
             self.loglikelihood = -np.inf
 
+    @property
+    def size(self):
+        # Theory vector size
+        return self.cumsizes[-1]
+
     @classmethod
     def install(cls, installer):
         try:

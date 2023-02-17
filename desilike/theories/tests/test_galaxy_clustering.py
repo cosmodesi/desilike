@@ -260,7 +260,9 @@ def test_pk_to_xi():
 def test_ap_diff():
 
     from matplotlib import pyplot as plt
-    from desilike.theories.galaxy_clustering import (ShapeFitPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles,
+    from desilike.theories.galaxy_clustering import (BAOPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate,
+                                                     DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles,
+                                                     KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles,
                                                      PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles,
                                                      LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles,
                                                      EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles,
@@ -282,7 +284,21 @@ def test_ap_diff():
         plt.show()
     '''
 
-    # For pybird, chat with Pierre
+    for Theory in [DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles]:
+        theory = Theory(s=np.linspace(10., 200., 1000), template=BAOPowerSpectrumTemplate(z=1.1))
+        xi_ref = theory()
+        fig, lax = plt.subplots(2, sharex=True, sharey=False, figsize=(10, 6), squeeze=True)
+        fig.subplots_adjust(hspace=0)
+        ax = plt.gca()
+        for ill, ell in enumerate(theory.ells):
+            lax[0].plot(theory.s, theory.s**2 * xi_ref[ill], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
+        for qpar in [0.998, 1., 1.002]:
+            xi = theory(qpar=qpar)
+            for ill, ell in enumerate(theory.ells):
+                lax[1].plot(theory.s, theory.s**2 * (xi[ill] - xi_ref[ill]), color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
+        plt.show()
+
+    # For pybird, chat with Pierre Zhang
     for Theory in [KaiserTracerCorrelationFunctionMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles,
                    PyBirdTracerCorrelationFunctionMultipoles, EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles,
                    LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles]:

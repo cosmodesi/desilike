@@ -1,10 +1,12 @@
+import numpy as np
+
 from desilike.likelihoods.base import BaseGaussianLikelihood
 
 
 class H0Likelihood(BaseGaussianLikelihood):
     r"""
     H0 likelihood.
-    
+
     Parameters
     ----------
     mean : float
@@ -12,7 +14,7 @@ class H0Likelihood(BaseGaussianLikelihood):
 
     std : float
         :math:`H_{0}` uncertainty.
-    
+
     cosmo : BasePrimordialCosmology, default=None
         Cosmology calculator. Defaults to ``Cosmoprimo()``.
     """
@@ -25,13 +27,13 @@ class H0Likelihood(BaseGaussianLikelihood):
 
     @property
     def flattheory(self):
-        return self.cosmo.H0
+        return np.asarray(self.cosmo.H0)
 
 
 class MbLikelihood(BaseGaussianLikelihood):
     r"""
     Magnitude likelihood, to be combined with SN likelihood.
-    
+
     Parameters
     ----------
     mean : float
@@ -44,5 +46,5 @@ class MbLikelihood(BaseGaussianLikelihood):
         super(MbLikelihood, self).initialize(flatdata=mean, covariance=std**2)
 
     def calculate(self, Mb):
-        self.flattheory = Mb
+        self.flattheory = np.asarray(Mb)
         super(MbLikelihood, self).calculate()

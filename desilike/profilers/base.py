@@ -321,6 +321,14 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
         profiles = Profiles.concatenate(list_profiles)
 
+        for name in ['size', 'nvaried', 'ndof']:
+            try:
+                value = getattr(self.likelihood, name)
+            except AttributeError:
+                pass
+            else:
+                profiles.bestfit.attrs[name] = value
+
         if self.profiles is None:
             self.profiles = profiles
         else:

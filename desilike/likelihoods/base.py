@@ -58,20 +58,33 @@ class BaseLikelihood(BaseCalculator):
             return self.sum(self)
         return self.__add__(other)
 
+    @property
+    def size(self):
+        # Theory vector size
+        return len(self.flattheory)
+
+    @property
+    def nvaried(self):
+        return len(self.varied_params) + len(self.all_params.select(solved=True))
+
+    @property
+    def ndof(self):
+        return self.size - self.nvaried
+
 
 class BaseGaussianLikelihood(BaseLikelihood):
 
     """
     Base class for Gaussian likelihood, which allows parameters the theory is linear with to be analytically marginalized over.
-    
+
     Parameters
     ----------
     data : array
         Data.
-        
+
     covariance : array, default=None
         Covariance matrix (or its diagonal).
-        
+
     precision : array, default=None
         If ``covariance`` is not provided, precision matrix (or its diagonal).
     """
@@ -228,16 +241,16 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
 
     """
     Gaussian likelihood of observables.
-    
+
     Parameters
     ----------
     observables : list, BaseCalculator
         List of (or single) observable, e.g. :class:`TracerPowerSpectrumMultipolesObservable` or :class:`TracerCorrelationFunctionMultipolesObservable`.
-    
+
     covariance : array, default=None
         Covariance matrix (or its diagonal) for input ``observables``.
         If ``None``, covariance matrix is computed on-the-fly using observables' mocks.
-    
+
     scale_covariance : float, default=1.
         Scale covariance by this value. If ``True``, scale covariance by the number of mocks.
     """
@@ -337,3 +350,8 @@ class SumLikelihood(BaseLikelihood):
 
     def _solve(self):
         return BaseGaussianLikelihood._solve(self)
+
+    @property
+    def size(self):
+        # Theory vector size
+        return sum(likelihood.size for likelihood in self.likelihoods)

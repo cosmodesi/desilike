@@ -28,6 +28,11 @@ class ParameterBestFit(Samples):
             self[self._logposterior] = np.zeros(self.shape, dtype='f8')
         return self[self._logposterior]
 
+    @property
+    def chi2min(self):
+        r"""Minimum :math:`\chi^{2}` (= -2 * :attr:`logposterior.max()`)"""
+        return -2. * self.logposterior.max()
+
     def choice(self, index='argmax', params=None, return_type='dict', **kwargs):
         """
         Return parameter best fit(s).
@@ -36,15 +41,15 @@ class ParameterBestFit(Samples):
         ----------
         index : str, default='argmax'
             'argmax' to return best fit (as defined by the point with maximum log-posterior in the samples).
-    
+
         params : list, ParameterCollection, default=None
             Parameters to compute best fit for. Defaults to all parameters.
-        
+
         return_dict : default='dict'
             'dict' to return a dictionary mapping parameter names to best fit;
             'nparray' to return an array of parameter best fits;
             ``None`` to return a :class:`ParameterBestFit` instance with a single value.
-        
+
         **kwargs : dict
             Optional arguments passed to :meth:`params` to select params to return, e.g. ``varied=True, derived=False``.
 
@@ -99,7 +104,7 @@ class ParameterContours(BaseParameterCollection):
         ----------
         data : list, dict, ParameterContours
             Can be:
-    
+
             - list of tuples of arrays if list of parameters
               (or :class:`ParameterCollection`) is provided in ``params``
             - dictionary mapping tuple of parameters to tuple of arrays
@@ -257,13 +262,13 @@ class Profiles(BaseClass):
 
     covariance : ParameterCovariance
         Parameter covariance at best fit.
-    
+
     interval : Samples
         Lower and upper errors corresponding to :math:`\Delta \chi^{2} = 1`.
-    
+
     profile : Samples
         Parameter 1D profiles.
-    
+
     contour : ParameterContours
         Parameter 2D contours.
     """
@@ -278,7 +283,7 @@ class Profiles(BaseClass):
         ----------
         attrs : dict, default=None
             Optionally, other attributes, stored in :attr:`attrs`.
-        
+
         **kwargs : dict
             Name and attributes; pass e.g. ``bestfit=...``.
         """
@@ -295,7 +300,7 @@ class Profiles(BaseClass):
     def get(self, *args, **kwargs):
         """Access attribute by name."""
         return getattr(self, *args, **kwargs)
-    
+
     def params(self, *args, **kwargs):
         return self.start.params(*args, **kwargs)
 
@@ -403,10 +408,10 @@ class Profiles(BaseClass):
         ----------
         params : list, ParameterCollection, default=None
             Parameters to share to GetDist. Defaults to all parameters.
-        
+
         label : str, default=None
             Name for GetDist to use for this distribution.
-        
+
         ignore_limits : bool, default=True
             GetDist does not seem to be able to integrate over distribution if bounded;
             so drop parameter limits.
@@ -445,7 +450,7 @@ class Profiles(BaseClass):
         tablefmt : str, default='latex_raw'
             Format for summary table.
             See :func:`tabulate.tabulate`.
-    
+
         fn : str, default=None
             If not ``None``, file name where to save summary table.
 
@@ -497,8 +502,24 @@ class Profiles(BaseClass):
                     row.append(round_errors(*value))
             data.append(row)
         headers = []
-        chi2min = '{:.2f}'.format(-2. * self.bestfit.logposterior[argmax])
-        headers.append((r'$\chi^{{2}} = {}$' if is_latex else 'chi2 = {}').format(chi2min))
+        chi2min = -2. * self.bestfit.logposterior[argmax]
+        chi2min_str = '{:.2f}'.format(chi2min)
+        try:
+            ndof = self.bestfit.attrs['ndof']
+        except KeyError:
+            ndof = None
+        else:
+            ndof_str = '{:d}'.format(ndof)
+        try:
+            size, nvaried = self.bestfit.attrs['size'], self.bestfit.attrs['nvaried']
+        except KeyError:
+            size, nvaried = None, None
+        else:
+            if ndof is None: ndof = size - nvaried
+            ndof_str = '({:d} - {:d})'.format(size, nvaried)
+
+        chi2min_str = '/ {0} = {1} / {2:d} = {3:.2f}'.format(ndof_str, chi2min_str, ndof, chi2min / ndof) if ndof is not None else '= {}'.format(chi2min_str)
+        headers.append((r'$\chi^{{2}} {}$' if is_latex else 'chi2 {}').format(chi2min_str))
         headers.append('varied')
         headers += [quantity.replace('_', ' ') for quantity in quantities]
         tab = tabulate.tabulate(data, headers=headers, tablefmt=tablefmt)

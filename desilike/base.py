@@ -680,10 +680,10 @@ class RuntimeInfo(BaseClass):
         """Initialize calculator (if not already initialized), calling :meth:`BaseCalculator.initialize` with :attr:`init` configuration."""
         if not self.initialized:
             self.clear()
+            self._initialization = True   # to avoid infinite loops
             self.install()
             bak = self.init.params
             self.init.params = ParameterCollection(self.init.params).deepcopy()
-            self._initialization = True   # to avoid infinite loops
             try:
                 self.calculator.initialize(*self.init.args, **self.init)
             except Exception as exc:

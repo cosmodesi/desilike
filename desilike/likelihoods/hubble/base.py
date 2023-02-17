@@ -23,7 +23,7 @@ class H0Likelihood(BaseGaussianLikelihood):
             from desilike.theories.primordial_cosmology import Cosmoprimo
             cosmo = Cosmoprimo()
         self.cosmo = cosmo
-        super(H0Likelihood, self).initialize(flatdata=mean, covariance=std**2)
+        super(H0Likelihood, self).initialize(data=mean, covariance=std**2)
 
     @property
     def flattheory(self):
@@ -43,7 +43,7 @@ class MbLikelihood(BaseGaussianLikelihood):
         :math:`Mb` uncertainty.
     """
     def initialize(self, mean, std):
-        super(MbLikelihood, self).initialize(flatdata=mean, covariance=std**2)
+        super(MbLikelihood, self).initialize(data=mean, covariance=std**2)
 
     def calculate(self, Mb):
         self.flattheory = np.asarray(Mb)

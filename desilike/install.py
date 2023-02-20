@@ -275,7 +275,9 @@ class Installer(BaseClass):
                    'include_dir': os.path.join(self.install_dir, 'include'),
                    'dylib_dir': os.path.join(self.install_dir, 'lib')}
         for name, value in default.items():
-            setattr(self, name, kwargs.get(name, value))
+            setattr(self, name, kwargs.pop(name, value))
+        if kwargs:
+            raise ValueError('Did not understand {}'.format(kwargs))
 
     @property
     def config_fn(self):

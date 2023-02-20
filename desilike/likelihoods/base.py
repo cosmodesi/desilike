@@ -41,7 +41,11 @@ class BaseLikelihood(BaseCalculator):
         if len(others) == 1 and utils.is_sequence(others[0]):
             others = others[0]
         likelihoods = []
-        for likelihood in others: likelihoods += getattr(likelihood, 'likelihoods', [likelihood])
+        for likelihood in others:
+            if isinstance(likelihood, SumLikelihood):
+                likelihoods += likelihood.likelihoods
+            else:
+                likelihoods.append(likelihood)
         return SumLikelihood(likelihoods=likelihoods)
 
     def __add__(self, other):

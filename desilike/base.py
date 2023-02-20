@@ -677,7 +677,7 @@ class RuntimeInfo(BaseClass):
             for calculator in self.required_by:
                 calculator.runtime_info.initialized = False
 
-    def initialize(self, **kwargs):
+    def initialize(self):
         """Initialize calculator (if not already initialized), calling :meth:`BaseCalculator.initialize` with :attr:`init` configuration."""
         if not self.initialized:
             self.clear()

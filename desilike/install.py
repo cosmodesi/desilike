@@ -270,7 +270,7 @@ class Installer(BaseClass):
         self.no_deps = bool(no_deps)
         self.force_reinstall = bool(force_reinstall)
         self.ignore_installed = bool(ignore_installed)
-        default = {'pylib_dir': os.path.join(self.install_dir, lib_rel_install_dir),
+        default = {'pylib_dir': os.path.normpath(os.path.join(self.install_dir, lib_rel_install_dir)),
                    'bin_dir': os.path.join(self.install_dir, 'bin'),
                    'include_dir': os.path.join(self.install_dir, 'include'),
                    'dylib_dir': os.path.join(self.install_dir, 'lib')}

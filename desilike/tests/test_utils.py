@@ -21,6 +21,11 @@ def test_logger():
 
     setup_logging('info')
 
+    logger = logging.getLogger('WarningContext')
+
+    with LoggingContext('warning'):
+        logger.info('This should not be printed')
+
     with LoggingContext():
         logger = logging.getLogger('InfoContext')
         logger.info('This should be printed')

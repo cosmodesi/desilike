@@ -144,6 +144,8 @@ class LoggingContext(object):
             if isinstance(level, str):
                 level = {'info': logging.INFO, 'debug': logging.DEBUG, 'warning': logging.WARNING}[level.lower()]
             logging.root.level = level
+            for handler in logging.root.handlers:
+                handler.setLevel(level)
 
     def __enter__(self):
         """Enter context."""
@@ -151,7 +153,9 @@ class LoggingContext(object):
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
         """Exit context."""
-        logging.root.level = self._level
+        logging.root.level = level = self._level
+        for handler in logging.root.handlers:
+            handler.setLevel(level)
 
 
 class BaseMetaClass(type):

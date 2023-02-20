@@ -380,14 +380,15 @@ class BasePipeline(BaseClass):
         """
         for calculator, params in zip(calculators, params):
             for param in params:
-                # Remove derived parameters with same basename
-                if hasattr(param, 'setdefault'):
-                    param = param.copy()
-                    param.setdefault('namespace', calculator.runtime_info.namespace)
-                param = Parameter(param).clone(derived=True)
-                for dparam in calculator.runtime_info.derived_params.names(basename=param.basename):
-                    calculator.runtime_info.params[dparam]
-                calculator.runtime_info.params.set(param)
+                if param not in self.varied_params:
+                    # Remove derived parameters with same basename
+                    if hasattr(param, 'setdefault'):
+                        param = param.copy()
+                        param.setdefault('namespace', calculator.runtime_info.namespace)
+                    param = Parameter(param).clone(derived=True)
+                    for dparam in calculator.runtime_info.derived_params.names(basename=param.basename):
+                        calculator.runtime_info.params[dparam]
+                    calculator.runtime_info.params.set(param)
         self._set_params()
 
     def _set_speed(self, niterations=10, override=False, seed=42):

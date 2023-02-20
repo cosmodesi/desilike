@@ -58,7 +58,6 @@ def test_matrix():
     from desilike.samples import plotting
     plotting.plot_triangle([covariance, covariance.select(name=['a', 'b'])], show=True)
 
-    assert np.allclose(covariance.rescale().center(), 1.)
     assert np.ndim(covariance.std('a')) == 0
     std = covariance.std()
     covariance *= 1.2

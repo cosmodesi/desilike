@@ -85,15 +85,12 @@ def test_fisher_galaxy():
     #print(likelihood(wa_fld=0), likelihood(wa_fld=0.1))
     from desilike import Fisher
     fisher = Fisher(likelihood)
-    matrix = fisher()
-    print(matrix.to_covariance().to_stats())
-
-    fisher = Fisher(likelihood)
-    matrix = fisher()
+    fisher = fisher()
+    print(fisher.to_stats())
 
 
 def test_fisher_cmb():
-    from desilike import Fisher
+    from desilike import Fisher, FisherGaussianLikelihood
     from desilike.likelihoods.cmb import BasePlanck2018GaussianLikelihood, TTTEEEHighlPlanck2018PlikLikelihood, TTHighlPlanck2018PlikLiteLikelihood,\
                                          TTTEEEHighlPlanck2018PlikLiteLikelihood, TTLowlPlanck2018ClikLikelihood,\
                                          EELowlPlanck2018ClikLikelihood, LensingPlanck2018ClikLikelihood
@@ -110,11 +107,17 @@ def test_fisher_cmb():
     fisher_clik = Fisher(likelihood_clik)
     # Planck covariance matrix used above should roughly correspond to Fisher at the Planck posterior bestfit
     # at which logA ~= 3.044 (instead of logA = ln(1e10 2.0830e-9) = 3.036 assumed in the DESI fiducial cosmology)
-    precision_clik = fisher_clik()
-    print(precision_clik.to_covariance().to_stats(tablefmt='pretty'))
-    print(likelihood_clik())
+    fisher_clik = fisher_clik()
+    print(fisher_clik.to_stats(tablefmt='pretty'))
     for likelihood in likelihood_clik.likelihoods:
         print(likelihood, likelihood.loglikelihood)
+    fisher_likelihood_clik = fisher_clik.to_likelihood()
+    print(fisher_likelihood_clik.all_params)
+    print(likelihood_clik(), fisher_likelihood_clik())
+    fn = '_tests/test.npy'
+    fisher_likelihood_clik.save(fn)
+    fisher_likelihood_clik2 = FisherGaussianLikelihood.load(fn)
+    assert np.allclose(fisher_likelihood_clik2(), fisher_likelihood_clik())
 
 
 if __name__ == '__main__':
@@ -122,5 +125,5 @@ if __name__ == '__main__':
     setup_logging()
     #test_misc()
     #test_differentiation()
-    test_fisher_galaxy()
+    #test_fisher_galaxy()
     test_fisher_cmb()

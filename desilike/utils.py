@@ -126,6 +126,34 @@ def setup_logging(level=logging.INFO, stream=sys.stdout, filename=None, filemode
     sys.excepthook = exception_handler
 
 
+class LoggingContext(object):
+    """
+    Class to locally update logging level:
+
+    >>> with LoggingContext('warning') as mem:
+            ...
+            # Logging level is warning
+            logger = logging.getLogger('Logger')
+            logger.info('This should not be printed')  # not logged
+            logger.warning('This should be printed')  # logged
+            ...
+    """
+    def __init__(self, level=None):
+        self._level = logging.root.level
+        if level is not None:
+            if isinstance(level, str):
+                level = {'info': logging.INFO, 'debug': logging.DEBUG, 'warning': logging.WARNING}[level.lower()]
+            logging.root.level = level
+
+    def __enter__(self):
+        """Enter context."""
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        """Exit context."""
+        logging.root.level = self._level
+
+
 class BaseMetaClass(type):
 
     """Metaclass to add logging attributes to :class:`BaseClass` derived classes."""

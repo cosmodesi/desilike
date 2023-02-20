@@ -276,13 +276,93 @@ def test_fiber_collisions():
     window.plot(show=True)
 
 
+from desilike.base import BaseCalculator
+
+class CompressionWindow(BaseCalculator):
+
+    def initialize(self, likelihood, theory, quantities):
+        self.likelihood = likelihood
+        self.observable = self.likelihood.observables[0].deepcopy()
+        self.quantities = [str(name) for name in quantities]
+        kp = np.unique(np.concatenate(self.observable.k))
+        theory.init['template'].init.update(kp=kp)
+        for param in theory.params:
+            param.update(fixed=True)
+        self.observable.init.update(theory=theory)
+        self.runtime_info.requires = [self.observable]
+
+    def calculate(self):
+        self.likelihood.flatdata = self.observable.flattheory.copy()
+        self.likelihood()
+        self.values = {}
+        for quantity in self.quantities:
+            self.values[quantity] = self.likelihood.runtime_info.pipeline.param_values[quantity]
+            #self.values[quantity] = self.likelihood.runtime_info.pipeline.derived[quantity].item()
+
+    def get(self):
+        return self.values
+
+    def __getstate__(self):
+        state = {'compression_{}'.format(quantity): value for quantity, value in self.values.items()}
+        state['quantities'] = self.quantities
+        return state
+
+    def __setstate__(self, state):
+        self.quantities = state['quantities']
+        self.values = {quantity: state['compression_{}'.format(quantity)] for quantity in self.quantities}
+
+
+def test_compression_window():
+
+    from desilike.theories.galaxy_clustering import StandardPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
+
+    z, b1 = 1., 2.
+    theory = KaiserTracerPowerSpectrumMultipoles(template=StandardPowerSpectrumTemplate(z=z))
+    theory.params['b1'].update(fixed=False, value=b1)
+    theory.params['sn0'].update(fixed=True, value=0.)
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data={},
+                                                         theory=theory)
+    footprint = BoxFootprint(volume=1e10, nbar=1e-3)
+    cov = ObservablesCovarianceMatrix(observable, footprints=footprint)()
+    likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
+    for param in likelihood.all_params.select(basename='q*'):
+        param.update(fixed=True)
+    from desilike.emulators import Emulator, TaylorEmulatorEngine
+    emulator = Emulator(theory, engine=TaylorEmulatorEngine(order=1))
+    emulator.set_samples()
+    emulator.fit()
+
+    observable.init.update(theory=emulator.to_calculator())
+    for param in likelihood.varied_params:
+        param.update(prior=None, derived='.best')
+    likelihood()
+
+    template = BandVelocityPowerSpectrumTemplate(z=z)
+    theory_band = KaiserTracerPowerSpectrumMultipoles(template=template)
+    theory_band.params['b1'].update(fixed=False, value=b1)
+    compression = CompressionWindow(likelihood=likelihood, theory=theory_band, quantities=theory.template.varied_params)
+    compression.all_params['qap'].update(fixed=True)
+
+    from desilike.emulators import Emulator, TaylorEmulatorEngine
+    emulator = Emulator(compression, engine=TaylorEmulatorEngine(order=1))
+    emulator.set_samples()
+    print(emulator.samples['compression_df']['compression_df'], emulator.samples['compression_df']['compression_df'].derivs)
+    emulator.fit()
+    emulated_compression = emulator.to_calculator()
+    print(emulated_compression())
+
+
+
 if __name__ == '__main__':
 
     setup_logging()
-    # test_power_spectrum()
-    # test_correlation_function()
+    test_power_spectrum()
+    test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
-    test_compression()
+    # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
+    # test_compression_window()

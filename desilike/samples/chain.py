@@ -4,7 +4,8 @@ import glob
 
 import numpy as np
 
-from desilike.parameter import ParameterCollection, Parameter, ParameterPrior, ParameterArray, Samples, _reshape, is_parameter_sequence
+from desilike.parameter import ParameterCollection, Parameter, ParameterPrior, ParameterArray, Samples, ParameterCovariance, _reshape, is_parameter_sequence
+from desilike import LikelihoodFisher
 
 from . import utils
 
@@ -64,16 +65,16 @@ class Chain(Samples):
 
         params : list, ParameterCollection
             Optionally, list of parameters.
-        
+
         logposterior : str, default='logposterior'
             Name of log-posterior in ``data``.
-        
+
         aweight : str, default='aweight'
             Name of sample weights (which default to 1. if not provided in ``data``).
-        
+
         fweight : str, default='fweight'
             Name of sample frequency weights (which default to 1 if not provided in ``data``).
-        
+
         weight : str, default='weight'
             Name of sample total weight. It is defined as the product of :attr:`aweight` and :attr:`fweight`,
             hence should not provided in ``data``.
@@ -205,7 +206,7 @@ class Chain(Samples):
             Chain numbers to load. Defaults to all chains matching pattern '{base_fn}*.txt'.
             If a single number is provided, return a unique chain.
             If multiple numbers are provided, or is ``None``, return a list of chains (see ``concatenate``).
-        
+
         concatenate : bool, default=False
             If ``True``, concatenate all chains in one.
 
@@ -286,13 +287,13 @@ class Chain(Samples):
 
         params : list, ParameterCollection, default=None
             Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
-        
+
         ichain : int, default=None
             If not ``None``, append '_{ichain:d}' to ``base_fn``.
-        
+
         fmt : str, default='%.18e'
             How to format floats.
-        
+
         delimiter : str, default=' '
             String or character separating columns.
 
@@ -350,10 +351,10 @@ class Chain(Samples):
         ----------
         params : list, ParameterCollection, default=None
             Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
-        
+
         label : str, default=None
             Name for  GetDist to use for these samples.
-        
+
         **kwargs : dict
             Optional arguments for :class:`getdist.MCSamples`.
 
@@ -384,10 +385,10 @@ class Chain(Samples):
         ----------
         params : list, ParameterCollection, default=None
             Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
-        
+
         label : str, default=None
             Name for  anesthetic to use for these samples.
-        
+
         **kwargs : dict
             Optional arguments for :class:`anesthetic.MCMCSamples`.
 
@@ -406,24 +407,24 @@ class Chain(Samples):
         toret = MCMCSamples(samples=samples.T, columns=names, weights=np.asarray(self.weight.ravel()), logL=-np.asarray(self.logposterior.ravel()), labels=labels, label=label, logzero=-np.inf, limits=limits, **kwargs)
         return toret
 
-    def choice(self, index='argmax', params=None, return_type='dict', **kwargs):
+    def choice(self, index='mean', params=None, return_type='dict', **kwargs):
         """
-        Return parameter best fit(s), or mean(s).
+        Return parameter mean(s) or best fit(s).
 
         Parameters
         ----------
-        index : str, default='argmax'
+        index : str, default='mean'
             'argmax' to return "best fit" (as defined by the point with maximum log-posterior in the chain).
             'mean' to return mean of parameters (weighted by :attr:`weight`).
 
-        params :  list, ParameterCollection, default=None
-            Parameters to compute best fit / mean for. Defaults to all parameters.
-        
+        params : list, ParameterCollection, default=None
+            Parameters to compute mean / best fit for. Defaults to all parameters.
+
         return_type : default='dict'
-            'dict' to return a dictionary mapping parameter names to best fit / mean;
-            'nparray' to return an array of parameter best fit / mean;
+            'dict' to return a dictionary mapping parameter names to mean / best fit;
+            'nparray' to return an array of parameter mean / best fit;
             ``None`` to return a :class:`Chain` instance with a single value.
-        
+
         **kwargs : dict
             Optional arguments passed to :meth:`params` to select params to return, e.g. ``varied=True, derived=False``.
 
@@ -448,7 +449,7 @@ class Chain(Samples):
         toret.data = [ParameterArray([value], param=value.param) for value in di.values()]
         return toret
 
-    def cov(self, params=None, return_type='nparray', ddof=1):
+    def covariance(self, params=None, return_type='nparray', ddof=1):
         """
         Return parameter covariance computed from (weighted) samples.
 
@@ -457,7 +458,7 @@ class Chain(Samples):
         params : list, ParameterCollection, default=None
             Parameters to compute covariance for. Defaults to all parameters.
             If a single parameter is provided, this parameter is a scalar, and ``return_type`` is 'nparray', return a scalar.
-        
+
         return_type : str, default='nparray'
             'nparray' to return matrix array;
             ``None`` to return :class:`ParameterCovariance` instance.
@@ -467,7 +468,7 @@ class Chain(Samples):
 
         Returns
         -------
-        cov : array, float, ParameterCovariance
+        covariance : array, float, ParameterCovariance
         """
         if params is None: params = self.params()
         if not is_parameter_sequence(params): params = [params]
@@ -475,12 +476,9 @@ class Chain(Samples):
         values = [self[param].reshape(self.size, -1) for param in params]
         values = np.concatenate(values, axis=-1)
         cov = np.atleast_2d(np.cov(values, rowvar=False, fweights=self.fweight.ravel(), aweights=self.aweight.ravel(), ddof=ddof))
-        if return_type == 'nparray':
-            return cov
-        from .profiles import ParameterCovariance
-        return ParameterCovariance(cov, params=params, center=self.mean(params))
+        return ParameterCovariance(cov, params=params).view(return_type=return_type)
 
-    def invcov(self, params=None, return_type='nparray', ddof=1):
+    def precision(self, params=None, return_type='nparray', ddof=1):
         """
         Return inverse parameter covariance computed from (weighted) samples.
 
@@ -489,8 +487,8 @@ class Chain(Samples):
         params :  list, ParameterCollection, default=None
             Parameters to compute covariance for. Defaults to all parameters.
             If a single parameter is provided, this parameter is a scalar, and ``return_type`` is 'nparray', return a scalar.
-        
-         return_type : str, default='nparray'
+
+        return_type : str, default='nparray'
             'nparray' to return matrix array.
             ``None`` to return a :class:`ParameterPrecision` instance.
 
@@ -499,17 +497,13 @@ class Chain(Samples):
 
         Returns
         -------
-        cov : array, float, ParameterPrecision
+        precision : array, float, ParameterPrecision
         """
-        invcov = utils.inv(self.cov(params, ddof=ddof))
-        if return_type == 'nparray':
-            return invcov
-        from .profiles import ParameterPrecision
-        return ParameterPrecision(invcov, params=params)
+        return self.covariance(params=params, ddof=ddof).to_precision(return_type=return_type)
 
     def corrcoef(self, params=None):
         """Return correlation matrix array computed from (weighted) samples (optionally restricted to input parameters)."""
-        return utils.cov_to_corrcoef(self.cov(params=params, return_type='nparray'))
+        return self.covariance(params=params, return_type=None).corrcoef()
 
     @vectorize
     def var(self, params=None, ddof=1):
@@ -518,7 +512,7 @@ class Chain(Samples):
         If a single parameter is given as input and this parameter is a scalar, return a scalar.
         ``ddof`` is the number of degrees of freedom.
         """
-        cov = self.cov(params, ddof=ddof, return_type='nparray')
+        cov = self.covariance(params, ddof=ddof, return_type='nparray')
         if np.ndim(cov) == 0: return cov  # single param
         return np.diag(cov)
 
@@ -528,7 +522,7 @@ class Chain(Samples):
         If a single parameter is given as input and this parameter is a scalar, return a scalar.
         ``ddof`` is the number of degrees of freedom.
         """
-        return self.var(params=params)**0.5
+        return self.var(params=params, ddof=ddof)**0.5
 
     @vectorize
     def mean(self, params=None):
@@ -568,7 +562,7 @@ class Chain(Samples):
         ----------
         params :  list, ParameterCollection, default=None
             Parameters to compute quantiles for. Defaults to all parameters.
-    
+
         q : tuple, list, array
             Quantile or sequence of quantiles to compute, which must be between
             0 and 1 inclusive.
@@ -585,7 +579,7 @@ class Chain(Samples):
             - higher: ``j``.
             - nearest: ``i`` or ``j``, whichever is nearest.
             - midpoint: ``(i + j) / 2``.
-        
+
         Returns
         -------
         quantiles : list, scalar, array
@@ -610,6 +604,30 @@ class Chain(Samples):
         interval : tuple, list
         """
         return utils.interval(self[params].ravel(), self.weight.ravel(), nsigmas=nsigmas)
+
+    def to_fisher(self, params=None, ddof=1, **kwargs):
+        """
+        Return Fisher from (weighted) samples.
+
+        Parameters
+        ----------
+        params :  list, ParameterCollection, default=None
+            Parameters to return Fisher for. Defaults to all parameters.
+
+        ddof : int, default=1
+            Number of degrees of freedom.
+
+        **kwargs : dict
+            Arguments for :meth:`choice`, giving the mean of the output Fisher likelihood.
+
+        Returns
+        -------
+        fisher : LikelihoodFisher
+        """
+        precision = self.precision(params=params, ddof=ddof, return_type=None)
+        params = precision._params
+        mean = self.choice(params=params, return_type='nparray', **kwargs)
+        return LikelihoodFisher(center=mean, params=params, offset=self.logposterior.max(), hessian=precision, with_prior=True)
 
     def to_stats(self, params=None, quantities=None, sigfigs=2, tablefmt='latex_raw', fn=None):
         """

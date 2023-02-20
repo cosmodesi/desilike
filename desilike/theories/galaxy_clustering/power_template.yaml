@@ -53,7 +53,7 @@ params:
       dist: norm
       loc: 0.9649
       scale: 0.0042
-    delta: 0.004
+    delta: 0.0004
     latex: n_{s}
   tau_reio:
     value: 0.0544
@@ -63,7 +63,7 @@ params:
       dist: norm
       loc: 0.0544
       scale: 0.008
-    delta: 0.012
+    delta: 0.0012
     latex: \tau
     fixed: True
   m_ncdm:
@@ -312,6 +312,7 @@ params:
       limits: [0., 2.]
     ref:
       limits: [0.95, 1.05]
+    fixed: True
     latex: df
 
 ---

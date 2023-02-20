@@ -12,7 +12,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.002
+    delta: 0.0025
     latex: h
   omega_cdm:
     prior:
@@ -21,7 +21,7 @@ params:
       dist: norm
       loc: 0.12
       scale: 0.0012
-    delta: 0.00017
+    delta: 0.0004
     latex: \omega_{cdm}
   omega_b:
     prior:
@@ -39,7 +39,7 @@ params:
       dist: norm
       loc: 3.036394
       scale: 0.014
-    delta: 0.0014
+    delta: 0.005
     latex: \ln(10^{10} A_{s})
   n_s:
     prior:
@@ -48,7 +48,7 @@ params:
       dist: norm
       loc: 0.9649
       scale: 0.0042
-    delta: 0.004
+    delta: 0.002
     latex: n_{s}
   tau_reio:
     value: 0.0544
@@ -57,8 +57,8 @@ params:
     ref:
       dist: norm
       loc: 0.0544
-      scale: 0.008
-    delta: 0.012
+      scale: 0.01
+    delta: 0.004
     latex: \tau
   m_ncdm:
     prior:
@@ -86,7 +86,7 @@ params:
       dist: norm
       loc: -1
       scale: 0.08
-    delta: 0.01
+    delta: 0.04
     latex: w_{0}
     fixed: True
   wa_fld:
@@ -96,7 +96,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.3
-    delta: 0.01
+    delta: 0.04
     latex: w_{a}
     fixed: True
   Omega_k:

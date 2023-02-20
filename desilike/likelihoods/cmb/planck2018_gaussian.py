@@ -16,17 +16,17 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
     https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
 
     Parameters
-    ----------    
+    ----------
     cosmo : BasePrimordialCosmology, default=None
         Cosmology calculator. Defaults to ``Cosmoprimo()``.
-    
+
     data_dir : str, Path, default=None
         Data directory. Defaults to path saved in desilike's configuration,
         as provided by :class:`Installer` if likelihood has been installed.
-    
+
     basename : str, default='base_plikHM_TTTEEE_lowl_lowE_lensing'
         Likelihood base name, e.g. 'base_plikHM_TT', 'base_plikHM_TTTEEE', 'base_plikHM_TTTEEE_lowl_lowE_lensing'.
-    
+
     source : str, default='covmat'
         Source, either:
 
@@ -55,22 +55,22 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
         self.cosmo = cosmo
         convert_params = {'omegabh2': 'omega_b', 'omegach2': 'omega_cdm', 'omegak': 'Omega_k', 'w': 'w0_fld', 'wa': 'wa_fld', 'theta': 'theta_cosmomc', 'tau': 'tau_reio',
                           'mnu': 'm_ncdm_tot', 'logA': 'ln10^10A_s', 'ns': 'n_s', 'nrun': 'alpha_s', 'r': 'r'}
+        basenames = list(convert_params.keys())
         if source == 'covmat':
-            from desilike.parameter import ParameterCovariance
-            covariance = ParameterCovariance.read_getdist(base_dist_fn)
+            from desilike import LikelihoodFisher
+            fisher = LikelihoodFisher.read_getdist(base_dist_fn)
         elif source == 'chains' or source[0] == 'chains':
             burnin = None
             if utils.is_sequence(source): burnin = source[1]
             from desilike.samples import Chain
             chains = Chain.read_getdist(base_chain_fn)
-            chain = Chain.concatenate([chain.remove_burnin(burnin) if burnin is not None else chain for chain in chains])
-            covariance = chain.cov(return_type=None)
+            chain = Chain.concatenate([chain.select(basename=basenames).remove_burnin(burnin) if burnin is not None else chain for chain in chains])
+            fisher = chain.to_fisher()
         else:
             raise ValueError('source must be one of ["covmat", "chains"]')
-        self.covariance = covariance.select(basename=list(convert_params.keys()))
-        for param in self.covariance._params: param.update(basename=convert_params[param.name])
-        super(BasePlanck2018GaussianLikelihood, self).initialize(data=self.covariance.center(), precision=self.covariance.invcov(return_type='nparray'))
-        self.cosmo_quantities = self.covariance.names()
+        params = fisher.params(basename=basenames)
+        super(BasePlanck2018GaussianLikelihood, self).initialize(data=fisher.mean(params=params), covariance=fisher.covariance(params=params))
+        self.cosmo_quantities = [convert_params[param.basename] for param in params]
 
     @property
     def flattheory(self):
@@ -90,7 +90,7 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
         except KeyError:
             data_dir = installer.data_dir(cls.installer_section)
 
-        from desilike.install import exists_package, exists_path, download, extract, InstallError
+        from desilike.install import exists_path, download, extract
 
         if installer.force_reinstall or not exists_path(os.path.join(data_dir, 'base')):
             # Install data
@@ -115,17 +115,17 @@ class FullGridPlanck2018GaussianLikelihood(BaseGaussianLikelihood):
     https://wiki.cosmos.esa.int/planck-legacy-archive/index.php/CMB_spectrum_%26_Likelihood_Code
 
     Parameters
-    ----------    
+    ----------
     cosmo : BasePrimordialCosmology, default=None
         Cosmology calculator. Defaults to ``Cosmoprimo()``.
-    
+
     data_dir : str, Path, default=None
         Data directory. Defaults to path saved in desilike's configuration,
         as provided by :class:`Installer` if likelihood has been installed.
-    
+
     basename : str, default='base_plikHM_TTTEEE_lowl_lowE_lensing'
         Likelihood base name, e.g. 'base_plikHM_TT', 'base_plikHM_TTTEEE', 'base_plikHM_TTTEEE_lowl_lowE_lensing', 'base_mnu_plikHM_TTTEEE_lowl_lowE_lensing'.
-    
+
     source : str, default='covmat'
         Source, either:
 

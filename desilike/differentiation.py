@@ -218,8 +218,10 @@ class Differentiation(BaseClass):
         self.calculator = calculator
         self.calculator()  # dry run
         self.pipeline = self.calculator.runtime_info.pipeline
-        self.all_params = self.calculator.all_params.select(derived=False)
         self.varied_params = self.calculator.varied_params
+        # In case of likelihood marginalization self.calculator.runtime_info.pipeline._varied_params is changed
+        # Make sure these parameters are included in all_params with + self.varied_params
+        self.all_params = self.calculator.all_params.select(derived=False) + self.varied_params
         if not self.varied_params:
             raise ValueError('No parameters to be varied!')
         if self.mpicomm.rank == 0:
@@ -240,6 +242,9 @@ class Differentiation(BaseClass):
             for cc, vv in zip(calculators, varied):
                 bp = cc.runtime_info.base_params
                 varied_by_calculator.append(ParameterCollection([bp[k].copy() for k in vv if k in bp and bp[k].derived]))
+
+            if not any(varied_by_calculator):
+                raise ValueError('No varied parameter is derived, so nothing to differentiate')
 
             def getter():
                 toret = {}
@@ -345,7 +350,10 @@ class Differentiation(BaseClass):
                 self.getter_size = len(toret)
             else:
                 toret = [toret]
-            return list(toret)
+            toret = list(toret)
+            if not toret:
+                raise ValueError('getter returns nothing to differentiate')
+            return toret
 
         params = {**self.pipeline.param_values, **params}
         params, values = list(params.keys()), list(params.values())

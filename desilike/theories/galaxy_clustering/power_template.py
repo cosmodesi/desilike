@@ -540,7 +540,7 @@ class BandVelocityPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         super(BandVelocityPowerSpectrumExtractor, self).initialize(*args, **kwargs)
         self.kp = kp
         if kp is None:
-            raise ValueError('Please provide kptt')
+            raise ValueError('Please provide kp')
         else:
             self.kp = np.asarray(kp)
         if self.fiducial is not None:
@@ -611,8 +611,9 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate, BandVelocityP
         for ikp, kp in enumerate(self.kp):
             basename = '{}{:d}'.format(self._base_param_name, ikp)
             if basename not in self.params:
-                self.params[basename] = dict(value=0., prior={'dist': 'norm', 'loc': 0., 'scale': 1.})
-            self.params[basename].update(latex=r'(\Delta P / P)_{{\{0}\{0}}}(k={1:.3f})'.format('theta', kp))
+                value = 1.
+                self.params[basename] = dict(value=value, prior={'limits': [0, 3]}, ref={'dist': 'norm', 'loc': value, 'scale': 0.01}, delta=0.005)
+            self.params[basename].update(latex=r'(P / P^{{\mathrm{{fid}}}})_{{\{0}\{0}}}(k={1:.3f})'.format('theta', kp))
 
         if self.kp[0] < self.k[0]:
             raise ValueError('Theory k starts at {0:.2e} but first point is {1:.2e} < {0:.2e}'.format(self.k[0], self.kp[0]))
@@ -642,7 +643,7 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate, BandVelocityP
 
     def calculate(self, df=1., **params):
         self.f = self.f_fid * df
-        rptt = jnp.array([params['{}{:d}'.format(self._base_param_name, ii)] for ii in range(len(self.templates))])
+        rptt = jnp.array([params['{}{:d}'.format(self._base_param_name, ii)] - 1. for ii in range(len(self.templates))])
         factor = (1. + jnp.dot(rptt, self.templates)) / self.f**2
         self.pk_dd = self.pk_tt_fid * factor
         if self.with_now:

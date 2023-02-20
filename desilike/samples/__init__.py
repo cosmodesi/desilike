@@ -93,25 +93,23 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
             else:
                 params_in_source = [param for param in params if param in source]
                 if params_in_source:
-                    if not choice and hasattr(source, 'center'):  # Covariance matrix
-                        tmp = source.center(params=params_in_source, return_type='dict')
-                    else:
-                        tmp = source.choice(params=params_in_source, return_type='dict', **choice)
+                    tmp = source.choice(params=params_in_source, return_type='dict', **choice)
                 params_not_in_source = [param for param in params if param not in params_in_source]
                 for param in params_not_in_source:
                     tmp[str(param)] = (param.value if default is False else default)
                 tmp = [tmp[str(param)] for param in params]
             source = ParameterBestFit(tmp, params=params)
         if source:
-            if not choice and hasattr(source, 'center'):  # Covariance matrix
-                tmp = source.center(params=source.params(), return_type=return_type)
-            else:
-                tmp = source.choice(params=source.params(), return_type=return_type, **choice)
+            tmp = source.choice(params=source.params(), return_type=return_type, **choice)
         toret.append(tmp)
 
     if cov is not None:
-        if hasattr(source, 'covariance'):
-            source = source.covariance
+        if hasattr(source, 'to_fisher'):  # Chain, Profiles
+            source = source.to_fisher()
+        if hasattr(source, 'covariance'):  # LikelihoodFisher
+            source = source.covariance(return_type=None)
+        if hasattr(source, 'to_covariance'):  # ParameterPrecision
+            source = source.to_covariance(return_type=None)
         tmp = None
         if params is not None:
             if isinstance(source, np.ndarray):
@@ -123,7 +121,7 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
             else:
                 params_in_source = [param for param in params if param in source]
                 if params_in_source:
-                    cov = source.cov(params=params_in_source, return_type=None)
+                    cov = source.view(params=params_in_source, return_type=None)
                     params = [cov._params[param] if params in params_in_source else param for param in params]
                 params_not_in_source = [param for param in params if param not in params_in_source]
                 sizes = [param.size if param in params_not_in_source else cov._sizes[params_in_source.index(param)] for param in params]
@@ -143,7 +141,7 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
                         tmp[indices] = default
             source = ParameterCovariance(tmp, params=params)
         if source:
-            tmp = source.cov(return_type=return_type)
+            tmp = source.view(return_type=return_type)
         toret.append(tmp)
 
     if len(toret) == 0:

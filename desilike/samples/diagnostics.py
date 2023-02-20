@@ -22,7 +22,7 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
     params : list, ParameterCollection
         Parameters to compute Gelman-Rubin statistics for.
         Defaults to all parameters.
-    
+
     nsplits : int, default=None
         The Gelman-Rubin criterion requires at least 2 chains.
         If provided, split input chains into ``nsplits`` parts.
@@ -44,13 +44,13 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
         - 'raise': raise a :class:`LinAlgError`
         - 'warn': issue a warning
         - 'ignore': ignore
-    
+
     Returns
     -------
     gr : scalar, array, tuple
         Gelman-Rubin statistics (scalar if single parameter provided, else array of size ``params``).
         If ``return_matrices``, also return pair covariance matrices.
-    
+
     Reference
     ---------
     http://www.stat.columbia.edu/~gelman/research/published/brooksgelman2.pdf
@@ -75,7 +75,7 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
             return [chain.mean(param) for param in params]
 
     means = np.asarray([statistic(chain, params) for chain in chains])
-    covs = np.asarray([chain.cov(params) for chain in chains])
+    covs = np.asarray([chain.covariance(params) for chain in chains])
     wsums = np.asarray([chain.weight.sum() for chain in chains])
     w2sums = np.asarray([(chain.weight * chain.aweight).sum() for chain in chains])
     # W = "within"
@@ -266,13 +266,13 @@ def geweke(chains, params=None, first=0.1, last=0.5):
     params : list, ParameterCollection
         Parameters to compute Geweke statistics for.
         Defaults to all parameters.
-    
+
     first : float, default=0.1
         Fraction of samples in the first part of the chain.
-    
+
     last : float, default=0.5
         Fraction of samples in the last part of the chain.
-    
+
     Returns
     -------
     geweke : 2D or 1D array

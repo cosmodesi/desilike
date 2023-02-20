@@ -271,7 +271,8 @@ class Emulator(BaseClass):
         calculator = new_cls()
         calculator.emulator = self
         calculator.params = self.params.deepcopy()
-        _setstate(calculator, self.fixed)
+        predict = self.predict(**{name: self.params[name].value for name in self.varied_params})
+        _setstate(calculator, {**self.fixed, **predict})
         calculator.runtime_info.initialize()  # to initialize
         if derived is not None:
             calculator.runtime_info.pipeline._set_derived([calculator], params=[derived])

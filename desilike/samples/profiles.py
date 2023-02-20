@@ -7,7 +7,7 @@ import numpy as np
 from desilike.mpi import CurrentMPIComm
 from desilike.utils import BaseClass
 from desilike.parameter import Parameter, ParameterArray, ParameterCollection, BaseParameterCollection, ParameterCovariance, Samples, is_parameter_sequence
-from desilike import mpi
+from desilike import LikelihoodFisher, mpi
 from . import utils
 
 
@@ -400,7 +400,31 @@ class Profiles(BaseClass):
             if name in state:
                 setattr(self, name, cls.from_state(state[name]))
 
-    def to_getdist(self, params=None, label=None, ignore_limits=True, **kwargs):
+    def to_fisher(self, params=None, **kwargs):
+        """
+        Return a Fisher, centered on :attr:`bestfit.choice`, with covariance matrix :attr:`covariance`.
+
+        Parameters
+        ----------
+        params :  list, ParameterCollection, default=None
+            Parameters to return Fisher for. Defaults to all parameters.
+
+        ddof : int, default=1
+            Number of degrees of freedom.
+
+        **kwargs : dict
+            Arguments for :meth:`bestfit.choice`, giving the mean of the output Fisher likelihood.
+
+        Returns
+        -------
+        fisher : LikelihoodFisher
+        """
+        precision = self.covariance.to_precision(params=params, return_type=None)
+        params = precision._params
+        mean = self.bestfit.choice(params=params, return_type='nparray', **kwargs)
+        return LikelihoodFisher(center=mean, params=params, offset=self.bestfit.logposterior.max(), hessian=precision, with_prior=True)
+
+    def to_getdist(self, params=None, label=None, ignore_limits=True):
         """
         Return a GetDist Gaussian distribution, centered on :attr:`bestfit.choice`, with covariance matrix :attr:`covariance`.
 
@@ -420,16 +444,7 @@ class Profiles(BaseClass):
         -------
         samples : getdist.gaussian_mixtures.MixtureND
         """
-        from getdist.gaussian_mixtures import MixtureND
-        cov = self.covariance.view(params=params, return_type=None)
-        labels = [param.latex() for param in cov._params]
-        names = [str(param) for param in cov._params]
-        center = self.bestfit.choice(params=cov._params, return_type='nparray')
-        # ignore_limits to avoid issue in GetDist with analytic marginalization
-        ranges = None
-        if not ignore_limits:
-            ranges = [tuple(None if limit is None or not np.isfinite(limit) else limit for limit in param.prior.limits) for param in cov._params]
-        return MixtureND([center], [cov._value], lims=ranges, names=names, labels=labels, label=label)
+        return self.to_fisher(params=params).to_getdist(label=label, ignore_limits=ignore_limits)
 
     def to_stats(self, params=None, quantities=None, sigfigs=2, tablefmt='latex_raw', fn=None):
         """

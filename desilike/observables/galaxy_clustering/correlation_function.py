@@ -26,18 +26,18 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         Data correlation function measurement: array, :class:`pycorr.BaseTwoPointEstimator` instance,
         or path to such instances, or list of such objects (in which case the average of them is taken).
         If dict, parameters to be passed to theory to generate mock measurement.
-    
+
     covariance : list, default=None
         2D array, list of :class:`pycorr.BaseTwoPointEstimator` instances, or paths to such instances;
         these are used to compute the covariance matrix.
-    
+
     slim : dict, default=None
         Separation limits: a dictionary mapping multipoles to (min separation, max separation, step (float)),
         e.g. ``{0: (30., 160., 5.), 2: (30., 160., 5.)}``.
-    
+
     **kwargs : dict
         Optional arguments for :class:`WindowedCorrelationFunctionMultipoles`, e.g.:
-        
+
         - theory: defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
         - fiber_collisions
     """
@@ -76,7 +76,9 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
 
         def load_data(fn):
             from pycorr import TwoPointCorrelationFunction
-            return TwoPointCorrelationFunction.load(fn)
+            with utils.LoggingContext(level='warning'):
+                toret = TwoPointCorrelationFunction.load(fn)
+            return toret
 
         def lim_data(corr, slim=slim):
             if slim is None:
@@ -100,7 +102,16 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             list_y = []
             for mocks in list_mocks:
                 if isinstance(mocks, path_types):
-                    mocks = [load_data(mock) for mock in glob.glob(mocks)]
+                    fns = sorted(glob.glob(mocks))
+                    mocks = []
+                    if len(fns):
+                        nfns = 5
+                        if len(fns) < nfns:
+                            msg = 'Loading {}.'.format(fns)
+                        else:
+                            msg = 'Loading [{}].'.format(', ..., '.join(fns[::len(fns) // nfns]))
+                        self.log_info(msg)
+                    mocks = [load_data(fn) for fn in fns]
                 else:
                     mocks = [mocks]
                 for mock in mocks:

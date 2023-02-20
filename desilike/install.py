@@ -276,7 +276,6 @@ class Installer(BaseClass):
                    'dylib_dir': os.path.join(self.install_dir, 'lib')}
         for name, value in default.items():
             setattr(self, name, kwargs.get(name, value))
-        self.log_info('Installation directory is {}.'.format(self.install_dir))
 
     @property
     def config_fn(self):
@@ -311,6 +310,8 @@ class Installer(BaseClass):
 
         More generally, whatever has an :meth:`install` method.
         """
+        self.log_info('Installation directory is {}.'.format(self.install_dir))
+
         def install(obj):
             try:
                 func = obj.install

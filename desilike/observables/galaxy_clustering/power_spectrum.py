@@ -83,10 +83,13 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
         def load_data(fn):
             from pypower import MeshFFTPower, PowerSpectrumMultipoles
-            toret = MeshFFTPower.load(fn)
-            if hasattr(toret, 'poles'):
-                return toret.poles
-            return PowerSpectrumMultipoles.load(fn)
+            with utils.LoggingContext(level='warning'):
+                toret = MeshFFTPower.load(fn)
+                if hasattr(toret, 'poles'):
+                    toret = toret.poles
+                else:
+                    toret = PowerSpectrumMultipoles.load(fn)
+            return toret
 
         def lim_data(power, klim=klim):
             if hasattr(power, 'poles'):
@@ -112,7 +115,16 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             list_y, list_shotnoise = [], []
             for mocks in list_mocks:
                 if isinstance(mocks, path_types):
-                    mocks = [load_data(mock) for mock in sorted(glob.glob(mocks))]
+                    fns = sorted(glob.glob(mocks))
+                    mocks = []
+                    if len(fns):
+                        nfns = 5
+                        if len(fns) < nfns:
+                            msg = 'Loading {}.'.format(fns)
+                        else:
+                            msg = 'Loading [{}].'.format(', ..., '.join(fns[::len(fns) // nfns]))
+                        self.log_info(msg)
+                    mocks = [load_data(fn) for fn in fns]
                 else:
                     mocks = [mocks]
                 for mock in mocks:

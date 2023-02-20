@@ -3,7 +3,7 @@ import numpy as np
 from desilike import utils
 
 
-def test_utils():
+def test_misc():
 
     shape = (10,) * 2
     rng = np.random.RandomState(seed=42)
@@ -14,6 +14,26 @@ def test_utils():
     assert np.allclose(utils.blockinv(blocks), utils.inv(covariance))
 
 
+def test_logger():
+
+    import logging
+    from desilike.utils import setup_logging, LoggingContext
+
+    setup_logging('info')
+
+    with LoggingContext():
+        logger = logging.getLogger('InfoContext')
+        logger.info('This should be printed')
+
+    with LoggingContext('warning'):
+        logger = logging.getLogger('WarningContext')
+        logger.info('This should not be printed')
+
+    logger = logging.getLogger('Info')
+    logger.info('This should be printed')
+
+
 if __name__ == '__main__':
 
-    test_utils()
+    #test_misc()
+    test_logger()

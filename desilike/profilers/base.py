@@ -166,7 +166,8 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         mask = np.isnan(toret)
         toret[mask] = -np.inf
         if mask.any() and self.mpicomm.rank == 0:
-            self.log_warning('loglikelihood is NaN for {}'.format({k: v[mask] for k, v in points.items()}))
+            import warnings
+            warnings.warn('loglikelihood is NaN for {}'.format({k: v[mask] for k, v in points.items()}))
         return toret
 
     @bcast_values

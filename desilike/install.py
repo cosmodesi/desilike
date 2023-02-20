@@ -149,9 +149,9 @@ def pip(pkgindex, pkgname=None, install_dir=None, no_deps=False, force_reinstall
     if no_deps:
         command.append('--no-deps')
     if force_reinstall:
-        command.append('--force_reinstall')
+        command.append('--force-reinstall')
     if ignore_installed:
-        command.append('--ignore_installed')
+        command.append('--ignore-installed')
     command = ' '.join(command)
     logger.info(command)
     from subprocess import Popen, PIPE
@@ -330,6 +330,10 @@ class Installer(BaseClass):
             RuntimeInfo.installer = installer_bak
         else:
             install(obj)
+
+    @property
+    def reinstall(self):
+        return self.force_reinstall or self.ignore_installed
 
     def pip(self, pkgindex, **kwargs):
         """

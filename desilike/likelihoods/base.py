@@ -43,7 +43,10 @@ class BaseLikelihood(BaseCalculator):
         likelihoods = []
         for likelihood in others:
             if isinstance(likelihood, SumLikelihood):
-                likelihoods += likelihood.likelihoods
+                if likelihood.runtime_info.initialized:
+                    likelihoods += likelihood.likelihoods
+                else:
+                    likelihoods += list(likelihood.init.get('likelihoods', []))
             else:
                 likelihoods.append(likelihood)
         return SumLikelihood(likelihoods=likelihoods)

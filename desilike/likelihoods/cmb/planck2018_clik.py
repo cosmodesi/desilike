@@ -123,7 +123,7 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
 
         from desilike.install import exists_package, exists_path, download, extract, InstallError
 
-        if installer.force_reinstall or not exists_package('clik'):
+        if installer.reinstall or not exists_package('clik'):
 
             for pkg in ['cython', 'astropy']:
                 installer.pip(pkg, no_deps=False, force_reinstall=False, ignore_installed=False)
@@ -174,7 +174,7 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
                 raise InstallError('clik installation failed, please do:\n' + error_msg)
             os.chdir(cwd)
 
-        if installer.force_reinstall or not exists_path(os.path.join(data_dir, cls.data_basename)):
+        if installer.reinstall or not exists_path(os.path.join(data_dir, cls.data_basename)):
             # Install data
             tar_base = cls.data_file_id
             url = 'http://pla.esac.esa.int/pla/aio/product-action?COSMOLOGY.FILE_ID={}'.format(tar_base)

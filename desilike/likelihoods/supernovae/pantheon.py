@@ -40,7 +40,7 @@ class PantheonSNLikelihood(BaseSNLikelihood):
     def plot(self):
         """
         Plot Hubble diagram: Hubble residuals as a function of distance.
-        
+
         fn : str, Path, default=None
         Optionally, path where to save figure.
         If not provided, figure is not saved.
@@ -78,7 +78,7 @@ class PantheonSNLikelihood(BaseSNLikelihood):
 
         config_fn = os.path.join(data_dir, 'full_long.dataset')
 
-        if installer.force_reinstall or not exists_path(config_fn):
+        if installer.reinstall or not exists_path(config_fn):
             github = 'https://raw.githubusercontent.com/dscolnic/Pantheon/master/'
             for fn in ['full_long.dataset', 'lcparam_full_long.txt', 'lcparam_full_long_zhel.txt', 'sys_full_long.txt']:
                 download(os.path.join(github, fn), os.path.join(data_dir, fn))

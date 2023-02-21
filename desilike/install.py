@@ -185,8 +185,9 @@ def source(fn):
         try:
             key, value = line.split('=')
             if key == 'PYTHONPATH':
-                for path in value.split(':'): _insert_first(sys.path, path)
-            os.environ[key] = value
+                for path in value.split(':')[::-1]: _insert_first(sys.path, path)
+            else:
+                os.environ[key] = value
         except ValueError:
             pass
 

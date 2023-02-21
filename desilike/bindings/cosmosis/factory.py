@@ -132,6 +132,11 @@ def CosmoSISLikelihoodFactory(cls, kw_like, module=None):
     @classmethod
     def build_module(cls):
 
+        # desilike changes sys.path
+        # but cosmosis does sys.path.pop(0) after importing the module; compensate this here
+        import sys
+        sys.path.insert(0, '')
+
         from cosmosis.datablock import SectionOptions
 
         def setup(options):

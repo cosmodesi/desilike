@@ -6,7 +6,7 @@ from desilike.io import BaseConfig
 from desilike.bindings.base import BaseLikelihoodGenerator, get_likelihood_params, Parameter, ParameterCollection
 
 
-from desilike.cosmo import Cosmology, BaseExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list, get_default
+from desilike.cosmo import Cosmology, BaseExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list, get_default, merge
 
 
 """Mock up cosmoprimo with cobaya's camb / classy provider."""
@@ -49,12 +49,18 @@ class CobayaEngine(BaseExternalEngine):
                         tmp['vars_pairs'] = []
                         for pair in attrs['of']:
                             if any('theta' in p for p in pair):
-                                require_f += [tmp['z']]
-                            tmp['vars_pairs'].append([convert[p] for p in pair])
+                                require_f.append(tmp['z'])
+                            tmp['vars_pairs'].append(tuple(convert[p] for p in pair))
+                        Pk_grid = toret.get('Pk_grid', {})
+                        if Pk_grid:
+                            tmp['nonlinear'] |= Pk_grid['nonlinear']
+                            tmp['z'] = merge([tmp['z'], Pk_grid['z']])
+                            tmp['k_max'] = max(tmp['k_max'], Pk_grid['k_max'])
+                            tmp['vars_pairs'] = Pk_grid['vars_pairs'] + [pair for pair in tmp['vars_pairs'] if pair not in Pk_grid['vars_pairs']]
                         toret['Pk_grid'] = tmp
         if require_f:
-            toret['fsigma8'] = {'z': require_f}
-            toret['sigma8_z'] = {'z': require_f}
+            toret['fsigma8'] = {'z': merge(require_f)}
+            toret['sigma8_z'] = {'z': merge(require_f)}
         if toret or requires.get('params', {}):  # to get /h units
             if 'Hubble' in toret:
                 toret['Hubble']['z'] = np.unique(np.insert(tmp['z'], 0, 0.))

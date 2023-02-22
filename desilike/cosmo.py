@@ -25,6 +25,11 @@ def get_default(name='z'):
     return {'z': np.linspace(0., 10., 60), 'k': np.logspace(-6., 2., 500)}[name]
 
 
+def merge(arrays):
+    arrays = _make_list(arrays)
+    return np.unique(np.concatenate([np.atleast_1d(a) for a in arrays], axis=0))
+
+
 class BaseExternalEngine(BaseEngine):
     """
     A base cosmoprimo's engine class, to be extended for specific external provider of cosmological calculation.
@@ -56,16 +61,12 @@ class BaseExternalEngine(BaseEngine):
         requires = toret
         requires.setdefault('params', {})
 
-        def concatenate(arrays):
-            arrays = _make_list(arrays)
-            return np.unique(np.concatenate([np.atleast_1d(a) for a in arrays], axis=0))
-
         for section, names in requires.items():
             for name, attrs in names.items():
                 if section == 'background':
-                    attrs['z'] = concatenate(attrs.get('z', get_default('z')))
+                    attrs['z'] = merge(attrs.get('z', get_default('z')))
                 if section == 'primordial':
-                    attrs['k'] = concatenate(attrs.get('k', get_default('k')))
+                    attrs['k'] = merge(attrs.get('k', get_default('k')))
                 if section == 'fourier':
                     if name == 'pk_interpolator':
                         attrs['of'] = [tuple(_make_list(of, length=2)) for of in attrs['of']]
@@ -73,5 +74,5 @@ class BaseExternalEngine(BaseEngine):
                         attrs['non_linear'] = attrs.get('non_linear', False)
                     if name == 'sigma8_z':
                         attrs['of'] = [tuple(_make_list(of, length=2)) for of in attrs['of']]
-                        for a in ['z']: attrs[a] = concatenate(attrs.get('z', get_default('z')))
+                        for a in ['z']: attrs[a] = merge(attrs.get('z', get_default('z')))
         return requires

@@ -6,7 +6,7 @@ from desilike.io import BaseConfig
 from desilike.bindings.base import BaseLikelihoodGenerator, get_likelihood_params, Parameter, ParameterCollection
 
 
-from desilike.cosmo import Cosmology, BaseExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list
+from desilike.cosmo import Cosmology, BaseExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, _make_list, get_default
 
 
 """Mock up cosmoprimo with cobaya's camb / classy provider."""
@@ -40,6 +40,7 @@ class CobayaEngine(BaseExternalEngine):
                     tmp = {}
                     if name == 'sigma8_z':
                         name = 'pk_interpolator'
+                        for aname in ['z', 'k']: attrs[aname] = attrs.get(aname, get_default(aname))
                         attrs['non_linear'] = False
                     if name == 'pk_interpolator':
                         tmp['nonlinear'] = attrs['non_linear']

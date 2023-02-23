@@ -158,7 +158,7 @@ class MontePythonLikelihoodGenerator(BaseLikelihoodGenerator):
                 di['min'] = di['max'] = None
             try:
                 di['center'] = prior.loc
-                di['variance'] = prior.scale ** 2
+                di['variance'] = prior.scale**2
             except AttributeError:
                 pass
             return di

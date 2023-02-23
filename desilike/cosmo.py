@@ -49,11 +49,12 @@ class BaseExternalEngine(BaseEngine):
             for name, value in d2.items():
                 if name in d1:
                     if isinstance(d1[name], dict) and isinstance(value, dict):
-                        toret[name] = _merge_dict(d1[name], value)
+                        value = _merge_dict(d1[name], value)
+                    elif d1[name] is None and value is None:
+                        pass
                     else:
-                        toret[name] = _make_list(d1[name], isinst=(list,)) + _make_list(value, isinst=(list,))
-                else:
-                    toret[name] = value
+                        value = _make_list(d1[name], isinst=(list,)) + _make_list(value, isinst=(list,))
+                toret[name] = value
             return toret
 
         toret = {}
@@ -69,10 +70,10 @@ class BaseExternalEngine(BaseEngine):
                     attrs['k'] = merge(attrs.get('k', get_default('k')))
                 if section == 'fourier':
                     if name == 'pk_interpolator':
-                        attrs['of'] = [tuple(_make_list(of, length=2)) for of in attrs['of']]
-                        for aname in ['z', 'k']: attrs[aname] = attrs.get(aname, get_default(aname))
+                        attrs['of'] = list(set([tuple(_make_list(of, length=2)) for of in attrs['of']]))
+                        for aname in ['z', 'k']: attrs[aname] = merge(attrs.get(aname, get_default(aname)))
                         attrs['non_linear'] = attrs.get('non_linear', False)
                     if name == 'sigma8_z':
-                        attrs['of'] = [tuple(_make_list(of, length=2)) for of in attrs['of']]
-                        for a in ['z']: attrs[a] = merge(attrs.get('z', get_default('z')))
+                        attrs['of'] = list(set([tuple(_make_list(of, length=2)) for of in attrs['of']]))
+                        for aname in ['z']: attrs[aname] = merge(attrs.get(aname, get_default(aname)))
         return requires

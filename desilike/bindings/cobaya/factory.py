@@ -56,11 +56,14 @@ class CobayaEngine(BaseExternalEngine):
                             tmp['nonlinear'] |= Pk_grid['nonlinear']
                             tmp['z'] = merge([tmp['z'], Pk_grid['z']])
                             tmp['k_max'] = max(tmp['k_max'], Pk_grid['k_max'])
-                            tmp['vars_pairs'] = Pk_grid['vars_pairs'] + [pair for pair in tmp['vars_pairs'] if pair not in Pk_grid['vars_pairs']]
+                            tmp['vars_pairs'] = list(set(Pk_grid['vars_pairs'] + tmp['vars_pairs']))
                         toret['Pk_grid'] = tmp
         if require_f:
-            toret['fsigma8'] = {'z': merge(require_f)}
-            toret['sigma8_z'] = {'z': merge(require_f)}
+            require_f = merge(require_f)
+            # oversampling, to interpolate at z of Pk_grid with classy wrapper
+            require_f = merge([require_f, np.linspace(0., require_f[-1] + 1., 20)])
+            toret['fsigma8'] = {'z': require_f}
+            toret['sigma8_z'] = {'z': require_f}
         if toret or requires.get('params', {}):  # to get /h units
             if 'Hubble' in toret:
                 toret['Hubble']['z'] = np.unique(np.insert(tmp['z'], 0, 0.))
@@ -114,7 +117,14 @@ class Fourier(Section):
         pk = pk.T * self.h**3
         ntheta = sum('theta' in of_ for of_ in of)
         if ntheta:
-            f = self.provider.get_fsigma8(z=z) / self.provider.get_sigma8_z(z=z)
+            from scipy import interpolate
+            collector = {}
+            for name in ['sigma8_z', 'fsigma8']:
+                provider = self.provider.requirement_providers[name]  # hacky way to get to classy
+                collector[name] = interpolate.interp1d(provider.collectors[name].z_pool, provider.current_state[name], kind='cubic', axis=-1, copy=True, bounds_error=False, assume_sorted=False)(z)
+            f = collector['fsigma8'] / collector['sigma8_z']
+            # Below does not work for classy wrapper, because z does not match requested z...
+            # f = self.provider.get_fsigma8(z=z) / self.provider.get_sigma8_z(z=z)
             pk = pk * f**ntheta
         return PowerSpectrumInterpolator2D(k, z, pk, **kwargs)
 

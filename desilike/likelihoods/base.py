@@ -164,8 +164,8 @@ class BaseGaussianLikelihood(BaseLikelihood):
                 self.differentiation = Differentiation(self, getter, method='auto', order={str(param): 1 for param in solved_params})
                 pipeline._varied_params = varied_params_bak
 
-            #derivatives = self.mpicomm.bcast(self.differentiation(), root=0)
-            derivatives = self.mpicomm.bcast(self.differentiation(**{param.name: param.value for param in solved_params}), root=0)
+            derivatives = self.mpicomm.bcast(self.differentiation(), root=0)
+            #derivatives = self.mpicomm.bcast(self.differentiation(**{param.name: param.value for param in solved_params}), root=0)
             pipeline.more_calculate = self._solve
             # flatdiff is model - data
             projections, inverse_fishers = [], []

@@ -125,5 +125,5 @@ if __name__ == '__main__':
     #test_gaussian_likelihood()
     #test_params()
     #test_help()
-    #test_copy()
-    test_error()
+    test_copy()
+    #test_error()

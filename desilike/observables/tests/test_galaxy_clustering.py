@@ -278,14 +278,16 @@ def test_fiber_collisions():
 
 from desilike.base import BaseCalculator
 
+
 class CompressionWindow(BaseCalculator):
 
     def initialize(self, likelihood, theory, quantities):
         self.likelihood = likelihood
         self.observable = self.likelihood.observables[0].deepcopy()
         self.quantities = [str(name) for name in quantities]
-        kp = np.unique(np.concatenate(self.observable.k))
-        theory.init['template'].init.update(kp=kp)
+        self.kp = np.unique(np.concatenate(self.observable.k))
+        #self.kp = np.linspace(0.009, 0.16, 30)
+        theory.init['template'].init.update(kp=self.kp)
         for param in theory.params:
             param.update(fixed=True)
         self.observable.init.update(theory=theory)
@@ -293,7 +295,13 @@ class CompressionWindow(BaseCalculator):
 
     def calculate(self):
         self.likelihood.flatdata = self.observable.flattheory.copy()
-        self.likelihood()
+        for i in range(3):
+            #for calc in self.likelihood.runtime_info.pipeline.calculators:
+            #    calc.runtime_info.tocalculate = True
+            #self.likelihood(**self.likelihood.runtime_info.pipeline.param_values)
+            self.likelihood()
+            #print(i, self.likelihood.runtime_info.pipeline.param_values)
+        #self.likelihood.observables[0].plot(show=True)
         self.values = {}
         for quantity in self.quantities:
             self.values[quantity] = self.likelihood.runtime_info.pipeline.param_values[quantity]
@@ -304,65 +312,195 @@ class CompressionWindow(BaseCalculator):
 
     def __getstate__(self):
         state = {'compression_{}'.format(quantity): value for quantity, value in self.values.items()}
-        state['quantities'] = self.quantities
+        for name in ['quantities', 'kp']: state[name] = getattr(self, name)
         return state
 
     def __setstate__(self, state):
-        self.quantities = state['quantities']
+        for name in ['quantities', 'kp']: setattr(self, name, state[name])
         self.values = {quantity: state['compression_{}'.format(quantity)] for quantity in self.quantities}
 
 
 def test_compression_window():
 
-    from desilike.theories.galaxy_clustering import StandardPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import StandardPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
 
     z, b1 = 1., 2.
-    theory = KaiserTracerPowerSpectrumMultipoles(template=StandardPowerSpectrumTemplate(z=z))
-    theory.params['b1'].update(fixed=False, value=b1)
-    theory.params['sn0'].update(fixed=True, value=0.)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data={},
-                                                         theory=theory)
+    order = 2
+    kwargs_template = {'only_now': 'peakaverage', 'z': z, 'fiducial': 'DESI'}
+    theory_compression = KaiserTracerPowerSpectrumMultipoles(template=StandardPowerSpectrumTemplate(**kwargs_template, apmode='qap'))
+    theory_compression.params['b1'].update(fixed=False, value=b1)
+    #theory_compression.params['sn0'].update(fixed=True, value=0.)
+    observable_compression = TracerPowerSpectrumMultipolesObservable(klim={0: [0.01, 0.15, 0.01], 2: [0.01, 0.15, 0.01], 4: [0.01, 0.15, 0.01]},
+                                                                     data={},
+                                                                     theory=theory_compression)
+
     footprint = BoxFootprint(volume=1e10, nbar=1e-3)
-    cov = ObservablesCovarianceMatrix(observable, footprints=footprint)()
-    likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
-    for param in likelihood.all_params.select(basename='q*'):
-        param.update(fixed=True)
+    cov = ObservablesCovarianceMatrix(observable_compression, footprints=footprint)()
+    likelihood_compression = ObservablesGaussianLikelihood(observables=observable_compression, covariance=cov)
+    #likelihood_compression.all_params['df'].update(fixed=True)
+    #likelihood_compression.all_params['qap'].update(fixed=True)
+    #for param in likelihood_compression.all_params.select(basename='q*'):
+    #    param.update(fixed=True)
     from desilike.emulators import Emulator, TaylorEmulatorEngine
-    emulator = Emulator(theory, engine=TaylorEmulatorEngine(order=1))
+    emulator = Emulator(theory_compression, engine=TaylorEmulatorEngine(order=order))
     emulator.set_samples()
     emulator.fit()
 
-    observable.init.update(theory=emulator.to_calculator())
-    for param in likelihood.varied_params:
+    observable_compression.init.update(theory=emulator.to_calculator())
+    for param in likelihood_compression.varied_params:
         param.update(prior=None, derived='.best')
-    likelihood()
 
-    template = BandVelocityPowerSpectrumTemplate(z=z)
-    theory_band = KaiserTracerPowerSpectrumMultipoles(template=template)
+    template_band = BandVelocityPowerSpectrumTemplate(**kwargs_template)
+    theory_band = KaiserTracerPowerSpectrumMultipoles(template=template_band)
     theory_band.params['b1'].update(fixed=False, value=b1)
-    compression = CompressionWindow(likelihood=likelihood, theory=theory_band, quantities=theory.template.varied_params)
-    compression.all_params['qap'].update(fixed=True)
+    #theory_band.params['sn0'].update(fixed=True, value=0.)
+    """
+    observable_band = TracerPowerSpectrumMultipolesObservable(klim={0: [0.01, 0.15, 0.01], 2: [0.01, 0.15, 0.01], 4: [0.01, 0.15, 0.01]},
+                                                              data={},
+                                                              theory=theory_band)
+    #observable_band = observable_compression.deepcopy()
+    #observable_band.init.update(theory=theory_band)
+    observable_band()
+    """
+    compression_window = CompressionWindow(likelihood=likelihood_compression, theory=theory_band, quantities=theory_compression.template.varied_params)
+    #compression_window.all_params['qap'].update(fixed=True)
 
     from desilike.emulators import Emulator, TaylorEmulatorEngine
-    emulator = Emulator(compression, engine=TaylorEmulatorEngine(order=1))
+    emulator = Emulator(compression_window, engine=TaylorEmulatorEngine(order=order))
     emulator.set_samples()
-    print(emulator.samples['compression_df']['compression_df'], emulator.samples['compression_df']['compression_df'].derivs)
+    #print(emulator.samples['compression_df']['compression_df'], emulator.samples['compression_df']['compression_df'].derivs)
+    #print(emulator.samples['compression_qap']['compression_qap'], emulator.samples['compression_qap']['compression_qap'].derivs)
+    #exit()
     emulator.fit()
-    emulated_compression = emulator.to_calculator()
-    print(emulated_compression())
+    emulated_compression_window = emulator.to_calculator()
+    #emulated_compression_window()
 
+    observable_compression.init.update(theory=theory_compression)
+    observable_direct = observable_compression.deepcopy()
+    template_direct = DirectPowerSpectrumTemplate(**kwargs_template)
+    theory_direct = KaiserTracerPowerSpectrumMultipoles(template=template_direct)
+    theory_direct.params['b1'].update(fixed=False, value=b1)
+    #theory_direct.params['sn0'].update(fixed=True, value=0.)
+    observable_direct.init.update(theory=theory_direct)
+    #observable_direct.wmatrix.theory.init.update(template=template_direct)
+    #print(observable_direct.all_params, print(observable_direct.wmatrix.theory.template))
+
+    from desilike.profilers import MinuitProfiler
+
+    #likelihood_compression.all_params['qap'].update(fixed=True)
+    profiler = MinuitProfiler(likelihood_compression, seed=42)
+    bestfits, expected_no_window, expected_no_window_grid, expected_with_window = [], [], [], []
+
+    def get_expected_no_window(grid_coordinates=False):
+        cosmo, fiducial = template_direct.cosmo, template_direct.fiducial
+        fo = fiducial.get_fourier()
+        r = 8.
+        fsigma8_fid = fo.sigma_rz(r, template_direct.z, of='theta_cb')
+        qper, qpar = cosmo.comoving_angular_distance(template_direct.z) / fiducial.comoving_angular_distance(template_direct.z), fiducial.efunc(template_direct.z) / cosmo.efunc(template_direct.z)
+        qiso = qpar**(1. / 3.) * qper**(2. / 3.)
+        qap = qpar / qper
+        fo = cosmo.get_fourier()
+        if grid_coordinates: r *= qiso
+        df = fo.sigma_rz(r, template_direct.z, of='theta_cb') / fsigma8_fid
+        return {'qiso': qiso, 'qap': qap, 'df': df}
+
+    def get_expected_with_window():
+        cosmo, fiducial = template_direct.cosmo, template_direct.fiducial
+        qper, qpar = cosmo.comoving_angular_distance(template_direct.z) / fiducial.comoving_angular_distance(template_direct.z), fiducial.efunc(template_direct.z) / cosmo.efunc(template_direct.z)
+        qiso = qpar**(1. / 3.) * qper**(2. / 3.)
+        qap = qpar / qper
+        # Move pk_tt to grid coordinates
+        pk_tt = 1. / qiso**3 * cosmo.get_fourier().pk_interpolator(of='theta_cb')(emulated_compression_window.kp / qiso, z=template_direct.z)
+        #pk_tt = cosmo.get_fourier().pk_interpolator(of='theta_cb')(emulated_compression_window.kp, z=template_direct.z)
+        # Compare to fiducial
+        pk_tt /= fiducial.get_fourier().pk_interpolator(of='theta_cb')(emulated_compression_window.kp, z=template_direct.z)
+        '''
+        pk_tt = 1. / qiso**3 * cosmo.get_fourier().pk_interpolator(of='delta_cb')(emulated_compression_window.kp / qiso, z=template_direct.z)
+        pk_tt /= fiducial.get_fourier().pk_interpolator(of='delta_cb')(emulated_compression_window.kp, z=template_direct.z)
+        fo = fiducial.get_fourier()
+        f_fid = fo.sigma8_z(template_direct.z, of='theta_cb') / fo.sigma8_z(template_direct.z, of='delta_cb')
+        fo = cosmo.get_fourier()
+        r = 8. * qiso
+        f = fo.sigma_rz(r, template_direct.z, of='theta_cb') / fo.sigma_rz(r, template_direct.z, of='delta_cb')
+        pk_tt *= f**2 / f_fid**2
+        '''
+        params = {'qap': qap, **{'ptt{:d}'.format(ik): ptt for ik, ptt in enumerate(pk_tt)}}
+        return emulated_compression_window(**params)
+
+    params = {}
+    #params['w0_fld'] = [-1.2, -1., -0.8]
+    #params['wa_fld'] = [-0.3, 0., 0.3]
+    #params['Omega_m'] = [0.27, 0.3, 0.33]
+    params['Omega_m'] = [0.2, 0.3, 0.4]
+    params['h'] = [0.65, 0.7, 0.75]
+    import itertools
+    grid_params = [dict(zip(params.keys(), values)) for values in itertools.product(*params.values())]
+    for param in params:
+        template_direct.params[param].update(fixed=False)
+
+    theories = []
+    for params in grid_params:
+        likelihood_compression.flatdata = observable_direct(**params).flattheory
+        theories.append(observable_direct.theory)
+        profiles = profiler.maximize(niterations=5)
+        profiler.profiles = None
+        index = profiles.bestfit.logposterior.argmax()
+        bestfits.append({param.name: (profiles.bestfit[param][index], profiles.error[param][index]) for param in profiles.bestfit.params(varied=True)})
+        expected_no_window.append(get_expected_no_window(grid_coordinates=False))
+        expected_no_window_grid.append(get_expected_no_window(grid_coordinates=True))
+        expected_with_window.append(get_expected_with_window())
+        print('besfit', bestfits[-1])
+        print('no window', expected_no_window[-1])
+        print('no window grid', expected_no_window_grid[-1])
+        print('with window', expected_with_window[-1])
+
+    params_compression = emulated_compression_window.quantities
+
+    from matplotlib import pyplot as plt
+    fig, lax = plt.subplots(1, len(params_compression), sharex=False, sharey=False, figsize=(len(params_compression) * 5, 5), squeeze=False)
+    lax = lax.flatten()
+    fig.subplots_adjust(hspace=0)
+    for iparam, param in enumerate(params_compression):
+        ax = lax[iparam]
+        '''
+        ax.scatter([bestfit[param][0] for bestfit in bestfits], [expected[param] for expected in expected_no_window], color='C0', label='standard interpretation')
+        ax.scatter([bestfit[param][0] for bestfit in bestfits], [expected[param] for expected in expected_no_window_grid], color='C1', label='standard interpretation in grid coordinates')
+        #ax.scatter([bestfit[param][0] for bestfit in bestfits], [expected[param] for expected in expected_with_window], color='C1', label='window')
+        ax.errorbar([bestfit[param][0] for bestfit in bestfits], [expected[param] for expected in expected_with_window], yerr=[bestfit[param][1] for bestfit in bestfits], color='C2', label='window', marker='o', linestyle='')
+        ax.plot(ax.get_xlim(), ax.get_xlim(), linestyle='--', color='k')
+        ax.set_xlabel('best fit')
+        ax.set_ylabel('expected')
+        '''
+        ax.scatter([expected[param] for expected in expected_no_window], [bestfit[param][0] for bestfit in bestfits], color='C0', label='standard interpretation')
+        ax.scatter([expected[param] for expected in expected_no_window_grid], [bestfit[param][0] for bestfit in bestfits], color='C1', label='standard interpretation in grid coordinates')
+        ax.errorbar([expected[param] for expected in expected_with_window], [bestfit[param][0] for bestfit in bestfits], yerr=[bestfit[param][1] for bestfit in bestfits], color='C2', label='window', marker='o', linestyle='')
+        ax.plot(ax.get_xlim(), ax.get_xlim(), linestyle='--', color='k')
+        ax.set_xlabel('expected')
+        ax.set_ylabel('best fit')
+        ax.set_title(param)
+    lax[0].legend()
+    plt.show()
+
+    ax = plt.gca()
+    for ill, ell in enumerate(observable_direct.ells):
+        for theory in theories:
+            ax.plot(observable_direct.k[ill], observable_direct.k[ill] * theory[ill], color='C{:d}'.format(ill), alpha=0.3)
+        ax.plot([], [], linestyle='-', color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
+    ax.legend()
+    ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+    ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+    plt.show()
 
 
 if __name__ == '__main__':
 
     setup_logging()
-    test_power_spectrum()
-    test_correlation_function()
+    # test_power_spectrum()
+    # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
-    # test_compression_window()
+    test_compression_window()

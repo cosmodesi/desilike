@@ -55,7 +55,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
     """Base class for linear power spectrum template."""
     config_fn = 'power_template.yaml'
 
-    def initialize(self, k=None, z=1., with_now=False, apmode='qparqper', fiducial='DESI'):
+    def initialize(self, k=None, z=1., with_now=False, apmode='qparqper', fiducial='DESI', only_now=False):
         self.z = float(z)
         self.cosmo = self.fiducial = get_cosmo(fiducial)
         if k is None: k = np.logspace(-3., 1., 400)
@@ -71,6 +71,9 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
         self.with_now = False
         BasePowerSpectrumExtractor.calculate(self)
         self.with_now = with_now
+        if only_now and not self.with_now:
+            self.with_now = only_now
+        self.only_now = bool(only_now)
         for name in ['sigma8', 'fsigma8', 'f', 'pk_dd_interpolator']:
             setattr(self, name + '_fid', getattr(self, name))
             delattr(self, name)
@@ -86,6 +89,9 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
         if self.with_now:
             for name in ['pknow_dd_interpolator', 'pknow_dd']:
                 setattr(self, name, getattr(self, name + '_fid'))
+        if self.only_now:
+            for name in ['dd_interpolator', 'dd']:
+                setattr(self, 'pk_' + name, getattr(self, 'pknow_' + name))
 
     @property
     def qpar(self):
@@ -128,13 +134,6 @@ class FixedPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.apeffect()  # qpar, qper = 1. as a default
         self.runtime_info.requires = []  # remove APEffect dependence
 
-    def calculate(self):
-        for name in ['sigma8', 'fsigma8', 'f', 'pk_dd_interpolator', 'pk_dd']:
-            setattr(self, name, getattr(self, name + '_fid'))
-        if self.with_now:
-            for name in ['pknow_dd_interpolator', 'pknow_dd']:
-                setattr(self, name, getattr(self, name + '_fid'))
-
 
 class DirectPowerSpectrumTemplate(BasePowerSpectrumTemplate):
 
@@ -158,6 +157,9 @@ class DirectPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.pk_dd = self.pk_dd_interpolator(self.k)
         if self.with_now:
             self.pknow_dd = self.pknow_dd_interpolator(self.k)
+        if self.only_now:
+            for name in ['dd_interpolator', 'dd']:
+                setattr(self, 'pk_' + name, getattr(self, 'pknow_' + name))
 
 
 class BAOExtractor(BaseCalculator):
@@ -497,10 +499,13 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
             delattr(self, name)
 
     def calculate(self, df=1., dm=0., dn=0.):
+        super(ShapeFitPowerSpectrumTemplate, self).calculate()
         factor = np.exp(dm / self.a * np.tanh(self.a * np.log(self.k / self.kp)) + dn * np.log(self.k / self.kp))
         self.pk_dd = self.pk_dd_fid * factor
         if self.with_now:
             self.pknow_dd = self.pknow_dd_fid * factor
+        if self.only_now:
+            self.pk_dd = self.pknow_dd
         self.n = self.n_fid + dn
         self.m = self.m_fid + dm
         self.f = self.f_fid * df
@@ -648,6 +653,9 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate, BandVelocityP
         self.pk_dd = self.pk_tt_fid * factor
         if self.with_now:
             self.pknow_dd = self.pknow_tt_fid * factor
+        if self.only_now:
+            for name in ['dd']:
+                setattr(self, 'pk_' + name, getattr(self, 'pknow_' + name))
 
     def get(self):
         return self

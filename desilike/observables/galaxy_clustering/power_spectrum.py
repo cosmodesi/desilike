@@ -225,16 +225,13 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
         fig.subplots_adjust(hspace=0)
         data, theory, std = self.data, self.theory, self.std
-        try:
-            mode = self.wmatrix.theory.wiggle
-        except AttributeError as exc:
-            raise ValueError('Theory {} has no mode wiggle'.format(self.theory.theory.__class__)) from exc
-        self.wmatrix.theory.wiggle = False
+        only_now = self.wmatrix.theory.template.only_now
+        self.wmatrix.theory.template.only_now = True
         for calculator in self.runtime_info.pipeline.calculators:
             calculator.runtime_info.tocalculate = True
             calculator.runtime_info.calculate()
         nowiggle = self.theory
-        self.wmatrix.theory.wiggle = mode
+        self.wmatrix.theory.template.only_now = only_now
         for ill, ell in enumerate(self.ells):
             lax[ill].errorbar(self.k[ill], self.k[ill] * (data[ill] - nowiggle[ill]), yerr=self.k[ill] * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o')
             lax[ill].plot(self.k[ill], self.k[ill] * (theory[ill] - nowiggle[ill]), color='C{:d}'.format(ill))

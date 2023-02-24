@@ -389,13 +389,14 @@ def test_png():
     assert not np.allclose(theory2(fnl_loc=0.), theory(), rtol=2e-3)
 
 
+
 if __name__ == '__main__':
 
     setup_logging()
     #test_integ()
-    #test_bao()
+    test_bao()
     #test_full_shape()
     #test_pk_to_xi()
     #test_ap_diff()
     #test_png()
-    test_templates()
+    #test_templates()

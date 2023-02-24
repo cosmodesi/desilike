@@ -195,10 +195,10 @@ def test_install():
 if __name__ == '__main__':
 
     setup_logging()
-    test_init()
+    #test_init()
     #test_observable()
     #test_likelihood()
-    test_params()
+    #test_params()
     test_copy()
     #test_cosmo()
     #test_install()

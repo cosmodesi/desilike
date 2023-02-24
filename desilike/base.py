@@ -891,12 +891,11 @@ class BaseCalculator(BaseClass):
         if self.runtime_info.initialized:
             # Let's reinitialize, other we'd need to replace references to calculator dependencies in each calculator
             new.runtime_info.initialize()
-            self.runtime_info.params = self.runtime_info.params.deepcopy()
+            new.runtime_info.params = self.runtime_info.params.deepcopy()
             if getattr(self.runtime_info, '_pipeline', None) is not None:  # no need if self.runtime_info.pipeline isn't created
-                new.runtime_info.pipeline._set_params(self.runtime_info.pipeline.params.deepcopy())  # to preserve depends
+                params = self.runtime_info.pipeline.params.deepcopy()
+                new.runtime_info.pipeline._set_params(params)  # to preserve depends
                 new(**self.runtime_info.pipeline.param_values)
-        else:
-            self.runtime_info.clear()
         return new
 
     def deepcopy(self):

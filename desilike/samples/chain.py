@@ -499,7 +499,7 @@ class Chain(Samples):
         -------
         precision : array, float, ParameterPrecision
         """
-        return self.covariance(params=params, ddof=ddof).to_precision(return_type=return_type)
+        return self.covariance(params=params, ddof=ddof, return_type=None).to_precision(return_type=return_type)
 
     def corrcoef(self, params=None):
         """Return correlation matrix array computed from (weighted) samples (optionally restricted to input parameters)."""
@@ -627,7 +627,7 @@ class Chain(Samples):
         precision = self.precision(params=params, ddof=ddof, return_type=None)
         params = precision._params
         mean = self.choice(params=params, return_type='nparray', **kwargs)
-        return LikelihoodFisher(center=mean, params=params, offset=self.logposterior.max(), hessian=precision, with_prior=True)
+        return LikelihoodFisher(center=mean, params=params, offset=self.logposterior.max(), hessian=-precision.view(return_type='nparray'), with_prior=True)
 
     def to_stats(self, params=None, quantities=None, sigfigs=2, tablefmt='latex_raw', fn=None):
         """

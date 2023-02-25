@@ -428,12 +428,14 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
 
     def calculate(self):
         super(ShapeFitPowerSpectrumExtractor, self).calculate()
-        kp = self.kp * self.fiducial.rs_drag / self.cosmo.rs_drag
-        self.Ap = self.pknow_dd_interpolator(kp)
+        s = self.cosmo.rs_drag / self.fiducial.rs_drag
+        kp = self.kp / s
+        self.Ap = 1. / s**3 * self.pknow_dd_interpolator(kp)
         self.f_sqrt_Ap = self.f * self.Ap**0.5
         self.n = self.cosmo.n_s
         dk = 1e-2
-        k = self.kp * np.array([1. - dk, 1. + dk])
+        k = kp * np.array([1. - dk, 1. + dk])
+        # No need to include 1/s^3 factors here, as we care about the slope
         if self.n_varied:
             pk_prim = self.cosmo.get_primordial().pk_interpolator()(k) * k
         else:

@@ -105,11 +105,11 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
 
     if cov is not None:
         if hasattr(source, 'to_fisher'):  # Chain, Profiles
-            source = source.to_fisher()
+            source = source.to_fisher(params=params)
         if hasattr(source, 'covariance'):  # LikelihoodFisher
-            source = source.covariance(return_type=None)
+            source = source.covariance(params=params, return_type=None)
         if hasattr(source, 'to_covariance'):  # ParameterPrecision
-            source = source.to_covariance(return_type=None)
+            source = source.to_covariance(params=params, return_type=None)
         tmp = None
         if params is not None:
             if isinstance(source, np.ndarray):

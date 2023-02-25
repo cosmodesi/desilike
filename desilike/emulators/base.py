@@ -114,6 +114,8 @@ class Emulator(BaseClass):
         if mpicomm.rank == 0:
             self.log_info('Varied parameters: {}.'.format(self.varied_params))
             self.log_info('Found varying {} and fixed {} outputs.'.format(self.varied, list(self.fixed.keys())))
+        if not self.varied:
+            raise ValueError('Found no varying quantity in provided calculator')
 
         # Add in cosmo_requires
         self.fixed['cosmo_requires'] = self.calculator.runtime_info.pipeline.get_cosmo_requires()

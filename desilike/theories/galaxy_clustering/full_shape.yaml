@@ -172,7 +172,6 @@ params:
       scale: 0.5
     latex: b_{s}
   b3:
-    fixed: True
     prior:
       dist: norm
       loc: 0.

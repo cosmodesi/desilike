@@ -281,42 +281,31 @@ from desilike.base import BaseCalculator
 
 class CompressionWindow(BaseCalculator):
 
-    def initialize(self, likelihood, theory, quantities):
+    def initialize(self, likelihood, observable, quantities):
         self.likelihood = likelihood
-        self.observable = self.likelihood.observables[0].deepcopy()
+        self.observable = observable
         self.quantities = [str(name) for name in quantities]
-        self.kp = np.unique(np.concatenate(self.observable.k))
-        #self.kp = np.linspace(0.009, 0.16, 30)
-        theory.init['template'].init.update(kp=self.kp)
-        for param in theory.params:
-            param.update(fixed=True)
-        self.observable.init.update(theory=theory)
         self.runtime_info.requires = [self.observable]
 
     def calculate(self):
         self.likelihood.flatdata = self.observable.flattheory.copy()
         for i in range(3):
-            #for calc in self.likelihood.runtime_info.pipeline.calculators:
-            #    calc.runtime_info.tocalculate = True
-            #self.likelihood(**self.likelihood.runtime_info.pipeline.param_values)
-            self.likelihood()
-            #print(i, self.likelihood.runtime_info.pipeline.param_values)
+            self.likelihood()  # find parameter best fit (iteratively in case order > 1)
         #self.likelihood.observables[0].plot(show=True)
         self.values = {}
         for quantity in self.quantities:
             self.values[quantity] = self.likelihood.runtime_info.pipeline.param_values[quantity]
-            #self.values[quantity] = self.likelihood.runtime_info.pipeline.derived[quantity].item()
 
     def get(self):
         return self.values
 
     def __getstate__(self):
         state = {'compression_{}'.format(quantity): value for quantity, value in self.values.items()}
-        for name in ['quantities', 'kp']: state[name] = getattr(self, name)
+        for name in ['quantities']: state[name] = getattr(self, name)
         return state
 
     def __setstate__(self, state):
-        for name in ['quantities', 'kp']: setattr(self, name, state[name])
+        for name in ['quantities']: setattr(self, name, state[name])
         self.values = {quantity: state['compression_{}'.format(quantity)] for quantity in self.quantities}
 
 
@@ -351,19 +340,17 @@ def test_compression_window():
     for param in likelihood_compression.varied_params:
         param.update(prior=None, derived='.best')
 
+    # Theory is band power + AP
     template_band = BandVelocityPowerSpectrumTemplate(**kwargs_template)
     theory_band = KaiserTracerPowerSpectrumMultipoles(template=template_band)
     theory_band.params['b1'].update(fixed=False, value=b1)
-    #theory_band.params['sn0'].update(fixed=True, value=0.)
-    """
-    observable_band = TracerPowerSpectrumMultipolesObservable(klim={0: [0.01, 0.15, 0.01], 2: [0.01, 0.15, 0.01], 4: [0.01, 0.15, 0.01]},
-                                                              data={},
-                                                              theory=theory_band)
-    #observable_band = observable_compression.deepcopy()
-    #observable_band.init.update(theory=theory_band)
-    observable_band()
-    """
-    compression_window = CompressionWindow(likelihood=likelihood_compression, theory=theory_band, quantities=theory_compression.template.varied_params)
+    for param in theory_band.params: param.update(fixed=True)
+
+    observable_band = observable_compression.deepcopy()
+    kp = np.unique(np.concatenate(observable_compression.k))
+    template_band.init.update(kp=kp)
+    observable_band.init.update(theory=theory_band)
+    compression_window = CompressionWindow(likelihood=likelihood_compression, observable=observable_band, quantities=theory_compression.template.varied_params)
     #compression_window.all_params['qap'].update(fixed=True)
 
     from desilike.emulators import Emulator, TaylorEmulatorEngine
@@ -371,7 +358,6 @@ def test_compression_window():
     emulator.set_samples()
     #print(emulator.samples['compression_df']['compression_df'], emulator.samples['compression_df']['compression_df'].derivs)
     #print(emulator.samples['compression_qap']['compression_qap'], emulator.samples['compression_qap']['compression_qap'].derivs)
-    #exit()
     emulator.fit()
     emulated_compression_window = emulator.to_calculator()
     #emulated_compression_window()
@@ -411,13 +397,13 @@ def test_compression_window():
         qiso = qpar**(1. / 3.) * qper**(2. / 3.)
         qap = qpar / qper
         # Move pk_tt to grid coordinates
-        pk_tt = 1. / qiso**3 * cosmo.get_fourier().pk_interpolator(of='theta_cb')(emulated_compression_window.kp / qiso, z=template_direct.z)
-        #pk_tt = cosmo.get_fourier().pk_interpolator(of='theta_cb')(emulated_compression_window.kp, z=template_direct.z)
+        pk_tt = 1. / qiso**3 * cosmo.get_fourier().pk_interpolator(of='theta_cb')(kp / qiso, z=template_direct.z)
+        #pk_tt = cosmo.get_fourier().pk_interpolator(of='theta_cb')(kp, z=template_direct.z)
         # Compare to fiducial
-        pk_tt /= fiducial.get_fourier().pk_interpolator(of='theta_cb')(emulated_compression_window.kp, z=template_direct.z)
+        pk_tt /= fiducial.get_fourier().pk_interpolator(of='theta_cb')(kp, z=template_direct.z)
         '''
-        pk_tt = 1. / qiso**3 * cosmo.get_fourier().pk_interpolator(of='delta_cb')(emulated_compression_window.kp / qiso, z=template_direct.z)
-        pk_tt /= fiducial.get_fourier().pk_interpolator(of='delta_cb')(emulated_compression_window.kp, z=template_direct.z)
+        pk_tt = 1. / qiso**3 * cosmo.get_fourier().pk_interpolator(of='delta_cb')(kp / qiso, z=template_direct.z)
+        pk_tt /= fiducial.get_fourier().pk_interpolator(of='delta_cb')(kp, z=template_direct.z)
         fo = fiducial.get_fourier()
         f_fid = fo.sigma8_z(template_direct.z, of='theta_cb') / fo.sigma8_z(template_direct.z, of='delta_cb')
         fo = cosmo.get_fourier()

@@ -201,11 +201,13 @@ class BaseGaussianLikelihood(BaseLikelihood):
 
         sum_loglikelihood = 0.
         sum_logprior = 0.
+        derived = getattr(pipeline, 'derived', None)
 
         for param, xx in zip(solved_params, x):
             sum_logprior += all_params[param].prior(xx)
             pipeline.param_values[param.name] = xx
-            pipeline.derived.set(ParameterArray(xx, param=param))
+            if derived is not None:
+                derived.set(ParameterArray(xx, param=param))
 
         for likelihood in likelihoods:
             loglikelihood = float(likelihood.loglikelihood)
@@ -219,7 +221,8 @@ class BaseGaussianLikelihood(BaseLikelihood):
                 if indices_marg:
                     loglikelihood += 1. / 2. * dx[indices_marg].dot(inverse_fishers[index][np.ix_(indices_marg, indices_marg)]).dot(dx[indices_marg])
             # Set derived values
-            pipeline.derived.set(ParameterArray(loglikelihood, param=likelihood._param_loglikelihood))
+            if derived is not None:
+                derived.set(ParameterArray(loglikelihood, param=likelihood._param_loglikelihood))
             sum_loglikelihood += loglikelihood
         if indices_marg:
             sum_loglikelihood -= 1. / 2. * np.linalg.slogdet(sum_inverse_fishers[np.ix_(indices_marg, indices_marg)])[1]
@@ -233,8 +236,9 @@ class BaseGaussianLikelihood(BaseLikelihood):
         self.loglikelihood = sum_loglikelihood
         self.logprior += sum_logprior
 
-        pipeline.derived.set(ParameterArray(self.loglikelihood, param=self._param_loglikelihood))
-        pipeline.derived.set(ParameterArray(self.logprior, param=self._param_logprior))
+        if derived is not None:
+            derived.set(ParameterArray(self.loglikelihood, param=self._param_loglikelihood))
+            derived.set(ParameterArray(self.logprior, param=self._param_logprior))
         return self.loglikelihood + self.logprior
 
     def __getstate__(self):

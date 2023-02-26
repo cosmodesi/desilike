@@ -30,7 +30,9 @@ params:
     latex: \Omega_{m}
   omega_b:
     prior:
-      limits: [0.005, 0.1]
+      dist: norm
+      loc: 0.02237
+      scale: 0.00037
     ref:
       dist: norm
       loc: 0.02237
@@ -55,6 +57,7 @@ params:
       scale: 0.0042
     delta: 0.0004
     latex: n_{s}
+    fixed: True
   tau_reio:
     value: 0.0544
     prior:
@@ -351,8 +354,19 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.001
+    delta: 0.002
     latex: \Omega_{m}
+  omega_b:
+    prior:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00037
+    ref:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00015
+    delta: 0.0001
+    latex: \omega_{b}
   logA:
     prior:
       limits: [1.61, 3.91]
@@ -362,6 +376,76 @@ params:
       scale: 0.014
     delta: 0.0014
     latex: \ln(10^{10} A_{s})
+  n_s:
+    prior:
+      limits: [0.8, 1.2]
+    ref:
+      dist: norm
+      loc: 0.9649
+      scale: 0.0042
+    delta: 0.0004
+    latex: n_{s}
+    fixed: True
+  tau_reio:
+    value: 0.0544
+    prior:
+      limits: [0.01, 0.8]
+    ref:
+      dist: norm
+      loc: 0.0544
+      scale: 0.008
+    delta: 0.0012
+    latex: \tau
+    fixed: True
+  m_ncdm:
+    prior:
+      limits: [0., 5.]
+    ref:
+      dist: norm
+      loc: 0.06
+      scale: 0.12
+    delta: 0.01
+    latex: m_{ncdm}
+    fixed: True
+  N_ur:
+    prior:
+      limits: [0.05, 10.]
+    ref:
+      dist: norm
+      loc: 2.0328
+      scale: 0.32
+    latex: N_{ur}
+    fixed: True
+  w0_fld:
+    prior:
+      limits: [-3., 1.]
+    ref:
+      dist: norm
+      loc: -1
+      scale: 0.08
+    delta: 0.01
+    latex: w_{0}
+    fixed: True
+  wa_fld:
+    prior:
+      limits: [-3., 2.]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.3
+    delta: 0.01
+    latex: w_{a}
+    fixed: True
+  Omega_k:
+    prior:
+      limits: [-0.3, 0.3]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.0065
+    delta: 0.002
+    latex: \Omega_{k}
+    fixed: True
 
 ---
 
@@ -384,8 +468,19 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.001
+    delta: 0.002
     latex: \Omega_{m}
+  omega_b:
+    prior:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00037
+    ref:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00015
+    delta: 0.0001
+    latex: \omega_{b}
   logA:
     prior:
       limits: [1.61, 3.91]
@@ -395,6 +490,76 @@ params:
       scale: 0.014
     delta: 0.0014
     latex: \ln(10^{10} A_{s})
+  n_s:
+    prior:
+      limits: [0.8, 1.2]
+    ref:
+      dist: norm
+      loc: 0.9649
+      scale: 0.0042
+    delta: 0.0004
+    latex: n_{s}
+    fixed: True
+  tau_reio:
+    value: 0.0544
+    prior:
+      limits: [0.01, 0.8]
+    ref:
+      dist: norm
+      loc: 0.0544
+      scale: 0.008
+    delta: 0.0012
+    latex: \tau
+    fixed: True
+  m_ncdm:
+    prior:
+      limits: [0., 5.]
+    ref:
+      dist: norm
+      loc: 0.06
+      scale: 0.12
+    delta: 0.01
+    latex: m_{ncdm}
+    fixed: True
+  N_ur:
+    prior:
+      limits: [0.05, 10.]
+    ref:
+      dist: norm
+      loc: 2.0328
+      scale: 0.32
+    latex: N_{ur}
+    fixed: True
+  w0_fld:
+    prior:
+      limits: [-3., 1.]
+    ref:
+      dist: norm
+      loc: -1
+      scale: 0.08
+    delta: 0.01
+    latex: w_{0}
+    fixed: True
+  wa_fld:
+    prior:
+      limits: [-3., 2.]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.3
+    delta: 0.01
+    latex: w_{a}
+    fixed: True
+  Omega_k:
+    prior:
+      limits: [-0.3, 0.3]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.0065
+    delta: 0.002
+    latex: \Omega_{k}
+    fixed: True
 
 ---
 
@@ -417,8 +582,19 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.001
+    delta: 0.002
     latex: \Omega_{m}
+  omega_b:
+    prior:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00037
+    ref:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00015
+    delta: 0.0001
+    latex: \omega_{b}
   logA:
     prior:
       limits: [1.61, 3.91]
@@ -428,3 +604,73 @@ params:
       scale: 0.014
     delta: 0.0014
     latex: \ln(10^{10} A_{s})
+  n_s:
+    prior:
+      limits: [0.8, 1.2]
+    ref:
+      dist: norm
+      loc: 0.9649
+      scale: 0.0042
+    delta: 0.0004
+    latex: n_{s}
+    fixed: True
+  tau_reio:
+    value: 0.0544
+    prior:
+      limits: [0.01, 0.8]
+    ref:
+      dist: norm
+      loc: 0.0544
+      scale: 0.008
+    delta: 0.0012
+    latex: \tau
+    fixed: True
+  m_ncdm:
+    prior:
+      limits: [0., 5.]
+    ref:
+      dist: norm
+      loc: 0.06
+      scale: 0.12
+    delta: 0.01
+    latex: m_{ncdm}
+    fixed: True
+  N_ur:
+    prior:
+      limits: [0.05, 10.]
+    ref:
+      dist: norm
+      loc: 2.0328
+      scale: 0.32
+    latex: N_{ur}
+    fixed: True
+  w0_fld:
+    prior:
+      limits: [-3., 1.]
+    ref:
+      dist: norm
+      loc: -1
+      scale: 0.08
+    delta: 0.01
+    latex: w_{0}
+    fixed: True
+  wa_fld:
+    prior:
+      limits: [-3., 2.]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.3
+    delta: 0.01
+    latex: w_{a}
+    fixed: True
+  Omega_k:
+    prior:
+      limits: [-0.3, 0.3]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.0065
+    delta: 0.002
+    latex: \Omega_{k}
+    fixed: True

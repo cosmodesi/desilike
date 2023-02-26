@@ -29,6 +29,7 @@ class BaseLikelihood(BaseCalculator):
             param = param[0]
             param.update(derived=True)
             setattr(self, '_param_{}'.format(name), param)
+        #self.differentiation = None
 
     def get(self):
         pipeline = self.runtime_info.pipeline

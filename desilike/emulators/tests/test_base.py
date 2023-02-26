@@ -28,6 +28,7 @@ def test_base():
         print(emulator.varied_params, emulator.all_params)
         print(emulator.runtime_info.pipeline.get_cosmo_requires())
         emulator()
+        emulator = emulator.deepcopy()
         #print(emulator.params, emulator.runtime_info.init[2], emulator.runtime_info.params)
         emulator().shape
         emulator.save(fn)
@@ -43,7 +44,7 @@ def test_base():
     emulator.save(fn)
     pt = EmulatedCalculator.load(fn)
     calculator.init.update(pt=pt)
-    calculator(f=0.8)
+    calculator(df=0.8)
 
 
 if __name__ == '__main__':

@@ -669,19 +669,20 @@ class RuntimeInfo(BaseClass):
 
     @initialized.setter
     def initialized(self, initialized):
-        self._initialized = initialized
         if initialized:
             self.init._updated = False
         else:
             self._pipeline = None
             for calculator in self.required_by:
                 calculator.runtime_info.initialized = False
+        self._initialized = initialized
 
     def initialize(self):
         """Initialize calculator (if not already initialized), calling :meth:`BaseCalculator.initialize` with :attr:`init` configuration."""
         if not self.initialized:
             self.clear()
             self._initialization = True   # to avoid infinite loops
+            self.calculator.__dict__ = {name: self.calculator.__dict__[name] for name in ['info', 'runtime_info', 'mpicomm']}
             self.install()
             bak = self.init.params
             params_with_namespace = ParameterCollection(self.init.params).deepcopy()
@@ -862,7 +863,8 @@ class BaseCalculator(BaseClass):
         # calculator2 will call calculator1 dependencies
         """
         new = object.__new__(self.__class__)
-        new.__dict__.update(self.__dict__)
+        new.mpicomm = self.mpicomm
+        #new.__dict__.update(self.__dict__)  # this is problematic, we should remove every but non-standard attributes
         for name in ['info', 'runtime_info']:
             setattr(new, name, getattr(self, name).copy())
         new.runtime_info.calculator = new
@@ -879,7 +881,8 @@ class BaseCalculator(BaseClass):
 
     def __deepcopy__(self, memo):
         new = object.__new__(self.__class__)
-        new.__dict__.update(self.__dict__)
+        new.mpicomm = self.mpicomm
+        #new.__dict__.update(self.__dict__)  # this is problematic, we should remove every but non-standard attributes
         for name in ['info', 'runtime_info']:
             setattr(new, name, getattr(self, name).copy())
         memo[id(self)] = new

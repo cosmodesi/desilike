@@ -71,6 +71,10 @@ class BaseTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
     def get(self):
         return self.power
 
+    @property
+    def template(self):
+        return self.pt.template
+
 
 class BaseTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipoles):
 
@@ -102,6 +106,10 @@ class BaseTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMulti
 
     def get(self):
         return self.corr
+
+    @property
+    def template(self):
+        return self.pt.template
 
 
 class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):

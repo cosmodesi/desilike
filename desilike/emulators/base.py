@@ -38,8 +38,10 @@ def _setstate(self, state):
 
 class EmulatedCalculator(BaseCalculator):
 
-    def initialize(self, **kwargs):
-        pass
+    def initialize(self, emulator=None, **kwargs):
+        self.emulator = emulator
+        self.params = self.emulator.params.deepcopy()
+        self.calculate(**{name: self.params[name].value for name in self.emulator.varied_params})
 
     def calculate(self, **params):
         predict = self.emulator.predict(**params)
@@ -146,7 +148,8 @@ class Emulator(BaseClass):
 
     @property
     def mpicomm(self):
-        return self._mpicomm
+        from desilike import mpi
+        return getattr(self, '_mpicomm', mpi.COMM_WORLD)
 
     @mpicomm.setter
     def mpicomm(self, mpicomm):
@@ -270,11 +273,7 @@ class Emulator(BaseClass):
         except AttributeError:
             pass
 
-        calculator = new_cls()
-        calculator.emulator = self
-        calculator.params = self.params.deepcopy()
-        predict = self.predict(**{name: self.params[name].value for name in self.varied_params})
-        _setstate(calculator, {**self.fixed, **predict})
+        calculator = new_cls(emulator=self)
         calculator.runtime_info.initialize()  # to initialize
         if derived is not None:
             calculator.runtime_info.pipeline._set_derived([calculator], params=[derived])

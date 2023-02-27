@@ -556,7 +556,7 @@ class Profiles(BaseClass):
         state = mpicomm.bcast(state, root=mpiroot)
         for name, acls in cls._attrs.items():
             if mpicomm.bcast(name in value if mpicomm.rank == mpiroot else None, root=mpiroot):
-                state[name] = acls.bcast(value.get(name) if mpicomm.rank == mpiroot else None, mpiroot=mpiroot).__getstate__()
+                state[name] = acls.bcast(value.get(name) if mpicomm.rank == mpiroot else None, mpicomm=mpicomm, mpiroot=mpiroot).__getstate__()
             else:
                 del state[name]
         return cls.from_state(state)

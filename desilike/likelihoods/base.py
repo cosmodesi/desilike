@@ -159,7 +159,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
 
             pipeline.more_calculate = lambda: None
             self.differentiation = getattr(self, 'differentiation', None)
-            if self.differentiation is None:
+            if self.differentiation is None or self.differentiation.mpicomm is not self.mpicomm:
                 varied_params_bak = pipeline.varied_params
                 pipeline._varied_params = ParameterCollection(solved_params)  # to set varied_params
                 self.differentiation = Differentiation(self, getter, method='auto', order={str(param): 1 for param in solved_params})

@@ -454,6 +454,8 @@ class Differentiation(BaseClass):
                         nautoindices.append(nautoindex)
                         degrees.append(nautodegree)
                         Y = [getter_samples[autoorder][(slice(None),) + nautoindex + (Ellipsis,)] for getter_samples in self._getter_samples]
+                        if autodegree:  # with jax nan derivatives are zero derivatives...
+                            for y in Y: y[np.isnan(y)] = 0.
                         for iy, y in enumerate(Y): derivatives[iy].append(y[cidx])
                         # Now finite differentiation
                         yshapes = [y.shape[samples.ndim:] for y in Y]

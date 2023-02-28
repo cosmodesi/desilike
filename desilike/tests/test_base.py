@@ -83,12 +83,6 @@ def test_likelihood():
 
 def test_params():
 
-    import copy
-    from desilike.parameter import Parameter, ParameterCollection
-    from scipy import stats
-    params = ParameterCollection([Parameter('test', prior=dict(dist=stats.uniform, limits=(0., 1.)))])
-    copy.deepcopy(params)
-
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
@@ -98,6 +92,11 @@ def test_params():
                                                          data='_pk/data.npy', covariance='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
+    likelihood.observables[0].wmatrix.theory.params['b1'].update(value=3.)
+    print(likelihood(), likelihood.runtime_info.pipeline.param_values)
+    exit()
+
     print(likelihood.runtime_info.pipeline.params)
     print(likelihood(dm=0.), likelihood(dm=0.01), likelihood(b1=2., dm=0.02))
     print(likelihood.varied_params)
@@ -198,7 +197,7 @@ if __name__ == '__main__':
     #test_init()
     #test_observable()
     #test_likelihood()
-    #test_params()
-    test_copy()
+    test_params()
+    #test_copy()
     #test_cosmo()
     #test_install()

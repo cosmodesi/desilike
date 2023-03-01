@@ -503,6 +503,7 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
     def calculate(self, df=1., dm=0., dn=0.):
         super(ShapeFitPowerSpectrumTemplate, self).calculate()
         factor = np.exp(dm / self.a * np.tanh(self.a * np.log(self.k / self.kp)) + dn * np.log(self.k / self.kp))
+        #factor = np.exp(dm * np.log(self.k / self.kp))
         self.pk_dd = self.pk_dd_fid * factor
         if self.with_now:
             self.pknow_dd = self.pknow_dd_fid * factor

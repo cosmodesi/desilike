@@ -25,7 +25,7 @@ class ParameterBestFit(Samples):
     def logposterior(self):
         """Log-posterior."""
         if self._logposterior not in self:
-            self[self._logposterior] = np.zeros(self.shape, dtype='f8')
+            self[Parameter(self._logposterior, derived=True)] = np.zeros(self.shape, dtype='f8')
         return self[self._logposterior]
 
     @property

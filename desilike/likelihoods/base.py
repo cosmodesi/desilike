@@ -169,7 +169,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
             #derivatives = self.mpicomm.bcast(self.differentiation(**{param.name: param.value for param in solved_params}), root=0)
             pipeline.more_calculate = self._solve
             # flatdiff is model - data
-            projections, inverse_fishers = [], []
+            jacs, projections, inverse_fishers = [], [], []
 
             for likelihood, derivative in zip(solve_likelihoods, derivatives):
                 flatdiff = derivative[()]
@@ -182,6 +182,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
                     except KeyError:
                         jac.append(zeros)
                 jac = np.column_stack(jac)
+                jacs.append(jac)
                 if precision.ndim == 2:
                     projector = precision.dot(jac)
                 else:
@@ -214,6 +215,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
             loglikelihood = float(likelihood.loglikelihood)
             # Modify derived loglikelihood in-place
             if likelihood in solve_likelihoods:
+                likelihood.flatdiff += jacs[likelihoods.index(likelihood)].dot(dx)  # so that flatdiff is updated
                 index = solve_likelihoods.index(likelihood)
                 # Note: priors of solved params have already been added
                 if indices_best:

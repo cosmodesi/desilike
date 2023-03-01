@@ -20,9 +20,7 @@ Example notebooks presenting most use cases are provided in directory nb/.
 
 ## TODO
 
-.yaml or not .yaml file? e.g. parameter specifications could be given in docstrings, and automatically read out at runtime
-(but this would make very long docstrings...).
-Add curve_fit-type profiler.
+When autodiff is available, pass gradient to profilers / samplers whenever relavant.
 
 ## Documentation
 

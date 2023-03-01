@@ -723,7 +723,7 @@ class RuntimeInfo(BaseClass):
             try:
                 self.calculator.calculate(**self.param_values)
             except Exception as exc:
-                raise PipelineError('Error in method calculate of {}'.format(self.calculator)) from exc
+                raise PipelineError('Error in method calculate of {} with calculator parameters {} and pipeline parameters'.format(self.calculator, self.param_values, self.pipeline.param_values)) from exc
             self.monitor.stop()
             self._derived = None
             self.calculated = True

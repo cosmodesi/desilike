@@ -2,6 +2,7 @@ import numpy as np
 from matplotlib import gridspec, transforms
 
 from desilike import plotting
+from desilike.plotting import *
 from desilike.parameter import is_parameter_sequence
 from . import diagnostics, utils
 
@@ -67,16 +68,16 @@ def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, k
     params : list, ParameterCollection, default=None
         Parameters to plot trace for.
         Defaults to varied and not derived parameters.
-    
+
     figsize : float, tuple, default=None
         Figure size.
-    
+
     colors : str, list
         List of (or single) color(s) for chains.
-    
+
     labelsize : int, default=None
         Label sizes.
-    
+
     kw_plot : dict, default=None
         Optional arguments for :meth:`matplotlib.axes.Axes.plot`.
         Defaults to ``{'alpha': 0.2}``.
@@ -145,7 +146,7 @@ def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, s
         List of increasing number of steps to include in calculation of Gelman-Rubin statistics.
         Defaults to ``np.arange(100, nsteps, 500)``, where ``nsteps`` is the minimum size of input ``chains``:
         Gelman-Rubin statistics is then plotted for chain slices (0, 100), (0, 600), ...
-    
+
     labelsize : int, default=None
         Label sizes.
 
@@ -218,7 +219,7 @@ def plot_geweke(chains, params=None, threshold=None, slices=None, labelsize=None
         List of increasing number of steps to include in calculation of Geweke statistics.
         Defaults to ``np.arange(100, nsteps, 500)``, where ``nsteps`` is the minimum size of input ``chains``:
         Geweke statistics is then plotted for chain slices (0, 100), (0, 600), ...
-    
+
     labelsize : int, default=None
         Label sizes.
 
@@ -289,7 +290,7 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
         List of increasing number of steps to include in calculation of autocorrelation time.
         Defaults to ``np.arange(100, nsteps, 500)``, where ``nsteps`` is the minimum size of input ``chains``:
         Autocorrelation time is then plotted for chain slices (0, 100), (0, 600), ...
-    
+
     labelsize : int, default=None
         Label sizes.
 
@@ -343,7 +344,7 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
 def plot_triangle(chains, params=None, labels=None, g=None, **kwargs):
     """
     Triangle plot.
-    
+
     Note
     ----
     *GetDist* package is required.
@@ -356,7 +357,7 @@ def plot_triangle(chains, params=None, labels=None, g=None, **kwargs):
     params : list, ParameterCollection, default=None
         Parameters to plot distribution for.
         Defaults to varied and not derived parameters.
-    
+
     labels : str, list, default=None
         Name for  *GetDist* to use for input chains.
 
@@ -366,7 +367,7 @@ def plot_triangle(chains, params=None, labels=None, g=None, **kwargs):
 
     kw_save : dict, default=None
         Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
-        
+
     g : getdist subplot_plotter()
         can be created with `g = gdplt.get_subplot_plotter()` and can be modified with g.settings
 
@@ -408,25 +409,25 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
 
     labels : list, str, default=None
         Label(s) for best fits within each :class:`Profiles` instance.
-    
+
     colors : list, str, default=None
         Color(s) for best fits within each :class:`Profiles` instance.
 
     truth : float, bool, default=None
         Plot this truth / reference value for parameter.
         If ``True``, take :attr:`Parameter.value`.
-    
+
     error : str, default='error'
         What to take as error:
         - 'error' for parabolic error
         - 'interval' for lower and upper errors corresponding to :math:`\Delta \chi^{2} = 1`.
-    
+
     labelsize : int, default=None
         Label sizes.
-    
+
     ticksize : int, default=None
         Tick sizes.
-    
+
     kw_scatter : dict, default=None
         Optional arguments for :meth:`matplotlib.axes.Axes.scatter`.
         Defaults to ``{'marker': 'o'}``.
@@ -437,20 +438,20 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
         absolute lower and upper y-coordinates of band;
         lower and upper fraction around truth.
         If float, fraction around truth.
-    
+
     kw_mean : dict, default=None
         If ``None``, no mean is plotted.
         Else, optional arguments for :meth:`matplotlib.axes.Axes.errorbar`.
         Defaults to ``{'marker': 'o'}``.
-    
+
     kw_truth : dict, default=None
         If ``None``, and ``truth`` not provided, no truth is plotted.
         Else, optional arguments for :meth:`matplotlib.axes.Axes.axhline`.
         Defaults to ``{'color': 'k', 'linestyle': ':', 'linewidth': 2}``.
-    
+
     kw_yband : dict, default=None
         Optional arguments for :meth:`matplotlib.axes.Axes.axhspan`.
-    
+
     kw_legend : dict, default=None
         Optional arguments for :meth:`matplotlib.axes.Axes.legend`.
 
@@ -563,7 +564,7 @@ def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=No
 
     ylimits : list, default=None
         If not ``None``, limits  for y-axis.
-    
+
     figsize : float, tuple, default=None
         Figure size.
 
@@ -628,7 +629,7 @@ def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors
 
     offsets : list, float, default=0
         Vertical offset for each profile.
-    
+
     nrows : int, default=1
         Number of rows in figure.
 
@@ -637,30 +638,30 @@ def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors
 
     colors : list, str, default=None
         Color(s) for profiles within each :class:`Profiles` instance.
-    
+
     linestyles : list, str, default=None
         Linestyle(s) for profiles within each :class:`Profiles` instance.
-    
+
     cl : int, tuple, default=(1, 2, 3)
         Confidence levels to plot.
-    
+
     labelsize : int, default=None
         Label sizes.
-    
+
     ticksize : int, default=None
         Tick sizes.
-    
+
     kw_profile : dict, default=None
         Optional arguments for :meth:`matplotlib.axes.Axes.plot`.
         Defaults to ``{'marker': 'o'}``.
-    
+
     kw_cl : dict, default=None
         Optional arguments for :meth:`matplotlib.axes.Axes.axhline`.
         Defaults to ``{'color': 'k', 'linestyle': ':', 'linewidth': 2}``.
-    
+
     kw_legend : dict, default=None
         Optional arguments for :meth:`matplotlib.axes.Axes.legend`.
-    
+
     figsize : float, tuple, default=None
         Figure size.
 
@@ -733,7 +734,7 @@ def plot_profile_comparison(profiles, profiles_ref, params=None, labels=None, co
     ----------
     profiles : list
         List of (or single) :class:`Profiles` instance(s).
-    
+
     profiles_ref : list
         List of (or single) :class:`Profiles` instance(s) to compare to.
 
@@ -746,7 +747,7 @@ def plot_profile_comparison(profiles, profiles_ref, params=None, labels=None, co
 
     colors : list, str, default=None
         Color(s) for profiles within each :class:`Profiles` instance.
-    
+
     **kwargs : dict
         Optional arguments for :func:`plot_profile`
         ('nrows', 'cl', 'labelsize', 'ticksize', 'kw_profile', 'kw_cl', 'kw_legend', 'figsize').

@@ -17,11 +17,11 @@ class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
         super(BasePTPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
-        kin = np.geomspace(min(1e-3, self.k[0] / 2), max(1., self.k[-1] * 2), 3000)  # margin for AP effect
         if template is None:
             template = DirectPowerSpectrumTemplate()
         self.template = template
-        self.template.init.setdefault('k', kin)
+        kin = np.geomspace(min(1e-3, self.k[0] / 2, self.template.init.get('k', [1.])[0]), max(1., self.k[-1] * 2, self.template.init.get('k', [0.])[0]), 3000)  # margin for AP effect
+        self.template.init.update(k=kin)
 
 
 class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipoles):
@@ -33,11 +33,11 @@ class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipole
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
         super(BasePTCorrelationFunctionMultipoles, self).initialize(*args, **kwargs)
-        kin = np.geomspace(min(1e-3, 1 / self.s[-1] / 2), max(2., 1 / self.s[0] * 2), 3000)  # margin for AP effect
+        kin = np.geomspace(min(1e-3, 1 / self.s[-1] / 2, self.template.init.get('k', [1.])[0]), max(2., 1 / self.s[0] * 2, self.template.init.get('k', [0.])[0]), 3000)  # margin for AP effect
         if template is None:
             template = DirectPowerSpectrumTemplate(k=kin)
         self.template = template
-        self.template.init.setdefault('k', kin)
+        self.template.init.update(k=kin)
 
 
 class BaseTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):

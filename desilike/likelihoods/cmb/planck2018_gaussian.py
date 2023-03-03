@@ -47,8 +47,8 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
             base_dir, obs_dir = basename.split('_plikHM_')
         except ValueError as exc:
             raise ValueError('basename {} is expected to contain "_plikHM_"'.format(basename)) from exc
-        base_chain_fn = os.path.join(data_dir, base_dir, 'plikHM_' + obs_dir, basename)
-        base_dist_fn = os.path.join(data_dir, base_dir, 'plikHM_' + obs_dir, 'dist', basename)
+        self.base_chain_fn = os.path.join(data_dir, base_dir, 'plikHM_' + obs_dir, basename)
+        self.base_dist_fn = os.path.join(data_dir, base_dir, 'plikHM_' + obs_dir, 'dist', basename)
         if cosmo is None:
             from desilike.theories.primordial_cosmology import Cosmoprimo
             cosmo = Cosmoprimo()
@@ -58,12 +58,12 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
         basenames = list(convert_params.keys())
         if source == 'covmat':
             from desilike import LikelihoodFisher
-            fisher = LikelihoodFisher.read_getdist(base_dist_fn)
+            fisher = LikelihoodFisher.read_getdist(self.base_dist_fn)
         elif source == 'chains' or source[0] == 'chains':
             burnin = None
             if utils.is_sequence(source): burnin = source[1]
             from desilike.samples import Chain
-            chains = Chain.read_getdist(base_chain_fn)
+            chains = Chain.read_getdist(self.base_chain_fn)
             chain = Chain.concatenate([chain.select(basename=basenames).remove_burnin(burnin) if burnin is not None else chain for chain in chains])
             fisher = chain.to_fisher()
         else:

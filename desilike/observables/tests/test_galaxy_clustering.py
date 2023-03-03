@@ -116,6 +116,7 @@ def test_covariance_matrix():
     observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [30., 150., 4.], 2: [30., 150., 4.], 4: [30., 150., 4.]},
                                                                data={}, #'../../tests/_xi/data.npy',
                                                                theory=theory)
+
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov())
     print(likelihood())
@@ -485,8 +486,8 @@ if __name__ == '__main__':
     # test_power_spectrum()
     # test_correlation_function()
     # test_footprint()
-    # test_covariance_matrix()
+    test_covariance_matrix()
     # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
-    test_compression_window()
+    # test_compression_window()

@@ -81,9 +81,9 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
         self.theory = theory
         self.theory.init.update(cls=cls, lensing=True, unit='muK', T0=2.7255)
         if cosmo is not None: self.theory.init.update(cosmo=cosmo)
-        basenames = [param.basename for param in self.params if param.name not in (self._param_loglikelihood.name, self._param_logprior.name) and param.basename not in ['SZ']]
-        if set(basenames) != set(self.nuisance_params):
-            raise ValueError('Expected nuisance parameters {}, received {}'.format(self.nuisance_params, basenames))
+        #basenames = [param.basename for param in self.params if param.name not in (self._param_loglikelihood.name, self._param_logprior.name) and not param.drop]
+        #if set(basenames) != set(self.nuisance_params):
+        #    raise ValueError('Expected nuisance parameters {}, received {}'.format(self.nuisance_params, basenames))
 
     def calculate(self, **params):
         self.loglikelihood = -np.inf

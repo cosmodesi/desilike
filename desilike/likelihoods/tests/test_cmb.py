@@ -10,7 +10,7 @@ from desilike.likelihoods.cmb import (BasePlanck2018GaussianLikelihood, TTHighlP
 def test_install():
     for Likelihood in (BasePlanck2018GaussianLikelihood, TTHighlPlanck2018PlikLikelihood, TTHighlPlanck2018PlikLiteLikelihood, TTHighlPlanck2018PlikUnbinnedLikelihood,
                        TTTEEEHighlPlanck2018PlikLikelihood, TTTEEEHighlPlanck2018PlikLiteLikelihood, TTTEEEHighlPlanck2018PlikUnbinnedLikelihood,
-                       LensingPlanck2018ClikLikelihood, TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood)[:1]:
+                       LensingPlanck2018ClikLikelihood, TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood):
         if 'Unbinned' in Likelihood.__name__: continue
         if 'Lite' in Likelihood.__name__: continue
         print(Likelihood.__name__)
@@ -119,11 +119,11 @@ def test_error():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_install()
+    test_install()
     #test_clik()
     #test_sum()
     #test_gaussian_likelihood()
     #test_params()
     #test_help()
-    test_copy()
+    #test_copy()
     #test_error()

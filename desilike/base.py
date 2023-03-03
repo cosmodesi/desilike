@@ -132,7 +132,7 @@ class BasePipeline(BaseClass):
         for calculator in self.calculators:
             calculator.runtime_info.initialized = True
         self.calculators = self.calculators[::-1]
-        self.mpicomm = calculator.mpicomm
+        self.mpicomm = calculator._mpicomm
         for calculator in self.calculators:
             calculator.runtime_info.tocalculate = True
         self._params = ParameterCollection()
@@ -211,7 +211,7 @@ class BasePipeline(BaseClass):
         """Set MPI communicator."""
         self._mpicomm = mpicomm
         for calculator in self.calculators:
-            calculator.mpicomm = mpicomm
+            calculator._mpicomm = mpicomm
 
     def calculate(self, **params):
         """
@@ -381,13 +381,12 @@ class BasePipeline(BaseClass):
         for calculator, params in zip(calculators, params):
             for param in params:
                 if param not in self.varied_params:
-                    # Remove derived parameters with same basename
                     if hasattr(param, 'setdefault'):
                         param = param.copy()
                         param.setdefault('namespace', calculator.runtime_info.namespace)
                     param = Parameter(param).clone(derived=True)
                     for dparam in calculator.runtime_info.derived_params.names(basename=param.basename):
-                        calculator.runtime_info.params[dparam]
+                        param = calculator.runtime_info.params[dparam]
                     calculator.runtime_info.params.set(param)
         self._set_params()
 
@@ -641,10 +640,10 @@ class RuntimeInfo(BaseClass):
         self._params = ParameterCollection(params)
         self._params.updated = False
         self.base_params = {param.basename: param for param in self._params}
-        self.varied_params = ParameterCollection([param for param in self._params if (param.depends or (not param.derived) or param.solved)])
+        self.input_params = ParameterCollection([param for param in self._params if (param.depends or (not param.derived) or param.solved) and not param.drop])
         self.derived_params = self._params.select(derived=True)
         self.solved_params = self._params.select(solved=True)
-        self.param_values = {param.basename: param.value for param in self.varied_params}
+        self.param_values = {param.basename: param.value for param in self.input_params}
 
     @property
     def derived(self):
@@ -682,7 +681,7 @@ class RuntimeInfo(BaseClass):
         if not self.initialized:
             self.clear()
             self._initialization = True   # to avoid infinite loops
-            self.calculator.__dict__ = {name: self.calculator.__dict__[name] for name in ['info', 'runtime_info', 'mpicomm']}
+            self.calculator.__dict__ = {name: self.calculator.__dict__[name] for name in ['info', 'runtime_info', '_mpicomm']}
             self.install()
             bak = self.init.params
             params_with_namespace = ParameterCollection(self.init.params).deepcopy()
@@ -715,7 +714,8 @@ class RuntimeInfo(BaseClass):
     def calculate(self, **params):
         """
         If calculator's :class:`BaseCalculator.calculate` has not be called with input parameter values, call it,
-        keeping track of running time with :attr:`monitor`."""
+        keeping track of running time with :attr:`monitor`.
+        """
         self.initialize()
         self.set_param_values(params)
         if self.tocalculate:
@@ -723,7 +723,7 @@ class RuntimeInfo(BaseClass):
             try:
                 self.calculator.calculate(**self.param_values)
             except Exception as exc:
-                raise PipelineError('Error in method calculate of {} with calculator parameters {} and pipeline parameters'.format(self.calculator, self.param_values, self.pipeline.param_values)) from exc
+                raise PipelineError('Error in method calculate of {} with calculator parameters {} and pipeline parameters {}'.format(self.calculator, self.param_values, self.pipeline.param_values)) from exc
             self.monitor.stop()
             self._derived = None
             self.calculated = True
@@ -737,8 +737,8 @@ class RuntimeInfo(BaseClass):
         self.params
         if full:
             for param, value in param_values.items():
-                if param in self.varied_params:
-                    basename = self.varied_params[param].basename
+                if param in self.input_params:
+                    basename = self.input_params[param].basename
                     if force is not None:
                         self._tocalculate = force
                     elif type(self.param_values[basename]) is not type(value) or self.param_values[basename] != value:
@@ -811,12 +811,24 @@ class BaseCalculator(BaseClass):
         new.info = cls_info
         init.params = params
         new.runtime_info = RuntimeInfo(new, init=init)
-        new.mpicomm = mpi.COMM_WORLD
+        new._mpicomm = mpi.COMM_WORLD
         return new
 
     def __init__(self, *args, **kwargs):
         self.init.args = args
         self.init.update(**kwargs)
+
+    @property
+    def mpicomm(self):
+        if not self.runtime_info.initialized:
+            return self._mpicomm
+        return self.runtime_info.pipeline.mpicomm
+
+    @mpicomm.setter
+    def mpicomm(self, mpicomm):
+        if not self.runtime_info.initialized:
+            self._mpicomm = mpicomm
+        self.runtime_info.pipeline.mpicomm = mpicomm
 
     @property
     def init(self):
@@ -851,9 +863,9 @@ class BaseCalculator(BaseClass):
         """
         return {}
 
-    def __repr__(self):
-        """Return string representation, i.e. calculator's name."""
-        return self.runtime_info.name
+    #def __repr__(self):
+    #    """Return string representation, i.e. calculator's name."""
+    #    return self.runtime_info.name
 
     def __copy__(self):
         """
@@ -863,7 +875,7 @@ class BaseCalculator(BaseClass):
         # calculator2 will call calculator1 dependencies
         """
         new = object.__new__(self.__class__)
-        new.mpicomm = self.mpicomm
+        new._mpicomm = self._mpicomm
         #new.__dict__.update(self.__dict__)  # this is problematic, we should remove every but non-standard attributes
         for name in ['info', 'runtime_info']:
             setattr(new, name, getattr(self, name).copy())
@@ -881,7 +893,7 @@ class BaseCalculator(BaseClass):
 
     def __deepcopy__(self, memo):
         new = object.__new__(self.__class__)
-        new.mpicomm = self.mpicomm
+        new._mpicomm = self._mpicomm
         #new.__dict__.update(self.__dict__)  # this is problematic, we should remove every but non-standard attributes
         for name in ['info', 'runtime_info']:
             setattr(new, name, getattr(self, name).copy())
@@ -941,22 +953,57 @@ class BaseCalculator(BaseClass):
         return self.runtime_info.pipeline.varied_params
 
 
-class EnsembleCalculator(BaseCalculator):
-
-    """A calculator to rule them all."""
+class CollectionCalculator(BaseCalculator):
 
     def initialize(self, calculators=None):
-        self.calculators = calculators
-        self.runtime_info.requires = calculators
+        if hasattr(calculators, 'items'):
+            calculators = dict(calculators.items())
+        else:
+            calculators = {str(i): calc for i, calc in enumerate(calculators)}
+        self.names = list(calculators.keys())
+        self.calculators = list(calculators.values())
+        for name, calculator in zip(self.names, self.calculators):
+            if calculator.runtime_info.initialized:
+                for param in calculator.all_params.select(derived=True, solved=False, depends={}):
+                    param.update(namespace=name + '.' + param.namespace if param.namespace is not None else name)
+                for param in calculator.all_params:
+                    for name in param.depends.values():
+                        param = calculator.all_params[name]
+                        if not any(param in calc.runtime_info.params for calc in calculator.runtime_info.pipeline.calculators):
+                            self.params[param] = param.clone(drop=True)
+        self.runtime_info.requires = self.calculators
 
-    def __getitem__(self, index):
-        return self.calculators[index]
+    def __getitem__(self, name):
+        try:
+            return self.calculators[name]
+        except TypeError:
+            return self.calculators[self.names.index(name)]
 
-    def __setitem__(self, index, calculator):
-        self.calculators[index] = calculator
+    def __setitem__(self, name, calculator):
+        try:
+            self.calculators[name] = calculator
+        except TypeError:
+            self.calculators[self.names.index(name)] = calculator
 
     def __len__(self):
         return len(self.calculators)
 
     def __iter__(self):
         return iter(self.calculators)
+
+    def items(self):
+        return list(zip(self.names, self.calculators))
+
+    def __getattr__(self, name):
+        if '_' in name:
+            calcname, basename = name.split('_', maxsplit=2)
+            if calcname in self.names:
+                return getattr(self[calcname], basename)
+        raise AttributeError('calculator has no attribute {}'.format(name))
+
+    def __getstate__(self):
+        state = {}
+        for calcname, calculator in zip(self.names, self.calculators):
+            for key, value in calculator.__getstate__().items():
+                state['{}_{}'.format(calcname, key)] = value
+        return state

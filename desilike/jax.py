@@ -1,3 +1,8 @@
+import logging
+
+logging.getLogger('jax._src.lib.xla_bridge').addFilter(logging.Filter('No GPU/TPU found, falling back to CPU.'))
+
+
 # jax array types
 array_types = ()
 

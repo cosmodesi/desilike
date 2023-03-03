@@ -2,7 +2,7 @@ import numpy as np
 from scipy import special
 
 from desilike.theories.primordial_cosmology import get_cosmo
-from desilike.base import BaseCalculator, EnsembleCalculator
+from desilike.base import BaseCalculator, CollectionCalculator
 from desilike.utils import BaseClass
 from desilike import utils
 from .power_spectrum import TracerPowerSpectrumMultipolesObservable
@@ -235,7 +235,7 @@ class ObservablesCovarianceMatrix(BaseClass):
         """
         if not utils.is_sequence(observables):
             observables = [observables]
-        self.observables = EnsembleCalculator(calculators=observables).runtime_info.initialize()
+        self.observables = CollectionCalculator(calculators=observables).runtime_info.initialize()
         if not utils.is_sequence(footprints):
             footprints = [footprints] * len(self.observables)
         self.footprints = []

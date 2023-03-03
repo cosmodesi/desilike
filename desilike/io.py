@@ -39,8 +39,8 @@ YamlLoader.add_constructor('!none', none_constructor)
 def yaml_parser(string, index=None):
     """Parse string in *yaml* format."""
     # https://stackoverflow.com/questions/30458977/yaml-loads-5e-6-as-string-and-not-a-number
-    alls = list(yaml.load_all(string, Loader=YamlLoader))
     if index is not None:
+        alls = list(yaml.load_all(string, Loader=YamlLoader))
         if isinstance(index, dict):
             match = False
             for config in alls:
@@ -52,8 +52,7 @@ def yaml_parser(string, index=None):
             config = alls[index]
     else:
         config = yaml.load(string, Loader=YamlLoader)
-    data = dict(config)
-    return data
+    return config
 
 
 class MetaClass(type(BaseClass), type(UserDict)):
@@ -356,17 +355,24 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
         """Test equality."""
         return type(other) == type(self) and deep_eq(self.data, other.data)
 
-    def write(self, fn):
+    @utils.hybridmethod
+    def write(cls, data, fn):
         """Save to yaml file ``fn``."""
-        self.log_info('Saving {}.'.format(fn))
+        cls.log_info('Saving {}.'.format(fn))
         utils.mkdir(os.path.dirname(fn))
-        data = utils.dict_to_yaml(self.data)
+
+        if not utils.is_sequence(data): data = [data]
+        data = [BaseConfig(data).data for data in data]
+        data = [utils.dict_to_yaml(data) for data in data]
 
         def list_rep(dumper, data):
             return dumper.represent_sequence(u'tag:yaml.org,2002:seq', data, flow_style=True)
 
         yaml.add_representer(list, list_rep)
 
-        utils.mkdir(os.path.dirname(fn))
         with open(fn, 'w') as file:
-            yaml.dump(data, file, default_flow_style=False)
+            yaml.dump_all(data, file, default_flow_style=False)
+
+    @write.instancemethod
+    def write(self, fn):
+        return self.__class__.write(self, fn)

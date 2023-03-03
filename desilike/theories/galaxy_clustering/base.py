@@ -58,7 +58,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         self.k_mid = self.k[~mask]
         if power is None:
             from .full_shape import KaiserTracerPowerSpectrumMultipoles
-            power = KaiserTracerPowerSpectrumMultipoles(k=self.k, ells=self.ells)
+            power = KaiserTracerPowerSpectrumMultipoles()
         self.power = power
         self.power.init.update(k=self.kin, ells=self.ells, **kwargs)
         self.power.params = self.params.copy()

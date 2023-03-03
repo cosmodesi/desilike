@@ -2,7 +2,7 @@ import numpy as np
 from scipy import special
 
 from desilike.jax import numpy as jnp
-from desilike.base import EnsembleCalculator
+from desilike.base import CollectionCalculator
 from desilike.likelihoods.base import BaseGaussianLikelihood
 from desilike import utils
 
@@ -43,7 +43,7 @@ class SNWeightedPowerSpectrumLikelihood(BaseGaussianLikelihood):
         if klim is not None:
             k = np.linspace(*klim, num=500)  # jax takes *a lot* of memory in reverse mode
             for theory in self.theories: theory.init.update(k=k)
-        self.theories = EnsembleCalculator(calculators=theories)
+        self.theories = CollectionCalculator(calculators=theories)
         self.mu, wmu = utils.weights_mu(mu=mu)
         prefactor = 4 * np.pi / (2 * (2 * np.pi)**3) * wmu
         self.flatdata, self.precision = [], []

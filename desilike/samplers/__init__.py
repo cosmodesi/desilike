@@ -6,3 +6,4 @@ from .pocomc import PocoMCSampler
 from .mcmc import MCMCSampler
 from .dynesty import StaticDynestySampler, DynamicDynestySampler
 from .polychord import PolychordSampler
+from .importance import ImportanceSampler

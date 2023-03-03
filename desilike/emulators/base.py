@@ -40,7 +40,8 @@ class EmulatedCalculator(BaseCalculator):
 
     def initialize(self, emulator=None, **kwargs):
         self.emulator = emulator
-        self.params = self.emulator.params.deepcopy()
+        self.params = self.emulator.params.select(depends={}).deepcopy()
+        for param in self.params: param.update(drop=False)
         self.calculate(**{name: self.params[name].value for name in self.emulator.varied_params})
 
     def calculate(self, **params):
@@ -85,6 +86,11 @@ class Emulator(BaseClass):
         mpicomm : mpi.COMM_WORLD, default=None
             MPI communicator.
         """
+        self.is_calculator_sequence = utils.is_sequence(calculator)
+        if self.is_calculator_sequence:
+            self.is_calculator_sequence = len(calculator)
+            from desilike.base import CollectionCalculator
+            calculator = CollectionCalculator(calculators=calculator)
         if mpicomm is None:
             mpicomm = calculator.mpicomm
         self.calculator = calculator
@@ -101,8 +107,8 @@ class Emulator(BaseClass):
         params = []
         for cc, ff, vv in zip(calculators[:-1], fixed, varied):
             bp = cc.runtime_info.base_params
-            ff = {k: v for k, v in ff.items() if k in bp and bp[k].derived}
-            vv = {k: None for k in vv if k in bp and bp[k].derived}
+            ff = {bp[k].name: v for k, v in ff.items() if k in bp and bp[k].derived}
+            vv = {bp[k].name: None for k in vv if k in bp and bp[k].derived}
             self.fixed.update(ff)
             self.varied.update(vv)
             params.append(list(vv))
@@ -119,29 +125,42 @@ class Emulator(BaseClass):
         if not self.varied:
             raise ValueError('Found no varying quantity in provided calculator')
 
-        # Add in cosmo_requires
-        self.fixed['cosmo_requires'] = self.calculator.runtime_info.pipeline.get_cosmo_requires()
+        def get_calculator_info(calculator):
+            calculator__class__ = serialize_class(calculator.__class__)
+            yaml_data = BaseConfig()
+            yaml_data['class'] = calculator.__class__.__name__
+            yaml_data['info'] = dict(calculator.info)
+            #self.yaml_data['init'] = dict(calculator.runtime_info.init)
+            params = {}
+            for param in calculator.all_params:
+                params[param.basename] = dict(ParameterConfig(param))
+                params[param.basename].pop('basename')
+                params[param.basename].pop('namespace', None)
+            yaml_data['params'] = params
+            return calculator__class__, yaml_data
+
+        if self.is_calculator_sequence:
+            self.calculator__class__, self.yaml_data = [], []
+            for name, calculator in self.calculator.items():
+                calculator__class__, yaml_data = get_calculator_info(calculator)
+                self.calculator__class__.append(calculator__class__)
+                self.yaml_data.append(yaml_data)
+                self.fixed[name + '_cosmo_requires'] = calculator.runtime_info.pipeline.get_cosmo_requires()
+        else:
+            self.calculator__class__, self.yaml_data = get_calculator_info(self.calculator)
+            # Add in cosmo_requires
+            self.fixed['cosmo_requires'] = self.calculator.runtime_info.pipeline.get_cosmo_requires()
 
         if not hasattr(engine, 'items'):
             engine = {'*': engine}
-        for template, engine in engine.items():
+        for engine in engine.values():
             engine = get_engine(engine)
         self.engines = expand_dict(engine, self.varied)
         for name, engine in self.engines.items():
             if engine is None:
                 raise ValueError('Engine not specified for varying attribute {}'.format(name))
-            engine.initialize(varied_params=self.varied_params)
+            engine.initialize(varied_params=self._get_varied_params(name))
 
-        self.calculator__class__ = serialize_class(calculator.__class__)
-        self.yaml_data = BaseConfig()
-        self.yaml_data['class'] = calculator.__class__.__name__
-        self.yaml_data['info'] = dict(calculator.info)
-        #self.yaml_data['init'] = dict(calculator.runtime_info.init)
-        params = {}
-        for param in self.params:
-            params[param.name] = dict(ParameterConfig(param))
-            params[param.name].pop('basename')
-        self.yaml_data['params'] = params
         self.varied_shape = {name: -1 for name in self.engines}
         self.samples, self.diagnostics = {}, {}
         self.mpicomm = mpicomm
@@ -159,6 +178,14 @@ class Emulator(BaseClass):
                 engine.mpicomm = mpicomm
         except AttributeError:
             pass
+
+    def _get_varied_params(self, name):
+        name = str(name)
+        import re
+        if self.is_calculator_sequence:
+            index = int(re.match(r'\d*', name).group(0))
+            return [name for name in self.varied_params if name in self.yaml_data[index]['params']]
+        return self.varied_params.copy()
 
     def set_samples(self, name=None, samples=None, **kwargs):
         """
@@ -217,7 +244,7 @@ class Emulator(BaseClass):
             X, Y = None, None
             if self.mpicomm.rank == 0:
                 nsamples = samples.size
-                X = np.concatenate([samples[name].reshape(nsamples, 1) for name in self.varied_params], axis=-1)
+                X = np.concatenate([samples[name].reshape(nsamples, 1) for name in self._get_varied_params(yname)], axis=-1)
                 Y = samples[yname]
                 yshape = Y.shape[Y.andim:]
                 if Y.derivs is not None:
@@ -262,7 +289,43 @@ class Emulator(BaseClass):
         calculator : EmulatedCalculator
             Emulated calculator.
         """
+        def _split_emulator(self):
+            emulators = []
+            for index in range(self.is_calculator_sequence):
+                emulator = self.__class__.__new__(self.__class__)
+                emulator.is_calculator_sequence = False
+                emulator.yaml_data = self.yaml_data[index]
+                params = self.params.select(basename=list(emulator.yaml_data['params'].keys())).deepcopy()
+                emulator.varied_params = self._get_varied_params(index)
+                emulator.calculator__class__ = self.calculator__class__[index]
+                index = str(index)
+                emulator.params = ParameterCollection()
+                for param in params:
+                    if param.derived and not param.solved and not param.depends:
+                        if param.namespace.startswith(index):
+                            if len(param.namespace) == len(index):
+                                param = param.clone(namespace=None)  # just the index, there was no previous namespace
+                            else:
+                                param = param.clone(namespace=param.namespace[len(index) + 1:])
+                            emulator.params.set(param)
+                    else:
+                        emulator.params.set(param)
+
+                def get_name(name):
+                    return name[len(index) + 1:]
+
+                emulator.fixed = {get_name(name): value for name, value in self.fixed.items() if name.startswith(index)}
+                emulator.varied_shape = {get_name(name): value for name, value in self.varied_shape.items() if name.startswith(index)}
+                emulator.in_calculator_state = [get_name(name) for name in self.in_calculator_state if name.startswith(index)]
+                emulator.engines = {get_name(name): engine for name, engine in self.engines.items() if name.startswith(index)}
+                emulators.append(emulator)
+            return emulators
+
+        if self.is_calculator_sequence:
+            return [emulator.to_calculator(derived=derived) for emulator in _split_emulator(self)]
+
         state = self.__getstate__()
+
         Calculator = import_class(*state['calculator__class__'])
         new_name = Calculator.__name__
 
@@ -277,6 +340,7 @@ class Emulator(BaseClass):
         calculator.runtime_info.initialize()  # to initialize
         if derived is not None:
             calculator.runtime_info.pipeline._set_derived([calculator], params=[derived])
+
         return calculator
 
     def check(self, mse_stop=None, diagnostics=None, frac=0.1, **kwargs):
@@ -414,9 +478,9 @@ class Emulator(BaseClass):
         state = {'engines': {}}
         for name, engine in self.engines.items():
             state['engines'][name] = {'__class__': serialize_class(engine.__class__), **engine.__getstate__()}
-        for name in ['varied_params', 'fixed', 'varied_shape', 'in_calculator_state', 'calculator__class__']:
+        for name in ['varied_params', 'fixed', 'varied_shape', 'in_calculator_state', 'calculator__class__', 'is_calculator_sequence']:
             state[name] = getattr(self, name)
-        state['yaml_data'] = self.yaml_data.data
+        state['yaml_data'] = [yaml_data.data for yaml_data in self.yaml_data] if self.is_calculator_sequence else self.yaml_data.data
         state['params'] = self.params.__getstate__()
         return state
 
@@ -427,12 +491,13 @@ class Emulator(BaseClass):
             utils.mkdir(os.path.dirname(filename))
             if yaml:
                 state['config_fn'] = fn = os.path.splitext(filename)[0] + '.yaml'
-                self.yaml_data.write(fn)
+                BaseConfig.write(self.yaml_data, fn)
             np.save(filename, state, allow_pickle=True)
 
     def __setstate__(self, state):
         super(Emulator, self).__setstate__(state)
-        self.yaml_data = BaseConfig(self.yaml_data)
+        self.is_calculator_sequence = getattr(self, 'is_calculator_sequence', False)
+        self.yaml_data = [BaseConfig(yaml_data) for yaml_data in self.yaml_data] if self.is_calculator_sequence else BaseConfig(self.yaml_data)
         self.params = ParameterCollection.from_state(state['params'])
         for name, state in self.engines.items():
             state = state.copy()

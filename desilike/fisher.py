@@ -1,4 +1,6 @@
 import os
+import copy
+
 import numpy as np
 
 from .differentiation import Differentiation
@@ -132,6 +134,10 @@ class LikelihoodFisher(BaseClass):
         self.with_prior = state['with_prior']
         self.attrs = state.get('attrs', {})
         self._params = ParameterCollection.from_state(state['params'])
+
+    def deepcopy(self):
+        """Deep copy."""
+        return copy.deepcopy(self)
 
     def __repr__(self):
         """Return string representation of parameter matrix, including parameters."""

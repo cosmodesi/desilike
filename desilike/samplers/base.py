@@ -5,11 +5,10 @@ import functools
 import numpy as np
 
 from desilike import mpi
-from desilike.utils import BaseClass, path_types
+from desilike.utils import BaseClass, path_types, TaskManager
 from desilike.samples import Chain, Samples, load_source
 from desilike.samples import diagnostics as sample_diagnostics
 from desilike.parameter import ParameterPriorError
-from desilike.utils import TaskManager
 
 
 class RegisteredSampler(type(BaseClass)):
@@ -85,7 +84,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         max_tries : int, default=1000
             A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
 
-        chains : str, Path, Chain
+        chains : str, Path, Chain, default=None
             Path to or chains to resume from.
 
         ref_scale : float, default=1.

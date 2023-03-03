@@ -564,10 +564,10 @@ class Parameter(BaseClass):
 
     """Class that represents a parameter."""
 
-    _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'delta', 'latex', 'depends', 'shape']
+    _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'delta', 'latex', 'depends', 'shape', 'drop']
     _allowed_solved = ['.best', '.marg', '.auto']
 
-    def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, delta=None, latex=None, shape=()):
+    def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, delta=None, latex=None, shape=(), drop=False):
         """
         Initialize :class:`Parameter`.
 
@@ -618,6 +618,9 @@ class Parameter(BaseClass):
 
         shape : tuple, default=()
             Parameter shape; typically non-trivial when ``derived`` is ``True``.
+
+        drop : bool, default=False
+            If ``True``, this parameter will not be provided to the calculator.
         """
         from . import base
         if isinstance(basename, Parameter):
@@ -678,6 +681,7 @@ class Parameter(BaseClass):
             fixed = prior is None and ref is None and not self.depends
         self._fixed = bool(fixed)
         self._shape = tuple(int(s) for s in (shape if utils.is_sequence(shape) else (shape,)))
+        self._drop = bool(drop)
         self.updated = True
 
     @property
@@ -1840,8 +1844,8 @@ class ParameterPrior(BaseClass):
             raise ParameterPriorError('Cannot sample from improper prior')
         return self.rv.rvs(size=size, random_state=random_state)
 
-    def __str__(self):
-        """Return string with distribution name, limits, and attributes (e.g. ``loc`` and ``scale``)."""
+    def __repr__(self):
+        """String representation with distribution name, limits, and attributes (e.g. ``loc`` and ``scale``)."""
         base = self.dist
         if self.is_limited():
             base = '{}[{}, {}]'.format(base, *self.limits)

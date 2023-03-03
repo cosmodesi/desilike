@@ -48,9 +48,9 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
         super(PNGTracerPowerSpectrumMultipoles, self).initialize(*args, ells=ells, **kwargs)
         kin = np.insert(self.k, 0, 1e-4)
         if template is None:
-            template = FixedPowerSpectrumTemplate(k=kin)
+            template = FixedPowerSpectrumTemplate()
         self.template = template
-        self.template.init.setdefault('k', kin)
+        self.template.init.update(k=kin)
         self.method = str(method)
         self.mode = str(mode)
         keep_params = ['b1', 'sigmas', 'sn0']

@@ -559,6 +559,12 @@ class ParameterArray(np.ndarray):
         """Create :class:`ParameterArray` for state (dictionary)."""
         return cls(state['value'], None if state.get('param', None) is None else Parameter.from_state(state['param']), state.get('derivs', None))
 
+    def clone(self, **kwargs):
+        """Clone :class:`ParameterArray`, optionally updating :attr:`value`, :attr:`param` or :attr:`derivs`."""
+        state = self.__getstate__()
+        state.update(**kwargs)
+        return self.__class__(**state)
+
 
 class Parameter(BaseClass):
 
@@ -2603,7 +2609,7 @@ class ParameterCovariance(BaseParameterMatrix):
         ranges = None
         if not ignore_limits:
             ranges = [tuple(None if limit is None or not np.isfinite(limit) else limit for limit in param.prior.limits) for param in cov._params]
-        center = np.asarray([param.value for param in self._params]) if center is None else np.asarray(center)
+        center = np.asarray([param.value for param in cov._params]) if center is None else np.asarray(center)
         return MixtureND([center], [cov._value], lims=ranges, names=names, labels=labels, label=label)
 
     @classmethod

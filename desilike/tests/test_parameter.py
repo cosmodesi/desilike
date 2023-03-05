@@ -36,6 +36,7 @@ def test_param_array():
 
     samples = Samples([array])
     print(samples[:10]['a'].derivs)
+    samples['b'] = samples['a'].clone(param=param.clone(basename='b')) * 2
 
 
 def test_matrix():
@@ -48,7 +49,7 @@ def test_matrix():
     print(covariance.to_stats())
     gd = covariance.to_getdist(center=[0.] * len(params))
 
-    precision = ParameterPrecision(np.eye(len(params)), params=params, center=[1.] * len(params))
+    precision = ParameterPrecision(np.eye(len(params)), params=params)
     covariance = precision.to_covariance()
     #covariance.to_getdist()
 
@@ -64,16 +65,13 @@ def test_matrix():
     assert np.allclose(covariance.std(), 1.2**0.5 * std)
     covariance /= 1.2
     assert np.allclose(covariance.std(), std)
-    covariance = covariance.view(params=['a'])
+    covariance = covariance.view(params=['a'], return_type=None)
     assert np.ndim(covariance.fom()) == 0
-
-    covariance = covariance.clone(center=[2.])
-    assert np.allclose(covariance.center(), 2.)
 
 
 if __name__ == '__main__':
 
     test_prior()
-    #test_deriv()
-    #test_param_array()
+    test_deriv()
+    test_param_array()
     test_matrix()

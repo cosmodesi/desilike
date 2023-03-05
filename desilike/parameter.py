@@ -2215,8 +2215,8 @@ class Samples(BaseParameterCollection):
     @CurrentMPIComm.enable
     def sendrecv(cls, value, source=0, dest=0, tag=0, mpicomm=None):
         """Send samples from rank ``source`` to rank ``dest`` and receive them here."""
-        if dest == source:
-            return value.copy()
+        if dest == source == mpicomm.rank:
+            return value.deepcopy()
         if mpicomm.rank == source:
             value.send(dest=dest, tag=tag, mpicomm=mpicomm)
         toret = None

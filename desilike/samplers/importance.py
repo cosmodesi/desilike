@@ -71,9 +71,14 @@ class ImportanceSampler(BaseClass):
         self.chains = [None] * self.nchains
         mpicomm_bak = self.mpicomm
         with TaskManager(nprocs_per_task=nprocs_per_chain, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
+            for dest in self.mpicomm.allgather(tm.self_worker_ranks[0] if tm.self_worker_ranks else 0):
+                for ichain in range(self.nchains):
+                    chain = Chain.sendrecv(self.input_chains[ichain], source=0, dest=dest, mpicomm=self.mpicomm)
+                    if chain is not None: self.input_chains[ichain] = chain
             self.mpicomm = tm.mpicomm
             for ichain in tm.iterate(range(self.nchains)):
-                chain = self.input_chains[ichain].deepcopy()
+                if self.mpicomm.rank == 0:
+                    chain = self.input_chains[ichain].deepcopy()
                 self.pipeline.mpicalculate(**(chain.to_dict(params=self.varied_params) if self.mpicomm.rank == 0 else {}))
                 if self.mpicomm.rank == 0:
                     if chain is not None:

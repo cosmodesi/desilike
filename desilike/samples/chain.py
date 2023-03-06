@@ -261,7 +261,7 @@ class Chain(Samples):
             cls.log_info('Loading chain file: {}.'.format(chain_fn))
             array = np.loadtxt(chain_fn, unpack=True)
             new = cls()
-            new.aweight, new.logposterior = array[0], -array[1]
+            new.fweight, new.logposterior = array[0], -array[1]
             for param, values in zip(params, array[2:]):
                 new.set(ParameterArray(values, param))
             toret.append(new)

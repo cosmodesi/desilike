@@ -138,7 +138,7 @@ class Fourier(Section):
 
 
 def cosmoprimo_to_camb_params(params):
-    convert = {'H0': 'H0', 'omega_b': 'ombh2', 'omega_cdm': 'omch2', 'A_s': 'As', 'n_s': 'ns', 'N_eff': 'nnu', 'm_ncdm': 'mnu', 'Omega_k': 'omk'}
+    convert = {'H0': 'H0', 'theta_mc': 'cosmomc_theta', 'omega_b': 'ombh2', 'omega_cdm': 'omch2', 'A_s': 'As', 'n_s': 'ns', 'N_eff': 'nnu', 'm_ncdm': 'mnu', 'Omega_k': 'omk'}
     toret = ParameterCollection()
     params = params.copy()
     name = 'h'

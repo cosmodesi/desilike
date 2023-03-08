@@ -687,7 +687,7 @@ class RuntimeInfo(BaseClass):
             params_with_namespace = ParameterCollection(self.init.params).deepcopy()
             params_basenames = params_with_namespace.basenames()
             # Pass parameters without namespace
-            self.init.params = params_with_namespace.clone(namespace=None)
+            self.params = self.init.params = params_with_namespace.clone(namespace=None)
             try:
                 self.calculator.initialize(*self.init.args, **self.init)
             except Exception as exc:

@@ -1,3 +1,6 @@
+import numpy as np
+from scipy import optimize
+
 from cosmoprimo import Cosmology
 
 from desilike.base import BaseCalculator
@@ -40,6 +43,8 @@ def get_from_cosmo(cosmo, name):
         return get_from_cosmo(cosmo, 'O' + name[1:]) * cosmo.h ** 2
     if name == 'm_ncdm':
         name = 'm_ncdm_tot'
+    if name == 'theta_mc':
+        name = 'theta_cosmomc'
     if name == 'k_pivot':
         return cosmo.k_pivot * cosmo.h
     try:
@@ -51,6 +56,37 @@ def get_from_cosmo(cosmo, name):
     return toret
 
 
+def _clone(self, params, base='input'):
+    params = {conversions.get(name, name): float(value) for name, value in params.items()}
+
+    theta_mc = params.pop('theta_mc', None)
+    self.cosmo = self.fiducial.clone(base=base, **params)
+
+    if theta_mc is not None:
+        if 'h' in params:
+            raise ValueError('Cannot provide both theta_mc and h')
+
+        # With self.cosmo.get_thermodynamics().theta_cosmomc
+        # Typically takes 18 iterations and ~0.8 s
+        # The computation of the thermodynamics is the most time consuming
+        # The 'theta_cosmomc' call takes ~0.1 s and is accurate within 3e-6 (rel.), ~1% of Planck errors
+        def f(h):
+            self.cosmo = self.cosmo.clone(base='input', h=h)
+            return theta_mc - self.cosmo['theta_cosmomc']
+            #return theta_mc - self.cosmo.get_thermodynamics().theta_cosmomc
+
+        limits = [0.1, 5.]  # h-limits
+        xtol = 0.0001  # 1 / 50 of Planck errors
+        rtol = xtol
+        try:
+            h = optimize.bisect(f, *limits, xtol=xtol, rtol=rtol, disp=True)
+        except ValueError as exc:
+            raise ValueError('Could not find proper h value in the interval that matches theta_mc = {:.4f} with [f({:.3f}), f({:.3f})] = [{:.4f}, {:.4f}]'.format(theta_mc, *limits, *list(map(f, limits)))) from exc
+        f(h)
+
+    return self.cosmo
+
+
 class Cosmoprimo(BasePrimordialCosmology):
 
     """Primordial cosmology calculation, based on :mod:`cosmoprimo`."""
@@ -59,7 +95,7 @@ class Cosmoprimo(BasePrimordialCosmology):
     def initialize(self, fiducial=None, **kwargs):
         """
         Initialize :class:`Cosmoprimo`.
-        
+
         Parameters
         ----------
         fiducial : str, tuple, dict, cosmoprimo.Cosmology
@@ -70,7 +106,7 @@ class Cosmoprimo(BasePrimordialCosmology):
             - tuple: (name of fiducial cosmology, dictionary of parameters to update)
             - dict: dictionary of parameters
             - :class:`cosmoprimo.Cosmology`: Cosmology instance
-        
+
         **kwargs : dict
             Optionally, dictionary of parameters to update ``fiducial`` with.
         """
@@ -81,13 +117,18 @@ class Cosmoprimo(BasePrimordialCosmology):
         else:
             fiducial = get_cosmo(fiducial)
         self.fiducial = fiducial.clone(**kwargs)
+        if any(name in self.params.basenames(varied=True) for name in ['h', 'H0']):
+            for param in self.params.select(basename='theta_mc'):
+                del self.params[param]
+        print(self.params)
         if fiducial_input:
             for param in self.params:
                 param.update(value=get_from_cosmo(self.fiducial, param.basename))
+        self.fiducial = _clone(self, {param.name: param.value for param in self.params}, base=None)  # just to set the parameter basis
         self.cosmo_requires = {'fiducial': self.fiducial.__getstate__(), 'params': dict.fromkeys(self.params.basenames())}
 
     def calculate(self, **params):
-        self.cosmo = self.fiducial.clone(**{name: float(value) for name, value in convert(params).items()})
+        self.cosmo = _clone(self, params)
 
     def get(self):
         return self.cosmo

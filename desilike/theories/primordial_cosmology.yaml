@@ -4,16 +4,27 @@ init:
   engine: class
 
 params:
-  # Using Planck priors
+  # Using Planck2O18 priors, TT,TE,EE+lowE+lensing
   h:
     prior:
-      limits: [0.1, 1.]
+      limits: [0.1, 10.]
     ref:
       dist: norm
       loc: 0.6736
       scale: 0.005
     delta: 0.0025
     latex: h
+  # If h is there, used instead of theta_mc below
+  theta_mc:
+    prior:
+      min: 0.005
+      max: 0.02
+    ref:
+      dist: norm
+      loc: 0.0104092
+      scale: 0.0000031
+    proposal: 0.000001
+    latex: \theta_\mathrm{mc}
   omega_cdm:
     prior:
       limits: [0.01, 0.99]

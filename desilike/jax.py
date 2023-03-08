@@ -20,8 +20,8 @@ except ImportError:
 
 def dist_name(dist):
     """
-    Return distribution name, which should work with either scipy
-    (where dist is a :class:`rv_continuous` instance) or jax implementation (where dist is a module).
+    Return distribution name, which should work with either scipy (where dist is a :class:`rv_continuous` instance)
+    or jax implementation (where dist is a module).
     """
     name = getattr(dist, 'name', None)
     if name is None: name = dist.__name__.split('.')[-1]

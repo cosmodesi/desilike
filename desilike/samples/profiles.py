@@ -20,6 +20,8 @@ class ParameterBestFit(Samples):
     def __init__(self, *args, logposterior='logposterior', **kwargs):
         self._logposterior = logposterior
         super(ParameterBestFit, self).__init__(*args, **kwargs)
+        if self._logposterior in self:
+            self.logposterior.param.update(derived=True)
 
     @property
     def logposterior(self):

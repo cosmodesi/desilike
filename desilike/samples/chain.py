@@ -88,42 +88,45 @@ class Chain(Samples):
         self._weight = weight
         self._derived = [self._logposterior, self._aweight, self._fweight, self._weight]
         super(Chain, self).__init__(data=data, params=params, attrs=attrs)
+        for name in self._derived:
+            if name in self:
+                self[name].param.update(derived=True)
 
     @property
     def aweight(self):
         """Sample weights (floats)."""
         if self._aweight not in self:
-            self[self._aweight] = np.ones(self.shape, dtype='f8')
+            self[Parameter(self._aweight, derived=True)] = np.ones(self.shape, dtype='f8')
         return self[self._aweight]
 
     @property
     def fweight(self):
         """Sample frequency weights (integers)."""
         if self._fweight not in self:
-            self[self._fweight] = np.ones(self.shape, dtype='i8')
+            self[Parameter(self._fweight, derived=True)] = np.ones(self.shape, dtype='i8')
         return self[self._fweight]
 
     @property
     def logposterior(self):
         """Log-posterior."""
         if self._logposterior not in self:
-            self[self._logposterior] = np.zeros(self.shape, dtype='f8')
+            self[Parameter(self._logposterior, derived=True)] = np.zeros(self.shape, dtype='f8')
         return self[self._logposterior]
 
     @aweight.setter
     def aweight(self, item):
         """Set weights (floats)."""
-        self[self._aweight] = item
+        self[Parameter(self._aweight, derived=True)] = item
 
     @fweight.setter
     def fweight(self, item):
         """Set frequency weights (integers)."""
-        self[self._fweight] = item
+        self[Parameter(self._fweight, derived=True)] = item
 
     @logposterior.setter
     def logposterior(self, item):
         """Set log-posterior."""
-        self[self._logposterior] = item
+        self[Parameter(self._logposterior, derived=True)] = item
 
     @property
     def weight(self):

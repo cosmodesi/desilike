@@ -70,6 +70,7 @@ def test_solve():
     #profiler = ScipyProfiler(likelihood, method='lsq')
     profiles = profiler.maximize(niterations=2)
     print(profiles.to_stats())
+    assert profiles.bestfit.logposterior.param.derived
 
     #print(likelihood(**profiles.bestfit.choice(varied=True)))
     #from desilike.samples import plotting

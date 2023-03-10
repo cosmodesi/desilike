@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import copy
 import warnings
@@ -962,15 +963,21 @@ class CollectionCalculator(BaseCalculator):
             calculators = {str(i): calc for i, calc in enumerate(calculators)}
         self.names = list(calculators.keys())
         self.calculators = list(calculators.values())
-        for name, calculator in zip(self.names, self.calculators):
+        for calculator in self.calculators:
             if calculator.runtime_info.initialized:
-                for param in calculator.all_params.select(derived=True, solved=False, depends={}):
-                    param.update(namespace=name + '.' + param.namespace if param.namespace is not None else name)
                 for param in calculator.all_params:
-                    for name in param.depends.values():
-                        param = calculator.all_params[name]
-                        if not any(param in calc.runtime_info.params for calc in calculator.runtime_info.pipeline.calculators):
-                            self.params[param] = param.clone(drop=True)
+                    for depname in param.depends.values():
+                        param = calculator.all_params[depname]
+                        if not any(param in calculator.runtime_info.params for calculator in calculator.runtime_info.pipeline.calculators):
+                            self.params[param] = param.clone(drop=True)  # add parameter to this calculator
+        self.all_calculators = {name: list(calculator.runtime_info.pipeline.calculators) for name, calculator in zip(self.names, self.calculators)}
+        self.all_derived = {}
+        for name, calculators in self.all_calculators.items():
+            self.all_derived[name] = {}
+            for calculator in calculators:
+                for param in calculator.runtime_info.derived_params:
+                    self.all_derived[name][param.name] = calculator
+                    self.params.set(param.clone(basename='{}_{}'.format(name, param.name)))
         self.runtime_info.requires = self.calculators
 
     def __getitem__(self, name):
@@ -995,10 +1002,14 @@ class CollectionCalculator(BaseCalculator):
         return list(zip(self.names, self.calculators))
 
     def __getattr__(self, name):
-        if '_' in name:
-            calcname, basename = name.split('_', maxsplit=2)
+        match = re.match(r'(\d*)_(.*)', name)
+        if match:
+            calcname, basename = match.group(1), match.group(2)
             if calcname in self.names:
-                return getattr(self[calcname], basename)
+                try:
+                    return getattr(self[calcname], basename)
+                except AttributeError:
+                    return self.all_derived[calcname][basename].runtime_info.derived[basename]
         raise AttributeError('calculator has no attribute {}'.format(name))
 
     def __getstate__(self):

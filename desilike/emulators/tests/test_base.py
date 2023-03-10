@@ -12,7 +12,9 @@ def test_base():
     fn = os.path.join(emulator_dir, 'emu.npy')
 
     for Template in [DirectPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate][1:]:
-        calculator = KaiserTracerPowerSpectrumMultipoles(template=Template())
+        template = Template()
+        calculator = KaiserTracerPowerSpectrumMultipoles(template=template)
+        template.params['fsigma8'] = {'derived': True}
         calculator.all_params['b1'].update(derived='{b}**2', prior=None)
         calculator.all_params['b'] = {'prior': {'limits': [0., 2.]}}
 
@@ -35,7 +37,9 @@ def test_base():
         emulator.save(fn)
         emulator = EmulatedCalculator.load(fn)
 
-        calculator = KaiserTracerPowerSpectrumMultipoles(template=Template())
+        template = Template()
+        calculator = KaiserTracerPowerSpectrumMultipoles(template=template)
+        template.params['fsigma8'] = {'derived': True}
         calculator.all_params['b1'].update(derived='{b}**2', prior=None)
         calculator.all_params['b'] = {'prior': {'limits': [0., 2.]}}
         emulator = Emulator([calculator, calculator.deepcopy()], engine='point')

@@ -1,4 +1,5 @@
 import os
+import re
 
 import numpy as np
 
@@ -109,6 +110,9 @@ class Emulator(BaseClass):
             bp = cc.runtime_info.base_params
             ff = {bp[k].name: v for k, v in ff.items() if k in bp and bp[k].derived}
             vv = {bp[k].name: None for k in vv if k in bp and bp[k].derived}
+            if self.is_calculator_sequence:
+                ff = {name: value for name, value in ff.items() if re.match(r'(\d*)_(.*)', name)}
+                vv = {name: value for name, value in vv.items() if re.match(r'(\d*)_(.*)', name)}
             self.fixed.update(ff)
             self.varied.update(vv)
             params.append(list(vv))
@@ -181,9 +185,8 @@ class Emulator(BaseClass):
 
     def _get_varied_params(self, name):
         name = str(name)
-        import re
         if self.is_calculator_sequence:
-            index = int(re.match(r'\d*', name).group(0))
+            index = int(re.match(r'(\d*)(_.*|)$', name).group(1))
             return [name for name in self.varied_params if name in self.yaml_data[index]['params']]
         return self.varied_params.copy()
 
@@ -295,21 +298,10 @@ class Emulator(BaseClass):
                 emulator = self.__class__.__new__(self.__class__)
                 emulator.is_calculator_sequence = False
                 emulator.yaml_data = self.yaml_data[index]
-                params = self.params.select(basename=list(emulator.yaml_data['params'].keys())).deepcopy()
+                emulator.params = self.params.select(basename=list(emulator.yaml_data['params'].keys())).deepcopy()
                 emulator.varied_params = self._get_varied_params(index)
                 emulator.calculator__class__ = self.calculator__class__[index]
                 index = str(index)
-                emulator.params = ParameterCollection()
-                for param in params:
-                    if param.derived and not param.solved and not param.depends:
-                        if param.namespace.startswith(index):
-                            if len(param.namespace) == len(index):
-                                param = param.clone(namespace=None)  # just the index, there was no previous namespace
-                            else:
-                                param = param.clone(namespace=param.namespace[len(index) + 1:])
-                            emulator.params.set(param)
-                    else:
-                        emulator.params.set(param)
 
                 def get_name(name):
                     return name[len(index) + 1:]

@@ -107,11 +107,14 @@ def test_footprint():
 
 def test_covariance_matrix():
 
-    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerCorrelationFunctionMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import (ShapeFitPowerSpectrumTemplate,
+                                                     KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles,
+                                                     LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles)
     from desilike.observables.galaxy_clustering import TracerCorrelationFunctionMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
 
     template = ShapeFitPowerSpectrumTemplate(z=1.1)
-    theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template)
+    #theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template)
+    theory =  KaiserTracerCorrelationFunctionMultipoles(template=template)
     footprint = BoxFootprint(volume=1e10, nbar=1e-4)
     observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [30., 150., 4.], 2: [30., 150., 4.], 4: [30., 150., 4.]},
                                                                data={}, #'../../tests/_xi/data.npy',
@@ -123,7 +126,14 @@ def test_covariance_matrix():
     #observable.plot(show=True)
     observable.plot_covariance_matrix(show=True, corrcoef=True)
 
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    #theory_pk = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
+    theory_pk = KaiserTracerPowerSpectrumMultipoles(template=template)
+    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, theories=theory_pk, resolution=3)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov())
+    print(likelihood())
+    #observable.plot(show=True)
+    observable.plot_covariance_matrix(show=True, corrcoef=True)
+
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
@@ -138,7 +148,7 @@ def test_covariance_matrix():
     #observable.plot(show=True)
     observable.plot_covariance_matrix(show=True, corrcoef=True)
 
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TracerCorrelationFunctionMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)

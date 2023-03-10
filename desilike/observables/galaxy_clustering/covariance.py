@@ -238,11 +238,12 @@ class ObservablesCovarianceMatrix(BaseClass):
         self.observables = CollectionCalculator(calculators=observables).runtime_info.initialize()
         if not utils.is_sequence(footprints):
             footprints = [footprints] * len(self.observables)
+        if not utils.is_sequence(theories):
+            theories = [theories] * len(self.observables)
         self.footprints = []
         for footprint, observable in zip(footprints, self.observables):
             if footprint is None: footprint = observable.footprint
             self.footprints.append(footprint.copy())
-        if theories is None: theories = [None] * len(self.observables)
         self.theories = theories
         self.resolution = int(resolution)
         if self.resolution <= 0:
@@ -254,7 +255,17 @@ class ObservablesCovarianceMatrix(BaseClass):
         return self.covariance
 
     def run(self, **params):
-        self.observables(**params)
+        for io, (observable, theory) in enumerate(zip(self.observables, self.theories)):
+            if theory is None:
+                for calculator in observable.runtime_info.pipeline.calculators[::-1]:
+                    if hasattr(calculator, 'k') and hasattr(calculator, 'power') and not isinstance(calculator.power, BaseCalculator) and np.ndim(calculator.k[0]) == 0:
+                        theory = calculator
+                        break
+            if theory is None:
+                raise ValueError('Theory must be provided for observable {}'.format(observable))
+            self.theories[io] = theory
+        self.theories = CollectionCalculator(self.theories)
+        self.theories(**params)
         self.cosmo = None
         if any(isinstance(footprint, CutskyFootprint) for footprint in self.footprints):
             for footprint in self.footprints:
@@ -262,8 +273,8 @@ class ObservablesCovarianceMatrix(BaseClass):
                 if self.cosmo is not None: break
             if self.cosmo is None:
                 from desilike.theories.primordial_cosmology import Cosmoprimo
-                for observable in self.observables:
-                    for calculator in observable.runtime_info.pipeline.calculators:
+                for theory in self.theories:
+                    for calculator in theory.runtime_info.pipeline.calculators:
                         if isinstance(calculator, Cosmoprimo):
                             self.cosmo = calculator
                             break
@@ -284,14 +295,7 @@ class ObservablesCovarianceMatrix(BaseClass):
         volume = (self.footprints[io1] & self.footprints[io2]).volume
         cache = {}
 
-        def get_pk(observable, footprint, theory=None):
-            if theory is None:
-                for calculator in observable.runtime_info.pipeline.calculators[::-1]:
-                    if hasattr(calculator, 'k') and hasattr(calculator, 'power') and not isinstance(calculator.power, BaseCalculator) and np.ndim(calculator.k[0]) == 0:
-                        theory = calculator
-                        break
-            if theory is None:
-                raise ValueError('Theory must be provided for observable {}'.format(observable))
+        def get_pk(theory, footprint):
 
             def pk(k, ell=0):
                 ill = theory.ells.index(ell)
@@ -319,7 +323,7 @@ class ObservablesCovarianceMatrix(BaseClass):
                 return 4. / 3. * np.pi * (bin[1:]**3 - bin[:-1]**3)
             return 4. * np.pi * bin**2 * utils.weights_trapz(bin)
 
-        pks = [get_pk(self.observables[io], self.footprints[io], theory=self.theories[io]) for io in ios]
+        pks = [get_pk(self.theories[io], self.footprints[io]) for io in ios]
 
         def get_integ_points(bin):
             return np.linspace(*bin, self.resolution + 2)[1:-1]

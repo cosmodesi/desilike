@@ -255,6 +255,8 @@ class ObservablesCovarianceMatrix(BaseClass):
         return self.covariance
 
     def run(self, **params):
+        if any(theory is None for theory in self.theories):
+            self.observables(**params)
         for io, (observable, theory) in enumerate(zip(self.observables, self.theories)):
             if theory is None:
                 for calculator in observable.runtime_info.pipeline.calculators[::-1]:

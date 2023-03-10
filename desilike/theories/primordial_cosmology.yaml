@@ -15,16 +15,16 @@ params:
     delta: 0.0025
     latex: h
   # If h is there, used instead of theta_mc below
-  theta_mc:
+  theta_mc_100:
     prior:
-      min: 0.005
-      max: 0.02
+      min: 0.5
+      max: 2
     ref:
       dist: norm
-      loc: 0.0104092
-      scale: 0.0000031
-    proposal: 0.000001
-    latex: \theta_\mathrm{mc}
+      loc: 1.04092
+      scale: 0.00031
+    proposal: 0.0001
+    latex: 100 \theta_\mathrm{MC}
   omega_cdm:
     prior:
       limits: [0.01, 0.99]

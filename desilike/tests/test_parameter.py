@@ -37,6 +37,8 @@ def test_param_array():
     samples = Samples([array])
     print(samples[:10]['a'].derivs)
     samples['b'] = samples['a'].clone(param=param.clone(basename='b')) * 2
+    samples['c'] = samples['a'] * 1.2
+    assert samples['c'].param.name == 'c'
 
 
 def test_matrix():

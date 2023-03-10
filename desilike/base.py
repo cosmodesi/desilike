@@ -977,7 +977,7 @@ class CollectionCalculator(BaseCalculator):
             for calculator in calculators:
                 for param in calculator.runtime_info.derived_params:
                     self.all_derived[name][param.name] = calculator
-                    self.params.set(param.clone(basename='{}_{}'.format(name, param.name)))
+                    self.params.set(param.clone(name='{}_{}'.format(name, param.name)))
         self.runtime_info.requires = self.calculators
 
     def __getitem__(self, name):
@@ -1009,7 +1009,7 @@ class CollectionCalculator(BaseCalculator):
                 try:
                     return getattr(self[calcname], basename)
                 except AttributeError:
-                    return self.all_derived[calcname][basename].runtime_info.derived[basename]
+                    return self.all_derived[calcname][basename].runtime_info.derived[basename][0]  # Samples, so remove the first axis
         raise AttributeError('calculator has no attribute {}'.format(name))
 
     def __getstate__(self):

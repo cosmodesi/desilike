@@ -59,12 +59,12 @@ def get_from_cosmo(cosmo, name):
 def _clone(self, params, base='input'):
     params = {conversions.get(name, name): float(value) for name, value in params.items()}
 
-    theta_mc = params.pop('theta_mc', None)
+    theta_MC_100 = params.pop('theta_MC_100', None)
     self.cosmo = self.fiducial.clone(base=base, **params)
 
-    if theta_mc is not None:
+    if theta_MC_100 is not None:
         if 'h' in params:
-            raise ValueError('Cannot provide both theta_mc and h')
+            raise ValueError('Cannot provide both theta_MC_100 and h')
 
         # With self.cosmo.get_thermodynamics().theta_cosmomc
         # Typically takes 18 iterations and ~0.8 s
@@ -72,7 +72,7 @@ def _clone(self, params, base='input'):
         # The 'theta_cosmomc' call takes ~0.1 s and is accurate within 3e-6 (rel.), ~1% of Planck errors
         def f(h):
             self.cosmo = self.cosmo.clone(base='input', h=h)
-            return theta_mc - self.cosmo['theta_cosmomc']
+            return theta_MC_100 - 100. * self.cosmo['theta_cosmomc']
             #return theta_mc - self.cosmo.get_thermodynamics().theta_cosmomc
 
         limits = [0.1, 5.]  # h-limits
@@ -81,7 +81,7 @@ def _clone(self, params, base='input'):
         try:
             h = optimize.bisect(f, *limits, xtol=xtol, rtol=rtol, disp=True)
         except ValueError as exc:
-            raise ValueError('Could not find proper h value in the interval that matches theta_mc = {:.4f} with [f({:.3f}), f({:.3f})] = [{:.4f}, {:.4f}]'.format(theta_mc, *limits, *list(map(f, limits)))) from exc
+            raise ValueError('Could not find proper h value in the interval that matches theta_MC_100 = {:.4f} with [f({:.3f}), f({:.3f})] = [{:.4f}, {:.4f}]'.format(theta_MC_100, *limits, *list(map(f, limits)))) from exc
         f(h)
 
     return self.cosmo

@@ -788,6 +788,9 @@ class Parameter(BaseClass):
             state = ParameterConfig(self).clone(args[0]).init().__getstate__()
         elif len(args):
             raise ValueError('Unrecognized arguments {}'.format(args))
+        if 'name' in kwargs:
+            kwargs['basename'] = kwargs.pop('name')
+            kwargs['namespace'] = None
         state.update(kwargs)
         state.pop('updated', None)
         self.__init__(**state)
@@ -2089,7 +2092,12 @@ class Samples(BaseParameterCollection):
         except TypeError:
             item_name = str(self._get_name(item))
             if str(name) != item_name:
-                raise KeyError('Parameter {} must be indexed by name (incorrect {})'.format(item_name, name))
+                item = item.copy()
+                if isinstance(name, Parameter):
+                    item.param = name
+                else:
+                    item.param = item.param.clone(name=name)
+                #raise KeyError('Parameter {} must be indexed by name (incorrect {})'.format(item_name, name))
             self.set(item)
 
     def __getitem__(self, name):

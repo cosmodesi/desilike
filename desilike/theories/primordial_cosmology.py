@@ -80,7 +80,7 @@ def _clone(self, params, base='input'):
             #return theta_mc - self.cosmo.get_thermodynamics().theta_cosmomc
 
         limits = [0.1, 5.]  # h-limits
-        xtol = 0.0001  # 1 / 50 of Planck errors
+        xtol = 0.00001  # 1 / 500 of Planck errors
         rtol = xtol
         try:
             h = optimize.bisect(f, *limits, xtol=xtol, rtol=rtol, disp=True)

@@ -23,7 +23,7 @@ params:
       dist: norm
       loc: 1.04092
       scale: 0.00031
-    delta: 0.00015
+    delta: 0.0003
     latex: 100 \theta_\mathrm{MC}
   omega_cdm:
     prior:

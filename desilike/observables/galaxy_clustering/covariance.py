@@ -322,7 +322,7 @@ class ObservablesCovarianceMatrix(BaseClass):
         def get_bin_volume(bin, edges=True):
             bin = np.asarray(bin)
             if edges:
-                return 4. / 3. * np.pi * (bin[1:]**3 - bin[:-1]**3)
+                return np.squeeze(4. / 3. * np.pi * (bin[1:]**3 - bin[:-1]**3))
             return 4. * np.pi * bin**2 * utils.weights_trapz(bin)
 
         pks = [get_pk(self.theories[io], self.footprints[io]) for io in ios]
@@ -379,7 +379,8 @@ class ObservablesCovarianceMatrix(BaseClass):
                     return toret
                 # Add in shot noise contribution
                 shotnoise = integral_legendre_product((0, 0) + ells, range=(-1, 1)) * pks[0].shotnoise * pks[1].shotnoise * (2 * ells[0] + 1) * (2 * ells[1] + 1) / volume
-                return toret + np.sign(1j ** sum(ells)).real * get_bin_volume(bin) / np.prod([get_bin_volume(bin) for bin in bins]) * shotnoise
+                toret += np.sign(1j ** sum(ells)).real * get_bin_volume(bin) / np.prod([get_bin_volume(bin) for bin in bins]) * shotnoise
+                return toret
 
         covariance = []
         for ill1, ell1 in enumerate(obs[0].ells):

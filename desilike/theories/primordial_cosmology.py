@@ -80,13 +80,12 @@ def _clone(self, params, base='input'):
             #return theta_mc - self.cosmo.get_thermodynamics().theta_cosmomc
 
         limits = [0.1, 5.]  # h-limits
-        xtol = 0.00001  # 1 / 500 of Planck errors
+        xtol = 1e-6  # 1 / 5000 of Planck errors
         rtol = xtol
         try:
             h = optimize.bisect(f, *limits, xtol=xtol, rtol=rtol, disp=True)
         except ValueError as exc:
             raise ValueError('Could not find proper h value in the interval that matches theta_MC_100 = {:.4f} with [f({:.3f}), f({:.3f})] = [{:.4f}, {:.4f}]'.format(theta_MC_100, *limits, *list(map(f, limits)))) from exc
-        f(h)
 
     return self.cosmo
 

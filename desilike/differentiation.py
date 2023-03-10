@@ -254,7 +254,7 @@ class Differentiation(BaseClass):
                         name = param.basename
                         if name in state: value = state[name]
                         else: value = getattr(calculator, name)
-                        param._shape = value.shape  # a bit hacky, but no need to update parameters for this...
+                        param._shape = jnp.shape(value)  # a bit hacky, but no need to update parameters for this...
                         toret[param] = jnp.array(value)
                 return toret
 

@@ -41,12 +41,12 @@ def get_from_cosmo(cosmo, name):
         name = name[:5] + '0' + name[5:]
     if name.startswith('omega'):
         return get_from_cosmo(cosmo, 'O' + name[1:]) * cosmo.h ** 2
-    factor = 1.
+    scale = None
     if name == 'm_ncdm':
         name = 'm_ncdm_tot'
     if name == 'theta_MC_100':
         name = 'theta_cosmomc'
-        factor = 100.
+        scale = 100.
     if name == 'k_pivot':
         return cosmo.k_pivot * cosmo.h
     try:
@@ -55,7 +55,9 @@ def get_from_cosmo(cosmo, name):
         toret = cosmo[name]
     if not toret:
         return 0.
-    return factor * toret
+    if scale is not None:
+        return scale * toret
+    return toret
 
 
 def _clone(self, params, base='input'):

@@ -641,7 +641,7 @@ class RuntimeInfo(BaseClass):
         self._params = ParameterCollection(params)
         self._params.updated = False
         self.base_params = {param.basename: param for param in self._params}
-        self.input_params = ParameterCollection([param for param in self._params if (param.depends or (not param.derived) or param.solved) and not param.drop])
+        self.input_params = self._params.select(input=True)
         self.derived_params = self._params.select(derived=True)
         self.solved_params = self._params.select(solved=True)
         self.param_values = {param.basename: param.value for param in self.input_params}

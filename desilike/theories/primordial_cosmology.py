@@ -125,7 +125,7 @@ class Cosmoprimo(BasePrimordialCosmology):
         if fiducial_input:
             for param in self.params:
                 param.update(value=get_from_cosmo(self.fiducial, param.basename))
-        self.fiducial = _clone(self, {param.name: param.value for param in self.runtime_info.input_params}, base=None)  # just to set the parameter basis
+        self.fiducial = _clone(self, {param.name: param.value for param in self.params.select(input=True)}, base=None)  # just to set the parameter basis
         self.cosmo_requires = {'fiducial': self.fiducial.__getstate__(), 'params': dict.fromkeys(self.params.basenames())}
 
     def calculate(self, **params):

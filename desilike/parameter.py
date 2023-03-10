@@ -772,6 +772,10 @@ class Parameter(BaseClass):
         return not self._fixed and self._derived in self._allowed_solved
 
     @property
+    def input(self):
+        return (self.depends or (not self.derived) or self.solved) and not self.drop
+
+    @property
     def name(self):
         """Return parameter name, as namespace.basename if :attr:`namespace` is not ``None``, else basename."""
         from . import base

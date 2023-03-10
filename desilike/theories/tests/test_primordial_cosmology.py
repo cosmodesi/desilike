@@ -7,6 +7,8 @@ from desilike.theories import Cosmoprimo
 def test_parameterization():
 
     cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
+    cosmo()
+    cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
     del cosmo.params['h']
     cosmo.params['theta_MC_100'].update(prior={'limits': [0.99, 1.01]})
     cosmo()

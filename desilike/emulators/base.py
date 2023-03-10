@@ -41,8 +41,6 @@ class EmulatedCalculator(BaseCalculator):
 
     def initialize(self, emulator=None, **kwargs):
         self.emulator = emulator
-        self.params = self.emulator.params.select(depends={}).deepcopy()
-        for param in self.params: param.update(drop=False)
         self.calculate(**{name: self.params[name].value for name in self.emulator.varied_params})
 
     def calculate(self, **params):
@@ -327,6 +325,8 @@ class Emulator(BaseClass):
             new_cls.config_fn = Calculator.config_fn
         except AttributeError:
             pass
+        new_cls._params = self.params.select(depends={}).deepcopy()
+        for param in new_cls._params: param.update(drop=False)
 
         calculator = new_cls(emulator=self)
         calculator.runtime_info.initialize()  # to initialize

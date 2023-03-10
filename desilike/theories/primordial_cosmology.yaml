@@ -15,7 +15,7 @@ params:
     delta: 0.0025
     latex: h
   # If h is there, used instead of theta_mc below
-  theta_mc_100:
+  theta_MC_100:
     prior:
       min: 0.5
       max: 2

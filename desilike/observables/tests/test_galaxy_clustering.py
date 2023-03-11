@@ -169,6 +169,68 @@ def test_covariance_matrix():
     likelihood.plot_covariance_matrix(show=True, corrcoef=True)
 
 
+def test_covariance_matrix_mocks():
+
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TracerCorrelationFunctionMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
+
+    template = ShapeFitPowerSpectrumTemplate(z=0.5)
+    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+
+    pk_mocks, xi_mocks = '../../tests/_pk/mock_*.npy', '../../tests/_xi/mock_*.npy'
+    data = {'b1': 2.}
+
+    #pk_mocks, xi_mocks = '../../tests/_pk_shotnoise/mock_*.npy', '../../tests/_xi_shotnoise/mock_*.npy'
+    #data = {'b1': 0., 'df': 0.}
+
+    klim = {0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01], 4: [0.05, 0.2, 0.01]}
+    observable_pk_mocks = TracerPowerSpectrumMultipolesObservable(klim=klim, data=pk_mocks, covariance=pk_mocks, theory=theory)
+
+    observable_pk_mocks(**data)
+    shotnoise = observable_pk_mocks.shotnoise[0]
+    footprint = BoxFootprint(volume=500**3, nbar=1. / shotnoise)
+
+    observable_pk = TracerPowerSpectrumMultipolesObservable(klim=klim, data=data, theory=theory)
+
+    covariance = ObservablesCovarianceMatrix(observable_pk, footprints=footprint, resolution=3)(**data)
+    observable_pk.init.update(covariance=covariance)
+    observable_pk(**data)
+
+    #observable_pk_mocks.plot(show=True)
+    from matplotlib import pyplot as plt
+    ax = plt.gca()
+    for ill, ell in enumerate(observable_pk.ells):
+        ax.plot(observable_pk.k[ill], observable_pk_mocks.std[ill] / observable_pk.std[ill], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
+    ax.legend()
+    plt.show()
+
+    theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
+    slim = {0: [20., 80., 4.], 2: [20., 80., 4.], 4: [20., 80., 4.]}
+    observable_xi_mocks = TracerCorrelationFunctionMultipolesObservable(slim=slim, data=xi_mocks, covariance=xi_mocks, theory=theory)
+
+    observable_xi_mocks(**data)
+    observable_xi = TracerCorrelationFunctionMultipolesObservable(slim=slim, data=data, theory=theory)
+    covariance = ObservablesCovarianceMatrix(observable_xi, footprints=footprint, resolution=3)(**data)
+    observable_xi.init.update(covariance=covariance)
+    observable_xi(**data)
+
+    #observable_xi_mocks.plot(show=True)
+    from matplotlib import pyplot as plt
+    ax = plt.gca()
+    for ill, ell in enumerate(observable_xi.ells):
+        ax.plot(observable_xi.s[ill], observable_xi_mocks.std[ill] / observable_xi.std[ill], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
+    ax.legend()
+    plt.show()
+
+    covariance = ObservablesCovarianceMatrix([observable_pk, observable_xi], footprints=footprint, resolution=3)(**data)
+    likelihood_mocks = ObservablesGaussianLikelihood([observable_pk_mocks, observable_xi_mocks])
+    likelihood = ObservablesGaussianLikelihood([observable_pk, observable_xi], covariance=covariance)
+
+    likelihood_mocks.plot_covariance_matrix(show=True)
+    likelihood.plot_covariance_matrix(show=True)
+
+
+
 def test_compression():
 
     from desilike.observables.galaxy_clustering import BAOCompressionObservable, ShapeFitCompressionObservable, StandardCompressionObservable
@@ -496,7 +558,8 @@ if __name__ == '__main__':
     # test_power_spectrum()
     # test_correlation_function()
     # test_footprint()
-    test_covariance_matrix()
+    # test_covariance_matrix()
+    test_covariance_matrix_mocks()
     # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()

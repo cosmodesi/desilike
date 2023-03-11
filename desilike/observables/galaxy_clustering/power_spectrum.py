@@ -46,7 +46,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         - fiber_collisions
     """
     def initialize(self, data=None, covariance=None, klim=None, wmatrix=None, **kwargs):
-        self.k, self.kedges, self.ells, self.shotnoise = None, None, None, 0.
+        self.k, self.kedges, self.ells, self.shotnoise = None, None, None, None
         self.flatdata, self.mocks, self.covariance = None, None, None
         if not isinstance(data, dict):
             self.flatdata = self.load_data(data=data, klim=klim)[0]
@@ -70,6 +70,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         if klim is not None:
             self.wmatrix.init.update(klim=klim)
         self.wmatrix.init.update(kwargs)
+        if self.shotnoise is None: self.shotnoise = 0.
         self.wmatrix.init.setdefault('shotnoise', self.shotnoise)
         if self.flatdata is None:
             self.wmatrix(**data)

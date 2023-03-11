@@ -86,6 +86,7 @@ def _clone(self, params, base='input'):
             h = optimize.bisect(f, *limits, xtol=xtol, rtol=rtol, disp=True)
         except ValueError as exc:
             raise ValueError('Could not find proper h value in the interval that matches theta_MC_100 = {:.4f} with [f({:.3f}), f({:.3f})] = [{:.4f}, {:.4f}]'.format(theta_MC_100, *limits, *list(map(f, limits)))) from exc
+        f(h)
 
     return self.cosmo
 

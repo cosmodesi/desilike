@@ -94,7 +94,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
                 mask = (s >= lo) & (s < hi)
                 index = np.flatnonzero(mask)
                 list_s.append(s[mask])
-                list_sedges.append(corr.edges[0][np.append(index, index[-1] + 1)])
+                list_sedges.append(corr_slice.edges[0][np.append(index, index[-1] + 1)])
                 list_data.append(data[index])
             return list_s, list_sedges, ells, list_data
 

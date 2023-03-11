@@ -42,6 +42,23 @@ def run_box_mock(power_fn=None, corr_fn=None, unitary_amplitude=False, seed=42):
         corr.save(corr_fn)
 
 
+def run_box_mock_shotnoise(power_fn=None, corr_fn=None, seed=42):
+
+    data = RandomBoxCatalog(nbar=1e-3, boxsize=boxsize, boxcenter=boxcenter, seed=seed)
+
+    if power_fn:
+        poles = CatalogFFTPower(data_positions1=data['Position'], edges={'step': 0.005},
+                                los=los, boxsize=boxsize, boxcenter=boxcenter, nmesh=100,
+                                resampler='tsc', interlacing=2,
+                                position_type='pos', mpicomm=data.mpicomm).poles
+        poles.save(power_fn)
+    if corr_fn:
+        corr = TwoPointCorrelationFunction(mode='smu', data_positions1=data['Position'],
+                                           edges=(np.linspace(0., 80., 81), np.linspace(-1., 1., 101)), los=los, boxsize=boxsize,
+                                           position_type='pos', mpicomm=data.mpicomm, mpiroot=None, nthreads=1)
+        corr.save(corr_fn)
+
+
 def run_box_window(save_fn, poles_fn):
 
     edgesin = np.linspace(0., 0.5, 100)
@@ -93,18 +110,24 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    power_dir = '_pk'
-    corr_dir = '_xi'
-    power_fn, mock_power_fn = os.path.join(power_dir, 'data.npy'), os.path.join(power_dir, 'mock_{:d}.npy')
-    corr_fn, mock_corr_fn = os.path.join(corr_dir, 'data.npy'), os.path.join(corr_dir, 'mock_{:d}.npy')
+    power_dir, power_shotnoise_dir = '_pk', '_pk_shotnoise'
+    corr_dir, corr_shotnoise_dir = '_xi', '_xi_shotnoise'
+    power_fn, mock_power_fn, mock_shotnoise_power_fn = os.path.join(power_dir, 'data.npy'), os.path.join(power_dir, 'mock_{:d}.npy'), os.path.join(power_shotnoise_dir, 'mock_{:d}.npy')
+    corr_fn, mock_corr_fn, mock_shotnoise_corr_fn = os.path.join(corr_dir, 'data.npy'), os.path.join(corr_dir, 'mock_{:d}.npy'), os.path.join(corr_shotnoise_dir, 'mock_{:d}.npy')
     window_fn = os.path.join(power_dir, 'window.npy')
-    todo = ['mock', 'window']
+    #todo = ['mock', 'window']
+    todo = ['mock']
 
     if 'mock' in todo:
         run_box_mock(power_fn=power_fn, corr_fn=corr_fn, unitary_amplitude=True, seed=0)
         for i in range(500):
             print(i)
             run_box_mock(power_fn=mock_power_fn.format(i), corr_fn=mock_corr_fn.format(i), seed=(i + 1) * 42)
+
+    if 'mock_shotnoise' in todo:
+        for i in range(500):
+            print(i)
+            run_box_mock_shotnoise(power_fn=mock_shotnoise_power_fn.format(i), corr_fn=mock_shotnoise_corr_fn.format(i), seed=(i + 1) * 42)
 
     if 'window' in todo:
         run_box_window(window_fn, power_fn)

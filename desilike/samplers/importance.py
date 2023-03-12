@@ -6,9 +6,7 @@ from desilike.samples import Chain, load_source
 
 class ImportanceSampler(BaseClass):
 
-    name = 'base'
-    nwalkers = 1
-    _check_same_input = False
+    name = 'importance'
 
     def __init__(self, likelihood, chains, save_fn=None, mpicomm=None):
         """

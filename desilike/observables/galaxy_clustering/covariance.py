@@ -341,7 +341,7 @@ class ObservablesCovarianceMatrix(BaseClass):
                 if _interval_empty(bin):
                     return 0.
                 k = get_integ_points(bin)
-                return (2. * np.pi)**3 * np.mean(get_bin_volume(bin) / np.prod([get_bin_volume(bin) for bin in bins]) * get_sigma_k(*pks, *ells, k))
+                return (2. * np.pi)**3 * get_bin_volume(bin) / np.prod([get_bin_volume(bin) for bin in bins]) * np.sum(k**2 * get_sigma_k(*pks, *ells, k)) / np.sum(k**2, axis=0)
 
         if isinstance(obs[0], TracerCorrelationFunctionMultipolesObservable) and isinstance(obs[1], TracerPowerSpectrumMultipolesObservable):
 
@@ -350,8 +350,8 @@ class ObservablesCovarianceMatrix(BaseClass):
                 bins = [edges[ill][i:i + 2] for edges, ill, i in zip([obs[0].sedges, obs[1].kedges], ills, ibin)]
                 s, k = [get_integ_points(bin) for bin in bins]
                 weights = np.sum(s[:, None]**2 * special.spherical_jn(ells[0], s[:, None] * k), axis=0) / np.sum(s**2, axis=0)
-                sigmak = np.mean(get_sigma_k(*pks, *ells, k), axis=-1)
-                return np.sign(1j ** ells[0]).real * np.sum(sigmak * weights)
+                sigmak = get_sigma_k(*pks, *ells, k)
+                return np.sign(1j ** ells[0]).real * np.sum(k**2 * sigmak * weights) / np.sum(k**2)
 
         if isinstance(obs[1], TracerCorrelationFunctionMultipolesObservable) and isinstance(obs[0], TracerPowerSpectrumMultipolesObservable):
             return self._run(io2, io1).T

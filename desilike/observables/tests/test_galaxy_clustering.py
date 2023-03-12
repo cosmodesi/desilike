@@ -184,6 +184,7 @@ def test_covariance_matrix_mocks():
     #data = {'b1': 0., 'df': 0.}
 
     klim = {0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01], 4: [0.05, 0.2, 0.01]}
+    #klim = {0: [0.05, 0.2, 0.02], 2: [0.05, 0.2, 0.02], 4: [0.05, 0.2, 0.02]}
     observable_pk_mocks = TracerPowerSpectrumMultipolesObservable(klim=klim, data=pk_mocks, covariance=pk_mocks, theory=theory)
 
     observable_pk_mocks(**data)
@@ -206,6 +207,7 @@ def test_covariance_matrix_mocks():
 
     theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
     slim = {0: [20., 80., 4.], 2: [20., 80., 4.], 4: [20., 80., 4.]}
+    #slim = {0: [20., 80., 2.], 2: [20., 80., 2.], 4: [20., 80., 2.]}
     observable_xi_mocks = TracerCorrelationFunctionMultipolesObservable(slim=slim, data=xi_mocks, covariance=xi_mocks, theory=theory)
 
     observable_xi_mocks(**data)
@@ -222,9 +224,25 @@ def test_covariance_matrix_mocks():
     ax.legend()
     plt.show()
 
+    ax = plt.gca()
+    index = np.arange(observable_xi_mocks.covariance.shape[0])
+    for offset in range(1, 5):
+        indices = (index[:-offset], index[offset:])
+        ax.plot(observable_xi_mocks.covariance[indices] / observable_xi.covariance[indices])
+    ax.set_ylim(0., 3.)
+    plt.show()
+
     covariance = ObservablesCovarianceMatrix([observable_pk, observable_xi], footprints=footprint, resolution=3)(**data)
     likelihood_mocks = ObservablesGaussianLikelihood([observable_pk_mocks, observable_xi_mocks])
     likelihood = ObservablesGaussianLikelihood([observable_pk, observable_xi], covariance=covariance)
+
+    ax = plt.gca()
+    index = np.arange(likelihood_mocks.covariance.shape[0])
+    for offset in [1, observable_pk.covariance.shape[0], observable_pk.covariance.shape[0] + 1]:
+        indices = (index[:-offset], index[offset:])
+        ax.plot(likelihood_mocks.covariance[indices] / likelihood.covariance[indices])
+    ax.set_ylim(0., 3.)
+    plt.show()
 
     likelihood_mocks.plot_covariance_matrix(show=True)
     likelihood.plot_covariance_matrix(show=True)

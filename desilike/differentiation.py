@@ -408,7 +408,11 @@ class Differentiation(BaseClass):
         self.pipeline.mpicalculate(**(samples.to_dict(params=self.all_params) if self.mpicomm.rank == 0 else {}))
         self.pipeline.calculate, self.pipeline.more_derived = calculate_bak, more_derived_bak
         states = self.mpicomm.gather(self._getter_samples, root=0)
-
+        for getter_inst, getter_size in self.mpicomm.allgather((getattr(self, 'getter_inst', None), getattr(self, 'getter_size', None))):
+            if getter_inst is not None:
+                self.getter_inst = getter_inst
+                self.getter_size = getter_size
+                break
         toret = None
         if self.mpicomm.rank == 0:
             finiteparams, finiteorder, finiteaccuracy = [], [], []

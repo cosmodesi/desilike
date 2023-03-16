@@ -39,7 +39,7 @@ class BaseCompressionObservable(BaseCalculator):
             if meta:
                 try:
                     source = load_source(data, params=meta, choice=True, return_type='dict')
-                except ValueError:
+                except (ValueError, AttributeError, KeyError):
                     pass
                 else:
                     meta = {name: source.pop(name) for name in self.meta_names if name in source}

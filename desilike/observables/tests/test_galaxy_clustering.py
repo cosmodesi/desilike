@@ -248,10 +248,9 @@ def test_covariance_matrix_mocks():
     likelihood.plot_covariance_matrix(show=True)
 
 
-
 def test_compression():
 
-    from desilike.observables.galaxy_clustering import BAOCompressionObservable, ShapeFitCompressionObservable, StandardCompressionObservable
+    from desilike.observables.galaxy_clustering import BAOCompressionObservable, StandardCompressionObservable, ShapeFitCompressionObservable, WiggleSplitCompressionObservable, BandVelocityCompressionObservable
     from desilike.emulators import Emulator, TaylorEmulatorEngine
 
     observable = BAOCompressionObservable(data=[1., 1.], covariance=np.diag([0.01, 0.01]), quantities=['qpar', 'qper'], z=2.)
@@ -267,12 +266,17 @@ def test_compression():
     print(likelihood.varied_params)
     assert np.allclose(likelihood(), 0.)
 
+    observable = StandardCompressionObservable(data=[1., 1., 1.], covariance=np.diag([0.01, 0.01, 0.01]), quantities=['qpar', 'qper', 'df'], z=2.)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    print(likelihood())
+    print(likelihood.varied_params)
+
     observable = ShapeFitCompressionObservable(data=[1., 1., 0., 0.8], covariance=np.diag([0.01, 0.01, 0.0001, 0.01]), quantities=['qpar', 'qper', 'm', 'f_sqrt_Ap'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
     print(likelihood.varied_params)
 
-    observable = ShapeFitCompressionObservable(data=[1., 1., 0., 0.8], covariance=np.diag([0.01, 0.01, 0.0001, 0.01]), quantities=['qpar', 'qper', 'dm', 'df'], z=2.)
+    observable = ShapeFitCompressionObservable(data=[1., 1., 0., 1.], covariance=np.diag([0.01, 0.01, 0.0001, 0.01]), quantities=['qpar', 'qper', 'dm', 'df'], z=2.)
     emulator = Emulator(observable, engine=TaylorEmulatorEngine(order=1))
     emulator.set_samples()
     emulator.fit()
@@ -280,18 +284,25 @@ def test_compression():
     print(likelihood(logA=3.), likelihood(logA=3.1))
     print(likelihood.varied_params)
 
-    observable = StandardCompressionObservable(data=[1., 1., 0.8], covariance=np.diag([0.01, 0.01, 0.01]), quantities=['qpar', 'qper', 'df'], z=2.)
+    observable = WiggleSplitCompressionObservable(data=[1., 1., 1., 0.], covariance=np.diag([0.01, 0.01, 0.01, 0.01]), quantities=['qap', 'qbao', 'df', 'dm'], z=2.)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
+    print(likelihood.varied_params)
+
+    observable = BandVelocityCompressionObservable(data=[1., 1., 1.], covariance=np.diag([0.01, 0.01, 0.01]), kp=[0.01, 0.1], quantities=['dptt0', 'dptt1', 'qap'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
     print(likelihood.varied_params)
 
     from desilike import ParameterCovariance
-    covariance = ParameterCovariance(value=np.diag([0.01, 0.01, 0.01]), center=[1., 1., 0.8], params=['qpar', 'qper', 'df'])
-    observable = StandardCompressionObservable(data=covariance, covariance=covariance, quantities=['qpar', 'qper', 'df'], z=2.)
+    covariance = ParameterCovariance(value=np.diag([0.01, 0.01, 0.01]), params=['qpar', 'qper', 'df'])
+    observable = StandardCompressionObservable(data={}, covariance=covariance, quantities=['qpar', 'qper', 'df'], z=2.)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    print(likelihood(), observable.flattheory)
+
     emulator = Emulator(observable, engine=TaylorEmulatorEngine(order=1))
     emulator.set_samples()
     emulator.fit()
-    observable = emulator.to_calculator()
     likelihood = ObservablesGaussianLikelihood(observables=[emulator.to_calculator()])
     print(likelihood())
     print(likelihood.varied_params)
@@ -577,8 +588,8 @@ if __name__ == '__main__':
     # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
-    test_covariance_matrix_mocks()
-    # test_compression()
+    # test_covariance_matrix_mocks()
+    test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

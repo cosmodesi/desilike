@@ -4,7 +4,7 @@ import glob
 
 import numpy as np
 
-from ..parameter import Samples
+from ..parameter import ParameterCollection, Samples
 from .chain import Chain
 from .profiles import Profiles, ParameterBestFit, ParameterCovariance, ParameterContours
 from . import diagnostics, utils
@@ -91,7 +91,7 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
                 if len(tmp) != size:
                     raise ValueError('Provide a 1D array of size {:d} for params = {} (found {})'.format(size, params, len(tmp)))
             else:
-                params_in_source = [param for param in params if param in source]
+                params_in_source = source.params(name=[str(param) for param in params]) if source else []
                 if params_in_source:
                     tmp = source.choice(params=params_in_source, return_type='dict', **choice)
                 params_not_in_source = [param for param in params if param not in params_in_source]
@@ -119,10 +119,11 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
                 if tmp.shape != shape:
                     raise ValueError('Provide a 2D array of shape {} for params = {} (found {})'.format(shape, params, tmp.shape))
             else:
-                params_in_source = [param for param in params if param in source]
+                params_in_source = source.params(name=[str(param) for param in params]) if source else []
                 if params_in_source:
                     cov = source.view(params=params_in_source, return_type=None)
-                    params = [cov._params[param] if params in params_in_source else param for param in params]
+                    params = [cov._params[param] if param in params_in_source else param for param in params]
+                params = ParameterCollection(params)
                 params_not_in_source = [param for param in params if param not in params_in_source]
                 sizes = [param.size if param in params_not_in_source else cov._sizes[params_in_source.index(param)] for param in params]
                 tmp = np.zeros((len(sizes),) * 2, dtype='f8')

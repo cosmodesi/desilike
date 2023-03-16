@@ -20,16 +20,17 @@ def test_integ():
 def test_templates():
 
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
-    from desilike.theories.galaxy_clustering import BAOExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor
+    from desilike.theories.galaxy_clustering import BAOExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor
     from desilike.theories.galaxy_clustering import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BAOPowerSpectrumTemplate,
-                                                     StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate)
+                                                     StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate)
 
     for extractor in [BAOExtractor(), StandardPowerSpectrumExtractor(),
-                      ShapeFitPowerSpectrumExtractor(), BandVelocityPowerSpectrumExtractor(kp=np.linspace(0.01, 0.1, 10))]:
+                      ShapeFitPowerSpectrumExtractor(), WiggleSplitPowerSpectrumExtractor(),
+                      BandVelocityPowerSpectrumExtractor(kp=np.linspace(0.01, 0.1, 10))]:
         extractor()
 
     for template in [FixedPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), BAOPowerSpectrumTemplate(),
-                     StandardPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), BandVelocityPowerSpectrumTemplate(kp=np.linspace(0.01, 0.1, 10))]:
+                     StandardPowerSpectrumTemplate(), WiggleSplitPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), BandVelocityPowerSpectrumTemplate(kp=np.linspace(0.01, 0.1, 10))]:
         print(template)
         theory = KaiserTracerPowerSpectrumMultipoles(template=template)
         theory()
@@ -394,9 +395,9 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_integ()
-    test_bao()
+    #test_bao()
     #test_full_shape()
     #test_pk_to_xi()
     #test_ap_diff()
     #test_png()
-    #test_templates()
+    test_templates()

@@ -48,7 +48,7 @@ Several options are possible, with the most notable one being:
 - `pybird <https://github.com/pierrexyz/pybird>`_ model, with :class:`~desilike.theories.galaxy_clustering.full_shape.PyBirdTracerPowerSpectrumMultipoles`,
   or :class:`~desilike.theories.galaxy_clustering.full_shape.PyBirdTracerCorrelationFunctionMultipoles`
 - empirical BAO model, with :class:`~desilike.theories.galaxy_clustering.bao.DampedBAOWigglesPowerSpectrumMultipoles`,
-  or :class:`~desilike.theories.galaxy_clustering.bao.DampedBAOWigglesPowerSpectrumMultipoles`
+  or :class:`~desilike.theories.galaxy_clustering.bao.ResummedBAOWigglesPowerSpectrumMultipoles`
 - power spectrum with scale-dependent bias (primordial non-gaussianity), with :class:`~desilike.theories.galaxy_clustering.primordial_non_gaussianity.PNGTracerPowerSpectrumMultipoles`
 
 See :mod:`~desilike.theories.galaxy_clustering.full_shape` for all full shape models, and :mod:`~desilike.theories.galaxy_clustering.bao` for all BAO models.

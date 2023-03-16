@@ -1,7 +1,7 @@
 import numpy as np
 from scipy import optimize
 
-from cosmoprimo import Cosmology
+from cosmoprimo import Cosmology, constants
 
 from desilike.base import BaseCalculator
 

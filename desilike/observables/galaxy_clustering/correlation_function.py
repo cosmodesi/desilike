@@ -85,16 +85,15 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
                 slim = {ell: (0, np.inf) for ell in (0, 2, 4)}
             ells, list_s, list_sedges, list_data = [], [], [], []
             for ell, (lo, hi, *step) in slim.items():
-                corr_slice = corr
                 if step:
                     rebin = int(step / np.diff(corr.edges[0]).mean() + 0.5)  # nearest integer
-                    corr_slice = corr[:(corr.shape[0] // rebin) * rebin:rebin]
-                s, data = corr_slice(ells=ell, return_sep=True, return_std=False)
+                    corr = corr[:(corr.shape[0] // rebin) * rebin:rebin]
+                s, data = corr(ells=ell, return_sep=True, return_std=False)
                 ells.append(ell)
                 mask = (s >= lo) & (s < hi)
                 index = np.flatnonzero(mask)
                 list_s.append(s[mask])
-                list_sedges.append(corr_slice.edges[0][np.append(index, index[-1] + 1)])
+                list_sedges.append(corr.edges[0][np.append(index, index[-1] + 1)])
                 list_data.append(data[index])
             return list_s, list_sedges, ells, list_data
 

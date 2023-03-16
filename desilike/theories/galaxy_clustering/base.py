@@ -2,7 +2,7 @@ import numpy as np
 from scipy import special
 
 from desilike.jax import numpy as jnp
-from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo
+from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo, constants
 from desilike.base import BaseCalculator
 from desilike import plotting, utils
 
@@ -183,7 +183,7 @@ class APEffect(BaseCalculator):
         self.fiducial = get_cosmo(fiducial)
         self.eta = float(eta)
         self.efunc_fid = self.fiducial.efunc(self.z)
-        self.comoving_angular_distance_fid = self.fiducial.comoving_angular_distance(self.z)
+        self.DM_fid = self.fiducial.comoving_angular_distance(self.z)
         self.mode = mode
         if self.mode == 'qiso':
             self.params = self.params.select(basename=['qiso'])
@@ -205,10 +205,19 @@ class APEffect(BaseCalculator):
                 self.cosmo = Cosmoprimo(fiducial=self.fiducial)
         else:
             self.cosmo = self.fiducial
+        if self.mode == 'distances':
+            self.DH_fid = constants.c / (100. * self.fiducial.efunc(self.z))
+            self.DM_fid = self.fiducial.comoving_angular_distance(self.z)
+            self.DH_over_DM_fid = self.DH_fid / self.DM_fid
+            self.DV_fid = (self.DH_fid * self.DM_fid**2 * self.z)**(1. / 3.)
 
     def calculate(self, **params):
         if self.mode == 'distances':
-            qpar, qper = self.efunc_fid / self.cosmo.efunc(self.z), self.cosmo.comoving_angular_distance(self.z) / self.comoving_angular_distance_fid
+            self.DH = constants.c / (100. * self.cosmo.efunc(self.z))
+            self.DM = self.cosmo.comoving_angular_distance(self.z)
+            self.DH_over_DM = self.DH / self.DM
+            self.DV = (self.DH * self.DM**2 * self.z)**(1. / 3.)
+            qpar, qper = self.DH / self.DH_fid, self.DM / self.DM_fid
         elif self.mode == 'qiso':
             qpar = qper = params['qiso']
         elif self.mode == 'qap':

@@ -731,7 +731,7 @@ def _kernel_tophat_deriv_lowx(x):
 
 def _kernel_tophat_deriv_highx(x):
     r"""Derivative of tophat function math:`W(x) = 3 (\sin(x)-x\cos(x))/x^{3}`."""
-    return 3. * np.sin(x) / x**3 - 9. * (np.sin(x) - x * np.cos(x)) / x**4
+    return 3. * np.sin(x) / x**2 - 9. * (np.sin(x) - x * np.cos(x)) / x**4
 
 
 def kernel_tophat2_deriv(x):

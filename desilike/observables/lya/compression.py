@@ -1,18 +1,8 @@
-from desilike.jax import numpy as jnp
-from desilike.parameter import Parameter
-from desilike.base import BaseCalculator
-from desilike.samples import load_source
 from desilike.theories.lya.power_template import P1DPowerSpectrumExtractor
-from desilike.observables.galaxy_clustering.compression import BAOCompressionObservable
+from desilike.observables.galaxy_clustering.compression import BAOCompressionObservable, BaseCompressionObservable
 
 
-def _check_conflicts(quantities, conflicts):
-    for conflict in conflicts:
-        if all(c in quantities for c in conflict):
-            raise ValueError('Found conflicting quantities: {}'.format(conflict))
-
-
-class P1DCompressionObservable(BaseCalculator):
+class P1DCompressionObservable(BaseCompressionObservable):
     """
     P1D compression observable: compare P1D compressed measurements to theory predictions.
 
@@ -38,32 +28,5 @@ class P1DCompressionObservable(BaseCalculator):
     ---------
     https://arxiv.org/abs/2106.07641
     """
-    def initialize(self, data=None, covariance=None, cosmo=None, quantities=None, **kwargs):
-        self.quantities, self.flatdata, self.covariance = self.load_data(data=data, covariance=covariance, quantities=quantities)
-        if self.mpicomm.rank == 0:
-            self.log_info('Found quantities {}.'.format(self.quantities))
-        # If cosmo is None, this will set default parameters for cosmology
-        self.extractor = P1DPowerSpectrumExtractor(cosmo=cosmo, **kwargs).runtime_info.initialize()
-
-    def load_data(self, data=None, covariance=None, quantities=None):
-        data = load_source(data, params=quantities, choice=True, return_type='dict')
-        quantities = [Parameter(quantity) for quantity in data.keys()]
-        allowed_quantities = ['delta2star', 'nstar', 'alphastar']
-        indices = []
-        for iq, quantity in enumerate(quantities):
-            if quantity.basename in allowed_quantities: indices.append(iq)
-        quantities = [quantities[iq] for iq in indices]
-        conflicts = []
-        _check_conflicts(quantities, conflicts)
-        flatdata = [data[quantity.name] for quantity in quantities]
-        covariance = load_source(covariance, params=quantities, cov=True, return_type='nparray')
-        return [quantity.basename for quantity in quantities], flatdata, covariance
-
-    def calculate(self):
-        self.flattheory = jnp.array([getattr(self.extractor, quantity) for quantity in self.quantities])
-
-    def __getstate__(self):
-        state = {}
-        for name in ['flatdata', 'covariance', 'flattheory', 'quantities']:
-            state[name] = getattr(self, name)
-        return state
+    def initialize(self, *args, **kwargs):
+        super(P1DCompressionObservable, self).initialize(*args, extractor=P1DPowerSpectrumExtractor(), **kwargs)

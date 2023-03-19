@@ -19,18 +19,52 @@ def test_integ():
 
 def test_templates():
 
+    from desilike.theories.galaxy_clustering.power_template import PowerSpectrumInterpolator1D, integrate_sigma_r2, kernel_gauss2, kernel_gauss2_deriv, kernel_tophat2, kernel_tophat2_deriv
+
+    from cosmoprimo.fiducial import DESI
+    cosmo = DESI()
+    pk = cosmo.get_fourier().pk_interpolator().to_1d(z=0.)
+    r = 8.
+    assert np.allclose(pk.sigma_r(r), integrate_sigma_r2(r, pk, kernel=kernel_tophat2)**0.5, atol=0., rtol=1e-3)
+    """
+    from matplotlib import pyplot as plt
+    x = np.linspace(0., 0.2, 100)
+    plt.plot(x, kernel_tophat2(x))
+    plt.plot(x, kernel_tophat2_deriv(x))
+    plt.show()
+    """
+    k = np.logspace(-2, 1, 100)
+    n = -2.
+    pk = PowerSpectrumInterpolator1D(k=k, pk=k**n)
+    r = 1.
+    """
+    slope_gauss = integrate_sigma_r2(r, pk, kernel=kernel_gauss2_deriv) / integrate_sigma_r2(r, pk, kernel=kernel_gauss2)
+    from scipy import special
+    ntot = 2 + n
+    print((2. * np.pi**2) * integrate_sigma_r2(r, pk, kernel=kernel_gauss2), special.gamma((ntot + 1) / 2.) / 2.)
+    ntot_deriv = ntot + 1
+    print((2. * np.pi**2) * integrate_sigma_r2(r, pk, kernel=kernel_gauss2_deriv) / (-2.), special.gamma((ntot_deriv + 1) / 2.) / 2.)
+    print(slope_gauss / (-2.), special.gamma((ntot_deriv + 1) / 2.) / special.gamma((ntot + 1) / 2.))
+    """
+    slope_gauss = integrate_sigma_r2(r, pk, kernel=kernel_gauss2_deriv) / integrate_sigma_r2(r, pk, kernel=kernel_gauss2)
+    slope_tophat = integrate_sigma_r2(r, pk, kernel=kernel_tophat2_deriv) / integrate_sigma_r2(r, pk, kernel=kernel_tophat2)
+    print(slope_gauss, slope_tophat)
+
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
     from desilike.theories.galaxy_clustering import BAOExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor
     from desilike.theories.galaxy_clustering import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BAOPowerSpectrumTemplate,
                                                      StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate)
 
     for extractor in [BAOExtractor(), StandardPowerSpectrumExtractor(),
-                      ShapeFitPowerSpectrumExtractor(), WiggleSplitPowerSpectrumExtractor(),
+                      ShapeFitPowerSpectrumExtractor(),
+                      WiggleSplitPowerSpectrumExtractor(), WiggleSplitPowerSpectrumExtractor(kernel='tophat'),
                       BandVelocityPowerSpectrumExtractor(kp=np.linspace(0.01, 0.1, 10))]:
         extractor()
 
     for template in [FixedPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), BAOPowerSpectrumTemplate(),
-                     StandardPowerSpectrumTemplate(), WiggleSplitPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), BandVelocityPowerSpectrumTemplate(kp=np.linspace(0.01, 0.1, 10))]:
+                     StandardPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(),
+                     WiggleSplitPowerSpectrumTemplate(), WiggleSplitPowerSpectrumTemplate(kernel='tophat'),
+                     BandVelocityPowerSpectrumTemplate(kp=np.linspace(0.01, 0.1, 10))]:
         print(template)
         theory = KaiserTracerPowerSpectrumMultipoles(template=template)
         theory()

@@ -727,7 +727,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         import pybird_dev as pybird
         super(PyBirdPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         if self.options['nd'] is None: self.options['nd'] = 1. / shotnoise
-        print(self.k[0] * 0.8, self.k[-1] * 1.2)
+        # print(self.k[0] * 0.8, self.k[-1] * 1.2)
         self.co = pybird.Common(halohalo=True, with_time=True, exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False,
                                 Nl=len(self.ells), kmin=self.k[0] * 0.8, kmax=self.k[-1] * 1.2, optiresum=self.options['with_resum'] == 'opti',
                                 nd=self.options['nd'], with_cf=False)

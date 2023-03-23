@@ -104,6 +104,12 @@ def setup_logging(level=logging.INFO, stream=sys.stdout, filename=None, filemode
     """
     Set up logging.
 
+    Note
+    ----
+    You may find it useful to have different logging level depending on the process; e.g.
+    ``setup_logging(level=(logging.INFO if mpicomm.rank == 0 else logging.ERROR))``
+    will set INFO level on rank 0, and ERROR level on all other ranks of the MPI communicator ``mpicomm``.
+
     Parameters
     ----------
     level : string, int, default=logging.INFO

@@ -84,7 +84,7 @@ class BaseLikelihood(BaseCalculator):
             indices_derivs = posterior_fisher._index([deriv[0] for deriv in derivs[1:]]), posterior_fisher._index([deriv[1] for deriv in derivs[1:]])
 
         sum_loglikelihood = np.zeros(len(derivs) if solved_params else None, dtype='f8')
-        sum_logprior = 0.
+        sum_logprior = np.zeros((), dtype='f8')
         derived = getattr(pipeline, 'derived', None)
 
         for param, xx in zip(solved_params, x):

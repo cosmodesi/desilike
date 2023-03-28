@@ -73,8 +73,7 @@ class BaseLikelihood(BaseCalculator):
                 self.fisher = Fisher(self, method='auto')
                 pipeline._params, pipeline._varied_params = params_bak, varied_params_bak
 
-            posterior_fisher = self.fisher()
-            # self.fisher(**{param.name: param.value for param in solved_params})
+            posterior_fisher = self.fisher(**pipeline.param_values)
             pipeline.more_calculate = self._solve
             # flatdiff is model - data
             x = posterior_fisher.mean()

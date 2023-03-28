@@ -78,7 +78,11 @@ def test_solved():
     footprint = BoxFootprint(volume=1e10, nbar=1e-5)
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
-    likelihood()
+    likelihood(b1=1.)
+    exit()
+    #likelihood()
+    print(likelihood(b1=1.), likelihood(b1=1.1))
+    exit()
     from desilike.utils import Monitor
     with Monitor() as mem:
         mem.start()

@@ -25,6 +25,12 @@ class ParameterBestFit(Samples):
         if self._logposterior in self:
             self.logposterior.param.update(derived=True)
 
+    def __setstate__(self, state):
+        # Backward-compatibility
+        for name in ['_logposterior', '_loglikelihood', '_logprior']:
+            state.setdefault(name, name[1:])
+        super(ParameterBestFit, self).__setstate__(state)
+
     @property
     def logposterior(self):
         """Log-posterior."""

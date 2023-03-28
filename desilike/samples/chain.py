@@ -99,11 +99,17 @@ class Chain(Samples):
         self._aweight = str(aweight)
         self._fweight = str(fweight)
         self._weight = str(weight)
-        self._derived = [self._logposterior, self._loglikelihood, self._logprior, self._aweight, self._fweight, self._weight]
+        derived = [self._logposterior, self._loglikelihood, self._logprior, self._aweight, self._fweight, self._weight]
         super(Chain, self).__init__(data=data, params=params, attrs=attrs)
-        for name in self._derived:
+        for name in derived:
             if name in self:
                 self[name].param.update(derived=True)
+
+    def __setstate__(self, state):
+        # Backward-compatibility
+        for name in ['_logposterior', '_loglikelihood', '_logprior', '_aweight', '_fweight', '_weight']:
+            state.setdefault(name, name[1:])
+        super(Chain, self).__setstate__(state)
 
     @property
     def aweight(self):

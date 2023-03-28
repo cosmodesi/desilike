@@ -403,10 +403,10 @@ class Differentiation(BaseClass):
                     samples[param] = np.full(samples.shape, self.center[param.name])
         nsamples = self.mpicomm.bcast(samples.size if self.mpicomm.rank == 0 else None, root=0)
         self._getter_samples = {}
-        calculate_bak, more_derived_bak = self.pipeline.calculate, self.pipeline.more_derived
-        self.pipeline.calculate, self.pipeline.more_derived = self._calculate, self._more_derived
+        calculate_bak, more_derived_bak, mpicomm_bak = self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm
+        self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm = self._calculate, self._more_derived, self.mpicomm
         self.pipeline.mpicalculate(**(samples.to_dict(params=self.all_params) if self.mpicomm.rank == 0 else {}))
-        self.pipeline.calculate, self.pipeline.more_derived = calculate_bak, more_derived_bak
+        self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm = calculate_bak, more_derived_bak, mpicomm_bak
         states = self.mpicomm.gather(self._getter_samples, root=0)
         for getter_inst, getter_size in self.mpicomm.allgather((getattr(self, 'getter_inst', None), getattr(self, 'getter_size', None))):
             if getter_inst is not None:

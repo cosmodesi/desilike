@@ -49,6 +49,10 @@ def _get_solved_covariance(chain, params=None):
         params = solved_params
     solved_indices = [solved_params.index(param) for param in params]
     logposterior = -(chain[chain._loglikelihood] + chain[chain._logprior])
+    if not logposterior.derivs:
+        import warnings
+        warnings.warn('You need the covariance of analytically marginalized ("solved") parameters, but it has not been computed (maybe this chain has been obtained with an old version of the code). Assuming zero covariance.')
+        return np.zeros(chain.shape + (len(solved_indices), ) * 2, dtype='f8')
     logposterior = np.array([[logposterior[param1, param2].ravel() for param2 in solved_params] for param1 in solved_params])
     logposterior = np.moveaxis(logposterior, -1, 0).reshape(chain.shape + (len(solved_params),) * 2)
     return np.linalg.inv(logposterior)[(Ellipsis,) + np.ix_(solved_indices, solved_indices)]
@@ -358,10 +362,11 @@ class Chain(Samples):
         kwargs : dict
             Optional arguments for :func:`numpy.savetxt`.
         """
-        if self.params(solved=True):
-            self = self.sample_solved()
         if params is None: params = self.params()
-        columns = list([str(param) for param in params])
+        else: params = [self[param].param for param in params]
+        if any(param.solved for param in params):
+            self = self.sample_solved()
+        columns = [str(param) for param in params]
         outputs_columns = [self._weight, self._logposterior]
         shape = self.shape
         outputs = [array.param.name for array in self if array.shape != shape]
@@ -418,12 +423,12 @@ class Chain(Samples):
         -------
         samples : getdist.MCSamples
         """
-        if self.params(solved=True):
-            self = self.sample_solved()
         from getdist import MCSamples
         toret = None
         if params is None: params = self.params(varied=True)
         else: params = [self[param].param for param in params]
+        if any(param.solved for param in params):
+            self = self.sample_solved()
         samples = self.to_array(params=params, struct=False, derivs=()).reshape(-1, self.size)
         labels = [param.latex() for param in params]
         names = [str(param) for param in params]
@@ -454,12 +459,12 @@ class Chain(Samples):
         -------
         samples : anesthetic.MCMCSamples
         """
-        if self.params(solved=True):
-            self = self.sample_solved()
         from anesthetic import MCMCSamples
         toret = None
         if params is None: params = self.params(varied=True)
         else: params = [self[param].param for param in params]
+        if any(param.solved for param in params):
+            self = self.sample_solved()
         labels = [param.latex() for param in params]
         samples = self.to_array(params=params, struct=False, derivs=()).reshape(-1, self.size)
         names = [str(param) for param in params]

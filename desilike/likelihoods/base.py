@@ -124,7 +124,7 @@ class BaseLikelihood(BaseCalculator):
         if derived is not None:
             derived.set(ParameterArray(self.loglikelihood, param=self._param_loglikelihood, derivs=derivs))
             derived.set(ParameterArray(self.logprior, param=self._param_logprior, derivs=derivs))
-        return self.loglikelihood + self.logprior
+        return self.loglikelihood.flat[0] + self.logprior.flat[0]
 
     @classmethod
     def sum(cls, *others):

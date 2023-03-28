@@ -501,23 +501,31 @@ class ParameterArray(np.ndarray):
     def __getstate__(self):
         return {'value': self.view(np.ndarray), 'param': None if self.param is None else self.param.__getstate__(), 'derivs': self.derivs}
 
-    def _index(self, deriv):
-        ideriv = deriv
-        if self.derivs is not None:
-            try:
-                deriv = Deriv(deriv)
-            except ValueError:
-                pass
-            else:
+    def _isderiv(self, deriv):
+        try:
+            deriv = Deriv(deriv)
+            return deriv, True
+        except ValueError:
+            return deriv, False
+
+    def _index(self, index):
+        toret = index
+        deriv, isderiv = self._isderiv(index)
+        if isderiv:
+            if self.derivs is not None:
                 try:
                     ideriv = self.derivs.index(deriv)
                 except ValueError as exc:
                     raise KeyError('{} is not in computed derivatives: {}'.format(deriv, self.derivs)) from exc
                 else:
-                    ideriv = (Ellipsis, ideriv)
+                    toret = (Ellipsis, ideriv)
                     if self.param is not None:
-                        ideriv += (slice(None),) * self.param.ndim
-        return ideriv
+                        toret += (slice(None),) * self.param.ndim
+            elif deriv:
+                raise KeyError('Array has no derivatives')
+            else:
+                toret = Ellipsis
+        return toret
 
     @property
     def zero(self):
@@ -548,7 +556,11 @@ class ParameterArray(np.ndarray):
 
     def __getitem__(self, deriv):
         """Derivative w.r.t. parameter 'a' can be obtained (if exists) as array[('a',)]."""
-        return super(ParameterArray, self).__getitem__(self._index(deriv))
+        deriv, isderiv = self._isderiv(deriv)
+        toret = super(ParameterArray, self).__getitem__(self._index(deriv))
+        if isderiv:
+            toret.derivs = None
+        return toret
 
     def __setitem__(self, deriv, item):
         """Derivative w.r.t. parameter 'a' can be set (if exists) as array[('a',)] = deriv."""
@@ -561,7 +573,7 @@ class ParameterArray(np.ndarray):
 
     def clone(self, **kwargs):
         """Clone :class:`ParameterArray`, optionally updating :attr:`value`, :attr:`param` or :attr:`derivs`."""
-        state = self.__getstate__()
+        state = {'value': self.view(np.ndarray), 'param': self.param, 'derivs': self.derivs}
         state.update(**kwargs)
         return self.__class__(**state)
 
@@ -1992,8 +2004,8 @@ class Samples(BaseParameterCollection):
         self._reshape(shape)
 
     def _reshape(self, shape):
-        for array in self:
-            self.set(_reshape(array, shape))
+        for array in self.data:
+            super(Samples, self).set(_reshape(array, shape))  # this is to circumvent automatic reshaping of :meth:`Samples.set`
 
     def reshape(self, *args):
         """Reshape samples (with shallow copy)."""
@@ -2039,7 +2051,7 @@ class Samples(BaseParameterCollection):
             if new_names and other_names and set(other_names) != set(new_names):
                 raise ValueError('Cannot concatenate values as parameters do not match: {} != {}.'.format(new_names, other_names))
         for param in new_params:
-            new[param] = np.concatenate([np.atleast_1d(other[param]) for other in others], axis=0)
+            new[param] = others[0][param].clone(value=np.concatenate([np.atleast_1d(other[param]) for other in others], axis=0))
         return new
 
     def update(self, *args, **kwargs):
@@ -2122,7 +2134,7 @@ class Samples(BaseParameterCollection):
         """Return string representation, including shape and parameters."""
         return '{}(shape={}, params={})'.format(self.__class__.__name__, self.shape, self.params())
 
-    def to_array(self, params=None, struct=True):
+    def to_array(self, params=None, struct=True, derivs=None):
         """
         Return samples as numpy array.
 
@@ -2141,11 +2153,17 @@ class Samples(BaseParameterCollection):
         """
         if params is None: params = self.params()
         names = [str(param) for param in params]
+        values = []
+        for name in names:
+            value = self[name]
+            if derivs is not None:
+                value = value[derivs]
+            values.append(value)
         if struct:
-            toret = np.empty(len(self), dtype=[(name, self[name].dtype, self.shape[1:]) for name in names])
-            for name in names: toret[name] = self[name]
+            toret = np.empty(self.shape, dtype=[(name, value.dtype, value.shape[len(self.shape):]) for value in values])
+            for name, value in zip(names, values): toret[name] = value
             return toret
-        return np.array([self[name] for name in names])
+        return np.array(values)
 
     def to_dict(self, params=None):
         """
@@ -2199,10 +2217,10 @@ class Samples(BaseParameterCollection):
         state = None
         if mpicomm.rank == mpiroot:
             state = value.__getstate__()
-            state['data'] = [array['param'] for array in state['data']]
+            state['data'] = [(array['param'], array['derivs']) for array in state['data']]
         state = mpicomm.bcast(state, root=mpiroot)
-        for ivalue, param in enumerate(state['data']):
-            state['data'][ivalue] = {'value': mpi.bcast(value.data[ivalue] if mpicomm.rank == mpiroot else None, mpicomm=mpicomm, mpiroot=mpiroot), 'param': param}
+        for ivalue, (param, derivs) in enumerate(state['data']):
+            state['data'][ivalue] = {'value': mpi.bcast(value.data[ivalue] if mpicomm.rank == mpiroot else None, mpicomm=mpicomm, mpiroot=mpiroot), 'param': param, 'derivs': derivs}
         return cls.from_state(state)
 
     @CurrentMPIComm.enable

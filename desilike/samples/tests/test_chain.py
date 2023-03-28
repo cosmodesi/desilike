@@ -1,7 +1,7 @@
 import os
 
 import numpy as np
-from desilike import Parameter, ParameterPrior, setup_logging
+from desilike import Parameter, ParameterPrior, ParameterArray, setup_logging
 from desilike.samples import Chain, plotting, diagnostics
 
 
@@ -12,10 +12,10 @@ def get_chain(params, nwalkers=4, size=4000, seed=42):
     cov = np.eye(ndim, dtype='f8')
     cov += 0.1  # off-diagonal
     invcov = np.linalg.inv(cov)
-    array = rng.multivariate_normal(mean, cov, size=size)
+    array = rng.multivariate_normal(mean, cov, size=(size, nwalkers))
     diff = array - mean
     logposterior = -0.5 * np.sum(diff.dot(invcov) * diff, axis=-1)
-    chain = Chain(list(array.T) + [logposterior], params=params + ['logposterior'])
+    chain = Chain(list(np.moveaxis(array, -1, 0)) + [logposterior], params=params + ['logposterior'])
     for iparam, param in enumerate(chain.params(derived=False)):
         param.update(fixed=False, value=mean[iparam])
     return mean, cov, chain
@@ -54,16 +54,18 @@ def test_misc():
     chain['like.a'].param.update(fixed=False)
     assert not chain[4:10]['like.a'].param.fixed
     assert not chain.concatenate(chain, chain)['like.a'].param.fixed
-    assert np.all(chain.match(chain) == np.arange(len(chain)))
+    assert np.all(np.array(chain.match(chain)[0]) == np.array(np.unravel_index(np.arange(chain.size), shape=chain.shape)))
 
 
 def test_stats():
     params = ['like.a', 'like.b', 'like.c', 'like.d']
-    mean, cov, chain = get_chain(params)
+    mean, cov, chain = get_chain(params, nwalkers=4, size=4000)
+    assert chain.ravel().shape == (16000,)
+    assert chain.shape == (4000, 4)
 
     try:
         from emcee import autocorr
-        ref = autocorr.integrated_time(chain['like.a'].T, quiet=True)
+        ref = autocorr.integrated_time(chain['like.a'].ravel(), quiet=True)
         assert np.allclose(diagnostics.integrated_autocorrelation_time(chain, params='like.a'), ref)
         assert len(diagnostics.integrated_autocorrelation_time(chain, params=['like.a'] * 2)) == 2
     except ImportError:
@@ -105,11 +107,28 @@ def test_plot():
     plotting.plot_geweke(chains, fn=os.path.join(chain_dir, 'geweke.png'))
 
 
+def test_solved():
+    params = ['like.a', 'like.b', 'like.c', 'like.d']
+    chain = get_chain(params, size=1000, nwalkers=5)[-1]
+    chain['like.a'].param.update(derived='.auto')
+    chain['like.b'].param.update(derived='.auto')
+    array = np.zeros(chain.shape + (4,), dtype='f8')
+    array[..., 1] = -0.3
+    array[..., 3] = -0.3
+    chain.set(ParameterArray(array, param='loglikelihood', derivs=[(), ('like.a',) * 2, ('like.a', 'like.b'), ('like.b',) * 2]))
+    chain['logprior'] = chain['loglikelihood']
+
+    assert np.allclose(chain.median('like.a'), np.median(chain['like.a']), atol=1.)
+    print(chain.sample_solved(size=10).to_stats(tablefmt='pretty'))
+    print(chain.to_stats(tablefmt='pretty'))
+
+
 if __name__ == '__main__':
 
     setup_logging()
 
-    # test_bcast()
-    #test_misc()
-    #test_stats()
+    test_bcast()
+    test_misc()
+    test_stats()
     test_plot()
+    test_solved()

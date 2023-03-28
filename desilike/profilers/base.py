@@ -159,7 +159,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             else:
                 self.derived = [Samples.concatenate([self.derived[0], points]),
                                 Samples.concatenate([self.derived[1], self.pipeline.derived])]
-            toret = self.pipeline.derived[self.likelihood._param_loglikelihood] + self.pipeline.derived[self.likelihood._param_logprior]
+            toret = self.pipeline.derived[self.likelihood._param_loglikelihood][()] + self.pipeline.derived[self.likelihood._param_logprior][()]
         else:
             self.derived = None
         toret = self.pipeline.mpicomm.bcast(toret, root=0)
@@ -300,15 +300,25 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                 p = self._maximize_one(start, **kwargs)
                 if self.mpicomm.rank == 0:
                     profiles = Profiles(start=Samples(start, params=self.varied_params),
-                                        bestfit=ParameterBestFit(list(start) + [logposterior], params=self.varied_params + ['logposterior']))
+                                        bestfit=ParameterBestFit(list(start) + [logposterior], params=self.varied_params + ['logposterior'],
+                                                                 logposterior='logposterior', loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior))
                     profiles.update(p)
                     profiles = self._profiles_transform(profiles)
                     for param in self.likelihood.params.select(fixed=True, derived=False):
                         profiles.bestfit[param] = np.array(param.value, dtype='f8')
                     index_in_profile, index = self.derived[0].match(profiles.bestfit, params=profiles.start.params())
                     assert index_in_profile[0].size == 1
+                    logposterior = -(self.derived[1][self.likelihood._param_loglikelihood][index] + self.derived[1][self.likelihood._param_logprior][index])
+                    covariance = []
+                    if logposterior.derivs:
+                        from desilike.parameter import ParameterPrecision
+                        solved_params = ParameterCollection([self.likelihood.all_params[param] for deriv in logposterior.derivs for param in deriv.keys()])
+                        covariance = ParameterPrecision(logposterior[0], params=solved_params).to_covariance()
                     for array in self.derived[1]:
-                        profiles.bestfit.set(array[index])
+                        array = array[index]
+                        profiles.bestfit.set(array)
+                        if array.param in covariance:
+                            profiles.error[array.param] = covariance.std([array.param])
                 else:
                     profiles = None
                 list_profiles[ii] = profiles

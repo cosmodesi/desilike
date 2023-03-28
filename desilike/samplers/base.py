@@ -141,7 +141,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
             else:
                 self.derived = [Samples.concatenate([self.derived[0], points]),
                                 Samples.concatenate([self.derived[1], self.pipeline.derived])]
-            toret = self.pipeline.derived[self.likelihood._param_loglikelihood] + self.pipeline.derived[self.likelihood._param_logprior]
+            toret = self.pipeline.derived[self.likelihood._param_loglikelihood][()] + self.pipeline.derived[self.likelihood._param_logprior][()]
         else:
             self.derived = None
         toret = self.likelihood.mpicomm.bcast(toret, root=0)
@@ -180,6 +180,11 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
 
     def _prepare(self):
         pass
+
+    def _finalize_one(self, chain):
+        chain._logliklihood = str(self.likelihood._param_loglikelihood)
+        chain._logprior = str(self.likelihood._param_logprior)
+        return chain
 
     @property
     def nchains(self):
@@ -269,9 +274,9 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                 self._set_rng(rng=self.rng)
                 self.derived = None
                 self._ichain = ichain
-                chain = self._run_one(start[ichain], **kwargs)
+                chain = self._finalize_one(self._run_one(start[ichain], **kwargs))
                 if self.mpicomm.rank == 0:
-                    ncalls[ichain] = self.derived[1]['loglikelihood'].size if self.derived is not None else 0
+                    ncalls[ichain] = self.derived[1][self.likelihood._param_loglikelihood].size if self.derived is not None else 0
                     if chain is not None:
                         chains[ichain] = self._set_derived(chain)
         self.mpicomm = mpicomm_bak
@@ -358,9 +363,9 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
                     self._set_rng(rng=self.rng)
                     self.derived = None
                     self._ichain = ichain
-                    chain = self._run_one(start[ichain], niterations=niterations, **kwargs)
+                    chain = self._finalize_one(self._run_one(start[ichain], niterations=niterations, **kwargs))
                     if self.mpicomm.rank == 0:
-                        ncalls[ichain] = self.derived[1]['loglikelihood'].size if self.derived is not None else 0
+                        ncalls[ichain] = self.derived[1][self.likelihood._param_loglikelihood].size if self.derived is not None else 0
                         if chain is not None:
                             chains[ichain] = self._set_derived(chain)
             self.mpicomm = mpicomm_bak

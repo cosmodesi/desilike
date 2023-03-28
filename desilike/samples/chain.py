@@ -43,14 +43,25 @@ def vectorize(func):
     return wrapper
 
 
+def _get_solved_covariance(chain, params=None):
+    solved_params = chain.params(solved=True)
+    if params is None:
+        params = solved_params
+    solved_indices = [solved_params.index(param) for param in params]
+    logposterior = -(chain[chain._loglikelihood] + chain[chain._logprior])
+    logposterior = np.array([[logposterior[param1, param2].ravel() for param2 in solved_params] for param1 in solved_params])
+    logposterior = np.moveaxis(logposterior, -1, 0).reshape(chain.shape + (len(solved_params),) * 2)
+    return np.linalg.inv(logposterior)[(Ellipsis,) + np.ix_(solved_indices, solved_indices)]
+
+
 class Chain(Samples):
 
     """Class that holds samples drawn from posterior (in practice, :class:`Samples` with a log-posterior and optional weights)."""
 
     _type = ParameterArray
-    _attrs = Samples._attrs + ['_logposterior', '_aweight', '_fweight', '_weight']
+    _attrs = Samples._attrs + ['_logposterior', '_loglikelihood', '_logprior', '_aweight', '_fweight', '_weight']
 
-    def __init__(self, data=None, params=None, logposterior='logposterior', aweight='aweight', fweight='fweight', weight='weight', attrs=None):
+    def __init__(self, data=None, params=None, logposterior='logposterior', loglikelihood='loglikelihood', logprior='logprior', aweight='aweight', fweight='fweight', weight='weight', attrs=None):
         """
         Initialize :class:`Chain`.
 
@@ -82,11 +93,13 @@ class Chain(Samples):
         attrs : dict, default=None
             Optionally, other attributes, stored in :attr:`attrs`.
         """
-        self._logposterior = logposterior
-        self._aweight = aweight
-        self._fweight = fweight
-        self._weight = weight
-        self._derived = [self._logposterior, self._aweight, self._fweight, self._weight]
+        self._logposterior = str(logposterior)
+        self._loglikelihood = str(loglikelihood)
+        self._logprior = str(logprior)
+        self._aweight = str(aweight)
+        self._fweight = str(fweight)
+        self._weight = str(weight)
+        self._derived = [self._logposterior, self._loglikelihood, self._logprior, self._aweight, self._fweight, self._weight]
         super(Chain, self).__init__(data=data, params=params, attrs=attrs)
         for name in self._derived:
             if name in self:
@@ -151,6 +164,30 @@ class Chain(Samples):
             burnin = burnin * len(self)
         burnin = int(burnin + 0.5)
         return self[burnin:]
+
+    def sample_solved(self, size=1, seed=42):
+        """Sample parameters that have been analytic marginalized over (``solved``)."""
+        new = self.deepcopy()
+        solved_params = self.params(solved=True)
+        if not solved_params: return new
+        covariance = _get_solved_covariance(self, params=solved_params)
+        L = np.moveaxis(np.linalg.cholesky(covariance), (-2, -1), (0, 1))
+        new.data = []
+        for array in self:
+            new.set(array.clone(value=np.repeat(array, size, axis=self.ndim - 1)))
+        rng = np.random.RandomState(seed=seed)
+        noise = rng.standard_normal((len(solved_params),) + self.shape + (size,))
+        values = np.sum(noise[None, ...] * L[..., None], axis=0)
+        for param, value in zip(solved_params, values):
+            new[param] = new[param].clone(value=new[param] + value.reshape(new.shape), param=param.clone(derived=False))
+        dlogposterior = 0.
+        for param in [self._loglikelihood, self._logprior]:
+            icov = - np.array([[self[param][param1, param2] for param2 in solved_params] for param1 in solved_params])
+            log = -0.5 * np.sum(values[None, ...] * icov[..., None] * values[:, None, ...], axis=(0, 1)).reshape(new.shape)
+            new[param] = self[param].clone(value=new[param][()] + log, derivs=None)
+            dlogposterior += log
+        new.logposterior[...] += dlogposterior
+        return new
 
     def get(self, name, *args, **kwargs):
         """
@@ -268,6 +305,14 @@ class Chain(Samples):
             for param, values in zip(params, array[2:]):
                 new.set(ParameterArray(values, param))
             toret.append(new)
+        for new in toret:
+            for param in new.params(basename='chi2_*'):
+                namespace = param.name[4:]
+                if namespace == 'prior':
+                    new_param = param.clone(basename=new._logprior)
+                else:
+                    new_param = param.clone(basename=new._loglikelihood, namespace=namespace)
+                new[new_param] = -0.5 * new[param]
         if isscalar:
             return toret[0]
         if concatenate:
@@ -307,6 +352,8 @@ class Chain(Samples):
         kwargs : dict
             Optional arguments for :func:`numpy.savetxt`.
         """
+        if self.params(solved=True):
+            self = self.sample_solved()
         if params is None: params = self.params()
         columns = list([str(param) for param in params])
         outputs_columns = [self._weight, self._logposterior]
@@ -314,7 +361,7 @@ class Chain(Samples):
         outputs = [array.param.name for array in self if array.shape != shape]
         for column in outputs:
             if column in columns: del columns[columns.index(column)]
-        data = self.to_array(params=outputs_columns + columns, struct=False).reshape(-1, self.size)
+        data = self.to_array(params=outputs_columns + columns, struct=False, derivs=()).reshape(-1, self.size)
         data[1] *= -1
         data = data.T
         utils.mkdir(os.path.dirname(base_fn))
@@ -365,11 +412,13 @@ class Chain(Samples):
         -------
         samples : getdist.MCSamples
         """
+        if self.params(solved=True):
+            self = self.sample_solved()
         from getdist import MCSamples
         toret = None
         if params is None: params = self.params(varied=True)
         else: params = [self[param].param for param in params]
-        samples = self.to_array(params=params, struct=False).reshape(-1, self.size)
+        samples = self.to_array(params=params, struct=False, derivs=()).reshape(-1, self.size)
         labels = [param.latex() for param in params]
         names = [str(param) for param in params]
         ranges = {str(param): tuple('N' if limit is None or not np.isfinite(limit) else limit for limit in param.prior.limits) for param in params}
@@ -399,12 +448,14 @@ class Chain(Samples):
         -------
         samples : anesthetic.MCMCSamples
         """
+        if self.params(solved=True):
+            self = self.sample_solved()
         from anesthetic import MCMCSamples
         toret = None
         if params is None: params = self.params(varied=True)
         else: params = [self[param].param for param in params]
         labels = [param.latex() for param in params]
-        samples = self.to_array(params=params, struct=False).reshape(-1, self.size)
+        samples = self.to_array(params=params, struct=False, derivs=()).reshape(-1, self.size)
         names = [str(param) for param in params]
         limits = {param.name: tuple('N' if limit is None or np.abs(limit) == np.inf else limit for limit in param.prior.limits) for param in params}
         toret = MCMCSamples(samples=samples.T, columns=names, weights=np.asarray(self.weight.ravel()), logL=-np.asarray(self.logposterior.ravel()), labels=labels, label=label, logzero=-np.inf, limits=limits, **kwargs)
@@ -438,8 +489,8 @@ class Chain(Samples):
         if params is None:
             params = self.params(**kwargs)
         if index == 'argmax':
-            index = np.unravel_index(self.logposterior.argmax(), shape=self.shape)
-            di = {str(param): self[param][index] for param in params}
+            index = np.argmax(self.logposterior.ravel())
+            di = {str(param): _reshape(self[param], self.size)[index] for param in params}
         elif index == 'mean':
             di = {str(param): self.mean(param) for param in params}
         else:
@@ -478,8 +529,12 @@ class Chain(Samples):
         params = [self[param].param for param in params]
         values = [self[param].reshape(self.size, -1) for param in params]
         values = np.concatenate(values, axis=-1)
-        cov = np.atleast_2d(np.cov(values, rowvar=False, fweights=self.fweight.ravel(), aweights=self.aweight.ravel(), ddof=ddof))
-        return ParameterCovariance(cov, params=params).view(return_type=return_type)
+        covariance = np.atleast_2d(np.cov(values, rowvar=False, fweights=self.fweight.ravel(), aweights=self.aweight.ravel(), ddof=ddof))
+        solved_params = [param for param in params if param.solved]
+        if solved_params:
+            solved_indices = [params.index(param) for param in solved_params]
+            covariance[np.ix_(solved_indices, solved_indices)] += np.average(_get_solved_covariance(self, params=solved_params).reshape(-1, len(solved_params), len(solved_params)), weights=self.weight.ravel(), axis=0)
+        return ParameterCovariance(covariance, params=params).view(return_type=return_type)
 
     def precision(self, params=None, return_type='nparray', ddof=1):
         """
@@ -543,13 +598,12 @@ class Chain(Samples):
         """
         return _reshape(self[params], self.size)[np.argmax(self.logposterior.ravel())]
 
-    @vectorize
-    def median(self, params=None):
+    def median(self, params=None, method='linear'):
         """
         Return parameter median of weighted parameter samples (optionally restricted to input parameters).
         If a single parameter is given as input and this parameter is a scalar, return a scalar.
         """
-        return utils.weighted_quantile(_reshape(self[params], self.size), q=0.5, weights=self.weight.ravel(), axis=0)
+        return self.quantile(params, q=0.5, method=method)
 
     @vectorize
     def quantile(self, params=None, q=(0.1587, 0.8413), method='linear'):
@@ -587,7 +641,46 @@ class Chain(Samples):
         -------
         quantiles : list, scalar, array
         """
-        return utils.weighted_quantile(_reshape(self[params], self.size), q=q, weights=self.weight.ravel(), axis=0, method=method)
+        value = _reshape(self[params], self.size)
+        weight = self.weight.ravel()
+        weight /= np.sum(weight)
+
+        if value.param.solved:
+            from scipy import stats
+
+            locs = value
+            scales = _get_solved_covariance(self, [params])[..., 0, 0].ravel()**0.5
+            cdfs = [stats.norm(loc=loc, scale=scale).cdf for loc, scale in zip(locs, scales)]
+
+            isscalar = np.ndim(q) == 0
+            q = np.atleast_1d(q)
+            quantiles = np.array(q)
+
+            for iq, qq in enumerate(q.flat):
+
+                def cdf(x):
+                    return sum(w * cdf(x) for w, cdf in zip(weight, cdfs)) - qq
+
+                nsigmas = 100
+                limits = np.min(locs - nsigmas * scales), np.max(locs + nsigmas * scales)
+                if qq <= limits[0]:
+                    res = limits[0]
+                elif qq >= limits[1]:
+                    res = limits[1]
+                else:
+                    x = np.linspace(*limits, num=10000)
+                    cdf = cdf(x)
+                    idx = np.searchsorted(cdf, 0, side='right') - 1
+                    res = (x[idx + 1] - x[idx]) / (cdf[idx + 1] - cdf[idx]) * cdf[idx + 1] + x[idx]
+                    #print(cdf(x[idx]), cdf(x[idx + 1]))
+                    #res = optimize.bisect(cdf, x[idx], x[idx + 1], xtol=1e-6 * np.mean(scales), disp=True)
+                quantiles.flat[iq] = res
+
+            if isscalar:
+                return quantiles[0]
+            return quantiles
+
+        return utils.weighted_quantile(value, q=q, weights=weight, axis=0, method=method)
 
     @vectorize
     def interval(self, params=None, nsigmas=1.):
@@ -606,7 +699,27 @@ class Chain(Samples):
         -------
         interval : tuple, list
         """
-        return utils.interval(self[params].ravel(), self.weight.ravel(), nsigmas=nsigmas)
+        value = self[params].ravel()
+        weight = self.weight.ravel()
+        weight /= np.sum(weight)
+
+        if value.param.solved:
+
+            from scipy import stats
+
+            locs = value
+            scales = _get_solved_covariance(self, [params])[..., 0, 0].ravel()**0.5
+            cdfs = [stats.norm(loc=loc, scale=scale).cdf for loc, scale in zip(locs, scales)]
+
+            def cdf(x):
+                return sum(w * cdf(x) for w, cdf in zip(weight, cdfs))
+
+            limits = np.min(locs - 2 * nsigmas * scales), np.max(locs + 2 * nsigmas * scales)
+            value = np.linspace(*limits, num=10000)
+            weight = cdf(value)
+            weight = np.concatenate([[weight[0]], np.diff(weight)[:-1], [1. - weight[-2]]])
+
+        return utils.interval(value, weights=weight, nsigmas=nsigmas)
 
     def to_fisher(self, params=None, ddof=1, **kwargs):
         """

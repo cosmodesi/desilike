@@ -56,7 +56,7 @@ class BaseLikelihood(BaseCalculator):
                 elif solved != '.best':
                     raise ValueError('Unknown option for solved = {}'.format(solved))
 
-        dx, x, solve_likelihoods = [], [], []
+        dx, x, solve_likelihoods, derivs = [], [], [], None
 
         if solved_params:
             from desilike.fisher import Fisher
@@ -80,7 +80,10 @@ class BaseLikelihood(BaseCalculator):
             x = posterior_fisher.mean()
             dx = x - posterior_fisher._center
 
-        sum_loglikelihood = 0.
+            derivs = [()] + [(param1.name, param2.name) for iparam1, param1 in enumerate(solved_params) for param2 in solved_params[iparam1:]]
+            indices_derivs = posterior_fisher._index([deriv[0] for deriv in derivs[1:]]), posterior_fisher._index([deriv[1] for deriv in derivs[1:]])
+
+        sum_loglikelihood = np.zeros(len(derivs) if solved_params else None, dtype='f8')
         sum_logprior = 0.
         derived = getattr(pipeline, 'derived', None)
 
@@ -89,6 +92,8 @@ class BaseLikelihood(BaseCalculator):
             pipeline.param_values[param.name] = xx
             if derived is not None:
                 derived.set(ParameterArray(xx, param=param))
+        if solved_params:
+            sum_logprior = np.insert(self.fisher.prior_fisher._hessian[indices_derivs], 0, sum_logprior)
 
         for ilikelihood, likelihood in enumerate(likelihoods):
             loglikelihood = float(likelihood.loglikelihood)
@@ -98,30 +103,27 @@ class BaseLikelihood(BaseCalculator):
                 # Note: priors of solved params have already been added
                 loglikelihood += 1. / 2. * dx.dot(likelihood_fisher._hessian).dot(dx)
                 loglikelihood += likelihood_fisher._gradient.dot(dx)
-                #if indices_best:
-                #    loglikelihood += 1. / 2. * dx[indices_best].dot(likelihood_fisher._hessian[np.ix_(indices_best, indices_best)]).dot(dx[indices_best])
-                #    loglikelihood += likelihood_fisher._gradient[indices_best].dot(dx[indices_best])
-                #if indices_marg:
-                #    loglikelihood -= 1. / 2. * dx[indices_marg].dot(likelihood_fisher._hessian[np.ix_(indices_marg, indices_marg)]).dot(dx[indices_marg])
+                loglikelihood = np.insert(likelihood_fisher._hessian[indices_derivs], 0, loglikelihood)
             # Set derived values
             if derived is not None:
-                derived.set(ParameterArray(loglikelihood, param=likelihood._param_loglikelihood))
+                derived.set(ParameterArray(loglikelihood, param=likelihood._param_loglikelihood, derivs=derivs))
             sum_loglikelihood += loglikelihood
         if indices_marg:
-            sum_loglikelihood -= 1. / 2. * np.linalg.slogdet(- posterior_fisher._hessian[np.ix_(indices_marg, indices_marg)])[1]
+            sum_loglikelihood.flat[0] -= 1. / 2. * np.linalg.slogdet(- posterior_fisher._hessian[np.ix_(indices_marg, indices_marg)])[1]
             # sum_loglikelihood += 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
             # Convention: in the limit of no likelihood constraint on dx, no change to the loglikelihood
             # This allows to ~ keep the interpretation in terms of -1. / 2. chi2
             ip = self.fisher.prior_fisher._hessian[indices_marg]
-            sum_loglikelihood += 1. / 2. * np.sum(np.log(ip[ip > 0.]))  # logdet
+            sum_loglikelihood.flat[0] += 1. / 2. * np.sum(np.log(ip[ip > 0.]))  # logdet
             # sum_loglikelihood -= 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
 
         self.loglikelihood = sum_loglikelihood
-        self.logprior += sum_logprior
+        sum_logprior.flat[0] += self.logprior
+        self.logprior = sum_logprior
 
         if derived is not None:
-            derived.set(ParameterArray(self.loglikelihood, param=self._param_loglikelihood))
-            derived.set(ParameterArray(self.logprior, param=self._param_logprior))
+            derived.set(ParameterArray(self.loglikelihood, param=self._param_loglikelihood, derivs=derivs))
+            derived.set(ParameterArray(self.logprior, param=self._param_logprior, derivs=derivs))
         return self.loglikelihood + self.logprior
 
     @classmethod

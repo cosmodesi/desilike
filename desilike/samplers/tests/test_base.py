@@ -22,9 +22,12 @@ def test_ensemble():
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
     likelihood()
-    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler]:
+    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler][:1]:
         sampler = Sampler(likelihood, save_fn='./_tests/chain_*.npy')
-        sampler.run(max_iterations=100, check=True)
+        chains = sampler.run(max_iterations=100, check=True)
+        if sampler.mpicomm.rank == 0:
+            assert chains[0]['loglikelihood'].derivs is not None
+            assert chains[0].sample_solved()['loglikelihood'].derivs is None
 
 
 def test_fixed():
@@ -65,6 +68,6 @@ def test_importance():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_ensemble()
+    test_ensemble()
     #test_fixed()
-    test_importance()
+    #test_importance()

@@ -15,10 +15,12 @@ class ParameterBestFit(Samples):
 
     """Class holding parameter best fits (in practice, :class:`Samples` with a log-posterior)."""
 
-    _attrs = Samples._attrs + ['_logposterior']
+    _attrs = Samples._attrs + ['_logposterior', '_loglikelihood', '_logprior']
 
-    def __init__(self, *args, logposterior='logposterior', **kwargs):
-        self._logposterior = logposterior
+    def __init__(self, *args, logposterior='logposterior', loglikelihood='loglikelihood', logprior='logprior', **kwargs):
+        self._logposterior = str(logposterior)
+        self._loglikelihood = str(loglikelihood)
+        self._logprior = str(logprior)
         super(ParameterBestFit, self).__init__(*args, **kwargs)
         if self._logposterior in self:
             self.logposterior.param.update(derived=True)

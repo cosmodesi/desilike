@@ -21,10 +21,9 @@ def test_ensemble():
     footprint = BoxFootprint(volume=1e10, nbar=1e-5)
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
-    likelihood()
     for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler][:1]:
         sampler = Sampler(likelihood, save_fn='./_tests/chain_*.npy')
-        chains = sampler.run(max_iterations=100, check=True)
+        chains = sampler.run(max_iterations=100, check=True, check_every=10)
         if sampler.mpicomm.rank == 0:
             assert chains[0]['loglikelihood'].derivs is not None
             assert chains[0].sample_solved()['loglikelihood'].derivs is None

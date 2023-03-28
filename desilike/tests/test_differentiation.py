@@ -64,6 +64,29 @@ def test_differentiation():
     diff(sn0=50.)
 
 
+def test_solved():
+
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+
+    theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data={},
+                                                         theory=theory)
+    footprint = BoxFootprint(volume=1e10, nbar=1e-5)
+    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
+    likelihood()
+    from desilike.utils import Monitor
+    with Monitor() as mem:
+        mem.start()
+        for i in range(10): likelihood(b1=1. + i * 0.1)
+        mem.stop()
+        print(mem.get('time', average=False))
+
+
 def test_fisher_galaxy():
 
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
@@ -125,5 +148,6 @@ if __name__ == '__main__':
     setup_logging()
     #test_misc()
     #test_differentiation()
-    test_fisher_galaxy()
-    test_fisher_cmb()
+    test_solved()
+    #test_fisher_galaxy()
+    #test_fisher_cmb()

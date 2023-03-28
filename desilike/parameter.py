@@ -2227,7 +2227,7 @@ class Samples(BaseParameterCollection):
     def send(self, dest, tag=0, mpicomm=None):
         """Send ``self`` to rank ``dest``."""
         state = self.__getstate__()
-        state['data'] = [array['param'] for array in state['data']]
+        state['data'] = [(array['param'], array['derivs']) for array in state['data']]
         mpicomm.send(state, dest=dest, tag=tag)
         for array in self:
             mpi.send(array, dest=dest, tag=tag, mpicomm=mpicomm)
@@ -2237,8 +2237,8 @@ class Samples(BaseParameterCollection):
     def recv(cls, source=mpi.ANY_SOURCE, tag=mpi.ANY_TAG, mpicomm=None):
         """Receive samples from rank ``source``."""
         state = mpicomm.recv(source=source, tag=tag)
-        for ivalue, param in enumerate(state['data']):
-            state['data'][ivalue] = {'value': mpi.recv(source, tag=tag, mpicomm=mpicomm), 'param': param}
+        for ivalue, (param, derivs) in enumerate(state['data']):
+            state['data'][ivalue] = {'value': mpi.recv(source, tag=tag, mpicomm=mpicomm), 'param': param, 'derivs': derivs}
         return cls.from_state(state)
 
     @classmethod

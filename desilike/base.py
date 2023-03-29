@@ -49,16 +49,14 @@ class InitConfig(BaseConfig):
     @property
     def updated(self):
         """Whether the configuration parameters have been updated (which requires reinitialization of the calculator)."""
-        return self._updated
+        return self._updated or self.params.updated
 
     @updated.setter
     def updated(self, updated):
         """Set the 'updated' status."""
         self._updated = bool(updated)
-        if self._updated:
-            runtime_info = getattr(self, 'runtime_info', None)
-            if runtime_info is not None:
-                runtime_info.initialized = False
+        if not self._updated:
+            self.params.updated = False
 
     @property
     def args(self):
@@ -625,6 +623,7 @@ class RuntimeInfo(BaseClass):
     @property
     def pipeline(self):
         """Return pipeline for this calculator."""
+        self.initialize()
         if getattr(self, '_pipeline', None) is None:
             self._pipeline = BasePipeline(self.calculator)
         return self._pipeline
@@ -665,14 +664,16 @@ class RuntimeInfo(BaseClass):
     @property
     def initialized(self):
         """Has this calculator been initialized?"""
+        if self.init.updated:
+            self.initialized = False
         return self._initialized
 
     @initialized.setter
     def initialized(self, initialized):
         if initialized:
-            self.init._updated = False
+            self.init.updated = False
         else:
-            self._pipeline = None
+            #self._pipeline = None
             for calculator in self.required_by:
                 calculator.runtime_info.initialized = False
         self._initialized = initialized
@@ -717,7 +718,6 @@ class RuntimeInfo(BaseClass):
         If calculator's :class:`BaseCalculator.calculate` has not be called with input parameter values, call it,
         keeping track of running time with :attr:`monitor`.
         """
-        self.initialize()
         self.set_param_values(params)
         if self.tocalculate:
             self.monitor.start()
@@ -926,9 +926,9 @@ class BaseCalculator(BaseClass):
     @property
     def params(self):
         """This calculator's specific parameters."""
-        if not self.runtime_info.initialized:
-            return self.runtime_info.init.params
-        return self.runtime_info.params
+        #if not self.runtime_info.initialized:
+        return self.runtime_info.init.params
+        #return self.runtime_info.params
 
     @params.setter
     def params(self, params):

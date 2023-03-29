@@ -308,17 +308,17 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                         profiles.bestfit[param] = np.array(param.value, dtype='f8')
                     index_in_profile, index = self.derived[0].match(profiles.bestfit, params=profiles.start.params())
                     assert index_in_profile[0].size == 1
-                    logposterior = -(self.derived[1][self.likelihood._param_loglikelihood][index] + self.derived[1][self.likelihood._param_logprior][index])
-                    covariance = []
-                    if logposterior.derivs:
-                        from desilike.parameter import ParameterPrecision
-                        solved_params = ParameterCollection([self.likelihood.all_params[param] for deriv in logposterior.derivs for param in deriv.keys()])
-                        covariance = ParameterPrecision(logposterior[0], params=solved_params).to_covariance()
+                    #logposterior = -(self.derived[1][self.likelihood._param_loglikelihood][index] + self.derived[1][self.likelihood._param_logprior][index])
+                    #covariance = []
+                    #if logposterior.derivs:
+                    #    from desilike.parameter import ParameterPrecision
+                    #    solved_params = ParameterCollection([self.likelihood.all_params[param] for deriv in logposterior.derivs for param in deriv.keys()])
+                    #    covariance = ParameterPrecision(logposterior[0], params=solved_params).to_covariance()
                     for array in self.derived[1]:
                         array = array[index]
                         profiles.bestfit.set(array)
-                        if array.param in covariance:
-                            profiles.error[array.param] = covariance.std([array.param])
+                        #if array.param in covariance:
+                        #    profiles.error[array.param] = covariance.std([array.param])
                 else:
                     profiles = None
                 list_profiles[ii] = profiles

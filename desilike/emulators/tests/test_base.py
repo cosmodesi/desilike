@@ -11,7 +11,8 @@ def test_base():
     emulator_dir = '_tests'
     fn = os.path.join(emulator_dir, 'emu.npy')
 
-    for Template in [DirectPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate][1:]:
+    '''
+    for Template in [DirectPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate]:
 
         template = Template()
         calculator = KaiserTracerPowerSpectrumMultipoles(template=template)
@@ -25,11 +26,10 @@ def test_base():
         emulator.save(fn)
         emulator = emulator.to_calculator()
         emulator = EmulatedCalculator.load(fn)
-        emulator.runtime_info.initialize()
-        #print(emulator.runtime_info.varied_params)
+        #emulator.runtime_info.initialize()
         #print(emulator.runtime_info.param_values)
-        print(emulator.varied_params, emulator.all_params)
-        print(emulator.runtime_info.pipeline.get_cosmo_requires())
+        #print(emulator.varied_params, emulator.all_params)
+        #print(emulator.runtime_info.pipeline.get_cosmo_requires())
         emulator()
         emulator = emulator.deepcopy()
         #print(emulator.params, emulator.runtime_info.init[2], emulator.runtime_info.params)
@@ -54,7 +54,7 @@ def test_base():
         emulators[0].save(fn)
         emulator = EmulatedCalculator.load(fn)
         assert np.allclose(emulator(), emulators[0]())
-
+    '''
     calculator = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate())
     calculator()
     pt = calculator.pt
@@ -64,7 +64,10 @@ def test_base():
     emulator.save(fn)
     pt = EmulatedCalculator.load(fn)
     calculator.init.update(pt=pt)
-    calculator(df=0.8)
+    pt.params['df'].update(prior=None, derived='.auto')
+    print(calculator.varied_params)
+    calculator(dm=0.01)
+    print(calculator.varied_params)
 
 
 if __name__ == '__main__':

@@ -159,10 +159,10 @@ class BasePipeline(BaseClass):
                 new_calculator_params.set(param)
                 new_params.set(param)
             calculator.runtime_info.params = new_calculator_params
-            for param in new_calculator_params:
-                if param.basename in calculator.runtime_info.init._params:
-                    calculator.runtime_info.init._params[param] = param
-                calculator.runtime_info.init.updated = False
+            #for param in new_calculator_params:
+            #    if param.basename in calculator.runtime_info.init._params:
+            #        calculator.runtime_info.init._params[param.basename] = param.clone(namespace=None)
+            #    calculator.runtime_info.init.updated = False
         for param in ParameterCollection(params):
             if any(param.name in p.depends.values() for p in new_params):
                 new_params.set(param)

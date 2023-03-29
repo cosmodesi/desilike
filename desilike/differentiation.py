@@ -407,6 +407,7 @@ class Differentiation(BaseClass):
         self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm = self._calculate, self._more_derived, self.mpicomm
         self.pipeline.mpicalculate(**(samples.to_dict(params=self.all_params) if self.mpicomm.rank == 0 else {}))
         self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm = calculate_bak, more_derived_bak, mpicomm_bak
+
         states = self.mpicomm.gather(self._getter_samples, root=0)
         for getter_inst, getter_size in self.mpicomm.allgather((getattr(self, 'getter_inst', None), getattr(self, 'getter_size', None))):
             if getter_inst is not None:
@@ -441,6 +442,7 @@ class Differentiation(BaseClass):
                 cidx = tuple(cidx)
             else:
                 cidx = (0,)
+
             autodegrees, autoindices = [Deriv()], [()]
             for autoorder, autoderiv in enumerate(self.autoderivs):
                 nautodegrees, nautoindices = [], []

@@ -680,9 +680,21 @@ class Fisher(BaseClass):
 
         prior_calculator = PriorCalculator()
         prior_calculator.params = [param for param in self.likelihood.all_params if param.depends or (not param.derived)]
+        prior_simplified = all(param.prior.dist in ['norm', 'uniform'] and not param.depends for param in prior_calculator.params)
 
         def prior_getter():
             return prior_calculator.logprior
+
+        def prior_finalize(derivs):
+            if prior_simplified:
+                offset = derivs[()]
+                # gradient = [derivs[param] for param in self.varied_params]
+                precisions = [1. / getattr(param.prior, 'scale', np.inf)**2 for param in self.varied_params]
+                gradient = [-(self.likelihood.runtime_info.pipeline.param_values[param.name] - getattr(param.prior, 'loc', 0.)) * precision for param, precision in zip(self.varied_params, precisions)]
+                hessian = np.diag(precisions)
+                # print(gradient)
+                return {'offset': offset, 'gradient': gradient, 'hessian': hessian}
+            return {'gradient': derivs}  # offset, gradient and hessian are pulled out of gradient by :class:`LikelihoodFisher`
 
         likelihoods = getattr(self.likelihood, 'likelihoods', [self.likelihood])
         from desilike.likelihoods import BaseGaussianLikelihood
@@ -695,7 +707,7 @@ class Fisher(BaseClass):
 
             order = 1
 
-            def finalize(derivs):
+            def likelihood_finalize(derivs):
                 toret = []
                 for likelihood, derivs in zip(likelihoods, derivs):
                     flatderiv = np.array([derivs[param] for param in self.varied_params])
@@ -719,7 +731,7 @@ class Fisher(BaseClass):
 
             order = 2
 
-            def finalize(derivs):
+            def likelihood_finalize(derivs):
                 toret = []
                 for derivs in derivs:
                     offset = derivs[()]
@@ -728,15 +740,16 @@ class Fisher(BaseClass):
                     toret.append({'offset': offset, 'gradient': gradient, 'hessian': hessian})
                 return toret
 
-        self.prior_differentiation = Differentiation(prior_calculator, getter=prior_getter, order=2, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=self.mpicomm)
+        self.prior_differentiation = Differentiation(prior_calculator, getter=prior_getter, order=0 if prior_simplified else 2, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=self.mpicomm)
+        self._prior_finalize = prior_finalize
         self.likelihood_differentiation = Differentiation(self.likelihood, getter=getter, order=order, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=self.mpicomm)
-        self._finalize = finalize
+        self._likelihood_finalize = likelihood_finalize
 
     def run(self, **params):
         diff = self.mpicomm.bcast(self.prior_differentiation(**params), root=0)
-        self.prior_fisher = LikelihoodFisher(center=[self.prior_differentiation.center[str(param)] for param in self.varied_params], params=self.varied_params, gradient=diff)
+        self.prior_fisher = LikelihoodFisher(center=[self.prior_differentiation.center[str(param)] for param in self.varied_params], params=self.varied_params, **self._prior_finalize(diff))
         diff = self.mpicomm.bcast(self.likelihood_differentiation(**self.prior_differentiation.center), root=0)
-        self.likelihood_fishers = [LikelihoodFisher(center=self.prior_fisher._center, params=self.varied_params, **kwargs) for kwargs in self._finalize(diff)]
+        self.likelihood_fishers = [LikelihoodFisher(center=self.prior_fisher._center, params=self.varied_params, **kwargs) for kwargs in self._likelihood_finalize(diff)]
 
     def __call__(self, **params):
         """Return :class:`LikelihoodFisher` for input parameter values, as the sum of :attr:`prior_fisher` and :attr:`likelihood_fisher`."""

@@ -53,7 +53,7 @@ def test_jax():
 
 def test_differentiation():
 
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
 
     from desilike import Differentiation
     theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.4))
@@ -68,7 +68,31 @@ def test_solved():
 
     from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate
+
+    theory = KaiserTracerPowerSpectrumMultipoles(template=BandVelocityPowerSpectrumTemplate(z=0.5, kp=np.arange(0.05, 0.2 + 1e-6, 0.005)))
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data={},
+                                                         theory=theory)
+    footprint = BoxFootprint(volume=1e10, nbar=1e-5)
+    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
+    from desilike.emulators import Emulator, TaylorEmulatorEngine
+    emulator = Emulator(theory, engine=TaylorEmulatorEngine(order=1))
+    emulator.set_samples(method='finite')
+    emulator.fit()
+    observable.init.update(theory=emulator.to_calculator())
+
+    for param in likelihood.all_params.select(basename=['alpha*', 'sn*', 'dptt*']):
+        param.update(prior=None, derived='.best')
+    likelihood()
+    from desilike.utils import Monitor
+    with Monitor() as mem:
+        mem.start()
+        for i in range(10): likelihood(b1=1. + i * 0.1)
+        mem.stop()
+        print(mem.get('time', average=False))
+    exit()
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
@@ -78,11 +102,7 @@ def test_solved():
     footprint = BoxFootprint(volume=1e10, nbar=1e-5)
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
-    likelihood(b1=1.)
-    exit()
-    #likelihood()
-    print(likelihood(b1=1.), likelihood(b1=1.1))
-    exit()
+
     from desilike.utils import Monitor
     with Monitor() as mem:
         mem.start()
@@ -151,7 +171,7 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_misc()
-    test_differentiation()
+    #test_differentiation()
     test_solved()
-    test_fisher_galaxy()
-    test_fisher_cmb()
+    #test_fisher_galaxy()
+    #test_fisher_cmb()

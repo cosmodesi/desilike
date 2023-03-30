@@ -691,7 +691,7 @@ class Fisher(BaseClass):
                 # gradient = [derivs[param] for param in self.varied_params]
                 precisions = [1. / getattr(param.prior, 'scale', np.inf)**2 for param in self.varied_params]
                 gradient = [-(self.likelihood.runtime_info.pipeline.param_values[param.name] - getattr(param.prior, 'loc', 0.)) * precision for param, precision in zip(self.varied_params, precisions)]
-                hessian = np.diag(precisions)
+                hessian = - np.diag(precisions)
                 # print(gradient)
                 return {'offset': offset, 'gradient': gradient, 'hessian': hessian}
             return {'gradient': derivs}  # offset, gradient and hessian are pulled out of gradient by :class:`LikelihoodFisher`

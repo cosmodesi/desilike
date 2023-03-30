@@ -228,7 +228,7 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
                 raise ValueError('Unrecognized parameter {}'.format(param))
         self.broadband_matrix = []
         self.broadband_params = [name for ell in self.ells for name in broadband_coeffs[ell]]
-        for ill, ell in enumerate(self.ells):
+        for ell in self.ells:
             row = [np.zeros_like(self.k) for i in range(len(self.broadband_params))]
             for name, k_i in broadband_coeffs[ell].items():
                 row[self.broadband_params.index(name)] = k_i

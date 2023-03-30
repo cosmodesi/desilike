@@ -92,7 +92,6 @@ def test_solved():
         for i in range(10): likelihood(b1=1. + i * 0.1)
         mem.stop()
         print(mem.get('time', average=False))
-    exit()
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')

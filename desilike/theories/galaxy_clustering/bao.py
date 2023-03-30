@@ -206,35 +206,39 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
         self.set_params()
 
     def set_params(self):
-        self_params = self.params.select(basename='al*_*')
-        pt_params = self.params.copy()
-        for param in pt_params.names():
-            if param in self_params: del pt_params[param]
-        self.pt.params = pt_params
-        broadband_coeffs = {}
-        for ell in self.ells:
-            broadband_coeffs[ell] = {}
-        for param in self_params.params():
-            name = param.basename
-            match = re.match('al(.*)_(.*)', name)
-            if match:
-                ell = int(match.group(1))
-                pow = int(match.group(2))
-                if ell in self.ells:
-                    broadband_coeffs[ell][name] = (self.k / self.kp)**pow
+
+        def get_params_matrix(base):
+            coeffs = {ell: {} for ell in self.ells}
+            for param in self.params.select(basename=base + '*_*'):
+                name = param.basename
+                ell = None
+                if name == base + '0':
+                    ell, pow = 0, 0
                 else:
-                    del self_params[param]
-            else:
-                raise ValueError('Unrecognized parameter {}'.format(param))
-        self.broadband_matrix = []
-        self.broadband_params = [name for ell in self.ells for name in broadband_coeffs[ell]]
-        for ell in self.ells:
-            row = [np.zeros_like(self.k) for i in range(len(self.broadband_params))]
-            for name, k_i in broadband_coeffs[ell].items():
-                row[self.broadband_params.index(name)] = k_i
-            self.broadband_matrix.append(np.column_stack(row))
-        self.broadband_matrix = jnp.array(self.broadband_matrix)
-        self.params = self_params
+                    match = re.match(base + '(.*)_(.*)', name)
+                    if match:
+                        ell, pow = int(match.group(1)), int(match.group(2))
+                if ell is not None:
+                    if ell in self.ells:
+                        coeffs[ell][name] = (self.k / self.kp)**pow
+                    else:
+                        del self.params[param]
+            params = [name for ell in self.ells for name in coeffs[ell]]
+            matrix = []
+            for ell in self.ells:
+                row = [np.zeros_like(self.k) for i in range(len(params))]
+                for name, k_i in coeffs[ell].items():
+                    row[params.index(name)][:] = k_i
+                matrix.append(np.column_stack(row))
+            matrix = jnp.array(matrix)
+            return params, matrix
+
+        self.broadband_params, self.broadband_matrix = get_params_matrix('al')
+        pt_params = self.params.copy()
+        for param in pt_params.basenames():
+            if param in self.broadband_params: del pt_params[param]
+        self.pt.params = pt_params
+        self.params = self.params.select(basename=self.broadband_params)
 
     def calculate(self, **params):
         values = jnp.array([params.get(name, 0.) for name in self.broadband_params])

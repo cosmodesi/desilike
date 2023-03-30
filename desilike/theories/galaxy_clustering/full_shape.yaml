@@ -77,6 +77,71 @@ params:
 
 ---
 
+class: EFTLikeKaiserTracerPowerSpectrumMultipoles
+
+params:
+  b1:
+    prior:
+      limits: [0., 4.0]
+    ref:
+      limits: [1.0, 2.0]
+    latex: b_{1}
+  ct[:5:2]_2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{[], 2}
+  sn0:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1e7
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: s_{n, 0}
+  sn[:5:2]_2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1e7
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: s_{[], 2}
+
+---
+
+class: EFTLikeKaiserTracerCorrelationFunctionMultipoles
+
+params:
+  b1:
+    prior:
+      dist: uniform
+      limits: [0., 4.0]
+    ref:
+      limits: [1.0, 2.0]
+    latex: b_{1}
+  ct[:5:2]_2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{[], 2}
+
+---
+
 class: LPTVelocileptorsTracerPowerSpectrumMultipoles
 
 params:

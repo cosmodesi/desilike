@@ -1,3 +1,5 @@
+import re
+
 import numpy as np
 from scipy import interpolate
 
@@ -33,10 +35,10 @@ class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipole
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
         super(BasePTCorrelationFunctionMultipoles, self).initialize(*args, **kwargs)
-        kin = np.geomspace(min(1e-3, 1 / self.s[-1] / 2, self.template.init.get('k', [1.])[0]), max(2., 1 / self.s[0] * 2, self.template.init.get('k', [0.])[0]), 3000)  # margin for AP effect
         if template is None:
-            template = DirectPowerSpectrumTemplate(k=kin)
+            template = DirectPowerSpectrumTemplate()
         self.template = template
+        kin = np.geomspace(min(1e-3, 1 / self.s[-1] / 2, self.template.init.get('k', [1.])[0]), max(2., 1 / self.s[0] * 2, self.template.init.get('k', [0.])[0]), 3000)  # margin for AP effect
         self.template.init.update(k=kin)
 
 
@@ -51,7 +53,7 @@ class BaseTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
         if pt is None:
-            pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
+            pt = globals()[getattr(self, 'pt_cls', self.__class__.__name__.replace('Tracer', ''))]()
         self.pt = pt
         if template is not None:
             self.pt.init.update(template=template)
@@ -60,6 +62,9 @@ class BaseTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
                 self.pt.init.update({name: kwargs.pop(name)})
             elif name in self.options:
                 self.pt.init.update({name: self.options[name]})
+        for name in ['method', 'mu']:
+            if name in kwargs:
+                self.pt.init.update({name: kwargs.pop(name)})
         self.required_bias_params, self.optional_bias_params = {}, {}
         super(BaseTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.pt.init.update(k=self.k, ells=self.ells)
@@ -87,7 +92,7 @@ class BaseTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMulti
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
         if pt is None:
-            pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
+            pt = globals()[getattr(self, 'pt_cls', self.__class__.__name__.replace('Tracer', ''))]()
         self.pt = pt
         if template is not None:
             self.pt.init.update(template=template)
@@ -147,7 +152,7 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
     ells : tuple, default=(0, 2, 4)
         Multipoles to compute.
 
-    mu : int, default=20
+    mu : int, default=8
         Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
 
     template : BasePowerSpectrumTemplate
@@ -155,10 +160,10 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
     """
     config_fn = 'full_shape.yaml'
 
-    def initialize(self, *args, template=None, **kwargs):
+    def initialize(self, *args, mu=8, method='leggauss', template=None, **kwargs):
         if template is None:
             template = StandardPowerSpectrumTemplate()
-        super(SimpleTracerPowerSpectrumMultipoles, self).initialize(*args, template=template, **kwargs)
+        super(SimpleTracerPowerSpectrumMultipoles, self).initialize(*args, template=template, mu=mu, method=method, **kwargs)
 
     def calculate(self, b1=1., sn0=0., sigmapar=0., sigmaper=0.):
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
@@ -173,7 +178,45 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
         return self.power
 
 
-class KaiserTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+    r"""
+    Kaiser power spectrum multipoles.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    mu : int, default=8
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+    """
+    def initialize(self, *args, mu=8, **kwargs):
+        super(KaiserPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
+
+    def calculate(self):
+        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        f = self.template.f
+        pkap = jac * interpolate.InterpolatedUnivariateSpline(np.log10(self.template.k), self.template.pk_dd, k=3, ext=2)(np.log10(kap))
+        self.pktable = []
+        self.pktable.append(self.to_poles(pkap))
+        self.pktable.append(self.to_poles(f * muap**2 * pkap))
+        self.pktable.append(self.to_poles(f**2 * muap**4 * pkap))
+
+    def __getstate__(self):
+        state = {}
+        for name in ['k', 'z', 'ells', 'pktable']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        return state
+
+
+class KaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     r"""
     Kaiser tracer power spectrum multipoles.
 
@@ -185,26 +228,19 @@ class KaiserTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
     ells : tuple, default=(0, 2, 4)
         Multipoles to compute.
 
-    mu : int, default=20
+    mu : int, default=8
         Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
 
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
     """
-    config_fn = 'full_shape.yaml'
+    def set_params(self):
+        self.required_bias_params = dict(b1=1., sn0=0)
+        super(KaiserTracerPowerSpectrumMultipoles, self).set_params()
 
     def calculate(self, b1=1., sn0=0.):
-        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        f = self.template.f
-        #pkmu = jac * (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0
-        pkmu = jac * (b1 + f * muap**2)**2 * interpolate.InterpolatedUnivariateSpline(np.log10(self.template.k), self.template.pk_dd, k=3, ext=2)(np.log10(kap)) + sn0
-        #qiso = self.template.apeffect.qiso
-        #pkmu = 1. / qiso**3 * (b1 + f * self.mu[None, :]**2)**2 * self.template.pk_dd_interpolator(self.k / qiso)[:, None] + sn0
-        #pkmu = 1. / qiso**3 * (b1 + f * self.mu[None, :]**2)**2 * jnp.interp(jnp.log10(self.k / qiso), jnp.log10(self.template.k), self.template.pk_dd)[:, None] + sn0
-        self.power = self.to_poles(pkmu)
-
-    def get(self):
-        return self.power
+        sn0 = np.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * sn0
+        self.power = b1**2 * self.pt.pktable[0] + 2. * b1 * self.pt.pktable[1] + self.pt.pktable[2] + sn0
 
 
 class KaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
@@ -219,11 +255,102 @@ class KaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFro
     ells : tuple, default=(0, 2, 4)
         Multipoles to compute.
 
-    mu : int, default=20
+    mu : int, default=8
         Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
 
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+    """
+
+
+class EFTLikeKaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
+    r"""
+    Kaiser tracer power spectrum multipoles, with EFT-like counterterms.
+    Can be exactly marginalized over counter terms and stochastic parameters ct*, sn*.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    mu : int, default=8
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+    """
+    pt_cls = 'KaiserPowerSpectrumMultipoles'
+
+    def set_params(self):
+        self.kp = 1.
+
+        def get_params_matrix(base):
+            coeffs = {ell: {} for ell in self.ells}
+            for param in self.params.select(basename=base + '*_*'):
+                name = param.basename
+                match = re.match(base + '(.*)_(.*)', name)
+                if match:
+                    ell, pow = int(match.group(1)), int(match.group(2))
+                    if ell in self.ells:
+                        coeffs[ell][name] = (self.k / self.kp)**pow
+                    else:
+                        del self.params[param]
+            for param in self.params.select(basename=base + '0'):
+                ell, name = 0, param.basename
+                if ell in self.ells:
+                    if name + '_0' in coeffs[ell]:
+                        raise ValueError('Choose between {} and {}'.format(name, name + '_0'))
+                    coeffs[ell][name] = 1.
+                else:
+                    del self.params[param]
+            params = [name for ell in self.ells for name in coeffs[ell]]
+            if not params:
+                return params, jnp.array([], dtype='f8')
+            matrix = []
+            for ell in self.ells:
+                row = [np.zeros_like(self.k) for i in range(len(params))]
+                for name, k_i in coeffs[ell].items():
+                    row[params.index(name)][:] = k_i
+                matrix.append(np.column_stack(row))
+            matrix = jnp.array(matrix)
+            return params, matrix
+
+        self.counterterm_params, self.counterterm_matrix = get_params_matrix('ct')
+        self.stochastic_params, self.stochastic_matrix = get_params_matrix('sn')
+        params = self.counterterm_params + self.stochastic_params
+        self.required_bias_params = dict(b1=1., **dict(zip(params, [0] * len(params))))
+        super(EFTLikeKaiserTracerPowerSpectrumMultipoles, self).set_params()
+
+    def calculate(self, b1=1., **params):
+        self.power = b1**2 * self.pt.pktable[0] + 2. * b1 * self.pt.pktable[1] + self.pt.pktable[2]
+        values = jnp.array([params.get(name, 0.) for name in self.counterterm_params])
+        p11 = self.pt.pktable[0][self.pt.ells.index(0)]
+        self.power += self.counterterm_matrix.dot(values) * p11
+        values = jnp.array([params.get(name, 0.) for name in self.stochastic_params])
+        self.power += self.stochastic_matrix.dot(values)
+
+
+class EFTLikeKaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
+    r"""
+    Kaiser tracer correlation function multipoles, with EFT-like counterterms.
+    Can be exactly marginalized over counter terms and stochastic parameters ct*, sn*.
+
+    Parameters
+    ----------
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    **kwargs : dict
+        Options, defaults to: ``mu=8``.
     """
 
 
@@ -318,7 +445,7 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'zeff', 'ells', 'pktable']:
+        for name in ['k', 'z', 'ells', 'pktable']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
@@ -331,7 +458,7 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
 class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPowerSpectrumMultipoles):
     """
     Velocileptors Lagrangian perturbation theory (LPT) tracer power spectrum multipoles.
-    Can be exactly marginalized over counter terms and shot noise parameters alpha*, sn*.
+    Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn*.
 
     Parameters
     ----------
@@ -345,7 +472,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
 
     **kwargs : dict
-        Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5``.
+        Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5, mu=8``.
 
 
     Reference
@@ -369,7 +496,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
 class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
     """
     Velocileptors LPT tracer correlation function multipoles.
-    Can be exactly marginalized over counter terms and shot noise parameters alpha*, sn*.
+    Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn*.
 
     Parameters
     ----------
@@ -383,7 +510,7 @@ class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationF
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
 
     **kwargs : dict
-        Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5``.
+        Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5, mu=8``.
 
 
     Reference
@@ -482,7 +609,7 @@ class EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTrac
 
     **kwargs : dict
         Velocileptors options, defaults to: ``rbao=110, kmin=1e-2, kmax=0.5, nk=100, beyond_gauss=True,
-        one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000, nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False, reduce=True``.
+        one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000, nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False, reduce=True, mu=4``.
 
 
     Reference
@@ -515,7 +642,7 @@ class EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTrac
 class EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
     """
     Velocileptors EPT moments tracer correlation function multipoles.
-    Can be exactly marginalized over counter terms and shot noise parameters alpha*, sn*.
+    Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn*.
 
     Parameters
     ----------
@@ -530,7 +657,7 @@ class EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorre
 
     **kwargs : dict
         Velocileptors options, defaults to: ``rbao=110, kmin=1e-2, kmax=0.5, nk=100, beyond_gauss=True,
-        one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000, nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False, reduce=True``.
+        one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000, nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False, reduce=True, mu=8``.
 
 
     Reference
@@ -651,7 +778,7 @@ class LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTrac
 
     **kwargs : dict
         Velocileptors options, defaults to: ``kmin=5e-3, kmax=0.3, nk=50, beyond_gauss=False, one_loop=True,
-        shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False``.
+        shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False, mu=8``.
 
 
     Reference
@@ -691,7 +818,7 @@ class LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTrac
 class LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
     """
     Velocileptors LPT moments tracer correlation function multipoles.
-    Can be exactly marginalized over counter terms and shot noise parameters alpha*, sn*.
+    Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn*.
 
     Parameters
     ----------

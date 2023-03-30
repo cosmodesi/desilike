@@ -184,6 +184,8 @@ class BasePipeline(BaseClass):
     @property
     def params(self):
         """Get pipeline parameters."""
+        if any(not calculator.runtime_info.initialized for calculator in self.calculators):
+            self.__init__(self.calculators[-1])
         _params = getattr(self, '_params', None)
         if _params is None or _params.updated:
             self._set_params(_params)
@@ -224,7 +226,7 @@ class BasePipeline(BaseClass):
         self.param_values.update(params)
         params = self.params.eval(**self.param_values)
         self.derived = Samples()
-        for param in self.params:
+        for param in self._params:
             if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
         for calculator in self.calculators:  # start by first calculator
             runtime_info = calculator.runtime_info
@@ -474,9 +476,10 @@ class BasePipeline(BaseClass):
             calculators_to_calculate = []
 
             def callback(calculator):
-                for calculator in calculator.runtime_info.required_by:
-                    calculators_to_calculate.append(calculator)
-                    callback(calculator)
+                for calc in self.calculators:
+                    if calculator in calc.runtime_info.requires:
+                        calculators_to_calculate.append(calc)
+                        callback(calc)
 
             for calculator in self.calculators:
                 if param in calculator.runtime_info.params:
@@ -576,7 +579,7 @@ class RuntimeInfo(BaseClass):
         self.namespace = None
         self.speed = None
         self.monitor = Monitor()
-        self.required_by = set()
+        #self.required_by = set()
         if init is None: init = InitConfig()
         self.init = InitConfig(init)
         self.init.runtime_info = self
@@ -614,16 +617,15 @@ class RuntimeInfo(BaseClass):
     def requires(self, requires):
         """Set list of calculators this calculator depends upon."""
         self._requires = list(requires)
-        for require in self._requires:
-            require.runtime_info.initialize()  # otherwise runtime_info is cleared and required_by is lost
+        #for require in self._requires:
+            #require.runtime_info.initialize()  # otherwise runtime_info is cleared and required_by is lost
             #assert not require.runtime_info.toinitialize
-            require.runtime_info.required_by.add(self.calculator)
+            #require.runtime_info.required_by.add(self.calculator)
         self._pipeline = None
 
     @property
     def pipeline(self):
         """Return pipeline for this calculator."""
-        self.initialize()
         if getattr(self, '_pipeline', None) is None:
             self._pipeline = BasePipeline(self.calculator)
         return self._pipeline
@@ -665,17 +667,17 @@ class RuntimeInfo(BaseClass):
     def initialized(self):
         """Has this calculator been initialized?"""
         if self.init.updated:
-            self.initialized = False
+            self._initialized = False
         return self._initialized
 
     @initialized.setter
     def initialized(self, initialized):
         if initialized:
             self.init.updated = False
-        else:
+        #else:
             #self._pipeline = None
-            for calculator in self.required_by:
-                calculator.runtime_info.initialized = False
+        #    for calculator in self.required_by:
+        #        calculator.runtime_info.initialized = False
         self._initialized = initialized
 
     def initialize(self):

@@ -23,10 +23,11 @@ def test_ensemble():
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
     for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler][:1]:
         sampler = Sampler(likelihood, save_fn='./_tests/chain_*.npy')
-        chains = sampler.run(max_iterations=100, check=True, check_every=10)
+        chains = sampler.run(max_iterations=50, check=True, check_every=50)
         if sampler.mpicomm.rank == 0:
             assert chains[0]['loglikelihood'].derivs is not None
             assert chains[0].sample_solved()['loglikelihood'].derivs is None
+        chains = sampler.run(max_iterations=50, check=True, check_every=10)
 
 
 def test_fixed():

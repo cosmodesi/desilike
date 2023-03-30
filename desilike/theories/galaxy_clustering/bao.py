@@ -49,11 +49,11 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
         pknow = self.template.pknow_dd_interpolator(kap)
         pk = self.template.pk_dd_interpolator(kap)
         sigmanl2 = kap**2 * (sigmapar**2 * muap**2 + sigmaper**2 * (1. - muap**2))
-        damped_wiggles = (pk - pknow) * np.exp(-sigmanl2 / 2.)
+        damped_wiggles = (pk / pknow - 1.) * np.exp(-sigmanl2 / 2.)
         fog = 1. / (1. + (sigmas * kap * muap)**2 / 2.)**2.
         sk = 0.
         if self.mode == 'reciso': sk = np.exp(-1. / 2. * (kap * self.smoothing_radius)**2)
-        pkmu = jac * fog * (b1 + f * muap**2 * (1 - sk))**2 * (pknow + damped_wiggles)
+        pkmu = jac * fog * (b1 + f * muap**2 * (1 - sk))**2 * pknow * (1 + damped_wiggles)
         self.power = self.to_poles(pkmu)
 
 
@@ -65,14 +65,13 @@ class SimpleBAOWigglesPowerSpectrumMultipoles(DampedBAOWigglesPowerSpectrumMulti
     def calculate(self, b1=1., sigmas=0., sigmapar=9., sigmaper=6.):
         f = self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        wiggles = self.template.pk_dd_interpolator(kap) / self.template.pknow_dd_interpolator(kap)
         pknow = self.template.pknow_dd_interpolator(self.k)[:, None]
         sigmanl2 = self.k[:, None]**2 * (sigmapar**2 * self.mu**2 + sigmaper**2 * (1. - self.mu**2))
-        damping = np.exp(-sigmanl2 / 2.)
+        damped_wiggles = (self.template.pk_dd_interpolator(kap) / self.template.pknow_dd_interpolator(kap) - 1.) * np.exp(-sigmanl2 / 2.)
         fog = 1. / (1. + (sigmas * self.k[:, None] * self.mu)**2 / 2.)**2.
         sk = 0.
         if self.mode == 'reciso': sk = np.exp(-1. / 2. * (self.k * self.smoothing_radius)**2)[:, None]
-        pkmu = fog * (b1 + f * self.mu**2 * (1 - sk))**2 * (1. + damping * (wiggles - 1.)) * pknow
+        pkmu = fog * (b1 + f * self.mu**2 * (1 - sk))**2 * pknow * (1. + damped_wiggles)
         self.power = self.to_poles(pkmu)
 
 
@@ -156,11 +155,11 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
         f = self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.template.pknow_dd_interpolator(kap)
-        wiggles = 0. if self.template.only_now else self.wiggles.wiggles(kap, muap, b1=b1, **kwargs)
+        damped_wiggles = 0. if self.template.only_now else self.wiggles.wiggles(kap, muap, b1=b1, **kwargs) / pknow
         fog = 1. / (1. + (sigmas * kap * muap)**2 / 2.)**2.
         sk = 0.
         if self.mode == 'reciso': sk = np.exp(-1. / 2. * (kap * self.smoothing_radius)**2)
-        pkmu = jac * fog * (wiggles + (b1 + f * muap**2 * (1 - sk))**2 * pknow)
+        pkmu = jac * fog * pknow * (damped_wiggles + (b1 + f * muap**2 * (1 - sk))**2)
         self.power = self.to_poles(pkmu)
 
 

@@ -55,6 +55,9 @@ def test_templates():
     from desilike.theories.galaxy_clustering import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BAOPowerSpectrumTemplate,
                                                      StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate)
 
+    extractor = ShapeFitPowerSpectrumExtractor()
+    dm = 0.02
+    assert np.allclose(extractor(n_s=0.96 + dm).dm - extractor(n_s=0.96).dm, dm, atol=0., rtol=1e-5)
     for extractor in [BAOExtractor(), StandardPowerSpectrumExtractor(),
                       ShapeFitPowerSpectrumExtractor(), ShapeFitPowerSpectrumExtractor(dfextractor='fsigmar'),
                       WiggleSplitPowerSpectrumExtractor(), WiggleSplitPowerSpectrumExtractor(kernel='tophat'),
@@ -88,16 +91,10 @@ def test_bao():
     print(theory.runtime_info.pipeline.params)
     theory(qpar=1.1, sigmas=3.)
 
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles
-
-    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
-    theory(qpar=1.1, sigmapar=3.)
-
     from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate
-    template = BAOPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso')
+    template = BAOPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso', only_now=True)
     theory.init.update(template=template)
-    theory(df=0.8)
+    theory(qiso=0.9)
 
     template = StandardPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso', with_now='peakaverage')
     theory.init.update(template=template)
@@ -438,8 +435,8 @@ if __name__ == '__main__':
     setup_logging()
     #test_integ()
     #test_bao()
-    test_full_shape()
+    #test_full_shape()
     #test_pk_to_xi()
     #test_ap_diff()
     #test_png()
-    #test_templates()
+    test_templates()

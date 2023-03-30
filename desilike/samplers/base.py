@@ -210,8 +210,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         for ichain, chain in enumerate(self.chains):
             if self.mpicomm.bcast(chain is not None, root=0):
                 start[ichain] = self.mpicomm.bcast(np.array([chain[param][-1] for param in self.varied_params]).T if self.mpicomm.rank == 0 else None, root=0)
-                if not np.isnan(start[ichain]).all():
-                    logposterior[ichain] = self.logposterior(start[ichain])
+                logposterior[ichain] = self.logposterior(start[ichain])
 
         start.shape = (self.nchains * self.nwalkers, -1)
         logposterior.shape = -1

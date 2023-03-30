@@ -95,7 +95,6 @@ def test_params():
     likelihood()
     likelihood.observables[0].wmatrix.theory.params['b1'].update(value=3.)
     print(likelihood(), likelihood.runtime_info.pipeline.param_values)
-    exit()
 
     print(likelihood.runtime_info.pipeline.params)
     print(likelihood(dm=0.), likelihood(dm=0.01), likelihood(b1=2., dm=0.02))
@@ -158,6 +157,28 @@ def test_copy():
     print(likelihood2.varied_params)
     assert np.allclose(likelihood2(), SumLikelihood(likelihoods=likelihood2)())
 
+    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, DampedBAOWigglesTracerPowerSpectrumMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+
+
+    template = BAOPowerSpectrumTemplate(z=0.5, fiducial='DESI')
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
+    # Set damping sigmas to zero, as data follows linear pk
+    for param in theory.params.select(basename='sigma*'):
+        param.update(value=0., fixed=True)
+    # Fix some broadband parameters (those with k^{-3} and k^{-2}) to speed up calculation in this notebook
+    for param in theory.params.select(basename=['al*_-3', 'al*_-2']):
+        param.update(value=0., fixed=True)
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
+                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
+    template = BAOPowerSpectrumTemplate(z=0.5, fiducial='DESI', apmode='qiso', only_now=False)
+    theory.init.update(template=template)
+    assert 'qiso' in likelihood.all_params
+
 
 def test_cosmo():
 
@@ -197,7 +218,7 @@ if __name__ == '__main__':
     #test_init()
     #test_observable()
     #test_likelihood()
-    test_params()
-    #test_copy()
+    #test_params()
+    test_copy()
     #test_cosmo()
     #test_install()

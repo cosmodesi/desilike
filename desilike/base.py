@@ -173,7 +173,7 @@ class BasePipeline(BaseClass):
                 # Add in previous parameters to be dropped
                 if any(param.name in p.depends.values() for p in new_params):
                     new_params.set(param)
-        self._params = new_params
+        self._params = new_params.deepcopy()
         self._params.updated = False
         self._varied_params = self._params.select(varied=True, derived=False)
         self.param_values = {param.name: param.value for param in self._params}

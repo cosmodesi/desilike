@@ -56,7 +56,7 @@ def test_templates():
                                                      StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate)
 
     for extractor in [BAOExtractor(), StandardPowerSpectrumExtractor(),
-                      ShapeFitPowerSpectrumExtractor(),
+                      ShapeFitPowerSpectrumExtractor(), ShapeFitPowerSpectrumExtractor(dfextractor='fsigmar'),
                       WiggleSplitPowerSpectrumExtractor(), WiggleSplitPowerSpectrumExtractor(kernel='tophat'),
                       BandVelocityPowerSpectrumExtractor(kp=np.linspace(0.01, 0.1, 10))]:
         extractor()

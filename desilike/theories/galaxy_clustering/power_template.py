@@ -422,9 +422,14 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
     ---------
     https://arxiv.org/abs/2106.07641
     """
-    def initialize(self, *args, kp=0.03, eta=1. / 3., n_varied=False, with_now='peakaverage', **kwargs):
+    def initialize(self, *args, kp=0.03, eta=1. / 3., n_varied=False, dfextractor='shapefit', r=8., with_now='peakaverage', **kwargs):
         self.kp = float(kp)
         self.n_varied = bool(n_varied)
+        self.dfextractor = dfextractor.lower()
+        allowed_dfextractor = ['shapefit', 'fsigmar']
+        if self.dfextractor not in allowed_dfextractor:
+            raise ValueError('dfextractor must be one of {}'.format(allowed_dfextractor))
+        self.r = float(r)
         super(ShapeFitPowerSpectrumExtractor, self).initialize(*args, with_now=with_now, **kwargs)
         if external_cosmo(self.cosmo):
             self.cosmo_requires['primordial'] = {'pk_interpolator': {'k': self.k}}
@@ -433,7 +438,7 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         self.eta = float(eta)
         self.calculate()
         self.cosmo = cosmo
-        for name in ['DH', 'DM', 'DV', 'DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd', 'Ap', 'f_sqrt_Ap', 'n', 'm']:
+        for name in ['DH', 'DM', 'DV', 'DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd', 'Ap', 'f_sqrt_Ap', 'f_sigmar', 'n', 'm']:
             setattr(self, name + '_fid', getattr(self, name))
             delattr(self, name)
 
@@ -444,6 +449,7 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         kp = self.kp / s
         self.Ap = 1. / s**3 * self.pknow_dd_interpolator(kp)
         self.f_sqrt_Ap = self.f * self.Ap**0.5
+        self.f_sigmar = self.f * self.pknow_dd_interpolator.sigma_r(self.r * s)
         self.n = self.cosmo.n_s
         dk = 1e-2
         k = kp * np.array([1. - dk, 1. + dk])
@@ -458,7 +464,10 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         BAOExtractor.get(self)
         self.dn = self.n - self.n_fid
         self.dm = self.m - self.m_fid
-        self.df = self.f_sqrt_Ap / (self.f_fid * self.Ap_fid**0.5)
+        if self.dfextractor == 'shapefit':
+            self.df = self.f_sqrt_Ap / self.f_sqrt_Ap_fid
+        else:
+            self.df = self.f_sigmar / self.f_sigmar_fid
         return self
 
 
@@ -503,14 +512,15 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
     ---------
     https://arxiv.org/abs/2106.07641
     """
-    def initialize(self, *args, kp=0.03, a=0.6, with_now='peakaverage', **kwargs):
+    def initialize(self, *args, kp=0.03, a=0.6, r=8., with_now='peakaverage', **kwargs):
         self.a = float(a)
         self.kp = float(kp)
         self.n_varied = self.params['dn'].varied
+        self.r = float(r)
         super(ShapeFitPowerSpectrumTemplate, self).initialize(*args, with_now=with_now, **kwargs)
         self.eta = self.apeffect.eta
         ShapeFitPowerSpectrumExtractor.calculate(self)
-        for name in ['DH', 'DM', 'DV', 'DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd', 'Ap', 'f_sqrt_Ap', 'n', 'm']:
+        for name in ['DH', 'DM', 'DV', 'DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd', 'Ap', 'f_sqrt_Ap', 'f_sigmar', 'n', 'm']:
             setattr(self, name + '_fid', getattr(self, name))
             delattr(self, name)
 

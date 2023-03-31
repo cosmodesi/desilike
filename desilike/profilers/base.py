@@ -332,18 +332,18 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
         profiles = Profiles.concatenate(list_profiles)
 
+        if self.profiles is None:
+            self.profiles = profiles
+        else:
+            self.profiles = Profiles.concatenate(self.profiles, profiles)
+
         for name in ['size', 'nvaried', 'ndof']:
             try:
                 value = getattr(self.likelihood, name)
             except AttributeError:
                 pass
             else:
-                profiles.bestfit.attrs[name] = value
-
-        if self.profiles is None:
-            self.profiles = profiles
-        else:
-            self.profiles = Profiles.concatenate(self.profiles, profiles)
+                self.profiles.bestfit.attrs[name] = value
 
         if self.mpicomm.rank == 0 and self.save_fn is not None:
             self.profiles.save(self.save_fn)

@@ -2043,7 +2043,7 @@ class Samples(BaseParameterCollection):
         if len(others) == 1 and utils.is_sequence(others[0]):
             others = others[0]
         if not others: return cls()
-        new = cls()
+        new = cls(attrs=others[0].attrs)
         new_params = others[0].params()
         new_names = new_params.names()
         for other in others:

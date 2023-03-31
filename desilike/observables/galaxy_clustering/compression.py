@@ -19,9 +19,9 @@ class BaseCompressionObservable(BaseCalculator):
     conflict_names = []
     meta_names = []
 
-    def initialize(self, extractor=None, data=None, covariance=None, cosmo=None, quantities=None, **kwargs):
+    def initialize(self, extractor=None, data=None, covariance=None, quantities=None, **kwargs):
         self.extractor = extractor
-        self.extractor.init.update(cosmo=cosmo, **kwargs)
+        self.extractor.init.update(**kwargs)
         if quantities is None:
             quantities = get_quantities(self.conflict_names)
         quantities = list(quantities)

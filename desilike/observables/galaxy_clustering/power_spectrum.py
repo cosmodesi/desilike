@@ -140,7 +140,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
                     list_shotnoise.append(mock_shotnoise)
             return list_y, list_shotnoise
 
-        flatdata, shotnoise, list_y = None, None, None
+        flatdata, shotnoise, list_shotnoise, list_y = None, None, None, None
         if self.mpicomm.rank == 0 and data is not None:
             if not utils.is_sequence(data):
                 data = [data]

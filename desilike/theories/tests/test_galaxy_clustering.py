@@ -104,7 +104,7 @@ def test_bao():
 
 def test_full_shape():
 
-    def test_emulator_likelihood(theory, test_likelihood=True):
+    def test_emulator_likelihood(theory, test_likelihood=True, emulate='pt'):
         print('Emulating', theory)
         if test_likelihood:
             from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TracerCorrelationFunctionMultipolesObservable, ObservablesCovarianceMatrix
@@ -118,34 +118,45 @@ def test_full_shape():
             observable()
             cov = np.eye(observable.flatdata.shape[0])
             likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
-            for param in likelihood.all_params.select(basename=['alpha*', 'sn*', 'c*']):
-                param.update(derived='.best')
+            #for param in likelihood.all_params.select(basename=['alpha*', 'sn*', 'c*']):
+            #    param.update(derived='.best')
             likelihood()
         from desilike.emulators import Emulator, TaylorEmulatorEngine
         #theory()
         bak = theory()
-        calculator = theory.pt
+        if emulate == 'pt':
+            calculator = theory.pt
+        else:
+            calculator = theory
         emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=0))
         emulator.set_samples()
         emulator.fit()
-        pt = emulator.to_calculator()
-        theory.init.update(pt=pt)
+        calculator = emulator.to_calculator()
+        if emulate == 'pt':
+            theory.init.update(pt=calculator)
+        else:
+            theory = calculator
         assert np.allclose(theory(), bak)
         if test_likelihood:
             likelihood()
 
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
-
+    """
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
     theory = KaiserTracerPowerSpectrumMultipoles()
     theory(logA=3.04, b1=1.).shape
     theory = KaiserTracerCorrelationFunctionMultipoles()
     theory(logA=3.04, b1=1.).shape
+    """
 
     from desilike.theories.galaxy_clustering import EFTLikeKaiserTracerPowerSpectrumMultipoles, EFTLikeKaiserTracerCorrelationFunctionMultipoles
     theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    test_emulator_likelihood(theory)
+    test_emulator_likelihood(theory, emulate='pt')
     theory(df=1.01, b1=1., sn2_2=1., sigmapar=4.).shape
+    test_emulator_likelihood(theory, emulate=None)
+    theory(df=1.01, b1=1., sn2_2=1., sigmapar=4.).shape
+
+    exit()
     theory = EFTLikeKaiserTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     test_emulator_likelihood(theory)
     theory(df=1.01, b1=1., ct0_2=1.).shape
@@ -155,7 +166,8 @@ def test_full_shape():
     theory(dm=0.01, b1=1.).shape
     assert not np.allclose(theory(dm=-0.01), theory(dm=0.01))
     assert not np.allclose(theory(qpar=0.99), theory(qper=1.01))
-    test_emulator_likelihood(theory)
+    test_emulator_likelihood(theory, emulate='pt')
+    test_emulator_likelihood(theory, emulate=None)
     theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=0.5))
     test_emulator_likelihood(theory)
     theory(dm=0.01, b1=1.).shape

@@ -145,7 +145,7 @@ def test_full_shape():
     from desilike.theories.galaxy_clustering import EFTLikeKaiserTracerPowerSpectrumMultipoles, EFTLikeKaiserTracerCorrelationFunctionMultipoles
     theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     test_emulator_likelihood(theory)
-    theory(df=1.01, b1=1., sn2_2=1.).shape
+    theory(df=1.01, b1=1., sn2_2=1., sigmapar=4.).shape
     theory = EFTLikeKaiserTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     test_emulator_likelihood(theory)
     theory(df=1.01, b1=1., ct0_2=1.).shape
@@ -435,8 +435,8 @@ if __name__ == '__main__':
     setup_logging()
     #test_integ()
     #test_bao()
-    #test_full_shape()
+    test_full_shape()
     #test_pk_to_xi()
     #test_ap_diff()
     #test_png()
-    test_templates()
+    #test_templates()

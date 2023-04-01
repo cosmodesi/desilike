@@ -13,8 +13,9 @@ params:
     value: 0.
     prior:
       limits: [0, 10]
+    ref:
+      limits: [0., 1.]
     latex: \Sigma_{s}
-    fixed: True
   sigmapar:
     value: 9.
     prior:
@@ -34,7 +35,6 @@ params:
     ref:
       limits: [-1e2, 1e2]
     latex: a_{[], []}
-    fixed: False
 
 
 ---
@@ -54,8 +54,9 @@ params:
     value: 0.
     prior:
       limits: [0, 10]
+    ref:
+      limits: [0., 1.]
     latex: \Sigma_{s}
-    fixed: True
   sigmapar:
     value: 9.
     prior:
@@ -75,7 +76,6 @@ params:
     ref:
       limits: [-1e2, 1e2]
     latex: a_{[], []}
-    fixed: False
 
 ---
 
@@ -94,8 +94,9 @@ params:
     value: 0.
     prior:
       limits: [0, 10]
+    ref:
+      limits: [0., 1.]
     latex: \Sigma_{s}
-    fixed: True
   al[:5:2]_[-3:2]:
     value: 0.
     prior:
@@ -103,7 +104,6 @@ params:
     ref:
       limits: [-1e2, 1e2]
     latex: a_{[], []}
-    fixed: False
 
 ---
 
@@ -122,8 +122,9 @@ params:
     value: 0.
     prior:
       limits: [0, 10]
+    ref:
+      limits: [0., 1.]
     latex: \Sigma_{s}
-    fixed: True
   sigmapar:
     value: 9.
     prior:
@@ -143,7 +144,6 @@ params:
     ref:
       limits: [-1e2, 1e2]
     latex: a_{[], []}
-    fixed: False
 
 ---
 
@@ -162,8 +162,9 @@ params:
     value: 0.
     prior:
       limits: [0, 10]
+    ref:
+      limits: [0., 1.]
     latex: \Sigma_{s}
-    fixed: True
   sigmapar:
     value: 9.
     prior:
@@ -183,7 +184,6 @@ params:
     ref:
       limits: [-1e2, 1e2]
     latex: a_{[], []}
-    fixed: False
 
 ---
 
@@ -202,8 +202,9 @@ params:
     value: 0.
     prior:
       limits: [0, 10]
+    ref:
+      limits: [0., 1.]
     latex: \Sigma_{s}
-    fixed: True
   al[:5:2]_[-3:2]:
     value: 0.
     prior:
@@ -211,4 +212,3 @@ params:
     ref:
       limits: [-1e2, 1e2]
     latex: a_{[], []}
-    fixed: False

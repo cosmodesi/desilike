@@ -71,6 +71,7 @@ class BaseTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         self.set_params()
 
     def set_params(self):
+        self.pt.params.update(self.params.select(basename=self.pt.params.basenames()))
         self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
 
     def get(self):
@@ -107,6 +108,7 @@ class BaseTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMulti
         self.set_params()
 
     def set_params(self):
+        self.pt.params.update(self.params.select(basename=self.pt.params.basenames()))
         self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
 
     def get(self):
@@ -196,13 +198,17 @@ class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPow
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
     """
+    _params = {'sigmapar': {'value': 0., 'fixed': True}, 'sigmaper': {'value': 0, 'fixed': True}}
+
     def initialize(self, *args, mu=8, **kwargs):
         super(KaiserPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
 
-    def calculate(self):
+    def calculate(self, sigmapar=0., sigmaper=0.):
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
-        pkap = jac * interpolate.InterpolatedUnivariateSpline(np.log10(self.template.k), self.template.pk_dd, k=3, ext=2)(np.log10(kap))
+        sigmanl2 = kap**2 * (sigmapar**2 * muap**2 + sigmaper**2 * (1. - muap**2))
+        damping = np.exp(-sigmanl2 / 2.)
+        pkap = jac * damping * interpolate.InterpolatedUnivariateSpline(np.log10(self.template.k), self.template.pk_dd, k=3, ext=2)(np.log10(kap))
         self.pktable = []
         self.pktable.append(self.to_poles(pkap))
         self.pktable.append(self.to_poles(f * muap**2 * pkap))

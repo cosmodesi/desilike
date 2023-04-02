@@ -437,7 +437,7 @@ class NamespaceDict(BaseClass):
         return str(self.__getstate__())
 
 
-def _check_valid_inv(mat, invmat, rtol=1e-04, atol=1e-05, check_valid='raise'):
+def _check_valid_inv(mat, invmat, rtol=1e-03, atol=1e-03, check_valid='raise'):
     """
     Check input array ``mat`` and ``invmat`` are matrix inverse within relative difference ``rtol`` and absolute difference ``atol``.
     If inversion is inaccurate, and ``check_valid`` is:

@@ -320,11 +320,8 @@ class Emulator(BaseClass):
         new_name = Calculator.__name__
 
         new_cls = type(EmulatedCalculator)(new_name, (EmulatedCalculator, Calculator),
-                                           {'__setstate__': Calculator.__setstate__, 'get': Calculator.get, '__module__': Calculator.__module__})
-        try:
-            new_cls.config_fn = Calculator.config_fn
-        except AttributeError:
-            pass
+                                           {'__setstate__': Calculator.__setstate__, 'get': Calculator.get, '__module__': Calculator.__module__, 'config_fn': None})
+
         new_cls._params = self.params.select(depends={}).deepcopy()
         for param in new_cls._params: param.update(drop=False)
 

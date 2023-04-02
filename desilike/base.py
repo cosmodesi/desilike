@@ -127,7 +127,7 @@ class BasePipeline(BaseClass):
                 callback(require)
 
         callback(calculator)
-        # To avoid loops created by one calculator, which when updated, requests reinitialization of the calculators which depends on it
+        # To avoid loops created by one calculator, which when updated, requests reinitialization of the calculators which depend on it
         for calculator in self.calculators:
             calculator.runtime_info.initialized = True
         self.calculators = self.calculators[::-1]
@@ -184,8 +184,6 @@ class BasePipeline(BaseClass):
     @property
     def params(self):
         """Get pipeline parameters."""
-        if any(not calculator.runtime_info.initialized for calculator in self.calculators):
-            self.__init__(self.calculators[-1])
         _params = getattr(self, '_params', None)
         if _params is None or _params.updated:
             self._set_params(_params)
@@ -627,6 +625,9 @@ class RuntimeInfo(BaseClass):
     def pipeline(self):
         """Return pipeline for this calculator."""
         if getattr(self, '_pipeline', None) is None:
+            self._pipeline = BasePipeline(self.calculator)
+        elif any(not calculator.runtime_info.initialized for calculator in self._pipeline.calculators):
+            self.initialized = False
             self._pipeline = BasePipeline(self.calculator)
         return self._pipeline
 

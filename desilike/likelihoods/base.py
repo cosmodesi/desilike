@@ -59,15 +59,16 @@ class BaseLikelihood(BaseCalculator):
         dx, x, solve_likelihoods, derivs = [], [], [], None
 
         if solved_params:
+            solved_params = ParameterCollection(solved_params)
             from desilike.fisher import Fisher
 
             solve_likelihoods = [likelihood for likelihood in likelihoods if any(param.solved for param in likelihood.all_params)]
 
             pipeline.more_calculate = lambda: None
             self.fisher = getattr(self, 'fisher', None)
-            if self.fisher is None or self.fisher.mpicomm is not self.mpicomm:
+            if self.fisher is None or self.fisher.mpicomm is not self.mpicomm or self.fisher.varied_params != solved_params:
                 params_bak, varied_params_bak = pipeline.params, pipeline.varied_params
-                pipeline._varied_params = ParameterCollection(solved_params)  # to set varied_params
+                pipeline._varied_params = solved_params  # to set varied_params
                 pipeline._params = ParameterCollection([param.clone(derived=False) if param in pipeline._varied_params else param.clone(fixed=True) for param in params_bak])
                 pipeline._varied_params.updated, pipeline._params.updated = False, False
                 self.fisher = Fisher(self, method='auto')

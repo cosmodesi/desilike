@@ -218,7 +218,8 @@ class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPow
         elif self.nloop == 1:
             # We could have a speed-up with FFTlog, see https://arxiv.org/pdf/1603.04405.pdf
             from desilike import utils
-            k = self.k[:, None]
+            self.kloop = np.linspace(self.k[0] * 0.8, self.k[-1] * 1.2, int(len(self.k) * 1.4 + 0.5))
+            k = self.kloop[:, None]
             q = self.template.k
             jq = q**2 * utils.weights_trapz(q) / (4. * np.pi**2)
             mus, wmus = utils.weights_mu(40, method='leggauss', sym=False)
@@ -239,7 +240,7 @@ class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPow
                 qdkq = kdq - q**2
                 F2 = 5. / 7. + 1. / 2. * qdkq * (1. / q**2 + 1. / kq2) + 2. / 7. * qdkq**2 / (q**2 * kq2)
                 self.pk22 += 2 * wmu * np.sum(jq * F2**2 * self.template.pk_dd * np.interp(kq2**0.5, self.template.k, self.template.pk_dd), axis=-1)
-            k = self.k
+            k = self.kloop
             self.pk11 = np.interp(k, self.template.k, self.template.pk_dd)
             self.pk13 = np.sum(self.kernel13 * self.template.pk_dd, axis=-1) * self.pk11
             pk = self.pk11 + self.pk22 + self.pk13

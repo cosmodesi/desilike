@@ -159,9 +159,9 @@ def test_full_shape():
 
     from matplotlib import pyplot as plt
     ax = plt.gca()
-    ax.loglog(theory_1loop.k, np.abs(theory_1loop.pt.pk11), label='P11')
-    ax.loglog(theory_1loop.k, np.abs(theory_1loop.pt.pk22), label='P22')
-    ax.loglog(theory_1loop.k, np.abs(theory_1loop.pt.pk13), label='P13')
+    ax.loglog(theory_1loop.pt.kloop, np.abs(theory_1loop.pt.pk11), label='P11')
+    ax.loglog(theory_1loop.pt.kloop, np.abs(theory_1loop.pt.pk22), label='P22')
+    ax.loglog(theory_1loop.pt.kloop, np.abs(theory_1loop.pt.pk13), label='P13')
     ax.legend()
     ax.set_xlim(1e-3, 1e2)
     ax.set_ylim(1., 1e4)

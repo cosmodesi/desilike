@@ -77,7 +77,7 @@ class ParameterBestFit(Samples):
         if return_type == 'nparray':
             return np.array([value[0] for value in di.values()])
         toret = self.copy()
-        toret.data = [ParameterArray(value, param=value.param) for value in di.values()]
+        toret.data = [self[param].clone(value=value) for param, value in di.items()]
         return toret
 
 

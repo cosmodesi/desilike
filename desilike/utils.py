@@ -573,7 +573,7 @@ def weights_leggauss(nx, sym=False):
     return x, wx
 
 
-def weights_mu(mu, method='leggauss'):
+def weights_mu(mu, method='leggauss', sym=True):
     if method == 'trapz':
         if np.ndim(mu) == 0:
             mu = np.linspace(0., 1., mu)
@@ -582,8 +582,22 @@ def weights_mu(mu, method='leggauss'):
         return mu, weights_trapz(mu) / (mu[-1] - mu[0])
     if method == 'leggauss':
         if np.ndim(mu) == 0:
-            return weights_leggauss(mu, sym=True)
+            return weights_leggauss(mu, sym=sym)
         raise ValueError('gauss integration does not array of mus')
+
+
+def matrix_lininterp(xin, xout):
+    # Matrix for linear interpolation
+    toret = np.zeros((len(xout), len(xin)), dtype='f8')
+    for iout, xout in enumerate(xout):
+        iin = np.searchsorted(xin, xout, side='right') - 1
+        if 0 <= iin < len(xin) - 1:
+            frac = (xout - xin[iin]) / (xin[iin + 1] - xin[iin])
+            toret[iout, iin] = 1. - frac
+            toret[iout, iin + 1] = frac
+        elif np.isclose(xout, xin[-1]):
+            toret[iout, iin] = 1.
+    return toret
 
 
 def subspace(X, precision=None, npcs=None, chi2min=None, fweights=None, aweights=None):

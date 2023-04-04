@@ -464,19 +464,6 @@ def _format_kernel(sep, kernel):
     return sep, kernel
 
 
-def _interp_matrix(xout, xin):
-    toret = np.zeros((len(xout), len(xin)), dtype='f8')
-    for iout, xout in enumerate(xout):
-        iin = np.searchsorted(xin, xout, side='right') - 1
-        if 0 <= iin < len(xin) - 1:
-            frac = (xout - xin[iin]) / (xin[iin + 1] - xin[iin])
-            toret[iout, iin] = 1. - frac
-            toret[iout, iin + 1] = frac
-        elif np.isclose(xout, xin[-1]):
-            toret[iout, iin] = 1.
-    return toret
-
-
 class FiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMultipoles):
     r"""
     Fiber collision effect on power spectrum multipoles.
@@ -539,7 +526,7 @@ class FiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMul
         interp_kernel = RectBivariateSpline(k_perp, q_perp, integral_kernel, kx=3, ky=3, s=0)
 
         wq = utils.weights_trapz(self.kin)
-        diag = _interp_matrix(self.k, self.kin)
+        diag = utils.matrix_lininterp(self.kin, self.k)
         self.kernel_correlated = []
         for ellout in self.ells:
             legout = special.legendre(ellout)
@@ -625,7 +612,7 @@ class TopHatFiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpect
 
         kk, qq = np.meshgrid(self.k, self.kin, indexing='ij')
         wq = utils.weights_trapz(self.kin)
-        diag = _interp_matrix(self.k, self.kin)
+        diag = utils.matrix_lininterp(self.kin, self.k)
         self.kernel_correlated = []
         for ellout in self.ells:
             self.kernel_correlated.append([])

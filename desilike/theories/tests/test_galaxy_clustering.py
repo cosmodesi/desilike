@@ -150,13 +150,44 @@ def test_full_shape():
     """
 
     from desilike.theories.galaxy_clustering import EFTLikeKaiserTracerPowerSpectrumMultipoles, EFTLikeKaiserTracerCorrelationFunctionMultipoles
-    theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
+
+    k = np.logspace(-3, 1.5, 1000)
+    theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(k=k, template=ShapeFitPowerSpectrumTemplate(z=0.))
+    theory()
+    theory_1loop = EFTLikeKaiserTracerPowerSpectrumMultipoles(k=k, nloop=1, template=ShapeFitPowerSpectrumTemplate(z=0.))
+    theory_1loop()
+
+    from matplotlib import pyplot as plt
+    ax = plt.gca()
+    ax.loglog(theory_1loop.k, np.abs(theory_1loop.pt.pk11), label='P11')
+    ax.loglog(theory_1loop.k, np.abs(theory_1loop.pt.pk22), label='P22')
+    ax.loglog(theory_1loop.k, np.abs(theory_1loop.pt.pk13), label='P13')
+    ax.legend()
+    ax.set_xlim(1e-3, 1e2)
+    ax.set_ylim(1., 1e4)
+    plt.show()
+
+    ax = plt.gca()
+    mask = k < 0.3
+    for ill, ell in enumerate(theory.ells):
+        ax.plot(theory.k[mask], theory.k[mask] * theory.power[ill][mask], color='C{:d}'.format(ill))
+        ax.plot(theory_1loop.k[mask], theory_1loop.k[mask] * theory_1loop.power[ill][mask], color='C{:d}'.format(ill), linestyle='--')
+    plt.show()
+    exit()
+
     test_emulator_likelihood(theory, emulate='pt')
     theory(df=1.01, b1=1., sn2_2=1., sigmapar=4.).shape
     test_emulator_likelihood(theory, emulate=None)
     theory(df=1.01, b1=1., sn2_2=1., sigmapar=4.).shape
 
     exit()
+    theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    test_emulator_likelihood(theory, emulate='pt')
+    theory(df=1.01, b1=1., sn2_2=1., sigmapar=4.).shape
+    test_emulator_likelihood(theory, emulate=None)
+    theory(df=1.01, b1=1., sn2_2=1., sigmapar=4.).shape
+
+
     theory = EFTLikeKaiserTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     test_emulator_likelihood(theory)
     theory(df=1.01, b1=1., ct0_2=1.).shape

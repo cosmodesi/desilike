@@ -199,16 +199,51 @@ class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPow
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
     """
     _params = {'sigmapar': {'value': 0., 'fixed': True}, 'sigmaper': {'value': 0, 'fixed': True}}
+    _default_options = dict(nloop=0)
 
     def initialize(self, *args, mu=8, **kwargs):
         super(KaiserPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
+        #self.template.init.update(k=np.logspace(-4, 2, 1000))
+        self.nloop = int(self.options['nloop'])
+        if self.nloop not in [0, 1]:
+            raise ValueError('nloop must be one of 0 (linear) or 1 (1-loop)')
 
     def calculate(self, sigmapar=0., sigmaper=0.):
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
         sigmanl2 = kap**2 * (sigmapar**2 * muap**2 + sigmaper**2 * (1. - muap**2))
         damping = np.exp(-sigmanl2 / 2.)
-        pkap = jac * damping * interpolate.InterpolatedUnivariateSpline(np.log10(self.template.k), self.template.pk_dd, k=3, ext=2)(np.log10(kap))
+        if self.nloop == 0:
+            k, pk = self.template.k, self.template.pk_dd
+        elif self.nloop == 1:
+            # We could have a speed-up with FFTlog, see https://arxiv.org/pdf/1603.04405.pdf
+            from desilike import utils
+            k = self.k[:, None]
+            q = self.template.k
+            jq = q**2 * utils.weights_trapz(q) / (4. * np.pi**2)
+            mus, wmus = utils.weights_mu(40, method='leggauss', sym=False)
+            # Kernel for P13
+            if getattr(self, 'kernel13', None) is None:
+                self.kernel13 = 0.
+                for mu, wmu in zip(mus, wmus):
+                    kdq = k * q * mu  # k \cdot q
+                    kq2 = k**2 - 2. * kdq + q**2  # |k - q|^2
+                    F3 = (5. / 63. * k**2 - 11. / 54. * kdq - 1. / 6. * k**2 / q**4 * kdq**2 + 19. / 63. / q**4 * kdq**3
+                          - 23. / 378. * k**2 / q**2 * kdq - 23. / 378. / q**2 * kdq**2 + 1. / 9. / (k**2 * q**2) * kdq**3) / kq2
+                    self.kernel13 += 6. * wmu * jq * F3
+            # Compute P22
+            self.pk22 = 0.
+            for mu, wmu in zip(mus, wmus):
+                kdq = k * q * mu  # k \cdot q
+                kq2 = k**2 - 2. * kdq + q**2  # |k - q|^2
+                qdkq = kdq - q**2
+                F2 = 5. / 7. + 1. / 2. * qdkq * (1. / q**2 + 1. / kq2) + 2. / 7. * qdkq**2 / (q**2 * kq2)
+                self.pk22 += 2 * wmu * np.sum(jq * F2**2 * self.template.pk_dd * np.interp(kq2**0.5, self.template.k, self.template.pk_dd), axis=-1)
+            k = self.k
+            self.pk11 = np.interp(k, self.template.k, self.template.pk_dd)
+            self.pk13 = np.sum(self.kernel13 * self.template.pk_dd, axis=-1) * self.pk11
+            pk = self.pk11 + self.pk22 + self.pk13
+        pkap = jac * damping * interpolate.InterpolatedUnivariateSpline(np.log10(k), pk, k=3, ext=2)(np.log10(kap))
         self.pktable = []
         self.pktable.append(self.to_poles(pkap))
         self.pktable.append(self.to_poles(f * muap**2 * pkap))
@@ -220,6 +255,7 @@ class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPow
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
+
 
 
 class KaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):

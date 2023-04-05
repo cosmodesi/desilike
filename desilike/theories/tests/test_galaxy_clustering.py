@@ -151,20 +151,20 @@ def test_full_shape():
 
     from desilike.theories.galaxy_clustering import EFTLikeKaiserTracerPowerSpectrumMultipoles, EFTLikeKaiserTracerCorrelationFunctionMultipoles
 
-    k = np.logspace(-3, 1.5, 1000)
-    theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(k=k, template=ShapeFitPowerSpectrumTemplate(z=0.))
+    #k = np.logspace(-3, 1.5, 1000)
+    k = np.linspace(0.01, 0.5, 60)
+    theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(k=k, template=ShapeFitPowerSpectrumTemplate(z=1.))
     theory()
-    theory_1loop = EFTLikeKaiserTracerPowerSpectrumMultipoles(k=k, nloop=1, template=ShapeFitPowerSpectrumTemplate(z=0.))
+    theory_1loop = EFTLikeKaiserTracerPowerSpectrumMultipoles(k=k, nloop=1, template=ShapeFitPowerSpectrumTemplate(z=1.))
     theory_1loop()
 
     from matplotlib import pyplot as plt
     ax = plt.gca()
-    ax.loglog(theory_1loop.pt.kloop, np.abs(theory_1loop.pt.pk11), label='P11')
-    ax.loglog(theory_1loop.pt.kloop, np.abs(theory_1loop.pt.pk22), label='P22')
-    ax.loglog(theory_1loop.pt.kloop, np.abs(theory_1loop.pt.pk13), label='P13')
+    #for name in ['pk11', 'pk_dd', 'pk_b2d', 'pk_bs2d', 'pk_sig3sq', 'pk_b22', 'pk_b2s2', 'pk_bs22', 'pk_dt', 'pk_b2t', 'pk_bs2t', 'pk_tt']:
+    for name in ['pk_b2d', 'pk_bs2d', 'pk_sig3sq', 'pk_b22', 'pk_b2s2', 'pk_bs22', 'pk_b2t', 'pk_bs2t']:
+        ax.plot(theory_1loop.pt.k11, np.abs(getattr(theory_1loop.pt, name)), label=name)
+    ax.set_yscale('log')
     ax.legend()
-    ax.set_xlim(1e-3, 1e2)
-    ax.set_ylim(1., 1e4)
     plt.show()
 
     ax = plt.gca()

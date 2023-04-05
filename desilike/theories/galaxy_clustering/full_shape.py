@@ -213,48 +213,97 @@ class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPow
         f = self.template.f
         sigmanl2 = kap**2 * (sigmapar**2 * muap**2 + sigmaper**2 * (1. - muap**2))
         damping = np.exp(-sigmanl2 / 2.)
+
+        self.pktable = []
         if self.nloop == 0:
-            k, pk = self.template.k, self.template.pk_dd
+            self.k11 = self.template.k
+            self.pk11 = self.template.pk_dd
+            pktable = jac * damping * interpolate.interp1d(np.log10(self.k11), self.pk11, kind='cubic', axis=-1)(np.log10(kap))
+            self.pktable = {'pk_dd': self.to_poles(pktable), 'pk_dt': self.to_poles(f * muap**2 * pktable), 'pk_tt': self.to_poles(f**2 * muap**4 * pktable)}
+            self.pktable['pk11'] = self.pktable['pk_dd']
+
         elif self.nloop == 1:
             # We could have a speed-up with FFTlog, see https://arxiv.org/pdf/1603.04405.pdf
             from desilike import utils
-            self.kloop = np.linspace(self.k[0] * 0.8, self.k[-1] * 1.2, int(len(self.k) * 1.4 + 0.5))
-            k = self.kloop[:, None]
+            self.k11 = np.linspace(self.k[0] * 0.8, self.k[-1] * 1.2, int(len(self.k) * 1.4 + 0.5))
+            k = self.k11[:, None]
             q = self.template.k
             jq = q**2 * utils.weights_trapz(q) / (4. * np.pi**2)
             mus, wmus = utils.weights_mu(40, method='leggauss', sym=False)
             # Kernel for P13
             if getattr(self, 'kernel13', None) is None:
-                self.kernel13 = 0.
-                for mu, wmu in zip(mus, wmus):
-                    kdq = k * q * mu  # k \cdot q
-                    kq2 = k**2 - 2. * kdq + q**2  # |k - q|^2
-                    F3 = (5. / 63. * k**2 - 11. / 54. * kdq - 1. / 6. * k**2 / q**4 * kdq**2 + 19. / 63. / q**4 * kdq**3
-                          - 23. / 378. * k**2 / q**2 * kdq - 23. / 378. / q**2 * kdq**2 + 1. / 9. / (k**2 * q**2) * kdq**3) / kq2
-                    self.kernel13 += 6. * wmu * jq * F3
+
+                # Integral of F3(q, -q, k) over mu cosine angle between k and q
+                def kernel_ff(x):
+                    toret = (6. / x**2 - 79. + 50. * x**2 - 21. * x**4 + 0.75 * (1. / x - x)**3 * (2. + 7. * x**2) * 2 * np.log(np.abs((x - 1.)/(x + 1.)))) / 504.
+                    mask = x > 10.
+                    toret[mask] = - 61. / 630. + 2. / 105. / x[mask]**2 - 10. / 1323. / x[mask]**4
+                    dx = x - 1.
+                    mask = np.abs(dx) < 0.01
+                    toret[mask] = - 11. / 126. + dx[mask] / 126. - 29. / 252. * dx[mask]**2
+                    return toret / x**2
+
+                def kernel_gg(x):
+                    toret = (6. / x**2 - 41. + 2. * x**2 - 3. * x**4 + 0.75 * (1. / x - x)**3 * (2. + x**2) * 2 * np.log(np.abs((x - 1.)/(x + 1.)))) / 168.
+                    mask = x > 10.
+                    toret[mask] = - 3. / 10. + 26. / 245. / x[mask]**2 - 38. / 2205. / x[mask]**4
+                    dx = x - 1.
+                    mask = np.abs(dx) < 0.01
+                    toret[mask] = - 3. / 14. - 5. / 42. * dx[mask] - 1. / 84. * dx[mask]**2
+                    return toret / x**2
+
+                self.kernel13_d = 2 * jq * kernel_ff(q / k)
+                self.kernel13_t = 2 * jq * kernel_gg(q / k)
+
             # Compute P22
-            self.pk22 = 0.
+            self.pk22_dd, self.pk22_dt, self.pk22_tt = (0., ) * 3
+            self.pk_b2d, self.pk_bs2d, self.pk_b2t, self.pk_bs2t, self.sig3sq, self.pk_b22, self.pk_b2s2, self.pk_bs22 = (0.,) * 8
             for mu, wmu in zip(mus, wmus):
                 kdq = k * q * mu  # k \cdot q
                 kq2 = k**2 - 2. * kdq + q**2  # |k - q|^2
-                qdkq = kdq - q**2
-                F2 = 5. / 7. + 1. / 2. * qdkq * (1. / q**2 + 1. / kq2) + 2. / 7. * qdkq**2 / (q**2 * kq2)
-                self.pk22 += 2 * wmu * np.sum(jq * F2**2 * self.template.pk_dd * np.interp(kq2**0.5, self.template.k, self.template.pk_dd), axis=-1)
-            k = self.kloop
-            self.pk11 = np.interp(k, self.template.k, self.template.pk_dd)
-            self.pk13 = np.sum(self.kernel13 * self.template.pk_dd, axis=-1) * self.pk11
-            pk = self.pk11 + self.pk22 + self.pk13
-        pkap = jac * damping * interpolate.InterpolatedUnivariateSpline(np.log10(k), pk, k=3, ext=2)(np.log10(kap))
-        self.pktable = []
-        self.pktable.append(self.to_poles(pkap))
-        self.pktable.append(self.to_poles(f * muap**2 * pkap))
-        self.pktable.append(self.to_poles(f**2 * muap**4 * pkap))
+                qdkq = kdq - q**2   # k \cdot (k - q)
+                F2_d = 5. / 7. + 1. / 2. * qdkq * (1. / q**2 + 1. / kq2) + 2. / 7. * qdkq**2 / (q**2 * kq2)
+                F2_t = 3. / 7. + 1. / 2. * qdkq * (1. / q**2 + 1. / kq2) + 4. / 7. * qdkq**2 / (q**2 * kq2)
+                # https://arxiv.org/pdf/0902.0991.pdf
+                S = (qdkq)**2 / (q**2 * kq2) - 1. / 3.
+                D = 2. / 7. * (mu**2 - 1.)
+                pk_q = self.template.pk_dd
+                pk_kq = np.interp(kq2**0.5, self.template.k, self.template.pk_dd)
+                jq_pk_q_pk_kq = jq * pk_q * pk_kq
+                self.pk_b2d += wmu * np.sum(jq_pk_q_pk_kq * F2_d, axis=-1)
+                self.pk_bs2d += wmu * np.sum(jq_pk_q_pk_kq * F2_d * S, axis=-1)
+                self.pk_b2t += wmu * np.sum(jq_pk_q_pk_kq * F2_t, axis=-1)
+                self.pk_bs2t += wmu * np.sum(jq_pk_q_pk_kq * F2_t * S, axis=-1)
+                self.sig3sq += wmu * np.sum(105. / 16. * jq * pk_q * (D * S + 8. / 63.), axis=-1)
+                self.pk_b22 += wmu / 2. * np.sum(jq * pk_q * (pk_kq - pk_q), axis=-1)
+                self.pk_b2s2 += wmu / 2. * np.sum(jq * pk_q * (pk_kq * S - 2. / 3. * pk_q), axis=-1)
+                self.pk_bs22 += wmu / 2. * np.sum(jq * pk_q * (pk_kq * S**2 - 4. / 9. * pk_q), axis=-1)
+                self.pk22_dd += 2 * wmu * np.sum(F2_d**2 * jq_pk_q_pk_kq, axis=-1)
+                self.pk22_dt += 2 * wmu * np.sum(F2_d * F2_t * jq_pk_q_pk_kq, axis=-1)
+                self.pk22_tt += 2 * wmu * np.sum(F2_t * F2_t * jq_pk_q_pk_kq, axis=-1)
+
+            self.pk11 = np.interp(self.k11, self.template.k, self.template.pk_dd)
+            pk13_dd = 2. * np.sum(self.kernel13_d * self.template.pk_dd, axis=-1) * self.pk11
+            pk13_tt = 2. * np.sum(self.kernel13_t * self.template.pk_dd, axis=-1) * self.pk11
+            pk13_dt = (pk13_dd + pk13_tt) / 2.
+            self.pk_sig3sq = self.sig3sq * self.pk11
+            self.pk_dd = self.pk11 + self.pk22_dd + pk13_dd
+            self.pk_dt = self.pk11 + self.pk22_dt + pk13_dt
+            self.pk_tt = self.pk11 + self.pk22_tt + pk13_tt
+
+            names = ['pk11', 'pk_dd', 'pk_b2d', 'pk_bs2d', 'pk_sig3sq', 'pk_b22', 'pk_b2s2', 'pk_bs22', 'pk_dt', 'pk_b2t', 'pk_bs2t', 'pk_tt']
+            pktable = np.vstack([getattr(self, name) for name in names])
+            pktable = jac * damping * interpolate.interp1d(np.log10(self.k11), pktable, kind='cubic', axis=-1)(np.log10(kap))
+            pktable = np.concatenate([self.to_poles(pktable[:8, None]), self.to_poles(f * muap**2 * pktable[8:11, None]), self.to_poles(f**2 * muap**4 * pktable[11:, None])])
+            self.pktable = {name: pk for name, pk in zip(names, pktable)}
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'z', 'ells', 'pktable']:
+        for name in ['k', 'z', 'ells', 'nloop']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
+        for name in self.pktable:
+            state[name] = self.pktable[name]
         return state
 
 
@@ -283,7 +332,7 @@ class KaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
     def calculate(self, b1=1., sn0=0.):
         sn0 = np.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * sn0
-        self.power = b1**2 * self.pt.pktable[0] + 2. * b1 * self.pt.pktable[1] + self.pt.pktable[2] + sn0
+        self.power = b1**2 * self.pt.pktable['pk_tt'] + 2. * b1 * self.pt.pktable['pk_dt'] + self.pt.pktable['pk_tt'] + sn0
 
 
 class KaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
@@ -364,14 +413,21 @@ class EFTLikeKaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipol
         self.counterterm_params, self.counterterm_matrix = get_params_matrix('ct')
         self.stochastic_params, self.stochastic_matrix = get_params_matrix('sn')
         params = self.counterterm_params + self.stochastic_params
-        self.required_bias_params = dict(b1=1., **dict(zip(params, [0] * len(params))))
+        self.required_bias_params = dict(b1=1., b2=0., bs=0., b3=0., **dict(zip(params, [0] * len(params))))
         super(EFTLikeKaiserTracerPowerSpectrumMultipoles, self).set_params()
 
-    def calculate(self, b1=1., **params):
-        self.power = b1**2 * self.pt.pktable[0] + 2. * b1 * self.pt.pktable[1] + self.pt.pktable[2]
+    def calculate(self, b1=1., b2=0., bs=0., b3=0., **params):
+        self.power = b1**2 * self.pt.pktable['pk_dd'] + 2. * b1 * self.pt.pktable['pk_dt'] + self.pt.pktable['pk_tt']
+        if self.pt.nloop == 1:
+            bs2 = bs - 4. / 7. * (b1 - 1.)
+            b3nl = b3 + 32. / 315. * (b1 - 1.)
+            #bs2 = b3nl = 0.
+            self.power += 2 * b1 * b2 * self.pt.pktable['pk_b2d'] + 2. * b1 * bs2 * self.pt.pktable['pk_bs2d']\
+                          + 2 * b1 * b3nl * self.pt.pktable['pk_sig3sq'] + b2**2 * self.pt.pktable['pk_b22']\
+                          + 2 * b2 * bs2 * self.pt.pktable['pk_b2s2'] + bs2**2 * self.pt.pktable['pk_bs22']\
+                          + b2 * self.pt.pktable['pk_b2t'] + b3nl * self.pt.pktable['pk_sig3sq']
         values = jnp.array([params.get(name, 0.) for name in self.counterterm_params])
-        p11 = self.pt.pktable[0][self.pt.ells.index(0)]
-        self.power += self.counterterm_matrix.dot(values) * p11
+        self.power += self.counterterm_matrix.dot(values) * self.pt.pktable['pk11'][self.pt.ells.index(0)]
         values = jnp.array([params.get(name, 0.) for name in self.stochastic_params])
         self.power += self.stochastic_matrix.dot(values)
 

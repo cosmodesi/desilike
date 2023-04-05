@@ -304,7 +304,13 @@ class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPow
                 state[name] = getattr(self, name)
         for name in self.pktable:
             state[name] = self.pktable[name]
+        state['names'] = list(self.pktable.keys())
         return state
+
+    def __setstate__(self, state):
+        state = dict(state)
+        self.pktable = {name: state.pop(name, None) for name in state['names']}
+        super(KaiserPowerSpectrumMultipoles, self).__setstate__(state)
 
 
 

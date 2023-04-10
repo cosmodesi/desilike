@@ -665,12 +665,11 @@ class Fisher(BaseClass):
         """
         if mpicomm is None:
             mpicomm = likelihood.mpicomm
-        self.mpicomm = mpicomm
         self.likelihood = likelihood
 
         solved_params = self.likelihood.all_params.select(solved=True)
         if solved_params:
-            if self.mpicomm.rank == 0:
+            if mpicomm.rank == 0:
                 import warnings
                 warnings.warn('solved parameters: {}; cannot proceed with solved parameters, so we will work with likelihood.deepcopy(), varying solved parameters'.format(solved_params))
             self.likelihood = self.likelihood.deepcopy()
@@ -740,10 +739,25 @@ class Fisher(BaseClass):
                     toret.append({'offset': offset, 'gradient': gradient, 'hessian': hessian})
                 return toret
 
-        self.prior_differentiation = Differentiation(prior_calculator, getter=prior_getter, order=0 if prior_simplified else 2, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=self.mpicomm)
+        self.prior_differentiation = Differentiation(prior_calculator, getter=prior_getter, order=0 if prior_simplified else 2, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=mpicomm)
         self._prior_finalize = prior_finalize
-        self.likelihood_differentiation = Differentiation(self.likelihood, getter=getter, order=order, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=self.mpicomm)
+        self.likelihood_differentiation = Differentiation(self.likelihood, getter=getter, order=order, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=mpicomm)
         self._likelihood_finalize = likelihood_finalize
+        self.mpicomm = mpicomm
+
+    @property
+    def mpicomm(self):
+        return self._mpicomm
+
+    @mpicomm.setter
+    def mpicomm(self, mpicomm):
+        self._mpicomm = mpicomm
+        try:
+            self.prior_differentiation.mpicomm = self._mpicomm
+            self.likelihood_differentiation.mpicomm = self._mpicomm
+        except AttributeError:
+            pass
+
 
     def run(self, **params):
         diff = self.mpicomm.bcast(self.prior_differentiation(**params), root=0)

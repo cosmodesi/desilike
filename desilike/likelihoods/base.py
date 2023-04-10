@@ -174,7 +174,6 @@ class BaseLikelihood(BaseCalculator):
 
 
 class BaseGaussianLikelihood(BaseLikelihood):
-
     """
     Base class for Gaussian likelihood, which allows parameters the theory is linear with to be analytically marginalized over.
 

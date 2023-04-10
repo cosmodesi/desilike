@@ -4,6 +4,7 @@ import numpy as np
 from scipy import interpolate
 
 from desilike.jax import numpy as jnp
+from desilike import utils
 from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
 from .base import BaseTheoryPowerSpectrumMultipoles, BaseTheoryCorrelationFunctionMultipoles, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
 from .power_template import DirectPowerSpectrumTemplate, StandardPowerSpectrumTemplate
@@ -199,14 +200,10 @@ class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPow
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
     """
     _params = {'sigmapar': {'value': 0., 'fixed': True}, 'sigmaper': {'value': 0, 'fixed': True}}
-    _default_options = dict(nloop=0)
 
     def initialize(self, *args, mu=8, **kwargs):
         super(KaiserPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
         #self.template.init.update(k=np.logspace(-4, 2, 1000))
-        self.nloop = int(self.options['nloop'])
-        if self.nloop not in [0, 1]:
-            raise ValueError('nloop must be one of 0 (linear) or 1 (1-loop)')
 
     def calculate(self, sigmapar=0., sigmaper=0.):
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
@@ -215,91 +212,15 @@ class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPow
         damping = np.exp(-sigmanl2 / 2.)
 
         self.pktable = []
-        if self.nloop == 0:
-            self.k11 = self.template.k
-            self.pk11 = self.template.pk_dd
-            pktable = jac * damping * interpolate.interp1d(np.log10(self.k11), self.pk11, kind='cubic', axis=-1)(np.log10(kap))
-            self.pktable = {'pk_dd': self.to_poles(pktable), 'pk_dt': self.to_poles(f * muap**2 * pktable), 'pk_tt': self.to_poles(f**2 * muap**4 * pktable)}
-            self.pktable['pk11'] = self.pktable['pk_dd']
-
-        elif self.nloop == 1:
-            # We could have a speed-up with FFTlog, see https://arxiv.org/pdf/1603.04405.pdf
-            from desilike import utils
-            self.k11 = np.linspace(self.k[0] * 0.8, self.k[-1] * 1.2, int(len(self.k) * 1.4 + 0.5))
-            k = self.k11[:, None]
-            q = self.template.k
-            jq = q**2 * utils.weights_trapz(q) / (4. * np.pi**2)
-            mus, wmus = utils.weights_mu(40, method='leggauss', sym=False)
-            # Kernel for P13
-            if getattr(self, 'kernel13', None) is None:
-
-                # Integral of F3(q, -q, k) over mu cosine angle between k and q
-                def kernel_ff(x):
-                    toret = (6. / x**2 - 79. + 50. * x**2 - 21. * x**4 + 0.75 * (1. / x - x)**3 * (2. + 7. * x**2) * 2 * np.log(np.abs((x - 1.)/(x + 1.)))) / 504.
-                    mask = x > 10.
-                    toret[mask] = - 61. / 630. + 2. / 105. / x[mask]**2 - 10. / 1323. / x[mask]**4
-                    dx = x - 1.
-                    mask = np.abs(dx) < 0.01
-                    toret[mask] = - 11. / 126. + dx[mask] / 126. - 29. / 252. * dx[mask]**2
-                    return toret / x**2
-
-                def kernel_gg(x):
-                    toret = (6. / x**2 - 41. + 2. * x**2 - 3. * x**4 + 0.75 * (1. / x - x)**3 * (2. + x**2) * 2 * np.log(np.abs((x - 1.)/(x + 1.)))) / 168.
-                    mask = x > 10.
-                    toret[mask] = - 3. / 10. + 26. / 245. / x[mask]**2 - 38. / 2205. / x[mask]**4
-                    dx = x - 1.
-                    mask = np.abs(dx) < 0.01
-                    toret[mask] = - 3. / 14. - 5. / 42. * dx[mask] - 1. / 84. * dx[mask]**2
-                    return toret / x**2
-
-                self.kernel13_d = 2 * jq * kernel_ff(q / k)
-                self.kernel13_t = 2 * jq * kernel_gg(q / k)
-
-            # Compute P22
-            self.pk22_dd, self.pk22_dt, self.pk22_tt = (0., ) * 3
-            self.pk_b2d, self.pk_bs2d, self.pk_b2t, self.pk_bs2t, self.sig3sq, self.pk_b22, self.pk_b2s2, self.pk_bs22 = (0.,) * 8
-            for mu, wmu in zip(mus, wmus):
-                kdq = k * q * mu  # k \cdot q
-                kq2 = k**2 - 2. * kdq + q**2  # |k - q|^2
-                qdkq = kdq - q**2   # k \cdot (k - q)
-                F2_d = 5. / 7. + 1. / 2. * qdkq * (1. / q**2 + 1. / kq2) + 2. / 7. * qdkq**2 / (q**2 * kq2)
-                F2_t = 3. / 7. + 1. / 2. * qdkq * (1. / q**2 + 1. / kq2) + 4. / 7. * qdkq**2 / (q**2 * kq2)
-                # https://arxiv.org/pdf/0902.0991.pdf
-                S = (qdkq)**2 / (q**2 * kq2) - 1. / 3.
-                D = 2. / 7. * (mu**2 - 1.)
-                pk_q = self.template.pk_dd
-                pk_kq = np.interp(kq2**0.5, self.template.k, self.template.pk_dd)
-                jq_pk_q_pk_kq = jq * pk_q * pk_kq
-                self.pk_b2d += wmu * np.sum(jq_pk_q_pk_kq * F2_d, axis=-1)
-                self.pk_bs2d += wmu * np.sum(jq_pk_q_pk_kq * F2_d * S, axis=-1)
-                self.pk_b2t += wmu * np.sum(jq_pk_q_pk_kq * F2_t, axis=-1)
-                self.pk_bs2t += wmu * np.sum(jq_pk_q_pk_kq * F2_t * S, axis=-1)
-                self.sig3sq += wmu * np.sum(105. / 16. * jq * pk_q * (D * S + 8. / 63.), axis=-1)
-                self.pk_b22 += wmu / 2. * np.sum(jq * pk_q * (pk_kq - pk_q), axis=-1)
-                self.pk_b2s2 += wmu / 2. * np.sum(jq * pk_q * (pk_kq * S - 2. / 3. * pk_q), axis=-1)
-                self.pk_bs22 += wmu / 2. * np.sum(jq * pk_q * (pk_kq * S**2 - 4. / 9. * pk_q), axis=-1)
-                self.pk22_dd += 2 * wmu * np.sum(F2_d**2 * jq_pk_q_pk_kq, axis=-1)
-                self.pk22_dt += 2 * wmu * np.sum(F2_d * F2_t * jq_pk_q_pk_kq, axis=-1)
-                self.pk22_tt += 2 * wmu * np.sum(F2_t * F2_t * jq_pk_q_pk_kq, axis=-1)
-
-            self.pk11 = np.interp(self.k11, self.template.k, self.template.pk_dd)
-            pk13_dd = 2. * np.sum(self.kernel13_d * self.template.pk_dd, axis=-1) * self.pk11
-            pk13_tt = 2. * np.sum(self.kernel13_t * self.template.pk_dd, axis=-1) * self.pk11
-            pk13_dt = (pk13_dd + pk13_tt) / 2.
-            self.pk_sig3sq = self.sig3sq * self.pk11
-            self.pk_dd = self.pk11 + self.pk22_dd + pk13_dd
-            self.pk_dt = self.pk11 + self.pk22_dt + pk13_dt
-            self.pk_tt = self.pk11 + self.pk22_tt + pk13_tt
-
-            names = ['pk11', 'pk_dd', 'pk_b2d', 'pk_bs2d', 'pk_sig3sq', 'pk_b22', 'pk_b2s2', 'pk_bs22', 'pk_dt', 'pk_b2t', 'pk_bs2t', 'pk_tt']
-            pktable = np.vstack([getattr(self, name) for name in names])
-            pktable = jac * damping * interpolate.interp1d(np.log10(self.k11), pktable, kind='cubic', axis=-1)(np.log10(kap))
-            pktable = np.concatenate([self.to_poles(pktable[:8, None]), self.to_poles(f * muap**2 * pktable[8:11, None]), self.to_poles(f**2 * muap**4 * pktable[11:, None])])
-            self.pktable = {name: pk for name, pk in zip(names, pktable)}
+        self.k11 = self.template.k
+        self.pk11 = self.template.pk_dd
+        pktable = jac * damping * interpolate.interp1d(np.log10(self.k11), self.pk11, kind='cubic', axis=-1)(np.log10(kap))
+        self.pktable = {'pk_dd': self.to_poles(pktable), 'pk_dt': self.to_poles(f * muap**2 * pktable), 'pk_tt': self.to_poles(f**2 * muap**4 * pktable)}
+        self.pktable['pk11'] = self.pktable['pk_dd']
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'z', 'ells', 'nloop']:
+        for name in ['k', 'z', 'ells']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         for name in self.pktable:
@@ -311,7 +232,6 @@ class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPow
         state = dict(state)
         self.pktable = {name: state.pop(name, None) for name in state['names']}
         super(KaiserPowerSpectrumMultipoles, self).__setstate__(state)
-
 
 
 class KaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
@@ -333,7 +253,7 @@ class KaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
     """
     def set_params(self):
-        self.required_bias_params = dict(b1=1., sn0=0)
+        self.required_bias_params.update(dict(b1=1., sn0=0))
         super(KaiserTracerPowerSpectrumMultipoles, self).set_params()
 
     def calculate(self, b1=1., sn0=0.):
@@ -347,40 +267,28 @@ class KaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFro
 
     Parameters
     ----------
-    k : array, default=None
-        Theory wavenumbers where to evaluate multipoles.
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
 
     ells : tuple, default=(0, 2, 4)
         Multipoles to compute.
 
-    mu : int, default=8
-        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
-
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    **kwargs : dict
+        Options, defaults to: ``mu=8``.
     """
 
 
-class EFTLikeKaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
+class BaseEFTLikeTracerPowerSpectrumMultipoles(object):
     r"""
-    Kaiser tracer power spectrum multipoles, with EFT-like counterterms.
-    Can be exactly marginalized over counter terms and stochastic parameters ct*, sn*.
-
-    Parameters
-    ----------
-    k : array, default=None
-        Theory wavenumbers where to evaluate multipoles.
-
-    ells : tuple, default=(0, 2, 4)
-        Multipoles to compute.
-
-    mu : int, default=8
-        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
-
-    template : BasePowerSpectrumTemplate
-        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+    Base class for tracer power spectrum multipoles with EFT-like counter and stochastic terms.
+    Can be exactly marginalized over counter terms and stochastic terms ct*, sn*.
     """
-    pt_cls = 'KaiserPowerSpectrumMultipoles'
+    def initialize(self, *args, **kwargs):
+        self.pt_cls = self.__class__.__name__.replace('EFTLike', '').replace('Tracer', '')
+        super(BaseEFTLikeTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
 
     def set_params(self):
         self.kp = 1.
@@ -419,29 +327,338 @@ class EFTLikeKaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipol
         self.counterterm_params, self.counterterm_matrix = get_params_matrix('ct')
         self.stochastic_params, self.stochastic_matrix = get_params_matrix('sn')
         params = self.counterterm_params + self.stochastic_params
-        self.required_bias_params = dict(b1=1., b2=0., bs=0., b3=0., **dict(zip(params, [0] * len(params))))
-        super(EFTLikeKaiserTracerPowerSpectrumMultipoles, self).set_params()
+        self.required_bias_params = dict(**self.required_bias_params, **dict(zip(params, [0] * len(params))))
+        super(BaseEFTLikeTracerPowerSpectrumMultipoles, self).set_params()
 
-    def calculate(self, b1=1., b2=0., bs=0., b3=0., **params):
-        self.power = b1**2 * self.pt.pktable['pk_dd'] + 2. * b1 * self.pt.pktable['pk_dt'] + self.pt.pktable['pk_tt']
-        if self.pt.nloop == 1:
-            bs2 = bs - 4. / 7. * (b1 - 1.)
-            b3nl = b3 + 32. / 315. * (b1 - 1.)
-            #bs2 = b3nl = 0.
-            self.power += 2 * b1 * b2 * self.pt.pktable['pk_b2d'] + 2. * b1 * bs2 * self.pt.pktable['pk_bs2d']\
-                          + 2 * b1 * b3nl * self.pt.pktable['pk_sig3sq'] + b2**2 * self.pt.pktable['pk_b22']\
-                          + 2 * b2 * bs2 * self.pt.pktable['pk_b2s2'] + bs2**2 * self.pt.pktable['pk_bs22']\
-                          + b2 * self.pt.pktable['pk_b2t'] + b3nl * self.pt.pktable['pk_sig3sq']
-        values = jnp.array([params.get(name, 0.) for name in self.counterterm_params])
-        self.power += self.counterterm_matrix.dot(values) * self.pt.pktable['pk11'][self.pt.ells.index(0)]
-        values = jnp.array([params.get(name, 0.) for name in self.stochastic_params])
-        self.power += self.stochastic_matrix.dot(values)
+    def calculate(self, **params):
+        counterterm_values = jnp.array([params.pop(name, 0.) for name in self.counterterm_params])
+        stochastic_values = jnp.array([params.pop(name, 0.) for name in self.stochastic_params])
+        super(BaseEFTLikeTracerPowerSpectrumMultipoles, self).calculate(**params)
+        self.power += self.counterterm_matrix.dot(counterterm_values) * self.pt.pktable['pk11'][self.pt.ells.index(0)]
+        self.power += self.stochastic_matrix.dot(stochastic_values)
+
+
+class EFTLikeKaiserTracerPowerSpectrumMultipoles(BaseEFTLikeTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles):
+    r"""
+    Kaiser tracer power spectrum multipoles with EFT-like counter and stochastic terms.
+    Can be exactly marginalized over counter terms and stochastic terms ct*, sn*.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    mu : int, default=8
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+    """
 
 
 class EFTLikeKaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
     r"""
-    Kaiser tracer correlation function multipoles, with EFT-like counterterms.
-    Can be exactly marginalized over counter terms and stochastic parameters ct*, sn*.
+    EFT-like Kaiser tracer correlation function multipoles.
+    Can be exactly marginalized over counter terms and stochastic terms ct*, sn*.
+
+    Parameters
+    ----------
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    **kwargs : dict
+        Options, defaults to: ``mu=8``.
+    """
+
+
+class TNSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+    r"""
+    TNS power spectrum multipoles.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    mu : int, default=8
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+    """
+    _default_options = dict(nloop=1)
+
+    def initialize(self, *args, mu=8, **kwargs):
+        super(TNSPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
+        self.nloop = int(self.options['nloop'])
+        if self.nloop not in [1]:
+            raise ValueError('nloop must be one of 1 (1-loop)')
+
+    def calculate(self):
+        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        f = self.template.f
+
+        self.pktable = []
+        # We could have a speed-up with FFTlog, see https://arxiv.org/pdf/1603.04405.pdf
+        self.k11 = np.linspace(self.k[0] * 0.8, self.k[-1] * 1.2, int(len(self.k) * 1.4 + 0.5))
+        k = self.k11[:, None]
+        q = self.template.k
+        wq = utils.weights_trapz(q)
+        jq = q**2 * wq / (4. * np.pi**2)
+        mus, wmus = utils.weights_mu(20, method='leggauss', sym=False)
+        x = q / k
+        # Kernel for P13
+        if any(getattr(self, name, None) is None for name in ['kernel13_d, kernel13_t']):
+
+            # Integral of F3(q, -q, k) over mu cosine angle between k and q
+            def kernel_ff(x):
+                toret = (6. / x**2 - 79. + 50. * x**2 - 21. * x**4 + 0.75 * (1. / x - x)**3 * (2. + 7. * x**2) * 2 * np.log(np.abs((x - 1.) / (x + 1.)))) / 504.
+                mask = x > 10.
+                toret[mask] = - 61. / 630. + 2. / 105. / x[mask]**2 - 10. / 1323. / x[mask]**4
+                dx = x - 1.
+                mask = np.abs(dx) < 0.01
+                toret[mask] = - 11. / 126. + dx[mask] / 126. - 29. / 252. * dx[mask]**2
+                return toret / x**2
+
+            def kernel_gg(x):
+                toret = (6. / x**2 - 41. + 2. * x**2 - 3. * x**4 + 0.75 * (1. / x - x)**3 * (2. + x**2) * 2 * np.log(np.abs((x - 1.) / (x + 1.)))) / 168.
+                mask = x > 10.
+                toret[mask] = - 3. / 10. + 26. / 245. / x[mask]**2 - 38. / 2205. / x[mask]**4
+                dx = x - 1.
+                mask = np.abs(dx) < 0.01
+                toret[mask] = - 3. / 14. - 5. / 42. * dx[mask] - 1. / 84. * dx[mask]**2
+                return toret / x**2
+
+            self.kernel13_d = 2 * jq * kernel_ff(x)
+            self.kernel13_t = 2 * jq * kernel_gg(x)
+
+            def kernel_a(x):
+                toret = np.zeros((5,) + x.shape, dtype='f8')
+                logx = np.zeros_like(x)
+                mask = np.abs(x - 1) > 1e-16
+                logx[mask] = np.log(np.abs((x[mask] + 1) / (x[mask] - 1)))
+                toret[0] = -1. / 84. / x * (2 * x * (19 - 24 * x**2 + 9 * x**4) - 9 * (x**2 - 1)**3 * logx)
+                toret[1] = 1. / 112. / x**3 * (2 * x * (x**2 + 1) * (3 - 14 * x**2 + 3 * x**4) - 3 * (x**2 - 1)**4 * logx)
+                toret[2] = 1. / 336. / x**3 * (2 * x * (9 - 185 * x**2 + 159 * x**4 - 63 * x**6) + 9 * (x**2 - 1)**3 * (7 * x**2 + 1) * logx)
+                toret[4] = 1. / 336. / x**3 * (2 * x * (9 - 109 * x**2 + 63 * x**4 - 27 * x**6) + 9 * (x**2 - 1)**3 * (3 * x**2 + 1) * logx)
+
+                mask = x < 1e-4
+                xm = x[mask]
+                toret[0][mask] = 8 * xm**8 / 735 + 24 * xm**6 / 245 - 24 * xm**4 / 35 + 8 * xm**2 / 7 - 2. / 3
+                toret[1][mask] = - 16 * xm**8 / 8085 - 16 * xm**6 / 735 + 48 * xm**4 / 245 - 16 * xm**2 / 35
+                toret[2][mask] = 32 * xm**8 / 1617 + 128 * xm**6 / 735 - 288 * xm**4 / 245 + 64 * xm**2 / 35 - 4. / 3
+                toret[4][mask] = 24 * xm**8 / 2695 + 8 * xm**6 / 105 - 24 * xm**4 / 49 + 24 * xm**2 / 35 - 2. / 3
+
+                mask = x > 1e2
+                xm = x[mask]
+                toret[0][mask] = 2. / 105 - 24 / (245 * xm**2) - 8 / (735 * xm**4) - 8 / (2695 * xm**6) - 8 / (7007 * xm**8)
+                toret[1][mask] = -16. / 35 + 48 / (245 * xm**2) - 16 / (735 * xm**4) - 16 / (8085 * xm**6) - 16 / (35035 * xm**8)
+                toret[2][mask] = -44. / 105 - 32 / (735 * xm**4) - 64 / (8085 * xm**6) - 96 / (35035 * xm**8)
+                toret[4][mask] = -46. / 105 + 24 / (245 * xm**2) - 8 / (245 * xm**4) - 8 / (1617 * xm**6) - 8 / (5005 * xm**8)
+
+                toret[3] = toret[1]
+                return toret / x**2
+
+            self.kernel_a = jq * kernel_a(x)
+
+        # Compute P22
+        self.pk22_dd, self.pk22_dt, self.pk22_tt = (0., ) * 3
+        self.pk_b2d, self.pk_bs2d, self.pk_b2t, self.pk_bs2t, self.sig3sq, self.pk_b22, self.pk_b2s2, self.pk_bs22 = (0.,) * 8
+        self.A = np.zeros((5,) + self.k11.shape, dtype='f8')
+        self.B = np.zeros((12,) + self.k11.shape, dtype='f8')
+        kernel_A, kernel_tA = (np.zeros((5,) + x.shape, dtype='f8') for i in range(2))
+        pk_k = np.interp(self.k11, self.template.k, self.template.pk_dd)
+        pk_q = self.template.pk_dd
+
+        for mu, wmu in zip(mus, wmus):
+            kdq = k * q * mu  # k \cdot q
+            kq2 = k**2 - 2. * kdq + q**2  # |k - q|^2
+            qdkq = kdq - q**2   # k \cdot (k - q)
+            F2_d = 5. / 7. + 1. / 2. * qdkq * (1. / q**2 + 1. / kq2) + 2. / 7. * qdkq**2 / (q**2 * kq2)
+            F2_t = 3. / 7. + 1. / 2. * qdkq * (1. / q**2 + 1. / kq2) + 4. / 7. * qdkq**2 / (q**2 * kq2)
+            # https://arxiv.org/pdf/0902.0991.pdf
+            S = (qdkq)**2 / (q**2 * kq2) - 1. / 3.
+            D = 2. / 7. * (mu**2 - 1.)
+            pk_kq = np.interp(kq2**0.5, self.template.k, self.template.pk_dd, left=0., right=0.)
+            jq_pk_q_pk_kq = jq * pk_q * pk_kq
+            self.pk_b2d += wmu * np.sum(jq_pk_q_pk_kq * F2_d, axis=-1)
+            self.pk_bs2d += wmu * np.sum(jq_pk_q_pk_kq * F2_d * S, axis=-1)
+            self.pk_b2t += wmu * np.sum(jq_pk_q_pk_kq * F2_t, axis=-1)
+            self.pk_bs2t += wmu * np.sum(jq_pk_q_pk_kq * F2_t * S, axis=-1)
+            self.sig3sq += wmu * np.sum(105. / 16. * jq * pk_q * (D * S + 8. / 63.), axis=-1)
+            self.pk_b22 += wmu / 2. * np.sum(jq * pk_q * (pk_kq - pk_q), axis=-1)
+            self.pk_b2s2 += wmu / 2. * np.sum(jq * pk_q * (pk_kq * S - 2. / 3. * pk_q), axis=-1)
+            self.pk_bs22 += wmu / 2. * np.sum(jq * pk_q * (pk_kq * S**2 - 4. / 9. * pk_q), axis=-1)
+            self.pk22_dd += 2 * wmu * np.sum(F2_d**2 * jq_pk_q_pk_kq, axis=-1)
+            self.pk22_dt += 2 * wmu * np.sum(F2_d * F2_t * jq_pk_q_pk_kq, axis=-1)
+            self.pk22_tt += 2 * wmu * np.sum(F2_t * F2_t * jq_pk_q_pk_kq, axis=-1)
+
+            xmu = kq2 / k**2
+            kernel_A[0] = - x**3 / 7. * (mu + 6 * mu**3 + x**2 * mu * (-3 + 10 * mu**2) + x * (-3 + mu**2 - 12 * mu**4))
+            kernel_A[1] = x**4 / 14. * (mu**2 - 1) * (-1 + 7 * x * mu - 6 * mu**2)
+            kernel_A[2] = x**3 / 14. * (x**2 * mu * (13 - 41 * mu**2) - 4 * (mu + 6 * mu**3) + x * (5 + 9 * mu**2 + 42 * mu**4))
+            kernel_A[3] = kernel_A[1]
+            kernel_A[4] = x**3 / 14. * (1 - 7 * x * mu + 6 * mu**2) * (-2 * mu + x * (-1 + 3 * mu**2))
+            kernel_tA[0] = 1. / 7. * (mu + x - 2 * x * mu**2) * (3 * x + 7 * mu - 10 * x * mu**2)
+            kernel_tA[1] = x / 14. * (mu**2 - 1) * (3 * x + 7 * mu - 10 * x * mu**2)
+            kernel_tA[2] = 1. / 14. * (28 * mu**2 + x * mu * (25 - 81 * mu**2) + x**2 * (1 - 27 * mu**2 + 54 * mu**4))
+            kernel_tA[3] = x / 14. * (1 - mu**2) * (x - 7 * mu + 6 * x * mu**2)
+            kernel_tA[4] = 1. / 14. * (x - 7 * mu + 6 * x * mu**2) * (-2 * mu - x + 3 * x * mu**2)
+            # Taruya 2010 (arXiv 1006.0699v1) eq A3
+            self.A += wmu * np.sum(jq / x**2 * (kernel_A * pk_k[:, None] + kernel_tA * pk_q) * pk_kq / xmu**2, axis=-1)
+
+            jq_pk_q_pk_kq /= x**2 * xmu
+            self.B[0] += wmu * np.sum(x**2 * (mu**2 - 1.) / 2. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 1,1,1
+            self.B[1] += wmu * np.sum(3. * x**2 * (mu**2 - 1.)**2 / 8. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 1,1,2
+            self.B[2] += wmu * np.sum(3. * x**4 * (mu**2 - 1.)**2 / xmu / 8. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 1,2,1
+            self.B[3] += wmu * np.sum(5. * x**4 * (mu**2 - 1.)**3 / xmu / 16. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 1,2,2
+            self.B[4] += wmu * np.sum(x * (x + 2. * mu - 3. * x * mu**2) / 2. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 2,1,1
+            self.B[5] += wmu * np.sum(- 3. * x * (mu**2 - 1.) * (-x - 2. * mu + 5. * x * mu**2) / 4. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 2,1,2
+            self.B[6] += wmu * np.sum(3. * x**2 * (mu**2 - 1.) * (-2. + x**2 + 6. * x * mu - 5. * x**2 * mu**2) / xmu / 4. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 2,2,1
+            self.B[7] += wmu * np.sum(- 3. * x**2 * (mu**2 - 1.)**2 * (6. - 5. * x**2 - 30. * x * mu + 35. * x**2 * mu**2) / xmu / 16. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 2,2,2
+            self.B[8] += wmu * np.sum(x * (4. * mu * (3. - 5. * mu**2) + x * (3. - 30. * mu**2 + 35. * mu**4)) / 8. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 3,1,2
+            self.B[9] += wmu * np.sum(x * (-8. * mu + x * (-12. + 36. * mu**2 + 12. * x * mu * (3. - 5. * mu**2) + x**2 * (3. - 30. * mu**2 + 35. * mu**4))) / xmu / 8. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 3,2,1
+            self.B[10] += wmu * np.sum(3. * x * (mu**2 - 1.) * (-8. * mu + x * (-12. + 60. * mu**2 + 20. * x * mu * (3. - 7. * mu**2) + 5. * x**2 * (1. - 14. * mu**2 + 21. * mu**4))) / xmu / 16. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 3,2,2
+            self.B[11] += wmu * np.sum(x * (8. * mu * (-3. + 5. * mu**2) - 6. * x * (3. - 30. * mu**2 + 35. * mu**4) + 6. * x**2 * mu * (15. - 70. * mu**2 + 63 * mu**4) + x**3 * (5. - 21. * mu**2 * (5. - 15. * mu**2 + 11. * mu**4))) / xmu / 16. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 4,2,2
+
+        self.A += pk_k * np.sum(self.kernel_a * pk_q, axis=-1)
+        self.pk11 = pk_k
+        pk13_dd = 2. * np.sum(self.kernel13_d * self.template.pk_dd, axis=-1) * pk_k
+        pk13_tt = 2. * np.sum(self.kernel13_t * self.template.pk_dd, axis=-1) * pk_k
+        pk13_dt = (pk13_dd + pk13_tt) / 2.
+        self.pk_sig3sq = self.sig3sq * pk_k
+        self.pk_dd = self.pk11 + self.pk22_dd + pk13_dd
+        self.pk_dt = self.pk11 + self.pk22_dt + pk13_dt
+        self.pk_tt = self.pk11 + self.pk22_tt + pk13_tt
+
+        names = ['pk11', 'pk_dd', 'pk_b2d', 'pk_bs2d', 'pk_sig3sq', 'pk_b22', 'pk_b2s2', 'pk_bs22', 'pk_dt', 'pk_b2t', 'pk_bs2t', 'pk_tt', 'A', 'B']
+        pktable = np.vstack([getattr(self, name) for name in names])
+        pktable = jac * interpolate.interp1d(np.log10(self.k11), pktable, kind='cubic', axis=-1)(np.log10(kap))
+        A = pktable[12:]
+        B = pktable[17:]
+        #self._A = A
+        #self._B = np.array([B[0], -(B[1] + B[2]), B[3], B[4], -(B[5] + B[6]), B[7], -(B[8] + B[9]), B[10], B[11]])
+        A = np.array([f * A[0] * muap**2, f**2 * (A[1] * muap**2 + A[2] * muap**4), f**3 * (A[3] * muap**4 + A[4] * muap**6)])  # for b1^2, b1, 1
+        B = np.array([f**2 * (B[0] * muap**2 + B[4] * muap**4),
+                      -f**3 * ((B[1] + B[2]) * muap**2 + (B[5] + B[6]) * muap**4 + (B[8] + B[9]) * muap**6),
+                      f**4 * (B[3] * muap**2 + B[7] * muap**4 + B[10] * muap**6 + B[11] * muap**8)])   # for b1^2, b1, 1
+
+        pktable = [self.to_poles(pktable[:8, None]), self.to_poles(f * muap**2 * pktable[8:11, None]), self.to_poles(f**2 * muap**4 * pktable[11:12, None])]
+        self.pktable = {}
+        for pkt in pktable:
+            for pk in pkt: self.pktable[names[len(self.pktable)]] = pk
+        self.pktable['A'] = self.to_poles(A[:, None, ...])
+        self.pktable['B'] = self.to_poles(B[:, None, ...])
+
+    def __getstate__(self):
+        state = {}
+        for name in ['k', 'z', 'ells', 'nloop']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        for name in self.pktable:
+            state[name] = self.pktable[name]
+        state['names'] = list(self.pktable.keys())
+        return state
+
+    def __setstate__(self, state):
+        state = dict(state)
+        self.pktable = {name: state.pop(name, None) for name in state['names']}
+        super(TNSPowerSpectrumMultipoles, self).__setstate__(state)
+
+
+class TNSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
+    r"""
+    TNS tracer power spectrum multipoles.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    mu : int, default=8
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+    """
+    def set_params(self):
+        self.required_bias_params.update(dict(b1=1., b2=0., bs=0., b3=0.))
+        super(TNSTracerPowerSpectrumMultipoles, self).set_params()
+
+    def calculate(self, b1=1., b2=0., bs=0., b3=0., sn0=0):
+        self.power = b1**2 * self.pt.pktable['pk_dd'] + 2. * b1 * self.pt.pktable['pk_dt'] + self.pt.pktable['pk_tt'] + sn0
+        bs2 = bs - 4. / 7. * (b1 - 1.)
+        b3nl = b3 + 32. / 315. * (b1 - 1.)
+        #bs2 = b3nl = 0.
+        self.power += 2 * b1 * b2 * self.pt.pktable['pk_b2d'] + 2. * b1 * bs2 * self.pt.pktable['pk_bs2d']\
+                      + 2 * b1 * b3nl * self.pt.pktable['pk_sig3sq'] + b2**2 * self.pt.pktable['pk_b22']\
+                      + 2 * b2 * bs2 * self.pt.pktable['pk_b2s2'] + bs2**2 * self.pt.pktable['pk_bs22']\
+                      + b2 * self.pt.pktable['pk_b2t'] + b3nl * self.pt.pktable['pk_sig3sq']
+        self.power += b1**2 * (self.pt.pktable['A'][0] + self.pt.pktable['B'][0])
+        self.power += b1 * (self.pt.pktable['A'][1] + self.pt.pktable['B'][1])
+        self.power += (self.pt.pktable['A'][2] + self.pt.pktable['B'][2])
+
+
+class TNSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
+    r"""
+    TNS tracer correlation function multipoles.
+
+    Parameters
+    ----------
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    **kwargs : dict
+        Options, defaults to: ``mu=8``.
+    """
+
+
+class EFTLikeTNSTracerPowerSpectrumMultipoles(BaseEFTLikeTracerPowerSpectrumMultipoles, TNSTracerPowerSpectrumMultipoles):
+    r"""
+    TNS tracer power spectrum multipoles with EFT-like counter and stochastic terms.
+    Can be exactly marginalized over counter terms and stochastic terms ct*, sn*.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    mu : int, default=8
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+    """
+
+
+class EFTLikeTNSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
+    r"""
+    TNS tracer correlation function multipoles with EFT-like counter and stochastic terms.
+    Can be exactly marginalized over counter terms and stochastic terms ct*, sn*.
 
     Parameters
     ----------

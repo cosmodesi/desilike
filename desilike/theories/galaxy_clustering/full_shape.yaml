@@ -287,6 +287,229 @@ params:
     latex: \Sigma_{\perp}
     fixed: True
 
+
+---
+
+class: TNSTracerPowerSpectrumMultipoles
+
+params:
+  b1:
+    prior:
+      dist: uniform
+      limits: [0., 4.0]
+    ref:
+      limits: [1.0, 2.0]
+    latex: b_{1}
+  b2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{2}
+  bs:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{s}
+    fixed: True
+  b3:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{3}
+    fixed: True
+
+---
+
+class: TNSTracerCorrelationFunctionMultipoles
+
+params:
+  b1:
+    prior:
+      dist: uniform
+      limits: [0., 4.0]
+    ref:
+      limits: [1.0, 2.0]
+    latex: b_{1}
+  b2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{2}
+  bs:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{s}
+    fixed: True
+  b3:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{3}
+    fixed: True
+
+
+---
+
+class: EFTLikeTNSTracerPowerSpectrumMultipoles
+
+params:
+  b1:
+    prior:
+      dist: uniform
+      limits: [0., 4.0]
+    ref:
+      limits: [1.0, 2.0]
+    latex: b_{1}
+  b2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{2}
+  bs:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{s}
+    fixed: True
+  b3:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{3}
+    fixed: True
+  ct[:5:2]_2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{[], 2}
+  sn0:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1e7
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: s_{n, 0}
+  sn[:5:2]_2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1e7
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: s_{[], 2}
+
+---
+
+class: EFTLikeTNSTracerCorrelationFunctionMultipoles
+
+params:
+  b1:
+    prior:
+      dist: uniform
+      limits: [0., 4.0]
+    ref:
+      limits: [1.0, 2.0]
+    latex: b_{1}
+  b2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{2}
+    fixed: True
+  bs:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{s}
+  b3:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{3}
+    fixed: True
+  ct[:5:2]_2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{[], 2}
+
+
 ---
 
 class: LPTVelocileptorsTracerPowerSpectrumMultipoles

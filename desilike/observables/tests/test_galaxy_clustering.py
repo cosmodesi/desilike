@@ -581,6 +581,51 @@ def test_compression_window():
     plt.show()
 
 
+def test_shapefit(run=True, plot=True):
+    from cosmoprimo.fiducial import DESI
+
+    from desilike.samples import Chain
+    from desilike.observables.galaxy_clustering import ShapeFitCompressionObservable
+    from desilike.emulators import Emulator, TaylorEmulatorEngine
+
+    z = 0.8
+
+    if run:
+        chain_shapefit = np.loadtxt('_tests/shapefit_chains_test.txt', unpack=True)
+        chain_shapefit = Chain(chain_shapefit, params=['fsigma8', 'qpar', 'qper', 'dm'])
+
+        cosmo = DESI(A_s=np.exp(3.0364) / 1e10)
+        chain_shapefit['df'] = chain_shapefit['fsigma8'] / cosmo.get_fourier().sigma_rz(8., z, of='theta_cb')
+
+        from desilike.theories import Cosmoprimo
+        cosmo = Cosmoprimo(fiducial='DESI')
+        for param in cosmo.params:
+            param.update(fixed=param.basename not in ['h', 'omega_cdm', 'omega_b', 'logA'])
+        cosmo.params['omega_b'].update(fixed=False, prior={'dist': 'norm', 'loc': 0.02237, 'scale': 0.00037})
+        observable = ShapeFitCompressionObservable(cosmo=cosmo, data=chain_shapefit, covariance=chain_shapefit, quantities=['qpar', 'qper', 'dm', 'df'], z=z)
+        emulator = Emulator(observable, engine=TaylorEmulatorEngine(method='finite', order=2))
+        emulator.set_samples()
+        emulator.fit()
+        likelihood = ObservablesGaussianLikelihood(observables=[emulator.to_calculator()])
+
+        from desilike.samplers import EmceeSampler
+        sampler = EmceeSampler(likelihood, chains=4, seed=42, save_fn='_tests/SF_desilike_Appkh_cAs_*.npy')
+        sampler.run(min_iterations=2000, check={'max_eigen_gr': 0.03})
+
+    if plot:
+        chain = Chain.concatenate([Chain.load('_tests/SF_desilike_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
+        chain2 = Chain.concatenate([Chain.load('_tests/SF_desilike_Appk_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
+        chain3 = Chain.concatenate([Chain.load('_tests/SF_desilike_Appkh_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
+        chain4 = Chain.concatenate([Chain.load('_tests/SF_desilike_Appkh_cAs_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
+        chain_ref = np.loadtxt('_tests/SF_Markresult_convert-2.txt', unpack=True)
+        params = ['h', 'omega_cdm', 'omega_b', 'logA']
+        chain_ref = Chain(chain_ref, params=params)
+        from desilike.samples import plotting
+        plotting.plot_triangle([chain, chain2, chain3, chain4, chain_ref], params=params, labels=['desilike', 'desilike2', 'desilike3', 'desilike4', 'reference'], fn='_tests/comparison.png')
+
+
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -589,7 +634,8 @@ if __name__ == '__main__':
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    test_compression()
+    # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()
+    test_shapefit(run=False)

@@ -447,7 +447,8 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         BAOExtractor.calculate(self)
         s = self.cosmo.rs_drag / self.fiducial.rs_drag
         kp = self.kp / s
-        self.Ap = 1. / s**3 * self.pknow_dd_interpolator(kp)
+        #self.Ap = 1. / s**3 * self.pknow_dd_interpolator(kp)
+        self.Ap = 1. / s**3 * (self.cosmo.h / self.fiducial.h)**3 * self.pk_dd_interpolator(kp)
         self.f_sqrt_Ap = self.f * self.Ap**0.5
         self.f_sigmar = self.f * self.pknow_dd_interpolator.sigma_r(self.r * s)
         self.n = self.cosmo.n_s

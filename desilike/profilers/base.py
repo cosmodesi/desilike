@@ -337,13 +337,13 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         else:
             self.profiles = Profiles.concatenate(self.profiles, profiles)
 
-        attrs = {}
-        for name in ['size', 'nvaried', 'ndof']:
-            try: attrs[name] = getattr(self.likelihood, name)
-            except AttributeError: pass
-        attrs = self.mpicomm.allgather(attrs)
-        for attrs in attrs:
-            if attrs: self.profiles.attrs.update(attrs)
+        attrs = {name: getattr(self.likelihood, name, None) for name in ['size', 'nvaried', 'ndof']}
+        for name, value in attrs.items():
+            for value in self.mpicomm.allgather(value):
+                if value is not None:
+                    attrs[name] = value
+                    break
+        self.profiles.bestfit.attrs.update(attrs)
 
         if self.mpicomm.rank == 0 and self.save_fn is not None:
             self.profiles.save(self.save_fn)

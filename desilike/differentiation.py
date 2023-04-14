@@ -214,7 +214,6 @@ class Differentiation(BaseClass):
         """
         if mpicomm is None:
             mpicomm = calculator.mpicomm
-        self.mpicomm = mpicomm
         self.calculator = calculator
         self.calculator()  # dry run
         self.pipeline = self.calculator.runtime_info.pipeline
@@ -224,7 +223,7 @@ class Differentiation(BaseClass):
         self.all_params = self.calculator.all_params.select(derived=False) + self.varied_params
         if not self.varied_params:
             raise ValueError('No parameters to be varied!')
-        if self.mpicomm.rank == 0:
+        if mpicomm.rank == 0:
             self.log_info('Varied parameters: {}.'.format(self.varied_params.names()))
 
         for name, item in zip(['order', 'method', 'accuracy'], [order, method, accuracy]):
@@ -275,7 +274,7 @@ class Differentiation(BaseClass):
                         raise ValueError('Cannot use auto-differentiation (with jax) for parameter {}'.format(param)) from exc
                 else:
                     method = 'auto'
-            if self.method[param] is None and self.mpicomm.rank == 0:
+            if self.method[param] is None and mpicomm.rank == 0:
                 self.log_info('Using {}-differentiation for parameter {}.'.format(method, param))
             self.method[param] = method
             if method == 'finite':
@@ -319,14 +318,14 @@ class Differentiation(BaseClass):
                         order[cindex - s // 2:cindex + s // 2 + 1] = ord
                     order[cindex] = 0
                     grid = (grid, order, self.order[param.name])
-                if self.mpicomm.rank == 0:
+                if mpicomm.rank == 0:
                     self.log_info('{} grid is {}.'.format(param, grid[0]))
             else:
                 grid = (np.array([center]), np.array([0]), 0)
             grids.append(grid)
 
         self._grid_samples = None
-        if self.mpicomm.rank == 0:
+        if mpicomm.rank == 0:
             samples = np.array(deriv_grid(grids)).T
             self._grid_samples = Samples(samples, params=self.varied_params)
 
@@ -337,6 +336,22 @@ class Differentiation(BaseClass):
         self.autoderivs.append(())
         for maxorder in range(1, max([0] + autoorder) + 1):
             self.autoderivs.append([autoparams[i] for i, o in enumerate(autoorder) if o >= maxorder])
+        self.mpicomm = mpicomm
+
+    @property
+    def mpicomm(self):
+        return self._mpicomm
+
+    @mpicomm.setter
+    def mpicomm(self, mpicomm):
+        mpicomm_bak = getattr(self, '_mpicomm', None)
+        if mpicomm_bak is not None and mpicomm is not mpicomm_bak:
+            # Broadcast self._grid_samples to the new rank = 0 processes
+            ranks = [rank for rank in mpicomm_bak.allgather(mpicomm_bak.rank if mpicomm.rank == 0 else None) if rank is not None]
+            for mpiroot in ranks:
+                grid_samples = Samples.bcast(self._grid_samples, mpiroot=mpiroot, mpicomm=mpicomm_bak)
+                if grid_samples is not None: self._grid_samples = grid_samples
+        self._mpicomm = mpicomm
 
     def _calculate(self, **params):
 

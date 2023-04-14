@@ -154,8 +154,12 @@ def test_fisher_galaxy():
     #print(likelihood(wa_fld=0), likelihood(wa_fld=0.1))
     from desilike import Fisher
     fisher = Fisher(likelihood)
-    fisher = fisher()
-    print(fisher.to_stats())
+    #like = fisher()
+    #print(like.to_stats())
+    from desilike import mpi
+    fisher.mpicomm = mpi.COMM_SELF
+    like = fisher()
+    print(like.to_stats())
 
 
 def test_fisher_cmb():
@@ -194,6 +198,6 @@ if __name__ == '__main__':
     setup_logging()
     #test_misc()
     #test_differentiation()
-    test_solve()
-    #test_fisher_galaxy()
+    #test_solve()
+    test_fisher_galaxy()
     #test_fisher_cmb()

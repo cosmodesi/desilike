@@ -758,7 +758,6 @@ class Fisher(BaseClass):
         except AttributeError:
             pass
 
-
     def run(self, **params):
         diff = self.mpicomm.bcast(self.prior_differentiation(**params), root=0)
         self.prior_fisher = LikelihoodFisher(center=[self.prior_differentiation.center[str(param)] for param in self.varied_params], params=self.varied_params, **self._prior_finalize(diff))

@@ -55,10 +55,25 @@ def test_plot():
     plotting.plot_profile_comparison(profiles[0], profiles[1], fn=os.path.join(profiles_dir, 'profile_comparison.png'))
 
 
+def test_mpi():
+    params = ['params.a', 'params.b', 'params.c', 'params.d']
+    profiles = get_profiles(params)
+    profiles.bestfit.attrs.update(ndof=10, chi2=10.)
+    profiles2 = get_profiles(params)
+    profiles2.update(profiles)
+
+    from desilike import mpi
+    mpicomm = mpi.COMM_WORLD
+    profiles = Profiles.bcast(profiles, mpiroot=0)
+    if mpicomm.rank == 0:
+        print(profiles.bestfit.attrs)
+
+
 if __name__ == '__main__':
 
     setup_logging()
 
-    test_misc()
-    test_stats()
-    test_plot()
+    #test_misc()
+    #test_stats()
+    #test_plot()
+    test_mpi()

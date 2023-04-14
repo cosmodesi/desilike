@@ -17,7 +17,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.002
+    delta: 0.003
     latex: h
   Omega_m:
     prior:
@@ -26,7 +26,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.002
+    delta: 0.005
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -381,7 +381,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.002
+    delta: 0.005
     latex: \Omega_{m}
 
 ---
@@ -396,7 +396,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.002
+    delta: 0.003
     latex: h
   Omega_m:
     prior:
@@ -405,7 +405,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.002
+    delta: 0.005
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -510,7 +510,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.002
+    delta: 0.003
     latex: h
   Omega_m:
     prior:
@@ -519,7 +519,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.002
+    delta: 0.005
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -624,7 +624,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.002
+    delta: 0.003
     latex: h
   Omega_m:
     prior:
@@ -633,7 +633,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.002
+    delta: 0.005
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -738,7 +738,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.002
+    delta: 0.003
     latex: h
   Omega_m:
     prior:
@@ -747,7 +747,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.002
+    delta: 0.005
     latex: \Omega_{m}
   omega_b:
     prior:

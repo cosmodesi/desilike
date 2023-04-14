@@ -112,31 +112,25 @@ def test_solve():
 
 def test_solve():
 
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, ObservablesCovarianceMatrix, BoxFootprint
     from desilike.likelihoods import ObservablesGaussianLikelihood
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
-    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    #theory = KaiserTracerPowerSpectrumMultipoles(template=template)
     #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
+    theory = PyBirdTracerPowerSpectrumMultipoles(template=template)
     #for param in theory.params.select(basename=['df', 'dm', 'qpar', 'qper']): param.update(fixed=True)
-    for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
+    for param in theory.params.select(basename=['alpha*', 'sn*', 'ce*']): param.update(derived='.best')
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data={'sn0': 1000.},
+                                                         data={},
                                                          theory=theory)
     covariance = ObservablesCovarianceMatrix(observables=observable, footprints=BoxFootprint(volume=1e10, nbar=1e-2))
     observable.init.update(covariance=covariance())
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     #for param in likelihood.all_params.select(basename=['df', 'dm', 'qpar', 'qper']): param.update(fixed=True)
 
-    import numpy as np
-    likelihood.flatdata += 100 * np.cos(np.linspace(0., 5. * np.pi, observable.flatdata.size))
     likelihood()
-    print(likelihood.runtime_info.pipeline.param_values['sn0'])
-    likelihood()
-    print(likelihood.runtime_info.pipeline.param_values['sn0'])
-    likelihood()
-    print(likelihood.runtime_info.pipeline.param_values['sn0'])
 
 
 def test_fisher_galaxy():
@@ -200,6 +194,6 @@ if __name__ == '__main__':
     setup_logging()
     #test_misc()
     #test_differentiation()
-    #test_solve()
-    test_fisher_galaxy()
+    test_solve()
+    #test_fisher_galaxy()
     #test_fisher_cmb()

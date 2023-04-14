@@ -337,7 +337,7 @@ class Profiles(BaseClass):
         self.attrs.update(other.attrs)
         for name in other._attrs:
             if name in other:
-                if name in self:
+                if name in self and name != 'covariance':
                     self.get(name).update(other.get(name))
                 else:
                     self.set(**{name: other.get(name)})

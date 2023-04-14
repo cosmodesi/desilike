@@ -674,7 +674,7 @@ class Parameter(BaseClass):
         self._proposal = proposal
         self._delta = delta
         if delta is not None:
-            if not utils.is_sequence(delta):
+            if np.ndim(delta) == 0:
                 delta = (delta, ) * 2
             self._delta = tuple(delta)
         self._derived = derived

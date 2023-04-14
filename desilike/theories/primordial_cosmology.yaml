@@ -12,7 +12,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.0025
+    delta: 0.003
     latex: h
   # If h is there, used instead of theta_mc below
   theta_MC_100:
@@ -32,7 +32,7 @@ params:
       dist: norm
       loc: 0.12
       scale: 0.0012
-    delta: 0.0004
+    delta: 0.0008
     latex: \omega_{cdm}
   omega_b:
     prior:

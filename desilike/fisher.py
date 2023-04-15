@@ -93,16 +93,17 @@ class LikelihoodFisher(BaseClass):
         self._center = np.concatenate([np.ravel(c) for c in center])
         if self._center.size != hessian.shape[0]:
             raise ValueError('Input center and hessian matrix have different sizes: {:d} vs {:d}'.format(self.center.size, hessian.shape[0]))
+        gradient_has_derivs = getattr(gradient, 'derivs', None) is not None
         if gradient is None:
             self._gradient = np.zeros_like(center)
-        elif isinstance(gradient, ParameterArray):
+        elif gradient_has_derivs:
             self._gradient = np.array([gradient[param] for param in self._params])
         else:
             self._gradient = np.ravel(gradient)
             if self._gradient.size != len(self._params):
                 raise ValueError('Number of parameters and gradient size are different: {:d} vs {:d}'.format(len(self._params), self._gradient.size))
         if offset is None:
-            if isinstance(gradient, ParameterArray):
+            if gradient_has_derivs:
                 offset = gradient[()]
             else:
                 offset = 0.

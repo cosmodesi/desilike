@@ -2289,7 +2289,7 @@ class BaseParameterMatrix(BaseClass):
         self._params = ParameterCollection(params)
         if not self._params:
             raise ValueError('Got no parameters')
-        if isinstance(value, ParameterArray):
+        if getattr(value, 'derivs', None) is not None:
             value = np.array([[value[param1, param2] for param2 in self._params] for param1 in self._params])
         self._value = np.atleast_2d(np.array(value))
         if self._value.ndim != 2:

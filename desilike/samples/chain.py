@@ -187,7 +187,7 @@ class Chain(Samples):
             new.set(array.clone(value=np.repeat(array, size, axis=self.ndim - 1)))
         rng = np.random.RandomState(seed=seed)
         noise = rng.standard_normal((len(solved_params),) + self.shape + (size,))
-        values = np.sum(noise[None, ...] * L[..., None], axis=0)
+        values = np.sum(noise[None, ...] * L[..., None], axis=1)
         for param, value in zip(solved_params, values):
             new[param] = new[param].clone(value=new[param] + value.reshape(new.shape), param=param.clone(derived=False))
         dlogposterior = 0.

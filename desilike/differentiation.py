@@ -347,7 +347,8 @@ class Differentiation(BaseClass):
         mpicomm_bak = getattr(self, '_mpicomm', None)
         if mpicomm_bak is not None and mpicomm is not mpicomm_bak:
             # Broadcast self._grid_samples to the new rank = 0 processes
-            ranks = [rank for rank in mpicomm_bak.allgather(mpicomm_bak.rank if mpicomm.rank == 0 else None) if rank is not None]
+            ranks = mpicomm_bak.allgather(mpicomm_bak.rank if mpicomm.rank == 0 else None)
+            ranks = [rank for rank in ranks if rank is not None]
             for mpiroot in ranks:
                 grid_samples = Samples.bcast(self._grid_samples, mpiroot=mpiroot, mpicomm=mpicomm_bak)
                 if grid_samples is not None: self._grid_samples = grid_samples

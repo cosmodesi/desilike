@@ -9,7 +9,7 @@ def get_chain(params, nwalkers=4, size=4000, seed=42):
     rng = np.random.RandomState(seed=seed)
     ndim = len(params)
     mean = np.zeros(ndim, dtype='f8')
-    cov = np.eye(ndim, dtype='f8')
+    cov = np.diag(np.linspace(1., 25., ndim))
     cov += 0.1  # off-diagonal
     invcov = np.linalg.inv(cov)
     array = rng.multivariate_normal(mean, cov, size=(size, nwalkers))
@@ -119,8 +119,19 @@ def test_solved():
     chain['logprior'] = chain['loglikelihood']
 
     assert np.allclose(chain.median('like.a'), np.median(chain['like.a']), atol=1.)
-    print(chain.sample_solved(size=10).to_stats(tablefmt='pretty'))
+    print(chain.sample_solved().to_stats(tablefmt='pretty'))
     print(chain.to_stats(tablefmt='pretty'))
+
+
+def test_cholesky():
+    ndim = 4
+    cov = np.random.uniform(size=(ndim, ndim))
+    cov += 2. * np.eye(ndim)
+    L = np.linalg.cholesky(cov)
+    noise = np.random.standard_normal(size=(ndim, 1000))
+    values = np.sum(noise[None, ...] * L[:, :, None], axis=1)
+    print(cov)
+    print(np.cov(values))
 
 
 if __name__ == '__main__':
@@ -132,3 +143,4 @@ if __name__ == '__main__':
     test_stats()
     test_plot()
     test_solved()
+    # test_cholesky()

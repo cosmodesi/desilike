@@ -567,11 +567,11 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 1e7
+      scale: 1000.
     ref:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 1.
     latex: s_{n, []}
 
 ---

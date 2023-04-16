@@ -261,7 +261,6 @@ def test_full_shape():
     theory = EFTLikeTNSTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     test_emulator_likelihood(theory)
     theory(df=1.01, b1=1., ct0_2=1.).shape
-    exit()
 
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))

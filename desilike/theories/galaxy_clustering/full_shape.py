@@ -404,7 +404,7 @@ class TNSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerS
         super(TNSPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
         self.nloop = int(self.options['nloop'])
         if self.nloop not in [1]:
-            raise ValueError('nloop must be one of 1 (1-loop)')
+            raise ValueError('nloop must be 1 (1-loop)')
 
     def calculate(self):
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
@@ -739,7 +739,8 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
     _default_options = dict(kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5)
     # Slow, ~ 4 sec per iteration
 
-    def initialize(self, *args, mu=8, **kwargs):
+    def initialize(self, *args, mu=8, shotnoise=1e4, **kwargs):
+        self.nd = 1. / shotnoise
         super(LPTVelocileptorsPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
 
     def calculate(self):
@@ -761,13 +762,14 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
         # bias = [b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4]
         # pkells = self.pt.combine_bias_terms_pkell(bias)[1:]
         # return np.array([pkells[[0, 2, 4].index(ell)] for ell in self.ells])
+        nd = getattr(self, 'nd', 1.)
         b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4 = pars
-        bias_monomials = jnp.array([1, b1, b1**2, b2, b1 * b2, b2**2, bs, b1 * bs, b2 * bs, bs**2, b3, b1 * b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4])
+        bias_monomials = jnp.array([1, b1, b1**2, b2, b1 * b2, b2**2, bs, b1 * bs, b2 * bs, bs**2, b3, b1 * b3, alpha0, alpha2, alpha4, alpha6, sn0 / nd, sn2 / nd, sn4 / nd])
         return jnp.sum(self.pktable * bias_monomials, axis=-1)
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'z', 'ells', 'pktable']:
+        for name in ['k', 'z', 'ells', 'pktable', 'nd']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state

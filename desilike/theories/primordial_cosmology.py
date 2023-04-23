@@ -96,7 +96,7 @@ class Cosmoprimo(BasePrimordialCosmology):
     """Primordial cosmology calculation, based on :mod:`cosmoprimo`."""
     config_fn = 'primordial_cosmology.yaml'
 
-    def initialize(self, fiducial=None, **kwargs):
+    def initialize(self, fiducial=None, engine=None, **kwargs):
         """
         Initialize :class:`Cosmoprimo`.
 
@@ -117,10 +117,10 @@ class Cosmoprimo(BasePrimordialCosmology):
         # kwargs is engine, extra_params
         fiducial_input = bool(fiducial)
         if fiducial is None:
-            fiducial = Cosmology()
+            self.fiducial = Cosmology()
         else:
-            fiducial = get_cosmo(fiducial)
-        self.fiducial = fiducial.clone(**kwargs)
+            self.fiducial = get_cosmo(fiducial)
+        self.fiducial = _clone(self, kwargs, base=None)
         if any(name in self.params.basenames(varied=True) for name in ['h', 'H0']):
             for param in self.params.select(basename='theta_MC_100'):
                 del self.params[param]

@@ -35,17 +35,17 @@ def test_power_spectrum():
     likelihood.params['pk.logprior'] = {}
     likelihood()
     observable.plot(show=True)
-    #observable()
+    observable()
     #observable.wmatrix.plot(show=True)
     theory.template.init.update(z=1.)
-    #observable()
-    print(observable.runtime_info.pipeline.varied_params)
+    observable()
+    #print(observable.runtime_info.pipeline.varied_params)
     assert theory.template.z == 1.
     likelihood()
     assert np.allclose((likelihood + likelihood)(), 2. * likelihood() - likelihood.logprior)
 
     theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
-    params = {'al0_1': 100., 'al0_-1': 100.}
+    params = {'al0_1': 100., 'al0_-1': 100., 'al2_1': 100., 'b1': 1.5}
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data=params,
                                                          theory=theory)
@@ -54,6 +54,7 @@ def test_power_spectrum():
     likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
     print(likelihood(**params))
     observable.plot_wiggles(show=True)
+    exit()
 
     theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
     params = {'al0_1': 100., 'al0_-1': 100.}
@@ -595,7 +596,9 @@ def test_shapefit(run=True, plot=True):
         chain_shapefit = Chain(chain_shapefit, params=['fsigma8', 'qpar', 'qper', 'dm'])
 
         cosmo = DESI(A_s=np.exp(3.0364) / 1e10)
-        chain_shapefit['df'] = chain_shapefit['fsigma8'] / cosmo.get_fourier().sigma_rz(8., z, of='theta_cb')
+        chain_shapefit['df'] = chain_shapefit['fsigma8'] / cosmo.get_fourier().sigma_rz(8., z, of='theta_m')
+        #print(cosmo.growth_rate(z) * cosmo.get_fourier().sigma_rz(8., z, of='delta_cb') / cosmo.get_fourier().sigma_rz(8., z, of='theta_cb'))
+        #print(cosmo.n_s, cosmo['ln10^10A_s'], cosmo.h, cosmo.Omega0_b * cosmo.h**2, cosmo.Omega0_cdm * cosmo.h**2, cosmo.N_ur, cosmo.m_ncdm)
 
         from desilike.theories import Cosmoprimo
         cosmo = Cosmoprimo(fiducial='DESI')
@@ -609,27 +612,25 @@ def test_shapefit(run=True, plot=True):
         likelihood = ObservablesGaussianLikelihood(observables=[emulator.to_calculator()])
 
         from desilike.samplers import EmceeSampler
-        sampler = EmceeSampler(likelihood, chains=4, seed=42, save_fn='_tests/SF_desilike_Appkh_cAs_*.npy')
+        sampler = EmceeSampler(likelihood, chains=4, seed=42, save_fn='_tests/SF_desilike_m_*.npy')
         sampler.run(min_iterations=2000, check={'max_eigen_gr': 0.03})
 
     if plot:
-        chain = Chain.concatenate([Chain.load('_tests/SF_desilike_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
-        chain2 = Chain.concatenate([Chain.load('_tests/SF_desilike_Appk_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
-        chain3 = Chain.concatenate([Chain.load('_tests/SF_desilike_Appkh_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
-        chain4 = Chain.concatenate([Chain.load('_tests/SF_desilike_Appkh_cAs_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
-        chain_ref = np.loadtxt('_tests/SF_Markresult_convert-2.txt', unpack=True)
-        params = ['h', 'omega_cdm', 'omega_b', 'logA']
-        chain_ref = Chain(chain_ref, params=params)
+        chain = Chain.concatenate([Chain.load('_tests/SF_desilike_m_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
+        chain2 = Chain.concatenate([Chain.load('_tests/SF_desilike_Appk_m_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
+        #chain3 = Chain.concatenate([Chain.load('_tests/SF_desilike_Appkh_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
+        #chain4 = Chain.concatenate([Chain.load('_tests/SF_desilike_Appkh_cAs_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
+        chain_ref = Chain(np.loadtxt('_tests/SF_Markresult_convert-2.txt', unpack=True), params=['h', 'omega_cdm', 'omega_b', 'logA'])
+        chain_ref_new = Chain(np.loadtxt('_tests/SF_convert_Mark_new.txt', unpack=True), params=['H0', 'omega_b', 'omega_cdm', 'logA'])
+        chain_ref_new['h'] = chain_ref_new['H0'] / 100.
         from desilike.samples import plotting
-        plotting.plot_triangle([chain, chain2, chain3, chain4, chain_ref], params=params, labels=['desilike', 'desilike2', 'desilike3', 'desilike4', 'reference'], fn='_tests/comparison.png')
-
-
+        plotting.plot_triangle([chain, chain_ref, chain_ref_new], params=['h', 'omega_cdm', 'omega_b', 'logA'], labels=['desilike', 'Mark old code', 'Mark new code'], fn='_tests/comparison.png')
 
 
 if __name__ == '__main__':
 
     setup_logging()
-    # test_power_spectrum()
+    test_power_spectrum()
     # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
@@ -638,4 +639,4 @@ if __name__ == '__main__':
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()
-    test_shapefit(run=False)
+    # test_shapefit(run=False)

@@ -228,17 +228,35 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         data, theory, std = self.data, self.theory, self.std
         only_now = self.wmatrix.theory.template.only_now
         self.wmatrix.theory.template.only_now = True
-        for calculator in self.runtime_info.pipeline.calculators:
+
+        def callback(calculator):
+            all_requires.append(calculator)
+            for require in calculator.runtime_info.requires:
+                if require in all_requires:
+                    del all_requires[toret.index(require)]  # we want first dependencies at the end
+                callback(require)
+
+        all_requires = []
+        callback(self)
+        all_requires = all_requires[::-1]
+
+        for calculator in all_requires:
             calculator.runtime_info.tocalculate = True
             calculator.runtime_info.calculate()
         nowiggle = self.theory
-        self.wmatrix.theory.template.only_now = only_now
+
         for ill, ell in enumerate(self.ells):
             lax[ill].errorbar(self.k[ill], self.k[ill] * (data[ill] - nowiggle[ill]), yerr=self.k[ill] * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o')
             lax[ill].plot(self.k[ill], self.k[ill] * (theory[ill] - nowiggle[ill]), color='C{:d}'.format(ill))
             lax[ill].set_ylabel(r'$k \Delta P_{{{:d}}}(k)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]'.format(ell))
         for ax in lax: ax.grid(True)
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+
+        self.wmatrix.theory.template.only_now = only_now
+        for calculator in all_requires:
+            calculator.runtime_info.tocalculate = True
+            calculator.runtime_info.calculate()
+
         return lax
 
     @plotting.plotter

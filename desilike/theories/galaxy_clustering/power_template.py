@@ -90,7 +90,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
                 setattr(self, name, getattr(self, name + '_fid'))
         if self.only_now:
             for name in ['dd_interpolator', 'dd']:
-                setattr(self, 'pk_' + name, getattr(self, 'pknow_' + name))
+                setattr(self, 'pk_' + name, getattr(self, 'pknow_' + name + '_fid'))
 
     @property
     def qpar(self):
@@ -449,6 +449,7 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         kp = self.kp / s
         self.Ap = 1. / s**3 * self.pknow_dd_interpolator(kp)
         #self.Ap = 1. / s**3 * (self.cosmo.h / self.fiducial.h)**3 * self.pk_dd_interpolator(kp)
+        #self.Ap = 1. / s**3 * self.pk_dd_interpolator(kp)
         self.f_sqrt_Ap = self.f * self.Ap**0.5
         self.f_sigmar = self.f * self.pknow_dd_interpolator.sigma_r(self.r * s)
         self.n = self.cosmo.n_s

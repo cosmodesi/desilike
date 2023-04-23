@@ -193,47 +193,6 @@ class ShapeFitCompressionObservable(BaseCompressionObservable):
         self.extractor.init.update(n_varied='n' in self.quantities)
 
 
-class BandVelocityCompressionObservable(BaseCompressionObservable):
-    """
-    Band velocity power observable: compare band power measurements to theory predictions.
-
-    Parameters
-    ----------
-    data : str, Path, array, Profiles, Chain
-        Band velocity power parameters. If array, provide corresponding ``quantities``.
-        Else, chain, profiles or path to such objects.
-
-    covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
-        Covariance for band power parameters. If 2D array, provide corresponding ``quantities``.
-        Else, chain, profiles, covariance or path to such objects.
-
-    cosmo : BasePrimordialCosmology, default=None
-        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
-
-    quantities : list, tuple
-        Quantities to take from ``data`` and ``covariance``:
-        chose from ``['dptt*', 'df', 'qap']``.
-
-    z : float, default=None
-        Effective redshift.
-
-    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
-        Specifications for fiducial cosmology. Either:
-
-        - str: name of fiducial cosmology in :class:`cosmoprimo.fiducial`
-        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
-        - dict: dictionary of parameters
-        - :class:`cosmoprimo.Cosmology`: Cosmology instance
-
-    **kwargs : dict
-        Other optional arguments for :class:`BandVelocityPowerSpectrumExtractor`.
-    """
-    meta_names = ['kp']
-
-    def initialize(self, *args, **kwargs):
-        super(BandVelocityCompressionObservable, self).initialize(*args, extractor=BandVelocityPowerSpectrumExtractor(), **kwargs)
-
-
 class WiggleSplitCompressionObservable(BaseCompressionObservable):
     """
     Wiggle-split observable: compare the amplitude and tilt of the velocity power spectrum, and BAO position to theory predictions.
@@ -273,3 +232,44 @@ class WiggleSplitCompressionObservable(BaseCompressionObservable):
 
     def initialize(self, *args, **kwargs):
         super(WiggleSplitCompressionObservable, self).initialize(*args, extractor=WiggleSplitPowerSpectrumExtractor(), **kwargs)
+
+
+class BandVelocityCompressionObservable(BaseCompressionObservable):
+    """
+    Band velocity power observable: compare band power measurements to theory predictions.
+
+    Parameters
+    ----------
+    data : str, Path, array, Profiles, Chain
+        Band velocity power parameters. If array, provide corresponding ``quantities``.
+        Else, chain, profiles or path to such objects.
+
+    covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
+        Covariance for band power parameters. If 2D array, provide corresponding ``quantities``.
+        Else, chain, profiles, covariance or path to such objects.
+
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
+
+    quantities : list, tuple
+        Quantities to take from ``data`` and ``covariance``:
+        chose from ``['dptt*', 'df', 'qap']``.
+
+    z : float, default=None
+        Effective redshift.
+
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiducial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+
+    **kwargs : dict
+        Other optional arguments for :class:`BandVelocityPowerSpectrumExtractor`.
+    """
+    meta_names = ['kp']
+
+    def initialize(self, *args, **kwargs):
+        super(BandVelocityCompressionObservable, self).initialize(*args, extractor=BandVelocityPowerSpectrumExtractor(), **kwargs)

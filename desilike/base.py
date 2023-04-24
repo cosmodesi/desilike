@@ -647,6 +647,7 @@ class RuntimeInfo(BaseClass):
         self.derived_params = self._params.select(derived=True)
         self.solved_params = self._params.select(solved=True)
         self.param_values = {param.basename: param.value for param in self.input_params}
+        self._tocalculate = True
 
     @property
     def derived(self):

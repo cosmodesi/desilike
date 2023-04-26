@@ -174,7 +174,7 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
         sigmanl2 = self.k[:, None]**2 * (sigmapar**2 * self.mu**2 + sigmaper**2 * (1. - self.mu**2))
         damping = np.exp(-sigmanl2 / 2.)
         #pkmu = jac * damping * (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0
-        pkmu = jac * damping * (b1 + f * muap**2)**2 * interpolate.InterpolatedUnivariateSpline(np.log10(self.template.k), self.template.pk_dd, k=3, ext=2)(np.log10(kap)) + sn0
+        pkmu = jac * damping * (b1 + f * muap**2)**2 * interpolate.interp1d(np.log10(self.template.k), self.template.pk_dd, kind='cubic', axis=-1)(np.log10(kap)) + sn0
         self.power = self.to_poles(pkmu)
 
     def get(self):

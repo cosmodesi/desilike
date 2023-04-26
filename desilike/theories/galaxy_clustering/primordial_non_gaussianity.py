@@ -1,5 +1,5 @@
 import numpy as np
-from scipy import constants
+from scipy import constants, interpolate
 
 from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
 from .power_template import FixedPowerSpectrumTemplate
@@ -46,10 +46,11 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
 
     def initialize(self, *args, ells=(0, 2), method='prim', mode='b-p', template=None, **kwargs):
         super(PNGTracerPowerSpectrumMultipoles, self).initialize(*args, ells=ells, **kwargs)
-        kin = np.insert(self.k, 0, 1e-4)
         if template is None:
             template = FixedPowerSpectrumTemplate()
         self.template = template
+        kin = np.geomspace(min(1e-3, self.k[0] / 2, self.template.init.get('k', [1.])[0]), max(1., self.k[-1] * 2, self.template.init.get('k', [0.])[0]), 1000)
+        kin = np.insert(kin, 0, 1e-4)
         self.template.init.update(k=kin)
         self.method = str(method)
         self.mode = str(mode)
@@ -65,6 +66,7 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
         self.params = self.params.select(basename=keep_params)
 
     def calculate(self, b1=2., sigmas=0., sn0=0., **params):
+        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pk_dd = self.template.pk_dd
         kin = self.template.k
         cosmo = self.template.cosmo
@@ -81,7 +83,7 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
             normalized_growth_factor = cosmo.growth_factor(self.template.z) / cosmo.growth_factor(znorm) / (1 + znorm)
             alpha = 3. * cosmo.Omega0_m * 100**2 / (2. * (constants.c / 1e3)**2 * kin**2 * tk * normalized_growth_factor)
         # Remove first k, used to normalize tk
-        pk_dd, alpha = pk_dd[1:], alpha[1:]
+        kin, pk_dd, alpha = kin[1:], pk_dd[1:], alpha[1:]
         if self.mode == 'bphi':
             fnl_loc = params['fnl_loc']
             bphi = params['bphi']
@@ -93,9 +95,9 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
         else:
             bfnl_loc = params['bfnl_loc']
         # bfnl_loc is typically 2 * delta_c * (b1 - p)
-        bias = b1 + bfnl_loc * alpha
-        fog = 1. / (1. + sigmas**2 * self.k[:, None]**2 * self.mu**2 / 2.)**2.
-        pkmu = fog * (bias[:, None] + f * self.mu**2)**2 * pk_dd[:, None] + sn0
+        bias = b1 + bfnl_loc * interpolate.interp1d(np.log10(kin), alpha, kind='cubic', axis=-1)(np.log10(kap))
+        fog = 1. / (1. + sigmas**2 * kap**2 * muap**2 / 2.)**2.
+        pkmu = jac * fog * (bias + f * muap**2)**2 * interpolate.interp1d(np.log10(kin), pk_dd, kind='cubic', axis=-1)(np.log10(kap)) + sn0
         self.power = self.to_poles(pkmu)
 
     def get(self):

@@ -302,6 +302,20 @@ def test_full_shape():
     theory(logA=3.04, b1=1.).shape
 
 
+def test_png():
+
+    from desilike.theories.galaxy_clustering import PNGTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+
+    theory = PNGTracerPowerSpectrumMultipoles(method='prim')
+    params = dict(fnl_loc=100., b1=2.)
+    theory2 = PNGTracerPowerSpectrumMultipoles(method='matter')
+    assert np.allclose(theory2(**params), theory(**params), rtol=2e-3)
+    assert not np.allclose(theory2(fnl_loc=0.), theory(), rtol=2e-3)
+
+    theory = PNGTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.), method='prim')
+    theory(qpar=1.1, fnl_loc=2.)
+
+
 from scipy import special
 from desilike import utils
 from desilike.jax import numpy as jnp
@@ -531,25 +545,14 @@ def test_ap_diff():
     plt.show()
 
 
-def test_png():
-
-    from desilike.theories.galaxy_clustering import PNGTracerPowerSpectrumMultipoles
-
-    theory = PNGTracerPowerSpectrumMultipoles(method='prim')
-    params = dict(fnl_loc=100., b1=2.)
-    theory2 = PNGTracerPowerSpectrumMultipoles(method='matter')
-    assert np.allclose(theory2(**params), theory(**params), rtol=2e-3)
-    assert not np.allclose(theory2(fnl_loc=0.), theory(), rtol=2e-3)
-
-
 
 if __name__ == '__main__':
 
     setup_logging()
     #test_integ()
     #test_bao()
-    test_full_shape()
+    #test_full_shape()
+    test_png()
     #test_pk_to_xi()
     #test_ap_diff()
-    #test_png()
     #test_templates()

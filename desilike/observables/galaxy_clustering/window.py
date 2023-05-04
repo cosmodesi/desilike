@@ -101,10 +101,10 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 fiber_collisions.init.update(k=self.kin, ells=self.ells)
                 fiber_collisions = fiber_collisions.runtime_info.initialize()
                 self.matrix_full = np.bmat([list(kernel) for kernel in fiber_collisions.kernel_correlated]).A
-                self.offset = fiber_collisions.kernel_uncorrelated.ravel()
+                if fiber_collisions.with_uncorrelated: self.offset = fiber_collisions.kernel_uncorrelated.ravel()
                 if self.kmask is not None:
                     self.matrix_full = self.matrix_full[..., self.kmask]
-                    self.offset = self.offset[self.kmask]
+                    if fiber_collisions.with_uncorrelated: self.offset = self.offset[self.kmask]
                 self.ellsin, self.kin = fiber_collisions.ellsin, fiber_collisions.kin
             else:
                 self.ellsin = tuple(self.ells)
@@ -165,7 +165,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             if fiber_collisions is not None:
                 fiber_collisions.init.update(k=self.kin, ells=self.ellsin, theory=self.theory)
                 fiber_collisions = fiber_collisions.runtime_info.initialize()
-                self.offset = self.matrix_full.dot(fiber_collisions.kernel_uncorrelated.ravel())
+                if fiber_collisions.with_uncorrelated: self.offset = self.matrix_full.dot(fiber_collisions.kernel_uncorrelated.ravel())
                 self.matrix_full = self.matrix_full.dot(np.bmat([list(kernel) for kernel in fiber_collisions.kernel_correlated]).A)
                 self.ellsin, self.kin = fiber_collisions.ellsin, fiber_collisions.kin
         shotnoise = float(shotnoise)
@@ -314,10 +314,10 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
             fiber_collisions = fiber_collisions.runtime_info.initialize()
             self.ellsin = tuple(fiber_collisions.ellsin)
             self.matrix_diag = fiber_collisions.kernel_correlated
-            self.offset = fiber_collisions.kernel_uncorrelated.ravel()
+            if fiber_collisions.with_uncorrelated: self.offset = fiber_collisions.kernel_uncorrelated.ravel()
             if self.smask is not None:
                 self.matrix_diag = self.matrix_diag[..., self.smask]
-                self.offset = self.offset[self.smask]
+                if fiber_collisions.with_uncorrelated: self.offset = self.offset[self.smask]
         self.theory.init.update(s=self.sin, ells=self.ellsin)
 
     def _apply(self, theory):
@@ -393,7 +393,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
 
 class BaseFiberCollisionsPowerSpectrumMultipoles(BaseCalculator):
 
-    def initialize(self, k=None, ells=(0, 2, 4), theory=None):
+    def initialize(self, k=None, ells=(0, 2, 4), theory=None, with_uncorrelated=True):
         if k is None: k = np.linspace(0.01, 0.2, 101)
         self.k = np.array(k, dtype='f8')
         self.ells = tuple(ells)
@@ -405,12 +405,15 @@ class BaseFiberCollisionsPowerSpectrumMultipoles(BaseCalculator):
         self.theory.runtime_info.initialize()
         self.kin = np.array(self.theory.k, dtype='f8')
         self.ellsin = tuple(self.theory.ells)
+        self.with_uncorrelated = bool(with_uncorrelated)
 
     def correlated(self, power):
         return jnp.sum(self.kernel_correlated * power[None, :, None, :], axis=(1, 3))
 
     def uncorrelated(self):
-        return self.kernel_uncorrelated
+        if self.with_uncorrelated:
+            return self.kernel_uncorrelated
+        return np.zeros_like(self.kernel_uncorrelated)
 
     def calculate(self):
         self.power = self.correlated(self.theory.power) + self.uncorrelated()
@@ -488,6 +491,9 @@ class FiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMul
 
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory power spectrum multipoles, defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
+
+    with_uncorrelated : bool, default=True
+        If ``False``, do not include the uncorrelated part (due to not correcting the selection function for missing pairs).
 
 
     Reference
@@ -579,6 +585,9 @@ class TopHatFiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpect
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory power spectrum multipoles, defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
 
+    with_uncorrelated : bool, default=True
+        If ``False``, do not include the uncorrelated part (due to not correcting the selection function for missing pairs).
+
 
     Reference
     ---------
@@ -634,7 +643,7 @@ class TopHatFiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpect
 
 class BaseFiberCollisionsCorrelationFunctionMultipoles(BaseCalculator):
 
-    def initialize(self, s=None, ells=(0, 2, 4), theory=None):
+    def initialize(self, s=None, ells=(0, 2, 4), theory=None, with_uncorrelated=True):
         if s is None: s = np.linspace(20., 200, 101)
         self.s = np.array(s, dtype='f8')
         self.ells = tuple(ells)
@@ -645,12 +654,15 @@ class BaseFiberCollisionsCorrelationFunctionMultipoles(BaseCalculator):
         self.theory = theory
         self.theory.runtime_info.initialize()
         self.ellsin = tuple(self.theory.ells)
+        self.with_uncorrelated = bool(with_uncorrelated)
 
     def correlated(self, corr):
         return jnp.sum(self.kernel_correlated * corr[None, ...], axis=1)
 
     def uncorrelated(self):
-        return self.kernel_uncorrelated
+        if self.with_uncorrelated:
+            return self.kernel_uncorrelated
+        return np.zeros_like(self.kernel_uncorrelated)
 
     def calculate(self):
         self.corr = self.correlated(self.theory.corr) + self.uncorrelated()
@@ -717,6 +729,8 @@ class FiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorrelatio
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory correlation function multipoles, defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
 
+    with_uncorrelated : bool, default=True
+        If ``False``, do not include the uncorrelated part (due to not correcting the selection function for missing pairs).
 
     Reference
     ---------
@@ -774,22 +788,31 @@ class TopHatFiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorr
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory correlation function multipoles, defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
 
+    with_uncorrelated : bool, default=True
+        If ``False``, do not include the uncorrelated part (due to not correcting the selection function for missing pairs).
+
+    mu_range_cut : bool, default=False
+        If ``True``, normalize the Legendre integral by the uncut :math:`\mu` range (instead of ``2``):
+        in case the :math:`R1R2` counts are cut by the tophat kernel in the estimation of correlation function multipoles.
+
 
     Reference
     ---------
     https://arxiv.org/abs/1609.01714
     """
-    def initialize(self, *args, fs=1., Dfc=0., **kwargs):
+    def initialize(self, *args, fs=1., Dfc=0., mu_range_cut=False, **kwargs):
 
         super(TopHatFiberCollisionsCorrelationFunctionMultipoles, self).initialize(*args, **kwargs)
         self.fs = float(fs)
         self.Dfc = float(Dfc)
+        self.mu_range_cut = bool(mu_range_cut)
 
         mu_min = np.sqrt(np.clip(1. - (self.Dfc / self.s)**2, 0., None))
 
         def trapz_poly(poly):
             integ = poly.integ()
-            return integ(1.) - integ(mu_min) + integ(-mu_min) - integ(-1.)
+            toret = integ(1.) - integ(mu_min) + integ(-mu_min) - integ(-1.)
+            return toret
 
         self.kernel_uncorrelated = - np.array([(2 * ellout + 1.) / 2. * self.fs * trapz_poly(special.legendre(ellout)) for ellout in self.ells])
 
@@ -798,5 +821,7 @@ class TopHatFiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorr
             self.kernel_correlated.append([])
             for ellin in self.ellsin:
                 fll = (2 * ellout + 1.) / 2. * self.fs * trapz_poly(special.legendre(ellout) * special.legendre(ellin))
-                self.kernel_correlated[-1].append((ellin == ellout) * 1. - fll)
+                tmp = (ellin == ellout) * 1. - fll
+                if self.mu_range_cut: tmp /= mu_min
+                self.kernel_correlated[-1].append(tmp)
         self.kernel_correlated = np.array(self.kernel_correlated)

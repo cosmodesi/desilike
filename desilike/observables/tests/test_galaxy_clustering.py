@@ -327,7 +327,7 @@ def test_fiber_collisions():
     from desilike.observables.galaxy_clustering import (FiberCollisionsPowerSpectrumMultipoles, FiberCollisionsCorrelationFunctionMultipoles,
                                                         TopHatFiberCollisionsPowerSpectrumMultipoles, TopHatFiberCollisionsCorrelationFunctionMultipoles)
     from desilike.observables.galaxy_clustering import WindowedCorrelationFunctionMultipoles, WindowedPowerSpectrumMultipoles
-
+    """
     fs, Dfc = 0.5, 3.
     ells = (0, 2, 4)
 
@@ -370,10 +370,11 @@ def test_fiber_collisions():
     window = WindowedPowerSpectrumMultipoles(k=np.linspace(0.01, 0.2, 50), fiber_collisions=fiber_collisions)
     window()
     window.plot(show=True)
+    """
 
     fs, Dfc = 0.5, 3.
     ells = (0, 2, 4)
-    fiber_collisions = TopHatFiberCollisionsCorrelationFunctionMultipoles(fs=fs, Dfc=Dfc, ells=ells)
+    fiber_collisions = TopHatFiberCollisionsCorrelationFunctionMultipoles(fs=fs, Dfc=Dfc, ells=ells, with_uncorrelated=False, mu_range_cut=True)
     window = WindowedCorrelationFunctionMultipoles(s=np.linspace(20, 150, 50), fiber_collisions=fiber_collisions)
     window()
     window.plot(show=True)
@@ -630,13 +631,13 @@ def test_shapefit(run=True, plot=True):
 if __name__ == '__main__':
 
     setup_logging()
-    test_power_spectrum()
+    # test_power_spectrum()
     # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
     # test_compression()
     # test_integral_cosn()
-    # test_fiber_collisions()
+    test_fiber_collisions()
     # test_compression_window()
     # test_shapefit(run=False)

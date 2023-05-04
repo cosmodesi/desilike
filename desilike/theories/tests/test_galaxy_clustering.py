@@ -315,6 +315,13 @@ def test_png():
     theory = PNGTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.), method='prim')
     theory(qpar=1.1, fnl_loc=2.)
 
+    from desilike.emulators import Emulator, TaylorEmulatorEngine
+    emulator = Emulator(theory, engine=TaylorEmulatorEngine(order=1))
+    emulator.set_samples()
+    emulator.fit()
+    calculator = emulator.to_calculator()
+    calculator(qpar=1.1, fnl_loc=2.)
+
 
 from scipy import special
 from desilike import utils

@@ -822,6 +822,7 @@ class TopHatFiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorr
             for ellin in self.ellsin:
                 fll = (2 * ellout + 1.) / 2. * self.fs * trapz_poly(special.legendre(ellout) * special.legendre(ellin))
                 tmp = (ellin == ellout) * 1. - fll
-                if self.mu_range_cut: tmp /= mu_min
+                if self.mu_range_cut:
+                    tmp[mu_min > 0.] /= mu_min[mu_min > 0.]
                 self.kernel_correlated[-1].append(tmp)
         self.kernel_correlated = np.array(self.kernel_correlated)

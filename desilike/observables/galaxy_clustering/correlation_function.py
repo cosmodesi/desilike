@@ -41,15 +41,15 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         - theory: defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
         - fiber_collisions
     """
-    def initialize(self, data=None, covariance=None, slim=None, wmatrix=None, **kwargs):
+    def initialize(self, data=None, covariance=None, slim=None, wmatrix=None, ignore_nan=False, **kwargs):
         self.s, self.sedges, self.ells = None, None, None
         self.flatdata, self.mocks, self.covariance = None, None, None
         if not isinstance(data, dict):
-            self.flatdata = self.load_data(data=data, slim=slim)[0]
+            self.flatdata = self.load_data(data=data, slim=slim, ignore_nan=ignore_nan)[0]
         if self.mpicomm.bcast(_is_array(covariance), root=0):
             self.covariance = self.mpicomm.bcast(covariance, root=0)
         else:
-            self.mocks = self.load_data(data=covariance, slim=slim)[-1]
+            self.mocks = self.load_data(data=covariance, slim=slim, ignore_nan=ignore_nan)[-1]
         if self.mpicomm.bcast(self.mocks is not None, root=0):
             covariance = None
             if self.mpicomm.rank == 0:
@@ -72,7 +72,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         for name in ['s', 'ells', 'sedges']:
             setattr(self, name, getattr(self.wmatrix, name))
 
-    def load_data(self, data=None, slim=None):
+    def load_data(self, data=None, slim=None, ignore_nan=False):
 
         def load_data(fn):
             from pycorr import TwoPointCorrelationFunction
@@ -88,7 +88,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
                 if step:
                     rebin = int(step / np.diff(corr.edges[0]).mean() + 0.5)  # nearest integer
                     corr = corr[:(corr.shape[0] // rebin) * rebin:rebin]
-                s, data = corr(ells=ell, return_sep=True, return_std=False)
+                s, data = corr(ells=ell, return_sep=True, return_std=False, ignore_nan=ignore_nan)
                 ells.append(ell)
                 mask = (s >= lo) & (s < hi)
                 index = np.flatnonzero(mask)

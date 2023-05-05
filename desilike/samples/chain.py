@@ -499,19 +499,19 @@ class Chain(Samples):
         """
         if params is None:
             params = self.params(**kwargs)
-        if index == 'argmax':
-            index = np.argmax(self.logposterior.ravel())
-            di = {str(param): _reshape(self[param], self.size)[index] for param in params}
-        elif index == 'mean':
+        if isinstance(index, str) and index == 'mean':
             di = {str(param): self.mean(param) for param in params}
         else:
-            raise ValueError('Unknown "index" argument {}'.format(index))
+            if isinstance(index, str) and index == 'argmax':
+                index = np.argmax(self.logposterior.ravel())
+            di = {str(param): _reshape(self[param], self.size)[index] for param in params}
         if return_type == 'dict':
             return di
         if return_type == 'nparray':
             return np.array(list(di.values()))
         toret = self.copy()
-        toret.data = [self[param].clone(value=[value]) for param, value in di.items()]
+        isscalar = np.ndim(index) == 0
+        toret.data = [self[param].clone(value=[value] if isscalar else value) for param, value in di.items()]
         return toret
 
     def covariance(self, params=None, return_type='nparray', ddof=1):

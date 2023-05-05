@@ -49,6 +49,7 @@ def test_misc():
     chain2.extend(chain2)
     assert chain2.size == size
     assert chain == chain
+    assert chain.choice(index=[0, 1], return_type=None).shape[0] == 2
     chain.bcast(chain)
     chain.sendrecv(chain, source=0, dest=0)
     chain['like.a'].param.update(fixed=False)

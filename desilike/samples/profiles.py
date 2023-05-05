@@ -69,15 +69,16 @@ class ParameterBestFit(Samples):
         """
         if params is None:
             params = self.params(**kwargs)
-        if index == 'argmax':
+        if isinstance(index, str) and index == 'argmax':
             index = self.logposterior.argmax()
-        di = {str(param): self[param][[index]] for param in params}
+        di = {str(param): self[param][index] for param in params}
         if return_type == 'dict':
-            return {k: v[0] for k, v in di.items()}
+            return di
         if return_type == 'nparray':
-            return np.array([value[0] for value in di.values()])
+            return np.array(list(di.values()))
         toret = self.copy()
-        toret.data = [self[param].clone(value=value) for param, value in di.items()]
+        isscalar = np.ndim(index) == 0
+        toret.data = [self[param].clone(value=[value] if isscalar else value) for param, value in di.items()]
         return toret
 
 
@@ -358,6 +359,29 @@ class Profiles(BaseClass):
                 pass
         return toret
 
+    def choice(self, index='argmax'):
+        """
+        Return profiles restricted to best fit(s).
+
+        Parameters
+        ----------
+        index : str, default='argmax'
+            'argmax' to return profiles for best fit (as defined by the point with maximum log-posterior in the samples).
+
+        Returns
+        -------
+        toret : dict, array, ParameterBestFit
+        """
+        if isinstance(index, str) and index == 'argmax':
+            index = self.bestfit.logposterior.argmax()
+        toret = self.deepcopy()
+        toret.bestfit = self.bestfit.choice(index=index, return_type=None)
+        try:
+            toret.error = self.error[index]
+        except AttributeError:
+            pass
+        return toret
+
     @classmethod
     def concatenate(cls, *others):
         """
@@ -507,7 +531,7 @@ class Profiles(BaseClass):
             if is_latex: row.append(param.latex(inline=True))
             else: row.append(str(param.name))
             row.append(str(param.varied))
-            if param in self.error:
+            if param in getattr(self, 'error', []):
                 ref_error = self.error[param][argmax]
             else:
                 ref_error = None

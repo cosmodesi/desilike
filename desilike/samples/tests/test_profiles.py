@@ -33,6 +33,11 @@ def test_misc():
     profiles2 = profiles.load(fn)
     assert profiles2 == profiles
     profiles.bcast(profiles)
+    choice = profiles.choice()
+    assert choice.bestfit.shape == (1,)
+    print(choice.error.shape, choice.error)
+    assert choice.error.shape == (1,)
+    assert profiles.choice(index=[0, 1]).bestfit.shape == (2,)
     del profiles.error
     profiles.bcast(profiles)
 
@@ -73,7 +78,7 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    #test_misc()
-    #test_stats()
-    #test_plot()
+    test_misc()
+    test_stats()
+    test_plot()
     test_mpi()

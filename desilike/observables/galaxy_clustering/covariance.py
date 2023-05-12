@@ -99,7 +99,12 @@ class BaseFootprint(BaseClass):
 
 class BoxFootprint(BaseFootprint):
 
-    pass
+    def __getstate__(self):
+        state = {}
+        for name in ['nbar', 'size', 'volume']:
+            name = '_' + name
+            state[name] = getattr(self, name)
+        return state
 
 
 class CutskyFootprint(BaseFootprint):
@@ -208,6 +213,20 @@ class CutskyFootprint(BaseFootprint):
             zrange = [zrange[0], zrange[1]]
             nbar *= 0.
         return self.__class__(nbar=nbar, zrange=zrange, area=area, cosmo=self.cosmo)
+
+    def __getstate__(self):
+        state = {}
+        for name in ['area', 'zrange', 'nbar', 'size']:
+            name = '_' + name
+            state[name] = getattr(self, name)
+        state['_cosmo'] = self._cosmo.__getstate__() if self._cosmo is not None else self._cosmo
+        return state
+
+    def __setstate__(self, state):
+        super(CutskyFootprint, self).__setstate__(state)
+        if self._cosmo is not None:
+            from cosmoprimo import Cosmology
+            self._cosmo = Cosmology.from_state(self._cosmo)
 
 
 class ObservablesCovarianceMatrix(BaseClass):

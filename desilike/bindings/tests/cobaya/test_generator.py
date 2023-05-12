@@ -12,4 +12,3 @@ TestDirectKaiserLikelihood = CobayaLikelihoodFactory(TestDirectKaiserLikelihood,
 
 from desilike.bindings.tests.test_generator import TestEmulatedDirectKaiserLikelihood
 TestEmulatedDirectKaiserLikelihood = CobayaLikelihoodFactory(TestEmulatedDirectKaiserLikelihood, {}, __name__)
-

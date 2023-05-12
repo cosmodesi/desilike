@@ -61,7 +61,7 @@ class BaseLikelihoodGenerator(BaseClass):
         self.header += 'from {} import {}'.format(self.factory.__module__, self.factory.__name__)
         self.dirname = os.path.abspath(os.path.join(dirname, os.path.basename(os.path.dirname(sys.modules[self.factory.__module__].__file__))))
 
-    def get_code(self, likelihood, kw_like=None, module=None):
+    def get_code(self, likelihood, name_like=None, kw_like=None, module=None):
         """
         Internal method to write code to generate likelihood object to be imported by the external inference code.
 
@@ -69,22 +69,27 @@ class BaseLikelihoodGenerator(BaseClass):
         ----------
         likelihood : type, callable
             Callable that returns a :class:`BaseLikelihood`, given some optional arguments (see ``kw_like``).
-        
+
+        name_like : str, default=None
+            Likelihood name, defaults to ``likelihood`` name.
+
         kw_like : dict, default=None
             Optional arguments for ``likelihood``.
-        
+
         module : str, default=None
             Full module name where ``likelihood`` is defined.
             If ``None``, the full module name is searched with :func:`find_module_from_file`; if not in a package,
             absolute path to file where ``likelihood`` object is defined will be used to import it in the generated code.
-        
+
         Returns
         -------
-        cls, fn, code : callable, str, str
-            Callable that generates :class:`BaseLikelihood`, file name where the code is to be written, and code itself.
+        cls, name, fn, code : callable, str, str
+            Callable that generates :class:`BaseLikelihood`, likelihood name, file name where the code is to be written, and code itself.
         """
         self.kw_like = kw_like = kw_like or {}
         cls = import_class(likelihood)
+        if name_like is None:
+            name_like = cls.__name__
         src_fn = sys.modules[cls.__module__].__file__
         # src_dir = os.path.dirname(src_fn)
         fn = os.path.join(self.dirname, os.path.relpath(src_fn, os.path.commonpath([self.dirname, src_fn])))
@@ -98,10 +103,10 @@ class BaseLikelihoodGenerator(BaseClass):
             # code += 'from {} import {}\n'.format(os.path.splitext(os.path.basename(fn))[0], cls.__name__)
             code = 'from desilike.bindings.base import load_from_file\n'
             code += "{} = load_from_file('{}', '{}')\n".format(cls.__name__, src_fn, cls.__name__)
-        code += '{0} = {1}({0}, {2}, __name__)'.format(cls.__name__, self.factory.__name__, kw_like)
-        return cls, fn, code
+        code += '{} = {}({}, {}, __name__)'.format(name_like, self.factory.__name__, cls.__name__, kw_like)
+        return cls, name_like, fn, code
 
-    def __call__(self, likelihood, kw_like=None, module=None):
+    def __call__(self, likelihood, name_like=None, kw_like=None, module=None, overwrite=True):
         """
         Generate file structure and code containing definition of likelihood such that it can be imported by the external inference code.
 
@@ -109,10 +114,13 @@ class BaseLikelihoodGenerator(BaseClass):
         ----------
         likelihood : list, type, callable
             List of (or single) callable(s) that returns a :class:`BaseLikelihood`, given some optional arguments (see ``kw_like``).
-        
+
+        name_like : str, default=None
+            Likelihood name, defaults to ``likelihood`` name.
+
         kw_like : dict, default=None
             Optional arguments for (each of) ``likelihood``.
-        
+
         module : str, default=None
             Module where ``likelihood`` is defined.
             If ``None``, absolute path to file where ``likelihood`` object is defined
@@ -124,20 +132,28 @@ class BaseLikelihoodGenerator(BaseClass):
             module = [module] * len(likelihood)
         if len(module) != len(likelihood):
             raise ValueError('Number of provided likelihood modules is not the same as the number of likelihoods')
+        if not is_sequence(name_like):
+            name_like = [name_like] * len(likelihood)
+        if len(name_like) != len(likelihood):
+            raise ValueError('Number of provided likelihood names name_like is not the same as the number of likelihoods')
         if not is_sequence(kw_like):
             kw_like = [kw_like] * len(likelihood)
         if len(kw_like) != len(likelihood):
-            raise ValueError('Number of provided likelihood kwargs is not the same as the number of likelihoods')
+            raise ValueError('Number of provided likelihood kwargs kw_like is not the same as the number of likelihoods')
         txt = {}
-        for likelihood, kw_like, module in zip(likelihood, kw_like, module):
-            fn, code = self.get_code(likelihood, kw_like, module=module)[1:]
+        for likelihood, name_like, kw_like, module in zip(likelihood, name_like, kw_like, module):
+            fn, code = self.get_code(likelihood, name_like=name_like, kw_like=kw_like, module=module)[2:]
             txt[fn] = txt.get(fn, []) + [code]
         for fn in txt:
             self.log_debug('Saving likelihood in {}'.format(fn))
-            with open(fn, 'w') as file:
-                file.write(self.header + self.line_delimiter)
-                for line in txt[fn]:
-                    file.write(line + self.line_delimiter)
+            try:
+                with open(fn, 'r') as file: current = file.read()
+            except IOError:
+                current = ''
+            with open(fn, 'w' if overwrite else 'a') as file:
+                for line in [self.header] + txt[fn]:
+                    if line not in current:
+                        file.write(line + self.line_delimiter)
 
 
 def get_likelihood_params(likelihood):

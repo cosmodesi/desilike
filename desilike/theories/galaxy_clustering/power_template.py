@@ -191,9 +191,10 @@ class BAOExtractor(BasePowerSpectrumExtractor):
 
     def initialize(self, z=1., eta=1. / 3., cosmo=None, fiducial='DESI'):
         self.z = float(z)
-        self.fiducial = get_cosmo(fiducial)
-        self.cosmo = cosmo
         self.eta = float(eta)
+        self.fiducial = get_cosmo(fiducial)
+        self.cosmo_requires = {}
+        self.cosmo = cosmo
         if external_cosmo(self.cosmo):
             self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
         elif cosmo is None:

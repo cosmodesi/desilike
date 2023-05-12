@@ -177,9 +177,9 @@ class CosmoSISLikelihoodGenerator(BaseLikelihoodGenerator):
         super(CosmoSISLikelihoodGenerator, self).__init__(CosmoSISLikelihoodFactory, *args, **kwargs)
 
     def get_code(self, *args, **kwargs):
-        cls, fn, code = super(CosmoSISLikelihoodGenerator, self).get_code(*args, **kwargs)
+        cls, like_name, fn, code = super(CosmoSISLikelihoodGenerator, self).get_code(*args, **kwargs)
         dirname = os.path.dirname(fn)
-        fn = os.path.join(dirname, cls.__name__ + '.py')
+        fn = os.path.join(dirname, like_name + '.py')
 
         def decode_prior(prior, param):
             limits = list(prior.limits)
@@ -217,17 +217,17 @@ class CosmoSISLikelihoodGenerator(BaseLikelihoodGenerator):
             return ' '.join(map(str, li))
 
         utils.mkdir(dirname)
-        with open(os.path.join(dirname, cls.__name__ + '_values.ini'), 'w') as file:
+        with open(os.path.join(dirname, like_name + '_values.ini'), 'w') as file:
             file.write('[{}]\n'.format(desilike_name))
             for name, value in values.items():
                 file.write('{} = {}\n'.format(name, tostr(value)))
 
-        with open(os.path.join(dirname, cls.__name__ + '_priors.ini'), 'w') as file:
+        with open(os.path.join(dirname, like_name + '_priors.ini'), 'w') as file:
             file.write('[{}]\n'.format(desilike_name))
             for name, value in priors.items():
                 file.write('{} = {}\n'.format(name, tostr(value)))
 
         code += '\n\n'
-        code += 'setup, execute, cleanup = {}.build_module()'.format(cls.__name__)
+        code += 'setup, execute, cleanup = {}.build_module()'.format(like_name)
 
-        return cls, fn, code
+        return cls, like_name, fn, code

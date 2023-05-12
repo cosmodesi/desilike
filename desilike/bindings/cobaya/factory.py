@@ -234,7 +234,7 @@ class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
         super(CobayaLikelihoodGenerator, self).__init__(CobayaLikelihoodFactory, *args, **kwargs)
 
     def get_code(self, *args, **kwargs):
-        cls, fn, code = super(CobayaLikelihoodGenerator, self).get_code(*args, **kwargs)
+        cls, like_name, fn, code = super(CobayaLikelihoodGenerator, self).get_code(*args, **kwargs)
         dirname = os.path.dirname(fn)
         params = {}
 
@@ -271,10 +271,10 @@ class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
                         di['ref'] = decode_prior(param.ref)
                     if param.proposal is not None:
                         di['proposal'] = param.proposal
-                #if param.drop: di['drop'] = True
+                # if param.drop: di['drop'] = True
                 params[param.name] = di
 
-        BaseConfig(dict(stop_at_error=True, params=params)).write(os.path.join(dirname, cls.__name__ + '.yaml'))
+        BaseConfig(dict(stop_at_error=True, params=params)).write(os.path.join(dirname, like_name + '.yaml'))
 
         import_line = 'from .{} import *'.format(os.path.splitext(os.path.basename(fn))[0])
         with open(os.path.join(dirname, '__init__.py'), 'a+') as file:
@@ -284,4 +284,4 @@ class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
                 if lines and lines[-1] != '\n': file.write('\n')
                 file.write(import_line + '\n')
 
-        return cls, fn, code
+        return cls, like_name, fn, code

@@ -10,6 +10,8 @@ params:
       dist: uniform
       max: 2.0
       min: 1.0
+  sigmapar: 0.0
+  sigmaper: 0.0
   sn0:
     latex: s_{n, 0}
     prior:

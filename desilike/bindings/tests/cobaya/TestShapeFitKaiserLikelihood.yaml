@@ -55,6 +55,8 @@ params:
       dist: uniform
       max: 1.01
       min: 0.99
+  sigmapar: 0.0
+  sigmaper: 0.0
   sn0:
     latex: s_{n, 0}
     prior:

@@ -101,8 +101,13 @@ def test_correlation_function():
 def test_footprint():
     from desilike.observables.galaxy_clustering import BoxFootprint, CutskyFootprint
     from cosmoprimo.fiducial import DESI
+    fn = '_tests/footprint.npy'
     footprint = BoxFootprint(volume=1e10, nbar=1e-3)
+    footprint.save(fn)
+    footprint = BoxFootprint.load(fn)
     footprint = CutskyFootprint(nbar=2500., area=14000., zrange=(0.8, 1.6), cosmo=DESI())
+    footprint.save(fn)
+    footprint = CutskyFootprint.load(fn)
     print(footprint.zavg, footprint.size / 1e6, footprint.shotnoise, footprint.volume / 1e9)
 
 

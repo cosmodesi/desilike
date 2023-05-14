@@ -107,7 +107,7 @@ def montepython_to_cosmoprimo(fiducial, classy):
     return cosmo
 
 
-def MontePythonLikelihoodFactory(cls, kw_like, module=None):
+def MontePythonLikelihoodFactory(cls, name_like, kw_like, module=None):
 
     from montepython.likelihood_class import Likelihood
 
@@ -127,7 +127,7 @@ def MontePythonLikelihoodFactory(cls, kw_like, module=None):
         if self._requires:
             cosmo = montepython_to_cosmoprimo(self._fiducial, classy)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
-        nuisance_parameter_names = data.get_mcmc_parameters(['nuisance'])
+        # nuisance_parameter_names = data.get_mcmc_parameters(['nuisance'])
         loglikelihood = self.like(**{name: data.mcmc_parameters[name]['current'] * data.mcmc_parameters[name]['scale'] for name in self._nuisance_params})
         return loglikelihood
 

@@ -103,7 +103,7 @@ class BaseLikelihoodGenerator(BaseClass):
             # code += 'from {} import {}\n'.format(os.path.splitext(os.path.basename(fn))[0], cls.__name__)
             code = 'from desilike.bindings.base import load_from_file\n'
             code += "{} = load_from_file('{}', '{}')\n".format(cls.__name__, src_fn, cls.__name__)
-        code += '{} = {}({}, {}, __name__)'.format(name_like, self.factory.__name__, cls.__name__, kw_like)
+        code += "{} = {}({}, '{}', {}, __name__)".format(name_like, self.factory.__name__, cls.__name__, name_like, kw_like)
         return cls, name_like, fn, code
 
     def __call__(self, likelihood, name_like=None, kw_like=None, module=None, overwrite=True):
@@ -146,10 +146,12 @@ class BaseLikelihoodGenerator(BaseClass):
             txt[fn] = txt.get(fn, []) + [code]
         for fn in txt:
             self.log_debug('Saving likelihood in {}'.format(fn))
-            try:
-                with open(fn, 'r') as file: current = file.read()
-            except IOError:
-                current = ''
+            current = ''
+            if not overwrite:
+                try:
+                    with open(fn, 'r') as file: current = file.read()
+                except IOError:
+                    pass
             with open(fn, 'w' if overwrite else 'a') as file:
                 for line in [self.header] + txt[fn]:
                     if line not in current:

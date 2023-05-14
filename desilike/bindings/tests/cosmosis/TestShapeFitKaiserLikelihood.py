@@ -2,7 +2,7 @@
 from desilike.bindings.cosmosis.factory import CosmoSISLikelihoodFactory
 
 from desilike.bindings.tests.test_generator import TestShapeFitKaiserLikelihood
-TestShapeFitKaiserLikelihood = CosmoSISLikelihoodFactory(TestShapeFitKaiserLikelihood, {}, __name__)
+TestShapeFitKaiserLikelihood = CosmoSISLikelihoodFactory(TestShapeFitKaiserLikelihood, TestShapeFitKaiserLikelihood, {}, __name__)
 
 setup, execute, cleanup = TestShapeFitKaiserLikelihood.build_module()
 

@@ -113,7 +113,7 @@ def cosmosis_to_cosmoprimo(fiducial, cosmo_params, block):
     return cosmo
 
 
-def CosmoSISLikelihoodFactory(cls, kw_like, module=None):
+def CosmoSISLikelihoodFactory(cls, name_like, kw_like, module=None):
 
     def __init__(self, options):
         self.like = cls(**kw_like)
@@ -127,7 +127,7 @@ def CosmoSISLikelihoodFactory(cls, kw_like, module=None):
             cosmo = cosmosis_to_cosmoprimo(self._fiducial, self._requires.get('params', {}), block)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
         loglikelihood = self.like(**{param.name: block[desilike_name, param.name] for param in self._nuisance_params})
-        block['likelihoods', '{}_like'.format(desilike_name)] = float(loglikelihood)
+        block['likelihoods', '{}_like'.format(name_like)] = float(loglikelihood)
 
     @classmethod
     def build_module(cls):
@@ -188,7 +188,7 @@ class CosmoSISLikelihoodGenerator(BaseLikelihoodGenerator):
                 if not np.isfinite(lim):
                     lim = prior.ppf(cdf)
                     limits[ilim] = lim
-                    self.log_warning('Infinite prior for parameter {}; setting to {:d}-sigma = {}'.format(param, nsigmas, lim))
+                    self.log_warning('Unbounded prior for parameter {}; setting to {:d}-sigma = {}'.format(param, nsigmas, lim))
             if prior.dist == 'uniform':
                 prior = ['uniform'] + limits
             elif prior.dist == 'norm':

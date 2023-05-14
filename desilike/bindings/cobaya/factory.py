@@ -189,7 +189,7 @@ def camb_or_classy_to_cosmoprimo(fiducial, provider, **params):
     return cosmo
 
 
-def CobayaLikelihoodFactory(cls, kw_like, module=None):
+def CobayaLikelihoodFactory(cls, name_like, kw_like, module=None):
 
     def initialize(self):
         """Prepare any computation, importing any necessary code, files, etc."""

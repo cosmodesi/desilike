@@ -134,7 +134,7 @@ def MontePythonLikelihoodFactory(cls, name_like, kw_like, module=None):
     d = {'__init__': __init__, 'loglkl': loglkl}
     if module is not None:
         d['__module__'] = module
-    return type(Likelihood)(cls.__name__, (Likelihood,), d)
+    return type(Likelihood)(name_like, (Likelihood,), d)
 
 
 class MontePythonLikelihoodGenerator(BaseLikelihoodGenerator):

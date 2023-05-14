@@ -107,6 +107,10 @@ def montepython_to_cosmoprimo(fiducial, classy):
     return cosmo
 
 
+def convert_param_name(name):
+    return name.replace('.', '_')
+
+
 def MontePythonLikelihoodFactory(cls, name_like, kw_like, module=None):
 
     from montepython.likelihood_class import Likelihood
@@ -115,7 +119,8 @@ def MontePythonLikelihoodFactory(cls, name_like, kw_like, module=None):
         Likelihood.__init__(self, path, data, command_line)
         self.like = cls(**kw_like)
         self._cosmo_params, self._nuisance_params = get_likelihood_params(self.like)
-        self.nuisance = self.use_nuisance = [param.name for param in self._nuisance_params]  # required by MontePython
+        self._nuisance_params = {convert_param_name(param.name): param.name for param in self._nuisance_params}
+        self.nuisance = self.use_nuisance = list(self._nuisance_params.keys())  # required by MontePython
         requires = self.like.runtime_info.pipeline.get_cosmo_requires()
         self._fiducial = requires.get('fiducial', {})
         self._requires = MontePythonEngine.get_requires(requires)
@@ -128,7 +133,7 @@ def MontePythonLikelihoodFactory(cls, name_like, kw_like, module=None):
             cosmo = montepython_to_cosmoprimo(self._fiducial, classy)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
         # nuisance_parameter_names = data.get_mcmc_parameters(['nuisance'])
-        loglikelihood = self.like(**{name: data.mcmc_parameters[name]['current'] * data.mcmc_parameters[name]['scale'] for name in self._nuisance_params})
+        loglikelihood = self.like(**{name: data.mcmc_parameters[mname]['current'] * data.mcmc_parameters[mname]['scale'] for mname, name in self._nuisance_params.items()})
         return loglikelihood
 
     d = {'__init__': __init__, 'loglkl': loglkl}
@@ -170,7 +175,7 @@ class MontePythonLikelihoodGenerator(BaseLikelihoodGenerator):
             if param.depends:
                 raise ValueError('Cannot cope with parameter dependencies')
             prior = decode_prior(param.prior)
-            name = '{}.{}'.format(like_name, param.name)
+            name = '{}.{}'.format(like_name, convert_param_name(param.name))
             for attr in ['center', 'variance']:
                 if attr in prior:
                     likelihood_attrs['{}_prior_{}'.format(name, attr)] = float(prior[attr])

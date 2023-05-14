@@ -2,5 +2,5 @@
 from desilike.bindings.montepython.factory import MontePythonLikelihoodFactory
 
 from desilike.bindings.tests.test_generator import TestSimpleLikelihood
-TestSimpleLikelihood = MontePythonLikelihoodFactory(TestSimpleLikelihood, TestSimpleLikelihood, {}, __name__)
+TestSimpleLikelihood = MontePythonLikelihoodFactory(TestSimpleLikelihood, 'TestSimpleLikelihood', {}, __name__)
 

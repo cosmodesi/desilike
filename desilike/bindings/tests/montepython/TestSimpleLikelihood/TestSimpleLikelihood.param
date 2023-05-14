@@ -1,3 +1,3 @@
 # To be copy-pasted in the MontePython *.param file
-data.parameters[''] = [0.0, None, None, 10.0, 1.0, 'nuisance']
-data.parameters[''] = [0.0, None, None, 10.0, 1.0, 'nuisance']
+data.parameters['a'] = [0.0, None, None, 10.0, 1.0, 'nuisance']
+data.parameters['b'] = [0.0, None, None, 10.0, 1.0, 'nuisance']

@@ -189,6 +189,6 @@ class MontePythonLikelihoodGenerator(BaseLikelihoodGenerator):
         with open(os.path.join(dirname, like_name + '.param'), 'w') as file:
             file.write('# To be copy-pasted in the MontePython *.param file\n')
             for name, value in parameters.items():
-                file.write("data.parameters['{}'] = {}\n".format(name[len(name) + 1:], value))
+                file.write("data.parameters['{}'] = {}\n".format(name[len(like_name) + 1:], value))
 
         return cls, like_name, fn, code

@@ -289,11 +289,12 @@ class BasePipeline(BaseClass):
         for calculator in self.calculators:
             cosmo_requires = getattr(calculator, 'cosmo_requires', {})
             if cosmo_requires:
+                conversions = {'logA': 'ln10^10A_s'}
                 cosmo_params = cosmo_requires.get('params', {})
                 if cosmo_params:
                     for basename, param in calculator.runtime_info.base_params.items():
                         if basename in cosmo_params:
-                            self.param_values[param.name] = calculator.runtime_info.param_values[basename] = cosmo[basename]
+                            self.param_values[param.name] = calculator.runtime_info.param_values[basename] = cosmo[conversions.get(basename, basename)]
                 if set(cosmo_requires.keys()) != {'params'}:  # requires a :class:`cosmoprimo.Cosmology` instance as ``cosmo`` attribute
                     calculator.cosmo = cosmo
                 calculator.runtime_info.tocalculate = True

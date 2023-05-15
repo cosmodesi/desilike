@@ -213,7 +213,8 @@ Now we have our likelihood, we can bind it to external cosmological inference co
       from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
       from desilike.likelihoods import ObservablesGaussianLikelihood
 
-      template = DirectPowerSpectrumTemplate(z=1.1)
+      # 'external' means "get primordial quantities from external source, e.g. cobaya
+      template = DirectPowerSpectrumTemplate(z=1.1, cosmo='external')
       theory = KaiserTracerPowerSpectrumMultipoles(template=template)
       observable = TracerPowerSpectrumMultipolesObservable(data={'b1': 1.2}, covariance=None,
                                                            klim={0: [0.01, 0.2, 0.005], 2: [0.01, 0.2, 0.005]}, theory=theory)

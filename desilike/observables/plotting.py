@@ -44,7 +44,7 @@ def plot_covariance_matrix(covariance, x1=None, x2=None, xlabel1=None, xlabel2=N
     fig.subplots_adjust(wspace=wspace, hspace=hspace)
     for i in range(ncols):
         for j in range(nrows):
-            ax = lax[nrows-1-i][j]
+            ax = lax[nrows - 1 - i][j]
             xx1, xx2 = x1[i], x2[j]
             if x1[i] is None: xx1 = 1 + np.arange(mat[i][j].shape[0])
             if x2[j] is None: xx2 = 1 + np.arange(mat[i][j].shape[1])

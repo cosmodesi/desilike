@@ -159,12 +159,12 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         figsize = (6, 1.5 * sum(height_ratios))
         fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
         fig.subplots_adjust(hspace=0)
-        data, model, std = self.data, self.model, self.std
+        data, theory, std = self.data, self.theory, self.std
         for ill, ell in enumerate(self.ells):
             lax[0].errorbar(self.s[ill], self.s[ill]**2 * data[ill], yerr=self.s[ill]**2 * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o', label=r'$\ell = {:d}$'.format(ell))
-            lax[0].plot(self.s[ill], self.s[ill]**2 * model[ill], color='C{:d}'.format(ill))
+            lax[0].plot(self.s[ill], self.s[ill]**2 * theory[ill], color='C{:d}'.format(ill))
         for ill, ell in enumerate(self.ells):
-            lax[ill + 1].plot(self.s[ill], (data[ill] - model[ill]) / std[ill], color='C{:d}'.format(ill))
+            lax[ill + 1].plot(self.s[ill], (data[ill] - theory[ill]) / std[ill], color='C{:d}'.format(ill))
             lax[ill + 1].set_ylim(-4, 4)
             for offset in [-2., 2.]: lax[ill + 1].axhline(offset, color='k', linestyle='--')
             lax[ill + 1].set_ylabel(r'$\Delta \xi_{{{0:d}}} / \sigma_{{ \xi_{{{0:d}}} }}$'.format(ell))
@@ -186,7 +186,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         return self.wmatrix.flatcorr
 
     @property
-    def model(self):
+    def theory(self):
         return self.wmatrix.corr
 
     @property

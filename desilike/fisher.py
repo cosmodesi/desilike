@@ -13,10 +13,11 @@ from . import utils
 
 class PriorCalculator(BaseCalculator):
 
+    _with_namespace = True
+
     """Calculator that computes the logprior."""
 
     def calculate(self, **params):
-        params = {self.runtime_info.base_params[basename].name: value for basename, value in params.items()}
         self.logprior = self.runtime_info.params.prior(**params)
 
     def get(self):

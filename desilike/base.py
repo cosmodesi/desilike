@@ -585,6 +585,7 @@ class RuntimeInfo(BaseClass):
         self._initialized = False
         self._tocalculate = True
         self.calculated = False
+        self._with_namespace = False
         self.params = ParameterCollection(init.params)
         self.name = self.calculator.__class__.__name__
 
@@ -647,7 +648,7 @@ class RuntimeInfo(BaseClass):
         self.input_params = self._params.select(input=True)
         self.derived_params = self._params.select(derived=True)
         self.solved_params = self._params.select(solved=True)
-        self.param_values = {param.basename: param.value for param in self.input_params}
+        self.param_values = {(param.name if self._with_namespace else param.basename): param.value for param in self.input_params}
         self._tocalculate = True
 
     @property
@@ -692,18 +693,23 @@ class RuntimeInfo(BaseClass):
             self.install()
             bak = self.init.params
             params_with_namespace = ParameterCollection(self.init.params).deepcopy()
-            params_basenames = params_with_namespace.basenames()
-            # Pass parameters without namespace
-            self.params = self.init.params = params_with_namespace.clone(namespace=None)
+            self._with_namespace = getattr(self.calculator, '_with_namespace', False)
+            if not self._with_namespace:
+                params_basenames = params_with_namespace.basenames()
+                # Pass parameters without namespace
+                self.params = self.init.params = params_with_namespace.clone(namespace=None)
+            else:
+                self.params = self.init.params = params_with_namespace
             try:
                 self.calculator.initialize(*self.init.args, **self.init)
             except Exception as exc:
                 raise PipelineError('Error in method initialize of {}'.format(self.calculator)) from exc
             finally:
                 self._initialization = False
-            for param in self.init.params:
-                if param.namespace is None and param.basename in params_basenames:  # update namespace
-                    param.update(namespace=params_with_namespace[params_basenames.index(param.basename)].namespace)
+            if not self._with_namespace:
+                for param in self.init.params:
+                    if param.basename in params_basenames:  # update namespace
+                        param.update(namespace=params_with_namespace[params_basenames.index(param.basename)].namespace)
             self.params = self.init.params
             self.init.params = bak
             self.initialized = True
@@ -744,7 +750,7 @@ class RuntimeInfo(BaseClass):
         if full:
             for param, value in param_values.items():
                 if param in self.input_params:
-                    basename = self.input_params[param].basename
+                    basename = self.input_params[param].name if self._with_namespace else self.input_params[param].basename
                     if force is not None:
                         self._tocalculate = force
                     elif type(self.param_values[basename]) is not type(value) or self.param_values[basename] != value:

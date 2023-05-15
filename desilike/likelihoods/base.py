@@ -15,6 +15,7 @@ class BaseLikelihood(BaseCalculator):
 
     """Base class for likelihood."""
     _attrs = ['loglikelihood', 'logprior']
+    solved_default = '.marg'
 
     def initialize(self):
         for name in self._attrs:
@@ -190,7 +191,6 @@ class BaseGaussianLikelihood(BaseLikelihood):
     """
 
     _attrs = ['loglikelihood', 'logprior']
-    solved_default = '.marg'
 
     def initialize(self, data, covariance=None, precision=None):
         self.flatdata = np.ravel(data)

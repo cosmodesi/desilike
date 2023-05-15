@@ -285,11 +285,11 @@ We provide a routine for Fisher estimation.
 
   fisher = Fisher(likelihood)
   # Estimate Fisher (precision) matrix at b1=2, using jax auto-differentiation where possible, else finite differentiation (with step :attr:`Parameter.delta`)
-  precision = fisher(b1=2.)
-  # To sum with independent likelihood's Fisher matrix:
-  # precision1 + precision2
+  fish = fisher(b1=2.)
+  # To sum independent likelihood's Fisher matrices:
+  # fish1 + fish2
   # To get covariance matrix
-  covariance = precision.to_covariance()
+  covariance = fish.covariance()
 
 See :class:`~desilike.parameter.ParameterPrecision` and :class:`~desilike.parameter.ParameterCovariance` to know more about precision and covariance
 data classes.

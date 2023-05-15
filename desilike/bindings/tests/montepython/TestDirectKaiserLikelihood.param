@@ -24,8 +24,10 @@ data.parameters['h']         	= [0.703,  -1,-1, 0.0065,1,   'cosmo']
 data.parameters['tau_reio']   = [0.085,  -1,-1, 0.0044,1,   'cosmo']
 
 # Nuisance
-data.parameters['b1'] = [1.69, 0.0, 4.0, 0.5, 1.0, 'nuisance']
-data.parameters['sn0'] = [0.0, None, None, 1000.0, 1.0, 'nuisance']
+data.parameters['sigmapar'] = [0.0, 0.0, 10.0, 0.0, 1.0, 'nuisance']
+data.parameters['sigmaper'] = [0.0, 0.0, 10.0, 0.0, 1.0, 'nuisance']
+data.parameters['LRG_b1'] = [1.69, 0.0, 4.0, 0.5, 1.0, 'nuisance']
+data.parameters['LRG_sn0'] = [0.0, None, None, 1000.0, 1.0, 'nuisance']
 
 # Derived parameter list
 

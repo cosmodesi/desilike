@@ -1649,7 +1649,7 @@ class ParameterCollection(BaseParameterCollection):
                         if v in oldnames: dparam.depends[k] = newnames[oldnames.index(v)]
                 names = {}
                 for param in self.data: names[param.name] = names.get(param.name, 0) + 1
-                duplicates = {name: multiplicity for basename, multiplicity in names.items() if multiplicity > 1}
+                duplicates = {basename: multiplicity for basename, multiplicity in names.items() if multiplicity > 1}
                 if duplicates:
                     raise ValueError('Cannot update namespace, as following duplicates found: {}'.format(duplicates))
         else:

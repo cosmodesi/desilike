@@ -258,7 +258,7 @@ class KaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
     def calculate(self, b1=1., sn0=0.):
         sn0 = np.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * sn0
-        self.power = b1**2 * self.pt.pktable['pk_tt'] + 2. * b1 * self.pt.pktable['pk_dt'] + self.pt.pktable['pk_tt'] + sn0
+        self.power = b1**2 * self.pt.pktable['pk_dd'] + 2. * b1 * self.pt.pktable['pk_dt'] + self.pt.pktable['pk_tt'] + sn0
 
 
 class KaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):

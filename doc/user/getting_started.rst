@@ -16,10 +16,10 @@ Let's describe how to specify the likelihood for power spectrum multipoles.
 First, we specify a template, i.e. how the linear power spectrum as input of the theory codes is parameterized.
 Several options are possible:
 
-- `ShapeFit <https://arxiv.org/abs/2106.07641>`_ parameterization, in terms of :math:`q_{\parallel}`, :math:`q_{\perp}` (scaling parameters),
-  :math:`df` (variation in the growth rate of structure: :math:`f / f^{\mathrm{fid}}`), :math:`dm` (ShapeFit tilt parameter) with :class:`~desilike.theories.galaxy_clustering.power_template.ShapeFitPowerSpectrumTemplate`;
 - standard (as in BOSS/eBOSS) parameterization, in terms of :math:`q_{\parallel}`, :math:`q_{\perp}` (scaling parameters),
   :math:`df` (variation in the growth rate of structure: :math:`f / f^{\mathrm{fid}}`) with :class:`~desilike.theories.galaxy_clustering.power_template.StandardPowerSpectrumTemplate`;
+- `ShapeFit <https://arxiv.org/abs/2106.07641>`_ parameterization, in terms of :math:`q_{\parallel}`, :math:`q_{\perp}` (scaling parameters),
+  :math:`df` (variation in the growth rate of structure: :math:`f / f^{\mathrm{fid}}`), :math:`dm` (ShapeFit tilt parameter) with :class:`~desilike.theories.galaxy_clustering.power_template.ShapeFitPowerSpectrumTemplate`;
 - parameterization in terms of base cosmological parameters, with :class:`~desilike.theories.galaxy_clustering.power_template.DirectPowerSpectrumTemplate`
 
 See :mod:`~desilike.theories.galaxy_clustering.power_template` for all templates.
@@ -72,7 +72,7 @@ Then, we want to compare the theory to data (an *observable*), typically:
   # Or TracerCorrelationFunctionMultipolesObservable
   observable = TracerPowerSpectrumMultipolesObservable(data={'b1': 1.2},  # path to data, *pypower* power spectrum measurement, array, or dictionary of parameters where to evaluate the theory to take as a mock data vector
                                                        covariance=None,  # path to mocks, array (covariance matrix), or None
-                                                       klims={0: [0.01, 0.2, 0.005], 2: [0.01, 0.2, 0.005]},  # k-limits, between 0.01 and 0.2 h/Mpc with 0.005 h/Mpc step size for ell = 0, 2
+                                                       klim={0: [0.01, 0.2, 0.005], 2: [0.01, 0.2, 0.005]},  # k-limits, between 0.01 and 0.2 h/Mpc with 0.005 h/Mpc step size for ell = 0, 2
                                                        theory=theory)  # previously defined theory
 
 In this (runnable!) example, we do not have a covariance yet; let's estimate it on-the-fly (Gaussian approximation).
@@ -83,7 +83,7 @@ In this (runnable!) example, we do not have a covariance yet; let's estimate it 
 
   footprint = BoxFootprint(volume=1e9, nbar=1e-3)  # box with volume of 1e9 (Mpc/h)^3 and density of 1e-3 (h/Mpc)^3
   covariance = ObservablesCovarianceMatrix(observables=[observable], footprints=[footprint])
-  cov = covariance({'b1': 1.2})   # evaluate covariance matrix at this parameter
+  cov = covariance(b1=1.2)   # evaluate covariance matrix at this parameter
 
 Now we can define the likelihood:
 
@@ -157,6 +157,17 @@ They can be all updated with :meth:`~desilike.parameter.Parameter.update`, e.g.:
   # Now varied likelihood parameters are:
   likelihood.varied_params  # dm, df, sn0, qpar, qper
 
+The likelihood can be analytically marginalized over linear parameters (here ``sn0``):
+
+.. code-block:: python
+
+  # '.best': set sn0 at best fit
+  # '.marg': marginalization, assuming Gaussian likelihood
+  # '.auto': automatically choose between '.best' (likelihood profiling) and '.marg' (likelihood sampling)
+  likelihood.all_params['sn0'].update(derived='.auto')
+  # Now the likelihood has for varied parameters (no sn0)
+  likelihood.varied_params  # b1, df, dm, qiso, qap
+
 One can reparameterize the whole likelihood as:
 
 .. code-block:: python
@@ -170,17 +181,6 @@ One can reparameterize the whole likelihood as:
   likelihood.varied_params  # b1, sn0, df, dm, qiso, qap
 
 (a reparameterization we could have achieved in this particular case by passing ``apmode='qparqper'`` to ``ShapeFitPowerSpectrumTemplate``)
-
-The likelihood can be analytically marginalized over linear parameters (here ``sn0``):
-
-.. code-block:: python
-
-  # '.best': set sn0 at best fit
-  # '.marg': marginalization, assuming Gaussian likelihood
-  # '.auto': automatically choose between '.best' (likelihood profiling) and '.marg' (likelihood sampling)
-  likelihood.all_params['sn0'].update(derived='.auto')
-  # Now the likelihood has for varied parameters (no sn0)
-  likelihood.varied_params  # b1, df, dm, qiso, qap
 
 To update the whole parameterization of a calculator, one can do:
 
@@ -213,19 +213,21 @@ Now we have our likelihood, we can bind it to external cosmological inference co
       from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
       from desilike.likelihoods import ObservablesGaussianLikelihood
 
+      template = DirectPowerSpectrumTemplate(z=1.1)
+      theory = KaiserTracerPowerSpectrumMultipoles(template=template)
       observable = TracerPowerSpectrumMultipolesObservable(data={'b1': 1.2}, covariance=None,
-                                                           klims={0: [0.01, 0.2, 0.005], 2: [0.01, 0.2, 0.005]}, theory=theory)
+                                                           klim={0: [0.01, 0.2, 0.005], 2: [0.01, 0.2, 0.005]}, theory=theory)
       footprint = BoxFootprint(volume=1e9, nbar=1e-3)
-      covariance = ObservablesCovarianceMatrix(observables=[observable], footprints=[footprint])
-      cov = covariance({'b1': 1.2})
-      return ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
+      covariance = ObservablesCovarianceMatrix(observables=observable, footprints=footprint)
+      cov = covariance(b1=1.2)
+      return ObservablesGaussianLikelihood(observables=observable, covariance=cov)
 
 
     from desilike import setup_logging
     from desilike.bindings import CobayaLikelihoodGenerator, CosmoSISLikelihoodGenerator, MontePythonLikelihoodGenerator
 
     setup_logging('info')
-    # Pass the function below to the generators, that will write the necessary files to import it as an external likelihood
+    # Pass the function above to the generators, that will write the necessary files to import it as an external likelihood
     # in cobaya, cosmosis, montepython
     CobayaLikelihoodGenerator()(MyLikelihood)
     CosmoSISLikelihoodGenerator()(MyLikelihood)
@@ -255,7 +257,7 @@ See also the base emulator class, :class:`~desilike.emulators.Emulator`.
 
   theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=0.8))
 
-  from desilike.emulators import Emulator, TaylorEmulatorEngine
+  from desilike.emulators import Emulator, TaylorEmulatorEngine, EmulatedCalculator
 
   # Let's emulate the perturbation theory part (.pt) by performing a Taylor expansion of order 3
   emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(order=3))
@@ -267,7 +269,7 @@ See also the base emulator class, :class:`~desilike.emulators.Emulator`.
   # And reloaded with:
   pt = EmulatedCalculator.load('emulator.npy')
 
-  theory.update(pt=pt)
+  theory.init.update(pt=pt)
   # Now the theory will run much faster!
   theory(logA=3.)
 
@@ -300,7 +302,7 @@ Profilers
 Because we may want to test cosmological inference in-place (without resorting to montepython, cosmosis or cobaya),
 we provide wrapping for some profilers and samplers.
 
-Available profilers are:
+Profilers currently available are:
 - `minuit <https://github.com/scikit-hep/iminuit>`_, used by the high-energy physics community, with :class:`~desilike.profilers.MinuitProfiler`
 - `bobyqa <https://github.com/numericalalgorithmsgroup/pybobyqa>`_, with :class:`~desilike.profilers.BOBYQAProfiler`
 - `scipy <https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html#scipy.optimize.minimize>`_, with :class:`~desilike.profilers.ScipyProfiler`
@@ -324,7 +326,7 @@ See :class:`~desilike.samples.profiles.Profiles` to know more about this data cl
 Samplers
 --------
 
-Available samplers are:
+Samplers currently available are:
 - `Antony Lewis <https://github.com/CobayaSampler/cobaya/tree/master/cobaya/samplers/mcmc>`_ MCMC sampler, with :class:`~desilike.samplers.MCMCSampler`
 - `emcee <https://github.com/dfm/emcee>`_ ensemble sampler, with :class:`~desilike.samplers.EmceeSampler`
 - `zeus <https://github.com/minaskar/zeus>`_ ensemble slicing sampler, with :class:`~desilike.samplers.ZeusSampler`

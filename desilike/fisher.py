@@ -29,6 +29,8 @@ from desilike.likelihoods import BaseGaussianLikelihood
 
 class FisherGaussianLikelihood(BaseGaussianLikelihood):
 
+    _with_namespace = True
+
     def initialize(self, fisher):
         data = fisher.mean()
         precision = fisher.precision(return_type='nparray')

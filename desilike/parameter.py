@@ -2125,7 +2125,7 @@ class Samples(BaseParameterCollection):
             return self.get(name)
         new = self.copy()
         try:
-            index = [name] if np.ndim(name) == 0 else name
+            index = [name] if not isinstance(name, slice) and np.ndim(name) == 0 else name
             new.data = [column[index] for column in self.data]
         except IndexError as exc:
             raise IndexError('Unrecognized indices {}'.format(name)) from exc

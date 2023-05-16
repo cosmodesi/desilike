@@ -762,7 +762,7 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
         # bias = [b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4]
         # pkells = self.pt.combine_bias_terms_pkell(bias)[1:]
         # return np.array([pkells[[0, 2, 4].index(ell)] for ell in self.ells])
-        nd = getattr(self, 'nd', 1.)
+        nd = getattr(self, 'nd', 1e4)
         b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4 = pars
         bias_monomials = jnp.array([1, b1, b1**2, b2, b1 * b2, b2**2, bs, b1 * bs, b2 * bs, bs**2, b3, b1 * b3, alpha0, alpha2, alpha4, alpha6, sn0 / nd, sn2 / nd, sn4 / nd])
         return jnp.sum(self.pktable * bias_monomials, axis=-1)

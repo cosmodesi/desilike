@@ -35,23 +35,23 @@ def _make_list(obj, length=None, default=None):
     return obj
 
 
-def _get_default_chain_params(chains, params=None, varied=True, derived=False, **kwargs):
+def _get_default_chain_params(chains, params=None, **kwargs):
     chains = _make_list(chains)
     if params is not None:
         params = _make_list(params)
         return sum(chain.params(name=[str(param) for param in params]) for chain in chains)
-    list_params = [chain.params(varied=varied, derived=derived, **kwargs) for chain in chains]
+    list_params = [chain.params(**kwargs) for chain in chains]
     from desilike.parameter import ParameterCollection
     return ParameterCollection([params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])])
 
 
-def _get_default_profiles_params(profiles, params=None, of='bestfit', varied=True, derived=False, **kwargs):
+def _get_default_profiles_params(profiles, params=None, of='bestfit', **kwargs):
     profiles = _make_list(profiles)
     if params is not None:
         params = _make_list(params)
         list_params = [profile.get(of).params(name=[str(param) for param in params]) for profile in profiles]
     else:
-        list_params = [profile.get(of).params(varied=varied, derived=derived, **kwargs) for profile in profiles]
+        list_params = [profile.get(of).params(**kwargs) for profile in profiles]
     return [params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])]
 
 
@@ -99,7 +99,7 @@ def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, k
     """
     from matplotlib import pyplot as plt
     chains = _make_list(chains)
-    params = _get_default_chain_params(chains, params=params)
+    params = _get_default_chain_params(chains, params=params, varied=True, derived=False)
     nparams = len(params)
     colors = _make_list(colors, length=len(chains), default=None)
     kw_plot = kw_plot or {'alpha': 0.2}
@@ -171,7 +171,7 @@ def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, s
     ax : matplotlib.axes.Axes
     """
     from matplotlib import pyplot as plt
-    params = _get_default_chain_params(chains, params=params)
+    params = _get_default_chain_params(chains, params=params, varied=True, derived=False)
     if slices is None:
         nsteps = min(chain.size for chain in chains)
         slices = np.arange(100, nsteps, 500)
@@ -244,7 +244,7 @@ def plot_geweke(chains, params=None, threshold=None, slices=None, labelsize=None
     ax : matplotlib.axes.Axes
     """
     from matplotlib import pyplot as plt
-    params = _get_default_chain_params(chains, params=params)
+    params = _get_default_chain_params(chains, params=params, varied=True, derived=False)
     if slices is None:
         nsteps = min(chain.size for chain in chains)
         slices = np.arange(100, nsteps, 500)
@@ -313,7 +313,7 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
     """
     from matplotlib import pyplot as plt
     chains = _make_list(chains)
-    params = _get_default_chain_params(chains, params=params)
+    params = _get_default_chain_params(chains, params=params, varied=True, derived=False)
     if slices is None:
         nsteps = min(chain.size for chain in chains)
         slices = np.arange(100, nsteps, 500)
@@ -383,7 +383,7 @@ def plot_triangle(chains, params=None, labels=None, g=None, **kwargs):
     if g is None: g = plots.get_subplot_plotter()
     chains = _make_list(chains)
     labels = _make_list(labels, length=len(chains), default=None)
-    params = _get_default_chain_params(chains, params=params)
+    params = _get_default_chain_params(chains, params=params, varied=True)
     chains = [chain.to_getdist(label=label, params=chain.params(name=params.names())) for chain, label in zip(chains, labels)]
     g.triangle_plot(chains, [str(param) for param in params], **kwargs)
     return g
@@ -585,7 +585,7 @@ def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=No
     """
     from matplotlib import pyplot as plt
     profiles = _make_list(profiles)
-    params = _get_default_profiles_params(profiles, params=params)
+    params = _get_default_profiles_params(profiles, params=params, varied=True, derived=False)
     truths = _make_list(truths, length=len(params), default=None)
     ybands = _make_list(ybands, length=len(params), default=None)
     ylimits = _make_list(ybands, length=len(params), default=None)
@@ -682,7 +682,7 @@ def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors
     """
     from matplotlib import pyplot as plt
     profiles = _make_list(profiles)
-    params = _get_default_profiles_params(profiles, params=params, of='profile')
+    params = _get_default_profiles_params(profiles, params=params, of='profile', varied=True, derived=False)
     nprofiles = len(profiles)
     offsets = _make_list(offsets, length=nprofiles, default=0.)
     labels = _make_list(labels, length=nprofiles, default=None)

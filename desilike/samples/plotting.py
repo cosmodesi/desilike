@@ -374,6 +374,9 @@ def plot_triangle(chains, params=None, labels=None, g=None, **kwargs):
     show : bool, default=False
         If ``True``, show figure.
 
+    **kwargs : dict
+        Optional parameters for :meth:`GetDistPlotter.triangle_plot`.
+
     Returns
     -------
     lax : array

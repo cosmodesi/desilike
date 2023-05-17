@@ -4,7 +4,7 @@ import numpy as np
 from scipy import interpolate
 
 from desilike.jax import numpy as jnp
-from desilike import utils
+from desilike import utils, BaseCalculator
 from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
 from .base import BaseTheoryPowerSpectrumMultipoles, BaseTheoryCorrelationFunctionMultipoles, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
 from .power_template import DirectPowerSpectrumTemplate, StandardPowerSpectrumTemplate
@@ -26,6 +26,10 @@ class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         kin = np.geomspace(min(1e-3, self.k[0] / 2, self.template.init.get('k', [1.])[0]), max(1., self.k[-1] * 2, self.template.init.get('k', [0.])[0]), 3000)  # margin for AP effect
         self.template.init.update(k=kin)
 
+    @property
+    def z(self):
+        return self.template.z
+
 
 class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipoles):
 
@@ -42,8 +46,12 @@ class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipole
         kin = np.geomspace(min(1e-3, 1 / self.s[-1] / 2, self.template.init.get('k', [1.])[0]), max(2., 1 / self.s[0] * 2, self.template.init.get('k', [0.])[0]), 3000)  # margin for AP effect
         self.template.init.update(k=kin)
 
+    @property
+    def z(self):
+        return self.template.z
 
-class BaseTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
+
+class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
 
     """Base class for perturbation theory tracer power spectrum multipoles."""
     config_fn = 'full_shape.yaml'
@@ -67,8 +75,7 @@ class BaseTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
             if name in kwargs:
                 self.pt.init.update({name: kwargs.pop(name)})
         self.required_bias_params, self.optional_bias_params = {}, {}
-        super(BaseTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
-        self.pt.init.update(k=self.k, ells=self.ells)
+        self.pt.init.update(kwargs)
         self.set_params()
 
     def set_params(self):
@@ -82,8 +89,27 @@ class BaseTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
     def template(self):
         return self.pt.template
 
+    @property
+    def k(self):
+        return self.pt.k
 
-class BaseTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipoles):
+    @property
+    def z(self):
+        return self.pt.z
+
+    @property
+    def ells(self):
+        return self.pt.ells
+
+    def __getstate__(self):
+        state = {}
+        for name in ['k', 'z', 'ells', 'power']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        return state
+
+
+class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
 
     """Base class for perturbation theory tracer correlation function multipoles."""
     config_fn = 'full_shape.yaml'
@@ -104,8 +130,7 @@ class BaseTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMulti
             elif name in self.options:
                 self.pt.init.update({name: self.options[name]})
         self.required_bias_params, self.optional_bias_params = {}, {}
-        super(BaseTracerCorrelationFunctionMultipoles, self).initialize(*args, **kwargs)
-        self.pt.init.update(s=self.s, ells=self.ells)
+        self.pt.init.update(kwargs)
         self.set_params()
 
     def set_params(self):
@@ -118,6 +143,25 @@ class BaseTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMulti
     @property
     def template(self):
         return self.pt.template
+
+    @property
+    def s(self):
+        return self.pt.s
+
+    @property
+    def z(self):
+        return self.pt.z
+
+    @property
+    def ells(self):
+        return self.pt.ells
+
+    def __getstate__(self):
+        state = {}
+        for name in ['s', 'z', 'ells', 'corr']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        return state
 
 
 class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):
@@ -138,6 +182,10 @@ class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
     @property
     def template(self):
         return self.power.template
+
+    @property
+    def z(self):
+        return self.power.z
 
     def get(self):
         return self.corr
@@ -691,11 +739,12 @@ class BaseVelocileptorsPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, Ba
 
     def __getstate__(self):
         state = {}
+        for name in ['k', 'z', 'ells', 'wmu']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
         for name in self._pt_attrs:
             if hasattr(self.pt, name):
                 state[name] = getattr(self.pt, name)
-        for name in ['wmu']:
-            state[name] = getattr(self, name)
         return state
 
 
@@ -1217,6 +1266,9 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
     def __getstate__(self):
         state = {}
+        for name in ['k', 'z', 'ells']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
         for name in self._pt_attrs:
             if hasattr(self.pt, name):
                 state[name] = getattr(self.pt, name)
@@ -1340,6 +1392,9 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
 
     def __getstate__(self):
         state = {}
+        for name in ['s', 'z', 'ells']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
         for name in self._pt_attrs:
             if hasattr(self.pt, name):
                 state[name] = getattr(self.pt, name)

@@ -557,8 +557,8 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_integ()
-    #test_bao()
-    #test_full_shape()
+    test_bao()
+    test_full_shape()
     test_png()
     #test_pk_to_xi()
     #test_ap_diff()

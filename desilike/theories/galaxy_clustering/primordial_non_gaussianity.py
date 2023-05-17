@@ -100,5 +100,9 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
         pkmu = jac * fog * (bias + f * muap**2)**2 * interpolate.interp1d(np.log10(kin), pk_dd, kind='cubic', axis=-1)(np.log10(kap)) + sn0
         self.power = self.to_poles(pkmu)
 
+    @property
+    def z(self):
+        return self.template.z
+
     def get(self):
         return self.power

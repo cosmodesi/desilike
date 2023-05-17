@@ -18,7 +18,7 @@ class BaseTheoryPowerSpectrumMultipoles(BaseCalculator):
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'ells', 'power']:
+        for name in ['k', 'z', 'ells', 'power']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
@@ -35,7 +35,7 @@ class BaseTheoryCorrelationFunctionMultipoles(BaseCalculator):
 
     def __getstate__(self):
         state = {}
-        for name in ['s', 'ells', 'corr', 'fiducial']:
+        for name in ['s', 'z', 'ells', 'corr', 'fiducial']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
@@ -45,24 +45,28 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
 
     """Base class for theory correlation function from power spectrum multipoles."""
 
-    def initialize(self, s=None, ells=(0, 2, 4), power=None, **kwargs):
-        super(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles, self).initialize(s=s, ells=ells)
-        self.k = np.logspace(-4., 3., 2048)
-        from cosmoprimo import PowerToCorrelation
-        self.fftlog = PowerToCorrelation(self.k, ell=self.ells, q=0, lowring=True)
-        # Important to have high enough sampling, otherwise wiggles can be seen at small s
-        self.kin = np.geomspace(self.k[0], 0.6, 300)
-        mask = self.k > self.kin[-1]
-        self.k_high = np.log10(self.k[mask] / self.kin[-1])
-        self.pad_high = np.exp(-(self.k[mask] / self.kin[-1] - 1.)**2 / (2. * (10.)**2))
-        self.k_mid = self.k[~mask]
+    def initialize(self, s=None, power=None, **kwargs):
+        if s is None: s = np.linspace(20., 200, 101)
+        self.s = np.array(s, dtype='f8')
         if power is None:
             from .full_shape import KaiserTracerPowerSpectrumMultipoles
             power = KaiserTracerPowerSpectrumMultipoles()
         self.power = power
-        self.power.init.update(k=self.kin, ells=self.ells, **kwargs)
-        self.power.params = self.params.copy()
+        self.k = np.logspace(-4., 3., 2048)
+        self.power.init.update(**kwargs)
+        kin = self.power.init.get('k', None)
+        # Important to have high enough sampling, otherwise wiggles can be seen at small s
+        if kin is None: self.kin = np.geomspace(self.k[0], 0.6, 300)
+        else: self.kin = np.array(kin, dtype='f8')
+        self.power.init['k'] = self.kin
+        mask = self.k > self.kin[-1]
+        self.k_high = np.log10(self.k[mask] / self.kin[-1])
+        self.pad_high = np.exp(-(self.k[mask] / self.kin[-1] - 1.)**2 / (2. * (10.)**2))
+        self.k_mid = self.k[~mask]
+        self.power.init.params = self.params.copy()
         self.params.clear()
+        from cosmoprimo import PowerToCorrelation
+        self.fftlog = PowerToCorrelation(self.k, ell=self.ells, q=0, lowring=True)
 
     def calculate(self):
         power = []
@@ -71,6 +75,10 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
             power.append(jnp.concatenate([jnp.interp(np.log10(self.k_mid), np.log10(self.kin), pk), (pk[-1] + slope_high * self.k_high) * self.pad_high], axis=-1))
         s, corr = self.fftlog(jnp.vstack(power))
         self.corr = jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
+
+    @property
+    def ells(self):
+        return self.power.ells
 
     @plotting.plotter
     def plot(self):

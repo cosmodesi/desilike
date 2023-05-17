@@ -28,6 +28,10 @@ class BaseBAOWigglesPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
             template = BAOPowerSpectrumTemplate()
         self.template = template
 
+    @property
+    def z(self):
+        return self.template.z
+
 
 class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
     """
@@ -134,6 +138,10 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
             damping_ss = np.exp(-1. / 2. * k**2 * self.sigma_ss)  # f = 0.
             resummed_wiggles += damping_ss * sk**2
         return resummed_wiggles * wiggles
+
+    @property
+    def z(self):
+        return self.template.z
 
 
 class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
@@ -246,6 +254,10 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
     @property
     def template(self):
         return self.pt.template
+
+    @property
+    def z(self):
+        return self.pt.z
 
     def get(self):
         return self.power
@@ -373,6 +385,17 @@ class BaseBAOWigglesCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionF
         power = globals()[self.__class__.__name__.replace('CorrelationFunction', 'PowerSpectrum')](**kwargs)
         super(BaseBAOWigglesCorrelationFunctionMultipoles, self).initialize(s=s, ells=ells, power=power)
 
+    @property
+    def template(self):
+        return self.power.template
+
+    @property
+    def z(self):
+        return self.power.z
+
+    def get(self):
+        return self.corr
+
 
 class DampedBAOWigglesCorrelationFunctionMultipoles(BaseBAOWigglesCorrelationFunctionMultipoles):
 
@@ -417,6 +440,10 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
     @wiggle.setter
     def wiggle(self, wiggle):
         self.pt.wiggle = wiggle
+
+    @property
+    def z(self):
+        return self.pt.z
 
     def get(self):
         return self.corr

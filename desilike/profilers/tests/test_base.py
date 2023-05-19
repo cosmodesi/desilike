@@ -22,8 +22,8 @@ def test_profilers():
     for Profiler in [MinuitProfiler, ScipyProfiler, BOBYQAProfiler]:
         profiler = Profiler(likelihood)
         profiler.maximize(niterations=2)
-        #profiler.profile(params=['df'], size=4)
-        profiler.grid(params=['df', 'qpar'], size=(2, 2))
+        profiler.profile(params=['df'], size=4)
+        #profiler.grid(params=['df', 'qpar'], size=(2, 2))
         print(print(profiler.profiles.to_stats()))
         #likelihood()
         #observable.plot(show=True)
@@ -79,5 +79,5 @@ def test_solve():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_profilers()
-    test_solve()
+    test_profilers()
+    #test_solve()

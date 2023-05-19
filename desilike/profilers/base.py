@@ -554,7 +554,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
                 profile = Profiles.concatenate([self._maximize_one(start, chi2, varied_params, **kwargs) for start in start])
                 try:
-                    logposterior = profile.bestfit.logposterior.argmax()
+                    logposterior = profile.bestfit.logposterior.max()
                 except AttributeError:
                     logposterior = -np.inf
                 states[ipoint] = logposterior
@@ -624,7 +624,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         with TaskManager(nprocs_per_task=nprocs_per_param, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
             self.mpicomm = tm.mpicomm
             for iparam, param in tm.iterate(list(enumerate(params))):
-                self.profiles, self.derived = None, None
+                self.profiles, self.derived = profiles_bak.copy(), None
                 profiles = self.grid(params=param, grid=grid[iparam], size=size[iparam], cl=cl[iparam], **kwargs)
                 list_profiles[iparam] = profiles
         self.profiles, self.save_fn, self.mpicomm = profiles_bak, save_fn_bak, mpicomm_bak

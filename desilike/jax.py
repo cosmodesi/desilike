@@ -11,7 +11,13 @@ try:
     import jax, jaxlib
     from jax.config import config; config.update('jax_enable_x64', True)
     from jax import numpy, scipy
-    array_types = (jaxlib.xla_extension.DeviceArrayBase, type(numpy.array(0)), jax.core.Tracer)
+    array_types = []
+    for line in ['jaxlib.xla_extension.DeviceArrayBase', 'type(numpy.array(0))', 'jax.core.Tracer']:
+        try:
+            array_types.append(eval(line))
+        except AttributeError:
+            pass
+    array_types = tuple(array_types)
 except ImportError:
     jax = None
     import numpy

@@ -501,17 +501,23 @@ class Chain(Samples):
             params = self.params(**kwargs)
         if isinstance(index, str) and index == 'mean':
             di = {str(param): self.mean(param) for param in params}
+            index = (0,) # just for test below
         else:
             if isinstance(index, str) and index == 'argmax':
-                index = np.argmax(self.logposterior.ravel())
-            di = {str(param): _reshape(self[param], self.size)[index] for param in params}
+                index = np.unravel_index(self.logposterior.argmax(), self.shape)
+            if not isinstance(index, tuple):
+                index = (index,)
+            di = {str(param): self[param][index] for param in params}
         if return_type == 'dict':
             return di
         if return_type == 'nparray':
             return np.array(list(di.values()))
         toret = self.copy()
-        isscalar = np.ndim(index) == 0
-        toret.data = [self[param].clone(value=[value] if isscalar else value) for param, value in di.items()]
+        isscalar = all(np.ndim(ii) == 0 for ii in index)
+        toret.data = []
+        for param, value in di.items():
+            value = np.asarray(value)
+            toret.data.append(self[param].clone(value=value[None, ...] if isscalar else value))
         return toret
 
     def covariance(self, params=None, return_type='nparray', ddof=1):

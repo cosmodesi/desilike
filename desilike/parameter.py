@@ -1661,11 +1661,25 @@ class ParameterCollection(BaseParameterCollection):
 
     def __radd__(self, other):
         if other == 0: return self.copy()
-        return self.__add__(other)
+        return self.__class__(other).__add__(self)
 
     def __iadd__(self, other):
         if other == 0: return self
         self.__dict__.update(self.__add__(other).__dict__)
+        return self
+
+    def __sub__(self, other):
+        """Concatenate two parameter collections."""
+        other = self.__class__(other)
+        return self.__class__([param for param in self if param not in other])
+
+    def __rsub__(self, other):
+        if other == 0: return self.copy()
+        return self.__class__(other).__sub__(self)
+
+    def __isub__(self, other):
+        if other == 0: return self
+        self.__dict__.update(self.__sub__(other).__dict__)
         return self
 
     def params(self, **kwargs):

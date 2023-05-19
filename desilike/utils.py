@@ -758,6 +758,8 @@ def expand_dict(di, names):
     {'a1': 2, 'a2': 2, 'b': 1}
     """
     toret = dict.fromkeys(names)
+    if is_sequence(di):
+        di = dict(zip(names, di))
     if not hasattr(di, 'items'):
         di = {'*': di}
     from .parameter import find_names

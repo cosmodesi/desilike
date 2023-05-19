@@ -99,7 +99,7 @@ class ImportanceSampler(BaseClass):
                 for ichain, chain in enumerate(chains):
                     self.chains[ichain] = chain
                     if chain is not None:
-                        logposterior = chain[self.likelihood._param_loglikelihood] + chain[self.likelihood._param_logprior]
+                        logposterior = chain[self.likelihood._param_loglikelihood][()] + chain[self.likelihood._param_logprior][()]
                         chain.aweight[...] *= np.exp(logposterior - logposterior.max())
                     for name in ['size', 'nvaried', 'ndof']:
                         try:

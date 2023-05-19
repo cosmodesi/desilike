@@ -17,20 +17,16 @@ def test_profilers():
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1.)
 
-    profiler = MinuitProfiler(likelihood)
-    profiler.maximize(niterations=2)
-    print(print(profiler.profiles.to_stats()))
-
-    """
     # for param in likelihood.varied_params:
     #     print(param, [likelihood(**{param.name: param.value + param.proposal * scale}) for scale in [-1., 1.]])
     for Profiler in [MinuitProfiler, ScipyProfiler, BOBYQAProfiler]:
         profiler = Profiler(likelihood)
         profiler.maximize(niterations=2)
+        #profiler.profile(params=['df'], size=4)
+        profiler.grid(params=['df', 'qpar'], size=(2, 2))
         print(print(profiler.profiles.to_stats()))
         #likelihood()
         #observable.plot(show=True)
-    """
 
     from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, PNGTracerPowerSpectrumMultipoles
 
@@ -56,6 +52,7 @@ def test_solve():
     #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
     #for param in theory.params.select(basename=['df', 'dm', 'qpar', 'qper']): param.update(fixed=True)
     #for param in theory.params.select(basename=['ct*', 'sn*']): param.update(derived='.best')
+    for param in theory.params.select(basename=['ct*', 'sn*']): param.update(fixed=True)
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data={'ct0_2': 1., 'sn0': 1000.},
                                                          theory=theory)
@@ -66,10 +63,11 @@ def test_solve():
 
     #import numpy as np
     #likelihood.flatdata += 100 * np.cos(np.linspace(0., 5. * np.pi, observable.flatdata.size))
-    profiler = MinuitProfiler(likelihood)
+    profiler = MinuitProfiler(likelihood, rescale=True)
     #profiler = ScipyProfiler(likelihood, method='lsq')
     profiles = profiler.maximize(niterations=2)
-    profiles = profiler.interval()
+    profiles = profiler.interval(params=['df'])
+    profiler.grid(params=['df', 'qpar'], size=2)
     print(profiles.to_stats())
     assert profiles.bestfit.logposterior.param.derived
 

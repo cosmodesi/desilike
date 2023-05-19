@@ -70,15 +70,20 @@ class ParameterBestFit(Samples):
         if params is None:
             params = self.params(**kwargs)
         if isinstance(index, str) and index == 'argmax':
-            index = self.logposterior.argmax()
+            index = np.unravel_index(self.logposterior.argmax(), self.shape)
+        if not isinstance(index, tuple):
+            index = (index,)
         di = {str(param): self[param][index] for param in params}
         if return_type == 'dict':
             return di
         if return_type == 'nparray':
             return np.array(list(di.values()))
         toret = self.copy()
-        isscalar = np.ndim(index) == 0
-        toret.data = [self[param].clone(value=[value] if isscalar else value) for param, value in di.items()]
+        isscalar = all(np.ndim(ii) == 0 for ii in index)
+        toret.data = []
+        for param, value in di.items():
+            value = np.asarray(value)
+            toret.data.append(self[param].clone(value=value[(None,) * self.ndim + (Ellipsis,)] if isscalar else value))
         return toret
 
 
@@ -256,6 +261,61 @@ class ParameterContours(BaseParameterCollection):
         return toret
 
 
+class ParameterProfiles(Samples):
+
+    """Class holding parameter 1D profiles."""
+
+    def choice(self, index='argmax', params=None, return_type='dict', **kwargs):
+        """
+        Return parameter best fit(s).
+
+        Parameters
+        ----------
+        index : str, default='argmax'
+            'argmax' to return best fit (as defined by the point with maximum log-posterior in the samples).
+
+        params : list, ParameterCollection, default=None
+            Parameters to compute best fit for. Defaults to all parameters.
+
+        return_dict : default='dict'
+            'dict' to return a dictionary mapping parameter names to best fit;
+            'nparray' to return an array of parameter best fits;
+            ``None`` to return a :class:`ParameterProfiles` instance with a single value.
+
+        **kwargs : dict
+            Optional arguments passed to :meth:`params` to select params to return, e.g. ``varied=True, derived=False``.
+
+        Returns
+        -------
+        toret : dict, array, ParameterProfiles
+        """
+        if params is None:
+            params = self.params(**kwargs)
+        if isinstance(index, str) and index == 'argmax':
+            index = [self[param][:, 1].argmax() for param in params]
+        if not isinstance(index, tuple):
+            index = (index,)
+        if len(index) != len(params):
+            raise ValueError('Provide as many indices as params')
+        di = {str(param): self[param][ii, 0] for param, ii in zip(params, index)}
+        if return_type == 'dict':
+            return di
+        if return_type == 'nparray':
+            return np.array(list(di.values()))
+        toret = self.copy()
+        toret.data = []
+        for ii, (param, value) in zip(index, di.items()):
+            value = np.asarray(value)
+            isscalar = np.ndim(ii) == 0
+            toret.data.append(self[param].clone(value=value[None, ...] if isscalar else value))
+        return toret
+
+
+class ParameterGrid(ParameterBestFit):
+
+    pass
+
+
 class Profiles(BaseClass):
     r"""
     Class holding results of posterior profiling.
@@ -284,7 +344,7 @@ class Profiles(BaseClass):
         Parameter 2D contours.
     """
     _attrs = {'start': Samples, 'bestfit': ParameterBestFit, 'error': Samples, 'covariance': ParameterCovariance,
-              'interval': Samples, 'profile': Samples, 'contour': ParameterContours}
+              'interval': Samples, 'profile': ParameterProfiles, 'contour': ParameterContours, 'grid': ParameterGrid}
 
     def __init__(self, attrs=None, **kwargs):
         """

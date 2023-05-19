@@ -6,12 +6,12 @@ import numpy as np
 
 from ..parameter import ParameterCollection, Samples
 from .chain import Chain
-from .profiles import Profiles, ParameterBestFit, ParameterCovariance, ParameterContours
+from .profiles import Profiles, ParameterBestFit, ParameterCovariance, ParameterProfiles, ParameterContours, ParameterGrid
 from . import diagnostics, utils
 from .utils import BaseClass, path_types
 
 
-__all__ = ['Samples', 'Chain', 'Profiles', 'ParameterBestFit', 'ParameterCovariance', 'ParameterContours', 'diagnostics']
+__all__ = ['Samples', 'Chain', 'Profiles', 'ParameterBestFit', 'ParameterCovariance', 'ParameterContours', 'ParameterProfiles', 'ParameterGrid', 'diagnostics']
 
 
 def load_source(source, choice=None, cov=None, burnin=None, params=None, default=False, return_type=None):

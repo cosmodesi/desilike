@@ -190,7 +190,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
     def nchains(self):
         return len(self.chains)
 
-    def _get_start(self, max_tries=None):
+    def _get_start(self, start=None, max_tries=None):
         if max_tries is None:
             max_tries = self.max_tries
 
@@ -205,14 +205,21 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                     raise ParameterPriorError('Error in ref/prior distribution of parameter {}'.format(param)) from exc
             return np.array(toret).T
 
-        start = np.full((self.nchains, self.nwalkers, len(self.varied_params)), np.nan)
-        logposterior = np.full((self.nchains, self.nwalkers), -np.inf)
+        shape = (self.nchains, self.nwalkers, len(self.varied_params))
+        if start is not None:
+            start = np.asarray(start)
+            if start.shape != shape:
+                raise ValueError('Provide start with shape {}'.format(shape))
+            return start
+
+        start = np.full(shape, np.nan)
+        logposterior = np.full(shape[:2], -np.inf)
         for ichain, chain in enumerate(self.chains):
             if self.mpicomm.bcast(chain is not None, root=0):
                 start[ichain] = self.mpicomm.bcast(np.array([chain[param][-1] for param in self.varied_params]).T if self.mpicomm.rank == 0 else None, root=0)
                 logposterior[ichain] = self.logposterior(start[ichain])
 
-        start.shape = (self.nchains * self.nwalkers, -1)
+        start.shape = (shape[0] * shape[1], -1)
         logposterior.shape = -1
 
         for itry in range(max_tries):
@@ -226,7 +233,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         if not np.isfinite(logposterior).all():
             raise ValueError('Could not find finite log posterior after {:d} tries'.format(max_tries))
 
-        start.shape = (self.nchains, self.nwalkers, -1)
+        start.shape = shape
         return start
 
     def __enter__(self):
@@ -252,7 +259,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
             chain.set(array[indices].reshape(chain.shape + array.shape[1:]))
         return chain
 
-    def run(self, **kwargs):
+    def run(self, start=None, **kwargs):
         """
         Run chains. Sampling can be interrupted anytime, and resumed by providing
         the path to the saved chains in ``chains`` argument of :meth:`__init__`.
@@ -264,7 +271,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         #self.derived = None
         nprocs_per_chain = max((self.mpicomm.size - 1) // self.nchains, 1)
         chains, ncalls = [[None] * self.nchains for i in range(2)]
-        start = self._get_start()
+        start = self._get_start(start=start)
         mpicomm_bak = self.mpicomm
         self._prepare()
         with TaskManager(nprocs_per_task=nprocs_per_chain, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:

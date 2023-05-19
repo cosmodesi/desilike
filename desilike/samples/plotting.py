@@ -712,7 +712,7 @@ def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors
         for ipro, pro in enumerate(profiles):
             pro = pro.profile
             if param1 not in pro: continue
-            ax.plot(pro[param1][0], pro[param1][1] - offsets[ipro], color=colors[ipro], linestyle=linestyles[ipro], label=labels[ipro], **kw_profile)
+            ax.plot(pro[param1][:, 0], - 2 * (pro[param1][:, 1] - offsets[ipro]), color=colors[ipro], linestyle=linestyles[ipro], label=labels[ipro], **kw_profile)
         for nsigma in cl:
             y = utils.nsigmas_to_deltachi2(nsigma, ddof=1)
             ax.axhline(y=y, xmin=0., xmax=1., **kw_cl)
@@ -778,7 +778,7 @@ def plot_profile_comparison(profiles, profiles_ref, params=None, labels=None, co
     labels = _make_list(labels, length=nprofiles, default=None)
     colors = _make_list(colors, length=nprofiles, default=None)
     # Subtract chi2_min of profiles from both profiles and profiles_ref
-    offsets = [-2. * pro.bestfit.logposterior.max() for pro in profiles] * 2
+    offsets = [pro.bestfit.logposterior.max() for pro in profiles]
     colors = colors * 2
     linestyles = ['-'] * nprofiles + ['--'] * nprofiles
     plot_profile(profiles + profiles_ref, params=params, offsets=offsets, labels=labels, colors=colors, linestyles=linestyles, **kwargs)

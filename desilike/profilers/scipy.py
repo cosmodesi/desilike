@@ -67,52 +67,6 @@ class ScipyProfiler(BaseProfiler):
         """
         super(ScipyProfiler, self).__init__(*args, **kwargs)
         self.method = method
-        self.use_curve_fit = self.method in ['lsq', 'lm', 'trf', 'dogbox']
-        self.bounds = [tuple(None if np.isinf(lim) else lim for lim in param.prior.limits) for param in self.varied_params]
-
-        if self.use_curve_fit:
-            if self.method == 'lsq':
-                if all(bound == (None, None) for bound in self.bounds):
-                    self.method = 'lm'
-                else:
-                    self.method = 'trf'
-            self.use_curve_fit = {}
-            likelihoods = getattr(self.likelihood, 'likelihoods', [self.likelihood])
-            from desilike.likelihoods import BaseGaussianLikelihood
-            is_gaussian = all(isinstance(likelihood, BaseGaussianLikelihood) for likelihood in likelihoods)
-            if not is_gaussian:
-                raise ValueError('Cannot choose {} method with non-Gaussian likelihood'.format(method))
-
-            solved_params = self.pipeline.params.select(solved=True)
-            if solved_params and self.mpicomm.rank == 0:
-                self.log_warning('Analytic marginalization for parameters {} does not work with curve_fit yet.'.format(solved_params.names()))
-
-            params_with_scale = [param for param in self.varied_params + solved_params if getattr(param.prior, 'scale', None) is not None]
-            #params_with_scale = [param for param in self.varied_params if getattr(param.prior, 'scale', None) is not None]
-            covariance_params = np.array([param.prior.scale**2 for param in params_with_scale])
-            center_params = {param.name: param.prior.center() for param in params_with_scale}
-
-            self.likelihood()
-            is_2d = any(likelihood.precision.ndim == 2 for likelihood in likelihoods)
-            if is_2d:
-                covariances = [utils.inv(likelihood.precision) if likelihood.precision.ndim == 2 else np.diag(1. / likelihood.precision) for likelihood in likelihoods]
-                size = sum(cov.shape[0] for cov in covariances) + len(covariance_params)
-                sigma = np.zeros((size, size), dtype='f8')
-                start = 0
-                for cov in covariances:
-                    stop = start + cov.shape[0]
-                    sl = slice(start, stop)
-                    sigma[sl, sl] = cov
-                    start = stop
-                sigma[start:, start:] = np.diag(covariance_params)
-            else:
-                sigma = np.concatenate([1. / likelihood.precision for likelihood in likelihoods] + [covariance_params])**0.5  # if 1D, give sigma
-
-            def f(x, *values):
-                self.chi2(values)
-                return np.concatenate([likelihood.flatdiff for likelihood in likelihoods] + [[self.pipeline.param_values[param.name] - center_params[param.name] for param in params_with_scale]])
-
-            self.use_curve_fit = {'f': f, 'sigma': sigma}
 
     def maximize(self, *args, **kwargs):
         r"""
@@ -145,13 +99,56 @@ class ScipyProfiler(BaseProfiler):
         """
         return super(ScipyProfiler, self).maximize(*args, **kwargs)
 
-    def _maximize_one(self, start, max_iterations=int(1e5), tol=None, **kwargs):
+    def _maximize_one(self, start, chi2, varied_params, max_iterations=int(1e5), tol=None, **kwargs):
         from scipy import optimize
-        if self.use_curve_fit:
+
+        use_curve_fit = self.method in ['lsq', 'lm', 'trf', 'dogbox']
+        method = self.method
+        bounds = [tuple(None if np.isinf(lim) else lim for lim in param.prior.limits) for param in varied_params]
+
+        if use_curve_fit:
+            if self.method == 'lsq':
+                if all(bound == (None, None) for bound in bounds):
+                    method = 'lm'
+                else:
+                    method = 'trf'
+            use_curve_fit = {}
+            likelihoods = getattr(self.likelihood, 'likelihoods', [self.likelihood])
+            from desilike.likelihoods import BaseGaussianLikelihood
+            is_gaussian = all(isinstance(likelihood, BaseGaussianLikelihood) for likelihood in likelihoods)
+            if not is_gaussian:
+                raise ValueError('Cannot choose {} method with non-Gaussian likelihood'.format(method))
+
+            solved_params = self.pipeline.params.select(solved=True)
+            if solved_params and self.mpicomm.rank == 0:
+                self.log_warning('Analytic marginalization for parameters {} does not work with curve_fit yet.'.format(solved_params.names()))
+
+            params_with_scale = [param for param in self.varied_params + solved_params if getattr(param.prior, 'scale', None) is not None]
+            covariance_params = np.array([param.prior.scale**2 for param in params_with_scale])
+            center_params = {param.name: param.prior.center() for param in params_with_scale}
+
+            is_2d = any(likelihood.precision.ndim == 2 for likelihood in likelihoods)
+            if is_2d:
+                covariances = [utils.inv(likelihood.precision) if likelihood.precision.ndim == 2 else np.diag(1. / likelihood.precision) for likelihood in likelihoods]
+                size = sum(cov.shape[0] for cov in covariances) + len(covariance_params)
+                sigma = np.zeros((size, size), dtype='f8')
+                start = 0
+                for cov in covariances:
+                    stop = start + cov.shape[0]
+                    sl = slice(start, stop)
+                    sigma[sl, sl] = cov
+                    start = stop
+                sigma[start:, start:] = np.diag(covariance_params)
+            else:
+                sigma = np.concatenate([1. / likelihood.precision for likelihood in likelihoods] + [covariance_params])**0.5  # if 1D, give sigma
+
+            def f(x, *values):
+                chi2(values)
+                return np.concatenate([likelihood.flatdiff for likelihood in likelihoods] + [[self.pipeline.param_values[param.name] - center_params[param.name] for param in params_with_scale]])
+
             profiles = Profiles()
-            bounds = list(zip(*[tuple(param.prior.limits) for param in self.varied_params]))
+            bounds = list(zip(*[tuple(param.prior.limits) for param in varied_params]))
             try:
-                f, sigma = self.use_curve_fit['f'], self.use_curve_fit['sigma']
                 if tol is not None:
                     kwargs = {'xtol': tol, 'ftol': tol, 'gtol': tol, **kwargs}
                 if self.method == 'lm':
@@ -164,18 +161,78 @@ class ScipyProfiler(BaseProfiler):
                 if self.mpicomm.rank == 0:
                     self.log_error('Finished unsuccessfully.')
             else:
-                profiles.set(bestfit=ParameterBestFit(list(popt) + [- 0.5 * self.chi2(popt)], params=self.varied_params + ['logposterior']))
-                profiles.set(error=Samples(np.diag(pcov)**0.5, params=self.varied_params))
-                profiles.set(covariance=ParameterCovariance(pcov, params=self.varied_params))
+                profiles.set(bestfit=ParameterBestFit(list(popt) + [- 0.5 * self.chi2(popt)], params=varied_params + ['logposterior']))
+                profiles.set(error=Samples(np.diag(pcov)**0.5, params=varied_params))
+                profiles.set(covariance=ParameterCovariance(pcov, params=varied_params))
         else:
-            bounds = [tuple(None if np.isinf(lim) else lim for lim in param.prior.limits) for param in self.varied_params]
-            result = optimize.minimize(fun=self.chi2, x0=start, method=self.method, bounds=bounds, tol=tol, options={'maxiter': max_iterations, **kwargs})
+            bounds = [tuple(None if np.isinf(lim) else lim for lim in param.prior.limits) for param in varied_params]
+            result = optimize.minimize(fun=chi2, x0=start, method=method, bounds=bounds, tol=tol, options={'maxiter': max_iterations, **kwargs})
             if not result.success and self.mpicomm.rank == 0:
                 self.log_error('Finished unsuccessfully.')
             profiles = Profiles()
-            profiles.set(bestfit=ParameterBestFit(list(result.x) + [- 0.5 * result.fun], params=self.varied_params + ['logposterior']))
+            profiles.set(bestfit=ParameterBestFit(list(result.x) + [- 0.5 * result.fun], params=varied_params + ['logposterior']))
             if getattr(result, 'hess_inv', None) is not None:
                 cov = result.hess_inv.todense()
-                profiles.set(error=Samples(np.diag(cov)**0.5, params=self.varied_params))
-                profiles.set(covariance=ParameterCovariance(cov, params=self.varied_params))
+                profiles.set(error=Samples(np.diag(cov)**0.5, params=varied_params))
+                profiles.set(covariance=ParameterCovariance(cov, params=varied_params))
         return profiles
+
+    def profile(self, *args, **kwargs):
+        """
+        Compute 1D profiles for :attr:`likelihood`.
+        The following attributes are added to :attr:`profiles`:
+
+        - :attr:`Profiles.profile`
+
+        Parameters
+        ----------
+        params : str, Parameter, list, ParameterCollection, default=None
+            Parameters for which to compute 1D profiles.
+
+        grid : array, list, default=None
+            Parameter values on which to compute the profile, for each parameter. If grid is set, size and bound are ignored.
+
+        size : int, list, default=30
+            Number of scanning points. Ignored if grid is set. Can be specified for each parameter.
+
+        cl : int, list, default=2
+            If bound is a number, it specifies an interval of N sigmas symmetrically around the minimum.
+            Ignored if grid is set. Can be specified for each parameter.
+
+        niterations : int, default=1
+            Number of iterations, i.e. of runs of the profiler from independent starting points.
+
+        max_iterations : int, default=int(1e5)
+            Maximum number of likelihood evaluations.
+        """
+        return super(ScipyProfiler, self).profile(*args, **kwargs)
+
+    def grid(self, *args, **kwargs):
+        """
+        Compute best fits on grid for :attr:`likelihood`.
+        The following attributes are added to :attr:`profiles`:
+
+        - :attr:`Profiles.grid`
+
+        Parameters
+        ----------
+        params : str, Parameter, list, ParameterCollection, default=None
+            Parameters for which to compute 1D profiles.
+
+        grid : array, list, dict, default=None
+            Parameter values on which to compute the profile, for each parameter. If grid is set, size and bound are ignored.
+
+        size : int, list, dict, default=1
+            Number of scanning points. Ignored if grid is set. Can be specified for each parameter.
+
+        cl : int, list, dict, default=2
+            If bound is a number, it specifies an interval of N sigmas symmetrically around the minimum.
+            Ignored if grid is set. Can be specified for each parameter.
+
+        niterations : int, default=1
+            Number of iterations, i.e. of runs of the profiler from independent starting points.
+
+        max_iterations : int, default=int(1e5)
+            Maximum number of likelihood evaluations.
+        """
+        return super(ScipyProfiler, self).grid(*args, **kwargs)

@@ -27,22 +27,24 @@ class MinuitProfiler(BaseProfiler):
 
     def __init__(self, *args, **kwargs):
         super(MinuitProfiler, self).__init__(*args, **kwargs)
+
+    def _get_minuit(self, start, chi2, varied_params):
+
+        def chi2m(*values):
+            return chi2(values)
+
         import iminuit
         minuit_params = {}
-        minuit_params['name'] = parameter_names = [str(param) for param in self.varied_params]
-        self.minuit = iminuit.Minuit(self.chi2, **dict(zip(parameter_names, [param.value for param in self.varied_params])), **minuit_params)
-        self.minuit.errordef = 1.0
-        for param in self.varied_params:
-            self.minuit.limits[str(param)] = tuple(None if np.isinf(lim) else lim for lim in param.prior.limits)
+        minuit_params['name'] = parameter_names = [str(param) for param in varied_params]
+        minuit = iminuit.Minuit(chi2m, **dict(zip(parameter_names, [param.value for param in varied_params])), **minuit_params)
+        minuit.errordef = 1.0
+        for param, value in zip(varied_params, start):
+            minuit.values[str(param)] = value
+            minuit.limits[str(param)] = tuple(None if np.isinf(lim) else lim for lim in param.prior.limits)
             if param.ref.is_proper():
-                self.minuit.errors[str(param)] = param.proposal
+                minuit.errors[str(param)] = param.proposal
 
-    def chi2(self, *values):
-        return super(MinuitProfiler, self).chi2(values)
-
-    def _set_start(self, start):
-        for param, value in zip(self.varied_params, start):
-            self.minuit.values[str(param)] = value
+        return minuit
 
     def maximize(self, *args, **kwargs):
         r"""
@@ -68,15 +70,15 @@ class MinuitProfiler(BaseProfiler):
         """
         return super(MinuitProfiler, self).maximize(*args, **kwargs)
 
-    def _maximize_one(self, start, max_iterations=int(1e5)):
-        self._set_start(start)
-        self.minuit.migrad(ncall=max_iterations)
+    def _maximize_one(self, start, chi2, varied_params, max_iterations=int(1e5)):
+        minuit = self._get_minuit(start, chi2, varied_params)
+        minuit.migrad(ncall=max_iterations)
         profiles = Profiles()
-        profiles.set(start=Samples(start, params=self.varied_params))
-        profiles.set(bestfit=ParameterBestFit([self.minuit.values[str(param)] for param in self.varied_params] + [- 0.5 * self.minuit.fval], params=self.varied_params + ['logposterior']))
-        profiles.set(error=Samples([self.minuit.errors[str(param)] for param in self.varied_params], params=self.varied_params))
-        if self.minuit.covariance is not None:
-            profiles.set(covariance=ParameterCovariance(np.array(self.minuit.covariance), params=self.varied_params))
+        profiles.set(start=Samples(start, params=varied_params))
+        profiles.set(bestfit=ParameterBestFit([minuit.values[str(param)] for param in varied_params] + [- 0.5 * minuit.fval], params=varied_params + ['logposterior']))
+        profiles.set(error=Samples([minuit.errors[str(param)] for param in varied_params], params=varied_params))
+        if minuit.covariance is not None:
+            profiles.set(covariance=ParameterCovariance(np.array(minuit.covariance), params=varied_params))
         return profiles
 
     def interval(self, *args, **kwargs):
@@ -99,50 +101,13 @@ class MinuitProfiler(BaseProfiler):
         """
         return super(MinuitProfiler, self).interval(*args, **kwargs)
 
-    def _interval_one(self, start, param, max_iterations=int(1e5), cl=None):
-        self._set_start(start)
+    def _interval_one(self, start, chi2, varied_params, param, max_iterations=int(1e5), cl=None):
+        minuit = self._get_minuit(start, chi2, varied_params)
         profiles = Profiles()
         name = str(param)
-        self.minuit.minos(name, ncall=max_iterations, cl=cl)
-        interval = (self.minuit.merrors[name].lower, self.minuit.merrors[name].upper)
+        minuit.minos(name, ncall=max_iterations, cl=cl)
+        interval = (minuit.merrors[name].lower, minuit.merrors[name].upper)
         profiles.set(interval=Samples([interval], params=[param]))
-
-        return profiles
-
-    def profile(self, *args, **kwargs):
-        """
-        Compute 1D profiles for :attr:`likelihood`.
-        The following attributes are added to :attr:`profiles`:
-
-        - :attr:`Profiles.profile`
-
-        Parameters
-        ----------
-        params : str, Parameter, list, ParameterCollection, default=None
-            Parameters for which to compute 1D profiles.
-
-        size : int, default=30
-            Number of scanning points. Ignored if grid is set.
-
-        bound : tuple, int, default=2
-            If bound is tuple, (left, right) scanning bound. If bound is a number, it specifies an interval of N sigmas
-            symmetrically around the minimum. Ignored if grid is set.
-
-        grid : array, default=None
-            Parameter values on which to compute the profile. If grid is set, size and bound are ignored.
-        """
-        return super(MinuitProfiler, self).profile(*args, **kwargs)
-
-    def _profile_one(self, start, param, size=30, grid=None, **kwargs):
-        self._set_start(start)
-        profiles = Profiles()
-        if 'cl' in kwargs:
-            kwargs['bound'] = kwargs.pop('cl')
-        if not np.isinf(param.prior.limits).any():
-            kwargs.setdefault('bound', param.prior.limits)
-        x, chi2 = self.minuit.mnprofile(param.name, size=size, grid=grid, **kwargs)[:2]
-        profiles.set(profile=Samples([(x, chi2)], params=[param]))
-
         return profiles
 
     def contour(self, *args, **kwargs):
@@ -174,12 +139,72 @@ class MinuitProfiler(BaseProfiler):
         """
         return super(MinuitProfiler, self).contour(*args, **kwargs)
 
-    def _contour_one(self, start, param1, param2, cl=None, size=100, interpolated=0):
-        self._set_start(start)
+    def _contour_one(self, start, chi2, varied_params, param1, param2, cl=None, size=100, interpolated=0):
+        minuit = self._get_minuit(start, chi2, varied_params)
         profiles = Profiles()
-        x1, x2 = self.minuit.mncontour(str(param1), str(param2), cl=cl, size=size, interpolated=interpolated)
+        x1, x2 = minuit.mncontour(str(param1), str(param2), cl=cl, size=size, interpolated=interpolated)
         profiles.set(profile=ParameterContours([(ParameterArray(x1, param1), ParameterArray(x2, param2))]))
         return profiles
+
+    def profile(self, *args, **kwargs):
+        """
+        Compute 1D profiles for :attr:`likelihood`.
+        The following attributes are added to :attr:`profiles`:
+
+        - :attr:`Profiles.profile`
+
+        Parameters
+        ----------
+        params : str, Parameter, list, ParameterCollection, default=None
+            Parameters for which to compute 1D profiles.
+
+        grid : array, list, default=None
+            Parameter values on which to compute the profile, for each parameter. If grid is set, size and bound are ignored.
+
+        size : int, list, default=30
+            Number of scanning points. Ignored if grid is set. Can be specified for each parameter.
+
+        cl : int, list, default=2
+            If bound is a number, it specifies an interval of N sigmas symmetrically around the minimum.
+            Ignored if grid is set. Can be specified for each parameter.
+
+        niterations : int, default=1
+            Number of iterations, i.e. of runs of the profiler from independent starting points.
+
+        max_iterations : int, default=int(1e5)
+            Maximum number of likelihood evaluations.
+        """
+        return super(MinuitProfiler, self).profile(*args, **kwargs)
+
+    def grid(self, *args, **kwargs):
+        """
+        Compute best fits on grid for :attr:`likelihood`.
+        The following attributes are added to :attr:`profiles`:
+
+        - :attr:`Profiles.grid`
+
+        Parameters
+        ----------
+        params : str, Parameter, list, ParameterCollection, default=None
+            Parameters for which to compute 1D profiles.
+
+        grid : array, list, dict, default=None
+            Parameter values on which to compute the profile, for each parameter. If grid is set, size and bound are ignored.
+
+        size : int, list, dict, default=1
+            Number of scanning points. Ignored if grid is set. Can be specified for each parameter.
+
+        cl : int, list, dict, default=2
+            If bound is a number, it specifies an interval of N sigmas symmetrically around the minimum.
+            Ignored if grid is set. Can be specified for each parameter.
+
+        niterations : int, default=1
+            Number of iterations, i.e. of runs of the profiler from independent starting points.
+
+        max_iterations : int, default=int(1e5)
+            Maximum number of likelihood evaluations.
+        """
+        return super(MinuitProfiler, self).grid(*args, **kwargs)
 
     @classmethod
     def install(cls, config):

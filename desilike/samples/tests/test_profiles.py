@@ -2,7 +2,7 @@ import os
 
 import numpy as np
 from desilike import setup_logging
-from desilike.samples import Profiles, Samples, ParameterBestFit, ParameterCovariance, ParameterContours, plotting
+from desilike.samples import Profiles, Samples, ParameterBestFit, ParameterCovariance, ParameterContours, ParameterGrid, plotting
 
 
 def get_profiles(params):
@@ -20,6 +20,8 @@ def get_profiles(params):
     t = np.linspace(0., 2. * np.pi, 101)
     params2 = [(param1, param2) for param1 in params for param2 in params]
     profiles.set(contour=ParameterContours([(np.cos(t), np.sin(t)) for param in params2], params=params2))
+    grid = np.meshgrid(*(np.linspace(0., 0.1, 3),) * (len(params) + 1), indexing='ij')
+    profiles.set(grid=ParameterGrid(grid, params=params + ['logposterior']))
     return profiles
 
 
@@ -40,6 +42,8 @@ def test_misc():
     assert profiles.choice(index=[0, 1]).bestfit.shape == (2,)
     del profiles.error
     profiles.bcast(profiles)
+    profiles.profile.choice()
+    profiles.grid.choice()
 
 
 def test_stats():

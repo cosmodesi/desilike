@@ -638,7 +638,8 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate, BandVelocityP
     def initialize(self, *args, kp=None, **kwargs):
         super(BandVelocityPowerSpectrumTemplate, self).initialize(*args, apmode='qap', **kwargs)
         import re
-        params = self.params.select(basename=re.compile(r'{}(-?\d+)'.format(self._base_param_name)))
+        re_param_template = re.compile(r'{}(-?\d+)'.format(self._base_param_name))
+        params = self.params.select(basename=re_param_template)
         nkp = len(params)
         if kp is None:
             if not nkp:
@@ -650,16 +651,20 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate, BandVelocityP
         if nkp:
             if len(self.kp) == 2:
                 self.kp = np.linspace(*self.kp, num=nkp)
-            self.kp = np.array(self.kp)
+            self.kp = np.array(self.kp, dtype='f8')
             if self.kp.size != nkp:
                 raise ValueError('{:d} (!= {:d} parameters {}*) points have been provided'.format(self.kp.size, nkp, self._base_param_name))
+        basenames = []
         for ikp, kp in enumerate(self.kp):
             basename = '{}{:d}'.format(self._base_param_name, ikp)
+            basenames.append(basename)
             if basename not in self.params:
                 value = 1.
                 self.params[basename] = dict(value=value, prior={'limits': [0, 3]}, ref={'dist': 'norm', 'loc': value, 'scale': 0.01}, delta=0.005)
             self.params[basename].update(latex=r'(P / P^{{\mathrm{{fid}}}})_{{\{0}\{0}}}(k={1:.3f})'.format('theta', kp))
-
+        params = self.params.basename(basename=re_param_template)
+        if set(params) != set(basenames):
+            raise ValueError('Found parameters {}, but expected {}'.format(params, basenames))
         if self.kp[0] < self.k[0]:
             raise ValueError('Theory k starts at {0:.2e} but first point is {1:.2e} < {0:.2e}'.format(self.k[0], self.kp[0]))
         if self.kp[-1] > self.k[-1]:

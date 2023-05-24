@@ -38,21 +38,21 @@ def plot_covariance_matrix(covariance, x1=None, x2=None, xlabel1=None, xlabel2=N
     xextend = 0.8
     fig, lax = plt.subplots(nrows=nrows, ncols=ncols, sharex=False, sharey=False,
                             figsize=(figsize[0] / xextend, figsize[1]),
-                            gridspec_kw={'width_ratios': size2, 'height_ratios': size1[::-1]},
+                            gridspec_kw={'height_ratios': size2[::-1], 'width_ratios': size1},
                             squeeze=False)
     wspace = hspace = 0.18
     fig.subplots_adjust(wspace=wspace, hspace=hspace)
     for i in range(ncols):
         for j in range(nrows):
-            ax = lax[nrows - 1 - i][j]
+            ax = lax[nrows - j - 1][i]
             xx1, xx2 = x1[i], x2[j]
             if x1[i] is None: xx1 = 1 + np.arange(mat[i][j].shape[0])
             if x2[j] is None: xx2 = 1 + np.arange(mat[i][j].shape[1])
             mesh = ax.pcolor(xx1, xx2, mat[i][j].T, norm=norm, cmap=plt.get_cmap('jet_r'))
-            if i > 0 or x1[i] is None: ax.xaxis.set_visible(False)
-            elif xlabel2[i]: ax.set_xlabel(xlabel2[i], fontsize=labelsize)
-            if j > 0 or x2[j] is None: ax.yaxis.set_visible(False)
-            elif xlabel1[j]: ax.set_ylabel(xlabel1[j], fontsize=labelsize)
+            if i > 0 or x1[i] is None: ax.yaxis.set_visible(False)
+            if j == 0 and xlabel1[i]: ax.set_xlabel(xlabel1[i], fontsize=labelsize)
+            if j > 0 or x2[j] is None: ax.xaxis.set_visible(False)
+            if i == 0 and xlabel2[j]: ax.set_ylabel(xlabel2[j], fontsize=labelsize)
             ax.tick_params()
             if label1[i] is not None or label2[j] is not None:
                 text = '{}\nx {}'.format(label1[i], label2[j])

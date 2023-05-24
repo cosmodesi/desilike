@@ -200,3 +200,35 @@ params:
     ref:
       limits: [-1e2, 1e2]
     latex: a_{[], []}
+
+---
+
+class: FlexibleBAOWigglesTracerPowerSpectrumMultipoles
+
+params:
+  b1:
+    prior:
+      dist: norm
+      loc: 1.5
+      scale: 1.
+    ref:
+      dist: uniform
+      limits: [1.5, 2.5]
+    latex: b
+    fixed: True
+
+---
+
+class: FlexibleBAOWigglesTracerCorrelationFunctionMultipoles
+
+params:
+  b1:
+    prior:
+      dist: norm
+      loc: 1.5
+      scale: 1.
+    ref:
+      dist: uniform
+      limits: [1.5, 2.5]
+    latex: b
+    fixed: True

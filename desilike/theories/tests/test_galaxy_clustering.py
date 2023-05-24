@@ -75,8 +75,9 @@ def test_templates():
 
 def test_bao():
 
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles, FlexibleBAOWigglesTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles, FlexibleBAOWigglesTracerCorrelationFunctionMultipoles
+    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate
 
     theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
     print(theory.runtime_info.pipeline.params)
@@ -84,14 +85,19 @@ def test_bao():
     theory = ResummedBAOWigglesTracerPowerSpectrumMultipoles()
     print(theory.runtime_info.pipeline.params)
     theory(qpar=1.1, sigmas=3.)
+    theory = FlexibleBAOWigglesTracerPowerSpectrumMultipoles()
+    print(theory.runtime_info.pipeline.params)
+    theory(qpar=1.1)
     theory = DampedBAOWigglesTracerCorrelationFunctionMultipoles()
     print(theory.runtime_info.pipeline.params)
     theory(qpar=1.1, sigmapar=3.)
     theory = ResummedBAOWigglesTracerCorrelationFunctionMultipoles()
     print(theory.runtime_info.pipeline.params)
     theory(qpar=1.1, sigmas=3.)
+    theory = FlexibleBAOWigglesTracerCorrelationFunctionMultipoles()
+    print(theory.runtime_info.pipeline.params)
+    theory(qpar=1.1)
 
-    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate
     template = BAOPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso', only_now=True)
     theory.init.update(template=template)
     theory(qiso=0.9)
@@ -100,6 +106,33 @@ def test_bao():
     theory.init.update(template=template)
     theory()
     template.pk_dd
+
+
+def test_flexible_bao():
+
+    from matplotlib import pyplot as plt
+
+    from desilike.theories.galaxy_clustering import FlexibleBAOWigglesTracerPowerSpectrumMultipoles
+
+    fig, lax = plt.subplots(1, 2, sharex=False, sharey=True, figsize=(10, 4), squeeze=True)
+    fig.subplots_adjust(wspace=0.25)
+
+    theory = FlexibleBAOWigglesTracerPowerSpectrumMultipoles(kp=0.06, ells=(0,), broadband_kernel='tsc')
+    for iax, mode in enumerate(['additive', 'multiplicative']):
+        ax = lax[iax]
+        names = theory.all_params.names(basename=mode[0] + 'l*')
+        cmap = plt.get_cmap('jet', len(names))
+        for iname, name in enumerate(names):
+            pk = theory(**{name: 1. if iax == 0 else 2.})
+            for ill, ell in enumerate(theory.ells):
+                ax.plot(theory.k, theory.k * pk[ill], color=cmap(iname / len(names)))
+            pk = theory(**{name: 0.})
+        ax.plot(theory.k, theory.k * pk[ill], color='k')
+        ax.grid(True)
+        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        ax.set_title(mode)
+    plt.show()
 
 
 def test_full_shape():
@@ -558,8 +591,9 @@ if __name__ == '__main__':
     setup_logging()
     #test_integ()
     test_bao()
-    test_full_shape()
-    test_png()
+    #test_flexible_bao()
+    #test_full_shape()
+    #test_png()
     #test_pk_to_xi()
     #test_ap_diff()
     #test_templates()

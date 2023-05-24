@@ -552,11 +552,14 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                     values = np.insert(values, insert_indices, point, axis=-1)
                     return self.chi2(values)
 
-                profile = Profiles.concatenate([self._maximize_one(start, chi2, varied_params, **kwargs) for start in start])
-                try:
-                    logposterior = profile.bestfit.logposterior.max()
-                except AttributeError:
-                    logposterior = -np.inf
+                if varied_params:
+                    profile = Profiles.concatenate([self._maximize_one(start, chi2, varied_params, **kwargs) for start in start])
+                    try:
+                        logposterior = profile.bestfit.logposterior.max()
+                    except AttributeError:
+                        logposterior = -np.inf
+                else:
+                    logposterior = -0.5 * chi2([])
                 states[ipoint] = logposterior
 
         self.mpicomm = mpicomm_bak
@@ -606,10 +609,11 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         if params is None:
             params = self.varied_params
         else:
-            if not is_parameter_sequence(params): params = [params]
+            if not is_parameter_sequence(params):
+                params = [params]
             params = ParameterCollection([self.varied_params[param] for param in params])
 
-        if grid is None: grid = [None] * len(params)
+        if grid is None or np.ndim(grid[0]) == 0: grid = [grid] * len(params)
         if not utils.is_sequence(size): size = [size] * len(params)
         if not utils.is_sequence(cl): cl = [cl] * len(params)
 
@@ -624,7 +628,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         with TaskManager(nprocs_per_task=nprocs_per_param, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
             self.mpicomm = tm.mpicomm
             for iparam, param in tm.iterate(list(enumerate(params))):
-                self.profiles, self.derived = profiles_bak.copy(), None
+                self.profiles, self.derived = profiles_bak.copy() if profiles_bak is not None else None, None
                 profiles = self.grid(params=param, grid=grid[iparam], size=size[iparam], cl=cl[iparam], **kwargs)
                 list_profiles[iparam] = profiles
         self.profiles, self.save_fn, self.mpicomm = profiles_bak, save_fn_bak, mpicomm_bak

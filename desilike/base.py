@@ -55,7 +55,14 @@ class InitConfig(BaseConfig):
     def updated(self, updated):
         """Set the 'updated' status."""
         self._updated = bool(updated)
-        if not self._updated:
+        if self._updated:
+            try:
+                calculator = self.runtime_info.calculator
+                if not getattr(self.runtime_info, '_initialization', False):
+                    calculator.__dict__ = {name: calculator.__dict__[name] for name in ['_mpicomm', 'info', 'runtime_info']}
+            except AttributeError:
+                pass
+        else:
             self.params.updated = False
 
     @property
@@ -96,8 +103,9 @@ def _make_wrapper(func):
 
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
+        toret = func(self, *args, **kwargs)
         self.updated = True
-        return func(self, *args, **kwargs)
+        return toret
 
     return wrapper
 
@@ -580,7 +588,9 @@ class RuntimeInfo(BaseClass):
         self.monitor = Monitor()
         #self.required_by = set()
         if init is None: init = InitConfig()
-        self.init = InitConfig(init)
+        self.init = init
+        if not isinstance(init, InitConfig):
+            self.init = InitConfig(init)
         self.init.runtime_info = self
         self._initialized = False
         self._tocalculate = True
@@ -606,11 +616,9 @@ class RuntimeInfo(BaseClass):
         If not set, defaults to the :class:`BaseCalculator` instances in this calculator's ``__dict__``.
         """
         if getattr(self, '_requires', None) is None:
-            self._requires = []
-            for name, value in self.calculator.__dict__.items():
-                if isinstance(value, BaseCalculator):
-                    self._requires.append(value)
-            self.requires = self._requires
+            if getattr(self.runtime_info, '_initialization', False): return []
+            self.initialized = False
+            self.initialize()
         return self._requires
 
     @requires.setter
@@ -629,7 +637,11 @@ class RuntimeInfo(BaseClass):
         if getattr(self, '_pipeline', None) is None:
             self._pipeline = BasePipeline(self.calculator)
         elif any(not calculator.runtime_info.initialized for calculator in self._pipeline.calculators):
-            self.initialized = False
+            initialized = True
+            for calculator in self._pipeline.calculators:
+                if not calculator.runtime_info.initialized:
+                    initialized = False
+                calculator.runtime_info.initialized = initialized
             self._pipeline = BasePipeline(self.calculator)
         return self._pipeline
 
@@ -704,8 +716,7 @@ class RuntimeInfo(BaseClass):
                 self.calculator.initialize(*self.init.args, **self.init)
             except Exception as exc:
                 raise PipelineError('Error in method initialize of {}'.format(self.calculator)) from exc
-            finally:
-                self._initialization = False
+
             if not self._with_namespace:
                 for param in self.init.params:
                     if param.basename in params_basenames:  # update namespace
@@ -713,6 +724,12 @@ class RuntimeInfo(BaseClass):
             self.params = self.init.params
             self.init.params = bak
             self.initialized = True
+            self._initialization = False
+            if getattr(self, '_requires', None) is None:
+                self._requires = []
+                for name, value in self.calculator.__dict__.items():
+                    if isinstance(value, BaseCalculator):
+                        self._requires.append(value)
         return self.calculator
 
     @property

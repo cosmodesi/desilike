@@ -335,6 +335,16 @@ def test_full_shape():
     theory(logA=3.04, b1=1.).shape
 
 
+def test_params():
+
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
+    theory = KaiserTracerCorrelationFunctionMultipoles()
+    for param in theory.init.params:
+        print(param)
+        param.update(namespace='LRG')
+    print(theory.all_params)
+
+
 def test_png():
 
     from desilike.theories.galaxy_clustering import PNGTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
@@ -589,8 +599,10 @@ def test_ap_diff():
 if __name__ == '__main__':
 
     setup_logging()
+
+    test_params()
     #test_integ()
-    test_bao()
+    #test_bao()
     #test_flexible_bao()
     #test_full_shape()
     #test_png()

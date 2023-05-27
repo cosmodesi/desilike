@@ -44,6 +44,7 @@ class BaseTheoryCorrelationFunctionMultipoles(BaseCalculator):
 class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrelationFunctionMultipoles):
 
     """Base class for theory correlation function from power spectrum multipoles."""
+    _with_namespace = True
 
     def initialize(self, s=None, power=None, **kwargs):
         if s is None: s = np.linspace(20., 200, 101)
@@ -63,8 +64,8 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         self.k_high = np.log10(self.k[mask] / self.kin[-1])
         self.pad_high = np.exp(-(self.k[mask] / self.kin[-1] - 1.)**2 / (2. * (10.)**2))
         self.k_mid = self.k[~mask]
-        self.power.init.params = self.params.copy()
-        self.params.clear()
+        self.power.init.params = self.init.params.copy()
+        self.init.params.clear()
         from cosmoprimo import PowerToCorrelation
         self.fftlog = PowerToCorrelation(self.k, ell=self.ells, q=0, lowring=True)
 

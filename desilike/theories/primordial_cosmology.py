@@ -61,13 +61,19 @@ def get_from_cosmo(cosmo, name):
 
 
 def _clone(self, params, base='input'):
-    params = {conversions.get(name, name): float(value) for name, value in params.items()}
+    cparams = {}
+    for name, value in params.items():
+        try:
+            value = float(value)
+        except ValueError:
+            pass
+        cparams[conversions.get(name, name)] = value
 
-    theta_MC_100 = params.pop('theta_MC_100', None)
-    self.cosmo = self.fiducial.clone(base=base, **params)
+    theta_MC_100 = cparams.pop('theta_MC_100', None)
+    self.cosmo = self.fiducial.clone(base=base, **cparams)
 
     if theta_MC_100 is not None:
-        if 'h' in params:
+        if 'h' in cparams:
             raise ValueError('Cannot provide both theta_MC_100 and h')
 
         # With self.cosmo.get_thermodynamics().theta_cosmomc
@@ -96,7 +102,7 @@ class Cosmoprimo(BasePrimordialCosmology):
     """Primordial cosmology calculation, based on :mod:`cosmoprimo`."""
     config_fn = 'primordial_cosmology.yaml'
 
-    def initialize(self, fiducial=None, engine=None, **kwargs):
+    def initialize(self, fiducial=None, **kwargs):
         """
         Initialize :class:`Cosmoprimo`.
 

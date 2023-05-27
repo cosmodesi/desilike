@@ -17,17 +17,20 @@ class ParameterBestFit(Samples):
 
     _attrs = Samples._attrs + ['_logposterior', '_loglikelihood', '_logprior']
 
-    def __init__(self, *args, logposterior='logposterior', loglikelihood='loglikelihood', logprior='logprior', **kwargs):
-        self._logposterior = str(logposterior)
-        self._loglikelihood = str(loglikelihood)
-        self._logprior = str(logprior)
+    def __init__(self, *args, logposterior=None, loglikelihood=None, logprior=None, **kwargs):
         super(ParameterBestFit, self).__init__(*args, **kwargs)
-        if self._logposterior in self:
-            self.logposterior.param.update(derived=True)
+        for _name in self._attrs[-3:]:
+            name = _name[1:]
+            value = locals()[name]
+            if getattr(self, _name, None) is None or value is not None:  # set only if not previously set, or new value are provided
+                setattr(self, _name, name if value is None else str(value))
+            value = getattr(self, _name)
+            if value in self:
+                self[value].param.update(derived=True)
 
     def __setstate__(self, state):
         # Backward-compatibility
-        for name in ['_logposterior', '_loglikelihood', '_logprior']:
+        for name in self._attrs[-3:]:
             state.setdefault(name, name[1:])
         super(ParameterBestFit, self).__setstate__(state)
 
@@ -293,8 +296,6 @@ class ParameterProfiles(Samples):
             params = self.params(**kwargs)
         if isinstance(index, str) and index == 'argmax':
             index = [self[param][:, 1].argmax() for param in params]
-        if not isinstance(index, tuple):
-            index = (index,)
         if len(index) != len(params):
             raise ValueError('Provide as many indices as params')
         di = {str(param): self[param][ii, 0] for param, ii in zip(params, index)}

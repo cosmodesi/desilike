@@ -11,7 +11,7 @@ def get_profiles(params):
     profiles.set(start=Samples([0. for param in params], params=params))
     params = profiles.start.params()
     for param in params: param.update(fixed=False)
-    profiles.set(bestfit=ParameterBestFit([rng.normal(0., 0.1) for param in params] + [-0.5], params=params + ['logposterior']))
+    profiles.set(bestfit=ParameterBestFit([rng.normal(0., 0.1) for param in params] + [-0.5], params=params + ['logposterior'], loglikelihood='LRG.loglikelihood'))
     profiles.set(error=Samples([0.5 for param in params], params=params))
     profiles.set(covariance=ParameterCovariance(np.eye(len(params)), params=params))
     profiles.set(interval=Samples([(-0.5, 0.5) for param in params], params=params))
@@ -28,7 +28,9 @@ def get_profiles(params):
 def test_misc():
     profiles_dir = '_profiles'
     params = ['params.a', 'params.b', 'params.c', 'params.d']
-    profiles = Profiles.concatenate(*[get_profiles(params) for i in range(5)])
+    profiles = [get_profiles(params) for i in range(5)]
+    profiles = Profiles.concatenate(*profiles)
+    assert profiles.bestfit._loglikelihood == 'LRG.loglikelihood'
     assert profiles.bestfit.shape == profiles.bestfit['logposterior'].shape == (5,)
     fn = os.path.join(profiles_dir, 'profile.npy')
     profiles.save(fn)

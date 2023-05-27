@@ -65,7 +65,7 @@ class Chain(Samples):
     _type = ParameterArray
     _attrs = Samples._attrs + ['_logposterior', '_loglikelihood', '_logprior', '_aweight', '_fweight', '_weight']
 
-    def __init__(self, data=None, params=None, logposterior='logposterior', loglikelihood='loglikelihood', logprior='logprior', aweight='aweight', fweight='fweight', weight='weight', attrs=None):
+    def __init__(self, data=None, params=None, logposterior=None, loglikelihood=None, logprior=None, aweight=None, fweight=None, weight=None, attrs=None):
         """
         Initialize :class:`Chain`.
 
@@ -97,17 +97,15 @@ class Chain(Samples):
         attrs : dict, default=None
             Optionally, other attributes, stored in :attr:`attrs`.
         """
-        self._logposterior = str(logposterior)
-        self._loglikelihood = str(loglikelihood)
-        self._logprior = str(logprior)
-        self._aweight = str(aweight)
-        self._fweight = str(fweight)
-        self._weight = str(weight)
-        derived = [self._logposterior, self._loglikelihood, self._logprior, self._aweight, self._fweight, self._weight]
         super(Chain, self).__init__(data=data, params=params, attrs=attrs)
-        for name in derived:
-            if name in self:
-                self[name].param.update(derived=True)
+        for _name in self._attrs[-6:]:
+            name = _name[1:]
+            value = locals()[name]
+            if getattr(self, _name, None) is None or value is not None:  # set only if not previously set, or new value are provided
+                setattr(self, _name, name if value is None else str(value))
+            value = getattr(self, _name)
+            if value in self:
+                self[value].param.update(derived=True)
 
     def __setstate__(self, state):
         # Backward-compatibility

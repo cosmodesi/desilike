@@ -182,9 +182,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         pass
 
     def _finalize_one(self, chain):
-        chain._logliklihood = str(self.likelihood._param_loglikelihood)
-        chain._logprior = str(self.likelihood._param_logprior)
-        return chain
+        return Chain(chain, loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior)
 
     @property
     def nchains(self):
@@ -280,7 +278,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                 self._set_rng(rng=self.rng)
                 self.derived = None
                 self._ichain = ichain
-                chain = self._finalize_one(self._run_one(start[ichain], **kwargs))
+                chain = Chain(self._run_one(start[ichain], **kwargs), loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior)
                 if self.mpicomm.rank == 0:
                     ncalls[ichain] = self.derived[1][self.likelihood._param_loglikelihood].size if self.derived is not None else 0
                     if chain is not None:
@@ -369,7 +367,7 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
                     self._set_rng(rng=self.rng)
                     self.derived = None
                     self._ichain = ichain
-                    chain = self._finalize_one(self._run_one(start[ichain], niterations=niterations, **kwargs))
+                    chain = Chain(self._run_one(start[ichain], niterations=niterations, **kwargs), loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior)
                     if self.mpicomm.rank == 0:
                         ncalls[ichain] = self.derived[1][self.likelihood._param_loglikelihood].size if self.derived is not None else 0
                         if chain is not None:

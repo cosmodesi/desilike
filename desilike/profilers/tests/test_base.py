@@ -59,6 +59,7 @@ def test_solve():
     covariance = ObservablesCovarianceMatrix(observables=observable, footprints=BoxFootprint(volume=1e10, nbar=1e-2))
     observable.init.update(covariance=covariance())
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood.params['LRG.loglikelihood'] = likelihood.params['LRG.logprior'] = {}
     #for param in likelihood.all_params.select(basename=['df', 'dm', 'qpar', 'qper']): param.update(fixed=True)
 
     #import numpy as np
@@ -66,6 +67,7 @@ def test_solve():
     profiler = MinuitProfiler(likelihood, rescale=True)
     #profiler = ScipyProfiler(likelihood, method='lsq')
     profiles = profiler.maximize(niterations=2)
+    assert profiles.bestfit._loglikelihood == 'LRG.loglikelihood'
     profiles = profiler.interval(params=['df'])
     profiler.grid(params=['df', 'qpar'], size=2)
     print(profiles.to_stats())
@@ -80,4 +82,4 @@ if __name__ == '__main__':
 
     setup_logging()
     test_profilers()
-    #test_solve()
+    test_solve()

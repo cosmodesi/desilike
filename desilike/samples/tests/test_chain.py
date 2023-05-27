@@ -15,7 +15,7 @@ def get_chain(params, nwalkers=4, size=4000, seed=42):
     array = rng.multivariate_normal(mean, cov, size=(size, nwalkers))
     diff = array - mean
     logposterior = -0.5 * np.sum(diff.dot(invcov) * diff, axis=-1)
-    chain = Chain(list(np.moveaxis(array, -1, 0)) + [logposterior], params=params + ['logposterior'])
+    chain = Chain(list(np.moveaxis(array, -1, 0)) + [logposterior], params=params + ['logposterior'], loglikelihood='LRG.loglikelihood')
     for iparam, param in enumerate(chain.params(derived=False)):
         param.update(fixed=False, value=mean[iparam])
     return mean, cov, chain
@@ -56,6 +56,7 @@ def test_misc():
     chain['like.a'].param.update(fixed=False)
     assert not chain[4:10]['like.a'].param.fixed
     assert not chain.concatenate(chain, chain)['like.a'].param.fixed
+    assert chain.concatenate(chain, chain)._loglikelihood == 'LRG.loglikelihood'
     assert np.all(np.array(chain.match(chain)[0]) == np.array(np.unravel_index(np.arange(chain.size), shape=chain.shape)))
 
 
@@ -117,8 +118,8 @@ def test_solved():
     array = np.zeros(chain.shape + (4,), dtype='f8')
     array[..., 1] = -0.3
     array[..., 3] = -0.3
-    chain.set(ParameterArray(array, param='loglikelihood', derivs=[(), ('like.a',) * 2, ('like.a', 'like.b'), ('like.b',) * 2]))
-    chain['logprior'] = chain['loglikelihood']
+    chain.set(ParameterArray(array, param='LRG.loglikelihood', derivs=[(), ('like.a',) * 2, ('like.a', 'like.b'), ('like.b',) * 2]))
+    chain['logprior'] = chain['LRG.loglikelihood']
 
     assert np.allclose(chain.median('like.a'), np.median(chain['like.a']), atol=1.)
     print(chain.sample_solved().to_stats(tablefmt='pretty'))

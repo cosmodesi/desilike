@@ -185,8 +185,8 @@ class BasePipeline(BaseClass):
         self._params.updated = False
         self._varied_params = self._params.select(varied=True, derived=False)
         self.param_values = {param.name: param.value for param in self._params}
-        for calculator in self.calculators:
-            self.param_values.update(calculator.runtime_info.param_values)
+        #for calculator in self.calculators:
+        #    self.param_values.update({calculator.runtime_info.base_params[basename].name: value for basename, value in calculator.runtime_info.param_values.items()})
         self.derived = None
 
     @property
@@ -656,7 +656,7 @@ class RuntimeInfo(BaseClass):
         """Set parameters specific to this calculator."""
         self._params = ParameterCollection(params)
         self._params.updated = False
-        self.base_params = {param.basename: param for param in self._params}
+        self.base_params = {(param.name if self._with_namespace else param.basename): param for param in self._params}
         self.input_params = self._params.select(input=True)
         self.derived_params = self._params.select(derived=True)
         self.solved_params = self._params.select(solved=True)

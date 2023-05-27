@@ -338,9 +338,15 @@ def test_full_shape():
 def test_params():
 
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
+    theory = KaiserTracerPowerSpectrumMultipoles()
+    for param in theory.init.params:
+        param.update(namespace='LRG')
+    print(theory.all_params)
+    print(theory.runtime_info.pipeline.param_values)
+    exit()
+
     theory = KaiserTracerCorrelationFunctionMultipoles()
     for param in theory.init.params:
-        print(param)
         param.update(namespace='LRG')
     print(theory.all_params)
 

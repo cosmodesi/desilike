@@ -18,6 +18,33 @@ class ParameterBestFit(Samples):
     _attrs = Samples._attrs + ['_logposterior', '_loglikelihood', '_logprior']
 
     def __init__(self, *args, logposterior=None, loglikelihood=None, logprior=None, **kwargs):
+        """
+        Initialize :class:`ParameterBestFit`.
+
+        Parameters
+        ----------
+        data : list, dict, Samples
+            Can be:
+
+            - list of :class:`ParameterArray`, or :class:`np.ndarray` if list of parameters
+              (or :class:`ParameterCollection`) is provided in ``params``
+            - dictionary mapping parameter to array
+
+        params : list, ParameterCollection
+            Optionally, list of parameters.
+
+        logposterior : str, default='logposterior'
+            Name of log-posterior in ``data``.
+
+        loglikelihood : str, default='loglikelihood'
+            Name of log-likelihood in ``data``.
+
+        logprior : str, default='logprior'
+            Name of log-prior in ``data``.
+
+        attrs : dict, default=None
+            Optionally, other attributes, stored in :attr:`attrs`.
+        """
         super(ParameterBestFit, self).__init__(*args, **kwargs)
         for _name in self._attrs[-3:]:
             name = _name[1:]

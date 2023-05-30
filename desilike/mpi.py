@@ -41,11 +41,12 @@ else:
 
         def bcast(self, value, **kwargs):
             return copy.copy(value)
-    
+
+
     def Status():
         return 0
-    
-    
+
+
     def Get_processor_name():
         return ''
 

@@ -84,6 +84,12 @@ class Chain(Samples):
         logposterior : str, default='logposterior'
             Name of log-posterior in ``data``.
 
+        loglikelihood : str, default='loglikelihood'
+            Name of log-likelihood in ``data``.
+
+        logprior : str, default='logprior'
+            Name of log-prior in ``data``.
+
         aweight : str, default='aweight'
             Name of sample weights (which default to 1. if not provided in ``data``).
 

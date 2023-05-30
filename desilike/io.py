@@ -6,7 +6,7 @@ import numpy as np
 import yaml
 
 from . import utils
-from .utils import BaseClass, deep_eq, path_types
+from .utils import BaseClass, deep_eq, is_path
 
 
 class YamlLoader(yaml.SafeLoader):
@@ -15,6 +15,7 @@ class YamlLoader(yaml.SafeLoader):
     Taken from https://stackoverflow.com/questions/30458977/yaml-loads-5e-6-as-string-and-not-a-number.
     """
 
+# https://stackoverflow.com/questions/30458977/yaml-loads-5e-6-as-string-and-not-a-number
 
 YamlLoader.add_implicit_resolver(u'tag:yaml.org,2002:float',
                                  re.compile(u'''^(?:
@@ -38,7 +39,6 @@ YamlLoader.add_constructor('!none', none_constructor)
 
 def yaml_parser(string, index=None):
     """Parse string in *yaml* format."""
-    # https://stackoverflow.com/questions/30458977/yaml-loads-5e-6-as-string-and-not-a-number
     if index is not None:
         alls = list(yaml.load_all(string, Loader=YamlLoader))
         if isinstance(index, dict):
@@ -84,7 +84,7 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
 
     def __init__(self, data=None, string=None, parser=None, decode=True, base_dir=None, **kwargs):
         """
-        Initialize :class:`Decoder`.
+        Initialize :class:`BaseConfig`.
 
         Parameters
         ----------
@@ -111,28 +111,29 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
         """
         if isinstance(data, self.__class__):
             self.__dict__.update(data.copy().__dict__)
+            return
 
-        else:
-            self.parser = parser
-            if parser is None:
-                self.parser = yaml_parser
+        self.parser = parser
+        if parser is None:
+            self.parser = yaml_parser
 
-            datad = {}
+        datad = {}
 
-            self.base_dir = base_dir
-            if isinstance(data, path_types):
-                if string is None: string = ''
-                if base_dir is None: self.base_dir = os.path.dirname(data)
-                with open(data, 'r') as file:
-                    string += file.read()
-            elif data is not None:
-                datad = dict(data)
+        self.base_dir = base_dir
+        if is_path(data):
+            if string is None: string = ''
+            if base_dir is None: self.base_dir = os.path.dirname(data)
+            with open(data, 'r') as file:
+                string += file.read()
+        elif data is not None:
+            datad = dict(data)
 
-            if string is not None:
-                datad.update(self.parser(string, **kwargs))
+        if string is not None:
+            datad.update(self.parser(string, **kwargs))
 
-            self.data = datad
-            if decode: self.decode()
+        self.data = datad
+        if decode: self.decode()
+
 
     def decode(self):
         """

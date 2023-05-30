@@ -3,7 +3,7 @@ import glob
 import numpy as np
 
 from desilike import plotting, jax, utils
-from desilike.utils import path_types
+from desilike.utils import is_path
 from desilike.base import BaseCalculator
 from .window import WindowedCorrelationFunctionMultipoles
 
@@ -13,7 +13,7 @@ def _is_array(data):
 
 
 def _is_from_pycorr(data):
-    return isinstance(data, path_types) or not _is_array(data)
+    return is_path(data) or not _is_array(data)
 
 
 class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
@@ -100,7 +100,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         def load_all(list_mocks):
             list_y = []
             for mocks in list_mocks:
-                if isinstance(mocks, path_types):
+                if is_path(mocks):
                     fns = sorted(glob.glob(mocks))
                     mocks = []
                     if len(fns):

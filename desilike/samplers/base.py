@@ -5,7 +5,7 @@ import functools
 import numpy as np
 
 from desilike import mpi
-from desilike.utils import BaseClass, path_types, TaskManager
+from desilike.utils import BaseClass, TaskManager, is_path
 from desilike.samples import Chain, Samples, load_source
 from desilike.samples import diagnostics as sample_diagnostics
 from desilike.parameter import ParameterPriorError
@@ -120,7 +120,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
             self.chains = [None] * nchains
         self.save_fn = save_fn
         if save_fn is not None:
-            if isinstance(save_fn, path_types):
+            if is_path(save_fn):
                 self.save_fn = [str(save_fn).replace('*', '{}').format(i) for i in range(self.nchains)]
             else:
                 if len(save_fn) != self.nchains:

@@ -1,6 +1,6 @@
 import numpy as np
 
-from desilike.utils import BaseClass, path_types, TaskManager
+from desilike.utils import BaseClass, is_path, TaskManager
 from desilike.samples import Chain, load_source
 
 
@@ -44,7 +44,7 @@ class ImportanceSampler(BaseClass):
             self.input_chains = [None] * nchains
         self.save_fn = save_fn
         if save_fn is not None:
-            if isinstance(save_fn, path_types):
+            if is_path(save_fn):
                 self.save_fn = [str(save_fn).replace('*', '{}').format(i) for i in range(self.nchains)]
             else:
                 if len(save_fn) != self.nchains:

@@ -23,7 +23,7 @@ from .jax import rv_frozen
 from .io import BaseConfig
 from . import mpi, utils
 from .mpi import CurrentMPIComm
-from .utils import BaseClass, NamespaceDict, deep_eq, path_types
+from .utils import BaseClass, NamespaceDict, deep_eq, is_path
 
 
 def decode_name(name, default_start=0, default_stop=None, default_step=1):
@@ -1541,7 +1541,7 @@ class ParameterCollection(BaseParameterCollection):
         attrs : dict, default=None
             Optionally, other attributes, stored in :attr:`attrs`.
         """
-        if isinstance(data, path_types):
+        if is_path(data):
             data = ParameterCollectionConfig(data)
 
         if isinstance(data, ParameterCollectionConfig):
@@ -2541,7 +2541,7 @@ class ParameterCovariance(BaseParameterMatrix):
 
     def corrcoef(self, params=None):
         """Return correlation matrix array (optionally restricted to input parameters)."""
-        return utils.cov_to_corrcoef(self.cov(params=params, return_type='nparray'))
+        return utils.cov_to_corrcoef(self.view(params=params, return_type='nparray'))
 
     def var(self, params=None):
         """

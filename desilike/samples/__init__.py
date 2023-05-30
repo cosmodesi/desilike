@@ -8,7 +8,7 @@ from ..parameter import ParameterCollection, Samples
 from .chain import Chain
 from .profiles import Profiles, ParameterBestFit, ParameterCovariance, ParameterProfiles, ParameterContours, ParameterGrid
 from . import diagnostics, utils
-from .utils import BaseClass, path_types
+from .utils import BaseClass, is_path
 
 
 __all__ = ['Samples', 'Chain', 'Profiles', 'ParameterBestFit', 'ParameterCovariance', 'ParameterContours', 'ParameterProfiles', 'ParameterGrid', 'diagnostics']
@@ -57,7 +57,7 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
 
     sources = []
     for fn in fns:
-        if isinstance(fn, path_types):
+        if is_path(fn):
             sources += [BaseClass.load(ff) for ff in glob.glob(fn)]
         else:
             sources.append(fn)

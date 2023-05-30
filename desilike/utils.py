@@ -20,9 +20,6 @@ from . import mpi, jax
 from .mpi import CurrentMPIComm
 
 
-path_types = (str, Path)
-
-
 @CurrentMPIComm.enable
 def exception_handler(exc_type, exc_value, exc_traceback, mpicomm=None):
     """Print exception with a logger."""
@@ -322,6 +319,11 @@ class BaseClass(object, metaclass=BaseMetaClass):
 def is_sequence(item):
     """Whether input item is a tuple or list."""
     return isinstance(item, (list, tuple, set, frozenset))
+
+
+def is_path(item):
+    """Whether input item is a path."""
+    return isinstance(item, (str, Path))
 
 
 def dict_to_yaml(d):

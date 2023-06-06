@@ -1,6 +1,6 @@
 import numpy as np
 
-from desilike.parameter import Parameter, ParameterPrior, Deriv, ParameterArray, Samples, ParameterPrecision, ParameterCovariance
+from desilike.parameter import Parameter, ParameterPrior, Deriv, ParameterArray, ParameterCollection, Samples, ParameterPrecision, ParameterCovariance
 
 
 def test_prior():
@@ -41,6 +41,12 @@ def test_param_array():
     assert samples['c'].param.name == 'c'
 
 
+def test_collection():
+    params = ParameterCollection(['a', 'b'])
+    params2 = ParameterCollection(['b', 'c'])
+    assert (params & params2).names() == ['b']
+
+
 def test_matrix():
     params = {name: {'prior': {'dist': 'norm', 'loc': 1., 'scale': 10.}} for name in ['a', 'b', 'c']}
     #params = {name: {'prior': {'limits': [-1., 1.]}} for name in ['a', 'b']}
@@ -76,4 +82,5 @@ if __name__ == '__main__':
     test_prior()
     test_deriv()
     test_param_array()
+    test_collection()
     test_matrix()

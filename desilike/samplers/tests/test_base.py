@@ -5,7 +5,7 @@ from desilike.samplers import (EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSam
                                StaticDynestySampler, DynamicDynestySampler, PolychordSampler, GridSampler, QMCSampler, ImportanceSampler)
 
 
-def test_ensemble():
+def test_samplers():
 
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
@@ -23,14 +23,20 @@ def test_ensemble():
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
     likelihood.params['LRG.loglikelihood'] = likelihood.params['LRG.logprior'] = {}
 
-    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler][:1]:
-        sampler = Sampler(likelihood, save_fn='./_tests/chain_*.npy')
-        chains = sampler.run(max_iterations=50, check=True, check_every=50)
+    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler]:
+        kwargs = {}
+        if Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]:
+            kwargs.update(nwalkers=20)
+        save_fn = './_tests/chain_*.npy'
+        sampler = Sampler(likelihood, save_fn=save_fn, **kwargs)
+        chains = sampler.run(max_iterations=20, check=True, check_every=10)
         if sampler.mpicomm.rank == 0:
             assert chains[0].concatenate(chains)._loglikelihood == 'LRG.loglikelihood'
             assert chains[0]['LRG.loglikelihood'].derivs is not None
             assert chains[0].sample_solved()['LRG.loglikelihood'].derivs is None
-        chains = sampler.run(max_iterations=50, check=True, check_every=10)
+        chains = sampler.run(max_iterations=20, check=True, check_every=20)
+        sampler = Sampler(likelihood, chains=chains, save_fn=save_fn)
+        chains = sampler.run(max_iterations=20, check=True, check_every=10)
 
 
 def test_fixed():
@@ -71,6 +77,6 @@ def test_importance():
 if __name__ == '__main__':
 
     setup_logging()
-    test_ensemble()
+    test_samplers()
     #test_fixed()
     #test_importance()

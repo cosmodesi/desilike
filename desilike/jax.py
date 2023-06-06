@@ -1,3 +1,4 @@
+import functools
 import logging
 
 logging.getLogger('jax._src.lib.xla_bridge').addFilter(logging.Filter('No GPU/TPU found, falling back to CPU.'))
@@ -34,6 +35,17 @@ def dist_name(dist):
     return name
 
 
+def fallback(func):
+
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        args, kwargs = func(self, *args, **kwargs)
+        return getattr(self.dist, func.__name__, getattr(self.odist, func.__name__))(*args, **kwargs)
+
+    return wrapper
+
+
+
 class rv_frozen(object):
     """
     ``jax`` currently does not implement scipy's frozen random variate.
@@ -46,60 +58,74 @@ class rv_frozen(object):
         self.args = args
         self.kwds = kwds
 
+    @fallback
     def pdf(self, x):
-        return self.dist.pdf(x, *self.args, **self.kwds)
+        return (x,) + self.args, self.kwds
 
+    @fallback
     def logpdf(self, x):
-        return self.dist.logpdf(x, *self.args, **self.kwds)
+        return (x,) + self.args, self.kwds
 
+    @fallback
     def cdf(self, x):
-        return self.dist.cdf(x, *self.args, **self.kwds)
+        return (x,) + self.args, self.kwds
 
+    @fallback
     def logcdf(self, x):
-        return self.dist.logcdf(x, *self.args, **self.kwds)
+        return (x,) + self.args, self.kwds
 
+    @fallback
     def ppf(self, q):
-        return self.dist.ppf(q, *self.args, **self.kwds)
+        return (q,) + self.args, self.kwds
 
+    @fallback
     def isf(self, q):
-        return self.dist.isf(q, *self.args, **self.kwds)
+        return (q,) + self.args, self.kwds
 
+    @fallback
     def rvs(self, size=None, random_state=None):
-        kwds = self.kwds.copy()
-        kwds.update({'size': size, 'random_state': random_state})
-        return self.odist.rvs(*self.args, **kwds)
+        return self.args, {**self.kwds, 'size': size, 'random_state': random_state}
 
+    @fallback
     def sf(self, x):
-        return self.dist.sf(x, *self.args, **self.kwds)
+        return (x,) + self.args, self.kwds
 
+    @fallback
     def logsf(self, x):
-        return self.dist.logsf(x, *self.args, **self.kwds)
+        return (x,) + self.args, self.kwds
 
+    @fallback
     def stats(self, moments='mv'):
-        kwds = self.kwds.copy()
-        kwds.update({'moments': moments})
-        return self.odist.stats(*self.args, **kwds)
+        return self.args, {**self.kwds, 'moments': moments}
 
+    @fallback
     def median(self):
-        return self.odist.median(*self.args, **self.kwds)
+        return self.args, self.kwds
 
+    @fallback
     def mean(self):
-        return self.odist.mean(*self.args, **self.kwds)
+        return self.args, self.kwds
 
+    @fallback
     def var(self):
-        return self.odist.var(*self.args, **self.kwds)
+        return self.args, self.kwds
 
+    @fallback
     def std(self):
-        return self.odist.std(*self.args, **self.kwds)
+        return self.args, self.kwds
 
+    @fallback
     def moment(self, order=None, **kwds):
-        return self.odist.moment(order, *self.args, **self.kwds, **kwds)
+        return (order,) + self.args, {**self.kwds, **kwds}
 
+    @fallback
     def entropy(self):
-        return self.odist.entropy(*self.args, **self.kwds)
+        return self.args, self.kwds
 
+    @fallback
     def interval(self, confidence=None, **kwds):
-        return self.odist.interval(confidence, *self.args, **self.kwds, **kwds)
+        return (confidence,) + self.args, {**self.kwds, **kwds}
 
+    @fallback
     def support(self):
-        return self.odist.support(*self.args, **self.kwds)
+        return self.args, self.kwds

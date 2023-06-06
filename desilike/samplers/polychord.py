@@ -219,12 +219,14 @@ class PolychordSampler(BasePosteriorSampler):
                         pass
                     else:
                         nlive = len(live)
-                        aweight, loglikelihood = [np.concatenate([sample, np.full(nlive, value, dtype='f8')]) for sample, value in zip(samples[:2], [0., np.nan])]
+                        #aweight, loglikelihood = [np.concatenate([sample, np.full(nlive, value, dtype='f8')]) for sample, value in zip(samples[:2], [0., np.nan])]
+                        aweight = np.concatenate([samples[0], np.zeros_like(nlive, dtype='f8')])
                         points = [np.concatenate([sample, live[:, iparam]]) for iparam, sample in enumerate(samples[2: 2 + ndim])]
-                        loglikelihood[loglikelihood <= self.settings.logzero] = -np.inf
-                        chain = Chain(points + [aweight, loglikelihood], params=self.varied_params + ['aweight', 'loglikelihood'])
+                        #loglikelihood[loglikelihood <= self.settings.logzero] = -np.inf
+                        #chain = Chain(points + [aweight, loglikelihood], params=self.varied_params + ['aweight', 'loglikelihood'])
+                        chain = Chain(points + [aweight], params=self.varied_params + ['aweight'])
                         if self.resume_derived is not None:
-                            self.derived = [Samples.concatenate([resume_derived, derived]) for resume_derived, derived in zip(self.resume_derived, self.derived)]
+                            self.derived = [Samples.concatenate([resume_derived, derived], intersection=True) for resume_derived, derived in zip(self.resume_derived, self.derived)]
                         chain = self._set_derived(chain)
                         self.resume_chain = chain[:-nlive]
                         self.resume_chain.save(self.save_fn[self._ichain])
@@ -262,7 +264,7 @@ class PolychordSampler(BasePosteriorSampler):
             if self.mpicomm.rank == loglikelihood_rank:
                 source = load_source([self.save_fn[self._ichain], prefix + '.state.npy'])
                 source = source[0].concatenate(source)
-                self.resume_derived = [source.select(name=self.varied_params.names()), source.select(derived=True)]
+                self.resume_derived = [source] * 2
 
         ndim = len(self.varied_params)
         kwargs = {}

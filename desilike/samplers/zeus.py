@@ -33,7 +33,8 @@ class ZeusSampler(BaseBatchPosteriorSampler):
             Input likelihood.
 
         nwalkers : int, str, default=None
-            Number of walkers, defaults to ``2 * max((int(2.5 * ndim) + 1) // 2, 2)``.
+            Number of walkers, defaults to :attr:`Chain.shape[1]` of input chains, if any,
+            else ``2 * max((int(2.5 * ndim) + 1) // 2, 2)``.
             Can be given in dimension units, e.g. ``'3 * ndim'``.
 
         light_mode : bool, default=False
@@ -64,7 +65,15 @@ class ZeusSampler(BaseBatchPosteriorSampler):
         super(ZeusSampler, self).__init__(*args, **kwargs)
         ndim = len(self.varied_params)
         if nwalkers is None:
-            nwalkers = 2 * max((int(2.5 * ndim) + 1) // 2, 2)
+            shapes = self.mpicomm.bcast([chain.shape if chain is not None else None for chain in self.chains], root=0)
+            if any(shape is not None for shape in shapes):
+                try:
+                    nwalkers = shapes[0][1]
+                    assert all(shape[1] == nwalkers for shape in shapes)
+                except (IndexError, AssertionError) as exc:
+                    raise ValueError('Impossible to find number of walkers from input chains of shapes {}'.format(shapes)) from exc
+            else:
+                nwalkers = 2 * max((int(2.5 * ndim) + 1) // 2, 2)
         self.nwalkers = utils.evaluate(nwalkers, type=int, locals={'ndim': ndim})
         import zeus
         handlers = logging.root.handlers.copy()

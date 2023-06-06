@@ -445,7 +445,7 @@ class MCMCSampler(BaseBatchPosteriorSampler):
         else:
             covariance = {'source': covariance, 'burnin': burnin}
         if self.mpicomm.rank == 0:
-            covariance = load_source(covariance, cov=True, params=self.varied_params, return_type='nparray')
+            covariance = load_source(**covariance, cov=True, params=self.varied_params, return_type='nparray')
         covariance = self.mpicomm.bcast(covariance, root=0)
         self.proposer.set_covariance(covariance)
         self.learn_diagnostics = {}
@@ -469,7 +469,7 @@ class MCMCSampler(BaseBatchPosteriorSampler):
             if learn and self.mpicomm.rank == 0:
                 chain = Chain.concatenate([chain.remove_burnin(burnin) for chain in self.chains])
                 if chain.size > 1:
-                    covariance = chain.cov(params=self.varied_params)
+                    covariance = chain.covariance(params=self.varied_params)
         covariance = self.mpicomm.bcast(covariance, root=0)
         if covariance is not None:
             try:

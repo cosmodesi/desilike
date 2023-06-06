@@ -126,10 +126,7 @@ class BaseDynestySampler(BasePosteriorSampler):
                 raise ValueError('Previous run used {}, not {}.'.format(type(sampler), type(self.sampler)))
             self.sampler.__dict__.update(sampler.__dict__)
             source = load_source(self.save_fn[self._ichain])[0]
-            points = {}
-            for param in self.varied_params:
-                points[param.name] = source.pop(param)
-            self.resume_derived = [source.select(derived=True), points]
+            self.resume_derived = [source] * 2
 
         self.sampler.rstate = rstate
 
@@ -140,16 +137,16 @@ class BaseDynestySampler(BasePosteriorSampler):
             results = self.sampler.results
             chain = [results['samples'][..., iparam] for iparam, param in enumerate(self.varied_params)]
             logprior = sum(param.prior(value) for param, value in zip(self.varied_params, chain))
-            chain.append(logprior)
-            chain.append(results['logl'] + logprior)
+            #chain.append(logprior)
+            #chain.append(results['logl'] + logprior)
             chain.append(results['logwt'])
             chain.append(np.exp(results.logwt - results.logz[-1]))
-            chain = Chain(chain, params=self.varied_params + ['logprior', 'logposterior', 'logweight', 'aweight'])
+            chain = Chain(chain, params=self.varied_params + ['logweight', 'aweight'])
 
             if self.mpicomm.rank == 0:
                 if self.resume_derived is not None:
                     if self.derived is not None:
-                        self.derived = [Samples.concatenate([resume_derived, derived]) for resume_derived, derived in zip(self.resume_derived, self.derived)]
+                        self.derived = [Samples.concatenate([resume_derived, derived], intersection=True) for resume_derived, derived in zip(self.resume_derived, self.derived)]
                     else:
                         self.derived = self.resume_derived
                 chain = self._set_derived(chain)

@@ -449,6 +449,8 @@ def _check_valid_inv(mat, invmat, rtol=1e-03, atol=1e-03, check_valid='raise'):
     - 'ignore': ignore
 
     """
+    if check_valid == 'ignore':
+        return
     tmp = mat.dot(invmat)
     ref = np.eye(tmp.shape[0], dtype=tmp.dtype)
     if not np.allclose(tmp, ref, rtol=rtol, atol=atol):

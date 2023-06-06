@@ -1669,7 +1669,7 @@ class ParameterCollection(BaseParameterCollection):
         return self
 
     def __sub__(self, other):
-        """Concatenate two parameter collections."""
+        """Subtract two parameter collections."""
         other = self.__class__(other)
         return self.__class__([param for param in self if param not in other])
 
@@ -1680,6 +1680,19 @@ class ParameterCollection(BaseParameterCollection):
     def __isub__(self, other):
         if other == 0: return self
         self.__dict__.update(self.__sub__(other).__dict__)
+        return self
+
+    def __and__(self, other):
+        """Intersection of two parameter collections."""
+        return self.__class__([param for param in self if param in other])
+
+    def __rand__(self, other):
+        if other == 0: return self.copy()
+        return self.__class__(other).__and__(self)
+
+    def __iand__(self, other):
+        if other == 0: return self
+        self.__dict__.update(self.__and__(other).__dict__)
         return self
 
     def params(self, **kwargs):
@@ -2052,19 +2065,27 @@ class Samples(BaseParameterCollection):
         return 0
 
     @classmethod
-    def concatenate(cls, *others):
-        """Concatenate input samples, which requires all samples to hold same parameters."""
+    def concatenate(cls, *others, intersection=False):
+        """
+        Concatenate input samples, which requires all samples to hold same parameters,
+        except if ``intersection == True``, in which case common parameters are selected.
+        """
         if len(others) == 1 and utils.is_sequence(others[0]):
             others = others[0]
         if not others: return cls()
         new = others[0].copy()
         new.data = []
         new_params = others[0].params()
-        new_names = new_params.names()
-        for other in others:
-            other_names = other.names()
-            if new_names and other_names and set(other_names) != set(new_names):
-                raise ValueError('Cannot concatenate values as parameters do not match: {} != {}.'.format(new_names, other_names))
+        others = list(others[:1]) + [other for other in others[1:] if other.params()]
+        if intersection:
+            for other in others:
+                new_params &= other.params()
+        else:
+            new_names = new_params.names()
+            for other in others:
+                other_names = other.names()
+                if set(other_names) != set(new_names):
+                    raise ValueError('Cannot concatenate values as parameters do not match: {} != {}.'.format(new_names, other_names))
         for param in new_params:
             new[param] = others[0][param].clone(value=np.concatenate([np.atleast_1d(other[param]) for other in others], axis=0))
         return new

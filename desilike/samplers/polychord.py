@@ -143,7 +143,7 @@ class PolychordSampler(BasePosteriorSampler):
                   'do_clustering': do_clustering, 'feedback': feedback, 'precision_criterion': 1e-3,
                   'logzero': logzero, 'max_ndead': -1, 'boost_posterior': boost_posterior,
                   'posteriors': True, 'equals': True, 'cluster_posteriors': True,
-                  'write_resume': True, 'read_resume': False, 'write_stats': False,
+                  'write_resume': True, 'read_resume': False, 'write_stats': True,
                   'write_live': True, 'write_dead': True, 'write_prior': True,
                   'maximise': False, 'compression_factor': compression_factor, 'synchronous': synchronous,
                   'grade_dims': grade_dims, 'grade_frac': grade_frac, 'nlives': nlives or {}}
@@ -200,6 +200,7 @@ class PolychordSampler(BasePosteriorSampler):
             # When dumper() is called, save samples
             # BUT: we need derived parameters, which are on rank > 0 (if mpicomm.size > 1)
             # HACK: tell loglikelihood to save samples
+            self._it_send += 1
             for rank in range(self.mpicomm.size):
                 if _req.get(rank, None) is not None: _req[rank].Free()
                 _req[rank] = self.mpicomm.isend((self._it_send, live) if rank == loglikelihood_rank else (self._it_send, None), dest=rank, tag=_tag)
@@ -219,8 +220,9 @@ class PolychordSampler(BasePosteriorSampler):
                         pass
                     else:
                         nlive = len(live)
+                        print('LOOOOL', samples[0].shape, nlive)
                         #aweight, loglikelihood = [np.concatenate([sample, np.full(nlive, value, dtype='f8')]) for sample, value in zip(samples[:2], [0., np.nan])]
-                        aweight = np.concatenate([samples[0], np.zeros_like(nlive, dtype='f8')])
+                        aweight = np.concatenate([samples[0], np.zeros(nlive, dtype='f8')])
                         points = [np.concatenate([sample, live[:, iparam]]) for iparam, sample in enumerate(samples[2: 2 + ndim])]
                         #loglikelihood[loglikelihood <= self.settings.logzero] = -np.inf
                         #chain = Chain(points + [aweight, loglikelihood], params=self.varied_params + ['aweight', 'loglikelihood'])
@@ -286,6 +288,7 @@ class PolychordSampler(BasePosteriorSampler):
 
         self.derived = self.resume_derived
         if self.derived is None: self.derived = [None] * 2
+        # if self.mpicomm.bcast(self.derived[0] is not None, root=loglikelihood_rank):
         self.derived = [Samples.sendrecv(derived, source=loglikelihood_rank, dest=0, mpicomm=self.mpicomm) for derived in self.derived]
         chain = Samples.sendrecv(self.resume_chain, source=loglikelihood_rank, dest=0, mpicomm=self.mpicomm)
         return chain

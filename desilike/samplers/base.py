@@ -213,7 +213,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         start = np.full(shape, np.nan)
         logposterior = np.full(shape[:2], -np.inf)
         for ichain, chain in enumerate(self.chains):
-            if self.mpicomm.bcast(chain is not None, root=0):
+            if self.mpicomm.bcast(chain is not None and chain.size, root=0):
                 start[ichain] = self.mpicomm.bcast(np.array([chain[param][-1] for param in self.varied_params]).T if self.mpicomm.rank == 0 else None, root=0)
                 logposterior[ichain] = self.logposterior(start[ichain])
 

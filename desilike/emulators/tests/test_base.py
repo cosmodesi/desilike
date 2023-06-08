@@ -11,7 +11,6 @@ def test_base():
     emulator_dir = '_tests'
     fn = os.path.join(emulator_dir, 'emu.npy')
 
-    '''
     for Template in [DirectPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate]:
 
         template = Template()
@@ -19,7 +18,6 @@ def test_base():
         template.params['fsigma8'] = {'derived': True}
         calculator.all_params['b1'].update(derived='{b}**2', prior=None)
         calculator.all_params['b'] = {'prior': {'limits': [0., 2.]}}
-
         emulator = Emulator(calculator, engine='point')
         emulator.set_samples()
         emulator.fit()
@@ -27,7 +25,7 @@ def test_base():
         emulator = emulator.to_calculator()
         emulator = EmulatedCalculator.load(fn)
         #emulator.runtime_info.initialize()
-        #print(emulator.runtime_info.param_values)
+        #print(emulator.runtime_info.input_values)
         #print(emulator.varied_params, emulator.all_params)
         #print(emulator.runtime_info.pipeline.get_cosmo_requires())
         emulator()
@@ -54,7 +52,7 @@ def test_base():
         emulators[0].save(fn)
         emulator = EmulatedCalculator.load(fn)
         assert np.allclose(emulator(), emulators[0]())
-    '''
+
     calculator = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate())
     calculator()
     pt = calculator.pt

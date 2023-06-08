@@ -18,13 +18,14 @@ class BasePowerSpectrumExtractor(BaseCalculator):
         self.fiducial = get_cosmo(fiducial)
         self.cosmo_requires = {}
         self.cosmo = cosmo
+        params = self.params.select(derived=True)
         if external_cosmo(self.cosmo):
             self.cosmo_requires = {'fourier': {'sigma8_z': {'z': self.z, 'of': [('delta_cb', 'delta_cb'), ('theta_cb', 'theta_cb')]},
                                                'pk_interpolator': {'z': self.z, 'of': [('delta_cb', 'delta_cb')]}}}
         elif cosmo is None:
             self.cosmo = Cosmoprimo(fiducial=self.fiducial)
-            self.cosmo.params = self.params.copy()
-        self.params.clear()
+            self.cosmo.params = [param for param in self.params if param not in params]
+        self.params = params
         cosmo = self.cosmo
         self.cosmo = self.fiducial
         self.with_now = False
@@ -140,13 +141,14 @@ class DirectPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         super(DirectPowerSpectrumTemplate, self).initialize(*args, **kwargs)
         self.cosmo_requires = {}
         self.cosmo = cosmo
+        params = self.params.select(derived=True)
         if external_cosmo(self.cosmo):
             self.cosmo_requires = {'fourier': {'sigma8_z': {'z': self.z, 'of': [('delta_cb', 'delta_cb'), ('theta_cb', 'theta_cb')]},
                                                'pk_interpolator': {'z': self.z, 'k': self.k, 'of': [('delta_cb', 'delta_cb')]}}}
         elif cosmo is None:
             self.cosmo = Cosmoprimo(fiducial=self.fiducial)
-            self.cosmo.params = self.params.copy()
-        self.params.clear()
+            self.cosmo.params = [param for param in self.params if param not in params]
+        self.params = params
         self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, cosmo=self.cosmo, mode='distances').runtime_info.initialize()
         if external_cosmo(self.cosmo):
             self.cosmo_requires.update(self.apeffect.cosmo_requires)  # just background
@@ -195,12 +197,13 @@ class BAOExtractor(BasePowerSpectrumExtractor):
         self.fiducial = get_cosmo(fiducial)
         self.cosmo_requires = {}
         self.cosmo = cosmo
+        params = self.params.select(derived=True)
         if external_cosmo(self.cosmo):
             self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
         elif cosmo is None:
             self.cosmo = Cosmoprimo(fiducial=self.fiducial)
-            self.cosmo.params = self.params.copy()
-        self.params.clear()
+            self.cosmo.params = [param for param in self.params if param not in params]
+        self.params = params
         if self.fiducial is not None:
             cosmo = self.cosmo
             self.cosmo = self.fiducial
@@ -662,7 +665,7 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate, BandVelocityP
                 value = 1.
                 self.params[basename] = dict(value=value, prior={'limits': [0, 3]}, ref={'dist': 'norm', 'loc': value, 'scale': 0.01}, delta=0.005)
             self.params[basename].update(latex=r'(P / P^{{\mathrm{{fid}}}})_{{\{0}\{0}}}(k={1:.3f})'.format('theta', kp))
-        params = self.params.basename(basename=re_param_template)
+        params = self.params.basenames(basename=re_param_template)
         if set(params) != set(basenames):
             raise ValueError('Found parameters {}, but expected {}'.format(params, basenames))
         if self.kp[0] < self.k[0]:

@@ -153,7 +153,7 @@ class BasePipeline(BaseClass):
         new_params = ParameterCollection()
         for calculator in self.calculators:
             calculator_params = ParameterCollection(ParameterCollectionConfig(calculator.runtime_info.params, identifier='name').clone(params))
-            new_calculator_params = ParameterCollection()
+            #new_calculator_params = ParameterCollection()
             for iparam, param in enumerate(calculator.runtime_info.params):
                 param = calculator_params[param]
                 if param in new_params:
@@ -164,9 +164,9 @@ class BasePipeline(BaseClass):
                     elif param != new_params[param]:
                         raise PipelineError('Parameter {} of {} is different from that of {}.'.format(param, calculator, params_from_calculator[param.name]))
                 params_from_calculator[param.name] = calculator
-                new_calculator_params.set(param)
+                #new_calculator_params.set(param)
                 new_params.set(param)
-            calculator.runtime_info.params = new_calculator_params
+            #calculator.runtime_info.params = new_calculator_params
             #for param in new_calculator_params:
             #    if param.basename in calculator.runtime_info.init._params:
             #        calculator.runtime_info.init._params[param.basename] = param.clone(namespace=None)
@@ -184,9 +184,7 @@ class BasePipeline(BaseClass):
         self._params = new_params.deepcopy()
         self._params.updated = False
         self._varied_params = self._params.select(varied=True, derived=False)
-        self.param_values = {param.name: param.value for param in self._params}
-        #for calculator in self.calculators:
-        #    self.param_values.update({calculator.runtime_info.base_params[basename].name: value for basename, value in calculator.runtime_info.param_values.items()})
+        self.input_values = {param.name: param.value for param in self._params}
         self.derived = None
 
     @property
@@ -229,14 +227,14 @@ class BasePipeline(BaseClass):
         for name in params:
             if name not in self.params:
                 raise PipelineError('Input parameter {} is not one of parameters: {}'.format(name, self.params))
-        self.param_values.update(params)
-        params = self.params.eval(**self.param_values)
+        self.input_values.update(params)
+        params = self.params.eval(**self.input_values)
         self.derived = Samples()
         for param in self._params:
             if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
         for calculator in self.calculators:  # start by first calculator
             runtime_info = calculator.runtime_info
-            runtime_info.set_param_values(params, full=True)
+            runtime_info.set_input_values(params, full=True)
             result = runtime_info.calculate()
             self.derived.update(runtime_info.derived)
         if self.more_calculate:
@@ -300,9 +298,9 @@ class BasePipeline(BaseClass):
                 conversions = {'logA': 'ln10^10A_s'}
                 cosmo_params = cosmo_requires.get('params', {})
                 if cosmo_params:
-                    for basename, param in calculator.runtime_info.base_params.items():
+                    for basename, name in calculator.runtime_info.base_names.items():
                         if basename in cosmo_params:
-                            self.param_values[param.name] = calculator.runtime_info.param_values[basename] = cosmo[conversions.get(basename, basename)]
+                            self.input_values[name] = calculator.runtime_info.input_values[basename] = cosmo[conversions.get(basename, basename)]
                 if set(cosmo_requires.keys()) != {'params'}:  # requires a :class:`cosmoprimo.Cosmology` instance as ``cosmo`` attribute
                     calculator.cosmo = cosmo
                 calculator.runtime_info.tocalculate = True
@@ -343,9 +341,9 @@ class BasePipeline(BaseClass):
 
         states = [{} for i in range(len(calculators))]
         rng = np.random.RandomState(seed=seed)
-        param_values = {param.name: self.param_values[param.name] for param in self.varied_params}
+        input_values = {param.name: self.input_values[param.name] for param in self.varied_params}
         if calculators:
-            for params in [{str(param): param.ref.sample(random_state=rng) for param in self.varied_params} for ii in range(niterations)] + [param_values]:
+            for params in [{str(param): param.ref.sample(random_state=rng) for param in self.varied_params} for ii in range(niterations)] + [input_values]:
                 self.calculate(**params)
                 for calculator, state in zip(calculators, states):
                     calcstate = calculator.__getstate__()
@@ -396,7 +394,8 @@ class BasePipeline(BaseClass):
                     for dparam in calculator.runtime_info.derived_params.names(basename=param.basename):
                         param = calculator.runtime_info.params[dparam]
                     calculator.runtime_info.params.set(param)
-        self._set_params()
+            calculator.runtime_info.params = calculator.runtime_info.params
+        self._set_params(params=self.params)
 
     def _set_speed(self, niterations=10, override=False, seed=42):
         """
@@ -656,11 +655,10 @@ class RuntimeInfo(BaseClass):
         """Set parameters specific to this calculator."""
         self._params = ParameterCollection(params)
         self._params.updated = False
-        self.base_params = {(param.name if self._with_namespace else param.basename): param for param in self._params}
-        self.input_params = self._params.select(input=True)
-        self.derived_params = self._params.select(derived=True)
-        self.solved_params = self._params.select(solved=True)
-        self.param_values = {(param.name if self._with_namespace else param.basename): param.value for param in self.input_params}
+        self.base_names = {(param.name if self._with_namespace else param.basename): param.name for param in self.params}
+        self.input_names = {param.name: (param.name if self._with_namespace else param.basename) for param in self.params.select(input=True)}
+        self.input_values = {(param.name if self._with_namespace else param.basename): param.value for param in self.params.select(input=True)}
+        self.derived_params = self.params.select(derived=True)
         self._tocalculate = True
 
     @property
@@ -746,13 +744,13 @@ class RuntimeInfo(BaseClass):
         If calculator's :class:`BaseCalculator.calculate` has not be called with input parameter values, call it,
         keeping track of running time with :attr:`monitor`.
         """
-        self.set_param_values(params)
+        self.set_input_values(params)
         if self.tocalculate:
             self.monitor.start()
             try:
-                self.calculator.calculate(**self.param_values)
+                self.calculator.calculate(**self.input_values)
             except Exception as exc:
-                raise PipelineError('Error in method calculate of {} with calculator parameters {} and pipeline parameters {}'.format(self.calculator, self.param_values, self.pipeline.param_values)) from exc
+                raise PipelineError('Error in method calculate of {} with calculator parameters {} and pipeline parameters {}'.format(self.calculator, self.input_values, self.pipeline.input_values)) from exc
             self.monitor.stop()
             self._derived = None
             self.calculated = True
@@ -761,27 +759,28 @@ class RuntimeInfo(BaseClass):
         self._tocalculate = False
         return self.calculator.get()
 
-    def set_param_values(self, param_values, full=False, force=None):
+    def set_input_values(self, input_values, full=False, force=None):
         """Update parameter values; if new, next :meth:`calculate` call will call calculator's :class:`BaseCalculator.calculate`."""
         self.params
         if full:
-            for param, value in param_values.items():
-                if param in self.input_params:
-                    basename = self.input_params[param].name if self._with_namespace else self.input_params[param].basename
+            for name, value in input_values.items():
+                name = str(name)
+                if name in self.input_names:
+                    basename = self.input_names[name]
                     if force is not None:
                         self._tocalculate = force
-                    elif type(self.param_values[basename]) is not type(value) or self.param_values[basename] != value:
+                    elif type(self.input_values[basename]) is not type(value) or self.input_values[basename] != value:
                         self._tocalculate = True
-                    self.param_values[basename] = value
+                    self.input_values[basename] = value
         else:
-            for basename, value in param_values.items():
+            for basename, value in input_values.items():
                 basename = str(basename)
-                if basename in self.param_values:
+                if basename in self.input_values:
                     if force is not None:
                         self._tocalculate = force
-                    elif self.param_values[basename] != value or type(self.param_values[basename]) is not type(value):
+                    elif self.input_values[basename] != value or type(self.input_values[basename]) is not type(value):
                         self._tocalculate = True
-                    self.param_values[basename] = value
+                    self.input_values[basename] = value
 
     def __getstate__(self):
         """Return this class state dictionary."""
@@ -915,7 +914,7 @@ class BaseCalculator(BaseClass):
                                    _initialized=True)
             if getattr(self.runtime_info, '_pipeline', None) is not None:
                 new.runtime_info.pipeline._set_params(self.runtime_info.pipeline.params.deepcopy())  # to preserve depends
-                new(**self.runtime_info.pipeline.param_values)
+                new(**self.runtime_info.pipeline.input_values)
         else:
             new.runtime_info.clear()
         return new
@@ -939,7 +938,7 @@ class BaseCalculator(BaseClass):
             if getattr(self.runtime_info, '_pipeline', None) is not None:  # no need if self.runtime_info.pipeline isn't created
                 params = self.runtime_info.pipeline.params.deepcopy()
                 new.runtime_info.pipeline._set_params(params)  # to preserve depends
-                new(**self.runtime_info.pipeline.param_values)
+                new(**self.runtime_info.pipeline.input_values)
         return new
 
     def deepcopy(self):

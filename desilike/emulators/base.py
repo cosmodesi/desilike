@@ -105,15 +105,18 @@ class Emulator(BaseClass):
 
         params = []
         for cc, ff, vv in zip(calculators[:-1], fixed, varied):
-            bp = cc.runtime_info.base_params
-            ff = {bp[k].name: v for k, v in ff.items() if k in bp and bp[k].derived}
-            vv = {bp[k].name: None for k in vv if k in bp and bp[k].derived}
+            base_names = cc.runtime_info.base_names
+            fff, vvv = {}, {}
+            for k, v in ff.items():
+                if k in base_names and self.params[base_names[k]].derived: fff[base_names[k]] = v
+            for k in vv:
+                if k in base_names and self.params[base_names[k]].derived: vvv[base_names[k]] = None
             if self.is_calculator_sequence:
-                ff = {name: value for name, value in ff.items() if re.match(r'(\d*)_(.*)', name)}
-                vv = {name: value for name, value in vv.items() if re.match(r'(\d*)_(.*)', name)}
-            self.fixed.update(ff)
-            self.varied.update(vv)
-            params.append(list(vv))
+                fff = {name: value for name, value in fff.items() if re.match(r'(\d*)_(.*)', name)}
+                vvv = {name: value for name, value in vvv.items() if re.match(r'(\d*)_(.*)', name)}
+            self.fixed.update(fff)
+            self.varied.update(vvv)
+            params.append(list(vvv))
         self.fixed.update(fixed[-1])
         self.varied.update(dict.fromkeys(varied[-1]))
         params.append(varied[-1])

@@ -238,14 +238,14 @@ class Installer(BaseClass):
             if install_dir is not None:
                 raise ValueError('Cannot provide both user and install_dir')
             install_dir = os.getenv('PYTHONUSERBASE', site.getuserbase())
-        default_install_dir = os.getenv('DESILIKE_INSTALL_DIR', None)
+        default_install_dir = os.getenv('DESILIKE_INSTALL_DIR', '')
         if not default_install_dir:
             default_install_dir = os.path.dirname(os.path.dirname(os.path.dirname(site.getsitepackages()[0])))
         lib_rel_install_dir = os.path.relpath(site.getsitepackages()[0], default_install_dir)
         if install_dir is not None:
             install_dir = str(install_dir)
 
-        self.config_dir = os.getenv('DESILIKE_CONFIG_DIR', None)
+        self.config_dir = os.getenv('DESILIKE_CONFIG_DIR', '')
         default_config_dir = os.path.join(self.home_dir, '.desilike')
         if not self.config_dir:
             self.config_dir = default_config_dir

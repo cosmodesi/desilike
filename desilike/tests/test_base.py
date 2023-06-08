@@ -84,6 +84,34 @@ def test_likelihood():
     observable.plot(show=True)
 
 
+def test_combined_likelihood():
+
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+
+    template = ShapeFitPowerSpectrumTemplate(z=0.5)
+    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    theory.params['sn0'].update(namespace='LRG')
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
+                                                         theory=theory)
+    likelihood1 = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood1.all_params['LRG.sn0'].update(derived='.auto')
+    print(likelihood1.varied_params)
+    #print(theory.runtime_info.params['LRG.sn0'].derived)
+    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    theory.params['sn0'].update(namespace='ELG')
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
+                                                         theory=theory)
+    likelihood2 = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood2.all_params['ELG.sn0'].update(derived='.auto')
+
+    likelihood = likelihood1 + likelihood2
+    print(likelihood.varied_params)
+
+
 def test_params():
 
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
@@ -97,7 +125,7 @@ def test_params():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
     likelihood.observables[0].wmatrix.theory.params['b1'].update(value=3.)
-    print(likelihood(), likelihood.runtime_info.pipeline.param_values)
+    print(likelihood(), likelihood.runtime_info.pipeline.input_values)
 
     print(likelihood.runtime_info.pipeline.params)
     print(likelihood(dm=0.), likelihood(dm=0.01), likelihood(b1=2., dm=0.02))
@@ -220,8 +248,9 @@ if __name__ == '__main__':
     setup_logging()
     #test_init()
     #test_observable()
-    test_likelihood()
+    #test_likelihood()
+    test_combined_likelihood()
     #test_params()
-    #test_copy()
+    test_copy()
     #test_cosmo()
     #test_install()

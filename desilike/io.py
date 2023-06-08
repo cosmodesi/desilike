@@ -134,7 +134,6 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
         self.data = datad
         if decode: self.decode()
 
-
     def decode(self):
         """
         Decode (in-place) patterns, namely:

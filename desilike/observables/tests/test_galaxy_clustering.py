@@ -403,7 +403,7 @@ class CompressionWindow(BaseCalculator):
         #self.likelihood.observables[0].plot(show=True)
         self.values = {}
         for quantity in self.quantities:
-            self.values[quantity] = self.likelihood.runtime_info.pipeline.param_values[quantity]
+            self.values[quantity] = self.likelihood.runtime_info.pipeline.input_values[quantity]
 
     def get(self):
         return self.values

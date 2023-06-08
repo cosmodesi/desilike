@@ -33,7 +33,7 @@ class BaseLikelihood(BaseCalculator):
 
     def get(self):
         pipeline = self.runtime_info.pipeline
-        self.logprior = pipeline.params.prior(**pipeline.param_values)  # does not include solved params
+        self.logprior = pipeline.params.prior(**pipeline.input_values)  # does not include solved params
         if pipeline.more_calculate is None:
             pipeline.more_calculate = self._solve
         return self.loglikelihood + self.logprior
@@ -75,7 +75,7 @@ class BaseLikelihood(BaseCalculator):
                 self.fisher = Fisher(self, method='auto')
                 pipeline._params, pipeline._varied_params = params_bak, varied_params_bak
 
-            values = dict(pipeline.param_values)
+            values = dict(pipeline.input_values)
             for param in solved_params:
                 if not np.isfinite(values[param.name]): values[param.name] = param.value
             posterior_fisher = self.fisher(**values)
@@ -93,7 +93,7 @@ class BaseLikelihood(BaseCalculator):
 
         for param, xx in zip(solved_params, x):
             sum_logprior += all_params[param].prior(xx)
-            pipeline.param_values[param.name] = xx
+            pipeline.input_values[param.name] = xx
             if derived is not None:
                 derived.set(ParameterArray(xx, param=param))
         if solved_params:

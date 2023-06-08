@@ -144,7 +144,7 @@ class ScipyProfiler(BaseProfiler):
 
             def f(x, *values):
                 chi2(values)
-                return np.concatenate([likelihood.flatdiff for likelihood in likelihoods] + [[self.pipeline.param_values[param.name] - center_params[param.name] for param in params_with_scale]])
+                return np.concatenate([likelihood.flatdiff for likelihood in likelihoods] + [[self.pipeline.input_values[param.name] - center_params[param.name] for param in params_with_scale]])
 
             profiles = Profiles()
             bounds = list(zip(*[tuple(param.prior.limits) for param in varied_params]))

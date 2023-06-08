@@ -136,7 +136,7 @@ class BaseDynestySampler(BasePosteriorSampler):
             is_converged = self.sampler.it - it < niterations
             results = self.sampler.results
             chain = [results['samples'][..., iparam] for iparam, param in enumerate(self.varied_params)]
-            logprior = sum(param.prior(value) for param, value in zip(self.varied_params, chain))
+            #logprior = sum(param.prior(value) for param, value in zip(self.varied_params, chain))
             #chain.append(logprior)
             #chain.append(results['logl'] + logprior)
             chain.append(results['logwt'])

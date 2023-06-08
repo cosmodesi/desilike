@@ -239,8 +239,13 @@ class Differentiation(BaseClass):
             calculators, fixed, varied = self.pipeline._classify_derived(self.pipeline.calculators)
             varied_by_calculator = []
             for cc, vv in zip(calculators, varied):
-                bp = cc.runtime_info.base_params
-                varied_by_calculator.append(ParameterCollection([bp[k].copy() for k in vv if k in bp and bp[k].derived]))
+                base_names = cc.runtime_info.base_names
+                tmp = ParameterCollection()
+                for v in vv:
+                    if v in base_names:
+                        p = self.pipeline.params[base_names[v]]
+                        if p.derived: tmp.set(p.copy())
+                varied_by_calculator.append(tmp)
 
             if not any(varied_by_calculator):
                 raise ValueError('No varied parameter is derived, so nothing to differentiate')
@@ -371,17 +376,17 @@ class Differentiation(BaseClass):
                 raise ValueError('getter returns nothing to differentiate')
             return toret
 
-        params = {**self.pipeline.param_values, **params}
+        params = {**self.pipeline.input_values, **params}
         params, values = list(params.keys()), list(params.values())
 
         def __calculate(*values):
-            self.pipeline.param_values.update(dict(zip(params, values)))
-            values = self.pipeline.params.eval(**self.pipeline.param_values)
+            self.pipeline.input_values.update(dict(zip(params, values)))
+            values = self.pipeline.params.eval(**self.pipeline.input_values)
 
             for calculator in self.pipeline.calculators:  # start by first calculator, end by the last one
                 runtime_info = calculator.runtime_info
-                force = any(param.basename in runtime_info.param_values for param in self.varied_params)
-                runtime_info.set_param_values(values, full=True, force=force)
+                force = any(param.basename in runtime_info.input_values for param in self.varied_params)
+                runtime_info.set_input_values(values, full=True, force=force)
                 runtime_info.calculate()
             return getter()
 
@@ -408,7 +413,7 @@ class Differentiation(BaseClass):
         # Getter, or calculator, dict[param1, param2]
         self.center = {}
         for param in self.all_params:
-            self.center[param.name] = params.get(param.name, self.pipeline.param_values[param.name])
+            self.center[param.name] = params.get(param.name, self.pipeline.input_values[param.name])
         if self.mpicomm.rank == 0:
             samples = self._grid_samples.copy()
             for param in self.all_params:

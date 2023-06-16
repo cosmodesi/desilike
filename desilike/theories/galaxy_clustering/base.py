@@ -194,6 +194,7 @@ class APEffect(BaseCalculator):
         self.efunc_fid = self.fiducial.efunc(self.z)
         self.DM_fid = self.fiducial.comoving_angular_distance(self.z)
         self.mode = mode
+        self.cosmo_requires = {}
         if self.mode == 'qiso':
             self.params = self.params.select(basename=['qiso'])
         elif self.mode == 'qap':
@@ -205,7 +206,7 @@ class APEffect(BaseCalculator):
         elif self.mode == 'distances':
             self.params = self.params.clear()
             if external_cosmo(cosmo):
-                self.cosmo_requires = {'background': {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}}
+                self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
         else:
             raise ValueError('Unknown mode {}; it must be one of ["qiso", "qap", "qisoqap", "qparqper", "distances"]'.format(self.mode))
         self.cosmo = cosmo

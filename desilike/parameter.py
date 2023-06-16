@@ -853,6 +853,8 @@ class Parameter(BaseClass):
         """Set this class' state dictionary."""
         state = state.copy()
         updated = state.pop('updated', True)
+        # For backward-compatibility
+        state.pop('saved', None)
         self.__init__(**state)
         self.updated = updated
 

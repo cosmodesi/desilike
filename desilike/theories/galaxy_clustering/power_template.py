@@ -200,6 +200,7 @@ class BAOExtractor(BasePowerSpectrumExtractor):
         params = self.params.select(derived=True)
         if external_cosmo(self.cosmo):
             self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
+            self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
         elif cosmo is None:
             self.cosmo = Cosmoprimo(fiducial=self.fiducial)
             self.cosmo.params = [param for param in self.params if param not in params]

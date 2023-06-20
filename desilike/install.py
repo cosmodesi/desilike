@@ -168,17 +168,20 @@ def pip(pkgindex, pkgname=None, install_dir=None, no_deps=False, force_reinstall
             raise InstallError('potentially serious error detected during pip installation:\n' + err)
 
 
-def _insert_first(li, first):
-    try:
-        li.remove(first)
-    except ValueError:
-        pass
-    li.insert(0, first)
+def _insert_first(li, el):
+    # Remove element el from list li if exists,
+    # then add it at the start of li
+    while True:
+        try:
+            li.remove(el)
+        except ValueError:
+            break
+    li.insert(0, el)
     return li
 
 
 def source(fn):
-    """Source input file ``fn``, i.e. set associated environment variables."""
+    """Source input file ``fn`` and set associated environment variables."""
     import subprocess
     result = subprocess.run(['bash', '-c', 'source {} && env'.format(fn)], capture_output=True, text=True)
     for line in result.stdout.split('\n'):

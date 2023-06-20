@@ -615,7 +615,7 @@ class RuntimeInfo(BaseClass):
         If not set, defaults to the :class:`BaseCalculator` instances in this calculator's ``__dict__``.
         """
         if getattr(self, '_requires', None) is None:
-            if getattr(self.runtime_info, '_initialization', False): return []
+            if getattr(self, '_initialization', False): return []
             self.initialized = False
             self.initialize()
         return self._requires

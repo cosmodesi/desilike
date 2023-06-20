@@ -601,12 +601,20 @@ def test_ap_diff():
     plt.show()
 
 
+def test_ptt():
+
+    from desilike.theories.galaxy_clustering import BandVelocityPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles, BandVelocityPowerSpectrumCalculator
+    z = 1.
+    theory = KaiserTracerPowerSpectrumMultipoles(template=BandVelocityPowerSpectrumTemplate(kp=np.linspace(0.01, 0.1, 10), z=z))
+    power = BandVelocityPowerSpectrumCalculator(calculator=theory)
+    print(power().shape, power.varied_params)
+
 
 if __name__ == '__main__':
 
     setup_logging()
 
-    test_params()
+    #test_params()
     #test_integ()
     #test_bao()
     #test_flexible_bao()
@@ -615,3 +623,4 @@ if __name__ == '__main__':
     #test_pk_to_xi()
     #test_ap_diff()
     #test_templates()
+    test_ptt()

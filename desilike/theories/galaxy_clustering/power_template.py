@@ -1,3 +1,5 @@
+import re
+
 import numpy as np
 from cosmoprimo import PowerSpectrumBAOFilter, PowerSpectrumInterpolator1D
 
@@ -608,9 +610,53 @@ class BandVelocityPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         dptt = self.pk_tt / self.pk_tt_fid
         setattr(self, self._base_param_name, dptt)
         for i, dptt in enumerate(dptt):
-            setattr(self, 'dptt{:d}'.format(i), dptt)
+            setattr(self, '{}{:d}'.format(self._base_param_name, i), dptt)
         self.df = self.fsigmar / self.fsigmar_fid
         return self
+
+
+def BandVelocityPowerSpectrumCalculator(calculator, extractor=None, **kwargs):
+
+    Calculator = calculator.__class__
+    if extractor is None:
+        extractor = BandVelocityPowerSpectrumExtractor()
+    extractor.init.update(kwargs)
+
+    def initialize(self):
+        extractor.runtime_info.initialize()
+        calculator.runtime_info.initialize()
+        self.runtime_info.requires = [extractor]
+
+    def calculate(self, **params):
+        extractor.calculate()
+        extractor.get()
+        calculator(**{param.name: getattr(extractor, param.basename) for param in calculator_params}, **params)
+        self.__dict__.update({name: value for name, value in calculator.__dict__.items() if name not in ['info', 'runtime_info']})
+
+    def __getstate__(self):
+        return calculator.runtime_info.pipeline.derived.to_dict()
+
+    calculator()
+    for calculator in calculator.runtime_info.pipeline.calculators:
+        kp = getattr(calculator, 'kp', None)
+        if kp is not None:
+            extractor.init.setdefault('kp', kp)
+        z = getattr(calculator, 'z')
+        if z is not None:
+            extractor.init.setdefault('z', z)
+
+    cosmo_requires = getattr(extractor, 'cosmo_requires', {})
+    params, calculator_params = ParameterCollection(), ParameterCollection()
+    for param in calculator.all_params:
+        param = param.copy()
+        if re.match(r'{}(-?\d+)'.format(extractor._base_param_name), param.basename) or param.basename in ['df', 'qap']:
+            calculator_params.set(param)
+        else:
+            params.set(param)
+
+    new_cls = type(Calculator)(Calculator.__name__, (Calculator,),
+                               {'initialize': initialize, 'calculate': calculate, '_params': params, 'config_fn': None, 'cosmo_requires': cosmo_requires, '__getstate__': __getstate__})
+    return new_cls()
 
 
 class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate, BandVelocityPowerSpectrumExtractor):
@@ -641,7 +687,6 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate, BandVelocityP
     """
     def initialize(self, *args, kp=None, **kwargs):
         super(BandVelocityPowerSpectrumTemplate, self).initialize(*args, apmode='qap', **kwargs)
-        import re
         re_param_template = re.compile(r'{}(-?\d+)'.format(self._base_param_name))
         params = self.params.select(basename=re_param_template)
         nkp = len(params)

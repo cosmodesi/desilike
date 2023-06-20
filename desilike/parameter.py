@@ -873,7 +873,7 @@ class Parameter(BaseClass):
     def __hash__(self):
         return hash(str(self))
 
-    def latex(self, namespace=False, inline=False):
+    def latex(self, namespace=True, inline=False):
         """If :attr:`latex` is specified (i.e. not ``None``), return :attr:`latex` surrounded by '$' signs, else :attr:`name`."""
         if namespace:
             namespace = self._namespace

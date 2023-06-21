@@ -43,7 +43,7 @@ release = __version__
 
 html_theme = 'sphinx_rtd_theme'
 
-autodoc_mock_imports = ['cosmoprimo']
+autodoc_mock_imports = ['cosmoprimo', 'mpi4py']
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -86,7 +86,7 @@ ultimate_replacements = {
 
 
 def skip_some_classes(app, what, name, obj, skip, options):
-    # Skip those objects that are not imported at top-leveld
+    # Skip those objects that are not imported at top-level
     import inspect
     try:
         fn = sys.modules[getattr(obj, '__module__')].__file__

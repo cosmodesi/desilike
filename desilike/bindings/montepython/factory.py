@@ -119,6 +119,7 @@ def MontePythonLikelihoodFactory(cls, name_like, kw_like, module=None):
         Likelihood.__init__(self, path, data, command_line)
         self.like = cls(**kw_like)
         self._cosmo_params, self._nuisance_params = get_likelihood_params(self.like)
+        for param in self.like.all_params.select(varied=True): param.update(prior=None)  # remove prior on varied parameters (already taken care of by montepython)
         self._nuisance_params = {convert_param_name(param.name): param.name for param in self._nuisance_params}
         self.nuisance = self.use_nuisance = list(self._nuisance_params.keys())  # required by MontePython
         requires = self.like.runtime_info.pipeline.get_cosmo_requires()

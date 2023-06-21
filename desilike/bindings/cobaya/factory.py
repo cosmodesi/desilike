@@ -199,6 +199,7 @@ def CobayaLikelihoodFactory(cls, name_like, kw_like, module=None):
 
         self.like = cls(**kw_like)
         self._cosmo_params, self._nuisance_params = get_likelihood_params(self.like)
+        for param in self.like.all_params.select(varied=True): param.update(prior=None)  # remove prior on varied parameters (already taken care of by cobaya)
         """
         import inspect
         kwargs = {name: getattr(self, name) for name in inspect.getargspec(cls).args}

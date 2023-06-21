@@ -117,6 +117,8 @@ def CosmoSISLikelihoodFactory(cls, name_like, kw_like, module=None):
 
     def __init__(self, options):
         self.like = cls(**kw_like)
+        from desilike import mpi
+        self.like.mpicomm = mpi.COMM_SELF  # no likelihood-level MPI-parallelization
         self._cosmo_params, self._nuisance_params = get_likelihood_params(self.like)  # nuisance params
         for param in self.like.all_params.select(varied=True): param.update(prior=None)  # remove prior on varied parameters (already taken care of by cosmosis)
         requires = self.like.runtime_info.pipeline.get_cosmo_requires()

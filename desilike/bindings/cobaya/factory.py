@@ -198,6 +198,8 @@ def CobayaLikelihoodFactory(cls, name_like, kw_like, module=None):
         """Prepare any computation, importing any necessary code, files, etc."""
 
         self.like = cls(**kw_like)
+        from desilike import mpi
+        self.like.mpicomm = mpi.COMM_SELF  # no likelihood-level MPI-parallelization
         self._cosmo_params, self._nuisance_params = get_likelihood_params(self.like)
         for param in self.like.all_params.select(varied=True): param.update(prior=None)  # remove prior on varied parameters (already taken care of by cobaya)
         """

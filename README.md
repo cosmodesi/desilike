@@ -21,6 +21,7 @@ Example notebooks presenting most use cases are provided in directory nb/.
 ## TODO
 
 When autodiff is available, pass gradient to profilers / samplers whenever relavant.
+For ParameterArray, define when output should be a ParameterArray (e.g. under affine transforms) or not.
 
 ## Documentation
 

@@ -68,6 +68,8 @@ def TestEmulatedDirectKaiserLikelihood():
     from desilike.likelihoods import ObservablesGaussianLikelihood
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=1.4))
+    for name in ['b1', 'sn0']:
+        theory.init.params[name].update(namespace='ELG')
     dirname = os.path.join(os.path.dirname(desilike.__file__), 'tests', '_pk')
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data=os.path.join(dirname, 'data.npy'),
@@ -76,10 +78,10 @@ def TestEmulatedDirectKaiserLikelihood():
                                                          theory=theory)
     observable()
     from desilike.emulators import Emulator, TaylorEmulatorEngine
-    emulator = Emulator(theory, engine=TaylorEmulatorEngine(order=1))
+    emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(order=1))
     emulator.set_samples()
     emulator.fit()
-    observable.init.update(theory=emulator.to_calculator())
+    theory.init.update(pt=emulator.to_calculator())
     return ObservablesGaussianLikelihood(observables=[observable])
 
 
@@ -91,6 +93,6 @@ if __name__ == '__main__':
     Likelihoods = [TestSimpleLikelihood, TestShapeFitKaiserLikelihood, TestDirectKaiserLikelihood, TestEmulatedDirectKaiserLikelihood]
 
     setup_logging('info')
-    #CobayaLikelihoodGenerator()(Likelihoods)
-    #CosmoSISLikelihoodGenerator()(Likelihoods)
+    CobayaLikelihoodGenerator()(Likelihoods)
+    CosmoSISLikelihoodGenerator()(Likelihoods)
     MontePythonLikelihoodGenerator()(Likelihoods)

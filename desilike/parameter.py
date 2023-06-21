@@ -882,9 +882,9 @@ class Parameter(BaseClass):
                 match1 = re.match('(.*)_(.)$', self._latex)
                 match2 = re.match('(.*)_{(.*)}$', self._latex)
                 if match1 is not None:
-                    latex = r'%s_{%s,\mathrm{%s}}' % (match1.group(1), match1.group(2), namespace)
+                    latex = r'%s_{%s, \mathrm{%s}}' % (match1.group(1), match1.group(2), namespace)
                 elif match2 is not None:
-                    latex = r'%s_{%s,\mathrm{%s}}' % (match2.group(1), match2.group(2), namespace)
+                    latex = r'%s_{%s, \mathrm{%s}}' % (match2.group(1), match2.group(2), namespace)
                 else:
                     latex = r'%s_{\mathrm{%s}}' % (self._latex, namespace)
             else:

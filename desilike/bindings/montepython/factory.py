@@ -150,8 +150,8 @@ class MontePythonLikelihoodGenerator(BaseLikelihoodGenerator):
         super(MontePythonLikelihoodGenerator, self).__init__(MontePythonLikelihoodFactory, *args, **kwargs)
 
     def get_code(self, *args, **kwargs):
-        cls, like_name, fn, code = super(MontePythonLikelihoodGenerator, self).get_code(*args, **kwargs)
-        dirname = os.path.join(os.path.dirname(fn), like_name)
+        cls, name_like, fn, code = super(MontePythonLikelihoodGenerator, self).get_code(*args, **kwargs)
+        dirname = os.path.join(os.path.dirname(fn), name_like)
         fn = os.path.join(dirname, '__init__.py')
 
         def decode_prior(prior):
@@ -168,14 +168,14 @@ class MontePythonLikelihoodGenerator(BaseLikelihoodGenerator):
                 pass
             return di
 
-        parameters, likelihood_attrs = {}, {'{}.name'.format(like_name): like_name}  # useless placeholder, just to avoid MontePython to complain
+        parameters, likelihood_attrs = {}, {'{}.name'.format(name_like): name_like}  # useless placeholder, just to avoid MontePython to complain
         cosmo_params, nuisance_params = get_likelihood_params(cls(**self.kw_like))
         # cosmo_params = cosmoprimo_to_montepython_params(cosmo_params)
         for param in nuisance_params:
             if param.depends:
                 raise ValueError('Cannot cope with parameter dependencies')
             prior = decode_prior(param.prior)
-            name = '{}.{}'.format(like_name, convert_param_name(param.name))
+            name = '{}.{}'.format(name_like, convert_param_name(param.name))
             for attr in ['center', 'variance']:
                 if attr in prior:
                     likelihood_attrs['{}_prior_{}'.format(name, attr)] = float(prior[attr])
@@ -187,13 +187,13 @@ class MontePythonLikelihoodGenerator(BaseLikelihoodGenerator):
             parameters[name] = [float(param.value), mi, ma, float(proposal), 1., 'nuisance']
 
         utils.mkdir(dirname)
-        with open(os.path.join(dirname, like_name + '.data'), 'w') as file:
+        with open(os.path.join(dirname, name_like + '.data'), 'w') as file:
             for name, value in likelihood_attrs.items():
                 file.write('{} = {}\n'.format(name, value))
 
-        with open(os.path.join(dirname, like_name + '.param'), 'w') as file:
+        with open(os.path.join(dirname, name_like + '.param'), 'w') as file:
             file.write('# To be copy-pasted in the MontePython *.param file\n')
             for name, value in parameters.items():
-                file.write("data.parameters['{}'] = {}\n".format(name[len(like_name) + 1:], value))
+                file.write("data.parameters['{}'] = {}\n".format(name[len(name_like) + 1:], value))
 
-        return cls, like_name, fn, code
+        return cls, name_like, fn, code

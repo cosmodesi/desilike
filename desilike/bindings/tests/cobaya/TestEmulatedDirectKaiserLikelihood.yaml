@@ -1,6 +1,6 @@
 params:
-  b1:
-    latex: b_{1}
+  ELG.b1:
+    latex: b_{1, \mathrm{ELG}}
     prior:
       dist: uniform
       max: 4.0
@@ -10,10 +10,8 @@ params:
       dist: uniform
       max: 2.0
       min: 1.0
-  sigmapar: 0.0
-  sigmaper: 0.0
-  sn0:
-    latex: s_{n, 0}
+  ELG.sn0:
+    latex: s_{n, 0, \mathrm{ELG}}
     prior:
       dist: norm
       loc: 0.0
@@ -23,4 +21,6 @@ params:
       dist: norm
       loc: 0.0
       scale: 100.0
+  sigmapar: 0.0
+  sigmaper: 0.0
 stop_at_error: true

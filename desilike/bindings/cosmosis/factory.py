@@ -165,7 +165,7 @@ def CosmoSISLikelihoodFactory(cls, name_like, kw_like, module=None):
     d = {'__init__': __init__, 'do_likelihood': do_likelihood, 'build_module': build_module, 'as_module': as_module}
     if module is not None:
         d['__module__'] = module
-    return type(object)(cls.__name__, (object,), d)
+    return type(object)(name_like, (object,), d)
 
 
 class CosmoSISLikelihoodGenerator(BaseLikelihoodGenerator):
@@ -177,9 +177,9 @@ class CosmoSISLikelihoodGenerator(BaseLikelihoodGenerator):
         super(CosmoSISLikelihoodGenerator, self).__init__(CosmoSISLikelihoodFactory, *args, **kwargs)
 
     def get_code(self, *args, **kwargs):
-        cls, like_name, fn, code = super(CosmoSISLikelihoodGenerator, self).get_code(*args, **kwargs)
+        cls, name_like, fn, code = super(CosmoSISLikelihoodGenerator, self).get_code(*args, **kwargs)
         dirname = os.path.dirname(fn)
-        fn = os.path.join(dirname, like_name + '.py')
+        fn = os.path.join(dirname, name_like + '.py')
 
         def decode_prior(prior, param):
             limits = list(prior.limits)
@@ -217,17 +217,17 @@ class CosmoSISLikelihoodGenerator(BaseLikelihoodGenerator):
             return ' '.join(map(str, li))
 
         utils.mkdir(dirname)
-        with open(os.path.join(dirname, like_name + '_values.ini'), 'w') as file:
+        with open(os.path.join(dirname, name_like + '_values.ini'), 'w') as file:
             file.write('[{}]\n'.format(desilike_name))
             for name, value in values.items():
                 file.write('{} = {}\n'.format(name, tostr(value)))
 
-        with open(os.path.join(dirname, like_name + '_priors.ini'), 'w') as file:
+        with open(os.path.join(dirname, name_like + '_priors.ini'), 'w') as file:
             file.write('[{}]\n'.format(desilike_name))
             for name, value in priors.items():
                 file.write('{} = {}\n'.format(name, tostr(value)))
 
         code += '\n\n'
-        code += 'setup, execute, cleanup = {}.build_module()'.format(like_name)
+        code += 'setup, execute, cleanup = {}.build_module()'.format(name_like)
 
-        return cls, like_name, fn, code
+        return cls, name_like, fn, code

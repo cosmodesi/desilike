@@ -1,35 +1,58 @@
 theory:
-  camb:
-    stop_at_error: true
+  classy:
     extra_args:
-      num_massive_neutrinos: 1
-      halofit_version: mead
+      N_ncdm: 1
+      N_ur: 2.0328
 
 likelihood:
   desilike.bindings.tests.cobaya.TestDirectKaiserLikelihood: null
 
 params:
+  Omega_m:
+    prior:
+      min: 0.01
+      max: 1.
+    ref:
+      dist: norm
+      loc: 0.3153
+      scale: 0.0073
+    latex: \Omega_{m}
+  omega_b:
+    prior:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00037
+    ref:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00015
+    latex: \omega_{b}
+  H0:
+    prior:
+      min: 1.
+      max: 100.
+    ref:
+      dist: norm
+      loc: 67.36
+      scale: 0.5
+    latex: H_{0}
   As:
+    value: 'lambda logA: 1e-10*np.exp(logA)'
+    latex: A_\mathrm{s}
+  logA:
     prior:
-      min: 5.0e-10
-      max: 8.0e-09
-    ref: 2.0e-09
-    proposal: 1.0e-10
-  ombh2: 0.02242
-  omch2:
-    prior:
-      min: 0.05
-      max: 0.2
-    ref: 0.11933
-    proposal: 0.01
-  H0: 67.66
-  tau: 0.0561
-  mnu: 0.06
-  nnu: 3.046
-  ns: 0.9665
-  YHe: 0.2454
+      min: 1.61
+      max: 3.91
+    ref:
+      dist: norm
+      loc: 3.036394
+      scale: 0.014
+    latex: \ln(10^{10} A_{s})
+    drop: True
 
 sampler:
   mcmc:
+
+debug: True
 
 output: _chains/test

@@ -121,7 +121,10 @@ class Fourier(Section):
             collector = {}
             for name in ['sigma8_z', 'fsigma8']:
                 provider = self.provider.requirement_providers[name]  # hacky way to get to classy
-                collector[name] = interpolate.interp1d(provider.collectors[name].z_pool, provider.current_state[name], kind='cubic', axis=-1, copy=True, bounds_error=False, assume_sorted=False)(z)
+                z_pool = provider.collectors[name].z_pool
+                if z_pool is None:
+                    z_pool = provider.z_pool_for_perturbations.values
+                collector[name] = interpolate.interp1d(z_pool, provider.current_state[name], kind='cubic', axis=-1, copy=True, bounds_error=False, assume_sorted=False)(z)
             f = collector['fsigma8'] / collector['sigma8_z']
             # Below does not work for classy wrapper, because z does not match requested z...
             # f = self.provider.get_fsigma8(z=z) / self.provider.get_sigma8_z(z=z)
@@ -223,7 +226,7 @@ def CobayaLikelihoodFactory(cls, name_like, kw_like, module=None):
     if module is not None:
         d['__module__'] = module
     from cobaya.likelihood import Likelihood
-    return type(Likelihood)(cls.__name__, (Likelihood,), d)
+    return type(Likelihood)(name_like, (Likelihood,), d)
 
 
 class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
@@ -234,7 +237,7 @@ class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
         super(CobayaLikelihoodGenerator, self).__init__(CobayaLikelihoodFactory, *args, **kwargs)
 
     def get_code(self, *args, **kwargs):
-        cls, like_name, fn, code = super(CobayaLikelihoodGenerator, self).get_code(*args, **kwargs)
+        cls, name_like, fn, code = super(CobayaLikelihoodGenerator, self).get_code(*args, **kwargs)
         dirname = os.path.dirname(fn)
         params = {}
 
@@ -274,7 +277,7 @@ class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
                 # if param.drop: di['drop'] = True
                 params[param.name] = di
 
-        BaseConfig(dict(stop_at_error=True, params=params)).write(os.path.join(dirname, like_name + '.yaml'))
+        BaseConfig(dict(stop_at_error=True, params=params)).write(os.path.join(dirname, name_like + '.yaml'))
 
         import_line = 'from .{} import *'.format(os.path.splitext(os.path.basename(fn))[0])
         with open(os.path.join(dirname, '__init__.py'), 'a+') as file:
@@ -284,4 +287,4 @@ class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
                 if lines and lines[-1] != '\n': file.write('\n')
                 file.write(import_line + '\n')
 
-        return cls, like_name, fn, code
+        return cls, name_like, fn, code

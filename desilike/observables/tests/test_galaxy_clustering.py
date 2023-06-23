@@ -264,6 +264,17 @@ def test_compression():
     print(likelihood.varied_params)
     assert np.allclose(likelihood(), 0.)
 
+    observable = BAOCompressionObservable(data=[1., 1.], quantities=['DM_over_rd', 'DH_over_rd'], z=2.)
+    observable2 = BAOCompressionObservable(data=[1., 1.], quantities=['DM_over_rd', 'DH_over_rd'], z=2.)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable, observable2], covariance=np.diag([0.01, 0.01, 0.01, 0.01]))
+    print(likelihood.varied_params)
+    print(likelihood())
+
+    observable = BAOCompressionObservable(data=[1.], covariance=np.diag([0.01]), quantities=['DV_over_rd'], z=2.)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    print(likelihood.varied_params)
+    print(likelihood())
+
     observable = BAOCompressionObservable(data=np.array([1.]), covariance=np.diag([0.01]), quantities=['qiso'], z=2.)
     emulator = Emulator(observable, engine=TaylorEmulatorEngine(order=1))
     emulator.set_samples()
@@ -637,11 +648,11 @@ if __name__ == '__main__':
 
     setup_logging()
     # test_power_spectrum()
-    test_correlation_function()
+    # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    # test_compression()
+    test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

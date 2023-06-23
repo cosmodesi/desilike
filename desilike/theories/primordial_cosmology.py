@@ -83,9 +83,9 @@ def _clone(self, params, base='input'):
         def f(h):
             self.cosmo = self.cosmo.clone(base='input', h=h)
             return theta_MC_100 - 100. * self.cosmo['theta_cosmomc']
-            #return theta_mc - self.cosmo.get_thermodynamics().theta_cosmomc
+            #return theta_MC_100 - 100. * cosmo.get_thermodynamics().theta_cosmomc
 
-        limits = [0.1, 5.]  # h-limits
+        limits = [0.1, 2.]  # h-limits
         xtol = 1e-6  # 1 / 5000 of Planck errors
         rtol = xtol
         try:

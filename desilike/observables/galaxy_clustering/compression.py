@@ -55,7 +55,9 @@ class BaseCompressionObservable(BaseCalculator):
         for conflicts in self.conflict_names:
             if all(quantity in self.quantities for quantity in conflicts):
                 raise ValueError('Found conflicting quantities: {}'.format(conflicts))
-        self.covariance = load_source(covariance if covariance is not None else source, params=quantities, cov=True, return_type='nparray')
+        self.covariance = None
+        if covariance is not None:
+            self.covariance = load_source(covariance, params=quantities, cov=True, return_type='nparray')
 
     def calculate(self):
         self.flattheory = jnp.array([getattr(self.extractor, quantity) for quantity in self.quantities])

@@ -218,7 +218,7 @@ class BAOExtractor(BasePowerSpectrumExtractor):
 
     def calculate(self):
         rd = self.cosmo.rs_drag
-        self.DH = constants.c / (100. * self.cosmo.efunc(self.z))
+        self.DH = (constants.c / 1e3) / (100. * self.cosmo.efunc(self.z))
         self.DM = self.cosmo.comoving_angular_distance(self.z)
         self.DV = self.DH**self.eta * self.DM**(1. - self.eta) * self.z**(1. / 3.)
         self.DH_over_rd = self.DH / rd

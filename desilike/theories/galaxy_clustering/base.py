@@ -216,14 +216,14 @@ class APEffect(BaseCalculator):
         else:
             self.cosmo = self.fiducial
         if self.mode == 'distances':
-            self.DH_fid = constants.c / (100. * self.fiducial.efunc(self.z))
+            self.DH_fid = (constants.c / 1e3) / (100. * self.fiducial.efunc(self.z))
             self.DM_fid = self.fiducial.comoving_angular_distance(self.z)
             self.DH_over_DM_fid = self.DH_fid / self.DM_fid
             self.DV_fid = (self.DH_fid * self.DM_fid**2 * self.z)**(1. / 3.)
 
     def calculate(self, **params):
         if self.mode == 'distances':
-            self.DH = constants.c / (100. * self.cosmo.efunc(self.z))
+            self.DH = (constants.c / 1e3) / (100. * self.cosmo.efunc(self.z))
             self.DM = self.cosmo.comoving_angular_distance(self.z)
             self.DH_over_DM = self.DH / self.DM
             self.DV = (self.DH * self.DM**2 * self.z)**(1. / 3.)

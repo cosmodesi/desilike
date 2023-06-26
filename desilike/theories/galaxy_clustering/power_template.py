@@ -317,6 +317,9 @@ class StandardPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         self.eta = float(eta)
         self.r = float(r)
         super(StandardPowerSpectrumExtractor, self).initialize(*args, **kwargs)
+        if external_cosmo(self.cosmo):
+            self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
+            self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
         cosmo = self.cosmo
         self.cosmo = self.fiducial
         self.calculate()
@@ -440,6 +443,8 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         super(ShapeFitPowerSpectrumExtractor, self).initialize(*args, with_now=with_now, **kwargs)
         if external_cosmo(self.cosmo):
             self.cosmo_requires['primordial'] = {'pk_interpolator': {'k': self.k}}
+            self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
+            self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
         cosmo = self.cosmo
         self.cosmo = self.fiducial
         self.eta = float(eta)
@@ -892,6 +897,9 @@ class WiggleSplitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         self.eta = float(eta)
         self.set_kernel(kernel=kernel)
         super(WiggleSplitPowerSpectrumExtractor, self).initialize(*args, **kwargs)
+        if external_cosmo(self.cosmo):
+            self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
+            self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
         cosmo = self.cosmo
         self.cosmo = self.fiducial
         self.calculate()

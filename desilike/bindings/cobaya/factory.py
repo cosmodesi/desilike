@@ -61,7 +61,7 @@ class CobayaEngine(BaseExternalEngine):
         if require_f:
             require_f = merge(require_f)
             # oversampling, to interpolate at z of Pk_grid with classy wrapper
-            require_f = merge([require_f, np.linspace(0., require_f[-1] + 1., 20)])
+            require_f = merge([require_f, [0., require_f[-1] + 1.]])
             toret['fsigma8'] = {'z': require_f}
             toret['sigma8_z'] = {'z': require_f}
         if toret or requires.get('params', {}):  # to get /h units
@@ -123,8 +123,8 @@ class Fourier(Section):
                 provider = self.provider.requirement_providers[name]  # hacky way to get to classy
                 z_pool = provider.collectors[name].z_pool
                 if z_pool is None:
-                    z_pool = provider.z_pool_for_perturbations.values
-                collector[name] = interpolate.interp1d(z_pool, provider.current_state[name], kind='cubic', axis=-1, copy=True, bounds_error=False, assume_sorted=False)(z)
+                    z_pool = provider.z_pool_for_perturbations
+                collector[name] = interpolate.interp1d(z_pool.values, provider.current_state[name], kind='cubic', axis=-1, copy=True, fill_value='extrapolate', assume_sorted=False)(z)
             f = collector['fsigma8'] / collector['sigma8_z']
             # Below does not work for classy wrapper, because z does not match requested z...
             # f = self.provider.get_fsigma8(z=z) / self.provider.get_sigma8_z(z=z)

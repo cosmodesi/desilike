@@ -192,7 +192,55 @@ def camb_or_classy_to_cosmoprimo(fiducial, provider, **params):
     return cosmo
 
 
-def CobayaLikelihoodFactory(cls, name_like, kw_like, module=None):
+def cobaya_params(like):
+    params = {}
+
+    def decode_prior(prior):
+        di = {}
+        di['dist'] = prior.dist
+        if prior.is_limited():
+            di['min'], di['max'] = prior.limits
+        for name in ['loc', 'scale']:
+            if hasattr(prior, name):
+                di[name] = getattr(prior, name)
+        return di
+
+    cosmo_params, nuisance_params = get_likelihood_params(like)
+    # if self.engine == 'camb':
+    #     cosmo_params = cosmoprimo_to_camb_params(cosmo_params)
+    # elif self.engine == 'classy':
+    #     cosmo_params = cosmoprimo_to_classy_params(cosmo_params)
+    params = {}
+    for param in nuisance_params:
+        if param.solved or param.derived and not param.depends: continue
+        if param.fixed:
+            params[param.name] = param.value
+        else:
+            di = {'latex': param.latex()}
+            if param.depends:
+                names = param.depends.values()
+                for name in names:
+                    derived = param.derived.replace('{{{}}}'.format(name), name)
+                di['value'] = 'lambda {}: '.format(', '.join(names)) + derived
+            else:
+                di['prior'] = decode_prior(param.prior)
+                if param.ref.is_proper():
+                    di['ref'] = decode_prior(param.ref)
+                if param.proposal is not None:
+                    di['proposal'] = param.proposal
+            # if param.drop: di['drop'] = True
+            params[param.name] = di
+    return params
+
+
+def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, params=None):
+
+    if name_like is None:
+        name_like = cls.__name__
+    if kw_like is None:
+        kw_like = {}
+    if params is not None:
+        params = cobaya_params(cls(**kw_like))
 
     def initialize(self):
         """Prepare any computation, importing any necessary code, files, etc."""
@@ -228,6 +276,8 @@ def CobayaLikelihoodFactory(cls, name_like, kw_like, module=None):
     d = {'initialize': initialize, 'get_requirements': get_requirements, 'logp': logp}
     if module is not None:
         d['__module__'] = module
+    if params is not None:
+        d['params'] = params
     from cobaya.likelihood import Likelihood
     return type(Likelihood)(name_like, (Likelihood,), d)
 
@@ -242,44 +292,7 @@ class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
     def get_code(self, *args, **kwargs):
         cls, name_like, fn, code = super(CobayaLikelihoodGenerator, self).get_code(*args, **kwargs)
         dirname = os.path.dirname(fn)
-        params = {}
-
-        def decode_prior(prior):
-            di = {}
-            di['dist'] = prior.dist
-            if prior.is_limited():
-                di['min'], di['max'] = prior.limits
-            for name in ['loc', 'scale']:
-                if hasattr(prior, name):
-                    di[name] = getattr(prior, name)
-            return di
-
-        cosmo_params, nuisance_params = get_likelihood_params(cls(**self.kw_like))
-        # if self.engine == 'camb':
-        #     cosmo_params = cosmoprimo_to_camb_params(cosmo_params)
-        # elif self.engine == 'classy':
-        #     cosmo_params = cosmoprimo_to_classy_params(cosmo_params)
-        params = {}
-        for param in nuisance_params:
-            if param.solved or param.derived and not param.depends: continue
-            if param.fixed:
-                params[param.name] = param.value
-            else:
-                di = {'latex': param.latex()}
-                if param.depends:
-                    names = param.depends.values()
-                    for name in names:
-                        derived = param.derived.replace('{{{}}}'.format(name), name)
-                    di['value'] = 'lambda {}: '.format(', '.join(names)) + derived
-                else:
-                    di['prior'] = decode_prior(param.prior)
-                    if param.ref.is_proper():
-                        di['ref'] = decode_prior(param.ref)
-                    if param.proposal is not None:
-                        di['proposal'] = param.proposal
-                # if param.drop: di['drop'] = True
-                params[param.name] = di
-
+        params = cobaya_params(cls(**self.kw_like))
         BaseConfig(dict(stop_at_error=True, params=params)).write(os.path.join(dirname, name_like + '.yaml'))
 
         import_line = 'from .{} import *'.format(os.path.splitext(os.path.basename(fn))[0])

@@ -111,7 +111,12 @@ def convert_param_name(name):
     return name.replace('.', '_')
 
 
-def MontePythonLikelihoodFactory(cls, name_like, kw_like, module=None):
+def MontePythonLikelihoodFactory(cls, name_like=None, kw_like=None, module=None):
+
+    if name_like is None:
+        name_like = cls.__name__
+    if kw_like is None:
+        kw_like = {}
 
     from montepython.likelihood_class import Likelihood
 

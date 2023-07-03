@@ -16,12 +16,12 @@ data.experiments = ['TestEmulatedDirectKaiserLikelihood']
 
 
 # Cosmological parameters list
-data.parameters['omega_b'] 	  = [2.249,  -1,-1, 0.016, 0.01,'cosmo']
+data.parameters['omega_b']      = [2.249,  -1,-1, 0.016, 0.01,'cosmo']
 data.parameters['omega_cdm'] 	= [0.1120, -1,-1, 0.0016,1,   'cosmo']
 data.parameters['n_s']       	= [0.963,  -1,-1, 0.004, 1,   'cosmo']
 data.parameters['A_s']       	= [2.42,   -1,-1, 0.038, 1e-9,'cosmo']
 data.parameters['h']         	= [0.703,  -1,-1, 0.0065,1,   'cosmo']
-data.parameters['tau_reio']   = [0.085,  -1,-1, 0.0044,1,   'cosmo']
+data.parameters['tau_reio']     = [0.085,  -1,-1, 0.0044,1,   'cosmo']
 
 # Nuisance
 data.parameters['b1'] = [1.69, 0.0, 4.0, 0.5, 1.0, 'nuisance']

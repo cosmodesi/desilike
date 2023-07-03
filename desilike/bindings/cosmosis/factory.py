@@ -113,7 +113,12 @@ def cosmosis_to_cosmoprimo(fiducial, cosmo_params, block):
     return cosmo
 
 
-def CosmoSISLikelihoodFactory(cls, name_like, kw_like, module=None):
+def CosmoSISLikelihoodFactory(cls, name_like=None, kw_like=None, module=None):
+
+    if name_like is None:
+        name_like = cls.__name__
+    if kw_like is None:
+        kw_like = {}
 
     def __init__(self, options):
         self.like = cls(**kw_like)

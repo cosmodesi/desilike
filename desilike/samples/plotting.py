@@ -36,23 +36,31 @@ def _make_list(obj, length=None, default=None):
 
 
 def _get_default_chain_params(chains, params=None, **kwargs):
+    from desilike.parameter import ParameterCollection
     chains = _make_list(chains)
     if params is not None:
         params = _make_list(params)
-        return sum(chain.params(name=[str(param) for param in params]) for chain in chains)
+        list_params = ParameterCollection()
+        for chain in chains[::-1]:
+            all_params = chain.params()
+            list_params += [all_params[param] for param in params if param in all_params]
+        return ParameterCollection([list_params[param] for param in params if param in list_params])
     list_params = [chain.params(**kwargs) for chain in chains]
-    from desilike.parameter import ParameterCollection
     return ParameterCollection([params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])])
 
 
 def _get_default_profiles_params(profiles, params=None, of='bestfit', **kwargs):
+    from desilike.parameter import ParameterCollection
     profiles = _make_list(profiles)
     if params is not None:
         params = _make_list(params)
-        list_params = [profile.get(of).params(name=[str(param) for param in params]) for profile in profiles]
-    else:
-        list_params = [profile.get(of).params(**kwargs) for profile in profiles]
-    return [params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])]
+        list_params = ParameterCollection()
+        for profile in profiles[::-1]:
+            all_params = profile.get(of).params()
+            list_params += [all_params[param] for param in params if param in all_params]
+        return ParameterCollection([list_params[param] for param in params if param in list_params])
+    list_params = [profile.get(of).params(**kwargs) for profile in profiles]
+    return ParameterCollection([params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])])
 
 
 @plotting.plotter

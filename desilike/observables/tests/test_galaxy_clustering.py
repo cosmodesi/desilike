@@ -54,7 +54,6 @@ def test_power_spectrum():
     likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
     print(likelihood(**params))
     observable.plot_wiggles(show=True)
-    exit()
 
     theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
     params = {'al0_1': 100., 'al0_-1': 100.}
@@ -647,12 +646,12 @@ def test_shapefit(run=True, plot=True):
 if __name__ == '__main__':
 
     setup_logging()
-    # test_power_spectrum()
-    # test_correlation_function()
+    test_power_spectrum()
+    test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    test_compression()
+    # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

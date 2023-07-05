@@ -99,17 +99,12 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             if klim is None:
                 klim = {ell: (0, np.inf) for ell in power.ells}
             ells, list_k, list_kedges, list_data = [], [], [], []
-            for ell, (lo, hi, *step) in klim.items():
-                power_slice = power
-                if step:
-                    rebin = int(step / np.diff(power.kedges).mean() + 0.5)  # nearest integer
-                    power_slice = power[:(power.shape[0] // rebin) * rebin:rebin]
+            for ell, lim in klim.items():
+                power_slice = power.copy().select(lim)
                 ells.append(ell)
-                mask = (power_slice.k >= lo) & (power_slice.k < hi)
-                index = np.flatnonzero(mask)
-                list_k.append(power_slice.k[index])
-                list_kedges.append(power_slice.kedges[np.append(index, index[-1] + 1)])
-                list_data.append(power_slice(ell=ell, complex=False)[index])
+                list_k.append(power_slice.modeavg())
+                list_kedges.append(power_slice.edges[0])
+                list_data.append(power_slice(ell=ell, complex=False))
             return list_k, list_kedges, tuple(ells), list_data, shotnoise
 
         def load_all(list_mocks):
@@ -233,7 +228,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             all_requires.append(calculator)
             for require in calculator.runtime_info.requires:
                 if require in all_requires:
-                    del all_requires[toret.index(require)]  # we want first dependencies at the end
+                    del all_requires[all_requires.index(require)]  # we want first dependencies at the end
                 callback(require)
 
         all_requires = []

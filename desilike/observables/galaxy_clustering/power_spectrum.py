@@ -127,8 +127,8 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
                     mock_k, mock_kedges, mock_ells, mock_y, mock_shotnoise = lim_data(mock)
                     if self.k is None:
                         self.k, self.kedges, self.ells = mock_k, mock_kedges, mock_ells
-                    if not all(np.allclose(sk, mk, atol=0., rtol=1e-3) for sk, mk in zip(self.k, mock_k)):
-                        raise ValueError('{} does not have expected k-binning (based on previous data)'.format(mock))
+                    if not all(np.allclose(sk, mk, atol=0., rtol=1e-3) for sk, mk in zip(self.kedges, mock_kedges)):
+                        raise ValueError('{} does not have expected k-edges (based on previous data)'.format(mock))
                     if mock_ells != self.ells:
                         raise ValueError('{} does not have expected poles (based on previous data)'.format(mock))
                     list_y.append(np.concatenate(mock_y))

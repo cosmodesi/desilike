@@ -96,3 +96,4 @@ Installer(user=True)(likelihood)
 - Pat McDonald, Edmond Chaussidon, Uendert Andrade for early debugging
 - Cobaya, CosmoSIS bindings inspired by firecrown: https://github.com/LSSTDESC/firecrown
 - Inspiration from Cobaya: https://github.com/CobayaSampler/cobaya
+- Uendert Andrade and Daniel Forero Sanchez for early feedback

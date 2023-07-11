@@ -112,8 +112,8 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
                     mock_s, mock_sedges, mock_ells, mock_y = lim_data(mock)
                     if self.s is None:
                         self.s, self.sedges, self.ells = mock_s, mock_sedges, mock_ells
-                    if not all(np.allclose(ss, ms, atol=0., rtol=1e-3) for ss, ms in zip(self.s, mock_s)):
-                        raise ValueError('{} does not have expected s-binning (based on previous data)'.format(mock))
+                    if not all(np.allclose(ss, ms, atol=0., rtol=1e-3) for ss, ms in zip(self.sedges, mock_sedges)):
+                        raise ValueError('{} does not have expected s-edges (based on previous data)'.format(mock))
                     if mock_ells != self.ells:
                         raise ValueError('{} does not have expected poles (based on previous data)'.format(mock))
                     list_y.append(np.concatenate(mock_y))

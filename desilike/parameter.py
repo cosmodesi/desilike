@@ -842,7 +842,7 @@ class Parameter(BaseClass):
         state = {}
         for key in self._attrs:
             state[key] = getattr(self, '_' + key)
-            if hasattr(state[key], '__getstate__'):
+            if key in ['prior', 'ref']:
                 state[key] = state[key].__getstate__()
         state['derived'] = self.derived
         state.pop('depends')

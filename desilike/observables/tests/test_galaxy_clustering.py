@@ -6,10 +6,11 @@ from desilike.likelihoods import ObservablesGaussianLikelihood
 
 def test_power_spectrum():
 
+    from cosmoprimo.fiducial import DESI
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TopHatFiberCollisionsPowerSpectrumMultipoles, BoxFootprint, ObservablesCovarianceMatrix
 
-    template = ShapeFitPowerSpectrumTemplate(z=0.5)
+    template = ShapeFitPowerSpectrumTemplate(z=0.5, fiducial=DESI())
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
 
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
@@ -66,6 +67,28 @@ def test_power_spectrum():
     likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
     print(likelihood(**params))
     observable.plot_wiggles(show=True)
+
+
+def test_bao():
+
+    from cosmoprimo.fiducial import DESI
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, BAOPowerSpectrumTemplate
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+
+    template = BAOPowerSpectrumTemplate(z=0.38, fiducial=DESI())
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
+    observable = TracerPowerSpectrumMultipolesObservable(data='../../tests/_pk/data.npy',
+                                                         covariance='../../tests/_pk/mock_*.npy',
+                                                         klim={0: [0.01, 0.3]},
+                                                         wmatrix='../../tests/_pk/window.npy',
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+
+    setup_logging()
+    print(likelihood.params)
+    print(observable.params)
+    from desilike.profilers import MinuitProfiler
+    profiler = MinuitProfiler(likelihood, seed=42)
 
 
 def test_correlation_function():
@@ -646,8 +669,10 @@ def test_shapefit(run=True, plot=True):
 if __name__ == '__main__':
 
     setup_logging()
-    test_power_spectrum()
-    test_correlation_function()
+
+    test_bao()
+    # test_power_spectrum()
+    # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()

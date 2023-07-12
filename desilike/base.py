@@ -882,7 +882,12 @@ class BaseCalculator(BaseClass):
     def __getattr__(self, name):
         if not getattr(self.runtime_info, '_initialization', False):
             self.runtime_info.initialize()
-        return object.__getattribute__(self, name)
+        try:
+            return object.__getattribute__(self, name)
+        except AttributeError as exc:
+            raise AttributeError('calculator {} has no attribute {};'
+                                 'have you run any calculation already by calling this calculator or calculators'
+                                 'that depend on it (typically, a likelihood?)'.format(self.__class__.__name__, name)) from exc
 
     def __getstate__(self):
         """
@@ -1037,7 +1042,9 @@ class CollectionCalculator(BaseCalculator):
                     return getattr(self[calcname], basename)
                 except AttributeError:
                     return self.all_derived[calcname][basename].runtime_info.derived[basename][0]  # Samples, so remove the first axis
-        raise AttributeError('calculator has no attribute {}'.format(name))
+        raise AttributeError('calculator {} has no attribute {};'
+                             'have you run any calculation already by calling this calculator or calculators'
+                             'that depend on it (typically, a likelihood?)'.format(self.__class__.__name__, name))
 
     def __getstate__(self):
         state = {}

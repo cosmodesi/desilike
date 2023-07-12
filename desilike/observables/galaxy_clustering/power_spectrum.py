@@ -218,7 +218,8 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         from matplotlib import pyplot as plt
         height_ratios = [1] * len(self.ells)
         figsize = (6, 2 * sum(height_ratios))
-        fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
+        fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=False)
+        lax = lax.flatten()  # in case only one ell
         fig.subplots_adjust(hspace=0)
         data, theory, std = self.data, self.theory, self.std
         only_now = self.wmatrix.theory.template.only_now

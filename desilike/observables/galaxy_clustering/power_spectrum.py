@@ -107,32 +107,36 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
                 list_data.append(power_slice(ell=ell, complex=False))
             return list_k, list_kedges, tuple(ells), list_data, shotnoise
 
-        def load_all(list_mocks):
-            list_y, list_shotnoise = [], []
-            for mocks in list_mocks:
+        def load_all(lmocks):
+            list_mocks = []
+            for mocks in lmocks:
                 if is_path(mocks):
-                    fns = sorted(glob.glob(mocks))
-                    mocks = []
-                    if len(fns):
-                        nfns = 5
-                        if len(fns) < nfns:
-                            msg = 'Loading {}.'.format(fns)
-                        else:
-                            msg = 'Loading [{}].'.format(', ..., '.join(fns[::len(fns) // nfns]))
-                        self.log_info(msg)
-                    mocks = [load_data(fn) for fn in fns]
+                    list_mocks += sorted(glob.glob(mocks))
                 else:
-                    mocks = [mocks]
-                for mock in mocks:
-                    mock_k, mock_kedges, mock_ells, mock_y, mock_shotnoise = lim_data(mock)
-                    if self.k is None:
-                        self.k, self.kedges, self.ells = mock_k, mock_kedges, mock_ells
-                    if not all(np.allclose(sk, mk, atol=0., rtol=1e-3) for sk, mk in zip(self.kedges, mock_kedges)):
-                        raise ValueError('{} does not have expected k-edges (based on previous data)'.format(mock))
-                    if mock_ells != self.ells:
-                        raise ValueError('{} does not have expected poles (based on previous data)'.format(mock))
-                    list_y.append(np.concatenate(mock_y))
-                    list_shotnoise.append(mock_shotnoise)
+                    list_mocks.append(mocks)
+
+            fns = [mock for mock in list_mocks if is_path(mock)]
+            if len(fns):
+                nfns = 5
+                if len(fns) < nfns:
+                    msg = 'Loading {}.'.format(fns)
+                else:
+                    msg = 'Loading [{}].'.format(', ..., '.join(fns[::len(fns) // nfns]))
+                self.log_info(msg)
+
+            list_y, list_shotnoise = [], []
+            for mock in list_mocks:
+                if is_path(mock):
+                    mock = load_data(mock)
+                mock_k, mock_kedges, mock_ells, mock_y, mock_shotnoise = lim_data(mock)
+                if self.k is None:
+                    self.k, self.kedges, self.ells = mock_k, mock_kedges, mock_ells
+                if not all(np.allclose(sk, mk, atol=0., rtol=1e-3) for sk, mk in zip(self.kedges, mock_kedges)):
+                    raise ValueError('{} does not have expected k-edges (based on previous data)'.format(mock))
+                if mock_ells != self.ells:
+                    raise ValueError('{} does not have expected poles (based on previous data)'.format(mock))
+                list_y.append(np.concatenate(mock_y))
+                list_shotnoise.append(mock_shotnoise)
             return list_y, list_shotnoise
 
         flatdata, shotnoise, list_shotnoise, list_y = None, None, None, None

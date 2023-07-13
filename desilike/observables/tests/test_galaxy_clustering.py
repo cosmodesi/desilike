@@ -1,3 +1,4 @@
+import glob
 import numpy as np
 
 from desilike import setup_logging
@@ -15,7 +16,7 @@ def test_power_spectrum():
 
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data='../../tests/_pk/data.npy',
-                                                         covariance='../../tests/_pk/mock_*.npy',
+                                                         covariance=glob.glob('../../tests/_pk/mock_*.npy'),
                                                          wmatrix='../../tests/_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
@@ -77,6 +78,8 @@ def test_bao():
 
     template = BAOPowerSpectrumTemplate(z=0.38, fiducial=DESI())
     theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
+    theory.init.params = theory.init.params.select(basename='al0_*')
+    theory.init.params.set(theory.init.params['al0_0'].clone(name='al0_6'))
     observable = TracerPowerSpectrumMultipolesObservable(data='../../tests/_pk/data.npy',
                                                          covariance='../../tests/_pk/mock_*.npy',
                                                          klim={0: [0.01, 0.3]},
@@ -85,10 +88,7 @@ def test_bao():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
 
     setup_logging()
-    print(likelihood.params)
-    print(observable.params)
-    from desilike.profilers import MinuitProfiler
-    profiler = MinuitProfiler(likelihood, seed=42)
+    print(likelihood.all_params)
 
 
 def test_correlation_function():
@@ -100,7 +100,7 @@ def test_correlation_function():
     theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
     observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
                                                                data='../../tests/_xi/data.npy',
-                                                               covariance='../../tests/_xi/mock_*.npy',
+                                                               covariance=glob.glob('../../tests/_xi/mock_*.npy'),
                                                                theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
@@ -670,9 +670,9 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    test_bao()
-    # test_power_spectrum()
-    # test_correlation_function()
+    #test_bao()
+    test_power_spectrum()
+    test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()

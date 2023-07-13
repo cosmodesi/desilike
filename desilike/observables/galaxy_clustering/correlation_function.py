@@ -92,31 +92,36 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
                 list_data.append(corr_slice(ells=ell, return_std=False, ignore_nan=ignore_nan))
             return list_s, list_sedges, ells, list_data
 
-        def load_all(list_mocks):
-            list_y = []
-            for mocks in list_mocks:
+        def load_all(lmocks):
+
+            list_mocks = []
+            for mocks in lmocks:
                 if is_path(mocks):
-                    fns = sorted(glob.glob(mocks))
-                    mocks = []
-                    if len(fns):
-                        nfns = 5
-                        if len(fns) < nfns:
-                            msg = 'Loading {}.'.format(fns)
-                        else:
-                            msg = 'Loading [{}].'.format(', ..., '.join(fns[::len(fns) // nfns]))
-                        self.log_info(msg)
-                    mocks = [load_data(fn) for fn in fns]
+                    list_mocks += sorted(glob.glob(mocks))
                 else:
-                    mocks = [mocks]
-                for mock in mocks:
-                    mock_s, mock_sedges, mock_ells, mock_y = lim_data(mock)
-                    if self.s is None:
-                        self.s, self.sedges, self.ells = mock_s, mock_sedges, mock_ells
-                    if not all(np.allclose(ss, ms, atol=0., rtol=1e-3) for ss, ms in zip(self.sedges, mock_sedges)):
-                        raise ValueError('{} does not have expected s-edges (based on previous data)'.format(mock))
-                    if mock_ells != self.ells:
-                        raise ValueError('{} does not have expected poles (based on previous data)'.format(mock))
-                    list_y.append(np.concatenate(mock_y))
+                    list_mocks.append(mocks)
+
+            fns = [mock for mock in list_mocks if is_path(mock)]
+            if len(fns):
+                nfns = 5
+                if len(fns) < nfns:
+                    msg = 'Loading {}.'.format(fns)
+                else:
+                    msg = 'Loading [{}].'.format(', ..., '.join(fns[::len(fns) // nfns]))
+                self.log_info(msg)
+
+            list_y = []
+            for mock in list_mocks:
+                if is_path(mock):
+                    mock = load_data(mock)
+                mock_s, mock_sedges, mock_ells, mock_y = lim_data(mock)
+                if self.s is None:
+                    self.s, self.sedges, self.ells = mock_s, mock_sedges, mock_ells
+                if not all(np.allclose(ss, ms, atol=0., rtol=1e-3) for ss, ms in zip(self.sedges, mock_sedges)):
+                    raise ValueError('{} does not have expected s-edges (based on previous data)'.format(mock))
+                if mock_ells != self.ells:
+                    raise ValueError('{} does not have expected poles (based on previous data)'.format(mock))
+                list_y.append(np.concatenate(mock_y))
             return list_y
 
         flatdata, list_y = None, None

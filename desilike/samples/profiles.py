@@ -471,7 +471,7 @@ class Profiles(BaseClass):
         return toret
 
     @classmethod
-    def concatenate(cls, *others):
+    def concatenate(cls, *others, **kwargs):
         """
         Concatenate profiles together.
 
@@ -498,7 +498,7 @@ class Profiles(BaseClass):
             if [name for name in other._attrs if name in other and name in concatenable_attrs] != attrs:
                 raise ValueError('Cannot concatenate two profiles if both do not have same attributes.')
         for name in attrs:
-            setattr(new, name, new._attrs[name].concatenate(*[other.get(name) for other in others]))
+            setattr(new, name, new._attrs[name].concatenate(*[other.get(name) for other in others], **kwargs))
         return new
 
     def extend(self, other):

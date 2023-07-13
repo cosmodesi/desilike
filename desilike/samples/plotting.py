@@ -17,13 +17,15 @@ def _make_list(obj, length=None, default=None):
         If tuple, list or array, cast to list.
         Else return list of ``obj`` with length ``length``.
 
-    length : int, default=1
+    length : int, default=None
         Length of list to return.
 
     Returns
     -------
     toret : list
     """
+    if obj is None:
+        obj = default
     if is_parameter_sequence(obj):
         obj = list(obj)
         if length is not None:
@@ -31,7 +33,7 @@ def _make_list(obj, length=None, default=None):
     else:
         obj = [obj]
         if length is not None:
-            obj *= length
+            obj += [default] * (length - len(obj))
     return obj
 
 
@@ -491,7 +493,7 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
     maxpoints = max(map(lambda prof: len(prof.bestfit), profiles))
     ids = _make_list(ids, length=len(profiles), default=None)
     labels = _make_list(labels, length=maxpoints, default=None)
-    colors = _make_list(colors, length=maxpoints, default=None)
+    colors = _make_list(colors, length=maxpoints, default=['C{:d}'.format(i) for i in range(maxpoints)])
     add_legend = any(label is not None for label in labels)
     add_mean = kw_mean is not None
     if add_mean:

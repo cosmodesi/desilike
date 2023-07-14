@@ -65,7 +65,7 @@ def test_templates():
         extractor()
 
     for template in [FixedPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), BAOPowerSpectrumTemplate(),
-                     StandardPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(),
+                     StandardPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(apmode='qisoqap'),
                      WiggleSplitPowerSpectrumTemplate(), WiggleSplitPowerSpectrumTemplate(kernel='tophat'),
                      BandVelocityPowerSpectrumTemplate(kp=np.linspace(0.01, 0.1, 10))]:
         print(template)
@@ -191,7 +191,7 @@ def test_full_shape():
     test_emulator_likelihood(theory, emulate=None)
     theory(df=1.01, b1=1., sn2_2=1., sigmapar=4.).shape
 
-    theory = EFTLikeKaiserTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    theory = EFTLikeKaiserTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5, apmode='qisoqap'))
     test_emulator_likelihood(theory)
     theory(df=1.01, b1=1., ct0_2=1.).shape
 
@@ -616,11 +616,11 @@ if __name__ == '__main__':
 
     #test_params()
     #test_integ()
+    test_templates()
     #test_bao()
     #test_flexible_bao()
-    #test_full_shape()
+    test_full_shape()
     #test_png()
     #test_pk_to_xi()
     #test_ap_diff()
-    #test_templates()
-    test_ptt()
+    #test_ptt()

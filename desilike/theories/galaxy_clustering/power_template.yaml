@@ -274,6 +274,24 @@ params:
       limits: [0.99, 1.01]
     delta: 0.002
     latex: q_{\perp}
+  qiso:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    delta: 0.002
+    latex: q_{\mathrm{iso}}
+  qap:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    delta: 0.002
+    latex: q_{\mathrm{ap}}
   df:
     value: 1.
     prior:

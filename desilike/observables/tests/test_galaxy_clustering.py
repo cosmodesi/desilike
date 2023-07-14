@@ -315,7 +315,7 @@ def test_compression():
     likelihood()
     print(likelihood.varied_params)
 
-    observable = ShapeFitCompressionObservable(data=[1., 1., 0., 1.], covariance=np.diag([0.01, 0.01, 0.0001, 0.01]), quantities=['qpar', 'qper', 'dm', 'df'], z=2.)
+    observable = ShapeFitCompressionObservable(data=[1., 1., 0., 1.], covariance=np.diag([0.01, 0.01, 0.0001, 0.01]), quantities=['qiso', 'qap', 'dm', 'df'], z=2.)
     emulator = Emulator(observable, engine=TaylorEmulatorEngine(order=1))
     emulator.set_samples()
     emulator.fit()
@@ -676,7 +676,7 @@ if __name__ == '__main__':
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    # test_compression()
+    test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

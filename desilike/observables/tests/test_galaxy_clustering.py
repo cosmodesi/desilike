@@ -278,6 +278,8 @@ def test_covariance_matrix_mocks():
 
 def test_compression():
 
+    from desilike import LikelihoodFisher
+
     from desilike.observables.galaxy_clustering import BAOCompressionObservable, StandardCompressionObservable, ShapeFitCompressionObservable, WiggleSplitCompressionObservable, BandVelocityCompressionObservable
     from desilike.emulators import Emulator, TaylorEmulatorEngine
 
@@ -293,6 +295,12 @@ def test_compression():
     print(likelihood())
 
     observable = BAOCompressionObservable(data=[1.], covariance=np.diag([0.01]), quantities=['DV_over_rd'], z=2.)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    print(likelihood.varied_params)
+    print(likelihood())
+
+    fisher = LikelihoodFisher(center=[0.], params=['qiso'], offset=0., hessian=[[1.]], with_prior=True)
+    observable = BAOCompressionObservable(data=fisher, covariance=fisher, z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     print(likelihood.varied_params)
     print(likelihood())
@@ -671,8 +679,8 @@ if __name__ == '__main__':
     setup_logging()
 
     #test_bao()
-    test_power_spectrum()
-    test_correlation_function()
+    #test_power_spectrum()
+    #test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()

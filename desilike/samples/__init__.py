@@ -99,7 +99,7 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
                     tmp[str(param)] = (param.value if default is False else default)
                 tmp = [tmp[str(param)] for param in params]
             source = ParameterBestFit(tmp, params=params)
-        if source:
+        if hasattr(source, 'choice'):
             tmp = source.choice(params=source.params(), return_type=return_type, **choice)
         toret.append(tmp)
 

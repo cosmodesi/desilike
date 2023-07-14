@@ -46,7 +46,7 @@ class BaseCompressionObservable(BaseCalculator):
                     if self.mpicomm.rank == 0:
                         self.log_info('Found meta parameters {}.'.format(meta))
                     self.extractor.init.update(meta)
-            source = load_source(data, params=quantities, choice=True, return_type='dict')
+            source = load_source(data, params=quantities or None, choice=True, return_type='dict')
             quantities = [Parameter(quantity) for quantity in source.keys()]
             self.quantities = [quantity.basename for quantity in quantities]
             self.flatdata = [source[quantity.name] for quantity in quantities]
@@ -57,7 +57,7 @@ class BaseCompressionObservable(BaseCalculator):
                 raise ValueError('Found conflicting quantities: {}'.format(conflicts))
         self.covariance = None
         if covariance is not None:
-            self.covariance = load_source(covariance, params=quantities, cov=True, return_type='nparray')
+            self.covariance = load_source(covariance, params=quantities or None, cov=True, return_type='nparray')
 
     def calculate(self):
         self.flattheory = jnp.array([getattr(self.extractor, quantity) for quantity in self.quantities])

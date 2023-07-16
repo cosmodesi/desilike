@@ -234,7 +234,12 @@ def cobaya_params(like):
 
 
 def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, params=None):
+    """
+    Pass ``params=True`` for dynamic bindings (when no likelihood *.yaml parameter file is written):
 
+    >>> CobayaBAOLikelihood = CobayaLikelihoodFactory(BAOLikelihood, params=True)
+
+    """
     if name_like is None:
         name_like = cls.__name__
     if kw_like is None:

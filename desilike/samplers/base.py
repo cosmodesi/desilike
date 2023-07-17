@@ -110,11 +110,16 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         if not self.varied_params:
             raise ValueError('No parameters to be varied!')
         if self.mpicomm.rank == 0:
-            if chains is None: chains = 1
+            if chains is None:
+                if save_fn is not None and not is_path(save_fn):
+                    chains = len(save_fn)
+                else:
+                    chains = 1
             if isinstance(chains, numbers.Number):
                 self.chains = [None] * int(chains)
             else:
                 self.chains = load_source(chains)
+
         nchains = self.mpicomm.bcast(len(self.chains) if self.mpicomm.rank == 0 else None, root=0)
         if self.mpicomm.rank != 0:
             self.chains = [None] * nchains

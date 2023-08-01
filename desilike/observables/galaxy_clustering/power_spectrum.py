@@ -3,7 +3,6 @@ import glob
 import numpy as np
 
 from desilike import plotting, jax, utils
-from desilike.utils import is_path
 from desilike.base import BaseCalculator
 from .window import WindowedPowerSpectrumMultipoles
 
@@ -13,7 +12,7 @@ def _is_array(data):
 
 
 def _is_from_pypower(data):
-    return is_path(data) or not _is_array(data)
+    return utils.is_path(data) or not _is_array(data)
 
 
 class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
@@ -23,17 +22,18 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
     Parameters
     ----------
     data : array, str, Path, list, pypower.PowerSpectrumMultipoles, dict, default=None
-        Data power spectrum measurement: array, :class:`pypower.PowerSpectrumMultipoles` instance,
+        Data power spectrum measurement: flat array (of all multipoles), :class:`pypower.PowerSpectrumMultipoles` instance,
         or path to such instances, or list of such objects (in which case the average of them is taken).
         If dict, parameters to be passed to theory to generate mock measurement.
+        If a (list of) flat array, additionally provide list of multipoles ``ells`` and wavenumbers ``k``, and optionally ``shotnoise`` (see **kwargs).
 
     covariance : array, list, default=None
         2D array, list of :class:`pypower.PowerSpectrumMultipoles` instance` instances, or paths to such instances;
         these are used to compute the covariance matrix.
 
     klim : dict, default=None
-        Wavenumber limits: a dictionary mapping multipoles to (min separation, max separation, step (float)),
-        e.g. ``{0: (0.01, 0.2, 0.01), 2: (0.01, 0.15, 0.01)}``.
+        Wavenumber limits: a dictionary mapping multipoles to (min separation, max separation, (optionally) step (float)),
+        e.g. ``{0: (0.01, 0.2, 0.01), 2: (0.01, 0.15, 0.01)}``. If ``None``, no selection is applied for the given multipole.
 
     wmatrix : str, Path, pypower.BaseMatrix, WindowedPowerSpectrumMultipoles, default=None
         Optionally, window matrix.
@@ -44,6 +44,9 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         - theory: defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
         - shotnoise: take shot noise from ``data``, or ``covariance`` (mocks) if provided.
         - fiber_collisions
+        - if one only provided simple arrays for ``data`` and ``covariance``,
+          one can provide the list of multipoles ``ells`` and the corresponding (list of) :math:`k` wavenumbers as a (list of) array ``k``,
+          and optionally ``shotnoise``.
     """
     def initialize(self, data=None, covariance=None, klim=None, wmatrix=None, **kwargs):
         self.k, self.kedges, self.ells, self.shotnoise = None, None, None, None
@@ -110,12 +113,12 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         def load_all(lmocks):
             list_mocks = []
             for mocks in lmocks:
-                if is_path(mocks):
+                if utils.is_path(mocks):
                     list_mocks += sorted(glob.glob(mocks))
                 else:
                     list_mocks.append(mocks)
 
-            fns = [mock for mock in list_mocks if is_path(mock)]
+            fns = [mock for mock in list_mocks if utils.is_path(mock)]
             if len(fns):
                 nfns = 5
                 if len(fns) < nfns:
@@ -126,7 +129,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
             list_y, list_shotnoise = [], []
             for mock in list_mocks:
-                if is_path(mock):
+                if utils.is_path(mock):
                     mock = load_data(mock)
                 mock_k, mock_kedges, mock_ells, mock_y, mock_shotnoise = lim_data(mock)
                 if self.k is None:

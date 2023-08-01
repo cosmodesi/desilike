@@ -20,6 +20,14 @@ def test_parameterization():
 
     cosmo.runtime_info.pipeline._set_speed()
 
+    #from cosmoprimo.fiducial import DESI
+    #cosmo = DESI(engine='isitgr')
+    #print(cosmo['Q0'])
+
+    cosmo = Cosmoprimo(engine='isitgr')
+    cosmo.init.params['Q0'] = dict()
+    cosmo(Q0=0.1)
+
 
 if __name__ == '__main__':
 

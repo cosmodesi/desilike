@@ -14,6 +14,16 @@ def test_power_spectrum():
     template = ShapeFitPowerSpectrumTemplate(z=0.5, fiducial=DESI())
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
 
+    size = 10
+    ells = (0, 2)
+    observable = TracerPowerSpectrumMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * len(ells)),
+                                                         k=np.linspace(0.01, 0.1, size),
+                                                         ells=ells,
+                                                         covariance=np.eye(size * len(ells)),
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
+
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data='../../tests/_pk/data.npy',
                                                          covariance=glob.glob('../../tests/_pk/mock_*.npy'),
@@ -98,6 +108,16 @@ def test_correlation_function():
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
+    size = 10
+    ells = (0, 2)
+    observable = TracerCorrelationFunctionMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * len(ells)),
+                                                               s=np.linspace(20., 150., size),
+                                                               ells=ells,
+                                                               covariance=np.eye(size * len(ells)),
+                                                               theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
+
     observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
                                                                data='../../tests/_xi/data.npy',
                                                                covariance=glob.glob('../../tests/_xi/mock_*.npy'),
@@ -145,7 +165,7 @@ def test_covariance_matrix():
     theory =  KaiserTracerCorrelationFunctionMultipoles(template=template)
     footprint = BoxFootprint(volume=1e10, nbar=1e-4)
     observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [30., 150., 4.], 2: [30., 150., 4.], 4: [30., 150., 4.]},
-                                                               data={}, #'../../tests/_xi/data.npy',
+                                                               data={},  #'../../tests/_xi/data.npy',
                                                                theory=theory)
 
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)
@@ -679,12 +699,12 @@ if __name__ == '__main__':
     setup_logging()
 
     #test_bao()
-    #test_power_spectrum()
-    #test_correlation_function()
+    test_power_spectrum()
+    test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    test_compression()
+    # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

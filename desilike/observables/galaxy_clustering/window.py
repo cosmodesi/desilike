@@ -13,24 +13,22 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
     Parameters
     ----------
     klim : dict, default=None
-        Wavenumber limits: a dictionary mapping multipoles to (min separation, max separation, step (float)),
-        e.g. ``{0: (0.01, 0.2, 0.01), 2: (0.01, 0.15, 0.01)}``.
+        Optionally, wavenumber limits: a dictionary mapping multipoles to (min separation, max separation, step (float)),
+        e.g. ``{0: (0.01, 0.2, 0.01), 2: (0.01, 0.15, 0.01)}``. If ``None``, no selection is applied for the given multipole.
 
     k : array, default=None
-        Optionally, observed wavenumbers.
-        Taken from ``wmatrix`` if provided;
+        Optionally, observed wavenumbers :math:`k`, as an array or a list of such arrays (one for each multipole).
+        If not specified, taken from ``wmatrix`` if provided;
         else defaults to edge centers, based on ``klim`` if provided;
         else defaults to ``np.arange(0.01, 0.205, 0.01)``.
 
     ells : tuple, default=None
         Observed multipoles.
-        Defaults to poles in ``klim``, if provided;
-        else (0, 2, 4).
+        Defaults to poles in ``klim``, if provided; else ``(0, 2, 4)``.
 
     ellsin : tuple, default=None
         Optionally, input theory multipoles.
-        Taken from ``wmatrix`` if provided;
-        else (0, 2, 4).
+        If not specified, taken from ``wmatrix`` if provided, else ``(0, 2, 4)``.
 
     wmatrix : str, Path, pypower.BaseMatrix, default=None
         Optionally, window matrix.
@@ -62,21 +60,23 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 ells = (0, 2, 4)
         self.ells = tuple(ells)
         self.kedges = None
+
         if klim is not None:
             klim = dict(klim)
             self.kedges = []
             for ell in self.ells:
+                if klim[ell] is None:
+                    self.kedges = None
+                    break
                 (lo, hi, *step) = klim[ell]
                 if not step: step = (_default_step,)
                 self.kedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
 
         if k is None:
-            if klim is None:
+            if self.kedges is None:
                 k = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
             else:
-                k = []
-                for edges in self.kedges:
-                    k.append((edges[:-1] + edges[1:]) / 2.)
+                k = [(edges[:-1] + edges[1:]) / 2. for edges in self.kedges]
 
         if np.ndim(k[0]) == 0:
             k = [k] * len(self.ells)
@@ -110,7 +110,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 self.ellsin = tuple(self.ells)
             self.theory.init.update(k=self.kin, ells=self.ellsin)
         else:
-            if isinstance(wmatrix, str):
+            if utils.is_path(wmatrix):
                 from pypower import MeshFFTWindow, BaseMatrix
                 fn = wmatrix
                 wmatrix = MeshFFTWindow.load(fn)
@@ -248,10 +248,10 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
     Parameters
     ----------
     s : array, default=None
-        Observed separations.
+        Observed separations :math:`s`, as an array or a list of such arrays (one for each multipole).
 
-    ells : tuple, default=(0, 2, 4)
-        Observed multipoles.
+    ells : tuple, default=None
+        Observed multipoles, defaults to ``(0, 2, 4)``.
 
     fiber_collisions : BaseFiberCollisionsPowerSpectrumMultipoles
         Optionally, fiber collisions.
@@ -275,17 +275,18 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
             slim = dict(slim)
             self.sedges = []
             for ell in self.ells:
+                if slim[ell] is None:
+                    self.sedges = None
+                    break
                 (lo, hi, *step) = slim[ell]
                 if not step: step = (_default_step,)
                 self.sedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
 
         if s is None:
-            if slim is None:
+            if self.sedges is None:
                 s = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
             else:
-                s = []
-                for edges in self.sedges:
-                    s.append((edges[:-1] + edges[1:]) / 2.)
+                s = [(edges[:-1] + edges[1:]) / 2. for edges in self.sedges]
 
         if np.ndim(s[0]) == 0:
             s = [s] * len(self.ells)

@@ -3,7 +3,6 @@ import glob
 import numpy as np
 
 from desilike import plotting, jax, utils
-from desilike.utils import is_path
 from desilike.base import BaseCalculator
 from .window import WindowedCorrelationFunctionMultipoles
 
@@ -13,7 +12,7 @@ def _is_array(data):
 
 
 def _is_from_pycorr(data):
-    return is_path(data) or not _is_array(data)
+    return utils.is_path(data) or not _is_array(data)
 
 
 class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
@@ -23,23 +22,26 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
     Parameters
     ----------
     data : str, Path, list, pycorr.BaseTwoPointEstimator, dict, default=None
-        Data correlation function measurement: array, :class:`pycorr.BaseTwoPointEstimator` instance,
+        Data correlation function measurement: flat array (of all multipoles), :class:`pycorr.BaseTwoPointEstimator` instance,
         or path to such instances, or list of such objects (in which case the average of them is taken).
         If dict, parameters to be passed to theory to generate mock measurement.
+        If a (list of) flat array, additionally provide list of multipoles ``ells`` and separations ``s`` (see **kwargs).
 
     covariance : list, default=None
         2D array, list of :class:`pycorr.BaseTwoPointEstimator` instances, or paths to such instances;
         these are used to compute the covariance matrix.
 
     slim : dict, default=None
-        Separation limits: a dictionary mapping multipoles to (min separation, max separation, step (float)),
-        e.g. ``{0: (30., 160., 5.), 2: (30., 160., 5.)}``.
+        Separation limits: a dictionary mapping multipoles to (min separation, max separation, (optionally) step (float)),
+        e.g. ``{0: (30., 160., 5.), 2: (30., 160., 5.)}``. If ``None``, no selection is applied for the given multipole.
 
     **kwargs : dict
         Optional arguments for :class:`WindowedCorrelationFunctionMultipoles`, e.g.:
 
         - theory: defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
         - fiber_collisions
+        - if one only provided simple arrays for ``data`` and ``covariance``,
+          one can provide the list of multipoles ``ells`` and the corresponding (list of) :math:`s` separations as a (list of) array ``s``.
     """
     def initialize(self, data=None, covariance=None, slim=None, wmatrix=None, ignore_nan=False, **kwargs):
         self.s, self.sedges, self.ells = None, None, None
@@ -96,12 +98,12 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
 
             list_mocks = []
             for mocks in lmocks:
-                if is_path(mocks):
+                if utils.is_path(mocks):
                     list_mocks += sorted(glob.glob(mocks))
                 else:
                     list_mocks.append(mocks)
 
-            fns = [mock for mock in list_mocks if is_path(mock)]
+            fns = [mock for mock in list_mocks if utils.is_path(mock)]
             if len(fns):
                 nfns = 5
                 if len(fns) < nfns:
@@ -112,7 +114,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
 
             list_y = []
             for mock in list_mocks:
-                if is_path(mock):
+                if utils.is_path(mock):
                     mock = load_data(mock)
                 mock_s, mock_sedges, mock_ells, mock_y = lim_data(mock)
                 if self.s is None:

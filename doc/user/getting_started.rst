@@ -70,8 +70,8 @@ Then, we want to compare the theory to data (an *observable*), typically:
   from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
 
   # Or TracerCorrelationFunctionMultipolesObservable
-  observable = TracerPowerSpectrumMultipolesObservable(data={'b1': 1.2},  # path to data, *pypower* power spectrum measurement, array, or dictionary of parameters where to evaluate the theory to take as a mock data vector
-                                                       covariance=None,  # path to mocks, array (covariance matrix), or None
+  observable = TracerPowerSpectrumMultipolesObservable(data={'b1': 1.2},  # a (list of) (path to) *pypower* power spectrum measurement, flat array, or dictionary of parameters where to evaluate the theory to take as a mock data vector
+                                                       covariance=None,  # a (list of) (path to) mocks, array (covariance matrix), or None
                                                        klim={0: [0.01, 0.2, 0.005], 2: [0.01, 0.2, 0.005]},  # k-limits, between 0.01 and 0.2 h/Mpc with 0.005 h/Mpc step size for ell = 0, 2
                                                        theory=theory)  # previously defined theory
 

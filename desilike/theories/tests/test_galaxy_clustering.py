@@ -70,6 +70,7 @@ def test_templates():
                      BandVelocityPowerSpectrumTemplate(kp=np.linspace(0.01, 0.1, 10))]:
         print(template)
         theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+        template.f, template.f0
         theory()
 
 
@@ -154,6 +155,8 @@ def test_full_shape():
             #for param in likelihood.all_params.select(basename=['alpha*', 'sn*', 'c*']):
             #    param.update(derived='.best')
             likelihood()
+            theory.plot(show=True)
+            return
         from desilike.emulators import Emulator, TaylorEmulatorEngine
         #theory()
         bak = theory()
@@ -172,6 +175,7 @@ def test_full_shape():
         assert np.allclose(theory(), bak)
         if test_likelihood:
             likelihood()
+            theory.plot(show=True)
 
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
 
@@ -332,6 +336,15 @@ def test_full_shape():
     theory(logA=3.04, b1=1.).shape
     theory = PyBirdTracerCorrelationFunctionMultipoles(eft_basis='westcoast')
     test_emulator_likelihood(theory)  # no P(k) computed
+    theory(logA=3.04, b1=1.).shape
+
+    from desilike.theories.galaxy_clustering import FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles
+
+    theory = FOLPSTracerPowerSpectrumMultipoles()
+    test_emulator_likelihood(theory)
+    theory(logA=3.04, b1=1.).shape
+    theory = FOLPSTracerCorrelationFunctionMultipoles()
+    test_emulator_likelihood(theory)
     theory(logA=3.04, b1=1.).shape
 
 
@@ -616,7 +629,7 @@ if __name__ == '__main__':
 
     #test_params()
     #test_integ()
-    test_templates()
+    #test_templates()
     #test_bao()
     #test_flexible_bao()
     test_full_shape()

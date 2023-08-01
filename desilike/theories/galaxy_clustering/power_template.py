@@ -33,7 +33,7 @@ class BasePowerSpectrumExtractor(BaseCalculator):
         self.with_now = False
         BasePowerSpectrumExtractor.calculate(self)
         self.cosmo = cosmo
-        for name in ['sigma8', 'fsigma8', 'f', 'pk_dd_interpolator']:
+        for name in ['sigma8', 'fsigma8', 'f', 'f0', 'pk_dd_interpolator']:
             setattr(self, name + '_fid', getattr(self, name))
             delattr(self, name)
         self.with_now = with_now
@@ -47,6 +47,8 @@ class BasePowerSpectrumExtractor(BaseCalculator):
         self.fsigma8 = fo.sigma8_z(self.z, of='theta_cb')
         self.f = self.fsigma8 / self.sigma8
         self.pk_dd_interpolator = fo.pk_interpolator(of='delta_cb').to_1d(z=self.z)
+        k0 = 1e-3
+        self.f0 = (fo.pk_interpolator(of='theta_cb').to_1d(z=self.z)(k=k0) / self.pk_dd_interpolator(k0))**0.5
         if self.with_now:
             self.filter(self.pk_dd_interpolator, cosmo=self.cosmo)
             self.pknow_dd_interpolator = self.filter.smooth_pk_interpolator()
@@ -76,7 +78,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
         if only_now and not self.with_now:
             self.with_now = only_now
         self.only_now = bool(only_now)
-        for name in ['sigma8', 'fsigma8', 'f', 'pk_dd_interpolator']:
+        for name in ['sigma8', 'fsigma8', 'f', 'f0', 'pk_dd_interpolator']:
             setattr(self, name + '_fid', getattr(self, name))
             delattr(self, name)
         self.pk_dd_fid = self.pk_dd_interpolator_fid(self.k)
@@ -276,6 +278,7 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     def calculate(self, df=1.):
         super(BAOPowerSpectrumTemplate, self).calculate()
         self.f = self.f_fid * df
+        self.f0 = self.f0_fid * df
 
     def get(self):
         self.DH_over_rd = self.qpar * self.DH_over_rd_fid
@@ -389,6 +392,7 @@ class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate, StandardPowerSpec
     def calculate(self, df=1.):
         super(StandardPowerSpectrumTemplate, self).calculate()
         self.f = self.f_fid * df
+        self.f0 = self.f0_fid * df
 
     def get(self):
         return self
@@ -550,6 +554,7 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
         self.n = self.n_fid + dn
         self.m = self.m_fid + dm
         self.f = self.f_fid * df
+        self.f0 = self.f0_fid * df
         self.f_sqrt_Ap = self.f * self.Ap_fid**0.5
 
     def get(self):
@@ -746,6 +751,7 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate, BandVelocityP
 
     def calculate(self, df=1., **params):
         self.f = self.f_fid * df
+        self.f0 = self.f0_fid * df
         dptt = jnp.array([params['{}{:d}'.format(self._base_param_name, ii)] - 1. for ii in range(len(self.templates))])
         factor = (1. + jnp.dot(dptt, self.templates))
         self.pk_tt = self.pk_tt_fid * factor
@@ -978,7 +984,8 @@ class WiggleSplitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
 
     def calculate(self, df=1., dm=0., qbao=1.):
         super(WiggleSplitPowerSpectrumTemplate, self).calculate()
-        self.f = df * self.f_fid
+        self.f = self.f_fid * df
+        self.f0 = self.f0_fid * df
         kp = 0.05
         k = self.pk_tt_interpolator_fid.k
         k = k[(k > k[0] * 2.) & (k < k[-1] / 2.)]  # to avoid hitting boundaries with qbao

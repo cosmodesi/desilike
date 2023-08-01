@@ -587,6 +587,7 @@ class Profiles(BaseClass):
         tablefmt : str, default='latex_raw'
             Format for summary table.
             See :func:`tabulate.tabulate`.
+            If ``None``, return table as list of list of strings, and headers.
 
         fn : str, default=None
             If not ``None``, file name where to save summary table.
@@ -659,6 +660,8 @@ class Profiles(BaseClass):
         headers.append((r'$\chi^{{2}} {}$' if is_latex else 'chi2 {}').format(chi2min_str))
         headers.append('varied')
         headers += [quantity.replace('_', ' ') for quantity in quantities]
+        if tablefmt is None:
+            return data, quantities
         tab = tabulate.tabulate(data, headers=headers, tablefmt=tablefmt)
         if fn is not None:
             utils.mkdir(os.path.dirname(fn))

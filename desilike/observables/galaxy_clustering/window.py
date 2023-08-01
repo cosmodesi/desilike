@@ -374,7 +374,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
             If ``True``, show figure.
         """
         from matplotlib import pyplot as plt
-        fig, ax = plt.subplots()
+        ax = plt.gca()
         ax.plot([], [], linestyle='-', color='k', label='theory')
         ax.plot([], [], linestyle='--', color='k', label='window')
         for ill, ell in enumerate(self.ells):

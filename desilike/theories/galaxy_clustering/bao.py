@@ -7,6 +7,7 @@ from scipy import special, integrate
 
 from desilike.base import BaseCalculator
 from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo
+from desilike import plotting
 from desilike.jax import numpy as jnp
 from .power_template import BAOPowerSpectrumTemplate
 from .base import (BaseTheoryPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges,
@@ -258,6 +259,33 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
     def get(self):
         return self.power
 
+    @plotting.plotter
+    def plot(self):
+        """
+        Plot power spectrum multipoles.
+
+        Parameters
+        ----------
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+        """
+        from matplotlib import pyplot as plt
+        ax = plt.gca()
+        for ill, ell in enumerate(self.ells):
+            ax.plot(self.k, self.k * self.power[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.grid(True)
+        ax.legend()
+        ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        return ax
+
 
 class DampedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpectrumMultipoles):
     r"""
@@ -434,6 +462,33 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
 
     def get(self):
         return self.corr
+
+    @plotting.plotter
+    def plot(self):
+        """
+        Plot correlation function multipoles.
+
+        Parameters
+        ----------
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+        """
+        from matplotlib import pyplot as plt
+        fig, ax = plt.subplots()
+        for ill, ell in enumerate(self.ells):
+            ax.plot(self.s, self.s**2 * self.corr[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.grid(True)
+        ax.legend()
+        ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
+        return ax
 
 
 class DampedBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCorrelationFunctionMultipoles):

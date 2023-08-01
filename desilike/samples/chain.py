@@ -782,9 +782,10 @@ class Chain(Samples):
             Number of significant digits.
             See :func:`utils.round_measurement`.
 
-        tablefmt : string, default='latex_raw'
+        tablefmt : str, default='latex_raw'
             Format for summary table.
             See :func:`tabulate.tabulate`.
+            If ``None``, return table as list of list of strings, and headers.
 
         fn : str, default=None
             If not ``None``, file name where to save summary table.
@@ -828,6 +829,8 @@ class Chain(Samples):
                 else:
                     raise RuntimeError('Unknown quantity {}.'.format(quantity))
             data.append(row)
+        if tablefmt is None:
+            return data, quantities
         tab = tabulate.tabulate(data, headers=quantities, tablefmt=tablefmt)
         if fn is not None:
             utils.mkdir(os.path.dirname(fn))

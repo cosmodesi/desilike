@@ -43,10 +43,10 @@ def _get_default_chain_params(chains, params=None, **kwargs):
     if params is not None:
         params = _make_list(params)
         list_params = ParameterCollection()
-        for chain in chains[::-1]:
-            all_params = chain.params()
-            list_params += [all_params[param] for param in params if param in all_params]
-        return ParameterCollection([list_params[param] for param in params if param in list_params])
+        for param in params:
+            for chain in chains[::-1]:
+                list_params += chain.params(name=[str(param)])
+        return list_params
     list_params = [chain.params(**kwargs) for chain in chains]
     return ParameterCollection([params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])])
 
@@ -57,10 +57,11 @@ def _get_default_profiles_params(profiles, params=None, of='bestfit', **kwargs):
     if params is not None:
         params = _make_list(params)
         list_params = ParameterCollection()
-        for profile in profiles[::-1]:
-            all_params = profile.get(of).params()
-            list_params += [all_params[param] for param in params if param in all_params]
-        return ParameterCollection([list_params[param] for param in params if param in list_params])
+        list_params = ParameterCollection()
+        for param in params:
+            for profile in profiles[::-1]:
+                list_params += profile.get(of).params(name=[str(param)])
+        return list_params
     list_params = [profile.get(of).params(**kwargs) for profile in profiles]
     return ParameterCollection([params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])])
 

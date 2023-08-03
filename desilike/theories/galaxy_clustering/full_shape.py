@@ -1575,13 +1575,12 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         FOLPS.NonLinear([self.template.k, self.template.pk_dd], cosmo_params, EdSkernels=self.options['kernels'] == 'eds')
         k = FOLPS.kTout
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        FOLPS.f0 = f0 = self.template.f0  # for Sigma2Total
         table = FOLPS.Table_interp(kap, k, FOLPS.TableOut_interp(k))
-        table_now = FOLPS.Table_interp(kap, k, FOLPS.TableOut_NW_interp(k))
-        self.pt = Namespace(kap=kap, muap=muap, table=table,
-                            table_now=table_now,
-                            sigma2t=np.column_stack([FOLPS.Sigma2Total(kap[..., imu], muap[imu], table_now[..., imu]) for imu in range(len(self.mu))]),
-                            f0=self.template.f0, jac=jac)
-
+        table_now = FOLPS.TableOut_NW_interp(k)
+        sigma2t = FOLPS.Sigma2Total(k, muap, table_now)
+        table_now = FOLPS.Table_interp(kap, k, table_now)
+        self.pt = Namespace(kap=kap, muap=muap, table=table, table_now=table_now, sigma2t=sigma2t, f0=f0, jac=jac)
 
     def combine_bias_terms_poles(self, pars, nd=1e-4):
         import FOLPSnu as FOLPS
@@ -1593,7 +1592,6 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         k, mu = self.pt.kap, self.pt.muap
         FOLPS.f0 = self.pt.f0
         fk = self.pt.table[1] * self.pt.f0
-        #fk = self.pt.table[1] * FOLPS.f0
         pkl, pkl_now, sigma2t = self.pt.table[0], self.pt.table_now[0], self.pt.sigma2t
         pkmu = self.pt.jac * ((b1 + fk * mu**2)**2 * (pkl_now + np.exp(-k**2 * sigma2t)*(pkl - pkl_now)*(1 + k**2 * sigma2t))
                                + np.exp(-k**2 * sigma2t) * FOLPS.PEFTs(k, mu, pars, self.pt.table)

@@ -432,6 +432,10 @@ def test_pybird():
     ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
     plt.show()
 
+    for eft_basis in ['westcoast', 'eastcoast']:
+        theory.init.update(eft_basis=eft_basis)
+        theory()
+
     s = np.arange(10, 200, 5.)
     theory = PyBirdTracerCorrelationFunctionMultipoles(template=template, s=s, km=0.7, kr=0.35, with_nnlo_counterterm=True)
     theory()
@@ -458,6 +462,10 @@ def test_pybird():
     ax.set_ylabel(r'$s^{2} \Delta \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
     ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
     plt.show()
+
+    for eft_basis in ['westcoast', 'eastcoast']:
+        theory.init.update(eft_basis=eft_basis)
+        theory()
 
 
 def test_folps():
@@ -790,12 +798,12 @@ if __name__ == '__main__':
     setup_logging()
 
     #test_velocileptors()
-    #test_pybird()
+    test_pybird()
     #test_folps()
     #test_params()
     #test_integ()
     #test_templates()
-    test_bao()
+    #test_bao()
     #test_flexible_bao()
     #test_full_shape()
     #test_png()

@@ -14,6 +14,7 @@ class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
 
     """Base class for perturbation theory matter power spectrum multipoles."""
     _default_options = dict()
+    _klim = (1e-4, 10., 3000)
 
     def initialize(self, *args, template=None, **kwargs):
         self.options = self._default_options.copy()
@@ -23,17 +24,18 @@ class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         if template is None:
             template = DirectPowerSpectrumTemplate()
         self.template = template
-        kin = np.geomspace(min(1e-3, self.k[0] / 2, self.template.init.get('k', [1.])[0]), max(1., self.k[-1] * 2, self.template.init.get('k', [0.])[0]), 3000)  # margin for AP effect
+        kin = np.geomspace(min(self._klim[0], self.k[0] / 2, self.template.init.get('k', [1.])[0]), max(self._klim[1], self.k[-1] * 2, self.template.init.get('k', [0.])[0]), self._klim[2])  # margin for AP effect
         self.template.init.update(k=kin)
+        self.z = self.template.z
 
-    @property
-    def z(self):
-        return self.template.z
+    def calculate(self):
+        self.z = self.template.z
 
 
 class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipoles):
 
     _default_options = dict()
+    _klim = (1e-4, 10., 3000)
 
     def initialize(self, *args, template=None, **kwargs):
         self.options = self._default_options.copy()
@@ -43,12 +45,12 @@ class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipole
         if template is None:
             template = DirectPowerSpectrumTemplate()
         self.template = template
-        kin = np.geomspace(min(1e-3, 1 / self.s[-1] / 2, self.template.init.get('k', [1.])[0]), max(2., 1 / self.s[0] * 2, self.template.init.get('k', [0.])[0]), 3000)  # margin for AP effect
+        kin = np.geomspace(min(self._klim[0], 1 / self.s[-1] / 2, self.template.init.get('k', [1.])[0]), max(self._klim[1], 1 / self.s[0] * 2, self.template.init.get('k', [0.])[0]), self._klim[2])  # margin for AP effect
         self.template.init.update(k=kin)
+        self.z = self.template.z
 
-    @property
-    def z(self):
-        return self.template.z
+    def calculate(self):
+        self.z = self.template.z
 
 
 class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
@@ -77,11 +79,17 @@ class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
                 self.pt.init.update({name: kwargs.pop(name)})
         self.required_bias_params, self.optional_bias_params = {}, {}
         self.pt.init.update(kwargs)
+        for name in ['z', 'k', 'ells']:
+            setattr(self, name, getattr(self.pt, name))
         self.set_params()
 
     def set_params(self):
         self.pt.params.update(self.params.select(basename=self.pt.params.basenames()))
         self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
+
+    def calculate(self):
+        for name in ['z', 'k', 'ells']:
+            setattr(self, name, getattr(self.pt, name))
 
     def get(self):
         return self.power
@@ -89,18 +97,6 @@ class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
     @property
     def template(self):
         return self.pt.template
-
-    @property
-    def k(self):
-        return self.pt.k
-
-    @property
-    def z(self):
-        return self.pt.z
-
-    @property
-    def ells(self):
-        return self.pt.ells
 
     def __getstate__(self):
         state = {}
@@ -159,11 +155,17 @@ class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
                 self.pt.init.update({name: self.options[name]})
         self.required_bias_params, self.optional_bias_params = {}, {}
         self.pt.init.update(kwargs)
+        for name in ['z', 's', 'ells']:
+            setattr(self, name, getattr(self.pt, name))
         self.set_params()
 
     def set_params(self):
         self.pt.params.update(self.params.select(basename=self.pt.params.basenames()))
         self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
+
+    def calculate(self):
+        for name in ['z', 's', 'ells']:
+            setattr(self, name, getattr(self.pt, name))
 
     def get(self):
         return self.corr
@@ -171,18 +173,6 @@ class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
     @property
     def template(self):
         return self.pt.template
-
-    @property
-    def s(self):
-        return self.pt.s
-
-    @property
-    def z(self):
-        return self.pt.z
-
-    @property
-    def ells(self):
-        return self.pt.ells
 
     def __getstate__(self):
         state = {}
@@ -229,6 +219,13 @@ class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         if pt is not None: power.init.update(pt=pt)
         if template is not None: power.init.update(template=template)
         super(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles, self).initialize(*args, power=power, **kwargs)
+        for name in ['z', 'ells']:
+            setattr(self, name, getattr(self.power, name))
+
+    def calculate(self):
+        for name in ['z', 'ells']:
+            setattr(self, name, getattr(self.power, name))
+        super(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles, self).calculate()
 
     @property
     def pt(self):
@@ -237,10 +234,6 @@ class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
     @property
     def template(self):
         return self.power.template
-
-    @property
-    def z(self):
-        return self.power.z
 
     def get(self):
         return self.corr
@@ -272,6 +265,7 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
         super(SimpleTracerPowerSpectrumMultipoles, self).initialize(*args, template=template, mu=mu, method=method, **kwargs)
 
     def calculate(self, b1=1., sn0=0., sigmapar=0., sigmaper=0.):
+        super(SimpleTracerPowerSpectrumMultipoles, self).calculate()
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
         sigmanl2 = self.k[:, None]**2 * (sigmapar**2 * self.mu**2 + sigmaper**2 * (1. - self.mu**2))
@@ -310,6 +304,7 @@ class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPow
         #self.template.init.update(k=np.logspace(-4, 2, 1000))
 
     def calculate(self, sigmapar=0., sigmaper=0.):
+        super(KaiserPowerSpectrumMultipoles, self).calculate()
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
         sigmanl2 = kap**2 * (sigmapar**2 * muap**2 + sigmaper**2 * (1. - muap**2))
@@ -361,6 +356,7 @@ class KaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         super(KaiserTracerPowerSpectrumMultipoles, self).set_params()
 
     def calculate(self, b1=1., sn0=0.):
+        super(KaiserTracerPowerSpectrumMultipoles, self).calculate()
         sn0 = np.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * sn0 / self.nd
         self.power = b1**2 * self.pt.pktable['pk_dd'] + 2. * b1 * self.pt.pktable['pk_dt'] + self.pt.pktable['pk_tt'] + sn0
 
@@ -435,6 +431,7 @@ class BaseEFTLikeTracerPowerSpectrumMultipoles(object):
         super(BaseEFTLikeTracerPowerSpectrumMultipoles, self).set_params()
 
     def calculate(self, **params):
+        super(BaseEFTLikeTracerPowerSpectrumMultipoles, self).calculate()
         counterterm_values = jnp.array([params.pop(name, 0.) for name in self.counterterm_params])
         stochastic_values = jnp.array([params.pop(name, 0.) for name in self.stochastic_params]) / self.nd
         super(BaseEFTLikeTracerPowerSpectrumMultipoles, self).calculate(**params)
@@ -511,6 +508,7 @@ class TNSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerS
             raise ValueError('nloop must be 1 (1-loop)')
 
     def calculate(self):
+        super(TNSPowerSpectrumMultipoles, self).calculate()
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
 
@@ -705,6 +703,7 @@ class TNSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         super(TNSTracerPowerSpectrumMultipoles, self).set_params()
 
     def calculate(self, b1=1., b2=0., bs=0., b3=0., sn0=0.):
+        super(TNSTracerPowerSpectrumMultipoles, self).calculate()
         self.power = b1**2 * self.pt.pktable['pk_dd'] + 2. * b1 * self.pt.pktable['pk_dt'] + self.pt.pktable['pk_tt'] + sn0 / self.nd
         bs2 = bs - 4. / 7. * (b1 - 1.)
         b3nl = b3 + 32. / 315. * (b1 - 1.)
@@ -810,6 +809,7 @@ class BaseVelocileptorsTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMult
     _default_options = dict()
 
     def calculate(self, **params):
+        super(BaseVelocileptorsTracerPowerSpectrumMultipoles, self).calculate()
         pars = [params.get(name, value) for name, value in self.required_bias_params.items()]
         opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
         self.power = self.pt.combine_bias_terms_poles(pars, **opts, **self.options, nd=self.nd)
@@ -834,6 +834,7 @@ class BaseVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelation
     _default_options = dict()
 
     def calculate(self, **params):
+        super(BaseVelocileptorsTracerCorrelationFunctionMultipoles, self).calculate()
         pars = [params.get(name, value) for name, value in self.required_bias_params.items()]
         opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
         self.corr = self.pt.combine_bias_terms_poles(pars, **opts, **self.options)
@@ -848,6 +849,7 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
         super(LPTVelocileptorsPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
 
     def calculate(self):
+        super(LPTVelocileptorsPowerSpectrumMultipoles, self).calculate()
 
         def interp1d(x, y):
             return interpolate.interp1d(x, y, kind='cubic')
@@ -862,7 +864,7 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
         pktable = {0: self.pt.p0ktable, 2: self.pt.p2ktable, 4: self.pt.p4ktable}
         self.pktable = np.array([pktable[ell] for ell in self.ells])
 
-    def combine_bias_terms_poles(self, pars, nd=1e4):
+    def combine_bias_terms_poles(self, pars, nd=1e-4):
         # bias = [b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4]
         # pkells = self.pt.combine_bias_terms_pkell(bias)[1:]
         # return np.array([pkells[[0, 2, 4].index(ell)] for ell in self.ells])
@@ -916,9 +918,6 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
         if 2 not in self.ells: fix += ['alpha2', 'sn2']
         for name in fix: self.params[name].update(fixed=True)
 
-    def calculate(self, **params):
-        return super(LPTVelocileptorsTracerPowerSpectrumMultipoles, self).calculate(**params)
-
 
 class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
     """
@@ -963,6 +962,7 @@ class EPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpect
         self.template.init.update(with_now='peakaverage')
 
     def calculate(self):
+        super(EPTMomentsVelocileptorsPowerSpectrumMultipoles, self).calculate()
         from velocileptors.EPT.moment_expansion_fftw import MomentExpansion
         # default is kmin=1e-2, kmax=0.5, nk=100
         self.pt = MomentExpansion(self.template.k, self.template.pk_dd, pnw=self.template.pknow_dd, kmin=self.k[0], kmax=self.k[-1], nk=len(self.k), **self.options)
@@ -981,7 +981,7 @@ class EPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpect
         self.pt = MomentExpansion.__new__(MomentExpansion)
         self.pt.__dict__.update(state)
 
-    def combine_bias_terms_poles(self, pars, counterterm_c3=0, beyond_gauss=False, reduced=True, nd=1e4):
+    def combine_bias_terms_poles(self, pars, counterterm_c3=0, beyond_gauss=False, reduced=True, nd=1e-4):
         if beyond_gauss:
             if reduced:
                 b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn, sn2, sn4 = pars
@@ -1107,6 +1107,7 @@ class LPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpect
         super(LPTMomentsVelocileptorsPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method=method, **kwargs)
 
     def calculate(self):
+        super(LPTMomentsVelocileptorsPowerSpectrumMultipoles, self).calculate()
         from velocileptors.LPT.moment_expansion_fftw import MomentExpansion
         # default is kmin=5e-3, kmax=0.3, nk=50
         self.pt = MomentExpansion(self.template.k, self.template.pk_dd, kmin=self.k[0], kmax=self.k[-1], nk=len(self.k), **self.options)
@@ -1131,7 +1132,7 @@ class LPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpect
             if name in state:
                 setattr(self.pt, name, np.asarray(state[name]))
 
-    def combine_bias_terms_poles(self, pars, counterterm_c3=0, beyond_gauss=False, reduced=True, nd=1e4):
+    def combine_bias_terms_poles(self, pars, counterterm_c3=0, beyond_gauss=False, reduced=True, nd=1e-4):
         pt = self.pt
         kap, muap, f, pktable = pt.kap, pt.muap, pt.f, pt.pktable
         shape = kap.shape
@@ -1274,47 +1275,56 @@ class LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorre
 
 class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
-    _default_options = dict(nd=None, with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti')
+    _default_options = dict(km=0.7, kr=0.25, accboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=True, with_resum='full', eft_basis='eftoflss')
+    _klim = (1e-4, 11., 3000)  # numerical instability in pybird's fftlog at 10.
     _pt_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
                  'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol', 'bst']
 
-    def initialize(self, *args, shotnoise=1e4, **kwargs):
-        import pybird_dev as pybird
+    def initialize(self, *args, **kwargs):
         super(PyBirdPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
-        if self.options['nd'] is None: self.options['nd'] = 1. / shotnoise
-        # print(self.k[0] * 0.8, self.k[-1] * 1.2)
-        self.co = pybird.Common(halohalo=True, with_time=True, exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False,
-                                Nl=len(self.ells), kmin=self.k[0] * 0.8, kmax=self.k[-1] * 1.2, optiresum=self.options['with_resum'] == 'opti',
-                                nd=self.options['nd'], with_cf=False)
-        self.nonlinear = pybird.NonLinear(load=False, save=False, co=self.co)
-        self.resum = pybird.Resum(co=self.co)
-        self.nnlo_higher_derivative = self.nnlo_counterterm = None
-        if self.options['with_nnlo_higher_derivative']:
-            self.nnlo_higher_derivative = pybird.NNLO_higher_derivative(self.co.k, with_cf=False, co=self.co)
+        # self.co is fixed, so we can just export it in __getstate__
+        from pybird.common import Common
+        from pybird.nonlinear import NonLinear
+        from pybird.nnlo import NNLO_counterterm
+        from pybird.resum import Resum
+        from pybird.projection import Projection
+        # nd used by combine_bias_terms_poles only
+        #self.co = Common(Nl=len(self.ells), kmin=self.k[0] * 0.8, kmax=self.k[-1] * 1.2, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
+        self.co = Common(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.2, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
+                         eft_basis=self.options['eft_basis'], halohalo=True, with_cf=False,
+                         with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti',
+                         exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
+        self.nonlinear = NonLinear(load=False, save=False, fftbias=self.options['fftbias'], co=self.co)
+        self.resum = Resum(co=self.co)
+        self.nnlo_counterterm = None
         if self.options['with_nnlo_counterterm']:
-            self.nnlo_counterterm = pybird.NNLO_counterterm(co=self.co)
-        self.projection = pybird.Projection(self.k, Om_AP=0.3, z_AP=1., co=self.co)  # placeholders for Om_AP and z_AP, as we will provide q's
+            self.nnlo_counterterm = NNLO_counterterm(co=self.co)
+        self.projection = Projection(self.k, with_ap=True, H_fid=None, D_fid=None, co=self.co)  # placeholders for H_fid and D_fid, as we will provide q's
+        self.template.init.update(with_now='peakaverage')
 
     def calculate(self):
-        import pybird_dev as pybird
-        cosmo = {'k11': self.template.k, 'P11': self.template.pk_dd, 'f': self.template.f, 'DA': 1., 'H': 1.}
-        self.pt = pybird.Bird(cosmo, with_bias=False, eft_basis='eftoflss', with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
+        super(PyBirdPowerSpectrumMultipoles, self).calculate()
+        from pybird.bird import Bird
+        cosmo = {'kk': self.template.k, 'pk_lin': self.template.pk_dd, 'f': self.template.f, 'DA': 1., 'H': 1.}
+        self.pt = Bird(cosmo, with_bias=False, eft_basis=self.options['eft_basis'], with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
 
         if self.nnlo_counterterm is not None:  # we use smooth power spectrum since we don't want spurious BAO signals
-            self.nnlo_counterterm.Ps(self.pt, np.log(self.template.pknow_dd))
+            from scipy import interpolate
+            self.nnlo_counterterm.Ps(self.pt, interpolate.interp1d(np.log(self.template.k), np.log(self.template.pknow_dd), fill_value='extrapolate'))
 
         self.nonlinear.PsCf(self.pt)
         self.pt.setPsCfl()
 
         if self.options['with_resum']:
-            self.resum.Ps(self.pt)
+            self.resum.PsCf(self.pt, makeIR=True, makeQ=True, setIR=True, setPs=True, setCf=False)
 
         self.projection.AP(self.pt, q=(self.template.qper, self.template.qpar))
         self.projection.xdata(self.pt)
 
-    def combine_bias_terms_poles(self, **params):
-        from pybird_dev import bird
+    def combine_bias_terms_poles(self, params, nd=1e-4):
+        from pybird import bird
         bird.np = jnp
+        self.pt.co.nd = nd
         self.pt.setreducePslb(params, what='full')
         bird.np = np
         return self.pt.fullPs
@@ -1330,20 +1340,21 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         return state
 
     def __setstate__(self, state):
-        import pybird_dev as pybird
-        self.pt = pybird.Bird.__new__(pybird.Bird)
+        from pybird import bird
+        self.pt = bird.Bird.__new__(bird.Bird)
         self.pt.with_bias = False
         self.pt.__dict__.update(state)
 
     @classmethod
     def install(cls, installer):
-        installer.pip('git+https://github.com/adematti/pybird@dev')
+        installer.pip('git+https://github.com/adematti/pybird')
 
 
 class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     """
     Pybird tracer power spectrum multipoles.
-    Can be exactly marginalized over counterterms c*.
+    Can be exactly marginalized over counter terms and stochastic parameters c* and bias term b3*.
+    For the matter (unbiased) power spectrum, set b1=1, b2=1, b3=1 (eft_basis='eftoflss') and all other parameters to 0.
 
     Parameters
     ----------
@@ -1360,7 +1371,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         Shot noise (which is usually marginalized over).
 
     **kwargs : dict
-        Pybird options, defaults to: ``with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti', eft_basis='eftoflss'``.
+        Pybird options, defaults to: ``with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=True, with_resum='opti', eft_basis='eftoflss'``.
 
 
     Reference
@@ -1368,23 +1379,34 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     - https://arxiv.org/abs/2003.07956
     - https://github.com/pierrexyz/pybird
     """
-    _default_options = dict(with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=True, eft_basis='eftoflss')
+    _default_options = dict(with_nnlo_counterterm=False, with_stoch=True, eft_basis='eftoflss')
 
     def set_params(self):
-        self.required_bias_params = ['b1', 'b3', 'cct']
-        allowed_eft_basis = ['eftoflss', 'westcoast']
+        allowed_eft_basis = ['eftoflss', 'westcoast', 'eastcoast']
         if self.options['eft_basis'] not in allowed_eft_basis:
             raise ValueError('eft_basis must be one of {}'.format(allowed_eft_basis))
+        # in pybird:
+        # - westcoast: c2, c4 are b2p4, b2m4
+        # - eastcoast: b2t, b2g, b3g are bt2, bG2, bGamma3
+        if self.options['eft_basis'] == 'eftoflss':
+            self.required_bias_params = ['b1', 'b2', 'b3', 'b4']
         if self.options['eft_basis'] == 'westcoast':
-            self.required_bias_params += ['b2p4', 'b2m4']
+            self.required_bias_params = ['b1', 'b2p4', 'b3', 'b2m4']
+        if self.options['eft_basis'] == 'eastcoast':
+            self.required_bias_params = ['b1', 'b2t', 'b2g', 'b3g']
+        # now EFT parameters
+        if self.options['eft_basis'] in ['eftoflss', 'westcoast']:
+            self.required_bias_params += ['cct']
+            if len(self.ells) >= 2: self.required_bias_params += ['cr1', 'cr2']
+            if self.options['with_nnlo_counterterm']: self.required_bias_params += ['cr4', 'cr6']
         else:
-            self.required_bias_params += ['b2', 'b4']
-        if len(self.ells) >= 2: self.required_bias_params += ['cr1', 'cr2']
+            self.required_bias_params += ['c0']
+            if len(self.ells) >= 2: self.required_bias_params += ['c2', 'c4']
+            if self.options['with_nnlo_counterterm']: self.required_bias_params += ['ct']
+        # now shotnoise
         if self.options['with_stoch']:
             self.required_bias_params += ['ce0', 'ce1', 'ce2']
-        if self.options['with_nnlo_counterterm']:
-            self.required_bias_params += ['cr4', 'cr6']
-        default_values = {'b1': 1.6, 'b3': 0.}
+        default_values = {'b1': 1.6}
         self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
         self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
 
@@ -1392,56 +1414,67 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         if self.options['eft_basis'] == 'westcoast':
             params['b2'] = (params['b2p4'] + params['b2m4']) / 2.**0.5
             params['b4'] = (params.pop('b2p4') - params.pop('b2m4')) / 2.**0.5
+        elif self.options['eft_basis'] == 'eastcoast':
+            params['b2'] = params['b1'] + 7. / 2. * params['b2g']
+            params['b3'] = params['b1'] + 15. * params['b2g'] + 6. * params.pop('b3g')
+            params['b4'] = 1/2. * params.pop('b2t') - 7. / 2. * params.pop('b2g')
         return params
 
     def calculate(self, **params):
-        self.power = self.pt.combine_bias_terms_poles(**self.transform_params(**params))
+        super(PyBirdTracerPowerSpectrumMultipoles, self).calculate()
+        self.power = self.pt.combine_bias_terms_poles(self.transform_params(**params))
 
 
 class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
 
-    _default_options = dict(nd=None, with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti')
+    _default_options = dict(km=0.7, kr=0.25, accboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=True, with_resum='full', eft_basis='eftoflss')
+    _klim = (1e-4, 11., 3000)  # numerical instability in pybird's fftlog at 10.
     _pt_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
                  'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol']
 
-    def initialize(self, *args, shotnoise=1e4, **kwargs):
-        import pybird_dev as pybird
+    def initialize(self, *args, **kwargs):
         super(PyBirdCorrelationFunctionMultipoles, self).initialize(*args, **kwargs)
-        if self.options['nd'] is None: self.options['nd'] = 1. / shotnoise
-        self.co = pybird.Common(halohalo=True, with_time=True, exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False,
-                                Nl=len(self.ells), kmin=1e-3, kmax=0.25, optiresum=self.options['with_resum'] == 'opti',
-                                nd=self.options['nd'], with_cf=True, accboost=1.)
-        self.nonlinear = pybird.NonLinear(load=False, save=False, co=self.co)  # NFFT=256, fftbias=-1.6
-        self.resum = pybird.Resum(co=self.co)  # LambdaIR=.2, NFFT=192
-        self.nnlo_higher_derivative = self.nnlo_counterterm = None
-        if self.options['with_nnlo_higher_derivative']:
-            self.nnlo_higher_derivative = pybird.NNLO_higher_derivative(self.co.k, with_cf=True, co=self.co)
+        from pybird.common import Common
+        from pybird.nonlinear import NonLinear
+        from pybird.nnlo import NNLO_counterterm
+        from pybird.resum import Resum
+        from pybird.projection import Projection
+        # nd used by combine_bias_terms_poles only
+        self.co = Common(Nl=len(self.ells), kmin=1e-3, kmax=0.25, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
+                         eft_basis=self.options['eft_basis'], halohalo=True, with_cf=True,
+                         with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti',
+                         exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
+        self.nonlinear = NonLinear(load=False, save=False, fftbias=self.options['fftbias'], co=self.co)  # NFFT=256, fftbias=-1.6
+        self.resum = Resum(co=self.co)  # LambdaIR=.2, NFFT=192
+        self.nnlo_counterterm = None
         if self.options['with_nnlo_counterterm']:
-            self.nnlo_counterterm = pybird.NNLO_counterterm(co=self.co)
-        self.projection = pybird.Projection(self.s, Om_AP=0.3, z_AP=1., co=self.co)  # placeholders for Om_AP and z_AP, as we will provide q's
+            self.nnlo_counterterm = NNLO_counterterm(co=self.co)
+        self.projection = Projection(self.s, with_ap=True, H_fid=None, D_fid=None, co=self.co)  # placeholders for H_fid and D_fid, as we will provide q's
 
     def calculate(self):
-        import pybird_dev as pybird
-        cosmo = {'k11': self.template.k, 'P11': self.template.pk_dd, 'f': self.template.f, 'DA': 1., 'H': 1.}
-        self.pt = pybird.Bird(cosmo, with_bias=False, eft_basis='eftoflss', with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
+        super(PyBirdCorrelationFunctionMultipoles, self).calculate()
+        from pybird.bird import Bird
+        cosmo = {'kk': self.template.k, 'pk_lin': self.template.pk_dd, 'f': self.template.f, 'DA': 1., 'H': 1.}
+        self.pt = Bird(cosmo, with_bias=False, eft_basis=self.options['eft_basis'], with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
 
         if self.nnlo_counterterm is not None:  # we use smooth power spectrum since we don't want spurious BAO signals
-            assert np.allclose(self.template.k, self.pt.kin)
-            self.nnlo_counterterm.Cf(self.pt, np.log(self.template.pknow_dd))
+            from scipy import interpolate
+            self.nnlo_counterterm.Ps(self.pt, interpolate.interp1d(np.log(self.template.k), np.log(self.template.pknow_dd), fill_value='extrapolate'))
 
         self.nonlinear.PsCf(self.pt)
         self.pt.setPsCfl()
 
         if self.options['with_resum']:
-            self.resum.PsCf(self.pt)
+            self.resum.PsCf(self.pt, makeIR=True, makeQ=True, setIR=True, setPs=True, setCf=True)
 
         self.projection.AP(self.pt, q=(self.template.qper, self.template.qpar))
         self.projection.xdata(self.pt)
 
-    def combine_bias_terms_poles(self, **params):
-        from pybird_dev import bird
+    def combine_bias_terms_poles(self, params, nd=1e-4):
+        from pybird import bird
         bird.np = jnp
-        self.pt.setreduceCflb(params)
+        self.pt.co.nd = nd
+        self.pt.setreduceCflb(params, what='full')
         bird.np = np
         return self.pt.fullCf
 
@@ -1456,20 +1489,21 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
         return state
 
     def __setstate__(self, state):
-        import pybird_dev as pybird
-        self.pt = pybird.Bird.__new__(pybird.Bird)
+        from pybird import bird
+        self.pt = bird.Bird.__new__(bird.Bird)
         self.pt.with_bias = False
         self.pt.__dict__.update(state)
 
     @classmethod
     def install(cls, installer):
-        installer.pip('git+https://github.com/adematti/pybird@dev')
+        installer.pip('git+https://github.com/adematti/pybird')
 
 
 class PyBirdTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMultipoles):
     """
     Pybird tracer correlation function multipoles.
-    Can be exactly marginalized over counterterms c*.
+    Can be exactly marginalized over counter terms and stochastic parameters c* and bias term b3*.
+    For the matter (unbiased) correlation function, set b1=1, b2=1, b3=1 (eft_basis='eftoflss') and all other parameters to 0.
 
     Parameters
     ----------
@@ -1488,7 +1522,7 @@ class PyBirdTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMul
     **kwargs : dict
         Pybird options, defaults to: ``with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti', eft_basis='eftoflss'``.
     """
-    _default_options = dict(with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, eft_basis='eftoflss')
+    _default_options = dict(with_nnlo_counterterm=False, with_stoch=False, eft_basis='eftoflss')
 
     def set_params(self):
         return PyBirdTracerPowerSpectrumMultipoles.set_params(self)
@@ -1497,7 +1531,8 @@ class PyBirdTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMul
         return PyBirdTracerPowerSpectrumMultipoles.transform_params(self, **params)
 
     def calculate(self, **params):
-        self.corr = self.pt.combine_bias_terms_poles(**self.transform_params(**params))
+        super(PyBirdTracerCorrelationFunctionMultipoles, self).calculate()
+        self.corr = self.pt.combine_bias_terms_poles(self.transform_params(**params))
 
 
 class Namespace(object):
@@ -1517,6 +1552,7 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         FOLPS.Matrices()
 
     def calculate(self):
+        super(FOLPSPowerSpectrumMultipoles, self).calculate()
         import FOLPSnu as FOLPS
         # [z, omega_b, omega_cdm, omega_ncdm, h]
         # only used for neutrinos
@@ -1533,10 +1569,10 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         self.pt = Namespace(kap=kap, muap=muap, table=table,
                             table_now=table_now,
                             sigma2t=np.column_stack([FOLPS.Sigma2Total(kap[..., imu], muap[imu], table_now[..., imu]) for imu in range(len(self.mu))]),
-                            f=self.template.f, jac=jac)
+                            f=self.template.f0, jac=jac)
 
 
-    def combine_bias_terms_poles(self, pars, nd=1e4):
+    def combine_bias_terms_poles(self, pars, nd=1e-4):
         import FOLPSnu as FOLPS
         pars = list(pars) + [1. / nd]  # add shot noise
         b1 = pars[0]
@@ -1545,6 +1581,7 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         pars[3] = pars[3] + 32. / 315. * (b1 - 1.)
         k, mu = self.pt.kap, self.pt.muap
         fk = self.pt.table[1] * self.pt.f
+        #fk = self.pt.table[1] * FOLPS.f0
         pkl, pkl_now, sigma2t = self.pt.table[0], self.pt.table_now[0], self.pt.sigma2t
         pkmu = self.pt.jac * ((b1 + fk * mu**2)**2 * (pkl_now + np.exp(-k**2 * sigma2t)*(pkl - pkl_now)*(1 + k**2 * sigma2t))
                                + np.exp(-k**2 * sigma2t) * FOLPS.PEFTs(k, mu, pars, self.pt.table)
@@ -1572,7 +1609,9 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
 class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     """
     FOLPS tracer power spectrum multipoles.
-    Can be exactly marginalized over counterterms alpha* and sn*.
+    Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
+    Next-to-next-to-leading order parameter ctilde is renamed alpha6 (but does not match LPTVelocileptors's alpha6).
+    By default, bs and b3 are fixed to 0, following co-evolution.
 
     Parameters
     ----------
@@ -1600,8 +1639,13 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         default_values = {'b1': 1.6}
         self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
         self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
+        fix = []
+        if 4 not in self.ells: fix += ['alpha4']
+        if 2 not in self.ells: fix += ['alpha2', 'sn2']
+        for name in fix: self.params[name].update(fixed=True)
 
     def calculate(self, **params):
+        super(FOLPSTracerPowerSpectrumMultipoles, self).calculate()
         pars = [params.get(name, value) for name, value in self.required_bias_params.items()]
         opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
         self.power = self.pt.combine_bias_terms_poles(pars, **opts, **self.options, nd=self.nd)
@@ -1610,7 +1654,9 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 class FOLPSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
     """
     FOLPS tracer correlation function multipoles.
-    Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn*.
+    Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
+    Next-to-next-to-leading order parameter ctilde is renamed alpha6 (but does not match LPTVelocileptors's alpha6).
+    By default, bs and b3 are fixed to 0, following co-evolution.
 
     Parameters
     ----------

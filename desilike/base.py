@@ -885,8 +885,8 @@ class BaseCalculator(BaseClass):
         try:
             return object.__getattribute__(self, name)
         except AttributeError as exc:
-            raise AttributeError('calculator {} has no attribute {};'
-                                 'have you run any calculation already by calling this calculator or calculators'
+            raise AttributeError('calculator {} has no attribute {}; '
+                                 'have you run any calculation already by calling this calculator or calculators '
                                  'that depend on it (typically, a likelihood?)'.format(self.__class__.__name__, name)) from exc
 
     def __getstate__(self):

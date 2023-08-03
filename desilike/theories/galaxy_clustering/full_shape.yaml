@@ -1149,20 +1149,6 @@ params:
     ref:
       limits: [-1., 1.]
     latex: b_{4}
-  # west coast
-  b2p4:
-    prior:
-      limits: [-10., 10.]
-    ref:
-      limits: [-1., 1.]
-    latex: '(b_{2} + b_{4})/\sqrt{2}'
-  b2m4:
-    prior:
-      limits: [-10., 10.]
-    ref:
-      limits: [-1., 1.]
-    latex: '(b_{2} - b_{4})/\sqrt{2}'
-    fixed: True
   cct:
     prior:
       dist: norm
@@ -1199,7 +1185,50 @@ params:
       loc: 0.
       scale: 100.
     latex: c_{e, []}
-
+  # west coast
+  b2p4:
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: '(b_{2} + b_{4})/\sqrt{2}'
+  b2m4:
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: '(b_{2} - b_{4})/\sqrt{2}'
+  # east coast
+  b2t:
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: 'b_{2t}'
+  b2g:
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: 'b_{2g}'
+  b3g:
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: 'b_{2g}'
+  c[:5:2]:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{[]}
+  ct:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{t}
 ---
 
 class: PyBirdTracerCorrelationFunctionMultipoles
@@ -1233,16 +1262,6 @@ params:
     ref:
       limits: [-1., 1.]
     latex: b_{4}
-  # west coast
-  b2p4:
-    prior:
-      limits: [-10., 10.]
-    latex: '(b_{2} + b_{4})/\sqrt{2}'
-  b2m4:
-    prior:
-      limits: [-10., 10.]
-    latex: '(b_{2} - b_{4})/\sqrt{2}'
-    fixed: True
   cct:
     prior:
       dist: norm
@@ -1279,7 +1298,50 @@ params:
       loc: 0.
       scale: 100.
     latex: c_{e, []}
-
+  # west coast
+  b2p4:
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: '(b_{2} + b_{4})/\sqrt{2}'
+  b2m4:
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: '(b_{2} - b_{4})/\sqrt{2}'
+  # east coast
+  b2t:
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: 'b_{2t}'
+  b2g:
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: 'b_{2g}'
+  b3g:
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: 'b_{2g}'
+  c[:5:2]:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{[]}
+  ct:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{t}
 ---
 
 class: FOLPSTracerPowerSpectrumMultipoles

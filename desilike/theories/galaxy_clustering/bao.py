@@ -28,10 +28,10 @@ class BaseBAOWigglesPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         if template is None:
             template = BAOPowerSpectrumTemplate()
         self.template = template
+        self.z = self.template.z
 
-    @property
-    def z(self):
-        return self.template.z
+    def calculate(self):
+        self.z = self.template.z
 
 
 class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
@@ -49,6 +49,7 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
         self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
 
     def calculate(self, b1=1., sigmas=0., sigmapar=9., sigmaper=6.):
+        super(DampedBAOWigglesPowerSpectrumMultipoles, self).calculate()
         f = self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.template.pknow_dd_interpolator(kap)
@@ -68,6 +69,7 @@ class SimpleBAOWigglesPowerSpectrumMultipoles(DampedBAOWigglesPowerSpectrumMulti
     with scaling parameters.
     """
     def calculate(self, b1=1., sigmas=0., sigmapar=9., sigmaper=6.):
+        super(SimpleBAOWigglesPowerSpectrumMultipoles, self).calculate()
         f = self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.template.pknow_dd_interpolator(self.k)[:, None]
@@ -101,8 +103,10 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
         self.template.runtime_info.initialize()
         if external_cosmo(self.template.cosmo):
             self.cosmo_requires = {'thermodynamics': {'rs_drag': None}}
+        self.z = self.template.z
 
     def calculate(self):
+        self.z = self.template.z
         k = self.template.pknow_dd_interpolator.k
         pklin = self.template.pknow_dd_interpolator.pk
         q = self.template.cosmo.rs_drag
@@ -140,10 +144,6 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
             resummed_wiggles += damping_ss * sk**2
         return resummed_wiggles * wiggles
 
-    @property
-    def z(self):
-        return self.template.z
-
 
 class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
     r"""
@@ -161,6 +161,7 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
                                                     smoothing_radius=self.smoothing_radius)
 
     def calculate(self, b1=1., sigmas=0., **kwargs):
+        super(ResummedBAOWigglesPowerSpectrumMultipoles, self).calculate()
         f = self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.template.pknow_dd_interpolator(kap)
@@ -207,6 +208,8 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
         self.pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
         self.pt.init.update(k=self.k, ells=self.ells, **kwargs)
         self.kp = 0.1  # pivot to normalize broadband terms
+        for name in ['z', 'k', 'ells']:
+            setattr(self, name, getattr(self.pt, name))
         self.set_params()
 
     def set_params(self):
@@ -245,16 +248,14 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
         self.params = self.params.select(basename=self.broadband_params)
 
     def calculate(self, **params):
+        for name in ['z', 'k', 'ells']:
+            setattr(self, name, getattr(self.pt, name))
         values = jnp.array([params.get(name, 0.) for name in self.broadband_params])
         self.power = self.pt.power + self.broadband_matrix.dot(values)
 
     @property
     def template(self):
         return self.pt.template
-
-    @property
-    def z(self):
-        return self.pt.z
 
     def get(self):
         return self.power
@@ -399,14 +400,17 @@ class BaseBAOWigglesCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionF
     def initialize(self, s=None, ells=(0, 2), **kwargs):
         power = globals()[self.__class__.__name__.replace('CorrelationFunction', 'PowerSpectrum')](**kwargs)
         super(BaseBAOWigglesCorrelationFunctionMultipoles, self).initialize(s=s, ells=ells, power=power)
+        for name in ['z', 'ells']:
+            setattr(self, name, getattr(self.power, name))
+
+    def calculate(self):
+        for name in ['z', 'ells']:
+            setattr(self, name, getattr(self.power, name))
+        super(BaseBAOWigglesCorrelationFunctionMultipoles, self).calculate()
 
     @property
     def template(self):
         return self.power.template
-
-    @property
-    def z(self):
-        return self.power.z
 
     def get(self):
         return self.corr
@@ -437,6 +441,8 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
         self.pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
         self.pt.init.update(s=self.s, ells=self.ells, **kwargs)
         self.sp = 60.  # pivot to normalize broadband terms
+        for name in ['z', 's', 'ells']:
+            setattr(self, name, getattr(self.pt, name))
         self.set_params()
 
     def set_params(self):
@@ -445,6 +451,8 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
         del self.k, self.kp
 
     def calculate(self, **params):
+        for name in ['z', 's', 'ells']:
+            setattr(self, name, getattr(self.pt, name))
         values = jnp.array([params.get(name, 0.) for name in self.broadband_params])
         self.corr = self.pt.corr + self.broadband_matrix.dot(values)
 
@@ -455,10 +463,6 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
     @wiggle.setter
     def wiggle(self, wiggle):
         self.pt.wiggle = wiggle
-
-    @property
-    def z(self):
-        return self.pt.z
 
     def get(self):
         return self.corr
@@ -761,6 +765,7 @@ class FlexibleBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectru
                 raise ValueError('Unknown kernel: {}'.format(kernel))
 
     def calculate(self, b1=1.5, **kwargs):
+        super(FlexibleBAOWigglesTracerPowerSpectrumMultipoles, self).calculate()
         f = self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.template.pknow_dd_interpolator(self.k)
@@ -780,6 +785,33 @@ class FlexibleBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectru
     def get(self):
         return self.power
 
+    @plotting.plotter
+    def plot(self):
+        """
+        Plot power spectrum multipoles.
+
+        Parameters
+        ----------
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+        """
+        from matplotlib import pyplot as plt
+        ax = plt.gca()
+        for ill, ell in enumerate(self.ells):
+            ax.plot(self.k, self.k * self.power[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.grid(True)
+        ax.legend()
+        ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        return ax
+
 
 class FlexibleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesCorrelationFunctionMultipoles):
 
@@ -792,3 +824,30 @@ class FlexibleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesCorrel
             if kernel != 'power' and (self.kp[base] is None or np.ndim(self.kp[base]) == 0):
                 self.kp[base] = (self.kin[0], 0.3, self.kp[base])
         self.power.init.update(broadband_kernel=self.broadband_kernel, kp=self.kp)
+
+    @plotting.plotter
+    def plot(self):
+        """
+        Plot correlation function multipoles.
+
+        Parameters
+        ----------
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+        """
+        from matplotlib import pyplot as plt
+        fig, ax = plt.subplots()
+        for ill, ell in enumerate(self.ells):
+            ax.plot(self.s, self.s**2 * self.corr[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.grid(True)
+        ax.legend()
+        ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
+        return ax

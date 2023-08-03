@@ -80,33 +80,30 @@ def test_bao():
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles, FlexibleBAOWigglesTracerCorrelationFunctionMultipoles
     from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate
 
-    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
-    print(theory.runtime_info.pipeline.params)
-    theory(qpar=1.1, sigmapar=3.)
-    theory = ResummedBAOWigglesTracerPowerSpectrumMultipoles()
-    print(theory.runtime_info.pipeline.params)
-    theory(qpar=1.1, sigmas=3.)
-    theory = FlexibleBAOWigglesTracerPowerSpectrumMultipoles()
-    print(theory.runtime_info.pipeline.params)
-    theory(qpar=1.1)
-    theory = DampedBAOWigglesTracerCorrelationFunctionMultipoles()
-    print(theory.runtime_info.pipeline.params)
-    theory(qpar=1.1, sigmapar=3.)
-    theory = ResummedBAOWigglesTracerCorrelationFunctionMultipoles()
-    print(theory.runtime_info.pipeline.params)
-    theory(qpar=1.1, sigmas=3.)
-    theory = FlexibleBAOWigglesTracerCorrelationFunctionMultipoles()
-    print(theory.runtime_info.pipeline.params)
-    theory(qpar=1.1)
+    def test(theory):
+        print(theory.runtime_info.pipeline.params)
+        theory(qpar=1.1)
+        theory.z, theory.ells
+        if 'PowerSpectrum' in theory.__class__.__name__:
+            theory.k
+        else:
+            theory.s
+        theory.plot(show=True)
+        template = BAOPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso', only_now=True)
+        theory.init.update(template=template)
+        theory(qiso=0.9)
+        template = StandardPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso', with_now='peakaverage')
+        theory.init.update(template=template)
+        theory()
+        template.pk_dd
 
-    template = BAOPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso', only_now=True)
-    theory.init.update(template=template)
-    theory(qiso=0.9)
 
-    template = StandardPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso', with_now='peakaverage')
-    theory.init.update(template=template)
-    theory()
-    template.pk_dd
+    test(DampedBAOWigglesTracerPowerSpectrumMultipoles())
+    test(ResummedBAOWigglesTracerPowerSpectrumMultipoles())
+    test(FlexibleBAOWigglesTracerPowerSpectrumMultipoles())
+    test(DampedBAOWigglesTracerCorrelationFunctionMultipoles())
+    test(ResummedBAOWigglesTracerCorrelationFunctionMultipoles())
+    test(FlexibleBAOWigglesTracerCorrelationFunctionMultipoles())
 
 
 def test_flexible_bao():
@@ -150,13 +147,12 @@ def test_full_shape():
                 observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20, 150, 4], 2: [20, 150, 4], 4: [20, 150, 4]},
                                                                            data={}, theory=theory)
             observable()
+            theory.plot(show=True)
             cov = np.eye(observable.flatdata.shape[0])
             likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
-            #for param in likelihood.all_params.select(basename=['alpha*', 'sn*', 'c*']):
-            #    param.update(derived='.best')
+            for param in likelihood.all_params.select(basename=['alpha*', 'sn*', 'c*']):
+                param.update(derived='.best')
             likelihood()
-            theory.plot(show=True)
-            return
         from desilike.emulators import Emulator, TaylorEmulatorEngine
         #theory()
         bak = theory()
@@ -346,6 +342,172 @@ def test_full_shape():
     theory = FOLPSTracerCorrelationFunctionMultipoles()
     test_emulator_likelihood(theory)
     theory(logA=3.04, b1=1.).shape
+
+
+def test_velocileptors():
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
+    z = 0.5
+    template = DirectPowerSpectrumTemplate(z=z)
+    k = np.arange(0.005, 0.3, 0.01)
+    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, k=k, shotnoise=1.)
+    biases = [0.71, 0.26, 0.67, 0.52]
+    cterms = [-3.4, -1.7, 6.5, 0]
+    stoch = [1500., -1900., 0]
+    pars = biases + cterms + stoch
+    names = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2', 'sn4']
+    power = theory(**dict(zip(names, pars)))
+
+    from velocileptors.LPT.lpt_rsd_fftw import LPT_RSD
+    options = dict(kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, threads=1, jn=5)
+    lpt = LPT_RSD(template.k, template.pk_dd, **options)
+    lpt.make_pltable(template.f, kv=k, nmax=4, apar=1, aperp=1)
+    ref = lpt.combine_bias_terms_pkell(pars)[1:]
+
+    from matplotlib import pyplot as plt
+    ax = plt.gca()
+    for ill, ell in enumerate((0, 2, 4)):
+        ax.plot(k, k * ref[ill], color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.plot(k, k * power[ill], color='C{:d}'.format(ill), ls='--')
+        #ax.plot(k, k * (ref[ill] / power[ill] - 1.), color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
+    ax.set_xlim([k[0], k[-1]])
+    ax.grid(True)
+    ax.legend()
+    ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+    ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+    plt.show()
+
+    stoch = [0, 0, 0]
+    pars = biases + cterms + stoch
+    lpt.make_pltable(template.f, apar=1, aperp=1, kmin=5e-3, kmax=1.0, nk=60, nmax=4)
+    ref = lpt.combine_bias_terms_xiell(pars)
+    s = ref[0][0]
+    s = s[(s > 0.) & (s < 150.)]
+    theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template, s=s)
+    corr = theory(**dict(zip(names, pars)))
+
+    ax = plt.gca()
+    for ill, ell in enumerate((0, 2, 4)):
+        ax.plot(ref[ill][0], ref[ill][0]**2 * ref[ill][1], color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.plot(s, s**2 * corr[ill], color='C{:d}'.format(ill), ls='--')
+    ax.set_xlim([s[0], s[-1]])
+    ax.set_ylim(-80., 80.)
+    ax.grid(True)
+    ax.legend()
+    ax.set_ylabel(r'$s^{2} \Delta \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
+    ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
+    plt.show()
+
+
+def test_pybird():
+    from matplotlib import pyplot as plt
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles
+    z = 0.5
+    template = DirectPowerSpectrumTemplate(z=z)
+    k = np.arange(0.005, 0.3, 0.01)
+    shotnoise = 1e4
+    theory = PyBirdTracerPowerSpectrumMultipoles(template=template, k=k, shotnoise=shotnoise, km=0.7, kr=0.35, with_nnlo_counterterm=True)
+    theory()
+    kk, pk_lin, psmooth, f = template.k, template.pk_dd, template.pknow_dd, template.f
+    eft_params = {'b1': 1.9535, 'b3': -0.3948, 'cct': 0.1839, 'cr1': -0.8414, 'cr2': -0.8084,
+                  'ce0': 1.5045, 'ce1': 0.0, 'ce2': -1.6803, 'b2': 0.4146, 'b4': 0.4146, 'cr4': 10., 'cr6': 20.}
+    from pybird.correlator import Correlator
+    c = Correlator()
+    c.set({'output': 'bPk', 'multipole': 3, 'kmin': k[0] * 0.8, 'kmax': k[-1] * 1.2, 'xdata': k, 'with_bias': False,
+           'km': 0.7, 'kr': 0.35, 'nd': 1. / shotnoise, 'eft_basis': 'eftoflss', 'with_stoch': True, 'with_nnlo_counterterm': True})
+    c.compute({'kk': kk, 'pk_lin': pk_lin, 'Psmooth': psmooth, 'f': f})
+    ref = c.get(eft_params)
+    #c.compute({'kk': kk, 'pk_lin': pk_lin, 'Psmooth': psmooth, 'f': f, 'bias': eft_params})
+    #ref = c.get()
+    power = theory(**eft_params)
+
+    ax = plt.gca()
+    for ill, ell in enumerate((0, 2, 4)):
+        ax.plot(k, k * ref[ill], color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.plot(k, k * power[ill], color='C{:d}'.format(ill), ls='--')
+        #ax.plot(k, k * (ref[ill] / power[ill] - 1.), color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
+    ax.set_xlim([k[0], k[-1]])
+    ax.grid(True)
+    ax.legend()
+    ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+    ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+    plt.show()
+
+    s = np.arange(10, 200, 5.)
+    theory = PyBirdTracerCorrelationFunctionMultipoles(template=template, s=s, km=0.7, kr=0.35, with_nnlo_counterterm=True)
+    theory()
+    kk, pk_lin, psmooth, f = template.k, template.pk_dd, template.pknow_dd, template.f
+    from pybird.correlator import Correlator
+    c = Correlator()
+    c.set({'output': 'bCf', 'multipole': 3, 'kmin': k[0] * 0.8, 'kmax': k[-1] * 1.2, 'xdata': s, 'with_bias': False,
+           'km': 0.7, 'kr': 0.35, 'eft_basis': 'eftoflss', 'with_stoch': True, 'with_nnlo_counterterm': True})
+    c.compute({'kk': kk, 'pk_lin': pk_lin, 'Psmooth': psmooth, 'f': f})
+    eft_params = {'b1': 1.9535, 'b3': -0.3948, 'cct': 0.1839, 'cr1': -0.8414, 'cr2': -0.8084,
+                  'b2': 0.4146, 'b4': 0.4146, 'cr4': 10., 'cr6': 20.}
+    ref = c.get(eft_params)
+    #c.compute({'kk': kk, 'pk_lin': pk_lin, 'Psmooth': psmooth, 'f': f, 'bias': eft_params})
+    #ref = c.get()
+    corr = theory(**eft_params)
+
+    ax = plt.gca()
+    for ill, ell in enumerate((0, 2, 4)):
+        ax.plot(s, s**2 * ref[ill], color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.plot(s, s**2 * corr[ill], color='C{:d}'.format(ill), ls='--')
+    ax.set_xlim([s[0], s[-1]])
+    ax.grid(True)
+    ax.legend()
+    ax.set_ylabel(r'$s^{2} \Delta \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
+    ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
+    plt.show()
+
+
+def test_folps():
+    from matplotlib import pyplot as plt
+    z_pk = 0.5
+    k = np.logspace(np.log10(0.01), np.log10(0.3), num=50) # array of k_ev in [h/Mpc]
+    PshotP = 1. / 0.0002118763
+    # bias parameters
+    b1 = 1.645
+    b2 = -0.46
+    bs2 = -4./7*(b1 - 1)
+    b3nl = 32./315*(b1 - 1)
+    # EFT parameters
+    alpha0 = 3                 #units: [Mpc/h]^2
+    alpha2 = -28.9             #units: [Mpc/h]^2
+    alpha4 = 0.0               #units: [Mpc/h]^2
+    ctilde = 0.0               #units: [Mpc/h]^4
+    # Stochatics parameters
+    alphashot0 = 0.08
+    alphashot2 = -8.1          #units: [Mpc/h]^2
+    NuisanParams = [b1, b2, bs2, b3nl, alpha0, alpha2, alpha4, ctilde, alphashot0, alphashot2, PshotP]
+
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, FOLPSTracerPowerSpectrumMultipoles
+    template = DirectPowerSpectrumTemplate(z=z_pk)
+    theory = FOLPSTracerPowerSpectrumMultipoles(template=template, k=k, shotnoise=PshotP, mu=3)
+    theory(m_ncdm=0.2)
+    cosmo = template.cosmo
+    omega_b, omega_cdm, omega_ncdm, h = cosmo['omega_b'], cosmo['omega_cdm'], cosmo['omega_ncdm_tot'], cosmo['h']
+    CosmoParams = [z_pk, omega_b, omega_cdm, omega_ncdm, h]
+    inputpkT = [template.k, template.pk_dd]
+
+    import FOLPSnu as FOLPS
+    matrices = FOLPS.Matrices()
+    nonlinear = FOLPS.NonLinear(inputpkT, CosmoParams)
+    ref = FOLPS.RSDmultipoles(k, NuisanParams, AP=False)[1:]
+    print(theory.template.f0 / FOLPS.f0)
+    power = theory(b1=b1, b2=b2, bs=bs2 + 4./7*(b1 - 1), b3=b3nl - 32./315*(b1 - 1),
+                   alpha0=alpha0, alpha2=alpha2, alpha4=alpha4, alpha6=ctilde, sn0=alphashot0, sn2=alphashot2)
+
+    ax = plt.gca()
+    for ill, ell in enumerate((0, 2, 4)):
+        ax.plot(k, k * ref[ill], color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.plot(k, k * power[ill], color='C{:d}'.format(ill), ls='--')
+        #ax.plot(k, k * (ref[ill] / power[ill] - 1.), color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
+    ax.set_xlim([k[0], k[-1]])
+    ax.grid(True)
+    ax.legend()
+    ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+    ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+    plt.show()
 
 
 def test_params():
@@ -627,12 +789,15 @@ if __name__ == '__main__':
 
     setup_logging()
 
+    #test_velocileptors()
+    #test_pybird()
+    #test_folps()
     #test_params()
     #test_integ()
     #test_templates()
-    #test_bao()
+    test_bao()
     #test_flexible_bao()
-    test_full_shape()
+    #test_full_shape()
     #test_png()
     #test_pk_to_xi()
     #test_ap_diff()

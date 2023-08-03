@@ -2,6 +2,7 @@ import numpy as np
 from scipy import special
 
 from desilike.jax import numpy as jnp
+from desilike.jax import InterpolatedUnivariateSpline
 from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo, constants
 from desilike.base import BaseCalculator
 from desilike import plotting, utils
@@ -46,9 +47,13 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
     """Base class for theory correlation function from power spectrum multipoles."""
     _with_namespace = True
 
-    def initialize(self, s=None, power=None, **kwargs):
+    def initialize(self, s=None, power=None, interp_order=1, **kwargs):
         if s is None: s = np.linspace(20., 200, 101)
         self.s = np.array(s, dtype='f8')
+        self.interp_order = int(interp_order)
+        allowed_interp_order = [1, 2, 3]
+        if self.interp_order not in allowed_interp_order:
+            raise ValueError('interp_order must be one of {}'.format(allowed_interp_order))
         if power is None:
             from .full_shape import KaiserTracerPowerSpectrumMultipoles
             power = KaiserTracerPowerSpectrumMultipoles()
@@ -57,7 +62,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         self.power.init.update(**kwargs)
         kin = self.power.init.get('k', None)
         # Important to have high enough sampling, otherwise wiggles can be seen at small s
-        if kin is None: self.kin = np.geomspace(self.k[0], 0.6, 300)
+        if kin is None: self.kin = np.geomspace(self.k[0], 0.6, int(300. / self.interp_order + 0.5))
         else: self.kin = np.array(kin, dtype='f8')
         self.power.init['k'] = self.kin
         mask = self.k > self.kin[-1]
@@ -66,6 +71,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         self.k_mid = self.k[~mask]
         self.power.init.params = self.init.params.copy()
         self.init.params.clear()
+        self.ells = self.power.ells
         from cosmoprimo import PowerToCorrelation
         self.fftlog = PowerToCorrelation(self.k, ell=self.ells, q=0, lowring=True)
 
@@ -73,13 +79,13 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         power = []
         for pk in self.power.power:
             slope_high = (pk[-1] - pk[-2]) / np.log10(self.kin[-1] / self.kin[-2])
-            power.append(jnp.concatenate([jnp.interp(np.log10(self.k_mid), np.log10(self.kin), pk), (pk[-1] + slope_high * self.k_high) * self.pad_high], axis=-1))
+            if self.interp_order == 1:
+                interp = jnp.interp(np.log10(self.k_mid), np.log10(self.kin), pk)
+            else:
+                interp = InterpolatedUnivariateSpline(np.log10(self.kin), pk, k=self.interp_order)(np.log10(self.k_mid))
+            power.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.k_high) * self.pad_high], axis=-1))
         s, corr = self.fftlog(jnp.vstack(power))
         self.corr = jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
-
-    @property
-    def ells(self):
-        return self.power.ells
 
     @plotting.plotter
     def plot(self):

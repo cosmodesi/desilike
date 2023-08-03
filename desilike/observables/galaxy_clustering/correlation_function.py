@@ -77,9 +77,18 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
     def load_data(self, data=None, slim=None, ignore_nan=False):
 
         def load_data(fn):
-            from pycorr import TwoPointCorrelationFunction
             with utils.LoggingContext(level='warning'):
-                toret = TwoPointCorrelationFunction.load(fn)
+                try:
+                    from pycorr import TwoPointCorrelationFunction
+                    toret = TwoPointCorrelationFunction.load(fn)
+                except:
+                    from pypower import MeshFFTCorr, CorrelationFunctionMultipoles
+                    with utils.LoggingContext(level='warning'):
+                        toret = MeshFFTCorr.load(fn)
+                        if hasattr(toret, 'poles'):
+                            toret = toret.poles
+                        else:
+                            toret = CorrelationFunctionMultipoles.load(fn)
             return toret
 
         def lim_data(corr, slim=slim):
@@ -91,7 +100,11 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
                 ells.append(ell)
                 list_s.append(corr_slice.sepavg())
                 list_sedges.append(corr_slice.edges[0])
-                list_data.append(corr_slice(ells=ell, return_std=False, ignore_nan=ignore_nan))
+                try:
+                    d = corr_slice(ell=ell, return_std=False, ignore_nan=ignore_nan)  # pycorr
+                except:
+                    d = corr_slice(ell=ell)  # pypower
+                list_data.append(d)
             return list_s, list_sedges, ells, list_data
 
         def load_all(lmocks):

@@ -242,6 +242,7 @@ class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
 class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
     r"""
     Kaiser tracer power spectrum multipoles, with fixed damping, essentially used for Fisher forecasts.
+    For the matter (unbiased) power spectrum, set b1=1 and sn0=0.
 
     Parameters
     ----------
@@ -336,6 +337,7 @@ class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPow
 class KaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     r"""
     Kaiser tracer power spectrum multipoles.
+    For the matter (unbiased) power spectrum, set b1=1 and sn0=0.
 
     Parameters
     ----------
@@ -364,6 +366,7 @@ class KaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 class KaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
     r"""
     Kaiser tracer correlation function multipoles.
+    For the matter (unbiased) correlation function, set b1=1 and sn0=0.
 
     Parameters
     ----------
@@ -384,7 +387,7 @@ class KaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFro
 class BaseEFTLikeTracerPowerSpectrumMultipoles(object):
     r"""
     Base class for tracer power spectrum multipoles with EFT-like counter and stochastic terms.
-    Can be exactly marginalized over counter terms and stochastic terms ct*, sn*.
+    Can be exactly marginalized over counter terms and stochastic parameters ct*, sn*.
     """
     def initialize(self, *args, **kwargs):
         self.pt_cls = self.__class__.__name__.replace('EFTLike', '').replace('Tracer', '')
@@ -442,7 +445,7 @@ class BaseEFTLikeTracerPowerSpectrumMultipoles(object):
 class EFTLikeKaiserTracerPowerSpectrumMultipoles(BaseEFTLikeTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles):
     r"""
     Kaiser tracer power spectrum multipoles with EFT-like counter and stochastic terms.
-    Can be exactly marginalized over counter terms and stochastic terms ct*, sn*.
+    Can be exactly marginalized over counter terms and stochastic parameters ct*, sn*.
 
     Parameters
     ----------
@@ -463,7 +466,7 @@ class EFTLikeKaiserTracerPowerSpectrumMultipoles(BaseEFTLikeTracerPowerSpectrumM
 class EFTLikeKaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
     r"""
     EFT-like Kaiser tracer correlation function multipoles.
-    Can be exactly marginalized over counter terms and stochastic terms ct*, sn*.
+    Can be exactly marginalized over counter terms and stochastic parameters ct*, sn*.
 
     Parameters
     ----------
@@ -683,6 +686,7 @@ class TNSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerS
 class TNSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     r"""
     TNS tracer power spectrum multipoles.
+    For the matter (unbiased) power spectrum, set b1=1 and all other bias parameters to 0.
 
     Parameters
     ----------
@@ -720,6 +724,7 @@ class TNSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 class TNSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
     r"""
     TNS tracer correlation function multipoles.
+    For the matter (unbiased) correlation function, set b1=1 and all other bias parameters to 0.
 
     Parameters
     ----------
@@ -740,7 +745,8 @@ class TNSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPo
 class EFTLikeTNSTracerPowerSpectrumMultipoles(BaseEFTLikeTracerPowerSpectrumMultipoles, TNSTracerPowerSpectrumMultipoles):
     r"""
     TNS tracer power spectrum multipoles with EFT-like counter and stochastic terms.
-    Can be exactly marginalized over counter terms and stochastic terms ct*, sn*.
+    Can be exactly marginalized over counter terms and stochastic parameters ct*, sn*.
+    For the matter (unbiased) power spectrum, set b1=1 and all other bias parameters to 0.
 
     Parameters
     ----------
@@ -761,7 +767,8 @@ class EFTLikeTNSTracerPowerSpectrumMultipoles(BaseEFTLikeTracerPowerSpectrumMult
 class EFTLikeTNSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
     r"""
     TNS tracer correlation function multipoles with EFT-like counter and stochastic terms.
-    Can be exactly marginalized over counter terms and stochastic terms ct*, sn*.
+    Can be exactly marginalized over counter terms and stochastic parameters ct*, sn*.
+    For the matter (unbiased) correlation function, set b1=1 and all other bias parameters to 0.
 
     Parameters
     ----------
@@ -888,6 +895,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     """
     Velocileptors Lagrangian perturbation theory (LPT) tracer power spectrum multipoles.
     Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn*.
+    For the matter (unbiased) power spectrum, set all bias parameters to 0.
 
     Parameters
     ----------
@@ -923,6 +931,7 @@ class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationF
     """
     Velocileptors LPT tracer correlation function multipoles.
     Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn*.
+    For the matter (unbiased) correlation function, set all bias parameters to 0.
 
     Parameters
     ----------
@@ -1354,7 +1363,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     """
     Pybird tracer power spectrum multipoles.
     Can be exactly marginalized over counter terms and stochastic parameters c* and bias term b3*.
-    For the matter (unbiased) power spectrum, set b1=1, b2=1, b3=1 (eft_basis='eftoflss') and all other parameters to 0.
+    For the matter (unbiased) power spectrum, set b1=1, b2=1, b3=1 (eft_basis='eftoflss') and all other bias parameters to 0.
 
     Parameters
     ----------
@@ -1503,7 +1512,7 @@ class PyBirdTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMul
     """
     Pybird tracer correlation function multipoles.
     Can be exactly marginalized over counter terms and stochastic parameters c* and bias term b3*.
-    For the matter (unbiased) correlation function, set b1=1, b2=1, b3=1 (eft_basis='eftoflss') and all other parameters to 0.
+    For the matter (unbiased) correlation function, set b1=1, b2=1, b3=1 (eft_basis='eftoflss') and all other bias parameters to 0.
 
     Parameters
     ----------
@@ -1612,6 +1621,7 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
     Next-to-next-to-leading order parameter ctilde is renamed alpha6 (but does not match LPTVelocileptors's alpha6).
     By default, bs and b3 are fixed to 0, following co-evolution.
+    For the matter (unbiased) power spectrum, set b1=1 and all other bias parameters to 0.
 
     Parameters
     ----------
@@ -1657,6 +1667,7 @@ class FOLPSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFrom
     Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
     Next-to-next-to-leading order parameter ctilde is renamed alpha6 (but does not match LPTVelocileptors's alpha6).
     By default, bs and b3 are fixed to 0, following co-evolution.
+    For the matter (unbiased) correlation function, set b1=1 and all other bias parameters to 0.
 
     Parameters
     ----------

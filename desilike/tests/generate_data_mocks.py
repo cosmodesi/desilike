@@ -2,7 +2,7 @@ import os
 import numpy as np
 
 from cosmoprimo.fiducial import DESI
-from pypower import CatalogFFTPower, MeshFFTWindow, PowerSpectrumStatistics, BaseMatrix
+from pypower import CatalogFFTPower, MeshFFTWindow, PowerSpectrumStatistics, BaseMatrix, CatalogFFTCorr
 from pycorr import TwoPointCorrelationFunction
 
 from mockfactory import EulerianLinearMock, RandomBoxCatalog, setup_logging
@@ -19,7 +19,7 @@ f = cosmo.growth_rate(z)
 bias = 2.
 
 
-def run_box_mock(power_fn=None, corr_fn=None, unitary_amplitude=False, seed=42):
+def run_box_mock(power_fn=None, corr_fn=None, corr_fft_fn=None, unitary_amplitude=False, seed=42):
 
     # unitary_amplitude forces amplitude to 1
     mock = EulerianLinearMock(pklin, nmesh=nmesh, boxsize=boxsize, boxcenter=boxcenter, seed=seed, unitary_amplitude=unitary_amplitude)
@@ -32,14 +32,20 @@ def run_box_mock(power_fn=None, corr_fn=None, unitary_amplitude=False, seed=42):
     if power_fn:
         poles = CatalogFFTPower(data_positions1=data['Position'], data_weights1=data['Weight'], edges={'step': 0.005},
                                 los=los, boxsize=boxsize, boxcenter=boxcenter, nmesh=100,
-                                resampler='tsc', interlacing=2,
-                                position_type='pos', mpicomm=data.mpicomm).poles
+                                resampler='tsc', interlacing=2, position_type='pos', mpicomm=data.mpicomm).poles
         poles.save(power_fn)
+
     if corr_fn:
         corr = TwoPointCorrelationFunction(mode='smu', data_positions1=data['Position'], data_weights1=data['Weight'],
                                            edges=(np.linspace(0., 80., 81), np.linspace(-1., 1., 101)), los=los, boxsize=boxsize,
                                            position_type='pos', mpicomm=data.mpicomm, mpiroot=None, nthreads=1)
         corr.save(corr_fn)
+
+    if corr_fft_fn:
+        corr = CatalogFFTCorr(data_positions1=data['Position'], data_weights1=data['Weight'], edges=np.linspace(0., 160., 81),
+                              los=los, boxsize=boxsize, boxcenter=boxcenter, nmesh=100,
+                              resampler='tsc', interlacing=2, position_type='pos', mpicomm=data.mpicomm).poles
+        corr.save(corr_fft_fn)
 
 
 def run_box_mock_shotnoise(power_fn=None, corr_fn=None, seed=42):
@@ -49,13 +55,19 @@ def run_box_mock_shotnoise(power_fn=None, corr_fn=None, seed=42):
     if power_fn:
         poles = CatalogFFTPower(data_positions1=data['Position'], edges={'step': 0.005},
                                 los=los, boxsize=boxsize, boxcenter=boxcenter, nmesh=100,
-                                resampler='tsc', interlacing=2,
-                                position_type='pos', mpicomm=data.mpicomm).poles
+                                resampler='tsc', interlacing=2, position_type='pos', mpicomm=data.mpicomm).poles
         poles.save(power_fn)
+
     if corr_fn:
         corr = TwoPointCorrelationFunction(mode='smu', data_positions1=data['Position'],
                                            edges=(np.linspace(0., 80., 81), np.linspace(-1., 1., 101)), los=los, boxsize=boxsize,
                                            position_type='pos', mpicomm=data.mpicomm, mpiroot=None, nthreads=1)
+        corr.save(corr_fn)
+
+    if corr_fft_fn:
+        corr = CatalogFFTCorr(data_positions1=data['Position'], data_weights1=data['Weight'], edges=np.linspace(0., 160., 81),
+                              los=los, boxsize=boxsize, boxcenter=boxcenter, nmesh=100,
+                              resampler='tsc', interlacing=2, position_type='pos', mpicomm=data.mpicomm).poles
         corr.save(corr_fn)
 
 
@@ -112,17 +124,19 @@ if __name__ == '__main__':
 
     power_dir, power_shotnoise_dir = '_pk', '_pk_shotnoise'
     corr_dir, corr_shotnoise_dir = '_xi', '_xi_shotnoise'
+    corr_fft_dir, corr_fft_shotnoise_dir = '_xi_fft', '_xi_fft_shotnoise'
     power_fn, mock_power_fn, mock_shotnoise_power_fn = os.path.join(power_dir, 'data.npy'), os.path.join(power_dir, 'mock_{:d}.npy'), os.path.join(power_shotnoise_dir, 'mock_{:d}.npy')
     corr_fn, mock_corr_fn, mock_shotnoise_corr_fn = os.path.join(corr_dir, 'data.npy'), os.path.join(corr_dir, 'mock_{:d}.npy'), os.path.join(corr_shotnoise_dir, 'mock_{:d}.npy')
+    corr_fft_fn, mock_corr_fft_fn, mock_shotnoise_corr_fft_fn = os.path.join(corr_fft_dir, 'data.npy'), os.path.join(corr_fft_dir, 'mock_{:d}.npy'), os.path.join(corr_fft_shotnoise_dir, 'mock_{:d}.npy')
     window_fn = os.path.join(power_dir, 'window.npy')
     #todo = ['mock', 'window']
     todo = ['mock']
 
     if 'mock' in todo:
-        run_box_mock(power_fn=power_fn, corr_fn=corr_fn, unitary_amplitude=True, seed=0)
+        run_box_mock(power_fn=power_fn, corr_fn=corr_fn, corr_fft_fn=corr_fft_fn, unitary_amplitude=True, seed=0)
         for i in range(500):
             print(i)
-            run_box_mock(power_fn=mock_power_fn.format(i), corr_fn=mock_corr_fn.format(i), seed=(i + 1) * 42)
+            run_box_mock(power_fn=mock_power_fn.format(i), corr_fn=mock_corr_fn.format(i), corr_fft_fn=mock_corr_fft_fn.format(i), seed=(i + 1) * 42)
 
     if 'mock_shotnoise' in todo:
         for i in range(500):

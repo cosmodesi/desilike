@@ -127,6 +127,16 @@ def test_correlation_function():
     theory()
     fiber_collisions = TopHatFiberCollisionsCorrelationFunctionMultipoles(fs=0.5, Dfc=1.)
     observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
+                                                               data='../../tests/_xi_fft/data.npy',
+                                                               covariance='../../tests/_xi_fft/mock_*.npy',
+                                                               theory=theory,
+                                                               fiber_collisions=fiber_collisions)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    observable()
+    observable.plot(show=True)
+
+    fiber_collisions = TopHatFiberCollisionsCorrelationFunctionMultipoles(fs=0.5, Dfc=1.)
+    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
                                                                data={}, #'../../tests/_xi/data.npy',
                                                                covariance='../../tests/_xi/mock_*.npy',
                                                                theory=theory,
@@ -699,7 +709,7 @@ if __name__ == '__main__':
     setup_logging()
 
     #test_bao()
-    test_power_spectrum()
+    #test_power_spectrum()
     test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()

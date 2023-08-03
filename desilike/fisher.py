@@ -209,10 +209,17 @@ class LikelihoodFisher(BaseClass):
             new.attrs = dict(attrs)
         return new
 
+    def _solve(self):
+        try:
+            return np.linalg.solve(self._hessian, self._gradient)
+        except np.linalg.LinAlgError as exc:
+            raise ValueError('Singular matrix: {}, for parameters {}'.format(self._hessian, self._params)) from exc
+        return None
+
     @property
     def chi2min(self):
         r"""Minimum :math:`\chi^{2}`."""
-        flatdiff = - np.linalg.solve(self._hessian, self._gradient)
+        flatdiff = - self._solve()
         return -2. * (self._offset + self._gradient.dot(flatdiff) + 1. / 2. * flatdiff.dot(self._hessian).dot(flatdiff))
 
     def mean(self, params=None, return_type='nparray'):
@@ -232,7 +239,7 @@ class LikelihoodFisher(BaseClass):
         -------
         mean : array, dict
         """
-        mean = self._center - np.linalg.solve(self._hessian, self._gradient)
+        mean = self._center - self._solve()
         if params is None:
             params = self._params
         isscalar = not is_parameter_sequence(params)

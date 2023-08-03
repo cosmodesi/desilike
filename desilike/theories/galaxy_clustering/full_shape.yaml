@@ -621,22 +621,12 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
       scale: 1.0
     latex: \alpha_{[]}
-  sn[:5:2]:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 50.
-    latex: s_{n, []}
 
 ---
 
@@ -686,7 +676,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -700,7 +690,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 1.
     latex: s_{n, []}
   alpha:
     value: 0.
@@ -731,7 +721,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: s_{v}
   sigma0:
     prior:
@@ -741,7 +731,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: \sigma_{0}
   stoch_k0:
     prior:
@@ -751,7 +741,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: s_{k, 0}
   counterterm_c3:
     value: 0.
@@ -805,7 +795,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -819,7 +809,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 1.
     latex: s_{n, []}
   alpha:
     value: 0.
@@ -850,7 +840,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 100.
     latex: s_{v}
   sigma0:
     prior:
@@ -924,7 +914,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -938,7 +928,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 1.
     latex: s_{n, []}
   alpha:
     value: 0.
@@ -969,7 +959,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: s_{v}
   sigma0:
     prior:
@@ -979,7 +969,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: \sigma_{0}
   sigma0_stoch:
     prior:
@@ -989,7 +979,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: s_{k, 0}
   counterterm_c3:
     value: 0.
@@ -1044,7 +1034,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -1058,7 +1048,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 1.
     latex: s_{n, []}
   alpha:
     value: 0.
@@ -1089,7 +1079,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: s_{v}
   sigma0:
     prior:
@@ -1099,7 +1089,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: \sigma_{0}
   sigma0_stoch:
     prior:
@@ -1109,7 +1099,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: s_{k, 0}
   counterterm_c3:
     value: 0.
@@ -1292,12 +1282,6 @@ params:
       loc: 0.
       scale: 100.
     latex: c_{r, 6}
-  ce[:3]:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 100.
-    latex: c_{e, []}
   # west coast
   b2p4:
     prior:
@@ -1453,19 +1437,9 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
       scale: 1.0
     latex: \alpha_{[]}
-  sn[:5:2]:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 50.
-    latex: s_{n, []}

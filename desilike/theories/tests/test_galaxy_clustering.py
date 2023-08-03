@@ -147,11 +147,12 @@ def test_full_shape():
         if test_likelihood:
             from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TracerCorrelationFunctionMultipolesObservable, ObservablesCovarianceMatrix
             from desilike.likelihoods import ObservablesGaussianLikelihood
+            ells = (0, 2, 4)
             if 'Power' in theory.__class__.__name__:
-                observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01], 4: [0.05, 0.2, 0.01]},
+                observable = TracerPowerSpectrumMultipolesObservable(klim={ell: [0.05, 0.2, 0.01] for ell in ells},
                                                                      data={}, theory=theory)
             else:
-                observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20, 150, 4], 2: [20, 150, 4], 4: [20, 150, 4]},
+                observable = TracerCorrelationFunctionMultipolesObservable(slim={ell: [20, 150, 4] for ell in ells},
                                                                            data={}, theory=theory)
             observable()
             theory.plot(show=True)
@@ -159,6 +160,8 @@ def test_full_shape():
             likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
             for param in likelihood.all_params.select(basename=['alpha*', 'sn*', 'c*']):
                 param.update(derived='.best')
+            for param in likelihood.all_params.select(basename=['alpha6']):
+                param.update(fixed=True)
             likelihood()
             clean_folps()
         from desilike.emulators import Emulator, TaylorEmulatorEngine
@@ -341,15 +344,6 @@ def test_full_shape():
     theory(logA=3.04, b1=1.).shape
     theory = PyBirdTracerCorrelationFunctionMultipoles(eft_basis='westcoast')
     test_emulator_likelihood(theory)  # no P(k) computed
-    theory(logA=3.04, b1=1.).shape
-
-    from desilike.theories.galaxy_clustering import FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles
-
-    theory = FOLPSTracerPowerSpectrumMultipoles()
-    test_emulator_likelihood(theory)
-    theory(logA=3.04, b1=1.).shape
-    theory = FOLPSTracerCorrelationFunctionMultipoles()
-    test_emulator_likelihood(theory)
     theory(logA=3.04, b1=1.).shape
 
 

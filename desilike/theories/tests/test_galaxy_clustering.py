@@ -135,6 +135,13 @@ def test_flexible_bao():
 
 def test_full_shape():
 
+    def clean_folps():
+        import FOLPSnu as FOLPS
+        import types
+        for name, value in FOLPS.__dict__.items():
+            if not name.startswith('__') and not callable(value) and not isinstance(value, types.ModuleType):
+                FOLPS.__dict__[name] = None
+
     def test_emulator_likelihood(theory, test_likelihood=True, emulate='pt'):
         print('Emulating', theory)
         if test_likelihood:
@@ -153,6 +160,7 @@ def test_full_shape():
             for param in likelihood.all_params.select(basename=['alpha*', 'sn*', 'c*']):
                 param.update(derived='.best')
             likelihood()
+            clean_folps()
         from desilike.emulators import Emulator, TaylorEmulatorEngine
         #theory()
         bak = theory()
@@ -168,6 +176,7 @@ def test_full_shape():
             theory.init.update(pt=calculator)
         else:
             theory = calculator
+        clean_folps()
         assert np.allclose(theory(), bak)
         if test_likelihood:
             likelihood()
@@ -798,14 +807,14 @@ if __name__ == '__main__':
     setup_logging()
 
     #test_velocileptors()
-    test_pybird()
+    #test_pybird()
     #test_folps()
     #test_params()
     #test_integ()
     #test_templates()
     #test_bao()
     #test_flexible_bao()
-    #test_full_shape()
+    test_full_shape()
     #test_png()
     #test_pk_to_xi()
     #test_ap_diff()

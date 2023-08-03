@@ -1553,16 +1553,18 @@ class Namespace(object):
 class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
 
     _default_options = dict(kernels='fk')
-    _pt_attrs = ['kap', 'muap', 'table', 'table_now', 'sigma2t', 'f', 'jac']
+    _pt_attrs = ['kap', 'muap', 'table', 'table_now', 'sigma2t', 'f0', 'jac']
 
     def initialize(self, *args, mu=6, **kwargs):
         super(FOLPSPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
         import FOLPSnu as FOLPS
         FOLPS.Matrices()
+        self.matrices = Namespace(**{name: getattr(FOLPS, name) for name in ['M22matrices', 'M13vectors', 'bnu_b', 'N']})
 
     def calculate(self):
         super(FOLPSPowerSpectrumMultipoles, self).calculate()
         import FOLPSnu as FOLPS
+        FOLPS.__dict__.update(self.matrices.__dict__)
         # [z, omega_b, omega_cdm, omega_ncdm, h]
         # only used for neutrinos
         # sensitive to omega_b + omega_cdm, not omega_b, omega_cdm separately
@@ -1578,7 +1580,7 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         self.pt = Namespace(kap=kap, muap=muap, table=table,
                             table_now=table_now,
                             sigma2t=np.column_stack([FOLPS.Sigma2Total(kap[..., imu], muap[imu], table_now[..., imu]) for imu in range(len(self.mu))]),
-                            f=self.template.f0, jac=jac)
+                            f0=self.template.f0, jac=jac)
 
 
     def combine_bias_terms_poles(self, pars, nd=1e-4):
@@ -1589,7 +1591,8 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         pars[2] = pars[2] - 4. / 7. * (b1 - 1.)
         pars[3] = pars[3] + 32. / 315. * (b1 - 1.)
         k, mu = self.pt.kap, self.pt.muap
-        fk = self.pt.table[1] * self.pt.f
+        FOLPS.f0 = self.pt.f0
+        fk = self.pt.table[1] * self.pt.f0
         #fk = self.pt.table[1] * FOLPS.f0
         pkl, pkl_now, sigma2t = self.pt.table[0], self.pt.table_now[0], self.pt.sigma2t
         pkmu = self.pt.jac * ((b1 + fk * mu**2)**2 * (pkl_now + np.exp(-k**2 * sigma2t)*(pkl - pkl_now)*(1 + k**2 * sigma2t))

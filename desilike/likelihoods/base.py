@@ -250,6 +250,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
                         scale_covariance = 1. / self.nobs
                     else:
                         scale_covariance = 1.
+                covariance = self.mpicomm.bcast(covariance if self.mpicomm.rank == 0 else None, root=0)
             elif all(getattr(obs, 'covariance', None) is not None for obs in self.observables):
                 covariances = [obs.covariance for obs in self.observables]
                 size = sum(cov.shape[0] for cov in covariances)

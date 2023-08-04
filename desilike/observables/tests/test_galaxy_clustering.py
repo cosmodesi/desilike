@@ -31,6 +31,7 @@ def test_power_spectrum():
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
+    assert np.allclose(likelihood.flatdiff, observable.wmatrix.flatpower - observable.flatdata)
     theory()
 
     fiber_collisions = TopHatFiberCollisionsPowerSpectrumMultipoles(fs=0.5, Dfc=1.)
@@ -41,7 +42,8 @@ def test_power_spectrum():
                                                          shotnoise=1e4,
                                                          theory=theory,
                                                          fiber_collisions=fiber_collisions,
-                                                         kinlim=(0., 0.24))
+                                                         kinlim=(0., 0.24),
+                                                         transform='cubic')
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood.params['pk.loglikelihood'] = {}
     likelihood.params['pk.logprior'] = {}
@@ -55,6 +57,7 @@ def test_power_spectrum():
     assert theory.template.z == 1.
     likelihood()
     assert np.allclose((likelihood + likelihood)(), 2. * likelihood() - likelihood.logprior)
+    assert np.allclose(likelihood.flatdiff, 3. * observable.flatdata * (np.cbrt(observable.wmatrix.flatpower / observable.flatdata) - 1.))
 
     theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
     params = {'al0_1': 100., 'al0_-1': 100., 'al2_1': 100., 'b1': 1.5}
@@ -310,79 +313,71 @@ def test_compression():
 
     from desilike import LikelihoodFisher
 
-    from desilike.observables.galaxy_clustering import BAOCompressionObservable, StandardCompressionObservable, ShapeFitCompressionObservable, WiggleSplitCompressionObservable, BandVelocityCompressionObservable
+    from desilike.observables.galaxy_clustering import BAOCompressionObservable, StandardCompressionObservable, ShapeFitCompressionObservable, WiggleSplitCompressionObservable, BandVelocityCompressionObservable, TurnOverCompressionObservable
     from desilike.emulators import Emulator, TaylorEmulatorEngine
+
+    def test(likelihood, emulate=True):
+        print(likelihood.varied_params)
+        likelihood_bak = likelihood()
+        print(likelihood_bak)
+        if emulate:
+            emulator = Emulator(likelihood.observables, engine=TaylorEmulatorEngine(order=1))
+            emulator.set_samples()
+            emulator.fit()
+            likelihood.init.update(observables=emulator.to_calculator())
+            assert np.allclose(likelihood(), likelihood_bak)
 
     observable = BAOCompressionObservable(data=[1., 1.], covariance=np.diag([0.01, 0.01]), quantities=['qpar', 'qper'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    print(likelihood.varied_params)
-    assert np.allclose(likelihood(), 0.)
+    test(likelihood)
 
     observable = BAOCompressionObservable(data=[1., 1.], quantities=['DM_over_rd', 'DH_over_rd'], z=2.)
     observable2 = BAOCompressionObservable(data=[1., 1.], quantities=['DM_over_rd', 'DH_over_rd'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable, observable2], covariance=np.diag([0.01, 0.01, 0.01, 0.01]))
-    print(likelihood.varied_params)
-    print(likelihood())
+    test(likelihood)
 
     observable = BAOCompressionObservable(data=[1.], covariance=np.diag([0.01]), quantities=['DV_over_rd'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    print(likelihood.varied_params)
-    print(likelihood())
+    test(likelihood)
 
     fisher = LikelihoodFisher(center=[0.], params=['qiso'], offset=0., hessian=[[1.]], with_prior=True)
     observable = BAOCompressionObservable(data=fisher, covariance=fisher, z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    print(likelihood.varied_params)
-    print(likelihood())
+    test(likelihood)
 
     observable = BAOCompressionObservable(data=np.array([1.]), covariance=np.diag([0.01]), quantities=['qiso'], z=2.)
-    emulator = Emulator(observable, engine=TaylorEmulatorEngine(order=1))
-    emulator.set_samples()
-    emulator.fit()
-    likelihood = ObservablesGaussianLikelihood(observables=[emulator.to_calculator()])
-    print(likelihood.varied_params)
-    assert np.allclose(likelihood(), 0.)
+    likelihood = ObservablesGaussianLikelihood(observables=observable)
+    test(likelihood)
 
     observable = StandardCompressionObservable(data=[1., 1., 1.], covariance=np.diag([0.01, 0.01, 0.01]), quantities=['qpar', 'qper', 'df'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    print(likelihood())
-    print(likelihood.varied_params)
+    test(likelihood)
 
     observable = ShapeFitCompressionObservable(data=[1., 1., 0., 0.8], covariance=np.diag([0.01, 0.01, 0.0001, 0.01]), quantities=['qpar', 'qper', 'm', 'f_sqrt_Ap'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    print(likelihood.varied_params)
+    test(likelihood)
 
     observable = ShapeFitCompressionObservable(data=[1., 1., 0., 1.], covariance=np.diag([0.01, 0.01, 0.0001, 0.01]), quantities=['qiso', 'qap', 'dm', 'df'], z=2.)
-    emulator = Emulator(observable, engine=TaylorEmulatorEngine(order=1))
-    emulator.set_samples()
-    emulator.fit()
-    likelihood = ObservablesGaussianLikelihood(observables=[emulator.to_calculator()])
-    print(likelihood(logA=3.), likelihood(logA=3.1))
-    print(likelihood.varied_params)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    test(likelihood)
 
     observable = WiggleSplitCompressionObservable(data=[1., 1., 1., 0.], covariance=np.diag([0.01, 0.01, 0.01, 0.01]), quantities=['qap', 'qbao', 'df', 'dm'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    print(likelihood.varied_params)
+    test(likelihood)
 
     observable = BandVelocityCompressionObservable(data=[1., 1., 1.], covariance=np.diag([0.01, 0.01, 0.01]), kp=[0.01, 0.1], quantities=['dptt0', 'dptt1', 'qap'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    print(likelihood.varied_params)
+    test(likelihood)
+
+    observable = TurnOverCompressionObservable(data=[1.], covariance=np.diag([0.01]), quantities=['qto'], z=2.)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    test(likelihood)
 
     from desilike import ParameterCovariance
     covariance = ParameterCovariance(value=np.diag([0.01, 0.01, 0.01]), params=['qpar', 'qper', 'df'])
     observable = StandardCompressionObservable(data={}, covariance=covariance, quantities=['qpar', 'qper', 'df'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    print(likelihood(), observable.flattheory)
-
-    emulator = Emulator(observable, engine=TaylorEmulatorEngine(order=1))
-    emulator.set_samples()
-    emulator.fit()
-    likelihood = ObservablesGaussianLikelihood(observables=[emulator.to_calculator()])
-    print(likelihood())
-    print(likelihood.varied_params)
+    test(likelihood)
 
 
 def test_integral_cosn():
@@ -708,13 +703,13 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    #test_bao()
-    #test_power_spectrum()
-    test_correlation_function()
+    # test_bao()
+    # test_power_spectrum()
+    # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    # test_compression()
+    test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

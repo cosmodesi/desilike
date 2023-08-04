@@ -38,6 +38,11 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
     wmatrix : str, Path, pypower.BaseMatrix, WindowedPowerSpectrumMultipoles, default=None
         Optionally, window matrix.
 
+    transform : array, default=None
+        Transform to gaussianize the likelihood of the power spectrum.
+        For 'cubic', see eq. 16 of https://arxiv.org/pdf/2302.07484.pdf.
+        If ``None``, no transform is applied.
+
     **kwargs : dict
         Optional arguments for :class:`WindowedPowerSpectrumMultipoles`, e.g.:
 
@@ -48,7 +53,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
           one can provide the list of multipoles ``ells`` and the corresponding (list of) :math:`k` wavenumbers as a (list of) array ``k``,
           and optionally ``shotnoise``.
     """
-    def initialize(self, data=None, covariance=None, klim=None, wmatrix=None, **kwargs):
+    def initialize(self, data=None, covariance=None, klim=None, wmatrix=None, transform=None, **kwargs):
         self.k, self.kedges, self.ells, self.shotnoise = None, None, None, None
         self.flatdata, self.mocks, self.covariance = None, None, None
         if not isinstance(data, dict):
@@ -75,6 +80,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         self.wmatrix.init.update(kwargs)
         if self.shotnoise is None: self.shotnoise = 0.
         self.wmatrix.init.setdefault('shotnoise', self.shotnoise)
+        self.transform = None  # just to get standard flattheory
         if self.flatdata is None:
             self.wmatrix(**data)
             self.flatdata = self.flattheory.copy()
@@ -82,6 +88,10 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             self.wmatrix.runtime_info.initialize()
         for name in ['k', 'ells', 'kedges', 'shotnoise']:
             setattr(self, name, getattr(self.wmatrix, name))
+        self.transform = transform
+        allowed_transform = [None, 'cubic']
+        if self.transform not in allowed_transform:
+            raise ValueError('transform must be one of {}'.format(allowed_transform))
 
     def load_data(self, data=None, klim=None):
 
@@ -271,7 +281,11 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
     @property
     def flattheory(self):
-        return self.wmatrix.flatpower
+        flattheory = self.wmatrix.flatpower
+        if self.transform == 'cubic':
+            # See eq. 16 of https://arxiv.org/pdf/2302.07484.pdf
+            return (3. * (flattheory / self.flatdata)**(1. / 3.) - 2.) * self.flatdata
+        return flattheory
 
     @property
     def theory(self):
@@ -289,8 +303,8 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         return [diag[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
 
     def __getstate__(self):
-        state = super(TracerPowerSpectrumMultipolesObservable, self).__getstate__()
-        for name in ['k', 'ells']:
+        state = {}
+        for name in ['k', 'ells', 'flatdata']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state

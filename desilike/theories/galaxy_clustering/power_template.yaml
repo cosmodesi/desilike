@@ -179,7 +179,7 @@ params:
     latex: D_{\mathrm{H}}/D_{\mathrm{M}}
   DV_over_rd:
     derived: True
-    latex: (D_{\mathrm{H}} D_{\mathrm{M}}^{2} z)^{1/3}/r_{d}
+    latex: D_{\mathrm{V}}/r_{d}
 
 ---
 
@@ -386,6 +386,73 @@ params:
   pk_tt:
     derived: True
     latex: P_{\theta\theta}
+
+---
+
+class: TurnOverPowerSpectrumTemplate
+
+params:
+  m:
+    value: 0.57
+    prior:
+      dist: uniform
+      limits: [-1., 10.]
+    ref:
+      limits: [0., 1.]
+    delta: 0.01
+    latex: m
+  n:
+    value: 0.89
+    prior:
+      dist: uniform
+      limits: [0., 10.]
+    ref:
+      limits: [0.5, 1.]
+    delta: 0.01
+    latex: n
+  dpto:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0., 2.]
+    ref:
+      limits: [0.9, 1.1]
+    delta: 0.01
+    latex: (P / P^{\mathrm{fid}})(k_{\mathrm{TO}})
+    fixed: True  # let's vary linear bias as a default
+  qto:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.5, 1.5]
+    ref:
+      limits: [0.99, 1.01]
+    delta: 0.002
+    latex: q_{\mathrm{TO}}
+  qap:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    delta: 0.002
+    latex: q_{\mathrm{ap}}
+    fixed: True  # inconstrained when fitting the monopole only
+  df:
+    value: 1.
+    prior:
+      dist: uniform
+      limits: [0., 2.]
+    ref:
+      limits: [0.95, 1.05]
+    fixed: True
+  DH_over_DM:
+    derived: True
+    latex: D_{\mathrm{H}}/D_{\mathrm{M}}
+  DV_times_kTO:
+    derived: True
+    latex: D_{\mathrm{V}} k_{\mathrm{TO}}
 
 ---
 
@@ -857,3 +924,18 @@ params:
     delta: 0.002
     latex: \Omega_{k}
     fixed: True
+
+---
+
+class: TurnOverPowerSpectrumExtractor
+
+params:
+  Omega_m:
+    prior:
+      limits: [0.01, 1.]
+    ref:
+      dist: norm
+      loc: 0.3153
+      scale: 0.0073
+    delta: 0.005
+    latex: \Omega_{m}

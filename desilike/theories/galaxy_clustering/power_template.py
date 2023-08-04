@@ -76,6 +76,8 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
         BasePowerSpectrumExtractor.calculate(self)
         self.with_now = with_now
         if only_now and not self.with_now:
+            if isinstance(only_now, bool):
+                only_now = 'peakaverage'  # default
             self.with_now = only_now
         self.only_now = bool(only_now)
         for name in ['sigma8', 'fsigma8', 'f', 'f0', 'pk_dd_interpolator']:
@@ -88,7 +90,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
             self.pknow_dd_fid = self.pknow_dd_interpolator_fid(self.k)
 
     def calculate(self):
-        for name in ['sigma8', 'fsigma8', 'f', 'pk_dd_interpolator', 'pk_dd']:
+        for name in ['sigma8', 'fsigma8', 'f', 'f0', 'pk_dd_interpolator', 'pk_dd']:
             setattr(self, name, getattr(self, name + '_fid'))
         if self.with_now:
             for name in ['pknow_dd_interpolator', 'pknow_dd']:
@@ -294,9 +296,6 @@ class StandardPowerSpectrumExtractor(BasePowerSpectrumExtractor):
 
     Parameters
     ----------
-    k : array, default=None
-        Theory wavenumbers where to evaluate linear power spectrum.
-
     z : float, default=1.
         Effective redshift.
 
@@ -404,9 +403,6 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
 
     Parameters
     ----------
-    k : array, default=None
-        Theory wavenumbers where to evaluate linear power spectrum.
-
     z : float, default=1.
         Effective redshift.
 
@@ -567,9 +563,6 @@ class BandVelocityPowerSpectrumExtractor(BasePowerSpectrumExtractor):
 
     Parameters
     ----------
-    k : array, default=None
-        Theory wavenumbers where to evaluate linear power spectrum.
-
     z : float, default=1.
         Effective redshift.
 
@@ -1007,4 +1000,135 @@ class WiggleSplitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.m = self.m_fid + dm
 
     def get(self):
+        return self
+
+
+def find_turn_over(pk_interpolator):
+    # Find turn over, with parabolic interpolation
+    imax = np.argmax(pk_interpolator.pk)
+    logk = np.log10(pk_interpolator.k[imax - 1:imax + 2])
+    logpk = np.log10(pk_interpolator.pk[imax - 1:imax + 2])
+    # Parabola is a * (logk - logk0)^2 + b, we do not care about b
+    c0, c1, c2 = logpk[0] / (logk[0] - logk[1]) / (logk[0] - logk[2]), logpk[1] / (logk[1] - logk[0]) / (logk[1] - logk[2]), logpk[2] / (logk[2] - logk[0]) / (logk[2] - logk[1])
+    a = c0 + c1 + c2
+    logk0 = (c0 * (logk[1] + logk[2]) + c1 * (logk[0] + logk[2]) + c2 * (logk[0] + logk[1])) / (2 * a)
+    assert a <= 0.
+    assert logk[0] <= logk0 <= logk[2]
+    k0 = 10**logk0
+    return k0, pk_interpolator(k0)
+
+
+class TurnOverPowerSpectrumExtractor(BasePowerSpectrumExtractor):
+    """
+    Extract turn over parameters from base cosmological parameters.
+
+    Parameters
+    ----------
+    z : float, default=1.
+        Effective redshift.
+
+    eta : float, default=1./3.
+        Relation between 'qpar', 'qper' and 'qiso', 'qap' parameters:
+        ``qiso = qpar ** eta * qper ** (1 - eta)``.
+
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
+
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+
+
+    Reference
+    ---------
+    https://arxiv.org/pdf/2302.07484.pdf
+    """
+    config_fn = 'power_template.yaml'
+    conflicts = [('DM_over_DH', 'qap'), ('DV_times_kTO', 'qto')]
+
+    def initialize(self, *args, r=8., eta=1. / 3., **kwargs):
+        self.eta = float(eta)
+        super(TurnOverPowerSpectrumExtractor, self).initialize(*args, **kwargs)
+        if external_cosmo(self.cosmo):
+            self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
+        cosmo = self.cosmo
+        if self.fiducial is not None:
+            self.cosmo = self.fiducial
+            self.calculate()
+            self.cosmo = cosmo
+            for name in ['DH', 'DM', 'DV', 'DH_over_DM', 'DV_times_kTO']:
+                setattr(self, name + '_fid', getattr(self, name))
+                delattr(self, name)
+
+    def calculate(self):
+        self.DH = (constants.c / 1e3) / (100. * self.cosmo.efunc(self.z))
+        self.DM = self.cosmo.comoving_angular_distance(self.z)
+        self.DV = self.DH**self.eta * self.DM**(1. - self.eta) * self.z**(1. / 3.)
+        self.DH_over_DM = self.DH / self.DM
+        fo = self.cosmo.get_fourier()
+        self.pk_dd_interpolator = fo.pk_interpolator(of='delta_cb').to_1d(z=self.z)
+        self.kTO, self.pkTO_dd = find_turn_over(self.pk_dd_interpolator)
+        self.DV_times_kTO = self.DV * self.kTO
+
+    def get(self):
+        if self.fiducial is not None:
+            self.qap = self.DH_over_DM / self.DH_over_DM_fid
+            self.qto = self.DV_times_kTO / self.DV_times_kTO_fid
+        return self
+
+
+class TurnOverPowerSpectrumTemplate(BasePowerSpectrumTemplate):
+    """
+    TurnOver power spectrum template.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate linear power spectrum.
+
+    z : float, default=1.
+        Effective redshift.
+
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology, used to compute the growth rate. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+
+
+    Reference
+    ---------
+    https://arxiv.org/pdf/2302.07484.pdf
+    """
+    def initialize(self, *args, **kwargs):
+        super(TurnOverPowerSpectrumTemplate, self).initialize(*args, with_now=False, apmode='qap', **kwargs)
+        self.eta = self.apeffect.eta
+        TurnOverPowerSpectrumExtractor.calculate(self)
+        for name in ['DH_over_DM', 'DV_times_kTO', 'kTO', 'pkTO_dd']:
+            setattr(self, name + '_fid', getattr(self, name))
+            delattr(self, name)
+
+    def calculate(self, df=1., m=0.6, n=0.9, qto=1., dpto=1.):
+        super(TurnOverPowerSpectrumTemplate, self).calculate()
+        kTO = self.kTO_fid * qto
+        pkTO = self.pkTO_dd_fid * dpto
+        x = np.log10(self.k) / np.log10(kTO) - 1
+        self.pk_dd = np.empty_like(x)
+        mask_m = self.k < kTO
+        mask_n = ~mask_m
+        self.pk_dd[mask_m] = pkTO ** (1. - m * x[mask_m] ** 2)
+        self.pk_dd[mask_n] = pkTO ** (1. - n * x[mask_n] ** 2)
+        self.pknow_dd = self.pk_dd
+        self.f = self.f_fid * df
+        self.f0 = self.f0_fid * df
+
+    def get(self):
+        self.DV_times_kTO = self.apeffect.qiso * self.DV_times_kTO_fid
+        self.DH_over_DM = self.apeffect.qap * self.DH_over_DM_fid
         return self

@@ -1284,7 +1284,7 @@ class LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorre
 
 class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
-    _default_options = dict(km=0.7, kr=0.25, accboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=True, with_resum='full', eft_basis='eftoflss')
+    _default_options = dict(km=0.7, kr=0.25, accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=True, with_resum='full', eft_basis='eftoflss')
     _klim = (1e-4, 11., 3000)  # numerical instability in pybird's fftlog at 10.
     _pt_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
                  'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol', 'bst']
@@ -1303,7 +1303,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                          eft_basis=self.options['eft_basis'], halohalo=True, with_cf=False,
                          with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti',
                          exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
-        self.nonlinear = NonLinear(load=False, save=False, fftbias=self.options['fftbias'], co=self.co)
+        self.nonlinear = NonLinear(load=False, save=False, NFFT=256 * int(self.options['fftaccboost']), fftbias=self.options['fftbias'], co=self.co)
         self.resum = Resum(co=self.co)
         self.nnlo_counterterm = None
         if self.options['with_nnlo_counterterm']:
@@ -1314,7 +1314,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
     def calculate(self):
         super(PyBirdPowerSpectrumMultipoles, self).calculate()
         from pybird.bird import Bird
-        cosmo = {'kk': self.template.k, 'pk_lin': self.template.pk_dd, 'f': self.template.f, 'DA': 1., 'H': 1.}
+        cosmo = {'kk': self.template.k, 'pk_lin': self.template.pk_dd, 'pk_lin_2': None, 'f': self.template.f, 'DA': 1., 'H': 1.}
         self.pt = Bird(cosmo, with_bias=False, eft_basis=self.options['eft_basis'], with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
 
         if self.nnlo_counterterm is not None:  # we use smooth power spectrum since we don't want spurious BAO signals
@@ -1436,7 +1436,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
 class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
 
-    _default_options = dict(km=0.7, kr=0.25, accboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=True, with_resum='full', eft_basis='eftoflss')
+    _default_options = dict(km=0.7, kr=0.25, accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=True, with_resum='full', eft_basis='eftoflss')
     _klim = (1e-4, 11., 3000)  # numerical instability in pybird's fftlog at 10.
     _pt_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
                  'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol']
@@ -1453,7 +1453,7 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
                          eft_basis=self.options['eft_basis'], halohalo=True, with_cf=True,
                          with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti',
                          exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
-        self.nonlinear = NonLinear(load=False, save=False, fftbias=self.options['fftbias'], co=self.co)  # NFFT=256, fftbias=-1.6
+        self.nonlinear = NonLinear(load=False, save=False, NFFT=256 * int(self.options['fftaccboost']), fftbias=self.options['fftbias'], co=self.co)  # NFFT=256, fftbias=-1.6
         self.resum = Resum(co=self.co)  # LambdaIR=.2, NFFT=192
         self.nnlo_counterterm = None
         if self.options['with_nnlo_counterterm']:
@@ -1463,7 +1463,7 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
     def calculate(self):
         super(PyBirdCorrelationFunctionMultipoles, self).calculate()
         from pybird.bird import Bird
-        cosmo = {'kk': self.template.k, 'pk_lin': self.template.pk_dd, 'f': self.template.f, 'DA': 1., 'H': 1.}
+        cosmo = {'kk': self.template.k, 'pk_lin': self.template.pk_dd, 'pk_lin_2': None, 'f': self.template.f, 'DA': 1., 'H': 1.}
         self.pt = Bird(cosmo, with_bias=False, eft_basis=self.options['eft_basis'], with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
 
         if self.nnlo_counterterm is not None:  # we use smooth power spectrum since we don't want spurious BAO signals

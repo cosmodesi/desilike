@@ -216,8 +216,8 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         return [diag[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
 
     def __getstate__(self):
-        state = super(TracerCorrelationFunctionMultipolesObservable, self).__getstate__()
-        for name in ['s', 'ells']:
+        state = {}
+        for name in ['s', 'ells', 'flatdata']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state

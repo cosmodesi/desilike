@@ -50,28 +50,40 @@ def test_templates():
     slope_tophat = integrate_sigma_r2(r, pk, kernel=kernel_tophat2_deriv) / integrate_sigma_r2(r, pk, kernel=kernel_tophat2)
     print(slope_gauss, slope_tophat)
 
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
-    from desilike.theories.galaxy_clustering import BAOExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor
-    from desilike.theories.galaxy_clustering import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BAOPowerSpectrumTemplate,
-                                                     StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate)
+    from desilike.theories.galaxy_clustering.power_template import find_turn_over
+    pk = cosmo.get_fourier().pk_interpolator().to_1d(z=0.)
+    kTO, pkTO = find_turn_over(pk)
+    k, k0 = np.logspace(-3, 1, 100), 0.01
+    logk, logk0 = np.log10(k), np.log10(k0)
+    pk = PowerSpectrumInterpolator1D(k=k, pk=10**(-(logk - logk0)**2))
+    kTO, pkTO = find_turn_over(pk)
+    assert np.allclose([kTO, pkTO], [k0, 1.])
 
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BAOPowerSpectrumTemplate,
+                                                     StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate, TurnOverPowerSpectrumTemplate)
+
+    for template in [FixedPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), BAOPowerSpectrumTemplate(),
+                     StandardPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(apmode='qisoqap'),
+                     WiggleSplitPowerSpectrumTemplate(), WiggleSplitPowerSpectrumTemplate(kernel='tophat'),
+                     BandVelocityPowerSpectrumTemplate(kp=np.linspace(0.01, 0.1, 10)), TurnOverPowerSpectrumTemplate()]:
+        print(template)
+        theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+        theory()
+        template.f, template.f0
+        template.init.update(only_now=True)
+        theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+        theory()
+
+    from desilike.theories.galaxy_clustering import BAOExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor
     extractor = ShapeFitPowerSpectrumExtractor()
     dm = 0.02
     assert np.allclose(extractor(n_s=0.96 + dm).dm - extractor(n_s=0.96).dm, dm, atol=0., rtol=1e-5)
     for extractor in [BAOExtractor(), StandardPowerSpectrumExtractor(),
                       ShapeFitPowerSpectrumExtractor(), ShapeFitPowerSpectrumExtractor(dfextractor='fsigmar'),
                       WiggleSplitPowerSpectrumExtractor(), WiggleSplitPowerSpectrumExtractor(kernel='tophat'),
-                      BandVelocityPowerSpectrumExtractor(kp=np.linspace(0.01, 0.1, 10))]:
+                      BandVelocityPowerSpectrumExtractor(kp=np.linspace(0.01, 0.1, 10)), TurnOverPowerSpectrumExtractor()]:
         extractor()
-
-    for template in [FixedPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), BAOPowerSpectrumTemplate(),
-                     StandardPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(apmode='qisoqap'),
-                     WiggleSplitPowerSpectrumTemplate(), WiggleSplitPowerSpectrumTemplate(kernel='tophat'),
-                     BandVelocityPowerSpectrumTemplate(kp=np.linspace(0.01, 0.1, 10))]:
-        print(template)
-        theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-        template.f, template.f0
-        theory()
 
 
 def test_bao():
@@ -549,6 +561,7 @@ def test_png():
 
     theory = PNGTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.), method='prim')
     theory(qpar=1.1, fnl_loc=2.)
+    theory.plot(show=True)
 
     from desilike.emulators import Emulator, TaylorEmulatorEngine
     emulator = Emulator(theory, engine=TaylorEmulatorEngine(order=1))
@@ -808,8 +821,8 @@ if __name__ == '__main__':
     #test_templates()
     #test_bao()
     #test_flexible_bao()
-    test_full_shape()
-    #test_png()
+    #test_full_shape()
+    test_png()
     #test_pk_to_xi()
     #test_ap_diff()
     #test_ptt()

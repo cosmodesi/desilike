@@ -80,7 +80,7 @@ class BaseLikelihood(BaseCalculator):
                 if not np.isfinite(values[param.name]): values[param.name] = param.value
             posterior_fisher = self.fisher(**values)
             pipeline.more_calculate = self._solve
-            # flatdiff is model - data
+            # flatdiff is theory - data
             x = posterior_fisher.mean()
             dx = x - posterior_fisher._center
 
@@ -189,10 +189,9 @@ class BaseGaussianLikelihood(BaseLikelihood):
     precision : array, default=None
         If ``covariance`` is not provided, precision matrix (or its diagonal).
     """
-
     _attrs = ['loglikelihood', 'logprior']
 
-    def initialize(self, data, covariance=None, precision=None):
+    def initialize(self, data, covariance=None, precision=None, transform=None):
         self.flatdata = np.ravel(data)
         if precision is None:
             if covariance is None:
@@ -208,7 +207,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
 
     def __getstate__(self):
         state = {}
-        for name in ['flatdiff', 'flatdata', 'covariance', 'precision', 'loglikelihood']:
+        for name in ['flatdiff', 'flatdata', 'covariance', 'precision', 'transform', 'loglikelihood']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
@@ -231,11 +230,12 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
     scale_covariance : float, default=1.
         Scale covariance by this value. If ``True``, scale covariance by the number of mocks.
     """
-    def initialize(self, observables, covariance=None, scale_covariance=1.):
+    def initialize(self, observables, covariance=None, scale_covariance=1., precision=None):
         if not utils.is_sequence(observables):
             observables = [observables]
         self.nobs = None
         self.observables = [obs.runtime_info.initialize() for obs in observables]
+        covariance, scale_covariance, precision = (self.mpicomm.bcast(obj if self.mpicomm.rank == 0 else None, root=0) for obj in (covariance, scale_covariance, precision))
         if covariance is None:
             nmocks = [self.mpicomm.bcast(len(obs.mocks) if self.mpicomm.rank == 0 and getattr(obs, 'mocks', None) is not None else 0) for obs in self.observables]
             if any(nmocks):
@@ -260,8 +260,8 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
                     sl = slice(start, stop)
                     covariance[sl, sl] = cov
                     start = stop
-            else:
-                raise ValueError('Observables must have mocks if global covariance matrix not provided')
+            elif precision is None:
+                raise ValueError('Observables must have mocks or their own covariance if global covariance or precision matrix not provided')
         if isinstance(scale_covariance, bool):
             import warnings
             if scale_covariance:
@@ -269,24 +269,37 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
             else:
                 warnings.warn('Got scale_covariance = {} (boolean), why? defaulting to scale_covariance = 1.'.format(scale_covariance))
             scale_covariance = 1.
-        self.covariance = np.atleast_2d(self.mpicomm.bcast(scale_covariance * covariance if self.mpicomm.rank == 0 else None, root=0))
-        if self.covariance.shape != (self.covariance.shape[0],) * 2:
-            raise ValueError('Covariance must be a square matrix')
         self.flatdata = np.concatenate([obs.flatdata for obs in self.observables], axis=0)
-        if self.covariance.shape != (self.flatdata.size,) * 2:
-            raise ValueError('Based on provided observables, covariance expected to be a matrix of shape ({0:d}, {0:d})'.format(self.flatdata.size))
 
-        # Set each observable's covariance (for, e.g., plots)
-        start, slices = 0, []
-        for obs in observables:
-            stop = start + len(obs.flatdata)
-            sl = slice(start, stop)
-            slices.append(sl)
-            obs.covariance = self.covariance[sl, sl]
-            start = stop
+        def check_matrix(matrix, name):
+            if matrix is None:
+                return matrix
+            matrix = np.atleast_2d(matrix).copy()
+            if matrix.shape != (matrix.shape[0],) * 2:
+                raise ValueError('{} must be a square matrix, but found shape {}'.format(name, matrix.shape))
+            shape = (self.flatdata.size,) * 2
+            if matrix.shape != shape:
+                raise ValueError('Based on provided observables, {} expected to be a matrix of shape {}, but found {}'.format(name, shape, matrix.shape))
+            return matrix
 
-        # Block-inversion is usually more numerically stable
-        self.precision = utils.blockinv([[self.covariance[sl1, sl2] for sl2 in slices] for sl1 in slices])
+        self.precision = check_matrix(precision, 'precision')
+        self.covariance = check_matrix(covariance, 'covariance')
+
+        if self.covariance is not None:
+            self.covariance *= scale_covariance
+            # Set each observable's covariance (for, e.g., plots)
+            start, slices = 0, []
+            for obs in observables:
+                stop = start + len(obs.flatdata)
+                sl = slice(start, stop)
+                slices.append(sl)
+                obs.covariance = self.covariance[sl, sl]
+                start = stop
+            if self.precision is None:
+                # Block-inversion is usually more numerically stable
+                self.precision = utils.blockinv([[self.covariance[sl1, sl2] for sl2 in slices] for sl1 in slices])
+        else:
+            self.precision /= scale_covariance
         size = self.precision.shape[0]
         if self.nobs is not None:
             self.hartlap = (self.nobs - size - 2.) / (self.nobs - 1.)

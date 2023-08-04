@@ -1,6 +1,7 @@
 import numpy as np
 from scipy import constants, interpolate
 
+from desilike import plotting
 from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
 from .power_template import FixedPowerSpectrumTemplate
 
@@ -63,9 +64,11 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
             keep_params += ['bfnl_loc']
         else:
             raise ValueError('Unknown mode {}; it must be one of ["bphi", "b-p", "bfnl_loc"]'.format(self.mode))
+        self.z = self.template.z
         self.params = self.params.select(basename=keep_params)
 
     def calculate(self, b1=2., sigmas=0., sn0=0., **params):
+        self.z = self.template.z
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pk_dd = self.template.pk_dd
         kin = self.template.k
@@ -100,9 +103,41 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
         pkmu = jac * fog * (bias + f * muap**2)**2 * interpolate.interp1d(np.log10(kin), pk_dd, kind='cubic', axis=-1)(np.log10(kap)) + sn0
         self.power = self.to_poles(pkmu)
 
-    @property
-    def z(self):
-        return self.template.z
-
     def get(self):
         return self.power
+
+    @plotting.plotter
+    def plot(self, scaling='loglog'):
+        """
+        Plot power spectrum multipoles.
+
+        Parameters
+        ----------
+        scaling : str, default='loglog'
+            Either 'kpk' or 'loglog'.
+
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+        """
+        from matplotlib import pyplot as plt
+        ax = plt.gca()
+        k_exp = 1 if scaling == 'kpk' else 0
+        for ill, ell in enumerate(self.ells):
+            ax.plot(self.k, self.k**k_exp * self.power[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.grid(True)
+        ax.legend()
+        if scaling == 'kpk':
+            ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        if scaling == 'loglog':
+            ax.set_ylabel(r'$P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{3}$]')
+            ax.set_yscale('log')
+            ax.set_xscale('log')
+        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        return ax

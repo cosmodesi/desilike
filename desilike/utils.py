@@ -592,15 +592,15 @@ def weights_mu(mu, method='leggauss', sym=True):
 
 def matrix_lininterp(xin, xout):
     # Matrix for linear interpolation
-    toret = np.zeros((len(xout), len(xin)), dtype='f8')
+    toret = np.zeros((len(xin), len(xout)), dtype='f8')
     for iout, xout in enumerate(xout):
         iin = np.searchsorted(xin, xout, side='right') - 1
         if 0 <= iin < len(xin) - 1:
             frac = (xout - xin[iin]) / (xin[iin + 1] - xin[iin])
-            toret[iout, iin] = 1. - frac
-            toret[iout, iin + 1] = frac
+            toret[iin, iout] = 1. - frac
+            toret[iin + 1, iout] = frac
         elif np.isclose(xout, xin[-1]):
-            toret[iout, iin] = 1.
+            toret[iin, iout] = 1.
     return toret
 
 

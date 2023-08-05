@@ -6,6 +6,56 @@ from desilike.base import BaseCalculator
 from desilike import plotting, utils
 
 
+def window_matrix_bininteg(list_edges, resolution=1):
+    """
+    Build window matrix for binning, in the continuous limit, i.e. integral of :math:`\int dx x^2 f(x) / \int dx x^2` over each bin.
+
+    Parameters
+    ----------
+    resolution : int, default=1
+        Number of evaluation points in the integral.
+
+    Returns
+    -------
+    xin : array
+        Input theory coordinates.
+
+    full_matrix : array
+        Window matrix.
+    """
+    resolution = int(resolution)
+    if resolution <= 0:
+        raise ValueError('resolution must be a strictly positive integer')
+    if np.ndim(list_edges[0]) == 0:
+        list_edges = [list_edges]
+
+    step = min(np.diff(edges).min() for edges in list_edges) / resolution
+    start, stop = min(np.min(edges) for edges in list_edges), max(np.max(edges) for edges in list_edges)
+    xin = np.arange(start + step / 2., stop, step)
+
+    matrices = []
+    for edges in list_edges:
+        x, w = [], []
+        for ibin, bin in enumerate(zip(edges[:-1], edges[1:])):
+            x.append(np.linspace(*bin, resolution + 2)[1:-1])
+            edge = np.linspace(*bin, resolution + 1)
+            line = np.zeros((len(edges) - 1) * resolution, dtype='f8')
+            line[ibin * resolution:(ibin + 1) * resolution] = (edge[1:]**2 - edge[:-1]**2) / (edge[-1]**2 - edge[0]**2)  # dx is constant
+            w.append(line)
+        matrices.append(utils.matrix_lininterp(xin, np.concatenate(x)).dot(np.column_stack(w)))  # linear interpolation * integration weights
+    full_matrix = []
+    for iin, matin in enumerate(matrices):
+        line = []
+        for i, mat in enumerate(matrices):
+            if i == iin:
+                line.append(mat)
+            else:
+                line.append(np.zeros_like(mat))
+        full_matrix.append(line)
+    full_matrix = np.bmat(full_matrix).A
+    return xin, full_matrix
+
+
 class WindowedPowerSpectrumMultipoles(BaseCalculator):
     """
     Window effect on the power spectrum multipoles.
@@ -72,11 +122,11 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 if not step: step = (_default_step,)
                 self.kedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
 
+        if self.kedges is None:
+            self.kedges = np.arange(0.01 - _default_step / 2., 0.2 + _default_step, _default_step)  # gives k = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
+
         if k is None:
-            if self.kedges is None:
-                k = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
-            else:
-                k = [(edges[:-1] + edges[1:]) / 2. for edges in self.kedges]
+            k = [(edges[:-1] + edges[1:]) / 2. for edges in self.kedges]
 
         if np.ndim(k[0]) == 0:
             k = [k] * len(self.ells)
@@ -110,57 +160,62 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 self.ellsin = tuple(self.ells)
             self.theory.init.update(k=self.kin, ells=self.ellsin)
         else:
-            if utils.is_path(wmatrix):
-                from pypower import MeshFFTWindow, BaseMatrix
-                fn = wmatrix
-                wmatrix = MeshFFTWindow.load(fn)
-                if hasattr(wmatrix, 'poles'):
-                    wmatrix = wmatrix.poles
-                else:
-                    wmatrix = BaseMatrix.load(fn)
+            if isinstance(wmatrix, dict):
+                self.ellsin = tuple(self.ells)
+                self.kin, self.matrix_full = window_matrix_bininteg(self.kedges, **wmatrix)
+                self.matrix_full = self.matrix_full.T
             else:
-                wmatrix = wmatrix.deepcopy()
-            if ellsin is not None:
-                self.ellsin = list(ellsin)
-            else:
-                self.ellsin = []
-                for proj in wmatrix.projsin:
-                    assert proj.wa_order in (None, 0)
-                    self.ellsin.append(proj.ell)
-            projsin = [proj for proj in wmatrix.projsin if proj.ell in self.ellsin]
-            self.ellsin = [proj.ell for proj in projsin]
-            wmatrix.select_proj(projsout=[(ell, None) for ell in self.ells], projsin=projsin)
-            wmatrix.slice_x(slicein=slice(0, len(wmatrix.xin[0]) // kinrebin * kinrebin, kinrebin))
-            # print(wmatrix.xout[0], max(kk.max() for kk in self.k) * 1.2)
-            if kinlim is not None:
-                wmatrix.select_x(xinlim=kinlim)
-            self.kin = wmatrix.xin[0]
-            # print(wmatrix.xout[0])
-            assert all(np.allclose(xin, self.kin) for xin in wmatrix.xin)
-            # TODO: implement best match BaseMatrix method
-            for iout, (projout, kk) in enumerate(zip(wmatrix.projsout, self.k)):
-                ksize, factorout = None, 1
-                if klim is not None:
-                    lo, hi, *step = klim[projout.ell]
-                    if step: ksize = int((hi - lo) / step[0] + 0.5)  # nearest integer
+                if utils.is_path(wmatrix):
+                    from pypower import MeshFFTWindow, BaseMatrix
+                    fn = wmatrix
+                    wmatrix = MeshFFTWindow.load(fn)
+                    if hasattr(wmatrix, 'poles'):
+                        wmatrix = wmatrix.poles
+                    else:
+                        wmatrix = BaseMatrix.load(fn)
                 else:
-                    lo, hi, ksize = 2 * kk[0] - kk[1], 2 * kk[-1] - kk[-2], kk.size
-                if ksize is not None:
-                    nmk = np.sum((wmatrix.xout[iout] >= lo) & (wmatrix.xout[iout] <= hi))
-                    factorout = nmk // ksize
-                wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout, factorout), projsout=projout)
-                # wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout), projsout=projout)
-                # wmatrix.rebin_x(factorout=factorout, projsout=projout)
-                if klim is not None:
-                    istart = np.flatnonzero(wmatrix.xout[iout] >= lo)[0]
-                    ksize = np.flatnonzero(wmatrix.xout[iout] <= hi)[-1] - istart + 1
+                    wmatrix = wmatrix.deepcopy()
+                if ellsin is not None:
+                    self.ellsin = list(ellsin)
                 else:
-                    istart = np.nanargmin(np.abs(wmatrix.xout[iout] - kk[0]))
-                wmatrix.slice_x(sliceout=slice(istart, istart + ksize), projsout=projout)
-                self.k[iout] = wmatrix.xout[iout]
-                if klim is None and not np.allclose(wmatrix.xout[iout], kk, rtol=1e-4):
-                    raise ValueError('k-coordinates {} for ell = {:d} could not be found in input matrix (rebinning = {:d})'.format(kk, projout.ell, factorout))
-            self.matrix_full = wmatrix.value.T
+                    self.ellsin = []
+                    for proj in wmatrix.projsin:
+                        assert proj.wa_order in (None, 0)
+                        self.ellsin.append(proj.ell)
+                projsin = [proj for proj in wmatrix.projsin if proj.ell in self.ellsin]
+                self.ellsin = tuple(proj.ell for proj in projsin)
+                wmatrix.select_proj(projsout=[(ell, None) for ell in self.ells], projsin=projsin)
+                wmatrix.slice_x(slicein=slice(0, len(wmatrix.xin[0]) // kinrebin * kinrebin, kinrebin))
+                # print(wmatrix.xout[0], max(kk.max() for kk in self.k) * 1.2)
+                if kinlim is not None:
+                    wmatrix.select_x(xinlim=kinlim)
+                self.kin = wmatrix.xin[0]
+                # print(wmatrix.xout[0])
+                assert all(np.allclose(xin, self.kin) for xin in wmatrix.xin)
+                # TODO: implement best match BaseMatrix method
+                for iout, (projout, kk) in enumerate(zip(wmatrix.projsout, self.k)):
+                    ksize, factorout = None, 1
+                    if klim is not None:
+                        lo, hi, *step = klim[projout.ell]
+                        if step: ksize = int((hi - lo) / step[0] + 0.5)  # nearest integer
+                    else:
+                        lo, hi, ksize = 2 * kk[0] - kk[1], 2 * kk[-1] - kk[-2], kk.size
+                    if ksize is not None:
+                        nmk = np.sum((wmatrix.xout[iout] >= lo) & (wmatrix.xout[iout] <= hi))
+                        factorout = nmk // ksize
+                    wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout, factorout), projsout=projout)
+                    # wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout), projsout=projout)
+                    # wmatrix.rebin_x(factorout=factorout, projsout=projout)
+                    if klim is not None:
+                        istart = np.flatnonzero(wmatrix.xout[iout] >= lo)[0]
+                        ksize = np.flatnonzero(wmatrix.xout[iout] <= hi)[-1] - istart + 1
+                    else:
+                        istart = np.nanargmin(np.abs(wmatrix.xout[iout] - kk[0]))
+                    wmatrix.slice_x(sliceout=slice(istart, istart + ksize), projsout=projout)
+                    self.k[iout] = wmatrix.xout[iout]
+                    if klim is None and not np.allclose(wmatrix.xout[iout], kk, rtol=1e-4):
+                        raise ValueError('k-coordinates {} for ell = {:d} could not be found in input matrix (rebinning = {:d})'.format(kk, projout.ell, factorout))
+                self.matrix_full = wmatrix.value.T
             self.theory.init.update(k=self.kin, ells=self.ellsin)
             if fiber_collisions is not None:
                 fiber_collisions.init.update(k=self.kin, ells=self.ellsin, theory=self.theory)
@@ -247,8 +302,14 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
 
     Parameters
     ----------
+    slim : dict, default=None
+        Optionally, separation limits: a dictionary mapping multipoles to (min separation, max separation, (optionally) step (float)),
+        e.g. ``{0: (30., 160., 5.), 2: (30., 160., 5.)}``. If ``None``, no selection is applied for the given multipole.
+
     s : array, default=None
-        Observed separations :math:`s`, as an array or a list of such arrays (one for each multipole).
+        Optionally, observed separations :math:`s`, as an array or a list of such arrays (one for each multipole).
+        If not specified, defaults to edge centers, based on ``slim`` if provided;
+        else defaults to ``np.arange(20, 151, 5)``.
 
     ells : tuple, default=None
         Observed multipoles, defaults to ``(0, 2, 4)``.
@@ -282,11 +343,11 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
                 if not step: step = (_default_step,)
                 self.sedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
 
+        if self.sedges is None:
+            self.sedges = np.arange(20. - _default_step / 2., 150 + _default_step, _default_step)  # gives s = np.arange(20, 150 + _default_step / 2., _default_step)
+
         if s is None:
-            if self.sedges is None:
-                s = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
-            else:
-                s = [(edges[:-1] + edges[1:]) / 2. for edges in self.sedges]
+            s = [(edges[:-1] + edges[1:]) / 2. for edges in self.sedges]
 
         if np.ndim(s[0]) == 0:
             s = [s] * len(self.ells)
@@ -533,7 +594,7 @@ class FiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMul
         interp_kernel = RectBivariateSpline(k_perp, q_perp, integral_kernel, kx=3, ky=3, s=0)
 
         wq = utils.weights_trapz(self.kin)
-        diag = utils.matrix_lininterp(self.kin, self.k)
+        diag = utils.matrix_lininterp(self.kin, self.k).T
         self.kernel_correlated = []
         for ellout in self.ells:
             legout = special.legendre(ellout)

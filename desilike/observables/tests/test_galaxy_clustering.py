@@ -48,7 +48,7 @@ def test_power_spectrum():
     likelihood.params['pk.loglikelihood'] = {}
     likelihood.params['pk.logprior'] = {}
     likelihood()
-    observable.plot(show=True)
+    #observable.plot(show=True)
     observable()
     #observable.wmatrix.plot(show=True)
     theory.template.init.update(z=1.)
@@ -63,11 +63,13 @@ def test_power_spectrum():
     params = {'al0_1': 100., 'al0_-1': 100., 'al2_1': 100., 'b1': 1.5}
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data=params,
+                                                         wmatrix=dict(resolution=2),
                                                          theory=theory)
     footprint = BoxFootprint(volume=1e10, nbar=1e-3)
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)(**params)
     likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
     print(likelihood(**params))
+    observable.wmatrix.plot(show=True)
     observable.plot_wiggles(show=True)
 
     theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
@@ -704,12 +706,12 @@ if __name__ == '__main__':
     setup_logging()
 
     # test_bao()
-    # test_power_spectrum()
+    test_power_spectrum()
     # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    test_compression()
+    # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

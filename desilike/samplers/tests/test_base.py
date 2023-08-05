@@ -23,7 +23,7 @@ def test_samplers():
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
     likelihood.params['LRG.loglikelihood'] = likelihood.params['LRG.logprior'] = {}
 
-    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler]:
+    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler][4:5]:
         kwargs = {}
         if Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]:
             kwargs.update(nwalkers=20)

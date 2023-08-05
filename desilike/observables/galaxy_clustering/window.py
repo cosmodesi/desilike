@@ -76,12 +76,9 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         Observed multipoles.
         Defaults to poles in ``klim``, if provided; else ``(0, 2, 4)``.
 
-    ellsin : tuple, default=None
-        Optionally, input theory multipoles.
-        If not specified, taken from ``wmatrix`` if provided, else ``(0, 2, 4)``.
-
-    wmatrix : str, Path, pypower.BaseMatrix, default=None
+    wmatrix : str, Path, pypower.BaseMatrix, dict, default=None
         Optionally, window matrix.
+        Can be e.g. {'resolution': 2}, specifying the number of theory :math:`k` to integrate over per observed bin.
 
     kinrebin : int, default=1
         If ``wmatrix`` (which is defined for input theory wavenumbers) is provided,
@@ -90,6 +87,10 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
     kinlim : tuple, default=None
         If ``wmatrix`` (which is defined for input theory wavenumbers) is provided,
         limit theory wavenumbers in the provided range.
+
+    ellsin : tuple, default=None
+        Optionally, input theory multipoles.
+        If not specified, taken from ``wmatrix`` if provided, else ``(0, 2, 4)``.
 
     shotnoise : float, default=0.
         Shot noise (window matrix must be applied to power spectrum with shot noise).
@@ -100,7 +101,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory power spectrum multipoles, defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
     """
-    def initialize(self, klim=None, k=None, ells=None, ellsin=None, wmatrix=None, kinrebin=1, kinlim=None, shotnoise=0., fiber_collisions=None, theory=None):
+    def initialize(self, klim=None, k=None, ells=None, wmatrix=None, kinrebin=1, kinlim=None, ellsin=None, shotnoise=0., fiber_collisions=None, theory=None):
         _default_step = 0.01
 
         if ells is None:
@@ -283,12 +284,13 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         ax.plot([], [], linestyle='--', color='k', label='window')
         for ill, ell in enumerate(self.ells):
             color = 'C{:d}'.format(ill)
+            ax.plot([], [], linestyle='-', color=color, label=r'$\ell = {:d}$'.format(ell))
             k = self.k[ill]
             if ell in self.ellsin:
                 illin = self.ellsin.index(ell)
                 maskin = (self.kin >= k[0]) & (self.kin <= k[-1])
                 ax.plot(self.kin[maskin], self.kin[maskin] * self.theory.power[illin][maskin], color=color, linestyle='-', label=None)
-            ax.plot(k, k * self.power[ill], color=color, linestyle='--', label=r'$\ell = {:d}$'.format(ell))
+            ax.plot(k, k * self.power[ill], color=color, linestyle='--', label=None)
         ax.grid(True)
         ax.legend()
         ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
@@ -314,13 +316,16 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
     ells : tuple, default=None
         Observed multipoles, defaults to ``(0, 2, 4)``.
 
+    wmatrix : dict, default=None
+        Can be e.g. {'resolution': 2}, specifying the number of theory :math:`k` to integrate over per observed bin.
+
     fiber_collisions : BaseFiberCollisionsPowerSpectrumMultipoles
         Optionally, fiber collisions.
 
     theory : BaseTheoryCorrelationFunctionMultipoles
         Theory correlation function multipoles, defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
     """
-    def initialize(self, slim=None, s=None, ells=None, fiber_collisions=None, theory=None):
+    def initialize(self, slim=None, s=None, ells=None, wmatrix=None, fiber_collisions=None, theory=None):
 
         _default_step = 5.
 
@@ -363,24 +368,37 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         self.theory = theory
 
         self.matrix_diag, self.matrix_full, self.smask, self.offset = None, None, None, None
-        self.sin = np.unique(np.concatenate(self.s, axis=0))
-        if not all(np.allclose(ss, self.sin) for ss in self.s):
-            self.smask = [np.searchsorted(self.sin, ss, side='left') for ss in self.s]
-            assert all(smask.min() >= 0 and smask.max() < ss.size for ss, smask in zip(self.s, self.smask))
-            self.smask = np.concatenate(self.smask, axis=0)
-        if theory is None:
-            from desilike.theories.galaxy_clustering import KaiserTracerCorrelationFunctionMultipoles
-            theory = KaiserTracerCorrelationFunctionMultipoles()
-        if fiber_collisions is not None:
-            fiber_collisions.init.update(s=self.sin, ells=self.ellsin, theory=theory)
-            fiber_collisions = fiber_collisions.runtime_info.initialize()
-            self.ellsin = tuple(fiber_collisions.ellsin)
-            self.matrix_diag = fiber_collisions.kernel_correlated
-            if fiber_collisions.with_uncorrelated: self.offset = fiber_collisions.kernel_uncorrelated.ravel()
-            if self.smask is not None:
-                self.matrix_diag = self.matrix_diag[..., self.smask]
-                if fiber_collisions.with_uncorrelated: self.offset = self.offset[self.smask]
-        self.theory.init.update(s=self.sin, ells=self.ellsin)
+        if wmatrix is None:
+            self.sin = np.unique(np.concatenate(self.s, axis=0))
+            if not all(np.allclose(ss, self.sin) for ss in self.s):
+                self.smask = [np.searchsorted(self.sin, ss, side='left') for ss in self.s]
+                assert all(smask.min() >= 0 and smask.max() < ss.size for ss, smask in zip(self.s, self.smask))
+                self.smask = np.concatenate(self.smask, axis=0)
+            self.theory.init.update(s=self.sin, ells=self.ellsin)
+            if fiber_collisions is not None:
+                fiber_collisions.init.update(s=self.sin, ells=self.ellsin, theory=self.theory)
+                fiber_collisions = fiber_collisions.runtime_info.initialize()
+                self.ellsin = tuple(fiber_collisions.ellsin)
+                self.matrix_diag = fiber_collisions.kernel_correlated
+                if fiber_collisions.with_uncorrelated: self.offset = fiber_collisions.kernel_uncorrelated.ravel()
+                if self.smask is not None:
+                    self.matrix_diag = self.matrix_diag[..., self.smask]
+                    if fiber_collisions.with_uncorrelated: self.offset = self.offset[self.smask]
+        else:
+            if isinstance(wmatrix, dict):
+                self.ellsin = tuple(self.ells)
+                self.sin, self.matrix_full = window_matrix_bininteg(self.sedges, **wmatrix)
+                self.matrix_full = self.matrix_full.T
+            else:
+                raise ValueError('Unrecognized wmatrix {}'.format(wmatrix))
+            self.theory.init.update(s=self.sin, ells=self.ellsin)
+            if fiber_collisions is not None:
+                fiber_collisions.init.update(s=self.sin, ells=self.ellsin, theory=self.theory)
+                fiber_collisions = fiber_collisions.runtime_info.initialize()
+                if fiber_collisions.with_uncorrelated: self.offset = self.matrix_full.dot(fiber_collisions.kernel_uncorrelated.ravel())
+                # kernel_correlated is (ellout, ellin, s)
+                self.matrix_full = self.matrix_full.dot(np.bmat([[np.diag(kk) for kk in kernel] for kernel in fiber_collisions.kernel_correlated]).A)
+                self.ellsin, self.sin = fiber_collisions.ellsin, fiber_collisions.sin
 
     def _apply(self, theory):
         if self.matrix_diag is not None:
@@ -440,12 +458,13 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         ax.plot([], [], linestyle='--', color='k', label='window')
         for ill, ell in enumerate(self.ells):
             color = 'C{:d}'.format(ill)
+            ax.plot([], [], linestyle='-', color=color, label=r'$\ell = {:d}$'.format(ell))
             s = self.s[ill]
             if ell in self.ellsin:
                 illin = self.ellsin.index(ell)
                 maskin = (self.sin >= s[0]) & (self.sin <= s[-1])
                 ax.plot(self.sin[maskin], self.sin[maskin]**2 * self.theory.corr[illin][maskin], color=color, linestyle='-', label=None)
-            ax.plot(s, s**2 * self.corr[ill], color=color, linestyle='--', label=r'$\ell = {:d}$'.format(ell))
+            ax.plot(s, s**2 * self.corr[ill], color=color, linestyle='--', label=None)
         ax.grid(True)
         ax.legend()
         ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')

@@ -72,8 +72,16 @@ def test_power_spectrum():
     observable.wmatrix.plot(show=True)
     observable.plot_wiggles(show=True)
 
-    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
-    params = {'al0_1': 100., 'al0_-1': 100.}
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data=params,
+                                                         wmatrix=dict(resolution=2),
+                                                         fiber_collisions=fiber_collisions,
+                                                         theory=theory)
+    footprint = BoxFootprint(volume=1e10, nbar=1e-3)
+    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)(**params)
+    likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
+    print(likelihood(**params))
+
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data=params,
                                                          wmatrix='../../tests/_pk/window.npy',
@@ -82,28 +90,7 @@ def test_power_spectrum():
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)(**params)
     likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
     print(likelihood(**params))
-    observable.plot_wiggles(show=True)
-
-
-def test_bao():
-
-    from cosmoprimo.fiducial import DESI
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, BAOPowerSpectrumTemplate
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
-
-    template = BAOPowerSpectrumTemplate(z=0.38, fiducial=DESI())
-    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
-    theory.init.params = theory.init.params.select(basename='al0_*')
-    theory.init.params.set(theory.init.params['al0_0'].clone(name='al0_6'))
-    observable = TracerPowerSpectrumMultipolesObservable(data='../../tests/_pk/data.npy',
-                                                         covariance='../../tests/_pk/mock_*.npy',
-                                                         klim={0: [0.01, 0.3]},
-                                                         wmatrix='../../tests/_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-
-    setup_logging()
-    print(likelihood.all_params)
+    #observable.plot_wiggles(show=True)
 
 
 def test_correlation_function():
@@ -153,6 +140,44 @@ def test_correlation_function():
     observable.plot(show=True)
     print(observable.runtime_info.pipeline.varied_params)
     assert theory.power.template.z == 1.
+
+    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
+                                                               data={}, #'../../tests/_xi/data.npy',
+                                                               covariance='../../tests/_xi/mock_*.npy',
+                                                               theory=theory,
+                                                               wmatrix={'resolution': 2})
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    observable.wmatrix.plot(show=True)
+
+    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
+                                                               data={}, #'../../tests/_xi/data.npy',
+                                                               covariance='../../tests/_xi/mock_*.npy',
+                                                               theory=theory,
+                                                               wmatrix={'resolution': 2},
+                                                               fiber_collisions=fiber_collisions)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    observable.wmatrix.plot(show=True)
+
+
+def test_bao():
+
+    from cosmoprimo.fiducial import DESI
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, BAOPowerSpectrumTemplate
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+
+    template = BAOPowerSpectrumTemplate(z=0.38, fiducial=DESI())
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
+    theory.init.params = theory.init.params.select(basename='al0_*')
+    theory.init.params.set(theory.init.params['al0_0'].clone(name='al0_6'))
+    observable = TracerPowerSpectrumMultipolesObservable(data='../../tests/_pk/data.npy',
+                                                         covariance='../../tests/_pk/mock_*.npy',
+                                                         klim={0: [0.01, 0.3]},
+                                                         wmatrix='../../tests/_pk/window.npy',
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+
+    setup_logging()
+    print(likelihood.all_params)
 
 
 def test_footprint():
@@ -707,7 +732,7 @@ if __name__ == '__main__':
 
     # test_bao()
     test_power_spectrum()
-    # test_correlation_function()
+    test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()

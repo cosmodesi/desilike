@@ -392,7 +392,8 @@ class BasePipeline(BaseClass):
                         param.setdefault('namespace', calculator.runtime_info.namespace)
                     param = Parameter(param).clone(derived=True)
                     for dparam in calculator.runtime_info.derived_params.names(basename=param.basename):
-                        param = calculator.runtime_info.params[dparam]
+                        param = calculator.runtime_info.params[dparam].clone(namespace=param.namespace)
+                        break
                     calculator.runtime_info.params.set(param)
             calculator.runtime_info.params = calculator.runtime_info.params
         self._set_params(params=self.params)

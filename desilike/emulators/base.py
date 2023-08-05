@@ -331,6 +331,7 @@ class Emulator(BaseClass):
         calculator = new_cls(emulator=self)
         calculator.runtime_info.initialize()  # to initialize
         if derived is not None:
+            print(derived, calculator.params.select(derived=True))
             calculator.runtime_info.pipeline._set_derived([calculator], params=[derived])
 
         return calculator

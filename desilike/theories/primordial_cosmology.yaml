@@ -41,7 +41,7 @@ params:
       dist: norm
       loc: 0.02237
       scale: 0.00015
-    delta: 0.0001
+    delta: 0.0002
     latex: \omega_{b}
   logA:
     prior:

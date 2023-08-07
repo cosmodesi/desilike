@@ -193,17 +193,24 @@ def test_full_shape():
             theory = calculator
         clean_folps()
         assert np.allclose(theory(), bak)
+        if 'Correlation' not in theory.__class__.__name__: theory.nd
         if test_likelihood:
             likelihood()
             theory.plot(show=True)
 
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
 
+    from desilike.theories.galaxy_clustering import SimpleTracerPowerSpectrumMultipoles
+    theory = SimpleTracerPowerSpectrumMultipoles()
+    test_emulator_likelihood(theory, emulate=None)
+
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
     theory = KaiserTracerPowerSpectrumMultipoles()
-    theory(logA=3.04, b1=1.).shape
+    test_emulator_likelihood(theory, emulate='pt')
+    test_emulator_likelihood(theory, emulate=None)
     theory = KaiserTracerCorrelationFunctionMultipoles()
-    theory(logA=3.04, b1=1.).shape
+    test_emulator_likelihood(theory, emulate='pt')
+    test_emulator_likelihood(theory, emulate=None)
 
     from desilike.theories.galaxy_clustering import EFTLikeKaiserTracerPowerSpectrumMultipoles, EFTLikeKaiserTracerCorrelationFunctionMultipoles
 
@@ -821,8 +828,8 @@ if __name__ == '__main__':
     #test_templates()
     #test_bao()
     #test_flexible_bao()
-    #test_full_shape()
-    test_png()
+    test_full_shape()
+    #test_png()
     #test_pk_to_xi()
     #test_ap_diff()
     #test_ptt()

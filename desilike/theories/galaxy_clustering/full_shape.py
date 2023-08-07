@@ -260,7 +260,8 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
     """
     config_fn = 'full_shape.yaml'
 
-    def initialize(self, *args, mu=8, method='leggauss', template=None, **kwargs):
+    def initialize(self, *args, mu=8, method='leggauss', template=None, shotnoise=1e4, **kwargs):
+        self.nd = 1. / shotnoise
         if template is None:
             template = StandardPowerSpectrumTemplate()
         super(SimpleTracerPowerSpectrumMultipoles, self).initialize(*args, template=template, mu=mu, method=method, **kwargs)
@@ -278,6 +279,40 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
 
     def get(self):
         return self.power
+
+    def __getstate__(self):
+        state = {}
+        for name in ['k', 'z', 'ells', 'nd', 'power']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        return state
+
+    @plotting.plotter
+    def plot(self):
+        """
+        Plot power spectrum multipoles.
+
+        Parameters
+        ----------
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+        """
+        from matplotlib import pyplot as plt
+        ax = plt.gca()
+        for ill, ell in enumerate(self.ells):
+            ax.plot(self.k, self.k * self.power[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.grid(True)
+        ax.legend()
+        ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        return ax
 
 
 class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):

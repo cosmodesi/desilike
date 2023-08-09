@@ -90,7 +90,7 @@ def coefficients(order, acc, coords, idx):
     return np.linalg.solve(matrix, rhs), np.array([p for p in range(-nside, nside + 1)])
 
 
-def deriv_nd(X, Y, orders, center=None):
+def deriv_nd(X, Y, orders, center=None, atol=0.):
     """
     Compute n-dimensional derivative.
 
@@ -109,6 +109,9 @@ def deriv_nd(X, Y, orders, center=None):
         The center around which to take derivatives, of size ndim.
         If ``None``, defaults to the median of input ``X``.
 
+    atol : list, float
+        Absolute tolerance to find the center.
+
     Returns
     -------
     deriv : array
@@ -121,8 +124,11 @@ def deriv_nd(X, Y, orders, center=None):
     orders = uorders
     if center is None:
         center = [np.median(np.unique(xx)) for xx in X.T]
+    if np.ndim(atol) == 0:
+        atol = [atol] * X.shape[1]
+    atol = list(atol)
     if not len(orders):
-        toret = Y[np.all([xx == cc for xx, cc in zip(X.T, center)], axis=0)]
+        toret = Y[np.all([np.isclose(xx, cc, rtol=0., atol=at) for xx, cc, at in zip(X.T, center, atol)], axis=0)]
         if not toret.size:
             raise ValueError('Global center point not found')
         return toret[0]
@@ -131,23 +137,24 @@ def deriv_nd(X, Y, orders, center=None):
     coord = np.unique(X[..., axis])
     if coord.size < ncoeffs:
         raise ValueError('Grid is not large enough ({:d} < {:d}) to estimate {:d}-th order derivative'.format(coord.size, ncoeffs, order))
-    cidx = np.flatnonzero(coord == center[axis])
+    cidx = np.flatnonzero(np.isclose(coord, center[axis], rtol=0., atol=atol[axis]))
     if not cidx.size:
         raise ValueError('Global center point not found')
     cidx = cidx[0]
     toret = 0.
     for coeff, offset in zip(*coefficients(order, acc, coord, cidx)):
-        mask = X[:, axis] == coord[cidx + offset]
+        mask = X[..., axis] == coord[cidx + offset]
         ncenter = center.copy()
         ncenter[axis] = coord[cidx + offset]
-        y = deriv_nd(X[mask], Y[mask], orders[:-1], center=ncenter)
+        # We could fill in atol[axis] = 0., but it should be useless?
+        y = deriv_nd(X[mask], Y[mask], orders[:-1], center=ncenter, atol=atol)
         toret += y * coeff
     return toret
 
 
 def deriv_grid(grids, current_order=0):
     """
-    Return grid of points to compute to estimate derivatives.
+    Return grid of points where to compute function to estimate its derivatives.
 
     Parameters
     ----------
@@ -157,7 +164,7 @@ def deriv_grid(grids, current_order=0):
     Returns
     -------
     grid : list
-        List of coordinates (list).
+        List of coordinates.
     """
     grid, orders, maxorder = grids[-1]
     toret = []
@@ -293,7 +300,7 @@ class Differentiation(BaseClass):
                     raise ValueError('accuracy is {} for parameter {}, but it must be a positive EVEN integer'.format(value, param))
                 self.accuracy[param] = value
 
-        self._grid_center, grids = {}, []
+        self._grid_center, grids, self._atol = {}, [], {}
         for param in self.varied_params:
             self._grid_center[param.name] = center = param.value
             if self.method[param.name] == 'finite' and self.order[param.name]:
@@ -328,6 +335,7 @@ class Differentiation(BaseClass):
             else:
                 grid = (np.array([center]), np.array([0]), 0)
             grids.append(grid)
+            self._atol[param.name] = 1e-3 * np.append(np.abs(np.diff(grid[0])), 0.1).min()  # absolute tolerance to find the center
 
         self._grid_samples = None
         if mpicomm.rank == 0:
@@ -457,7 +465,8 @@ class Differentiation(BaseClass):
                 ndim = X.shape[1]
                 #center = np.array([np.median(np.unique(xx)) for xx in X.T])
                 center = [self.center[param] for param in finiteparams]
-                cidx = np.flatnonzero(np.all([xx == cc for xx, cc in zip(X.T, center)], axis=0))
+                atol = [self._atol[param] for param in finiteparams]
+                cidx = np.flatnonzero(np.all([np.isclose(xx, cc, rtol=0., atol=atol) for xx, cc, atol in zip(X.T, center, atol)], axis=0))
                 if not cidx.size:
                     raise ValueError('Global center point not found')
                 cidx = tuple(cidx)
@@ -496,7 +505,7 @@ class Differentiation(BaseClass):
                                 if degree in degrees:
                                     continue
                                 orders = [(iparam, order, accuracy) for iparam, (order, accuracy) in enumerate(zip(orders, finiteaccuracy)) if order > 0]
-                                dx = [deriv_nd(X, y, orders, center=center) for y in Y]
+                                dx = [deriv_nd(X, y, orders, center=center, atol=atol) for y in Y]
                                 if any(np.isnan(ddx).any() for ddx in dx):
                                     raise ValueError('Some derivatives are NaN')
                                 degrees.append(degree)

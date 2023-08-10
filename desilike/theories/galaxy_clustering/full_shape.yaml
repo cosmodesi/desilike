@@ -3,19 +3,19 @@ class: SimpleTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   sn0:
     prior:
       dist: norm
       loc: 0.
-      scale: 1e7
+      scale: 1000.
     ref:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 0.1
     latex: s_{n, 0}
     fixed: False
   sigmapar:
@@ -46,21 +46,20 @@ class: KaiserTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   sn0:
     prior:
       dist: norm
       loc: 0.
-      scale: 1e7
+      scale: 1000.
     ref:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 0.1
     latex: s_{n, 0}
-    fixed: False
   sigmapar:
     value: 0.
     prior:
@@ -90,9 +89,9 @@ params:
   b1:
     prior:
       dist: uniform
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   sigmapar:
     value: 0.
@@ -123,9 +122,9 @@ params:
   b1:
     prior:
       dist: uniform
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   b2:
     prior:
@@ -164,7 +163,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 100
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -174,21 +173,21 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 1e7
+      scale: 1000.
     ref:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 0.1
     latex: s_{n, 0}
   sn[:5:2]_2:
     prior:
       dist: norm
       loc: 0.
-      scale: 1e7
+      scale: 1000.
     ref:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 0.1
     latex: s_{[], 2}
   sigmapar:
     value: 0.
@@ -219,9 +218,9 @@ params:
   b1:
     prior:
       dist: uniform
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   b2:
     prior:
@@ -260,7 +259,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 100
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -296,9 +295,9 @@ params:
   b1:
     prior:
       dist: uniform
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   b2:
     prior:
@@ -332,6 +331,16 @@ params:
       scale: 0.5
     latex: b_{3}
     fixed: True
+  sn0:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 0}
 
 ---
 
@@ -341,9 +350,9 @@ params:
   b1:
     prior:
       dist: uniform
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   b2:
     prior:
@@ -387,9 +396,9 @@ params:
   b1:
     prior:
       dist: uniform
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   b2:
     prior:
@@ -427,7 +436,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 100
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -437,22 +446,22 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 1e7
+      scale: 1000.
     ref:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 0.1
     latex: s_{n, 0}
   sn[:5:2]_2:
     prior:
       dist: norm
       loc: 0.
-      scale: 1e7
+      scale: 1000.
     ref:
       dist: norm
       loc: 0.
-      scale: 100.
-    latex: s_{[], 2}
+      scale: 0.1
+    latex: s_{n, [], 2}
 
 ---
 
@@ -462,9 +471,9 @@ params:
   b1:
     prior:
       dist: uniform
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   b2:
     prior:
@@ -502,7 +511,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 100
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -518,7 +527,7 @@ params:
   b1:
     prior:
       dist: uniform
-      limits: [-1., 4.0]
+      limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
     latex: b_{1}
@@ -557,7 +566,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 100
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -571,7 +580,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 1.
+      scale: 0.1
     latex: s_{n, []}
 
 ---
@@ -582,7 +591,7 @@ params:
   b1:
     prior:
       dist: uniform
-      limits: [-1., 4.0]
+      limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
     latex: b_{1}
@@ -625,7 +634,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 1.0
+      scale: 1.
     latex: \alpha_{[]}
 
 ---
@@ -636,7 +645,7 @@ params:
   b1:
     prior:
       dist: uniform
-      limits: [-1., 4.0]
+      limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
     latex: b_{1}
@@ -680,7 +689,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 1.0
+      scale: 1.
     latex: \alpha_{[]}
   sn[:5:2]:
     prior:
@@ -690,7 +699,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 1.
+      scale: 0.1
     latex: s_{n, []}
   alpha:
     value: 0.
@@ -755,7 +764,7 @@ params:
   b1:
     prior:
       dist: uniform
-      limits: [-1., 4.0]
+      limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
     latex: b_{1}
@@ -799,7 +808,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 1.0
+      scale: 1.
     latex: \alpha_{[]}
   sn[:5:2]:
     prior:
@@ -809,7 +818,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 1.
+      scale: 0.1
     latex: s_{n, []}
   alpha:
     value: 0.
@@ -874,7 +883,7 @@ params:
   b1:
     prior:
       dist: uniform
-      limits: [-1., 4.0]
+      limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
     latex: b_{1}
@@ -918,7 +927,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 1.0
+      scale: 1.
     latex: \alpha_{[]}
   sn[:5:2]:
     prior:
@@ -928,7 +937,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 1.
+      scale: 0.1
     latex: s_{n, []}
   alpha:
     value: 0.
@@ -994,7 +1003,7 @@ params:
   b1:
     prior:
       dist: uniform
-      limits: [-1., 4.0]
+      limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
     latex: b_{1}
@@ -1038,7 +1047,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 1.0
+      scale: 1.
     latex: \alpha_{[]}
   sn[:5:2]:
     prior:
@@ -1048,7 +1057,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 1.
+      scale: 0.1
     latex: s_{n, []}
   alpha:
     value: 0.
@@ -1113,7 +1122,7 @@ class: PyBirdTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
       limits: [1.4, 1.6]
     latex: b_{1}
@@ -1226,7 +1235,7 @@ class: PyBirdTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
       limits: [1.4, 1.6]
     latex: b_{1}
@@ -1333,7 +1342,7 @@ class: FOLPSTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
       limits: [1.4, 1.6]
     latex: b_{1}
@@ -1373,7 +1382,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 100
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -1387,7 +1396,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 1.
+      scale: 0.1
     latex: s_{n, []}
 
 ---
@@ -1397,7 +1406,7 @@ class: FOLPSTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
       limits: [1.4, 1.6]
     latex: b_{1}
@@ -1441,5 +1450,5 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 1.0
+      scale: 1.
     latex: \alpha_{[]}

@@ -319,7 +319,8 @@ These can be used with e.g.:
   profiles = profiler.maximize(niterations=5)
   profiles = profiler.interval(params=['b1'])
   # To print relevant information
-  print(profiles.to_stats(tablefmt='pretty'))
+  if profiler.mpicomm.rank == 0:
+    print(profiles.to_stats(tablefmt='pretty'))
 
 See :class:`~desilike.samples.profiles.Profiles` to know more about this data class.
 
@@ -345,6 +346,17 @@ These can be used with e.g.:
   sampler = EmceeSampler(likelihood)
   chains = sampler.run(check={'max_eigen_gr': 0.05})  # run until Gelman-Rubin criterion < 0.05
   # To print relevant information
-  print(chains[0].to_stats(tablefmt='pretty'))
+  if sampler.mpicomm.rank == 0:  # chains only available on rank 0
+    chain = chains[0].concatenate([chain.remove_burnin(0.5)[::10] for chain in chains])  # removing burnin and thinning
+    print(chain.to_stats(tablefmt='pretty'))
 
 See :class:`~desilike.samples.chain.Chain` to know more about this data class.
+
+
+MPI
+---
+All costly operations, e.g. emulation, Fisher (computation of numerical derivatives), profiling, sampling, are MPI-parallelized.
+Look at the emulator, profiler and sampler documentation for more information.
+In a nutshell, the code in the above sections (Emulators, Fisher, Profilers, Samplers) can be run without any change on several MPI processes;
+if written in a script ``yourscript.py``, it can be launched with e.g. 8 processes (or more, depending on your setup): ``mpiexec -np 8 yourscript.py``.
+On supercomputers using Slurm workload manager, one may have to use ``srun -n`` instead of ``mpiexec -np``.

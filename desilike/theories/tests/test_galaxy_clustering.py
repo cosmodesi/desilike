@@ -196,7 +196,9 @@ def test_full_shape():
         if 'Correlation' not in theory.__class__.__name__: theory.nd
         if test_likelihood:
             likelihood()
-            theory.plot(show=True)
+            from desilike.theories.galaxy_clustering.base import BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
+            if not isinstance(theory, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):
+                theory.plot(show=True)
 
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
 

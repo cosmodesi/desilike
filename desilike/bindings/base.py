@@ -90,7 +90,7 @@ class BaseLikelihoodGenerator(BaseClass):
         cls = import_class(likelihood)
         if name_like is None:
             name_like = cls.__name__
-        src_fn = sys.modules[cls.__module__].__file__
+        src_fn = os.path.abspath(sys.modules[cls.__module__].__file__)
         # src_dir = os.path.dirname(src_fn)
         fn = os.path.join(self.dirname, os.path.relpath(src_fn, os.path.commonpath([self.dirname, src_fn])))
         if module is None:

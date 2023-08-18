@@ -315,12 +315,15 @@ These can be used with e.g.:
 
   from desilike.profilers import MinuitProfiler
 
-  profiler = MinuitProfiler(likelihood)
+  profiler = MinuitProfiler(likelihood)  # optinally, provide save_fn = 'profiles.npy' to save profiles to save_fn
   profiles = profiler.maximize(niterations=5)
   profiles = profiler.interval(params=['b1'])
   # To print relevant information
   if profiler.mpicomm.rank == 0:
     print(profiles.to_stats(tablefmt='pretty'))
+    # If you saved profiles to 'profiles.npy', you can load the object with:
+    # from desilike.samples import Profiles
+    # profiles = Profiles.load('profiles.npy')
 
 See :class:`~desilike.samples.profiles.Profiles` to know more about this data class.
 
@@ -343,12 +346,15 @@ These can be used with e.g.:
 
   from desilike.samplers import EmceeSampler
 
-  sampler = EmceeSampler(likelihood)
+  sampler = EmceeSampler(likelihood, chains=4)  # optinally, provide save_fn = 'chain_*.npy' to save chains to save_fn
   chains = sampler.run(check={'max_eigen_gr': 0.05})  # run until Gelman-Rubin criterion < 0.05
   # To print relevant information
   if sampler.mpicomm.rank == 0:  # chains only available on rank 0
     chain = chains[0].concatenate([chain.remove_burnin(0.5)[::10] for chain in chains])  # removing burnin and thinning
     print(chain.to_stats(tablefmt='pretty'))
+    # If you saved chains to 'chain_*.npy', you can load them with:
+    # from desilike.samples import Chain
+    # chain = Chain.concatenate([Chain.load('chain_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])  # remove burnin and thin by a factor 10
 
 See :class:`~desilike.samples.chain.Chain` to know more about this data class.
 

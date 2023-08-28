@@ -106,16 +106,46 @@ def plotter(func):
 
     show : bool, default=False
         If ``True``, show figure.
+        
+    interactive : True or dict, default=False
+        If not None, use interactive interface provided by ipywidgets. Interactive can be a dictionary 
+        with several entries:
+            * ref_param : Use to display reference theory
     """
     from functools import wraps
 
     @wraps(func)
-    def wrapper(*args, fn=None, kw_save=None, show=False, **kwargs):
+    def wrapper(*args, fn=None, kw_save=None, show=False, interactive=None, **kwargs):
         from matplotlib import pyplot as plt
-        toret = func(*args, **kwargs)
-        if fn is not None:
-            savefig(fn, fig=plt.gcf(), **(kw_save or {}))
-        if show: plt.show()
-        return toret
+        if (interactive is None) or (interactive is False):
+            toret = func(*args, **kwargs)
+            if fn is not None:
+                savefig(fn, fig=plt.gcf(), **(kw_save or {}))
+            if show: plt.show()
+            return toret
+        else:
+            import ipywidgets as widgets
+            from IPython.display import display
+            
+            if interactive is True: interactive = {}
+            
+            def interactive_plot(**params):
+                if 'ref_param' in interactive:
+                    args[0](**interactive['ref_param']) 
+                    lax = func(*args, kw_theo=[{'color':'black', 'label': 'reference'}], **kwargs)
+                else:
+                    lax = None
+                args[0](**params) 
+                toret = func(lax=lax, *args, **kwargs)
+            
+            # collect limits of varied params and initialize the associated slider
+            sliders = dict()
+            for param in args[0].varied_params:
+                sliders[param.basename] = widgets.FloatSlider(min=param.prior.limits[0],
+                                                              max=param.prior.limits[1],
+                                                              step=0.01, 
+                                                              value=param.value)              
+            w = widgets.interactive(interactive_plot, **sliders)
+            display(w)
 
     return wrapper

@@ -170,14 +170,20 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         return flatdata, list_y
 
     @plotting.plotter
-    def plot(self, scaling='kpk'):
+    def plot(self, lax=None, scaling='kpk', kw_theo=None):
         """
         Plot data and theory power spectrum multipoles.
 
         Parameters
         ----------
+        lax : matplotlib axs, default=None
+            If not provided, generate a new figure with default parametrization, otherwise use the provided axes that should have at least 1 + #ells axes.
+        
         scaling : str, default='kpk'
             Either 'kpk' or 'loglog'.
+            
+        kw_theo : list of dict, default=None
+            Change the default line parametrization of the theory, one dictionary for each ell or duplicate it.
 
         fn : str, Path, default=None
             Optionally, path where to save figure.
@@ -188,24 +194,44 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
         show : bool, default=False
             If ``True``, show figure.
+            
+        interactive : bool, default=False
+            If ``True``, use interactive interface provided by ipywidgets
+            
+        
         """
         from matplotlib import pyplot as plt
-        height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
-        figsize = (6, 1.5 * sum(height_ratios))
-        fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
-        fig.subplots_adjust(hspace=0)
+        
+        if kw_theo is None:
+            kw_theo = [{}] * len(self.ells)
+        elif len(kw_theo) != len(self.ells):
+            kw_theo = kw_theo * len(self.ells)
+ 
+        if lax is None:
+            height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
+            figsize = (6, 1.5 * sum(height_ratios))
+            fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
+            fig.subplots_adjust(hspace=0.1)
+            show_legend = True
+        else:
+            show_legend = False
+            
         data, theory, std = self.data, self.theory, self.std
         k_exp = 1 if scaling == 'kpk' else 0
+        
         for ill, ell in enumerate(self.ells):
             lax[0].errorbar(self.k[ill], self.k[ill]**k_exp * data[ill], yerr=self.k[ill]**k_exp * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o', label=r'$\ell = {:d}$'.format(ell))
-            lax[0].plot(self.k[ill], self.k[ill]**k_exp * theory[ill], color='C{:d}'.format(ill))
+            if not 'color' in kw_theo[ill]: kw_theo[ill]['color'] = 'C{:d}'.format(ill)
+            lax[0].plot(self.k[ill], self.k[ill]**k_exp * theory[ill], **kw_theo[ill])
+            
         for ill, ell in enumerate(self.ells):
-            lax[ill + 1].plot(self.k[ill], (data[ill] - theory[ill]) / std[ill], color='C{:d}'.format(ill))
+            lax[ill + 1].plot(self.k[ill], (data[ill] - theory[ill]) / std[ill], **kw_theo[ill])
             lax[ill + 1].set_ylim(-4, 4)
             for offset in [-2., 2.]: lax[ill + 1].axhline(offset, color='k', linestyle='--')
             lax[ill + 1].set_ylabel(r'$\Delta P_{{{0:d}}} / \sigma_{{ P_{{{0:d}}} }}$'.format(ell))
+            
         for ax in lax: ax.grid(True)
-        lax[0].legend()
+        if show_legend: lax[0].legend()
         if scaling == 'kpk':
             lax[0].set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         if scaling == 'loglog':
@@ -213,6 +239,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             lax[0].set_yscale('log')
             lax[0].set_xscale('log')
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        
         return lax
 
     @plotting.plotter

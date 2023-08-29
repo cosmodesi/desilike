@@ -1,0 +1,58 @@
+theory:
+  classy:
+    extra_args:
+      N_ncdm: 1
+      N_ur: 2.0328
+
+likelihood:
+  desilike.bindings.tests.cobaya_bindings.TestDirectKaiserLikelihood: null
+
+params:
+  Omega_m:
+    prior:
+      min: 0.01
+      max: 1.
+    ref:
+      dist: norm
+      loc: 0.3153
+      scale: 0.0073
+    latex: \Omega_{m}
+  omega_b:
+    prior:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00037
+    ref:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00015
+    latex: \omega_{b}
+  H0:
+    prior:
+      min: 1.
+      max: 100.
+    ref:
+      dist: norm
+      loc: 67.36
+      scale: 0.5
+    latex: H_{0}
+  As:
+    value: 'lambda logA: 1e-10*np.exp(logA)'
+    latex: A_\mathrm{s}
+  logA:
+    prior:
+      min: 1.61
+      max: 3.91
+    ref:
+      dist: norm
+      loc: 3.036394
+      scale: 0.014
+    latex: \ln(10^{10} A_{s})
+    drop: True
+
+sampler:
+  mcmc:
+
+debug: True
+
+output: _chains/test

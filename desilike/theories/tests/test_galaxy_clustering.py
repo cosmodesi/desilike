@@ -202,6 +202,19 @@ def test_full_shape():
 
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
 
+    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
+    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    theory(dm=0.01, b1=1.).shape
+    assert not np.allclose(theory(dm=-0.01), theory(dm=0.01))
+    assert not np.allclose(theory(qpar=0.99), theory(qper=1.01))
+    test_emulator_likelihood(theory, emulate='pt')
+    test_emulator_likelihood(theory, emulate=None)
+    theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    test_emulator_likelihood(theory)
+    theory(dm=0.01, b1=1.).shape
+    theory.pt
+    exit()
+
     from desilike.theories.galaxy_clustering import SimpleTracerPowerSpectrumMultipoles
     theory = SimpleTracerPowerSpectrumMultipoles()
     test_emulator_likelihood(theory, emulate=None)

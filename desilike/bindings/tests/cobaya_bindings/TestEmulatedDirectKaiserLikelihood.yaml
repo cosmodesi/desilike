@@ -1,0 +1,26 @@
+params:
+  ELG.b1:
+    latex: b_{1, \mathrm{ELG}}
+    prior:
+      dist: uniform
+      max: 4.0
+      min: 0.0
+    proposal: 0.28867513459481287
+    ref:
+      dist: uniform
+      max: 2.0
+      min: 1.0
+  ELG.sn0:
+    latex: s_{n, 0, \mathrm{ELG}}
+    prior:
+      dist: norm
+      loc: 0.0
+      scale: 1000.0
+    proposal: 0.1
+    ref:
+      dist: norm
+      loc: 0.0
+      scale: 0.1
+  sigmapar: 0.0
+  sigmaper: 0.0
+stop_at_error: true

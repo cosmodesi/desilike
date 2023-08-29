@@ -45,7 +45,6 @@ def fallback(func):
     return wrapper
 
 
-
 class rv_frozen(object):
     """
     ``jax`` currently does not implement scipy's frozen random variate.

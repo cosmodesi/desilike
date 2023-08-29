@@ -278,6 +278,19 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, para
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
         return self.like(**{name: value for name, value in params_values.items() if name in self._nuisance_params})
 
+    '''
+    @classmethod
+    def get_text_file_content(cls, file_name: str) -> Optional[str]:
+        """
+        Return the content of a file in the directory of the module, if it exists.
+        """
+        package = inspect.getmodule(cls).__package__  # for __package__ to be non-zero, we need the class module's package to be specified, e.g. cobaya_bindings
+        try:
+            return resources.read_text(package, file_name)
+        except Exception:
+            return None
+    '''
+
     d = {'initialize': initialize, 'get_requirements': get_requirements, 'logp': logp}
     if module is not None:
         d['__module__'] = module

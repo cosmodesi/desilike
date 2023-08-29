@@ -491,10 +491,6 @@ class LikelihoodFisher(BaseClass):
         if other == 0: return self.deepcopy()
         return self.__add__(other)
 
-    def __iadd__(self, other):
-        if other == 0: return self.deepcopy()
-        return self.__add__(other)
-
     def to_likelihood(self):
         """
         Export Fisher to Gaussian likelihood.

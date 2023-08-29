@@ -1665,11 +1665,6 @@ class ParameterCollection(BaseParameterCollection):
         if other == 0: return self.copy()
         return self.__class__(other).__add__(self)
 
-    def __iadd__(self, other):
-        if other == 0: return self
-        self.__dict__.update(self.__add__(other).__dict__)
-        return self
-
     def __sub__(self, other):
         """Subtract two parameter collections."""
         other = self.__class__(other)
@@ -1679,11 +1674,6 @@ class ParameterCollection(BaseParameterCollection):
         if other == 0: return self.copy()
         return self.__class__(other).__sub__(self)
 
-    def __isub__(self, other):
-        if other == 0: return self
-        self.__dict__.update(self.__sub__(other).__dict__)
-        return self
-
     def __and__(self, other):
         """Intersection of two parameter collections."""
         return self.__class__([param for param in self if param in other])
@@ -1691,11 +1681,6 @@ class ParameterCollection(BaseParameterCollection):
     def __rand__(self, other):
         if other == 0: return self.copy()
         return self.__class__(other).__and__(self)
-
-    def __iand__(self, other):
-        if other == 0: return self
-        self.__dict__.update(self.__and__(other).__dict__)
-        return self
 
     def params(self, **kwargs):
         """Return a collection of parameters :class:`ParameterCollection`, with optional selection. See :meth:`select`."""
@@ -2757,9 +2742,5 @@ class ParameterPrecision(BaseParameterMatrix):
         return self.sum(self, other)
 
     def __radd__(self, other):
-        if other == 0: return self.deepcopy()
-        return self.__add__(other)
-
-    def __iadd__(self, other):
         if other == 0: return self.deepcopy()
         return self.__add__(other)

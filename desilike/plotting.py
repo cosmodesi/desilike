@@ -132,20 +132,18 @@ def plotter(func):
             def interactive_plot(**params):
                 if 'ref_param' in interactive:
                     args[0](**interactive['ref_param']) 
-                    lax = func(*args, kw_theo=[{'color':'black', 'label': 'reference'}], **kwargs)
+                    lax = func(*args, kw_theory=[{'color':'black', 'label': 'reference'}], **kwargs)
                 else:
                     lax = None
                 args[0](**params) 
                 toret = func(lax=lax, *args, **kwargs)
-            
-            # collect limits of varied params and initialize the associated slider
-            sliders = dict()
-            for param in args[0].varied_params:
-                sliders[param.basename] = widgets.FloatSlider(min=param.prior.limits[0],
-                                                              max=param.prior.limits[1],
-                                                              step=0.01, 
-                                                              value=param.value)              
-            w = widgets.interactive(interactive_plot, **sliders)
+
+            w = widgets.interactive(interactive_plot,
+                                    **{param.basename: widgets.FloatSlider(min=param.prior.limits[0],
+                                                                           max=param.prior.limits[1],
+                                                                           step=(param.prior.limits[1] - param.prior.limits[0]) / 100,
+                                                                           value=param.value, 
+                                                                           description=param.latex(inline=True) + ' : ') for param in args[0].varied_params})
             display(w)
 
     return wrapper

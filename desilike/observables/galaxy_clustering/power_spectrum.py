@@ -170,7 +170,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         return flatdata, list_y
 
     @plotting.plotter
-    def plot(self, lax=None, scaling='kpk', kw_theo=None):
+    def plot(self, lax=None, scaling='kpk', kw_theory=None):
         """
         Plot data and theory power spectrum multipoles.
 
@@ -182,7 +182,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         scaling : str, default='kpk'
             Either 'kpk' or 'loglog'.
             
-        kw_theo : list of dict, default=None
+        kw_theory : list of dict, default=None
             Change the default line parametrization of the theory, one dictionary for each ell or duplicate it.
 
         fn : str, Path, default=None
@@ -202,10 +202,10 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         """
         from matplotlib import pyplot as plt
         
-        if kw_theo is None:
-            kw_theo = [{}] * len(self.ells)
-        elif len(kw_theo) != len(self.ells):
-            kw_theo = kw_theo * len(self.ells)
+        if kw_theory is None:
+            kw_theory = [{}] * len(self.ells)
+        elif len(kw_theory) != len(self.ells):
+            kw_theory = kw_theory * len(self.ells)
  
         if lax is None:
             height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
@@ -221,11 +221,11 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         
         for ill, ell in enumerate(self.ells):
             lax[0].errorbar(self.k[ill], self.k[ill]**k_exp * data[ill], yerr=self.k[ill]**k_exp * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o', label=r'$\ell = {:d}$'.format(ell))
-            if not 'color' in kw_theo[ill]: kw_theo[ill]['color'] = 'C{:d}'.format(ill)
-            lax[0].plot(self.k[ill], self.k[ill]**k_exp * theory[ill], **kw_theo[ill])
+            if not 'color' in kw_theory[ill]: kw_theory[ill]['color'] = 'C{:d}'.format(ill)
+            lax[0].plot(self.k[ill], self.k[ill]**k_exp * theory[ill], **kw_theory[ill])
             
         for ill, ell in enumerate(self.ells):
-            lax[ill + 1].plot(self.k[ill], (data[ill] - theory[ill]) / std[ill], **kw_theo[ill])
+            lax[ill + 1].plot(self.k[ill], (data[ill] - theory[ill]) / std[ill], **kw_theory[ill])
             lax[ill + 1].set_ylim(-4, 4)
             for offset in [-2., 2.]: lax[ill + 1].axhline(offset, color='k', linestyle='--')
             lax[ill + 1].set_ylabel(r'$\Delta P_{{{0:d}}} / \sigma_{{ P_{{{0:d}}} }}$'.format(ell))

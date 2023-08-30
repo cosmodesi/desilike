@@ -220,7 +220,6 @@ class PolychordSampler(BasePosteriorSampler):
                         pass
                     else:
                         nlive = len(live)
-                        print('LOOOOL', samples[0].shape, nlive)
                         #aweight, loglikelihood = [np.concatenate([sample, np.full(nlive, value, dtype='f8')]) for sample, value in zip(samples[:2], [0., np.nan])]
                         aweight = np.concatenate([samples[0], np.zeros(nlive, dtype='f8')])
                         points = [np.concatenate([sample, live[:, iparam]]) for iparam, sample in enumerate(samples[2: 2 + ndim])]
@@ -248,7 +247,7 @@ class PolychordSampler(BasePosteriorSampler):
         def loglikelihood(values):
             # Called by ranks > 0
             my_dumper()
-            return (max(self.loglikelihood(values), self.settings.logzero), [])
+            return (max(self.logposterior(values) - self.logprior(values), self.settings.logzero), [])
 
         self.pipeline.mpicomm = mpi.COMM_SELF
         loglikelihood_rank = 0 if self.mpicomm.size == 1 else 1

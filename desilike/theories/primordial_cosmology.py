@@ -1,7 +1,7 @@
 import numpy as np
 from scipy import optimize
 
-from cosmoprimo import Cosmology, constants
+from cosmoprimo import Cosmology, CosmologyError, constants  # constants is imported by e.g. theories.galaxy_clustering.base
 
 from desilike.base import BaseCalculator
 
@@ -101,6 +101,7 @@ class Cosmoprimo(BasePrimordialCosmology):
 
     """Primordial cosmology calculation, based on :mod:`cosmoprimo`."""
     config_fn = 'primordial_cosmology.yaml'
+    _likelihood_catch_errors = (CosmologyError,)
 
     def initialize(self, fiducial=None, **kwargs):
         """

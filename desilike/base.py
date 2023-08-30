@@ -4,6 +4,7 @@ import sys
 import copy
 import warnings
 import functools
+import traceback
 
 import numpy as np
 
@@ -185,7 +186,7 @@ class BasePipeline(BaseClass):
         self._params.updated = False
         self._varied_params = self._params.select(varied=True, derived=False)
         self.input_values = {param.name: param.value for param in self._params}
-        self.derived = None
+        self.derived = Samples()
 
     @property
     def params(self):
@@ -229,13 +230,17 @@ class BasePipeline(BaseClass):
                 raise PipelineError('Input parameter {} is not one of parameters: {}'.format(name, self.params))
         self.input_values.update(params)
         params = self.params.eval(**self.input_values)
-        self.derived = Samples()
+        self.derived, self.error = Samples(), None
         for param in self._params:
             if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
         for calculator in self.calculators:  # start by first calculator
             runtime_info = calculator.runtime_info
             runtime_info.set_input_values(params, full=True)
-            result = runtime_info.calculate()
+            try:
+                result = runtime_info.calculate()
+            except Exception as exc:
+                self.error = (exc, traceback.format_exc())
+                raise PipelineError('Error in method calculate of {} with calculator parameters {} and pipeline parameters {}'.format(calculator, runtime_info.input_values, self.input_values)) from exc
             self.derived.update(runtime_info.derived)
         if self.more_calculate:
             toret = self.more_calculate()
@@ -258,31 +263,50 @@ class BasePipeline(BaseClass):
             params[name] = mpi.scatter(array, mpicomm=self.mpicomm, mpiroot=0)
             size = params[name].size
         cumsizes = np.cumsum([0] + self.mpicomm.allgather(size))
+        self.derived, self.errors = Samples(), {}
         if not cumsizes[-1]:
             try:
                 self.derived = self.derived[:0]
             except (AttributeError, TypeError, IndexError):
-                self.derived = Samples()
+                pass
             return
-        self.derived = Samples()
         mpicomm, more_derived = self.mpicomm, self.more_derived
         self.mpicomm, self.more_derived = mpi.COMM_SELF, None
         states = {}
         for ivalue in range(size):
-            self.calculate(**{name: value[ivalue] for name, value in params.items()})
             istate = ivalue + cumsizes[mpicomm.rank]
+            try:
+                self.calculate(**{name: value[ivalue] for name, value in params.items()})
+            except PipelineError as exc:
+                if self.error is None:
+                    self.error = (exc, traceback.format_exc())
+                states[istate] = self.error
+                continue
             states[istate] = self.derived
             if more_derived:
                 tmp = more_derived(istate)
                 if tmp is not None: states[istate].update(tmp)
         self.mpicomm, self.more_derived = mpicomm, more_derived
-        derived = None
         states = self.mpicomm.gather(states, root=0)
         if self.mpicomm.rank == 0:
-            derived = {}
-            for state in states: derived.update(state)
-            derived = Samples.concatenate([derived[i] for i in range(cumsizes[-1])]).reshape(cshape)
-        self.derived = derived
+            cstate = {}
+            for state in states:
+                cstate.update(state)
+            samples, sample_ref = [], None
+            for iref in range(cumsizes[-1]):
+                if isinstance(cstate[iref], Samples):
+                    sample_ref = cstate[iref]
+                    break
+            for i in range(cumsizes[-1]):
+                sample = cstate[i]
+                if isinstance(sample, Samples):
+                    samples.append(sample)
+                else:
+                    self.errors[i] = sample
+                    if sample_ref is not None:
+                        samples.append(sample_ref)
+            if samples:
+                self.derived = Samples.concatenate(samples).reshape(cshape)
 
     def get_cosmo_requires(self):
         """Return a dictionary mapping section to method's name and arguments,
@@ -740,18 +764,14 @@ class RuntimeInfo(BaseClass):
     def tocalculate(self, tocalculate):
         self._tocalculate = tocalculate
 
-    def calculate(self, **params):
+    def calculate(self):
         """
         If calculator's :class:`BaseCalculator.calculate` has not be called with input parameter values, call it,
         keeping track of running time with :attr:`monitor`.
         """
-        self.set_input_values(params)
         if self.tocalculate:
             self.monitor.start()
-            try:
-                self.calculator.calculate(**self.input_values)
-            except Exception as exc:
-                raise PipelineError('Error in method calculate of {} with calculator parameters {} and pipeline parameters {}'.format(self.calculator, self.input_values, self.pipeline.input_values)) from exc
+            self.calculator.calculate(**self.input_values)
             self.monitor.stop()
             self._derived = None
             self.calculated = True

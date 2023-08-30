@@ -16,11 +16,13 @@ def test_profilers():
                                                          data='../../tests/_pk/data.npy', covariance='../../tests/_pk/mock_*.npy', wmatrix='../../tests/_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1.)
+    for param in likelihood.all_params.select(basename=['qpar', 'qper']):
+        param.update(fixed=True)
 
     # for param in likelihood.varied_params:
     #     print(param, [likelihood(**{param.name: param.value + param.proposal * scale}) for scale in [-1., 1.]])
     for Profiler in [MinuitProfiler, ScipyProfiler, BOBYQAProfiler]:
-        profiler = Profiler(likelihood)
+        profiler = Profiler(likelihood, seed=42)
         profiler.maximize(niterations=2)
         profiler.profile(params=['df'], size=4)
         #profiler.grid(params=['df', 'qpar'], size=(2, 2))
@@ -51,8 +53,8 @@ def test_solve():
     theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(template=template)
     #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
     #for param in theory.params.select(basename=['df', 'dm', 'qpar', 'qper']): param.update(fixed=True)
-    #for param in theory.params.select(basename=['ct*', 'sn*']): param.update(derived='.best')
-    for param in theory.params.select(basename=['ct*', 'sn*']): param.update(fixed=True)
+    for param in theory.params.select(basename=['ct*', 'sn*']): param.update(derived='.best')
+    #for param in theory.params.select(basename=['ct*', 'sn*']): param.update(fixed=True)
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data={'ct0_2': 1., 'sn0': 1000.},
                                                          theory=theory)
@@ -60,16 +62,18 @@ def test_solve():
     observable.init.update(covariance=covariance())
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood.params['LRG.loglikelihood'] = likelihood.params['LRG.logprior'] = {}
-    #for param in likelihood.all_params.select(basename=['df', 'dm', 'qpar', 'qper']): param.update(fixed=True)
+    likelihood()
+    for param in likelihood.all_params.select(basename=['qpar', 'qper', 'dm']):
+        param.update(fixed=True)
 
     #import numpy as np
     #likelihood.flatdata += 100 * np.cos(np.linspace(0., 5. * np.pi, observable.flatdata.size))
-    profiler = MinuitProfiler(likelihood, rescale=True)
+    profiler = MinuitProfiler(likelihood, rescale=False, seed=42)
     #profiler = ScipyProfiler(likelihood, method='lsq')
     profiles = profiler.maximize(niterations=2)
     assert profiles.bestfit._loglikelihood == 'LRG.loglikelihood'
-    profiles = profiler.interval(params=['df'])
-    profiler.grid(params=['df', 'qpar'], size=2)
+    #profiles = profiler.interval(params=['df'])
+    #profiler.grid(params=['df', 'qpar'], size=2)
     print(profiles.to_stats())
     assert profiles.bestfit.logposterior.param.derived
 

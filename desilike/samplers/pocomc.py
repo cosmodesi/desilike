@@ -88,6 +88,7 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         import pocomc
         diagonal = rescale == 'diagonal'
         rescale = bool(rescale)
+
         self.sampler = pocomc.Sampler(self.nwalkers, ndim, self.loglikelihood, self.logprior, bounds=bounds, threshold=threshold, scale=scale,
                                       rescale=rescale, diagonal=diagonal, flow_config=flow_config, train_config=train_config,
                                       vectorize_likelihood=True, vectorize_prior=True, infer_vectorization=False,
@@ -95,6 +96,9 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         if self.save_fn is None:
             raise ValueError('save_fn must be provided, in order to save pocomc state')
         self.state_fn = [os.path.splitext(fn)[0] + '.pocomc.state' for fn in self.save_fn]
+
+    def loglikelihood(self, values):
+        return self.logposterior(values) - self.logprior(values)
 
     def logprior(self, params, bounds=None):
         return super(PocoMCSampler, self).logprior(params)

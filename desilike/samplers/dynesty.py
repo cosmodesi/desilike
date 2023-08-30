@@ -94,6 +94,9 @@ class BaseDynestySampler(BasePosteriorSampler):
             raise ValueError('save_fn must be provided to save dynesty state')
         self.state_fn = [os.path.splitext(fn)[0] + '.dynesty.state' for fn in self.save_fn]
 
+    def loglikelihood(self, values):
+        return self.logposterior(values) - self.logprior(values)
+
     def prior_transform(self, values):
         toret = np.empty_like(values)
         for iparam, (value, param) in enumerate(zip(values.T, self.varied_params)):
@@ -223,6 +226,7 @@ class StaticDynestySampler(BaseDynestySampler):
 
     def _set_sampler(self, rstate, pool, use_pool):
         import dynesty
+
         self.sampler = dynesty.NestedSampler(self.loglikelihood, self.prior_transform, len(self.varied_params), nlive=self.nlive, pool=pool, use_pool=use_pool, rstate=rstate, **self.attrs)
 
     def _run_nested(self, niterations, **kwargs):
@@ -281,6 +285,7 @@ class DynamicDynestySampler(BaseDynestySampler):
 
     def _set_sampler(self, rstate, pool, use_pool):
         import dynesty
+
         self.sampler = dynesty.DynamicNestedSampler(self.loglikelihood, self.prior_transform, len(self.varied_params), pool=pool, use_pool=use_pool, rstate=rstate, **self.attrs)
 
     def _run_nested(self, niterations, **kwargs):

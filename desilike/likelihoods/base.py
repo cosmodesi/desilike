@@ -17,7 +17,7 @@ class BaseLikelihood(BaseCalculator):
     _attrs = ['loglikelihood', 'logprior']
     solved_default = '.marg'
 
-    def initialize(self):
+    def initialize(self, catch_errors=None):
         for name in self._attrs:
             if name not in self.params.basenames():
                 self.params.set(Parameter(basename=name, namespace=self.runtime_info.namespace, latex=utils.outputs_to_latex(name), derived=True))
@@ -29,6 +29,9 @@ class BaseLikelihood(BaseCalculator):
             param = param[0]
             param.update(derived=True)
             setattr(self, '_param_{}'.format(name), param)
+        if catch_errors is not None:
+            catch_errors = tuple(catch_errors)
+        self._catch_errors = catch_errors
         #self.fisher = None
 
     def get(self):
@@ -37,6 +40,16 @@ class BaseLikelihood(BaseCalculator):
         if pipeline.more_calculate is None:
             pipeline.more_calculate = self._solve
         return self.loglikelihood + self.logprior
+
+    @property
+    def catch_errors(self):
+        toret = getattr(self, '_catch_errors', None)
+        if toret is None:
+            self._catch_errors = []
+            for calculator in self.runtime_info.pipeline.calculators:
+                self._catch_errors += [error for error in getattr(calculator, '_likelihood_catch_errors', [])]
+            toret = self._catch_errors = tuple(self._catch_errors)
+        return toret
 
     def _solve(self):
         # Analytic marginalization, to be called, if desired, in get()
@@ -191,7 +204,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
     """
     _attrs = ['loglikelihood', 'logprior']
 
-    def initialize(self, data, covariance=None, precision=None, transform=None):
+    def initialize(self, data, covariance=None, precision=None, **kwargs):
         self.flatdata = np.ravel(data)
         if precision is None:
             if covariance is None:
@@ -199,7 +212,7 @@ class BaseGaussianLikelihood(BaseLikelihood):
             self.precision = utils.inv(np.atleast_2d(np.array(covariance, dtype='f8')))
         else:
             self.precision = np.atleast_1d(np.array(precision, dtype='f8'))
-        super(BaseGaussianLikelihood, self).initialize()
+        super(BaseGaussianLikelihood, self).initialize(**kwargs)
 
     def calculate(self):
         self.flatdiff = self.flattheory - self.flatdata
@@ -230,7 +243,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
     scale_covariance : float, default=1.
         Scale covariance by this value. If ``True``, scale covariance by the number of mocks.
     """
-    def initialize(self, observables, covariance=None, scale_covariance=1., precision=None):
+    def initialize(self, observables, covariance=None, scale_covariance=1., precision=None, **kwargs):
         if not utils.is_sequence(observables):
             observables = [observables]
         self.nobs = None
@@ -308,7 +321,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
                 self.log_info('Covariance matrix with {:d} points built from {:d} observations.'.format(size, self.nobs))
                 self.log_info('...resulting in Hartlap factor of {:.4f}.'.format(self.hartlap))
             self.precision *= self.hartlap
-        BaseLikelihood.initialize(self)
+        BaseLikelihood.initialize(self, **kwargs)
         self.runtime_info.requires = self.observables
 
     @property
@@ -327,10 +340,10 @@ class SumLikelihood(BaseLikelihood):
 
     _attrs = ['loglikelihood', 'logprior']
 
-    def initialize(self, likelihoods):
+    def initialize(self, likelihoods, **kwargs):
         if not utils.is_sequence(likelihoods): likelihoods = [likelihoods]
         self.likelihoods = list(likelihoods)
-        super(SumLikelihood, self).initialize()
+        super(SumLikelihood, self).initialize(**kwargs)
         self.runtime_info.requires = self.likelihoods
 
     def calculate(self):

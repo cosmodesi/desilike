@@ -1,10 +1,11 @@
 import sys
 import numbers
 import functools
+import logging
 
 import numpy as np
 
-from desilike import mpi
+from desilike import mpi, PipelineError
 from desilike.utils import BaseClass, TaskManager, is_path
 from desilike.samples import Chain, Samples, load_source
 from desilike.samples import diagnostics as sample_diagnostics
@@ -136,39 +137,63 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         self.derived = None
 
     @bcast_values
-    def loglikelihood(self, values):
-        points = Samples(values.T, params=self.varied_params)
+    def logposterior(self, values):
+        logprior = self.logprior(values)
+        mask_finite_prior = ~np.isinf(logprior)
+        if not mask_finite_prior.any():
+            return logprior
+        points = Samples(values[mask_finite_prior].T, params=self.varied_params)
         self.pipeline.mpicalculate(**points.to_dict())
-        toret = None
+        logposterior, raise_error = None, None
         if self.pipeline.mpicomm.rank == 0:
-            if self.derived is None:
-                self.derived = [points, self.pipeline.derived]
-            else:
-                self.derived = [Samples.concatenate([self.derived[0], points]),
-                                Samples.concatenate([self.derived[1], self.pipeline.derived])]
-            toret = self.pipeline.derived[self.likelihood._param_loglikelihood][()] + self.pipeline.derived[self.likelihood._param_logprior][()]
+            update_derived = True
+            di = {}
+            try:
+                di = {'loglikelihood': self.pipeline.derived[self.likelihood._param_loglikelihood],
+                      'logprior': self.pipeline.derived[self.likelihood._param_logprior]}
+            except KeyError:
+                di['loglikelihood'] = di['logprior'] = np.full(points.shape, -np.inf)
+                update_derived = False
+            if self.pipeline.errors:
+                for ipoint, error in self.pipeline.errors.items():
+                    if isinstance(error[0], self.likelihood.catch_errors):
+                        self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(error[0],
+                                       {k: v.flat[ipoint] for k, v in points.items()}, error[1]))
+                        for values in di.values():
+                            values[ipoint, ...] = -np.inf  # should be useless, as no step with -inf loglikelihood should be kept
+                    else:
+                        raise_error = error
+                        update_derived = False
+                    if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
+                        self.log_info('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug to get full stack trace.'.format(error[0]))
+            if update_derived:
+                if self.derived is None:
+                    self.derived = [points, self.pipeline.derived]
+                else:
+                    self.derived = [Samples.concatenate([self.derived[0], points]),
+                                    Samples.concatenate([self.derived[1], self.pipeline.derived])]
+            logposterior = logprior.copy()
+            logposterior[mask_finite_prior] = 0.
+            for name, values in di.items():
+                values = values[()]
+                mask = np.isnan(values)
+                values[mask] = -np.inf
+                logposterior[mask_finite_prior] += values
+                if mask.any() and self.mpicomm.rank == 0:
+                    import warnings
+                    warnings.warn('{} is NaN for {}'.format(name, {k: v[mask] for k, v in points.items()}))
         else:
             self.derived = None
-        toret = self.likelihood.mpicomm.bcast(toret, root=0)
-        mask = np.isnan(toret)
-        toret[mask] = -np.inf
-        if mask.any() and self.mpicomm.rank == 0:
-            import warnings
-            warnings.warn('loglikelihood is NaN for {}'.format({k: v[mask] for k, v in points.items()}))
-        return toret
+        raise_error = self.likelihood.mpicomm.bcast(raise_error, root=0)
+        if raise_error:
+            raise PipelineError('Error "{}" occured with stack trace:\n{}'.format(*raise_error))
+        return self.likelihood.mpicomm.bcast(logposterior, root=0)
 
     @bcast_values
     def logprior(self, values):
         toret = 0.
         for param, value in zip(self.varied_params, values.T):
             toret += param.prior(value)
-        return toret
-
-    @bcast_values
-    def logposterior(self, values):
-        toret = self.logprior(values)
-        mask = ~np.isinf(toret)
-        toret[mask] = self.loglikelihood(values[mask])
         return toret
 
     def __getstate__(self):

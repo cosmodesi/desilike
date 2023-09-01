@@ -409,6 +409,9 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
     kp : float, default=0.03
         Pivot point in ShapeFit parameterization.
 
+    a : float, default=0.6
+        :math:`a` parameter in ShapeFit parameterization.
+
     n_varied : bool, default=False
         Use second order ShapeFit parameter ``n``.
         This choice changes the definition of parameter ``m``.
@@ -431,14 +434,15 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
     Reference
     ---------
     https://arxiv.org/abs/2106.07641
+    https://arxiv.org/pdf/2212.04522.pdf
     """
-    def initialize(self, *args, kp=0.03, eta=1. / 3., n_varied=False, dfextractor='shapefit', r=8., with_now='peakaverage', **kwargs):
-        self.kp = float(kp)
+    def initialize(self, *args, kp=0.03, a=0.6, eta=1. / 3., n_varied=False, dfextractor='Ap', r=8., with_now='peakaverage', **kwargs):
+        self.kp, self.a = float(kp), float(a)
         self.n_varied = bool(n_varied)
-        self.dfextractor = dfextractor.lower()
-        allowed_dfextractor = ['shapefit', 'fsigmar']
+        self.dfextractor = dfextractor
+        allowed_dfextractor = ['Ap', 'fsigmar']
         if self.dfextractor not in allowed_dfextractor:
-            raise ValueError('dfextractor must be one of {}'.format(allowed_dfextractor))
+            raise ValueError('dfextractor must be one of {}, found {}'.format(allowed_dfextractor, self.dfextractor))
         self.r = float(r)
         super(ShapeFitPowerSpectrumExtractor, self).initialize(*args, with_now=with_now, **kwargs)
         if external_cosmo(self.cosmo):
@@ -459,11 +463,6 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         BAOExtractor.calculate(self)
         s = self.cosmo.rs_drag / self.fiducial.rs_drag
         kp = self.kp / s
-        self.Ap = 1. / s**3 * self.pknow_dd_interpolator(kp)
-        #self.Ap = 1. / s**3 * (self.cosmo.h / self.fiducial.h)**3 * self.pk_dd_interpolator(kp)
-        #self.Ap = 1. / s**3 * self.pk_dd_interpolator(kp)
-        self.f_sqrt_Ap = self.f * self.Ap**0.5
-        self.f_sigmar = self.f * self.pknow_dd_interpolator.sigma_r(self.r * s)
         self.n = self.cosmo.n_s
         dk = 1e-2
         k = kp * np.array([1. - dk, 1. + dk])
@@ -473,12 +472,20 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         else:
             pk_prim = 1.
         self.m = (np.diff(np.log(self.pknow_dd_interpolator(k) / pk_prim)) / np.diff(np.log(k)))[0]
+        # Eq. 3.11 of https://arxiv.org/abs/2106.07641
+        self.Ap = 1. / s**3 * self.pknow_dd_interpolator(kp)
+        #self.Ap = 1. / s**3 * (self.cosmo.h / self.fiducial.h)**3 * self.pk_dd_interpolator(kp)
+        #self.Ap = 1. / s**3 * self.pk_dd_interpolator(kp)
+        self.f_sqrt_Ap = self.f * self.Ap**0.5
+        # Eq. 3.11 of https://arxiv.org/pdf/2212.04522.pdf
+        dm = self.m - getattr(self, 'm_fid', self.m)
+        self.f_sigmar = self.f * self.pknow_dd_interpolator.sigma_r(self.r * s) * np.exp(dm / (2 * self.a) * np.tanh(self.a * self.fiducial.rs_drag / self.r))
 
     def get(self):
         BAOExtractor.get(self)
         self.dn = self.n - self.n_fid
         self.dm = self.m - self.m_fid
-        if self.dfextractor == 'shapefit':
+        if self.dfextractor == 'Ap':
             self.df = self.f_sqrt_Ap / self.f_sqrt_Ap_fid
         else:
             self.df = self.f_sigmar / self.f_sigmar_fid
@@ -525,6 +532,7 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
     Reference
     ---------
     https://arxiv.org/abs/2106.07641
+    https://arxiv.org/pdf/2212.04522.pdf
     """
     def initialize(self, *args, kp=0.03, a=0.6, r=8., with_now='peakaverage', **kwargs):
         self.a = float(a)

@@ -147,6 +147,16 @@ def test_flexible_bao():
 
 def test_full_shape():
 
+    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles
+
+    """
+    for Theory in [LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles]:
+        theory = Theory(ells=(0, 2))
+        print(Theory, theory.varied_params)
+        theory = Theory(ells=(0, 2, 4))
+        print(Theory, theory.varied_params)
+    """
+
     def clean_folps():
         import FOLPSnu as FOLPS
         import types
@@ -155,7 +165,6 @@ def test_full_shape():
                 FOLPS.__dict__[name] = None
 
     def test_emulator_likelihood(theory, test_likelihood=True, emulate='pt'):
-        print('Emulating', theory)
         if test_likelihood:
             from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TracerCorrelationFunctionMultipolesObservable, ObservablesCovarianceMatrix
             from desilike.likelihoods import ObservablesGaussianLikelihood
@@ -203,6 +212,7 @@ def test_full_shape():
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
 
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
+
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     theory(dm=0.01, b1=1.).shape
     assert not np.allclose(theory(dm=-0.01), theory(dm=0.01))
@@ -210,10 +220,10 @@ def test_full_shape():
     test_emulator_likelihood(theory, emulate='pt')
     test_emulator_likelihood(theory, emulate=None)
     theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    theory()
     test_emulator_likelihood(theory)
     theory(dm=0.01, b1=1.).shape
     theory.pt
-    exit()
 
     from desilike.theories.galaxy_clustering import SimpleTracerPowerSpectrumMultipoles
     theory = SimpleTracerPowerSpectrumMultipoles()

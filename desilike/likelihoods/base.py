@@ -78,6 +78,7 @@ class BaseLikelihood(BaseCalculator):
 
             solve_likelihoods = [likelihood for likelihood in likelihoods if any(param.solved for param in likelihood.all_params)]
 
+            derived = pipeline.derived
             pipeline.more_calculate = lambda: None
             self.fisher = getattr(self, 'fisher', None)
             if self.fisher is None or self.fisher.mpicomm is not self.mpicomm or self.fisher.varied_params != solved_params:
@@ -92,6 +93,7 @@ class BaseLikelihood(BaseCalculator):
             for param in solved_params:
                 if not np.isfinite(values[param.name]): values[param.name] = param.value
             posterior_fisher = self.fisher(**values)
+            #pipeline.derived = derived
             pipeline.more_calculate = self._solve
             # flatdiff is theory - data
             x = posterior_fisher.mean()
@@ -102,7 +104,7 @@ class BaseLikelihood(BaseCalculator):
 
         sum_loglikelihood = np.zeros(len(derivs) if solved_params else None, dtype='f8')
         sum_logprior = np.zeros((), dtype='f8')
-        derived = getattr(pipeline, 'derived', None)
+        derived = pipeline.derived
 
         for param, xx in zip(solved_params, x):
             sum_logprior += all_params[param].prior(xx)

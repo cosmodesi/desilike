@@ -179,7 +179,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         from matplotlib import pyplot as plt
         
         if kw_theory is None:
-            kw_theory = [{}] * len(self.ells)
+            kw_theory = [{} for i in range(len(self.ells))]
         elif len(kw_theory) != len(self.ells):
             kw_theory = kw_theory * len(self.ells)
  

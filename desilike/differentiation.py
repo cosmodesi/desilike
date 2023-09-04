@@ -387,15 +387,28 @@ class Differentiation(BaseClass):
         params = {**self.pipeline.input_values, **params}
         params, values = list(params.keys()), list(params.values())
 
-        def __calculate(*values):
-            self.pipeline.input_values.update(dict(zip(params, values)))
-            values = self.pipeline.params.eval(**self.pipeline.input_values)
+        def __calculate(*values, derived=False):
+            pipeline = self.pipeline
+            pipeline.input_values.update(dict(zip(params, values)))
+            values = pipeline.params.eval(**pipeline.input_values)
+            if derived:
+                pipeline.derived = Samples()
 
-            for calculator in self.pipeline.calculators:  # start by first calculator, end by the last one
+            for calculator in pipeline.calculators:  # start by first calculator, end by the last one
                 runtime_info = calculator.runtime_info
                 force = any(param.basename in runtime_info.input_values for param in self.varied_params)
                 runtime_info.set_input_values(values, full=True, force=force)
                 runtime_info.calculate()
+                if derived:
+                    pipeline.derived.update(runtime_info.derived)
+
+            if pipeline.more_calculate:
+                pipeline.more_calculate()
+
+            if derived and pipeline.more_derived:
+                tmp = pipeline.more_derived(0)
+                if tmp is not None: pipeline.derived.update(tmp)
+
             return getter()
 
         toret = []
@@ -411,7 +424,7 @@ class Differentiation(BaseClass):
         except Exception as exc:
             raise exc
         finally:
-            self._getter_sample = [__calculate(*values)] + toret
+            self._getter_sample = [__calculate(*values, derived=True)] + toret
         return toret
 
     def _more_derived(self, ipoint):

@@ -24,7 +24,7 @@ def test_samplers():
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
     likelihood.params['LRG.loglikelihood'] = likelihood.params['LRG.logprior'] = {}
 
-    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler][-1:]:
+    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler][:-1]:
         kwargs = {}
         if Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]:
             kwargs.update(nwalkers=20)
@@ -32,6 +32,7 @@ def test_samplers():
         sampler = Sampler(likelihood, save_fn=save_fn, **kwargs)
         chains = sampler.run(max_iterations=20, check=True, check_every=10)
         if sampler.mpicomm.rank == 0:
+            assert 'f_sqrt_Ap' in chains[0]
             assert chains[0].concatenate(chains)._loglikelihood == 'LRG.loglikelihood'
             assert chains[0]['LRG.loglikelihood'].derivs is not None
             assert chains[0].sample_solved()['LRG.loglikelihood'].derivs is None
@@ -198,8 +199,8 @@ def test_nested():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_samplers()
+    test_samplers()
     #test_fixed()
     #test_importance()
     #test_error()
-    test_nested()
+    #test_nested()

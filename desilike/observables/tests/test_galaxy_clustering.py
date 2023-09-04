@@ -95,11 +95,12 @@ def test_power_spectrum():
 
 def test_correlation_function():
 
-    from desilike.theories.galaxy_clustering import KaiserTracerCorrelationFunctionMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import KaiserTracerCorrelationFunctionMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import TracerCorrelationFunctionMultipolesObservable, TopHatFiberCollisionsCorrelationFunctionMultipoles
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
+    #theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template, ells=(0, 2))
     size = 10
     ells = (0, 2)
     observable = TracerCorrelationFunctionMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * len(ells)),
@@ -731,12 +732,12 @@ if __name__ == '__main__':
     setup_logging()
 
     # test_bao()
-    test_power_spectrum()
+    #test_power_spectrum()
     test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    # test_compression()
+    #test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

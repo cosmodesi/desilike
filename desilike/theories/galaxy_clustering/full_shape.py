@@ -959,7 +959,8 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
         fix = []
         if 4 not in self.ells: fix += ['alpha4', 'alpha6', 'sn4']
         if 2 not in self.ells: fix += ['alpha2', 'sn2']
-        for name in fix: self.params[name].update(fixed=True)
+        for param in self.init.params.select(basename=fix):
+            param.update(value=0., fixed=True)
 
 
 class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
@@ -1688,7 +1689,8 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         fix = []
         if 4 not in self.ells: fix += ['alpha4']
         if 2 not in self.ells: fix += ['alpha2', 'sn2']
-        for name in fix: self.params[name].update(fixed=True)
+        for param in self.init.params.select(basename=fix):
+            param.update(value=0., fixed=True)
 
     def calculate(self, **params):
         super(FOLPSTracerPowerSpectrumMultipoles, self).calculate()

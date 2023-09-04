@@ -179,9 +179,9 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         from matplotlib import pyplot as plt
         
         if kw_theory is None:
-            kw_theory = [{}] * len(self.ells)
+            kw_theory = [{} for i in range(len(self.ells))]
         elif len(kw_theory) != len(self.ells):
-            kw_theory = kw_theory * len(self.ells)
+            kw_theory = [{keys:kw_theory[0][keys] for keys in kw_theory[0].keys() if (keys != 'label') or (i == 0)} for i in range(len(self.ells))]
  
         if lax is None:
             height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)

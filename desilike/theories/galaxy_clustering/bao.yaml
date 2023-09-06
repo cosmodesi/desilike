@@ -93,6 +93,14 @@ params:
     ref:
       limits: [0., 1.]
     latex: \Sigma_{s}
+  d:
+    fixed: True
+    value: 1.
+    prior:
+      limits: [0, 4.]
+    ref:
+      limits: [0.8, 1.2]
+    latex: d
   al[:5:2]_[-3:2]:
     value: 0.
     ref:

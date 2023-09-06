@@ -93,7 +93,7 @@ def test_bao():
     from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate
 
     def test(theory):
-        print(theory.runtime_info.pipeline.params)
+        print(theory)
         theory(qpar=1.1)
         theory.z, theory.ells
         if 'PowerSpectrum' in theory.__class__.__name__:
@@ -149,13 +149,15 @@ def test_full_shape():
 
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles
 
-    """
+    ntemplate = 4
     for Theory in [LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles]:
-        theory = Theory(ells=(0, 2))
-        print(Theory, theory.varied_params)
-        theory = Theory(ells=(0, 2, 4))
-        print(Theory, theory.varied_params)
-    """
+        for freedom in ['min', 'max']:
+            theory = Theory(ells=(0, 2), freedom=freedom)
+            print(Theory, theory.varied_params)
+            assert len(theory.varied_params) == ntemplate + 6 + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 EFT, 2 sn
+            theory = Theory(ells=(0, 2, 4), freedom=freedom)
+            print(Theory, theory.varied_params)
+            assert len(theory.varied_params) == ntemplate + 7 + 2 * (freedom == 'max')  # 2 (+ 2) bias, 3 EFT, 2 sn
 
     def clean_folps():
         import FOLPSnu as FOLPS
@@ -851,9 +853,9 @@ if __name__ == '__main__':
     #test_params()
     #test_integ()
     #test_templates()
-    #test_bao()
+    test_bao()
     #test_flexible_bao()
-    test_full_shape()
+    #test_full_shape()
     #test_png()
     #test_pk_to_xi()
     #test_ap_diff()

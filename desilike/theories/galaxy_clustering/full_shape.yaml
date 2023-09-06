@@ -1192,6 +1192,7 @@ params:
       limits: [-1., 1.]
     latex: '(b_{2} + b_{4})/\sqrt{2}'
   b2m4:
+    fixed: True
     prior:
       limits: [-10., 10.]
     ref:
@@ -1344,17 +1345,13 @@ params:
     prior:
       limits: [0., 4.]
     ref:
-      limits: [1.4, 1.6]
+      limits: [-1., 1.]
     latex: b_{1}
   b2:
     prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
+      limits: [-10., 10.]
     ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
+      limits: [-1., 1.]
     latex: b_{2}
   bs:
     prior:
@@ -1408,17 +1405,13 @@ params:
     prior:
       limits: [0., 4.]
     ref:
-      limits: [1.4, 1.6]
+      limits: [-1., 1.]
     latex: b_{1}
   b2:
     prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
+      limits: [-10., 10.]
     ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
+      limits: [-1., 1.]
     latex: b_{2}
   bs:
     prior:

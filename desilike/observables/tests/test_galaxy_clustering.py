@@ -344,9 +344,11 @@ def test_compression():
     from desilike.observables.galaxy_clustering import BAOCompressionObservable, StandardCompressionObservable, ShapeFitCompressionObservable, WiggleSplitCompressionObservable, BandVelocityCompressionObservable, TurnOverCompressionObservable
     from desilike.emulators import Emulator, TaylorEmulatorEngine
 
-    def test(likelihood, emulate=True):
+    def test(likelihood, emulate=True, test_zero=False):
         print(likelihood.varied_params)
         likelihood_bak = likelihood()
+        if test_zero:
+            assert np.allclose(likelihood.loglikelihood, 0.)
         print(likelihood_bak)
         if emulate:
             emulator = Emulator(likelihood.observables, engine=TaylorEmulatorEngine(order=1))
@@ -399,7 +401,7 @@ def test_compression():
 
     observable = TurnOverCompressionObservable(data=[1.], covariance=np.diag([0.01]), quantities=['qto'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    test(likelihood)
+    test(likelihood, test_zero=True)
 
     from desilike import ParameterCovariance
     covariance = ParameterCovariance(value=np.diag([0.01, 0.01, 0.01]), params=['qpar', 'qper', 'df'])
@@ -732,12 +734,12 @@ if __name__ == '__main__':
     setup_logging()
 
     # test_bao()
-    #test_power_spectrum()
-    test_correlation_function()
+    # test_power_spectrum()
+    # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    #test_compression()
+    test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

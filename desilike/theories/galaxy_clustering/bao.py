@@ -135,8 +135,8 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
                 self.sigma_ds_ds = - 1. / (6. * np.pi**2) * integrate.simps(j0 * sk * skc * pklin, k)
                 self.sigma_ds_ss = 1. / (6. * np.pi**2) * integrate.simps(sk**2 * pklin, k)
 
-    def wiggles(self, k, mu, b1=1., f=0., d=1.):
-        # b1 Eulerian bias
+    def wiggles(self, k, mu, b1=1., f=0., d=1., sigmas=0.):
+        # b1 Eulerian bias, d scaling the growth factor, sigmas FoG
         wiggles = self.template.pk_dd_interpolator(k) - self.template.pknow_dd_interpolator(k)
         sk = 0.
         if self.mode: sk = np.exp(-1. / 2. * (k * self.smoothing_radius)**2)
@@ -146,12 +146,12 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
         damping_dd = np.exp(-1. / 2. * ksq * dsq * self.sigma_dd)
         resummed_wiggles = damping_dd * (b1 + f * mu**2 * skc - sk)**2
         if self.mode == 'recsym':
-            damping_ds = np.exp(-1. / 2. * ksq * dsq * self.sigma_ds)
+            damping_ds = np.exp(-1. / 2. * (ksq * dsq * self.sigma_ds + (k * mu * sigmas)**2))
             resummed_wiggles -= 2. * damping_ds * (b1 + f * mu**2 * skc - sk) * (1 + f * mu**2) * sk
             damping_ss = np.exp(-1. / 2. * ksq * dsq * self.sigma_ss)
             resummed_wiggles += damping_ss * (1 + f * mu**2)**2 * sk**2
         if self.mode == 'reciso':
-            damping_ds = np.exp(-1. / 2. * (ksq * dsq * self.sigma_ds_dd + k**2 * dsq * (self.sigma_ds_ss - 2. * (1 + f * mu**2) * self.sigma_ds_dd)))
+            damping_ds = np.exp(-1. / 2. * (ksq * dsq * self.sigma_ds_dd + k**2 * dsq * (self.sigma_ds_ss - 2. * (1 + f * mu**2) * self.sigma_ds_dd) + (k * mu * sigmas)**2))
             resummed_wiggles -= 2. * damping_ds * (b1 + f * mu**2 * skc - sk) * sk
             damping_ss = np.exp(-1. / 2. * k**2 * dsq * self.sigma_ss)  # f = 0.
             resummed_wiggles += damping_ss * sk**2

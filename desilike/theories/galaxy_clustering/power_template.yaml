@@ -17,7 +17,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.003
+    delta: 0.01
     latex: h
   Omega_m:
     prior:
@@ -26,7 +26,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.005
+    delta: 0.01
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -46,7 +46,7 @@ params:
       dist: norm
       loc: 3.036394
       scale: 0.014
-    delta: 0.0014
+    delta: 0.01
     latex: \ln(10^{10} A_{s})
   n_s:
     prior:
@@ -115,7 +115,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    delta: 0.002
+    delta: 0.005
     latex: \Omega_{k}
     fixed: True
 
@@ -131,7 +131,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\parallel}
   qper:
     value: 1.
@@ -140,7 +140,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\perp}
   qiso:
     value: 1.
@@ -149,7 +149,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\mathrm{iso}}
   qap:
     value: 1.
@@ -158,16 +158,18 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\mathrm{ap}}
   df:
+    fixed: True
     value: 1.
     prior:
       dist: uniform
       limits: [0., 2.]
     ref:
       limits: [0.95, 1.05]
-    fixed: True
+    delta: 0.02
+    latex: df
   DM_over_rd:
     derived: True
     latex: D_{\mathrm{M}}/r_{d}
@@ -193,7 +195,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\parallel}
   qper:
     value: 1.
@@ -202,7 +204,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\perp}
   qiso:
     value: 1.
@@ -211,7 +213,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\mathrm{iso}}
   qap:
     value: 1.
@@ -220,7 +222,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\mathrm{ap}}
   df:
     value: 1.
@@ -229,8 +231,8 @@ params:
       limits: [0., 2.]
     ref:
       limits: [0.95, 1.05]
+    delta: 0.02
     latex: df
-
 
 ---
 
@@ -244,9 +246,10 @@ params:
       limits: [-3., 3.]
     ref:
       limits: [-0.01, 0.01]
-    delta: 0.005
+    delta: 0.01
     latex: dm
   dn:
+    fixed: True
     prior:
       dist: uniform
       limits: [-0.5, 0.5]
@@ -255,7 +258,6 @@ params:
       loc: 0.
       scale: 0.1
     latex: dn
-    fixed: True
   qpar:
     value: 1.
     prior:
@@ -263,7 +265,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\parallel}
   qper:
     value: 1.
@@ -272,7 +274,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\perp}
   qiso:
     value: 1.
@@ -281,7 +283,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\mathrm{iso}}
   qap:
     value: 1.
@@ -290,7 +292,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\mathrm{ap}}
   df:
     value: 1.
@@ -299,6 +301,7 @@ params:
       limits: [0., 2.]
     ref:
       limits: [0.95, 1.05]
+    delta: 0.02
     latex: df
   f_sqrt_Ap:
     derived: True
@@ -322,7 +325,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\mathrm{BAO}}
   qap:
     value: 1.
@@ -331,7 +334,7 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\mathrm{ap}}
   df:
     value: 1.
@@ -340,6 +343,7 @@ params:
       limits: [0., 2.]
     ref:
       limits: [0.95, 1.05]
+    delta: 0.02
     latex: df
   dm:
     value: 0.
@@ -366,16 +370,17 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\mathrm{ap}}
   df:
+    fixed: True
     value: 1.
     prior:
       dist: uniform
       limits: [0., 2.]
     ref:
       limits: [0.95, 1.05]
-    fixed: True
+    delta: 0.02
     latex: df
   f:
     derived: True
@@ -427,7 +432,7 @@ params:
       limits: [0.5, 1.5]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\mathrm{TO}}
   qap:
     value: 1.
@@ -436,17 +441,19 @@ params:
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
-    delta: 0.002
+    delta: 0.005
     latex: q_{\mathrm{ap}}
     fixed: True  # inconstrained when fitting the monopole only
   df:
+    fixed: True
     value: 1.
     prior:
       dist: uniform
       limits: [0., 2.]
     ref:
       limits: [0.95, 1.05]
-    fixed: True
+    delta: 0.02
+    latex: df
   DH_over_DM:
     derived: True
     latex: D_{\mathrm{H}}/D_{\mathrm{M}}
@@ -466,7 +473,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.005
+    delta: 0.01
     latex: \Omega_{m}
 
 ---
@@ -481,7 +488,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.003
+    delta: 0.01
     latex: h
   Omega_m:
     prior:
@@ -490,7 +497,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.005
+    delta: 0.01
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -510,7 +517,7 @@ params:
       dist: norm
       loc: 3.036394
       scale: 0.014
-    delta: 0.0014
+    delta: 0.01
     latex: \ln(10^{10} A_{s})
   n_s:
     prior:
@@ -579,7 +586,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    delta: 0.002
+    delta: 0.005
     latex: \Omega_{k}
     fixed: True
 
@@ -595,7 +602,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.003
+    delta: 0.01
     latex: h
   Omega_m:
     prior:
@@ -604,7 +611,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.005
+    delta: 0.01
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -624,7 +631,7 @@ params:
       dist: norm
       loc: 3.036394
       scale: 0.014
-    delta: 0.0014
+    delta: 0.01
     latex: \ln(10^{10} A_{s})
   n_s:
     prior:
@@ -693,7 +700,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    delta: 0.002
+    delta: 0.005
     latex: \Omega_{k}
     fixed: True
 
@@ -709,7 +716,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.003
+    delta: 0.01
     latex: h
   Omega_m:
     prior:
@@ -718,7 +725,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.005
+    delta: 0.01
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -738,7 +745,7 @@ params:
       dist: norm
       loc: 3.036394
       scale: 0.014
-    delta: 0.0014
+    delta: 0.01
     latex: \ln(10^{10} A_{s})
   n_s:
     prior:
@@ -807,7 +814,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    delta: 0.002
+    delta: 0.005
     latex: \Omega_{k}
     fixed: True
 
@@ -823,7 +830,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.003
+    delta: 0.01
     latex: h
   Omega_m:
     prior:
@@ -832,7 +839,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.005
+    delta: 0.01
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -852,7 +859,7 @@ params:
       dist: norm
       loc: 3.036394
       scale: 0.014
-    delta: 0.0014
+    delta: 0.01
     latex: \ln(10^{10} A_{s})
   n_s:
     prior:
@@ -921,7 +928,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    delta: 0.002
+    delta: 0.005
     latex: \Omega_{k}
     fixed: True
 
@@ -930,6 +937,15 @@ params:
 class: TurnOverPowerSpectrumExtractor
 
 params:
+  h:
+    prior:
+      limits: [0.1, 1.]
+    ref:
+      dist: norm
+      loc: 0.6736
+      scale: 0.005
+    delta: 0.01
+    latex: h
   Omega_m:
     prior:
       limits: [0.01, 1.]
@@ -937,5 +953,5 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.005
+    delta: 0.01
     latex: \Omega_{m}

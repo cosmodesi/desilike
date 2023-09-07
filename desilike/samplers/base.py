@@ -157,7 +157,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
             if self.pipeline.errors:
                 for ipoint, error in self.pipeline.errors.items():
                     if isinstance(error[0], self.likelihood.catch_errors):
-                        self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(error[0],
+                        self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(repr(error[0]),
                                        {k: v.flat[ipoint] for k, v in points.items()}, error[1]))
                         for values in di.values():
                             values[ipoint, ...] = -np.inf  # should be useless, as no step with -inf loglikelihood should be kept
@@ -165,7 +165,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                         raise_error = error
                         update_derived = False
                     if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
-                        self.log_info('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug to get full stack trace.'.format(error[0]))
+                        self.log_info('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0])))
             if update_derived:
                 if self.derived is None:
                     self.derived = [points, self.pipeline.derived]

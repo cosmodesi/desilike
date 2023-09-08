@@ -125,39 +125,6 @@ params:
     ref:
       limits: [1., 2.]
     latex: b_{1}
-  b2:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{2}
-    fixed: True
-  bs:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{s}
-    fixed: True
-  b3:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{3}
-    fixed: True
   ct[:5:2]_2:
     prior:
       dist: norm
@@ -221,39 +188,6 @@ params:
     ref:
       limits: [1., 2.]
     latex: b_{1}
-  b2:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{2}
-    fixed: True
-  bs:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{s}
-    fixed: True
-  b3:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{3}
-    fixed: True
   ct[:5:2]_2:
     prior:
       dist: norm
@@ -309,6 +243,7 @@ params:
       scale: 0.5
     latex: b_{2}
   bs:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -318,8 +253,8 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{s}
-    fixed: True
   b3:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -329,7 +264,6 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
   sn0:
     prior:
       dist: norm
@@ -364,6 +298,7 @@ params:
       scale: 0.5
     latex: b_{2}
   bs:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -373,8 +308,8 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{s}
-    fixed: True
   b3:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -384,7 +319,6 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
 
 
 ---
@@ -410,6 +344,7 @@ params:
       scale: 0.5
     latex: b_{2}
   bs:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -419,8 +354,8 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{s}
-    fixed: True
   b3:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -430,7 +365,6 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
   ct[:5:2]_2:
     prior:
       dist: norm
@@ -486,6 +420,7 @@ params:
     latex: b_{2}
     fixed: True
   bs:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -496,6 +431,7 @@ params:
       scale: 0.5
     latex: b_{s}
   b3:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -505,7 +441,6 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
   ct[:5:2]_2:
     prior:
       dist: norm
@@ -551,6 +486,7 @@ params:
       scale: 0.5
     latex: b_{s}
   b3:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -560,8 +496,7 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
-  alpha[0:7:2]:
+  alpha[0:5:2]:
     prior:
       dist: norm
       loc: 0.
@@ -571,6 +506,17 @@ params:
       loc: 0.
       scale: 1.
     latex: \alpha_{[]}
+  alpha6:
+    fixed: True
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{6}
   sn[:5:2]:
     prior:
       dist: norm
@@ -615,6 +561,7 @@ params:
       scale: 0.5
     latex: b_{s}
   b3:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -624,8 +571,7 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
-  alpha[0:7:2]:
+  alpha[0:5:2]:
     prior:
       dist: norm
       loc: 0.
@@ -635,6 +581,17 @@ params:
       loc: 0.
       scale: 1.
     latex: \alpha_{[]}
+  alpha6:
+    fixed: True
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{6}
 
 ---
 
@@ -679,7 +636,6 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
   alpha[0:7:2]:
     prior:
       dist: norm
@@ -798,7 +754,6 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
   alpha[0:7:2]:
     prior:
       dist: norm
@@ -917,7 +872,6 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
   alpha[0:7:2]:
     prior:
       dist: norm
@@ -1037,7 +991,6 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
   alpha[0:7:2]:
     prior:
       dist: norm
@@ -1177,12 +1130,25 @@ params:
       loc: 0.
       scale: 100.
     latex: c_{r, 6}
-  ce[:3]:
+  ce0:
     prior:
       dist: norm
       loc: 0.
       scale: 100.
-    latex: c_{e, []}
+    latex: c_{e, 0}
+  ce1:
+    fixed: True
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{e, 1}
+  ce2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{e, 2}
   # west coast
   b2p4:
     prior:
@@ -1239,6 +1205,12 @@ params:
     ref:
       limits: [1.4, 1.6]
     latex: b_{1}
+  b2:
+    prior:
+      limits: [-10., 10.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{2}
   b3:
     prior:
       dist: norm
@@ -1249,12 +1221,6 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-  b2:
-    prior:
-      limits: [-10., 10.]
-    ref:
-      limits: [-1., 1.]
-    latex: b_{2}
   b4:
     prior:
       limits: [-10., 10.]
@@ -1299,6 +1265,7 @@ params:
       limits: [-1., 1.]
     latex: '(b_{2} + b_{4})/\sqrt{2}'
   b2m4:
+    fixed: True
     prior:
       limits: [-10., 10.]
     ref:
@@ -1356,14 +1323,14 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 3.
     ref:
       dist: norm
       loc: 0.
       scale: 0.5
     latex: b_{s}
-    fixed: True
   b3:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -1373,8 +1340,7 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
-  alpha[0:7:2]:
+  alpha[0:5:2]:
     prior:
       dist: norm
       loc: 0.
@@ -1384,6 +1350,17 @@ params:
       loc: 0.
       scale: 1.
     latex: \alpha_{[]}
+  ct:
+    fixed: True
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{t}
   sn[:5:2]:
     prior:
       dist: norm
@@ -1422,8 +1399,8 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{s}
-    fixed: True
   b3:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -1433,7 +1410,6 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
   alpha[0:7:2]:
     prior:
       dist: norm
@@ -1444,3 +1420,24 @@ params:
       loc: 0.
       scale: 1.
     latex: \alpha_{[]}
+  alpha[0:5:2]:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{[]}
+  ct:
+    fixed: True
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{t}

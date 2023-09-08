@@ -497,7 +497,6 @@ class BaseEFTLikeTracerPowerSpectrumMultipoles(object):
         super(BaseEFTLikeTracerPowerSpectrumMultipoles, self).set_params()
 
     def calculate(self, **params):
-        super(BaseEFTLikeTracerPowerSpectrumMultipoles, self).calculate()
         counterterm_values = jnp.array([params.pop(name, 0.) for name in self.counterterm_params])
         stochastic_values = jnp.array([params.pop(name, 0.) for name in self.stochastic_params]) / self.nd
         super(BaseEFTLikeTracerPowerSpectrumMultipoles, self).calculate(**params)
@@ -1729,7 +1728,6 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     """
     FOLPS tracer power spectrum multipoles.
     Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
-    Next-to-next-to-leading order parameter ctilde is renamed alpha6 (but does not match LPTVelocileptors's alpha6).
     By default, bs and b3 are fixed to 0, following co-evolution.
     For the matter (unbiased) power spectrum, set b1=1 and all other bias parameters to 0.
 
@@ -1755,7 +1753,7 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     _default_options = dict(freedom=None)
 
     def set_params(self):
-        self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2']
+        self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'ct', 'sn0', 'sn2']
         default_values = {'b1': 1.6}
         self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
         self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
@@ -1764,9 +1762,9 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         if freedom == 'max':
             for param in self.init.params:
                 param.update(fixed=False)
-            fix += ['alpha6']
+            fix += ['ct']
         if freedom == 'min':
-            fix += ['b3', 'bs', 'alpha6']
+            fix += ['b3', 'bs', 'ct']
         if 4 not in self.ells: fix += ['alpha4']
         if 2 not in self.ells: fix += ['alpha2', 'sn2']
         for param in self.init.params.select(basename=fix):
@@ -1783,7 +1781,6 @@ class FOLPSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFrom
     """
     FOLPS tracer correlation function multipoles.
     Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
-    Next-to-next-to-leading order parameter ctilde is renamed alpha6 (but does not match LPTVelocileptors's alpha6).
     By default, bs and b3 are fixed to 0, following co-evolution.
     For the matter (unbiased) correlation function, set b1=1 and all other bias parameters to 0.
 

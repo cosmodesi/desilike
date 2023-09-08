@@ -150,16 +150,21 @@ def test_flexible_bao():
 def test_full_shape():
 
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles
 
     ntemplate = 4
-    for Theory in [LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles]:
-        for freedom in ['min', 'max']:
-            theory = Theory(ells=(0, 2), freedom=freedom)
-            print(Theory, theory.varied_params)
-            assert len(theory.varied_params) == ntemplate + 6 + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 EFT, 2 sn
-            theory = Theory(ells=(0, 2, 4), freedom=freedom)
-            print(Theory, theory.varied_params)
-            assert len(theory.varied_params) == ntemplate + 7 + 2 * (freedom == 'max')  # 2 (+ 2) bias, 3 EFT, 2 sn
+    for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles],
+                                       [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles]):
+        for freedom in [None, 'min', 'max']:
+            for ells in [(0, 2), (0, 2, 4)]:
+                power = TheoryPower(ells=ells, freedom=freedom)
+                print(TheoryPower.__name__, ells, freedom, power.varied_params)
+                if freedom is not None: assert len(power.varied_params) == ntemplate + 6 + (4 in ells) + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 (+ 1) EFT, 2 sn
+                corr = TheoryCorr(ells=ells, freedom=freedom)
+                print(TheoryCorr.__name__, ells, freedom, corr.varied_params)
+                if freedom is not None: assert len(corr.varied_params) == ntemplate + 4 + (4 in ells) + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 EFT
+                for param in corr.varied_params:
+                    assert param in power.varied_params, '{} not in {}'.format(param, power.varied_params)
 
     def clean_folps():
         import FOLPSnu as FOLPS
@@ -217,17 +222,6 @@ def test_full_shape():
 
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
 
-    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    theory(dm=0.01, b1=1.).shape
-    assert not np.allclose(theory(dm=-0.01), theory(dm=0.01))
-    assert not np.allclose(theory(qpar=0.99), theory(qper=1.01))
-    test_emulator_likelihood(theory, emulate='pt')
-    test_emulator_likelihood(theory, emulate=None)
-    theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    theory()
-    test_emulator_likelihood(theory)
-    theory(dm=0.01, b1=1.).shape
-    theory.pt
 
     from desilike.theories.galaxy_clustering import SimpleTracerPowerSpectrumMultipoles
     theory = SimpleTracerPowerSpectrumMultipoles()
@@ -855,9 +849,9 @@ if __name__ == '__main__':
     #test_params()
     #test_integ()
     #test_templates()
-    test_bao()
+    #test_bao()
     #test_flexible_bao()
-    #test_full_shape()
+    test_full_shape()
     #test_png()
     #test_pk_to_xi()
     #test_ap_diff()

@@ -41,7 +41,7 @@ params:
     latex: \omega_{b}
   logA:
     prior:
-      limits: [1.61, 3.91]
+      limits: [2., 4.]
     ref:
       dist: norm
       loc: 3.036394
@@ -127,7 +127,6 @@ params:
   qpar:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -136,7 +135,6 @@ params:
   qper:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -145,7 +143,6 @@ params:
   qiso:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -154,7 +151,6 @@ params:
   qap:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -164,7 +160,6 @@ params:
     fixed: True
     value: 1.
     prior:
-      dist: uniform
       limits: [0., 2.]
     ref:
       limits: [0.95, 1.05]
@@ -191,7 +186,6 @@ params:
   qpar:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -200,7 +194,6 @@ params:
   qper:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -209,7 +202,6 @@ params:
   qiso:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -218,7 +210,6 @@ params:
   qap:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -227,7 +218,6 @@ params:
   df:
     value: 1.
     prior:
-      dist: uniform
       limits: [0., 2.]
     ref:
       limits: [0.95, 1.05]
@@ -242,7 +232,6 @@ params:
   dm:
     value: 0.
     prior:
-      dist: uniform
       limits: [-3., 3.]
     ref:
       limits: [-0.01, 0.01]
@@ -251,7 +240,6 @@ params:
   dn:
     fixed: True
     prior:
-      dist: uniform
       limits: [-0.5, 0.5]
     ref:
       dist: norm
@@ -261,7 +249,6 @@ params:
   qpar:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -270,7 +257,6 @@ params:
   qper:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -279,7 +265,6 @@ params:
   qiso:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -288,7 +273,6 @@ params:
   qap:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -297,7 +281,6 @@ params:
   df:
     value: 1.
     prior:
-      dist: uniform
       limits: [0., 2.]
     ref:
       limits: [0.95, 1.05]
@@ -321,7 +304,6 @@ params:
   qbao:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -330,7 +312,6 @@ params:
   qap:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -339,7 +320,6 @@ params:
   df:
     value: 1.
     prior:
-      dist: uniform
       limits: [0., 2.]
     ref:
       limits: [0.95, 1.05]
@@ -348,7 +328,6 @@ params:
   dm:
     value: 0.
     prior:
-      dist: uniform
       limits: [-3., 3.]
     ref:
       limits: [-0.01, 0.01]
@@ -366,7 +345,6 @@ params:
   qap:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -376,7 +354,6 @@ params:
     fixed: True
     value: 1.
     prior:
-      dist: uniform
       limits: [0., 2.]
     ref:
       limits: [0.95, 1.05]
@@ -400,7 +377,6 @@ params:
   m:
     value: 0.57
     prior:
-      dist: uniform
       limits: [-1., 10.]
     ref:
       limits: [0., 1.]
@@ -409,7 +385,6 @@ params:
   n:
     value: 0.89
     prior:
-      dist: uniform
       limits: [0., 10.]
     ref:
       limits: [0.5, 1.]
@@ -418,7 +393,6 @@ params:
   dpto:
     value: 1.
     prior:
-      dist: uniform
       limits: [0., 2.]
     ref:
       limits: [0.9, 1.1]
@@ -428,7 +402,6 @@ params:
   qto:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.5, 1.5]
     ref:
       limits: [0.99, 1.01]
@@ -437,7 +410,6 @@ params:
   qap:
     value: 1.
     prior:
-      dist: uniform
       limits: [0.8, 1.2]
     ref:
       limits: [0.99, 1.01]
@@ -448,7 +420,6 @@ params:
     fixed: True
     value: 1.
     prior:
-      dist: uniform
       limits: [0., 2.]
     ref:
       limits: [0.95, 1.05]
@@ -512,7 +483,7 @@ params:
     latex: \omega_{b}
   logA:
     prior:
-      limits: [1.61, 3.91]
+      limits: [2., 4.]
     ref:
       dist: norm
       loc: 3.036394
@@ -626,7 +597,7 @@ params:
     latex: \omega_{b}
   logA:
     prior:
-      limits: [1.61, 3.91]
+      limits: [2., 4.]
     ref:
       dist: norm
       loc: 3.036394
@@ -740,7 +711,7 @@ params:
     latex: \omega_{b}
   logA:
     prior:
-      limits: [1.61, 3.91]
+      limits: [2., 4.]
     ref:
       dist: norm
       loc: 3.036394
@@ -854,7 +825,7 @@ params:
     latex: \omega_{b}
   logA:
     prior:
-      limits: [1.61, 3.91]
+      limits: [2., 4.]
     ref:
       dist: norm
       loc: 3.036394

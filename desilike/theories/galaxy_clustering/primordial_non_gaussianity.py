@@ -38,6 +38,8 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`FixedPowerSpectrumTemplate`.
 
+    shotnoise : float, default=1e4
+        Shot noise (which is usually marginalized over).
 
     Reference
     ---------
@@ -45,8 +47,9 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
     """
     config_fn = 'primordial_non_gaussianity.yaml'
 
-    def initialize(self, *args, ells=(0, 2), method='prim', mode='b-p', template=None, **kwargs):
+    def initialize(self, *args, ells=(0, 2), method='prim', mode='b-p', template=None, shotnoise=1e4, **kwargs):
         super(PNGTracerPowerSpectrumMultipoles, self).initialize(*args, ells=ells, **kwargs)
+        self.nd = 1. / shotnoise
         if template is None:
             template = FixedPowerSpectrumTemplate()
         self.template = template
@@ -100,19 +103,22 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
         # bfnl_loc is typically 2 * delta_c * (b1 - p)
         bias = b1 + bfnl_loc * interpolate.interp1d(np.log10(kin), alpha, kind='cubic', axis=-1)(np.log10(kap))
         fog = 1. / (1. + sigmas**2 * kap**2 * muap**2 / 2.)**2.
-        pkmu = jac * fog * (bias + f * muap**2)**2 * interpolate.interp1d(np.log10(kin), pk_dd, kind='cubic', axis=-1)(np.log10(kap)) + sn0
+        pkmu = jac * fog * (bias + f * muap**2)**2 * interpolate.interp1d(np.log10(kin), pk_dd, kind='cubic', axis=-1)(np.log10(kap)) + sn0 / self.nd
         self.power = self.to_poles(pkmu)
 
     def get(self):
         return self.power
 
     @plotting.plotter
-    def plot(self, scaling='loglog'):
+    def plot(self, fig=None, scaling='loglog'):
         """
         Plot power spectrum multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         scaling : str, default='loglog'
             Either 'kpk' or 'loglog'.
 
@@ -125,9 +131,16 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
 
         show : bool, default=False
             If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
-        ax = plt.gca()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         k_exp = 1 if scaling == 'kpk' else 0
         for ill, ell in enumerate(self.ells):
             ax.plot(self.k, self.k**k_exp * self.power[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
@@ -140,4 +153,4 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
             ax.set_yscale('log')
             ax.set_xscale('log')
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        return ax
+        return fig

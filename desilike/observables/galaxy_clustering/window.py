@@ -262,12 +262,15 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         return state
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot window function effect on power spectrum multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -277,9 +280,16 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
 
         show : bool, default=False
             If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
-        fig, ax = plt.subplots()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         ax.plot([], [], linestyle='-', color='k', label='theory')
         ax.plot([], [], linestyle='--', color='k', label='window')
         for ill, ell in enumerate(self.ells):
@@ -295,7 +305,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         ax.legend()
         ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        return ax
+        return fig
 
 
 class WindowedCorrelationFunctionMultipoles(BaseCalculator):
@@ -436,12 +446,15 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         return state
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot window function effect on correlation function multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -451,9 +464,16 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
 
         show : bool, default=False
             If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
-        ax = plt.gca()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         ax.plot([], [], linestyle='-', color='k', label='theory')
         ax.plot([], [], linestyle='--', color='k', label='window')
         for ill, ell in enumerate(self.ells):
@@ -469,7 +489,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         ax.legend()
         ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
-        return ax
+        return fig
 
 
 class BaseFiberCollisionsPowerSpectrumMultipoles(BaseCalculator):
@@ -501,12 +521,15 @@ class BaseFiberCollisionsPowerSpectrumMultipoles(BaseCalculator):
         # self.power = self.theory.power + self.uncorrelated()
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot fiber collision effect on power spectrum multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -518,7 +541,10 @@ class BaseFiberCollisionsPowerSpectrumMultipoles(BaseCalculator):
             If ``True``, show figure.
         """
         from matplotlib import pyplot as plt
-        fig, ax = plt.subplots()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         ax.plot([], [], linestyle='-', color='k', label='theory')
         ax.plot([], [], linestyle='--', color='k', label='fiber collisions')
         for ill, ell in enumerate(self.ells):
@@ -532,7 +558,7 @@ class BaseFiberCollisionsPowerSpectrumMultipoles(BaseCalculator):
         ax.legend()
         ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        return ax
+        return fig
 
 
 def _format_kernel(sep, kernel):
@@ -749,12 +775,15 @@ class BaseFiberCollisionsCorrelationFunctionMultipoles(BaseCalculator):
         self.corr = self.correlated(self.theory.corr) + self.uncorrelated()
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot fiber collision effect on correlation function multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -764,9 +793,16 @@ class BaseFiberCollisionsCorrelationFunctionMultipoles(BaseCalculator):
 
         show : bool, default=False
             If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
-        fig, ax = plt.subplots()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         ax.plot([], [], linestyle='-', color='k', label='theory')
         ax.plot([], [], linestyle='--', color='k', label='fiber collisions')
         for ill, ell in enumerate(self.ells):
@@ -777,7 +813,7 @@ class BaseFiberCollisionsCorrelationFunctionMultipoles(BaseCalculator):
         ax.legend()
         ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
-        return ax
+        return fig
 
 
 def integral_cosn(n=0, range=(-np.pi, np.pi)):

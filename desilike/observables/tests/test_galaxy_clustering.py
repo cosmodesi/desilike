@@ -69,6 +69,7 @@ def test_power_spectrum():
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)(**params)
     likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
     print(likelihood(**params))
+    observable.plot(show=True)
     observable.wmatrix.plot(show=True)
     observable.plot_wiggles(show=True)
 
@@ -734,12 +735,12 @@ if __name__ == '__main__':
     setup_logging()
 
     # test_bao()
-    # test_power_spectrum()
-    # test_correlation_function()
+    test_power_spectrum()
+    test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    test_compression()
+    # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

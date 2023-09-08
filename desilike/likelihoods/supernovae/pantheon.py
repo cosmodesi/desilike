@@ -37,13 +37,18 @@ class PantheonSNLikelihood(BaseSNLikelihood):
         super(PantheonSNLikelihood, self).calculate()
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot Hubble diagram: Hubble residuals as a function of distance.
 
+        Parameters
+        ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 2 axes.
+
         fn : str, Path, default=None
-        Optionally, path where to save figure.
-        If not provided, figure is not saved.
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
 
         kw_save : dict, default=None
             Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
@@ -52,8 +57,11 @@ class PantheonSNLikelihood(BaseSNLikelihood):
             If ``True``, show figure.
         """
         from matplotlib import pyplot as plt
-        fig, lax = plt.subplots(2, sharex=True, sharey=False, gridspec_kw={'height_ratios': (3, 1)}, figsize=(6, 6), squeeze=True)
-        fig.subplots_adjust(hspace=0)
+        if fig is None:
+            fig, lax = plt.subplots(2, sharex=True, sharey=False, gridspec_kw={'height_ratios': (3, 1)}, figsize=(6, 6), squeeze=True)
+            fig.subplots_adjust(hspace=0)
+        else:
+            lax = fig.axes
         alpha = 0.3
         argsort = np.argsort(self.light_curve_params['zcmb'])
         zdata = self.light_curve_params['zcmb'][argsort]
@@ -65,7 +73,7 @@ class PantheonSNLikelihood(BaseSNLikelihood):
         lax[0].set_ylabel(r'distance modulus [$\mathrm{mag}$]')
         lax[1].set_ylabel(r'Hubble res. [$\mathrm{mag}$]')
         lax[1].set_xlabel('$z$')
-        return lax
+        return fig
 
     @classmethod
     def install(cls, installer):

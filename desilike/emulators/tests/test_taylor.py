@@ -31,6 +31,7 @@ def test_taylor_power(plot=False):
         emulator.set_samples()
         emulator.fit()
         emulator.check()
+        emulator.plot(show=plot)
 
         emulated_calculator = emulator.to_calculator()
 
@@ -42,12 +43,12 @@ def test_taylor_power(plot=False):
         #d = Differentiation(emulated_calculator, getter, order=1)()
         #assert not np.isnan(d).any()
 
-        if plot:
+        if True:
             from matplotlib import pyplot as plt
             ax = plt.gca()
             for i, dx in enumerate(np.linspace(-1., 1., 5)):
-                calculator(**{str(param): param.value + dx for param in calculator.runtime_info.params if param.varied})
-                emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.runtime_info.params if param.varied})
+                calculator(**{str(param): param.value + dx for param in calculator.varied_params})
+                emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.varied_params})
                 color = 'C{:d}'.format(i)
                 ax.plot(calculator.x, calculator.model, color=color, linestyle='--')
                 ax.plot(emulated_calculator.x, emulated_calculator.model, color=color, linestyle='-')
@@ -74,8 +75,8 @@ def test_taylor_power(plot=False):
             from matplotlib import pyplot as plt
             ax = plt.gca()
             for i, dx in enumerate(np.linspace(1., 2., 5)):
-                calculator(**{str(param): param.value + dx for param in calculator.runtime_info.params if param.varied})
-                emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.runtime_info.params if param.varied})
+                calculator(**{str(param): param.value + dx for param in calculator.varied_params})
+                emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.varied_params})
                 color = 'C{:d}'.format(i)
                 ax.plot(calculator.x, calculator.model, color=color, linestyle='--')
                 ax.plot(emulated_calculator.x, emulated_calculator.model, color=color, linestyle='-')
@@ -137,6 +138,6 @@ def test_likelihood():
 if __name__ == '__main__':
 
     setup_logging()
-    test_taylor_power(plot=False)
-    test_taylor(plot=True)
-    test_likelihood()
+    test_taylor_power(plot=True)
+    #test_taylor(plot=True)
+    #test_likelihood()

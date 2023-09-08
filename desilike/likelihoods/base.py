@@ -331,11 +331,42 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
         return jnp.concatenate([obs.flattheory for obs in self.observables], axis=0)
 
     @plotting.plotter
-    def plot_covariance_matrix(self, corrcoef=True):
+    def plot_covariance_matrix(self, corrcoef=True, **kwargs):
+        """
+        Plot covariance matrix.
+
+        Parameters
+        ----------
+        corrcoef : bool, default=True
+            If ``True``, plot the correlation matrix; else the covariance.
+
+        barlabel : str, default=None
+            Optionally, label for the color bar.
+
+        label1 : str, list of str, default=None
+            Optionally, label(s) for the observable(s).
+
+        figsize : int, tuple, default=None
+            Optionally, figure size.
+
+        norm : matplotlib.colors.Normalize, default=None
+            Scales the covariance / correlation to the canonical colormap range [0, 1] for mapping to colors.
+            By default, the covariance / correlation range is mapped to the color bar range using linear scaling.
+
+        labelsize : int, default=None
+            Optionally, size for labels.
+
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least ``len(self.observables) * len(self.observables)`` axes.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        """
         from desilike.observables.plotting import plot_covariance_matrix
         cumsize = np.insert(np.cumsum([len(obs.flatdata) for obs in self.observables]), 0, 0)
         mat = [[self.covariance[start1:stop1, start2:stop2] for start2, stop2 in zip(cumsize[:-1], cumsize[1:])] for start1, stop1 in zip(cumsize[:-1], cumsize[1:])]
-        return plot_covariance_matrix(mat, corrcoef=corrcoef)
+        return plot_covariance_matrix(mat, corrcoef=corrcoef, **kwargs)
 
 
 class SumLikelihood(BaseLikelihood):

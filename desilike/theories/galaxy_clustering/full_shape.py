@@ -59,7 +59,7 @@ class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
     config_fn = 'full_shape.yaml'
     _default_options = dict()
 
-    def initialize(self, *args, pt=None, template=None, shotnoise=1e4, **kwargs):
+    def initialize(self, pt=None, template=None, shotnoise=1e4, **kwargs):
         self.nd = 1. / shotnoise
         self.options = self._default_options.copy()
         for name, value in self._default_options.items():
@@ -106,12 +106,15 @@ class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
         return state
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot power spectrum multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -121,16 +124,23 @@ class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
 
         show : bool, default=False
             If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
-        ax = plt.gca()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         for ill, ell in enumerate(self.ells):
             ax.plot(self.k, self.k * self.power[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
         ax.grid(True)
         ax.legend()
         ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        return ax
+        return fig
 
 
 class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
@@ -182,12 +192,15 @@ class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
         return state
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot correlation function multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -199,14 +212,17 @@ class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
             If ``True``, show figure.
         """
         from matplotlib import pyplot as plt
-        fig, ax = plt.subplots()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         for ill, ell in enumerate(self.ells):
             ax.plot(self.s, self.s**2 * self.corr[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
         ax.grid(True)
         ax.legend()
         ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
-        return ax
+        return fig
 
 
 class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):
@@ -257,6 +273,9 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
 
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`StandardPowerSpectrumTemplate`.
+
+    shotnoise : float, default=1e4
+        Shot noise (which is usually marginalized over).
     """
     config_fn = 'full_shape.yaml'
 
@@ -272,9 +291,8 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
         f = self.template.f
         sigmanl2 = self.k[:, None]**2 * (sigmapar**2 * self.mu**2 + sigmaper**2 * (1. - self.mu**2))
         damping = np.exp(-sigmanl2 / 2.)
-        sn0 = sn0 / self.nd
-        #pkmu = jac * damping * (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0
-        pkmu = jac * damping * (b1 + f * muap**2)**2 * interpolate.interp1d(np.log10(self.template.k), self.template.pk_dd, kind='cubic', axis=-1)(np.log10(kap)) + sn0
+        #pkmu = jac * damping * (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0 / self.nd
+        pkmu = jac * damping * (b1 + f * muap**2)**2 * interpolate.interp1d(np.log10(self.template.k), self.template.pk_dd, kind='cubic', axis=-1)(np.log10(kap)) + sn0 / self.nd
         self.power = self.to_poles(pkmu)
 
     def get(self):
@@ -288,12 +306,15 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
         return state
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot power spectrum multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -303,16 +324,23 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
 
         show : bool, default=False
             If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
-        ax = plt.gca()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         for ill, ell in enumerate(self.ells):
             ax.plot(self.k, self.k * self.power[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
         ax.grid(True)
         ax.legend()
         ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        return ax
+        return fig
 
 
 class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
@@ -495,6 +523,9 @@ class EFTLikeKaiserTracerPowerSpectrumMultipoles(BaseEFTLikeTracerPowerSpectrumM
 
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    shotnoise : float, default=1e4
+        Shot noise (which is usually marginalized over).
     """
 
 
@@ -736,6 +767,9 @@ class TNSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    shotnoise : float, default=1e4
+        Shot noise (which is usually marginalized over).
     """
     _default_options = dict(freedom=None)
 
@@ -808,6 +842,9 @@ class EFTLikeTNSTracerPowerSpectrumMultipoles(BaseEFTLikeTracerPowerSpectrumMult
 
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    shotnoise : float, default=1e4
+        Shot noise (which is usually marginalized over).
     """
 
 
@@ -955,9 +992,11 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
 
+    shotnoise : float, default=1e4
+        Shot noise (which is usually marginalized over).
+
     **kwargs : dict
         Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5, mu=8``.
-
 
     Reference
     ---------
@@ -1100,6 +1139,9 @@ class EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTrac
 
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    shotnoise : float, default=1e4
+        Shot noise (which is usually marginalized over).
 
     **kwargs : dict
         Velocileptors options, defaults to: ``rbao=110, kmin=1e-2, kmax=0.5, nk=100, beyond_gauss=True,
@@ -1270,6 +1312,9 @@ class LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTrac
 
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    shotnoise : float, default=1e4
+        Shot noise (which is usually marginalized over).
 
     **kwargs : dict
         Velocileptors options, defaults to: ``kmin=5e-3, kmax=0.3, nk=50, beyond_gauss=False, one_loop=True,
@@ -1591,9 +1636,6 @@ class PyBirdTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMul
 
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
-
-    shotnoise : float, default=1e4
-        Shot noise (which is usually marginalized over).
 
     **kwargs : dict
         Pybird options, defaults to: ``with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='opti', eft_basis='eftoflss'``.

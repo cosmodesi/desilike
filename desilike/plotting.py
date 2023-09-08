@@ -9,6 +9,14 @@ from . import utils
 logger = logging.getLogger('Plotting')
 
 
+class FakeFigure(object):
+
+    def __init__(self, axes):
+        if not hasattr(axes, '__iter__'):
+            axes = [axes]
+        self.axes = list(axes)
+
+
 def savefig(filename, fig=None, bbox_inches='tight', pad_inches=0.1, dpi=200, **kwargs):
     """
     Save figure to ``filename``.
@@ -71,8 +79,7 @@ def suplabel(axis, label, shift=0, labelpad=5, ha='center', va='center', **kwarg
     """
     from matplotlib import pyplot as plt
     fig = plt.gcf()
-    xmin = []
-    ymin = []
+    xmin, ymin = [], []
     for ax in fig.axes:
         xmin.append(ax.get_position().xmin)
         ymin.append(ax.get_position().ymin)
@@ -91,7 +98,7 @@ def suplabel(axis, label, shift=0, labelpad=5, ha='center', va='center', **kwarg
     plt.text(x, y, label, rotation=rotation, transform=fig.transFigure, ha=ha, va=va, **kwargs)
 
 
-def plotter(func):
+def plotter(*args, **kwargs):
     """
     Return wrapper for plotting functions, that adds the following (optional) arguments to ``func``:
 
@@ -106,16 +113,82 @@ def plotter(func):
 
     show : bool, default=False
         If ``True``, show figure.
+
+    interactive : True or dict, default=False
+        If not None, use interactive interface provided by ipywidgets. Interactive can be a dictionary
+        with several entries:
+            * ref_param : Use to display reference theory
     """
     from functools import wraps
 
-    @wraps(func)
-    def wrapper(*args, fn=None, kw_save=None, show=False, **kwargs):
-        from matplotlib import pyplot as plt
-        toret = func(*args, **kwargs)
-        if fn is not None:
-            savefig(fn, fig=plt.gcf(), **(kw_save or {}))
-        if show: plt.show()
-        return toret
+    use_interactive = False
 
-    return wrapper
+    def get_wrapper(func):
+
+        @wraps(func)
+        def wrapper(*args, fn=None, kw_save=None, show=False, fig=None, **kwargs):
+
+            from matplotlib import pyplot as plt
+
+            if fig is not None:
+
+                if not isinstance(fig, plt.Figure):  # create fake figure that has axes
+                    fig = FakeFigure(fig)
+
+                kwargs['fig'] = fig
+
+            interactive = None
+            if use_interactive:
+                interactive = kwargs.pop('interactive', None)
+
+            if (interactive is None) or (interactive is False):
+                fig = func(*args, **kwargs)
+                if fn is not None:
+                    savefig(fn, **(kw_save or {}))
+                if show: plt.show()
+                return fig
+            else:
+                import ipywidgets as widgets
+                from IPython.display import display
+
+                if interactive is True:
+                    interactive = {}
+                interactive = {**use_interactive, **interactive}
+                ref_params = interactive.pop('params', None)
+                ndelta = interactive.pop('ndelta', 10)
+
+                self = args[0]
+                def interactive_plot(**params):
+                    fig = None
+                    if ref_params is not None:
+                        self(**ref_params)
+                        fig = func(*args, **{**kwargs, **interactive, 'fig': None})
+                    self(**params)
+                    func(*args, **{**kwargs, 'fig': fig})
+
+                sliders = {}
+                for param in self.all_params.select(input=True):
+                    center, delta, limits = param.value, param.delta, param.prior.limits
+                    edges = [center - ndelta * delta[0], center + ndelta * delta[1]]
+                    edges = [max(edges[0], limits[0]), min(edges[1], limits[1])]
+
+                    sliders[param.name] = widgets.FloatSlider(min=edges[0], max=edges[1], step=(edges[1] - edges[0]) / 100.,
+                                                            value=center, description=param.latex(inline=True) + ' : ')
+                w = widgets.interactive(interactive_plot, **sliders)
+                display(w)
+
+        return wrapper
+
+    if kwargs or not args:
+        if args:
+            raise ValueError('unexpected args: {}, {}'.format(args, kwargs))
+        use_interactive = kwargs.pop('interactive', False)
+        if use_interactive is True:
+            use_interactive = {}
+        use_interactive = dict(use_interactive or {})
+        return get_wrapper
+
+    if len(args) != 1:
+        raise ValueError('unexpected args: {}'.format(args))
+
+    return get_wrapper(args[0])

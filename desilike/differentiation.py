@@ -305,10 +305,10 @@ class Differentiation(BaseClass):
             self._grid_center[param.name] = center = param.value
             if self.method[param.name] == 'finite' and self.order[param.name]:
                 size = deriv_ncoeffs(self.order[param.name], acc=self.accuracy[param.name])
-                center, delta = param.value, param.delta
+                center, delta, limits = param.value, param.delta, param.prior.limits
                 ndelta = size // 2
                 edges = [center - delta_scale * ndelta * delta[0], center + delta_scale * ndelta * delta[1]]
-                edges = [max(edges[0], param.prior.limits[0]), min(edges[1], param.prior.limits[1])]
+                edges = [max(edges[0], limits[0]), min(edges[1], limits[1])]
                 grid = None
                 # If center is super close from edges, put all points regularly on the other side
                 for edge, cindex in zip(edges, [0, size]):

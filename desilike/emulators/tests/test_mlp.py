@@ -68,5 +68,5 @@ def test_mlp(plot=False):
 if __name__ == '__main__':
 
     setup_logging()
-    #test_mlp_linear(plot=True)
+    test_mlp_linear(plot=True)
     test_mlp(plot=True)

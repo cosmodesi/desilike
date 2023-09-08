@@ -422,6 +422,10 @@ class Emulator(BaseClass):
 
         seed : int, default=None
             Random seed for sample downsampling.
+
+        Returns
+        -------
+        figs : list of matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
 
@@ -441,7 +445,7 @@ class Emulator(BaseClass):
         pipeline = calculator.runtime_info.pipeline
         unique_samples = find_uniques(self.samples.values())
 
-        toret = []
+        figs = []
         for samples in unique_samples:
             samples_names = [name for name, s in self.samples.items() if s is samples]
             if samples_names:
@@ -460,12 +464,12 @@ class Emulator(BaseClass):
                         lax[0].set_ylabel(name)
                         lax[1].set_ylabel(r'$\Delta$ {}'.format(name))
                         for ax in lax: ax.grid(True)
-                        toret.append(lax)
+                        figs.append(fig)
                         if fn is not None:
                             plotting.savefig(fn, fig=fig, **(kw_save or {}))
-                        if show is None:
+                        if show:
                             plt.show()
-        return toret
+        return figs
 
     def __getstate__(self):
         state = {'engines': {}}

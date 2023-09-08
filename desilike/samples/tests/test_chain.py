@@ -108,6 +108,7 @@ def test_plot():
     plotting.plot_trace(chains[0], fn=os.path.join(chain_dir, 'trace.png'))
     plotting.plot_autocorrelation_time(chains[0], fn=os.path.join(chain_dir, 'autocorrelation_time.png'))
     plotting.plot_gelman_rubin(chains, fn=os.path.join(chain_dir, 'gelman_rubin.png'))
+    plotting.plot_gelman_rubin(chains[0], nsplits=8, fn=os.path.join(chain_dir, 'gelman_rubin.png'))
     plotting.plot_geweke(chains, fn=os.path.join(chain_dir, 'geweke.png'))
 
 
@@ -142,6 +143,8 @@ if __name__ == '__main__':
 
     setup_logging()
 
+    test_plot()
+    exit()
     test_bcast()
     test_misc()
     test_stats()

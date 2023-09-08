@@ -275,12 +275,15 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
         return self.power
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot power spectrum multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -290,16 +293,23 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
 
         show : bool, default=False
             If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
-        ax = plt.gca()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         for ill, ell in enumerate(self.ells):
             ax.plot(self.k, self.k * self.power[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
         ax.grid(True)
         ax.legend()
         ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        return ax
+        return fig
 
 
 class DampedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpectrumMultipoles):
@@ -482,12 +492,15 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
         return self.corr
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot correlation function multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -499,14 +512,17 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
             If ``True``, show figure.
         """
         from matplotlib import pyplot as plt
-        fig, ax = plt.subplots()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         for ill, ell in enumerate(self.ells):
             ax.plot(self.s, self.s**2 * self.corr[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
         ax.grid(True)
         ax.legend()
         ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
-        return ax
+        return fig
 
 
 class DampedBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCorrelationFunctionMultipoles):
@@ -800,12 +816,15 @@ class FlexibleBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectru
         return self.power
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot power spectrum multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -815,16 +834,23 @@ class FlexibleBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectru
 
         show : bool, default=False
             If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
-        ax = plt.gca()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         for ill, ell in enumerate(self.ells):
             ax.plot(self.k, self.k * self.power[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
         ax.grid(True)
         ax.legend()
         ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        return ax
+        return fig
 
 
 class FlexibleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesCorrelationFunctionMultipoles):
@@ -840,12 +866,15 @@ class FlexibleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesCorrel
         self.power.init.update(broadband_kernel=self.broadband_kernel, kp=self.kp)
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot correlation function multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -857,11 +886,14 @@ class FlexibleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesCorrel
             If ``True``, show figure.
         """
         from matplotlib import pyplot as plt
-        fig, ax = plt.subplots()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         for ill, ell in enumerate(self.ells):
             ax.plot(self.s, self.s**2 * self.corr[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
         ax.grid(True)
         ax.legend()
         ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
-        return ax
+        return fig

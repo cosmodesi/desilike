@@ -17,7 +17,6 @@ params:
       loc: 0.
       scale: 0.1
     latex: s_{n, 0}
-    fixed: False
   sigmapar:
     value: 0.
     prior:
@@ -29,6 +28,7 @@ params:
     latex: \Sigma_{\parallel}
     fixed: True
   sigmaper:
+    fixed: True
     value: 0.
     prior:
       limits: [0., 10]
@@ -37,7 +37,6 @@ params:
       loc: 5.
       scale: 2.
     latex: \Sigma_{\perp}
-    fixed: True
 
 ---
 

@@ -88,7 +88,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         self.corr = jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot comparison to brute-force (non-fftlog) computation.
         We see convergence towards brute-force when decreasing damping sigma.
@@ -96,6 +96,9 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least ``1 + len(self.ells)`` axes.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -113,10 +116,13 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
             tmp = np.sum(self.kin**3 * self.power.power[ill] * weights * special.spherical_jn(ell, self.s[:, None] * self.kin), axis=-1)
             corr.append((-1) ** (ell // 2) / (2. * np.pi**2) * tmp)
         from matplotlib import pyplot as plt
-        height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
-        figsize = (6, 1.5 * sum(height_ratios))
-        fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
-        fig.subplots_adjust(hspace=0)
+        if fig is None:
+            height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
+            figsize = (6, 1.5 * sum(height_ratios))
+            fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
+            fig.subplots_adjust(hspace=0)
+        else:
+            lax = fig.axes
         lax[0].plot([], [], linestyle='-', color='k', label='fftlog')
         lax[0].plot([], [], linestyle='--', color='k', label='brute-force')
         for ill, ell in enumerate(self.ells):
@@ -130,7 +136,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         lax[0].legend()
         lax[0].set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
         lax[-1].set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
-        return lax
+        return fig
 
 
 class BaseTheoryPowerSpectrumMultipolesFromWedges(BaseTheoryPowerSpectrumMultipoles):

@@ -124,6 +124,7 @@ def setup_logging(level=logging.INFO, stream=sys.stdout, filename=None, filemode
     kwargs : dict
         Other arguments for :func:`logging.basicConfig`.
     """
+    logging.getLogger("jax._src.lib.xla_bridge").addFilter(logging.Filter("No GPU/TPU found, falling back to CPU."))
     # Cannot provide stream and filename kwargs at the same time to logging.basicConfig, so handle different cases
     # Thanks to https://stackoverflow.com/questions/30861524/logging-basicconfig-not-creating-log-file-when-i-run-in-pycharm
     if isinstance(level, str):

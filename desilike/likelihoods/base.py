@@ -243,7 +243,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
         If ``None``, covariance matrix is computed on-the-fly using observables' mocks.
 
     scale_covariance : float, default=1.
-        Scale covariance by this value. If ``True``, scale covariance by the number of mocks.
+        Scale covariance by this value.
     """
     def initialize(self, observables, covariance=None, scale_covariance=1., precision=None, **kwargs):
         if not utils.is_sequence(observables):
@@ -260,11 +260,6 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
                 if self.mpicomm.rank == 0:
                     list_y = [np.concatenate(y, axis=0) for y in zip(*[obs.mocks for obs in self.observables])]
                     covariance = np.cov(list_y, rowvar=False, ddof=1)
-                if isinstance(scale_covariance, bool):
-                    if scale_covariance:
-                        scale_covariance = 1. / self.nobs
-                    else:
-                        scale_covariance = 1.
                 covariance = self.mpicomm.bcast(covariance if self.mpicomm.rank == 0 else None, root=0)
             elif all(getattr(obs, 'covariance', None) is not None for obs in self.observables):
                 covariances = [obs.covariance for obs in self.observables]
@@ -278,13 +273,6 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
                     start = stop
             elif precision is None:
                 raise ValueError('Observables must have mocks or their own covariance if global covariance or precision matrix not provided')
-        if isinstance(scale_covariance, bool):
-            import warnings
-            if scale_covariance:
-                warnings.warn('Got scale_covariance = {} (boolean), but I do not know the number of realizations; defaults to scale_covariance = 1.'.format(scale_covariance))
-            else:
-                warnings.warn('Got scale_covariance = {} (boolean), why? defaulting to scale_covariance = 1.'.format(scale_covariance))
-            scale_covariance = 1.
         self.flatdata = np.concatenate([obs.flatdata for obs in self.observables], axis=0)
 
         def check_matrix(matrix, name):

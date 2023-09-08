@@ -61,7 +61,7 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
         sk = 0.
         if self.mode == 'reciso': sk = np.exp(-1. / 2. * (kap * self.smoothing_radius)**2)
         kaiser = (b1 + f * muap**2 * (1 - sk))**2
-        if self.model == 'beutler2018':
+        if self.model == 'beutler2016':
             pkmu = jac * fog * kaiser * (pknow + np.exp(-sigmanl2 / 2.) * pkw)
         else:
             pkmu = jac * (fog * kaiser * pknow + kaiser * np.exp(-sigmanl2 / 2.) * pkw)
@@ -84,7 +84,7 @@ class SimpleBAOWigglesPowerSpectrumMultipoles(DampedBAOWigglesPowerSpectrumMulti
         sk = 0.
         if self.mode == 'reciso': sk = np.exp(-1. / 2. * (self.k * self.smoothing_radius)**2)[:, None]
         kaiser = (b1 + f * self.mu**2 * (1 - sk))**2
-        if self.model == 'beutler':
+        if self.model == 'beutler2016':
             pkmu = fog * kaiser * (pknow + np.exp(-sigmanl2 / 2.) * pkw)
         else:
             pkmu = (fog * kaiser * pknow + kaiser * np.exp(-sigmanl2 / 2.) * pkw)
@@ -341,6 +341,9 @@ class DampedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpe
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
 
+    model : str, default='howlett2023'
+        'beutler2016' to use the model of https://arxiv.org/abs/1607.03149.
+        Else, 'fog' only applies to the no-wiggle part.
 
     Reference
     ---------

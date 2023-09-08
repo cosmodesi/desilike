@@ -88,8 +88,8 @@ def test_templates():
 
 def test_bao():
 
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles, FlexibleBAOWigglesTracerPowerSpectrumMultipoles
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles, FlexibleBAOWigglesTracerCorrelationFunctionMultipoles
+    from desilike.theories.galaxy_clustering import SimpleBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles, FlexibleBAOWigglesTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import SimpleBAOWigglesTracerCorrelationFunctionMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles, FlexibleBAOWigglesTracerCorrelationFunctionMultipoles
     from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate
 
     def test(theory):
@@ -110,9 +110,11 @@ def test_bao():
         template.pk_dd
 
 
+    test(SimpleBAOWigglesTracerPowerSpectrumMultipoles())
     test(DampedBAOWigglesTracerPowerSpectrumMultipoles())
     test(ResummedBAOWigglesTracerPowerSpectrumMultipoles())
     test(FlexibleBAOWigglesTracerPowerSpectrumMultipoles())
+    test(SimpleBAOWigglesTracerCorrelationFunctionMultipoles())
     test(DampedBAOWigglesTracerCorrelationFunctionMultipoles())
     test(ResummedBAOWigglesTracerCorrelationFunctionMultipoles())
     test(FlexibleBAOWigglesTracerCorrelationFunctionMultipoles())
@@ -853,10 +855,10 @@ if __name__ == '__main__':
     #test_params()
     #test_integ()
     #test_templates()
-    #test_bao()
+    test_bao()
     #test_flexible_bao()
     #test_full_shape()
-    test_png()
+    #test_png()
     #test_pk_to_xi()
     #test_ap_diff()
     #test_ptt()

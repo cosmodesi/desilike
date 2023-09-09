@@ -778,7 +778,7 @@ class TNSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         freedom = self.options.pop('freedom', None)
         fix = []
         if freedom == 'max':
-            for param in self.init.params:
+            for param in self.init.params.select(basename=['b1', 'b2', 'bs', 'b3']):
                 param.update(fixed=False)
             fix += ['alpha6']
         if freedom == 'min':
@@ -1011,7 +1011,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
         freedom = self.options.pop('freedom', None)
         fix = []
         if freedom == 'max':
-            for param in self.init.params:
+            for param in self.init.params.select(basename=['b1', 'b2', 'bs', 'b3']):
                 param.update(fixed=False)
             fix += ['alpha6', 'sn4']
         if freedom == 'min':
@@ -1520,7 +1520,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         freedom = self.options.pop('freedom', None)
         fix = []
         if freedom == 'max':
-            for param in self.init.params:
+            for param in self.init.params.select(basename=['b1', 'b2', 'b3', 'b4', 'b2p4', 'b2m4', 'b2t', 'b2g', 'b3g']):
                 param.update(fixed=False)
             fix += ['ce1']
         if freedom == 'min':
@@ -1760,7 +1760,7 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         freedom = self.options.pop('freedom', None)
         fix = []
         if freedom == 'max':
-            for param in self.init.params:
+            for param in self.init.params.select(basename=['b1', 'b2', 'bs', 'b3']):
                 param.update(fixed=False)
             fix += ['ct']
         if freedom == 'min':

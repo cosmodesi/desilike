@@ -20,7 +20,7 @@ class BaseDynestySampler(BasePosteriorSampler):
 
     check = None
 
-    def __init__(self, *args, nlive=500, bound='multi', sample='auto', update_interval=None, **kwargs):
+    def __init__(self, *args, nlive=1000, bound='multi', sample='auto', update_interval=None, **kwargs):
         """
         Initialize dynesty sampler.
 
@@ -29,7 +29,7 @@ class BaseDynestySampler(BasePosteriorSampler):
         likelihood : BaseLikelihood
             Input likelihood.
 
-        nlive : int, default=500
+        nlive : int, default=1000
             Number of "live" points. Larger numbers result in a more finely sampled posterior (more accurate evidence),
             but also a larger number of iterations required to converge.
 
@@ -87,8 +87,7 @@ class BaseDynestySampler(BasePosteriorSampler):
         mpicomm : mpi.COMM_WORLD, default=None
             MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
         """
-        self.nlive = int(nlive)
-        self.attrs = {'bound': bound, 'sample': sample, 'update_interval': update_interval}
+        self.attrs = dict(n_live=int(nlive), bound=bound, sample=sample, update_interval=update_interval)
         super(BaseDynestySampler, self).__init__(*args, **kwargs)
         if self.save_fn is None:
             raise ValueError('save_fn must be provided to save dynesty state')
@@ -227,7 +226,7 @@ class StaticDynestySampler(BaseDynestySampler):
     def _set_sampler(self, rstate, pool, use_pool):
         import dynesty
 
-        self.sampler = dynesty.NestedSampler(self.loglikelihood, self.prior_transform, len(self.varied_params), nlive=self.nlive, pool=pool, use_pool=use_pool, rstate=rstate, **self.attrs)
+        self.sampler = dynesty.NestedSampler(self.loglikelihood, self.prior_transform, len(self.varied_params), pool=pool, use_pool=use_pool, rstate=rstate, **self.attrs)
 
     def _run_nested(self, niterations, **kwargs):
         self.sampler.run_nested(maxiter=niterations, **kwargs)
@@ -289,4 +288,4 @@ class DynamicDynestySampler(BaseDynestySampler):
         self.sampler = dynesty.DynamicNestedSampler(self.loglikelihood, self.prior_transform, len(self.varied_params), pool=pool, use_pool=use_pool, rstate=rstate, **self.attrs)
 
     def _run_nested(self, niterations, **kwargs):
-        self.sampler.run_nested(nlive_init=self.nlive, maxiter=niterations + self.sampler.it, **kwargs)
+        self.sampler.run_nested(nlive_init=self.attrs['n_live'], maxiter=niterations + self.sampler.it, **kwargs)

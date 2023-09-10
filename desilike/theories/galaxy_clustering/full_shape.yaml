@@ -87,7 +87,6 @@ class: KaiserTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [0., 4.]
     ref:
       limits: [1., 2.]
@@ -120,7 +119,6 @@ class: EFTLikeKaiserTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [0., 4.]
     ref:
       limits: [1., 2.]
@@ -183,7 +181,6 @@ class: EFTLikeKaiserTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [0., 4.]
     ref:
       limits: [1., 2.]
@@ -227,7 +224,6 @@ class: TNSTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [0., 4.]
     ref:
       limits: [1., 2.]
@@ -282,7 +278,6 @@ class: TNSTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [0., 4.]
     ref:
       limits: [1., 2.]
@@ -328,7 +323,6 @@ class: EFTLikeTNSTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [0., 4.]
     ref:
       limits: [1., 2.]
@@ -403,7 +397,6 @@ class: EFTLikeTNSTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [0., 4.]
     ref:
       limits: [1., 2.]
@@ -460,7 +453,6 @@ class: LPTVelocileptorsTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
@@ -535,7 +527,6 @@ class: LPTVelocileptorsTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
@@ -600,7 +591,6 @@ class: EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
@@ -718,7 +708,6 @@ class: EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
@@ -836,7 +825,6 @@ class: LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
@@ -955,7 +943,6 @@ class: LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]

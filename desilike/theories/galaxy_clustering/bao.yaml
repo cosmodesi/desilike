@@ -3,10 +3,8 @@ class: DampedBAOWigglesTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [0.2, 4.]
     ref:
-      dist: uniform
       limits: [1.5, 2.5]
     latex: b
   sigmas:
@@ -42,10 +40,8 @@ class: SimpleBAOWigglesTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [0.2, 4.]
     ref:
-      dist: uniform
       limits: [1.5, 2.5]
     latex: b
   sigmas:
@@ -80,10 +76,8 @@ class: ResummedBAOWigglesTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [0.2, 4.]
     ref:
-      dist: uniform
       limits: [1.5, 2.5]
     latex: b
   sigmas:
@@ -114,10 +108,8 @@ class: DampedBAOWigglesTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [0.2, 4.]
     ref:
-      dist: uniform
       limits: [1.5, 2.5]
     latex: b
   sigmas:
@@ -152,10 +144,8 @@ class: SimpleBAOWigglesTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [0.2, 4.]
     ref:
-      dist: uniform
       limits: [1.5, 2.5]
     latex: b
   sigmas:
@@ -190,10 +180,8 @@ class: ResummedBAOWigglesTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
       limits: [0.2, 4.]
     ref:
-      dist: uniform
       limits: [1.5, 2.5]
     latex: b
   sigmas:
@@ -220,7 +208,6 @@ params:
       loc: 1.5
       scale: 1.
     ref:
-      dist: uniform
       limits: [1.5, 2.5]
     latex: b
     fixed: True
@@ -236,7 +223,6 @@ params:
       loc: 1.5
       scale: 1.
     ref:
-      dist: uniform
       limits: [1.5, 2.5]
     latex: b
     fixed: True

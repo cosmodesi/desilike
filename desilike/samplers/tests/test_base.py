@@ -3,7 +3,8 @@ import numpy as np
 
 from desilike import PipelineError, setup_logging
 from desilike.samplers import (EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler,
-                               StaticDynestySampler, DynamicDynestySampler, PolychordSampler, GridSampler, QMCSampler, ImportanceSampler)
+                               StaticDynestySampler, DynamicDynestySampler, PolychordSampler, NautilusSampler,
+                               GridSampler, QMCSampler, ImportanceSampler)
 
 
 def test_samplers():
@@ -24,21 +25,72 @@ def test_samplers():
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
     likelihood.params['LRG.loglikelihood'] = likelihood.params['LRG.logprior'] = {}
 
-    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler][:-1]:
+    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][:-1]:
         kwargs = {}
         if Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]:
             kwargs.update(nwalkers=20)
-        save_fn = './_tests/chain_*.npy'
+        if Sampler in [StaticDynestySampler, DynamicDynestySampler, PolychordSampler, NautilusSampler]:
+            kwargs.update(nlive=100)
+        save_fn = './_tests/chain_0.npy'
         sampler = Sampler(likelihood, save_fn=save_fn, **kwargs)
-        chains = sampler.run(max_iterations=20, check=True, check_every=10)
+        chains = sampler.run(max_iterations=100, check=True, check_every=50)
+        size1 = sampler.mpicomm.bcast(chains[0].size if sampler.mpicomm.rank == 0 else None, root=0)
+        chains = sampler.run(max_iterations=0, check=True, check_every=10)
+        size2 = sampler.mpicomm.bcast(chains[0].size if sampler.mpicomm.rank == 0 else None, root=0)
+        assert size2 == size1
         if sampler.mpicomm.rank == 0:
             assert 'f_sqrt_Ap' in chains[0]
             assert chains[0].concatenate(chains)._loglikelihood == 'LRG.loglikelihood'
             assert chains[0]['LRG.loglikelihood'].derivs is not None
             assert chains[0].sample_solved()['LRG.loglikelihood'].derivs is None
         chains = sampler.run(max_iterations=20, check=True, check_every=20)
-        sampler = Sampler(likelihood, chains=chains, save_fn=save_fn)
+        sampler = Sampler(likelihood, chains=save_fn, save_fn=save_fn)
         chains = sampler.run(max_iterations=20, check=True, check_every=10)
+
+
+def test_nautilus(test=2):
+
+    if test == 1:
+        from scipy.stats import norm
+        from nautilus import Prior
+
+        prior = Prior()
+        prior.add_parameter('a', dist=(-5, +5))
+        prior.add_parameter('b', dist=(-5, +5))
+        prior.add_parameter('c', dist=norm(loc=0, scale=2.0))
+
+        import numpy as np
+        from scipy.stats import multivariate_normal
+
+        def likelihood(param_dict):
+            x = np.array([param_dict['a'], param_dict['b'], param_dict['c']])
+            return multivariate_normal.logpdf(
+                x, mean=np.zeros(3), cov=[[1, 0, 0.90], [0, 1, 0], [0.90, 0, 1]])
+
+
+        from nautilus import Sampler
+
+        sampler = Sampler(prior, likelihood, n_live=1000)
+        sampler.run(verbose=True)
+
+    if test == 2:
+
+        import numpy as np
+        from scipy.stats import uniform, multivariate_normal
+
+        def prior(values):
+            toret = uniform(-5., 5.).ppf(values)
+            print(values, toret)
+            return toret
+
+        def likelihood(values):
+            return multivariate_normal.logpdf(values, mean=np.zeros(3), cov=[[1, 0, 0.90], [0, 1, 0], [0.90, 0, 1]])
+
+        from nautilus import Sampler
+
+        sampler = Sampler(prior, likelihood, n_dim=3, n_live=1000)
+        sampler.run(verbose=True)
+
 
 
 def test_fixed():
@@ -199,6 +251,7 @@ def test_nested():
 if __name__ == '__main__':
 
     setup_logging()
+    #test_nautilus()
     test_samplers()
     #test_fixed()
     #test_importance()

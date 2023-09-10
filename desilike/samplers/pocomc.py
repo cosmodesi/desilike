@@ -105,6 +105,7 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
 
     def _prepare(self):
         self.resume = self.mpicomm.bcast(any(chain is not None for chain in self.chains), root=0)
+        #self.chains = [None] * len(self.chains)
 
     def _run_one(self, start, niterations=300, progress=False, **kwargs):
         if self.resume:

@@ -25,6 +25,8 @@ class RegisteredSampler(type(BaseClass)):
 def batch_iterate(func, min_iterations=0, max_iterations=sys.maxsize, check_every=200, **kwargs):
     count_iterations = 0
     is_converged = False
+    if max_iterations < 0:
+        raise ValueError('max_iterations must be positive')
     if check_every < 1:
         raise ValueError('check_every must be >= 1, found {:d}'.format(check_every))
     while not is_converged:
@@ -170,8 +172,8 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                 if self.derived is None:
                     self.derived = [points, self.pipeline.derived]
                 else:
-                    self.derived = [Samples.concatenate([self.derived[0], points]),
-                                    Samples.concatenate([self.derived[1], self.pipeline.derived])]
+                    self.derived = [Samples.concatenate([self.derived[0], points], intersection=True),
+                                    Samples.concatenate([self.derived[1], self.pipeline.derived], intersection=True)]
             logposterior = logprior.copy()
             logposterior[mask_finite_prior] = 0.
             for name, values in di.items():
@@ -279,6 +281,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         self._mpicomm = self.pipeline.mpicomm = mpicomm
 
     def _set_derived(self, chain):
+        chain = Chain(chain, loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior)
         for param in self.pipeline.params.select(fixed=True, derived=False):
             chain[param] = np.full(chain.shape, param.value, dtype='f8')
         indices_in_chain, indices = self.derived[0].match(chain, params=self.varied_params)
@@ -308,13 +311,12 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                 self._set_rng(rng=self.rng)
                 self.derived = None
                 self._ichain = ichain
-                chain = Chain(self._run_one(start[ichain], **kwargs), loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior)
+                chain = self._run_one(start[ichain], **kwargs)
                 if self.mpicomm.rank == 0:
                     ncalls[ichain] = self.derived[1][self.likelihood._param_loglikelihood].size if self.derived is not None else 0
                     if chain is not None:
                         chains[ichain] = self._set_derived(chain)
         self.mpicomm = mpicomm_bak
-
         for ichain, chain in enumerate(chains):
             mpiroot_worker = self.mpicomm.rank if ncalls[ichain] is not None else None
             for mpiroot_worker in self.mpicomm.allgather(mpiroot_worker):
@@ -397,7 +399,7 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
                     self._set_rng(rng=self.rng)
                     self.derived = None
                     self._ichain = ichain
-                    chain = Chain(self._run_one(start[ichain], niterations=niterations, **kwargs), loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior)
+                    chain = self._run_one(start[ichain], niterations=niterations, **kwargs)
                     if self.mpicomm.rank == 0:
                         ncalls[ichain] = self.derived[1][self.likelihood._param_loglikelihood].size if self.derived is not None else 0
                         if chain is not None:

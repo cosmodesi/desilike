@@ -169,6 +169,7 @@ def plotter(*args, **kwargs):
                 sliders = {}
                 for param in self.all_params.select(input=True):
                     center, delta, limits = param.value, param.delta, param.prior.limits
+                    if (ref_params is not None) and (param.basename in ref_params): center = ref_params[param.basename]
                     edges = [center - ndelta * delta[0], center + ndelta * delta[1]]
                     edges = [max(edges[0], limits[0]), min(edges[1], limits[1])]
 

@@ -849,7 +849,7 @@ if __name__ == '__main__':
     #test_params()
     #test_integ()
     #test_templates()
-    #test_bao()
+    test_bao()
     #test_flexible_bao()
     test_full_shape()
     #test_png()

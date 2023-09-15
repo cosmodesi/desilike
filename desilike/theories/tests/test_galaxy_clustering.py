@@ -95,7 +95,7 @@ def test_bao():
     def test(theory):
         print(theory)
         theory(qpar=1.1)
-        theory.z, theory.ells
+        theory.z, theory.ells, theory.template
         if 'PowerSpectrum' in theory.__class__.__name__:
             theory.k
         else:
@@ -197,10 +197,11 @@ def test_full_shape():
         from desilike.emulators import Emulator, TaylorEmulatorEngine
         #theory()
         bak = theory()
-        if emulate == 'pt':
-            calculator = theory.pt
-        else:
-            calculator = theory
+        theory.z, theory.ells, theory.template
+        if 'PowerSpectrum' in theory.__class__.__name__: theory.k
+        else: theory.s
+        if emulate == 'pt': calculator = theory.pt
+        else: calculator = theory
         emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=0))
         emulator.set_samples()
         emulator.fit()
@@ -214,6 +215,9 @@ def test_full_shape():
         if 'Correlation' not in theory.__class__.__name__: theory.nd
         if test_likelihood:
             likelihood()
+            theory.z, theory.ells
+            if 'PowerSpectrum' in theory.__class__.__name__: theory.k
+            else: theory.s
             from desilike.theories.galaxy_clustering.base import BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
             if not isinstance(theory, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):
                 theory.plot(show=True)
@@ -849,7 +853,7 @@ if __name__ == '__main__':
     #test_params()
     #test_integ()
     #test_templates()
-    test_bao()
+    #test_bao()
     #test_flexible_bao()
     test_full_shape()
     #test_png()

@@ -484,6 +484,10 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
         self.corr = self.pt.corr + self.broadband_matrix.dot(values)
 
     @property
+    def template(self):
+        return self.pt.template
+
+    @property
     def wiggle(self):
         return self.pt.wiggle
 

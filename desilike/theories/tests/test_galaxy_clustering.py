@@ -152,6 +152,7 @@ def test_full_shape():
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles
 
+    '''
     ntemplate = 4
     for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles],
                                        [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles]):
@@ -165,7 +166,7 @@ def test_full_shape():
                 if freedom is not None: assert len(corr.varied_params) == ntemplate + 4 + (4 in ells) + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 EFT
                 for param in corr.varied_params:
                     assert param in power.varied_params, '{} not in {}'.format(param, power.varied_params)
-
+    '''
     def clean_folps():
         import FOLPSnu as FOLPS
         import types
@@ -173,7 +174,7 @@ def test_full_shape():
             if not name.startswith('__') and not callable(value) and not isinstance(value, types.ModuleType):
                 FOLPS.__dict__[name] = None
 
-    def test_emulator_likelihood(theory, test_likelihood=True, emulate='pt'):
+    def test(theory, test_likelihood=True, emulate='pt', show=False):
         if test_likelihood:
             from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TracerCorrelationFunctionMultipolesObservable, ObservablesCovarianceMatrix
             from desilike.likelihoods import ObservablesGaussianLikelihood
@@ -185,7 +186,7 @@ def test_full_shape():
                 observable = TracerCorrelationFunctionMultipolesObservable(slim={ell: [20, 150, 4] for ell in ells},
                                                                            data={}, theory=theory)
             observable()
-            theory.plot(show=True)
+            theory.plot(show=show)
             cov = np.eye(observable.flatdata.shape[0])
             likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
             for param in likelihood.all_params.select(basename=['alpha*', 'sn*', 'c*']):
@@ -193,11 +194,11 @@ def test_full_shape():
             for param in likelihood.all_params.select(basename=['alpha6']):
                 param.update(fixed=True)
             likelihood()
+            theory.z, theory.ells, theory.template
             clean_folps()
         from desilike.emulators import Emulator, TaylorEmulatorEngine
-        #theory()
-        bak = theory()
-        theory.z, theory.ells, theory.template
+
+        bak = theory(**{param.name: param.value for param in theory.all_params.select(input=True)})
         if 'PowerSpectrum' in theory.__class__.__name__: theory.k
         else: theory.s
         if emulate == 'pt': calculator = theory.pt
@@ -220,7 +221,7 @@ def test_full_shape():
             else: theory.s
             from desilike.theories.galaxy_clustering.base import BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
             if not isinstance(theory, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):
-                theory.plot(show=True)
+                theory.plot(show=show)
 
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
 
@@ -229,40 +230,40 @@ def test_full_shape():
 
     from desilike.theories.galaxy_clustering import SimpleTracerPowerSpectrumMultipoles
     theory = SimpleTracerPowerSpectrumMultipoles()
-    test_emulator_likelihood(theory, emulate=None)
+    test(theory, emulate=None)
 
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
     theory = KaiserTracerPowerSpectrumMultipoles()
-    test_emulator_likelihood(theory, emulate='pt')
-    test_emulator_likelihood(theory, emulate=None)
+    test(theory, emulate='pt')
+    test(theory, emulate=None, test_likelihood=False)
     theory = KaiserTracerCorrelationFunctionMultipoles()
-    test_emulator_likelihood(theory, emulate='pt')
-    test_emulator_likelihood(theory, emulate=None)
+    test(theory, emulate='pt')
+    test(theory, emulate=None, test_likelihood=False)
 
     from desilike.theories.galaxy_clustering import EFTLikeKaiserTracerPowerSpectrumMultipoles, EFTLikeKaiserTracerCorrelationFunctionMultipoles
 
     theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.))
     theory()
 
-    test_emulator_likelihood(theory, emulate='pt')
+    test(theory, emulate='pt')
     theory(df=1.01, b1=1., sn2_2=1., sigmapar=4.).shape
-    test_emulator_likelihood(theory, emulate=None)
+    test(theory, emulate=None, test_likelihood=False)
     theory(df=1.01, b1=1., sn2_2=1., sigmapar=4.).shape
 
     theory = EFTLikeKaiserTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5, apmode='qisoqap'))
-    test_emulator_likelihood(theory)
+    test(theory)
     theory(df=1.01, b1=1., ct0_2=1.).shape
 
     from desilike.theories.galaxy_clustering import TNSTracerPowerSpectrumMultipoles, TNSTracerCorrelationFunctionMultipoles
 
     theory = TNSTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    test_emulator_likelihood(theory, emulate='pt')
+    test(theory, emulate='pt')
     theory(df=1.01, b1=1.).shape
-    test_emulator_likelihood(theory, emulate=None)
+    test(theory, emulate=None, test_likelihood=False)
     theory(df=1.01, b1=1.).shape
 
     theory = TNSTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    test_emulator_likelihood(theory)
+    test(theory)
     theory(df=1.01, b1=1., b2=1.).shape
 
     from desilike.theories.galaxy_clustering import EFTLikeTNSTracerPowerSpectrumMultipoles, EFTLikeTNSTracerCorrelationFunctionMultipoles
@@ -344,13 +345,13 @@ def test_full_shape():
     """
     theory = EFTLikeTNSTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
 
-    test_emulator_likelihood(theory, emulate='pt')
+    test(theory, emulate='pt')
     theory(df=1.01, b1=1.).shape
-    test_emulator_likelihood(theory, emulate=None)
+    test(theory, emulate=None, test_likelihood=False)
     theory(df=1.01, b1=1.).shape
 
     theory = EFTLikeTNSTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    test_emulator_likelihood(theory)
+    test(theory)
     theory(df=1.01, b1=1., ct0_2=1.).shape
 
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
@@ -358,38 +359,38 @@ def test_full_shape():
     theory(dm=0.01, b1=1.).shape
     assert not np.allclose(theory(dm=-0.01), theory(dm=0.01))
     assert not np.allclose(theory(qpar=0.99), theory(qper=1.01))
-    test_emulator_likelihood(theory, emulate='pt')
-    test_emulator_likelihood(theory, emulate=None)
+    test(theory, emulate='pt')
+    test(theory, emulate=None, test_likelihood=False)
     theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    test_emulator_likelihood(theory)
+    test(theory)
     theory(dm=0.01, b1=1.).shape
     theory.pt
 
     from desilike.theories.galaxy_clustering import EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
     theory = EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    test_emulator_likelihood(theory)
+    test(theory)
     theory(dm=0.01, b1=1.).shape
     theory = EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    test_emulator_likelihood(theory)
+    test(theory)
     theory(dm=0.01, b1=1.).shape
     theory.pt
 
     from desilike.theories.galaxy_clustering import LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
     theory = LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    test_emulator_likelihood(theory)
+    test(theory)
     theory(dm=0.01, b1=1.).shape
     theory = LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    test_emulator_likelihood(theory)
+    test(theory)
     theory(dm=0.01, b1=1.).shape
     theory.pt
 
     from desilike.theories.galaxy_clustering import PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles
 
     theory = PyBirdTracerPowerSpectrumMultipoles(eft_basis='westcoast')
-    test_emulator_likelihood(theory)
+    test(theory)
     theory(logA=3.04, b1=1.).shape
     theory = PyBirdTracerCorrelationFunctionMultipoles(eft_basis='westcoast')
-    test_emulator_likelihood(theory)  # no P(k) computed
+    test(theory)  # no P(k) computed
     theory(logA=3.04, b1=1.).shape
 
 

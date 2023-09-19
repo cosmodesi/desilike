@@ -72,9 +72,14 @@ class MinuitProfiler(BaseProfiler):
 
     def _maximize_one(self, start, chi2, varied_params, max_iterations=int(1e5)):
         minuit = self._get_minuit(start, chi2, varied_params)
-        minuit.migrad(ncall=max_iterations)
         profiles = Profiles()
         profiles.set(start=Samples(start, params=varied_params))
+        try:
+            minuit.migrad(ncall=max_iterations)
+        except RuntimeError as exc:
+            if self.mpicomm.rank == 0:
+                self.log_warning('maximize failed: {}'.format(exc))
+            return profiles
         profiles.set(bestfit=ParameterBestFit([minuit.values[str(param)] for param in varied_params] + [- 0.5 * minuit.fval], params=varied_params + ['logposterior']))
         profiles.set(error=Samples([minuit.errors[str(param)] for param in varied_params], params=varied_params))
         if minuit.covariance is not None:
@@ -105,7 +110,12 @@ class MinuitProfiler(BaseProfiler):
         minuit = self._get_minuit(start, chi2, varied_params)
         profiles = Profiles()
         name = str(param)
-        minuit.minos(name, ncall=max_iterations, cl=cl)
+        try:
+            minuit.minos(name, ncall=max_iterations, cl=cl)  # minimum not found
+        except RuntimeError as exc:
+            if self.mpicomm.rank == 0:
+                self.log_warning('interval failed: {}'.format(exc))
+            return profiles
         interval = (minuit.merrors[name].lower, minuit.merrors[name].upper)
         profiles.set(interval=Samples([interval], params=[param]))
         return profiles
@@ -142,7 +152,12 @@ class MinuitProfiler(BaseProfiler):
     def _contour_one(self, start, chi2, varied_params, param1, param2, cl=None, size=100, interpolated=0):
         minuit = self._get_minuit(start, chi2, varied_params)
         profiles = Profiles()
-        x1, x2 = minuit.mncontour(str(param1), str(param2), cl=cl, size=size, interpolated=interpolated)
+        try:
+            x1, x2 = minuit.mncontour(str(param1), str(param2), cl=cl, size=size, interpolated=interpolated)
+        except RuntimeError as exc:
+            if self.mpicomm.rank == 0:
+                self.log_warning('contour failed: {}'.format(exc))
+            return profiles
         profiles.set(profile=ParameterContours([(ParameterArray(x1, param1), ParameterArray(x2, param2))]))
         return profiles
 

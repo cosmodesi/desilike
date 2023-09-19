@@ -26,6 +26,7 @@ For ParameterArray, define when output should be a ParameterArray (e.g. under af
 ## Documentation
 
 Documentation in construction on Read the Docs, [desilike docs](https://desilike.readthedocs.io/).
+See in particular [getting started](https://desilike.readthedocs.io/en/latest/user/getting_started.html).
 
 ## Requirements
 
@@ -80,6 +81,7 @@ Just define your calculator (most commonly your likelihood), then in a python sc
 from desilike import Installer
 Installer(user=True)(likelihood)
 ```
+
 ## License
 
 **desilike** is free software distributed under a BSD3 license. For details see the [LICENSE](https://github.com/cosmodesi/desilike/blob/main/LICENSE).

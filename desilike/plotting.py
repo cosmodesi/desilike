@@ -99,32 +99,32 @@ def suplabel(axis, label, shift=0, labelpad=5, ha='center', va='center', **kwarg
 
 
 def plotter(*args, **kwargs):
-    """
-    Return wrapper for plotting functions, that adds the following (optional) arguments to ``func``:
 
-    Parameters
-    ----------
-    fn : str, Path, default=None
-        Optionally, path where to save figure.
-        If not provided, figure is not saved.
-
-    kw_save : dict, default=None
-        Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
-
-    show : bool, default=False
-        If ``True``, show figure.
-
-    interactive : True or dict, default=False
-        If not None, use interactive interface provided by ipywidgets. Interactive can be a dictionary
-        with several entries:
-            * ref_param : Use to display reference theory
-    """
     from functools import wraps
 
     use_interactive = False
 
     def get_wrapper(func):
+        """
+        Return wrapper for plotting functions, that adds the following (optional) arguments to ``func``:
 
+        Parameters
+        ----------
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+
+        interactive : True or dict, default=False
+            If not None, use interactive interface provided by ipywidgets. Interactive can be a dictionary
+            with several entries:
+                * ref_param : Use to display reference theory
+        """
         @wraps(func)
         def wrapper(*args, fn=None, kw_save=None, show=False, fig=None, **kwargs):
 
@@ -134,6 +134,9 @@ def plotter(*args, **kwargs):
 
                 if not isinstance(fig, plt.Figure):  # create fake figure that has axes
                     fig = FakeFigure(fig)
+
+                elif not fig.axes:
+                    fig.add_subplot(111)
 
                 kwargs['fig'] = fig
 

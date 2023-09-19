@@ -8,7 +8,6 @@ import traceback
 import warnings
 import functools
 import importlib
-from pathlib import Path
 from collections import UserDict
 import math
 
@@ -37,10 +36,10 @@ def exception_handler(exc_type, exc_value, exc_traceback, mpicomm=None):
         mpicomm.Abort()
 
 
-def mkdir(dirname):
+def mkdir(dirname, **kwargs):
     """Try to create ``dirname`` and catch :class:`OSError`."""
     try:
-        os.makedirs(dirname)  # MPI...
+        os.makedirs(dirname, **kwargs)  # MPI...
     except OSError:
         return
 
@@ -324,7 +323,7 @@ def is_sequence(item):
 
 def is_path(item):
     """Whether input item is a path."""
-    return isinstance(item, (str, Path))
+    return isinstance(item, (str, os.PathLike))
 
 
 def dict_to_yaml(d):

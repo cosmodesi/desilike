@@ -152,21 +152,6 @@ def test_full_shape():
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles
 
-    '''
-    ntemplate = 4
-    for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles],
-                                       [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles]):
-        for freedom in [None, 'min', 'max']:
-            for ells in [(0, 2), (0, 2, 4)]:
-                power = TheoryPower(ells=ells, freedom=freedom)
-                print(TheoryPower.__name__, ells, freedom, power.varied_params)
-                if freedom is not None: assert len(power.varied_params) == ntemplate + 6 + (4 in ells) + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 (+ 1) EFT, 2 sn
-                corr = TheoryCorr(ells=ells, freedom=freedom)
-                print(TheoryCorr.__name__, ells, freedom, corr.varied_params)
-                if freedom is not None: assert len(corr.varied_params) == ntemplate + 4 + (4 in ells) + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 EFT
-                for param in corr.varied_params:
-                    assert param in power.varied_params, '{} not in {}'.format(param, power.varied_params)
-    '''
     def clean_folps():
         import FOLPSnu as FOLPS
         import types
@@ -223,10 +208,21 @@ def test_full_shape():
             if not isinstance(theory, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):
                 theory.plot(show=show)
 
+    ntemplate = 4
+    for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles],
+                                       [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles]):
+        for freedom in [None, 'min', 'max']:
+            for ells in [(0, 2), (0, 2, 4)]:
+                power = TheoryPower(ells=ells, freedom=freedom)
+                print(TheoryPower.__name__, ells, freedom, power.varied_params)
+                if freedom is not None: assert len(power.varied_params) == ntemplate + 6 + (4 in ells) + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 (+ 1) EFT, 2 sn
+                corr = TheoryCorr(ells=ells, freedom=freedom)
+                print(TheoryCorr.__name__, ells, freedom, corr.varied_params)
+                if freedom is not None: assert len(corr.varied_params) == ntemplate + 4 + (4 in ells) + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 EFT
+                for param in corr.varied_params:
+                    assert param in power.varied_params, '{} not in {}'.format(param, power.varied_params)
+
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
-
-    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
-
 
     from desilike.theories.galaxy_clustering import SimpleTracerPowerSpectrumMultipoles
     theory = SimpleTracerPowerSpectrumMultipoles()
@@ -268,81 +264,81 @@ def test_full_shape():
 
     from desilike.theories.galaxy_clustering import EFTLikeTNSTracerPowerSpectrumMultipoles, EFTLikeTNSTracerCorrelationFunctionMultipoles
 
-    """
-    #k = np.logspace(-3, 1.5, 1000)
-    k = np.linspace(0.01, 0.3, 60)
-    theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(k=k, ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=1.))
-    theory()
-    theory_tns = EFTLikeTNSTracerPowerSpectrumMultipoles(k=k, ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=1.))
-    theory_tns()
+    if False:
+        #k = np.logspace(-3, 1.5, 1000)
+        k = np.linspace(0.01, 0.3, 60)
+        theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(k=k, ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=1.))
+        theory()
+        theory_tns = EFTLikeTNSTracerPowerSpectrumMultipoles(k=k, ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=1.))
+        theory_tns()
 
-    from matplotlib import pyplot as plt
+        from matplotlib import pyplot as plt
 
-    from pyregpt import A1Loop, B1Loop
+        from pyregpt import A1Loop, B1Loop
 
-    pyregpt = A1Loop()
-    pyregpt.set_pk_lin(theory_tns.template.k, theory_tns.template.pk_dd)
-    pyregpt.set_terms(theory_tns.pt.k)
-    pyregpt.run_terms(nthreads=4)
+        pyregpt = A1Loop()
+        pyregpt.set_pk_lin(theory_tns.template.k, theory_tns.template.pk_dd)
+        pyregpt.set_terms(theory_tns.pt.k)
+        pyregpt.run_terms(nthreads=4)
 
-    ax = plt.gca()
-    for i in range(5):
-        ax.plot(pyregpt['k'], pyregpt['pk'][:, i], color='C{:d}'.format(i), linestyle='-', label='regpt' if i == 0 else None)
-        ax.plot(theory_tns.pt.k, theory_tns.pt._A[i, :, 0], color='C{:d}'.format(i), linestyle='--', label='desilike' if i == 0 else None)
-    ax.legend()
-    plt.show()
-    exit()
+        ax = plt.gca()
+        for i in range(5):
+            ax.plot(pyregpt['k'], pyregpt['pk'][:, i], color='C{:d}'.format(i), linestyle='-', label='regpt' if i == 0 else None)
+            ax.plot(theory_tns.pt.k, theory_tns.pt._A[i, :, 0], color='C{:d}'.format(i), linestyle='--', label='desilike' if i == 0 else None)
+        ax.legend()
+        plt.show()
+        exit()
 
-    pyregpt = B1Loop()
-    pyregpt.set_pk_lin(theory_tns.template.k, theory_tns.template.pk_dd)
-    pyregpt.set_terms(theory_tns.pt.k)
-    pyregpt.run_terms(nthreads=4)
+        pyregpt = B1Loop()
+        pyregpt.set_pk_lin(theory_tns.template.k, theory_tns.template.pk_dd)
+        pyregpt.set_terms(theory_tns.pt.k)
+        pyregpt.run_terms(nthreads=4)
 
-    ax = plt.gca()
-    for i in range(9):
-        ax.plot(pyregpt['k'], pyregpt['pk'][:, i], color='C{:d}'.format(i), linestyle='-', label='regpt' if i == 0 else None)
-        ax.plot(theory_tns.pt.k, theory_tns.pt._B[i, :, 0], color='C{:d}'.format(i), linestyle='--', label='desilike' if i == 0 else None)
-    ax.legend()
-    plt.show()
-    exit()
+        ax = plt.gca()
+        for i in range(9):
+            ax.plot(pyregpt['k'], pyregpt['pk'][:, i], color='C{:d}'.format(i), linestyle='-', label='regpt' if i == 0 else None)
+            ax.plot(theory_tns.pt.k, theory_tns.pt._B[i, :, 0], color='C{:d}'.format(i), linestyle='--', label='desilike' if i == 0 else None)
+        ax.legend()
+        plt.show()
+        exit()
 
-    from pyregpt import Bias1Loop
+        from pyregpt import Bias1Loop
 
-    pyregpt = Bias1Loop()
-    pyregpt.set_pk_lin(theory_tns.template.k, theory_tns.template.pk_dd)
-    pyregpt.set_terms(theory_tns.pt.k11)
-    pyregpt.run_terms(nthreads=4)
+        pyregpt = Bias1Loop()
+        pyregpt.set_pk_lin(theory_tns.template.k, theory_tns.template.pk_dd)
+        pyregpt.set_terms(theory_tns.pt.k11)
+        pyregpt.run_terms(nthreads=4)
 
-    ax = plt.gca()
-    #for name in ['pk11', 'pk_dd', 'pk_b2d', 'pk_bs2d', 'pk_sig3sq', 'pk_b22', 'pk_b2s2', 'pk_bs22', 'pk_dt', 'pk_b2t', 'pk_bs2t', 'pk_tt']:
-    for i, name in enumerate(['pk_b2d', 'pk_bs2d', 'pk_sig3sq', 'pk_b22', 'pk_b2s2', 'pk_bs22', 'pk_b2t', 'pk_bs2t']):
-        ax.plot(theory_tns.pt.k11, np.abs(getattr(theory_tns.pt, name)), color='C{:d}'.format(i), linestyle='-', label=name)
-        if name == 'pk_sig3sq':
-            regptpk = pyregpt.pk_sigma3sq()
-        else:
-            regptpk = pyregpt[name]
-        ax.plot(pyregpt['k'], np.abs(regptpk), color='C{:d}'.format(i), linestyle='--')
-        #ax.plot(pyregpt['k'], np.abs(getattr(theory_tns.pt, name)) / np.abs(regptpk), color='C{:d}'.format(i), linestyle='--')
-    ax.set_yscale('log')
-    ax.legend()
-    plt.show()
+        ax = plt.gca()
+        #for name in ['pk11', 'pk_dd', 'pk_b2d', 'pk_bs2d', 'pk_sig3sq', 'pk_b22', 'pk_b2s2', 'pk_bs22', 'pk_dt', 'pk_b2t', 'pk_bs2t', 'pk_tt']:
+        for i, name in enumerate(['pk_b2d', 'pk_bs2d', 'pk_sig3sq', 'pk_b22', 'pk_b2s2', 'pk_bs22', 'pk_b2t', 'pk_bs2t']):
+            ax.plot(theory_tns.pt.k11, np.abs(getattr(theory_tns.pt, name)), color='C{:d}'.format(i), linestyle='-', label=name)
+            if name == 'pk_sig3sq':
+                regptpk = pyregpt.pk_sigma3sq()
+            else:
+                regptpk = pyregpt[name]
+            ax.plot(pyregpt['k'], np.abs(regptpk), color='C{:d}'.format(i), linestyle='--')
+            #ax.plot(pyregpt['k'], np.abs(getattr(theory_tns.pt, name)) / np.abs(regptpk), color='C{:d}'.format(i), linestyle='--')
+        ax.set_yscale('log')
+        ax.legend()
+        plt.show()
 
-    fig, lax = plt.subplots(1, 2, sharey=True)
-    lax = lax.flatten()
-    for ax, name in zip(lax, ['A', 'B']):
-        print(theory_tns.pt.pktable[name].shape)
-        corr = np.sum(theory_tns.pt.pktable[name], axis=0)
+        fig, lax = plt.subplots(1, 2, sharey=True)
+        lax = lax.flatten()
+        for ax, name in zip(lax, ['A', 'B']):
+            print(theory_tns.pt.pktable[name].shape)
+            corr = np.sum(theory_tns.pt.pktable[name], axis=0)
+            for ill, ell in enumerate(theory.ells):
+                ax.plot(theory_tns.pt.k, corr[ill] / theory.power[ill], color='C{:d}'.format(ill))
+        plt.show()
+
+        ax = plt.gca()
+        mask = k < 0.3
         for ill, ell in enumerate(theory.ells):
-            ax.plot(theory_tns.pt.k, corr[ill] / theory.power[ill], color='C{:d}'.format(ill))
-    plt.show()
+            ax.plot(theory.k[mask], theory.k[mask] * theory.power[ill][mask], color='C{:d}'.format(ill))
+            ax.plot(theory_tns.k[mask], theory_tns.k[mask] * theory_tns.power[ill][mask], color='C{:d}'.format(ill), linestyle='--')
+        plt.show()
 
-    ax = plt.gca()
-    mask = k < 0.3
-    for ill, ell in enumerate(theory.ells):
-        ax.plot(theory.k[mask], theory.k[mask] * theory.power[ill][mask], color='C{:d}'.format(ill))
-        ax.plot(theory_tns.k[mask], theory_tns.k[mask] * theory_tns.power[ill][mask], color='C{:d}'.format(ill), linestyle='--')
-    plt.show()
-    """
     theory = EFTLikeTNSTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
 
     test(theory, emulate='pt')
@@ -391,6 +387,15 @@ def test_full_shape():
     theory(logA=3.04, b1=1.).shape
     theory = PyBirdTracerCorrelationFunctionMultipoles(eft_basis='westcoast')
     test(theory)  # no P(k) computed
+    theory(logA=3.04, b1=1.).shape
+
+    from desilike.theories.galaxy_clustering import FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles
+
+    theory = FOLPSTracerPowerSpectrumMultipoles()
+    test(theory, show=True)
+    theory(logA=3.04, b1=1.).shape
+    theory = FOLPSTracerCorrelationFunctionMultipoles()
+    test(theory, show=True)  # no P(k) computed
     theory(logA=3.04, b1=1.).shape
 
 
@@ -538,9 +543,10 @@ def test_folps():
     alphashot2 = -8.1          #units: [Mpc/h]^2
     NuisanParams = [b1, b2, bs2, b3nl, alpha0, alpha2, alpha4, ctilde, alphashot0, alphashot2, PshotP]
 
-    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, FOLPSTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles
     template = DirectPowerSpectrumTemplate(z=z_pk)
     theory = FOLPSTracerPowerSpectrumMultipoles(template=template, k=k, shotnoise=PshotP, mu=3)
+
     theory(m_ncdm=0.2)
     cosmo = template.cosmo
     omega_b, omega_cdm, omega_ncdm, h = cosmo['omega_b'], cosmo['omega_cdm'], cosmo['omega_ncdm_tot'], cosmo['h']
@@ -553,7 +559,7 @@ def test_folps():
     ref = FOLPS.RSDmultipoles(k, NuisanParams, AP=False)[1:]
     print(theory.template.f0 / FOLPS.f0)
     power = theory(b1=b1, b2=b2, bs=bs2 + 4./7*(b1 - 1), b3=b3nl - 32./315*(b1 - 1),
-                   alpha0=alpha0, alpha2=alpha2, alpha4=alpha4, alpha6=ctilde, sn0=alphashot0, sn2=alphashot2)
+                   alpha0=alpha0, alpha2=alpha2, alpha4=alpha4, ct=ctilde, sn0=alphashot0, sn2=alphashot2)
 
     ax = plt.gca()
     for ill, ell in enumerate((0, 2, 4)):
@@ -566,6 +572,10 @@ def test_folps():
     ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
     ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
     plt.show()
+
+    theory = FOLPSTracerCorrelationFunctionMultipoles()
+    theory()
+    theory.plot(show=True)
 
 
 def test_params():

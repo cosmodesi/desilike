@@ -1400,7 +1400,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         from pybird.projection import Projection
         # nd used by combine_bias_terms_poles only
         #self.co = Common(Nl=len(self.ells), kmin=self.k[0] * 0.8, kmax=self.k[-1] * 1.2, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
-        self.co = Common(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.2, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
+        self.co = Common(Nl=len(self.ells), kmin=self.k[0] * 0.8, kmax=self.k[-1] * 1.2, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
                          eft_basis=self.options['eft_basis'], halohalo=True, with_cf=False,
                          with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti',
                          exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
@@ -1680,7 +1680,10 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         cosmo = getattr(self.template, 'cosmo', None)
         if cosmo is not None:
             cosmo_params = [self.z, cosmo['omega_b'], cosmo['omega_cdm'], cosmo['omega_ncdm_tot'], cosmo['h']]
-        FOLPS.NonLinear([self.template.k, self.template.pk_dd], cosmo_params, EdSkernels=self.options['kernels'] == 'eds')
+        FOLPS.NonLinear([self.template.k, self.template.pk_dd], cosmo_params, kminout=self.k[0] * 0.8, kmaxout=self.k[-1] * 1.2, nk=max(len(self.k), 120),
+                        EdSkernels=self.options['kernels'] == 'eds')
+        #FOLPS.NonLinear([self.template.k, self.template.pk_dd], cosmo_params, kminout=0.001, kmaxout=0.5, nk=120,
+        #                EdSkernels=self.options['kernels'] == 'eds')
         k = FOLPS.kTout
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         FOLPS.f0 = f0 = self.template.f0  # for Sigma2Total

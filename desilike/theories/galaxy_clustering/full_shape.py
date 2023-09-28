@@ -1322,7 +1322,7 @@ class LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTrac
 
     Reference
     ---------
-    , rather use dynamic nested sampling- https://arxiv.org/abs/2005.00523
+    - https://arxiv.org/abs/2005.00523
     - https://arxiv.org/abs/2012.04636
     - https://github.com/sfschen/velocileptors
     """

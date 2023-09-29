@@ -6,12 +6,51 @@ import numpy as np
 from scipy import special, integrate
 
 from desilike.base import BaseCalculator
-from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo
+from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo
 from desilike import plotting
 from desilike.jax import numpy as jnp
 from .power_template import BAOPowerSpectrumTemplate
-from .base import (BaseTheoryPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges,
-                   BaseTheoryCorrelationFunctionMultipoles, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles)
+from .base import (BaseTheoryPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles)
+
+
+def _get_orders(base, params, ells):
+    orders = {ell: {} for ell in ells}
+    for param in params.select(basename=base + '*_*'):
+        name = param.basename
+        ell = None
+        if name == base + '0':
+            ell, ind = 0, 0
+        else:
+            match = re.match(base + '(.*)_(.*)', name)
+            if match:
+                ell, ind = int(match.group(1)), int(match.group(2))
+        if ell is not None:
+            if ell in ells:
+                orders[ell][name] = ind
+            else:
+                del params[param]
+    return orders
+
+
+def _kernel_func(x, kernel='tsc'):
+    toret = np.zeros_like(x)
+    if kernel == 'ngp':
+        mask = x < 0.5
+        np.add.at(toret, mask, 1.)
+    elif kernel == 'cic':
+        mask = x < 1.
+        np.add.at(toret, mask, 1. - x[mask])
+    elif kernel == 'tsc':
+        mask = x < 0.5
+        np.add.at(toret, mask, 3. / 4. - x[mask]**2)
+        mask = (x >= 0.5) & (x < 1.5)
+        np.add.at(toret, mask, 1. / 2. * (3. / 2. - x[mask])**2)
+    elif kernel == 'pcs':
+        mask = x < 1.
+        np.add.at(toret, mask, 1. / 6. * (4. - 6. * x[mask]**2 + 3. * x[mask]**3))
+        mask = (x >= 1.) & (x < 2.)
+        np.add.at(toret, mask, 1. / 6. * (2. - x[mask])**3)
+    return toret
 
 
 class BaseBAOWigglesPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
@@ -44,10 +83,13 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
     ---------
     https://arxiv.org/abs/1607.03149
     """
-    def initialize(self, *args, mu=40, method='leggauss', model='howlett2023', **kwargs):
+    def initialize(self, *args, mu=10, method='leggauss', model='howlett2023', **kwargs):
         super(DampedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.model = str(model)
         self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
+        if self.template.only_now:
+            for param in self.init.params.select(basename=['sigmapar', 'sigmaper']):
+                param.update(fixed=True)
 
     def calculate(self, b1=1., sigmas=0., sigmapar=9., sigmaper=6.):
         super(DampedBAOWigglesPowerSpectrumMultipoles, self).calculate()
@@ -62,9 +104,9 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
         if self.mode == 'reciso': sk = np.exp(-1. / 2. * (kap * self.smoothing_radius)**2)
         kaiser = (b1 + f * muap**2 * (1 - sk))**2
         if self.model == 'beutler2016':
-            pkmu = jac * fog * kaiser * (pknow + np.exp(-sigma_nl2 / 2.) * pkw)
+            pkmu = fog * kaiser * (pknow + np.exp(-sigma_nl2 / 2.) * pkw)
         else:
-            pkmu = jac * (fog * kaiser * pknow + kaiser * np.exp(-sigma_nl2 / 2.) * pkw)
+            pkmu = (fog * kaiser * pknow + kaiser * np.exp(-sigma_nl2 / 2.) * pkw)
         self.power = self.to_poles(pkmu)
 
 
@@ -161,11 +203,14 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
     ---------
     https://arxiv.org/abs/1907.00043
     """
-    def initialize(self, *args, mu=20, method='leggauss', **kwargs):
+    def initialize(self, *args, mu=10, method='leggauss', **kwargs):
         super(ResummedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
         self.wiggles = ResummedPowerSpectrumWiggles(mode=self.mode, template=self.template,
                                                     smoothing_radius=self.smoothing_radius)
+        if self.template.only_now:
+            for param in self.init.params.select(basename=['q']):
+                param.update(fixed=True)
 
     def calculate(self, b1=1., sigmas=0., d=1., **kwargs):
         super(ResummedBAOWigglesPowerSpectrumMultipoles, self).calculate()
@@ -177,8 +222,152 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
         sk = 0.
         if self.mode == 'reciso': sk = np.exp(-1. / 2. * (kap * self.smoothing_radius)**2)
         kaiser = (b1 + f * muap**2 * (1 - sk))**2
-        pkmu = jac * (fog * kaiser * pknow + damped_wiggles)
+        pkmu = fog * kaiser * pknow + damped_wiggles
         self.power = self.to_poles(pkmu)
+
+
+class FlexibleBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+    r"""
+    Theory BAO power spectrum multipoles with terms multiplying the wiggles; no damping parameter (BAO damping or Finger-of-God).
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mode : str, default=''
+        Reconstruction mode:
+
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+    wiggles : str, default='pcs'
+        Multiplicative wiggles kernels, one of ['cic', 'tsc', 'pcs', 'power'].
+        'power' corresponds to :math:`k^{n}` wiggles terms.
+
+    kp : float, default=None
+        For 'power' kernel, the pivot :math:`k`.
+        For other kernels, their :math:`k`-period.
+        Defaults to :math:`2 \pi / r_{d}`.
+
+    """
+    @staticmethod
+    def _params(params, wiggles='pcs'):
+        ells = [0, 2, 4]
+        if wiggles == 'power':
+            for ell in ells:
+                for pow in range(-3, 2):
+                    params['ml{:d}_{:d}'.format(ell, pow)] = dict(value=0., ref=dict(limits=[-1e2, 1e2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, pow))
+        else:
+            for ell in ells:
+                for ik in range(-1, 10):  # should be more than enough
+                    params['ml{:d}_{:d}'.format(ell, ik)] = dict(value=0., ref=dict(limits=[-1e-2, 1e-2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
+        return params
+
+    def initialize(self, *args, mu=10, method='leggauss', wiggles='pcs', kp=None, **kwargs):
+        super(FlexibleBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
+        self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
+        self.wiggles = str(wiggles)
+        if kp is None: self.kp = 2. * np.pi / self.template.fiducial.rs_drag
+        else: self.kp = float(kp)
+        self.set_params()
+        if self.template.only_now:
+            for param in self.init.params.select(basename='ml*_*'):
+                param.update(fixed=True)
+
+    def set_params(self):
+        self.wiggles_orders = _get_orders('ml', self.init.params, self.ells)
+        self.wiggles_matrix = {}
+        if self.wiggles == 'power':
+            for ell in self.ells:
+                self.wiggles_matrix[ell] = jnp.array([(self.k / self.kp)**pow for pow in self.wiggles_orders[ell].values()])
+        elif self.wiggles in ['ngp', 'cic', 'tsc', 'pcs']:
+            for ell in self.ells:
+                tmp, bb_orders = [], {}
+                for name, ik in self.wiggles_orders[ell].items():
+                    kernel = _kernel_func(np.abs(self.k / self.kp - ik), kernel=self.wiggles)
+                    if not np.allclose(kernel, 0.):
+                        tmp.append(kernel)
+                        bb_orders[name] = ik
+                self.wiggles_orders[ell] = bb_orders
+                self.wiggles_matrix[ell] = jnp.array(tmp)
+        else:
+            raise ValueError('Unknown kernel: {}'.format(self.wiggles))
+        bb_params = ['b1']
+        for params in self.wiggles_orders.values(): bb_params += list(params)
+        self.params = self.params.select(basename=bb_params)
+
+    def calculate(self, b1=1., **kwargs):
+        super(FlexibleBAOWigglesPowerSpectrumMultipoles, self).calculate()
+        f = self.template.f
+        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        pknow = self.template.pknow_dd_interpolator(self.k)
+        wiggles = self.template.pk_dd_interpolator(kap) - self.template.pknow_dd_interpolator(kap)
+        damped_wiggles = 0.
+        for ell in self.ells:
+            mult = jnp.array([kwargs[name] for name in self.wiggles_orders[ell]]).dot(self.wiggles_matrix[ell])
+            if ell == 0: mult += 1.
+            leg = special.legendre(ell)(self.mu)
+            damped_wiggles += wiggles * mult[:, None] * leg
+        sk = 0.
+        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (self.k * self.smoothing_radius)**2)[:, None]
+        kaiser = (b1 + f * self.mu**2 * (1 - sk))**2
+        pkmu = kaiser * (pknow[:, None] + damped_wiggles)
+        self.power = self.to_poles(pkmu)
+
+    def get(self):
+        return self.power
+
+    @plotting.plotter
+    def plot(self, fig=None):
+        """
+        Plot power spectrum multipoles.
+
+        Parameters
+        ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        """
+        from matplotlib import pyplot as plt
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
+        for ill, ell in enumerate(self.ells):
+            ax.plot(self.k, self.k * self.power[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.grid(True)
+        ax.legend()
+        ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        return fig
 
 
 class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
@@ -208,58 +397,75 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
 
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+    broadband : str, default='power'
+        Broadband parameterization: 'power' for powers of :math:`k`,
+        'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels.
+
+    kp : float, default=None
+        For 'power' kernel, the pivot :math:`k`.
+        For other kernels, their :math:`k`-period.
+        Defaults to :math:`2 \pi / r_{d}`.
     """
     config_fn = 'bao.yaml'
 
-    def initialize(self, k=None, ells=(0, 2), **kwargs):
+    @staticmethod
+    def _params(params, broadband='power'):
+        ells = [0, 2, 4]
+        if broadband == 'power':
+            for ell in ells:
+                for pow in range(-3, 2):
+                    params['al{:d}_{:d}'.format(ell, pow)] = dict(value=0., ref=dict(limits=[-1e2, 1e2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, pow))
+        else:
+            for ell in ells:
+                for ik in range(-1, 10):  # should be more than enough
+                    params['al{:d}_{:d}'.format(ell, ik)] = dict(value=0., ref=dict(limits=[-1e-2, 1e-2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
+        return params
+
+    def initialize(self, k=None, ells=(0, 2), broadband='power', kp=None, **kwargs):
         super(BaseBAOWigglesTracerPowerSpectrumMultipoles, self).initialize(k=k, ells=ells)
         self.pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
         self.pt.init.update(k=self.k, ells=self.ells, **kwargs)
-        self.kp = 0.1  # pivot to normalize broadband terms
         for name in ['z', 'k', 'ells']:
             setattr(self, name, getattr(self.pt, name))
+        self.broadband = str(broadband)
+        if kp is None: self.kp = 2. * np.pi / self.template.fiducial.rs_drag
+        else: self.kp = float(kp)
         self.set_params()
 
     def set_params(self):
-
-        def get_params_matrix(base):
-            coeffs = {ell: {} for ell in self.ells}
-            for param in self.params.select(basename=base + '*_*'):
-                name = param.basename
-                ell = None
-                if name == base + '0':
-                    ell, pow = 0, 0
-                else:
-                    match = re.match(base + '(.*)_(.*)', name)
-                    if match:
-                        ell, pow = int(match.group(1)), int(match.group(2))
-                if ell is not None:
-                    if ell in self.ells:
-                        coeffs[ell][name] = (self.k / self.kp)**pow
-                    else:
-                        del self.params[param]
-            params = [name for ell in self.ells for name in coeffs[ell]]
-            matrix = []
-            for ell in self.ells:
-                row = [np.zeros_like(self.k) for i in range(len(params))]
-                for name, k_i in coeffs[ell].items():
-                    row[params.index(name)][:] = k_i
-                matrix.append(np.column_stack(row))
-            matrix = jnp.array(matrix)
-            return params, matrix
-
-        self.broadband_params, self.broadband_matrix = get_params_matrix('al')
+        self.broadband_orders = _get_orders('al', self.init.params, self.ells)
+        self.broadband_matrix = {}
         pt_params = self.params.copy()
+        bb_params = []
+        for params in self.broadband_orders.values(): bb_params += list(params)
+        self.params = self.params.select(basename=bb_params)
         for param in pt_params.basenames():
-            if param in self.broadband_params: del pt_params[param]
-        self.pt.params = pt_params
-        self.params = self.params.select(basename=self.broadband_params)
+            if param in self.params: del pt_params[param]
+        self.pt.params.update(pt_params)
+        if self.broadband == 'power':
+            for ell in self.ells:
+                self.broadband_matrix[ell] = jnp.array([(self.k / self.kp)**pow for pow in self.broadband_orders[ell].values()])
+        elif self.broadband in ['ngp', 'cic', 'tsc', 'pcs']:
+            for ell in self.ells:
+                tmp, bb_orders = [], {}
+                for name, ik in self.broadband_orders[ell].items():
+                    kernel = _kernel_func(np.abs(self.k / self.kp - ik), kernel=self.broadband)
+                    if not np.allclose(kernel, 0.):
+                        tmp.append(kernel)
+                        bb_orders[name] = ik
+                self.broadband_orders[ell] = bb_orders
+                self.broadband_matrix[ell] = jnp.array(tmp)
+        else:
+            raise ValueError('Unknown kernel: {}'.format(self.broadband))
+        bb_params = []
+        for params in self.broadband_orders.values(): bb_params += list(params)
+        self.params = self.params.select(basename=bb_params)
 
     def calculate(self, **params):
         for name in ['z', 'k', 'ells']:
             setattr(self, name, getattr(self.pt, name))
-        values = jnp.array([params.get(name, 0.) for name in self.broadband_params])
-        self.power = self.pt.power + self.broadband_matrix.dot(values)
+        self.power = self.pt.power.copy() + jnp.array([jnp.array([params.get(name, 0.) for name in self.broadband_orders[ell]]).dot(self.broadband_matrix[ell]) for ell in self.ells])
 
     @property
     def template(self):
@@ -339,6 +545,15 @@ class DampedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpe
         'beutler2016' to use the model of https://arxiv.org/abs/1607.03149.
         Else, 'fog' only applies to the no-wiggle part.
 
+    broadband : str, default='power'
+        Broadband parameterization: 'power' for powers of :math:`k`,
+        'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels.
+
+    kp : float, default=None
+        For 'power' kernel, the pivot :math:`k`.
+        For other kernels, their :math:`k`-period.
+        Defaults to :math:`2 \pi / r_{d}`.
+
     Reference
     ---------
     https://arxiv.org/abs/1607.03149
@@ -374,6 +589,14 @@ class SimpleBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpe
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
 
+    broadband : str, default='power'
+        Broadband parameterization: 'power' for powers of :math:`k`,
+        'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels.
+
+    kp : float, default=None
+        For 'power' kernel, the pivot :math:`k`.
+        For other kernels, their :math:`k`-period.
+        Defaults to :math:`2 \pi / r_{d}`.
     """
 
 
@@ -406,10 +629,62 @@ class ResummedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerS
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
 
+    broadband : str, default='power'
+        Broadband parameterization: 'power' for powers of :math:`k`,
+        'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels.
+
+    kp : float, default=None
+        For 'power' kernel, the pivot :math:`k`.
+        For other kernels, their :math:`k`-period.
+        Defaults to :math:`2 \pi / r_{d}`.
 
     Reference
     ---------
     https://arxiv.org/abs/1907.00043
+    """
+
+
+class FlexibleBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpectrumMultipoles):
+    r"""
+    Theory BAO power spectrum multipoles, with broadband terms, with flexible BAO wiggles.
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mode : str, default=''
+        Reconstruction mode:
+
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+    wiggles : str, default='pcs'
+        Multiplicative wiggles kernels, one of ['cic', 'tsc', 'pcs', 'power'].
+        'power' corresponds to :math:`k^{n}` wiggles terms.
+
+    broadband : str, default='power'
+        Broadband parameterization: 'power' for powers of :math:`k`,
+        'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels.
+
+    kp : float, default=None
+        For 'power' kernel, the pivot :math:`k`.
+        For other kernels, their :math:`k`-period.
+        Defaults to :math:`2 \pi / r_{d}`.
     """
 
 
@@ -452,42 +727,116 @@ class ResummedBAOWigglesCorrelationFunctionMultipoles(BaseBAOWigglesCorrelationF
     pass
 
 
-class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipoles):
+class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):
+    """
+    Base class that implements theory BAO correlation function multipoles, with broadband terms.
 
-    """Base class that implements theory BAO correlation function multipoles, with broadband terms."""
+    Parameters
+    ----------
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mode : str, default=''
+        Reconstruction mode:
+
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+    model : str, default='howlett2023'
+        'beutler2016' to use the model of https://arxiv.org/abs/1607.03149.
+        Else, 'fog' only applies to the no-wiggle part.
+
+    broadband : str, default='power'
+        Broadband parameterization: 'power' for powers of :math:`s`,
+        'even-power' for powers of :math:`s^{2}` (motivated theoretically by Stephen Chen),
+        'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels in Fourier space.
+
+    sp : float, default=None
+        The pivot :math:`s`. Defaults to :math:`2 \pi / 0.02`.
+    """
     config_fn = 'bao.yaml'
 
-    def initialize(self, s=None, ells=(0, 2), **kwargs):
-        super(BaseBAOWigglesTracerCorrelationFunctionMultipoles, self).initialize(s=s, ells=ells)
-        self.pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
-        self.pt.init.update(s=self.s, ells=self.ells, **kwargs)
-        self.sp = 60.  # pivot to normalize broadband terms
-        for name in ['z', 's', 'ells']:
-            setattr(self, name, getattr(self.pt, name))
-        self.set_params()
+    @staticmethod
+    def _params(params, broadband='power'):
+        ells = [0, 2, 4]
+        if broadband == 'power':
+            for ell in ells:
+                for pow in range(-2, 3):
+                    params['al{:d}_{:d}'.format(ell, pow)] = dict(value=0., ref=dict(limits=[-1e-3, 1e-3]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, pow))
+        elif broadband == 'even-power':
+            for ell in ells:
+                for pow in [0, 2]:
+                    params['al{:d}_{:d}'.format(ell, pow)] = dict(value=0., ref=dict(limits=[-1e-3, 1e-3]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, pow))
+        else:
+            for ell in ells:
+                for ik in range(-1, 10):  # should be more than enough
+                    params['al{:d}_{:d}'.format(ell, ik)] = dict(value=0., ref=dict(limits=[-1e2, 1e2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
+                for ik in [0, 2]:  # should be more than enough
+                    params['bl{:d}_{:d}'.format(ell, ik)] = dict(value=0., ref=dict(limits=[-1e-3, 1e-3]), delta=0.005, latex='b_{{{:d}, {:d}}}'.format(ell, ik))
+        return params
+
+    def initialize(self, s=None, ells=(0, 2), sp=None, broadband='power', **kwargs):
+        self.broadband = str(broadband)
+        if sp is None: self.sp = 2. * np.pi / 0.02
+        else: self.sp = float(sp)
+        if self.broadband in ['power', 'even-power']:
+            power = globals()[self.__class__.__name__.replace('TracerCorrelationFunction', 'PowerSpectrum')](**kwargs)
+        else:
+            power = globals()[self.__class__.__name__.replace('CorrelationFunction', 'PowerSpectrum')](broadband=broadband, **kwargs)
+        super(BaseBAOWigglesTracerCorrelationFunctionMultipoles, self).initialize(s=s, ells=ells, power=power)
+        for name in ['z', 'ells']:
+            setattr(self, name, getattr(self.power, name))
 
     def set_params(self):
-        self.k, self.kp = self.s, self.sp
-        BaseBAOWigglesTracerPowerSpectrumMultipoles.set_params(self)
-        del self.k, self.kp
+        if self.broadband in ['power', 'even-power']:
+            self.k, self.kp = self.s, self.sp
+            self.pt = self.power  # other model parameters, e.g. bias
+            BaseBAOWigglesTracerPowerSpectrumMultipoles.set_params(self)
+            del self.k, self.kp, self.pt
+        else:
+            self.broadband_orders = _get_orders('bl', self.init.params, self.ells)
+            self.broadband_matrix = {}
+
+            for ell in self.ells:
+                self.broadband_matrix[ell] = jnp.array([(self.s / self.sp)**pow for pow in self.broadband_orders[ell].values()])
+            power_params = self.params.copy()
+            bb_params = []
+            for params in self.broadband_orders.values(): bb_params += list(params)
+            self.params = self.params.select(basename=bb_params)
+            for param in power_params.basenames():
+                if param in self.params: del power_params[param]
+            self.power.params = power_params
 
     def calculate(self, **params):
-        for name in ['z', 's', 'ells']:
-            setattr(self, name, getattr(self.pt, name))
-        values = jnp.array([params.get(name, 0.) for name in self.broadband_params])
-        self.corr = self.pt.corr + self.broadband_matrix.dot(values)
+        for name in ['z', 'ells']:
+            setattr(self, name, getattr(self.power, name))
+        super(BaseBAOWigglesTracerCorrelationFunctionMultipoles, self).calculate()
+        self.corr += jnp.array([jnp.array([params.get(name, 0.) for name in self.broadband_orders[ell]]).dot(self.broadband_matrix[ell]) for ell in self.ells])
 
     @property
     def template(self):
-        return self.pt.template
+        return self.power.template
 
     @property
     def wiggle(self):
-        return self.pt.wiggle
+        return self.power.wiggle
 
     @wiggle.setter
     def wiggle(self, wiggle):
-        self.pt.wiggle = wiggle
+        self.power.wiggle = wiggle
 
     def get(self):
         return self.corr
@@ -555,6 +904,17 @@ class DampedBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCo
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
 
+    model : str, default='howlett2023'
+        'beutler2016' to use the model of https://arxiv.org/abs/1607.03149.
+        Else, 'fog' only applies to the no-wiggle part.
+
+    broadband : str, default='power'
+        Broadband parameterization: 'power' for powers of :math:`s`,
+        'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels in Fourier space.
+
+    sp : float, default=None
+        The pivot :math:`s`. Defaults to :math:`2 \pi / 0.02`.
+
 
     Reference
     ---------
@@ -590,6 +950,17 @@ class SimpleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCo
 
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+    model : str, default='howlett2023'
+        'beutler2016' to use the model of https://arxiv.org/abs/1607.03149.
+        Else, 'fog' only applies to the no-wiggle part.
+
+    broadband : str, default='power'
+        Broadband parameterization: 'power' for powers of :math:`s`,
+        'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels in Fourier space.
+
+    sp : float, default=None
+        The pivot :math:`s`. Defaults to :math:`2 \pi / 0.02`.
 
 
     Reference
@@ -627,6 +998,17 @@ class ResummedBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracer
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
 
+    model : str, default='howlett2023'
+        'beutler2016' to use the model of https://arxiv.org/abs/1607.03149.
+        Else, 'fog' only applies to the no-wiggle part.
+
+    broadband : str, default='power'
+        Broadband parameterization: 'power' for powers of :math:`s`,
+        'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels in Fourier space.
+
+    sp : float, default=None
+        The pivot :math:`s`. Defaults to :math:`2 \pi / 0.02`.
+
 
     Reference
     ---------
@@ -634,16 +1016,15 @@ class ResummedBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracer
     """
 
 
-class FlexibleBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+class FlexibleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCorrelationFunctionMultipoles):
     r"""
-    Theory BAO power spectrum multipoles, with broadband terms,
-    both multiplying anf adding to the wiggles; no damping parameter (BAO damping or Finger-of-God).
+    Theory BAO correlation function multipoles, with broadband terms, with flexible BAO wiggles.
     Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
 
     Parameters
     ----------
-    k : array, default=None
-        Theory wavenumbers where to evaluate multipoles.
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
 
     ells : tuple, default=(0, 2)
         Multipoles to compute.
@@ -664,237 +1045,23 @@ class FlexibleBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectru
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
 
-    broadband_kernel : str, default='tsc'
-        Additive and multiplicative broadband kernels, one of ['cic', 'tsc', 'pcs', 'power'].
-        'power' corresponds to the standard :math:`k^{n}` broadband terms.
+    model : str, default='howlett2023'
+        'beutler2016' to use the model of https://arxiv.org/abs/1607.03149.
+        Else, 'fog' only applies to the no-wiggle part.
 
-    kp : float, array, default=None
+    wiggles : str, default='pcs'
+        Multiplicative wiggles kernels, one of ['cic', 'tsc', 'pcs', 'power'].
+        'power' corresponds to :math:`k^{n}` wiggles terms.
+
+    kp : float, default=None
         For 'power' kernel, the pivot :math:`k`.
-        For other kernels, their :math:`k`-period; typically :math:`2 \pi / r_{d}` (defaults to :math:`2 \pi / 100`).
+        For other kernels, their :math:`k`-period.
+        Defaults to :math:`2 \pi / r_{d}`.
 
+    broadband : str, default='power'
+        Broadband parameterization: 'power' for powers of :math:`s`,
+        'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels in Fourier space.
+
+    sp : float, default=None
+        The pivot :math:`s`. Defaults to :math:`2 \pi / 0.02`.
     """
-    config_fn = 'bao.yaml'
-    default_kp = 2. * np.pi / 100.  # BAO scale
-
-    def initialize(self, *args, mu=40, method='leggauss', kp=None, broadband_kernel='tsc', **kwargs):
-        super(FlexibleBAOWigglesTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
-        self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
-        #self.template.runtime_info.initialize()
-        self.set_broadband_kernel(broadband_kernel=broadband_kernel, kp=kp)
-        self.set_params()
-
-    def set_broadband_kernel(self, broadband_kernel, kp=None):
-        if hasattr(broadband_kernel, 'items'):
-            self.broadband_kernel = dict(broadband_kernel)
-        else:
-            self.broadband_kernel = {'add': str(broadband_kernel), 'mult': str(broadband_kernel)}
-        if hasattr(kp, 'items'):
-            self.kp = dict(kp)
-        else:
-            self.kp = {'add': kp, 'mult': kp}
-
-    def set_params(self):
-
-        def get_orders(base):
-            orders = {ell: {} for ell in self.ells}
-            for param in self.params.select(basename=base + '*_*'):
-                name = param.basename
-                ell = None
-                if name == base + '0':
-                    ell, pow = 0, 0
-                else:
-                    match = re.match(base + '(.*)_(.*)', name)
-                    if match:
-                        ell, pow = int(match.group(1)), int(match.group(2))
-                if ell is not None:
-                    if ell in self.ells:
-                        orders[ell][name] = pow
-                    else:
-                        del self.params[param]
-            return orders
-
-        def kernel_support(kernel):
-            return {'ngp': 0.5, 'cic': 1., 'tsc': 1.5, 'pcs': 2.}[kernel]
-
-        def kernel_func(k, kp, dkp, kernel='tsc'):
-            toret = np.zeros_like(k)
-            for kkp in kp:
-                diff = k - kkp
-                adiff = np.abs(diff)
-                adiff[diff < 0.] /= dkp[0]
-                adiff[diff >= 0.] /= dkp[1]
-                if kernel == 'ngp':
-                    mask = adiff < 0.5
-                    np.add.at(toret, mask, 1.)
-                elif kernel == 'cic':
-                    mask = adiff < 1.
-                    np.add.at(toret, mask, 1. - adiff[mask])
-                elif kernel == 'tsc':
-                    mask = adiff < 0.5
-                    np.add.at(toret, mask, 3. / 4. - adiff[mask]**2)
-                    mask = (adiff >= 0.5) & (adiff < 1.5)
-                    np.add.at(toret, mask, 1. / 2. * (3. / 2. - adiff[mask])**2)
-                elif kernel == 'pcs':
-                    mask = adiff < 1.
-                    np.add.at(toret, mask, 1. / 6. * (4. - 6. * adiff[mask]**2 + 3. * adiff[mask]**3))
-                    mask = (adiff >= 1.) & (adiff < 2.)
-                    np.add.at(toret, mask, 1. / 6. * (2. - adiff[mask])**3)
-            return toret
-
-        self.broadband_orders, self.broadband_matrix = {}, {}
-        for base in ['add', 'mult']:
-            base_param_name = base[0] + 'l'
-            self.broadband_orders[base] = get_orders(base_param_name)
-            self.broadband_matrix[base] = {}
-            kernel = self.broadband_kernel[base]
-            if kernel == 'power':
-                for ell in self.ells:
-                    row = jnp.array([(self.k / (self.kp[base] if self.kp[base] is not None else 0.1))**pow for pow in self.broadband_orders[base][ell].values()])
-                    self.broadband_matrix[base][ell] = row
-            elif kernel in ['ngp', 'cic', 'tsc', 'pcs']:
-                for ell in self.ells:
-                    kp = self.kp[base]
-                    ids = self.broadband_orders[base][ell].values()
-                    nkp = len(ids)
-                    if kp is None:
-                        if nkp:
-                            kp = (self.k[-1] - self.k[0]) / nkp
-                        elif base == 'mult' and self.template.only_now:  # no terms
-                            self.broadband_matrix[base][ell] = jnp.zeros((0, len(self.k)), dtype='f8')
-                            continue
-                        else:
-                            kp = self.default_kp
-                    if np.ndim(kp) == 0:
-                        kp = np.arange(self.k[0], self.k[-1] + kp * (1. - 1e-9), kp)
-                    elif isinstance(kp, tuple):
-                        kpmin, kpmax, dkp = kp
-                        if kpmin is None: kpmin = self.k[0]
-                        if kpmax is None: kpmax = self.k[-1]
-                        if dkp is None: dkp = self.default_kp
-                        kp = np.arange(kpmin, kpmax + dkp * (1. - 1e-9), dkp)
-                    kp = np.array(kp, dtype='f8')
-                    nkp = len(kp)
-                    if not ids:
-                        for ikp in range(nkp):
-                            basename = '{}{:d}_{:d}'.format(base_param_name, ell, ikp)
-                            self.params[basename] = dict(value=0., prior=None, ref={'dist': 'norm', 'loc': 0., 'scale': 0.01}, delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ikp))
-                            self.broadband_orders[base][ell][basename] = ikp
-                    if set(self.broadband_orders[base][ell].values()) != set(range(nkp)):
-                        raise ValueError('Found parameters {}, but expected all parameters 0 to {:d}'.format(list(self.broadband_orders[base][ell].keys()), nkp))
-                    support = kernel_support(kernel)
-                    dkp = np.diff(kp)
-                    dkp_low, dkp_high = np.insert(dkp, 0, dkp[0]), np.insert(dkp, -1, dkp[-1])
-                    kmin, kmax = self.k[0] - dkp[0] * support, self.k[-1] + dkp[-1] * support
-                    row = []
-                    row.append(kernel_func(self.k, np.arange(kp[0], kmin - dkp_low[0], -dkp_low[0]), (dkp_low[0], dkp_high[0]), kernel=kernel))
-                    for kkp, ddkp_low, ddkp_high in list(zip(kp, dkp_low, dkp_high))[1:-1]:
-                        row.append(kernel_func(self.k, [kkp], (ddkp_low, ddkp_high), kernel=kernel))
-                    row.append(kernel_func(self.k, np.arange(kp[-1], kmax + dkp_high[0], dkp_high[-1]), (dkp_low[-1], dkp_high[-1]), kernel=kernel))
-                    row = jnp.array([row[idx] for idx in ids])
-                    self.broadband_matrix[base][ell] = row
-            else:
-                raise ValueError('Unknown kernel: {}'.format(kernel))
-
-    def calculate(self, b1=1.5, **kwargs):
-        super(FlexibleBAOWigglesTracerPowerSpectrumMultipoles, self).calculate()
-        f = self.template.f
-        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        pknow = self.template.pknow_dd_interpolator(self.k)
-        wiggles = self.template.pk_dd_interpolator(kap) / self.template.pknow_dd_interpolator(kap) - 1.
-        damped_wiggles = 0.
-        for ell in self.ells:
-            mult = jnp.array([kwargs[name] for name in self.broadband_orders['mult'][ell]]).dot(self.broadband_matrix['mult'][ell])
-            if ell == 0: mult += 1.
-            add = jnp.array([kwargs[name] for name in self.broadband_orders['add'][ell]]).dot(self.broadband_matrix['add'][ell])
-            leg = special.legendre(ell)(self.mu)
-            damped_wiggles += wiggles * mult[:, None] * leg + add[:, None] * leg
-        sk = 0.
-        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (self.k * self.smoothing_radius)**2)[:, None]
-        pkmu = (b1 + f * self.mu**2 * (1 - sk))**2 * pknow[:, None] * (1. + damped_wiggles)
-        self.power = self.to_poles(pkmu)
-
-    def get(self):
-        return self.power
-
-    @plotting.plotter
-    def plot(self, fig=None):
-        """
-        Plot power spectrum multipoles.
-
-        Parameters
-        ----------
-        fig : matplotlib.figure.Figure, default=None
-            Optionally, a figure with at least 1 axis.
-
-        fn : str, Path, default=None
-            Optionally, path where to save figure.
-            If not provided, figure is not saved.
-
-        kw_save : dict, default=None
-            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
-
-        show : bool, default=False
-            If ``True``, show figure.
-
-        Returns
-        -------
-        fig : matplotlib.figure.Figure
-        """
-        from matplotlib import pyplot as plt
-        if fig is None:
-            fig, ax = plt.subplots()
-        else:
-            ax = fig.axes[0]
-        for ill, ell in enumerate(self.ells):
-            ax.plot(self.k, self.k * self.power[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
-        ax.grid(True)
-        ax.legend()
-        ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
-        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        return fig
-
-
-class FlexibleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesCorrelationFunctionMultipoles):
-
-    config_fn = 'bao.yaml'
-
-    def initialize(self, *args, kp=None, broadband_kernel='tsc', **kwargs):
-        super(FlexibleBAOWigglesTracerCorrelationFunctionMultipoles, self).initialize(*args, **kwargs)
-        FlexibleBAOWigglesTracerPowerSpectrumMultipoles.set_broadband_kernel(self, broadband_kernel=broadband_kernel, kp=kp)
-        for base, kernel in self.broadband_kernel.items():
-            if kernel != 'power' and (self.kp[base] is None or np.ndim(self.kp[base]) == 0):
-                self.kp[base] = (self.kin[0], 0.3, self.kp[base])
-        self.power.init.update(broadband_kernel=self.broadband_kernel, kp=self.kp)
-
-    @plotting.plotter
-    def plot(self, fig=None):
-        """
-        Plot correlation function multipoles.
-
-        Parameters
-        ----------
-        fig : matplotlib.figure.Figure, default=None
-            Optionally, a figure with at least 1 axis.
-
-        fn : str, Path, default=None
-            Optionally, path where to save figure.
-            If not provided, figure is not saved.
-
-        kw_save : dict, default=None
-            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
-
-        show : bool, default=False
-            If ``True``, show figure.
-        """
-        from matplotlib import pyplot as plt
-        if fig is None:
-            fig, ax = plt.subplots()
-        else:
-            ax = fig.axes[0]
-        for ill, ell in enumerate(self.ells):
-            ax.plot(self.s, self.s**2 * self.corr[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
-        ax.grid(True)
-        ax.legend()
-        ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
-        ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
-        return fig

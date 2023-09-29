@@ -724,7 +724,7 @@ def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors
     xshift_cl = kw_cl.pop('xhift', 0.9)
     kw_legend = dict(kw_legend or {})
 
-    ncols = int(len(params) * 1. / nrows + 1.)
+    ncols = int((len(params) + nrows - 1) * 1. / nrows)
 
     if fig is None:
         figsize = figsize or (4. * ncols, 4. * nrows)

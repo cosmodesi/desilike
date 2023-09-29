@@ -93,27 +93,48 @@ def test_bao():
     from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate
 
     def test(theory):
-        print(theory)
-        theory(qpar=1.1)
-        theory.z, theory.ells, theory.template
-        if 'PowerSpectrum' in theory.__class__.__name__:
-            theory.k
-        else:
-            theory.s
-        theory.plot(show=True)
-        template = BAOPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso', only_now=True)
-        theory.init.update(template=template)
-        theory(qiso=0.9)
-        template = StandardPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso', with_now='peakaverage')
-        theory.init.update(template=template)
-        theory()
-        template.pk_dd
-
+        is_power = 'Power' in theory.__class__.__name__
+        list_params, list_remove = {}, {}
+        list_params['power'] = {'al0_1': 1e3 if is_power else 1e-3}
+        list_params['pcs'] = {'al0_2': 1e4 if is_power else 1e-3}
+        list_remove['power'] = ['al0_-1']
+        list_remove['pcs'] = ['al0_-1']
+        if not is_power:
+            list_params['pcs'].update({'bl0_2': 1e-3})
+        for broadband in ['power', 'pcs']:
+            theory.init.update(broadband=broadband)
+            params = list_params[broadband]
+            remove = list_remove[broadband]
+            for name, value in params.items():
+                theory.init.params[name].update(fixed=True)
+            for name in remove:
+                del theory.init.params[name]
+            for name in params:
+                assert name not in theory.varied_params
+            for name in remove:
+                assert name not in theory.all_params
+            theory(qpar=1.1, **params)
+            theory.z, theory.ells, theory.template
+            if 'PowerSpectrum' in theory.__class__.__name__:
+                theory.k
+            else:
+                theory.s
+            theory.plot(show=True)
+            template = BAOPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso', only_now=True)
+            theory.init.update(template=template)
+            theory(qiso=0.9)
+            for param in theory.all_params.select(basename=['d', 'sigmapar', 'sigmaper', 'ml*_*']):
+                assert param.fixed
+            template = StandardPowerSpectrumTemplate(z=1., fiducial='DESI', with_now='peakaverage')
+            theory.init.update(template=template)
+            theory()
+            template.pk_dd
 
     test(SimpleBAOWigglesTracerPowerSpectrumMultipoles())
     test(DampedBAOWigglesTracerPowerSpectrumMultipoles())
     test(ResummedBAOWigglesTracerPowerSpectrumMultipoles())
     test(FlexibleBAOWigglesTracerPowerSpectrumMultipoles())
+
     test(SimpleBAOWigglesTracerCorrelationFunctionMultipoles())
     test(DampedBAOWigglesTracerCorrelationFunctionMultipoles())
     test(ResummedBAOWigglesTracerCorrelationFunctionMultipoles())

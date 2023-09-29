@@ -31,7 +31,7 @@ class InitConfig(BaseConfig):
 
     """Structure, used internally in the code, holding configuration (passed to :meth:`BaseCalculator.initialize`) and parameters at initialization."""
 
-    _attrs = ['_args', '_params', '_updated']  # will be copied
+    _attrs = ['_args', '_params', '_updated_args', '_updated_params', '_args_func_params']  # will be copied
 
     def __init__(self, *arg, args=None, params=None, **kwargs):
         """
@@ -42,29 +42,30 @@ class InitConfig(BaseConfig):
         params : list, ParameterCollection
             Parameters at initialization.
         """
-        self.args = args or ()
-        self.params = params or ParameterCollection()
-        self._updated = True
+        self._args = args or tuple()
+        self._params = params or ParameterCollection()
+        self._updated_args = self._updated_params = True
+        self._func_params, self._args_func_params = None, tuple()
         super(InitConfig, self).__init__(*arg, **kwargs)
 
     @property
     def updated(self):
         """Whether the configuration parameters have been updated (which requires reinitialization of the calculator)."""
-        return self._updated or self.params.updated
+        return self._updated_args or (self._updated_params or self.params.updated)
+
+    def _clear(self):
+        try:
+            calculator = self.runtime_info.calculator
+            if not getattr(self.runtime_info, '_initialization', False):
+                calculator.__dict__ = {name: calculator.__dict__[name] for name in ['_mpicomm', 'info', 'runtime_info']}
+        except AttributeError:
+            pass
 
     @updated.setter
     def updated(self, updated):
         """Set the 'updated' status."""
-        self._updated = bool(updated)
-        if self._updated:
-            try:
-                calculator = self.runtime_info.calculator
-                if not getattr(self.runtime_info, '_initialization', False):
-                    calculator.__dict__ = {name: calculator.__dict__[name] for name in ['_mpicomm', 'info', 'runtime_info']}
-            except AttributeError:
-                pass
-        else:
-            self.params.updated = False
+        self._updated_args = self._updated_params = self.params.updated = bool(updated)
+        if self._updated_args: self._clear()
 
     @property
     def args(self):
@@ -74,7 +75,8 @@ class InitConfig(BaseConfig):
     def args(self, args):
         """Positional arguments to be passed to calculator."""
         self._args = tuple(args)
-        self.updated = True
+        self._updated_args = True
+        self._clear()
 
     @property
     def params(self):
@@ -85,35 +87,31 @@ class InitConfig(BaseConfig):
     def params(self, params):
         """Set parameters."""
         self._params = ParameterCollection(params)
-        self.updated = True
+        self._updated_params = True
 
     def __getstate__(self):
         """Return state."""
-        return {name: getattr(self, name) for name in ['data', 'args', 'params', 'updated']}
+        return {name: getattr(self, name) for name in ['data'] + self._attrs}
 
-    def __setstate__(self, state):
-        """Set state."""
-        for name, value in state.items():
-            if name == 'data':
-                self.data = state[name]
-            else:
-                setattr(self, '_' + name, value)
+    def _call_func_params(self):
+        if self._func_params is not None:
+            self._params = self._func_params(self._cls_params.deepcopy(), **{key: self.data[key] for key in self._args_func_params if key in self.data})
 
+    def __setitem__(self, key, item):
+        super(InitConfig, self).__setitem__(key, item)
+        if key in self._args_func_params: self._call_func_params()
+        self._updated_args = True
+        self._clear()
 
-def _make_wrapper(func):
+    def __delitem__(self, key):
+        super(InitConfig, self).__delitem__(key)
+        if key in self._args_func_params: self._call_func_params()
+        self._updated_args = True
+        self._clear()
 
-    @functools.wraps(func)
-    def wrapper(self, *args, **kwargs):
-        toret = func(self, *args, **kwargs)
-        self.updated = True
-        return toret
-
-    return wrapper
-
-
-for name in ['__delitem__', '__getitem__', '__setitem__', 'clear', 'fromkeys', 'pop', 'popitem', 'setdefault', 'update']:
-
-    setattr(InitConfig, name, _make_wrapper(getattr(UserDict, name)))
+    def __getitem__(self, key):  # in case mutable
+        self._updated_args = True
+        return super(InitConfig, self).__getitem__(key)
 
 
 class BasePipeline(BaseClass):
@@ -615,13 +613,13 @@ class RuntimeInfo(BaseClass):
         self.init = init
         if not isinstance(init, InitConfig):
             self.init = InitConfig(init)
-        self.init.runtime_info = self
         self._initialized = False
         self._tocalculate = True
         self.calculated = False
+        self.name = self.calculator.__class__.__name__
         self._with_namespace = False
         self.params = ParameterCollection(init.params)
-        self.name = self.calculator.__class__.__name__
+        self.init.runtime_info = self
 
     def install(self):
         """Install calculator, called by :class:`install.Installer`."""
@@ -739,12 +737,13 @@ class RuntimeInfo(BaseClass):
                 self.calculator.initialize(*self.init.args, **self.init)
             except Exception as exc:
                 raise PipelineError('Error in method initialize of {}'.format(self.calculator)) from exc
-
             if not self._with_namespace:
                 for param in self.init.params:
                     if param.basename in params_basenames:  # update namespace
                         param.update(namespace=params_with_namespace[params_basenames.index(param.basename)].namespace)
             self.params = self.init.params
+            #if 'FlexibleBAOWigglesPowerSpectrumMultipoles' in self.calculator.__class__.__name__:
+            #    print(self.init.params)
             self.init.params = bak
             self.initialized = True
             self._initialization = False
@@ -843,7 +842,16 @@ class BaseCalculator(BaseClass):
     def __new__(cls, *args, **kwargs):
         cls_info = Info(getattr(cls, '_info', {}))
         cls_init = InitConfig(data=getattr(cls, '_init', {}))
-        cls_params = ParameterCollection(getattr(cls, '_params', None))
+        func_params, args_func_params = None, tuple()
+        params = getattr(cls, '_params', None)
+        if callable(params):
+            import inspect
+            func_params = params
+            sig = inspect.signature(params)
+            args_func_params = tuple(param.name for param in sig.parameters.values() if param.name not in ['self', 'params'])
+            cls_params = ParameterCollection()
+        else:
+            cls_params = ParameterCollection(params)
         if getattr(cls, 'config_fn', None):
             dirname = os.path.dirname(sys.modules[cls.__module__].__file__)
             config = BaseConfig(os.path.join(dirname, cls.config_fn), index={'class': cls.__name__})
@@ -858,9 +866,13 @@ class BaseCalculator(BaseClass):
             params = cls_params.deepcopy()
         new = super(BaseCalculator, cls).__new__(cls)
         new.info = cls_info
-        init.params = params
+        init._cls_params = params.deepcopy()
+        init._args_func_params = args_func_params
+        init._func_params = func_params
+        init._params = params
         new.runtime_info = RuntimeInfo(new, init=init)
         new._mpicomm = mpi.COMM_WORLD
+        init._call_func_params()
         return new
 
     def __init__(self, *args, **kwargs):

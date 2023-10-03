@@ -53,6 +53,8 @@ def test_stats():
     profiles = get_profiles(params)
     print(profiles.to_stats(tablefmt='latex_raw'))
     print(profiles.to_stats(tablefmt='pretty'))
+    print(profiles.to_stats(tablefmt='list_latex'))
+    assert isinstance(profiles.to_stats(tablefmt='list')[0], list)
 
 
 def test_plot():

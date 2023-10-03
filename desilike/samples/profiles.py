@@ -587,7 +587,8 @@ class Profiles(BaseClass):
         tablefmt : str, default='latex_raw'
             Format for summary table.
             See :func:`tabulate.tabulate`.
-            If ``None``, return table as list of list of strings, and headers.
+            If 'list', return table as list of list of strings, and headers.
+            If 'list_latex', return table as list of list of latex strings, and headers.
 
         fn : str, default=None
             If not ``None``, file name where to save summary table.
@@ -607,7 +608,7 @@ class Profiles(BaseClass):
         for quantity in quantities:
             if quantity not in allowed_quantities:
                 raise ValueError('Unknown quantity {}.'.format(quantity))
-        is_latex = 'latex_raw' in tablefmt
+        is_latex = 'latex' in tablefmt
         argmax = self.bestfit.logposterior.argmax()
 
         def round_errors(low, up):
@@ -615,7 +616,7 @@ class Profiles(BaseClass):
             if is_latex: return '${{}}_{{{}}}^{{{}}}$'.format(low, up)
             return '{}/{}'.format(low, up)
 
-        for iparam, param in enumerate(params):
+        for param in params:
             row = []
             if is_latex: row.append(param.latex(inline=True))
             else: row.append(str(param.name))
@@ -660,7 +661,7 @@ class Profiles(BaseClass):
         headers.append((r'$\chi^{{2}} {}$' if is_latex else 'chi2 {}').format(chi2min_str))
         headers.append('varied')
         headers += [quantity.replace('_', ' ') for quantity in quantities]
-        if tablefmt is None:
+        if 'list' in tablefmt:
             return data, quantities
         tab = tabulate.tabulate(data, headers=headers, tablefmt=tablefmt)
         if fn is not None:

@@ -131,7 +131,7 @@ class BaseLikelihood(BaseCalculator):
             sum_loglikelihood.flat[0] -= 1. / 2. * np.linalg.slogdet(- posterior_fisher._hessian[np.ix_(indices_marg, indices_marg)])[1]
             # sum_loglikelihood += 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
             # Convention: in the limit of no likelihood constraint on dx, no change to the loglikelihood
-            # This allows to ~ keep the interpretation in terms of -1. / 2. chi2
+            # This allows to ~ keep the interpretation in terms of -1. / 2. * chi2
             ip = self.fisher.prior_fisher._hessian[indices_marg]
             sum_loglikelihood.flat[0] += 1. / 2. * np.sum(np.log(ip[ip > 0.]))  # logdet
             # sum_loglikelihood -= 1. / 2. * len(indices_marg) * np.log(2. * np.pi)

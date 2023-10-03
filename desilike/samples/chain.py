@@ -785,7 +785,8 @@ class Chain(Samples):
         tablefmt : str, default='latex_raw'
             Format for summary table.
             See :func:`tabulate.tabulate`.
-            If ``None``, return table as list of list of strings, and headers.
+            If 'list', return table as list of list of strings, and headers.
+            If 'list_latex', return table as list of list of latex strings, and headers.
 
         fn : str, default=None
             If not ``None``, file name where to save summary table.
@@ -799,7 +800,7 @@ class Chain(Samples):
         if params is None: params = self.params(varied=True)
         else: params = [self[param].param for param in params]
         if quantities is None: quantities = ['argmax', 'mean', 'median', 'std', 'quantile:1sigma', 'interval:1sigma']
-        is_latex = 'latex_raw' in tablefmt
+        is_latex = 'latex' in tablefmt
 
         def round_errors(low, up):
             low, up = utils.round_measurement(0.0, low, up, sigfigs=sigfigs, positive_sign='u')[1:]
@@ -807,7 +808,7 @@ class Chain(Samples):
             return '{}/{}'.format(low, up)
 
         data = []
-        for iparam, param in enumerate(params):
+        for param in params:
             row = []
             row.append(param.latex(inline=True) if is_latex else str(param))
             ref_center = self.mean(param)
@@ -829,7 +830,7 @@ class Chain(Samples):
                 else:
                     raise RuntimeError('Unknown quantity {}.'.format(quantity))
             data.append(row)
-        if tablefmt is None:
+        if 'list' in tablefmt:
             return data, quantities
         tab = tabulate.tabulate(data, headers=quantities, tablefmt=tablefmt)
         if fn is not None:

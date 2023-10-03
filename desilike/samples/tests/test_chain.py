@@ -81,6 +81,8 @@ def test_stats():
     assert np.ndim(diagnostics.integrated_autocorrelation_time(chains, 'like.a')) == 0
     assert diagnostics.geweke(chains, params=['like.a'] * 2, first=0.25, last=0.75).shape == (2, len(chains))
     print(chain.to_stats(tablefmt='latex_raw'))
+    print(chain.to_stats(tablefmt='list_latex'))
+    assert isinstance(chain.to_stats(tablefmt='list')[0], list)
 
 
 def test_bcast():
@@ -144,7 +146,6 @@ if __name__ == '__main__':
     setup_logging()
 
     test_plot()
-    exit()
     test_bcast()
     test_misc()
     test_stats()

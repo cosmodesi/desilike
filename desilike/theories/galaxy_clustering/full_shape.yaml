@@ -488,37 +488,77 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-  alpha[0:5:2]:
+  alpha0:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 30.
     ref:
       dist: norm
       loc: 0.
       scale: 1.
-    latex: \alpha_{[]}
+    latex: \alpha_{0}
+  alpha2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{2}
+  alpha4:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{4}
   alpha6:
     fixed: True
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 50.
     ref:
       dist: norm
       loc: 0.
       scale: 1.
     latex: \alpha_{6}
-  sn[:5:2]:
+  sn0:
     prior:
       dist: norm
       loc: 0.
-      scale: 1000.
+      scale: 5.
     ref:
       dist: norm
       loc: 0.
       scale: 0.1
-    latex: s_{n, []}
+    latex: s_{n, 0}
+  sn2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 2}
+  sn4:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 4}
 
 ---
 
@@ -562,22 +602,42 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-  alpha[0:5:2]:
+  alpha0:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 30.
     ref:
       dist: norm
       loc: 0.
       scale: 1.
-    latex: \alpha_{[]}
+    latex: \alpha_{0}
+  alpha2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{2}
+  alpha4:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{4}
   alpha6:
     fixed: True
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 50.
     ref:
       dist: norm
       loc: 0.
@@ -1091,50 +1151,50 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 2.
     latex: c_{t}
   cr1:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 4.
     latex: c_{r, 1}
   cr2:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 4.
     latex: c_{r, 2}
   cr4:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 10.
     latex: c_{r, 4}
   cr6:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 10.
     latex: c_{r, 6}
   ce0:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 2.
     latex: c_{e, 0}
   ce1:
     fixed: True
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 2.
     latex: c_{e, 1}
   ce2:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 2.
     latex: c_{e, 2}
   # west coast
   b2p4:
@@ -1218,31 +1278,31 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 2.
     latex: c_{t}
   cr1:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 4.
     latex: c_{r, 1}
   cr2:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 4.
     latex: c_{r, 2}
   cr4:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 10.
     latex: c_{r, 4}
   cr6:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 10.
     latex: c_{r, 6}
   # west coast
   b2p4:
@@ -1327,37 +1387,77 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-  alpha[0:5:2]:
+  alpha0:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 30.
     ref:
       dist: norm
       loc: 0.
       scale: 1.
-    latex: \alpha_{[]}
+    latex: \alpha_{0}
+  alpha2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{2}
+  alpha4:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{4}
   ct:
     fixed: True
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 50.
     ref:
       dist: norm
       loc: 0.
       scale: 1.
     latex: c_{t}
-  sn[:5:2]:
+  sn0:
     prior:
       dist: norm
       loc: 0.
-      scale: 1000.
+      scale: 5.
     ref:
       dist: norm
       loc: 0.
       scale: 0.1
-    latex: s_{n, []}
+    latex: s_{n, 0}
+  sn2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 2}
+  sn4:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 4}
 
 ---
 
@@ -1397,32 +1497,42 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-  alpha[0:7:2]:
+  alpha0:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 30.
     ref:
       dist: norm
       loc: 0.
       scale: 1.
-    latex: \alpha_{[]}
-  alpha[0:5:2]:
+    latex: \alpha_{0}
+  alpha2:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 50.
     ref:
       dist: norm
       loc: 0.
       scale: 1.
-    latex: \alpha_{[]}
+    latex: \alpha_{2}
+  alpha4:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{4}
   ct:
     fixed: True
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 50.
     ref:
       dist: norm
       loc: 0.

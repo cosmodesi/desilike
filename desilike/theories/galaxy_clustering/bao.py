@@ -274,8 +274,10 @@ class FlexibleBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
                     params['ml{:d}_{:d}'.format(ell, pow)] = dict(value=0., ref=dict(limits=[-1e2, 1e2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, pow))
         else:
             for ell in ells:
-                for ik in range(-1, 10):  # should be more than enough
-                    params['ml{:d}_{:d}'.format(ell, ik)] = dict(value=0., ref=dict(limits=[-1e-2, 1e-2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
+                for ik in range(-2, 10):  # should be more than enough
+                    # We are adding a very loose prior just to regularize the fit --- parameters at the high-k end can be e.g. poorly constrained
+                    # because these modes are given zero weight by the window matrix
+                    params['ml{:d}_{:d}'.format(ell, ik)] = dict(value=0., prior=dict(dist='norm', loc=0., scale=1e4), ref=dict(limits=[-1e-2, 1e-2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
         return params
 
     def initialize(self, *args, mu=10, method='leggauss', wiggles='pcs', kp=None, **kwargs):
@@ -300,7 +302,7 @@ class FlexibleBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
                 tmp, bb_orders = [], {}
                 for name, ik in self.wiggles_orders[ell].items():
                     kernel = _kernel_func(np.abs(self.k / self.kp - ik), kernel=self.wiggles)
-                    if not np.allclose(kernel, 0.):
+                    if not np.allclose(kernel, 0., rtol=0., atol=1e-8):
                         tmp.append(kernel)
                         bb_orders[name] = ik
                 self.wiggles_orders[ell] = bb_orders
@@ -418,8 +420,10 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
                     params['al{:d}_{:d}'.format(ell, pow)] = dict(value=0., ref=dict(limits=[-1e2, 1e2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, pow))
         else:
             for ell in ells:
-                for ik in range(-1, 10):  # should be more than enough
-                    params['al{:d}_{:d}'.format(ell, ik)] = dict(value=0., ref=dict(limits=[-1e-2, 1e-2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
+                for ik in range(-2, 10):  # should be more than enough
+                    # We are adding a very loose prior just to regularize the fit --- parameters at the high-k end can be e.g. poorly constrained
+                    # because these modes are given zero weight by the window matrix
+                    params['al{:d}_{:d}'.format(ell, ik)] = dict(value=0., prior=dict(dist='norm', loc=0., scale=1e4), ref=dict(limits=[-1e-2, 1e-2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
         return params
 
     def initialize(self, k=None, ells=(0, 2), broadband='power', kp=None, **kwargs):
@@ -447,12 +451,13 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
             for ell in self.ells:
                 self.broadband_matrix[ell] = jnp.array([(self.k / self.kp)**pow for pow in self.broadband_orders[ell].values()])
         elif self.broadband in ['ngp', 'cic', 'tsc', 'pcs']:
+            pk_now = self.template.pknow_dd_interpolator_fid
             for ell in self.ells:
                 tmp, bb_orders = [], {}
                 for name, ik in self.broadband_orders[ell].items():
                     kernel = _kernel_func(np.abs(self.k / self.kp - ik), kernel=self.broadband)
-                    if not np.allclose(kernel, 0.):
-                        tmp.append(kernel)
+                    if not np.allclose(kernel, 0., rtol=0., atol=1e-8):
+                        tmp.append(kernel * pk_now(np.clip(ik * self.kp, self.k[0], self.k[-1])))
                         bb_orders[name] = ik
                 self.broadband_orders[ell] = bb_orders
                 self.broadband_matrix[ell] = jnp.array(tmp)
@@ -782,7 +787,7 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
                     params['al{:d}_{:d}'.format(ell, pow)] = dict(value=0., ref=dict(limits=[-1e-3, 1e-3]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, pow))
         else:
             for ell in ells:
-                for ik in range(-1, 10):  # should be more than enough
+                for ik in range(-2, 10):  # should be more than enough
                     params['al{:d}_{:d}'.format(ell, ik)] = dict(value=0., ref=dict(limits=[-1e2, 1e2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
                 for ik in [0, 2]:  # should be more than enough
                     params['bl{:d}_{:d}'.format(ell, ik)] = dict(value=0., ref=dict(limits=[-1e-3, 1e-3]), delta=0.005, latex='b_{{{:d}, {:d}}}'.format(ell, ik))

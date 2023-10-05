@@ -1,4 +1,7 @@
+import os
+import tempfile
 import glob
+
 import numpy as np
 
 from desilike import setup_logging
@@ -44,6 +47,7 @@ def test_power_spectrum():
                                                          fiber_collisions=fiber_collisions,
                                                          kinlim=(0., 0.24),
                                                          transform='cubic')
+
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood.params['pk.loglikelihood'] = {}
     likelihood.params['pk.logprior'] = {}
@@ -92,6 +96,13 @@ def test_power_spectrum():
     likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
     print(likelihood(**params))
     #observable.plot_wiggles(show=True)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        fn = os.path.join(tmp_dir, 'tmp.npy')
+        observable.save(fn)
+        # And reload the result
+        tmp = TracerPowerSpectrumMultipolesObservable.load(fn)
+        tmp.k, tmp.ells, tmp.flatdata, tmp.shotnoise, tmp.flattheory
 
 
 def test_correlation_function():
@@ -160,6 +171,14 @@ def test_correlation_function():
                                                                fiber_collisions=fiber_collisions)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     observable.wmatrix.plot(show=True)
+
+    likelihood()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        fn = os.path.join(tmp_dir, 'tmp.npy')
+        observable.save(fn)
+        # And reload the result
+        tmp = TracerCorrelationFunctionMultipolesObservable.load(fn)
+        tmp.s, tmp.ells, tmp.flatdata, tmp.flattheory
 
 
 def test_bao():

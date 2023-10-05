@@ -68,7 +68,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         self.wmatrix.init.update(kwargs)
         if self.flatdata is None:
             self.wmatrix(**data)
-            self.flatdata = self.flattheory.copy()
+            self.flatdata = self.wmatrix.flatcorr.copy()
         else:
             self.wmatrix.runtime_info.initialize()
         for name in ['s', 'ells', 'sedges']:
@@ -252,9 +252,8 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         mat = [[self.covariance[start1:stop1, start2:stop2] for start2, stop2 in zip(cumsize[:-1], cumsize[1:])] for start1, stop1 in zip(cumsize[:-1], cumsize[1:])]
         return plot_covariance_matrix(mat, x1=self.s, xlabel1=r'$s$ [$\mathrm{Mpc}/h$]', label1=[r'$\ell = {:d}$'.format(ell) for ell in self.ells], corrcoef=corrcoef, **kwargs)
 
-    @property
-    def flattheory(self):
-        return self.wmatrix.flatcorr
+    def calculate(self):
+        self.flattheory = self.wmatrix.flatcorr
 
     @property
     def theory(self):
@@ -273,7 +272,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
 
     def __getstate__(self):
         state = {}
-        for name in ['s', 'ells', 'flatdata']:
+        for name in ['s', 'sedges', 'ells', 'flatdata', 'shotnoise', 'flattheory']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state

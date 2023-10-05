@@ -80,10 +80,9 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         self.wmatrix.init.update(kwargs)
         if self.shotnoise is None: self.shotnoise = 0.
         self.wmatrix.init.setdefault('shotnoise', self.shotnoise)
-        self.transform = None  # just to get standard flattheory
         if self.flatdata is None:
             self.wmatrix(**data)
-            self.flatdata = self.flattheory.copy()
+            self.flatdata = self.wmatrix.flatpower.copy()
         else:
             self.wmatrix.runtime_info.initialize()
         for name in ['k', 'ells', 'kedges', 'shotnoise']:
@@ -346,13 +345,11 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         mat = [[self.covariance[start1:stop1, start2:stop2] for start2, stop2 in zip(cumsize[:-1], cumsize[1:])] for start1, stop1 in zip(cumsize[:-1], cumsize[1:])]
         return plot_covariance_matrix(mat, x1=self.k, xlabel1=r'$k$ [$h/\mathrm{Mpc}$]', label1=[r'$\ell = {:d}$'.format(ell) for ell in self.ells], corrcoef=corrcoef, **kwargs)
 
-    @property
-    def flattheory(self):
-        flattheory = self.wmatrix.flatpower
+    def calculate(self):
+        self.flattheory = self.wmatrix.flatpower
         if self.transform == 'cubic':
             # See eq. 16 of https://arxiv.org/pdf/2302.07484.pdf
-            return (3. * (flattheory / self.flatdata)**(1. / 3.) - 2.) * self.flatdata
-        return flattheory
+            self.flattheory = (3. * (self.flattheory / self.flatdata)**(1. / 3.) - 2.) * self.flatdata
 
     @property
     def theory(self):
@@ -371,7 +368,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'ells', 'flatdata']:
+        for name in ['k', 'kedges', 'ells', 'flatdata', 'shotnoise', 'flattheory']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state

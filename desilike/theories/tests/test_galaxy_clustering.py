@@ -96,12 +96,14 @@ def test_bao():
         is_power = 'Power' in theory.__class__.__name__
         list_params, list_remove = {}, {}
         list_params['power'] = {'al0_1': 1e3 if is_power else 1e-3}
+        list_params['even-power'] = {'al0_2': 1e-3}
         list_params['pcs'] = {'al0_2': 2.}
         list_remove['power'] = ['al0_-1']
+        list_remove['even-power'] = ['al0_0']
         list_remove['pcs'] = ['al0_-1']
         if not is_power:
             list_params['pcs'].update({'bl0_2': 1e-3})
-        for broadband in ['power', 'pcs']:
+        for broadband in ['power', 'pcs'] + (['even-power'] if not is_power else []):
             theory.init.update(broadband=broadband)
             print(theory.all_params)
             params = list_params[broadband]
@@ -886,9 +888,9 @@ if __name__ == '__main__':
     #test_params()
     #test_integ()
     #test_templates()
-    #test_bao()
+    test_bao()
     #test_flexible_bao()
-    test_full_shape()
+    #test_full_shape()
     #test_png()
     #test_pk_to_xi()
     #test_ap_diff()

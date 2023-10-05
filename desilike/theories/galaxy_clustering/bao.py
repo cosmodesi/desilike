@@ -447,7 +447,7 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
         for param in pt_params.basenames():
             if param in self.params: del pt_params[param]
         self.pt.params.update(pt_params)
-        if self.broadband == 'power':
+        if 'power' in self.broadband:  # even-power for the correlation function
             for ell in self.ells:
                 self.broadband_matrix[ell] = jnp.array([(self.k / self.kp)**pow for pow in self.broadband_orders[ell].values()])
         elif self.broadband in ['ngp', 'cic', 'tsc', 'pcs']:

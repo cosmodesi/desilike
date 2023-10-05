@@ -617,7 +617,7 @@ def set_independent_seed(seed=None, mpicomm=None, size=10000):
     return seed
 
 
-def barrier_idle(mpicomm, tag=0, sleep=0.01):
+def barrier_idle(mpicomm, tag=0, sleep=0.1):
     """
     MPI barrier fonction that solves the problem that idle processes occupy 100% CPU.
     See https://goo.gl/NofOO9.

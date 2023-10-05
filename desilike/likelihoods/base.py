@@ -243,9 +243,17 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
         If ``None``, covariance matrix is computed on-the-fly using observables' mocks.
 
     scale_covariance : float, default=1.
-        Scale covariance by this value.
+        Scale precision by the inverse of this value.
+
+    correct_covariance : str, default='hartlap-percival2014'
+        Only applies if mocks are provided to input observables.
+        'hartlap' to apply Hartlap 2007 factor (https://arxiv.org/abs/astro-ph/0608064).
+        'percival2014' to apply Percival 2014 factor (https://arxiv.org/abs/1312.4841).
+
+    precision : array, default=None
+        Precision matrix to be used instead of the inverse covariance.
     """
-    def initialize(self, observables, covariance=None, scale_covariance=1., precision=None, **kwargs):
+    def initialize(self, observables, covariance=None, scale_covariance=1., correct_covariance='hartlap-percival2014', precision=None, **kwargs):
         if not utils.is_sequence(observables):
             observables = [observables]
         self.nobs = None
@@ -304,15 +312,32 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
                 self.precision = utils.blockinv([[self.covariance[sl1, sl2] for sl2 in slices] for sl1 in slices])
         else:
             self.precision /= scale_covariance
-        size = self.precision.shape[0]
-        if self.nobs is not None:
-            self.hartlap = (self.nobs - size - 2.) / (self.nobs - 1.)
-            if self.mpicomm.rank == 0:
-                self.log_info('Covariance matrix with {:d} points built from {:d} observations.'.format(size, self.nobs))
-                self.log_info('...resulting in Hartlap factor of {:.4f}.'.format(self.hartlap))
-            self.precision *= self.hartlap
+        nbins = self.precision.shape[0]
         BaseLikelihood.initialize(self, **kwargs)
         self.runtime_info.requires = self.observables
+        if self.nobs is not None:
+            if 'hartlap' in correct_covariance:
+                self.hartlap2007_factor = (self.nobs - nbins - 2.) / (self.nobs - 1.)
+                if self.mpicomm.rank == 0:
+                    self.log_info('Covariance matrix with {:d} points built from {:d} observations.'.format(nbins, self.nobs))
+                    self.log_info('...resulting in a Hartlap 2007 factor of {:.4f}.'.format(self.hartlap2007_factor))
+                self.precision *= self.hartlap2007_factor
+            if 'percival' in correct_covariance:
+                # eq. 8 and 18 of https://arxiv.org/pdf/1312.4841.pdf
+                A = 2. / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
+                B = (self.nobs - nbins - 2.) / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
+                params = set()
+                for obs in self.observables: params |= set(obs.all_params.names(varied=True))
+                nparams = len(params)
+                self.percival2014_factor = (1 + B * (nbins - nparams)) / (1 + A + B * (nparams + 1))
+                if self.mpicomm.rank == 0:
+                    self.log_info('Covariance matrix with {:d} points built from {:d} observations, varying {:d} parameters.'.format(nbins, self.nobs, nparams))
+                    self.log_info('...resulting in a Percival 2014 factor of {:.4f}.'.format(self.percival2014_factor))
+                self.precision /= self.percival2014_factor
+
+    def calculate(self):
+        self.flatdiff = self.flattheory - self.flatdata
+        self.loglikelihood = -0.5 * chi2(self.flatdiff, self.precision)
 
     @property
     def flattheory(self):

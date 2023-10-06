@@ -78,8 +78,8 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         if klim is not None:
             self.wmatrix.init.update(klim=klim)
         self.wmatrix.init.update(kwargs)
-        if self.shotnoise is None: self.shotnoise = 0.
         self.wmatrix.init.setdefault('shotnoise', self.shotnoise)
+        if self.shotnoise is None: self.shotnoise = 0.
         if self.flatdata is None:
             self.wmatrix(**data)
             self.flatdata = self.wmatrix.flatpower.copy()

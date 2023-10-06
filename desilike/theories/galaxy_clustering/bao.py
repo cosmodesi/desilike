@@ -167,7 +167,7 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
         if self.mode: sk = np.exp(-1. / 2. * (k * self.smoothing_radius)**2)
         # https://www.overleaf.com/project/633e1b59130591a7bf55a9cd eq. 17
         skc = 1. - sk
-        self.sigma_sn2 = 1. / (3. * np.pi**2) * integrate.simps((1. - j0) * skc**2, k)
+        self.sigma_sn2 = 1. / self.smoothing_radius / 6 / np.pi**(3. / 2.)
         self.sigma_nl2 = 1. / (3. * np.pi**2) * integrate.simps((1. - j0) * pklin, k)
         self.sigma_dd2 = 1. / (3. * np.pi**2) * integrate.simps((1. - j0) * skc**2 * pklin, k)
         if self.mode == 'reciso':
@@ -189,8 +189,8 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
             resummed_wiggles += 2. * (b1 + f * mu**2 * skc - sk) * (1 + f * mu**2) * sk * np.exp(-1. / 2. * ksq * d2 * sigma_ds2)
             sigma_ss2 = sigma_dd2 + f**2 * mu**2 * self.sigma_nl2 + 2 * f * mu**2 * self.sigma_x2
             resummed_wiggles += (1 + f * mu**2)**2 * sk**2 * np.exp(-1. / 2. * ksq * d2 * sigma_ss2)
-        else:
-            resummed_wiggles = (b1 + f * mu**2 * skc - sk)**2 * np.exp(-1. / 2. * ksq * d2 * sigma_dd2)
+        else:  # redshift-space, no reconstruction
+            resummed_wiggles = (b1 + f * mu**2)**2 * np.exp(-1. / 2. * ksq * d2 * sigma_dd2)
         return resummed_wiggles * wiggles
 
 
@@ -203,11 +203,15 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
     ---------
     https://arxiv.org/abs/1907.00043
     """
+    _default_options = dict(shotnoise=0.)  # to be given shot noise by window matrix
+
     def initialize(self, *args, mu=10, method='leggauss', **kwargs):
+        shotnoise = kwargs.pop('shotnoise', self._default_options['shotnoise'])
         super(ResummedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
         self.wiggles = ResummedPowerSpectrumWiggles(mode=self.mode, template=self.template,
-                                                    smoothing_radius=self.smoothing_radius)
+                                                    smoothing_radius=self.smoothing_radius,
+                                                    shotnoise=shotnoise)
         if self.template.only_now:
             for param in self.init.params.select(basename=['q']):
                 param.update(fixed=True)
@@ -647,6 +651,7 @@ class ResummedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerS
     ---------
     https://arxiv.org/abs/1907.00043
     """
+    _default_options = dict(shotnoise=0.)  # to be given shot noise by window matrix
 
 
 class FlexibleBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpectrumMultipoles):
@@ -1019,6 +1024,7 @@ class ResummedBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracer
     ---------
     https://arxiv.org/abs/1907.00043
     """
+    _default_options = dict(shotnoise=0.)  # to be given shot noise by window matrix
 
 
 class FlexibleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCorrelationFunctionMultipoles):

@@ -60,10 +60,10 @@ class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
     _default_options = dict()
 
     def initialize(self, pt=None, template=None, shotnoise=1e4, **kwargs):
-        self.nd = 1. / shotnoise
         self.options = self._default_options.copy()
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
+        self.nd = 1. / float(shotnoise)
         if pt is None:
             pt = globals()[getattr(self, 'pt_cls', self.__class__.__name__.replace('Tracer', ''))]()
         self.pt = pt
@@ -280,7 +280,7 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
     config_fn = 'full_shape.yaml'
 
     def initialize(self, *args, mu=8, method='leggauss', template=None, shotnoise=1e4, **kwargs):
-        self.nd = 1. / shotnoise
+        self.nd = 1. / float(shotnoise)
         if template is None:
             template = StandardPowerSpectrumTemplate()
         super(SimpleTracerPowerSpectrumMultipoles, self).initialize(*args, template=template, mu=mu, method=method, **kwargs)
@@ -896,7 +896,6 @@ class BaseVelocileptorsPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, Ba
 class BaseVelocileptorsTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
     """Base class for velocileptor-based tracer power spectrum multipoles."""
-    _default_options = dict()
 
     def calculate(self, **params):
         super(BaseVelocileptorsTracerPowerSpectrumMultipoles, self).calculate()
@@ -908,7 +907,6 @@ class BaseVelocileptorsTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMult
 class BaseVelocileptorsCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
 
     """Base class for velocileptor-based matter correlation function multipoles."""
-    _default_options = dict()
 
     def initialize(self, *args, **kwargs):
         super(BaseVelocileptorsCorrelationFunctionMultipoles, self).initialize(*args, **kwargs)
@@ -921,7 +919,6 @@ class BaseVelocileptorsCorrelationFunctionMultipoles(BasePTCorrelationFunctionMu
 class BaseVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMultipoles):
 
     """Base class for velocileptor-based tracer correlation function multipoles."""
-    _default_options = dict()
 
     def calculate(self, **params):
         super(BaseVelocileptorsTracerCorrelationFunctionMultipoles, self).calculate()

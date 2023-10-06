@@ -101,7 +101,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory power spectrum multipoles, defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
     """
-    def initialize(self, klim=None, k=None, ells=None, wmatrix=None, kinrebin=1, kinlim=None, ellsin=None, shotnoise=0., fiber_collisions=None, theory=None):
+    def initialize(self, klim=None, k=None, ells=None, wmatrix=None, kinrebin=1, kinlim=None, ellsin=None, shotnoise=None, fiber_collisions=None, theory=None):
         _default_step = 0.01
 
         if ells is None:
@@ -224,7 +224,12 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 if fiber_collisions.with_uncorrelated: self.offset = self.matrix_full.dot(fiber_collisions.kernel_uncorrelated.ravel())
                 self.matrix_full = self.matrix_full.dot(np.bmat([list(kernel) for kernel in fiber_collisions.kernel_correlated]).A)
                 self.ellsin, self.kin = fiber_collisions.ellsin, fiber_collisions.kin
-        shotnoise = float(shotnoise)
+        if shotnoise is None:
+            shotnoise = 0.
+        else:
+            shotnoise = float(shotnoise)
+            if 'shotnoise' in getattr(self.theory, '_default_options', {}):
+                self.theory.init.update(shotnoise=shotnoise)
         self.shotnoise = np.array([shotnoise * (ell == 0) for ell in self.ellsin])
         self.flatshotnoise = np.concatenate([np.full_like(k, shotnoise * (ell == 0), dtype='f8') for ell, k in zip(self.ells, self.k)])
 

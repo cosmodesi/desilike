@@ -461,7 +461,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
@@ -471,7 +471,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
@@ -482,7 +482,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
@@ -492,7 +492,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 30.
+      scale: 50.
     ref:
       dist: norm
       loc: 0.
@@ -575,7 +575,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
@@ -585,7 +585,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 3.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
@@ -596,7 +596,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
@@ -606,7 +606,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 30.
+      scale: 50.
     ref:
       dist: norm
       loc: 0.

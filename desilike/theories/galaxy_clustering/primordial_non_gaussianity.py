@@ -46,8 +46,10 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
     https://arxiv.org/pdf/1904.08859.pdf
     """
     config_fn = 'primordial_non_gaussianity.yaml'
+    _default_options = dict(shotnoise=1e4)  # to be given shot noise by window matrix
 
-    def initialize(self, *args, ells=(0, 2), method='prim', mode='b-p', template=None, shotnoise=1e4, **kwargs):
+    def initialize(self, *args, ells=(0, 2), method='prim', mode='b-p', template=None, **kwargs):
+        shotnoise = kwargs.pop('shotnoise', self._default_options['shotnoise'])
         super(PNGTracerPowerSpectrumMultipoles, self).initialize(*args, ells=ells, **kwargs)
         self.nd = 1. / shotnoise
         if template is None:

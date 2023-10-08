@@ -92,9 +92,7 @@ class: FlexibleBAOWigglesTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: norm
-      loc: 1.5
-      scale: 1.
+      limits: [0.2, 4.]
     ref:
       limits: [1.5, 2.5]
     latex: b
@@ -187,9 +185,7 @@ class: FlexibleBAOWigglesTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: norm
-      loc: 1.5
-      scale: 1.
+      limits: [0.2, 4.]
     ref:
       limits: [1.5, 2.5]
     latex: b

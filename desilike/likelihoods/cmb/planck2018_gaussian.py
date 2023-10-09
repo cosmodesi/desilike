@@ -104,7 +104,7 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
             installer.write({cls.installer_section: {'data_dir': data_dir}})
 
 
-class FullGridPlanck2018GaussianLikelihood(BaseGaussianLikelihood):
+class FullGridPlanck2018GaussianLikelihood(BasePlanck2018GaussianLikelihood):
     r"""
     Gaussian approximation of the full grid of likelihoods of Planck's 2018 data release.
 

@@ -1,1 +1,1 @@
-from .factory import CobayaLikelihoodFactory, CobayaLikelihoodGenerator
+from .factory import CobayaLikelihoodFactory, CobayaLikelihoodGenerator, desilike_to_cobaya_params

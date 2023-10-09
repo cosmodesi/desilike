@@ -11,6 +11,7 @@ class TestSimpleLikelihood(BaseLikelihood):
                'b': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}}}
 
     def initialize(self):
+        super(TestSimpleLikelihood, self).initialize()
         self.x = np.linspace(0., 1., 10)
         mean = np.zeros_like(self.x)
         self.covariance = 100. * np.eye(len(self.x))

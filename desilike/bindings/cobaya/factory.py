@@ -124,7 +124,7 @@ class Fourier(Section):
                 z_pool = provider.collectors[name].z_pool
                 if z_pool is None:
                     z_pool = provider.z_pool_for_perturbations
-                collector[name] = interpolate.interp1d(z_pool.values, provider.current_state[name], kind='cubic', axis=-1, copy=True, fill_value='extrapolate', assume_sorted=False)(z)
+                collector[name] = interpolate.interp1d(z_pool.values, provider.current_state[name], kind=min(3, len(z_pool.values) - 1), axis=-1, copy=True, fill_value='extrapolate', assume_sorted=False)(z)
             f = collector['fsigma8'] / collector['sigma8_z']
             # Below does not work for classy wrapper, because z does not match requested z...
             # f = self.provider.get_fsigma8(z=z) / self.provider.get_sigma8_z(z=z)
@@ -192,8 +192,7 @@ def camb_or_classy_to_cosmoprimo(fiducial, provider, **params):
     return cosmo
 
 
-def cobaya_params(like):
-    params = {}
+def desilike_to_cobaya_params(params, engine=None):
 
     def decode_prior(prior):
         di = {}
@@ -205,16 +204,15 @@ def cobaya_params(like):
                 di[name] = getattr(prior, name)
         return di
 
-    cosmo_params, nuisance_params = get_likelihood_params(like)
-    # if self.engine == 'camb':
-    #     cosmo_params = cosmoprimo_to_camb_params(cosmo_params)
-    # elif self.engine == 'classy':
-    #     cosmo_params = cosmoprimo_to_classy_params(cosmo_params)
-    params = {}
-    for param in nuisance_params:
+    if engine == 'camb':
+        params = cosmoprimo_to_camb_params(params)
+    elif engine == 'classy':
+        params = cosmoprimo_to_classy_params(params)
+    toret = {}
+    for param in params:
         if param.solved or param.derived and not param.depends: continue
         if param.fixed:
-            params[param.name] = param.value
+            toret[param.name] = param.value
         else:
             di = {'latex': param.latex()}
             if param.depends:
@@ -229,8 +227,14 @@ def cobaya_params(like):
                 if param.proposal is not None:
                     di['proposal'] = param.proposal
             # if param.drop: di['drop'] = True
-            params[param.name] = di
-    return params
+            toret[param.name] = di
+    return toret
+
+
+def cobaya_params(like):
+
+    cosmo_params, nuisance_params = get_likelihood_params(like)
+    return desilike_to_cobaya_params(nuisance_params)
 
 
 def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, params=None):

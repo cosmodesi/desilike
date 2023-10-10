@@ -24,6 +24,11 @@ def test_parameterization():
     cosmo.init.params['Q0'] = dict()
     cosmo(Q0=0.1)
 
+    cosmo = Cosmoprimo()
+    del cosmo.params['N_ur']
+    cosmo(logA=3.)
+    assert np.allclose(cosmo.cosmo['N_ur'], 2.030798372516493)
+
 
 if __name__ == '__main__':
 

@@ -28,6 +28,7 @@ def test_parameterization():
     del cosmo.params['N_ur']
     cosmo(logA=3.)
     assert np.allclose(cosmo.cosmo['N_ur'], 2.030798372516493)
+    #print(cosmo.init.params['omega_b'].latex(), cosmo.init.params['tau_reio'].latex())
 
 
 if __name__ == '__main__':

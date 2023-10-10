@@ -141,34 +141,38 @@ class Fourier(Section):
 
 
 def cosmoprimo_to_camb_params(params):
-    convert = {'H0': 'H0', 'theta_mc': 'cosmomc_theta', 'omega_b': 'ombh2', 'omega_cdm': 'omch2', 'A_s': 'As', 'n_s': 'ns', 'N_eff': 'nnu', 'm_ncdm': 'mnu', 'Omega_k': 'omk'}
+    convert = {'H0': 'H0', 'theta_mc': 'cosmomc_theta', 'omega_b': 'ombh2', 'omega_cdm': 'omch2', 'A_s': 'As', 'n_s': 'ns', 'N_eff': 'nnu', 'm_ncdm': 'mnu', 'Omega_k': 'omk', 'w0_fld': 'w', 'wa_fld': 'wa', 'tau_reio': 'tau'}
+    convert.update({'h': ('H0', '100 * {h}'), 'Omega_b': ('ombh2', '{Omega_b} * ({H0} / 100)**2'), 'Omega_cdm': ('omch2', '{Omega_cdm} * ({H0} / 100)**2'), 'logA': ('As', '1e-10 * np.exp({logA})')})
     toret = ParameterCollection()
-    params = params.copy()
-    name = 'h'
-    if name in params and params[name].varied:
-        toret[name] = params.pop(name).copy()#.clone(drop=True)
-        toret.set(Parameter('H0', derived='100 * {h}'))
-    for name in ['Omega_b', 'Omega_cdm']:
-        if name in params and params[name].varied:
-            cname = convert[name.lower()]
-            toret.set(params.pop(name).clone(basename=name))
-            toret.set(Parameter(cname, derived='{{{}}} * ({{H0}} / 100)**2'.format(name)))
     for param in params:
-        if param.varied:
+        if param.depends: continue
+        if param.derived:
+            toret.set(param)
+        else:
             try:
                 name = convert[param.name]
             except KeyError as exc:
                 raise ValueError('There is no translation for parameter {} to camb; we can only translate {}'.format(param.name, list(convert.keys()))) from exc
-            param = param.clone(basename=name)
-            toret.set(param)
+            if isinstance(name, tuple):
+                cname, derived = name
+                toret.set(param.copy())
+                toret.set(Parameter(cname, derived=derived))
+            else:
+                param = param.clone(basename=name)
+                toret.set(param)
     return toret
 
 
 def cosmoprimo_to_classy_params(params):
-    convert = {name: name for name in ['H0', 'h', 'A_s', 'ln10^{10}A_s', 'sigma8', 'n_s', 'omega_b', 'Omega_b', 'omega_cdm', 'Omega_cdm', 'omega_m', 'Omega_m', 'Omega_ncdm', 'omega_ncdm', 'm_ncdm', 'omega_k', 'Omega_k']}
+    convert = {name: name for name in ['H0', 'h', 'A_s', 'ln10^{10}A_s', 'sigma8', 'n_s', 'omega_b', 'Omega_b', 'omega_cdm', 'Omega_cdm', 'omega_m', 'Omega_m', 'Omega_ncdm', 'omega_ncdm', 'm_ncdm', 'omega_k', 'Omega_k',
+                                       'w0_fld', 'wa_fld', 'tau_reio']}
+    convert['logA'] = 'ln10^{10}A_s'
     toret = ParameterCollection()
     for param in params:
-        if param.varied:
+        if param.depends: continue
+        if param.derived:
+            toret.set(param)
+        else:
             try:
                 name = convert[param.name]
             except KeyError as exc:
@@ -208,19 +212,22 @@ def desilike_to_cobaya_params(params, engine=None):
         params = cosmoprimo_to_camb_params(params)
     elif engine == 'classy':
         params = cosmoprimo_to_classy_params(params)
+    elif engine is not None:
+        raise ValueError('unknown engine {}'.format(engine))
     toret = {}
     for param in params:
-        if param.solved or param.derived and not param.depends: continue
-        if param.fixed:
+        if param.solved or param.derived and (not param.depends) and (engine is None): continue
+        if param.fixed and not param.derived:
             toret[param.name] = param.value
         else:
             di = {'latex': param.latex()}
             if param.depends:
                 names = param.depends.values()
+                derived = param.derived
                 for name in names:
-                    derived = param.derived.replace('{{{}}}'.format(name), name)
+                    derived = derived.replace('{{{}}}'.format(name), name)
                 di['value'] = 'lambda {}: '.format(', '.join(names)) + derived
-            else:
+            elif param.varied:
                 di['prior'] = decode_prior(param.prior)
                 if param.ref.is_proper():
                     di['ref'] = decode_prior(param.ref)

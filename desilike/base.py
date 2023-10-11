@@ -409,9 +409,9 @@ class BasePipeline(BaseClass):
         for calculator, params in zip(calculators, params):
             for param in params:
                 if param not in self.varied_params:
-                    if hasattr(param, 'setdefault'):
-                        param = param.copy()
-                        param.setdefault('namespace', calculator.runtime_info.namespace)
+                    #if hasattr(param, 'setdefault'):
+                    #    param = param.copy()
+                    #    param.setdefault('namespace', calculator.runtime_info.namespace)
                     param = Parameter(param).clone(derived=True)
                     for dparam in calculator.runtime_info.derived_params.names(basename=param.basename):
                         param = calculator.runtime_info.params[dparam].clone(namespace=param.namespace)

@@ -1196,6 +1196,17 @@ params:
       loc: 0.
       scale: 2.
     latex: c_{e, 2}
+  # mcdonald
+  bs:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 3.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{s}
   # west coast
   b2p4:
     prior:
@@ -1304,6 +1315,17 @@ params:
       loc: 0.
       scale: 10.
     latex: c_{r, 6}
+ # mcdonald
+  bs:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 3.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{s}
   # west coast
   b2p4:
     prior:

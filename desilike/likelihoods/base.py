@@ -15,12 +15,13 @@ class BaseLikelihood(BaseCalculator):
 
     """Base class for likelihood."""
     _attrs = ['loglikelihood', 'logprior']
+    name = None
     solved_default = '.marg'
 
     def initialize(self, catch_errors=None):
         for name in self._attrs:
             if name not in self.params.basenames():
-                self.params.set(Parameter(basename=name, namespace=self.runtime_info.namespace, latex=utils.outputs_to_latex(name), derived=True))
+                self.params.set(Parameter(basename=name, namespace=self.name, latex=utils.outputs_to_latex(name), derived=True))
             param = self.params.select(basename=name)
             if not len(param):
                 raise ValueError('{} derived parameter not found'.format(name))
@@ -253,7 +254,8 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
     precision : array, default=None
         Precision matrix to be used instead of the inverse covariance.
     """
-    def initialize(self, observables, covariance=None, scale_covariance=1., correct_covariance='hartlap-percival2014', precision=None, **kwargs):
+    def initialize(self, observables, covariance=None, scale_covariance=1., correct_covariance='hartlap-percival2014', precision=None, name=None, **kwargs):
+        self.name = name
         if not utils.is_sequence(observables):
             observables = [observables]
         self.nobs = None

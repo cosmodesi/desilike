@@ -25,6 +25,8 @@ def test_install():
 def test_clik():
     likelihood = TTTEEEHighlPlanck2018PlikLiteLikelihood()
     likelihood()
+    for param in likelihood.all_params.select(basename=['loglikelihood', 'logprior']):
+        assert param.namespace
     TTTEEEHighlPlanck2018PlikLiteLikelihood()()
 
 
@@ -119,8 +121,8 @@ def test_error():
 if __name__ == '__main__':
 
     setup_logging()
-    test_install()
-    #test_clik()
+    #test_install()
+    test_clik()
     #test_sum()
     #test_gaussian_likelihood()
     #test_params()

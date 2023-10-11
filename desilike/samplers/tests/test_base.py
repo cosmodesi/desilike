@@ -195,16 +195,40 @@ class AffineModel(BaseCalculator):  # all calculators should inherit from BaseCa
         return {'x': self.x, 'y': self.y}  # dictionary of Python base types and numpy arrays
 
 
+class PolyModel(BaseCalculator):  # all calculators should inherit from BaseCalculator
+
+    # Model parameters; those can also be declared in a yaml file
+    _params = {'a': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}, 'ref': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
+               'b': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}, 'ref': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
+               'c': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}, 'ref': {'dist': 'norm', 'loc': 0., 'scale': 1.}}}
+
+    def initialize(self, x=None):
+        # Actual, non-trivial initialization must happen in initialize(); this is to be able to do PolyModel(x=...)
+        # without doing any actual work
+        self.x = x
+
+    def calculate(self, a=0., b=0., c=0.):
+        self.y = a * self.x**2 + b * c * self.x + c
+
+    # Not mandatory, this is to return something in particular after calculate (else this will just be the instance)
+    def get(self):
+        return self.y
+
+    # This is only needed for emulation
+    def __getstate__(self):
+        return {'x': self.x, 'y': self.y}  # dictionary of Python base types and numpy arrays
+
+
 from desilike.likelihoods import BaseGaussianLikelihood
 
 
 class Likelihood(BaseGaussianLikelihood):
 
-    def initialize(self, theory=None):
+    def initialize(self, theory=None, scalecov=1.):
         # Let us generate some fake data
-        self.xdata = np.linspace(0., 1., 10)
-        mean = np.zeros_like(self.xdata)
-        self.covariance = np.eye(len(self.xdata))
+        self.xdata = np.linspace(0., 2., 10)
+        mean = self.xdata**2 + self.xdata
+        self.covariance = np.eye(len(self.xdata)) * scalecov
         rng = np.random.RandomState(seed=42)
         y = rng.multivariate_normal(mean, self.covariance)
         super(Likelihood, self).initialize(y, covariance=self.covariance)
@@ -248,12 +272,44 @@ def test_nested():
     plotting.plot_triangle(list(chains.values()), labels=list(chains.keys()), show=True)
 
 
+def test_marg():
+
+    from desilike.samples import Chain, plotting
+
+    likelihood = Likelihood(theory=PolyModel(), scalecov=0.1)
+    sampler_kwargs = {'nwalkers': 20, 'seed': 42}
+    run_kwargs = {'check': {'max_eigen_gr': 0.02}, 'min_iterations': 600, 'check_every': 100}
+    save_fn_full = './_tests/chain_full_0.npy'
+    save_fn_marg = './_tests/chain_marg_0.npy'
+    save_fn_bf = './_tests/chain_bf_0.npy'
+    todo = ['full', 'marg', 'bf'][:1]
+    if 'full' in todo:
+        sampler = ZeusSampler(likelihood, chains=save_fn_full, save_fn=save_fn_full, **sampler_kwargs)
+        sampler.run(**run_kwargs)[0]
+    if 'marg' in todo:
+        for param in likelihood.all_params.select(basename=['a', 'b']):
+            param.update(derived='.auto')
+        sampler = ZeusSampler(likelihood, chains=save_fn_marg, save_fn=save_fn_marg, **sampler_kwargs)
+        sampler.run(**run_kwargs)[0]
+    if 'bf' in todo:
+        for param in likelihood.all_params.select(basename=['a', 'b']):
+            param.update(derived='.best')
+        sampler = ZeusSampler(likelihood, chains=save_fn_bf, save_fn=save_fn_bf, **sampler_kwargs)
+        sampler.run(**run_kwargs)[0]
+    chain_full = Chain.load(save_fn_full).remove_burnin(0.5)[::5].sample_solved(size=5)
+    chain_marg = Chain.load(save_fn_marg).remove_burnin(0.5)[::5].sample_solved(size=5)
+    chain_bf = Chain.load(save_fn_bf).remove_burnin(0.5)[::5].sample_solved(size=5)
+    #plotting.plot_triangle([chain_bf], labels=['ref', 'marg', 'bestfit'], show=True, fn='./_tests/fig.png')
+    plotting.plot_triangle([chain_full, chain_marg, chain_bf], labels=['ref', 'marg', 'bestfit'], show=True, fn='./_tests/fig.png')
+
+
 if __name__ == '__main__':
 
     setup_logging()
     #test_nautilus()
-    test_samplers()
+    #test_samplers()
     #test_fixed()
     #test_importance()
     #test_error()
     #test_nested()
+    test_marg()

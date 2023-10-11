@@ -215,6 +215,7 @@ class TTHighlPlanck2018PlikLikelihood(BasePlanck2018ClikLikelihood):
     """
     data_file_id = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
     data_basename = 'baseline/plc_3.0/hi_l/plik/plik_rd12_HM_v22_TT.clik'
+    name = 'TTHighlPlanck2018Plik'
 
 
 class TTHighlPlanck2018PlikLiteLikelihood(BasePlanck2018ClikLikelihood):
@@ -242,6 +243,7 @@ class TTHighlPlanck2018PlikLiteLikelihood(BasePlanck2018ClikLikelihood):
     """
     data_file_id = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
     data_basename = 'baseline/plc_3.0/hi_l/plik_lite/plik_lite_v22_TT.clik'
+    name = 'TTHighlPlanck2018PlikLite'
 
 
 class TTHighlPlanck2018PlikUnbinnedLikelihood(BasePlanck2018ClikLikelihood):
@@ -269,6 +271,7 @@ class TTHighlPlanck2018PlikUnbinnedLikelihood(BasePlanck2018ClikLikelihood):
     """
     data_file_id = 'COM_Likelihood_Data-extra-plik-ext_R3.00.tar.gz'
     data_basename = 'extended_plik/plc_3.0/hi_l/plik/plik_rd12_HM_v22_TT_bin1.clik'
+    name = 'TTHighlPlanck2018PlikUnbinned'
 
 
 class TTTEEEHighlPlanck2018PlikLikelihood(BasePlanck2018ClikLikelihood):
@@ -296,6 +299,7 @@ class TTTEEEHighlPlanck2018PlikLikelihood(BasePlanck2018ClikLikelihood):
     """
     data_file_id = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
     data_basename = 'baseline/plc_3.0/hi_l/plik/plik_rd12_HM_v22b_TTTEEE.clik'
+    name = 'TTTEEEHighlPlanck2018Plik'
 
 
 class TTTEEEHighlPlanck2018PlikLiteLikelihood(BasePlanck2018ClikLikelihood):
@@ -323,6 +327,7 @@ class TTTEEEHighlPlanck2018PlikLiteLikelihood(BasePlanck2018ClikLikelihood):
     """
     data_file_id = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
     data_basename = 'baseline/plc_3.0/hi_l/plik_lite/plik_lite_v22_TTTEEE.clik'
+    name = 'TTTEEEHighlPlanck2018PlikLite'
 
 
 class TTTEEEHighlPlanck2018PlikUnbinnedLikelihood(BasePlanck2018ClikLikelihood):
@@ -350,6 +355,7 @@ class TTTEEEHighlPlanck2018PlikUnbinnedLikelihood(BasePlanck2018ClikLikelihood):
     """
     data_file_id = 'COM_Likelihood_Data-extra-plik-ext_R3.00.tar.gz'
     data_basename = 'extended_plik/plc_3.0/hi_l/plik/plik_rd12_HM_v22b_TTTEEE_bin1.clik'
+    name = 'TTTEEEHighlPlanck2018PlikUnbinned'
 
 
 class LensingPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
@@ -377,6 +383,7 @@ class LensingPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
     """
     data_file_id = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
     data_basename = 'baseline/plc_3.0/lensing/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8.clik_lensing'
+    name = 'LensingPlanck2018Clik'
 
 
 class TTLowlPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
@@ -404,6 +411,7 @@ class TTLowlPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
     """
     data_file_id = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
     data_basename = 'baseline/plc_3.0/low_l/commander/commander_dx12_v3_2_29.clik'
+    name = 'TTLowlPlanck2018Clik'
 
 
 class EELowlPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
@@ -431,3 +439,4 @@ class EELowlPlanck2018ClikLikelihood(BasePlanck2018ClikLikelihood):
     """
     data_file_id = 'COM_Likelihood_Data-baseline_R3.00.tar.gz'
     data_basename = 'baseline/plc_3.0/low_l/simall/simall_100x143_offlike5_EE_Aplanck_B.clik'
+    name = 'EELowlPlanck2018Clik'

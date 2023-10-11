@@ -9,6 +9,7 @@ from .base import BaseSNLikelihood
 class PantheonSNLikelihood(BaseSNLikelihood):
     """
     Likelihood for Pantheon type Ia supernovae sample.
+    TODO: organize as SNObservable / ObservablesGaussianLikelihood?
 
     Reference
     ---------
@@ -22,6 +23,7 @@ class PantheonSNLikelihood(BaseSNLikelihood):
     """
     config_fn = 'pantheon.yaml'
     installer_section = 'PantheonSNLikelihood'
+    name = 'PantheonSN'
 
     def initialize(self, *args, **kwargs):
         super(PantheonSNLikelihood, self).initialize(*args, **kwargs)

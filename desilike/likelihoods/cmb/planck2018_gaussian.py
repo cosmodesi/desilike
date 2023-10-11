@@ -40,6 +40,7 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
     data_file_id = 'COM_CosmoParams_base-plikHM_R3.01.zip'
 
     def initialize(self, cosmo=None, data_dir=None, basename='base_plikHM_TTTEEE_lowl_lowE_lensing', source='covmat'):
+        self.name = basename
         if data_dir is None:
             from desilike.install import Installer
             data_dir = Installer()[self.installer_section]['data_dir']

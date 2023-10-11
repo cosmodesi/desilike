@@ -1489,18 +1489,22 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     _default_options = dict(with_nnlo_counterterm=False, with_stoch=True, eft_basis='westcoast', freedom=None)
 
     def set_params(self):
-        allowed_eft_basis = ['eftoflss', 'westcoast', 'eastcoast']
+        allowed_eft_basis = ['eftoflss', 'westcoast', 'mcdonald']
         if self.options['eft_basis'] not in allowed_eft_basis:
             raise ValueError('eft_basis must be one of {}'.format(allowed_eft_basis))
         # in pybird:
         # - westcoast: c2, c4 are b2p4, b2m4
         # - eastcoast: b2t, b2g, b3g are bt2, bG2, bGamma3
+        # - mcdonald: https://arxiv.org/pdf/0902.0991.pdf, https://arxiv.org/pdf/1607.03150.pdf
+        # bs = bs2 - 4. / 7. * (b1 - 1.) and b3 = b3nl + 32. / 315. * (b1 - 1.)
         if self.options['eft_basis'] == 'eftoflss':
             self.required_bias_params = ['b1', 'b2', 'b3', 'b4']
         if self.options['eft_basis'] == 'westcoast':
             self.required_bias_params = ['b1', 'b2p4', 'b3', 'b2m4']
         if self.options['eft_basis'] == 'eastcoast':
             self.required_bias_params = ['b1', 'b2t', 'b2g', 'b3g']
+        if self.options['eft_basis'] == 'mcdonald':
+            self.required_bias_params = ['b1', 'b2', 'bs', 'b3']
         # now EFT parameters
         if self.options['eft_basis'] in ['eftoflss', 'westcoast']:
             self.required_bias_params += ['cct', 'cr1', 'cr2']
@@ -1521,7 +1525,9 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                 param.update(fixed=False)
             fix += ['ce1']
         if freedom == 'min':
-            fix += ['b3', 'b2m4', 'ce1']
+            if self.options['eft_basis'] != 'mcdonald':
+                raise ValueError('min freedom only defined in eft_basis="mcdonald"')
+            fix += ['bs', 'b3', 'ce1']
         if 4 not in self.ells: fix += ['cr2']
         if 2 not in self.ells: fix += ['cr1', 'ce2', 'c2', 'c4']
         for param in self.init.params.select(basename=fix):
@@ -1534,7 +1540,9 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         elif self.options['eft_basis'] == 'eastcoast':
             params['b2'] = params['b1'] + 7. / 2. * params['b2g']
             params['b3'] = params['b1'] + 15. * params['b2g'] + 6. * params.pop('b3g')
-            params['b4'] = 1/2. * params.pop('b2t') - 7. / 2. * params.pop('b2g')
+            params['b4'] = 1 / 2. * params.pop('b2t') - 7. / 2. * params.pop('b2g')
+        elif self.options['eft_basis'] == 'mcdonald':
+            pass
         return params
 
     def calculate(self, **params):
@@ -1695,8 +1703,8 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         pars = list(pars) + [1. / nd]  # add shot noise
         b1 = pars[0]
         # add co-evolution part
-        pars[2] = pars[2] - 4. / 7. * (b1 - 1.)
-        pars[3] = pars[3] + 32. / 315. * (b1 - 1.)
+        pars[2] = pars[2] - 4. / 7. * (b1 - 1.)  # bs
+        pars[3] = pars[3] + 32. / 315. * (b1 - 1.)  # b3
         k, mu = self.pt.kap, self.pt.muap
         FOLPS.f0 = self.pt.f0
         fk = self.pt.table[1] * self.pt.f0

@@ -577,7 +577,7 @@ class LikelihoodFisher(BaseClass):
         return self.covariance(params=params, return_type=None).to_getdist(label=label, center=self.mean(params=params), ignore_limits=ignore_limits)
 
     @classmethod
-    def read_getdist(cls, base_fn, with_prior=True):
+    def read_getdist(cls, base_fn, with_prior=True, **kwargs):
         """
         Read Fisher from GetDist format.
 
@@ -589,6 +589,11 @@ class LikelihoodFisher(BaseClass):
 
         with_prior : bool, default=True
             Whether input chains include parameter priors.
+
+        **kwargs : dict
+            If ``params`` is ``None``, optional arguments passed to :meth:`ParameterCollection.select`
+            to select parameters (e.g. ``varied=True``).
+            Restricting to useful parameters is relevant for the numerical accuracy of covariance inversion.
 
         Returns
         -------
@@ -618,7 +623,7 @@ class LikelihoodFisher(BaseClass):
                 if line.startswith(txt):
                     offset = -float(line[len(txt):])
                     break
-        covariance = ParameterCovariance.read_getdist(base_fn)
+        covariance = ParameterCovariance.read_getdist(base_fn).select(**kwargs)
         params = covariance.params()
         mean = [mean[param.name] for param in params]
         return cls(mean, params=params, offset=offset, hessian=-covariance.to_precision(params=params, return_type='nparray'), with_prior=with_prior)

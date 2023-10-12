@@ -238,6 +238,71 @@ class Chain(Samples):
             raise KeyError('Column {} does not exist'.format(name))
 
     @classmethod
+    def from_getdist(cls, samples):
+        """
+        Turn getdist.MCSamples into a :class:`Chain` instance.
+
+        Note
+        ----
+        GetDist package is required.
+        """
+        params = ParameterCollection()
+        for param in samples.paramNames.names:
+            params.set(Parameter(param.name, latex=param.label, derived=param.isDerived, fixed=False))
+        for param in params:
+            limits = [samples.ranges.lower.get(param.name, -np.inf), samples.ranges.upper.get(param.name, np.inf)]
+            param.update(prior=ParameterPrior(limits=limits))
+        new = cls()
+        new.fweight, new.logposterior = samples.weights, -samples.loglikes
+        for param in params:
+            new.set(ParameterArray(samples[param.name], param=param))
+        for param in new.params(basename='chi2_*'):
+            namespace = param.name[5:]
+            if namespace == 'prior':
+                new_param = param.clone(basename=new._logprior)
+            else:
+                new_param = param.clone(basename=new._loglikelihood, namespace=namespace)
+            new[new_param] = -0.5 * new[param]
+        return new
+
+    def to_getdist(self, params=None, label=None, **kwargs):
+        """
+        Return GetDist hook to samples.
+
+        Note
+        ----
+        GetDist package is required.
+
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
+
+        label : str, default=None
+            Name for  GetDist to use for these samples.
+
+        **kwargs : dict
+            Optional arguments for :class:`getdist.MCSamples`.
+
+        Returns
+        -------
+        samples : getdist.MCSamples
+        """
+        from getdist import MCSamples
+        toret = None
+        if params is None: params = self.params(varied=True)
+        else: params = [self[param].param for param in params]
+        if any(param.solved for param in params):
+            self = self.sample_solved()
+        params = [param for param in params if param.name not in [self._weight, self._logposterior]]
+        samples = self.to_array(params=params, struct=False, derivs=()).reshape(-1, self.size)
+        labels = [param.latex() for param in params]
+        names = [str(param) for param in params]
+        ranges = {str(param): tuple('N' if limit is None or not np.isfinite(limit) else limit for limit in param.prior.limits) for param in params}
+        toret = MCSamples(samples=samples.T, weights=np.asarray(self.weight.ravel()), loglikes=-np.asarray(self.logposterior.ravel()), names=names, labels=labels, label=label, ranges=ranges, **kwargs)
+        return toret
+
+    @classmethod
     def read_getdist(cls, base_fn, ichains=None, concatenate=False):
         """
         Load samples in *CosmoMC* format, i.e.:
@@ -321,7 +386,7 @@ class Chain(Samples):
             toret.append(new)
         for new in toret:
             for param in new.params(basename='chi2_*'):
-                namespace = param.name[4:]
+                namespace = param.name[5:]
                 if namespace == 'prior':
                     new_param = param.clone(basename=new._logprior)
                 else:
@@ -351,17 +416,14 @@ class Chain(Samples):
             Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
 
         ichain : int, default=None
-            If not ``None``, append '_{ichain:d}' to ``base_fn``.
+            Chain number to append to file name, i.e. sample values will be saved as '{base_fn}_{ichain}.txt'.
+            If ``None``, does not append any number, sample values will be saved as '{base_fn}.txt'.
 
         fmt : str, default='%.18e'
             How to format floats.
 
         delimiter : str, default=' '
             String or character separating columns.
-
-        ichain : int, default=None
-            Chain number to append to file name, i.e. sample values will be saved as '{base_fn}_{ichain}.txt'.
-            If ``None``, does not append any number, sample values will be saved as '{base_fn}.txt'.
 
         kwargs : dict
             Optional arguments for :func:`numpy.savetxt`.
@@ -403,42 +465,6 @@ class Chain(Samples):
         self.log_info('Saving parameter ranges to {}.'.format(ranges_fn))
         with open(ranges_fn, 'w') as file:
             file.write(output)
-
-    def to_getdist(self, params=None, label=None, **kwargs):
-        """
-        Return GetDist hook to samples.
-
-        Note
-        ----
-        GetDist package *is* required.
-
-        Parameters
-        ----------
-        params : list, ParameterCollection, default=None
-            Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
-
-        label : str, default=None
-            Name for  GetDist to use for these samples.
-
-        **kwargs : dict
-            Optional arguments for :class:`getdist.MCSamples`.
-
-        Returns
-        -------
-        samples : getdist.MCSamples
-        """
-        from getdist import MCSamples
-        toret = None
-        if params is None: params = self.params(varied=True)
-        else: params = [self[param].param for param in params]
-        if any(param.solved for param in params):
-            self = self.sample_solved()
-        samples = self.to_array(params=params, struct=False, derivs=()).reshape(-1, self.size)
-        labels = [param.latex() for param in params]
-        names = [str(param) for param in params]
-        ranges = {str(param): tuple('N' if limit is None or not np.isfinite(limit) else limit for limit in param.prior.limits) for param in params}
-        toret = MCSamples(samples=samples.T, weights=np.asarray(self.weight.ravel()), loglikes=-np.asarray(self.logposterior.ravel()), names=names, labels=labels, label=label, ranges=ranges, **kwargs)
-        return toret
 
     def to_anesthetic(self, params=None, label=None, **kwargs):
         """

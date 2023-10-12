@@ -26,7 +26,6 @@ def test_misc():
     chain_dir = '_chains'
     params = ['like.a', 'like.b', 'like.c', 'like.d']
     mean, cov, chain = get_chain(params, nwalkers=10)
-
     chain['like.a'].param.update(latex='a', prior=ParameterPrior(limits=(-10., 10.)))
     assert isinstance(list(chain), list)
     pb = chain['like.b'].param
@@ -37,8 +36,11 @@ def test_misc():
     chain.save(fn)
     base_fn = os.path.join(chain_dir, 'chain')
     chain.write_getdist(base_fn, ichain=0)
-    chain2 = Chain.read_getdist(base_fn)
-    chain.to_getdist()
+    chain2 = Chain.read_getdist(base_fn, concatenate=True)
+    chain3 = Chain.from_getdist(chain.to_getdist())
+    for chain2 in [chain2, chain3]:
+        for param in chain2.params():
+            assert np.allclose(chain2[param], chain[param].ravel())
     chain.interval('like.a')
     chain2 = chain.deepcopy()
     chain['like.a'] += 1
@@ -145,6 +147,7 @@ if __name__ == '__main__':
 
     setup_logging()
 
+    test_misc()
     test_plot()
     test_bcast()
     test_misc()

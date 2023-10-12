@@ -2692,7 +2692,7 @@ class ParameterCovariance(BaseParameterMatrix):
                         params = line[1:]
                     else:
                         covariance.append([float(value) for value in line])
-        return cls(covariance, params=params)
+        return cls(covariance, params=[Parameter(param, fixed=False) for param in params])
 
 
 class ParameterPrecision(BaseParameterMatrix):

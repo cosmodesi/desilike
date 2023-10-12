@@ -59,18 +59,18 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
         basenames = list(convert_params.keys())
         if source == 'covmat':
             from desilike import LikelihoodFisher
-            fisher = LikelihoodFisher.read_getdist(self.base_dist_fn)
+            self.fisher = LikelihoodFisher.read_getdist(self.base_dist_fn, basename=basenames)
         elif source == 'chains' or source[0] == 'chains':
             burnin = None
             if utils.is_sequence(source): burnin = source[1]
             from desilike.samples import Chain
-            chains = Chain.read_getdist(self.base_chain_fn)
-            chain = Chain.concatenate([chain.select(basename=basenames).remove_burnin(burnin) if burnin is not None else chain for chain in chains])
-            fisher = chain.to_fisher()
+            chains = [chain.select(basename=basenames) for chain in Chain.read_getdist(self.base_chain_fn)]
+            chain = Chain.concatenate([chain.remove_burnin(burnin) if burnin is not None else chain for chain in chains])
+            self.fisher = chain.to_fisher()
         else:
             raise ValueError('source must be one of ["covmat", "chains"]')
-        params = fisher.params(basename=basenames)
-        super(BasePlanck2018GaussianLikelihood, self).initialize(data=fisher.mean(params=params), covariance=fisher.covariance(params=params))
+        params = self.fisher.params(basename=basenames)
+        super(BasePlanck2018GaussianLikelihood, self).initialize(data=self.fisher.mean(params=params), covariance=self.fisher.covariance(params=params))
         self.cosmo_quantities = [convert_params[param.basename] for param in params]
 
     @property

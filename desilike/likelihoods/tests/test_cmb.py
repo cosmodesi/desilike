@@ -40,15 +40,15 @@ def test_gaussian_likelihood():
 
     likelihood = BasePlanck2018GaussianLikelihood(source='covmat')
     likelihood()
-    covmat = likelihood.covariance
+    covmat = likelihood.fisher
 
     likelihood = BasePlanck2018GaussianLikelihood(source='chains')
     likelihood()
-    chains = likelihood.covariance
+    chains = likelihood.fisher
 
     print(covmat.to_stats(tablefmt='pretty'))
     print(chains.to_stats(tablefmt='pretty'))
-    print(np.abs((chains._value - covmat._value) / covmat._value))
+    print(np.abs((chains._hessian - covmat._hessian) / covmat._hessian))
     from desilike.samples import plotting
     plotting.plot_triangle([chains, covmat], labels=['chains', 'covmat'], show=True)
 
@@ -122,9 +122,9 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_install()
-    test_clik()
+    #test_clik()
     #test_sum()
-    #test_gaussian_likelihood()
+    test_gaussian_likelihood()
     #test_params()
     #test_help()
     #test_copy()

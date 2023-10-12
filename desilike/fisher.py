@@ -13,7 +13,8 @@ from . import utils
 
 class PriorCalculator(BaseCalculator):
 
-    _with_namespace = True
+    _initialize_with_namespace = True
+    _calculate_with_namespace = True
 
     """Calculator that computes the logprior."""
 
@@ -29,7 +30,8 @@ from desilike.likelihoods import BaseGaussianLikelihood
 
 class FisherGaussianLikelihood(BaseGaussianLikelihood):
 
-    _with_namespace = True
+    _initialize_with_namespace = True
+    _calculate_with_namespace = True
 
     def initialize(self, fisher):
         data = fisher.mean()

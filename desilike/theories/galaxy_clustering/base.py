@@ -45,7 +45,7 @@ class BaseTheoryCorrelationFunctionMultipoles(BaseCalculator):
 class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrelationFunctionMultipoles):
 
     """Base class for theory correlation function from power spectrum multipoles."""
-    _with_namespace = True
+    _initialize_with_namespace = True
 
     def initialize(self, s=None, power=None, interp_order=1, **kwargs):
         if s is None: s = np.linspace(20., 200, 101)

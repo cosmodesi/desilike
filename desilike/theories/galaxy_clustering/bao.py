@@ -414,6 +414,7 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
         Defaults to :math:`2 \pi / r_{d}`.
     """
     config_fn = 'bao.yaml'
+    _initialize_with_namespace = True  # to properly forward parameters to pt
 
     @staticmethod
     def _params(params, broadband='power'):
@@ -448,8 +449,8 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
         bb_params = []
         for params in self.broadband_orders.values(): bb_params += list(params)
         self.params = self.params.select(basename=bb_params)
-        for param in pt_params.basenames():
-            if param in self.params: del pt_params[param]
+        for param in list(pt_params):
+            if param.basename in bb_params: del pt_params[param]
         self.pt.params.update(pt_params)
         if 'power' in self.broadband:  # even-power for the correlation function
             for ell in self.ells:
@@ -826,8 +827,8 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
             bb_params = []
             for params in self.broadband_orders.values(): bb_params += list(params)
             self.params = self.params.select(basename=bb_params)
-            for param in power_params.basenames():
-                if param in self.params: del power_params[param]
+            for param in list(power_params):
+                if param.basename in bb_params: del power_params[param]
             self.power.params = power_params
 
     def calculate(self, **params):

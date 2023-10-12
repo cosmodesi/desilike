@@ -1525,9 +1525,10 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                 param.update(fixed=False)
             fix += ['ce1']
         if freedom == 'min':
-            if self.options['eft_basis'] != 'mcdonald':
-                raise ValueError('min freedom only defined in eft_basis="mcdonald"')
-            fix += ['bs', 'b3', 'ce1']
+            fix += ['b3', 'b2m4', 'ce1']
+            #if self.options['eft_basis'] != 'mcdonald':
+            #    raise ValueError('min freedom only defined in eft_basis="mcdonald"')
+            #fix += ['bs', 'b3', 'ce1']
         if 4 not in self.ells: fix += ['cr2']
         if 2 not in self.ells: fix += ['cr1', 'ce2', 'c2', 'c4']
         for param in self.init.params.select(basename=fix):

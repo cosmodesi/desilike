@@ -152,6 +152,7 @@ class BasePipeline(BaseClass):
         new_params = ParameterCollection()
         for calculator in self.calculators:
             calculator_params = ParameterCollection(ParameterCollectionConfig(calculator.runtime_info.params, identifier='name').clone(params))
+            #print(calculator, calculator.runtime_info.params)
             #new_calculator_params = ParameterCollection()
             for iparam, param in enumerate(calculator.runtime_info.params):
                 param = calculator_params[param]
@@ -617,7 +618,8 @@ class RuntimeInfo(BaseClass):
         self._tocalculate = True
         self.calculated = False
         self.name = self.calculator.__class__.__name__
-        self._with_namespace = False
+        self._initialize_with_namespace = False
+        self._calculate_with_namespace = False
         self.params = ParameterCollection(init.params)
         self.init.runtime_info = self
 
@@ -678,9 +680,9 @@ class RuntimeInfo(BaseClass):
         """Set parameters specific to this calculator."""
         self._params = ParameterCollection(params)
         self._params.updated = False
-        self.base_names = {(param.name if self._with_namespace else param.basename): param.name for param in self.params}
-        self.input_names = {param.name: (param.name if self._with_namespace else param.basename) for param in self.params.select(input=True)}
-        self.input_values = {(param.name if self._with_namespace else param.basename): param.value for param in self.params.select(input=True)}
+        self.base_names = {(param.name if self._calculate_with_namespace else param.basename): param.name for param in self.params}
+        self.input_names = {param.name: (param.name if self._calculate_with_namespace else param.basename) for param in self.params.select(input=True)}
+        self.input_values = {(param.name if self._calculate_with_namespace else param.basename): param.value for param in self.params.select(input=True)}
         self.derived_params = self.params.select(derived=True)
         self._tocalculate = True
 
@@ -726,8 +728,9 @@ class RuntimeInfo(BaseClass):
             self.install()
             bak = self.init.params
             params_with_namespace = ParameterCollection(self.init.params).deepcopy()
-            self._with_namespace = getattr(self.calculator, '_with_namespace', False)
-            if not self._with_namespace:
+            self._initialize_with_namespace = getattr(self.calculator, '_initialize_with_namespace', False)
+            self._calculate_with_namespace = getattr(self.calculator, '_calculate_with_namespace', False)
+            if not self._initialize_with_namespace:
                 params_basenames = params_with_namespace.basenames()
                 # Pass parameters without namespace
                 self.params = self.init.params = params_with_namespace.clone(namespace=None)
@@ -737,7 +740,7 @@ class RuntimeInfo(BaseClass):
                 self.calculator.initialize(*self.init.args, **self.init)
             except Exception as exc:
                 raise PipelineError('Error in method initialize of {}'.format(self.calculator)) from exc
-            if not self._with_namespace:
+            if not self._initialize_with_namespace:
                 for param in self.init.params:
                     if param.basename in params_basenames:  # update namespace
                         param.update(namespace=params_with_namespace[params_basenames.index(param.basename)].namespace)

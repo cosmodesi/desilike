@@ -235,12 +235,14 @@ class BasePipeline(BaseClass):
         for calculator in self.calculators:  # start by first calculator
             runtime_info = calculator.runtime_info
             runtime_info.set_input_values(params, full=True)
+            derived = None
             try:
                 result = runtime_info.calculate()
+                derived = runtime_info.derived
             except Exception as exc:
                 self.error = (exc, traceback.format_exc())
                 raise PipelineError('Error in method calculate of {} with calculator parameters {} and pipeline parameters {}'.format(calculator, runtime_info.input_values, self.input_values)) from exc
-            self.derived.update(runtime_info.derived)
+            if derived is not None: self.derived.update(derived)
         if self.more_calculate:
             toret = self.more_calculate()
             if toret is not None: result = toret

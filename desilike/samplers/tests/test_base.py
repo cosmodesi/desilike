@@ -307,9 +307,9 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_nautilus()
-    #test_samplers()
+    test_samplers()
     #test_fixed()
     #test_importance()
     #test_error()
     #test_nested()
-    test_marg()
+    #test_marg()

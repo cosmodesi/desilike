@@ -137,7 +137,7 @@ class Chain(Samples):
     def logposterior(self):
         """Log-posterior."""
         if self._logposterior not in self:
-            self[Parameter(self._logposterior, derived=True)] = np.zeros(self.shape, dtype='f8')
+            self[Parameter(self._logposterior, derived=True, latex=utils.outputs_to_latex(self._logposterior))] = np.zeros(self.shape, dtype='f8')
         return self[self._logposterior]
 
     @aweight.setter
@@ -153,7 +153,7 @@ class Chain(Samples):
     @logposterior.setter
     def logposterior(self, item):
         """Set log-posterior."""
-        self[Parameter(self._logposterior, derived=True)] = item
+        self[Parameter(self._logposterior, derived=True, latex=utils.outputs_to_latex(self._logposterior))] = item
 
     @property
     def weight(self):

@@ -22,8 +22,7 @@ def test_samplers():
                                                          theory=theory)
     footprint = BoxFootprint(volume=1e10, nbar=1e-5)
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
-    likelihood.params['LRG.loglikelihood'] = likelihood.params['LRG.logprior'] = {}
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov, name='LRG')
 
     for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][:-1]:
         kwargs = {}
@@ -34,6 +33,10 @@ def test_samplers():
         save_fn = './_tests/chain_0.npy'
         sampler = Sampler(likelihood, save_fn=save_fn, **kwargs)
         chains = sampler.run(max_iterations=100, check=True, check_every=50)
+        assert chains[0]['LRG.loglikelihood'].param.latex() == 'L_{\mathrm{LRG}}'
+        assert chains[0]['LRG.loglikelihood'].param.derived
+        assert chains[0].logposterior.param.latex() == '\mathcal{L}'
+        assert chains[0].logposterior.param.derived
         size1 = sampler.mpicomm.bcast(chains[0].size if sampler.mpicomm.rank == 0 else None, root=0)
         chains = sampler.run(max_iterations=0, check=True, check_every=10)
         size2 = sampler.mpicomm.bcast(chains[0].size if sampler.mpicomm.rank == 0 else None, root=0)
@@ -165,8 +168,6 @@ def test_error():
     chain = sampler.run(max_iterations=4)[0]
     if sampler.mpicomm.rank == 0:
         assert np.all(np.isfinite(chain.logposterior))
-
-
 
 
 from desilike.base import BaseCalculator

@@ -1,9 +1,10 @@
 import functools
 import logging
+import warnings
 
 import numpy as np
 
-from desilike import mpi, PipelineError, utils
+from desilike import utils, mpi, PipelineError
 from desilike.utils import BaseClass, expand_dict, TaskManager
 from desilike.samples import load_source
 from desilike.samples.profiles import Profiles, ParameterBestFit, ParameterGrid, ParameterProfiles
@@ -260,7 +261,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                         raise_error = error
                         update_derived = False
                     if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
-                        self.log_info('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug to get full stack trace.'.format(error[0]))
+                        warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug to get full stack trace.'.format(error[0]))
             if update_derived:
                 if self.derived is None:
                     self.derived = [points, self.pipeline.derived]
@@ -275,7 +276,6 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                 values[mask] = -np.inf
                 logposterior[mask_finite_prior] += values
                 if mask.any() and self.mpicomm.rank == 0:
-                    import warnings
                     warnings.warn('{} is NaN for {}'.format(name, {k: v[mask] for k, v in points.items()}))
         else:
             self.derived = None
@@ -402,8 +402,8 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                 p = self._maximize_one(start[ii], self.chi2, self.transformed_params, **kwargs)
                 if self.mpicomm.rank == 0:
                     profiles = Profiles(start=Samples(start[ii], params=self.varied_params),
-                                        bestfit=ParameterBestFit(list(start[ii]) + [logposterior[ii]], params=self.varied_params + ['logposterior'],
-                                                                 logposterior='logposterior', loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior))
+                                        bestfit=ParameterBestFit(list(start[ii]), params=self.varied_params, loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior))
+                    profiles.bestfit.logposterior = logposterior[ii]
                     profiles.update(p)
                     profiles = _profiles_transform(self, profiles)
                     for param in self.likelihood.params.select(fixed=True, derived=False):
@@ -417,10 +417,12 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                     #    solved_params = ParameterCollection([self.likelihood.all_params[param] for deriv in logposterior.derivs for param in deriv.keys()])
                     #    covariance = ParameterPrecision(logposterior[0], params=solved_params).to_covariance()
                     for array in self.derived[1]:
-                        array = array[index]
-                        profiles.bestfit.set(array)
+                        profiles.bestfit.set(array[index])
                         #if array.param in covariance:
                         #    profiles.error[array.param] = covariance.std([array.param])
+                    if profiles.bestfit._logposterior not in profiles.bestfit:
+                        profiles.bestfit.logposterior = profiles.bestfit[profiles.bestfit._loglikelihood] + profiles.bestfit[profiles.bestfit._logprior]
+                    profiles.bestfit.logposterior.param.update(derived=True, latex=utils.outputs_to_latex(profiles.bestfit._logposterior))
                 else:
                     profiles = None
                 list_profiles[ii] = profiles
@@ -593,7 +595,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             logposterior = {}
             for state in states: logposterior.update(state)
             logposterior = np.array([logposterior[i] for i in range(nsamples)])
-        grid['logposterior'] = self.mpicomm.bcast(logposterior, root=0)
+        grid.logposterior = self.mpicomm.bcast(logposterior, root=0)
         if self.profiles is None:
             self.profiles = Profiles()
         self.profiles.set(grid=grid)

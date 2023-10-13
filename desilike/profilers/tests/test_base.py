@@ -15,7 +15,7 @@ def test_profilers():
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data='../../tests/_pk/data.npy', covariance='../../tests/_pk/mock_*.npy', wmatrix='../../tests/_pk/window.npy',
                                                          theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1.)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1., name='LRG')
     for param in likelihood.all_params.select(basename=['qpar', 'qper']):
         param.update(fixed=True)
 
@@ -23,7 +23,11 @@ def test_profilers():
     #     print(param, [likelihood(**{param.name: param.value + param.proposal * scale}) for scale in [-1., 1.]])
     for Profiler in [MinuitProfiler, ScipyProfiler, BOBYQAProfiler]:
         profiler = Profiler(likelihood, seed=42)
-        profiler.maximize(niterations=2)
+        profiles = profiler.maximize(niterations=2)
+        assert profiles.bestfit['LRG.loglikelihood'].param.latex() == 'L_{\mathrm{LRG}}'
+        assert profiles.bestfit['LRG.loglikelihood'].param.derived
+        assert profiles.bestfit.logposterior.param.latex() == '\mathcal{L}'
+        assert profiles.bestfit.logposterior.param.derived
         profiler.profile(params=['df'], size=4)
         #profiler.grid(params=['df', 'qpar'], size=(2, 2))
         print(print(profiler.profiles.to_stats()))
@@ -75,8 +79,6 @@ def test_solve():
     #profiles = profiler.interval(params=['df'])
     #profiler.grid(params=['df', 'qpar'], size=2)
     print(profiles.to_stats())
-    assert profiles.bestfit.logposterior.param.derived
-
     #print(likelihood(**profiles.bestfit.choice(varied=True)))
     #from desilike.samples import plotting
     #plotting.plot_triangle(profiles, show=True)

@@ -6,7 +6,7 @@ import warnings
 
 import numpy as np
 
-from desilike import mpi, PipelineError
+from desilike import utils, mpi, PipelineError
 from desilike.utils import BaseClass, TaskManager, is_path
 from desilike.samples import Chain, Samples, load_source
 from desilike.samples import diagnostics as sample_diagnostics
@@ -213,9 +213,6 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
     def _prepare(self):
         pass
 
-    def _finalize_one(self, chain):
-        return Chain(chain, loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior)
-
     @property
     def nchains(self):
         return len(self.chains)
@@ -282,6 +279,9 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
 
     def _set_derived(self, chain):
         chain = Chain(chain, loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior)
+        if chain._logposterior not in chain:
+            chain.logposterior = chain[chain._loglikelihood] + chain[chain._logprior]
+        chain.logposterior.param.update(derived=True, latex=utils.outputs_to_latex(chain._logposterior))
         for param in self.pipeline.params.select(fixed=True, derived=False):
             chain[param] = np.full(chain.shape, param.value, dtype='f8')
         indices_in_chain, indices = self.derived[0].match(chain, params=self.varied_params)

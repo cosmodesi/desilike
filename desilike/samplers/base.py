@@ -2,6 +2,7 @@ import sys
 import numbers
 import functools
 import logging
+import warnings
 
 import numpy as np
 
@@ -167,7 +168,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                         raise_error = error
                         update_derived = False
                     if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
-                        self.log_info('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0])))
+                        warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0])))
             if update_derived:
                 if self.derived is None:
                     self.derived = [points, self.pipeline.derived]
@@ -182,7 +183,6 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                 values[mask] = -np.inf
                 logposterior[mask_finite_prior] += values
                 if mask.any() and self.mpicomm.rank == 0:
-                    import warnings
                     warnings.warn('{} is NaN for {}'.format(name, {k: v[mask] for k, v in points.items()}))
         else:
             self.derived = None

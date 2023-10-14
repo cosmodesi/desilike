@@ -244,7 +244,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         return fig
 
     @plotting.plotter
-    def plot_wiggles(self, fig=None):
+    def plot_bao(self, fig=None):
         """
         Plot data and theory BAO power spectrum wiggles.
 
@@ -309,6 +309,11 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             calculator.runtime_info.calculate()
 
         return fig
+
+    def plot_wiggles(self, *args, **kwargs):
+        import warnings
+        warnings.warn('plot_wiggles is deprecated, use plot_bao instead')
+        self.plot_bao(*args, **kwargs)
 
     @plotting.plotter
     def plot_covariance_matrix(self, corrcoef=True, **kwargs):

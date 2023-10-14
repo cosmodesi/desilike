@@ -218,6 +218,78 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         return fig
 
     @plotting.plotter
+    def plot_bao(self, fig=None):
+        """
+        Plot data and theory BAO correlation function peak.
+
+        Parameters
+        ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least ``len(self.ells)`` axes.
+
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        """
+        from matplotlib import pyplot as plt
+        if fig is None:
+            height_ratios = [1] * len(self.ells)
+            figsize = (4, 3 * sum(height_ratios))
+            fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=False)
+            lax = lax.ravel()  # in case only one ell
+            fig.subplots_adjust(hspace=0)
+        else:
+            lax = fig.axes
+        data, theory, std = self.data, self.theory, self.std
+        only_now = self.wmatrix.theory.template.only_now
+        self.wmatrix.theory.template.only_now = True
+
+        def callback(calculator):
+            all_requires.append(calculator)
+            for require in calculator.runtime_info.requires:
+                if require in all_requires:
+                    del all_requires[all_requires.index(require)]  # we want first dependencies at the end
+                callback(require)
+
+        all_requires = []
+        callback(self)
+        all_requires = all_requires[::-1]
+
+        for calculator in all_requires:
+            calculator.runtime_info.tocalculate = True
+            calculator.runtime_info.calculate()
+        nowiggle = self.theory
+
+        for ill, ell in enumerate(self.ells):
+            lax[ill].errorbar(self.s[ill], self.s[ill]**2 * (data[ill] - nowiggle[ill]), yerr=self.s[ill]**2 * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o')
+            lax[ill].plot(self.s[ill], self.s[ill]**2 * (theory[ill] - nowiggle[ill]), color='C{:d}'.format(ill))
+            lax[ill].set_ylabel(r'$s^{{2}} \Delta \xi_{{{:d}}}(s)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]'.format(ell))
+        for ax in lax: ax.grid(True)
+        lax[-1].set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
+
+        self.wmatrix.theory.template.only_now = only_now
+        for calculator in all_requires:
+            calculator.runtime_info.tocalculate = True
+            calculator.runtime_info.calculate()
+
+        return fig
+
+    def plot_wiggles(self, *args, **kwargs):
+        import warnings
+        warnings.warn('plot_wiggles is deprecated, use plot_bao instead')
+        self.plot_bao(*args, **kwargs)
+
+    @plotting.plotter
     def plot_covariance_matrix(self, corrcoef=True, **kwargs):
         """
         Plot covariance matrix.

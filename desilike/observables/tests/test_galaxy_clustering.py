@@ -81,6 +81,7 @@ def test_power_spectrum():
     observable.plot(show=True)
     observable.wmatrix.plot(show=True)
     observable.plot_wiggles(show=True)
+    observable.plot_bao(show=True)
 
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data=params,
@@ -112,14 +113,16 @@ def test_power_spectrum():
 
 def test_correlation_function():
 
-    from desilike.theories.galaxy_clustering import KaiserTracerCorrelationFunctionMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, ShapeFitPowerSpectrumTemplate
-    from desilike.observables.galaxy_clustering import TracerCorrelationFunctionMultipolesObservable, TopHatFiberCollisionsCorrelationFunctionMultipoles
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelationFunctionMultipoles, KaiserTracerCorrelationFunctionMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.observables.galaxy_clustering import TracerCorrelationFunctionMultipolesObservable, TopHatFiberCollisionsCorrelationFunctionMultipoles, BoxFootprint, ObservablesCovarianceMatrix
+
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
     #theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template, ells=(0, 2))
     size = 10
     ells = (0, 2)
+
     observable = TracerCorrelationFunctionMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * len(ells)),
                                                                s=np.linspace(20., 150., size),
                                                                slim={ell: (10, 160) for ell in ells},
@@ -160,13 +163,18 @@ def test_correlation_function():
     print(observable.runtime_info.pipeline.varied_params)
     assert theory.power.template.z == 1.
 
-    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
-                                                               data={}, #'../../tests/_xi/data.npy',
-                                                               covariance='../../tests/_xi/mock_*.npy',
+    theory = DampedBAOWigglesTracerCorrelationFunctionMultipoles()
+    params = {'b1': 1.5}
+    footprint = BoxFootprint(volume=1e10, nbar=1e-4)
+    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [50., 150., 5.]},
+                                                               data=params, #'../../tests/_xi/data.npy',
                                                                theory=theory,
                                                                wmatrix={'resolution': 2})
+    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
+    observable.init.update(covariance=cov)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     observable.wmatrix.plot(show=True)
+    observable.plot_bao(show=True)
 
     observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
                                                                data={}, #'../../tests/_xi/data.npy',

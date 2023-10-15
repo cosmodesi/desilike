@@ -7,7 +7,7 @@ from desilike import utils
 
 
 convert_planck2018_params = {'omegabh2': 'omega_b', 'omegach2': 'omega_cdm', 'omegak': 'Omega_k', 'w': 'w0_fld', 'wa': 'wa_fld', 'theta': 'theta_MC_100', 'tau': 'tau_reio',
-                         'mnu': 'm_ncdm_tot', 'logA': 'logA', 'ns': 'n_s', 'nrun': 'alpha_s', 'r': 'r', 'H0': 'H0', 'omegam': 'Omega_m'}
+                             'mnu': 'm_ncdm_tot', 'logA': 'logA', 'ns': 'n_s', 'nrun': 'alpha_s', 'r': 'r', 'H0': 'H0', 'omegam': 'Omega_m'}
 
 
 def planck2018_base_fn(basename, data_dir=None):
@@ -17,9 +17,16 @@ def planck2018_base_fn(basename, data_dir=None):
     as provided by :class:`Installer` if :class:`BasePlanck2018GaussianLikelihood` or :class:`FullGridPlanck2018GaussianLikelihood` have been installed.
     """
     if data_dir is None:
-        installer_section = 'BasePlanck2018GaussianLikelihood' if basename.startswith('base_plik') else 'FullGridPlanck2018GaussianLikelihood'
+        installer_section = 'FullGridPlanck2018GaussianLikelihood'
         from desilike.install import Installer
-        data_dir = Installer()[installer_section]['data_dir']
+        try:
+            data_dir = Installer()[installer_section]['data_dir']
+        except KeyError:
+            if basename.startswith('base_plik'):
+                installer_section = 'BasePlanck2018GaussianLikelihood'
+                data_dir = Installer()[installer_section]['data_dir']
+            else:
+                raise
     try:
         base_dir, obs_dir = basename.split('_plikHM_')
     except ValueError as exc:
@@ -79,17 +86,16 @@ def read_planck2018_chain(basename='base_plikHM_TTTEEE_lowl_lowE_lensing', data_
         inverse_convert_planck2018_params = {value: name for name, value in convert_planck2018_params.items()}
 
         def get_from_chain(name):
-            if name in inverse_convert_planck2018_params:
-                name = inverse_convert_planck2018_params[name]
-            if name in chain:
-                return chain[name]
+            planck2018_name = inverse_convert_planck2018_params.get(name, name)
+            if planck2018_name in chain:
+                return chain[planck2018_name]
             if name == 'A_s':
                 return 1e-10 * np.exp(get_from_chain('logA'))
             if name == 'h':
                 return 100. * get_from_chain('H0')
             if name.startswith('omega'):
                 return get_from_chain('O' + name[1:]) * get_from_chain('h') ** 2
-            if name.startswith('Omega'):
+            if name in ['Omega_b', 'Omega_cdm']:
                 return get_from_chain('o' + name[1:]) / get_from_chain('h') ** 2
 
         missing = []

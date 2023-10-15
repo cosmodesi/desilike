@@ -38,7 +38,7 @@ def test_sum():
 
 def test_gaussian_likelihood():
 
-    params = ['Omega_m', 'A_s', 'H0']
+    params = ['Omega_m', 'Omega_cdm', 'A_s', 'H0']
     chain = read_planck2018_chain('base_w_wa_plikHM_TTTEEE_lowl_lowE_BAO_Riess18_Pantheon18', weights='cmb_only', params=params)
     print(chain.names())
     assert chain.names()[:len(params)] == params

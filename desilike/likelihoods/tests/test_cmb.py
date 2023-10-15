@@ -38,16 +38,21 @@ def test_sum():
 
 def test_gaussian_likelihood():
 
-    likelihood = BasePlanck2018GaussianLikelihood(source='covmat')
+    likelihood = BasePlanck2018GaussianLikelihood(basename='base_plikHM_TE_lowE_BAO', weights='cmb_only')
     likelihood()
-    covmat = likelihood.fisher
+    chains = likelihood.fisher
+    print(chains.to_stats(tablefmt='pretty'))
 
     likelihood = BasePlanck2018GaussianLikelihood(source='chains')
     likelihood()
     chains = likelihood.fisher
-
-    print(covmat.to_stats(tablefmt='pretty'))
     print(chains.to_stats(tablefmt='pretty'))
+
+    likelihood = BasePlanck2018GaussianLikelihood(source='covmat')
+    likelihood()
+    covmat = likelihood.fisher
+    print(covmat.to_stats(tablefmt='pretty'))
+
     print(np.abs((chains._hessian - covmat._hessian) / covmat._hessian))
     from desilike.samples import plotting
     plotting.plot_triangle([chains, covmat], labels=['chains', 'covmat'], show=True)

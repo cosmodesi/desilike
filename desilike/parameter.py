@@ -2311,6 +2311,7 @@ class BaseParameterMatrix(BaseClass):
         if params is None:
             raise ValueError('Provide matrix parameters')
         self._params = ParameterCollection(params)
+        for param in self._params: param.update(fixed=False)
         if not self._params:
             raise ValueError('Got no parameters')
         if getattr(value, 'derivs', None) is not None:

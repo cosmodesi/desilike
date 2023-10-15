@@ -1,4 +1,5 @@
 import os
+import numpy as np
 
 from desilike.likelihoods import BaseGaussianLikelihood
 from desilike.jax import numpy as jnp
@@ -27,19 +28,26 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
     basename : str, default='base_plikHM_TTTEEE_lowl_lowE_lensing'
         Likelihood base name, e.g. 'base_plikHM_TT', 'base_plikHM_TTTEEE', 'base_plikHM_TTTEEE_lowl_lowE_lensing'.
 
-    source : str, default='covmat'
+    source : str, default=None
         Source, either:
 
         - 'covmat': use '.margestats' for mean and '.covmat' file as covariance.
         - 'chains': compute mean and covariance from chains
 
         Both options are very close (within precision in provided file).
+        Defaults to 'chains' if ``weights`` is not ``None``, else 'covmat'.
+
+    weights : str, callable, default=None
+        If ``source`` is 'chains', callable that takes a :class:`Chain` as input and returns weights (float),
+        e.g. ``weights = lambda chain: 1. / np.exp(chain['logposterior'] + 0.5 * chain['chi2_prior'] + 0.5 * chain['chi2_CMB'])``.
+        If ``weights`` is 'cmb_only', the lambda function above is used to "importance unweight" the non-CMB datasets
+        (useful e.g. to get an approximation of the CMB-only posterior for :math:`w_{0}` and :math:`w_{a}` extensions).
     """
     config_fn = 'planck2018_gaussian.yaml'
     installer_section = 'BasePlanck2018GaussianLikelihood'
     data_file_id = 'COM_CosmoParams_base-plikHM_R3.01.zip'
 
-    def initialize(self, cosmo=None, data_dir=None, basename='base_plikHM_TTTEEE_lowl_lowE_lensing', source='covmat'):
+    def initialize(self, cosmo=None, data_dir=None, basename='base_plikHM_TTTEEE_lowl_lowE_lensing', source=None, weights=None):
         self.name = basename
         if data_dir is None:
             from desilike.install import Installer
@@ -47,7 +55,7 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
         try:
             base_dir, obs_dir = basename.split('_plikHM_')
         except ValueError as exc:
-            raise ValueError('basename {} is expected to contain "_plikHM_"'.format(basename)) from exc
+            raise ValueError('basename {0} is expected to contain "_plikHM_"; maybe you forgot to add the model name in front, e.g. base_{0}?'.format(basename)) from exc
         self.base_chain_fn = os.path.join(data_dir, base_dir, 'plikHM_' + obs_dir, basename)
         self.base_dist_fn = os.path.join(data_dir, base_dir, 'plikHM_' + obs_dir, 'dist', basename)
         if cosmo is None:
@@ -57,14 +65,31 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
         convert_params = {'omegabh2': 'omega_b', 'omegach2': 'omega_cdm', 'omegak': 'Omega_k', 'w': 'w0_fld', 'wa': 'wa_fld', 'theta': 'theta_cosmomc', 'tau': 'tau_reio',
                           'mnu': 'm_ncdm_tot', 'logA': 'ln10^10A_s', 'ns': 'n_s', 'nrun': 'alpha_s', 'r': 'r'}
         basenames = list(convert_params.keys())
+        if source is None:
+            source = 'covmat' if weights is None else 'chains'
         if source == 'covmat':
+            if weights: raise ValueError('use source = "chains" to reweight chains')
             from desilike import LikelihoodFisher
             self.fisher = LikelihoodFisher.read_getdist(self.base_dist_fn, basename=basenames)
         elif source == 'chains' or source[0] == 'chains':
             burnin = None
             if utils.is_sequence(source): burnin = source[1]
             from desilike.samples import Chain
-            chains = [chain.select(basename=basenames) for chain in Chain.read_getdist(self.base_chain_fn)]
+            chains = Chain.read_getdist(self.base_chain_fn)
+            # chain = chains[0]
+            # logposterior = -0.5 * (chain['chi2_CMB'] + chain['chi2_6DF'] + chain['chi2_MGS'] + chain['chi2_DR12BAO'] + chain['chi2_prior'])
+            # print(logposterior / chain['logposterior'] - 1.)
+            # print((chain['chi2_CMB'] - (chain['chi2_simall'] + chain['chi2_plikTE'])) / chain['chi2_CMB'])
+            # print(chains[0].names())
+            if weights is not None:
+                if isinstance(weights, str):
+                    if weights.lower() == 'cmb_only':
+                        weights = lambda chain: 1. / np.exp(chain['logposterior'] + 0.5 * chain['chi2_prior'] + 0.5 * chain['chi2_CMB'])
+                elif not callable(weights):
+                    raise ValueError('weights should be a callable, found {}'.format(weights))
+                for chain in chains:
+                    chain.aweight *= weights(chain)
+            chains = [chain.select(basename=basenames) for chain in chains]
             chain = Chain.concatenate([chain.remove_burnin(burnin) if burnin is not None else chain for chain in chains])
             self.fisher = chain.to_fisher()
         else:

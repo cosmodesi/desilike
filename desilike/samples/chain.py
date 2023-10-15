@@ -123,14 +123,14 @@ class Chain(Samples):
     def aweight(self):
         """Sample weights (floats)."""
         if self._aweight not in self:
-            self[Parameter(self._aweight, derived=True)] = np.ones(self.shape, dtype='f8')
+            self[Parameter(self._aweight, derived=True, latex=utils.outputs_to_latex(self._aweight))] = np.ones(self.shape, dtype='f8')
         return self[self._aweight]
 
     @property
     def fweight(self):
         """Sample frequency weights (integers)."""
         if self._fweight not in self:
-            self[Parameter(self._fweight, derived=True)] = np.ones(self.shape, dtype='i8')
+            self[Parameter(self._fweight, derived=True, latex=utils.outputs_to_latex(self._fweight))] = np.ones(self.shape, dtype='i8')
         return self[self._fweight]
 
     @property
@@ -143,12 +143,12 @@ class Chain(Samples):
     @aweight.setter
     def aweight(self, item):
         """Set weights (floats)."""
-        self[Parameter(self._aweight, derived=True)] = item
+        self[Parameter(self._aweight, derived=True, latex=utils.outputs_to_latex(self._aweight))] = item
 
     @fweight.setter
     def fweight(self, item):
         """Set frequency weights (integers)."""
-        self[Parameter(self._fweight, derived=True)] = item
+        self[Parameter(self._fweight, derived=True, latex=utils.outputs_to_latex(self._fweight))] = item
 
     @logposterior.setter
     def logposterior(self, item):
@@ -158,7 +158,7 @@ class Chain(Samples):
     @property
     def weight(self):
         """Return total weight, as the product of :attr:`aweight` and :attr:`fweight`."""
-        return ParameterArray(self.aweight * self.fweight, Parameter(self._weight, latex=utils.outputs_to_latex(self._weight)))
+        return ParameterArray(self.aweight * self.fweight, Parameter(self._weight, derived=True, latex=utils.outputs_to_latex(self._weight)))
 
     def remove_burnin(self, burnin=0):
         """

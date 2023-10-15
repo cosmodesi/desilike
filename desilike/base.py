@@ -508,6 +508,7 @@ class BasePipeline(BaseClass):
             calculators_to_calculate = []
 
             def callback(calculator):
+                calculators_to_calculate.append(calculator)
                 for calc in self.calculators:
                     if calculator in calc.runtime_info.requires:
                         calculators_to_calculate.append(calc)
@@ -518,6 +519,7 @@ class BasePipeline(BaseClass):
                     callback(calculator)
 
             footprints.append(tuple(calculator in calculators_to_calculate for calculator in self.calculators))
+
         unique_footprints = list(set(row for row in footprints))
         param_blocks = [[p for ip, p in enumerate(params) if footprints[ip] == uf] for uf in unique_footprints]
         param_block_sizes = [len(b) for b in param_blocks]

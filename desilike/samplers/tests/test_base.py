@@ -1,3 +1,6 @@
+import os
+import time
+
 import pytest
 import numpy as np
 
@@ -93,7 +96,6 @@ def test_nautilus(test=2):
 
         sampler = Sampler(prior, likelihood, n_dim=3, n_live=1000)
         sampler.run(verbose=True)
-
 
 
 def test_fixed():
@@ -247,6 +249,57 @@ class Likelihood(BaseGaussianLikelihood):
         return self.theory.y  # data - model
 
 
+class MyGaussianLikelihood(BaseGaussianLikelihood):
+
+    _params = {'a': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}, 'ref': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
+               'b': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}, 'ref': {'dist': 'norm', 'loc': 0., 'scale': 1.}}}
+
+    def initialize(self):
+        self.covariance = np.eye(len(self.params))
+        y = np.zeros(len(self.params))
+        super(MyGaussianLikelihood, self).initialize(y, covariance=self.covariance)
+
+    def calculate(self, a=0., b=0.):
+        self.flattheory = np.array([a, b])
+        super(MyGaussianLikelihood, self).calculate()
+
+
+def test_mcmc():
+
+    from desilike.samples import plotting
+
+    from desilike import LikelihoodFisher
+    params = {'a': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}, 'ref': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
+              'b': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}, 'ref': {'dist': 'norm', 'loc': 0., 'scale': 1.}}}
+    fisher = LikelihoodFisher(center=[0., 0.], params=params, hessian=-np.eye(2))
+
+    likelihood = fisher.to_likelihood()  # MyGaussianLikelihood()
+    #likelihood.varied_params['a'].update(prior={'dist': 'norm', 'loc': 0., 'scale': 0.2})
+    #likelihood.varied_params['b'].update(fixed=True)
+    for param in likelihood.varied_params:
+        param.update(prior=None)
+
+    chains, timing = {}, {}
+    for Sampler in [EmceeSampler, MCMCSampler]:
+        kwargs, check = {}, True
+        ensemble = Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]
+        if ensemble:
+            kwargs.update(nwalkers=10)
+            check = {'max_eigen_gr': 0.005, 'stable_over': 10}
+        save_fn = './_tests/chain_{}_0.npy'.format(Sampler.__name__.replace('Sampler', '').lower())
+        #os.remove(save_fn)
+        sampler = Sampler(likelihood, chains=save_fn if os.path.isfile(save_fn) else 1, save_fn=save_fn, **kwargs)
+        t0 = time.time()
+        chain = sampler.run(check=check, min_iterations=10000)[0]
+        timing[Sampler.__name__] = time.time() - t0
+        chain = chain.remove_burnin(0.5)
+        if ensemble: chain = chain[::10]
+        chains[Sampler.__name__] = chain
+
+    print(timing)
+    plotting.plot_triangle(list(chains.values()) + [fisher], labels=list(chains.keys()) + ['fisher'], show=True)
+
+
 def test_nested():
 
     from desilike.samples import plotting
@@ -259,13 +312,13 @@ def test_nested():
     #for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler]:
     for Sampler in [EmceeSampler, StaticDynestySampler, DynamicDynestySampler]:
         kwargs, check = {}, True
-        mcmc = Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]
-        if mcmc:
+        ensemble = Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]
+        if ensemble:
             kwargs.update(nwalkers=10)
             check = {'max_eigen_gr': 0.02}
         sampler = Sampler(likelihood, save_fn='./_tests/chain_*.npy', **kwargs)
         chain = sampler.run(check=check, min_iterations=1000, check_every=50)[0]
-        if mcmc:
+        if ensemble:
             chain = chain.remove_burnin(0.5)[::10]
         chains[Sampler.__name__] = chain
 
@@ -285,17 +338,17 @@ def test_marg():
     save_fn_bf = './_tests/chain_bf_0.npy'
     todo = ['full', 'marg', 'bf'][:1]
     if 'full' in todo:
-        sampler = ZeusSampler(likelihood, chains=save_fn_full, save_fn=save_fn_full, **sampler_kwargs)
+        sampler = ZeusSampler(likelihood, chains=save_fn_full if os.path.isfile(save_fn_full) else 1, save_fn=save_fn_full, **sampler_kwargs)
         sampler.run(**run_kwargs)[0]
     if 'marg' in todo:
         for param in likelihood.all_params.select(basename=['a', 'b']):
             param.update(derived='.auto')
-        sampler = ZeusSampler(likelihood, chains=save_fn_marg, save_fn=save_fn_marg, **sampler_kwargs)
+        sampler = ZeusSampler(likelihood, chains=save_fn_marg if os.path.isfile(save_fn_marg) else 1, save_fn=save_fn_marg, **sampler_kwargs)
         sampler.run(**run_kwargs)[0]
     if 'bf' in todo:
         for param in likelihood.all_params.select(basename=['a', 'b']):
             param.update(derived='.best')
-        sampler = ZeusSampler(likelihood, chains=save_fn_bf, save_fn=save_fn_bf, **sampler_kwargs)
+        sampler = ZeusSampler(likelihood, chains=save_fn_bf if os.path.isfile(save_fn_bf) else 1, save_fn=save_fn_bf, **sampler_kwargs)
         sampler.run(**run_kwargs)[0]
     chain_full = Chain.load(save_fn_full).remove_burnin(0.5)[::5].sample_solved(size=5)
     chain_marg = Chain.load(save_fn_marg).remove_burnin(0.5)[::5].sample_solved(size=5)
@@ -308,9 +361,10 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_nautilus()
-    test_samplers()
+    #test_samplers()
     #test_fixed()
     #test_importance()
     #test_error()
+    test_mcmc()
     #test_nested()
     #test_marg()

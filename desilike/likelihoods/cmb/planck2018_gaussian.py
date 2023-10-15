@@ -6,6 +6,106 @@ from desilike.jax import numpy as jnp
 from desilike import utils
 
 
+convert_planck2018_params = {'omegabh2': 'omega_b', 'omegach2': 'omega_cdm', 'omegak': 'Omega_k', 'w': 'w0_fld', 'wa': 'wa_fld', 'theta': 'theta_MC_100', 'tau': 'tau_reio',
+                         'mnu': 'm_ncdm_tot', 'logA': 'logA', 'ns': 'n_s', 'nrun': 'alpha_s', 'r': 'r', 'H0': 'H0', 'omegam': 'Omega_m'}
+
+
+def planck2018_base_fn(basename, data_dir=None):
+    """
+    Return paths to chains and corresponding summary statistics given input base chain name,
+    and data directory ``data_dir``. If ``data_dir`` is ``None``, defaults to path saved in desilike's configuration,
+    as provided by :class:`Installer` if :class:`BasePlanck2018GaussianLikelihood` or :class:`FullGridPlanck2018GaussianLikelihood` have been installed.
+    """
+    if data_dir is None:
+        installer_section = 'BasePlanck2018GaussianLikelihood' if basename.startswith('base_plik') else 'FullGridPlanck2018GaussianLikelihood'
+        from desilike.install import Installer
+        data_dir = Installer()[installer_section]['data_dir']
+    try:
+        base_dir, obs_dir = basename.split('_plikHM_')
+    except ValueError as exc:
+        raise ValueError('basename {0} is expected to contain "_plikHM_"; maybe you forgot to add the model name in front, e.g. base_{0}?'.format(basename)) from exc
+    base_chain_fn = os.path.join(data_dir, base_dir, 'plikHM_' + obs_dir, basename)
+    base_dist_fn = os.path.join(data_dir, base_dir, 'plikHM_' + obs_dir, 'dist', basename)
+    return base_chain_fn, base_dist_fn
+
+
+def read_planck2018_chain(basename='base_plikHM_TTTEEE_lowl_lowE_lensing', data_dir=None, weights=None, params=None):
+    """
+    Read Planck chains, operating basic conversion in parameters.
+
+    Parameters
+    ----------
+    basename : str, default='base_plikHM_TTTEEE_lowl_lowE_lensing'
+        Likelihood base name, e.g. 'base_plikHM_TT', 'base_plikHM_TTTEEE', 'base_plikHM_TTTEEE_lowl_lowE_lensing'.
+
+     data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if :class:`BasePlanck2018GaussianLikelihood` or :class:`FullGridPlanck2018GaussianLikelihood` have been installed.
+
+     weights : str, callable, default=None
+        Callable that takes a :class:`Chain` as input and returns weights (float),
+        e.g. ``weights = lambda chain: 1. / np.exp(chain['logposterior'] + 0.5 * chain['chi2_prior'] + 0.5 * chain['chi2_CMB'])``.
+        If ``weights`` is 'cmb_only', the lambda function above is used to "importance unweight" the non-CMB datasets
+        (useful e.g. to get an approximation of the CMB-only posterior for :math:`w_{0}` and :math:`w_{a}` extensions).
+
+    params : list, ParameterCollection
+        List of parameters to convert the chain to; e.g. ['h', 'Omega_m', 'A_s'].
+
+    Returns
+    -------
+    chain : Chain
+    """
+    from desilike.samples import Chain
+    base_chain_fn = planck2018_base_fn(basename, data_dir=data_dir)[0]
+    chain = Chain.concatenate(Chain.read_getdist(base_chain_fn))
+
+    if weights is not None:
+        if isinstance(weights, str):
+
+            if weights.lower() == 'cmb_only':
+
+                def weights(chain):
+                    loglikelihood_non_cmb = chain['logposterior'] + 0.5 * chain['chi2_prior'] + 0.5 * chain['chi2_CMB']
+                    loglikelihood_non_cmb -= np.mean(loglikelihood_non_cmb)  # remove zero-lag
+                    return 1. / np.exp(loglikelihood_non_cmb)
+
+        elif not callable(weights):
+            raise ValueError('weights should be a callable, found {}'.format(weights))
+
+        chain.aweight *= weights(chain)
+
+    if params is not None:
+
+        inverse_convert_planck2018_params = {value: name for name, value in convert_planck2018_params.items()}
+
+        def get_from_chain(name):
+            if name in inverse_convert_planck2018_params:
+                name = inverse_convert_planck2018_params[name]
+            if name in chain:
+                return chain[name]
+            if name == 'A_s':
+                return 1e-10 * np.exp(get_from_chain('logA'))
+            if name == 'h':
+                return 100. * get_from_chain('H0')
+            if name.startswith('omega'):
+                return get_from_chain('O' + name[1:]) * get_from_chain('h') ** 2
+            if name.startswith('Omega'):
+                return get_from_chain('o' + name[1:]) / get_from_chain('h') ** 2
+
+        missing = []
+        for param in params:
+            name = str(param)
+            array = get_from_chain(name)
+            if array is None: missing.append(name)
+            else: chain[param] = array
+        if missing:
+            raise ValueError('cannot find parameters {} from chain'.format(missing))
+        chain = chain.sort([str(param) for param in params] + [chain._aweight, chain._fweight, chain._logposterior])
+
+        # In case we needed more parameters, we could run desilike's Cosmoprimo in parallel
+    return chain
+
+
 class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
     r"""
     Gaussian approximation of "base" likelihoods of Planck's 2018 data release.
@@ -38,10 +138,11 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
         Defaults to 'chains' if ``weights`` is not ``None``, else 'covmat'.
 
     weights : str, callable, default=None
-        If ``source`` is 'chains', callable that takes a :class:`Chain` as input and returns weights (float),
+        Callable that takes a :class:`Chain` as input and returns weights (float),
         e.g. ``weights = lambda chain: 1. / np.exp(chain['logposterior'] + 0.5 * chain['chi2_prior'] + 0.5 * chain['chi2_CMB'])``.
         If ``weights`` is 'cmb_only', the lambda function above is used to "importance unweight" the non-CMB datasets
         (useful e.g. to get an approximation of the CMB-only posterior for :math:`w_{0}` and :math:`w_{a}` extensions).
+        Only available if ``source`` is 'chains'.
     """
     config_fn = 'planck2018_gaussian.yaml'
     installer_section = 'BasePlanck2018GaussianLikelihood'
@@ -49,65 +150,31 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
 
     def initialize(self, cosmo=None, data_dir=None, basename='base_plikHM_TTTEEE_lowl_lowE_lensing', source=None, weights=None):
         self.name = basename
-        if data_dir is None:
-            from desilike.install import Installer
-            data_dir = Installer()[self.installer_section]['data_dir']
-        try:
-            base_dir, obs_dir = basename.split('_plikHM_')
-        except ValueError as exc:
-            raise ValueError('basename {0} is expected to contain "_plikHM_"; maybe you forgot to add the model name in front, e.g. base_{0}?'.format(basename)) from exc
-        self.base_chain_fn = os.path.join(data_dir, base_dir, 'plikHM_' + obs_dir, basename)
-        self.base_dist_fn = os.path.join(data_dir, base_dir, 'plikHM_' + obs_dir, 'dist', basename)
+        self.base_chain_fn, self.base_dist_fn = planck2018_base_fn(basename, data_dir=data_dir)
         if cosmo is None:
             from desilike.theories.primordial_cosmology import Cosmoprimo
             cosmo = Cosmoprimo()
         self.cosmo = cosmo
-        convert_params = {'omegabh2': 'omega_b', 'omegach2': 'omega_cdm', 'omegak': 'Omega_k', 'w': 'w0_fld', 'wa': 'wa_fld', 'theta': 'theta_cosmomc', 'tau': 'tau_reio',
-                          'mnu': 'm_ncdm_tot', 'logA': 'ln10^10A_s', 'ns': 'n_s', 'nrun': 'alpha_s', 'r': 'r'}
-        basenames = list(convert_params.keys())
+        basenames = ['omegabh2', 'omegach2', 'omegak', 'w', 'wa', 'theta', 'tau', 'mnu', 'logA', 'ns', 'nrun', 'r']
         if source is None:
             source = 'covmat' if weights is None else 'chains'
         if source == 'covmat':
             if weights: raise ValueError('use source = "chains" to reweight chains')
             from desilike import LikelihoodFisher
             self.fisher = LikelihoodFisher.read_getdist(self.base_dist_fn, basename=basenames)
-        elif source == 'chains' or source[0] == 'chains':
-            burnin = None
-            if utils.is_sequence(source): burnin = source[1]
-            from desilike.samples import Chain
-            chains = Chain.read_getdist(self.base_chain_fn)
-            # chain = chains[0]
-            # logposterior = -0.5 * (chain['chi2_CMB'] + chain['chi2_6DF'] + chain['chi2_MGS'] + chain['chi2_DR12BAO'] + chain['chi2_prior'])
-            # print(logposterior / chain['logposterior'] - 1.)
-            # print((chain['chi2_CMB'] - (chain['chi2_simall'] + chain['chi2_plikTE'])) / chain['chi2_CMB'])
-            # print(chains[0].names())
-            if weights is not None:
-                if isinstance(weights, str):
-                    if weights.lower() == 'cmb_only':
-                        weights = lambda chain: 1. / np.exp(chain['logposterior'] + 0.5 * chain['chi2_prior'] + 0.5 * chain['chi2_CMB'])
-                elif not callable(weights):
-                    raise ValueError('weights should be a callable, found {}'.format(weights))
-                for chain in chains:
-                    chain.aweight *= weights(chain)
-            chains = [chain.select(basename=basenames) for chain in chains]
-            chain = Chain.concatenate([chain.remove_burnin(burnin) if burnin is not None else chain for chain in chains])
-            self.fisher = chain.to_fisher()
+        elif source == 'chains':
+            chain = read_planck2018_chain(basename=basename, data_dir=data_dir, weights=weights)
+            self.fisher = chain.select(basename=basenames).to_fisher()
         else:
             raise ValueError('source must be one of ["covmat", "chains"]')
-        params = self.fisher.params(basename=basenames)
+        for param in self.fisher.params(): param.update(name=convert_planck2018_params[param.name])
+        params = self.fisher.params()
+        self.cosmo_quantities = params.basenames()
         super(BasePlanck2018GaussianLikelihood, self).initialize(data=self.fisher.mean(params=params), covariance=self.fisher.covariance(params=params))
-        self.cosmo_quantities = [convert_params[param.basename] for param in params]
 
     @property
     def flattheory(self):
-        toret = []
-        for param in self.cosmo_quantities:
-            if param == 'theta_cosmomc':
-                cosmo = self.cosmo.clone(engine='camb')
-                toret.append(100. * cosmo.theta_cosmomc)
-            else:
-                toret.append(self.cosmo[param])
-        return jnp.array(toret)
+        return jnp.array([self.cosmo[param] for param in self.cosmo_quantities])
 
     @classmethod
     def install(cls, installer):

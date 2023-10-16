@@ -1548,7 +1548,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
     def calculate(self, **params):
         super(PyBirdTracerPowerSpectrumMultipoles, self).calculate()
-        self.power = self.pt.combine_bias_terms_poles(self.transform_params(**params))
+        self.power = self.pt.combine_bias_terms_poles(self.transform_params(**params), nd=self.nd)
 
 
 class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
@@ -1622,7 +1622,7 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
 
     @classmethod
     def install(cls, installer):
-        installer.pip('git+https://github.com/adematti/pybird')
+        installer.pip('git+https://github.com/pierrexyz/pybird')
 
 
 class PyBirdTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMultipoles):

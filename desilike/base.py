@@ -154,6 +154,7 @@ class BasePipeline(BaseClass):
             calculator_params = ParameterCollection(ParameterCollectionConfig(calculator.runtime_info.params, identifier='name').clone(params))
             #print(calculator, calculator.runtime_info.params)
             #new_calculator_params = ParameterCollection()
+            #print(calculator, calculator.runtime_info.params, calculator.runtime_info.params.select(input=True), calculator.runtime_info.input_values)
             for iparam, param in enumerate(calculator.runtime_info.params):
                 param = calculator_params[param]
                 if param in new_params:

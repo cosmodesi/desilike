@@ -785,7 +785,8 @@ class Parameter(BaseClass):
 
     @property
     def input(self):
-        return (self.depends or (not self.derived) or self.solved) and not self.drop
+        """Whether parameter should be fed as input to calculator."""
+        return ((self._derived is False) or isinstance(self._derived, str)) and not self.drop
 
     @property
     def name(self):
@@ -2310,7 +2311,7 @@ class BaseParameterMatrix(BaseClass):
             return
         if params is None:
             raise ValueError('Provide matrix parameters')
-        self._params = ParameterCollection(params)
+        self._params = ParameterCollection(params).deepcopy()
         for param in self._params: param.update(fixed=False)
         if not self._params:
             raise ValueError('Got no parameters')

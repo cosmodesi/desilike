@@ -112,21 +112,30 @@ def test_solve():
 
 def test_solve():
 
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import (DampedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles,
+                                                     LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate)
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, ObservablesCovarianceMatrix, BoxFootprint
     from desilike.likelihoods import ObservablesGaussianLikelihood
+
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
+    for param in theory.params.select(basename=['al*']): param.update(namespace='LRG', derived='.best')
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data={},
+                                                         theory=theory)
+    covariance = ObservablesCovarianceMatrix(observables=observable, footprints=BoxFootprint(volume=1e10, nbar=1e-2))
+    observable.init.update(covariance=covariance())
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     #theory = KaiserTracerPowerSpectrumMultipoles(template=template)
     #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
     theory = PyBirdTracerPowerSpectrumMultipoles(template=template)
     #for param in theory.params.select(basename=['df', 'dm', 'qpar', 'qper']): param.update(fixed=True)
-    for param in theory.params.select(basename=['alpha*', 'sn*', 'ce*']): param.update(derived='.best')
+    for param in theory.params.select(basename=['alpha*', 'sn*', 'ce*']): param.update(namespace='LRG', derived='.best')
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data={},
                                                          theory=theory)
-    observable()
-    exit()
     covariance = ObservablesCovarianceMatrix(observables=observable, footprints=BoxFootprint(volume=1e10, nbar=1e-2))
     observable.init.update(covariance=covariance())
     likelihood = ObservablesGaussianLikelihood(observables=[observable])

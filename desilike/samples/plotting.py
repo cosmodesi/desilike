@@ -406,7 +406,7 @@ def plot_triangle(chains, params=None, labels=None, g=None, **kwargs):
     if g is None: g = plots.get_subplot_plotter()
     chains = _make_list(chains)
     labels = _make_list(labels, length=len(chains), default=None)
-    params = _get_default_chain_params(chains, params=params, varied=True)
+    params = _get_default_chain_params(chains, params=params, varied=True, input=True)
     chains = [chain.to_getdist(label=label, params=chain.params(name=params.names())) for chain, label in zip(chains, labels)]
     g.triangle_plot(chains, [str(param) for param in params], **kwargs)
     return g

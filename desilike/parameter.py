@@ -2443,7 +2443,9 @@ class BaseParameterMatrix(BaseClass):
         # Internal method to return indices in matrix array corresponding to input params.""""
         cumsizes = np.cumsum([0] + self._sizes)
         idx = [self._params.index(param) for param in params]
-        return np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx])
+        if idx:
+            return np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx], dtype='i4')
+        return np.array(idx, dtype='i4')
 
     def __contains__(self, name):
         """Has this parameter?"""

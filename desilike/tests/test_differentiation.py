@@ -155,7 +155,7 @@ def test_fisher_galaxy():
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
                                                          data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                          theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=False)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood.all_params['logA'].update(derived='jnp.log(10 *  {A_s})', prior=None)
     likelihood.all_params['A_s'] = {'prior': {'limits': [1.9, 2.2]}, 'ref': {'dist': 'norm', 'loc': 2.083, 'scale': 0.01}}
     for param in likelihood.all_params.select(name=['m_ncdm', 'w0_fld', 'wa_fld', 'Omega_k']):
@@ -171,6 +171,11 @@ def test_fisher_galaxy():
     fisher.mpicomm = mpi.COMM_SELF
     like = fisher()
     print(like.to_stats())
+    like2 = like.clone(params=['a', 'b'])
+    assert np.allclose(like2._hessian, 0.)
+    like2 = like.clone(params=['a', 'b'], center=np.ones(2), hessian=np.eye(2))
+    assert np.allclose(like2._center, np.ones(2))
+    assert np.allclose(like2._hessian, np.eye(2))
 
 
 def test_fisher_cmb():
@@ -209,6 +214,6 @@ if __name__ == '__main__':
     setup_logging()
     #test_misc()
     #test_differentiation()
-    test_solve()
-    #test_fisher_galaxy()
+    #test_solve()
+    test_fisher_galaxy()
     #test_fisher_cmb()

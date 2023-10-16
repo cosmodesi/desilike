@@ -130,7 +130,9 @@ class LikelihoodFisher(BaseClass):
         # Internal method to return indices corresponding to input params.""""
         cumsizes = np.cumsum([0] + self._sizes)
         idx = [self._params.index(param) for param in params]
-        return np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx])
+        if idx:
+            return np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx], dtype='i4')
+        return np.array(idx, dtype='i4')
 
     def __contains__(self, name):
         """Has this parameter?"""
@@ -428,10 +430,9 @@ class LikelihoodFisher(BaseClass):
         params = precision.params()
         params_in_self = [param for param in params if param in self._params]
         ccenter, gradient = np.full(precision.shape[0], np.nan, dtype='f8'), np.zeros(precision.shape[0], dtype='f8')
-        if params_in_self:
-            index_new, index_self = precision._index(params_in_self), self._index(params_in_self)
-            gradient[index_new] = self._gradient[index_self]
-            ccenter[index_new] = self._center[index_self]
+        index_new, index_self = precision._index(params_in_self), self._index(params_in_self)
+        gradient[index_new] = self._gradient[index_self]
+        ccenter[index_new] = self._center[index_self]
         hessian = -precision._value
         offset = self._offset
         if center is None:

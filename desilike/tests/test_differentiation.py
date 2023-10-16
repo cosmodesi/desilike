@@ -125,6 +125,8 @@ def test_solve():
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data={},
                                                          theory=theory)
+    observable()
+    exit()
     covariance = ObservablesCovarianceMatrix(observables=observable, footprints=BoxFootprint(volume=1e10, nbar=1e-2))
     observable.init.update(covariance=covariance())
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
@@ -198,6 +200,6 @@ if __name__ == '__main__':
     setup_logging()
     #test_misc()
     #test_differentiation()
-    #test_solve()
-    test_fisher_galaxy()
-    test_fisher_cmb()
+    test_solve()
+    #test_fisher_galaxy()
+    #test_fisher_cmb()

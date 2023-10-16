@@ -257,11 +257,11 @@ class Chain(Samples):
         for param in params:
             new.set(ParameterArray(samples[param.name], param=param))
         for param in new.params(basename='chi2_*'):
-            namespace = param.name[5:]
+            namespace = re.match('chi2_[_]*(.*)$', param.name).groups()[0]
             if namespace == 'prior':
-                new_param = param.clone(basename=new._logprior)
+                new_param = param.clone(basename=new._logprior, derived=True)
             else:
-                new_param = param.clone(basename=new._loglikelihood, namespace=namespace)
+                new_param = param.clone(basename=new._loglikelihood, namespace=namespace, derived=True)
             new[new_param] = -0.5 * new[param]
         return new
 
@@ -386,11 +386,11 @@ class Chain(Samples):
             toret.append(new)
         for new in toret:
             for param in new.params(basename='chi2_*'):
-                namespace = param.name[5:]
+                namespace = re.match('chi2_[_]*(.*)$', param.name).groups()[0]
                 if namespace == 'prior':
-                    new_param = param.clone(basename=new._logprior)
+                    new_param = param.clone(basename=new._logprior, derived=True)
                 else:
-                    new_param = param.clone(basename=new._loglikelihood, namespace=namespace)
+                    new_param = param.clone(basename=new._loglikelihood, namespace=namespace, derived=True)
                 new[new_param] = -0.5 * new[param]
         if isscalar:
             return toret[0]

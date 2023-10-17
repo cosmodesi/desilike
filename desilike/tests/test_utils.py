@@ -57,8 +57,18 @@ def test_dict():
     test.pop('b')
 
 
+def test_task_manager():
+    from desilike.utils import TaskManager
+
+    with TaskManager(nprocs_per_task=2) as tm:
+
+        for task in tm.iterate(range(10)):
+            print(tm.basecomm.rank, task)
+
+
 if __name__ == '__main__':
 
     #test_misc()
     #test_logger()
-    test_dict()
+    #test_dict()
+    test_task_manager()

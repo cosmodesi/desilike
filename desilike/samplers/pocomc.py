@@ -143,8 +143,8 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         #self.sampler.derived = [d[:-1] for d in self.derived]
         if self.mpicomm.rank == 0:
             self.sampler.save_state(self.state_fn[self._ichain])
-        data = [result['samples'][..., iparam] for iparam, param in enumerate(self.varied_params)] + [result['logprior'], result['loglikelihood']]
-        return Chain(data=data, params=self.varied_params + ['logprior', 'loglikelihood']).reshape(-1, self.nwalkers)
+        data = [result['samples'][..., iparam] for iparam, param in enumerate(self.varied_params)] + [result['loglikelihood'] + result['logprior']]
+        return Chain(data=data, params=self.varied_params + ['logposterior']).reshape(-1, self.nwalkers)
 
     @classmethod
     def install(cls, config):

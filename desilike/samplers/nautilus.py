@@ -161,7 +161,7 @@ class NautilusSampler(BasePosteriorSampler):
         n_eff = kwargs.get('n_eff', 10000)
         n_shell = kwargs.get('n_shell', 100)
 
-        from desilike.mpi import MPIPool
+        from desilike.utils import TaskManager as MPIPool
         pool = (FakePool(size=self.mpicomm.size), MPIPool(mpicomm=self.mpicomm))
 
         def write_derived(sampler):

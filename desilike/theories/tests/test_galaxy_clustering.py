@@ -119,6 +119,7 @@ def test_bao():
             namespace = 'LRG'
             for param in theory.init.params:
                 param.update(namespace=namespace)
+            print(theory.init.params)
             theory(qpar=1.1, **{namespace + '.' + param: value for param, value in params.items()})
             theory.z, theory.ells, theory.template
             if 'PowerSpectrum' in theory.__class__.__name__:
@@ -230,6 +231,7 @@ def test_full_shape():
         else:
             theory = calculator
         clean_folps()
+        print(emulate, theory.init.params.basenames())
         assert np.allclose(theory(), bak)
         if 'Correlation' not in theory.__class__.__name__: theory.nd
         if test_likelihood:
@@ -243,15 +245,18 @@ def test_full_shape():
         for param in theory.init.params: param.update(namespace='LRG')
         basenames = theory.init.params.basenames()
         theory()
+        print(theory.all_params)
         for param in theory.all_params:
             if param.basename in basenames:
                 assert param.namespace == 'LRG'
+        for param in theory.init.params: param.update(namespace=None)
 
     ntemplate = 4
     for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles],
                                        [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles]):
         for freedom in [None, 'min', 'max']:
             for ells in [(0, 2), (0, 2, 4)]:
+                print(freedom, ells)
                 power = TheoryPower(ells=ells, freedom=freedom)
                 print(TheoryPower.__name__, ells, freedom, power.varied_params)
                 if freedom is not None: assert len(power.varied_params) == ntemplate + 6 + (4 in ells) + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 (+ 1) EFT, 2 sn
@@ -275,6 +280,7 @@ def test_full_shape():
 
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
     theory = KaiserTracerPowerSpectrumMultipoles()
+    theory()
     test(theory, emulate='pt')
     test(theory, emulate=None, test_likelihood=False)
     theory = KaiserTracerCorrelationFunctionMultipoles()
@@ -285,7 +291,6 @@ def test_full_shape():
 
     theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.))
     theory()
-
     test(theory, emulate='pt')
     theory(df=1.01, b1=1., sn2_2=1., sigmapar=4.).shape
     test(theory, emulate=None, test_likelihood=False)
@@ -907,9 +912,9 @@ if __name__ == '__main__':
     #test_params()
     #test_integ()
     #test_templates()
-    test_bao()
+    #test_bao()
     #test_flexible_bao()
-    #test_full_shape()
+    test_full_shape()
     #test_png()
     #test_pk_to_xi()
     #test_ap_diff()

@@ -57,6 +57,7 @@ class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
 
     """Base class for perturbation theory tracer power spectrum multipoles."""
     config_fn = 'full_shape.yaml'
+    _initialize_with_namespace = True  # to properly forward parameters to pt
     _default_options = dict()
 
     def initialize(self, pt=None, template=None, shotnoise=1e4, **kwargs):
@@ -84,7 +85,7 @@ class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
         self.set_params()
 
     def set_params(self):
-        self.pt.params.update(self.params.select(basename=self.pt.params.basenames()))
+        self.pt.params.update(self.params.select(basename=self.pt.params.basenames()), basename=True)
         self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
 
     def calculate(self):
@@ -147,6 +148,7 @@ class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
 
     """Base class for perturbation theory tracer correlation function multipoles."""
     config_fn = 'full_shape.yaml'
+    _initialize_with_namespace = True  # to properly forward parameters to pt
     _default_options = dict()
 
     def initialize(self, *args, pt=None, template=None, **kwargs):
@@ -170,7 +172,7 @@ class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
         self.set_params()
 
     def set_params(self):
-        self.pt.params.update(self.params.select(basename=self.pt.params.basenames()))
+        self.pt.params.update(self.params.select(basename=self.pt.params.basenames()), basename=True)
         self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
 
     def calculate(self):
@@ -1395,10 +1397,12 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         from pybird.nnlo import NNLO_counterterm
         from pybird.resum import Resum
         from pybird.projection import Projection
+        eft_basis = self.options.get('eft_basis', None)
+        if eft_basis in [None, 'mcdonald']: eft_basis = 'eftoflss'
         # nd used by combine_bias_terms_poles only
         #self.co = Common(Nl=len(self.ells), kmin=self.k[0] * 0.8, kmax=self.k[-1] * 1.2, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
         self.co = Common(Nl=len(self.ells), kmin=self.k[0] * 0.8, kmax=self.k[-1] * 1.2, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
-                         eft_basis=self.options['eft_basis'], halohalo=True, with_cf=False,
+                         eft_basis=eft_basis, halohalo=True, with_cf=False,
                          with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti',
                          exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
         self.nonlinear = NonLinear(load=False, save=False, NFFT=256 * int(self.options['fftaccboost']), fftbias=self.options['fftbias'], co=self.co)
@@ -1478,7 +1482,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         Shot noise (which is usually marginalized over).
 
     **kwargs : dict
-        Pybird options, defaults to: ``with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=True, with_resum='full', eft_basis='eftoflss'``.
+        Pybird options, defaults to: ``with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=True, with_resum='full'``.
 
 
     Reference
@@ -1486,10 +1490,13 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     - https://arxiv.org/abs/2003.07956
     - https://github.com/pierrexyz/pybird
     """
-    _default_options = dict(with_nnlo_counterterm=False, with_stoch=True, eft_basis='westcoast', freedom=None)
+    _default_options = dict(with_nnlo_counterterm=False, with_stoch=True, eft_basis=None, freedom=None)
 
     def set_params(self):
-        allowed_eft_basis = ['eftoflss', 'westcoast', 'mcdonald']
+        freedom = self.options.pop('freedom', None)
+        if self.options['eft_basis'] is None:
+            self.options['eft_basis'] = 'mcdonald' if freedom == 'min' else 'westcoast'
+        allowed_eft_basis = ['eftoflss', 'eastcoast', 'westcoast', 'mcdonald']
         if self.options['eft_basis'] not in allowed_eft_basis:
             raise ValueError('eft_basis must be one of {}'.format(allowed_eft_basis))
         # in pybird:
@@ -1504,9 +1511,12 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         if self.options['eft_basis'] == 'eastcoast':
             self.required_bias_params = ['b1', 'b2t', 'b2g', 'b3g']
         if self.options['eft_basis'] == 'mcdonald':
+            if freedom != 'min':
+                raise ValueError('eft_basis = "mcdonald" only available for freedom = "min"')
             self.required_bias_params = ['b1', 'b2', 'bs', 'b3']
+        self.pt.init.update(eft_basis=self.options['eft_basis'])
         # now EFT parameters
-        if self.options['eft_basis'] in ['eftoflss', 'westcoast']:
+        if self.options['eft_basis'] in ['eftoflss', 'westcoast', 'mcdonald']:
             self.required_bias_params += ['cct', 'cr1', 'cr2']
             if self.options['with_nnlo_counterterm']: self.required_bias_params += ['cr4', 'cr6']
         else:
@@ -1518,19 +1528,18 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         default_values = {'b1': 1.6}
         self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
         self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
-        freedom = self.options.pop('freedom', None)
         fix = []
         if freedom == 'max':
-            for param in self.init.params.select(basename=['b1', 'b2', 'b3', 'b4', 'b2p4', 'b2m4', 'b2t', 'b2g', 'b3g']):
+            for param in self.init.params.select(basename=['b1', 'b2', 'b3', 'b4', 'bs', 'b2p4', 'b2m4', 'b2t', 'b2g', 'b3g']):
                 param.update(fixed=False)
             fix += ['ce1']
         if freedom == 'min':
-            fix += ['b3', 'b2m4', 'ce1']
-            #if self.options['eft_basis'] != 'mcdonald':
-            #    raise ValueError('min freedom only defined in eft_basis="mcdonald"')
-            #fix += ['bs', 'b3', 'ce1']
-        if 4 not in self.ells: fix += ['cr2']
-        if 2 not in self.ells: fix += ['cr1', 'ce2', 'c2', 'c4']
+            #fix += ['b3', 'b2m4', 'ce1']
+            if self.options['eft_basis'] != 'mcdonald':
+                raise ValueError('freedom = "min" only defined in eft_basis = "mcdonald"')
+            fix += ['bs', 'b3', 'ce1']
+        if 4 not in self.ells: fix += ['cr2', 'c4']
+        if 2 not in self.ells: fix += ['cr1', 'c2', 'ce2']
         for param in self.init.params.select(basename=fix):
             param.update(value=0., fixed=True)
 
@@ -1543,7 +1552,15 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             params['b3'] = params['b1'] + 15. * params['b2g'] + 6. * params.pop('b3g')
             params['b4'] = 1 / 2. * params.pop('b2t') - 7. / 2. * params.pop('b2g')
         elif self.options['eft_basis'] == 'mcdonald':
-            pass
+            # WARNING: relations only valid in the coevolution picture, freedom = 'min'
+            # b2g = -2. / 7. * (b1 - 1), bs = bs2 - 4. / 7. * (b1 - 1.) = 0 => b2g = -1. / 2. * bs2 = -1. / 2. * (bs + 4. / 7. * (b1 - 1.))
+            # b3g = 23. / 42 * (b1 - 1), b3 = b3nl + 32. / 315. * (b1 - 1.) = 0 => b3g = -345. / 64. * b3nl = -345. / 64. * (b3 - 32. / 315. * (b1 - 1.))
+            params['b2t'] = params.pop('b2')
+            params['b2'] = 1.
+            params['b2g'] = - 1 / 2. * (params.pop('bs') + 4. / 7. * (params['b1'] - 1.))
+            params['b3g'] = -345. / 64. * (params.pop('b3') - 32. / 315. * (params['b1'] - 1.))
+            params['b3'] = params['b1'] + 15. * params['b2g'] + 6. * params.pop('b3g')
+            params['b4'] = 1 / 2. * params.pop('b2t') - 7. / 2. * params.pop('b2g')
         return params
 
     def calculate(self, **params):
@@ -1553,7 +1570,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
 class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
 
-    _default_options = dict(km=0.7, kr=0.25, accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=True, with_resum='full', eft_basis='westcoast')
+    _default_options = dict(km=0.7, kr=0.25, accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=True, with_resum='full', eft_basis='eftoflss')
     _klim = (1e-4, 11., 3000)  # numerical instability in pybird's fftlog at 10.
     _pt_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
                  'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol']
@@ -1565,9 +1582,11 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
         from pybird.nnlo import NNLO_counterterm
         from pybird.resum import Resum
         from pybird.projection import Projection
+        eft_basis = self.options.get('eft_basis', None)
+        if eft_basis in [None, 'mcdonald']: eft_basis = 'eftoflss'
         # nd used by combine_bias_terms_poles only
         self.co = Common(Nl=len(self.ells), kmin=1e-3, kmax=0.25, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
-                         eft_basis=self.options['eft_basis'], halohalo=True, with_cf=True,
+                         eft_basis=eft_basis, halohalo=True, with_cf=True,
                          with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti',
                          exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
         self.nonlinear = NonLinear(load=False, save=False, NFFT=256 * int(self.options['fftaccboost']), fftbias=self.options['fftbias'], co=self.co)  # NFFT=256, fftbias=-1.6
@@ -1643,9 +1662,9 @@ class PyBirdTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMul
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
 
     **kwargs : dict
-        Pybird options, defaults to: ``with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='full', eft_basis='eftoflss'``.
+        Pybird options, defaults to: ``with_nnlo_higher_derivative=False, with_nnlo_counterterm=False, with_stoch=False, with_resum='full'``.
     """
-    _default_options = dict(with_nnlo_counterterm=False, with_stoch=False, eft_basis='westcoast', freedom=None)
+    _default_options = dict(with_nnlo_counterterm=False, with_stoch=False, eft_basis=None, freedom=None)
 
     def set_params(self):
         return PyBirdTracerPowerSpectrumMultipoles.set_params(self)

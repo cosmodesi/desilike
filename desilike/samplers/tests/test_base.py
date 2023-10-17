@@ -33,13 +33,15 @@ def test_samplers():
             kwargs.update(nwalkers=20)
         if Sampler in [StaticDynestySampler, DynamicDynestySampler, PolychordSampler, NautilusSampler]:
             kwargs.update(nlive=100)
-        save_fn = './_tests/chain_0.npy'
+        save_fn = ['./_tests/chain_{:d}.npy'.format(i) for i in range(min(likelihood.mpicomm.size, 2))]
         sampler = Sampler(likelihood, save_fn=save_fn, **kwargs)
         chains = sampler.run(max_iterations=100, check=True, check_every=50)
-        assert chains[0]['LRG.loglikelihood'].param.latex() == 'L_{\mathrm{LRG}}'
-        assert chains[0]['LRG.loglikelihood'].param.derived
-        assert chains[0].logposterior.param.latex() == '\mathcal{L}'
-        assert chains[0].logposterior.param.derived
+        if sampler.mpicomm.rank == 0:
+            assert chains[0]['LRG.loglikelihood'].param.latex() == 'L_{\mathrm{LRG}}'
+            assert chains[0]['LRG.loglikelihood'].param.derived
+            assert chains[0].logposterior.param.latex() == '\mathcal{L}'
+            assert chains[0].logposterior.param.derived
+            assert np.allclose(chains[0].logposterior, chains[0]['LRG.loglikelihood'][()] + chains[0]['LRG.logprior'][()])
         size1 = sampler.mpicomm.bcast(chains[0].size if sampler.mpicomm.rank == 0 else None, root=0)
         chains = sampler.run(max_iterations=0, check=True, check_every=10)
         size2 = sampler.mpicomm.bcast(chains[0].size if sampler.mpicomm.rank == 0 else None, root=0)
@@ -361,10 +363,10 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_nautilus()
-    #test_samplers()
+    test_samplers()
     #test_fixed()
     #test_importance()
     #test_error()
-    test_mcmc()
+    #test_mcmc()
     #test_nested()
     #test_marg()

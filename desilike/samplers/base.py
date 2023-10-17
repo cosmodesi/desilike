@@ -279,15 +279,15 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
 
     def _set_derived(self, chain):
         chain = Chain(chain, loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior)
-        if chain._logposterior not in chain:
-            chain.logposterior = chain[chain._loglikelihood] + chain[chain._logprior]
-        chain.logposterior.param.update(derived=True, latex=utils.outputs_to_latex(chain._logposterior))
         for param in self.pipeline.params.select(fixed=True, derived=False):
             chain[param] = np.full(chain.shape, param.value, dtype='f8')
         indices_in_chain, indices = self.derived[0].match(chain, params=self.varied_params)
         assert indices_in_chain[0].size == chain.size, '{:d} != {:d}'.format(indices_in_chain[0].size, chain.size)
         for array in self.derived[1]:
             chain.set(array[indices].reshape(chain.shape + array.shape[1:]))
+        if chain._logposterior not in chain:
+            chain.logposterior = chain[chain._loglikelihood][()] + chain[chain._logprior][()]
+        chain.logposterior.param.update(derived=True, latex=utils.outputs_to_latex(chain._logposterior))
         return chain
 
     def run(self, start=None, **kwargs):
@@ -300,7 +300,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         the number of processes per chain --- plus 1 root process to distribute the work.
         """
         #self.derived = None
-        nprocs_per_chain = max((self.mpicomm.size - 1) // self.nchains, 1)
+        nprocs_per_chain = max(self.mpicomm.size  // self.nchains, 1)
         chains, ncalls = [[None] * self.nchains for i in range(2)]
         start = self._get_start(start=start)
         mpicomm_bak = self.mpicomm
@@ -382,7 +382,7 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
             Optional sampler-specific arguments.
         """
         #self.derived = None
-        nprocs_per_chain = max((self.mpicomm.size - 1) // self.nchains, 1)
+        nprocs_per_chain = max(self.mpicomm.size // self.nchains, 1)
 
         run_check = bool(check) or isinstance(check, dict)
         if run_check and not isinstance(check, dict):

@@ -31,22 +31,6 @@ if use_mpi:
     #from mpi4py.futures import MPIPoolExecutor
     #MPIPool = MPIPoolExecutor
 
-    class MPIPool(object):
-
-        def __init__(self, mpicomm=None):
-            self.mpicomm = mpicomm
-            self.size = self.mpicomm.size
-
-        def map(self, func, tasks):
-            size = len(tasks)
-            start, stop = self.mpicomm.rank * size // self.size, (self.mpicomm.rank + 1) * size // self.size
-            results = map(func, tasks[start:stop])
-            results = self.mpicomm.allgather(results)
-            toret = []
-            for result in results: toret += result
-            return np.asarray(toret)
-
-
 else:
     # Fake MPI
     class Comm(object):
@@ -74,16 +58,6 @@ else:
     COMM_SELF = Comm()
     ANY_SOURCE = 0
     ANY_TAG = 0
-
-
-    class MPIPool(object):
-
-        def __init__(self, mpicomm=None):
-            self.mpicomm = mpicomm
-            self.size = 1
-
-        def map(self, func, tasks):
-            return map(func, tasks)
 
 
 class CurrentMPIComm(object):

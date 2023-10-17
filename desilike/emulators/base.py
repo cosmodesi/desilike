@@ -41,7 +41,7 @@ class EmulatedCalculator(BaseCalculator):
 
     def initialize(self, emulator=None, **kwargs):
         self.emulator = emulator
-        self.calculate(**{name: self.params[name].value for name in self.emulator.varied_params})
+        self.calculate(**{param.basename: param.value for param in self.init.params})
 
     def calculate(self, **params):
         predict = self.emulator.predict(**params)
@@ -95,8 +95,8 @@ class Emulator(BaseClass):
         self.calculator = calculator
         self.pipeline = self.calculator.runtime_info.pipeline
 
-        self.params = self.pipeline.params.deepcopy()
-        self.varied_params = self.pipeline.varied_params.names()
+        self.params = self.pipeline.params.clone(namespace=None).deepcopy()
+        self.varied_params = self.pipeline.varied_params.clone(namespace=None).names()
         if not self.varied_params:
             raise ValueError('No parameters to be varied!')
 
@@ -226,7 +226,7 @@ class Emulator(BaseClass):
         if self.mpicomm.rank == 0:
             tmp = Samples(attrs=samples.attrs)
             for param in self.pipeline.varied_params + self.pipeline.params.select(name=list(self.engines.keys()), derived=True):
-                tmp[param] = samples[param.name]
+                tmp[param.clone(namespace=None)] = samples[param.name]
         for name, eng in self.engines.items():
             if eng is engine:
                 self.samples[name] = tmp
@@ -331,7 +331,6 @@ class Emulator(BaseClass):
         calculator = new_cls(emulator=self)
         calculator.runtime_info.initialize()  # to initialize
         if derived is not None:
-            print(derived, calculator.params.select(derived=True))
             calculator.runtime_info.pipeline._set_derived([calculator], params=[derived])
 
         return calculator

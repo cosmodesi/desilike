@@ -1620,12 +1620,15 @@ class ParameterCollection(BaseParameterCollection):
         self._updated = True
         if len(args) == 1 and isinstance(args[0], self.__class__):
             other = args[0]
+            self_basenames = self.basenames()
             for item in other:
                 if item in self:
-                    tmp = self[item].clone(item)
+                    self[item] = self[item].clone(item)
+                elif basename is True and item.basename in self_basenames:
+                    index = self_basenames.index(item.basename)
+                    self[index] = self[index].clone(item)
                 else:
-                    tmp = item.copy()
-                self.set(tmp)
+                    self.set(item.copy())
         elif len(args) <= 1:
             list_update = self.names(name=name, basename=basename)
             for meta_name, fixed in zip(['fixed', 'varied'], [True, False]):

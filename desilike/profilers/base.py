@@ -95,7 +95,7 @@ def _profiles_transform(self, profiles):
 
 def _iterate_over_params(self, params, method, **kwargs):
     nparams = len(params)
-    nprocs_per_param = max((self.mpicomm.size - 1) // nparams, 1)
+    nprocs_per_param = max(self.mpicomm.size // nparams, 1)
     if self.profiles is None:
         start = self._get_start()
     else:
@@ -390,10 +390,10 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                 start = [start]
             if niterations is None:
                 niterations = len(start)
-        if niterations is None: niterations = max(self.mpicomm.size - 1, 1)
+        if niterations is None: niterations = max(self.mpicomm.size, 1)
         niterations = int(niterations)
         start, logposterior = self._get_start(start=start, niterations=niterations)
-        nprocs_per_iteration = max((self.mpicomm.size - 1) // niterations, 1)
+        nprocs_per_iteration = max(self.mpicomm.size // niterations, 1)
         list_profiles = [None] * niterations
         mpicomm_bak = self.mpicomm
         with TaskManager(nprocs_per_task=nprocs_per_iteration, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
@@ -555,7 +555,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         grid = ParameterGrid(grid)
         grid_params = grid.params()
         nsamples = grid.size
-        nprocs_per_param = max((self.mpicomm.size - 1) // nsamples, 1)
+        nprocs_per_param = max(self.mpicomm.size // nsamples, 1)
         start = self._get_start(niterations=niterations)[0]
 
         flat_grid = grid.ravel()
@@ -647,7 +647,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             raise ValueError('Provide a list of grids, one for each of {}'.format(params))
 
         nparams = len(params)
-        nprocs_per_param = max((self.mpicomm.size - 1) // nparams, 1)
+        nprocs_per_param = max(self.mpicomm.size // nparams, 1)
         list_profiles = [None] * nparams
         profiles_bak, save_fn_bak, mpicomm_bak = self.profiles, self.save_fn, self.mpicomm
         self.save_fn = None

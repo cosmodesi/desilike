@@ -225,7 +225,7 @@ def test_footprint():
     footprint = CutskyFootprint(nbar=2500., area=14000., zrange=(0.8, 1.6), cosmo=DESI())
     footprint.save(fn)
     footprint = CutskyFootprint.load(fn)
-    print(footprint.zavg, footprint.size / 1e6, footprint.shotnoise, footprint.volume / 1e9)
+    print(footprint.zavg, footprint.zeff, footprint.size / 1e6, footprint.shotnoise, footprint.volume / 1e9)
 
 
 def test_covariance_matrix():
@@ -768,9 +768,9 @@ if __name__ == '__main__':
     setup_logging()
 
     # test_bao()
-    test_power_spectrum()
+    # test_power_spectrum()
     # test_correlation_function()
-    # test_footprint()
+    test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
     # test_compression()

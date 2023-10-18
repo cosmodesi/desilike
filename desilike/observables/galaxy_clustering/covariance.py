@@ -182,6 +182,16 @@ class CutskyFootprint(BaseFootprint):
         return np.mean(z)
 
     @property
+    def zeff(self):
+        r"""Effective redshift."""
+        z = (self._zrange[:-1] + self._zrange[1:]) / 2.
+        if self._nbar.ndim:
+            volume = np.diff(self.cosmo.comoving_radial_distance(self._zrange)**3)
+            nbar = (self._nbar[:-1] + self._nbar[1:]) / 2.
+            return np.average(z, weights=nbar**2 * volume)
+        return np.mean(z)
+
+    @property
     def zlim(self):
         return (self._zrange[0], self._zrange[-1])
 

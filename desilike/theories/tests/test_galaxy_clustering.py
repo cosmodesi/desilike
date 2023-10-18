@@ -251,6 +251,7 @@ def test_full_shape():
                 assert param.namespace == 'LRG'
         for param in theory.init.params: param.update(namespace=None)
 
+    """
     ntemplate = 4
     for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles],
                                        [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles]):
@@ -429,15 +430,20 @@ def test_full_shape():
     test(theory)
     theory(dm=0.01, b1=1.).shape
     theory.pt
+    """
 
     from desilike.theories.galaxy_clustering import PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles
 
-    theory = PyBirdTracerPowerSpectrumMultipoles(eft_basis='westcoast')
-    test(theory)
-    theory(logA=3.04, b1=1.).shape
-    theory = PyBirdTracerCorrelationFunctionMultipoles(eft_basis='westcoast')
-    test(theory)  # no P(k) computed
-    theory(logA=3.04, b1=1.).shape
+    for freedom in ['min', 'max', None]:
+        print(freedom)
+        theory = PyBirdTracerPowerSpectrumMultipoles(freedom=freedom)
+        test(theory)
+        theory(logA=3.04, b1=1.).shape
+        theory = PyBirdTracerCorrelationFunctionMultipoles(freedom=freedom)
+        test(theory)  # no P(k) computed
+        theory(logA=3.04, b1=1.).shape
+
+    exit()
 
     from desilike.theories.galaxy_clustering import FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles
 

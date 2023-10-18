@@ -1387,7 +1387,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
     _default_options = dict(km=0.7, kr=0.25, accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=True, with_resum='full', eft_basis='eftoflss')
     _klim = (1e-4, 11., 3000)  # numerical instability in pybird's fftlog at 10.
     _pt_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
-                 'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol', 'bst']
+                 'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol']
 
     def initialize(self, *args, **kwargs):
         super(PyBirdPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
@@ -1417,7 +1417,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         super(PyBirdPowerSpectrumMultipoles, self).calculate()
         from pybird.bird import Bird
         cosmo = {'kk': self.template.k, 'pk_lin': self.template.pk_dd, 'pk_lin_2': None, 'f': self.template.f, 'DA': 1., 'H': 1.}
-        self.pt = Bird(cosmo, with_bias=False, eft_basis=self.options['eft_basis'], with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
+        self.pt = Bird(cosmo, with_bias=False, eft_basis=self.co.eft_basis, with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
 
         if self.nnlo_counterterm is not None:  # we use smooth power spectrum since we don't want spurious BAO signals
             from scipy import interpolate
@@ -1600,7 +1600,7 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
         super(PyBirdCorrelationFunctionMultipoles, self).calculate()
         from pybird.bird import Bird
         cosmo = {'kk': self.template.k, 'pk_lin': self.template.pk_dd, 'pk_lin_2': None, 'f': self.template.f, 'DA': 1., 'H': 1.}
-        self.pt = Bird(cosmo, with_bias=False, eft_basis=self.options['eft_basis'], with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
+        self.pt = Bird(cosmo, with_bias=False, eft_basis=self.co.eft_basis, with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co)
 
         if self.nnlo_counterterm is not None:  # we use smooth power spectrum since we don't want spurious BAO signals
             from scipy import interpolate

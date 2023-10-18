@@ -54,7 +54,7 @@ class BaseFootprint(BaseClass):
 
     """Base class to characterize 3D footprint: density and volume."""
 
-    def __init__(self, nbar=None, size=None, volume=None):
+    def __init__(self, nbar=None, size=None, volume=None, attrs=None):
         r"""
         Initialize footprint.
 
@@ -74,6 +74,7 @@ class BaseFootprint(BaseClass):
         for name in ['nbar', 'size', 'volume']:
             value = locals()[name]
             setattr(self, '_' + name, None if value is None else np.asarray(value))
+        self.attrs = dict(attrs or {})
 
     @property
     def volume(self):
@@ -96,22 +97,28 @@ class BaseFootprint(BaseClass):
         """Intersection of footprints ``self`` with ``other``."""
         return self.__class__(nbar=self._nbar + other._nbar, volume=min(self.volume, other.volume))
 
-
-class BoxFootprint(BaseFootprint):
-
     def __getstate__(self):
-        state = {}
+        state = {'attrs': self.attrs}
         for name in ['nbar', 'size', 'volume']:
             name = '_' + name
             state[name] = getattr(self, name)
         return state
+
+    def __setstate__(self, state):
+        state.setdefault('attrs', {})  # backward-compatibility
+        super(BaseFootprint, self).__setstate__(state)
+
+
+class BoxFootprint(BaseFootprint):
+
+    """Box footprint."""
 
 
 class CutskyFootprint(BaseFootprint):
 
     """Extend :class:`BaseFootprint` to cutsky: surface area, redshift range and redshift density."""
 
-    def __init__(self, nbar=None, size=None, area=None, zrange=None, cosmo=None):
+    def __init__(self, nbar=None, size=None, area=None, zrange=None, cosmo=None, attrs=None):
         r"""
         Initialize footprint.
 
@@ -146,6 +153,7 @@ class CutskyFootprint(BaseFootprint):
         self._zrange = self._zrange[argsort]
         if self._nbar.size == self._zrange.size: self._nbar = self._nbar[argsort]
         self.cosmo = cosmo
+        self.attrs = dict(attrs or {})
 
     @property
     def cosmo(self):
@@ -225,7 +233,7 @@ class CutskyFootprint(BaseFootprint):
         return self.__class__(nbar=nbar, zrange=zrange, area=area, cosmo=self.cosmo)
 
     def __getstate__(self):
-        state = {}
+        state = {'attrs': self.attrs}
         for name in ['area', 'zrange', 'nbar', 'size']:
             name = '_' + name
             state[name] = getattr(self, name)
@@ -233,6 +241,7 @@ class CutskyFootprint(BaseFootprint):
         return state
 
     def __setstate__(self, state):
+        state.setdefault('attrs', {})  # backward-compatibility
         super(CutskyFootprint, self).__setstate__(state)
         if self._cosmo is not None:
             from cosmoprimo import Cosmology

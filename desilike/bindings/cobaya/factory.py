@@ -164,9 +164,9 @@ def cosmoprimo_to_camb_params(params):
 
 
 def cosmoprimo_to_classy_params(params):
-    convert = {name: name for name in ['H0', 'h', 'A_s', 'ln10^{10}A_s', 'sigma8', 'n_s', 'omega_b', 'Omega_b', 'omega_cdm', 'Omega_cdm', 'omega_m', 'Omega_m', 'Omega_ncdm', 'omega_ncdm', 'm_ncdm', 'omega_k', 'Omega_k',
+    convert = {name: name for name in ['H0', 'h', 'A_s', 'sigma8', 'n_s', 'omega_b', 'Omega_b', 'omega_cdm', 'Omega_cdm', 'omega_m', 'Omega_m', 'Omega_ncdm', 'omega_ncdm', 'm_ncdm', 'omega_k', 'Omega_k',
                                        'w0_fld', 'wa_fld', 'tau_reio']}
-    convert['logA'] = 'ln10^{10}A_s'
+    for name in ['logA', 'ln10^{10}A_s', 'ln10^10A_s', 'ln_A_s_1e10']: convert[name] = 'ln_A_s_1e10'
     toret = ParameterCollection()
     for param in params:
         if param.depends: continue
@@ -187,7 +187,8 @@ def camb_or_classy_to_cosmoprimo(fiducial, provider, **params):
     else: cosmo = Cosmology()
     params = {**provider.params, **params}
     convert = {'H0': 'H0', 'As': 'A_s', 'ns': 'n_s', 'ombh2': 'omega_b', 'omch2': 'omega_cdm', 'nnu': 'N_eff', 'mnu': 'm_ncdm', 'omk': 'Omega_k'}
-    convert.update({name: name for name in ['H0', 'h', 'A_s', 'ln10^{10}A_s', 'sigma8', 'n_s', 'omega_b', 'Omega_b', 'omega_cdm', 'Omega_cdm', 'omega_m', 'Omega_m', 'Omega_ncdm', 'omega_ncdm', 'm_ncdm', 'omega_k', 'Omega_k']})
+    convert.update({name: name for name in ['H0', 'h', 'A_s', 'sigma8', 'n_s', 'omega_b', 'Omega_b', 'omega_cdm', 'Omega_cdm', 'omega_m', 'Omega_m', 'Omega_ncdm', 'omega_ncdm', 'm_ncdm', 'omega_k', 'Omega_k']})
+    for name in ['logA', 'ln10^{10}A_s', 'ln10^10A_s', 'ln_A_s_1e10']: convert[name] = 'logA'
     state = {convert[param]: value for param, value in params.items() if param in convert}  # NEED MORE CHECKS!
     if not any(name in state for name in ['H0', 'h']):
         state['H0'] = np.squeeze(provider.get_Hubble(0.))

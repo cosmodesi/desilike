@@ -96,9 +96,11 @@ def test_convert_params():
     params = ParameterCollection(params)
     from desilike.bindings.cobaya import desilike_to_cobaya_params
     camb_params = desilike_to_cobaya_params(params, engine='camb')
-    print(camb_params['omch2'], camb_params['Omega_m'], camb_params['ns'])
+    #print(camb_params['omch2'], camb_params['Omega_m'], camb_params['ns'])
+    print(camb_params)
     classy_params = desilike_to_cobaya_params(params, engine='classy')
-    print(classy_params['Omega_m'], classy_params['n_s'])
+    #print(classy_params['Omega_m'], classy_params['n_s'])
+    print(classy_params)
 
 
 if __name__ == '__main__':

@@ -76,9 +76,14 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         Observed multipoles.
         Defaults to poles in ``klim``, if provided; else ``(0, 2, 4)``.
 
-    wmatrix : str, Path, pypower.BaseMatrix, dict, default=None
+    wmatrix : str, Path, pypower.BaseMatrix, dict, array, default=None
         Optionally, window matrix.
         Can be e.g. {'resolution': 2}, specifying the number of theory :math:`k` to integrate over per observed bin.
+        If a 2D array (window matrix), output and input wavenumbers and multipoles ``k``, ``ells``, ``kin``, ``ellsin`` should be provided.
+
+    kin : array, default=None
+        If provided, linearly interpolate ``wmatrix`` along input wavenumbers to these wavenumbers,
+        or if ``wmatrix`` is a 2D array, assume those are the input wavenumbers.
 
     kinrebin : int, default=1
         If ``wmatrix`` (which is defined for input theory wavenumbers) is provided,
@@ -101,7 +106,9 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory power spectrum multipoles, defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
     """
-    def initialize(self, klim=None, k=None, ells=None, wmatrix=None, kinrebin=1, kinlim=None, ellsin=None, shotnoise=None, fiber_collisions=None, theory=None):
+    def initialize(self, klim=None, k=None, ells=None, wmatrix=None, kin=None, kinrebin=1, kinlim=None, ellsin=None, shotnoise=None, fiber_collisions=None, theory=None):
+        from scipy import linalg
+
         _default_step = 0.01
 
         if ells is None:
@@ -165,6 +172,21 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 self.ellsin = tuple(self.ells)
                 self.kin, self.matrix_full = window_matrix_bininteg(self.kedges, **wmatrix)
                 self.matrix_full = self.matrix_full.T
+            elif isinstance(wmatrix, np.ndarray):
+                self.ellsin = tuple(self.ells)
+                self.matrix_full = np.array(wmatrix).T
+                ksize = sum(len(k) for k in self.k)
+                if self.matrix_full.shape[0] != ksize:
+                    raise ValueError('output "wmatrix" size is {:d}, but got {:d} output "k"'.format(self.matrix_full.shape[0], ksize))
+                kin = np.asarray(kin).flatten()
+                self.kin = kin.copy()
+                if kinrebin is not None:
+                    self.kin = self.kin[::kinrebin]
+                # print(wmatrix.xout[0], max(kk.max() for kk in self.k) * 1.2)
+                if kinlim is not None:
+                    self.kin = self.kin[(self.kin >= kinlim[0]) & (self.kin <= kinlim[-1])]
+                wmatrix_rebin = linalg.block_diag(*[utils.matrix_lininterp(self.kin, kin) for ell in self.ellsin])
+                self.matrix_full = self.matrix_full.dot(wmatrix_rebin.T)
             else:
                 if utils.is_path(wmatrix):
                     from pypower import MeshFFTWindow, BaseMatrix
@@ -176,23 +198,6 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                         wmatrix = BaseMatrix.load(fn)
                 else:
                     wmatrix = wmatrix.deepcopy()
-                if ellsin is not None:
-                    self.ellsin = list(ellsin)
-                else:
-                    self.ellsin = []
-                    for proj in wmatrix.projsin:
-                        assert proj.wa_order in (None, 0)
-                        self.ellsin.append(proj.ell)
-                projsin = [proj for proj in wmatrix.projsin if proj.ell in self.ellsin]
-                self.ellsin = tuple(proj.ell for proj in projsin)
-                wmatrix.select_proj(projsout=[(ell, None) for ell in self.ells], projsin=projsin)
-                wmatrix.slice_x(slicein=slice(0, len(wmatrix.xin[0]) // kinrebin * kinrebin, kinrebin))
-                # print(wmatrix.xout[0], max(kk.max() for kk in self.k) * 1.2)
-                if kinlim is not None:
-                    wmatrix.select_x(xinlim=kinlim)
-                self.kin = wmatrix.xin[0]
-                # print(wmatrix.xout[0])
-                assert all(np.allclose(xin, self.kin) for xin in wmatrix.xin)
                 # TODO: implement best match BaseMatrix method
                 for iout, (projout, kk) in enumerate(zip(wmatrix.projsout, self.k)):
                     ksize, factorout = None, 1
@@ -216,7 +221,29 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                     self.k[iout] = wmatrix.xout[iout]
                     if klim is None and not np.allclose(wmatrix.xout[iout], kk, rtol=1e-4):
                         raise ValueError('k-coordinates {} for ell = {:d} could not be found in input matrix (rebinning = {:d})'.format(kk, projout.ell, factorout))
+                if ellsin is not None:
+                    self.ellsin = list(ellsin)
+                else:
+                    self.ellsin = []
+                    for proj in wmatrix.projsin:
+                        assert proj.wa_order in (None, 0)
+                        self.ellsin.append(proj.ell)
+                projsin = [proj for proj in wmatrix.projsin if proj.ell in self.ellsin]
+                self.ellsin = tuple(proj.ell for proj in projsin)
+                wmatrix.select_proj(projsout=[(ell, None) for ell in self.ells], projsin=projsin)
+                if kinrebin is not None:
+                    wmatrix.slice_x(slicein=slice(0, len(wmatrix.xin[0]) // kinrebin * kinrebin, kinrebin))
+                # print(wmatrix.xout[0], max(kk.max() for kk in self.k) * 1.2)
+                if kinlim is not None:
+                    wmatrix.select_x(xinlim=kinlim)
+                self.kin = wmatrix.xin[0]
                 self.matrix_full = wmatrix.value.T
+                if kin is not None:
+                    self.kin = np.asarray(kin).flatten()
+                    wmatrix_rebin = linalg.block_diag(*[utils.matrix_lininterp(self.kin, xin) for xin in wmatrix.xin])
+                    self.matrix_full = self.matrix_full.dot(wmatrix_rebin.T)
+                else:
+                    assert all(np.allclose(xin, self.kin) for xin in wmatrix.xin), 'input coordinates of "wmatrix" are not the same for all multipoles; pass an k-coordinate array to "kin"'
             self.theory.init.update(k=self.kin, ells=self.ellsin)
             if fiber_collisions is not None:
                 fiber_collisions.init.update(k=self.kin, ells=self.ellsin, theory=self.theory)
@@ -333,6 +360,10 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
 
     wmatrix : dict, default=None
         Can be e.g. {'resolution': 2}, specifying the number of theory :math:`k` to integrate over per observed bin.
+        If a 2D array (window matrix), output and input separations and multipoles ``s``, ``ells``, ``sin``, ``ellsin`` should be provided.
+
+    sin : array, default=None
+        If ``wmatrix`` is a 2D array, assume those are the input separations.
 
     fiber_collisions : BaseFiberCollisionsPowerSpectrumMultipoles
         Optionally, fiber collisions.
@@ -340,8 +371,8 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
     theory : BaseTheoryCorrelationFunctionMultipoles
         Theory correlation function multipoles, defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
     """
-    def initialize(self, slim=None, s=None, ells=None, wmatrix=None, fiber_collisions=None, theory=None):
-
+    def initialize(self, slim=None, s=None, ells=None, wmatrix=None, sin=None, sinrebin=1, sinlim=None, ellsin=None, fiber_collisions=None, theory=None):
+        from scipy import linalg
         _default_step = 5.
 
         if ells is None:
@@ -404,8 +435,23 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
                 self.ellsin = tuple(self.ells)
                 self.sin, self.matrix_full = window_matrix_bininteg(self.sedges, **wmatrix)
                 self.matrix_full = self.matrix_full.T
+            elif isinstance(wmatrix, np.ndarray):
+                self.ellsin = tuple(self.ells)
+                self.matrix_full = np.array(wmatrix).T
+                ssize = sum(len(s) for s in self.s)
+                if self.matrix_full.shape[0] != ssize:
+                    raise ValueError('output "wmatrix" size is {:d}, but got {:d} output "s"'.format(self.matrix_full.shape[0], ssize))
+                sin = np.asarray(sin).flatten()
+                self.sin = sin.copy()
+                if sinrebin is not None:
+                    self.sin = self.sin[::sinrebin]
+                # print(wmatrix.xout[0], max(kk.max() for kk in self.k) * 1.2)
+                if sinlim is not None:
+                    self.sin = self.sin[(self.sin >= sinlim[0]) & (self.sin <= sinlim[-1])]
+                wmatrix_rebin = linalg.block_diag(*[utils.matrix_lininterp(self.sin, sin) for ell in self.ellsin])
+                self.matrix_full = self.matrix_full.dot(wmatrix_rebin.T)
             else:
-                raise ValueError('Unrecognized wmatrix {}'.format(wmatrix))
+                raise ValueError('unrecognized wmatrix {}'.format(wmatrix))
             self.theory.init.update(s=self.sin, ells=self.ellsin)
             if fiber_collisions is not None:
                 fiber_collisions.init.update(s=self.sin, ells=self.ellsin, theory=self.theory)
@@ -767,6 +813,10 @@ class BaseFiberCollisionsCorrelationFunctionMultipoles(BaseCalculator):
         self.theory.runtime_info.initialize()
         self.ellsin = tuple(self.theory.ells)
         self.with_uncorrelated = bool(with_uncorrelated)
+
+    @property
+    def sin(self):
+        return self.s
 
     def correlated(self, corr):
         return jnp.sum(self.kernel_correlated * corr[None, ...], axis=1)

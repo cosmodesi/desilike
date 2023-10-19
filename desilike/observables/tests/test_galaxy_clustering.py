@@ -67,6 +67,29 @@ def test_power_spectrum():
     assert np.allclose((likelihood + likelihood)(), 2. * likelihood() - likelihood.logprior)
     assert np.allclose(likelihood.flatdiff, 3. * observable.flatdata * (np.cbrt(observable.wmatrix.flatpower / observable.flatdata) - 1.))
 
+    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    kin = np.linspace(0.01, 0.3, 90)
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data='../../tests/_pk/data.npy',
+                                                         covariance='../../tests/_pk/mock_*.npy',
+                                                         wmatrix='../../tests/_pk/window.npy',
+                                                         shotnoise=2e4,
+                                                         theory=theory,
+                                                         fiber_collisions=fiber_collisions,
+                                                         kin=kin)
+    observable()
+    assert np.allclose(observable.wmatrix.theory.k, kin)
+
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data='../../tests/_pk/data.npy',
+                                                         covariance='../../tests/_pk/mock_*.npy',
+                                                         wmatrix=np.zeros((kin.size * 2, 15 * 2)),
+                                                         shotnoise=2e4,
+                                                         theory=theory,
+                                                         kin=kin)
+    observable()
+    assert np.allclose(observable.wmatrix.theory.k, kin)
+
     theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
     params = {'al0_1': 100., 'al0_-1': 100., 'al2_1': 100., 'b1': 1.5}
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
@@ -148,6 +171,15 @@ def test_correlation_function():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     observable()
     observable.plot(show=True)
+    sin = np.linspace(15., 160., 90)
+    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
+                                                               data='../../tests/_xi/data.npy',
+                                                               covariance='../../tests/_xi/mock_*.npy',
+                                                               wmatrix=np.zeros((sin.size * 2, 12 * 2)),
+                                                               theory=theory,
+                                                               sin=sin)
+    observable()
+    assert np.allclose(observable.wmatrix.theory.s, sin)
 
     fiber_collisions = TopHatFiberCollisionsCorrelationFunctionMultipoles(fs=0.5, Dfc=1.)
     observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
@@ -183,9 +215,9 @@ def test_correlation_function():
                                                                wmatrix={'resolution': 2},
                                                                fiber_collisions=fiber_collisions)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
     observable.wmatrix.plot(show=True)
 
-    likelihood()
     with tempfile.TemporaryDirectory() as tmp_dir:
         fn = os.path.join(tmp_dir, 'tmp.npy')
         observable.save(fn)
@@ -768,10 +800,10 @@ if __name__ == '__main__':
     setup_logging()
 
     # test_bao()
-    # test_power_spectrum()
-    # test_correlation_function()
-    test_footprint()
-    test_covariance_matrix()
+    test_power_spectrum()
+    test_correlation_function()
+    # test_footprint()
+    # test_covariance_matrix()
     # test_covariance_matrix_mocks()
     # test_compression()
     # test_integral_cosn()

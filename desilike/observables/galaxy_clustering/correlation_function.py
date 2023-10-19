@@ -60,6 +60,8 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         self.wmatrix = wmatrix
         if not isinstance(wmatrix, WindowedCorrelationFunctionMultipoles):
             self.wmatrix = WindowedCorrelationFunctionMultipoles()
+            if wmatrix is not None:
+                self.wmatrix.init.update(wmatrix=wmatrix)
         if self.sedges is not None:  # set by data
             slim = {ell: (edges[0], edges[-1], np.mean(np.diff(edges))) for ell, edges in zip(self.ells, self.sedges)}
             self.wmatrix.init.update(s=self.s)

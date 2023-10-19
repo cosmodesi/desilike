@@ -771,7 +771,7 @@ if __name__ == '__main__':
     # test_power_spectrum()
     # test_correlation_function()
     test_footprint()
-    # test_covariance_matrix()
+    test_covariance_matrix()
     # test_covariance_matrix_mocks()
     # test_compression()
     # test_integral_cosn()

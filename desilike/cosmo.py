@@ -48,10 +48,10 @@ class BaseExternalEngine(BaseEngine):
             toret = d1.copy()
             for name, value in d2.items():
                 if name in d1:
-                    if isinstance(d1[name], dict) and isinstance(value, dict):
-                        value = _merge_dict(d1[name], value)
-                    elif d1[name] is None and value is None:
+                    if utils.deep_eq(d1[name], value):
                         pass
+                    elif isinstance(d1[name], dict) and isinstance(value, dict):
+                        value = _merge_dict(d1[name], value)
                     else:
                         value = _make_list(d1[name], isinst=(list,)) + _make_list(value, isinst=(list,))
                 toret[name] = value

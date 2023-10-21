@@ -238,10 +238,10 @@ class CutskyFootprint(BaseFootprint):
             for i, inst in enumerate([self, other]):
                 zranges.append(inst._zrange)
                 nbars.append(inst._nbar)
-                if inst._nbar != inst._zrange.size - 1: m1 = False
+                if inst._nbar.size != inst._zrange.size - 1: m1 = False
             if not m1:
                 for i, inst in enumerate([self, other]):
-                    if inst._nbar == inst._zrange.size - 1: nbars[i] = (inst._nbar[:-1] + inst._nbar[1:]) / 2.
+                    if inst._nbar.size == inst._zrange.size - 1: nbars[i] = (inst._nbar[:-1] + inst._nbar[1:]) / 2.
 
             nbar = sum(interp_nbar(zrange, z, n) for z, n in zip(zranges, nbars))
         if zrange.size < 2:

@@ -33,4 +33,4 @@ class BBNOmegaBLikelihood(BaseGaussianLikelihood):
 
     @property
     def flattheory(self):
-        return np.asarray(self.cosmo.Omega0_b * self.cosmo.h**2)
+        return np.array([self.cosmo.Omega0_b * self.cosmo.h**2])

@@ -178,8 +178,8 @@ class BaseLikelihood(BaseCalculator):
 
     @property
     def size(self):
-        # Theory vector size
-        return len(self.flattheory)
+        # Data vector size
+        return len(self.flatdata)
 
     @property
     def nvaried(self):

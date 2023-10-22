@@ -321,14 +321,14 @@ class BasePipeline(BaseClass):
         for calculator in self.calculators:
             cosmo_requires = getattr(calculator, 'cosmo_requires', {})
             if cosmo_requires:
-                conversions = {'logA': 'ln10^10A_s'}
+                conversions = {}  # 'logA': 'ln10^10A_s'
                 cosmo_params = cosmo_requires.get('params', {})
                 if cosmo_params:
                     for basename, name in calculator.runtime_info.base_names.items():
                         if basename in cosmo_params:
                             self.input_values[name] = calculator.runtime_info.input_values[basename] = cosmo[conversions.get(basename, basename)]
-                if set(cosmo_requires.keys()) != {'params'}:  # requires a :class:`cosmoprimo.Cosmology` instance as ``cosmo`` attribute
-                    calculator.cosmo = cosmo
+                #if set(cosmo_requires.keys()) != {'params'}:  # requires a :class:`cosmoprimo.Cosmology` instance as ``cosmo`` attribute
+                calculator.cosmo = cosmo
                 calculator.runtime_info.tocalculate = True
 
     def _classify_derived(self, calculators=None, niterations=3, seed=42):

@@ -25,7 +25,7 @@ class BBNOmegaBLikelihood(BaseGaussianLikelihood):
     def initialize(self, mean, std, cosmo=None):
         self.cosmo = cosmo
         if is_external_cosmo(self.cosmo):
-            self.cosmo_requires = {'params': {'Omega_b': None, 'h': None}}
+            self.cosmo_requires = {'params': {'omega_b': None}}
         elif self.cosmo is None:
             from desilike.theories.primordial_cosmology import Cosmoprimo
             self.cosmo = Cosmoprimo()
@@ -33,4 +33,4 @@ class BBNOmegaBLikelihood(BaseGaussianLikelihood):
 
     @property
     def flattheory(self):
-        return np.array([self.cosmo.Omega0_b * self.cosmo.h**2])
+        return np.array([self.cosmo['omega_b']])

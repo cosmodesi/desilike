@@ -30,7 +30,7 @@ class H0Likelihood(BaseGaussianLikelihood):
 
     @property
     def flattheory(self):
-        return np.array([self.cosmo.H0])
+        return np.array([self.cosmo['H0']])
 
 
 class MbLikelihood(BaseGaussianLikelihood):

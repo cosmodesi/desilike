@@ -31,10 +31,6 @@ def get_cosmo(cosmo):
     return cosmoprimo.Cosmology(**convert(cosmo))
 
 
-def external_cosmo(cosmo):
-    return isinstance(cosmo, str) and cosmo == 'external'
-
-
 def get_from_cosmo(cosmo, name):
     name = conversions.get(name, name)
     if name.lower().startswith('omega_'):

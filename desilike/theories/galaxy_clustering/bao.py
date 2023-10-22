@@ -6,7 +6,7 @@ import numpy as np
 from scipy import special, integrate
 
 from desilike.base import BaseCalculator
-from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo
+from desilike.cosmo import is_external_cosmo
 from desilike import plotting
 from desilike.jax import numpy as jnp
 from .power_template import BAOPowerSpectrumTemplate
@@ -153,7 +153,7 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
             template = BAOPowerSpectrumTemplate()
         self.template = template
         self.template.runtime_info.initialize()
-        if external_cosmo(self.template.cosmo):
+        if is_external_cosmo(self.template.cosmo):
             self.cosmo_requires = {'thermodynamics': {'rs_drag': None}}
         self.z = self.template.z
 

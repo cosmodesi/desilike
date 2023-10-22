@@ -3,7 +3,8 @@ from scipy import special
 
 from desilike.jax import numpy as jnp
 from desilike.jax import InterpolatedUnivariateSpline
-from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo, constants
+from desilike.cosmo import is_external_cosmo
+from desilike.theories.primordial_cosmology import get_cosmo, Cosmoprimo, constants
 from desilike.base import BaseCalculator
 from desilike import plotting, utils
 
@@ -220,7 +221,7 @@ class APEffect(BaseCalculator):
             self.params = self.params.select(basename=['qpar', 'qper'])
         elif self.mode == 'distances':
             self.params = self.params.clear()
-            if external_cosmo(cosmo):
+            if is_external_cosmo(cosmo):
                 self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
         else:
             raise ValueError('Unknown mode {}; it must be one of ["qiso", "qap", "qisoqap", "qparqper", "distances"]'.format(self.mode))

@@ -3,6 +3,7 @@ from collections import UserDict
 
 import numpy as np
 
+from desilike.cosmo import is_external_cosmo
 from desilike.likelihoods.base import BaseLikelihood, BaseGaussianLikelihood
 
 
@@ -14,11 +15,11 @@ class BaseSNLikelihood(BaseGaussianLikelihood):
     ----------
     config_fn : str, Path
         Configuration file.
-    
+
     data_dir : str, Path, default=None
         Data directory. Defaults to path saved in desilike's configuration,
         as provided by :class:`Installer` if likelihood has been installed.
-    
+
     cosmo : BasePrimordialCosmology, default=None
         Cosmology calculator. Defaults to ``Cosmoprimo()``.
     """
@@ -29,10 +30,12 @@ class BaseSNLikelihood(BaseGaussianLikelihood):
         self.config = self.read_config(os.path.join(data_dir, config_fn))
         self.covariance = self.read_covariance(os.path.join(data_dir, self.config['mag_covmat_file']))
         self.light_curve_params = self.read_light_curve_params(os.path.join(data_dir, self.config['data_file']))
-        if cosmo is None:
-            from desilike.theories.primordial_cosmology import Cosmoprimo
-            cosmo = Cosmoprimo()
         self.cosmo = cosmo
+        if is_external_cosmo(self.cosmo):
+            self.cosmo_requires = {'background': {'luminosity_distance': {'z': np.linspace(0., 10., 1000)}}}
+        elif self.cosmo is None:
+            from desilike.theories.primordial_cosmology import Cosmoprimo
+            self.cosmo = Cosmoprimo()
         BaseLikelihood.initialize(self)
 
     def read_config(self, fn):

@@ -3,6 +3,7 @@ import os
 import numpy as np
 
 from desilike import plotting, utils
+from desilike.cosmo import is_external_cosmo
 from .base import BaseSNLikelihood
 
 
@@ -25,12 +26,14 @@ class PantheonSNLikelihood(BaseSNLikelihood):
     installer_section = 'PantheonSNLikelihood'
     name = 'PantheonSN'
 
-    def initialize(self, *args, **kwargs):
-        super(PantheonSNLikelihood, self).initialize(*args, **kwargs)
+    def initialize(self, *args, cosmo=None, **kwargs):
+        super(PantheonSNLikelihood, self).initialize(*args, cosmo=cosmo, **kwargs)
         # Add statistical error
         self.covariance += np.diag(self.light_curve_params['dmb']**2)
         self.precision = utils.inv(self.covariance)
         self.std = np.diag(self.covariance)**0.5
+        if is_external_cosmo(self.cosmo):
+            self.cosmo_requires = {'background': {'luminosity_distance': {'z': self.light_curve_params['zcmb']}}}
 
     def calculate(self, Mb=0):
         z = self.light_curve_params['zcmb']

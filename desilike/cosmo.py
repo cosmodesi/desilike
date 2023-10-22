@@ -30,6 +30,10 @@ def merge(arrays):
     return np.unique(np.concatenate([np.atleast_1d(a) for a in arrays], axis=0))
 
 
+def is_external_cosmo(cosmo):
+    return isinstance(cosmo, str) and cosmo == 'external'
+
+
 class BaseExternalEngine(BaseEngine):
     """
     A base cosmoprimo's engine class, to be extended for specific external provider of cosmological calculation.

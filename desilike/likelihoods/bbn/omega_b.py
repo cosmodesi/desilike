@@ -1,5 +1,6 @@
 import numpy as np
 
+from desilike.cosmo import is_external_cosmo
 from desilike.likelihoods.base import BaseGaussianLikelihood
 
 
@@ -22,10 +23,12 @@ class BBNOmegaBLikelihood(BaseGaussianLikelihood):
     name = 'BBNOmegaB'
 
     def initialize(self, mean, std, cosmo=None):
-        if cosmo is None:
-            from desilike.theories.primordial_cosmology import Cosmoprimo
-            cosmo = Cosmoprimo()
         self.cosmo = cosmo
+        if is_external_cosmo(self.cosmo):
+            self.cosmo_requires = {'params': {'Omega_b': None, 'h': None}}
+        elif self.cosmo is None:
+            from desilike.theories.primordial_cosmology import Cosmoprimo
+            self.cosmo = Cosmoprimo()
         super(BBNOmegaBLikelihood, self).initialize(data=mean, covariance=std**2)
 
     @property

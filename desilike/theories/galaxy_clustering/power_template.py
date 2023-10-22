@@ -5,8 +5,9 @@ from cosmoprimo import PowerSpectrumBAOFilter, PowerSpectrumInterpolator1D
 
 from desilike.jax import numpy as jnp
 from desilike.base import BaseCalculator
+from desilike.cosmo import is_external_cosmo
 from desilike.parameter import ParameterCollection
-from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo, constants
+from desilike.theories.primordial_cosmology import get_cosmo, Cosmoprimo, constants
 from .base import APEffect
 
 
@@ -21,7 +22,7 @@ class BasePowerSpectrumExtractor(BaseCalculator):
         self.cosmo_requires = {}
         self.cosmo = cosmo
         params = self.params.select(derived=True)
-        if external_cosmo(self.cosmo):
+        if is_external_cosmo(self.cosmo):
             self.cosmo_requires = {'fourier': {'sigma8_z': {'z': self.z, 'of': [('delta_cb', 'delta_cb'), ('theta_cb', 'theta_cb')]},
                                                'pk_interpolator': {'z': self.z, 'of': [('delta_cb', 'delta_cb')]}}}
         elif cosmo is None:
@@ -148,7 +149,7 @@ class DirectPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.cosmo_requires = {}
         self.cosmo = cosmo
         params = self.params.select(derived=True)
-        if external_cosmo(self.cosmo):
+        if is_external_cosmo(self.cosmo):
             self.cosmo_requires = {'fourier': {'sigma8_z': {'z': self.z, 'of': [('delta_cb', 'delta_cb'), ('theta_cb', 'theta_cb')]},
                                                'pk_interpolator': {'z': self.z, 'k': self.k, 'of': [('delta_cb', 'delta_cb')]}}}
         elif cosmo is None:
@@ -156,7 +157,7 @@ class DirectPowerSpectrumTemplate(BasePowerSpectrumTemplate):
             self.cosmo.params = [param for param in self.params if param not in params]
         self.params = params
         self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, cosmo=self.cosmo, mode='distances').runtime_info.initialize()
-        if external_cosmo(self.cosmo):
+        if is_external_cosmo(self.cosmo):
             self.cosmo_requires.update(self.apeffect.cosmo_requires)  # just background
 
     def calculate(self):
@@ -204,7 +205,7 @@ class BAOExtractor(BasePowerSpectrumExtractor):
         self.cosmo_requires = {}
         self.cosmo = cosmo
         params = self.params.select(derived=True)
-        if external_cosmo(self.cosmo):
+        if is_external_cosmo(self.cosmo):
             self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
             self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
         elif cosmo is None:
@@ -319,7 +320,7 @@ class StandardPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         self.eta = float(eta)
         self.r = float(r)
         super(StandardPowerSpectrumExtractor, self).initialize(*args, **kwargs)
-        if external_cosmo(self.cosmo):
+        if is_external_cosmo(self.cosmo):
             self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
             self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
         cosmo = self.cosmo
@@ -445,7 +446,7 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
             raise ValueError('dfextractor must be one of {}, found {}'.format(allowed_dfextractor, self.dfextractor))
         self.r = float(r)
         super(ShapeFitPowerSpectrumExtractor, self).initialize(*args, with_now=with_now, **kwargs)
-        if external_cosmo(self.cosmo):
+        if is_external_cosmo(self.cosmo):
             self.cosmo_requires['primordial'] = {'pk_interpolator': {'k': self.k}}
             self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
             self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
@@ -904,7 +905,7 @@ class WiggleSplitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         self.eta = float(eta)
         self.set_kernel(kernel=kernel)
         super(WiggleSplitPowerSpectrumExtractor, self).initialize(*args, **kwargs)
-        if external_cosmo(self.cosmo):
+        if is_external_cosmo(self.cosmo):
             self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
             self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
         cosmo = self.cosmo
@@ -1061,7 +1062,7 @@ class TurnOverPowerSpectrumExtractor(BasePowerSpectrumExtractor):
     def initialize(self, *args, r=8., eta=1. / 3., **kwargs):
         self.eta = float(eta)
         super(TurnOverPowerSpectrumExtractor, self).initialize(*args, **kwargs)
-        if external_cosmo(self.cosmo):
+        if is_external_cosmo(self.cosmo):
             self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
         cosmo = self.cosmo
         if self.fiducial is not None:

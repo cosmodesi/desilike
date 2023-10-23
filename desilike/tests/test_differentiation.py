@@ -34,11 +34,14 @@ def test_jax():
     from desilike.jax import jax
     from desilike.jax import numpy as jnp
 
-    def f(a, b):
-        return jnp.sum(a * b)
+    def f(*values):
+        return jnp.sum(jnp.array(values))
 
-    jac = jax.jacrev(f)
-    jac(1., 3.)
+    jac = jax.jacrev(f, argnums=(1, 2))
+    print(jac(1., 1., 3.))
+
+    jac = jax.jacrev(jac, argnums=(0, 1, 2))
+    print(jac(1., 1., 3.))
 
     a = np.arange(10)
     number = 100000
@@ -209,11 +212,36 @@ def test_fisher_cmb():
     assert np.allclose(fisher_likelihood_clik2(), fisher_likelihood_clik())
 
 
+def test_bao():
+
+    from cosmoprimo.fiducial import DESI
+    from desilike.theories.galaxy_clustering import FlexibleBAOWigglesTracerPowerSpectrumMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+
+    theory = FlexibleBAOWigglesTracerPowerSpectrumMultipoles()
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.3, 0.005], 2: [0.02, 0.3, 0.005]},
+                                                         data={},
+                                                         shotnoise=2e4,
+                                                         theory=theory)
+    footprint = BoxFootprint(volume=1e10, nbar=1e-4)
+    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
+    observable.init.update(covariance=cov)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    for iparam, param in enumerate(likelihood.all_params.select(basename=['al*_*', 'ml*_*'])):
+        param.update(derived='.best')
+        if iparam > 20: break
+    print(likelihood(), likelihood.loglikelihood)
+
+
+
 if __name__ == '__main__':
 
     setup_logging()
     #test_misc()
     #test_differentiation()
     #test_solve()
-    test_fisher_galaxy()
+    #test_fisher_galaxy()
     #test_fisher_cmb()
+    test_bao()
+    #test_jax()

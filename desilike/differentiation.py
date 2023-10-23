@@ -389,6 +389,7 @@ class Differentiation(BaseClass):
 
         def __calculate(*values, derived=False):
             pipeline = self.pipeline
+            assert len(params) == len(values)
             pipeline.input_values.update(dict(zip(params, values)))
             values = pipeline.params.eval(**pipeline.input_values)
             if derived:
@@ -418,9 +419,11 @@ class Differentiation(BaseClass):
                 if jax is None:
                     raise ValueError('jax is required to compute the Jacobian')
                 argnums = [params.index(p) for p in autoderiv]
-                #jac = getattr(jax, 'jacfwd' if iautoderiv else 'jacrev')(jac, argnums=argnums, has_aux=False, holomorphic=False)
-                jac = getattr(jax, 'jacfwd')(jac, argnums=argnums, has_aux=False, holomorphic=False)
+                funcname = 'jacfwd' if iautoderiv else 'jacrev'
+                jac = getattr(jax, funcname)(jac, argnums=argnums, has_aux=False, holomorphic=False)
+                #jac = jax.jacfwd(jac, argnums=argnums, has_aux=False, holomorphic=False)
                 toret.append(jac(*values))
+                #jax.vjp(tmp, has_aux=False)[1](jnp.ones(len(autoderiv)))
         except Exception as exc:
             raise exc
         finally:

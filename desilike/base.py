@@ -302,9 +302,10 @@ class BasePipeline(BaseClass):
             for istate, state in enumerate(states):
                 if isinstance(state, Samples):
                     samples.append(state)
-                elif ref is not None:
-                    samples.append(ref)
-                self.errors[istate] = state
+                else:
+                    self.errors[istate] = state
+                    if ref is not None:
+                        samples.append(ref)
             if samples:
                 self.derived = Samples.concatenate(samples).reshape(cshape)
 

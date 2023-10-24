@@ -2,6 +2,7 @@ import itertools
 
 import numpy as np
 
+from desilike import PipelineError
 from .parameter import Parameter, ParameterCollection, ParameterArray, Samples, Deriv, ParameterPriorError
 from .utils import BaseClass, expand_dict, is_sequence
 from .jax import jax
@@ -451,6 +452,8 @@ class Differentiation(BaseClass):
         calculate_bak, more_derived_bak, mpicomm_bak = self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm
         self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm = self._calculate, self._more_derived, self.mpicomm
         self.pipeline.mpicalculate(**(samples.to_dict(params=self.all_params) if self.mpicomm.rank == 0 else {}))
+        if self.pipeline.errors:
+            raise PipelineError('Got these errors: {}'.format(self.pipeline.errors))
         self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm = calculate_bak, more_derived_bak, mpicomm_bak
 
         states = self.mpicomm.gather(self._getter_samples, root=0)

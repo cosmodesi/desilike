@@ -274,7 +274,6 @@ class BasePipeline(BaseClass):
             return
         mpicomm, more_derived = self.mpicomm, self.more_derived
         self.mpicomm, self.more_derived = mpi.COMM_SELF, None
-        states = {}
         for ivalue in range(size):
             istate = ivalue + cumsizes[mpicomm.rank]
             try:
@@ -282,31 +281,30 @@ class BasePipeline(BaseClass):
             except PipelineError as exc:
                 if self.error is None:
                     self.error = (exc, traceback.format_exc())
-                states[istate] = self.error
-                continue
-            states[istate] = self.derived
-            if more_derived:
-                tmp = more_derived(istate)
-                if tmp is not None: states[istate].update(tmp)
+                state = self.error
+            else:
+                state = self.derived
+                if more_derived:
+                    tmp = more_derived(istate)
+                    if tmp is not None: state.update(tmp)
+            finally:
+                mpicomm.send(state, dest=0, tag=istate)
         self.mpicomm, self.more_derived = mpicomm, more_derived
-        states = self.mpicomm.gather(states, root=0)
+
         if self.mpicomm.rank == 0:
-            cstate = {}
+            states = [mpicomm.recv(tag=istate) for istate in range(cumsizes[-1])]
+            ref = None
             for state in states:
-                cstate.update(state)
-            samples, sample_ref = [], None
-            for iref in range(cumsizes[-1]):
-                if isinstance(cstate[iref], Samples):
-                    sample_ref = cstate[iref]
+                if isinstance(state, Samples):
+                    ref = state
                     break
-            for i in range(cumsizes[-1]):
-                sample = cstate[i]
-                if isinstance(sample, Samples):
-                    samples.append(sample)
-                else:
-                    self.errors[i] = sample
-                    if sample_ref is not None:
-                        samples.append(sample_ref)
+            samples = []
+            for istate, state in enumerate(states):
+                if isinstance(state, Samples):
+                    samples.append(state)
+                elif ref is not None:
+                    samples.append(ref)
+                self.errors[istate] = state
             if samples:
                 self.derived = Samples.concatenate(samples).reshape(cshape)
 

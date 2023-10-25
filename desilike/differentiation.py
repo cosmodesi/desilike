@@ -429,7 +429,7 @@ class Differentiation(BaseClass):
         except Exception as exc:
             raise exc
         finally:
-            self._getter_sample = [__calculate(*values, derived=True)] + toret
+            self._getter_sample = [__calculate(*values)] + toret
         return toret
 
     def _more_derived(self, ipoint):
@@ -457,13 +457,15 @@ class Differentiation(BaseClass):
             raise PipelineError('Got these errors: {}'.format(self.pipeline.errors))
         self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm = calculate_bak, more_derived_bak, mpicomm_bak
 
-        states = self.mpicomm.gather(self._getter_samples, root=0)
         for getter_inst, getter_size in self.mpicomm.allgather((getattr(self, 'getter_inst', None), getattr(self, 'getter_size', None))):
             if getter_inst is not None:
                 self.getter_inst = getter_inst
                 self.getter_size = getter_size
                 break
         toret = None
+        for isample, sample in self._getter_samples.items():
+            self.mpicomm.send(sample, dest=0, tag=isample)
+
         if self.mpicomm.rank == 0:
             finiteparams, finiteorder, finiteaccuracy = [], [], []
             for param, method in self.method.items():
@@ -471,13 +473,13 @@ class Differentiation(BaseClass):
                     finiteparams.append(param)
                     finiteorder.append(self.order[param])
                     finiteaccuracy.append(self.accuracy[param])
-            self._getter_samples = [[[None for i in range(nsamples)] for i in range(len(self.autoderivs))] for i in range(max(self.getter_size, 1))]
-            for state in states:
-                for istate, items in state.items():
-                    for ideriv, derivs in enumerate(items):
-                        for iitem, item in enumerate(derivs):
-                            self._getter_samples[iitem][ideriv][istate] = item
-            del states
+            self._getter_samples = [[[None for isample in range(nsamples)] for iautoderiv in range(len(self.autoderivs))] for igetter in range(max(self.getter_size, 1))]
+            for isample in range(nsamples):
+                items = self.mpicomm.recv(tag=isample)
+                for ideriv, derivs in enumerate(items):
+                    for iitem, item in enumerate(derivs):
+                        self._getter_samples[iitem][ideriv][isample] = item
+
             self._getter_samples = [[np.array(s) for s in getter_samples] for getter_samples in self._getter_samples]
             degrees, derivatives = [], [[] for i in range(max(self.getter_size, 1))]
             if finiteparams:
@@ -527,7 +529,7 @@ class Differentiation(BaseClass):
                                 orders = [(iparam, order, accuracy) for iparam, (order, accuracy) in enumerate(zip(orders, finiteaccuracy)) if order > 0]
                                 dx = [deriv_nd(X, y, orders, center=center, atol=atol) for y in Y]
                                 if any(np.isnan(ddx).any() for ddx in dx):
-                                    raise ValueError('Some derivatives are NaN')
+                                    raise ValueError('some derivatives are NaN')
                                 degrees.append(degree)
                                 for iy, (ddx, yshape) in enumerate(zip(dx, yshapes)): derivatives[iy].append(ddx.reshape(yshape))
                 autodegrees = nautodegrees

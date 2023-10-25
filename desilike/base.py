@@ -256,54 +256,68 @@ class BasePipeline(BaseClass):
         """MPI-parallel version of the above: one can pass arrays as input parameter values."""
         size, cshape = 0, ()
         names = self.mpicomm.bcast(list(params.keys()) if self.mpicomm.rank == 0 else None, root=0)
+        max_chunk_size = getattr(self, '_mpi_max_chunk_size', 100)
+        csizes = []
         for name in names:
             array = None
             if self.mpicomm.rank == 0:
                 array = np.asarray(params[name])
                 cshape = array.shape
                 array = array.ravel()
-            params[name] = mpi.scatter(array, mpicomm=self.mpicomm, mpiroot=0)
-            size = params[name].size
-        cumsizes = np.cumsum([0] + self.mpicomm.allgather(size))
+                csizes.append(array.size)
+            params[name] = array
         self.derived, self.errors = Samples(), {}
-        if not cumsizes[-1]:
-            try:
-                self.derived = self.derived[:0]
-            except (AttributeError, TypeError, IndexError):
-                pass
-            return
+
+        try: self.derived = self.derived[:0]
+        except (AttributeError, TypeError, IndexError): pass
+        if not names: return
+
+        csizes = self.mpicomm.bcast(csizes, root=0)
+        all_size = csizes[0]
+        if not all(csize == all_size for csize in csizes):
+            raise PipelineError('input parameter arrays are of different sizes: {}'.format(dict(zip(names, csizes))))
+        if not all_size: return
+
+        nchunks = (all_size // max_chunk_size) + 1
         mpicomm, more_derived = self.mpicomm, self.more_derived
-        self.mpicomm, self.more_derived = mpi.COMM_SELF, None
-        states = []
-        for ivalue in range(size):
-            istate = ivalue + cumsizes[mpicomm.rank]
-            try:
-                self.calculate(**{name: value[ivalue] for name, value in params.items()})
-            except PipelineError as exc:
-                if self.error is None:
-                    self.error = (exc, traceback.format_exc())
-                state = self.error
-            else:
-                state = self.derived
-                if more_derived:
-                    tmp = more_derived(istate)
-                    if tmp is not None: state.update(tmp)
-            finally:
-                states.append(state)
-        mpicomm.send(states, dest=0, tag=42)
-        self.mpicomm, self.more_derived = mpicomm, more_derived
-        if self.mpicomm.rank == 0:
-            #states = [mpicomm.recv(tag=istate) for istate in range(cumsizes[-1])]
+        all_states = []
+        for ichunk in range(nchunks):  # divide in chunks to save memory for MPI comm
+            chunk_offset = all_size * ichunk // nchunks
+            chunk_params = {}
+            for name in names:
+                chunk_params[name] = mpi.scatter(params[name][chunk_offset:all_size * (ichunk + 1) // nchunks] if mpicomm.rank == 0 else None, mpicomm=mpicomm, mpiroot=0)
+                size = len(chunk_params[name])
+            rank_offset = chunk_offset + sum(mpicomm.allgather(size)[:mpicomm.rank])
+            self.mpicomm, self.more_derived = mpi.COMM_SELF, None
             states = []
-            for irank in range(mpicomm.size):
-                states += mpicomm.recv(source=irank, tag=42)
+            for ivalue in range(size):
+                istate = ivalue + rank_offset
+                try:
+                    self.calculate(**{name: value[ivalue] for name, value in chunk_params.items()})
+                except PipelineError as exc:
+                    if self.error is None:
+                        self.error = (exc, traceback.format_exc())
+                    state = self.error
+                else:
+                    state = self.derived
+                    if more_derived:
+                        tmp = more_derived(istate)
+                        if tmp is not None: state.update(tmp)
+                finally:
+                    states.append(state)
+            mpicomm.send(states, dest=0, tag=42)
+            if mpicomm.rank == 0:
+                for irank in range(mpicomm.size):
+                    all_states += mpicomm.recv(source=irank, tag=42)
+            self.mpicomm, self.more_derived = mpicomm, more_derived
+        if self.mpicomm.rank == 0:
             ref = None
-            for state in states:
+            for state in all_states:
                 if isinstance(state, Samples):
                     ref = state
                     break
             samples = []
-            for istate, state in enumerate(states):
+            for istate, state in enumerate(all_states):
                 if isinstance(state, Samples):
                     samples.append(state)
                 else:

@@ -342,6 +342,7 @@ class Differentiation(BaseClass):
         if mpicomm.rank == 0:
             samples = np.array(deriv_grid(grids)).T
             self._grid_samples = Samples(samples, params=self.varied_params)
+            self.log_info('Differentation will evaluate {:d} points.'.format(len(self._grid_samples)))
 
         autoparams, autoorder, self.autoderivs = [], [], []
         for param, method in self.method.items():

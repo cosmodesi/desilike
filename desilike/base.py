@@ -274,6 +274,7 @@ class BasePipeline(BaseClass):
             return
         mpicomm, more_derived = self.mpicomm, self.more_derived
         self.mpicomm, self.more_derived = mpi.COMM_SELF, None
+        states = []
         for ivalue in range(size):
             istate = ivalue + cumsizes[mpicomm.rank]
             try:
@@ -288,11 +289,14 @@ class BasePipeline(BaseClass):
                     tmp = more_derived(istate)
                     if tmp is not None: state.update(tmp)
             finally:
-                mpicomm.send(state, dest=0, tag=istate)
+                states.append(state)
+        mpicomm.send(states, dest=0, tag=42)
         self.mpicomm, self.more_derived = mpicomm, more_derived
-
         if self.mpicomm.rank == 0:
-            states = [mpicomm.recv(tag=istate) for istate in range(cumsizes[-1])]
+            #states = [mpicomm.recv(tag=istate) for istate in range(cumsizes[-1])]
+            states = []
+            for irank in range(mpicomm.size):
+                states += mpicomm.recv(source=irank, tag=42)
             ref = None
             for state in states:
                 if isinstance(state, Samples):

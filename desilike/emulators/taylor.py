@@ -4,6 +4,7 @@ import numpy as np
 
 from desilike import mpi
 from desilike.jax import numpy as jnp
+from desilike.jax import jit
 from desilike.utils import expand_dict
 from desilike.parameter import Deriv
 from .base import BaseEmulatorEngine
@@ -83,6 +84,7 @@ class TaylorEmulatorEngine(BaseEmulatorEngine):
         self.powers = self.mpicomm.bcast(self.powers, root=0)
         self.center = self.mpicomm.bcast(self.center, root=0)
 
+    @jit(static_argnums=[0])
     def predict(self, X):
         diffs = jnp.array(X - self.center)
         #diffs = jnp.where(self.powers > 0, diffs, 0.)  # a trick to avoid NaNs in the derivation

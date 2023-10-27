@@ -18,7 +18,7 @@ import numpy as np
 import scipy as sp
 from .jax import numpy as jnp
 from .jax import scipy as jsp
-from .jax import rv_frozen
+from .jax import rv_frozen, use_jax, jit
 
 from .io import BaseConfig
 from . import mpi, utils
@@ -222,7 +222,10 @@ class Deriv(dict):
         >>> c = Deriv(x=2, y=1)                   # a new derivative from keyword args
         """
         super().__init__()
-        if iterable is None or isinstance(iterable, (Deriv, Mapping)):
+        if isinstance(iterable, Deriv):  # shortcut, saves ~1e-6 s
+            super().update(iterable)
+            return
+        if iterable is None or isinstance(iterable, (Mapping,)):
             self.update(iterable, **kwds)
         else:
             iterable = (iterable,) if not utils.is_sequence(iterable) else iterable
@@ -304,10 +307,6 @@ class Deriv(dict):
         self._keep_positive()
         if kwds:
             self.update(kwds)
-
-    def copy(self):
-        """Return a shallow copy."""
-        return self.__class__(self)
 
     def __reduce__(self):
         return self.__class__, (dict(self),)
@@ -1756,7 +1755,7 @@ class ParameterCollection(BaseParameterCollection):
         eval_params = self.eval(**params)
         toret = 0.
         for param in self.data:
-            if param.name in eval_params and param.varied and (param.depends or (not param.derived)):
+            if param.varied and (param.depends or (not param.derived)) and param.name in eval_params:
                 toret += param.prior(eval_params[param.name])
         return toret
 
@@ -1769,6 +1768,7 @@ class ParameterPriorError(Exception):
 class ParameterPrior(BaseClass):
     """
     Class that describes a 1D prior distribution.
+    TODO: make immutability explicit.
 
     Parameters
     ----------
@@ -1818,8 +1818,9 @@ class ParameterPrior(BaseClass):
             if name in ['loc', 'scale', 'a', 'b']: self.attrs[name] = float(value)
 
         self.dist = str(dist)
+        if self.dist.startswith('trunc'): self.dist = self.dist[5:]
         if self.is_limited():
-            dist = dist if dist.startswith('trunc') or dist == 'uniform' else 'trunc{}'.format(dist)
+            dist = dist if dist == 'uniform' else 'trunc{}'.format(dist)
         try:
             dist = getattr(jsp.stats, dist)
         except AttributeError:
@@ -1849,19 +1850,37 @@ class ParameterPrior(BaseClass):
         x = jnp.asarray(x)
         return (self.limits[0] < x) & (x < self.limits[1])
 
-    def __call__(self, x, remove_zerolag=True):
+    def __hash__(self):
+        return super().__hash__()
+
+    @jit(static_argnums=[0, 2])
+    def logpdf(self, x, remove_zerolag=True):
         """
         Return log-probability density at ``x``.
         If ``remove_zerolag`` is ``True``, remove the maximum log-probability density.
         """
+        _jnp = jnp if use_jax(x) else np  # Worth testing if input is jax, as jax incurs huge overheads
+        x = _jnp.asarray(x)
+        isin = (self.limits[0] < x) & (x < self.limits[1])
+        # Fast version
+        if remove_zerolag:
+            if self.dist == 'uniform':
+                return _jnp.where(isin, 0, -np.inf)
+            if self.dist == 'norm':
+                return - 0.5 * isin * (x - self.attrs['loc'])**2 / self.attrs['scale']**2
+
         if not self.is_proper():
-            return jnp.where(self.isin(x), 0, -np.inf)
+            return _jnp.where(isin, 0, -np.inf)
+
         toret = self.rv.logpdf(x)
         if remove_zerolag:
             loc = self.attrs.get('loc', None)
             if loc is None: loc = np.mean(self.limits)
             toret -= self.rv.logpdf(loc)
         return toret
+
+    def __call__(self, x, remove_zerolag=True):
+        return self.logpdf(x, remove_zerolag=remove_zerolag)
 
     def sample(self, size=None, random_state=None):
         """
@@ -1954,6 +1973,7 @@ class ParameterPrior(BaseClass):
     def __eq__(self, other):
         """Is ``self`` equal to ``other``, i.e. same type and attributes?"""
         return type(other) == type(self) and all(getattr(other, key) == getattr(self, key) for key in ['dist', 'limits', 'attrs'])
+
 
 
 def _reshape(array, shape):
@@ -2314,8 +2334,8 @@ class BaseParameterMatrix(BaseClass):
             return
         if params is None:
             raise ValueError('Provide matrix parameters')
-        self._params = ParameterCollection(params).deepcopy()
-        for param in self._params: param.update(fixed=False)
+        self._params = ParameterCollection(params)
+        self._params = ParameterCollection([param.clone(fixed=False) for param in self._params])
         if not self._params:
             raise ValueError('Got no parameters')
         if getattr(value, 'derivs', None) is not None:

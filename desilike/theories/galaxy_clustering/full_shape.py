@@ -4,6 +4,7 @@ import numpy as np
 from scipy import interpolate
 
 from desilike.jax import numpy as jnp
+from desilike.jax import jit
 from desilike import plotting, utils, BaseCalculator
 from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
 from .base import BaseTheoryPowerSpectrumMultipoles, BaseTheoryCorrelationFunctionMultipoles, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
@@ -1718,6 +1719,7 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         table_now = FOLPS.Table_interp(kap, k, table_now)
         self.pt = Namespace(kap=kap, muap=muap, table=table, table_now=table_now, sigma2t=sigma2t, f0=f0, jac=jac)
 
+    @jit(static_argnums=[0])
     def combine_bias_terms_poles(self, pars, nd=1e-4):
         import FOLPSnu as FOLPS
         pars = list(pars) + [1. / nd]  # add shot noise
@@ -1729,9 +1731,9 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         FOLPS.f0 = self.pt.f0
         fk = self.pt.table[1] * self.pt.f0
         pkl, pkl_now, sigma2t = self.pt.table[0], self.pt.table_now[0], self.pt.sigma2t
-        pkmu = self.pt.jac * ((b1 + fk * mu**2)**2 * (pkl_now + np.exp(-k**2 * sigma2t)*(pkl - pkl_now)*(1 + k**2 * sigma2t))
-                               + np.exp(-k**2 * sigma2t) * FOLPS.PEFTs(k, mu, pars, self.pt.table)
-                               + (1 - np.exp(-k**2 * sigma2t)) * FOLPS.PEFTs(k, mu, pars, self.pt.table_now))
+        pkmu = self.pt.jac * ((b1 + fk * mu**2)**2 * (pkl_now + jnp.exp(-k**2 * sigma2t)*(pkl - pkl_now)*(1 + k**2 * sigma2t))
+                               + jnp.exp(-k**2 * sigma2t) * FOLPS.PEFTs(k, mu, pars, self.pt.table)
+                               + (1 - jnp.exp(-k**2 * sigma2t)) * FOLPS.PEFTs(k, mu, pars, self.pt.table_now))
         return self.to_poles(pkmu)
 
     def __getstate__(self):

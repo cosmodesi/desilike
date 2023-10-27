@@ -25,6 +25,34 @@ except ImportError:
     import scipy
 
 
+def jit(*args, **kwargs):
+    """Return :mod:`jax` just-in-time compiler."""
+
+    def get_wrapper(func):
+        if jax is None:
+            return func
+        return jax.jit(func, **kwargs)
+
+    if kwargs or not args:
+        return get_wrapper
+
+    if len(args) != 1:
+        raise ValueError('unexpected args: {}'.format(args))
+
+    return get_wrapper(args[0])
+
+def use_jax(array):
+    """Whether to use jax.numpy depending on whether array is jax's object."""
+    return isinstance(array, tuple(array_types))
+
+
+def np_jax(array):
+    """Return numpy or jax.numpy depending on whether array is jax's object"""
+    if use_jax(array):
+        return jnp
+    return np
+
+
 def dist_name(dist):
     """
     Return distribution name, which should work with either scipy (where dist is a :class:`rv_continuous` instance)
@@ -40,7 +68,11 @@ def fallback(func):
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
         args, kwargs = func(self, *args, **kwargs)
-        return getattr(self.dist, func.__name__, getattr(self.odist, func.__name__))(*args, **kwargs)
+        ofunc = getattr(self.odist, func.__name__)
+        #print(any(use_jax(arg) for arg in args), func)
+        if not any(use_jax(arg) for arg in args):
+            return ofunc(*args, **kwargs)
+        return getattr(self.dist, func.__name__, ofunc)(*args, **kwargs)
 
     return wrapper
 

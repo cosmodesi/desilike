@@ -336,7 +336,7 @@ class BasePipeline(BaseClass):
         for calculator in self.calculators:
             cosmo_requires = getattr(calculator, 'cosmo_requires', {})
             if cosmo_requires:
-                conversions = {}  # 'logA': 'ln10^10A_s'
+                conversions = {'m_ncdm': 'm_ncdm_tot'}  # 'logA': 'ln10^10A_s'
                 cosmo_params = cosmo_requires.get('params', {})
                 if cosmo_params:
                     for basename, name in calculator.runtime_info.base_names.items():

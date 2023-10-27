@@ -1861,13 +1861,13 @@ class ParameterPrior(BaseClass):
         """
         _jnp = jnp if use_jax(x) else np  # Worth testing if input is jax, as jax incurs huge overheads
         x = _jnp.asarray(x)
-        isin = (self.limits[0] < x) & (x < self.limits[1])
+        isin = (self.limits[0] <= x) & (x <= self.limits[1])
         # Fast version
         if remove_zerolag:
             if self.dist == 'uniform':
                 return _jnp.where(isin, 0, -np.inf)
             if self.dist == 'norm':
-                return - 0.5 * isin * (x - self.attrs['loc'])**2 / self.attrs['scale']**2
+                return _jnp.where(isin, - 0.5 * (x - self.attrs['loc'])**2 / self.attrs['scale']**2, -np.inf)
 
         if not self.is_proper():
             return _jnp.where(isin, 0, -np.inf)

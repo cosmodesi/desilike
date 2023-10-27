@@ -2,7 +2,7 @@ import numpy as np
 from scipy import special
 
 from desilike.jax import numpy as jnp
-from desilike.jax import InterpolatedUnivariateSpline
+from desilike.jax import InterpolatedUnivariateSpline, jit
 from desilike.cosmo import is_external_cosmo
 from desilike.theories.primordial_cosmology import get_cosmo, Cosmoprimo, constants
 from desilike.base import BaseCalculator
@@ -79,17 +79,21 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         self.power.init.params = self.init.params.copy()
         self.init.params.clear()
 
-    def calculate(self):
-        power = []
-        for pk in self.power.power:
+    @jit(static_argnums=[0])
+    def get_corr(self, power):
+        tmp = []
+        for pk in power:
             slope_high = (pk[-1] - pk[-2]) / np.log10(self.kin[-1] / self.kin[-2])
             if self.interp_order == 1:
                 interp = jnp.interp(np.log10(self.k_mid), np.log10(self.kin), pk)
             else:
                 interp = InterpolatedUnivariateSpline(np.log10(self.kin), pk, k=self.interp_order)(np.log10(self.k_mid))
-            power.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.k_high) * self.pad_high], axis=-1))
-        s, corr = self.fftlog(jnp.vstack(power))
-        self.corr = jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
+            tmp.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.k_high) * self.pad_high], axis=-1))
+        s, corr = self.fftlog(jnp.vstack(tmp))
+        return jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
+
+    def calculate(self):
+        self.corr = self.get_corr(self.power.power)
 
     @plotting.plotter
     def plot(self, fig=None):

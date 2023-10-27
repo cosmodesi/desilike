@@ -421,7 +421,7 @@ class Differentiation(BaseClass):
                 if jax is None:
                     raise ValueError('jax is required to compute the Jacobian')
                 argnums = [params.index(p) for p in autoderiv]
-                funcname = 'jacfwd'# if iautoderiv else 'jacrev'
+                funcname = 'jacfwd' # if iautoderiv else 'jacrev'
                 jac = getattr(jax, funcname)(jac, argnums=argnums, has_aux=False, holomorphic=False)
                 #jac = jax.jacfwd(jac, argnums=argnums, has_aux=False, holomorphic=False)
                 toret.append(jac(*values))
@@ -462,22 +462,23 @@ class Differentiation(BaseClass):
                 self.getter_size = getter_size
                 break
         toret = None
-        for isample, sample in self._getter_samples.items():
-            self.mpicomm.send(sample, dest=0, tag=isample)
-        if self.mpicomm.rank == 0:
+        if self.mpicomm.rank != 0:
+            for isample, sample in self._getter_samples.items():
+                self.mpicomm.send(sample, dest=0, tag=isample)
+        else:
             finiteparams, finiteorder, finiteaccuracy = [], [], []
             for param, method in self.method.items():
                 if method == 'finite':
                     finiteparams.append(param)
                     finiteorder.append(self.order[param])
                     finiteaccuracy.append(self.accuracy[param])
-            self._getter_samples = [[[None for isample in range(nsamples)] for iautoderiv in range(len(self.autoderivs))] for igetter in range(max(self.getter_size, 1))]
+            getter_samples = [[[None for isample in range(nsamples)] for iautoderiv in range(len(self.autoderivs))] for igetter in range(max(self.getter_size, 1))]
             for isample in range(nsamples):
-                items = self.mpicomm.recv(tag=isample)
+                items = self._getter_samples[isample] if isample in self._getter_samples else self.mpicomm.recv(tag=isample)
                 for ideriv, derivs in enumerate(items):
                     for iitem, item in enumerate(derivs):
-                        self._getter_samples[iitem][ideriv][isample] = item
-            self._getter_samples = [[np.array(s) for s in getter_samples] for getter_samples in self._getter_samples]
+                        getter_samples[iitem][ideriv][isample] = item
+            getter_samples = [[np.array(s) for s in getter_sample] for getter_sample in getter_samples]
             degrees, derivatives = [], [[] for i in range(max(self.getter_size, 1))]
             if finiteparams:
                 X = np.concatenate([samples[param].reshape(nsamples, 1) for param in finiteparams], axis=-1)
@@ -508,7 +509,7 @@ class Differentiation(BaseClass):
                         nautodegrees.append(nautodegree)
                         nautoindices.append(nautoindex)
                         degrees.append(nautodegree)
-                        Y = [getter_samples[autoorder][(slice(None),) + nautoindex + (Ellipsis,)] for getter_samples in self._getter_samples]
+                        Y = [getter_sample[autoorder][(slice(None),) + nautoindex + (Ellipsis,)] for getter_sample in getter_samples]
                         if autodegree:  # with jax nan derivatives are zero derivatives...
                             for y in Y: y[np.isnan(y)] = 0.
                         for iy, y in enumerate(Y): derivatives[iy].append(y[cidx])

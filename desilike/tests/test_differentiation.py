@@ -212,27 +212,49 @@ def test_fisher_cmb():
     assert np.allclose(fisher_likelihood_clik2(), fisher_likelihood_clik())
 
 
-def test_bao():
+def test_speed():
 
+    import time
     from cosmoprimo.fiducial import DESI
-    from desilike.theories.galaxy_clustering import FlexibleBAOWigglesTracerPowerSpectrumMultipoles
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles, FlexibleBAOWigglesTracerPowerSpectrumMultipoles, FlexibleBAOWigglesTracerCorrelationFunctionMultipoles
+    from desilike.theories.galaxy_clustering import FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TracerCorrelationFunctionMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
     from desilike.likelihoods import ObservablesGaussianLikelihood
 
-    theory = FlexibleBAOWigglesTracerPowerSpectrumMultipoles()
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.3, 0.005], 2: [0.02, 0.3, 0.005]},
-                                                         data={},
-                                                         shotnoise=2e4,
-                                                         theory=theory)
     footprint = BoxFootprint(volume=1e10, nbar=1e-4)
-    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
-    observable.init.update(covariance=cov)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    for iparam, param in enumerate(likelihood.all_params.select(basename=['al*_*', 'ml*_*'])):
-        param.update(derived='.best')
-        if iparam > 20: break
-    print(likelihood(), likelihood.loglikelihood)
 
+    for theory_name in ['FOLPS', 'DampedBAOWiggles', 'FlexibleBAOWiggles'][:1]:
+        for observable_name in ['power', 'correlation']:
+            if observable_name == 'power':
+                theory = locals()[theory_name + 'TracerPowerSpectrumMultipoles']()
+                observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.3, 0.005], 2: [0.02, 0.3, 0.005]},
+                                                                     data={},
+                                                                     shotnoise=2e4,
+                                                                     theory=theory)
+            else:
+                theory = locals()[theory_name + 'TracerCorrelationFunctionMultipoles']()
+                observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 180., 4.], 2: [20., 180., 4.]},
+                                                                           data={},
+                                                                           theory=theory)
+
+            cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
+            observable.init.update(covariance=cov)
+            likelihood = ObservablesGaussianLikelihood(observables=[observable])
+            likelihood()
+            for param in likelihood.all_params.select(basename=theory.template.init.params.basenames()):
+                param.update(fixed=True)
+            for iparam, param in enumerate(likelihood.all_params.select(basename=['al*_*', 'ml*_*', 'alpha*', 'sn*'])):
+                param.update(derived='.best')
+            rng = np.random.RandomState(seed=42)
+            for i in range(2):
+                params = {param.name: param.prior.sample(random_state=rng) for param in likelihood.varied_params}
+                likelihood(**params)
+            niterations = 10
+            t0 = time.time()
+            for i in range(niterations):
+                params = {param.name: param.prior.sample(random_state=rng) for param in likelihood.varied_params}
+                likelihood(**params)
+            print(theory_name, observable_name, (time.time() - t0) / niterations)
 
 
 if __name__ == '__main__':
@@ -243,5 +265,5 @@ if __name__ == '__main__':
     #test_solve()
     #test_fisher_galaxy()
     #test_fisher_cmb()
-    test_bao()
+    test_speed()
     #test_jax()

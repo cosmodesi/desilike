@@ -599,31 +599,32 @@ def test_folps():
     template = DirectPowerSpectrumTemplate(z=z_pk)
     theory = FOLPSTracerPowerSpectrumMultipoles(template=template, k=k, shotnoise=PshotP, mu=3)
 
-    theory(m_ncdm=0.2)
-    cosmo = template.cosmo
-    omega_b, omega_cdm, omega_ncdm, h = cosmo['omega_b'], cosmo['omega_cdm'], cosmo['omega_ncdm_tot'], cosmo['h']
-    CosmoParams = [z_pk, omega_b, omega_cdm, omega_ncdm, h]
-    inputpkT = [template.k, template.pk_dd]
+    for m_ncdm in [0.2, 0.5]:
+        theory(m_ncdm=m_ncdm)
+        cosmo = template.cosmo
+        omega_b, omega_cdm, omega_ncdm, h = cosmo['omega_b'], cosmo['omega_cdm'], cosmo['omega_ncdm_tot'], cosmo['h']
+        CosmoParams = [z_pk, omega_b, omega_cdm, omega_ncdm, h]
+        inputpkT = [template.k, template.pk_dd]
 
-    import FOLPSnu as FOLPS
-    matrices = FOLPS.Matrices()
-    nonlinear = FOLPS.NonLinear(inputpkT, CosmoParams)
-    ref = FOLPS.RSDmultipoles(k, NuisanParams, AP=False)[1:]
-    print(theory.template.f0 / FOLPS.f0)
-    power = theory(b1=b1, b2=b2, bs=bs2 + 4./7*(b1 - 1), b3=b3nl - 32./315*(b1 - 1),
-                   alpha0=alpha0, alpha2=alpha2, alpha4=alpha4, ct=ctilde, sn0=alphashot0, sn2=alphashot2)
+        import FOLPSnu as FOLPS
+        matrices = FOLPS.Matrices()
+        nonlinear = FOLPS.NonLinear(inputpkT, CosmoParams)
+        ref = FOLPS.RSDmultipoles(k, NuisanParams, AP=False)[1:]
+        print(theory.template.f0 / FOLPS.f0)
+        power = theory(b1=b1, b2=b2, bs=bs2 + 4./7*(b1 - 1), b3=b3nl - 32./315*(b1 - 1),
+                    alpha0=alpha0, alpha2=alpha2, alpha4=alpha4, ct=ctilde, sn0=alphashot0, sn2=alphashot2)
 
-    ax = plt.gca()
-    for ill, ell in enumerate((0, 2, 4)):
-        ax.plot(k, k * ref[ill], color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
-        ax.plot(k, k * power[ill], color='C{:d}'.format(ill), ls='--')
-        #ax.plot(k, k * (ref[ill] / power[ill] - 1.), color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
-    ax.set_xlim([k[0], k[-1]])
-    ax.grid(True)
-    ax.legend()
-    ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
-    ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-    plt.show()
+        ax = plt.gca()
+        for ill, ell in enumerate((0, 2, 4)):
+            ax.plot(k, k * ref[ill], color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
+            ax.plot(k, k * power[ill], color='C{:d}'.format(ill), ls='--')
+            #ax.plot(k, k * (ref[ill] / power[ill] - 1.), color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.set_xlim([k[0], k[-1]])
+        ax.grid(True)
+        ax.legend()
+        ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        plt.show()
 
     theory = FOLPSTracerCorrelationFunctionMultipoles()
     theory()
@@ -910,13 +911,13 @@ if __name__ == '__main__':
 
     #test_velocileptors()
     #test_pybird()
-    #test_folps()
+    test_folps()
     #test_params()
     #test_integ()
     #test_templates()
     #test_bao()
     #test_flexible_bao()
-    test_full_shape()
+    #test_full_shape()
     #test_png()
     #test_pk_to_xi()
     #test_ap_diff()

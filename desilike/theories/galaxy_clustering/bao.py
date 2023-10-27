@@ -9,6 +9,7 @@ from desilike.base import BaseCalculator
 from desilike.cosmo import is_external_cosmo
 from desilike import plotting
 from desilike.jax import numpy as jnp
+from desilike.jax import jit
 from .power_template import BAOPowerSpectrumTemplate
 from .base import (BaseTheoryPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles)
 
@@ -317,18 +318,23 @@ class FlexibleBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
         for params in self.wiggles_orders.values(): bb_params += list(params)
         self.params = self.params.select(basename=bb_params)
 
-    def calculate(self, b1=1., **kwargs):
-        super(FlexibleBAOWigglesPowerSpectrumMultipoles, self).calculate()
-        f = self.template.f
-        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        pknow = self.template.pknow_dd_interpolator(self.k)
-        wiggles = self.template.pk_dd_interpolator(kap) - self.template.pknow_dd_interpolator(kap)
+    @jit(static_argnums=[0])
+    def get_wiggles(self, wiggles, **kwargs):
         damped_wiggles = 0.
         for ell in self.ells:
             mult = jnp.array([kwargs[name] for name in self.wiggles_orders[ell]]).dot(self.wiggles_matrix[ell])
             if ell == 0: mult += 1.
             leg = special.legendre(ell)(self.mu)
             damped_wiggles += wiggles * mult[:, None] * leg
+        return damped_wiggles
+
+    def calculate(self, b1=1., **kwargs):
+        super(FlexibleBAOWigglesPowerSpectrumMultipoles, self).calculate()
+        f = self.template.f
+        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        pknow = self.template.pknow_dd_interpolator(self.k)
+        wiggles = self.template.pk_dd_interpolator(kap) - self.template.pknow_dd_interpolator(kap)
+        damped_wiggles = self.get_wiggles(wiggles, **kwargs)
         sk = 0.
         if self.mode == 'reciso': sk = np.exp(-1. / 2. * (self.k * self.smoothing_radius)**2)[:, None]
         kaiser = (b1 + f * self.mu**2 * (1 - sk))**2
@@ -472,10 +478,14 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
         for params in self.broadband_orders.values(): bb_params += list(params)
         self.params = self.params.select(basename=bb_params)
 
+    @jit(static_argnums=[0])
+    def get_broadband(self, **params):
+        return jnp.array([jnp.array([params.get(name, 0.) for name in self.broadband_orders[ell]]).dot(self.broadband_matrix[ell]) for ell in self.ells])
+
     def calculate(self, **params):
         for name in ['z', 'k', 'ells']:
             setattr(self, name, getattr(self.pt, name))
-        self.power = self.pt.power.copy() + jnp.array([jnp.array([params.get(name, 0.) for name in self.broadband_orders[ell]]).dot(self.broadband_matrix[ell]) for ell in self.ells])
+        self.power = self.pt.power.copy() + self.get_broadband(**params)
 
     @property
     def template(self):

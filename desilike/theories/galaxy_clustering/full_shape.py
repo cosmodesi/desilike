@@ -1683,6 +1683,22 @@ class Namespace(object):
     def __init__(self, **kwargs):
         self.__dict__.update(**kwargs)
 
+@jit
+def folps_combine_bias_terms_pkmu(k, mu, jac, f0, table, table_now, sigma2t, pars, nd=1e-4):
+    import FOLPSnu as FOLPS
+    pars = list(pars) + [1. / nd]  # add shot noise
+    b1 = pars[0]
+    # add co-evolution part
+    pars[2] = pars[2] - 4. / 7. * (b1 - 1.)  # bs
+    pars[3] = pars[3] + 32. / 315. * (b1 - 1.)  # b3
+    FOLPS.f0 = f0
+    fk = table[1] * f0
+    pkl, pkl_now, sigma2t = table[0], table_now[0], sigma2t
+    pkmu = jac * ((b1 + fk * mu**2)**2 * (pkl_now + jnp.exp(-k**2 * sigma2t)*(pkl - pkl_now)*(1 + k**2 * sigma2t))
+                   + jnp.exp(-k**2 * sigma2t) * FOLPS.PEFTs(k, mu, pars, table)
+                   + (1 - jnp.exp(-k**2 * sigma2t)) * FOLPS.PEFTs(k, mu, pars, table_now))
+    return pkmu
+
 
 class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
 
@@ -1719,22 +1735,9 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         table_now = FOLPS.Table_interp(kap, k, table_now)
         self.pt = Namespace(kap=kap, muap=muap, table=table, table_now=table_now, sigma2t=sigma2t, f0=f0, jac=jac)
 
-    @jit(static_argnums=[0])
     def combine_bias_terms_poles(self, pars, nd=1e-4):
-        import FOLPSnu as FOLPS
-        pars = list(pars) + [1. / nd]  # add shot noise
-        b1 = pars[0]
-        # add co-evolution part
-        pars[2] = pars[2] - 4. / 7. * (b1 - 1.)  # bs
-        pars[3] = pars[3] + 32. / 315. * (b1 - 1.)  # b3
-        k, mu = self.pt.kap, self.pt.muap
-        FOLPS.f0 = self.pt.f0
-        fk = self.pt.table[1] * self.pt.f0
-        pkl, pkl_now, sigma2t = self.pt.table[0], self.pt.table_now[0], self.pt.sigma2t
-        pkmu = self.pt.jac * ((b1 + fk * mu**2)**2 * (pkl_now + jnp.exp(-k**2 * sigma2t)*(pkl - pkl_now)*(1 + k**2 * sigma2t))
-                               + jnp.exp(-k**2 * sigma2t) * FOLPS.PEFTs(k, mu, pars, self.pt.table)
-                               + (1 - jnp.exp(-k**2 * sigma2t)) * FOLPS.PEFTs(k, mu, pars, self.pt.table_now))
-        return self.to_poles(pkmu)
+        return self.to_poles(folps_combine_bias_terms_pkmu(self.pt.kap, self.pt.muap, self.pt.jac, self.pt.f0,
+                                                           self.pt.table, self.pt.table_now, self.pt.sigma2t, pars, nd=nd))
 
     def __getstate__(self):
         state = {}

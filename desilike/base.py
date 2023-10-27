@@ -301,9 +301,11 @@ class BasePipeline(BaseClass):
                         if tmp is not None: state.update(tmp)
                 finally:
                     states.append(state)
-            mpicomm.send(states, dest=0, tag=42)
-            if mpicomm.rank == 0:
-                for irank in range(mpicomm.size):
+            if mpicomm.rank != 0:
+                mpicomm.send(states, dest=0, tag=42)
+            else:
+                all_states += states
+                for irank in range(1, mpicomm.size):
                     all_states += mpicomm.recv(source=irank, tag=42)
             self.mpicomm, self.more_derived = mpicomm, more_derived
         if self.mpicomm.rank == 0:
@@ -1045,8 +1047,9 @@ class BaseCalculator(BaseClass):
     def __clear__(self):
         """Clear instance attributes and ``jax.jit`` cache."""
         self.__dict__ = {name: self.__dict__[name] for name in ['info', 'runtime_info', '_mpicomm'] if name in self.__dict__}
-        for func in self.__class__.__dict__.values():
-            getattr(func, 'clear_cache', lambda: None)()
+        for funcname in dir(self.__class__):
+            # to recompile jit
+            getattr(getattr(self.__class__, funcname, None), 'clear_cache', lambda: None)()
 
 
 class CollectionCalculator(BaseCalculator):

@@ -342,7 +342,7 @@ class Differentiation(BaseClass):
         if mpicomm.rank == 0:
             samples = np.array(deriv_grid(grids)).T
             self._grid_samples = Samples(samples, params=self.varied_params)
-            self.log_info('Differentation will evaluate {:d} points.'.format(len(self._grid_samples)))
+            self.log_info('Differentiation will evaluate {:d} points.'.format(len(self._grid_samples)))
 
         autoparams, autoorder, self.autoderivs = [], [], []
         for param, method in self.method.items():
@@ -421,7 +421,7 @@ class Differentiation(BaseClass):
                 if jax is None:
                     raise ValueError('jax is required to compute the Jacobian')
                 argnums = [params.index(p) for p in autoderiv]
-                funcname = 'jacfwd' if iautoderiv else 'jacrev'
+                funcname = 'jacfwd'# if iautoderiv else 'jacrev'
                 jac = getattr(jax, funcname)(jac, argnums=argnums, has_aux=False, holomorphic=False)
                 #jac = jax.jacfwd(jac, argnums=argnums, has_aux=False, holomorphic=False)
                 toret.append(jac(*values))
@@ -443,7 +443,7 @@ class Differentiation(BaseClass):
         if self.mpicomm.rank == 0:
             samples = self._grid_samples.copy()
             for param in self.all_params:
-                if param in self._grid_samples:
+                if param.name in self._grid_center:
                     offset = self.center[param.name] - self._grid_center[param.name]
                     samples[param] = self._grid_samples[param] + offset
                 else:
@@ -456,7 +456,6 @@ class Differentiation(BaseClass):
         if self.pipeline.errors:
             raise PipelineError('Got these errors: {}'.format(self.pipeline.errors))
         self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm = calculate_bak, more_derived_bak, mpicomm_bak
-
         for getter_inst, getter_size in self.mpicomm.allgather((getattr(self, 'getter_inst', None), getattr(self, 'getter_size', None))):
             if getter_inst is not None:
                 self.getter_inst = getter_inst
@@ -465,7 +464,6 @@ class Differentiation(BaseClass):
         toret = None
         for isample, sample in self._getter_samples.items():
             self.mpicomm.send(sample, dest=0, tag=isample)
-
         if self.mpicomm.rank == 0:
             finiteparams, finiteorder, finiteaccuracy = [], [], []
             for param, method in self.method.items():
@@ -479,7 +477,6 @@ class Differentiation(BaseClass):
                 for ideriv, derivs in enumerate(items):
                     for iitem, item in enumerate(derivs):
                         self._getter_samples[iitem][ideriv][isample] = item
-
             self._getter_samples = [[np.array(s) for s in getter_samples] for getter_samples in self._getter_samples]
             degrees, derivatives = [], [[] for i in range(max(self.getter_size, 1))]
             if finiteparams:

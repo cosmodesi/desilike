@@ -57,7 +57,7 @@ class InitConfig(BaseConfig):
         try:
             calculator = self.runtime_info.calculator
             if not getattr(self.runtime_info, '_initialization', False):
-                calculator.__dict__ = {name: calculator.__dict__[name] for name in ['_mpicomm', 'info', 'runtime_info']}
+                calculator.__clear__()
         except AttributeError:
             pass
 
@@ -152,16 +152,12 @@ class BasePipeline(BaseClass):
         new_params = ParameterCollection()
         for calculator in self.calculators:
             calculator_params = ParameterCollection(ParameterCollectionConfig(calculator.runtime_info.params, identifier='name').clone(params))
-            #print(calculator, calculator.runtime_info.params)
-            #new_calculator_params = ParameterCollection()
-            #print(calculator, calculator.runtime_info.params, calculator.runtime_info.params.select(input=True), calculator.runtime_info.input_values)
             for iparam, param in enumerate(calculator.runtime_info.params):
                 param = calculator_params[param]
                 if param in new_params:
                     if param.derived and param.fixed:
                         msg = 'Derived parameter {} of {} is already derived in {}.'.format(param, calculator, params_from_calculator[param.name])
-                        if self.mpicomm.rank == 0:
-                            warnings.warn(msg)
+                        if self.mpicomm.rank == 0: warnings.warn(msg)
                     elif param != new_params[param]:
                         raise PipelineError('Parameter {} of {} is different from that of {}.'.format(param, calculator, params_from_calculator[param.name]))
                 params_from_calculator[param.name] = calculator
@@ -468,6 +464,7 @@ class BasePipeline(BaseClass):
             self.calculate(**params)
         if self.mpicomm.rank == 0:
             self.log_info('Found speeds:')
+        total = 0.
         for calculator in self.calculators:
             if calculator.runtime_info.speed is None or override:
                 total_time = self.mpicomm.allreduce(calculator.runtime_info.monitor.get('time', average=False))
@@ -476,8 +473,11 @@ class BasePipeline(BaseClass):
                     calculator.runtime_info.speed = 1e6
                 else:
                     calculator.runtime_info.speed = counter / total_time
+                total += 1. / calculator.runtime_info.speed
                 if self.mpicomm.rank == 0:
-                    self.log_info('- {}: {:.2f} iterations / second'.format(calculator, calculator.runtime_info.speed))
+                    self.log_info('- {}: {:.2f} iterations / second - {:.3f} s / iteration'.format(calculator, calculator.runtime_info.speed, 1. / calculator.runtime_info.speed))
+        if self.mpicomm.rank == 0:
+            self.log_info('- total speed: {:.2f} iterations / second - {:.4f} s / iteration'.format(1. / total, total))
 
     def block_params(self, params=None, nblocks=None, oversample_power=0, **kwargs):
         """
@@ -746,7 +746,7 @@ class RuntimeInfo(BaseClass):
         if not self.initialized:
             self.clear()
             self._initialization = True   # to avoid infinite loops
-            self.calculator.__dict__ = {name: self.calculator.__dict__[name] for name in ['info', 'runtime_info', '_mpicomm']}
+            self.calculator.__clear__()
             self.install()
             bak = self.init.params
             params_with_namespace = ParameterCollection(self.init.params).deepcopy()
@@ -767,8 +767,6 @@ class RuntimeInfo(BaseClass):
                     if param.basename in params_basenames:  # update namespace
                         param.update(namespace=params_with_namespace[params_basenames.index(param.basename)].namespace)
             self.params = self.init.params
-            #if 'FlexibleBAOWigglesPowerSpectrumMultipoles' in self.calculator.__class__.__name__:
-            #    print(self.init.params)
             self.init.params = bak
             self.initialized = True
             self._initialization = False
@@ -782,7 +780,7 @@ class RuntimeInfo(BaseClass):
     @property
     def tocalculate(self):
         """Should calculator's :class:`BaseCalculator.calculate` be called?"""
-        return self._tocalculate or any(require.runtime_info.calculated for require in self.requires)
+        return self._tocalculate or any(require.runtime_info.calculated for require in self.requires) or not hasattr(self, '_get')
 
     @tocalculate.setter
     def tocalculate(self, tocalculate):
@@ -796,13 +794,14 @@ class RuntimeInfo(BaseClass):
         if self.tocalculate:
             self.monitor.start()
             self.calculator.calculate(**self.input_values)
-            self.monitor.stop()
             self._derived = None
             self.calculated = True
+            self._get = self.calculator.get()
+            self.monitor.stop()
         else:
             self.calculated = False
         self._tocalculate = False
-        return self.calculator.get()
+        return self._get
 
     def set_input_values(self, input_values, full=False, force=None):
         """Update parameter values; if new, next :meth:`calculate` call will call calculator's :class:`BaseCalculator.calculate`."""
@@ -1042,6 +1041,12 @@ class BaseCalculator(BaseClass):
     def varied_params(self):
         """Varied pipeline parameters."""
         return self.runtime_info.pipeline.varied_params
+
+    def __clear__(self):
+        """Clear instance attributes and ``jax.jit`` cache."""
+        self.__dict__ = {name: self.__dict__[name] for name in ['info', 'runtime_info', '_mpicomm'] if name in self.__dict__}
+        for func in self.__class__.__dict__.values():
+            getattr(func, 'clear_cache', lambda: None)()
 
 
 class CollectionCalculator(BaseCalculator):

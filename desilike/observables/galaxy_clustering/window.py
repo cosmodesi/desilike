@@ -2,6 +2,7 @@ import numpy as np
 from scipy import special
 
 from desilike.jax import numpy as jnp
+from desilike.jax import jit
 from desilike.base import BaseCalculator
 from desilike import plotting, utils
 
@@ -260,6 +261,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         self.shotnoise = np.array([shotnoise * (ell == 0) for ell in self.ellsin])
         self.flatshotnoise = np.concatenate([np.full_like(k, shotnoise * (ell == 0), dtype='f8') for ell, k in zip(self.ells, self.k)])
 
+    @jit(static_argnums=[0])
     def _apply(self, theory):
         theory = jnp.ravel(theory)
         if self.matrix_full is not None:
@@ -461,6 +463,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
                 self.matrix_full = self.matrix_full.dot(np.bmat([[np.diag(kk) for kk in kernel] for kernel in fiber_collisions.kernel_correlated]).A)
                 self.ellsin, self.sin = fiber_collisions.ellsin, fiber_collisions.sin
 
+    @jit(static_argnums=[0])
     def _apply(self, theory):
         if self.matrix_diag is not None:
             theory = jnp.sum(self.matrix_diag * theory[None, ...], axis=1)

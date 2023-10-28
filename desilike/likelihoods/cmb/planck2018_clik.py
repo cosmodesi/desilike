@@ -94,7 +94,7 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
             if np.isnan(tmp).any():
                 return
             self.vector[start:stop] = tmp
-
+        self.flattheory = self.vector[:stop]  # just in case we want to save the theory
         # Fill with likelihood parameters
         self.vector[self.cumsizes[-1]:] = [params[p] for p in self.nuisance_params]
         import clik

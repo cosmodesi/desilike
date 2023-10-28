@@ -429,7 +429,7 @@ class Differentiation(BaseClass):
         except Exception as exc:
             raise exc
         finally:
-            self._getter_sample = [__calculate(*values)] + toret
+            self._getter_sample = [__calculate(*values, derived=True)] + toret  # derived = True necessary to get derived parameters
         return toret
 
     def _more_derived(self, ipoint):

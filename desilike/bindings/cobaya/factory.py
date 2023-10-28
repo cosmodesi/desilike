@@ -140,8 +140,18 @@ class Fourier(Section):
         return self.sigma_rz(8., z, of=of)
 
 
+_convert_cosmoprimo_to_camb_params = {'H0': 'H0', 'theta_mc': 'cosmomc_theta', 'omega_b': 'ombh2', 'omega_cdm': 'omch2', 'A_s': 'As', 'n_s': 'ns', 'N_eff': 'nnu', 'm_ncdm': 'mnu', 'Omega_k': 'omk', 'w0_fld': 'w', 'wa_fld': 'wa', 'tau_reio': 'tau'}
+_convert_cosmoprimo_to_classy_params = {name: name for name in ['H0', 'h', 'A_s', 'sigma8', 'n_s', 'omega_b', 'Omega_b', 'omega_cdm', 'Omega_cdm', 'omega_m', 'Omega_m', 'Omega_ncdm', 'omega_ncdm', 'm_ncdm', 'omega_k', 'Omega_k', 'w0_fld', 'wa_fld', 'tau_reio']}
+for name in ['logA', 'ln10^{10}A_s', 'ln10^10A_s', 'ln_A_s_1e10']: _convert_cosmoprimo_to_classy_params[name] = 'ln_A_s_1e10'
+_convert_camb_or_classy_to_cosmoprimo_params = {}
+for name, value in _convert_cosmoprimo_to_camb_params.items():
+    _convert_camb_or_classy_to_cosmoprimo_params[value] = name
+for name, value in _convert_cosmoprimo_to_classy_params.items():
+    _convert_camb_or_classy_to_cosmoprimo_params[value] = name
+
+
 def cosmoprimo_to_camb_params(params):
-    convert = {'H0': 'H0', 'theta_mc': 'cosmomc_theta', 'omega_b': 'ombh2', 'omega_cdm': 'omch2', 'A_s': 'As', 'n_s': 'ns', 'N_eff': 'nnu', 'm_ncdm': 'mnu', 'Omega_k': 'omk', 'w0_fld': 'w', 'wa_fld': 'wa', 'tau_reio': 'tau'}
+    convert = dict(_convert_cosmoprimo_to_camb_params)
     convert.update({'h': ('H0', '100 * {h}'), 'Omega_b': ('ombh2', '{Omega_b} * ({H0} / 100)**2'), 'Omega_cdm': ('omch2', '{Omega_cdm} * ({H0} / 100)**2'), 'logA': ('As', '1e-10 * np.exp({logA})')})
     toret = ParameterCollection()
     for param in params:
@@ -164,9 +174,7 @@ def cosmoprimo_to_camb_params(params):
 
 
 def cosmoprimo_to_classy_params(params):
-    convert = {name: name for name in ['H0', 'h', 'A_s', 'sigma8', 'n_s', 'omega_b', 'Omega_b', 'omega_cdm', 'Omega_cdm', 'omega_m', 'Omega_m', 'Omega_ncdm', 'omega_ncdm', 'm_ncdm', 'omega_k', 'Omega_k',
-                                       'w0_fld', 'wa_fld', 'tau_reio']}
-    for name in ['logA', 'ln10^{10}A_s', 'ln10^10A_s', 'ln_A_s_1e10']: convert[name] = 'ln_A_s_1e10'
+    convert = dict(_convert_cosmoprimo_to_classy_params)
     toret = ParameterCollection()
     for param in params:
         if param.depends: continue
@@ -185,11 +193,16 @@ def cosmoprimo_to_classy_params(params):
 def camb_or_classy_to_cosmoprimo(fiducial, provider, **params):
     if fiducial: cosmo = Cosmology.from_state(fiducial)
     else: cosmo = Cosmology()
+    convert = dict(_convert_camb_or_classy_to_cosmoprimo_params)
     params = {**provider.params, **params}
-    convert = {'H0': 'H0', 'As': 'A_s', 'ns': 'n_s', 'ombh2': 'omega_b', 'omch2': 'omega_cdm', 'nnu': 'N_eff', 'mnu': 'm_ncdm', 'omk': 'Omega_k'}
-    convert.update({name: name for name in ['H0', 'h', 'A_s', 'sigma8', 'n_s', 'omega_b', 'Omega_b', 'omega_cdm', 'Omega_cdm', 'omega_m', 'Omega_m', 'Omega_ncdm', 'omega_ncdm', 'm_ncdm', 'omega_k', 'Omega_k']})
-    for name in ['logA', 'ln10^{10}A_s', 'ln10^10A_s', 'ln_A_s_1e10']: convert[name] = 'logA'
-    state = {convert[param]: value for param, value in params.items() if param in convert}  # NEED MORE CHECKS!
+    state = {convert[param]: value for param, value in params.items() if param in convert}
+    for provider in provider.requirement_providers.values():
+        if provider.__class__.__name__ in ['classy', 'camb']:
+            for param, value in provider.current_state['params'].items():
+                if param in convert:
+                    state[convert[param]] = value
+                else:
+                    raise ValueError('cannot translate {} parameter {} to cosmoprimo'.format(provider, param))
     if not any(name in state for name in ['H0', 'h']):
         state['H0'] = np.squeeze(provider.get_Hubble(0.))
     cosmo = cosmo.clone(**state, engine=CobayaEngine)

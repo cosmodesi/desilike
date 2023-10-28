@@ -332,7 +332,7 @@ class BasePipeline(BaseClass):
         return BaseExternalEngine.get_requires(*[getattr(calculator, 'cosmo_requires', {}) for calculator in self.calculators])
 
     def set_cosmo_requires(self, cosmo):
-        """Set input :class:`cosmoprimo.Cosmology` instance."""
+        """Set input :class:`cosmoprimo.Cosmology` instance for bindings."""
         for calculator in self.calculators:
             cosmo_requires = getattr(calculator, 'cosmo_requires', {})
             if cosmo_requires:
@@ -341,6 +341,7 @@ class BasePipeline(BaseClass):
                 if cosmo_params:
                     for basename, name in calculator.runtime_info.base_names.items():
                         if basename in cosmo_params:
+                            print(name, cosmo[conversions.get(basename, basename)])
                             self.input_values[name] = calculator.runtime_info.input_values[basename] = cosmo[conversions.get(basename, basename)]
                 #if set(cosmo_requires.keys()) != {'params'}:  # requires a :class:`cosmoprimo.Cosmology` instance as ``cosmo`` attribute
                 calculator.cosmo = cosmo

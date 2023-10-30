@@ -929,6 +929,12 @@ class BaseVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelation
         opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
         self.corr = self.pt.combine_bias_terms_poles(pars, **opts, **self.options)
 
+@jit
+def lptvel_combine_bias_terms_poles(pktable, pars, nd=1e-4):
+    b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4 = pars
+    bias_monomials = jnp.array([1, b1, b1**2, b2, b1 * b2, b2**2, bs, b1 * bs, b2 * bs, bs**2, b3, b1 * b3, alpha0, alpha2, alpha4, alpha6, sn0 / nd, sn2 / nd, sn4 / nd])
+    return jnp.sum(pktable * bias_monomials, axis=-1)
+
 
 class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMultipoles):
 
@@ -955,12 +961,7 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
         self.pktable = np.array([pktable[ell] for ell in self.ells])
 
     def combine_bias_terms_poles(self, pars, nd=1e-4):
-        # bias = [b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4]
-        # pkells = self.pt.combine_bias_terms_pkell(bias)[1:]
-        # return np.array([pkells[[0, 2, 4].index(ell)] for ell in self.ells])
-        b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4 = pars
-        bias_monomials = jnp.array([1, b1, b1**2, b2, b1 * b2, b2**2, bs, b1 * bs, b2 * bs, bs**2, b3, b1 * b3, alpha0, alpha2, alpha4, alpha6, sn0 / nd, sn2 / nd, sn4 / nd])
-        return jnp.sum(self.pktable * bias_monomials, axis=-1)
+        return lptvel_combine_bias_terms_poles(self.pktable, pars, nd=1e-4)
 
     def __getstate__(self):
         state = {}

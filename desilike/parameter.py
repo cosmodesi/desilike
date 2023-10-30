@@ -878,17 +878,18 @@ class Parameter(BaseClass):
         if namespace:
             namespace = self._namespace
         if self._latex is not None:
+            latex = self._latex
             if namespace:
                 match1 = re.match('(.*)_(.)$', self._latex)
                 match2 = re.match('(.*)_{(.*)}$', self._latex)
                 if match1 is not None:
-                    latex = r'%s_{%s, \mathrm{%s}}' % (match1.group(1), match1.group(2), namespace)
+                    if namespace not in match1.group(2):  # check namespace is not in latex str already
+                        latex = r'%s_{%s, \mathrm{%s}}' % (match1.group(1), match1.group(2), namespace)
                 elif match2 is not None:
-                    latex = r'%s_{%s, \mathrm{%s}}' % (match2.group(1), match2.group(2), namespace)
+                    if namespace not in match2.group(2):
+                        latex = r'%s_{%s, \mathrm{%s}}' % (match2.group(1), match2.group(2), namespace)
                 else:
                     latex = r'%s_{\mathrm{%s}}' % (self._latex, namespace)
-            else:
-                latex = self._latex
             if inline:
                 latex = '${}$'.format(latex)
             return latex

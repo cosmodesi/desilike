@@ -277,36 +277,14 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         else:
             lax = fig.axes
         data, theory, std = self.data, self.theory, self.std
-        only_now = self.wmatrix.theory.template.only_now
-        self.wmatrix.theory.template.only_now = True
-
-        def callback(calculator):
-            all_requires.append(calculator)
-            for require in calculator.runtime_info.requires:
-                if require in all_requires:
-                    del all_requires[all_requires.index(require)]  # we want first dependencies at the end
-                callback(require)
-
-        all_requires = []
-        callback(self)
-        all_requires = all_requires[::-1]
-
-        for calculator in all_requires:
-            calculator.runtime_info.tocalculate = True
-            calculator.runtime_info.calculate()
-        nowiggle = self.theory
+        nobao = self.theory_nobao
 
         for ill, ell in enumerate(self.ells):
-            lax[ill].errorbar(self.k[ill], self.k[ill] * (data[ill] - nowiggle[ill]), yerr=self.k[ill] * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o')
-            lax[ill].plot(self.k[ill], self.k[ill] * (theory[ill] - nowiggle[ill]), color='C{:d}'.format(ill))
+            lax[ill].errorbar(self.k[ill], self.k[ill] * (data[ill] - nobao[ill]), yerr=self.k[ill] * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o')
+            lax[ill].plot(self.k[ill], self.k[ill] * (theory[ill] - nobao[ill]), color='C{:d}'.format(ill))
             lax[ill].set_ylabel(r'$k \Delta P_{{{:d}}}(k)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]'.format(ell))
         for ax in lax: ax.grid(True)
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-
-        self.wmatrix.theory.template.only_now = only_now
-        for calculator in all_requires:
-            calculator.runtime_info.tocalculate = True
-            calculator.runtime_info.calculate()
 
         return fig
 
@@ -361,6 +339,36 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         return self.wmatrix.power
 
     @property
+    def theory_nobao(self):
+        template = self.wmatrix.theory.template
+        only_now = template.only_now
+        template.only_now = True
+
+        def callback(calculator):
+            all_requires.append(calculator)
+            for require in calculator.runtime_info.requires:
+                if require in all_requires:
+                    del all_requires[all_requires.index(require)]  # we want first dependencies at the end
+                callback(require)
+
+        all_requires = []
+        callback(self)
+        all_requires = all_requires[::-1]
+
+        for calculator in all_requires:
+            calculator.runtime_info.tocalculate = True
+            calculator.runtime_info.calculate()
+
+        nobao = self.theory
+
+        template.only_now = only_now
+        for calculator in all_requires:
+            calculator.runtime_info.tocalculate = True
+            calculator.runtime_info.calculate()
+
+        return nobao
+
+    @property
     def data(self):
         cumsize = np.insert(np.cumsum([len(k) for k in self.k]), 0, 0)
         return [self.flatdata[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
@@ -373,7 +381,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'kedges', 'ells', 'flatdata', 'shotnoise', 'flattheory']:
+        for name in ['k', 'kedges', 'ells', 'flatdata', 'flattheory', 'shotnoise']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state

@@ -253,36 +253,14 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         else:
             lax = fig.axes
         data, theory, std = self.data, self.theory, self.std
-        only_now = self.wmatrix.theory.template.only_now
-        self.wmatrix.theory.template.only_now = True
-
-        def callback(calculator):
-            all_requires.append(calculator)
-            for require in calculator.runtime_info.requires:
-                if require in all_requires:
-                    del all_requires[all_requires.index(require)]  # we want first dependencies at the end
-                callback(require)
-
-        all_requires = []
-        callback(self)
-        all_requires = all_requires[::-1]
-
-        for calculator in all_requires:
-            calculator.runtime_info.tocalculate = True
-            calculator.runtime_info.calculate()
-        nowiggle = self.theory
+        nobao = self.theory_nobao
 
         for ill, ell in enumerate(self.ells):
-            lax[ill].errorbar(self.s[ill], self.s[ill]**2 * (data[ill] - nowiggle[ill]), yerr=self.s[ill]**2 * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o')
-            lax[ill].plot(self.s[ill], self.s[ill]**2 * (theory[ill] - nowiggle[ill]), color='C{:d}'.format(ill))
+            lax[ill].errorbar(self.s[ill], self.s[ill]**2 * (data[ill] - nobao[ill]), yerr=self.s[ill]**2 * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o')
+            lax[ill].plot(self.s[ill], self.s[ill]**2 * (theory[ill] - nobao[ill]), color='C{:d}'.format(ill))
             lax[ill].set_ylabel(r'$s^{{2}} \Delta \xi_{{{:d}}}(s)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]'.format(ell))
         for ax in lax: ax.grid(True)
         lax[-1].set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
-
-        self.wmatrix.theory.template.only_now = only_now
-        for calculator in all_requires:
-            calculator.runtime_info.tocalculate = True
-            calculator.runtime_info.calculate()
 
         return fig
 
@@ -332,6 +310,36 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
     @property
     def theory(self):
         return self.wmatrix.corr
+
+    @property
+    def theory_nobao(self):
+        template = self.wmatrix.theory.template
+        only_now = template.only_now
+        template.only_now = True
+
+        def callback(calculator):
+            all_requires.append(calculator)
+            for require in calculator.runtime_info.requires:
+                if require in all_requires:
+                    del all_requires[all_requires.index(require)]  # we want first dependencies at the end
+                callback(require)
+
+        all_requires = []
+        callback(self)
+        all_requires = all_requires[::-1]
+
+        for calculator in all_requires:
+            calculator.runtime_info.tocalculate = True
+            calculator.runtime_info.calculate()
+
+        nobao = self.theory
+
+        template.only_now = only_now
+        for calculator in all_requires:
+            calculator.runtime_info.tocalculate = True
+            calculator.runtime_info.calculate()
+
+        return nobao
 
     @property
     def data(self):

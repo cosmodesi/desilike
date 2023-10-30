@@ -79,6 +79,7 @@ def test_power_spectrum():
                                                          kin=kin)
     observable()
     assert np.allclose(observable.wmatrix.theory.k, kin)
+    observable.__getstate__()
 
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data='../../tests/_pk/data.npy',
@@ -154,6 +155,8 @@ def test_correlation_function():
                                                                theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
+    observable.__getstate__()
+
 
     observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
                                                                data='../../tests/_xi/data.npy',
@@ -804,9 +807,9 @@ if __name__ == '__main__':
     setup_logging()
 
     # test_bao()
-    # test_power_spectrum()
-    # test_correlation_function()
-    test_footprint()
+    test_power_spectrum()
+    test_correlation_function()
+    # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
     # test_compression()

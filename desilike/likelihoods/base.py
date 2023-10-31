@@ -85,18 +85,31 @@ class BaseLikelihood(BaseCalculator):
                 if not np.isfinite(values[param.name]): values[param.name] = param.value
 
             derived = pipeline.derived
-            pipeline.more_calculate = lambda: None
+            #pipeline.more_calculate = lambda: None
             self.fisher = getattr(self, 'fisher', None)
             if self.fisher is None or self.fisher.mpicomm is not self.mpicomm or self.fisher.varied_params != solved_params:
-                params_bak, varied_params_bak = pipeline.params, pipeline.varied_params
-                pipeline._varied_params = solved_params  # to set varied_params
-                pipeline._params = ParameterCollection([param.clone(derived=False) if param in pipeline._varied_params else param.clone(fixed=True) for param in params_bak])
-                pipeline._varied_params.updated, pipeline._params.updated = False, False
-                self.fisher = Fisher(self, method='auto')
-                pipeline._params, pipeline._varied_params = params_bak, varied_params_bak
+                if self.fisher is not None: print(self.fisher.mpicomm is not self.mpicomm, self.fisher.varied_params != solved_params)
+                solve_likelihood = SumLikelihood(solve_likelihoods)
+                all_params = ParameterCollection()
+                #solved_params = ParameterCollection(solved_params)
+                for param in pipeline.params:
+                    if param in solve_likelihood.all_params:
+                        param = param.clone(derived=False) if param in solved_params else param.clone(fixed=True)
+                        all_params.set(param)
+                solve_likelihood.all_params = all_params
+                solve_likelihood.runtime_info.pipeline.more_calculate = lambda: None
+                self.fisher = Fisher(solve_likelihood, method='auto')
+                self.fisher.varied_params = solved_params  # just to get same _derived attribute
+                #assert self.fisher.varied_params == solved_params
+                #params_bak, varied_params_bak = pipeline.params, pipeline.varied_params
+                #pipeline._varied_params = solved_params  # to set varied_params
+                #pipeline._params = ParameterCollection([param.clone(derived=False) if param in pipeline._varied_params else param.clone(fixed=True) for param in params_bak])
+                #pipeline._varied_params.updated, pipeline._params.updated = False, False
+                #self.fisher = Fisher(self, method='auto')
+                #pipeline._params, pipeline._varied_params = params_bak, varied_params_bak
             posterior_fisher = self.fisher(**values)
             #pipeline.derived = derived
-            pipeline.more_calculate = self._solve
+            #pipeline.more_calculate = self._solve
             # flatdiff is theory - data
             x = posterior_fisher.mean()
             dx = x - posterior_fisher._center
@@ -134,9 +147,9 @@ class BaseLikelihood(BaseCalculator):
                 loglikelihood += 1. / 2. * dx.dot(likelihood_fisher._hessian).dot(dx)
                 loglikelihood += likelihood_fisher._gradient.dot(dx)
                 loglikelihood = np.insert(likelihood_fisher._hessian[indices_derivs], 0, loglikelihood)
-            # Set derived values
-            if derived is not None:
-                derived.set(ParameterArray(loglikelihood, param=likelihood._param_loglikelihood, derivs=derivs))
+                # Set derived values
+                if derived is not None:
+                    derived.set(ParameterArray(loglikelihood, param=likelihood._param_loglikelihood, derivs=derivs))
             sum_loglikelihood += loglikelihood
 
         if indices_marg:

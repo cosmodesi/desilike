@@ -652,17 +652,13 @@ class Parameter(BaseClass):
             pass
         else:
             return
-        self._namespace = namespace
-        if namespace is not None:
-            self._namespace = str(namespace)
+        if namespace is None: self._namespace = ''
+        else: self._namespace = str(namespace)
         names = str(basename).split(base.namespace_delimiter)
         self._basename, namespace = names[-1], base.namespace_delimiter.join(names[:-1])
-        if self._namespace:
-            if namespace:
-                self._namespace = base.namespace_delimiter.join([self._namespace, namespace])
-        else:
-            if namespace:
-                self._namespace = namespace
+        if namespace:
+            if self._namespace: self._namespace = base.namespace_delimiter.join([self._namespace, namespace])
+            else: self._namespace = namespace
         self._value = float(value) if value is not None else None
         self._prior = prior if isinstance(prior, ParameterPrior) else ParameterPrior(**(prior or {}))
         if ref is not None:
@@ -869,6 +865,15 @@ class Parameter(BaseClass):
     def __eq__(self, other):
         """Is ``self`` equal to ``other``, i.e. same type and attributes?"""
         return type(other) == type(self) and all(deep_eq(getattr(other, '_' + name), getattr(self, '_' + name)) for name in self._attrs)
+
+    def __diff__(self, other):
+        toret = {}
+        for name in self._attrs:
+            self_value = getattr(self, '_' + name)
+            other_value = getattr(other, '_' + name)
+            if not deep_eq(self_value, other_value):
+                toret[name] = (self_value, other_value)
+        return toret
 
     def __hash__(self):
         return hash(str(self))

@@ -334,7 +334,7 @@ def test_marg():
 
     likelihood = Likelihood(theory=PolyModel(), scalecov=0.1)
     sampler_kwargs = {'nwalkers': 20, 'seed': 42}
-    run_kwargs = {'check': {'max_eigen_gr': 0.02}, 'min_iterations': 600, 'check_every': 100}
+    run_kwargs = {'check': {'max_eigen_gr': 0.02}, 'min_iterations': 100, 'check_every': 100}
     save_fn_full = './_tests/chain_full_0.npy'
     save_fn_marg = './_tests/chain_marg_0.npy'
     save_fn_bf = './_tests/chain_bf_0.npy'

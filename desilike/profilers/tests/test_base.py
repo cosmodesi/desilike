@@ -54,6 +54,7 @@ def test_solve():
     from desilike.likelihoods import ObservablesGaussianLikelihood
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
+    template.init.params['f_sqrt_Ap'] = {'derived': True}
     theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(template=template)
     #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
     #for param in theory.params.select(basename=['df', 'dm', 'qpar', 'qper']): param.update(fixed=True)
@@ -78,7 +79,7 @@ def test_solve():
     assert profiles.bestfit._loglikelihood == 'LRG.loglikelihood'
     #profiles = profiler.interval(params=['df'])
     #profiler.grid(params=['df', 'qpar'], size=2)
-    print(profiles.to_stats())
+    print(profiles.to_stats(), profiles.bestfit['LRG.loglikelihood'], profiles.bestfit['f_sqrt_Ap'])
     #print(likelihood(**profiles.bestfit.choice(varied=True)))
     #from desilike.samples import plotting
     #plotting.plot_triangle(profiles, show=True)

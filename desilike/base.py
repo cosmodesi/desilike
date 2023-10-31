@@ -294,7 +294,6 @@ class BasePipeline(BaseClass):
                     if self.error is None:
                         self.error = (exc, traceback.format_exc())
                     state = self.error
-                    raise exc
                 else:
                     state = self.derived
                     if more_derived:

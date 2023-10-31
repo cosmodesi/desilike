@@ -90,7 +90,7 @@ class BaseLikelihood(BaseCalculator):
             if self.fisher is None or self.fisher.mpicomm is not self.mpicomm or self.fisher.varied_params != solved_params:
                 if self.fisher is not None: print(self.fisher.mpicomm is not self.mpicomm, self.fisher.varied_params != solved_params)
                 solve_likelihood = SumLikelihood(solve_likelihoods)
-                all_params = ParameterCollection()
+                all_params = solve_likelihood.all_params
                 #solved_params = ParameterCollection(solved_params)
                 for param in pipeline.params:
                     if param in solve_likelihood.all_params:

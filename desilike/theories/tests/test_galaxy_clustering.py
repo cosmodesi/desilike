@@ -911,11 +911,11 @@ if __name__ == '__main__':
 
     #test_velocileptors()
     #test_pybird()
-    test_folps()
+    #test_folps()
     #test_params()
     #test_integ()
     #test_templates()
-    #test_bao()
+    test_bao()
     #test_flexible_bao()
     #test_full_shape()
     #test_png()

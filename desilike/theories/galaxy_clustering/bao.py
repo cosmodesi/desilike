@@ -804,7 +804,8 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
         else:
             for ell in ells:
                 for ik in range(-2, 10):  # should be more than enough
-                    params['al{:d}_{:d}'.format(ell, ik)] = dict(value=0., ref=dict(limits=[-1e2, 1e2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
+                    # We are adding a very loose prior just to regularize the fit
+                    params['al{:d}_{:d}'.format(ell, ik)] = dict(value=0., prior=dict(dist='norm', loc=0., scale=1e4), ref=dict(limits=[-1e2, 1e2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
                 for ik in [0, 2]:  # should be more than enough
                     params['bl{:d}_{:d}'.format(ell, ik)] = dict(value=0., ref=dict(limits=[-1e-3, 1e-3]), delta=0.005, latex='b_{{{:d}, {:d}}}'.format(ell, ik))
         return params

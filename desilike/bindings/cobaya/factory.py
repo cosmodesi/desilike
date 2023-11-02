@@ -196,13 +196,13 @@ def camb_or_classy_to_cosmoprimo(fiducial, provider, **params):
     convert = dict(_convert_camb_or_classy_to_cosmoprimo_params)
     params = {**provider.params, **params}
     state = {convert[param]: value for param, value in params.items() if param in convert}
-    for provider in provider.requirement_providers.values():
-        if provider.__class__.__name__ in ['classy', 'camb']:
-            for param, value in provider.current_state['params'].items():
+    for p in provider.requirement_providers.values():
+        if p.__class__.__name__ in ['classy', 'camb']:
+            for param, value in p.current_state['params'].items():
                 if param in convert:
                     state[convert[param]] = value
                 else:
-                    raise ValueError('cannot translate {} parameter {} to cosmoprimo'.format(provider, param))
+                    raise ValueError('cannot translate {} parameter {} to cosmoprimo'.format(p, param))
     if not any(name in state for name in ['H0', 'h']):
         state['H0'] = np.squeeze(provider.get_Hubble(0.))
     cosmo = cosmo.clone(**state, engine=CobayaEngine)

@@ -79,8 +79,11 @@ class BaseLikelihood(BaseCalculator):
             solved_params = ParameterCollection(solved_params)
             from desilike.fisher import Fisher
 
-            solve_likelihoods = [likelihood for likelihood in likelihoods if any(param.solved for param in likelihood.all_params)]
-            values = dict(pipeline.input_values)
+            solve_likelihoods, values = [], {}
+            for likelihood in likelihoods:
+                if any(param.solved for param in likelihood.all_params):
+                    solve_likelihoods.append(likelihood)
+                    values.update({param.name: pipeline.input_values[param.name] for param in likelihood.all_params if param.name in pipeline.input_values})
             for param in solved_params:
                 if not np.isfinite(values[param.name]): values[param.name] = param.value
 
@@ -98,6 +101,7 @@ class BaseLikelihood(BaseCalculator):
                         all_params.set(param)
                 solve_likelihood.all_params = all_params
                 solve_likelihood.runtime_info.pipeline.more_calculate = lambda: None
+                #solve_likelihood.runtime_info.pipeline.input_values = values
                 self.fisher = Fisher(solve_likelihood, method='auto')
                 self.fisher.varied_params = solved_params  # just to get same _derived attribute
                 #assert self.fisher.varied_params == solved_params
@@ -107,6 +111,8 @@ class BaseLikelihood(BaseCalculator):
                 #pipeline._varied_params.updated, pipeline._params.updated = False, False
                 #self.fisher = Fisher(self, method='auto')
                 #pipeline._params, pipeline._varied_params = params_bak, varied_params_bak
+            #self.fisher.likelihood.runtime_info.pipeline.input_values = values
+            self.fisher.mpicomm = self.mpicomm
             posterior_fisher = self.fisher(**values)
             #pipeline.derived = derived
             #pipeline.more_calculate = self._solve
@@ -139,10 +145,10 @@ class BaseLikelihood(BaseCalculator):
 
         if solved_params:
             sum_logprior = np.insert(self.fisher.prior_fisher._hessian[indices_derivs], 0, sum_logprior)
-        for ilikelihood, likelihood in enumerate(likelihoods):
+        for likelihood in likelihoods:
             loglikelihood = float(likelihood.loglikelihood)
             if likelihood in solve_likelihoods:
-                likelihood_fisher = self.fisher.likelihood_fishers[ilikelihood]
+                likelihood_fisher = self.fisher.likelihood_fishers[solve_likelihoods.index(likelihood)]
                 # Note: priors of solved params have already been added
                 loglikelihood += 1. / 2. * dx.dot(likelihood_fisher._hessian).dot(dx)
                 loglikelihood += likelihood_fisher._gradient.dot(dx)

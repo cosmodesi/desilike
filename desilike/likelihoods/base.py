@@ -36,6 +36,7 @@ class BaseLikelihood(BaseCalculator):
             catch_errors = tuple(catch_errors)
         self._catch_errors = catch_errors
         #self.fisher = None
+        self._more_initialize = self._marginalize_precision
 
     def get(self):
         pipeline = self.runtime_info.pipeline
@@ -54,6 +55,51 @@ class BaseLikelihood(BaseCalculator):
             toret = self._catch_errors = tuple(self._catch_errors)
         return toret
 
+    def _marginalize_precision(self):
+        pipeline = self.runtime_info.pipeline
+        all_params = pipeline._params
+        likelihoods = getattr(self, 'likelihoods', [self])
+
+        solved_params = []
+        for param in all_params:
+            solved = param.derived
+            if param.solved and solved == '.prec':
+                solved_params.append(param)
+
+        if solved_params:
+            solved_params = ParameterCollection(solved_params)
+            values = dict(pipeline.input_values)
+            for param in solved_params:
+                if not np.isfinite(values[param.name]): values[param.name] = param.value
+
+            from desilike.fisher import Fisher
+            solve_likelihoods = [likelihood for likelihood in likelihoods if any(param in solved_params for param in likelihood.all_params)]
+
+            solve_likelihood = SumLikelihood(solve_likelihoods)
+            solve_likelihood.runtime_info.pipeline.more_initialize = None
+            solve_likelihood.runtime_info.pipeline.more_calculate = lambda: None
+            all_params = solve_likelihood.all_params
+            #solved_params = ParameterCollection(solved_params)
+            for param in pipeline.params:
+                if param in solve_likelihood.all_params:
+                    param = param.clone(derived=False) if param in solved_params else param.clone(fixed=True)
+                    all_params.set(param)
+            solve_likelihood.all_params = all_params
+            fisher = Fisher(solve_likelihood, method='auto')
+            for likelihood in solve_likelihood.likelihoods:
+                likelihood.precision = likelihood._precision_original = getattr(likelihood, '_precision_original', likelihood.precision)
+            posterior_fisher = fisher(**values)
+            posterior_covariance = np.linalg.inv(- posterior_fisher._hessian)
+            derivs = fisher.mpicomm.bcast(fisher.likelihood_differentiation.samples, root=0)
+            for likelihood, derivs in zip(solve_likelihoods, derivs):
+                precision = likelihood._precision_original
+                flatderiv = np.asarray(derivs)[1:]  # (len(solved_params), len(flatdata)) first is zero-lag
+                if precision.ndim == 1:
+                    derivp = flatderiv * precision
+                else:
+                    derivp = flatderiv.dot(precision)
+                likelihood.precision = precision - derivp.T.dot(posterior_covariance).dot(derivp)
+
     def _solve(self):
         # Analytic marginalization, to be called, if desired, in get()
         pipeline = self.runtime_info.pipeline
@@ -63,7 +109,7 @@ class BaseLikelihood(BaseCalculator):
         solved_params, indices_marg = [], []
         for param in all_params:
             solved = param.derived
-            if param.solved:
+            if param.solved and solved != '.prec':
                 iparam = len(solved_params)
                 solved_params.append(param)
                 if solved == '.auto':
@@ -79,7 +125,7 @@ class BaseLikelihood(BaseCalculator):
             solved_params = ParameterCollection(solved_params)
             from desilike.fisher import Fisher
 
-            solve_likelihoods = [likelihood for likelihood in likelihoods if any(param.solved for param in likelihood.all_params)]
+            solve_likelihoods = [likelihood for likelihood in likelihoods if any(param in solved_params for param in likelihood.all_params)]
             values = dict(pipeline.input_values)
             for param in solved_params:
                 if not np.isfinite(values[param.name]): values[param.name] = param.value
@@ -87,7 +133,7 @@ class BaseLikelihood(BaseCalculator):
             derived = pipeline.derived
             #pipeline.more_calculate = lambda: None
             self.fisher = getattr(self, 'fisher', None)
-            if self.fisher is None or self.fisher.mpicomm is not self.mpicomm or self.fisher.varied_params != solved_params:
+            if self.fisher is None or self.fisher.mpicomm is not self.mpicomm or solved_params != self.fisher.varied_params:
                 #if self.fisher is not None: print(self.fisher.mpicomm is not self.mpicomm, self.fisher.varied_params != solved_params)
                 solve_likelihood = SumLikelihood(solve_likelihoods)
                 all_params = solve_likelihood.all_params
@@ -99,7 +145,7 @@ class BaseLikelihood(BaseCalculator):
                 solve_likelihood.all_params = all_params
                 solve_likelihood.runtime_info.pipeline.more_calculate = lambda: None
                 self.fisher = Fisher(solve_likelihood, method='auto')
-                self.fisher.varied_params = solved_params  # just to get same _derived attribute
+                self.fisher.varied_params = solved_params  # just to get same _derived attribute for solved_params != self.fisher.varied_params not to fail
                 #assert self.fisher.varied_params == solved_params
                 #params_bak, varied_params_bak = pipeline.params, pipeline.varied_params
                 #pipeline._varied_params = solved_params  # to set varied_params
@@ -139,10 +185,10 @@ class BaseLikelihood(BaseCalculator):
 
         if solved_params:
             sum_logprior = np.insert(self.fisher.prior_fisher._hessian[indices_derivs], 0, sum_logprior)
-        for ilikelihood, likelihood in enumerate(likelihoods):
+        for likelihood in likelihoods:
             loglikelihood = float(likelihood.loglikelihood)
             if likelihood in solve_likelihoods:
-                likelihood_fisher = self.fisher.likelihood_fishers[ilikelihood]
+                likelihood_fisher = self.fisher.likelihood_fishers[solve_likelihoods.index(likelihood)]
                 # Note: priors of solved params have already been added
                 loglikelihood += 1. / 2. * dx.dot(likelihood_fisher._hessian).dot(dx)
                 loglikelihood += likelihood_fisher._gradient.dot(dx)
@@ -339,7 +385,6 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
         else:
             self.precision /= scale_covariance
         nbins = self.precision.shape[0]
-        BaseLikelihood.initialize(self, **kwargs)
         self.runtime_info.requires = self.observables
         if self.nobs is not None:
             if 'hartlap' in correct_covariance:
@@ -360,6 +405,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
                     self.log_info('Covariance matrix with {:d} points built from {:d} observations, varying {:d} parameters.'.format(nbins, self.nobs, nparams))
                     self.log_info('...resulting in a Percival 2014 factor of {:.4f}.'.format(self.percival2014_factor))
                 self.precision /= self.percival2014_factor
+        super(ObservablesGaussianLikelihood, self).initialize(self.flatdata, covariance=self.covariance, precision=self.precision, **kwargs)
 
     def calculate(self):
         self.flatdiff = self.flattheory - self.flatdata

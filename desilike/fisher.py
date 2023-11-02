@@ -725,8 +725,11 @@ class Fisher(BaseClass):
             def likelihood_finalize(derivs):
                 toret = []
                 for likelihood, derivs in zip(likelihoods, derivs):
-                    flatderiv = np.array([derivs[param] for param in self.varied_params])
-                    flatdiff = derivs[()]
+                    #flatderiv = np.array([derivs[param] for param in self.varied_params])
+                    #flatdiff = derivs[()]
+                    derivs = np.asarray(derivs)
+                    flatdiff = derivs[0]
+                    flatderiv = derivs[1:]  # first is zero-lag
                     precision = likelihood.precision
                     if precision.ndim == 1:
                         diffp = flatdiff * precision

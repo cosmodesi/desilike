@@ -60,6 +60,7 @@ def test_solve():
     #for param in theory.params.select(basename=['df', 'dm', 'qpar', 'qper']): param.update(fixed=True)
     for param in theory.params.select(basename=['ct*', 'sn*']): param.update(derived='.best')
     #for param in theory.params.select(basename=['ct*', 'sn*']): param.update(fixed=True)
+    for param in theory.params.select(basename=['sn*']): param.update(prior=None, fixed=False, derived='.prec')
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data={'ct0_2': 1., 'sn0': 1000.},
                                                          theory=theory)
@@ -88,5 +89,5 @@ def test_solve():
 if __name__ == '__main__':
 
     setup_logging()
-    test_profilers()
+    #test_profilers()
     test_solve()

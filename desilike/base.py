@@ -125,6 +125,7 @@ class BasePipeline(BaseClass):
         Calculators ``calculator`` depends upon are initialized.
         """
         self.calculators = []
+        self.more_derived, self.more_calculate, self.more_initialize = None, None, None
 
         def callback(calculator):
             self.calculators.append(calculator.runtime_info.initialize())
@@ -141,9 +142,10 @@ class BasePipeline(BaseClass):
         self.mpicomm = calculator._mpicomm
         for calculator in self.calculators:
             calculator.runtime_info.tocalculate = True
-        self._params = ParameterCollection()
-        self._set_params()
-        self.more_derived, self.more_calculate = None, None
+            more_initialize = getattr(calculator, '_more_initialize', None)
+            if more_initialize is not None: self.more_initialize = more_initialize
+        #self._params = ParameterCollection()
+        #self._set_params()
 
     def _set_params(self, params=None):
         # Internal method to reset parameters, based on calculator's :class:`BaseCalculator.runtime_info.params`
@@ -173,6 +175,7 @@ class BasePipeline(BaseClass):
                 new_params.set(param)
             if param not in new_params:
                 raise PipelineError('Cannot attribute parameter {} to any calculator'.format(param))
+        self._params = getattr(self, '_params', None) or ParameterCollection()
         for param in self._params:
             if param not in new_params:
                 # Add in previous parameters to be dropped
@@ -183,6 +186,7 @@ class BasePipeline(BaseClass):
         self._varied_params = self._params.select(varied=True, derived=False)
         self.input_values = {param.name: param.value for param in self._params}
         self.derived = Samples()
+        if self.more_initialize is not None: self.more_initialize()
 
     @property
     def params(self):
@@ -221,11 +225,12 @@ class BasePipeline(BaseClass):
         or if they depend on previous calculation that has been updated.
         Derived parameter values are stored in :attr:`derived`.
         """
+        self_params = self.params
         for name in params:
-            if name not in self.params:
-                raise PipelineError('Input parameter {} is not one of parameters: {}'.format(name, self.params))
+            if name not in self_params:
+                raise PipelineError('Input parameter {} is not one of parameters: {}'.format(name, self_params))
         self.input_values.update(params)
-        params = self.params.eval(**self.input_values)
+        params = self_params.eval(**self.input_values)
         self.derived, self.error = Samples(), None
         for param in self._params:
             if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))

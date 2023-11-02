@@ -582,7 +582,7 @@ class Parameter(BaseClass):
     """Class that represents a parameter."""
 
     _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'delta', 'latex', 'depends', 'shape', 'drop']
-    _allowed_solved = ['.best', '.marg', '.auto']
+    _allowed_solved = ['.best', '.marg', '.auto', '.prec']
 
     def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, delta=None, latex=None, shape=(), drop=False):
         """

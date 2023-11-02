@@ -406,7 +406,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                     profiles.bestfit.logposterior = logposterior[ii]
                     profiles.update(p)
                     profiles = _profiles_transform(self, profiles)
-                    for param in self.likelihood.params.select(fixed=True, derived=False):
+                    for param in self.likelihood.all_params.select(fixed=True, derived=False):
                         profiles.bestfit[param] = np.array(param.value, dtype='f8')
                     index_in_profile, index = self.derived[0].match(profiles.bestfit, params=profiles.start.params())
                     assert index_in_profile[0].size == 1

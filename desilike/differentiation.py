@@ -394,12 +394,13 @@ class Differentiation(BaseClass):
             assert len(params) == len(values)
             pipeline.input_values.update(dict(zip(params, values)))
             values = pipeline.params.eval(**pipeline.input_values)
+
             if derived:
                 pipeline.derived = Samples()
 
-            for calculator in pipeline.calculators:  # start by first calculator, end by the last one
+            for calculator in pipeline.calculators:  # start with first calculator, end with the last one
                 runtime_info = calculator.runtime_info
-                force = any(param.basename in runtime_info.input_values for param in self.varied_params)
+                force = any(param.basename in runtime_info.input_values for param in self.varied_params) or None  # run if non-differentiated parameter is updated
                 runtime_info.set_input_values(values, full=True, force=force)
                 runtime_info.calculate()
                 if derived:

@@ -48,7 +48,10 @@ def get_from_cosmo(cosmo, name):
     try:
         toret = getattr(cosmo, name)
     except AttributeError:
-        toret = cosmo[name]
+        try:
+            toret = cosmo[name]  # parameter
+        except (CosmologyError, KeyError) as exc:
+            raise AttributeError from exc
     if not toret:
         return 0.
     if scale is not None:

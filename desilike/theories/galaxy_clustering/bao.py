@@ -68,10 +68,19 @@ class BaseBAOWigglesPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         if template is None:
             template = BAOPowerSpectrumTemplate()
         self.template = template
+        self.template.init.setdefault('with_now', 'peakaverage')
         self.z = self.template.z
+        self.rs_drag_fid = self.template.fiducial.rs_drag
 
     def calculate(self):
         self.z = self.template.z
+        self.rs_drag_fid = self.template.fiducial.rs_drag
+
+    def __getstate__(self):
+        state = super(BaseBAOWigglesPowerSpectrumMultipoles, self).__getstate__()
+        for name in ['rs_drag_fid']:
+            state[name] = getattr(self, name)
+        return state
 
 
 class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
@@ -289,7 +298,7 @@ class FlexibleBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
         super(FlexibleBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
         self.wiggles = str(wiggles)
-        if kp is None: self.kp = 2. * np.pi / self.template.fiducial.rs_drag
+        if kp is None: self.kp = 2. * np.pi / self.rs_drag_fid
         else: self.kp = float(kp)
         self.set_params()
         if self.template.only_now:
@@ -437,14 +446,16 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
                     params['al{:d}_{:d}'.format(ell, ik)] = dict(value=0., prior=dict(dist='norm', loc=0., scale=1e4), ref=dict(limits=[-1e-2, 1e-2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
         return params
 
-    def initialize(self, k=None, ells=(0, 2), broadband='power', kp=None, **kwargs):
+    def initialize(self, k=None, ells=(0, 2), broadband='power', kp=None, pt=None, **kwargs):
         super(BaseBAOWigglesTracerPowerSpectrumMultipoles, self).initialize(k=k, ells=ells)
-        self.pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
+        if pt is None:
+            pt = globals()[self.__class__.__name__.replace('Tracer', '')]()
+        self.pt = pt
         self.pt.init.update(k=self.k, ells=self.ells, **kwargs)
         for name in ['z', 'k', 'ells']:
             setattr(self, name, getattr(self.pt, name))
         self.broadband = str(broadband)
-        if kp is None: self.kp = 2. * np.pi / self.template.fiducial.rs_drag
+        if kp is None: self.kp = 2. * np.pi / self.pt.rs_drag_fid
         else: self.kp = float(kp)
         self.set_params()
 
@@ -810,14 +821,16 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
                     params['bl{:d}_{:d}'.format(ell, ik)] = dict(value=0., ref=dict(limits=[-1e-3, 1e-3]), delta=0.005, latex='b_{{{:d}, {:d}}}'.format(ell, ik))
         return params
 
-    def initialize(self, s=None, ells=(0, 2), sp=None, broadband='power', **kwargs):
+    def initialize(self, s=None, ells=(0, 2), sp=None, broadband='power', pt=None, **kwargs):
         self.broadband = str(broadband)
         if sp is None: self.sp = 2. * np.pi / 0.02
         else: self.sp = float(sp)
         if self.broadband in ['power', 'even-power']:
-            power = globals()[self.__class__.__name__.replace('TracerCorrelationFunction', 'PowerSpectrum')](**kwargs)
+            if pt is None:
+                pt = globals()[self.__class__.__name__.replace('TracerCorrelationFunction', 'PowerSpectrum')](**kwargs)
+            power = pt
         else:
-            power = globals()[self.__class__.__name__.replace('CorrelationFunction', 'PowerSpectrum')](broadband=broadband, **kwargs)
+            power = globals()[self.__class__.__name__.replace('CorrelationFunction', 'PowerSpectrum')](broadband=broadband, pt=pt, **kwargs)
         super(BaseBAOWigglesTracerCorrelationFunctionMultipoles, self).initialize(s=s, ells=ells, power=power)
         for name in ['z', 'ells']:
             setattr(self, name, getattr(self.power, name))
@@ -825,9 +838,9 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
     def set_params(self):
         if self.broadband in ['power', 'even-power']:
             self.k, self.kp = self.s, self.sp
-            self.pt = self.power  # other model parameters, e.g. bias
+            # other model parameters, e.g. bias
             BaseBAOWigglesTracerPowerSpectrumMultipoles.set_params(self)
-            del self.k, self.kp, self.pt
+            del self.k, self.kp
         else:
             self.broadband_orders = _get_orders('bl', self.init.params, self.ells)
             self.broadband_matrix = {}
@@ -847,6 +860,10 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
             setattr(self, name, getattr(self.power, name))
         super(BaseBAOWigglesTracerCorrelationFunctionMultipoles, self).calculate()
         self.corr += jnp.array([jnp.array([params.get(name, 0.) for name in self.broadband_orders[ell]]).dot(self.broadband_matrix[ell]) for ell in self.ells])
+
+    @property
+    def pt(self):
+        return getattr(self.power, 'pt', self.power)
 
     @property
     def template(self):

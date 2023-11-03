@@ -59,9 +59,13 @@ def test_templates():
     kTO, pkTO = find_turn_over(pk)
     assert np.allclose([kTO, pkTO], [k0, 1.])
 
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles
     from desilike.theories.galaxy_clustering import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BAOPowerSpectrumTemplate,
                                                      StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate, TurnOverPowerSpectrumTemplate)
+
+    for template in [BAOPowerSpectrumTemplate(), FixedPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), DirectPowerSpectrumTemplate()]:
+        theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
+        theory()
 
     for template in [FixedPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), BAOPowerSpectrumTemplate(),
                      StandardPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(apmode='qisoqap'),
@@ -90,9 +94,10 @@ def test_bao():
 
     from desilike.theories.galaxy_clustering import SimpleBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles, FlexibleBAOWigglesTracerPowerSpectrumMultipoles
     from desilike.theories.galaxy_clustering import SimpleBAOWigglesTracerCorrelationFunctionMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles, FlexibleBAOWigglesTracerCorrelationFunctionMultipoles
-    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, DirectPowerSpectrumTemplate, StandardPowerSpectrumTemplate
 
-    def test(theory):
+
+    def test_theory(theory):
         is_power = 'Power' in theory.__class__.__name__
         list_params, list_remove = {}, {}
         list_params['power'] = {'al0_1': 1e3 if is_power else 1e-3}
@@ -103,6 +108,7 @@ def test_bao():
         list_remove['pcs'] = ['al0_-1']
         if not is_power:
             list_params['pcs'].update({'bl0_2': 1e-3})
+        theory.init.update(pt=None, template=BAOPowerSpectrumTemplate())
         for broadband in ['power', 'pcs'] + (['even-power'] if not is_power else []):
             theory.init.update(broadband=broadband)
             #print(theory.all_params)
@@ -126,12 +132,15 @@ def test_bao():
                 theory.k
             else:
                 theory.s
-            theory.plot(show=True)
+            theory.plot(show=False)
             template = BAOPowerSpectrumTemplate(z=0.1, fiducial='DESI', apmode='qiso', only_now=True)
             theory.init.update(template=template)
             theory(qiso=0.9)
             for param in theory.all_params.select(basename=['d', 'sigmapar', 'sigmaper', 'ml*_*']):
                 assert param.fixed
+            template = DirectPowerSpectrumTemplate(z=1., fiducial='DESI')
+            theory.init.update(template=template)
+            theory()
             template = StandardPowerSpectrumTemplate(z=1., fiducial='DESI', with_now='peakaverage')
             theory.init.update(template=template)
             theory()
@@ -143,7 +152,39 @@ def test_bao():
                 if param.basename in basenames:
                     assert param.namespace == 'LRG'
 
+    def test_emulate(theory, emulate='pt'):
+        for template in [BAOPowerSpectrumTemplate(z=1., fiducial='DESI', with_now='peakaverage'),
+                         DirectPowerSpectrumTemplate(z=1., fiducial='DESI'),
+                         StandardPowerSpectrumTemplate(z=1., fiducial='DESI', with_now='peakaverage')]:
+            theory.init.update(template=template)
+            theory()
+
+            from desilike.emulators import Emulator, TaylorEmulatorEngine
+
+            bak = theory(**{param.name: param.value for param in theory.all_params.select(input=True)})
+            if 'PowerSpectrum' in theory.__class__.__name__: theory.k
+            else: theory.s
+            if emulate == 'pt': calculator = theory.pt
+            else: calculator = theory
+            emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=1))
+            emulator.set_samples()
+            emulator.fit()
+            calculator = emulator.to_calculator()
+            if emulate == 'pt':
+                theory.init.update(pt=calculator)
+            else:
+                theory = calculator
+            print(emulate, theory.init.params.basenames())
+            assert np.allclose(theory(), bak)
+
+
+    def test(theory):
+        test_emulate(theory)
+        test_theory(theory)
+
+
     test(SimpleBAOWigglesTracerPowerSpectrumMultipoles())
+    test(SimpleBAOWigglesTracerCorrelationFunctionMultipoles())
     test(DampedBAOWigglesTracerPowerSpectrumMultipoles())
     test(ResummedBAOWigglesTracerPowerSpectrumMultipoles())
     test(FlexibleBAOWigglesTracerPowerSpectrumMultipoles())
@@ -914,8 +955,8 @@ if __name__ == '__main__':
     #test_folps()
     #test_params()
     #test_integ()
-    #test_templates()
-    test_bao()
+    test_templates()
+    #test_bao()
     #test_flexible_bao()
     #test_full_shape()
     #test_png()

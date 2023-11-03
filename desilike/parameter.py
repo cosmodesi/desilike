@@ -2118,6 +2118,7 @@ class Samples(BaseParameterCollection):
             other = self.__class__(*args, **kwargs)
         for item in other:
             self.set(item)
+        self.attrs.update(other.attrs)
 
     def set(self, item):
         """Add new :class:`ParameterArray` to samples."""

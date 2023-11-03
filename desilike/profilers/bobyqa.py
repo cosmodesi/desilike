@@ -71,10 +71,11 @@ class BOBYQAProfiler(BaseProfiler):
         if not success and self.mpicomm.rank == 0:
             self.log_error('Finished unsuccessfully.')
             return profiles
-        profiles.set(bestfit=ParameterBestFit(list(result.x) + [- 0.5 * result.f], params=varied_params + ['logposterior']))
+        attrs = {name: getattr(result, name) for name in ['nf', 'nx', 'nruns', 'flag', 'msg']}
+        profiles.set(bestfit=ParameterBestFit(list(result.x) + [- 0.5 * result.f], params=varied_params + ['logposterior'], attrs=attrs))
         cov = utils.inv(result.hessian)
-        profiles.set(error=Samples(np.diag(cov)**0.5, params=varied_params))
-        profiles.set(covariance=ParameterCovariance(cov, params=varied_params))
+        profiles.set(error=Samples(np.diag(cov)**0.5, params=varied_params, attrs=attrs))
+        profiles.set(covariance=ParameterCovariance(cov, params=varied_params, attrs=attrs))
         return profiles
 
     def profile(self, *args, **kwargs):

@@ -21,8 +21,11 @@ def test_profilers():
 
     # for param in likelihood.varied_params:
     #     print(param, [likelihood(**{param.name: param.value + param.proposal * scale}) for scale in [-1., 1.]])
-    for Profiler in [MinuitProfiler, ScipyProfiler, BOBYQAProfiler]:
-        profiler = Profiler(likelihood, seed=42)
+    for Profiler, kwargs in [(MinuitProfiler, {}),
+                             #(ScipyProfiler, {'method': 'lsq'}),
+                             (ScipyProfiler, {'method': 'BFGS'}),
+                             (BOBYQAProfiler, {})]:
+        profiler = Profiler(likelihood, seed=42, **kwargs)
         profiles = profiler.maximize(niterations=2)
         assert profiles.bestfit['LRG.loglikelihood'].param.latex() == 'L_{\mathrm{LRG}}'
         assert profiles.bestfit['LRG.loglikelihood'].param.derived
@@ -77,6 +80,8 @@ def test_solve():
     profiler = MinuitProfiler(likelihood, rescale=False, seed=42)
     #profiler = ScipyProfiler(likelihood, method='lsq')
     profiles = profiler.maximize(niterations=2)
+    profiler.interval(params=['df', 'b1'])
+    #print(profiles.bestfit.attrs, profiles.error.attrs, profiles.covariance.attrs, profiles.interval.attrs)
     assert profiles.bestfit._loglikelihood == 'LRG.loglikelihood'
     #profiles = profiler.interval(params=['df'])
     #profiler.grid(params=['df', 'qpar'], size=2)
@@ -120,6 +125,6 @@ def test_bao():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_profilers()
-    test_solve()
+    test_profilers()
+    #test_solve()
     #test_bao()

@@ -76,6 +76,7 @@ class BaseLikelihood(BaseCalculator):
             solve_likelihoods = [likelihood for likelihood in likelihoods if any(param in solved_params for param in likelihood.all_params)]
 
             solve_likelihood = SumLikelihood(solve_likelihoods)
+            solve_likelihood.mpicomm = self.mpicomm
             solve_likelihood.runtime_info.pipeline.more_initialize = None
             solve_likelihood.runtime_info.pipeline.more_calculate = lambda: None
             all_params = solve_likelihood.all_params
@@ -158,7 +159,7 @@ class BaseLikelihood(BaseCalculator):
                 #self.fisher = Fisher(self, method='auto')
                 #pipeline._params, pipeline._varied_params = params_bak, varied_params_bak
             #self.fisher.likelihood.runtime_info.pipeline.input_values = values
-            self.fisher.mpicomm = self.mpicomm
+            #self.fisher.mpicomm = self.mpicomm
             posterior_fisher = self.fisher(**values)
             #pipeline.derived = derived
             #pipeline.more_calculate = self._solve

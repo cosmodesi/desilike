@@ -447,7 +447,7 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         self.r = float(r)
         super(ShapeFitPowerSpectrumExtractor, self).initialize(*args, with_now=with_now, **kwargs)
         if is_external_cosmo(self.cosmo):
-            self.cosmo_requires['primordial'] = {'pk_interpolator': {'k': self.k}}
+            self.cosmo_requires['primordial'] = {'pk_interpolator': None}
             self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
             self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
         cosmo = self.cosmo

@@ -279,7 +279,7 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, para
         from desilike import mpi
         self.like.mpicomm = mpi.COMM_SELF  # no likelihood-level MPI-parallelization
         self._cosmo_params, self._nuisance_params = get_likelihood_params(self.like)
-        for param in self.like.all_params.select(varied=True): param.update(prior=None)  # remove prior on varied parameters (already taken care of by cobaya)
+        for param in self.like.varied_params: param.update(prior=None)  # remove prior on varied parameters (already taken care of by cobaya)
         """
         import inspect
         kwargs = {name: getattr(self, name) for name in inspect.getargspec(cls).args}
@@ -301,7 +301,8 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, para
         if self._requires:
             cosmo = camb_or_classy_to_cosmoprimo(self._fiducial, self.provider, **params_values)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
-        return self.like(**{name: value for name, value in params_values.items() if name in self._nuisance_params})
+        loglikelihood = self.like(**{name: value for name, value in params_values.items() if name in self._nuisance_params})
+        return loglikelihood
 
     '''
     @classmethod

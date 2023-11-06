@@ -92,7 +92,7 @@ def read_planck2018_chain(basename='base_plikHM_TTTEEE_lowl_lowE_lensing', data_
             if name == 'A_s':
                 return 1e-10 * np.exp(get_from_chain('logA'))
             if name == 'h':
-                return 100. * get_from_chain('H0')
+                return get_from_chain('H0') / 100.
             if name.startswith('omega'):
                 return get_from_chain('O' + name[1:]) * get_from_chain('h') ** 2
             if name in ['Omega_b', 'Omega_cdm']:
@@ -108,7 +108,7 @@ def read_planck2018_chain(basename='base_plikHM_TTTEEE_lowl_lowE_lensing', data_
             raise ValueError('cannot find parameters {} from chain'.format(missing))
         chain = chain.sort([str(param) for param in params] + [chain._aweight, chain._fweight, chain._logposterior])
 
-        # In case we needed more parameters, we could run desilike's Cosmoprimo in parallel
+    # In case we needed more parameters, we could run desilike's Cosmoprimo in parallel
     return chain
 
 

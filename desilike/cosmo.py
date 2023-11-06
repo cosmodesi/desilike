@@ -4,7 +4,7 @@ from . import utils
 
 from cosmoprimo.cosmology import Cosmology, BaseEngine, BaseSection, CosmologyError
 from cosmoprimo.interpolator import PowerSpectrumInterpolator1D, PowerSpectrumInterpolator2D
-from cosmoprimo.utils import flatarray
+from cosmoprimo.utils import flatarray, addproperty
 
 
 def _make_list(li, length=None, isinst=(list, tuple)):
@@ -69,10 +69,13 @@ class BaseExternalEngine(BaseEngine):
         for section, names in requires.items():
             for name, attrs in names.items():
                 if section == 'background':
+                    attrs = attrs or {}
                     attrs['z'] = merge(attrs.get('z', get_default('z')))
                 if section == 'primordial':
+                    attrs = attrs or {}
                     attrs['k'] = merge(attrs.get('k', get_default('k')))
                 if section == 'fourier':
+                    attrs = attrs or {}
                     if name == 'pk_interpolator':
                         attrs['of'] = list(set([tuple(_make_list(of, length=2)) for of in attrs['of']]))
                         for aname in ['z', 'k']: attrs[aname] = merge(attrs.get(aname, get_default(aname)))

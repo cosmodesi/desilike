@@ -163,7 +163,10 @@ def get_likelihood_params(likelihood):
     Given a :class:`BaseLikelihood` instance,
     return its cosmological parameters and its "nuisance" parameters.
     """
-    all_params = likelihood.runtime_info.pipeline.params.select(derived=False, solved=False)
+    all_params = ParameterCollection()
+    for param in likelihood.runtime_info.pipeline.params:
+        if param.solved or param.derived and (not param.depends): continue
+        all_params.set(param)
     cosmo_names = likelihood.runtime_info.pipeline.get_cosmo_requires().get('params', {})
     cosmo_params, nuisance_params = ParameterCollection(), ParameterCollection()
     for param in all_params:

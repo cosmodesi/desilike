@@ -4,8 +4,7 @@ TT:
   A_cib_217:
     prior:
       dist: uniform
-      min: 0
-      max: 200
+      limits: [0., 200.]
     ref:
       dist: norm
       loc: 67
@@ -15,8 +14,7 @@ TT:
   xi_sz_cib:
     prior:
       dist: uniform
-      min: 0
-      max: 1
+      limits: [0., 1.]
     ref:
       dist: halfnorm
       loc: 0
@@ -26,8 +24,7 @@ TT:
   A_sz:
     prior:
       dist: uniform
-      min: 0
-      max: 10
+      limits: [0., 10.]
     ref:
       dist: norm
       loc: 7
@@ -37,8 +34,7 @@ TT:
   ksz_norm:
     prior:
       dist: uniform
-      min: 0
-      max: 10
+      limits: [0., 10.]
     ref:
       dist: halfnorm
       loc: 0
@@ -99,8 +95,7 @@ TT:
   ps_A_100_100:
     prior:
       dist: uniform
-      min: 0
-      max: 400
+      limits: [0., 400.]
     ref:
       dist: norm
       loc: 257
@@ -110,8 +105,7 @@ TT:
   ps_A_143_143:
     prior:
       dist: uniform
-      min: 0
-      max: 400
+      limits: [0., 400.]
     ref:
       dist: norm
       loc: 47
@@ -121,8 +115,7 @@ TT:
   ps_A_143_217:
     prior:
       dist: uniform
-      min: 0
-      max: 400
+      limits: [0., 400.]
     ref:
       dist: norm
       loc: 40
@@ -132,8 +125,7 @@ TT:
   ps_A_217_217:
     prior:
       dist: uniform
-      min: 0
-      max: 400
+      limits: [0., 400.]
     ref:
       dist: norm
       loc: 104

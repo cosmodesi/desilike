@@ -85,20 +85,21 @@ class ImportanceSampler(BaseClass):
                 self.pipeline.mpicalculate(**(points if self.mpicomm.rank == 0 else {}))
                 raise_error = None
                 if self.mpicomm.rank == 0:
+                    for param in self.pipeline.params.select(fixed=True, derived=False):
+                        chain[param] = np.full(chain.shape, param.value, dtype='f8')
+                    chain.update(self.pipeline.derived)
                     if self.pipeline.errors:
                         for ipoint, error in self.pipeline.errors.items():
                             if isinstance(error[0], self.likelihood.catch_errors):
                                 self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(repr(error[0]), {k: v.flat[ipoint] for k, v in points.items()}, error[1]))
+                                for param in [self.likelihood._param_loglikelihood, self.likelihood._param_logprior]:
+                                    if param in chain:
+                                        chain[param][ipoint, ...] = -np.inf
                             else:
                                 raise_error = error
-                                update_derived = False
                             if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
                                 warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0])))
-                    if chain is not None:
-                        for param in self.pipeline.params.select(fixed=True, derived=False):
-                            chain[param] = np.full(chain.shape, param.value, dtype='f8')
-                        chain.update(self.pipeline.derived)
-                chains[ichain] = chain
+                    chains[ichain] = chain
         self.mpicomm = mpicomm_bak
 
         for ichain, chain in enumerate(chains):
@@ -113,10 +114,13 @@ class ImportanceSampler(BaseClass):
                 for ichain, chain in enumerate(chains):
                     self.chains[ichain] = chain
                     if chain is not None:
+                        for param in [self.likelihood._param_loglikelihood, self.likelihood._param_logprior]:
+                            mask = np.isnan(chain[param])
+                            chain[param][mask] = -np.inf
                         logposterior = chain[self.likelihood._param_loglikelihood][()] + chain[self.likelihood._param_logprior][()]
                         max_logposterior = 0.
-                        mask_finite = np.isfinite(logposterior)
-                        if mask_finite.any(): max_logposterior = logposterior[mask_finite].max()
+                        mask = np.isfinite(logposterior)
+                        if mask.any(): max_logposterior = logposterior[mask].max()
                         chain.aweight[...] *= np.exp(logposterior - max_logposterior)
                     for name in ['size', 'nvaried', 'ndof']:
                         try:

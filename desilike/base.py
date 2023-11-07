@@ -282,6 +282,7 @@ class BasePipeline(BaseClass):
         nchunks = (all_size // max_chunk_size) + 1
         mpicomm, more_derived = self.mpicomm, self.more_derived
         all_states = []
+        derived_bak = self.derived  # calculate will reset derived
         for ichunk in range(nchunks):  # divide in chunks to save memory for MPI comm
             chunk_offset = all_size * ichunk // nchunks
             chunk_params = {}
@@ -327,6 +328,7 @@ class BasePipeline(BaseClass):
                     self.errors[istate] = state
                     if ref is not None:
                         samples.append(ref)
+            self.derived = derived_bak
             if samples:
                 self.derived = Samples.concatenate(samples).reshape(cshape)
 

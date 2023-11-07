@@ -1,3 +1,6 @@
+import logging
+import warnings
+
 import numpy as np
 
 from desilike.utils import BaseClass, is_path, TaskManager
@@ -78,8 +81,19 @@ class ImportanceSampler(BaseClass):
             for ichain in tm.iterate(range(self.nchains)):
                 if self.mpicomm.rank == 0:
                     chain = self.input_chains[ichain].deepcopy()
-                self.pipeline.mpicalculate(**(chain.to_dict(params=self.varied_params) if self.mpicomm.rank == 0 else {}))
+                    points = chain.to_dict(params=self.varied_params)
+                self.pipeline.mpicalculate(**(points if self.mpicomm.rank == 0 else {}))
+                raise_error = None
                 if self.mpicomm.rank == 0:
+                    if self.pipeline.errors:
+                        for ipoint, error in self.pipeline.errors.items():
+                            if isinstance(error[0], self.likelihood.catch_errors):
+                                self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(repr(error[0]), {k: v.flat[ipoint] for k, v in points.items()}, error[1]))
+                            else:
+                                raise_error = error
+                                update_derived = False
+                            if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
+                                warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0])))
                     if chain is not None:
                         for param in self.pipeline.params.select(fixed=True, derived=False):
                             chain[param] = np.full(chain.shape, param.value, dtype='f8')

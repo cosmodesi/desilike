@@ -253,7 +253,12 @@ class Chain(Samples):
             limits = [samples.ranges.lower.get(param.name, -np.inf), samples.ranges.upper.get(param.name, np.inf)]
             param.update(prior=ParameterPrior(limits=limits))
         new = cls()
-        new.fweight, new.logposterior = samples.weights, -samples.loglikes
+        fweight, new.logposterior = samples.weights, -samples.loglikes
+        iweight = np.rint(fweight)
+        if np.allclose(fweight, iweight, atol=0., rtol=1e-9):
+            new.fweight = iweight.astype('i4')
+        else:
+            new.aweight = fweight
         for param in params:
             new.set(ParameterArray(samples[param.name], param=param))
         for param in new.params(basename='chi2_*'):
@@ -380,7 +385,12 @@ class Chain(Samples):
             cls.log_info('Loading chain file: {}.'.format(chain_fn))
             array = np.loadtxt(chain_fn, unpack=True)
             new = cls()
-            new.fweight, new.logposterior = array[0], -array[1]
+            fweight, new.logposterior = array[0], -array[1]
+            iweight = np.rint(fweight)
+            if np.allclose(fweight, iweight, atol=0., rtol=1e-9):
+                new.fweight = iweight.astype('i4')
+            else:
+                new.aweight = fweight
             for param, values in zip(params, array[2:]):
                 new.set(ParameterArray(values, param))
             toret.append(new)

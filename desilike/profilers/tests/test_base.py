@@ -103,20 +103,23 @@ def test_bao():
     #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
     #for param in theory.params.select(basename=['df', 'dm', 'qpar', 'qper']): param.update(fixed=True)
     for param in theory.params.select(basename=['al*']): param.update(derived='.auto')
+    for param in theory.params.select(basename=['al*']): param.update(fixed=True, derived='.auto')
+    for param in theory.params.select(basename=['al0_0']): param.update(fixed=False, derived='.auto')
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data={'b1': 1.5},
                                                          theory=theory)
     covariance = ObservablesCovarianceMatrix(observables=observable, footprints=BoxFootprint(volume=1e10, nbar=1e-2))
     observable.init.update(covariance=covariance())
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
-
     #import numpy as np
     #likelihood.flatdata += 100 * np.cos(np.linspace(0., 5. * np.pi, observable.flatdata.size))
     profiler = MinuitProfiler(likelihood, rescale=False, seed=42)
     #profiler = ScipyProfiler(likelihood, method='lsq')
     profiles = profiler.maximize(niterations=2)
     likelihood(**profiles.bestfit.choice(input=True))
-    observable.plot(show=True)
+    if likelihood.mpicomm.rank == 0:
+        print(profiles.bestfit.choice(input=True))
+        observable.plot(show=True)
     #print(likelihood(**profiles.bestfit.choice(varied=True)))
     #from desilike.samples import plotting
     #plotting.plot_triangle(profiles, show=True)
@@ -125,6 +128,6 @@ def test_bao():
 if __name__ == '__main__':
 
     setup_logging()
-    test_profilers()
-    #test_solve()
+    #test_profilers()
+    test_solve()
     #test_bao()

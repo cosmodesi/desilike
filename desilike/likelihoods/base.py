@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 
 from desilike.base import BaseCalculator, Parameter, ParameterCollection, ParameterArray
@@ -75,17 +77,19 @@ class BaseLikelihood(BaseCalculator):
             from desilike.fisher import Fisher
             solve_likelihoods = [likelihood for likelihood in likelihoods if any(param in solved_params for param in likelihood.all_params)]
 
-            solve_likelihood = SumLikelihood(solve_likelihoods)
-            solve_likelihood.mpicomm = self.mpicomm
-            solve_likelihood.runtime_info.pipeline.more_initialize = None
-            solve_likelihood.runtime_info.pipeline.more_calculate = lambda: None
-            all_params = solve_likelihood.all_params
-            #solved_params = ParameterCollection(solved_params)
-            for param in pipeline.params:
-                if param in solve_likelihood.all_params:
-                    param = param.clone(derived=False) if param in solved_params else param.clone(fixed=True)
-                    all_params.set(param)
-            solve_likelihood.all_params = all_params
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', message='.*Derived parameter.*')
+                solve_likelihood = SumLikelihood(solve_likelihoods)
+                solve_likelihood.mpicomm = self.mpicomm
+                solve_likelihood.runtime_info.pipeline.more_initialize = None
+                solve_likelihood.runtime_info.pipeline.more_calculate = lambda: None
+                all_params = solve_likelihood.all_params
+                #solved_params = ParameterCollection(solved_params)
+                for param in pipeline.params:
+                    if param in solve_likelihood.all_params:
+                        param = param.clone(derived=False) if param in solved_params else param.clone(fixed=True)
+                        all_params.set(param)
+                solve_likelihood.all_params = all_params
             fisher = Fisher(solve_likelihood, method='auto')
             for likelihood in solve_likelihood.likelihoods:
                 likelihood.precision = likelihood._precision_original = getattr(likelihood, '_precision_original', likelihood.precision)
@@ -139,16 +143,20 @@ class BaseLikelihood(BaseCalculator):
             self.fisher = getattr(self, 'fisher', None)
             if self.fisher is None or self.fisher.mpicomm is not self.mpicomm or solved_params != self.fisher.varied_params:
                 #if self.fisher is not None: print(self.fisher.mpicomm is not self.mpicomm, self.fisher.varied_params != solved_params)
-                solve_likelihood = SumLikelihood(solve_likelihoods)
-                all_params = solve_likelihood.all_params
-                #solved_params = ParameterCollection(solved_params)
-                for param in pipeline.params:
-                    if param in solve_likelihood.all_params:
-                        param = param.clone(derived=False) if param in solved_params else param.clone(fixed=True)
-                        all_params.set(param)
-                solve_likelihood.all_params = all_params
-                solve_likelihood.runtime_info.pipeline.more_calculate = lambda: None
-                #solve_likelihood.runtime_info.pipeline.input_values = values
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore', message='.*Derived parameter.*')
+                    solve_likelihood = SumLikelihood(solve_likelihoods)
+                    all_params = solve_likelihood.all_params
+                    #solved_params = ParameterCollection(solved_params)
+                    for param in pipeline.params:
+                        if param in solve_likelihood.all_params:
+                            param = param.clone(derived=False) if param in solved_params else param.clone(fixed=True)
+                            all_params.set(param)
+                    solve_likelihood.all_params = all_params
+                    solve_likelihood.runtime_info.pipeline.more_calculate = lambda: None
+                    # Such that when initializing, Fisher calls the pipeline (on all ranks of likelihood.mpicomm) at its current parameters
+                    # and does not use default ones (call to self.fisher(**values) below only updates the calculator states on the last rank)
+                    solve_likelihood.runtime_info.pipeline.input_values = values
                 self.fisher = Fisher(solve_likelihood, method='auto')
                 self.fisher.varied_params = solved_params  # just to get same _derived attribute for solved_params != self.fisher.varied_params not to fail
                 #assert self.fisher.varied_params == solved_params

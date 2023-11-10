@@ -49,6 +49,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         - theory: defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
         - shotnoise: take shot noise from ``data``, or ``covariance`` (mocks) if provided.
         - fiber_collisions
+        - systematic_templates
         - if one only provided simple arrays for ``data`` and ``covariance``,
           one can provide the list of multipoles ``ells`` and the corresponding (list of) :math:`k` wavenumbers as a (list of) array ``k``,
           and optionally ``shotnoise``.

@@ -4,4 +4,5 @@ from .compression import BAOCompressionObservable, StandardCompressionObservable
 from .covariance import ObservablesCovarianceMatrix, BoxFootprint, CutskyFootprint
 from .window import (WindowedPowerSpectrumMultipoles, WindowedCorrelationFunctionMultipoles,
                      FiberCollisionsPowerSpectrumMultipoles, FiberCollisionsCorrelationFunctionMultipoles,
-                     TopHatFiberCollisionsPowerSpectrumMultipoles, TopHatFiberCollisionsCorrelationFunctionMultipoles)
+                     TopHatFiberCollisionsPowerSpectrumMultipoles, TopHatFiberCollisionsCorrelationFunctionMultipoles,
+                     SystematicTemplatePowerSpectrumMultipoles, SystematicTemplateCorrelationFunctionMultipoles)

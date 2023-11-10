@@ -38,6 +38,9 @@ def test_power_spectrum():
     assert np.allclose(likelihood.flatdiff, observable.wmatrix.flatpower - observable.flatdata)
     theory()
 
+    def get_template(ell, x):
+        return float(ell + 1.) * x**2
+
     theory = ResummedBAOWigglesTracerPowerSpectrumMultipoles()
     fiber_collisions = TopHatFiberCollisionsPowerSpectrumMultipoles(fs=0.5, Dfc=1.)
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
@@ -47,11 +50,14 @@ def test_power_spectrum():
                                                          shotnoise=2e4,
                                                          theory=theory,
                                                          fiber_collisions=fiber_collisions,
+                                                         systematic_templates=get_template,
                                                          kinlim=(0., 0.24),
                                                          transform='cubic')
 
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
+    likelihood.all_params['syst_0'].update(derived='.prec')
+    likelihood(syst_0=1e6)
+    observable.plot(show=True)
     assert np.allclose(theory.pt.wiggles.shotnoise, 2e4)
     likelihood.params['pk.loglikelihood'] = {}
     likelihood.params['pk.logprior'] = {}
@@ -140,7 +146,6 @@ def test_correlation_function():
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelationFunctionMultipoles, KaiserTracerCorrelationFunctionMultipoles, ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import TracerCorrelationFunctionMultipolesObservable, TopHatFiberCollisionsCorrelationFunctionMultipoles, BoxFootprint, ObservablesCovarianceMatrix
 
-
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
     #theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template, ells=(0, 2))
@@ -165,14 +170,20 @@ def test_correlation_function():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
     theory()
+
+    def get_template(ell, x):
+        return float(ell + 1.) * x**2
+
     fiber_collisions = TopHatFiberCollisionsCorrelationFunctionMultipoles(fs=0.5, Dfc=1.)
     observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
                                                                data='../../tests/_xi_fft/data.npy',
                                                                covariance='../../tests/_xi_fft/mock_*.npy',
                                                                theory=theory,
+                                                               systematic_templates=get_template,
                                                                fiber_collisions=fiber_collisions)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    observable()
+    likelihood.all_params['syst_0'].update(derived='.prec')
+    observable(syst_0=1.)
     observable.plot(show=True)
     sin = np.linspace(15., 160., 90)
     observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
@@ -211,12 +222,12 @@ def test_correlation_function():
     observable.wmatrix.plot(show=True)
     observable.plot_bao(show=True)
 
-    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
+    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 4.], 2: [20., 150., 4.]},
                                                                data={}, #'../../tests/_xi/data.npy',
                                                                covariance='../../tests/_xi/mock_*.npy',
                                                                theory=theory,
-                                                               wmatrix={'resolution': 2},
-                                                               fiber_collisions=fiber_collisions)
+                                                               wmatrix={'resolution': 5})
+                                                               #fiber_collisions=fiber_collisions)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
     observable.wmatrix.plot(show=True)
@@ -501,7 +512,7 @@ def test_fiber_collisions():
     from desilike.observables.galaxy_clustering import (FiberCollisionsPowerSpectrumMultipoles, FiberCollisionsCorrelationFunctionMultipoles,
                                                         TopHatFiberCollisionsPowerSpectrumMultipoles, TopHatFiberCollisionsCorrelationFunctionMultipoles)
     from desilike.observables.galaxy_clustering import WindowedCorrelationFunctionMultipoles, WindowedPowerSpectrumMultipoles
-    """
+
     fs, Dfc = 0.5, 3.
     ells = (0, 2, 4)
 
@@ -544,7 +555,6 @@ def test_fiber_collisions():
     window = WindowedPowerSpectrumMultipoles(k=np.linspace(0.01, 0.2, 50), fiber_collisions=fiber_collisions)
     window()
     window.plot(show=True)
-    """
 
     fs, Dfc = 0.5, 3.
     ells = (0, 2, 4)
@@ -552,6 +562,38 @@ def test_fiber_collisions():
     window = WindowedCorrelationFunctionMultipoles(s=np.linspace(20, 150, 50), fiber_collisions=fiber_collisions)
     window()
     window.plot(show=True)
+
+
+def test_systematic_templates():
+
+    from desilike.observables.galaxy_clustering import (SystematicTemplatePowerSpectrumMultipoles, SystematicTemplateCorrelationFunctionMultipoles)
+
+    def get_callable_template(i):
+
+        def callable_template(ell, x):
+            return float(ell + 1) * x ** i
+
+        return callable_template
+
+    templates = [get_callable_template(i) for i in range(4)]
+    systematics = SystematicTemplatePowerSpectrumMultipoles(templates=templates[:2])
+    systematics(syst_0=10, syst_1=20)
+    systematics.plot(show=True)
+    systematics = SystematicTemplateCorrelationFunctionMultipoles(templates=templates)
+    systematics(syst_0=10, syst_1=20, syst_3=5)
+    systematics.plot(show=True)
+
+    ells = (0, 2)
+    x = np.linspace(20., 200, 100)
+    templates = []
+    for i in range(4):
+        templates.append(np.concatenate([float(ell + 1) * x ** i for ell in ells]))
+    systematics = SystematicTemplatePowerSpectrumMultipoles(templates=templates[:2], k=x, ells=ells)
+    systematics(syst_0=10, syst_1=20)
+    systematics.plot(show=True)
+    systematics = SystematicTemplateCorrelationFunctionMultipoles(templates=templates, s=x, ells=ells)
+    systematics(syst_0=10, syst_1=20, syst_3=5)
+    systematics.plot(show=True)
 
 
 from desilike.base import BaseCalculator
@@ -806,6 +848,7 @@ if __name__ == '__main__':
 
     setup_logging()
 
+    # test_systematic_templates()
     # test_bao()
     test_power_spectrum()
     test_correlation_function()

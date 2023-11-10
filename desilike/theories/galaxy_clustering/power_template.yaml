@@ -926,3 +926,19 @@ params:
       scale: 0.0073
     delta: 0.01
     latex: \Omega_{m}
+
+---
+
+class: WiggleRescalePowerSpectrumTemplate
+
+params:
+  alpha_rs:  
+    value: 1.0
+    prior: 
+      limits: [0.5, 1.5]
+    ref:
+      limits: [0.95, 1.05]
+    delta: 0.05
+    latex: \alpha_{r_s}
+
+ 

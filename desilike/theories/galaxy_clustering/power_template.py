@@ -2,6 +2,7 @@ import re
 
 import numpy as np
 from cosmoprimo import PowerSpectrumBAOFilter, PowerSpectrumInterpolator1D
+from scipy import interpolate
 
 from desilike.jax import numpy as jnp
 from desilike.base import BaseCalculator
@@ -1141,3 +1142,81 @@ class TurnOverPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.DV_times_kTO = self.apeffect.qiso * self.DV_times_kTO_fid
         self.DH_over_DM = self.apeffect.qap * self.DH_over_DM_fid
         return self
+
+
+class WiggleRescalePowerSpectrumTemplate(BasePowerSpectrumTemplate):
+    """
+    Rescale the wiggly part of the power spectrum in order to marginalize over the sound horizon scale.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate linear power spectrum.
+
+    z : float, default=1.
+        Effective redshift.
+
+    alpha_rs : float, default=1.0
+        Parameter to rescale power spectrum wiggles; P_w(k) -> P_w(k * alpha_rs)
+
+    with_now : str, default='wallish2018'
+        Compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
+
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
+
+    Reference
+    ----------
+    - https://arxiv.org/abs/2112.10749
+    """
+    config_fn = 'power_template.yaml'
+    
+    def initialize(self, *args, k=None, z=1., alpha_rs=1., with_now='wallish2018', fiducial='DESI', cosmo=None, **kwargs):
+        self.alpha_rs = float(alpha_rs)
+        self.cosmo = cosmo
+        self.fiducial = fiducial
+        self.z = z
+        self.with_now = with_now
+        if k is None: k = np.logspace(-3., 1., 400)
+        self.k = np.array(k, dtype='f8')
+
+        # Make sure to use a larger k-grid than requested for the linear power spectrum,
+        # so that after rescaling the wiggles fully cover the desired k-range.
+        if alpha_rs > 1.0:
+            self.k_lin = np.logspace(np.log10(k[0]/self.alpha_rs - margin), np.log10(k[-1]), 400)
+        elif alpha_rs < 1.0:
+            self.k_lin = np.logspace(np.log10(k[0] - margin), np.log10(k[-1]/alpha_rs), 400)
+        else:
+            self.k_lin = self.k
+        
+        super(WiggleRescalePowerSpectrumTemplate, self).initialize(*args, k=self.k_lin, z=self.z, with_now=self.with_now, fiducial=self.fiducial, apmode='distances', **kwargs)
+
+    def calculate(self, alpha_rs=1.):
+        super(WiggleRescalePowerSpectrumTemplate, self).calculate()
+        
+        # Separate wiggles
+        self.pkw_dd_fid = self.pk_dd_fid - self.pknow_dd_fid
+        
+        # Rescale k-grid for wiggles
+        kw_rescale = self.k_lin * self.alpha_rs
+        
+        # Interpolate wiggle power spectrum to the original k-grid
+        pkw_dd_interpolator = interpolate.interp1d(kw_rescale, self.pkw_dd_fid, kind='cubic')
+        pknow_dd_interpolator = interpolate.interp1d(self.k_lin, self.pknow_dd_fid, kind='cubic')
+        self.pknow_dd = pknow_dd_interpolator(self.k)
+        self.pkw_dd = pkw_dd_interpolator(self.k)
+        
+        # Recombine wiggles and smooth power spectrum
+        self.pk_dd = self.pknow_dd_fid + self.pkw_dd
+
+    def get(self):
+        return self
+

@@ -1065,7 +1065,8 @@ class SystematicTemplatePowerSpectrumMultipoles(BaseSystematicTemplateMultipoles
     templates : callable, list or dict, default=()
         List of templates; one parameter called 'syst_{i:d}' will be created for each template i.
         or dict of templates; the key will be used as parameter name.
-        Each template can be an array for all multipoles stacked, or a callable that takes (ell, k) as input.
+        Each template can be an array for all multipoles stacked, or a callable that takes (ell, k) as input
+        and returns an array of size ``k.size``.
 
     k : array, list, default=None
         Output wavenumbers. If list, one array for each multipole.
@@ -1138,7 +1139,8 @@ class SystematicTemplateCorrelationFunctionMultipoles(BaseSystematicTemplateMult
     templates : callable, list or dict, default=()
         List of templates; one parameter called 'syst_{i:d}' will be created for each template i.
         or dict of templates; the key will be used as parameter name.
-        Each template can be an array for all multipoles stacked, or a callable that takes (ell, s) as input.
+        Each template can be an array for all multipoles stacked, or a callable that takes (ell, s) as input
+        and returns an array of size ``s.size``.
 
     s : array, list, default=None
         Output separations. If list, one array for each multipole.

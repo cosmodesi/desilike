@@ -64,6 +64,7 @@ def test_solve():
     for param in theory.params.select(basename=['ct*', 'sn*']): param.update(derived='.best')
     #for param in theory.params.select(basename=['ct*', 'sn*']): param.update(fixed=True)
     for param in theory.params.select(basename=['sn*']): param.update(prior=None, fixed=False, derived='.prec')
+    for param in theory.params.select(basename=['sn*']): param.update(prior=dict(dist='norm', loc=1., scale=0.01))
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data={'b1': 2., 'ct0_2': 1., 'sn0': 0.5},
                                                          theory=theory)

@@ -71,8 +71,7 @@ class BaseLikelihood(BaseCalculator):
         if solved_params:
             solved_params = ParameterCollection(solved_params)
             values = dict(pipeline.input_values)
-            for param in solved_params:
-                if not np.isfinite(values[param.name]): values[param.name] = param.value
+            for param in solved_params: values[param.name] = 0.
 
             from desilike.fisher import Fisher
             solve_likelihoods = [likelihood for likelihood in likelihoods if any(param in solved_params for param in likelihood.all_params)]
@@ -93,9 +92,12 @@ class BaseLikelihood(BaseCalculator):
             fisher = Fisher(solve_likelihood, method='auto')
             for likelihood in solve_likelihood.likelihoods:
                 likelihood.precision = likelihood._precision_original = getattr(likelihood, '_precision_original', likelihood.precision)
+                likelihood.flatdata = likelihood._flatdata_original = getattr(likelihood, '_flatdata_original', likelihood.flatdata)
             posterior_fisher = fisher(**values)
             posterior_covariance = np.linalg.inv(- posterior_fisher._hessian)
             derivs = fisher.mpicomm.bcast(fisher.likelihood_differentiation.samples, root=0)
+            for param in solved_params: values[param.name] = getattr(param.prior, 'loc', 0.)
+            solve_likelihood(**values)
             for likelihood, derivs in zip(solve_likelihoods, derivs):
                 precision = likelihood._precision_original
                 flatderiv = np.asarray(derivs)[1:]  # (len(solved_params), len(flatdata)) first is zero-lag
@@ -104,6 +106,7 @@ class BaseLikelihood(BaseCalculator):
                 else:
                     derivp = flatderiv.dot(precision)
                 likelihood.precision = precision - derivp.T.dot(posterior_covariance).dot(derivp)
+                likelihood.flatdata = likelihood._flatdata_original - (likelihood.flatdiff - derivs[()])  # flatdiff = flattheory - flatdata
 
     def _solve(self):
         # Analytic marginalization, to be called, if desired, in get()

@@ -25,7 +25,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         Data power spectrum measurement: flat array (of all multipoles), :class:`pypower.PowerSpectrumMultipoles` instance,
         or path to such instances, or list of such objects (in which case the average of them is taken).
         If dict, parameters to be passed to theory to generate mock measurement.
-        If a (list of) flat array, additionally provide list of multipoles ``ells`` and wavenumbers ``k``, and optionally ``shotnoise`` (see **kwargs).
+        If a (list of) flat array, additionally provide list of multipoles ``ells`` and wavenumbers ``k``, and optionally ``shotnoise`` (see ``kwargs``).
 
     covariance : array, list, default=None
         2D array, list of :class:`pypower.PowerSpectrumMultipoles` instance` instances, or paths to such instances;
@@ -53,6 +53,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         - if one only provided simple arrays for ``data`` and ``covariance``,
           one can provide the list of multipoles ``ells`` and the corresponding (list of) :math:`k` wavenumbers as a (list of) array ``k``,
           and optionally ``shotnoise``.
+
     """
     def initialize(self, data=None, covariance=None, klim=None, wmatrix=None, transform=None, **kwargs):
         self.k, self.kedges, self.ells, self.shotnoise = None, None, None, None

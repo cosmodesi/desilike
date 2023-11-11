@@ -25,7 +25,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         Data correlation function measurement: flat array (of all multipoles), :class:`pycorr.BaseTwoPointEstimator` instance,
         or path to such instances, or list of such objects (in which case the average of them is taken).
         If dict, parameters to be passed to theory to generate mock measurement.
-        If a (list of) flat array, additionally provide list of multipoles ``ells`` and separations ``s`` (see **kwargs).
+        If a (list of) flat array, additionally provide list of multipoles ``ells`` and separations ``s`` (see ``kwargs``).
 
     covariance : list, default=None
         2D array, list of :class:`pycorr.BaseTwoPointEstimator` instances, or paths to such instances;
@@ -43,6 +43,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         - systematic_templates
         - if one only provided simple arrays for ``data`` and ``covariance``,
           one can provide the list of multipoles ``ells`` and the corresponding (list of) :math:`s` separations as a (list of) array ``s``.
+
     """
     def initialize(self, data=None, covariance=None, slim=None, wmatrix=None, ignore_nan=False, **kwargs):
         self.s, self.sedges, self.ells = None, None, None

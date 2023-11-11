@@ -1023,11 +1023,13 @@ class TopHatFiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorr
 
 
 def get_templates(templates, ells=(0, 2, 4), x=None):
-    if not utils.is_sequence(templates):
+    from collections.abc import Mapping
+    if not isinstance(templates, Mapping) and not utils.is_sequence(templates):
         templates = [templates]
-    templates = list(templates)
+    if not isinstance(templates, Mapping):
+        templates = {"syst_{:d}".format(i): v for i, v in enumerate(templates)}
     toret = {}
-    for iparam, template in enumerate(templates):
+    for name, template in templates.items():
         if x is not None:
             if callable(template):
                 template = np.concatenate([template(ell, xx) for ell, xx in zip(ells, x)])
@@ -1036,7 +1038,7 @@ def get_templates(templates, ells=(0, 2, 4), x=None):
             size = sum(sizes)
             if template.size != size:
                 raise ValueError('provided template is size {:d}, but expected {:d} = sum({:d})'.format(template.size, size, sizes))
-        toret['syst_{:d}'.format(iparam)] = template
+        toret[name] = template
     return toret
 
 
@@ -1060,8 +1062,9 @@ class SystematicTemplatePowerSpectrumMultipoles(BaseSystematicTemplateMultipoles
 
     Parameters
     ----------
-    templates : callable, list, default=()
+    templates : callable, list or dict, default=()
         List of templates; one parameter called 'syst_{i:d}' will be created for each template i.
+        or dict of templates; the key will be used as parameter name.
         Each template can be an array for all multipoles stacked, or a callable that takes (ell, k) as input.
 
     k : array, list, default=None
@@ -1132,8 +1135,9 @@ class SystematicTemplateCorrelationFunctionMultipoles(BaseSystematicTemplateMult
 
     Parameters
     ----------
-    templates : callable, list, default=()
+    templates : callable, list or dict, default=()
         List of templates; one parameter called 'syst_{i:d}' will be created for each template i.
+        or dict of templates; the key will be used as parameter name.
         Each template can be an array for all multipoles stacked, or a callable that takes (ell, s) as input.
 
     s : array, list, default=None

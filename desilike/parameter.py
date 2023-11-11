@@ -56,7 +56,8 @@ def decode_name(name, default_start=0, default_stop=None, default_step=1):
         List of ranges.
     """
     name = str(name)
-    replaces = re.finditer(r'\[(-?\d*):(\d*):*(-?\d*)\]', name)
+    #replaces = re.finditer(r'\[(-?\d*):(\d*):*(-?\d*)\]', name)
+    replaces = re.finditer(r'\[([-+]?\d*):([-+]?\d*):*([-+]?\d*)\]', name)
     strings, ranges = [], []
     string_start = 0
     for ireplace, replace in enumerate(replaces):
@@ -173,9 +174,10 @@ def find_names(allnames, name, quiet=True):
         pattern = name
         ranges = []
     else:
-        name = fnmatch.translate(name)
+        #name = fnmatch.translate(name)  # does weird things to -
+        name = name.replace('*', '.*?')  # ? for non-greedy
         strings, ranges = decode_name(name)
-        pattern = re.compile(r'(-?\d*)'.join(strings))
+        pattern = re.compile(r'([-+]?\d*)'.join(strings))
     toret = []
     for paramname in allnames:
         match = re.match(pattern, paramname)

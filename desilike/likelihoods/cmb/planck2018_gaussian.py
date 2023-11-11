@@ -6,8 +6,14 @@ from desilike.jax import numpy as jnp
 from desilike import utils
 
 
-convert_planck2018_params = {'omegabh2': 'omega_b', 'omegach2': 'omega_cdm', 'omegak': 'Omega_k', 'w': 'w0_fld', 'wa': 'wa_fld', 'theta': 'theta_MC_100', 'tau': 'tau_reio',
-                             'mnu': 'm_ncdm', 'logA': 'logA', 'ns': 'n_s', 'nrun': 'alpha_s', 'r': 'r', 'H0': 'H0', 'omegam': 'Omega_m'}
+convert_planck2018_params = {'omegabh2': 'omega_b', 'omegach2': 'omega_cdm', 'omegak': 'Omega_k', 'w': 'w0_fld', 'wa': 'wa_fld', 'theta': 'theta_MC_100', 'tau': 'tau_reio', 'mnu': 'm_ncdm', 'logA': 'logA', 'ns': 'n_s', 'nrun': 'alpha_s', 'r': 'r', 'H0': 'H0', 'omegam': 'Omega_m', 'omegal': 'Omega_Lambda', 'omegam': 'Omega_m', 'rdrag': 'rs_drag', 'zdrag': 'z_drag'}
+
+convert_planck2018_params.update({'calPlanck': 'A_planck', 'cal0': 'calib_100T', 'cal2': 'calib_217T', 'acib217': 'A_cib_217', 'xi': 'xi_sz_cib',
+                                  'asz143': 'A_sz', 'aksz': 'ksz_norm',
+                                  'kgal100': 'gal545_A_100', 'kgal143': 'gal545_A_143', 'kgal217': 'gal545_A_217', 'kgal143217': 'gal545_A_143_217',
+                                  'galfTE100': 'galf_TE_A_100', 'galfTE100143': 'galf_TE_A_100_143', 'galfTE100217': 'galf_TE_A_100_217',
+                                  'galfTE143': 'galf_TE_A_143', 'galfTE143217': 'galf_TE_A_143_217', 'galfTE217': 'galf_TE_A_217',
+                                  'aps100': 'ps_A_100_100', 'aps143': 'ps_A_143_143', 'aps143217': 'ps_A_143_217', 'aps217': 'ps_A_217_217'})
 
 
 def planck2018_base_fn(basename, data_dir=None):
@@ -83,14 +89,17 @@ def read_planck2018_chain(basename='base_plikHM_TTTEEE_lowl_lowE_lensing', data_
 
     if params is not None:
 
-        inverse_convert_planck2018_params = {value: name for name, value in convert_planck2018_params.items()}
+        for name, newname in convert_planck2018_params.items():
+            if name in chain:
+                chain[newname] = chain[name]
 
         def get_from_chain(name):
-            planck2018_name = inverse_convert_planck2018_params.get(name, name)
-            if planck2018_name in chain:
-                return chain[planck2018_name]
+            if name in chain:
+                return chain[name]
             if name == 'A_s':
                 return 1e-10 * np.exp(get_from_chain('logA'))
+            if name in ['ln10^{10}A_s', 'ln10^10A_s', 'ln_A_s_1e10']:
+                return get_from_chain('logA')
             if name == 'h':
                 return get_from_chain('H0') / 100.
             if name.startswith('omega'):
@@ -106,7 +115,6 @@ def read_planck2018_chain(basename='base_plikHM_TTTEEE_lowl_lowE_lensing', data_
             else: chain[param] = array
         if missing:
             raise ValueError('cannot find parameters {} from chain'.format(missing))
-        chain = chain.sort([str(param) for param in params] + [chain._aweight, chain._fweight, chain._logposterior])
 
     # In case we needed more parameters, we could run desilike's Cosmoprimo in parallel
     return chain

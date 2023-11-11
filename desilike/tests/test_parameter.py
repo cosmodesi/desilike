@@ -45,6 +45,10 @@ def test_collection():
     params = ParameterCollection(['a', 'b'])
     params2 = ParameterCollection(['b', 'c'])
     assert (params & params2).names() == ['b']
+    params = ParameterCollection(['a1_2', 'b1_3', 'b2_3', 'a2_3'])
+    assert params.names(name=['*1_*']) == ['a1_2', 'b1_3']
+    assert params.names(name=['*1_[2:3]']) == ['a1_2']
+    assert params.names(name=['*[1:3]_3']) == ['b1_3', 'b2_3', 'a2_3']
 
 
 def test_matrix():

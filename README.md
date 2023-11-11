@@ -97,6 +97,7 @@ Installer(user=True)(likelihood)
 - Stephen Chen, Joe DeRose for MLP emulator: https://github.com/sfschen/EmulateLSS
 - Pat McDonald, Eva Maria Mueller, Antony Lewis for thoughts
 - Pat McDonald, Edmond Chaussidon, Uendert Andrade, Daniel Forero Sanchez, Batia Friedman-Shaw, Svyatoslav Trusov, Nathan Findlay, Enrique Paillas for early debugging and feedback
+- Ruiyang Zhao for systematics templates
 - Cobaya, CosmoSIS bindings inspired by firecrown: https://github.com/LSSTDESC/firecrown
 - Inspiration from Cobaya: https://github.com/CobayaSampler/cobaya
 - Benedict Bahr-Kalus for turnover scale analysis: https://arxiv.org/pdf/2302.07484.pdf

@@ -1497,8 +1497,8 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     def set_params(self):
         freedom = self.options.pop('freedom', None)
         if self.options['eft_basis'] is None:
-            self.options['eft_basis'] = 'mcdonald' if freedom == 'min' else 'westcoast'
-        allowed_eft_basis = ['eftoflss', 'eastcoast', 'westcoast', 'mcdonald']
+            self.options['eft_basis'] = 'eftoflss' if freedom == 'min' else 'westcoast'
+        allowed_eft_basis = ['eftoflss', 'eastcoast', 'westcoast']  #, 'mcdonald']
         if self.options['eft_basis'] not in allowed_eft_basis:
             raise ValueError('eft_basis must be one of {}'.format(allowed_eft_basis))
         # in pybird:
@@ -1512,10 +1512,6 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             self.required_bias_params = ['b1', 'b2p4', 'b3', 'b2m4']
         if self.options['eft_basis'] == 'eastcoast':
             self.required_bias_params = ['b1', 'b2t', 'b2g', 'b3g']
-        if self.options['eft_basis'] == 'mcdonald':
-            if freedom != 'min':
-                raise ValueError('eft_basis = "mcdonald" only available for freedom = "min"')
-            self.required_bias_params = ['b1', 'b2', 'bs', 'b3']
         self.pt.init.update(eft_basis=self.options['eft_basis'])
         # now EFT parameters
         if self.options['eft_basis'] in ['eftoflss', 'westcoast', 'mcdonald']:
@@ -1532,18 +1528,19 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
         fix = []
         if freedom == 'max':
-            for param in self.init.params.select(basename=['b1', 'b2', 'b3', 'b4', 'bs', 'b2p4', 'b2m4', 'b2t', 'b2g', 'b3g']):
+            for param in self.params.select(basename=['b1', 'b2', 'b3', 'b4', 'bs', 'b2p4', 'b2m4', 'b2t', 'b2g', 'b3g']):
                 param.update(fixed=False)
             fix += ['ce1']
         if freedom == 'min':
             #fix += ['b3', 'b2m4', 'ce1']
-            if self.options['eft_basis'] != 'mcdonald':
-                raise ValueError('freedom = "min" only defined in eft_basis = "mcdonald"')
-            fix += ['bs', 'b3', 'ce1']
+            if self.options['eft_basis'] != 'eftoflss':
+                raise ValueError('freedom = "min" only defined in eft_basis = "eftoflss"')
+            fix += ['b2', 'b3', 'ce1']
         if 4 not in self.ells: fix += ['cr2', 'c4']
         if 2 not in self.ells: fix += ['cr1', 'c2', 'ce2']
-        for param in self.init.params.select(basename=fix):
+        for param in self.params.select(basename=fix):
             param.update(value=0., fixed=True)
+        self.freedom = freedom
 
     def transform_params(self, **params):
         if self.options['eft_basis'] == 'westcoast':
@@ -1553,16 +1550,9 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             params['b2'] = params['b1'] + 7. / 2. * params['b2g']
             params['b3'] = params['b1'] + 15. * params['b2g'] + 6. * params.pop('b3g')
             params['b4'] = 1 / 2. * params.pop('b2t') - 7. / 2. * params.pop('b2g')
-        elif self.options['eft_basis'] == 'mcdonald':
-            # WARNING: relations only valid in the coevolution picture, freedom = 'min'
-            # b2g = -2. / 7. * (b1 - 1), bs = bs2 - 4. / 7. * (b1 - 1.) = 0 => b2g = -1. / 2. * bs2 = -1. / 2. * (bs + 4. / 7. * (b1 - 1.))
-            # b3g = 23. / 42 * (b1 - 1), b3 = b3nl + 32. / 315. * (b1 - 1.) = 0 => b3g = -345. / 64. * b3nl = -345. / 64. * (b3 - 32. / 315. * (b1 - 1.))
-            params['b2t'] = params.pop('b2')
+        if self.freedom == 'min':
             params['b2'] = 1.
-            params['b2g'] = - 1 / 2. * (params.pop('bs') + 4. / 7. * (params['b1'] - 1.))
-            params['b3g'] = -345. / 64. * (params.pop('b3') - 32. / 315. * (params['b1'] - 1.))
-            params['b3'] = params['b1'] + 15. * params['b2g'] + 6. * params.pop('b3g')
-            params['b4'] = 1 / 2. * params.pop('b2t') - 7. / 2. * params.pop('b2g')
+            params['b3'] = (294. - 1015. * (params['b1'] - 1.)) / 441.
         return params
 
     def calculate(self, **params):

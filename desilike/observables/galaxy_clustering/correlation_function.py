@@ -62,10 +62,10 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         self.wmatrix = wmatrix
         if not isinstance(wmatrix, WindowedCorrelationFunctionMultipoles):
             self.wmatrix = WindowedCorrelationFunctionMultipoles()
-            if wmatrix is not None:
-                if self.muedges and isinstance(wmatrix, dict):
-                    wmatrix = {'muedges': self.muedges, **wmatrix}
-                self.wmatrix.init.update(wmatrix=wmatrix)
+            if wmatrix is None: wmatrix = {}
+            if self.muedges and isinstance(wmatrix, dict):
+                wmatrix = {'muedges': self.muedges, **wmatrix}
+            self.wmatrix.init.update(wmatrix=wmatrix)
         if self.sedges:  # set by data
             slim = {ell: (edges[0], edges[-1], np.mean(np.diff(edges))) for ell, edges in zip(self.ells, self.sedges)}
             self.wmatrix.init.update(s=self.s)
@@ -118,7 +118,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
                 else:
                     if mask_mu is not None:
                         muedges = np.array(list(zip(muedges[:-1], muedges[1:])))
-                        muedges = np.tile(muedges, (len(list_s[-1]), 1, 1))[mask_mu]
+                        muedges = [muedges[mm] for mm in mask_mu]
                         list_muedges.append(muedges)
             return list_s, list_sedges, list_muedges, ells, list_data
 

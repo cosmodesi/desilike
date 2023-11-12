@@ -161,21 +161,20 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             theory = KaiserTracerPowerSpectrumMultipoles()
         self.theory = theory
 
-        self.ellsin = ellsin
         self.matrix_full, self.kmask, self.offset = None, None, None
         if wmatrix is None:
+            self.ellsin = tuple(self.ells)
             self.kin = np.unique(np.concatenate(self.k, axis=0))
             if not all(kk.shape == self.kin.shape and np.allclose(kk, self.kin) for kk in self.k):
                 self.kmask = [np.searchsorted(self.kin, kk, side='left') for kk in self.k]
                 assert all(np.allclose(self.kin[kmask], kk) for kk, kmask in zip(self.k, self.kmask))
                 self.kmask = np.concatenate(self.kmask, axis=0)
-            self.ellsin = tuple(self.ells)
         elif isinstance(wmatrix, dict):
             self.ellsin = tuple(self.ells)
             self.kin, self.matrix_full = window_matrix_bininteg(self.kedges, **wmatrix)
             self.matrix_full = self.matrix_full.T
         elif isinstance(wmatrix, np.ndarray):
-            self.ellsin = tuple(self.ells)
+            self.ellsin = tuple(self.ells or self.ells)
             self.matrix_full = np.array(wmatrix).T
             ksize = sum(len(k) for k in self.k)
             if self.matrix_full.shape[0] != ksize:
@@ -247,15 +246,12 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             else:
                 assert all(np.allclose(xin, self.kin) for xin in wmatrix.xin), 'input coordinates of "wmatrix" are not the same for all multipoles; pass an k-coordinate array to "kin"'
         if fiber_collisions is not None:
-            self.theory.init.update(k=self.kin, ells=self.ellsin)  # fiber_collisions take kin, ellsin from theory
+            self.theory.init.update(k=self.kin, ells=self.ellsin)  # fiber_collisions takes kin, ellsin from theory
             fiber_collisions.init.update(k=self.kin, ells=self.ellsin, theory=self.theory)
             fiber_collisions = fiber_collisions.runtime_info.initialize()
-            if self.matrix_full is None:
-                self.matrix_full = np.bmat([list(kernel) for kernel in fiber_collisions.kernel_correlated]).A
+            if self.matrix_full is None:  # ellsin = ells
                 if fiber_collisions.with_uncorrelated: self.offset = fiber_collisions.kernel_uncorrelated.ravel()
-                if self.kmask is not None:
-                    self.matrix_full = self.matrix_full[..., self.kmask]
-                    if fiber_collisions.with_uncorrelated: self.offset = self.offset[self.kmask]
+                self.matrix_full = np.bmat([list(kernel) for kernel in fiber_collisions.kernel_correlated]).A
             else:
                 if fiber_collisions.with_uncorrelated: self.offset = self.matrix_full.dot(fiber_collisions.kernel_uncorrelated.ravel())
                 self.matrix_full = self.matrix_full.dot(np.bmat([list(kernel) for kernel in fiber_collisions.kernel_correlated]).A)
@@ -280,10 +276,10 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         theory = jnp.ravel(theory)
         if self.matrix_full is not None:
             theory = jnp.dot(self.matrix_full, theory)
-        if self.kmask is not None:
-            theory = theory[self.kmask]
         if self.offset is not None:
             theory = theory + self.offset
+        if self.kmask is not None:
+            theory = theory[self.kmask]
         return theory
 
     def calculate(self):
@@ -420,8 +416,6 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         self.s = [np.array(ss, dtype='f8') for ss in s]
         if len(self.s) != len(self.ells):
             raise ValueError("Provided as many s's as ells")
-        # No matrix for the moment
-        self.ellsin = tuple(self.ells)
 
         if theory is None:
             from desilike.theories.galaxy_clustering import KaiserTracerCorrelationFunctionMultipoles
@@ -429,20 +423,24 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         self.theory = theory
 
         self.matrix_diag, self.matrix_full, self.smask, self.offset = None, None, None, None
+        muedges = None
+        if isinstance(wmatrix, dict):
+            wmatrix = dict(wmatrix)
+            muedges = wmatrix.pop('muedges', None)
+            if not wmatrix: wmatrix = None
         if wmatrix is None:
+            self.ellsin = tuple(self.ells)
             self.sin = np.unique(np.concatenate(self.s, axis=0))
             if not all(np.allclose(ss, self.sin) for ss in self.s):
                 self.smask = [np.searchsorted(self.sin, ss, side='left') for ss in self.s]
                 assert all(smask.min() >= 0 and smask.max() < ss.size for ss, smask in zip(self.s, self.smask))
                 self.smask = np.concatenate(self.smask, axis=0)
         elif isinstance(wmatrix, dict):
-            wmatrix = dict(wmatrix)
-            muedges = wmatrix.pop('muedges', None)
             self.ellsin = tuple(self.ells)
             self.sin, self.matrix_full = window_matrix_bininteg(self.sedges, **wmatrix)
             self.matrix_full = self.matrix_full.T
         elif isinstance(wmatrix, np.ndarray):
-            self.ellsin = tuple(self.ells)
+            self.ellsin = tuple(ellsin or self.ells)
             self.matrix_full = np.array(wmatrix).T
             ssize = sum(len(s) for s in self.s)
             if self.matrix_full.shape[0] != ssize:
@@ -458,18 +456,37 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
             self.matrix_full = self.matrix_full.dot(wmatrix_rebin.T)
         else:
             raise ValueError('unrecognized wmatrix {}'.format(wmatrix))
+        if muedges is not None:
+            # This matrix will come *before* --- this isn't fully correct, but easier...
+            self.ellsin = tuple(ellsin or self.theory.init.get('ells', None) or self.ells)
+            matrix_diag = np.empty((len(self.ells), len(self.ellsin), len(self.sin)))
+            for ill, ell in enumerate(self.ells):
+                for illin, ellin in enumerate(self.ellsin):
+                    integ = (special.legendre(ell) * special.legendre(ellin)).integ()
+                    # shape (s[ill].size,) + (nmu(s), 2)
+                    tmp = [(2. * ell + 1.) / np.sum(me[:, 1] - me[:, 0]) * np.sum(integ(me[:, 1]) - integ(me[..., 0])) for me in muedges[ill]]
+                    matrix_diag[ill, illin] = np.interp(self.sin, self.s[ill], tmp)
+            if self.matrix_full is None:
+                if self.matrix_diag is None: self.matrix_diag = matrix_diag
+                else: self.matrix_diag = np.sum(self.matrix_diag[:, :, None, ...] * matrix_diag[None, ...], axis=1)
+            else:
+                self.matrix_full = self.matrix_full.dot(np.bmat([[np.diag(kk) for kk in kernel] for kernel in matrix_diag]).A)
         if fiber_collisions is not None:
-            fiber_collisions.init.update(s=self.sin, ells=self.ellsin, theory=self.theory)
+            self.theory.init.update(s=self.sin, ells=self.ellsin)  # fiber_collisions takes sin, ellsin from theory
+            fiber_collisions.init.update(ells=self.ellsin, theory=self.theory)
             fiber_collisions = fiber_collisions.runtime_info.initialize()
             self.ellsin = tuple(fiber_collisions.ellsin)
-            if fiber_collisions.with_uncorrelated: self.offset = fiber_collisions.kernel_uncorrelated.ravel()
             if self.matrix_full is None:
-                self.matrix_diag = fiber_collisions.kernel_correlated
-                if self.smask is not None:
-                    self.matrix_diag = self.matrix_diag[..., self.smask]
-                    if fiber_collisions.with_uncorrelated: self.offset = self.offset[self.smask]
-            else:
                 # kernel_correlated is (ellout, ellin, s)
+                matrix_diag = fiber_collisions.kernel_correlated
+                if self.matrix_diag is None:  # ellsin = ells, offset ok
+                    if fiber_collisions.with_uncorrelated: self.offset = fiber_collisions.kernel_uncorrelated.ravel()
+                    self.matrix_diag = matrix_diag
+                else:
+                    if fiber_collisions.with_uncorrelated: self.offset = np.sum(self.matrix_diag * fiber_collisions.kernel_uncorrelated[None, ...], axis=1).ravel()
+                    self.matrix_diag = np.sum(self.matrix_diag[:, :, None, ...] * matrix_diag[None, ...], axis=1)
+            else:
+                if fiber_collisions.with_uncorrelated: self.offset = self.matrix_full.dot(fiber_collisions.kernel_uncorrelated.ravel())
                 self.matrix_full = self.matrix_full.dot(np.bmat([[np.diag(kk) for kk in kernel] for kernel in fiber_collisions.kernel_correlated]).A)
                 self.ellsin, self.sin = fiber_collisions.ellsin, fiber_collisions.sin
         self.theory.init.update(s=self.sin, ells=self.ellsin)
@@ -486,10 +503,10 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         theory = jnp.ravel(theory)
         if self.matrix_full is not None:
             theory = jnp.dot(self.matrix_full, theory)
-        elif self.smask is not None:
-            theory = theory[self.smask]
         if self.offset is not None:
             theory = theory + self.offset
+        if self.smask is not None:
+            theory = theory[self.smask]
         return theory
 
     def calculate(self):
@@ -817,15 +834,15 @@ class TopHatFiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpect
 class BaseFiberCollisionsCorrelationFunctionMultipoles(BaseCalculator):
 
     def initialize(self, s=None, ells=(0, 2, 4), theory=None, with_uncorrelated=True):
-        if s is None: s = np.linspace(20., 200, 101)
-        self.s = np.array(s, dtype='f8')
         self.ells = tuple(ells)
 
         if theory is None:
             from desilike.theories.galaxy_clustering import KaiserTracerCorrelationFunctionMultipoles
-            theory = KaiserTracerCorrelationFunctionMultipoles(s=self.s)
+            theory = KaiserTracerCorrelationFunctionMultipoles()
         self.theory = theory
+        if s is not None: self.theory.init.update(s=s)
         self.theory.runtime_info.initialize()
+        self.s = np.array(self.theory.s, dtype='f8')
         self.ellsin = tuple(self.theory.ells)
         self.with_uncorrelated = bool(with_uncorrelated)
 

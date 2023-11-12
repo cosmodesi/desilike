@@ -175,7 +175,7 @@ def find_names(allnames, name, quiet=True):
         ranges = []
     else:
         #name = fnmatch.translate(name)  # does weird things to -
-        name = name.replace('*', '.*?')  # ? for non-greedy
+        name = name.replace('*', '.*?') + '$'  # ? for non-greedy, $ to match end of string
         strings, ranges = decode_name(name)
         pattern = re.compile(r'([-+]?\d*)'.join(strings))
     toret = []

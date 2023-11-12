@@ -107,8 +107,8 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
                 list_s.append(corr_slice.sepavg())
                 list_sedges.append(corr_slice.edges[0])
                 try:
-                    d, mask_mu = corr_slice.get_corr(ell=ell, return_std=False, ignore_nan=ignore_nan, return_mask=True)  # pycorr
-                except:
+                    d, mask_mu = corr_slice.get_corr(ell=ell, ignore_nan=ignore_nan, return_mask=True, return_cov=False, return_sep=False)  # pycorr
+                except TypeError:
                     d, mask_mu = corr_slice(ell=ell), None  # pypower
                 list_data.append(d)
                 try:

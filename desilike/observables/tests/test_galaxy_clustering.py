@@ -851,7 +851,7 @@ if __name__ == '__main__':
     # test_systematic_templates()
     # test_bao()
     test_power_spectrum()
-    test_correlation_function()
+    #test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()

@@ -551,11 +551,11 @@ def test_pybird():
     from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles
     z = 0.5
     template = DirectPowerSpectrumTemplate(z=z)
-    k = np.arange(0.005, 0.3, 0.01)
-
-    #k = np.arange(0.0001, 0.3, 0.01)
-    shotnoise = 1e4
     with_nnlo_counterterm = True
+    shotnoise = 1e4
+
+    k = np.arange(0.005, 0.3, 0.01)
+    #k = np.arange(0.0001, 0.3, 0.01)
     theory = PyBirdTracerPowerSpectrumMultipoles(template=template, eft_basis='eftoflss', k=k, shotnoise=shotnoise, km=0.7, kr=0.35, with_nnlo_counterterm=with_nnlo_counterterm)
     theory()
     kk, pk_lin, psmooth, f = template.k, template.pk_dd, template.pknow_dd, template.f
@@ -570,7 +570,7 @@ def test_pybird():
     #c.compute({'kk': kk, 'pk_lin': pk_lin, 'Psmooth': psmooth, 'f': f, 'bias': eft_params})
     #ref = c.get()
     power = theory(**eft_params)
-    print(power[:, :3])
+    print(power[:, :3])  # difference comes from the AP projection
     print(ref[:, :3])
 
     ax = plt.gca()
@@ -584,20 +584,20 @@ def test_pybird():
     ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
     ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
     plt.show()
-    exit()
+
     for eft_basis in ['westcoast', 'eastcoast']:
         theory.init.update(eft_basis=eft_basis)
         theory()
 
     s = np.arange(10, 200, 5.)
     template = DirectPowerSpectrumTemplate(z=z)
-    theory = PyBirdTracerCorrelationFunctionMultipoles(template=template, eft_basis='eftoflss', s=s, km=0.7, kr=0.35, with_nnlo_counterterm=True)
+    theory = PyBirdTracerCorrelationFunctionMultipoles(template=template, eft_basis='eftoflss', s=s, km=0.7, kr=0.35, with_nnlo_counterterm=with_nnlo_counterterm)
     corr = theory()
     kk, pk_lin, psmooth, f = template.k, template.pk_dd, template.pknow_dd, template.f
     from pybird.correlator import Correlator
     c = Correlator()
     c.set({'output': 'bCf', 'multipole': 3, 'kmax': 0.25, 'xdata': s, 'with_bias': False,
-           'km': 0.7, 'kr': 0.35, 'eft_basis': 'eftoflss', 'with_stoch': True, 'with_nnlo_counterterm': True})
+           'km': 0.7, 'kr': 0.35, 'nd': 1. / shotnoise, 'eft_basis': 'eftoflss', 'with_stoch': True, 'with_nnlo_counterterm': with_nnlo_counterterm})
     c.compute({'kk': kk, 'pk_lin': pk_lin, 'Psmooth': psmooth, 'f': f})
     eft_params = {'b1': 1.9535, 'b3': -0.3948, 'cct': 0.1839, 'cr1': -0.8414, 'cr2': -0.8084,
                   'b2': 0.4146, 'b4': 0.4146, 'cr4': 10., 'cr6': 20.}
@@ -605,6 +605,8 @@ def test_pybird():
     #c.compute({'kk': kk, 'pk_lin': pk_lin, 'Psmooth': psmooth, 'f': f, 'bias': eft_params})
     #ref = c.get()
     corr = theory(**eft_params)
+    print(corr[:, :3])
+    print(ref[:, :3])
 
     ax = plt.gca()
     for ill, ell in enumerate((0, 2, 4)):

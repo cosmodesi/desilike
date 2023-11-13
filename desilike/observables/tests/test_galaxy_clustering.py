@@ -50,11 +50,12 @@ def test_power_spectrum():
                                                          shotnoise=2e4,
                                                          theory=theory,
                                                          fiber_collisions=fiber_collisions,
-                                                         systematic_templates=get_template,
+                                                         systematic_templates=[get_template] * 2,
                                                          kinlim=(0., 0.24),
                                                          transform='cubic')
 
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    assert likelihood.all_params.names(basename=['syst_0', 'syst_1']) == ['syst_0', 'syst_1']
     likelihood.all_params['syst_0'].update(derived='.prec')
     likelihood(syst_0=1e6)
     observable.plot(show=True)
@@ -848,10 +849,10 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    # test_systematic_templates()
+    test_systematic_templates()
     # test_bao()
-    #test_power_spectrum()
-    test_correlation_function()
+    test_power_spectrum()
+    #test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()

@@ -552,21 +552,26 @@ def test_pybird():
     z = 0.5
     template = DirectPowerSpectrumTemplate(z=z)
     k = np.arange(0.005, 0.3, 0.01)
+
+    #k = np.arange(0.0001, 0.3, 0.01)
     shotnoise = 1e4
-    theory = PyBirdTracerPowerSpectrumMultipoles(template=template, k=k, shotnoise=shotnoise, km=0.7, kr=0.35, with_nnlo_counterterm=True)
+    with_nnlo_counterterm = True
+    theory = PyBirdTracerPowerSpectrumMultipoles(template=template, eft_basis='eftoflss', k=k, shotnoise=shotnoise, km=0.7, kr=0.35, with_nnlo_counterterm=with_nnlo_counterterm)
     theory()
     kk, pk_lin, psmooth, f = template.k, template.pk_dd, template.pknow_dd, template.f
     eft_params = {'b1': 1.9535, 'b3': -0.3948, 'cct': 0.1839, 'cr1': -0.8414, 'cr2': -0.8084,
                   'ce0': 1.5045, 'ce1': 0.0, 'ce2': -1.6803, 'b2': 0.4146, 'b4': 0.4146, 'cr4': 10., 'cr6': 20.}
     from pybird.correlator import Correlator
     c = Correlator()
-    c.set({'output': 'bPk', 'multipole': 3, 'kmin': k[0] * 0.8, 'kmax': k[-1] * 1.2, 'xdata': k, 'with_bias': False,
-           'km': 0.7, 'kr': 0.35, 'nd': 1. / shotnoise, 'eft_basis': 'eftoflss', 'with_stoch': True, 'with_nnlo_counterterm': True})
+    c.set({'output': 'bPk', 'multipole': 3, 'kmax': k[-1] * 1.2, 'xdata': k, 'with_bias': False, 'optiresum': False,
+           'km': 0.7, 'kr': 0.35, 'nd': 1. / shotnoise, 'eft_basis': 'eftoflss', 'with_stoch': True, 'with_nnlo_counterterm': with_nnlo_counterterm})
     c.compute({'kk': kk, 'pk_lin': pk_lin, 'Psmooth': psmooth, 'f': f})
     ref = c.get(eft_params)
     #c.compute({'kk': kk, 'pk_lin': pk_lin, 'Psmooth': psmooth, 'f': f, 'bias': eft_params})
     #ref = c.get()
     power = theory(**eft_params)
+    print(power[:, :3])
+    print(ref[:, :3])
 
     ax = plt.gca()
     for ill, ell in enumerate((0, 2, 4)):
@@ -579,18 +584,19 @@ def test_pybird():
     ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
     ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
     plt.show()
-
+    exit()
     for eft_basis in ['westcoast', 'eastcoast']:
         theory.init.update(eft_basis=eft_basis)
         theory()
 
     s = np.arange(10, 200, 5.)
-    theory = PyBirdTracerCorrelationFunctionMultipoles(template=template, s=s, km=0.7, kr=0.35, with_nnlo_counterterm=True)
-    theory()
+    template = DirectPowerSpectrumTemplate(z=z)
+    theory = PyBirdTracerCorrelationFunctionMultipoles(template=template, eft_basis='eftoflss', s=s, km=0.7, kr=0.35, with_nnlo_counterterm=True)
+    corr = theory()
     kk, pk_lin, psmooth, f = template.k, template.pk_dd, template.pknow_dd, template.f
     from pybird.correlator import Correlator
     c = Correlator()
-    c.set({'output': 'bCf', 'multipole': 3, 'kmin': k[0] * 0.8, 'kmax': k[-1] * 1.2, 'xdata': s, 'with_bias': False,
+    c.set({'output': 'bCf', 'multipole': 3, 'kmax': 0.25, 'xdata': s, 'with_bias': False,
            'km': 0.7, 'kr': 0.35, 'eft_basis': 'eftoflss', 'with_stoch': True, 'with_nnlo_counterterm': True})
     c.compute({'kk': kk, 'pk_lin': pk_lin, 'Psmooth': psmooth, 'f': f})
     eft_params = {'b1': 1.9535, 'b3': -0.3948, 'cct': 0.1839, 'cr1': -0.8414, 'cr2': -0.8084,
@@ -951,14 +957,14 @@ if __name__ == '__main__':
     setup_logging()
 
     #test_velocileptors()
-    #test_pybird()
+    test_pybird()
     #test_folps()
     #test_params()
     #test_integ()
     #test_templates()
     #test_bao()
     #test_flexible_bao()
-    test_full_shape()
+    #test_full_shape()
     #test_png()
     #test_pk_to_xi()
     #test_ap_diff()

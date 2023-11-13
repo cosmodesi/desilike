@@ -258,7 +258,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             self.ellsin, self.kin = fiber_collisions.ellsin, fiber_collisions.kin
         if systematic_templates is not None:
             if not isinstance(systematic_templates, SystematicTemplatePowerSpectrumMultipoles):
-                systematic_templates = SystematicTemplatePowerSpectrumMultipoles(systematic_templates)
+                systematic_templates = SystematicTemplatePowerSpectrumMultipoles(templates=systematic_templates)
             systematic_templates.init.update(k=self.k, ells=self.ells)
         self.systematic_templates = systematic_templates
         self.theory.init.update(k=self.kin, ells=self.ellsin)
@@ -492,7 +492,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         self.theory.init.update(s=self.sin, ells=self.ellsin)
         if systematic_templates is not None:
             if not isinstance(systematic_templates, SystematicTemplateCorrelationFunctionMultipoles):
-                systematic_templates = SystematicTemplateCorrelationFunctionMultipoles(systematic_templates)
+                systematic_templates = SystematicTemplateCorrelationFunctionMultipoles(templates=systematic_templates)
             systematic_templates.init.update(s=self.s, ells=self.ells)
         self.systematic_templates = systematic_templates
 
@@ -1034,6 +1034,8 @@ class TopHatFiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorr
 
 def get_templates(templates, ells=(0, 2, 4), x=None):
     from collections.abc import Mapping
+    if templates is None:
+        templates = {}
     if not isinstance(templates, Mapping) and not utils.is_sequence(templates):
         templates = [templates]
     if not isinstance(templates, Mapping):

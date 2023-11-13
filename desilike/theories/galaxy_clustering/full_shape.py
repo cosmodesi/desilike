@@ -1403,17 +1403,26 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         if eft_basis in [None, 'mcdonald']: eft_basis = 'eftoflss'
         # nd used by combine_bias_terms_poles only
         #self.co = Common(Nl=len(self.ells), kmin=self.k[0] * 0.8, kmax=self.k[-1] * 1.2, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
-        self.co = Common(Nl=len(self.ells), kmin=self.k[0] * 0.8, kmax=self.k[-1] * 1.2, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
+        # No way to go below kmin = 1e-3 h/Mpc (nan)
+        if self.k[0] * 0.8 < 1e-3:
+            import warnings
+            warnings.warn('pybird does not predict P(k) for k < 0.001 h/Mpc; nan will be replaced by 0')
+        self.co = Common(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.2, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
                          eft_basis=eft_basis, halohalo=True, with_cf=False,
-                         with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti',
+                         with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti', with_uvmatch=False,
                          exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
+        #print(dict(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.2, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
+        #                 eft_basis=eft_basis, halohalo=True, with_cf=False,
+        #                 with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti',
+        #                 exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False))
         self.nonlinear = NonLinear(load=False, save=False, NFFT=256 * int(self.options['fftaccboost']), fftbias=self.options['fftbias'], co=self.co)
+        #print(dict(load=False, save=False, NFFT=256 * int(self.options['fftaccboost']), fftbias=self.options['fftbias'], co=self.co))
         self.resum = Resum(co=self.co)
         self.nnlo_counterterm = None
         if self.options['with_nnlo_counterterm']:
             self.nnlo_counterterm = NNLO_counterterm(co=self.co)
+            self.template.init.update(with_now='peakaverage')
         self.projection = Projection(self.k, with_ap=True, H_fid=None, D_fid=None, co=self.co)  # placeholders for H_fid and D_fid, as we will provide q's
-        self.template.init.update(with_now='peakaverage')
 
     def calculate(self):
         super(PyBirdPowerSpectrumMultipoles, self).calculate()
@@ -1440,7 +1449,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         self.pt.co.nd = nd
         self.pt.setreducePslb(params, what='full')
         bird.np = np
-        return self.pt.fullPs
+        return jnp.nan_to_num(self.pt.fullPs, nan=0.0, posinf=jnp.inf, neginf=-jnp.inf)
 
     def __getstate__(self):
         state = {}
@@ -1586,6 +1595,7 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
         self.nnlo_counterterm = None
         if self.options['with_nnlo_counterterm']:
             self.nnlo_counterterm = NNLO_counterterm(co=self.co)
+            self.template.init.update(with_now='peakaverage')
         self.projection = Projection(self.s, with_ap=True, H_fid=None, D_fid=None, co=self.co)  # placeholders for H_fid and D_fid, as we will provide q's
 
     def calculate(self):

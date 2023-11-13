@@ -1156,9 +1156,6 @@ class WiggleRescalePowerSpectrumTemplate(BasePowerSpectrumTemplate):
     z : float, default=1.
         Effective redshift.
 
-    alpha_rs : float, default=1.0
-        Parameter to rescale power spectrum wiggles; P_w(k) -> P_w(k * alpha_rs)
-
     with_now : str, default='wallish2018'
         Compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
 
@@ -1179,8 +1176,7 @@ class WiggleRescalePowerSpectrumTemplate(BasePowerSpectrumTemplate):
     """
     config_fn = 'power_template.yaml'
     
-    def initialize(self, *args, k=None, z=1., alpha_rs=1., with_now='wallish2018', fiducial='DESI', cosmo=None, **kwargs):
-        self.alpha_rs = float(alpha_rs)
+    def initialize(self, *args, k=None, z=1., with_now='wallish2018', fiducial='DESI', cosmo=None, **kwargs):
         self.cosmo = cosmo
         self.fiducial = fiducial
         self.z = z
@@ -1188,34 +1184,31 @@ class WiggleRescalePowerSpectrumTemplate(BasePowerSpectrumTemplate):
         if k is None: k = np.logspace(-3., 1., 400)
         self.k = np.array(k, dtype='f8')
 
-        # Make sure to use a larger k-grid than requested for the linear power spectrum,
-        # so that after rescaling the wiggles fully cover the desired k-range.
-        if alpha_rs > 1.0:
-            self.k_lin = np.logspace(np.log10(k[0]/self.alpha_rs - margin), np.log10(k[-1]), 400)
-        elif alpha_rs < 1.0:
-            self.k_lin = np.logspace(np.log10(k[0] - margin), np.log10(k[-1]/alpha_rs), 400)
-        else:
-            self.k_lin = self.k
+        # Make sure to use a larger k-grid than requested for the input power spectrum,
+        # so that after rescaling, the wiggles fully cover the desired k-range.
+        min_qbao = 0.49
+        max_qbao = 1.51
+        self.kin = np.logspace(np.log10(k[0]*min_qbao), np.log10(k[-1]*max_qbao), 400)
         
-        super(WiggleRescalePowerSpectrumTemplate, self).initialize(*args, k=self.k_lin, z=self.z, with_now=self.with_now, fiducial=self.fiducial, apmode='distances', **kwargs)
+        super(WiggleRescalePowerSpectrumTemplate, self).initialize(*args, k=self.kin, z=self.z, with_now=self.with_now, fiducial=self.fiducial, apmode='distances', **kwargs)
 
-    def calculate(self, alpha_rs=1.):
+    def calculate(self, qbao=1.):
         super(WiggleRescalePowerSpectrumTemplate, self).calculate()
         
         # Separate wiggles
-        self.pkw_dd_fid = self.pk_dd_fid - self.pknow_dd_fid
+        self.pkw_dd = self.pk_dd - self.pknow_dd
         
         # Rescale k-grid for wiggles
-        kw_rescale = self.k_lin * self.alpha_rs
+        kw_rescale = self.kin * qbao
         
         # Interpolate wiggle power spectrum to the original k-grid
-        pkw_dd_interpolator = interpolate.interp1d(kw_rescale, self.pkw_dd_fid, kind='cubic')
-        pknow_dd_interpolator = interpolate.interp1d(self.k_lin, self.pknow_dd_fid, kind='cubic')
+        pkw_dd_interpolator = interpolate.interp1d(kw_rescale, self.pkw_dd, kind='cubic')
+        pknow_dd_interpolator = interpolate.interp1d(self.kin, self.pknow_dd, kind='cubic')
         self.pknow_dd = pknow_dd_interpolator(self.k)
         self.pkw_dd = pkw_dd_interpolator(self.k)
         
         # Recombine wiggles and smooth power spectrum
-        self.pk_dd = self.pknow_dd_fid + self.pkw_dd
+        self.pk_dd = self.pknow_dd + self.pkw_dd
 
     def get(self):
         return self

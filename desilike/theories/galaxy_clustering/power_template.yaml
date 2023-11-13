@@ -940,5 +940,4 @@ params:
       limits: [0.95, 1.05]
     delta: 0.05
     latex: \alpha_{r_s}
-
  

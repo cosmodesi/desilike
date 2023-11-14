@@ -68,6 +68,11 @@ class BaseLikelihood(BaseCalculator):
             if param.solved and solved == '.prec':
                 solved_params.append(param)
 
+        # Reset precision and flatdata
+        for likelihood in likelihoods:
+            likelihood.precision = likelihood._precision_original = getattr(likelihood, '_precision_original', likelihood.precision)
+            likelihood.flatdata = likelihood._flatdata_original = getattr(likelihood, '_flatdata_original', likelihood.flatdata)
+
         if solved_params:
             solved_params = ParameterCollection(solved_params)
             values = dict(pipeline.input_values)

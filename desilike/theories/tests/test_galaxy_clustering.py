@@ -201,6 +201,10 @@ def test_bao():
         test_emulate(theory)
         test_theory(theory)
 
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(ells=(0,))
+    assert 'dbeta' in theory.all_params
+    assert 'dbeta' not in theory.varied_params
+
     test(SimpleBAOWigglesTracerPowerSpectrumMultipoles())
     test(DampedBAOWigglesTracerPowerSpectrumMultipoles())
     test(ResummedBAOWigglesTracerPowerSpectrumMultipoles())

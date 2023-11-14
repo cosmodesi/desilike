@@ -71,8 +71,9 @@ class BaseBAOWigglesPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         self.template.init.setdefault('with_now', 'peakaverage')
         self.z = self.template.z
         self.rs_drag_fid = self.template.fiducial.rs_drag
-        if tuple(self.ells) == (0,):
-            self.params['dbeta'].update(fixed=True)
+        if tuple(self.ells) == (0,):  # one should be able to initialize pt without parameters  --- just to k and ells
+            for param in self.params.select(basename=['dbeta']):
+                param.update(fixed=True)
 
     def calculate(self):
         self.z = self.template.z
@@ -441,7 +442,7 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
             for ell in ells:
                 for pow in range(-3, 2):
                     param = dict(value=0., ref=dict(limits=[-1e2, 1e2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, pow))
-                    if broadband == 'power3' and (pow > 0): param.update(fixed=True)
+                    if broadband == 'power3' and (pow not in [-2, -1, 0]): param.update(fixed=True)
                     params['al{:d}_{:d}'.format(ell, pow)] = param
         else:
             for ell in ells:
@@ -814,15 +815,15 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
             for ell in ells:
                 for pow in range(-2, 3):
                     param = dict(value=0., ref=dict(limits=[-1e-3, 1e-3]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, pow))
-                    if broadband == 'power3' and (pow > 0): param.update(fixed=True)
-                    if broadband == 'even-power' and (pow < 0 or pow % 2): param.update(fixed=True)
+                    if broadband == 'power3' and (pow not in [-2, -1, 0]): param.update(fixed=True)
+                    if broadband == 'even-power' and (pow not in [0, 2]): param.update(fixed=True)
                     params['al{:d}_{:d}'.format(ell, pow)] = param
         else:
             for ell in ells:
                 for ik in range(-2, 3):  # should be more than enough
                     # We are adding a very loose prior just to regularize the fit
                     param = dict(value=0., prior=dict(dist='norm', loc=0., scale=1e4), ref=dict(limits=[-1e2, 1e2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
-                    if broadband == 'pcs2' and (ell == 0 or ik > 0): param.update(fixed=True)
+                    if broadband == 'pcs2' and (ell == 0 or ik not in [-1, 0]): param.update(fixed=True)
                     params['al{:d}_{:d}'.format(ell, ik)] = param
                 for ik in [0, 2]:
                     params['bl{:d}_{:d}'.format(ell, ik)] = dict(value=0., ref=dict(limits=[-1e-3, 1e-3]), delta=0.005, latex='b_{{{:d}, {:d}}}'.format(ell, ik))

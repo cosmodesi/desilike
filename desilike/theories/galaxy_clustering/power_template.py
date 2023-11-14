@@ -60,13 +60,13 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
     """Base class for linear power spectrum template."""
     config_fn = 'power_template.yaml'
 
-    def initialize(self, k=None, z=1., with_now=False, apmode='qparqper', fiducial='DESI', only_now=False):
+    def initialize(self, k=None, z=1., with_now=False, apmode='qparqper', fiducial='DESI', only_now=False, **kwargs):
         self.z = float(z)
         self.cosmo = self.fiducial = get_cosmo(fiducial)
         if k is None: k = np.logspace(-3., 1., 400)
         self.k = np.array(k, dtype='f8')
         self.cosmo_requires = {}
-        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=apmode)
+        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=apmode, **kwargs)
         ap_params = ParameterCollection()
         for param in list(self.params):
             if param in self.apeffect.params:
@@ -156,7 +156,7 @@ class DirectPowerSpectrumTemplate(BasePowerSpectrumTemplate):
             self.cosmo = Cosmoprimo(fiducial=self.fiducial)
             self.cosmo.params = [param for param in self.params if param not in params]
         self.params = params
-        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, cosmo=self.cosmo, mode='distances').runtime_info.initialize()
+        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, cosmo=self.cosmo, mode='geometry').runtime_info.initialize()
         if is_external_cosmo(self.cosmo):
             self.cosmo_requires.update(self.apeffect.cosmo_requires)  # just background
 
@@ -206,8 +206,8 @@ class BAOExtractor(BasePowerSpectrumExtractor):
         self.cosmo = cosmo
         params = self.params.select(derived=True)
         if is_external_cosmo(self.cosmo):
-            self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
             self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
+            self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
         elif cosmo is None:
             self.cosmo = Cosmoprimo(fiducial=self.fiducial)
             self.cosmo.params = [param for param in self.params if param not in params]
@@ -593,7 +593,7 @@ class BandVelocityPowerSpectrumExtractor(BasePowerSpectrumExtractor):
 
     def initialize(self, *args, eta=1. / 3., kp=None, **kwargs):
         super(BandVelocityPowerSpectrumExtractor, self).initialize(*args, **kwargs)
-        self.apeffect = APEffect(z=self.z, cosmo=self.cosmo, fiducial=self.fiducial, eta=eta, mode='distances')
+        self.apeffect = APEffect(z=self.z, cosmo=self.cosmo, fiducial=self.fiducial, eta=eta, mode='geometry')
         self.kp = kp
         if kp is None:
             raise ValueError('Please provide kp')

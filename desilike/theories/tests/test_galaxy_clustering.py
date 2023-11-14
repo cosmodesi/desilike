@@ -67,6 +67,17 @@ def test_templates():
         theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
         theory()
 
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPowerSpectrumTemplate(apmode='bao'))
+    theory()
+    assert 'n_s' in theory.varied_params
+
+    from desilike.theories import Cosmoprimo
+    cosmo = Cosmoprimo(fiducial='DESI')
+    cosmo.init.params = {'Omega_m': {'prior': {'limits': [0.01, 0.9]}}}
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPowerSpectrumTemplate(cosmo=cosmo, apmode='bao'))
+    theory()
+    assert 'n_s' not in theory.varied_params
+
     for template in [FixedPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), BAOPowerSpectrumTemplate(),
                      StandardPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(apmode='qisoqap'),
                      WiggleSplitPowerSpectrumTemplate(), WiggleSplitPowerSpectrumTemplate(kernel='tophat'),
@@ -959,11 +970,11 @@ if __name__ == '__main__':
     setup_logging()
 
     #test_velocileptors()
-    test_pybird()
+    #test_pybird()
     #test_folps()
     #test_params()
     #test_integ()
-    #test_templates()
+    test_templates()
     #test_bao()
     #test_flexible_bao()
     #test_full_shape()

@@ -174,7 +174,7 @@ class APEffect(BaseCalculator):
         Effective redshift.
 
     cosmo : BasePrimordialCosmology, default=None
-        Cosmology calculator, required only if ``mode`` is 'distances';
+        Cosmology calculator, required only if ``mode`` is 'geometry' or 'bao';
         defaults to ``Cosmoprimo(fiducial=fiducial)``.
 
     fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
@@ -185,14 +185,15 @@ class APEffect(BaseCalculator):
         - dict: dictionary of parameters
         - :class:`cosmoprimo.Cosmology`: Cosmology instance
 
-    mode : str, default='distances'
+    mode : str, default='geometry'
         Alcock-Paczynski parameterization:
 
         - 'qiso': single istropic parameter 'qiso'
         - 'qap': single, Alcock-Paczynski parameter 'qap'
         - 'qisoqap': two parameters 'qiso', 'qap'
         - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
-        - 'distances': scaling parameters computed from the ratio of ``cosmo`` to ``fiducial`` cosmologies.
+        - 'geometry': scaling parameters computed from the ratio of ``cosmo`` to ``fiducial`` cosmology distances
+        - 'bao': scaling parameters computed from the ratio of ``cosmo`` to ``fiducial`` cosmology distances, normalized by the :math:`r_{\mathrm{drag}}` coordinates.
 
     eta : float, default=1./3.
         Relation between 'qpar', 'qper' and 'qiso', 'qap' parameters:
@@ -205,7 +206,7 @@ class APEffect(BaseCalculator):
     """
     config_fn = 'base.yaml'
 
-    def initialize(self, z=1., cosmo=None, fiducial='DESI', mode='distances', eta=1. / 3.):
+    def initialize(self, z=1., cosmo=None, fiducial='DESI', mode='geometry', eta=1. / 3.):
         self.z = float(z)
         if fiducial is None:
             raise ValueError('Provide fiducial cosmology')
@@ -223,31 +224,44 @@ class APEffect(BaseCalculator):
             self.params = self.params.select(basename=['qiso', 'qap'])
         elif self.mode == 'qparqper':
             self.params = self.params.select(basename=['qpar', 'qper'])
-        elif self.mode == 'distances':
+        elif self.mode in ['geometry', 'bao']:
             self.params = self.params.clear()
             if is_external_cosmo(cosmo):
                 self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
+                if self.mode == 'bao': self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
         else:
-            raise ValueError('Unknown mode {}; it must be one of ["qiso", "qap", "qisoqap", "qparqper", "distances"]'.format(self.mode))
+            raise ValueError('unknown mode {}; it must be one of ["qiso", "qap", "qisoqap", "qparqper", "geometry", "bao"]'.format(self.mode))
         self.cosmo = cosmo
-        if self.mode == 'distances':
+        if self.mode in ['geometry', 'bao']:
             if cosmo is None:
                 self.cosmo = Cosmoprimo(fiducial=self.fiducial)
         else:
             self.cosmo = self.fiducial
-        if self.mode == 'distances':
+        if self.mode in ['geometry', 'bao']:
             self.DH_fid = (constants.c / 1e3) / (100. * self.fiducial.efunc(self.z))
             self.DM_fid = self.fiducial.comoving_angular_distance(self.z)
             self.DH_over_DM_fid = self.DH_fid / self.DM_fid
             self.DV_fid = (self.DH_fid * self.DM_fid**2 * self.z)**(1. / 3.)
+            if self.mode == 'bao':
+                rs_drag_fid = self.fiducial.rs_drag
+                self.DH_over_rd_fid = self.DH_fid / rs_drag_fid
+                self.DM_over_rd_fid = self.DM_fid / rs_drag_fid
+                self.DV_over_rd_fid = self.DV_fid / rs_drag_fid
 
     def calculate(self, **params):
-        if self.mode == 'distances':
+        if self.mode in ['geometry', 'bao']:
             self.DH = (constants.c / 1e3) / (100. * self.cosmo.efunc(self.z))
             self.DM = self.cosmo.comoving_angular_distance(self.z)
             self.DH_over_DM = self.DH / self.DM
             self.DV = (self.DH * self.DM**2 * self.z)**(1. / 3.)
-            qpar, qper = self.DH / self.DH_fid, self.DM / self.DM_fid
+            if self.mode == 'bao':
+                rs_drag = self.cosmo.rs_drag
+                self.DH_over_rd = self.DH / rs_drag
+                self.DM_over_rd = self.DM / rs_drag
+                self.DV_over_rd = self.DV / rs_drag
+                qpar, qper = self.DH_over_rd / self.DH_over_rd_fid, self.DM_over_rd / self.DM_over_rd_fid
+            else:  # geometry
+                qpar, qper = self.DH / self.DH_fid, self.DM / self.DM_fid
         elif self.mode == 'qiso':
             qpar = qper = params['qiso']
         elif self.mode == 'qap':

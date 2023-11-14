@@ -125,7 +125,11 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             list_mocks = []
             for mocks in lmocks:
                 if utils.is_path(mocks):
-                    list_mocks += sorted(glob.glob(mocks))
+                    gmocks = glob.glob(mocks)
+                    if not gmocks:
+                        import warnings
+                        warnings.warn('file {mocks} is not found')
+                    list_mocks += sorted(gmocks)
                 else:
                     list_mocks.append(mocks)
 

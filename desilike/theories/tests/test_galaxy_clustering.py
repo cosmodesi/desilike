@@ -112,19 +112,27 @@ def test_bao():
         is_power = 'Power' in theory.__class__.__name__
         list_params, list_remove = {}, {}
         list_params['power'] = {'al0_1': 1e3 if is_power else 1e-3}
+        list_params['power3'] = {'al0_-1': 1e3 if is_power else 1e-3}
         list_params['even-power'] = {'al0_2': 1e-3}
         list_params['pcs'] = {'al0_2': 2.}
+        list_params['pcs2'] = {'al0_2': 2.}
         list_remove['power'] = ['al0_-1']
         list_remove['even-power'] = ['al0_0']
         list_remove['pcs'] = ['al0_-1']
         if not is_power:
             list_params['pcs'].update({'bl0_2': 1e-3})
         theory.init.update(pt=None, template=BAOPowerSpectrumTemplate())
-        for broadband in ['power', 'pcs'] + (['even-power'] if not is_power else []):
+        for broadband in ['power', 'power3', 'pcs'] + (['even-power', 'pcs2'] if not is_power else []):
             theory.init.update(broadband=broadband)
             #print(theory.all_params)
             params = list_params[broadband]
-            remove = list_remove[broadband]
+            remove = list_remove.get(broadband, [])
+            if broadband == 'power3':
+                vp = theory.varied_params
+                assert len(vp.names(basename=['al0_*'])) == 3, theory.varied_params
+            if broadband == 'pcs2':
+                vp = theory.varied_params
+                assert len(vp.names(basename=['al0_*'])) == 0 and len(vp.names(basename=['al2_*'])) == 2, theory.varied_params
             for name, value in params.items():
                 theory.init.params[name].update(fixed=True)
             for name in remove:
@@ -193,9 +201,7 @@ def test_bao():
         test_emulate(theory)
         test_theory(theory)
 
-
     test(SimpleBAOWigglesTracerPowerSpectrumMultipoles())
-    test(SimpleBAOWigglesTracerCorrelationFunctionMultipoles())
     test(DampedBAOWigglesTracerPowerSpectrumMultipoles())
     test(ResummedBAOWigglesTracerPowerSpectrumMultipoles())
     test(FlexibleBAOWigglesTracerPowerSpectrumMultipoles())

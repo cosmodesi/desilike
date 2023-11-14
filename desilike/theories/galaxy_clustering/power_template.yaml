@@ -156,15 +156,6 @@ params:
       limits: [0.99, 1.01]
     delta: 0.005
     latex: q_{\mathrm{ap}}
-  df:
-    fixed: True
-    value: 1.
-    prior:
-      limits: [0., 2.]
-    ref:
-      limits: [0.95, 1.05]
-    delta: 0.02
-    latex: df
   DM_over_rd:
     derived: True
     latex: D_{\mathrm{M}}/r_{d}

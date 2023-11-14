@@ -71,6 +71,8 @@ class BaseBAOWigglesPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         self.template.init.setdefault('with_now', 'peakaverage')
         self.z = self.template.z
         self.rs_drag_fid = self.template.fiducial.rs_drag
+        if tuple(self.ells) == (0,):
+            self.params['dbeta'].update(fixed=True)
 
     def calculate(self):
         self.z = self.template.z
@@ -101,9 +103,9 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
             for param in self.init.params.select(basename=['sigmapar', 'sigmaper']):
                 param.update(fixed=True)
 
-    def calculate(self, b1=1., sigmas=0., sigmapar=9., sigmaper=6.):
+    def calculate(self, b1=1., dbeta=1., sigmas=0., sigmapar=9., sigmaper=6.):
         super(DampedBAOWigglesPowerSpectrumMultipoles, self).calculate()
-        f = self.template.f
+        f = dbeta * self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.template.pknow_dd_interpolator(kap)
         pk = self.template.pk_dd_interpolator(kap)
@@ -125,9 +127,9 @@ class SimpleBAOWigglesPowerSpectrumMultipoles(DampedBAOWigglesPowerSpectrumMulti
     As :class:`DampedBAOWigglesPowerSpectrumMultipoles`, but moving only BAO wiggles (and not damping or RSD terms)
     with scaling parameters.
     """
-    def calculate(self, b1=1., sigmas=0., sigmapar=9., sigmaper=6.):
+    def calculate(self, b1=1., dbeta=1., sigmas=0., sigmapar=9., sigmaper=6.):
         super(SimpleBAOWigglesPowerSpectrumMultipoles, self).calculate()
-        f = self.template.f
+        f = dbeta * self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.template.pknow_dd_interpolator(self.k)[:, None]
         sigma_nl2 = self.k[:, None]**2 * (sigmapar**2 * self.mu**2 + sigmaper**2 * (1. - self.mu**2))
@@ -226,9 +228,9 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
             for param in self.init.params.select(basename=['q']):
                 param.update(fixed=True)
 
-    def calculate(self, b1=1., sigmas=0., d=1., **kwargs):
+    def calculate(self, b1=1., dbeta=1., sigmas=0., d=1., **kwargs):
         super(ResummedBAOWigglesPowerSpectrumMultipoles, self).calculate()
-        f = self.template.f
+        f = dbeta * self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.template.pknow_dd_interpolator(kap)
         damped_wiggles = 0. if self.template.only_now else self.wiggles.wiggles(kap, muap, b1=b1, f=f, d=d, **kwargs)
@@ -337,9 +339,9 @@ class FlexibleBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
             damped_wiggles += wiggles * mult[:, None] * leg
         return damped_wiggles
 
-    def calculate(self, b1=1., **kwargs):
+    def calculate(self, b1=1., dbeta=1., **kwargs):
         super(FlexibleBAOWigglesPowerSpectrumMultipoles, self).calculate()
-        f = self.template.f
+        f = dbeta * self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.template.pknow_dd_interpolator(self.k)
         wiggles = self.template.pk_dd_interpolator(kap) - self.template.pknow_dd_interpolator(kap)
@@ -434,10 +436,13 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
     @staticmethod
     def _params(params, broadband='power'):
         ells = [0, 2, 4]
-        if broadband == 'power':
+        if 'power' in broadband:
             for ell in ells:
                 for pow in range(-3, 2):
                     params['al{:d}_{:d}'.format(ell, pow)] = dict(value=0., ref=dict(limits=[-1e2, 1e2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, pow))
+            if broadband == 'power3':
+                for pow in range(1, 3):
+                    params['al{:d}_{:d}'.format(ell, pow)].update(fixed=True)
         else:
             for ell in ells:
                 for ik in range(-2, 10):  # should be more than enough
@@ -804,10 +809,13 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
     @staticmethod
     def _params(params, broadband='power'):
         ells = [0, 2, 4]
-        if broadband == 'power':
+        if 'power' in broadband:
             for ell in ells:
                 for pow in range(-2, 3):
                     params['al{:d}_{:d}'.format(ell, pow)] = dict(value=0., ref=dict(limits=[-1e-3, 1e-3]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, pow))
+            if broadband == 'power3':
+                for pow in range(1, 3):
+                    params['al{:d}_{:d}'.format(ell, pow)].update(fixed=True)
         elif broadband == 'even-power':
             for ell in ells:
                 for pow in [0, 2]:
@@ -825,7 +833,7 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
         self.broadband = str(broadband)
         if sp is None: self.sp = 2. * np.pi / 0.02
         else: self.sp = float(sp)
-        if self.broadband in ['power', 'even-power']:
+        if 'power' in self.broadband:
             if pt is None:
                 pt = globals()[self.__class__.__name__.replace('TracerCorrelationFunction', 'PowerSpectrum')](**kwargs)
             power = pt
@@ -836,7 +844,7 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
             setattr(self, name, getattr(self.power, name))
 
     def set_params(self):
-        if self.broadband in ['power', 'even-power']:
+        if 'power' in self.broadband:
             self.k, self.kp = self.s, self.sp
             # other model parameters, e.g. bias
             BaseBAOWigglesTracerPowerSpectrumMultipoles.set_params(self)

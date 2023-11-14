@@ -627,8 +627,9 @@ class Chain(Samples):
         If a single parameter is given as input and this parameter is a scalar, return a scalar.
         ``ddof`` is the number of degrees of freedom.
         """
+        isscalar = not is_parameter_sequence(params)
         cov = self.covariance(params, ddof=ddof, return_type='nparray')
-        if np.ndim(cov) == 0: return cov  # single param
+        if isscalar: return cov.flat[0]  # single param
         return np.diag(cov)
 
     def std(self, params=None, ddof=1):

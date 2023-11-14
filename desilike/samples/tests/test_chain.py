@@ -60,6 +60,7 @@ def test_misc():
     assert not chain.concatenate(chain, chain)['like.a'].param.fixed
     assert chain.concatenate(chain, chain)._loglikelihood == 'LRG.loglikelihood'
     assert np.all(np.array(chain.match(chain)[0]) == np.array(np.unravel_index(np.arange(chain.size), shape=chain.shape)))
+    print(chain.mean('like.a'), chain.std('like.a'))
 
 
 def test_stats():

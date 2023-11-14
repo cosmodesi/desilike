@@ -184,7 +184,7 @@ class BasePipeline(BaseClass):
         self._params = new_params.deepcopy()
         self._params.updated = False
         self._varied_params = self._params.select(varied=True, derived=False)
-        self.input_values = {param.name: param.value for param in self._params}
+        self.input_values = {param.name: param.value for param in self._params.select(input=True)}
         self.derived = Samples()
         if self.more_initialize is not None: self.more_initialize()
 

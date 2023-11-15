@@ -220,27 +220,122 @@ def test_flexible_bao():
 
     from matplotlib import pyplot as plt
 
-    from desilike.theories.galaxy_clustering import FlexibleBAOWigglesTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import FlexibleBAOWigglesTracerPowerSpectrumMultipoles, FlexibleBAOWigglesTracerCorrelationFunctionMultipoles
 
-    fig, lax = plt.subplots(1, 2, sharex=False, sharey=True, figsize=(10, 4), squeeze=True)
-    fig.subplots_adjust(wspace=0.25)
-
-    theory = FlexibleBAOWigglesTracerPowerSpectrumMultipoles(kp=0.06, ells=(0,), broadband_kernel='tsc')
-    for iax, mode in enumerate(['additive', 'multiplicative']):
-        ax = lax[iax]
-        names = theory.all_params.names(basename=mode[0] + 'l*')
-        cmap = plt.get_cmap('jet', len(names))
-        for iname, name in enumerate(names):
-            pk = theory(**{name: 1. if iax == 0 else 2.})
+    if False:
+        fig, lax = plt.subplots(1, 2, sharex=False, sharey=True, figsize=(10, 4), squeeze=True)
+        fig.subplots_adjust(wspace=0.25)
+        theory = FlexibleBAOWigglesTracerPowerSpectrumMultipoles(ells=(0,), broadband='pcs', wiggles='pcs')
+        for iax, mode in enumerate(['additive', 'multiplicative']):
+            ax = lax[iax]
             for ill, ell in enumerate(theory.ells):
+                names = theory.varied_params.names(basename='{}l{:d}_*'.format(mode[0], ell))
+                cmap = plt.get_cmap('jet', len(names))
+                for iname, name in enumerate(names):
+                    pk = theory(**{name: 1.})
+                    ax.plot(theory.k, theory.k * pk[ill], color=cmap(iname / len(names)))
+                    pk = theory(**{name: 0.})
+                ax.plot(theory.k, theory.k * pk[ill], color='k')
+            ax.grid(True)
+            ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+            ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+            ax.set_title(mode)
+        plt.show()
+
+    if True:
+        fig, lax = plt.subplots(1, 2, sharex=False, sharey=True, figsize=(10, 4), squeeze=True)
+        fig.subplots_adjust(wspace=0.25)
+        theory = FlexibleBAOWigglesTracerCorrelationFunctionMultipoles(ells=(0, 2), broadband='pcs', wiggles='pcs')
+        for iax, mode in enumerate(['additive', 'multiplicative']):
+            ax = lax[iax]
+            for ill, ell in enumerate(theory.ells):
+                names = theory.varied_params.names(basename=['{}l{:d}_[-1:1]'.format(prefix, ell) for prefix in (['a', 'b'][:1] if mode == 'additive' else ['m'])])
+                cmap = plt.get_cmap('jet', len(names))
+                for iname, name in enumerate(names):
+                    xi = theory(**{name: 1e-3 if name.startswith('b') else 1e3})
+                    ax.plot(theory.s, theory.s**2 * xi[ill], color=cmap(iname / len(names)))
+                    xi = theory(**{name: 0.})
+                    ax.plot(theory.s, theory.s**2 * xi[ill], color='k')
+            ax.grid(True)
+            ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
+            ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
+            ax.set_title(mode)
+        plt.show()
+
+
+def test_broadband_bao():
+
+    from matplotlib import pyplot as plt
+
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles
+
+    if False:
+        ax = plt.gca()
+        theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(ells=(0, 2), broadband='pcs')
+        for ill, ell in enumerate(theory.ells):
+            names = theory.varied_params.names(basename='{}l{:d}_*'.format(mode[0], ell))
+            cmap = plt.get_cmap('jet', len(names))
+            for iname, name in enumerate(names):
+                pk = theory(**{name: 1.})
                 ax.plot(theory.k, theory.k * pk[ill], color=cmap(iname / len(names)))
-            pk = theory(**{name: 0.})
-        ax.plot(theory.k, theory.k * pk[ill], color='k')
+                pk = theory(**{name: 0.})
+            ax.plot(theory.k, theory.k * pk[ill], color='k')
         ax.grid(True)
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
         ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
-        ax.set_title(mode)
-    plt.show()
+
+    if True:
+        ax = plt.gca()
+        theory = DampedBAOWigglesTracerCorrelationFunctionMultipoles(ells=(0, 2), broadband='pcs')
+        for ill, ell in enumerate(theory.ells):
+            names = theory.varied_params.names(basename=['{}l{:d}_[-1:1]'.format(prefix, ell) for prefix in ['a', 'b']][:1])
+            print(names)
+            cmap = plt.get_cmap('jet', len(names))
+            for iname, name in enumerate(names):
+                xi = theory(**{name: 1e-3 if name.startswith('b') else 1e3})
+                ax.plot(theory.s, theory.s**2 * xi[ill], color=cmap(iname / len(names)))
+                xi = theory(**{name: 0.})
+                ax.plot(theory.s, theory.s**2 * xi[ill], color='k')
+        ax.grid(True)
+        ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
+        ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        plt.show()
+
+    if False:
+        fig, lax = plt.subplots(1, 2, sharex=False, sharey=True, figsize=(10, 4), squeeze=True)
+        fig.subplots_adjust(wspace=0.25)
+
+        def get_analytic(s, delta):
+            from scipy.special import sici
+            x = delta * s
+            sinx, cosx, cos2x = np.sin(x), np.cos(x), np.cos(2 * x)
+            Si_x, Si_2x = sici(x)[0], sici(2 * x)[0]
+            poly = {}
+            poly['al2_-1'] = (16.0 - 8.0 * x**2 - 16.0 * cosx + x**2 * cosx - x * sinx + x**3 * Si_x) / (2.0 * x**3 * s**3)
+            poly['al2_0'] = -2.0 * (12.0 - 16 * cosx + x**2 * cosx + 4.0 * cos2x - x**2 * cos2x - x * sinx + x * cosx * sinx + x**3 * Si_x - 2.0 * x**3 * Si_2x) / (x**3 * s**3)
+            return poly
+
+        theory = DampedBAOWigglesTracerCorrelationFunctionMultipoles(s=np.linspace(1., 130., 130), ells=(0, 2), broadband='pcs')
+        for ill, ell in enumerate(theory.ells):
+            ax = lax[ill]
+            names = theory.varied_params.names(basename=['{}l{:d}_[-1:1]'.format(prefix, ell) for prefix in ['a', 'b']][:1])
+            print(names)
+            cmap = plt.get_cmap('jet', len(names))
+            for iname, name in enumerate(names):
+                xiref = theory(**{name: 0.})
+                xi = theory(**{name: 1e-3 if name.startswith('b') else 1.})
+                diff = xi[ill] - xiref[ill]
+                color = cmap(iname / len(names))
+                ax.plot(theory.s, theory.s**2 * diff, color=color)
+                analytic = get_analytic(theory.s, delta=theory.power.kp)
+                if name in analytic:
+                    ratio = diff[-1] / analytic[name][-1]
+                    ax.plot(theory.s, theory.s**2 * analytic[name] * ratio, color=color, linestyle='--')
+                xi = theory(**{name: 0.})
+            ax.grid(True)
+            ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
+            ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        plt.show()
 
 
 def test_full_shape():
@@ -985,8 +1080,9 @@ if __name__ == '__main__':
     #test_params()
     #test_integ()
     #test_templates()
-    test_bao()
-    #test_flexible_bao()
+    #test_bao()
+    #test_broadband_bao()
+    test_flexible_bao()
     #test_full_shape()
     #test_png()
     #test_pk_to_xi()

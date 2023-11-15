@@ -96,7 +96,7 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
     ---------
     https://arxiv.org/abs/1607.03149
     """
-    def initialize(self, *args, mu=10, method='leggauss', model='howlett2023', **kwargs):
+    def initialize(self, *args, mu=10, method='leggauss', model='standard', **kwargs):
         super(DampedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.model = str(model)
         self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
@@ -110,40 +110,33 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.template.pknow_dd_interpolator(kap)
         pk = self.template.pk_dd_interpolator(kap)
-        sigma_nl2 = kap**2 * (sigmapar**2 * muap**2 + sigmaper**2 * (1. - muap**2))
-        pkw = pk - pknow
-        fog = 1. / (1. + (sigmas * kap * muap)**2 / 2.)**2.
+        if 'fix-damping' in self.model: k, mu = self.k[:, None], self.mu
+        else: k, mu = kap, muap
+        sigma_nl2 = k**2 * (sigmapar**2 * mu**2 + sigmaper**2 * (1. - mu**2))
+        damped_wiggles = (pk - pknow) / pknow * np.exp(-sigma_nl2 / 2.)
+        if 'move-all' in self.model: k, mu = kap, muap
+        else: k, mu = self.k[:, None], self.mu
+        pknow = self.template.pknow_dd_interpolator(k)
+        fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
         sk = 0.
-        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (kap * self.smoothing_radius)**2)
-        kaiser = (b1 + f * muap**2 * (1 - sk))**2
-        if self.model == 'beutler2016':
-            pkmu = fog * kaiser * (pknow + np.exp(-sigma_nl2 / 2.) * pkw)
-        else:
-            pkmu = (fog * kaiser * pknow + kaiser * np.exp(-sigma_nl2 / 2.) * pkw)
+        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (k * self.smoothing_radius)**2)
+        pksmooth = (b1 + f * mu**2 * (1 - sk))**2 * pknow
+        if 'fog-damping' in self.model:  # Beutler2016
+            pkmu = pksmooth * fog * (1. + damped_wiggles)
+        else:  # Howlett 2023
+            pkmu = pksmooth * (fog + damped_wiggles)
         self.power = self.to_poles(pkmu)
 
 
 class SimpleBAOWigglesPowerSpectrumMultipoles(DampedBAOWigglesPowerSpectrumMultipoles):
     r"""
-    As :class:`DampedBAOWigglesPowerSpectrumMultipoles`, but moving only BAO wiggles (and not damping or RSD terms)
+    As :class:`DampedBAOWigglesPowerSpectrumMultipoles`, but moving only BAO wiggles (and not damping, fog, or RSD terms)
     with scaling parameters.
     """
-    def calculate(self, b1=1., dbeta=1., sigmas=0., sigmapar=9., sigmaper=6.):
-        super(SimpleBAOWigglesPowerSpectrumMultipoles, self).calculate()
-        f = dbeta * self.template.f
-        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        pknow = self.template.pknow_dd_interpolator(self.k)[:, None]
-        sigma_nl2 = self.k[:, None]**2 * (sigmapar**2 * self.mu**2 + sigmaper**2 * (1. - self.mu**2))
-        pkw = self.template.pk_dd_interpolator(kap) - self.template.pknow_dd_interpolator(kap)
-        fog = 1. / (1. + (sigmas * self.k[:, None] * self.mu)**2 / 2.)**2.
-        sk = 0.
-        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (self.k * self.smoothing_radius)**2)[:, None]
-        kaiser = (b1 + f * self.mu**2 * (1 - sk))**2
-        if self.model == 'beutler2016':
-            pkmu = fog * kaiser * (pknow + np.exp(-sigma_nl2 / 2.) * pkw)
-        else:
-            pkmu = (fog * kaiser * pknow + kaiser * np.exp(-sigma_nl2 / 2.) * pkw)
-        self.power = self.to_poles(pkmu)
+    def initialize(self, *args, model='fix-damping', **kwargs):
+        #import warnings
+        #warnings.warn('SimpleBAOWigglesPowerSpectrumMultipoles is deprecated. Use DampedBAOWigglesPowerSpectrumMultipoles instead, with model="fix-damping.")
+        super(SimpleBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, model=model, **kwargs)
 
 
 class ResummedPowerSpectrumWiggles(BaseCalculator):
@@ -218,9 +211,10 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
     """
     _default_options = dict(shotnoise=0.)  # to be given shot noise by window matrix
 
-    def initialize(self, *args, mu=10, method='leggauss', **kwargs):
+    def initialize(self, *args, mu=10, method='leggauss', model='standard', **kwargs):
         shotnoise = kwargs.pop('shotnoise', self._default_options['shotnoise'])
         super(ResummedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
+        self.model = str(model)
         self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
         self.wiggles = ResummedPowerSpectrumWiggles(mode=self.mode, template=self.template,
                                                     smoothing_radius=self.smoothing_radius,
@@ -234,12 +228,18 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
         f = dbeta * self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.template.pknow_dd_interpolator(kap)
-        damped_wiggles = 0. if self.template.only_now else self.wiggles.wiggles(kap, muap, b1=b1, f=f, d=d, **kwargs)
-        fog = 1. / (1. + (sigmas * kap * muap)**2 / 2.)**2.
+        damped_wiggles = 0. if self.template.only_now else self.wiggles.wiggles(kap, muap, b1=b1, f=f, d=d, **kwargs) / pknow
+        if 'move-all' in self.model: k, mu = kap, muap
+        else: k, mu = self.k[:, None], self.mu
+        pknow = self.template.pknow_dd_interpolator(k)
+        fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
         sk = 0.
-        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (kap * self.smoothing_radius)**2)
-        kaiser = (b1 + f * muap**2 * (1 - sk))**2
-        pkmu = fog * kaiser * pknow + damped_wiggles
+        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (k * self.smoothing_radius)**2)
+        pksmooth = (b1 + f * mu**2 * (1 - sk))**2 * pknow
+        if 'fog-damping' in self.model:  # Beutler2016
+            pkmu = pksmooth * fog * (1. + damped_wiggles)
+        else:  # Howlett 2023
+            pkmu = pksmooth * (fog + damped_wiggles)
         self.power = self.to_poles(pkmu)
 
 
@@ -297,9 +297,10 @@ class FlexibleBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
                     params['ml{:d}_{:d}'.format(ell, ik)] = dict(value=0., prior=dict(dist='norm', loc=0., scale=1e4), ref=dict(limits=[-1e-2, 1e-2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
         return params
 
-    def initialize(self, *args, mu=10, method='leggauss', wiggles='pcs', kp=None, **kwargs):
+    def initialize(self, *args, mu=10, method='leggauss', model='standard', wiggles='pcs', kp=None, **kwargs):
         super(FlexibleBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
+        self.model = str(model)
         self.wiggles = str(wiggles)
         if kp is None: self.kp = 2. * np.pi / self.rs_drag_fid
         else: self.kp = float(kp)
@@ -344,13 +345,16 @@ class FlexibleBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
         super(FlexibleBAOWigglesPowerSpectrumMultipoles, self).calculate()
         f = dbeta * self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        pknow = self.template.pknow_dd_interpolator(self.k)
-        wiggles = self.template.pk_dd_interpolator(kap) - self.template.pknow_dd_interpolator(kap)
-        damped_wiggles = self.get_wiggles(wiggles, **kwargs)
+        pknow = self.template.pknow_dd_interpolator(kap)
+        pk = self.template.pk_dd_interpolator(kap)
+        damped_wiggles = self.get_wiggles(pk - pknow, **kwargs) / pknow
+        if 'move-all' in self.model: k, mu = kap, muap
+        else: k, mu = self.k[:, None], self.mu
+        pknow = self.template.pknow_dd_interpolator(k)
         sk = 0.
-        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (self.k * self.smoothing_radius)**2)[:, None]
-        kaiser = (b1 + f * self.mu**2 * (1 - sk))**2
-        pkmu = kaiser * (pknow[:, None] + damped_wiggles)
+        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (k * self.smoothing_radius)**2)
+        pksmooth = (b1 + f * mu**2 * (1 - sk))**2 * pknow
+        pkmu = pksmooth * (1. + damped_wiggles)
         self.power = self.to_poles(pkmu)
 
     def get(self):
@@ -578,9 +582,10 @@ class DampedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpe
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
 
-    model : str, default='howlett2023'
-        'beutler2016' to use the model of https://arxiv.org/abs/1607.03149.
-        Else, 'fog' only applies to the no-wiggle part.
+    model : str, default='standard'
+        'fog-damping' to apply Finger-of-God to the wiggle part (in addition to the no-wiggle part).
+        'move-all' to move the no-wiggle part (in addition to the wiggle part) with scaling parameters.
+        'fog-damping_move-all' to use the model of https://arxiv.org/abs/1607.03149.
 
     broadband : str, default='power'
         Broadband parameterization: 'power' for powers of :math:`k`,
@@ -666,6 +671,10 @@ class ResummedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerS
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
 
+    model : str, default='standard'
+        'fog-damping' to apply Finger-of-God to the wiggle part (in addition to the no-wiggle part).
+        'move-all' to move the no-wiggle part (in addition to the wiggle part) with scaling parameters.
+
     broadband : str, default='power'
         Broadband parameterization: 'power' for powers of :math:`k`,
         'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels.
@@ -710,6 +719,9 @@ class FlexibleBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerS
 
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+    model : str, default='standard'
+        'move-all' to move the no-wiggle part (in addition to the wiggle part) with scaling parameters.
 
     wiggles : str, default='pcs'
         Multiplicative wiggles kernels, one of ['cic', 'tsc', 'pcs', 'power'].
@@ -792,10 +804,6 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
 
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
-
-    model : str, default='howlett2023'
-        'beutler2016' to use the model of https://arxiv.org/abs/1607.03149.
-        Else, 'fog' only applies to the no-wiggle part.
 
     broadband : str, default='power'
         Broadband parameterization: 'power' for powers of :math:`s`,
@@ -953,9 +961,10 @@ class DampedBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCo
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
 
-    model : str, default='howlett2023'
-        'beutler2016' to use the model of https://arxiv.org/abs/1607.03149.
-        Else, 'fog' only applies to the no-wiggle part.
+    model : str, default='standard'
+        'fog-damping' to apply Finger-of-God to the wiggle part (in addition to the no-wiggle part).
+        'move-all' to move the no-wiggle part (in addition to the wiggle part) with scaling parameters.
+        'fog-damping_move-all' to use the model of https://arxiv.org/abs/1607.03149.
 
     broadband : str, default='power'
         Broadband parameterization: 'power' for powers of :math:`s`,
@@ -1000,10 +1009,6 @@ class SimpleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCo
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
 
-    model : str, default='howlett2023'
-        'beutler2016' to use the model of https://arxiv.org/abs/1607.03149.
-        Else, 'fog' only applies to the no-wiggle part.
-
     broadband : str, default='power'
         Broadband parameterization: 'power' for powers of :math:`s`,
         'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels in Fourier space.
@@ -1047,9 +1052,9 @@ class ResummedBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracer
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
 
-    model : str, default='howlett2023'
-        'beutler2016' to use the model of https://arxiv.org/abs/1607.03149.
-        Else, 'fog' only applies to the no-wiggle part.
+    model : str, default='standard'
+        'fog-damping' to apply Finger-of-God to the wiggle part (in addition to the no-wiggle part).
+        'move-all' to move the no-wiggle part (in addition to the wiggle part) with scaling parameters.
 
     broadband : str, default='power'
         Broadband parameterization: 'power' for powers of :math:`s`,
@@ -1095,9 +1100,8 @@ class FlexibleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracer
     template : BasePowerSpectrumTemplate, default=None
         Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
 
-    model : str, default='howlett2023'
-        'beutler2016' to use the model of https://arxiv.org/abs/1607.03149.
-        Else, 'fog' only applies to the no-wiggle part.
+    model : str, default='standard'
+        'move-all' to move the no-wiggle part (in addition to the wiggle part) with scaling parameters.
 
     wiggles : str, default='pcs'
         Multiplicative wiggles kernels, one of ['cic', 'tsc', 'pcs', 'power'].

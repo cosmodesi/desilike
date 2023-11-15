@@ -150,15 +150,15 @@ def test_correlation_function():
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
     #theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template, ells=(0, 2))
-    size = 10
+    size = 5
     ells = (0, 2)
-
     observable = TracerCorrelationFunctionMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * len(ells)),
                                                                s=np.linspace(20., 150., size),
                                                                slim={ell: (10, 160) for ell in ells},
                                                                ells=ells,
                                                                covariance=np.eye(size * len(ells)),
-                                                               theory=theory)
+                                                               theory=theory,
+                                                               wmatrix={'resolution': 2})
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
     observable.__getstate__()
@@ -849,10 +849,10 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    test_systematic_templates()
+    #test_systematic_templates()
     # test_bao()
-    test_power_spectrum()
-    #test_correlation_function()
+    #test_power_spectrum()
+    test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()

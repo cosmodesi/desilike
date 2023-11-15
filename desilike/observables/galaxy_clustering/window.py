@@ -126,35 +126,35 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         _default_step = 0.01
 
         if ells is None:
-            if klim is not None:
-                ells = klim.keys()
-            else:
-                ells = (0, 2, 4)
+            if klim is not None: ells = klim.keys()
+            else: ells = (0, 2, 4)
         self.ells = tuple(ells)
-        self.kedges = None
+        self.k = self.kedges = None
+        if k is not None:
+            if np.ndim(k[0]) == 0:
+                k = [k] * len(self.ells)
+            self.k = [np.array(kk, dtype='f8') for kk in k]
+            if len(self.k) != len(self.ells):
+                raise ValueError("provide as many k's as ells")
 
         if klim is not None:
             klim = dict(klim)
             self.kedges = []
-            for ell in self.ells:
+            for ill, ell in enumerate(self.ells):
                 if klim[ell] is None:
                     self.kedges = None
                     break
                 (lo, hi, *step) = klim[ell]
-                if not step: step = (_default_step,)
+                if not step:
+                    if self.k is not None: step = ((hi - lo) / self.k[ill].size,)
+                    else: step = (_default_step,)
                 self.kedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
 
         if self.kedges is None:
-            self.kedges = np.arange(0.01 - _default_step / 2., 0.2 + _default_step, _default_step)  # gives k = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
+            self.kedges = [np.arange(0.01 - _default_step / 2., 0.2 + _default_step, _default_step)] * len(self.ells)  # gives k = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
 
-        if k is None:
-            k = [(edges[:-1] + edges[1:]) / 2. for edges in self.kedges]
-
-        if np.ndim(k[0]) == 0:
-            k = [k] * len(self.ells)
-        self.k = [np.array(kk, dtype='f8') for kk in k]
-        if len(self.k) != len(self.ells):
-            raise ValueError("Provided as many k's as ells")
+        if self.k is None:
+            self.k = [(edges[:-1] + edges[1:]) / 2. for edges in self.kedges]
 
         if theory is None:
             from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
@@ -171,14 +171,14 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 self.kmask = np.concatenate(self.kmask, axis=0)
         elif isinstance(wmatrix, dict):
             self.ellsin = tuple(self.ells)
-            self.kin, self.matrix_full = window_matrix_bininteg(self.kedges, **wmatrix)
-            self.matrix_full = self.matrix_full.T
+            self.kin, matrix_full = window_matrix_bininteg(self.kedges, **wmatrix)
+            self.matrix_full = matrix_full.T
         elif isinstance(wmatrix, np.ndarray):
             self.ellsin = tuple(self.ells or self.ells)
-            self.matrix_full = np.array(wmatrix).T
+            matrix_full = np.array(wmatrix).T
             ksize = sum(len(k) for k in self.k)
-            if self.matrix_full.shape[0] != ksize:
-                raise ValueError('output "wmatrix" size is {:d}, but got {:d} output "k"'.format(self.matrix_full.shape[0], ksize))
+            if matrix_full.shape[0] != ksize:
+                raise ValueError('output "wmatrix" size is {:d}, but got {:d} output "k"'.format(matrix_full.shape[0], ksize))
             kin = np.asarray(kin).flatten()
             self.kin = kin.copy()
             if kinrebin is not None:
@@ -187,7 +187,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             if kinlim is not None:
                 self.kin = self.kin[(self.kin >= kinlim[0]) & (self.kin <= kinlim[-1])]
             wmatrix_rebin = linalg.block_diag(*[utils.matrix_lininterp(self.kin, kin) for ell in self.ellsin])
-            self.matrix_full = self.matrix_full.dot(wmatrix_rebin.T)
+            self.matrix_full = matrix_full.dot(wmatrix_rebin.T)
         else:
             if utils.is_path(wmatrix):
                 from pypower import MeshFFTWindow, BaseMatrix
@@ -387,35 +387,35 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         _default_step = 5.
 
         if ells is None:
-            if slim is not None:
-                ells = slim.keys()
-            else:
-                ells = (0, 2, 4)
+            if slim is not None: ells = slim.keys()
+            else: ells = (0, 2, 4)
         self.ells = tuple(ells)
+        self.s = self.sedges = None
+        if s is not None:
+            if np.ndim(s[0]) == 0:
+                s = [s] * len(self.ells)
+            self.s = [np.array(ss, dtype='f8') for ss in s]
+            if len(self.s) != len(self.ells):
+                raise ValueError("provide as many s's as ells")
 
-        self.sedges = None
         if slim is not None:
             slim = dict(slim)
             self.sedges = []
-            for ell in self.ells:
+            for ill, ell in enumerate(self.ells):
                 if slim[ell] is None:
                     self.sedges = None
                     break
                 (lo, hi, *step) = slim[ell]
-                if not step: step = (_default_step,)
+                if not step:
+                    if self.s is not None: step = ((hi - lo) / self.s[ill].size,)
+                    else: step = (_default_step,)
                 self.sedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
 
         if self.sedges is None:
             self.sedges = np.arange(20. - _default_step / 2., 150 + _default_step, _default_step)  # gives s = np.arange(20, 150 + _default_step / 2., _default_step)
 
-        if s is None:
-            s = [(edges[:-1] + edges[1:]) / 2. for edges in self.sedges]
-
-        if np.ndim(s[0]) == 0:
-            s = [s] * len(self.ells)
-        self.s = [np.array(ss, dtype='f8') for ss in s]
-        if len(self.s) != len(self.ells):
-            raise ValueError("Provided as many s's as ells")
+        if self.s is None:
+            self.s = [(edges[:-1] + edges[1:]) / 2. for edges in self.sedges]
 
         if theory is None:
             from desilike.theories.galaxy_clustering import KaiserTracerCorrelationFunctionMultipoles
@@ -437,14 +437,14 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
                 self.smask = np.concatenate(self.smask, axis=0)
         elif isinstance(wmatrix, dict):
             self.ellsin = tuple(self.ells)
-            self.sin, self.matrix_full = window_matrix_bininteg(self.sedges, **wmatrix)
-            self.matrix_full = self.matrix_full.T
+            self.sin, matrix_full = window_matrix_bininteg(self.sedges, **wmatrix)
+            self.matrix_full = matrix_full.T
         elif isinstance(wmatrix, np.ndarray):
             self.ellsin = tuple(ellsin or self.ells)
-            self.matrix_full = np.array(wmatrix).T
+            matrix_full = np.array(wmatrix).T
             ssize = sum(len(s) for s in self.s)
-            if self.matrix_full.shape[0] != ssize:
-                raise ValueError('output "wmatrix" size is {:d}, but got {:d} output "s"'.format(self.matrix_full.shape[0], ssize))
+            if matrix_full.shape[0] != ssize:
+                raise ValueError('output "wmatrix" size is {:d}, but got {:d} output "s"'.format(matrix_full.shape[0], ssize))
             sin = np.asarray(sin).flatten()
             self.sin = sin.copy()
             if sinrebin is not None:
@@ -453,7 +453,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
             if sinlim is not None:
                 self.sin = self.sin[(self.sin >= sinlim[0]) & (self.sin <= sinlim[-1])]
             wmatrix_rebin = linalg.block_diag(*[utils.matrix_lininterp(self.sin, sin) for ell in self.ellsin])
-            self.matrix_full = self.matrix_full.dot(wmatrix_rebin.T)
+            self.matrix_full = matrix_full.dot(wmatrix_rebin.T)
         else:
             raise ValueError('unrecognized wmatrix {}'.format(wmatrix))
         if muedges is not None:

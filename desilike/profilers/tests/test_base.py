@@ -1,3 +1,5 @@
+import numpy as np
+
 from desilike import setup_logging
 from desilike.profilers import MinuitProfiler, ScipyProfiler, BOBYQAProfiler
 
@@ -81,12 +83,21 @@ def test_solve():
     profiler = MinuitProfiler(likelihood, rescale=False, seed=42)
     #profiler = ScipyProfiler(likelihood, method='lsq')
     profiles = profiler.maximize(niterations=2)
+    print(profiles.to_stats())
+    for param in likelihood.all_params.select(basename=['sn*']): param.update(derived='.best')
+    profiler = MinuitProfiler(likelihood, rescale=False, seed=42)
+    profiles = profiler.maximize(niterations=2)
+    print(profiles.to_stats())
+    for param in likelihood.all_params.select(basename=['sn*']): param.update(derived='.prec')
+    profiler = MinuitProfiler(likelihood, rescale=False, seed=42)
+    profiles = profiler.maximize(niterations=2)
+    print(profiles.to_stats())
     profiler.interval(params=['df', 'b1'])
     #print(profiles.bestfit.attrs, profiles.error.attrs, profiles.covariance.attrs, profiles.interval.attrs)
     assert profiles.bestfit._loglikelihood == 'LRG.loglikelihood'
     #profiles = profiler.interval(params=['df'])
     #profiler.grid(params=['df', 'qpar'], size=2)
-    print(profiles.to_stats(), profiles.bestfit['LRG.loglikelihood'], profiles.bestfit['f_sqrt_Ap'])
+    print(profiles.bestfit['LRG.loglikelihood'], profiles.bestfit['f_sqrt_Ap'])
     likelihood(**profiles.bestfit.choice(input=True))
     #observable.plot(show=True)
     #print(likelihood(**profiles.bestfit.choice(varied=True)))
@@ -116,7 +127,9 @@ def test_bao():
     #likelihood.flatdata += 100 * np.cos(np.linspace(0., 5. * np.pi, observable.flatdata.size))
     profiler = MinuitProfiler(likelihood, rescale=False, seed=42)
     #profiler = ScipyProfiler(likelihood, method='lsq')
-    profiles = profiler.maximize(niterations=2)
+    profiles = profiler.maximize(niterations=1)
+    profiles = profiler.profile(params=['qpar'], grid=np.linspace(0.8, 1.2, 3))
+    assert profiles.profile['qpar'].shape == (3, 2)
     likelihood(**profiles.bestfit.choice(input=True))
     if likelihood.mpicomm.rank == 0:
         print(profiles.bestfit.choice(input=True))

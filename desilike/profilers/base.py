@@ -567,6 +567,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
         states = {}
         mpicomm_bak = self.mpicomm
+
         with TaskManager(nprocs_per_task=nprocs_per_param, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
             self.mpicomm = tm.mpicomm
             for ipoint in tm.iterate(range(nsamples)):

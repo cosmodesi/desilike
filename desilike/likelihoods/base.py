@@ -69,9 +69,9 @@ class BaseLikelihood(BaseCalculator):
                 solved_params.append(param)
 
         # Reset precision and flatdata
-        #for likelihood in likelihoods:
-        #    likelihood.precision = likelihood._precision_original = getattr(likelihood, '_precision_original', likelihood.precision)
-        #    likelihood.flatdata = likelihood._flatdata_original = getattr(likelihood, '_flatdata_original', likelihood.flatdata)
+        for likelihood in likelihoods:
+            likelihood.precision = likelihood._precision_original = getattr(likelihood, '_precision_original', likelihood.precision)
+            likelihood.flatdata = likelihood._flatdata_original = getattr(likelihood, '_flatdata_original', likelihood.flatdata)
 
         if solved_params:
             solved_params = ParameterCollection(solved_params)
@@ -154,6 +154,8 @@ class BaseLikelihood(BaseCalculator):
                 with warnings.catch_warnings():
                     warnings.filterwarnings('ignore', message='.*Derived parameter.*')
                     solve_likelihood = SumLikelihood(solve_likelihoods)
+                    solve_likelihood.runtime_info.pipeline.more_initialize = None
+                    solve_likelihood.runtime_info.pipeline.more_calculate = lambda: None
                     all_params = solve_likelihood.all_params
                     #solved_params = ParameterCollection(solved_params)
                     for param in pipeline.params:
@@ -161,7 +163,6 @@ class BaseLikelihood(BaseCalculator):
                             param = param.clone(derived=False) if param in solved_params else param.clone(fixed=True)
                             all_params.set(param)
                     solve_likelihood.all_params = all_params
-                    solve_likelihood.runtime_info.pipeline.more_calculate = lambda: None
                     # Such that when initializing, Fisher calls the pipeline (on all ranks of likelihood.mpicomm) at its current parameters
                     # and does not use default ones (call to self.fisher(**values) below only updates the calculator states on the last rank)
                     solve_likelihood.runtime_info.pipeline.input_values = values

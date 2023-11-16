@@ -205,6 +205,16 @@ def test_bao():
     assert 'dbeta' in theory.all_params
     assert 'dbeta' not in theory.varied_params
 
+    theory = FlexibleBAOWigglesTracerCorrelationFunctionMultipoles()
+    assert 'dbeta' in theory.all_params
+    assert 'dbeta' not in theory.varied_params
+
+    theory = DampedBAOWigglesTracerCorrelationFunctionMultipoles()
+    theory(sigmas=3.)
+    fig = theory.plot()
+    theory(sigmas=6.)
+    theory.plot(fig=fig, show=True)
+
     test(SimpleBAOWigglesTracerPowerSpectrumMultipoles())
     test(DampedBAOWigglesTracerPowerSpectrumMultipoles())
     test(ResummedBAOWigglesTracerPowerSpectrumMultipoles())
@@ -804,7 +814,6 @@ def test_params():
         param.update(namespace='LRG')
     print(theory.all_params)
     print(theory.runtime_info.pipeline.param_values)
-    exit()
 
     theory = KaiserTracerCorrelationFunctionMultipoles()
     for param in theory.init.params:
@@ -1080,9 +1089,9 @@ if __name__ == '__main__':
     #test_params()
     #test_integ()
     #test_templates()
-    #test_bao()
+    test_bao()
     #test_broadband_bao()
-    test_flexible_bao()
+    #test_flexible_bao()
     #test_full_shape()
     #test_png()
     #test_pk_to_xi()

@@ -121,6 +121,7 @@ params:
       limits: [1.5, 2.5]
     latex: b
   dbeta:
+    fixed: True  # degenerate
     value: 1.
     prior:
       limits: [0.7, 1.3]
@@ -245,6 +246,7 @@ params:
       limits: [1.5, 2.5]
     latex: b
   dbeta:
+    fixed: True  # degenerate
     value: 1.
     prior:
       limits: [0.7, 1.3]

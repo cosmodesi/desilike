@@ -327,7 +327,7 @@ class FlexibleBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
                 self.wiggles_matrix[ell] = jnp.array(tmp)
         else:
             raise ValueError('Unknown kernel: {}'.format(self.wiggles))
-        bb_params = ['b1']
+        bb_params = ['b1', 'dbeta']
         for params in self.wiggles_orders.values(): bb_params += list(params)
         self.params = self.params.select(basename=bb_params)
 

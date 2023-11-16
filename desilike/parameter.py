@@ -880,27 +880,61 @@ class Parameter(BaseClass):
     def __hash__(self):
         return hash(str(self))
 
-    def latex(self, namespace=True, inline=False):
-        """If :attr:`latex` is specified (i.e. not ``None``), return :attr:`latex` surrounded by '$' signs, else :attr:`name`."""
-        if namespace:
+    def latex(self, namespace=None, inline=False):
+        """
+        Return latex string for parameter if :attr:`latex` is specified (i.e. not ``None``), else :attr:`name`.
+
+        Parameters
+        ----------
+        namespace : bool, str, default=None
+            If ``False``, no namespace is added to the latex string.
+            If ``True``, :attr:`namespace` is turned into a latex string, and added as a subscript.
+            If string, add this subscript to the latex string.
+            If ``None``, and none of :attr:`namespace` "words" (defined as group of characters separated by ',', ' ', '_', '-')
+            are in the current latex string, then same as ``True``; else, same as ``False``.
+
+        inline : bool, default=False
+            If ``True``, add '$' around the latex string.
+
+        Returns
+        -------
+        latex : str
+            Latex string.
+        """
+        auto_namespace = namespace is None
+        force_namespace = namespace is True
+        provided_namespace = False
+        if auto_namespace or force_namespace:
             namespace = self._namespace
+        elif namespace is not False:
+            namespace = str(namespace)
+            provided_namespace = force_namespace = True
+
         if self._latex is not None:
+
+            def add_namespace(group):
+                words = re.split(', |_|-', namespace)  # parse namespace
+                for word in words:
+                    if word in self._latex and word not in self.basename:
+                        return False
+                return True
+
             latex = self._latex
-            if namespace:
+            if force_namespace or auto_namespace:
                 match1 = re.match('(.*)_(.)$', self._latex)
                 match2 = re.match('(.*)_{(.*)}$', self._latex)
-                if match1 is not None:
-                    if namespace not in match1.group(2):  # check namespace is not in latex str already
-                        latex = r'%s_{%s, \mathrm{%s}}' % (match1.group(1), match1.group(2), namespace)
-                elif match2 is not None:
-                    if namespace not in match2.group(2):
-                        latex = r'%s_{%s, \mathrm{%s}}' % (match2.group(1), match2.group(2), namespace)
-                else:
-                    latex = r'%s_{\mathrm{%s}}' % (self._latex, namespace)
+                latex_namespace = namespace if provided_namespace else ('\mathrm{%s}' % namespace.replace('\_', '_').replace('_', '\_'))
+                for match in [match1, match2, None]:
+                    if match is not None:
+                        if force_namespace or (auto_namespace and add_namespace(match.group(2))):  # check namespace is not in latex str already
+                            latex = r'%s_{%s, %s}' % (match.group(1), match.group(2), latex_namespace)
+                        break
+                    elif force_namespace or (auto_namespace and add_namespace(namespace)):
+                        latex = r'%s_{%s}' % (self._latex, latex_namespace)
             if inline:
                 latex = '${}$'.format(latex)
             return latex
-        return str(self)
+        return str(self.name)
 
 
 def _make_property(name):

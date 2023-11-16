@@ -904,8 +904,8 @@ class Parameter(BaseClass):
         auto_namespace = namespace is None
         force_namespace = namespace is True
         provided_namespace = False
-        if auto_namespace or force_namespace:
-            namespace = self._namespace
+        if force_namespace or auto_namespace:
+            namespace = str(self._namespace)
         elif namespace is not False:
             namespace = str(namespace)
             provided_namespace = force_namespace = True
@@ -920,7 +920,7 @@ class Parameter(BaseClass):
                 return True
 
             latex = self._latex
-            if force_namespace or auto_namespace:
+            if namespace and (force_namespace or auto_namespace):
                 match1 = re.match('(.*)_(.)$', self._latex)
                 match2 = re.match('(.*)_{(.*)}$', self._latex)
                 latex_namespace = namespace if provided_namespace else ('\mathrm{%s}' % namespace.replace('\_', '_').replace('_', '\_'))

@@ -298,6 +298,10 @@ def desilike_to_cobaya_params(params, engine=None):
         for name in ['loc', 'scale']:
             if hasattr(prior, name):
                 di[name] = getattr(prior, name)
+        if prior.dist == 'norm' and prior.is_limited():
+            di['dist'] = 'truncnorm'
+            # See https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.truncnorm.html
+            di['a'], di['b'] = (di.pop('min') - di['loc']) / di['scale'], (di.pop('max') - di['loc']) / di['scale']
         return di
 
     if engine == 'camb':

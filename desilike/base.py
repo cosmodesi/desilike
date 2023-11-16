@@ -145,7 +145,7 @@ class BasePipeline(BaseClass):
             more_initialize = getattr(calculator, '_more_initialize', None)
             if more_initialize is not None: self.more_initialize = more_initialize
         #self._params = ParameterCollection()
-        #self._set_params()
+        self._set_params()
 
     def _set_params(self, params=None):
         # Internal method to reset parameters, based on calculator's :class:`BaseCalculator.runtime_info.params`
@@ -186,7 +186,7 @@ class BasePipeline(BaseClass):
         self._varied_params = self._params.select(varied=True, derived=False)
         self.input_values = {param.name: param.value for param in self._params.select(input=True)}
         self.derived = Samples()
-        if self.more_initialize is not None: self.more_initialize()
+        self._initialized = False
 
     @property
     def params(self):
@@ -226,6 +226,9 @@ class BasePipeline(BaseClass):
         Derived parameter values are stored in :attr:`derived`.
         """
         self_params = self.params
+        if not self._initialized:
+            if self.more_initialize is not None: self.more_initialize()
+            self._initialized = True
         for name in params:
             if name not in self_params:
                 raise PipelineError('Input parameter {} is not one of parameters: {}'.format(name, self_params))
@@ -255,6 +258,10 @@ class BasePipeline(BaseClass):
 
     def mpicalculate(self, **params):
         """MPI-parallel version of the above: one can pass arrays as input parameter values."""
+        self.params
+        if not self._initialized:
+            if self.more_initialize is not None: self.more_initialize()
+            self._initialized = True
         size, cshape = 0, ()
         names = self.mpicomm.bcast(list(params.keys()) if self.mpicomm.rank == 0 else None, root=0)
         max_chunk_size = getattr(self, '_mpi_max_chunk_size', 100)

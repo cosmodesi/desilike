@@ -137,7 +137,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
         if 'fiducial' in state:
             state['fiducial'] = Cosmology.from_state(state['fiducial'])
         for name in list(state):
-            if 'interpolator_k' in name:
+            if ('interpolator' in name) and name.endswith('_k'):
                 k = state.pop(name)
                 pk = state.pop(name[:-1] + 'pk')
                 state[name[:-2]] = PowerSpectrumInterpolator1D(k, pk)

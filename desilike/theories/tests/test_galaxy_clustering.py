@@ -115,7 +115,8 @@ def test_emulator_templates():
     calculator = emulator.to_calculator()
     calculator()
 
-    theory.init.update(template=calculator)
+    theory.init.update(template=calculator, broadband='pcs')
+    theory()
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=calculator)
     theory()

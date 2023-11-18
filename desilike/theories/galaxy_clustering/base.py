@@ -160,8 +160,31 @@ class BaseTheoryPowerSpectrumMultipolesFromWedges(BaseTheoryPowerSpectrumMultipo
         self.mu, wmu = utils.weights_mu(mu, method=method)
         self.wmu = np.array([wmu * (2 * ell + 1) * special.legendre(ell)(self.mu) for ell in ells])
 
+    @jit(static_argnums=[0])
     def to_poles(self, pkmu):
-        return np.sum(pkmu * self.wmu[:, None, :], axis=-1)
+        return jnp.sum(pkmu * self.wmu[:, None, :], axis=-1)
+
+
+@jit
+def ap_k_mu(k, mu, qpar=1., qper=1.):
+    qap = qpar / qper
+    jac = 1. / (qpar * qper**2)
+    factorap = jnp.sqrt(1 + mu**2 * (1. / qap**2 - 1))
+    # Beutler 2016 (arXiv: 1607.03150v1) eq 44
+    kap = k[..., None] / qper * factorap
+    # Beutler 2016 (arXiv: 1607.03150v1) eq 45
+    muap = mu / qap / factorap
+    return jac, kap, muap
+
+
+@jit
+def ap_s_mu(s, mu, qpar=1., qper=1.):
+    qap = qpar / qper
+    # Compared to Fourier space, qpar -> 1/qpar, qper -> 1/qper
+    factorap = jnp.sqrt(1 + mu**2 * (qap**2 - 1))
+    sap = s[..., None] * qper * factorap
+    muap = mu * qap / factorap
+    return 1., sap, muap
 
 
 class APEffect(BaseCalculator):
@@ -277,20 +300,7 @@ class APEffect(BaseCalculator):
         self.qiso = self.qpar**self.eta * self.qper**(1. - self.eta)
 
     def ap_k_mu(self, k, mu):
-        # Recomputing qap for template emulation
-        qap = self.qpar / self.qper
-        jac = 1. / (self.qpar * self.qper**2)
-        factorap = jnp.sqrt(1 + mu**2 * (1. / qap**2 - 1))
-        # Beutler 2016 (arXiv: 1607.03150v1) eq 44
-        kap = k[..., None] / self.qper * factorap
-        # Beutler 2016 (arXiv: 1607.03150v1) eq 45
-        muap = mu / qap / factorap
-        return jac, kap, muap
+        return ap_k_mu(k, mu, qpar=self.qpar, qper=self.qper)
 
     def ap_s_mu(self, s, mu):
-        qap = self.qpar / self.qper
-        # Compared to Fourier space, qpar -> 1/qpar, qper -> 1/qper
-        factorap = jnp.sqrt(1 + mu**2 * (qap**2 - 1))
-        sap = s[..., None] * self.qper * factorap
-        muap = mu * qap / factorap
-        return 1., sap, muap
+        return ap_s_mu(s, mu, qpar=self.qpar, qper=self.qper)

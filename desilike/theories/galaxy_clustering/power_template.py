@@ -135,7 +135,9 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
     def __setstate__(self, state):
         state = dict(state)
         if 'fiducial' in state:
-            state['fiducial'] = Cosmology.from_state(state['fiducial'])
+            fiducial = state.pop('fiducial')
+            if not hasattr(self, 'fiducial'):
+                self.fiducial = Cosmology.from_state(fiducial)
         for name in list(state):
             if ('interpolator' in name) and name.endswith('_k'):
                 k = state.pop(name)
@@ -155,7 +157,7 @@ class FixedPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     Parameters
     ----------
     k : array, default=None
-        Theory wavenumbers where to evaluate linear power spectrum.
+        Theory wavenumbers where to evaluate the linear power spectrum.
 
     z : float, default=1.
         Effective redshift.
@@ -388,7 +390,7 @@ class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate, StandardPowerSpec
     Parameters
     ----------
     k : array, default=None
-        Theory wavenumbers where to evaluate linear power spectrum.
+        Theory wavenumbers where to evaluate the linear power spectrum.
 
     z : float, default=1.
         Effective redshift.
@@ -536,7 +538,7 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
     Parameters
     ----------
     k : array, default=None
-        Theory wavenumbers where to evaluate linear power spectrum.
+        Theory wavenumbers where to evaluate the linear power spectrum.
 
     z : float, default=1.
         Effective redshift.
@@ -714,7 +716,7 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate, BandVelocityP
     Parameters
     ----------
     k : array, default=None
-        Theory wavenumbers where to evaluate linear power spectrum.
+        Theory wavenumbers where to evaluate the linear power spectrum.
 
     z : float, default=1.
         Effective redshift.
@@ -986,7 +988,7 @@ class WiggleSplitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     Parameters
     ----------
     k : array, default=None
-        Theory wavenumbers where to evaluate linear power spectrum.
+        Theory wavenumbers where to evaluate the linear power spectrum.
 
     z : float, default=1.
         Effective redshift.
@@ -1133,7 +1135,7 @@ class TurnOverPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     Parameters
     ----------
     k : array, default=None
-        Theory wavenumbers where to evaluate linear power spectrum.
+        Theory wavenumbers where to evaluate the linear power spectrum.
 
     z : float, default=1.
         Effective redshift.

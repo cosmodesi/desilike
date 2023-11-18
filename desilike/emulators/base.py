@@ -33,7 +33,7 @@ def get_subsamples(samples, frac=1., nmax=np.inf, seed=42, mpicomm=None):
 
 
 def _setstate(self, state):
-    self.__dict__.update(state)
+    self.__dict__.update({name: value for name, value in state.items() if name not in self.emulator.in_calculator_state})
     self.__setstate__({name: value for name, value in state.items() if name in self.emulator.in_calculator_state})
 
 

@@ -466,13 +466,17 @@ class LikelihoodFisher(BaseClass):
         if len(others) == 1 and utils.is_sequence(others[0]):
             others = others[0]
         params = ParameterCollection.concatenate([other._params for other in others])
-        centers = [other.center(params=params) for other in others]
-        center = centers[0]
-        same_centers = [np.all(center == centers[0]) for center in centers]
-        same_center = all(same_centers)
-        if not same_center: center = np.nanmean(centers, axis=0)
         names = params.names()
-        others = [other.view(params, center=center) if not same_centers[iother] or other.names() != names else other for iother, other in enumerate(others)]
+        centers, need_view = [], []
+        for iother, other in enumerate(others):
+            c = np.full(len(params), np.nan, dtype='f8')
+            iparams_in_self, params_in_self = zip(*[(iparam, param) for iparam, param in enumerate(params) if param in other._params])
+            c[list(iparams_in_self)] = other.center(params=params_in_self)
+            centers.append(c)
+            if iother == 0: center = c
+            need_view.append((other._params.names() != names) or not np.all(center == c))
+        if any(need_view): center = np.nanmean(centers, axis=0)
+        others = [other.view(params, center=center) if need_view[iother] else other for iother, other in enumerate(others)]
         offset = gradient = hessian = 0.
         with_prior, attrs = {}, {}
         for other in others:

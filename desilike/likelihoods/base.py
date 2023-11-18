@@ -91,7 +91,7 @@ class BaseLikelihood(BaseCalculator):
                 #solved_params = ParameterCollection(solved_params)
                 for param in pipeline.params:
                     if param in solve_likelihood.all_params:
-                        param = param.clone(derived=False) if param in solved_params else param.clone(fixed=True)
+                        param = param.clone(derived=False if param in solved_params or param.depends else param.derived, fixed=param not in solved_params)
                         all_params.set(param)
                 solve_likelihood.all_params = all_params
             fisher = Fisher(solve_likelihood, method='auto')
@@ -160,7 +160,7 @@ class BaseLikelihood(BaseCalculator):
                     #solved_params = ParameterCollection(solved_params)
                     for param in pipeline.params:
                         if param in solve_likelihood.all_params:
-                            param = param.clone(derived=False) if param in solved_params else param.clone(fixed=True)
+                            param = param.clone(derived=False if param in solved_params or param.depends else param.derived, fixed=param not in solved_params)
                             all_params.set(param)
                     solve_likelihood.all_params = all_params
                     # Such that when initializing, Fisher calls the pipeline (on all ranks of likelihood.mpicomm) at its current parameters

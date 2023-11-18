@@ -63,9 +63,6 @@ def test_solve():
     theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(template=template)
     #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
     #for param in theory.params.select(basename=['df', 'dm', 'qpar', 'qper']): param.update(fixed=True)
-    for param in theory.params.select(basename=['ct*', 'sn*']): param.update(derived='.best')
-    #for param in theory.params.select(basename=['ct*', 'sn*']): param.update(fixed=True)
-    for param in theory.params.select(basename=['sn*']): param.update(prior=None, fixed=False, derived='.prec')
     for param in theory.params.select(basename=['sn*']): param.update(prior=dict(dist='norm', loc=1., scale=0.01))
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data={'b1': 2., 'ct0_2': 1., 'sn0': 0.5},
@@ -77,10 +74,16 @@ def test_solve():
     likelihood()
     for param in likelihood.all_params.select(basename=['qpar', 'qper', 'dm']):
         param.update(fixed=True)
-
+    profiler = MinuitProfiler(likelihood, rescale=False, seed=42)
+    #profiler = ScipyProfiler(likelihood, method='lsq')
+    profiles = profiler.maximize(niterations=2)
+    print(profiles.to_stats())
+    for param in likelihood.all_params.select(basename=['ct*', 'sn*']): param.update(derived='.best')
+    #for param in theory.params.select(basename=['ct*', 'sn*']): param.update(fixed=True)
+    for param in likelihood.all_params.select(basename=['sn*']): param.update(derived='.prec')
     #import numpy as np
     #likelihood.flatdata += 100 * np.cos(np.linspace(0., 5. * np.pi, observable.flatdata.size))
-    profiler = MinuitProfiler(likelihood, rescale=False, seed=42)
+    profiler = MinuitProfiler(likelihood, rescale=True, seed=42)
     #profiler = ScipyProfiler(likelihood, method='lsq')
     profiles = profiler.maximize(niterations=2)
     print(profiles.to_stats())

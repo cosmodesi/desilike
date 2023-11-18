@@ -184,7 +184,7 @@ class BasePipeline(BaseClass):
         self._params = new_params.deepcopy()
         self._params.updated = False
         self._varied_params = self._params.select(varied=True, derived=False)
-        self.input_values = {param.name: param.value for param in self._params.select(input=True)}
+        self.input_values = {param.name: param.value for param in self._params if param.input or param.depends}
         self.derived = Samples()
         self._initialized = False
 
@@ -234,6 +234,7 @@ class BasePipeline(BaseClass):
                 raise PipelineError('Input parameter {} is not one of parameters: {}'.format(name, self_params))
         self.input_values.update(params)
         params = self_params.eval(**self.input_values)
+        self.input_values.update(params)  # to update parameters with depends
         self.derived, self.error = Samples(), None
         for param in self._params:
             if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))

@@ -179,6 +179,7 @@ def test_fisher_galaxy():
     like2 = like.clone(params=['a', 'b'], center=np.ones(2), hessian=np.eye(2))
     assert np.allclose(like2._center, np.ones(2))
     assert np.allclose(like2._hessian, np.eye(2))
+    like2 += like
 
 
 def test_fisher_cmb():
@@ -263,7 +264,7 @@ if __name__ == '__main__':
     #test_misc()
     #test_differentiation()
     #test_solve()
-    #test_fisher_galaxy()
+    test_fisher_galaxy()
     #test_fisher_cmb()
-    test_speed()
+    #test_speed()
     #test_jax()

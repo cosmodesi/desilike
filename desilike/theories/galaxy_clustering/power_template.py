@@ -7,7 +7,7 @@ from desilike.jax import numpy as jnp
 from desilike.base import BaseCalculator
 from desilike.cosmo import is_external_cosmo
 from desilike.parameter import ParameterCollection
-from desilike.theories.primordial_cosmology import get_cosmo, Cosmoprimo, constants
+from desilike.theories.primordial_cosmology import get_cosmo, Cosmoprimo, Cosmology, constants
 from .base import APEffect
 
 
@@ -110,6 +110,41 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
 
     def ap_k_mu(self, k, mu):
         return self.apeffect.ap_k_mu(k, mu)
+
+    def __getstate__(self):
+        state = {}
+        for name in ['k', 'z', 'fiducial', 'only_now', 'with_now', 'qpar', 'qper']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        for suffix in ['', '_fid']:
+            for name in ['sigma8', 'fsigma8', 'f', 'f0', 'pk_dd_interpolator', 'pk_dd'] + ['pknow_dd_interpolator', 'pknow_dd'] + ['dd_interpolator', 'dd']:
+                name = name + suffix
+                if hasattr(self, name):
+                    state[name] = getattr(self, name)
+        for name in ['fiducial']:
+            if name in state:
+                state[name] = state[name].__getstate__()
+        for name in list(state):
+            if 'interpolator' in name:
+                value = state.pop(name)
+                state[name + '_k'] = value.k
+                state[name + '_pk'] = value.pk
+        return state
+
+    def __setstate__(self, state):
+        state = dict(state)
+        if 'fiducial' in state:
+            state['fiducial'] = Cosmology.from_state(state['fiducial'])
+        for name in list(state):
+            if 'interpolator_k' in name:
+                k = state.pop(name)
+                pk = state.pop(name[:-1] + 'pk')
+                state[name[:-2]] = PowerSpectrumInterpolator1D(k, pk)
+        class TmpAPEffect(object): pass
+        TmpAPEffect.ap_k_mu = APEffect.ap_k_mu
+        state['apeffect'] = TmpAPEffect()
+        state['apeffect'].qpar, state['apeffect'].qper = state.pop('qpar'), state.pop('qper')
+        super(BasePowerSpectrumTemplate, self).__setstate__(state)
 
 
 class FixedPowerSpectrumTemplate(BasePowerSpectrumTemplate):

@@ -101,6 +101,26 @@ def test_templates():
         extractor()
 
 
+def test_emulator_templates():
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles
+    calculator = DirectPowerSpectrumTemplate()
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=calculator)
+    theory()
+
+    from desilike.emulators import Emulator, TaylorEmulatorEngine
+
+    emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=0))
+    emulator.set_samples()
+    emulator.fit()
+    calculator = emulator.to_calculator()
+    calculator()
+
+    theory.init.update(template=calculator)
+
+    theory = KaiserTracerPowerSpectrumMultipoles(template=calculator)
+    theory()
+
+
 def test_bao():
 
     from desilike.theories.galaxy_clustering import SimpleBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles, FlexibleBAOWigglesTracerPowerSpectrumMultipoles
@@ -1088,8 +1108,9 @@ if __name__ == '__main__':
     #test_folps()
     #test_params()
     #test_integ()
-    #test_templates()
-    test_bao()
+    test_templates()
+    test_emulator_templates()
+    #test_bao()
     #test_broadband_bao()
     #test_flexible_bao()
     #test_full_shape()

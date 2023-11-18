@@ -277,17 +277,20 @@ class APEffect(BaseCalculator):
         self.qiso = self.qpar**self.eta * self.qper**(1. - self.eta)
 
     def ap_k_mu(self, k, mu):
+        # Recomputing qap for template emulation
+        qap = self.qpar / self.qper
         jac = 1. / (self.qpar * self.qper**2)
-        factorap = jnp.sqrt(1 + mu**2 * (1. / self.qap**2 - 1))
+        factorap = jnp.sqrt(1 + mu**2 * (1. / qap**2 - 1))
         # Beutler 2016 (arXiv: 1607.03150v1) eq 44
         kap = k[..., None] / self.qper * factorap
         # Beutler 2016 (arXiv: 1607.03150v1) eq 45
-        muap = mu / self.qap / factorap
+        muap = mu / qap / factorap
         return jac, kap, muap
 
     def ap_s_mu(self, s, mu):
+        qap = self.qpar / self.qper
         # Compared to Fourier space, qpar -> 1/qpar, qper -> 1/qper
-        factorap = jnp.sqrt(1 + mu**2 * (self.qap**2 - 1))
+        factorap = jnp.sqrt(1 + mu**2 * (qap**2 - 1))
         sap = s[..., None] * self.qper * factorap
-        muap = mu * self.qap / factorap
+        muap = mu * qap / factorap
         return 1., sap, muap

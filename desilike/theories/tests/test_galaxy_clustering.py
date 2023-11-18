@@ -109,7 +109,7 @@ def test_emulator_templates():
 
     from desilike.emulators import Emulator, TaylorEmulatorEngine
 
-    emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=0))
+    emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=1))
     emulator.set_samples()
     emulator.fit()
     calculator = emulator.to_calculator()
@@ -1108,7 +1108,7 @@ if __name__ == '__main__':
     #test_folps()
     #test_params()
     #test_integ()
-    test_templates()
+    #test_templates()
     test_emulator_templates()
     #test_bao()
     #test_broadband_bao()

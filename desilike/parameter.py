@@ -2140,7 +2140,11 @@ class Samples(BaseParameterCollection):
                 if set(other_names) != set(new_names):
                     raise ValueError('Cannot concatenate values as parameters do not match: {} != {}.'.format(new_names, other_names))
         for param in new_params:
-            new[param] = others[0][param].clone(value=np.concatenate([np.atleast_1d(other[param]) for other in others], axis=0))
+            try:
+                value = np.concatenate([np.atleast_1d(other[param]) for other in others], axis=0)
+            except ValueError as exc:
+                raise ValueError('error while concatenating array for parameter {}'.format(param)) from exc
+            new[param] = others[0][param].clone(value=value)
         return new
 
     def update(self, *args, **kwargs):

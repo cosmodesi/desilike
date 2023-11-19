@@ -70,8 +70,10 @@ class BaseLikelihood(BaseCalculator):
 
         # Reset precision and flatdata
         for likelihood in likelihoods:
-            likelihood.precision = likelihood._precision_original = getattr(likelihood, '_precision_original', likelihood.precision)
-            likelihood.flatdata = likelihood._flatdata_original = getattr(likelihood, '_flatdata_original', likelihood.flatdata)
+            for name in ['precision', 'flatdata']:
+                original_name = '_{}_original'.format(name)
+                if hasattr(likelihood, original_name):
+                    setattr(likelihood, name, getattr(likelihood, original_name))
 
         if solved_params:
             solved_params = ParameterCollection(solved_params)

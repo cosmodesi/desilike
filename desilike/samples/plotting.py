@@ -138,7 +138,7 @@ def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, k
 
 
 @plotting.plotter
-def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, slices=None, labelsize=None, fig=None, **kwargs):
+def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, slices=None, offset=0, labelsize=None, fig=None, **kwargs):
     """
     Plot Gelman-Rubin statistics as a function of steps.
 
@@ -162,6 +162,9 @@ def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, s
         List of increasing number of steps to include in calculation of Gelman-Rubin statistics.
         Defaults to ``np.arange(100, nsteps, 500)``, where ``nsteps`` is the minimum size of input ``chains``:
         Gelman-Rubin statistics is then plotted for chain slices (0, 100), (0, 600), ...
+
+    offset : float, default=0
+        Offset to apply to the Gelman-Rubin statistics, typically 0 or -1.
 
     labelsize : int, default=None
         Label sizes.
@@ -198,6 +201,7 @@ def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, s
         chains_sliced = [chain.ravel()[:end] for chain in chains]
         if multivariate: gr_multi.append(diagnostics.gelman_rubin(chains_sliced, params, method='eigen', **kwargs).max())
         for param in gr: gr[param].append(diagnostics.gelman_rubin(chains_sliced, param, method='diag', **kwargs))
+    gr_multi = np.asarray(gr_multi)
     for param in gr: gr[param] = np.asarray(gr[param])
 
     if fig is None:
@@ -206,11 +210,12 @@ def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, s
         ax = fig.axes[0]
     ax.grid(True)
     ax.set_xlabel('step', fontsize=labelsize)
-    ax.set_ylabel(r'$\hat{R}$', fontsize=labelsize)
+    ylabel = r'$\hat{{R}} {} {}$'.format('-' if (offset < 0) else '+', abs(offset)) if offset != 0 else r'$\hat{{R}}$'
+    ax.set_ylabel(ylabel, fontsize=labelsize)
 
-    if multivariate: ax.plot(slices, gr_multi, label='multi', linestyle='-', linewidth=1, color='k')
+    if multivariate: ax.plot(slices, gr_multi + offset, label='multi', linestyle='-', linewidth=1, color='k')
     for param in params:
-        ax.plot(slices, gr[param], label=chains[0][param].param.latex(inline=True), linestyle='--', linewidth=1)
+        ax.plot(slices, gr[param] + offset, label=chains[0][param].param.latex(inline=True), linestyle='--', linewidth=1)
     if threshold is not None: ax.axhline(y=threshold, xmin=0., xmax=1., linestyle='--', linewidth=1, color='k')
     ax.legend()
     return fig

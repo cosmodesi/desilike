@@ -357,7 +357,11 @@ class BasePipeline(BaseClass):
                     for basename, name in calculator.runtime_info.base_names.items():
                         if basename in cosmo_params:
                             #print(name, cosmo[conversions.get(basename, basename)])
-                            self.input_values[name] = calculator.runtime_info.input_values[basename] = cosmo[conversions.get(basename, basename)]
+                            value = cosmo[conversions.get(basename, basename)]
+                            if basename in calculator.runtime_info.input_values:
+                                calculator.runtime_info.input_values[basename] = value
+                            if basename in self.input_values:
+                                self.input_values[name] = value
                 #if set(cosmo_requires.keys()) != {'params'}:  # requires a :class:`cosmoprimo.Cosmology` instance as ``cosmo`` attribute
                 calculator.cosmo = cosmo
                 calculator.runtime_info.tocalculate = True

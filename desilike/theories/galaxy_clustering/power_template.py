@@ -1252,7 +1252,7 @@ class DirectWiggleSplitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         BasePowerSpectrumExtractor.calculate(self)
         k = self.pk_dd_interpolator_fid.k  # this is independent and much wider than self.k, typically
         k = k[(k > k[0] * 2.) & (k < k[-1] / 2.)]  # to avoid hitting boundaries with qbao
-        wiggles = np.exp(- (k * sigmabao)**2 / 2.) * (self.pk_dd_interpolator(k / qbao) - self.pknow_dd_interpolator(k / qbao))
+        wiggles = np.exp(- (k * sigmabao)**2) * (self.pk_dd_interpolator(k / qbao) - self.pknow_dd_interpolator(k / qbao))
         # creating a new interpolator in case we need it (only used by BAO models)
         self.pk_dd_interpolator = PowerSpectrumInterpolator1D(k, self.pk_dd_interpolator(k) + wiggles)
         self.pk_dd = self.pk_dd_interpolator(self.k)

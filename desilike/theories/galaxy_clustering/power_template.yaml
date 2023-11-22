@@ -441,7 +441,7 @@ params:
       limits: [0., 20.]
     ref:
       limits: [0., 1.]
-    delta: 0.02
+    delta: 2.
     latex: \Sigma_{\mathrm{BAO}}
 
   # Using Planck priors

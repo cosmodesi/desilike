@@ -110,7 +110,7 @@ def test_wiggle_split_template():
     fig, lax = plt.subplots(1, 2, sharex=False, sharey=True, figsize=(10, 4), squeeze=True)
     fig.subplots_adjust(wspace=0.25)
 
-    for iname, (name, values) in enumerate(zip(['qbao', 'sigmabao'], [np.linspace(0.8, 1.2, 5), np.linspace(0., 20., 5)])):
+    for iname, (name, values) in enumerate(zip(['qbao', 'sigmabao'], [np.linspace(0.8, 1.2, 5), np.linspace(0., 10., 5)])):
         template = DirectWiggleSplitPowerSpectrumTemplate(k=np.linspace(0.001, 0.3, 100))
         template.init.params['sigmabao'].update(fixed=False)
         template()

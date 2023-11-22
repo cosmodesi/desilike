@@ -182,7 +182,28 @@ class FixedPowerSpectrumTemplate(BasePowerSpectrumTemplate):
 
 
 class DirectPowerSpectrumTemplate(BasePowerSpectrumTemplate):
+    """
+    Direct power spectrum template, i.e. parameterized in terms of base cosmological parameters.
 
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate the linear power spectrum.
+
+    z : float, default=1.
+        Effective redshift.
+
+    with_now : str, default=False
+        If provided, also compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
+
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+    """
     def initialize(self, *args, cosmo=None, **kwargs):
         super(DirectPowerSpectrumTemplate, self).initialize(*args, **kwargs)
         self.cosmo_requires = {}
@@ -1182,20 +1203,22 @@ class TurnOverPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         return self
 
 
-class WiggleRescalePowerSpectrumTemplate(BasePowerSpectrumTemplate):
+class DirectWiggleSplitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     """
-    Rescale the wiggly part of the power spectrum in order to marginalize over the sound horizon scale.
+    Same as :class:`DirectPowerSpectrumTemplate`, i.e. parameterized in terms of base cosmological parameters,
+    but rescale the wiggly part of the power spectrum by ``qbao`` in order to marginalize over the sound horizon scale.
+    The wiggle amplitude can also be modulated with the Gaussian damping ``sigmabao``.
 
     Parameters
     ----------
     k : array, default=None
-        Theory wavenumbers where to evaluate linear power spectrum.
+        Theory wavenumbers where to evaluate the linear power spectrum.
 
     z : float, default=1.
         Effective redshift.
 
-    with_now : str, default='wallish2018'
-        Compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
+    with_now : str, default=False
+        If provided, also compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
 
     fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
         Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
@@ -1205,49 +1228,35 @@ class WiggleRescalePowerSpectrumTemplate(BasePowerSpectrumTemplate):
         - dict: dictionary of parameters
         - :class:`cosmoprimo.Cosmology`: Cosmology instance
 
-    cosmo : BasePrimordialCosmology, default=None
-        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
-
     Reference
     ----------
-    - https://arxiv.org/abs/2112.10749
+    https://arxiv.org/abs/2112.10749
     """
-    config_fn = 'power_template.yaml'
-    
-    def initialize(self, *args, k=None, z=1., with_now='wallish2018', fiducial='DESI', cosmo=None, **kwargs):
+    def initialize(self, *args, cosmo=None, with_now='peakaverage', **kwargs):
+        super(DirectWiggleSplitPowerSpectrumTemplate, self).initialize(*args, with_now=with_now, **kwargs)
+        self.cosmo_requires = {}
         self.cosmo = cosmo
-        self.fiducial = fiducial
-        self.z = z
-        self.with_now = with_now
-        if k is None: k = np.logspace(-3., 1., 400)
-        self.k = np.array(k, dtype='f8')
+        params = self.params.select(derived=True) + self.params.select(basename=['qbao', 'sigmabao'])
+        if is_external_cosmo(self.cosmo):
+            self.cosmo_requires = {'fourier': {'sigma8_z': {'z': self.z, 'of': [('delta_cb', 'delta_cb'), ('theta_cb', 'theta_cb')]},
+                                               'pk_interpolator': {'z': self.z, 'k': self.k, 'of': [('delta_cb', 'delta_cb')]}}}
+        elif cosmo is None:
+            self.cosmo = Cosmoprimo(fiducial=self.fiducial)
+            self.cosmo.params = [param for param in self.params if param not in params]
+        self.params = params
+        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, cosmo=self.cosmo, mode='geometry').runtime_info.initialize()
+        if is_external_cosmo(self.cosmo):
+            self.cosmo_requires.update(self.apeffect.cosmo_requires)  # just background
 
-        # Make sure to use a larger k-grid than requested for the input power spectrum,
-        # so that after rescaling, the wiggles fully cover the desired k-range.
-        min_qbao = 0.49
-        max_qbao = 1.51
-        self.kin = np.logspace(np.log10(k[0]*min_qbao), np.log10(k[-1]*max_qbao), 400)
-        
-        super(WiggleRescalePowerSpectrumTemplate, self).initialize(*args, k=self.kin, z=self.z, with_now=self.with_now, fiducial=self.fiducial, apmode='distances', **kwargs)
-
-    def calculate(self, qbao=1.):
-        super(WiggleRescalePowerSpectrumTemplate, self).calculate()
-        
-        # Separate wiggles
-        self.pkw_dd = self.pk_dd - self.pknow_dd
-        
-        # Rescale k-grid for wiggles
-        kw_rescale = self.kin * qbao
-        
-        # Interpolate wiggle power spectrum to the original k-grid
-        pkw_dd_interpolator = interpolate.interp1d(kw_rescale, self.pkw_dd, kind='cubic')
-        pknow_dd_interpolator = interpolate.interp1d(self.kin, self.pknow_dd, kind='cubic')
-        self.pknow_dd = pknow_dd_interpolator(self.k)
-        self.pkw_dd = pkw_dd_interpolator(self.k)
-        
-        # Recombine wiggles and smooth power spectrum
-        self.pk_dd = self.pknow_dd + self.pkw_dd
-
-    def get(self):
-        return self
-
+    def calculate(self, qbao=1., sigmabao=0.):
+        BasePowerSpectrumExtractor.calculate(self)
+        k = self.pk_dd_interpolator_fid.k  # this is independent and much wider than self.k, typically
+        k = k[(k > k[0] * 2.) & (k < k[-1] / 2.)]  # to avoid hitting boundaries with qbao
+        wiggles = np.exp(- (k * sigmabao)**2 / 2.) * (self.pk_dd_interpolator(k / qbao) - self.pknow_dd_interpolator(k / qbao))
+        # creating a new interpolator in case we need it (only used by BAO models)
+        self.pk_dd_interpolator = PowerSpectrumInterpolator1D(k, self.pk_dd_interpolator(k) + wiggles)
+        self.pk_dd = self.pk_dd_interpolator(self.k)
+        self.pknow_dd = self.pknow_dd_interpolator(self.k)
+        if self.only_now:
+            for name in ['dd_interpolator', 'dd']:
+                setattr(self, 'pk_' + name, getattr(self, 'pknow_' + name))

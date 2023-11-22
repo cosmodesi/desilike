@@ -12,7 +12,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.01
+    delta: 0.02
     latex: h
   # If h is there, used instead of theta_mc below
   theta_MC_100:
@@ -32,7 +32,7 @@ params:
       dist: norm
       loc: 0.12
       scale: 0.0012
-    delta: 0.002
+    delta: 0.007
     latex: \omega_{cdm}
   omega_b:
     prior:
@@ -41,7 +41,7 @@ params:
       dist: norm
       loc: 0.02237
       scale: 0.00015
-    delta: 0.0002
+    delta: 0.0007
     latex: \omega_{b}
   logA:
     prior:
@@ -59,7 +59,7 @@ params:
       dist: norm
       loc: 0.9649
       scale: 0.0042
-    delta: 0.002
+    delta: 0.005
     latex: n_{s}
   tau_reio:
     value: 0.0544
@@ -69,7 +69,7 @@ params:
       dist: norm
       loc: 0.0544
       scale: 0.01
-    delta: 0.004
+    delta: 0.01
     latex: \tau
   m_ncdm:
     prior:
@@ -97,7 +97,7 @@ params:
       dist: norm
       loc: -1
       scale: 0.08
-    delta: 0.04
+    delta: 0.1
     latex: w_{0}
     fixed: True
   wa_fld:
@@ -107,7 +107,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.3
-    delta: 0.04
+    delta: 0.15
     latex: w_{a}
     fixed: True
   Omega_k:
@@ -117,6 +117,6 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    delta: 0.002
+    delta: 0.01
     latex: \Omega_{k}
     fixed: True

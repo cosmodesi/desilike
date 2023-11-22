@@ -248,7 +248,7 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
                     add = {}
                     for imp in imports:
                         if not isinstance(imp, dict):
-                            raise ValueError('Imported {} must be dictionaries'.format(value))
+                            raise ValueError('imported {} must be dictionaries'.format(value))
                         add.update(imp)
                     di = insert_dict(di, key, add)
                 elif not isinstance(di, dict) and isinstance(value, dict) and set(value.keys()) == {self._key_import}:
@@ -257,7 +257,7 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
                     add = []
                     for imp in imports:
                         if not isinstance(imp, list):
-                            raise ValueError('Imported {} must be lists'.format(value))
+                            raise ValueError('imported {} must be lists'.format(value))
                         add += imp
                     di = insert_list(di, key, add)
                 if isinstance(value, (dict, list)):

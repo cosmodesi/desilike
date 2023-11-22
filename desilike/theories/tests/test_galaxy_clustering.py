@@ -61,9 +61,10 @@ def test_templates():
 
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles
     from desilike.theories.galaxy_clustering import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BAOPowerSpectrumTemplate,
-                                                     StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate, TurnOverPowerSpectrumTemplate)
+                                                     StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate,
+                                                     BandVelocityPowerSpectrumTemplate, TurnOverPowerSpectrumTemplate, DirectWiggleSplitPowerSpectrumTemplate)
 
-    for template in [BAOPowerSpectrumTemplate(), FixedPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), DirectPowerSpectrumTemplate()]:
+    for template in [BAOPowerSpectrumTemplate(), FixedPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), DirectWiggleSplitPowerSpectrumTemplate()]:
         theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
         theory()
 
@@ -80,7 +81,7 @@ def test_templates():
 
     for template in [FixedPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), BAOPowerSpectrumTemplate(),
                      StandardPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(apmode='qisoqap'),
-                     WiggleSplitPowerSpectrumTemplate(), WiggleSplitPowerSpectrumTemplate(kernel='tophat'),
+                     WiggleSplitPowerSpectrumTemplate(), WiggleSplitPowerSpectrumTemplate(kernel='tophat'), DirectWiggleSplitPowerSpectrumTemplate(),
                      BandVelocityPowerSpectrumTemplate(kp=np.linspace(0.01, 0.1, 10)), TurnOverPowerSpectrumTemplate()]:
         print(template)
         theory = KaiserTracerPowerSpectrumMultipoles(template=template)
@@ -99,6 +100,31 @@ def test_templates():
                       WiggleSplitPowerSpectrumExtractor(), WiggleSplitPowerSpectrumExtractor(kernel='tophat'),
                       BandVelocityPowerSpectrumExtractor(kp=np.linspace(0.01, 0.1, 10)), TurnOverPowerSpectrumExtractor()]:
         extractor()
+
+
+def test_wiggle_split_template():
+
+    from matplotlib import pyplot as plt
+    from desilike.theories.galaxy_clustering import DirectWiggleSplitPowerSpectrumTemplate
+
+    fig, lax = plt.subplots(1, 2, sharex=False, sharey=True, figsize=(10, 4), squeeze=True)
+    fig.subplots_adjust(wspace=0.25)
+
+    for iname, (name, values) in enumerate(zip(['qbao', 'sigmabao'], [np.linspace(0.8, 1.2, 5), np.linspace(0., 20., 5)])):
+        template = DirectWiggleSplitPowerSpectrumTemplate(k=np.linspace(0.001, 0.3, 100))
+        template.init.params['sigmabao'].update(fixed=False)
+        template()
+        ax = lax[iname]
+        cmap = plt.get_cmap('jet', len(values))
+        ax.set_title(template.all_params[name].latex(inline=True))
+        ax.plot(template.k, template.k * template.pk_dd, color='k')
+        for ivalue, value in enumerate(values):
+            template(**{name: value})
+            ax.plot(template.k, template.k * template.pk_dd, color=cmap(ivalue / len(values)))
+        ax.grid(True)
+        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+    plt.show()
 
 
 def test_emulator_templates():
@@ -300,11 +326,11 @@ def test_broadband_bao():
 
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles
 
-    if False:
+    if True:
         ax = plt.gca()
-        theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(ells=(0, 2), broadband='pcs')
+        theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(ells=(0, 2), k=np.linspace(0.001, 0.4, 100), broadband='pcs')
         for ill, ell in enumerate(theory.ells):
-            names = theory.varied_params.names(basename='{}l{:d}_*'.format(mode[0], ell))
+            names = theory.varied_params.names(basename='al{:d}_*'.format(ell))
             cmap = plt.get_cmap('jet', len(names))
             for iname, name in enumerate(names):
                 pk = theory(**{name: 1.})
@@ -314,8 +340,9 @@ def test_broadband_bao():
         ax.grid(True)
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
         ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        plt.show()
 
-    if True:
+    if False:
         ax = plt.gca()
         theory = DampedBAOWigglesTracerCorrelationFunctionMultipoles(ells=(0, 2), broadband='pcs')
         for ill, ell in enumerate(theory.ells):
@@ -1109,8 +1136,9 @@ if __name__ == '__main__':
     #test_folps()
     #test_params()
     #test_integ()
-    #test_templates()
-    test_emulator_templates()
+    test_templates()
+    #test_wiggle_split_template()
+    #test_emulator_templates()
     #test_bao()
     #test_broadband_bao()
     #test_flexible_bao()

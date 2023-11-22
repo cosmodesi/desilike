@@ -6,8 +6,6 @@ params:
 
 class: DirectPowerSpectrumTemplate
 
-init:
-
 params:
   # Using Planck priors
   h:
@@ -17,7 +15,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.01
+    delta: 0.02
     latex: h
   Omega_m:
     prior:
@@ -26,7 +24,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.01
+    delta: 0.015
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -37,7 +35,7 @@ params:
       dist: norm
       loc: 0.02237
       scale: 0.0002
-    delta: 0.0002
+    delta: 0.0007
     latex: \omega_{b}
   logA:
     prior:
@@ -55,7 +53,7 @@ params:
       dist: norm
       loc: 0.9649
       scale: 0.0042
-    delta: 0.0004
+    delta: 0.005
     latex: n_{s}
     fixed: True
   tau_reio:
@@ -66,7 +64,7 @@ params:
       dist: norm
       loc: 0.0544
       scale: 0.008
-    delta: 0.0012
+    delta: 0.01
     latex: \tau
     fixed: True
   m_ncdm:
@@ -95,7 +93,7 @@ params:
       dist: norm
       loc: -1
       scale: 0.08
-    delta: 0.01
+    delta: 0.1
     latex: w_{0}
     fixed: True
   wa_fld:
@@ -105,7 +103,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.3
-    delta: 0.01
+    delta: 0.15
     latex: w_{a}
     fixed: True
   Omega_k:
@@ -115,7 +113,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    delta: 0.005
+    delta: 0.01
     latex: \Omega_{k}
     fixed: True
 
@@ -423,6 +421,138 @@ params:
     derived: True
     latex: D_{\mathrm{V}} k_{\mathrm{TO}}
 
+---
+
+class: DirectWiggleSplitPowerSpectrumTemplate
+
+params:
+  qbao:
+    value: 1.
+    prior:
+      limits: [0.8, 1.2]
+    ref:
+      limits: [0.99, 1.01]
+    delta: 0.005
+    latex: q_{\mathrm{BAO}}
+  sigmabao:
+    fixed: True
+    value: 0.
+    prior:
+      limits: [0., 20.]
+    ref:
+      limits: [0., 1.]
+    delta: 0.02
+    latex: \Sigma_{\mathrm{BAO}}
+
+  # Using Planck priors
+  h:
+    prior:
+      limits: [0.1, 1.]
+    ref:
+      dist: norm
+      loc: 0.6736
+      scale: 0.005
+    delta: 0.02
+    latex: h
+  Omega_m:
+    prior:
+      limits: [0.01, 1.]
+    ref:
+      dist: norm
+      loc: 0.3153
+      scale: 0.0073
+    delta: 0.015
+    latex: \Omega_{m}
+  omega_b:
+    prior:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00037
+    ref:
+      dist: norm
+      loc: 0.02237
+      scale: 0.0002
+    delta: 0.0007
+    latex: \omega_{b}
+  logA:
+    prior:
+      limits: [2., 4.]
+    ref:
+      dist: norm
+      loc: 3.036394
+      scale: 0.014
+    delta: 0.01
+    latex: \ln(10^{10} A_{s})
+  n_s:
+    prior:
+      limits: [0.8, 1.2]
+    ref:
+      dist: norm
+      loc: 0.9649
+      scale: 0.0042
+    delta: 0.005
+    latex: n_{s}
+    fixed: True
+  tau_reio:
+    value: 0.0544
+    prior:
+      limits: [0.01, 0.8]
+    ref:
+      dist: norm
+      loc: 0.0544
+      scale: 0.008
+    delta: 0.01
+    latex: \tau
+    fixed: True
+  m_ncdm:
+    prior:
+      limits: [0., 5.]
+    ref:
+      dist: norm
+      loc: 0.06
+      scale: 0.12
+    delta: 0.01
+    latex: m_{ncdm}
+    fixed: True
+  N_ur:
+    prior:
+      limits: [0.05, 10.]
+    ref:
+      dist: norm
+      loc: 2.0328
+      scale: 0.32
+    latex: N_{ur}
+    fixed: True
+  w0_fld:
+    prior:
+      limits: [-3., 1.]
+    ref:
+      dist: norm
+      loc: -1
+      scale: 0.08
+    delta: 0.1
+    latex: w_{0}
+    fixed: True
+  wa_fld:
+    prior:
+      limits: [-3., 2.]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.3
+    delta: 0.15
+    latex: w_{a}
+    fixed: True
+  Omega_k:
+    prior:
+      limits: [-0.3, 0.3]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.0065
+    delta: 0.01
+    latex: \Omega_{k}
+    fixed: True
 ---
 
 class: BAOExtractor
@@ -917,18 +1047,3 @@ params:
       scale: 0.0073
     delta: 0.01
     latex: \Omega_{m}
-
----
-
-class: WiggleRescalePowerSpectrumTemplate
-
-params:
-  qbao:  
-    value: 1.0
-    prior: 
-      limits: [0.5, 1.5]
-    ref:
-      limits: [0.95, 1.05]
-    delta: 0.05
-    latex: q_{BAO}
- 

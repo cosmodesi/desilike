@@ -450,7 +450,7 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
                     params['al{:d}_{:d}'.format(ell, pow)] = param
         else:
             for ell in ells:
-                for ik in range(-2, 10):  # should be more than enough
+                for ik in range(-2, 10):  # should be more than enough for k < 0.4 h/Mpc
                     # We are adding a very loose prior just to regularize the fit --- parameters at the high-k end can be e.g. poorly constrained
                     # because these modes are given zero weight by the window matrix
                     params['al{:d}_{:d}'.format(ell, ik)] = dict(value=0., prior=dict(dist='norm', loc=0., scale=1e4), ref=dict(limits=[-1e-2, 1e-2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))

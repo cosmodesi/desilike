@@ -580,7 +580,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.01
+    delta: 0.02
     latex: h
   Omega_m:
     prior:
@@ -589,7 +589,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.01
+    delta: 0.015
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -599,8 +599,8 @@ params:
     ref:
       dist: norm
       loc: 0.02237
-      scale: 0.00015
-    delta: 0.0002
+      scale: 0.0002
+    delta: 0.0007
     latex: \omega_{b}
   logA:
     prior:
@@ -618,7 +618,7 @@ params:
       dist: norm
       loc: 0.9649
       scale: 0.0042
-    delta: 0.0004
+    delta: 0.005
     latex: n_{s}
     fixed: True
   tau_reio:
@@ -629,7 +629,7 @@ params:
       dist: norm
       loc: 0.0544
       scale: 0.008
-    delta: 0.0012
+    delta: 0.01
     latex: \tau
     fixed: True
   m_ncdm:
@@ -658,7 +658,7 @@ params:
       dist: norm
       loc: -1
       scale: 0.08
-    delta: 0.01
+    delta: 0.1
     latex: w_{0}
     fixed: True
   wa_fld:
@@ -668,7 +668,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.3
-    delta: 0.01
+    delta: 0.15
     latex: w_{a}
     fixed: True
   Omega_k:
@@ -678,7 +678,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    delta: 0.005
+    delta: 0.01
     latex: \Omega_{k}
     fixed: True
 
@@ -694,7 +694,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.01
+    delta: 0.02
     latex: h
   Omega_m:
     prior:
@@ -703,7 +703,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.01
+    delta: 0.015
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -713,8 +713,8 @@ params:
     ref:
       dist: norm
       loc: 0.02237
-      scale: 0.00015
-    delta: 0.0002
+      scale: 0.0002
+    delta: 0.0007
     latex: \omega_{b}
   logA:
     prior:
@@ -732,7 +732,7 @@ params:
       dist: norm
       loc: 0.9649
       scale: 0.0042
-    delta: 0.0004
+    delta: 0.005
     latex: n_{s}
     fixed: True
   tau_reio:
@@ -743,7 +743,7 @@ params:
       dist: norm
       loc: 0.0544
       scale: 0.008
-    delta: 0.0012
+    delta: 0.01
     latex: \tau
     fixed: True
   m_ncdm:
@@ -772,7 +772,7 @@ params:
       dist: norm
       loc: -1
       scale: 0.08
-    delta: 0.01
+    delta: 0.1
     latex: w_{0}
     fixed: True
   wa_fld:
@@ -782,7 +782,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.3
-    delta: 0.01
+    delta: 0.15
     latex: w_{a}
     fixed: True
   Omega_k:
@@ -792,7 +792,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    delta: 0.005
+    delta: 0.01
     latex: \Omega_{k}
     fixed: True
 
@@ -808,7 +808,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.01
+    delta: 0.02
     latex: h
   Omega_m:
     prior:
@@ -817,7 +817,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.01
+    delta: 0.015
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -827,8 +827,8 @@ params:
     ref:
       dist: norm
       loc: 0.02237
-      scale: 0.00015
-    delta: 0.0002
+      scale: 0.0002
+    delta: 0.0007
     latex: \omega_{b}
   logA:
     prior:
@@ -846,7 +846,7 @@ params:
       dist: norm
       loc: 0.9649
       scale: 0.0042
-    delta: 0.0004
+    delta: 0.005
     latex: n_{s}
     fixed: True
   tau_reio:
@@ -857,7 +857,7 @@ params:
       dist: norm
       loc: 0.0544
       scale: 0.008
-    delta: 0.0012
+    delta: 0.01
     latex: \tau
     fixed: True
   m_ncdm:
@@ -886,7 +886,7 @@ params:
       dist: norm
       loc: -1
       scale: 0.08
-    delta: 0.01
+    delta: 0.1
     latex: w_{0}
     fixed: True
   wa_fld:
@@ -896,7 +896,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.3
-    delta: 0.01
+    delta: 0.15
     latex: w_{a}
     fixed: True
   Omega_k:
@@ -906,7 +906,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    delta: 0.005
+    delta: 0.01
     latex: \Omega_{k}
     fixed: True
 
@@ -922,7 +922,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.01
+    delta: 0.02
     latex: h
   Omega_m:
     prior:
@@ -931,7 +931,7 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.01
+    delta: 0.015
     latex: \Omega_{m}
   omega_b:
     prior:
@@ -941,8 +941,8 @@ params:
     ref:
       dist: norm
       loc: 0.02237
-      scale: 0.00015
-    delta: 0.0002
+      scale: 0.0002
+    delta: 0.0007
     latex: \omega_{b}
   logA:
     prior:
@@ -960,7 +960,7 @@ params:
       dist: norm
       loc: 0.9649
       scale: 0.0042
-    delta: 0.0004
+    delta: 0.005
     latex: n_{s}
     fixed: True
   tau_reio:
@@ -971,7 +971,7 @@ params:
       dist: norm
       loc: 0.0544
       scale: 0.008
-    delta: 0.0012
+    delta: 0.01
     latex: \tau
     fixed: True
   m_ncdm:
@@ -1000,7 +1000,7 @@ params:
       dist: norm
       loc: -1
       scale: 0.08
-    delta: 0.01
+    delta: 0.1
     latex: w_{0}
     fixed: True
   wa_fld:
@@ -1010,7 +1010,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.3
-    delta: 0.01
+    delta: 0.15
     latex: w_{a}
     fixed: True
   Omega_k:
@@ -1020,7 +1020,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    delta: 0.005
+    delta: 0.01
     latex: \Omega_{k}
     fixed: True
 
@@ -1036,7 +1036,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.01
+    delta: 0.02
     latex: h
   Omega_m:
     prior:
@@ -1045,5 +1045,5 @@ params:
       dist: norm
       loc: 0.3153
       scale: 0.0073
-    delta: 0.01
+    delta: 0.015
     latex: \Omega_{m}

@@ -79,6 +79,12 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             self.wmatrix.runtime_info.initialize()
         for name in ['s', 'ells', 'sedges']:
             setattr(self, name, getattr(self.wmatrix, name))
+        smasklim = self.wmatrix.smasklim
+        if smasklim is not None:  # cut has been applied to input s
+            cumsize = np.insert(np.cumsum([len(ss) for ss in smasklim.values()]), 0, 0)
+            data = [self.flatdata[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
+            ells = list(smasklim.keys())
+            self.flatdata = np.concatenate([data[ells.index(ell)][smasklim[ell]] for ell in self.ells])
 
     def load_data(self, data=None, slim=None, ignore_nan=False):
 

@@ -129,7 +129,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             if klim is not None: ells = klim.keys()
             else: ells = (0, 2, 4)
         self.ells = tuple(ells)
-        self.k = self.kedges = None
+        self.k = self.kmasklim = self.kedges = None
         if k is not None:
             if np.ndim(k[0]) == 0:
                 k = [k] * len(self.ells)
@@ -140,6 +140,25 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         if klim is not None:
             klim = dict(klim)
             self.kedges = []
+            if self.k is not None:
+                k, ells, self.kmasklim = [], [], {}
+                for ill, ell in enumerate(self.ells):
+                    kk = self.k[ill]
+                    self.kmasklim[ell] = np.zeros(len(kk), dtype='?')
+                    if ell not in klim: continue  # do not take this multipole
+                    self.kmasklim[ell][...] = True
+                    lim = klim[ell]
+                    if lim is not None:  # cut
+                        (lo, hi, *step) = klim[ell]
+                        kmask = (kk >= lo) & (kk <= hi)
+                        kk = kk[kmask]  # scale cuts
+                        self.kmasklim[ell][...] = kmask
+                    if kk.size:
+                        k.append(kk)
+                        ells.append(ell)
+                self.k, self.ells = k, tuple(ells)
+            elif list(self.ells) != list(klim.keys()):
+                raise ValueError('incompatible ells = {} and klim = {}; just remove ells?', self.ells, klim.keys())
             for ill, ell in enumerate(self.ells):
                 if klim[ell] is None:
                     self.kedges = None
@@ -149,6 +168,8 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                     if self.k is not None: step = ((hi - lo) / self.k[ill].size,)
                     else: step = (_default_step,)
                 self.kedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
+        else:
+            klim = {ell: None for ell in self.ells}
 
         if self.kedges is None:
             self.kedges = [np.arange(0.01 - _default_step / 2., 0.2 + _default_step, _default_step)] * len(self.ells)  # gives k = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
@@ -171,6 +192,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 self.kmask = np.concatenate(self.kmask, axis=0)
         elif isinstance(wmatrix, dict):
             self.ellsin = tuple(self.ells)
+            if self.kedges is None: raise ValueError('provide klim to compute the binning matrix')
             self.kin, matrix_full = window_matrix_bininteg(self.kedges, **wmatrix)
             self.matrix_full = matrix_full.T
         elif isinstance(wmatrix, np.ndarray):
@@ -200,27 +222,29 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             else:
                 wmatrix = wmatrix.deepcopy()
             # TODO: implement best match BaseMatrix method
-            for iout, (projout, kk) in enumerate(zip(wmatrix.projsout, self.k)):
-                ksize, factorout = None, 1
-                if klim is not None:
-                    lo, hi, *step = klim[projout.ell]
-                    if step: ksize = int((hi - lo) / step[0] + 0.5)  # nearest integer
+            for kk, ellout in zip(self.k, self.ells):
+                for iout, projout in enumerate(wmatrix.projsout):
+                    if projout.ell == ellout: break
+                if projout.ell != ellout:
+                    raise ValueError('ell = {:d} not found in wmatrix.projsout = {}'.format(ellout, wmatrix.projsout))
+                lim = klim.get(projout.ell, None)
+                if lim is not None:
+                    lo, hi, *step = lim
                 else:
-                    lo, hi, ksize = 2 * kk[0] - kk[1], 2 * kk[-1] - kk[-2], kk.size
-                if ksize is not None:
-                    nmk = np.sum((wmatrix.xout[iout] >= lo) & (wmatrix.xout[iout] <= hi))
-                    factorout = nmk // ksize
+                    lo, hi = 2 * kk[0] - kk[1], 2 * kk[-1] - kk[-2]
+                nmk = np.sum((wmatrix.xout[iout] >= lo) & (wmatrix.xout[iout] <= hi))
+                factorout = nmk // kk.size
                 wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout, factorout), projsout=projout)
                 # wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout), projsout=projout)
                 # wmatrix.rebin_x(factorout=factorout, projsout=projout)
-                if klim is not None:
+                if lim is not None:
                     istart = np.flatnonzero(wmatrix.xout[iout] >= lo)[0]
                     ksize = np.flatnonzero(wmatrix.xout[iout] <= hi)[-1] - istart + 1
                 else:
                     istart = np.nanargmin(np.abs(wmatrix.xout[iout] - kk[0]))
                 wmatrix.slice_x(sliceout=slice(istart, istart + ksize), projsout=projout)
                 self.k[iout] = wmatrix.xout[iout]
-                if klim is None and not np.allclose(wmatrix.xout[iout], kk, rtol=1e-4):
+                if lim is None and not np.allclose(wmatrix.xout[iout], kk, rtol=1e-4):
                     raise ValueError('k-coordinates {} for ell = {:d} could not be found in input matrix (rebinning = {:d})'.format(kk, projout.ell, factorout))
             if ellsin is not None:
                 self.ellsin = list(ellsin)
@@ -390,7 +414,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
             if slim is not None: ells = slim.keys()
             else: ells = (0, 2, 4)
         self.ells = tuple(ells)
-        self.s = self.sedges = None
+        self.s = self.smasklim = self.sedges = None
         if s is not None:
             if np.ndim(s[0]) == 0:
                 s = [s] * len(self.ells)
@@ -401,6 +425,25 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         if slim is not None:
             slim = dict(slim)
             self.sedges = []
+            if self.s is not None:
+                s, ells, self.smasklim = [], [], {}
+                for ill, ell in enumerate(self.ells):
+                    ss = self.s[ill]
+                    self.smasklim[ell] = np.zeros(len(ss), dtype='?')
+                    if ell not in slim: continue  # do not take this multipole
+                    self.smasklim[ell][...] = True
+                    lim = slim[ell]
+                    if lim is not None:  # cut
+                        (lo, hi, *step) = slim[ell]
+                        smask = (ss >= lo) & (ss <= hi)
+                        ss = ss[smask]  # scale cuts
+                        self.smasklim[ell][...] = smask
+                    if ss.size:
+                        s.append(ss)
+                        ells.append(ell)
+                self.s, self.ells = s, tuple(ells)
+            elif list(self.ells) != list(slim.keys()):
+                raise ValueError('incompatible ells = {} and klim = {}; just remove ells?', self.ells, slim.keys())
             for ill, ell in enumerate(self.ells):
                 if slim[ell] is None:
                     self.sedges = None
@@ -410,6 +453,8 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
                     if self.s is not None: step = ((hi - lo) / self.s[ill].size,)
                     else: step = (_default_step,)
                 self.sedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
+        else:
+            slim = {ell: None for ell in self.ells}
 
         if self.sedges is None:
             self.sedges = np.arange(20. - _default_step / 2., 150 + _default_step, _default_step)  # gives s = np.arange(20, 150 + _default_step / 2., _default_step)

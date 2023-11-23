@@ -89,6 +89,13 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             self.wmatrix.runtime_info.initialize()
         for name in ['k', 'ells', 'kedges', 'shotnoise']:
             setattr(self, name, getattr(self.wmatrix, name))
+        kmasklim = self.wmatrix.kmasklim
+        if kmasklim is not None:  # cut has been applied to input k
+            cumsize = np.insert(np.cumsum([len(kk) for kk in kmasklim.values()]), 0, 0)
+            data = [self.flatdata[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
+            ells = list(kmasklim.keys())
+            self.flatdata = np.concatenate([data[ells.index(ell)][kmasklim[ell]] for ell in self.ells])
+
         self.transform = transform
         allowed_transform = [None, 'cubic']
         if self.transform not in allowed_transform:

@@ -66,7 +66,7 @@ class CobayaEngine(BaseExternalEngine):
             toret['sigma8_z'] = {'z': require_f}
         if toret or requires.get('params', {}):  # to get /h units
             if 'Hubble' in toret:
-                toret['Hubble']['z'] = np.unique(np.insert(tmp['z'], 0, 0.))
+                toret['Hubble']['z'] = np.unique(np.insert(toret['Hubble']['z'], 0, 0.))
             else:
                 toret['Hubble'] = {'z': np.array([0.])}
         return toret

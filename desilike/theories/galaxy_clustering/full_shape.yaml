@@ -417,7 +417,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 5.
     ref:
       dist: norm
       loc: 0.
@@ -428,7 +428,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 5.
     ref:
       dist: norm
       loc: 0.
@@ -453,7 +453,7 @@ class: LPTVelocileptorsTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      limits: [-1., 4.]
+      limits: [-1., 10.]
     ref:
       limits: [0.4, 0.6]
     latex: b_{1}
@@ -471,7 +471,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 10.
+      scale: 5.
     ref:
       dist: norm
       loc: 0.
@@ -482,7 +482,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 10.
+      scale: 5.
     ref:
       dist: norm
       loc: 0.
@@ -492,7 +492,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 30.
     ref:
       dist: norm
       loc: 0.
@@ -543,7 +543,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 200.
     ref:
       dist: norm
       loc: 0.
@@ -553,7 +553,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 200.
     ref:
       dist: norm
       loc: 0.
@@ -567,7 +567,7 @@ class: LPTVelocileptorsTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      limits: [-1., 4.]
+      limits: [-1., 10.]
     ref:
       limits: [0.4, 0.6]
     latex: b_{1}
@@ -606,7 +606,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 30.
     ref:
       dist: norm
       loc: 0.
@@ -1121,7 +1121,7 @@ class: PyBirdTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      limits: [0., 4.]
+      limits: [0., 10.]
     ref:
       limits: [1.4, 1.6]
     latex: b_{1}
@@ -1135,7 +1135,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
@@ -1148,60 +1148,67 @@ params:
       limits: [-1., 1.]
     latex: b_{4}
   cct:
-    prior:
+    ref:
       dist: norm
       loc: 0.
-      scale: 2.
+      scale: 1.
     latex: c_{t}
   cr1:
     prior:
+    ref:
       dist: norm
       loc: 0.
-      scale: 4.
+      scale: 1.
     latex: c_{r, 1}
   cr2:
     prior:
+    ref:
       dist: norm
       loc: 0.
-      scale: 4.
+      scale: 1.
     latex: c_{r, 2}
   cr4:
     prior:
+    ref:
       dist: norm
       loc: 0.
-      scale: 10.
+      scale: 1.
     latex: c_{r, 4}
   cr6:
     prior:
+    ref:
       dist: norm
       loc: 0.
-      scale: 10.
+      scale: 1.
     latex: c_{r, 6}
   ce0:
     prior:
+    ref:
       dist: norm
       loc: 0.
-      scale: 2.
+      scale: 1.
     latex: c_{e, 0}
   ce1:
     fixed: True
     prior:
+    ref:
       dist: norm
       loc: 0.
-      scale: 2.
+      scale: 1.
     latex: c_{e, 1}
   ce2:
     prior:
+    ref:
       dist: norm
       loc: 0.
-      scale: 2.
+      scale: 1.
     latex: c_{e, 2}
-  # mcdonald
+  # velocileptors
   bs:
     prior:
       dist: norm
       loc: 0.
-      scale: 3.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
@@ -1242,12 +1249,14 @@ params:
     latex: 'b_{2g}'
   c[:5:2]:
     prior:
+    ref:
       dist: norm
       loc: 0.
       scale: 100.
     latex: c_{[]}
   ct:
     prior:
+    ref:
       dist: norm
       loc: 0.
       scale: 100.
@@ -1315,7 +1324,7 @@ params:
       loc: 0.
       scale: 10.
     latex: c_{r, 6}
- # mcdonald
+  # velocileptors
   bs:
     prior:
       dist: norm
@@ -1378,32 +1387,23 @@ class: FOLPSTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      limits: [0., 4.]
+      limits: [0., 10.]
     ref:
       limits: [1.4, 1.6]
     latex: b_{1}
   b2:
     prior:
-      limits: [-10., 10.]
+      limits: [-50., 50.]
     ref:
       limits: [-1., 1.]
     latex: b_{2}
   bs:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 3.
     ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
+      limits: [-1., 1.]
     latex: b_{s}
   b3:
     fixed: True
     prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
     ref:
       dist: norm
       loc: 0.
@@ -1411,9 +1411,6 @@ params:
     latex: b_{3}
   alpha0:
     prior:
-      dist: norm
-      loc: 0.
-      scale: 30.
     ref:
       dist: norm
       loc: 0.
@@ -1421,9 +1418,6 @@ params:
     latex: \alpha_{0}
   alpha2:
     prior:
-      dist: norm
-      loc: 0.
-      scale: 50.
     ref:
       dist: norm
       loc: 0.
@@ -1431,9 +1425,6 @@ params:
     latex: \alpha_{2}
   alpha4:
     prior:
-      dist: norm
-      loc: 0.
-      scale: 50.
     ref:
       dist: norm
       loc: 0.
@@ -1442,9 +1433,6 @@ params:
   ct:
     fixed: True
     prior:
-      dist: norm
-      loc: 0.
-      scale: 50.
     ref:
       dist: norm
       loc: 0.
@@ -1452,9 +1440,6 @@ params:
     latex: c_{t}
   sn0:
     prior:
-      dist: norm
-      loc: 0.
-      scale: 5.
     ref:
       dist: norm
       loc: 0.
@@ -1462,9 +1447,6 @@ params:
     latex: s_{n, 0}
   sn2:
     prior:
-      dist: norm
-      loc: 0.
-      scale: 50.
     ref:
       dist: norm
       loc: 0.
@@ -1472,9 +1454,6 @@ params:
     latex: s_{n, 2}
   sn4:
     prior:
-      dist: norm
-      loc: 0.
-      scale: 50.
     ref:
       dist: norm
       loc: 0.
@@ -1488,32 +1467,24 @@ class: FOLPSTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      limits: [0., 4.]
+      limits: [0., 10.]
     ref:
       limits: [1.4, 1.6]
     latex: b_{1}
   b2:
     prior:
-      limits: [-10., 10.]
+      limits: [-50., 50.]
     ref:
       limits: [-1., 1.]
     latex: b_{2}
   bs:
     prior:
-      dist: norm
-      loc: 0.
-      scale: 3.
     ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
+      limits: [-1., 1.]
     latex: b_{s}
   b3:
     fixed: True
     prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
     ref:
       dist: norm
       loc: 0.
@@ -1521,9 +1492,6 @@ params:
     latex: b_{3}
   alpha0:
     prior:
-      dist: norm
-      loc: 0.
-      scale: 30.
     ref:
       dist: norm
       loc: 0.
@@ -1531,9 +1499,6 @@ params:
     latex: \alpha_{0}
   alpha2:
     prior:
-      dist: norm
-      loc: 0.
-      scale: 50.
     ref:
       dist: norm
       loc: 0.
@@ -1541,9 +1506,6 @@ params:
     latex: \alpha_{2}
   alpha4:
     prior:
-      dist: norm
-      loc: 0.
-      scale: 50.
     ref:
       dist: norm
       loc: 0.
@@ -1552,9 +1514,6 @@ params:
   ct:
     fixed: True
     prior:
-      dist: norm
-      loc: 0.
-      scale: 50.
     ref:
       dist: norm
       loc: 0.

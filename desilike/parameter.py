@@ -1328,7 +1328,7 @@ class ParameterConfig(NamespaceDict):
         if not isinstance(self.get('namespace', None), str):
             state['namespace'] = None
         for name in ['prior', 'ref']:
-            if name in state and 'rescale' in state[name]:
+            if state.get(name, None) is not None and 'rescale' in state[name]:
                 value = copy.copy(state[name])
                 rescale = value.pop('rescale')
                 if 'scale' in value:

@@ -152,7 +152,7 @@ class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
     _initialize_with_namespace = True  # to properly forward parameters to pt
     _default_options = dict()
 
-    def initialize(self, *args, pt=None, template=None, **kwargs):
+    def initialize(self, pt=None, template=None, **kwargs):
         self.options = self._default_options.copy()
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
@@ -961,7 +961,7 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
         self.pktable = np.array([pktable[ell] for ell in self.ells])
 
     def combine_bias_terms_poles(self, pars, nd=1e-4):
-        return lptvel_combine_bias_terms_poles(self.pktable, pars, nd=1e-4)
+        return lptvel_combine_bias_terms_poles(self.pktable, pars, nd=nd)
 
     def __getstate__(self):
         state = {}
@@ -1006,21 +1006,35 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     """
     _default_options = dict(freedom=None)
 
-    def set_params(self):
-        self.required_bias_params = dict(b1=0.69, b2=-1.17, bs=0., b3=0., alpha0=0., alpha2=0., alpha4=0., alpha6=0., sn0=0., sn2=0., sn4=0.)
-        super(LPTVelocileptorsTracerPowerSpectrumMultipoles, self).set_params()
-        freedom = self.options.pop('freedom', None)
+    @staticmethod
+    def _params(params, freedom=None):
         fix = []
         if freedom == 'max':
-            for param in self.init.params.select(basename=['b1', 'b2', 'bs', 'b3']):
+            for param in params.select(basename=['b1', 'b2', 'bs', 'b3']):
                 param.update(fixed=False)
+            for param in params.select(basename=['b2', 'bs', 'b3']):
+                param.update(prior=dict(limits=[-15., 15.]))
             fix += ['alpha6', 'sn4']
         if freedom == 'min':
             fix += ['b3', 'bs', 'alpha6', 'sn4']
+        for param in params.select(basename=fix):
+            param.update(value=0., fixed=True)
+        return params
+
+    def set_params(self):
+        self.required_bias_params = dict(b1=0.69, b2=-1.17, bs=0., b3=0., alpha0=0., alpha2=0., alpha4=0., alpha6=0., sn0=0., sn2=0., sn4=0.)
+        super(LPTVelocileptorsTracerPowerSpectrumMultipoles, self).set_params()
+        fix = []
         if 4 not in self.ells: fix += ['alpha4', 'alpha6', 'sn4']
         if 2 not in self.ells: fix += ['alpha2', 'sn2']
         for param in self.init.params.select(basename=fix):
             param.update(value=0., fixed=True)
+
+    def calculate(self, **params):
+        super(BaseVelocileptorsTracerPowerSpectrumMultipoles, self).calculate()
+        pars = [params.get(name, value) for name, value in self.required_bias_params.items()]
+        opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
+        self.power = self.pt.combine_bias_terms_poles(pars, **opts, nd=self.nd)
 
 
 class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
@@ -1050,6 +1064,7 @@ class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationF
     - https://arxiv.org/abs/2012.04636
     - https://github.com/sfschen/velocileptors
     """
+    _params = LPTVelocileptorsTracerPowerSpectrumMultipoles._params
 
 
 class EPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMultipoles):
@@ -1060,7 +1075,7 @@ class EPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpect
     _default_options = dict(rbao=110, beyond_gauss=True,
                             one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000,
                             nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False)
-    _pt_attrs = ['pktable', 'vktable', 's0ktable', 's2ktable', 'g1ktable', 'g3ktable', 'k0', 'k2', 'k4', 'plin_ir', 'kap', 'muap', 'f']
+    _pt_attrs = ['kap', 'muap', 'f', 'pktable', 'vktable', 's0ktable', 's2ktable', 'g1ktable', 'g3ktable', 'k0', 'k2', 'k4', 'plin_ir']
 
     def initialize(self, *args, mu=4, method='leggauss', **kwargs):
         super(EPTMomentsVelocileptorsPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method=method, **kwargs)
@@ -1082,6 +1097,8 @@ class EPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpect
                 setattr(self.pt, name, tmp)
 
     def __setstate__(self, state):
+        for name in ['k', 'z', 'ells', 'wmu']:
+            if name in state: setattr(self, name, state.pop(name))
         from velocileptors.EPT.moment_expansion_fftw import MomentExpansion
         self.pt = MomentExpansion.__new__(MomentExpansion)
         self.pt.__dict__.update(state)
@@ -1116,8 +1133,8 @@ class EPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpect
         if beyond_gauss:
             g1k, g3k = pt.combine_bias_terms_gk(b1, b2, bs, b3, alpha_g1, alpha_g3)
             k0k, k2k, k4k = pt.combine_bias_terms_kk(b1, b2, bs, b3, alpha_k2, stoch_k0)
-            pkmu += 1. / 6. * self.f**3 * (kap * muap)**3 * (g1k * muap + g3k * muap**3)\
-                    + 1. / 24. * self.f**4 * (kap * muap)**4 * (k0k + k2k * muap2 + k4k * muap2**2)
+            pkmu += 1. / 6. * f**3 * (kap * muap)**3 * (g1k * muap + g3k * muap**3)\
+                    + 1. / 24. * f**4 * (kap * muap)**4 * (k0k + k2k * muap2 + k4k * muap2**2)
         else:
             pkmu += 1. / 6. * counterterm_c3 * kap**2 * muap2**2 * pt.plin_ir
 
@@ -1209,7 +1226,7 @@ class LPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpect
     _default_options = dict(beyond_gauss=False, one_loop=True,
                             shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=1,
                             extrap_min=-5, extrap_max=3, import_wisdom=False)
-    _pt_attrs = ['pktable', 'vktable', 'stracektable', 'sparktable', 'gamma1ktable', 'kappaktable', 'kap', 'muap', 'f', 'third_order']
+    _pt_attrs = ['kap', 'muap', 'f', 'pktable', 'vktable', 'stracektable', 'sparktable', 'gamma1ktable', 'kappaktable', 'third_order']
 
     def initialize(self, *args, mu=8, method='leggauss', **kwargs):
         super(LPTMomentsVelocileptorsPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method=method, **kwargs)
@@ -1226,19 +1243,20 @@ class LPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpect
                 setattr(self.pt, name, getattr(self, name))
             elif name not in ['third_order'] and hasattr(self.pt, name):
                 value = getattr(self.pt, name)
-                tmp = jac * interpolate.interp1d(self.pt.kv, value, kind='cubic', fill_value='extrapolate', axis=0)(self.kap.ravel())
+                tmp = np.asarray(jac * interpolate.interp1d(self.pt.kv, value, kind='cubic', fill_value='extrapolate', axis=0)(self.pt.kap.ravel()))  # jax not supported
                 setattr(self.pt, name, tmp)
 
     def __setstate__(self, state):
+        for name in ['k', 'z', 'ells', 'wmu']:
+            if name in state: setattr(self, name, state.pop(name))
         from velocileptors.LPT.moment_expansion_fftw import MomentExpansion
         self.pt = MomentExpansion.__new__(MomentExpansion)
-        self.pt.__dict__.update(state)
         # This is very unfortunate, but otherwise jax arrays (generated by emulators) will fail when doing combine_bias_terms_sk, combine_bias_terms_gk,
         # because of item assignments.
         # It would be *really* nice that velocileptors is more jax-compatible...
+        self.pt.__dict__.update(state)
         for name in ['stracektable', 'sparktable', 'gamma1ktable']:
-            if name in state:
-                setattr(self.pt, name, np.asarray(state[name]))
+            if name in state: setattr(self.pt, name, np.asarray(state[name]))
 
     def combine_bias_terms_poles(self, pars, counterterm_c3=0, beyond_gauss=False, reduced=True, nd=1e-4):
         pt = self.pt
@@ -1400,7 +1418,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         from pybird.resum import Resum
         from pybird.projection import Projection
         eft_basis = self.options.get('eft_basis', None)
-        if eft_basis in [None, 'mcdonald']: eft_basis = 'eftoflss'
+        if eft_basis in [None, 'velocileptors']: eft_basis = 'eftoflss'
         # nd used by combine_bias_terms_poles only
         #self.co = Common(Nl=len(self.ells), kmin=self.k[0] * 0.8, kmax=self.k[-1] * 1.2, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
         # No way to go below kmin = 1e-3 h/Mpc (nan)
@@ -1462,6 +1480,8 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         return state
 
     def __setstate__(self, state):
+        for name in ['k', 'z', 'ells']:
+            if name in state: setattr(self, name, state.pop(name))
         from pybird import bird
         self.pt = bird.Bird.__new__(bird.Bird)
         self.pt.with_bias = False
@@ -1503,27 +1523,42 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     """
     _default_options = dict(with_nnlo_counterterm=False, with_stoch=True, eft_basis=None, freedom=None)
 
+    @staticmethod
+    def _params(params, freedom=None):
+        fix = []
+        if freedom == 'max':
+            for param in params.select(basename=['b1', 'b2', 'b3', 'b4', 'bs', 'b2p4', 'b2m4', 'b2t', 'b2g', 'b3g']):
+                param.update(fixed=False)
+            fix += ['ce1']
+        if freedom == 'min':
+            fix += ['b2', 'b3', 'ce1']
+        for param in params.select(basename=fix):
+            param.update(value=0., fixed=True)
+        return params
+
     def set_params(self):
-        freedom = self.options.pop('freedom', None)
+        freedom = self.options.get('freedom', None)
         if self.options['eft_basis'] is None:
             self.options['eft_basis'] = 'eftoflss' if freedom == 'min' else 'westcoast'
-        allowed_eft_basis = ['eftoflss', 'eastcoast', 'westcoast']  #, 'mcdonald']
+        allowed_eft_basis = ['eftoflss', 'velocileptors', 'eastcoast', 'westcoast']
         if self.options['eft_basis'] not in allowed_eft_basis:
             raise ValueError('eft_basis must be one of {}'.format(allowed_eft_basis))
+        if freedom == 'min' and self.options['eft_basis'] != 'eftoflss':
+            raise ValueError('freedom = "min" only defined in eft_basis = "eftoflss"')
         # in pybird:
         # - westcoast: c2, c4 are b2p4, b2m4
         # - eastcoast: b2t, b2g, b3g are bt2, bG2, bGamma3
-        # - mcdonald: https://arxiv.org/pdf/0902.0991.pdf, https://arxiv.org/pdf/1607.03150.pdf
-        # bs = bs2 - 4. / 7. * (b1 - 1.) and b3 = b3nl + 32. / 315. * (b1 - 1.)
         if self.options['eft_basis'] == 'eftoflss':
             self.required_bias_params = ['b1', 'b2', 'b3', 'b4']
+        if self.options['eft_basis'] == 'velocileptors':
+            self.required_bias_params = ['b1', 'b2', 'bs', 'b3']
         if self.options['eft_basis'] == 'westcoast':
             self.required_bias_params = ['b1', 'b2p4', 'b3', 'b2m4']
         if self.options['eft_basis'] == 'eastcoast':
             self.required_bias_params = ['b1', 'b2t', 'b2g', 'b3g']
         self.pt.init.update(eft_basis=self.options['eft_basis'])
         # now EFT parameters
-        if self.options['eft_basis'] in ['eftoflss', 'westcoast', 'mcdonald']:
+        if self.options['eft_basis'] in ['eftoflss', 'velocileptors', 'westcoast']:
             self.required_bias_params += ['cct', 'cr1', 'cr2']
             if self.options['with_nnlo_counterterm']: self.required_bias_params += ['cr4', 'cr6']
         else:
@@ -1536,30 +1571,28 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
         self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
         fix = []
-        if freedom == 'max':
-            for param in self.params.select(basename=['b1', 'b2', 'b3', 'b4', 'bs', 'b2p4', 'b2m4', 'b2t', 'b2g', 'b3g']):
-                param.update(fixed=False)
-            fix += ['ce1']
-        if freedom == 'min':
-            #fix += ['b3', 'b2m4', 'ce1']
-            if self.options['eft_basis'] != 'eftoflss':
-                raise ValueError('freedom = "min" only defined in eft_basis = "eftoflss"')
-            fix += ['b2', 'b3', 'ce1']
         if 4 not in self.ells: fix += ['cr2', 'c4']
         if 2 not in self.ells: fix += ['cr1', 'c2', 'ce2']
         for param in self.params.select(basename=fix):
             param.update(value=0., fixed=True)
-        self.freedom = freedom
 
     def transform_params(self, **params):
         if self.options['eft_basis'] == 'westcoast':
-            params['b2'] = (params['b2p4'] + params['b2m4']) / 2.**0.5
-            params['b4'] = (params.pop('b2p4') - params.pop('b2m4')) / 2.**0.5
+            b2p4, b2m4 = [params.pop(name) for name in ['b2p4', 'b2m4']]
+            params['b2'] = (b2p4 + b2m4) / 2.**0.5
+            params['b4'] = (b2p4 - b2m4) / 2.**0.5
         elif self.options['eft_basis'] == 'eastcoast':
-            params['b2'] = params['b1'] + 7. / 2. * params['b2g']
-            params['b3'] = params['b1'] + 15. * params['b2g'] + 6. * params.pop('b3g')
-            params['b4'] = 1 / 2. * params.pop('b2t') - 7. / 2. * params.pop('b2g')
-        if self.freedom == 'min':
+            b2g, b2t, b3g = [params.pop(name) for name in ['b2g', 'b2t', 'b3g']]
+            params['b2'] = params['b1'] + 7. / 2. * b2g
+            params['b3'] = params['b1'] + 15. * b2g + 6. * b3g
+            params['b4'] = 1 / 2. * b2t - 7. / 2. * b2g
+        elif self.options['eft_basis'] == 'velocileptors':
+            b1v, b2v, bsv, b3v = [params.pop(name) for name in ['b1', 'b2', 'bs', 'b3']]
+            params['b1'] = b1v # + 1 - 1
+            params['b2'] = 1. + 7. / 2. * bsv
+            params['b3'] = 7. / 441. * (42. - 145. * b1v - 21. * b3v + 630. * bsv)
+            params['b4'] = -7. / 5. * (params['b1'] - 1.) - 7. / 10. * b2v
+        if self.options['freedom'] == 'min':
             params['b2'] = 1.
             params['b3'] = (294. - 1015. * (params['b1'] - 1.)) / 441.
         return params
@@ -1584,7 +1617,7 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
         from pybird.resum import Resum
         from pybird.projection import Projection
         eft_basis = self.options.get('eft_basis', None)
-        if eft_basis in [None, 'mcdonald']: eft_basis = 'eftoflss'
+        if eft_basis in [None, 'velocileptors']: eft_basis = 'eftoflss'
         # nd used by combine_bias_terms_poles only
         self.co = Common(Nl=len(self.ells), kmin=1e-3, kmax=0.25, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
                          eft_basis=eft_basis, halohalo=True, with_cf=True,
@@ -1641,6 +1674,8 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
         return state
 
     def __setstate__(self, state):
+        for name in ['s', 'z', 'ells']:
+            if name in state: setattr(self, name, state.pop(name))
         from pybird import bird
         self.pt = bird.Bird.__new__(bird.Bird)
         self.pt.with_bias = False
@@ -1673,11 +1708,11 @@ class PyBirdTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMul
     """
     _default_options = dict(with_nnlo_counterterm=False, with_stoch=False, eft_basis=None, freedom=None)
 
-    def set_params(self):
-        return PyBirdTracerPowerSpectrumMultipoles.set_params(self)
+    _params = PyBirdTracerPowerSpectrumMultipoles._params
 
-    def transform_params(self, **params):
-        return PyBirdTracerPowerSpectrumMultipoles.transform_params(self, **params)
+    set_params = PyBirdTracerPowerSpectrumMultipoles.set_params
+
+    transform_params = PyBirdTracerPowerSpectrumMultipoles.transform_params
 
     def calculate(self, **params):
         super(PyBirdTracerCorrelationFunctionMultipoles, self).calculate()
@@ -1756,6 +1791,8 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         return state
 
     def __setstate__(self, state):
+        for name in ['k', 'z', 'ells', 'wmu']:
+            if name in state: setattr(self, name, state.pop(name))
         self.pt = Namespace(**state)
 
     @classmethod
@@ -1791,19 +1828,25 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     """
     _default_options = dict(freedom=None)
 
-    def set_params(self):
-        self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'ct', 'sn0', 'sn2']
-        default_values = {'b1': 1.6}
-        self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
-        self.params = self.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
-        freedom = self.options.pop('freedom', None)
+    @staticmethod
+    def _params(params, freedom=None):
         fix = []
         if freedom == 'max':
-            for param in self.init.params.select(basename=['b1', 'b2', 'bs', 'b3']):
+            for param in params.select(basename=['b1', 'b2', 'bs', 'b3']):
                 param.update(fixed=False)
             fix += ['ct']
         if freedom == 'min':
             fix += ['b3', 'bs', 'ct']
+        for param in params.select(basename=fix):
+            param.update(value=0., fixed=True)
+        return params
+
+    def set_params(self):
+        self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'ct', 'sn0', 'sn2']
+        default_values = {'b1': 1.6}
+        self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
+        self.init.params = self.init.params.select(basename=list(self.required_bias_params.keys()) + list(self.optional_bias_params.keys()))
+        fix = []
         if 4 not in self.ells: fix += ['alpha4']
         if 2 not in self.ells: fix += ['alpha2', 'sn2']
         for param in self.init.params.select(basename=fix):
@@ -1813,7 +1856,7 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         super(FOLPSTracerPowerSpectrumMultipoles, self).calculate()
         pars = [params.get(name, value) for name, value in self.required_bias_params.items()]
         opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
-        self.power = self.pt.combine_bias_terms_poles(pars, **opts, **self.options, nd=self.nd)
+        self.power = self.pt.combine_bias_terms_poles(pars, **opts, nd=self.nd)
 
 
 class FOLPSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
@@ -1839,3 +1882,4 @@ class FOLPSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFrom
     - https://arxiv.org/abs/2208.02791
     - https://github.com/henoriega/FOLPS-nu
     """
+    _params = FOLPSTracerPowerSpectrumMultipoles._params

@@ -448,28 +448,35 @@ def test_full_shape():
         clean_folps()
         print(emulate, theory.init.params.basenames())
         assert np.allclose(theory(), bak)
-        if 'Correlation' not in theory.__class__.__name__: theory.nd
+        theory.z, theory.ells
+        if 'PowerSpectrum' in theory.__class__.__name__:
+            theory.k, theory.nd
+        else:
+            theory.s
         if test_likelihood:
+            observable.init.update(theory=theory)
+            #print(likelihood.all_params.select(solved=True))
+            for param in likelihood.all_params.select(basename=['alpha*', 'sn*', 'c*']):
+                param.update(derived='.best')
             likelihood()
-            theory.z, theory.ells
-            if 'PowerSpectrum' in theory.__class__.__name__: theory.k
-            else: theory.s
+            print(likelihood.all_params.select(solved=True))
             from desilike.theories.galaxy_clustering.base import BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
             if not isinstance(theory, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):
                 theory.plot(show=show)
         for param in theory.init.params: param.update(namespace='LRG')
         basenames = theory.init.params.basenames()
         theory()
-        print(theory.all_params)
         for param in theory.all_params:
             if param.basename in basenames:
                 assert param.namespace == 'LRG'
         for param in theory.init.params: param.update(namespace=None)
 
+    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
+
     ntemplate = 4
     for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles],
                                        [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles]):
-        for freedom in [None, 'min', 'max']:
+        for freedom in [None, 'min', 'max'][2:]:
             for ells in [(0, 2), (0, 2, 4)]:
                 print(freedom, ells)
                 power = TheoryPower(ells=ells, freedom=freedom)
@@ -487,6 +494,9 @@ def test_full_shape():
                     for param in theory.all_params:
                         if param.basename in basenames:
                             assert param.namespace == 'LRG'
+                if 'velocileptors' in TheoryPower.__name__.lower() and freedom == 'max':
+                    for name in ['LRG.b2', 'LRG.bs', 'LRG.b3']:
+                        assert theory.all_params[name].prior.dist == 'uniform'
 
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
     from desilike.theories.galaxy_clustering import SimpleTracerPowerSpectrumMultipoles
@@ -659,10 +669,10 @@ def test_full_shape():
     from desilike.theories.galaxy_clustering import FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles
 
     theory = FOLPSTracerPowerSpectrumMultipoles()
-    test(theory, show=True)
-    theory(logA=3.04, b1=1.).shape
+    #test(theory)
+    #theory(logA=3.04, b1=1.).shape
     theory = FOLPSTracerCorrelationFunctionMultipoles()
-    test(theory, show=True)  # no P(k) computed
+    test(theory)  # no P(k) computed
     theory(logA=3.04, b1=1.).shape
 
 
@@ -1136,13 +1146,13 @@ if __name__ == '__main__':
     #test_folps()
     #test_params()
     #test_integ()
-    test_templates()
+    #test_templates()
     #test_wiggle_split_template()
     #test_emulator_templates()
     #test_bao()
     #test_broadband_bao()
     #test_flexible_bao()
-    #test_full_shape()
+    test_full_shape()
     #test_png()
     #test_pk_to_xi()
     #test_ap_diff()

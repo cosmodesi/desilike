@@ -25,10 +25,17 @@ def test_parameterization():
     cosmo(Q0=0.1)
 
     cosmo = Cosmoprimo()
-    del cosmo.params['N_ur']
+    cosmo()
+    del cosmo.params['N_eff']
     cosmo(logA=3.)
-    assert np.allclose(cosmo.cosmo['N_ur'], 2.030798372516493)
+    assert np.allclose(cosmo['N_eff'], 3.044)
     #print(cosmo.init.params['omega_b'].latex(), cosmo.init.params['tau_reio'].latex())
+
+    cosmo = Cosmoprimo(fiducial='DESI')
+    cosmo()
+    N_eff = cosmo['N_eff']
+    cosmo(m_ncdm=0.)
+    assert np.allclose(cosmo['N_eff'], N_eff)
 
 
 if __name__ == '__main__':

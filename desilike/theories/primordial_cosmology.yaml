@@ -81,14 +81,14 @@ params:
     delta: 0.01
     latex: m_{ncdm}
     fixed: True
-  N_ur:
+  N_eff:
     prior:
-      limits: [0.05, 10.]
+      limits: [0.01, 10.]
     ref:
       dist: norm
-      loc: 2.0328
-      scale: 0.32
-    latex: N_{ur}
+      loc: 3.046
+      scale: 0.16
+    latex: N_{eff}
     fixed: True
   w0_fld:
     prior:

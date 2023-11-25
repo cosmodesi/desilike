@@ -446,7 +446,6 @@ def test_full_shape():
         else:
             theory = calculator
         clean_folps()
-        print(emulate, theory.init.params.basenames())
         assert np.allclose(theory(), bak)
         theory.z, theory.ells
         if 'PowerSpectrum' in theory.__class__.__name__:
@@ -454,8 +453,7 @@ def test_full_shape():
         else:
             theory.s
         if test_likelihood:
-            observable.init.update(theory=theory)
-            #print(likelihood.all_params.select(solved=True))
+            #observable.init.update(theory=theory)
             for param in likelihood.all_params.select(basename=['alpha*', 'sn*', 'c*']):
                 param.update(derived='.best')
             likelihood()
@@ -669,8 +667,9 @@ def test_full_shape():
     from desilike.theories.galaxy_clustering import FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles
 
     theory = FOLPSTracerPowerSpectrumMultipoles()
-    #test(theory)
-    #theory(logA=3.04, b1=1.).shape
+    test(theory)
+    theory(logA=3.04, b1=1.).shape
+
     theory = FOLPSTracerCorrelationFunctionMultipoles()
     test(theory)  # no P(k) computed
     theory(logA=3.04, b1=1.).shape

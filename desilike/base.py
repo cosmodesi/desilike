@@ -130,6 +130,7 @@ class BasePipeline(BaseClass):
         def callback(calculator):
             self.calculators.append(calculator.runtime_info.initialize())
             for require in calculator.runtime_info.requires:
+                require.runtime_info._initialized_for_required_by.add(id(calculator))
                 if require in self.calculators:
                     del self.calculators[self.calculators.index(require)]  # we want first dependencies at the end
                 callback(require)
@@ -659,6 +660,7 @@ class RuntimeInfo(BaseClass):
         if not isinstance(init, InitConfig):
             self.init = InitConfig(init)
         self._initialized = False
+        self._initialized_for_required_by = set()
         self._tocalculate = True
         self.calculated = False
         self.name = self.calculator.__class__.__name__
@@ -676,42 +678,6 @@ class RuntimeInfo(BaseClass):
                 return
             func(self.installer)
             self.installer.setenv()
-
-    @property
-    def requires(self):
-        """
-        Return list of calculators this calculator depends upon.
-        If not set, defaults to the :class:`BaseCalculator` instances in this calculator's ``__dict__``.
-        """
-        if getattr(self, '_requires', None) is None:
-            if getattr(self, '_initialization', False): return []
-            self.initialized = False
-            self.initialize()
-        return self._requires
-
-    @requires.setter
-    def requires(self, requires):
-        """Set list of calculators this calculator depends upon."""
-        self._requires = list(requires)
-        #for require in self._requires:
-            #require.runtime_info.initialize()  # otherwise runtime_info is cleared and required_by is lost
-            #assert not require.runtime_info.toinitialize
-            #require.runtime_info.required_by.add(self.calculator)
-        self._pipeline = None
-
-    @property
-    def pipeline(self):
-        """Return pipeline for this calculator."""
-        if getattr(self, '_pipeline', None) is None:
-            self._pipeline = BasePipeline(self.calculator)
-        elif any(not calculator.runtime_info.initialized for calculator in self._pipeline.calculators):
-            initialized = True
-            for calculator in self._pipeline.calculators:
-                if not calculator.runtime_info.initialized:
-                    initialized = False
-                calculator.runtime_info.initialized = initialized
-            self._pipeline = BasePipeline(self.calculator)
-        return self._pipeline
 
     @property
     def params(self):
@@ -747,6 +713,36 @@ class RuntimeInfo(BaseClass):
         return self._derived
 
     @property
+    def pipeline(self):
+        """Return pipeline for this calculator."""
+        if getattr(self, '_pipeline', None) is None or not self.initialized:
+            self._pipeline = BasePipeline(self.calculator)
+        else:
+            for calculator in self._pipeline.calculators[:-1]:
+                if not calculator.runtime_info._initialized_for_required_by:
+                    self._pipeline = BasePipeline(self.calculator)
+                    break
+        return self._pipeline
+
+    @property
+    def requires(self):
+        """
+        Return set of calculators this calculator directly depends upon.
+        If not set, defaults to the :class:`BaseCalculator` instances in this calculator's ``__dict__``.
+        """
+        if getattr(self, '_requires', None) is None:
+            if getattr(self, '_initialization', False): return set()
+            self.initialized = False
+            self.initialize()
+        return self._requires
+
+    @requires.setter
+    def requires(self, requires):
+        """Set list of calculators this calculator depends upon."""
+        self._requires = set(requires)
+        self.initialized = False
+
+    @property
     def initialized(self):
         """Has this calculator been initialized?"""
         if self.init.updated:
@@ -757,10 +753,6 @@ class RuntimeInfo(BaseClass):
     def initialized(self, initialized):
         if initialized:
             self.init.updated = False
-        #else:
-            #self._pipeline = None
-        #    for calculator in self.required_by:
-        #        calculator.runtime_info.initialized = False
         self._initialized = initialized
 
     def initialize(self):
@@ -791,12 +783,13 @@ class RuntimeInfo(BaseClass):
             self.params = self.init.params
             self.init.params = bak
             self.initialized = True
+            self._initialized_for_required_by = set()
             self._initialization = False
             if getattr(self, '_requires', None) is None:
-                self._requires = []
+                self._requires = set()
                 for name, value in self.calculator.__dict__.items():
                     if isinstance(value, BaseCalculator):
-                        self._requires.append(value)
+                        self._requires.add(value)
         return self.calculator
 
     @property

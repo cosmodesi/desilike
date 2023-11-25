@@ -75,6 +75,8 @@ class BaseLikelihood(BaseCalculator):
                 if hasattr(likelihood, original_name):
                     setattr(likelihood, name, getattr(likelihood, original_name))
 
+        self.fisher = None
+
         if solved_params:
             solved_params = ParameterCollection(solved_params)
             values = dict(pipeline.input_values)
@@ -151,7 +153,7 @@ class BaseLikelihood(BaseCalculator):
             derived = pipeline.derived
             #pipeline.more_calculate = lambda: None
             self.fisher = getattr(self, 'fisher', None)
-            if self.fisher is None or self.fisher.mpicomm is not self.mpicomm or solved_params != self.fisher.varied_params:
+            if self.fisher is None or self.fisher.mpicomm is not self.mpicomm:
                 #if self.fisher is not None: print(self.fisher.mpicomm is not self.mpicomm, self.fisher.varied_params != solved_params)
                 with warnings.catch_warnings():
                     warnings.filterwarnings('ignore', message='.*Derived parameter.*')
@@ -169,7 +171,7 @@ class BaseLikelihood(BaseCalculator):
                     # and does not use default ones (call to self.fisher(**values) below only updates the calculator states on the last rank)
                     solve_likelihood.runtime_info.pipeline.input_values = values
                 self.fisher = Fisher(solve_likelihood, method='auto')
-                self.fisher.varied_params = solved_params  # just to get same _derived attribute for solved_params != self.fisher.varied_params not to fail
+                #self.fisher.varied_params = solved_params  # just to get same _derived attribute for solved_params != self.fisher.varied_params not to fail
                 #assert self.fisher.varied_params == solved_params
                 #params_bak, varied_params_bak = pipeline.params, pipeline.varied_params
                 #pipeline._varied_params = solved_params  # to set varied_params

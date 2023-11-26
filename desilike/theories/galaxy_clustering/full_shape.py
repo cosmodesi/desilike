@@ -948,7 +948,7 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
         super(LPTVelocileptorsPowerSpectrumMultipoles, self).calculate()
 
         def interp1d(x, y):
-            return interpolate.interp1d(x, y, kind='cubic')
+            return interpolate.interp1d(x, y, kind='cubic')  # for AP
 
         from velocileptors.LPT import lpt_rsd_fftw
         lpt_rsd_fftw.interp1d = interp1d

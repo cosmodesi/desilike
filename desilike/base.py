@@ -1013,7 +1013,7 @@ class BaseCalculator(BaseClass):
             new.runtime_info.initialize()
             new.runtime_info.params = self.runtime_info.params.deepcopy()
             if getattr(self.runtime_info, '_pipeline', None) is not None:  # no need if self.runtime_info.pipeline isn't created
-                params = self.runtime_info.pipeline.params.deepcopy()
+                params = ParameterCollection([param.copy() for param in self.runtime_info.pipeline.params if param.derived is not True])
                 new.runtime_info.pipeline._set_params(params)  # to preserve depends
                 new(**self.runtime_info.pipeline.input_values)
         return new

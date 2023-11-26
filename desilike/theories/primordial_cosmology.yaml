@@ -12,7 +12,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.02
+    delta: 0.03
     latex: h
   # If h is there, used instead of theta_mc below
   theta_MC_100:
@@ -41,7 +41,7 @@ params:
       dist: norm
       loc: 0.02237
       scale: 0.00015
-    delta: 0.0007
+    delta: 0.0015
     latex: \omega_{b}
   logA:
     prior:
@@ -50,7 +50,7 @@ params:
       dist: norm
       loc: 3.036394
       scale: 0.014
-    delta: 0.01
+    delta: 0.05
     latex: \ln(10^{10} A_{s})
   n_s:
     prior:
@@ -78,7 +78,7 @@ params:
       dist: norm
       loc: 0.06
       scale: 0.12
-    delta: 0.01
+    delta: [0.31, 0.15, 0.15]
     latex: m_{ncdm}
     fixed: True
   N_eff:
@@ -89,6 +89,7 @@ params:
       loc: 3.046
       scale: 0.16
     latex: N_{eff}
+    delta: 0.2
     fixed: True
   w0_fld:
     prior:
@@ -107,7 +108,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.3
-    delta: 0.15
+    delta: 0.3
     latex: w_{a}
     fixed: True
   Omega_k:
@@ -117,6 +118,6 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    delta: 0.01
+    delta: 0.05  # 0.08
     latex: \Omega_{k}
     fixed: True

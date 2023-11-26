@@ -129,14 +129,72 @@ def test_error():
     assert likelihood_clik(**{param.name: param.value for param in likelihood_clik.varied_params}) > -np.inf
 
 
+def test_emulator_direct():
+    from desilike.theories import Cosmoprimo
+    from desilike.likelihoods.cmb import TTHighlPlanck2018PlikLiteLikelihood
+    from desilike.emulators import Emulator, TaylorEmulatorEngine
+    from matplotlib import pyplot as plt
+
+    size = 3
+    #param_values = {'h': np.linspace(0.6, 0.8, size)}  #np.linspace(0.69, 0.7, size)}  # np.linspace(0.6, 0.8, size)}
+    #param_values = {'omega_cdm': np.linspace(0.08, 0.2, size)}
+    #param_values = {'omega_b': np.linspace(0.022, 0.025, size)} #np.linspace(0.01, 0.03, size)}
+    #param_values = {'Omega_k': np.linspace(-0.05, 0.05, size)}  #np.linspace(-0.3, 0.3, size)}
+    param_values = {'m_ncdm': np.linspace(0., 0.8, size)}
+    #param_values = {'logA': np.linspace(2.5, 3.5, size)}
+    #param_values = {'n_s': np.linspace(0.8, 1.1, size)}
+    #param_values = {'N_eff': np.linspace(2., 4., size)}
+    #param_values = {'w0_fld': np.linspace(-1.4, -0.6, size)}  #np.linspace(-1.5, -0.5, size)}
+    #param_values = {'wa_fld': np.linspace(-0.8, 0.8, size)}
+    todo = ['tt']
+
+    Likelihoods = {'tt': TTHighlPlanck2018PlikLiteLikelihood}
+
+    for likelihood, Likelihood in Likelihoods.items():
+        if likelihood in todo:
+            cosmo = Cosmoprimo()
+            for param in cosmo.init.params.select(fixed=False):
+                param.update(fixed=True)
+            for param in param_values:
+                cosmo.init.params[param].update(fixed=False)
+            likelihood = Likelihood(cosmo=cosmo)
+            likelihood()
+            theory = likelihood.theory
+
+            emulator = Emulator(theory, engine=TaylorEmulatorEngine(order=4))
+            emulator.set_samples()
+            emulator.fit()
+            emulated_theory = emulator.to_calculator()
+
+            for param, values in param_values.items():
+                cmap = plt.get_cmap('jet', len(values))
+                ax = plt.gca()
+                param = theory.all_params[param]
+                ax.set_title(param.latex(inline=True))
+                center = param.value
+                for ivalue, value in enumerate(values):
+                    theory(**{param.name: value})
+                    emulated_theory(**{param.name: value})
+                    color = cmap(ivalue / len(values))
+                    print({cl: np.abs(emulated_theory.cls[cl][1:] / theory.cls[cl][1:] - 1).max() for cl in theory.cls})
+                    for cl in theory.cls:
+                        ells = np.arange(theory.cls[cl].size)
+                        ax.plot(ells, ells * (ells + 1) * theory.cls[cl], color=color, linestyle='-')
+                        ax.plot(ells, ells * (ells + 1) * emulated_theory.cls[cl], color=color, linestyle='--')
+                theory(**{param.name: center})
+                emulated_theory(**{param.name: center})
+                plt.show()
+
+
 if __name__ == '__main__':
 
     setup_logging()
     #test_install()
     #test_clik()
     #test_sum()
-    test_gaussian_likelihood()
+    #test_gaussian_likelihood()
     #test_params()
     #test_help()
     #test_copy()
     #test_error()
+    test_emulator_direct()

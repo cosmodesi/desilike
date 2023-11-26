@@ -301,49 +301,52 @@ class Differentiation(BaseClass):
                     raise ValueError('accuracy is {} for parameter {}, but it must be a positive EVEN integer'.format(value, param))
                 self.accuracy[param] = value
 
-        self._grid_center, grids, self._atol = {}, [], {}
+        self._grid_center, grids = {}, []
         for param in self.varied_params:
-            self._grid_center[param.name] = center = param.value
+            center = param.delta[0]
             if self.method[param.name] == 'finite' and self.order[param.name]:
                 size = deriv_ncoeffs(self.order[param.name], acc=self.accuracy[param.name])
-                center, delta, limits = param.value, param.delta, param.prior.limits
-                ndelta = size // 2
-                edges = [center - delta_scale * ndelta * delta[0], center + delta_scale * ndelta * delta[1]]
-                edges = [max(edges[0], limits[0]), min(edges[1], limits[1])]
-                grid = None
-                # If center is super close from edges, put all points regularly on the other side
-                for edge, cindex in zip(edges, [0, size]):
-                    if np.abs(center - edge) < 1e-3 * np.abs(edges[1] - edges[0]):
-                        grid = np.linspace(*edges, num=size + 1)
-                        order = np.zeros(size + 1, dtype='i')
-                        for ord in range(self.order[param.name], 0, -1):
-                            s = deriv_ncoeffs(ord, acc=self.accuracy[param.name]) + 1
-                            order[max(cindex - s, 0):cindex + s] = ord
-                        order[cindex] = 0
-                        grid = (grid, order, self.order[param.name])
-                if grid is None:
-                    low, high = np.linspace(edges[0], center, size // 2 + 1), np.linspace(center, edges[1], size // 2 + 1)
-                    grid = np.concatenate([low, high[1:]])
-                    order = np.zeros(size, dtype='i')
-                    cindex = size // 2
-                    for ord in range(self.order[param.name], 0, -1):
-                        s = deriv_ncoeffs(ord, acc=self.accuracy[param.name])
-                        order[cindex - s // 2:cindex + s // 2 + 1] = ord
-                    order[cindex] = 0
-                    grid = (grid, order, self.order[param.name])
+                delta, limits = param.delta[1:], param.prior.limits
+                if not (limits[0] <= center <= limits[-1]):
+                    raise ValueError('for {} center {} is not within prior limits {}'.format(param.name, center, limits))
+                delta = tuple(delta_scale * dd for dd in delta)
+                hsize = size // 2
+                grid_min = limits[1] - hsize * (delta[0] + delta[1])  # if we start from upper limit
+                grid_min = max(limits[0], min(center - delta[0] * hsize, grid_min))
+                grid = [grid_min + np.arange(hsize + 1) * delta[0]]  # below center
+                center = grid[0][-1]
+                grid.append(center + np.arange(1, hsize + 1) * delta[1])  # above center
+                grid = np.concatenate(grid)
+                if grid[-1] > limits[1]:
+                    raise ValueError('for {}, cannot fit {:d} steps in prior limits {} with delta = {}; increase prior limits or decrease delta'.format(param.name, size, limits, delta))
+                cindex = hsize
+                order = np.zeros(len(grid), dtype='i')
+                for ord in range(self.order[param.name], 0, -1):
+                    s = deriv_ncoeffs(ord, acc=self.accuracy[param.name])
+                    order[cindex - s // 2:cindex + s // 2 + 1] = ord
+                order[cindex] = 0
+                grid = (grid, order, self.order[param.name])
                 if mpicomm.rank == 0:
                     self.log_info('{} grid is {}.'.format(param, grid[0]))
             else:
                 grid = (np.array([center]), np.array([0]), 0)
+            self._grid_center[param.name] = center
             grids.append(grid)
-            self._atol[param.name] = 1e-3 * np.append(np.abs(np.diff(grid[0])), 0.1).min()  # absolute tolerance to find the center
 
-        self._grid_samples = None
+        self._grid_samples = self._grid_cidx = None
         if mpicomm.rank == 0:
             samples = np.array(deriv_grid(grids)).T
             self._grid_samples = Samples(samples, params=self.varied_params)
+            self._grid_cidx = True
+            for array, grid in zip(self._grid_samples, grids):
+                grid = grid[0]
+                center = grid[len(grid) // 2]
+                atol = 0.
+                self._grid_cidx &= np.isclose(array, center, rtol=0., atol=atol)
+            self._grid_cidx = tuple(np.flatnonzero(self._grid_cidx))
+            assert len(self._grid_cidx) == 1
             self.log_info('Differentiation will evaluate {:d} points.'.format(len(self._grid_samples)))
-
+        self._grid_cidx = mpicomm.bcast(self._grid_cidx, root=0)
         autoparams, autoorder, self.autoderivs = [], [], []
         for param, method in self.method.items():
             autoparams.append(param)
@@ -455,7 +458,7 @@ class Differentiation(BaseClass):
         self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm = self._calculate, self._more_derived, self.mpicomm
         self.pipeline.mpicalculate(**(samples.to_dict(params=self.all_params) if self.mpicomm.rank == 0 else {}))
         if self.pipeline.errors:
-            raise PipelineError('Got these errors: {}'.format(self.pipeline.errors))
+            raise PipelineError('got these errors: {}'.format(self.pipeline.errors))
         self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm = calculate_bak, more_derived_bak, mpicomm_bak
         for getter_inst, getter_size in self.mpicomm.allgather((getattr(self, 'getter_inst', None), getattr(self, 'getter_size', None))):
             if getter_inst is not None:
@@ -468,8 +471,8 @@ class Differentiation(BaseClass):
                 self.mpicomm.send(sample, dest=0, tag=isample)
         else:
             finiteparams, finiteorder, finiteaccuracy = [], [], []
-            for param, method in self.method.items():
-                if method == 'finite':
+            for param in self._grid_samples.names():
+                if self.method[param] == 'finite':
                     finiteparams.append(param)
                     finiteorder.append(self.order[param])
                     finiteaccuracy.append(self.accuracy[param])
@@ -480,19 +483,13 @@ class Differentiation(BaseClass):
                     for iitem, item in enumerate(derivs):
                         getter_samples[iitem][ideriv][isample] = item
             getter_samples = [[np.array(s) for s in getter_sample] for getter_sample in getter_samples]
+            self.getter_samples = getter_samples
             degrees, derivatives = [], [[] for i in range(max(self.getter_size, 1))]
+            cidx = self._grid_cidx
             if finiteparams:
                 X = np.concatenate([samples[param].reshape(nsamples, 1) for param in finiteparams], axis=-1)
                 ndim = X.shape[1]
-                #center = np.array([np.median(np.unique(xx)) for xx in X.T])
-                center = [self.center[param] for param in finiteparams]
-                atol = [self._atol[param] for param in finiteparams]
-                cidx = np.flatnonzero(np.all([np.isclose(xx, cc, rtol=0., atol=atol) for xx, cc, atol in zip(X.T, center, atol)], axis=0))
-                if not cidx.size:
-                    raise ValueError('Global center point not found')
-                cidx = tuple(cidx)
-            else:
-                cidx = (0,)
+                center = X[cidx]
 
             autodegrees, autoindices = [Deriv()], [()]
             for autoorder, autoderiv in enumerate(self.autoderivs):
@@ -526,7 +523,7 @@ class Differentiation(BaseClass):
                                 if degree in degrees:
                                     continue
                                 orders = [(iparam, order, accuracy) for iparam, (order, accuracy) in enumerate(zip(orders, finiteaccuracy)) if order > 0]
-                                dx = [deriv_nd(X, y, orders, center=center, atol=atol) for y in Y]
+                                dx = [deriv_nd(X, y, orders, center=center, atol=0.) for y in Y]
                                 if any(np.isnan(ddx).any() for ddx in dx):
                                     raise ValueError('some derivatives are NaN')
                                 degrees.append(degree)
@@ -541,6 +538,7 @@ class Differentiation(BaseClass):
                 for param, derivative in zip(self.getter_inst.keys(), derivatives):
                     derivative.param = Parameter(param)
                     toret[param] = derivative
+                toret.attrs['center'] = self.center
             elif not self.getter_size:
                 toret = toret[0]
         self.samples = toret

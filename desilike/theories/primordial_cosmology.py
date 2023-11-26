@@ -113,7 +113,7 @@ class Cosmoprimo(BasePrimordialCosmology):
         else:
             self.fiducial = get_cosmo(fiducial)
         self.fiducial = _clone(self, kwargs)
-        if any(name in self.params.basenames(varied=True) for name in ['h', 'H0']):
+        if any(name in self.params.basenames(input=True) for name in ['h', 'H0']):
             for param in self.params.select(basename='theta_MC_100'):
                 del self.params[param]
         if fiducial_input:

@@ -60,7 +60,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
 
     """Base class for linear power spectrum template."""
     config_fn = 'power_template.yaml'
-    _interpolator_k = np.logspace(-5., 2., 150)  # more than classy
+    _interpolator_k = np.logspace(-5., 2., 1000)  # more than classy
 
     def initialize(self, k=None, z=1., with_now=False, apmode='qparqper', fiducial='DESI', only_now=False, **kwargs):
         self.z = float(z)

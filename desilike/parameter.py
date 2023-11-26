@@ -672,7 +672,7 @@ class Parameter(BaseClass):
         self._delta = delta
         if delta is not None:
             if np.ndim(delta) == 0:
-                delta = (delta, ) * 2
+                delta = (delta,) * 2
             self._delta = tuple(delta)
         self._derived = derived
         self._depends = {}
@@ -749,9 +749,9 @@ class Parameter(BaseClass):
     @property
     def delta(self):
         """
-        Variation for finite-differentiation, w.r.t. :attr:`value`;
-        e.g.: ``(0.1, 0.2)``, with :attr:`value` ``1``, means a variation range ``(0.9, 1.2)``.
-        If not specified, defaults to ``(0.1 * proposal, 0.1 * proposal)`` (further limited by prior bounds if any).
+        Variation for finite-differentiation;
+        e.g.: ``(1., 0.1, 0.2)``, means a variation range ``(0.9, 1.2)``.
+        If not specified, defaults to ``(value, 0.1 * proposal, 0.1 * proposal)`` (further limited by prior bounds if any).
         """
         delta = self._delta
         proposal_scale = 1e-1
@@ -763,6 +763,8 @@ class Parameter(BaseClass):
             delta = (proposal_scale * proposal, proposal_scale * proposal)
             center = self.value
             delta = (min(delta[0], center - self.prior.limits[0]), min(delta[1], self.prior.limits[1] - center))
+        if len(delta) == 2:
+            delta = (self.value,) + tuple(delta)
         return delta
 
     @property

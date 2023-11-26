@@ -22,6 +22,7 @@ doc/_build/
 **/*.pyc
 **/*.npz
 **/*.npy
+**/*.png
 
 # Unit test / coverage reports
 **/.coverage

@@ -1136,6 +1136,210 @@ def test_ptt():
     print(power().shape, power.varied_params)
 
 
+def test_emulator_direct():
+    import time
+    from desilike.theories import Cosmoprimo
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles
+    from desilike.emulators import Emulator, TaylorEmulatorEngine
+    from matplotlib import pyplot as plt
+
+    size = 5
+    #param_values = {'h': np.linspace(0.6, 0.8, size)}  #np.linspace(0.69, 0.7, size)}  # np.linspace(0.6, 0.8, size)}
+    #param_values = {'omega_cdm': np.linspace(0.08, 0.2, size)}
+    #param_values = {'omega_b': np.linspace(0.022, 0.025, size)} #np.linspace(0.01, 0.03, size)}
+    param_values = {'Omega_k': np.linspace(-0.1, 0.1, size)}  #np.linspace(-0.3, 0.3, size)}
+    #param_values = {'m_ncdm': np.linspace(0., 0.8, size)}
+    #param_values = {'logA': np.linspace(2.5, 3.5, size)}
+    #param_values = {'n_s': np.linspace(0.8, 1.1, size)}
+    #param_values = {'N_eff': np.linspace(2., 4., size)}
+    #param_values = {'w0_fld': np.linspace(-1.4, -0.6, size)}  #np.linspace(-1.5, -0.5, size)}
+    #param_values = {'wa_fld': np.linspace(-0.8, 0.8, size)}
+    1#todo = ['template']
+    #todo = ['folps']
+    #todo = ['pybird']
+    #todo = ['kaiser']
+    todo = ['velocileptors']
+
+    if 'template' in todo:
+        cosmo = Cosmoprimo()
+        for param in cosmo.init.params.select(fixed=False):
+            param.update(fixed=True)
+        for param in values:
+            cosmo.init.params[param].update(fixed=False)
+        template = DirectPowerSpectrumTemplate(cosmo=cosmo, k=np.linspace(0.001, 0.3, 100))
+        #t0 = time.time()
+        emulator = Emulator(template, engine=TaylorEmulatorEngine(order=4))
+        emulator.set_samples()
+        emulator.fit()
+        emulated_template = emulator.to_calculator()
+        #print('TIME', time.time() - t0)
+        for param, values in param_values.items():
+            cmap = plt.get_cmap('jet', len(values))
+            ax = plt.gca()
+            param = template.all_params[param]
+            ax.set_title(param.latex(inline=True))
+            center = param.value
+            for ivalue, value in enumerate(values):
+                template(**{param.name: value})
+                emulated_template(**{param.name: value})
+                color = cmap(ivalue / len(values))
+                ax.plot(template.k, template.k * template.pk_dd, color=color, linestyle='-')
+                ax.plot(template.k, template.k * emulated_template.pk_dd, color=color, linestyle='--')
+            template(**{param.name: center})
+            emulated_template(**{param.name: center})
+            plt.show()
+
+    Theories = {'kaiser': KaiserTracerPowerSpectrumMultipoles,
+                'velocileptors': LPTVelocileptorsTracerPowerSpectrumMultipoles,
+                'folps': FOLPSTracerPowerSpectrumMultipoles,
+                'pybird': PyBirdTracerPowerSpectrumMultipoles}
+
+    for theory, Theory in Theories.items():
+        if theory in todo:
+            cosmo = Cosmoprimo()
+            for param in cosmo.init.params.select(fixed=False):
+                param.update(fixed=True)
+            for param in param_values:
+                cosmo.init.params[param].update(fixed=False)
+            template = DirectPowerSpectrumTemplate(cosmo=cosmo)
+
+            theory = Theory(template=template, k=np.linspace(0.001, 0.25, 20))
+            theory()
+            emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(order=4))
+            emulator.set_samples()
+            emulator.fit()
+            emulated_theory = theory.deepcopy()
+            emulated_theory.init.update(pt=emulator.to_calculator())
+
+            for param, values in param_values.items():
+                cmap = plt.get_cmap('jet', len(values))
+                ax = plt.gca()
+                param = theory.all_params[param]
+                ax.set_title(param.latex(inline=True))
+                center = param.value
+                for ivalue, value in enumerate(values):
+                    theory(**{param.name: value})
+                    emulated_theory(**{param.name: value})
+                    color = cmap(ivalue / len(values))
+                    print(np.abs(emulated_theory.power[0] / theory.power[0] - 1).max())
+                    for ill, ell in enumerate(theory.ells):
+                        ax.plot(theory.k, theory.k * theory.power[ill], color=color, linestyle='-')
+                        ax.plot(theory.k, theory.k * emulated_theory.power[ill], color=color, linestyle='--')
+                theory(**{param.name: center})
+                emulated_theory(**{param.name: center})
+                plt.show()
+
+
+def test_emulator_shapefit():
+    import time
+    from desilike.theories import Cosmoprimo
+    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles
+    from desilike.emulators import Emulator, TaylorEmulatorEngine
+    from matplotlib import pyplot as plt
+
+    size = 10
+    #param_values = {'qiso': np.linspace(0.95, 1.05, size)}  #np.linspace(0.9, 1.1, size)}
+    #param_values = {'qap': np.linspace(0.9, 1.1, size)}
+    #param_values = {'df': np.linspace(0.6, 1.4, size)}
+    param_values = {'dm': np.linspace(-0.2, 0.2, size)}
+    todo = ['kaiser']
+
+    Theories = {'kaiser': KaiserTracerPowerSpectrumMultipoles,
+                'velocileptors': LPTVelocileptorsTracerPowerSpectrumMultipoles,
+                'folps': FOLPSTracerPowerSpectrumMultipoles,
+                'pybird': PyBirdTracerPowerSpectrumMultipoles}
+
+    for theory, Theory in Theories.items():
+        if theory in todo:
+            template = ShapeFitPowerSpectrumTemplate(apmode='qisoqap')
+            for param in template.init.params.select(fixed=False):
+                param.update(fixed=True)
+            for param in param_values:
+                template.init.params[param].update(fixed=False)
+            theory = Theory(template=template, k=np.linspace(0.001, 0.3, 1000))
+            theory()
+            emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(order=4))
+            emulator.set_samples()
+            emulator.fit()
+            emulated_theory = theory.deepcopy()
+            emulated_theory.init.update(pt=emulator.to_calculator())
+
+            for param, values in param_values.items():
+                cmap = plt.get_cmap('jet', len(values))
+                ax = plt.gca()
+                param = theory.all_params[param]
+                ax.set_title(param.latex(inline=True))
+                center = param.value
+                for ivalue, value in enumerate(values):
+                    theory(**{param.name: value})
+                    emulated_theory(**{param.name: value})
+                    color = cmap(ivalue / len(values))
+                    print(np.abs(emulated_theory.power[0] / theory.power[0] - 1).max())
+                    for ill, ell in enumerate(theory.ells):
+                        ax.plot(theory.k, theory.k * theory.power[ill], color=color, linestyle='-')
+                        ax.plot(theory.k, theory.k * emulated_theory.power[ill], color=color, linestyle='--')
+                theory(**{param.name: center})
+                emulated_theory(**{param.name: center})
+                plt.show()
+
+
+def plot_direct():
+    from desilike.theories import Cosmoprimo
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles
+    from matplotlib import pyplot as plt
+
+    size = 5
+    #param_values = {'h': np.linspace(0.6, 0.8, size)}  #np.linspace(0.69, 0.7, size)}  # np.linspace(0.6, 0.8, size)}
+    #param_values = {'omega_cdm': np.linspace(0.08, 0.2, size)}
+    #param_values = {'omega_b': np.linspace(0.022, 0.025, size)} #np.linspace(0.01, 0.03, size)}
+    param_values = {'Omega_k': np.linspace(-0.1, 0.1, size)}  #np.linspace(-0.3, 0.3, size)}
+    #param_values = {'m_ncdm': np.linspace(0., 0.8, size)}
+    #param_values = {'logA': np.linspace(2.5, 3.5, size)}
+    #param_values = {'n_s': np.linspace(0.8, 1.1, size)}
+    #param_values = {'N_eff': np.linspace(2., 4., size)}
+    #param_values = {'w0_fld': np.linspace(-1.4, -0.6, size)}  #np.linspace(-1.5, -0.5, size)}
+    #param_values = {'wa_fld': np.linspace(-0.8, 0.8, size)}
+    1#todo = ['template']
+    todo = ['kaiser', 'velocileptors', 'folps', 'pybird']
+
+    Theories = {'kaiser': KaiserTracerPowerSpectrumMultipoles,
+                'velocileptors': LPTVelocileptorsTracerPowerSpectrumMultipoles,
+                'folps': FOLPSTracerPowerSpectrumMultipoles,
+                'pybird': PyBirdTracerPowerSpectrumMultipoles}
+
+    for theory, Theory in Theories.items():
+        if theory in todo:
+            cosmo = Cosmoprimo()
+            for param in cosmo.init.params.select(fixed=False):
+                param.update(fixed=True)
+            for param in param_values:
+                cosmo.init.params[param].update(fixed=False)
+            template = DirectPowerSpectrumTemplate(cosmo=cosmo)
+
+            ax = plt.gca()
+            ax.set_title(theory)
+            fn = '{}_omegak.png'.format(theory)
+
+            theory = Theory(template=template, k=np.linspace(0.001, 0.2, 20))
+            theory()
+
+            for param, values in param_values.items():
+                cmap = plt.get_cmap('jet', len(values))
+                param = theory.all_params[param]
+                for ivalue, value in enumerate(values):
+                    theory(**{param.name: value})
+                    color = cmap(ivalue / len(values))
+                    for ill, ell in enumerate(theory.ells):
+                        ax.plot(theory.k, theory.k * theory.power[ill], color=color, linestyle='-', label='{} = {:.2f}'.format(param.latex(inline=True), value) if ill == 0 else None)
+            ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+            ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+            ax.grid(True)
+            ax.legend()
+            plt.savefig(fn)
+            plt.show()
+
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -1151,7 +1355,10 @@ if __name__ == '__main__':
     #test_bao()
     #test_broadband_bao()
     #test_flexible_bao()
-    test_full_shape()
+    #test_full_shape()
+    #test_emulator_direct()
+    plot_direct()
+    #test_emulator_shapefit()
     #test_png()
     #test_pk_to_xi()
     #test_ap_diff()

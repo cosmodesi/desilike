@@ -570,19 +570,29 @@ class TNSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerS
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
     """
-    _default_options = dict(nloop=1)
+    _default_options = dict(nloop=1,fog='lorentzian')
+    
+    _params = {'sigmav': {'value': 0., 'fixed': False}}
 
     def initialize(self, *args, mu=8, **kwargs):
         super(TNSPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
         self.nloop = int(self.options['nloop'])
+        self.fog = int(self.options['fog'])
         if self.nloop not in [1]:
             raise ValueError('nloop must be 1 (1-loop)')
 
-    def calculate(self):
+    def calculate(self,sigmav=0):
         super(TNSPowerSpectrumMultipoles, self).calculate()
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
-
+        
+        if self.fog == 'lorentzian' :
+            damping = (1 + (muap*kuap*sigmav)^2/2)^{-2}
+        elif self.fog == 'gaussian' :
+            damping = np.exp(-(muap*kuap*sigmav)^2/2)
+        else :
+            raise ValueError('fog must be lorentzian or gaussian')
+            
         self.pktable = []
         # We could have a speed-up with FFTlog, see https://arxiv.org/pdf/1603.04405.pdf
         self.k11 = np.linspace(self.k[0] * 0.8, self.k[-1] * 1.2, int(len(self.k) * 1.4 + 0.5))
@@ -718,7 +728,7 @@ class TNSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerS
 
         names = ['pk11', 'pk_dd', 'pk_b2d', 'pk_bs2d', 'pk_sig3sq', 'pk_b22', 'pk_b2s2', 'pk_bs22', 'pk_dt', 'pk_b2t', 'pk_bs2t', 'pk_tt', 'A', 'B']
         pktable = np.vstack([getattr(self, name) for name in names])
-        pktable = jac * interpolate.interp1d(np.log10(self.k11), pktable, kind='cubic', axis=-1)(np.log10(kap))
+        pktable = jac * damping * interpolate.interp1d(np.log10(self.k11), pktable, kind='cubic', axis=-1)(np.log10(kap))
         A = pktable[12:]
         B = pktable[17:]
         #self._A = A
@@ -737,7 +747,7 @@ class TNSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerS
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'z', 'ells', 'nloop']:
+        for name in ['k', 'z', 'ells', 'nloop','fog']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         for name in self.pktable:

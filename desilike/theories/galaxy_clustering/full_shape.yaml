@@ -269,7 +269,18 @@ params:
       dist: norm
       loc: 0.
       scale: 0.1
-    latex: s_{n, 0}
+    latex: s_{n, 0}   
+  sigmav:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 20.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: \sigma_{v}
+
 
 ---
 
@@ -313,7 +324,18 @@ params:
       dist: norm
       loc: 0.
       scale: 0.5
-    latex: b_{3}
+    latex: b_{3}   
+  sigmav:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 20.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: \sigma_{v}
+
 
 
 ---

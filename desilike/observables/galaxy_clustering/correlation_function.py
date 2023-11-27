@@ -145,9 +145,9 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             if len(fns):
                 nfns = 5
                 if len(fns) < nfns:
-                    msg = 'Loading {}.'.format(fns)
+                    msg = 'Loading 1 file {}.'.format(fns)
                 else:
-                    msg = 'Loading [{}].'.format(', ..., '.join(fns[::len(fns) // nfns]))
+                    msg = 'Loading {:d} files [{}].'.format(len(fns), ', ..., '.join(fns[::len(fns) // nfns]))
                 self.log_info(msg)
 
             list_y = []

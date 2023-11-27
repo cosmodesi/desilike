@@ -141,14 +141,15 @@ def test_emulator_direct():
     #param_values = {'omega_b': np.linspace(0.022, 0.025, size)} #np.linspace(0.01, 0.03, size)}
     #param_values = {'Omega_k': np.linspace(-0.05, 0.05, size)}  #np.linspace(-0.3, 0.3, size)}
     param_values = {'m_ncdm': np.linspace(0., 0.8, size)}
+    #param_values = {'tau_reio': np.linspace(0.03, 0.08, size)}
     #param_values = {'logA': np.linspace(2.5, 3.5, size)}
     #param_values = {'n_s': np.linspace(0.8, 1.1, size)}
     #param_values = {'N_eff': np.linspace(2., 4., size)}
     #param_values = {'w0_fld': np.linspace(-1.4, -0.6, size)}  #np.linspace(-1.5, -0.5, size)}
     #param_values = {'wa_fld': np.linspace(-0.8, 0.8, size)}
-    todo = ['tt']
+    todo = ['lowe']
 
-    Likelihoods = {'tt': TTHighlPlanck2018PlikLiteLikelihood}
+    Likelihoods = {'tt': TTHighlPlanck2018PlikLiteLikelihood, 'lowl': TTLowlPlanck2018ClikLikelihood, 'lowe': EELowlPlanck2018ClikLikelihood}
 
     for likelihood, Likelihood in Likelihoods.items():
         if likelihood in todo:

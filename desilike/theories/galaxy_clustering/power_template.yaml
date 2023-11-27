@@ -439,7 +439,7 @@ params:
     fixed: True
     value: 0.
     prior:
-      limits: [0., 20.]
+      limits: [0., 10.]
     ref:
       limits: [0., 1.]
     delta: 2.

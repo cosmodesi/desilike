@@ -1256,7 +1256,71 @@ def test_emulator_shapefit():
                 param.update(fixed=True)
             for param in param_values:
                 template.init.params[param].update(fixed=False)
-            theory = Theory(template=template, k=np.linspace(0.001, 0.3, 1000))
+            theory = Theory(template=template, k=np.linspace(0.001, 0.25, 20))
+            theory()
+            emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(order=4))
+            emulator.set_samples()
+            emulator.fit()
+            emulated_theory = theory.deepcopy()
+            emulated_theory.init.update(pt=emulator.to_calculator())
+
+            for param, values in param_values.items():
+                cmap = plt.get_cmap('jet', len(values))
+                ax = plt.gca()
+                param = theory.all_params[param]
+                ax.set_title(param.latex(inline=True))
+                center = param.value
+                for ivalue, value in enumerate(values):
+                    theory(**{param.name: value})
+                    emulated_theory(**{param.name: value})
+                    color = cmap(ivalue / len(values))
+                    print(np.abs(emulated_theory.power[0] / theory.power[0] - 1).max())
+                    for ill, ell in enumerate(theory.ells):
+                        ax.plot(theory.k, theory.k * theory.power[ill], color=color, linestyle='-')
+                        ax.plot(theory.k, theory.k * emulated_theory.power[ill], color=color, linestyle='--')
+                theory(**{param.name: center})
+                emulated_theory(**{param.name: center})
+                plt.show()
+
+
+def test_emulator_wigglesplit():
+    import time
+    from desilike.theories import Cosmoprimo
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, DirectWiggleSplitPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles
+    from desilike.emulators import Emulator, TaylorEmulatorEngine
+    from matplotlib import pyplot as plt
+
+    k = np.linspace(0.001, 0.3, 100)
+    template_direct = DirectPowerSpectrumTemplate(k=k)
+    template_direct_wigglesplit = DirectWiggleSplitPowerSpectrumTemplate(k=k)
+    template_direct()
+    template_direct_wigglesplit()
+    #ax = plt.gca()
+    #ax.plot(template_direct.k, template_direct.k * template_direct.pk_dd)
+    #ax.plot(template_direct.k, template_direct.k * template_direct_wigglesplit.pk_dd)
+    #plt.show()
+
+    size = 5
+    #param_values = {'qiso': np.linspace(0.95, 1.05, size)}  #np.linspace(0.9, 1.1, size)}
+    #param_values = {'qap': np.linspace(0.9, 1.1, size)}
+    #param_values = {'df': np.linspace(0.6, 1.4, size)}
+    param_values = {'sigmabao': np.linspace(0., 10., size)}
+    todo = ['kaiser']
+    #todo = ['velocileptors']
+
+    Theories = {'kaiser': KaiserTracerPowerSpectrumMultipoles,
+                'velocileptors': LPTVelocileptorsTracerPowerSpectrumMultipoles,
+                'folps': FOLPSTracerPowerSpectrumMultipoles,
+                'pybird': PyBirdTracerPowerSpectrumMultipoles}
+
+    for theory, Theory in Theories.items():
+        if theory in todo:
+            template = DirectWiggleSplitPowerSpectrumTemplate(apmode='qisoqap')
+            for param in template.init.params.select(fixed=False):
+                param.update(fixed=True)
+            for param in param_values:
+                template.init.params[param].update(fixed=False)
+            theory = Theory(template=template, k=np.linspace(0.001, 0.3, 100))
             theory()
             emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(order=4))
             emulator.set_samples()
@@ -1357,8 +1421,9 @@ if __name__ == '__main__':
     #test_flexible_bao()
     #test_full_shape()
     #test_emulator_direct()
-    plot_direct()
+    #plot_direct()
     #test_emulator_shapefit()
+    test_emulator_wigglesplit()
     #test_png()
     #test_pk_to_xi()
     #test_ap_diff()

@@ -649,10 +649,13 @@ class Parameter(BaseClass):
             self.__dict__.update(basename.init().__dict__)
             return
         try:
-            self.__init__(**basename)
-        except TypeError:
+            basename = dict(basename)
+        except (ValueError, TypeError):
             pass
         else:
+            if 'name' in basename:
+                basename['basename'] = basename.pop('name')
+            self.__init__(**basename)
             return
         if namespace is None: self._namespace = ''
         else: self._namespace = str(namespace)

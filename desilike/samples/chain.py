@@ -620,7 +620,6 @@ class Chain(Samples):
         """Return correlation matrix array computed from (weighted) samples (optionally restricted to input parameters)."""
         return self.covariance(params=params, return_type=None).corrcoef()
 
-    @vectorize
     def var(self, params=None, ddof=1):
         """
         Return variance computed from (weighted) samples (optionally restricted to input parameters).

@@ -1661,8 +1661,8 @@ class ParameterCollection(BaseParameterCollection):
         >>> params.update(name='a*', fixed=True)
         """
         self._updated = True
-        if len(args) == 1 and isinstance(args[0], self.__class__):
-            other = args[0]
+        if len(args) == 1 and (isinstance(args[0], self.__class__) or utils.is_sequence(args[0])):
+            other = self.__class__(args[0])
             self_basenames = self.basenames()
             for item in other:
                 if item in self:
@@ -1700,7 +1700,7 @@ class ParameterCollection(BaseParameterCollection):
                 for param in self.data: names[param.name] = names.get(param.name, 0) + 1
                 duplicates = {basename: multiplicity for basename, multiplicity in names.items() if multiplicity > 1}
                 if duplicates:
-                    raise ValueError('Cannot update namespace, as following duplicates found: {}'.format(duplicates))
+                    raise ValueError('Cannot update namespace, as following duplicates found: {} in {}'.format(duplicates, self))
         else:
             raise ValueError('Unrecognized arguments {}'.format(args))
 

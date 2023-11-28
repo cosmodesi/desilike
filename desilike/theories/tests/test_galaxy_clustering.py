@@ -457,11 +457,13 @@ def test_full_shape():
             for param in likelihood.all_params.select(basename=['alpha*', 'sn*', 'c*']):
                 param.update(derived='.best')
             likelihood()
-            print(likelihood.all_params.select(solved=True))
+            print(likelihood.all_params)
+            #print(likelihood.all_params.select(solved=True))
             from desilike.theories.galaxy_clustering.base import BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
             if not isinstance(theory, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):
                 theory.plot(show=show)
-        for param in theory.init.params: param.update(namespace='LRG')
+        for param in theory.init.params:
+            param.update(namespace='LRG')
         basenames = theory.init.params.basenames()
         theory()
         for param in theory.all_params:
@@ -534,7 +536,6 @@ def test_full_shape():
     theory = TNSTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     test(theory)
     theory(df=1.01, b1=1., b2=1.).shape
-
     from desilike.theories.galaxy_clustering import EFTLikeTNSTracerPowerSpectrumMultipoles, EFTLikeTNSTracerCorrelationFunctionMultipoles
 
     if False:
@@ -736,6 +737,11 @@ def test_pybird():
     template = DirectPowerSpectrumTemplate(z=z)
     with_nnlo_counterterm = True
     shotnoise = 1e4
+
+    k = np.arange(0.005, 0.3, 0.01)
+    #k = np.arange(0.0001, 0.3, 0.01)
+    theory = PyBirdTracerPowerSpectrumMultipoles(template=template, freedom='min', k=k, shotnoise=shotnoise)
+    theory()
 
     k = np.arange(0.005, 0.3, 0.01)
     #k = np.arange(0.0001, 0.3, 0.01)
@@ -1305,8 +1311,8 @@ def test_emulator_wigglesplit():
     #param_values = {'qap': np.linspace(0.9, 1.1, size)}
     #param_values = {'df': np.linspace(0.6, 1.4, size)}
     param_values = {'sigmabao': np.linspace(0., 10., size)}
-    todo = ['kaiser']
-    #todo = ['velocileptors']
+    #todo = ['kaiser']
+    todo = ['velocileptors']
 
     Theories = {'kaiser': KaiserTracerPowerSpectrumMultipoles,
                 'velocileptors': LPTVelocileptorsTracerPowerSpectrumMultipoles,
@@ -1419,11 +1425,11 @@ if __name__ == '__main__':
     #test_bao()
     #test_broadband_bao()
     #test_flexible_bao()
-    #test_full_shape()
+    test_full_shape()
     #test_emulator_direct()
     #plot_direct()
     #test_emulator_shapefit()
-    test_emulator_wigglesplit()
+    #test_emulator_wigglesplit()
     #test_png()
     #test_pk_to_xi()
     #test_ap_diff()

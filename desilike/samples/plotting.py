@@ -739,10 +739,6 @@ def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors
     else:
         lax = fig.axes
 
-    def data_to_axis(ax, y):
-        axis_to_data = ax.transAxes + ax.transData.inverted()
-        return axis_to_data.inverted().transform((0, y))[1]
-
     for iparam1, param1 in enumerate(params):
         ax = lax[iparam1]
         for ipro, pro in enumerate(profiles):

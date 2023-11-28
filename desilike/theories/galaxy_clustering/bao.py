@@ -72,7 +72,7 @@ class BaseBAOWigglesPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         self.z = self.template.z
         self.rs_drag_fid = self.template.fiducial.rs_drag
         if tuple(self.ells) == (0,):  # one should be able to initialize pt without parameters  --- just to k and ells
-            for param in self.params.select(basename=['dbeta']):
+            for param in self.init.params.select(basename=['dbeta']):
                 param.update(fixed=True)
 
     def calculate(self):
@@ -329,7 +329,7 @@ class FlexibleBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
             raise ValueError('Unknown kernel: {}'.format(self.wiggles))
         bb_params = ['b1', 'dbeta']
         for params in self.wiggles_orders.values(): bb_params += list(params)
-        self.params = self.params.select(basename=bb_params)
+        self.init.params = self.init.params.select(basename=bb_params)
 
     @jit(static_argnums=[0])
     def get_wiggles(self, wiggles, **kwargs):
@@ -472,13 +472,13 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
     def set_params(self):
         self.broadband_orders = _get_orders('al', self.init.params, self.ells)
         self.broadband_matrix = {}
-        pt_params = self.params.copy()
+        pt_params = self.init.params.copy()
         bb_params = []
         for params in self.broadband_orders.values(): bb_params += list(params)
-        self.params = self.params.select(basename=bb_params)
+        self.init.params = self.init.params.select(basename=bb_params)
         for param in list(pt_params):
             if param.basename in bb_params: del pt_params[param]
-        self.pt.params.update(pt_params)
+        self.pt.init.params.update(pt_params, basename=True)
         if 'power' in self.broadband:  # even-power for the correlation function
             for ell in self.ells:
                 self.broadband_matrix[ell] = jnp.array([(self.k / self.kp)**pow for pow in self.broadband_orders[ell].values()])
@@ -497,7 +497,7 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
             raise ValueError('Unknown kernel: {}'.format(self.broadband))
         bb_params = []
         for params in self.broadband_orders.values(): bb_params += list(params)
-        self.params = self.params.select(basename=bb_params)
+        self.init.params = self.init.params.select(basename=bb_params)
 
     @jit(static_argnums=[0])
     def get_broadband(self, **params):
@@ -865,10 +865,10 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
 
             for ell in self.ells:
                 self.broadband_matrix[ell] = jnp.array([(self.s / self.sp)**pow for pow in self.broadband_orders[ell].values()])
-            power_params = self.params.copy()
+            power_params = self.init.params.copy()
             bb_params = []
             for params in self.broadband_orders.values(): bb_params += list(params)
-            self.params = self.params.select(basename=bb_params)
+            self.init.params = self.init.params.select(basename=bb_params)
             for param in list(power_params):
                 if param.basename in bb_params: del power_params[param]
             self.power.params = power_params

@@ -1021,9 +1021,9 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
                 param.update(fixed=False)
             for param in params.select(basename=['b2', 'bs', 'b3']):
                 param.update(prior=dict(limits=[-15., 15.]))
-            fix += ['alpha6', 'sn4']
+            fix += ['alpha6']  #, 'sn4']
         if freedom == 'min':
-            fix += ['b3', 'bs', 'alpha6', 'sn4']
+            fix += ['b3', 'bs', 'alpha6']  #, 'sn4']
         for param in params.select(basename=fix):
             param.update(value=0., fixed=True)
         return params

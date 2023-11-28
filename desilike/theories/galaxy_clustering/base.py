@@ -218,7 +218,7 @@ class APEffect(BaseCalculator):
         - 'geometry': scaling parameters computed from the ratio of ``cosmo`` to ``fiducial`` cosmology distances
         - 'bao': scaling parameters computed from the ratio of ``cosmo`` to ``fiducial`` cosmology distances, normalized by the :math:`r_{\mathrm{drag}}` coordinates.
 
-    eta : float, default=1./3.
+    eta : float, default=1. / 3.
         Relation between 'qpar', 'qper' and 'qiso', 'qap' parameters:
         ``qiso = qpar ** eta * qper ** (1 - eta)``.
 

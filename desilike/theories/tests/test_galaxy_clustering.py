@@ -481,7 +481,9 @@ def test_full_shape():
                 print(freedom, ells)
                 power = TheoryPower(ells=ells, freedom=freedom)
                 print(TheoryPower.__name__, ells, freedom, power.varied_params)
-                if freedom is not None: assert len(power.varied_params) == ntemplate + 6 + (4 in ells) + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 (+ 1) EFT, 2 sn
+                fell = 1
+                if 'velocileptors' in TheoryPower.__name__.lower(): fell = 2  # alpha4 and sn4
+                if freedom is not None: assert len(power.varied_params) == ntemplate + 6 + (4 in ells) * fell + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 (+ 1) EFT, 2 sn
                 corr = TheoryCorr(ells=ells, freedom=freedom)
                 print(TheoryCorr.__name__, ells, freedom, corr.varied_params)
                 if freedom is not None: assert len(corr.varied_params) == ntemplate + 4 + (4 in ells) + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 EFT

@@ -558,7 +558,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 5.
+      scale: 4.
     ref:
       dist: norm
       loc: 0.
@@ -568,7 +568,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 200.
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -578,7 +578,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 200.
+      scale: 500.
     ref:
       dist: norm
       loc: 0.

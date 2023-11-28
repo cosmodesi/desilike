@@ -128,14 +128,15 @@ class BasePipeline(BaseClass):
         self.more_derived, self.more_calculate, self.more_initialize = None, None, None
 
         def callback(calculator):
-            self.calculators.append(calculator.runtime_info.initialize())
+            self.calculators.append(calculator)
             for require in calculator.runtime_info.requires:
+                require.runtime_info.initialize()
                 require.runtime_info._initialized_for_required_by.add(id(calculator))
                 if require in self.calculators:
                     del self.calculators[self.calculators.index(require)]  # we want first dependencies at the end
                 callback(require)
 
-        callback(calculator)
+        callback(calculator.runtime_info.initialize())
         # To avoid loops created by one calculator, which when updated, requests reinitialization of the calculators which depend on it
         for calculator in self.calculators:
             calculator.runtime_info.initialized = True

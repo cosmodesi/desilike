@@ -20,13 +20,22 @@ def test_parameterization():
 
     cosmo.runtime_info.pipeline._set_speed()
 
-    #from cosmoprimo.fiducial import DESI
-    #cosmo = DESI(engine='isitgr')
-    #print(cosmo['Q0'])
-
-    cosmo = Cosmoprimo(engine='isitgr')
+    cosmo = Cosmoprimo(fiducial='DESI', engine='isitgr')
     cosmo.init.params['Q0'] = dict()
     cosmo(Q0=0.1)
+
+    cosmo = Cosmoprimo()
+    cosmo()
+    del cosmo.params['N_eff']
+    cosmo(logA=3.)
+    assert np.allclose(cosmo['N_eff'], 3.044)
+    #print(cosmo.init.params['omega_b'].latex(), cosmo.init.params['tau_reio'].latex())
+
+    cosmo = Cosmoprimo(fiducial='DESI')
+    cosmo()
+    N_eff = cosmo['N_eff']
+    cosmo(m_ncdm=0.)
+    assert np.allclose(cosmo['N_eff'], N_eff)
 
 
 if __name__ == '__main__':

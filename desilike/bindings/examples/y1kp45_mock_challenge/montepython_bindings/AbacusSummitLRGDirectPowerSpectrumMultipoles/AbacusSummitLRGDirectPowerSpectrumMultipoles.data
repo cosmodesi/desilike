@@ -1,0 +1,7 @@
+AbacusSummitLRGDirectPowerSpectrumMultipoles.name = AbacusSummitLRGDirectPowerSpectrumMultipoles
+AbacusSummitLRGDirectPowerSpectrumMultipoles.b2_prior_center = 0.0
+AbacusSummitLRGDirectPowerSpectrumMultipoles.b2_prior_variance = 225.0
+AbacusSummitLRGDirectPowerSpectrumMultipoles.bs_prior_center = 0.0
+AbacusSummitLRGDirectPowerSpectrumMultipoles.bs_prior_variance = 225.0
+AbacusSummitLRGDirectPowerSpectrumMultipoles.b3_prior_center = 0.0
+AbacusSummitLRGDirectPowerSpectrumMultipoles.b3_prior_variance = 225.0

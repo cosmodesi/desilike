@@ -13,7 +13,8 @@ from . import utils
 
 class PriorCalculator(BaseCalculator):
 
-    _with_namespace = True
+    _initialize_with_namespace = True
+    _calculate_with_namespace = True
 
     """Calculator that computes the logprior."""
 
@@ -29,7 +30,8 @@ from desilike.likelihoods import BaseGaussianLikelihood
 
 class FisherGaussianLikelihood(BaseGaussianLikelihood):
 
-    _with_namespace = True
+    _initialize_with_namespace = True
+    _calculate_with_namespace = True
 
     def initialize(self, fisher):
         data = fisher.mean()
@@ -126,9 +128,11 @@ class LikelihoodFisher(BaseClass):
 
     def _index(self, params):
         # Internal method to return indices corresponding to input params.""""
-        cumsizes = np.cumsum([0] + self._sizes)
         idx = [self._params.index(param) for param in params]
-        return np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx])
+        if idx:
+            cumsizes = np.cumsum([0] + self._sizes)
+            return np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx], dtype='i4')
+        return np.array(idx, dtype='i4')
 
     def __contains__(self, name):
         """Has this parameter?"""
@@ -209,10 +213,17 @@ class LikelihoodFisher(BaseClass):
             new.attrs = dict(attrs)
         return new
 
+    def _solve(self):
+        try:
+            return np.linalg.solve(self._hessian, self._gradient)
+        except np.linalg.LinAlgError as exc:
+            raise ValueError('Singular matrix: {}, for parameters {}'.format(self._hessian, self._params)) from exc
+        return None
+
     @property
     def chi2min(self):
         r"""Minimum :math:`\chi^{2}`."""
-        flatdiff = - np.linalg.solve(self._hessian, self._gradient)
+        flatdiff = - self._solve()
         return -2. * (self._offset + self._gradient.dot(flatdiff) + 1. / 2. * flatdiff.dot(self._hessian).dot(flatdiff))
 
     def mean(self, params=None, return_type='nparray'):
@@ -232,7 +243,7 @@ class LikelihoodFisher(BaseClass):
         -------
         mean : array, dict
         """
-        mean = self._center - np.linalg.solve(self._hessian, self._gradient)
+        mean = self._center - self._solve()
         if params is None:
             params = self._params
         isscalar = not is_parameter_sequence(params)
@@ -419,10 +430,9 @@ class LikelihoodFisher(BaseClass):
         params = precision.params()
         params_in_self = [param for param in params if param in self._params]
         ccenter, gradient = np.full(precision.shape[0], np.nan, dtype='f8'), np.zeros(precision.shape[0], dtype='f8')
-        if params_in_self:
-            index_new, index_self = precision._index(params_in_self), self._index(params_in_self)
-            gradient[index_new] = self._gradient[index_self]
-            ccenter[index_new] = self._center[index_self]
+        index_new, index_self = precision._index(params_in_self), self._index(params_in_self)
+        gradient[index_new] = self._gradient[index_self]
+        ccenter[index_new] = self._center[index_self]
         hessian = -precision._value
         offset = self._offset
         if center is None:
@@ -456,16 +466,25 @@ class LikelihoodFisher(BaseClass):
         if len(others) == 1 and utils.is_sequence(others[0]):
             others = others[0]
         params = ParameterCollection.concatenate([other._params for other in others])
-        centers = [other.view(params=params)._center for other in others]
-        center = np.nanmean(centers, axis=0)
-        offset, gradient, hessian, with_prior, attrs = 0., 0., 0., {}, {}
+        names = params.names()
+        centers, need_view = [], []
+        for iother, other in enumerate(others):
+            c = np.full(len(params), np.nan, dtype='f8')
+            iparams_in_self, params_in_self = zip(*[(iparam, param) for iparam, param in enumerate(params) if param in other._params])
+            c[list(iparams_in_self)] = other.center(params=params_in_self)
+            centers.append(c)
+            if iother == 0: center = c
+            need_view.append((other._params.names() != names) or not np.all(center == c))
+        if any(need_view): center = np.nanmean(centers, axis=0)
+        others = [other.view(params, center=center) if need_view[iother] else other for iother, other in enumerate(others)]
+        offset = gradient = hessian = 0.
+        with_prior, attrs = {}, {}
         for other in others:
-            other = other.view(params, center=center)
             offset += other._offset
             gradient += other._gradient
             hessian += other._hessian
             if other.with_prior:
-                for param in other.params:
+                for param in other.params():
                     if param.prior.dist == 'uniform':  # if only uniform distributions, fine!
                         with_prior.setdefault(param.name, False)
                     else:
@@ -481,10 +500,6 @@ class LikelihoodFisher(BaseClass):
         return self.sum(self, other)
 
     def __radd__(self, other):
-        if other == 0: return self.deepcopy()
-        return self.__add__(other)
-
-    def __iadd__(self, other):
         if other == 0: return self.deepcopy()
         return self.__add__(other)
 
@@ -572,7 +587,7 @@ class LikelihoodFisher(BaseClass):
         return self.covariance(params=params, return_type=None).to_getdist(label=label, center=self.mean(params=params), ignore_limits=ignore_limits)
 
     @classmethod
-    def read_getdist(cls, base_fn, with_prior=True):
+    def read_getdist(cls, base_fn, with_prior=True, **kwargs):
         """
         Read Fisher from GetDist format.
 
@@ -584,6 +599,11 @@ class LikelihoodFisher(BaseClass):
 
         with_prior : bool, default=True
             Whether input chains include parameter priors.
+
+        **kwargs : dict
+            If ``params`` is ``None``, optional arguments passed to :meth:`ParameterCollection.select`
+            to select parameters (e.g. ``varied=True``).
+            Restricting to useful parameters is relevant for the numerical accuracy of covariance inversion.
 
         Returns
         -------
@@ -613,7 +633,7 @@ class LikelihoodFisher(BaseClass):
                 if line.startswith(txt):
                     offset = -float(line[len(txt):])
                     break
-        covariance = ParameterCovariance.read_getdist(base_fn)
+        covariance = ParameterCovariance.read_getdist(base_fn).select(**kwargs)
         params = covariance.params()
         mean = [mean[param.name] for param in params]
         return cls(mean, params=params, offset=offset, hessian=-covariance.to_precision(params=params, return_type='nparray'), with_prior=with_prior)
@@ -631,14 +651,6 @@ class Fisher(BaseClass):
     where :math:`\Delta` is the model (or data - model), of parameters :math:`p_{i}`, and :math:`C^{-1}`
     is the data hessian matrix.
     If input likelihood is not Gaussian, compute the second derivatives of the log-likelihood.
-
-    Attributes
-    ----------
-    prior_hessian : Parameterhessian
-        Prior Hessian.
-
-    hessian : Parameterhessian
-        Likelihood Hessian.
     """
     def __init__(self, likelihood, method=None, accuracy=2, delta_scale=1., mpicomm=None):
         """
@@ -690,12 +702,16 @@ class Fisher(BaseClass):
 
         def prior_finalize(derivs):
             if prior_simplified:
-                offset = derivs[()]
-                # gradient = [derivs[param] for param in self.varied_params]
-                precisions = [1. / getattr(param.prior, 'scale', np.inf)**2 for param in self.varied_params]
-                gradient = [-(self.likelihood.runtime_info.pipeline.input_values[param.name] - getattr(param.prior, 'loc', 0.)) * precision for param, precision in zip(self.varied_params, precisions)]
-                hessian = - np.diag(precisions)
-                # print(gradient)
+                offset, gradient, precision = 0., [], []
+                for param in self.varied_params:
+                    value = derivs[param.name]
+                    loc, scale = getattr(param.prior, 'loc', 0.), getattr(param.prior, 'scale', np.inf)
+                    prec = scale**(-2)
+                    offset += - 0.5 * (value - loc)**2 * prec
+                    # derivs[param]
+                    gradient.append(- (value - loc) * prec)
+                    precision.append(- prec)
+                hessian = np.diag(precision)
                 return {'offset': offset, 'gradient': gradient, 'hessian': hessian}
             return {'gradient': derivs}  # offset, gradient and hessian are pulled out of gradient by :class:`LikelihoodFisher`
 
@@ -713,17 +729,21 @@ class Fisher(BaseClass):
             def likelihood_finalize(derivs):
                 toret = []
                 for likelihood, derivs in zip(likelihoods, derivs):
-                    flatderiv = np.array([derivs[param] for param in self.varied_params])
-                    flatdiff = derivs[()]
+                    #flatderiv = np.array([derivs[param] for param in self.varied_params])
+                    #flatdiff = derivs[()]
+                    derivs = np.asarray(derivs)
+                    flatdiff = derivs[0]
+                    flatderiv = derivs[1:]  # first is zero-lag
                     precision = likelihood.precision
                     if precision.ndim == 1:
-                        offset = - (flatdiff * precision).dot(flatdiff.T)
-                        gradient = - (flatderiv * precision).dot(flatdiff.T)
-                        hessian = - (flatderiv * precision).dot(flatderiv.T)
+                        diffp = flatdiff * precision
+                        derivp = flatderiv * precision
                     else:
-                        offset = - flatdiff.dot(precision).dot(flatdiff.T)
-                        gradient = - flatderiv.dot(precision).dot(flatdiff.T)
-                        hessian = - flatderiv.dot(precision).dot(flatderiv.T)
+                        diffp = flatdiff.dot(precision)
+                        derivp = flatderiv.dot(precision)
+                    offset = - diffp.dot(flatdiff.T)
+                    gradient = - derivp.dot(flatdiff.T)
+                    hessian = - derivp.dot(flatderiv.T)
                     toret.append({'offset': offset, 'gradient': gradient, 'hessian': hessian})
                 return toret
 
@@ -743,7 +763,10 @@ class Fisher(BaseClass):
                     toret.append({'offset': offset, 'gradient': gradient, 'hessian': hessian})
                 return toret
 
-        self.prior_differentiation = Differentiation(prior_calculator, getter=prior_getter, order=0 if prior_simplified else 2, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=mpicomm)
+        if prior_simplified:
+            self.prior_differentiation = None
+        else:
+            self.prior_differentiation = Differentiation(prior_calculator, getter=prior_getter, order=2, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=mpicomm)
         self._prior_finalize = prior_finalize
         self.likelihood_differentiation = Differentiation(self.likelihood, getter=getter, order=order, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=mpicomm)
         self._likelihood_finalize = likelihood_finalize
@@ -763,14 +786,18 @@ class Fisher(BaseClass):
             pass
 
     def run(self, **params):
-        diff = self.mpicomm.bcast(self.prior_differentiation(**params), root=0)
-        self.prior_fisher = LikelihoodFisher(center=[self.prior_differentiation.center[str(param)] for param in self.varied_params], params=self.varied_params, **self._prior_finalize(diff))
-        diff = self.mpicomm.bcast(self.likelihood_differentiation(**self.prior_differentiation.center), root=0)
+        if self.prior_differentiation is None:
+            center = diff = {**self.likelihood.runtime_info.pipeline.input_values, **params}
+        else:
+            diff = self.mpicomm.bcast(self.prior_differentiation(**params), root=0)
+            center = self.prior_differentiation.center
+        self.prior_fisher = LikelihoodFisher(center=[center[str(param)] for param in self.varied_params], params=self.varied_params, **self._prior_finalize(diff))
+        diff = self.mpicomm.bcast(self.likelihood_differentiation(**center), root=0)
         self.likelihood_fishers = [LikelihoodFisher(center=self.prior_fisher._center, params=self.varied_params, **kwargs) for kwargs in self._likelihood_finalize(diff)]
 
     def __call__(self, **params):
         """Return :class:`LikelihoodFisher` for input parameter values, as the sum of :attr:`prior_fisher` and :attr:`likelihood_fisher`."""
         self.run(**params)
-        posterior_fisher = sum(self.likelihood_fishers) + self.prior_fisher
+        posterior_fisher = LikelihoodFisher.sum(self.likelihood_fishers + [self.prior_fisher])
         posterior_fisher.with_prior = True
         return posterior_fisher

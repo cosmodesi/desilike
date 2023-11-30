@@ -55,7 +55,8 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
     ---------
     http://www.stat.columbia.edu/~gelman/research/published/brooksgelman2.pdf
     """
-    if not utils.is_sequence(chains): chains = [chains]
+    if not utils.is_sequence(chains):
+        chains = [chains]
     nchains = len(chains)
     if nchains < 2:
         if nsplits is None or nchains * nsplits < 2:

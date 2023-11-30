@@ -1,7 +1,8 @@
 import numpy as np
 
 from desilike.base import BaseCalculator
-from desilike.theories.primordial_cosmology import external_cosmo, Cosmoprimo
+from desilike.cosmo import is_external_cosmo
+from desilike.theories.primordial_cosmology import Cosmoprimo
 
 
 class P1DPowerSpectrumExtractor(BaseCalculator):
@@ -31,7 +32,7 @@ class P1DPowerSpectrumExtractor(BaseCalculator):
         self.qstar = float(qstar)
         self.cosmo_requires = {}
         self.cosmo = cosmo
-        if external_cosmo(self.cosmo):
+        if is_external_cosmo(self.cosmo):
             self.cosmo_requires = {'fourier': {'pk_interpolator': {'z': self.z, 'of': [('delta_cb', 'delta_cb')]}},
                                    'background': {'efunc': {'z': self.z}}}
         elif cosmo is None:

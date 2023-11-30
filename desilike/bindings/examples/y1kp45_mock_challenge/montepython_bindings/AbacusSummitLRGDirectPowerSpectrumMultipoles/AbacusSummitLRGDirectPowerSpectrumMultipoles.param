@@ -1,0 +1,5 @@
+# To be copy-pasted in the MontePython *.param file
+data.parameters['b1'] = [0.5, -1.0, 4.0, 0.05773502691896256, 1.0, 'nuisance']
+data.parameters['b2'] = [0.0, None, None, 0.5, 1.0, 'nuisance']
+data.parameters['bs'] = [0.0, None, None, 0.5, 1.0, 'nuisance']
+data.parameters['b3'] = [0.0, None, None, 0.0, 1.0, 'nuisance']

@@ -2,7 +2,9 @@ import numpy as np
 from scipy import special
 
 from desilike.jax import numpy as jnp
-from desilike.theories.primordial_cosmology import get_cosmo, external_cosmo, Cosmoprimo, constants
+from desilike.jax import InterpolatedUnivariateSpline, jit
+from desilike.cosmo import is_external_cosmo
+from desilike.theories.primordial_cosmology import get_cosmo, Cosmoprimo, constants
 from desilike.base import BaseCalculator
 from desilike import plotting, utils
 
@@ -44,11 +46,15 @@ class BaseTheoryCorrelationFunctionMultipoles(BaseCalculator):
 class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrelationFunctionMultipoles):
 
     """Base class for theory correlation function from power spectrum multipoles."""
-    _with_namespace = True
+    _initialize_with_namespace = True
 
-    def initialize(self, s=None, power=None, **kwargs):
+    def initialize(self, s=None, power=None, interp_order=1, **kwargs):
         if s is None: s = np.linspace(20., 200, 101)
         self.s = np.array(s, dtype='f8')
+        self.interp_order = int(interp_order)
+        allowed_interp_order = [1, 2, 3]
+        if self.interp_order not in allowed_interp_order:
+            raise ValueError('interp_order must be one of {}'.format(allowed_interp_order))
         if power is None:
             from .full_shape import KaiserTracerPowerSpectrumMultipoles
             power = KaiserTracerPowerSpectrumMultipoles()
@@ -57,32 +63,40 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         self.power.init.update(**kwargs)
         kin = self.power.init.get('k', None)
         # Important to have high enough sampling, otherwise wiggles can be seen at small s
-        if kin is None: self.kin = np.geomspace(self.k[0], 0.6, 300)
+        if kin is None: self.kin = np.geomspace(self.k[0], 0.6, int(300. / self.interp_order + 0.5))
         else: self.kin = np.array(kin, dtype='f8')
         self.power.init['k'] = self.kin
         mask = self.k > self.kin[-1]
         self.k_high = np.log10(self.k[mask] / self.kin[-1])
         self.pad_high = np.exp(-(self.k[mask] / self.kin[-1] - 1.)**2 / (2. * (10.)**2))
         self.k_mid = self.k[~mask]
-        self.power.init.params = self.init.params.copy()
-        self.init.params.clear()
+        self.ells = self.power.ells
         from cosmoprimo import PowerToCorrelation
         self.fftlog = PowerToCorrelation(self.k, ell=self.ells, q=0, lowring=True)
+        self.set_params()
+
+    def set_params(self):
+        self.power.init.params = self.init.params.copy()
+        self.init.params.clear()
+
+    @jit(static_argnums=[0])
+    def get_corr(self, power):
+        tmp = []
+        for pk in power:
+            slope_high = (pk[-1] - pk[-2]) / np.log10(self.kin[-1] / self.kin[-2])
+            if self.interp_order == 1:
+                interp = jnp.interp(np.log10(self.k_mid), np.log10(self.kin), pk)
+            else:
+                interp = InterpolatedUnivariateSpline(np.log10(self.kin), pk, k=self.interp_order)(np.log10(self.k_mid))
+            tmp.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.k_high) * self.pad_high], axis=-1))
+        s, corr = self.fftlog(jnp.vstack(tmp))
+        return jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
 
     def calculate(self):
-        power = []
-        for pk in self.power.power:
-            slope_high = (pk[-1] - pk[-2]) / np.log10(self.kin[-1] / self.kin[-2])
-            power.append(jnp.concatenate([jnp.interp(np.log10(self.k_mid), np.log10(self.kin), pk), (pk[-1] + slope_high * self.k_high) * self.pad_high], axis=-1))
-        s, corr = self.fftlog(jnp.vstack(power))
-        self.corr = jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
-
-    @property
-    def ells(self):
-        return self.power.ells
+        self.corr = self.get_corr(self.power.power)
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot comparison to brute-force (non-fftlog) computation.
         We see convergence towards brute-force when decreasing damping sigma.
@@ -90,6 +104,9 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least ``1 + len(self.ells)`` axes.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -107,10 +124,13 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
             tmp = np.sum(self.kin**3 * self.power.power[ill] * weights * special.spherical_jn(ell, self.s[:, None] * self.kin), axis=-1)
             corr.append((-1) ** (ell // 2) / (2. * np.pi**2) * tmp)
         from matplotlib import pyplot as plt
-        height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
-        figsize = (6, 1.5 * sum(height_ratios))
-        fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
-        fig.subplots_adjust(hspace=0)
+        if fig is None:
+            height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
+            figsize = (6, 1.5 * sum(height_ratios))
+            fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
+            fig.subplots_adjust(hspace=0)
+        else:
+            lax = fig.axes
         lax[0].plot([], [], linestyle='-', color='k', label='fftlog')
         lax[0].plot([], [], linestyle='--', color='k', label='brute-force')
         for ill, ell in enumerate(self.ells):
@@ -124,7 +144,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         lax[0].legend()
         lax[0].set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
         lax[-1].set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
-        return lax
+        return fig
 
 
 class BaseTheoryPowerSpectrumMultipolesFromWedges(BaseTheoryPowerSpectrumMultipoles):
@@ -140,8 +160,31 @@ class BaseTheoryPowerSpectrumMultipolesFromWedges(BaseTheoryPowerSpectrumMultipo
         self.mu, wmu = utils.weights_mu(mu, method=method)
         self.wmu = np.array([wmu * (2 * ell + 1) * special.legendre(ell)(self.mu) for ell in ells])
 
+    @jit(static_argnums=[0])
     def to_poles(self, pkmu):
-        return np.sum(pkmu * self.wmu[:, None, :], axis=-1)
+        return jnp.sum(pkmu * self.wmu[:, None, :], axis=-1)
+
+
+@jit
+def ap_k_mu(k, mu, qpar=1., qper=1.):
+    qap = qpar / qper
+    jac = 1. / (qpar * qper**2)
+    factorap = jnp.sqrt(1 + mu**2 * (1. / qap**2 - 1))
+    # Beutler 2016 (arXiv: 1607.03150v1) eq 44
+    kap = k[..., None] / qper * factorap
+    # Beutler 2016 (arXiv: 1607.03150v1) eq 45
+    muap = mu / qap / factorap
+    return jac, kap, muap
+
+
+@jit
+def ap_s_mu(s, mu, qpar=1., qper=1.):
+    qap = qpar / qper
+    # Compared to Fourier space, qpar -> 1/qpar, qper -> 1/qper
+    factorap = jnp.sqrt(1 + mu**2 * (qap**2 - 1))
+    sap = s[..., None] * qper * factorap
+    muap = mu * qap / factorap
+    return 1., sap, muap
 
 
 class APEffect(BaseCalculator):
@@ -154,7 +197,7 @@ class APEffect(BaseCalculator):
         Effective redshift.
 
     cosmo : BasePrimordialCosmology, default=None
-        Cosmology calculator, required only if ``mode`` is 'distances';
+        Cosmology calculator, required only if ``mode`` is 'geometry' or 'bao';
         defaults to ``Cosmoprimo(fiducial=fiducial)``.
 
     fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
@@ -165,16 +208,17 @@ class APEffect(BaseCalculator):
         - dict: dictionary of parameters
         - :class:`cosmoprimo.Cosmology`: Cosmology instance
 
-    mode : str, default='distances'
+    mode : str, default='geometry'
         Alcock-Paczynski parameterization:
 
         - 'qiso': single istropic parameter 'qiso'
         - 'qap': single, Alcock-Paczynski parameter 'qap'
         - 'qisoqap': two parameters 'qiso', 'qap'
         - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
-        - 'distances': scaling parameters computed from the ratio of ``cosmo`` to ``fiducial`` cosmologies.
+        - 'geometry': scaling parameters computed from the ratio of ``cosmo`` to ``fiducial`` cosmology distances
+        - 'bao': scaling parameters computed from the ratio of ``cosmo`` to ``fiducial`` cosmology distances, normalized by the :math:`r_{\mathrm{drag}}` coordinates.
 
-    eta : float, default=1./3.
+    eta : float, default=1. / 3.
         Relation between 'qpar', 'qper' and 'qiso', 'qap' parameters:
         ``qiso = qpar ** eta * qper ** (1 - eta)``.
 
@@ -185,7 +229,7 @@ class APEffect(BaseCalculator):
     """
     config_fn = 'base.yaml'
 
-    def initialize(self, z=1., cosmo=None, fiducial='DESI', mode='distances', eta=1. / 3.):
+    def initialize(self, z=1., cosmo=None, fiducial='DESI', mode='geometry', eta=1. / 3.):
         self.z = float(z)
         if fiducial is None:
             raise ValueError('Provide fiducial cosmology')
@@ -203,31 +247,44 @@ class APEffect(BaseCalculator):
             self.params = self.params.select(basename=['qiso', 'qap'])
         elif self.mode == 'qparqper':
             self.params = self.params.select(basename=['qpar', 'qper'])
-        elif self.mode == 'distances':
+        elif self.mode in ['geometry', 'bao']:
             self.params = self.params.clear()
-            if external_cosmo(cosmo):
+            if is_external_cosmo(cosmo):
                 self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
+                if self.mode == 'bao': self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
         else:
-            raise ValueError('Unknown mode {}; it must be one of ["qiso", "qap", "qisoqap", "qparqper", "distances"]'.format(self.mode))
+            raise ValueError('unknown mode {}; it must be one of ["qiso", "qap", "qisoqap", "qparqper", "geometry", "bao"]'.format(self.mode))
         self.cosmo = cosmo
-        if self.mode == 'distances':
+        if self.mode in ['geometry', 'bao']:
             if cosmo is None:
                 self.cosmo = Cosmoprimo(fiducial=self.fiducial)
         else:
             self.cosmo = self.fiducial
-        if self.mode == 'distances':
+        if self.mode in ['geometry', 'bao']:
             self.DH_fid = (constants.c / 1e3) / (100. * self.fiducial.efunc(self.z))
             self.DM_fid = self.fiducial.comoving_angular_distance(self.z)
             self.DH_over_DM_fid = self.DH_fid / self.DM_fid
             self.DV_fid = (self.DH_fid * self.DM_fid**2 * self.z)**(1. / 3.)
+            if self.mode == 'bao':
+                rs_drag_fid = self.fiducial.rs_drag
+                self.DH_over_rd_fid = self.DH_fid / rs_drag_fid
+                self.DM_over_rd_fid = self.DM_fid / rs_drag_fid
+                self.DV_over_rd_fid = self.DV_fid / rs_drag_fid
 
     def calculate(self, **params):
-        if self.mode == 'distances':
+        if self.mode in ['geometry', 'bao']:
             self.DH = (constants.c / 1e3) / (100. * self.cosmo.efunc(self.z))
             self.DM = self.cosmo.comoving_angular_distance(self.z)
             self.DH_over_DM = self.DH / self.DM
             self.DV = (self.DH * self.DM**2 * self.z)**(1. / 3.)
-            qpar, qper = self.DH / self.DH_fid, self.DM / self.DM_fid
+            if self.mode == 'bao':
+                rs_drag = self.cosmo.rs_drag
+                self.DH_over_rd = self.DH / rs_drag
+                self.DM_over_rd = self.DM / rs_drag
+                self.DV_over_rd = self.DV / rs_drag
+                qpar, qper = self.DH_over_rd / self.DH_over_rd_fid, self.DM_over_rd / self.DM_over_rd_fid
+            else:  # geometry
+                qpar, qper = self.DH / self.DH_fid, self.DM / self.DM_fid
         elif self.mode == 'qiso':
             qpar = qper = params['qiso']
         elif self.mode == 'qap':
@@ -243,17 +300,7 @@ class APEffect(BaseCalculator):
         self.qiso = self.qpar**self.eta * self.qper**(1. - self.eta)
 
     def ap_k_mu(self, k, mu):
-        jac = 1. / (self.qpar * self.qper**2)
-        factorap = jnp.sqrt(1 + mu**2 * (1. / self.qap**2 - 1))
-        # Beutler 2016 (arXiv: 1607.03150v1) eq 44
-        kap = k[..., None] / self.qper * factorap
-        # Beutler 2016 (arXiv: 1607.03150v1) eq 45
-        muap = mu / self.qap / factorap
-        return jac, kap, muap
+        return ap_k_mu(k, mu, qpar=self.qpar, qper=self.qper)
 
     def ap_s_mu(self, s, mu):
-        # Compared to Fourier space, qpar -> 1/qpar, qper -> 1/qper
-        factorap = jnp.sqrt(1 + mu**2 * (self.qap**2 - 1))
-        sap = s[..., None] * self.qper * factorap
-        muap = mu * self.qap / factorap
-        return 1., sap, muap
+        return ap_s_mu(s, mu, qpar=self.qpar, qper=self.qper)

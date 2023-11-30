@@ -18,7 +18,7 @@ import numpy as np
 import scipy as sp
 from .jax import numpy as jnp
 from .jax import scipy as jsp
-from .jax import rv_frozen
+from .jax import rv_frozen, use_jax, jit
 
 from .io import BaseConfig
 from . import mpi, utils
@@ -56,7 +56,8 @@ def decode_name(name, default_start=0, default_stop=None, default_step=1):
         List of ranges.
     """
     name = str(name)
-    replaces = re.finditer(r'\[(-?\d*):(\d*):*(-?\d*)\]', name)
+    #replaces = re.finditer(r'\[(-?\d*):(\d*):*(-?\d*)\]', name)
+    replaces = re.finditer(r'\[([-+]?\d*):([-+]?\d*):*([-+]?\d*)\]', name)
     strings, ranges = [], []
     string_start = 0
     for ireplace, replace in enumerate(replaces):
@@ -173,9 +174,10 @@ def find_names(allnames, name, quiet=True):
         pattern = name
         ranges = []
     else:
-        name = fnmatch.translate(name)
+        #name = fnmatch.translate(name)  # does weird things to -
+        name = name.replace('*', '.*?') + '$'  # ? for non-greedy, $ to match end of string
         strings, ranges = decode_name(name)
-        pattern = re.compile(r'(-?\d*)'.join(strings))
+        pattern = re.compile(r'([-+]?\d*)'.join(strings))
     toret = []
     for paramname in allnames:
         match = re.match(pattern, paramname)
@@ -222,7 +224,10 @@ class Deriv(dict):
         >>> c = Deriv(x=2, y=1)                   # a new derivative from keyword args
         """
         super().__init__()
-        if iterable is None or isinstance(iterable, (Deriv, Mapping)):
+        if isinstance(iterable, Deriv):  # shortcut, saves ~1e-6 s
+            super().update(iterable)
+            return
+        if iterable is None or isinstance(iterable, (Mapping,)):
             self.update(iterable, **kwds)
         else:
             iterable = (iterable,) if not utils.is_sequence(iterable) else iterable
@@ -304,10 +309,6 @@ class Deriv(dict):
         self._keep_positive()
         if kwds:
             self.update(kwds)
-
-    def copy(self):
-        """Return a shallow copy."""
-        return self.__class__(self)
 
     def __reduce__(self):
         return self.__class__, (dict(self),)
@@ -583,7 +584,7 @@ class Parameter(BaseClass):
     """Class that represents a parameter."""
 
     _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'delta', 'latex', 'depends', 'shape', 'drop']
-    _allowed_solved = ['.best', '.marg', '.auto']
+    _allowed_solved = ['.best', '.marg', '.auto', '.prec']
 
     def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, delta=None, latex=None, shape=(), drop=False):
         """
@@ -648,22 +649,21 @@ class Parameter(BaseClass):
             self.__dict__.update(basename.init().__dict__)
             return
         try:
-            self.__init__(**basename)
-        except TypeError:
+            basename = dict(basename)
+        except (ValueError, TypeError):
             pass
         else:
+            if 'name' in basename:
+                basename['basename'] = basename.pop('name')
+            self.__init__(**basename)
             return
-        self._namespace = namespace
-        if namespace is not None:
-            self._namespace = str(namespace)
+        if namespace is None: self._namespace = ''
+        else: self._namespace = str(namespace)
         names = str(basename).split(base.namespace_delimiter)
         self._basename, namespace = names[-1], base.namespace_delimiter.join(names[:-1])
-        if self._namespace:
-            if namespace:
-                self._namespace = base.namespace_delimiter.join([self._namespace, namespace])
-        else:
-            if namespace:
-                self._namespace = namespace
+        if namespace:
+            if self._namespace: self._namespace = base.namespace_delimiter.join([self._namespace, namespace])
+            else: self._namespace = namespace
         self._value = float(value) if value is not None else None
         self._prior = prior if isinstance(prior, ParameterPrior) else ParameterPrior(**(prior or {}))
         if ref is not None:
@@ -675,7 +675,7 @@ class Parameter(BaseClass):
         self._delta = delta
         if delta is not None:
             if np.ndim(delta) == 0:
-                delta = (delta, ) * 2
+                delta = (delta,) * 2
             self._delta = tuple(delta)
         self._derived = derived
         self._depends = {}
@@ -752,9 +752,9 @@ class Parameter(BaseClass):
     @property
     def delta(self):
         """
-        Variation for finite-differentiation, w.r.t. :attr:`value`;
-        e.g.: ``(0.1, 0.2)``, with :attr:`value` ``1``, means a variation range ``(0.9, 1.2)``.
-        If not specified, defaults to ``(0.1 * proposal, 0.1 * proposal)`` (further limited by prior bounds if any).
+        Variation for finite-differentiation;
+        e.g.: ``(1., 0.1, 0.2)``, means a variation range ``(0.9, 1.2)``.
+        If not specified, defaults to ``(value, 0.1 * proposal, 0.1 * proposal)`` (further limited by prior bounds if any).
         """
         delta = self._delta
         proposal_scale = 1e-1
@@ -766,6 +766,8 @@ class Parameter(BaseClass):
             delta = (proposal_scale * proposal, proposal_scale * proposal)
             center = self.value
             delta = (min(delta[0], center - self.prior.limits[0]), min(delta[1], self.prior.limits[1] - center))
+        if len(delta) == 2:
+            delta = (self.value,) + tuple(delta)
         return delta
 
     @property
@@ -785,7 +787,8 @@ class Parameter(BaseClass):
 
     @property
     def input(self):
-        return (self.depends or (not self.derived) or self.solved) and not self.drop
+        """Whether parameter should be fed as input to calculator."""
+        return ((self._derived is False) or isinstance(self._derived, str)) and not self.drop and not self.depends
 
     @property
     def name(self):
@@ -870,29 +873,73 @@ class Parameter(BaseClass):
         """Is ``self`` equal to ``other``, i.e. same type and attributes?"""
         return type(other) == type(self) and all(deep_eq(getattr(other, '_' + name), getattr(self, '_' + name)) for name in self._attrs)
 
+    def __diff__(self, other):
+        toret = {}
+        for name in self._attrs:
+            self_value = getattr(self, '_' + name)
+            other_value = getattr(other, '_' + name)
+            if not deep_eq(self_value, other_value):
+                toret[name] = (self_value, other_value)
+        return toret
+
     def __hash__(self):
         return hash(str(self))
 
-    def latex(self, namespace=True, inline=False):
-        """If :attr:`latex` is specified (i.e. not ``None``), return :attr:`latex` surrounded by '$' signs, else :attr:`name`."""
-        if namespace:
-            namespace = self._namespace
+    def latex(self, namespace=None, inline=False):
+        """
+        Return latex string for parameter if :attr:`latex` is specified (i.e. not ``None``), else :attr:`name`.
+
+        Parameters
+        ----------
+        namespace : bool, str, default=None
+            If ``False``, no namespace is added to the latex string.
+            If ``True``, :attr:`namespace` is turned into a latex string, and added as a subscript.
+            If string, add this subscript to the latex string.
+            If ``None``, and none of :attr:`namespace` "words" (defined as group of characters separated by ',', ' ', '_', '-')
+            are in the current latex string, then same as ``True``; else, same as ``False``.
+
+        inline : bool, default=False
+            If ``True``, add '$' around the latex string.
+
+        Returns
+        -------
+        latex : str
+            Latex string.
+        """
+        auto_namespace = namespace is None
+        force_namespace = namespace is True
+        provided_namespace = False
+        if force_namespace or auto_namespace:
+            namespace = str(self._namespace)
+        elif namespace is not False:
+            namespace = str(namespace)
+            provided_namespace = force_namespace = True
+
         if self._latex is not None:
-            if namespace:
+
+            def add_namespace(group):
+                words = re.split(', |_|-', namespace)  # parse namespace
+                for word in words:
+                    if word in self._latex and word not in self.basename:
+                        return False
+                return True
+
+            latex = self._latex
+            if namespace and (force_namespace or auto_namespace):
                 match1 = re.match('(.*)_(.)$', self._latex)
                 match2 = re.match('(.*)_{(.*)}$', self._latex)
-                if match1 is not None:
-                    latex = r'%s_{%s, \mathrm{%s}}' % (match1.group(1), match1.group(2), namespace)
-                elif match2 is not None:
-                    latex = r'%s_{%s, \mathrm{%s}}' % (match2.group(1), match2.group(2), namespace)
-                else:
-                    latex = r'%s_{\mathrm{%s}}' % (self._latex, namespace)
-            else:
-                latex = self._latex
+                latex_namespace = namespace if provided_namespace else ('\mathrm{%s}' % namespace.replace('\_', '_').replace('_', '\_'))
+                for match in [match1, match2, None]:
+                    if match is not None:
+                        if force_namespace or (auto_namespace and add_namespace(match.group(2))):  # check namespace is not in latex str already
+                            latex = r'%s_{%s, %s}' % (match.group(1), match.group(2), latex_namespace)
+                        break
+                    elif force_namespace or (auto_namespace and add_namespace(namespace)):
+                        latex = r'%s_{%s}' % (self._latex, latex_namespace)
             if inline:
                 latex = '${}$'.format(latex)
             return latex
-        return str(self)
+        return str(self.name)
 
 
 def _make_property(name):
@@ -1286,7 +1333,7 @@ class ParameterConfig(NamespaceDict):
         if not isinstance(self.get('namespace', None), str):
             state['namespace'] = None
         for name in ['prior', 'ref']:
-            if name in state and 'rescale' in state[name]:
+            if state.get(name, None) is not None and 'rescale' in state[name]:
                 value = copy.copy(state[name])
                 rescale = value.pop('rescale')
                 if 'scale' in value:
@@ -1617,14 +1664,17 @@ class ParameterCollection(BaseParameterCollection):
         >>> params.update(name='a*', fixed=True)
         """
         self._updated = True
-        if len(args) == 1 and isinstance(args[0], self.__class__):
-            other = args[0]
+        if len(args) == 1 and (isinstance(args[0], self.__class__) or utils.is_sequence(args[0])):
+            other = self.__class__(args[0])
+            self_basenames = self.basenames()
             for item in other:
                 if item in self:
-                    tmp = self[item].clone(item)
+                    self[item] = self[item].clone(item)
+                elif basename is True and item.basename in self_basenames:
+                    index = self_basenames.index(item.basename)
+                    self[index] = self[index].clone(item)
                 else:
-                    tmp = item.copy()
-                self.set(tmp)
+                    self.set(item.copy())
         elif len(args) <= 1:
             list_update = self.names(name=name, basename=basename)
             for meta_name, fixed in zip(['fixed', 'varied'], [True, False]):
@@ -1653,7 +1703,7 @@ class ParameterCollection(BaseParameterCollection):
                 for param in self.data: names[param.name] = names.get(param.name, 0) + 1
                 duplicates = {basename: multiplicity for basename, multiplicity in names.items() if multiplicity > 1}
                 if duplicates:
-                    raise ValueError('Cannot update namespace, as following duplicates found: {}'.format(duplicates))
+                    raise ValueError('Cannot update namespace, as following duplicates found: {} in {}'.format(duplicates, self))
         else:
             raise ValueError('Unrecognized arguments {}'.format(args))
 
@@ -1665,11 +1715,6 @@ class ParameterCollection(BaseParameterCollection):
         if other == 0: return self.copy()
         return self.__class__(other).__add__(self)
 
-    def __iadd__(self, other):
-        if other == 0: return self
-        self.__dict__.update(self.__add__(other).__dict__)
-        return self
-
     def __sub__(self, other):
         """Subtract two parameter collections."""
         other = self.__class__(other)
@@ -1679,11 +1724,6 @@ class ParameterCollection(BaseParameterCollection):
         if other == 0: return self.copy()
         return self.__class__(other).__sub__(self)
 
-    def __isub__(self, other):
-        if other == 0: return self
-        self.__dict__.update(self.__sub__(other).__dict__)
-        return self
-
     def __and__(self, other):
         """Intersection of two parameter collections."""
         return self.__class__([param for param in self if param in other])
@@ -1691,11 +1731,6 @@ class ParameterCollection(BaseParameterCollection):
     def __rand__(self, other):
         if other == 0: return self.copy()
         return self.__class__(other).__and__(self)
-
-    def __iand__(self, other):
-        if other == 0: return self
-        self.__dict__.update(self.__and__(other).__dict__)
-        return self
 
     def params(self, **kwargs):
         """Return a collection of parameters :class:`ParameterCollection`, with optional selection. See :meth:`select`."""
@@ -1767,7 +1802,7 @@ class ParameterCollection(BaseParameterCollection):
         eval_params = self.eval(**params)
         toret = 0.
         for param in self.data:
-            if param.name in eval_params and param.varied and (param.depends or (not param.derived)):
+            if param.varied and (param.depends or (not param.derived)) and param.name in eval_params:
                 toret += param.prior(eval_params[param.name])
         return toret
 
@@ -1780,6 +1815,7 @@ class ParameterPriorError(Exception):
 class ParameterPrior(BaseClass):
     """
     Class that describes a 1D prior distribution.
+    TODO: make immutability explicit.
 
     Parameters
     ----------
@@ -1829,8 +1865,9 @@ class ParameterPrior(BaseClass):
             if name in ['loc', 'scale', 'a', 'b']: self.attrs[name] = float(value)
 
         self.dist = str(dist)
+        if self.dist.startswith('trunc'): self.dist = self.dist[5:]
         if self.is_limited():
-            dist = dist if dist.startswith('trunc') or dist == 'uniform' else 'trunc{}'.format(dist)
+            dist = dist if dist == 'uniform' else 'trunc{}'.format(dist)
         try:
             dist = getattr(jsp.stats, dist)
         except AttributeError:
@@ -1860,19 +1897,37 @@ class ParameterPrior(BaseClass):
         x = jnp.asarray(x)
         return (self.limits[0] < x) & (x < self.limits[1])
 
-    def __call__(self, x, remove_zerolag=True):
+    def __hash__(self):
+        return super().__hash__()
+
+    @jit(static_argnums=[0, 2])
+    def logpdf(self, x, remove_zerolag=True):
         """
         Return log-probability density at ``x``.
         If ``remove_zerolag`` is ``True``, remove the maximum log-probability density.
         """
+        _jnp = jnp if use_jax(x) else np  # Worth testing if input is jax, as jax incurs huge overheads
+        x = _jnp.asarray(x)
+        isin = (self.limits[0] <= x) & (x <= self.limits[1])
+        # Fast version
+        if remove_zerolag:
+            if self.dist == 'uniform':
+                return _jnp.where(isin, 0, -np.inf)
+            if self.dist == 'norm':
+                return _jnp.where(isin, - 0.5 * (x - self.attrs['loc'])**2 / self.attrs['scale']**2, -np.inf)
+
         if not self.is_proper():
-            return jnp.where(self.isin(x), 0, -np.inf)
+            return _jnp.where(isin, 0, -np.inf)
+
         toret = self.rv.logpdf(x)
         if remove_zerolag:
             loc = self.attrs.get('loc', None)
             if loc is None: loc = np.mean(self.limits)
             toret -= self.rv.logpdf(loc)
         return toret
+
+    def __call__(self, x, remove_zerolag=True):
+        return self.logpdf(x, remove_zerolag=remove_zerolag)
 
     def sample(self, size=None, random_state=None):
         """
@@ -1965,6 +2020,7 @@ class ParameterPrior(BaseClass):
     def __eq__(self, other):
         """Is ``self`` equal to ``other``, i.e. same type and attributes?"""
         return type(other) == type(self) and all(getattr(other, key) == getattr(self, key) for key in ['dist', 'limits', 'attrs'])
+
 
 
 def _reshape(array, shape):
@@ -2089,7 +2145,11 @@ class Samples(BaseParameterCollection):
                 if set(other_names) != set(new_names):
                     raise ValueError('Cannot concatenate values as parameters do not match: {} != {}.'.format(new_names, other_names))
         for param in new_params:
-            new[param] = others[0][param].clone(value=np.concatenate([np.atleast_1d(other[param]) for other in others], axis=0))
+            try:
+                value = np.concatenate([np.atleast_1d(other[param]) for other in others], axis=0)
+            except ValueError as exc:
+                raise ValueError('error while concatenating array for parameter {}'.format(param)) from exc
+            new[param] = others[0][param].clone(value=value)
         return new
 
     def update(self, *args, **kwargs):
@@ -2103,6 +2163,7 @@ class Samples(BaseParameterCollection):
             other = self.__class__(*args, **kwargs)
         for item in other:
             self.set(item)
+        self.attrs.update(other.attrs)
 
     def set(self, item):
         """Add new :class:`ParameterArray` to samples."""
@@ -2326,6 +2387,7 @@ class BaseParameterMatrix(BaseClass):
         if params is None:
             raise ValueError('Provide matrix parameters')
         self._params = ParameterCollection(params)
+        self._params = ParameterCollection([param.clone(fixed=False) for param in self._params])
         if not self._params:
             raise ValueError('Got no parameters')
         if getattr(value, 'derivs', None) is not None:
@@ -2456,7 +2518,9 @@ class BaseParameterMatrix(BaseClass):
         # Internal method to return indices in matrix array corresponding to input params.""""
         cumsizes = np.cumsum([0] + self._sizes)
         idx = [self._params.index(param) for param in params]
-        return np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx])
+        if idx:
+            return np.concatenate([np.arange(cumsizes[ii], cumsizes[ii + 1]) for ii in idx], dtype='i4')
+        return np.array(idx, dtype='i4')
 
     def __contains__(self, name):
         """Has this parameter?"""
@@ -2707,7 +2771,7 @@ class ParameterCovariance(BaseParameterMatrix):
                         params = line[1:]
                     else:
                         covariance.append([float(value) for value in line])
-        return cls(covariance, params=params)
+        return cls(covariance, params=[Parameter(param, fixed=False) for param in params])
 
 
 class ParameterPrecision(BaseParameterMatrix):
@@ -2757,9 +2821,5 @@ class ParameterPrecision(BaseParameterMatrix):
         return self.sum(self, other)
 
     def __radd__(self, other):
-        if other == 0: return self.deepcopy()
-        return self.__add__(other)
-
-    def __iadd__(self, other):
         if other == 0: return self.deepcopy()
         return self.__add__(other)

@@ -1,5 +1,6 @@
 import numpy as np
 
+from desilike.cosmo import is_external_cosmo
 from desilike.likelihoods.base import BaseGaussianLikelihood
 
 
@@ -19,15 +20,17 @@ class H0Likelihood(BaseGaussianLikelihood):
         Cosmology calculator. Defaults to ``Cosmoprimo()``.
     """
     def initialize(self, mean, std, cosmo=None):
-        if cosmo is None:
-            from desilike.theories.primordial_cosmology import Cosmoprimo
-            cosmo = Cosmoprimo()
         self.cosmo = cosmo
+        if is_external_cosmo(self.cosmo):
+            self.cosmo_requires = {'params': {'H0': None}}
+        elif self.cosmo is None:
+            from desilike.theories.primordial_cosmology import Cosmoprimo
+            self.cosmo = Cosmoprimo()
         super(H0Likelihood, self).initialize(data=mean, covariance=std**2)
 
     @property
     def flattheory(self):
-        return np.asarray(self.cosmo.H0)
+        return np.array([self.cosmo['H0']])
 
 
 class MbLikelihood(BaseGaussianLikelihood):
@@ -46,5 +49,5 @@ class MbLikelihood(BaseGaussianLikelihood):
         super(MbLikelihood, self).initialize(data=mean, covariance=std**2)
 
     def calculate(self, Mb):
-        self.flattheory = np.asarray(Mb)
+        self.flattheory = np.array([Mb])
         super(MbLikelihood, self).calculate()

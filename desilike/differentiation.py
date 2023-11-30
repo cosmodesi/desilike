@@ -2,6 +2,7 @@ import itertools
 
 import numpy as np
 
+from desilike import PipelineError
 from .parameter import Parameter, ParameterCollection, ParameterArray, Samples, Deriv, ParameterPriorError
 from .utils import BaseClass, expand_dict, is_sequence
 from .jax import jax
@@ -90,7 +91,7 @@ def coefficients(order, acc, coords, idx):
     return np.linalg.solve(matrix, rhs), np.array([p for p in range(-nside, nside + 1)])
 
 
-def deriv_nd(X, Y, orders, center=None):
+def deriv_nd(X, Y, orders, center=None, atol=0.):
     """
     Compute n-dimensional derivative.
 
@@ -109,6 +110,9 @@ def deriv_nd(X, Y, orders, center=None):
         The center around which to take derivatives, of size ndim.
         If ``None``, defaults to the median of input ``X``.
 
+    atol : list, float
+        Absolute tolerance to find the center.
+
     Returns
     -------
     deriv : array
@@ -121,8 +125,11 @@ def deriv_nd(X, Y, orders, center=None):
     orders = uorders
     if center is None:
         center = [np.median(np.unique(xx)) for xx in X.T]
+    if np.ndim(atol) == 0:
+        atol = [atol] * X.shape[1]
+    atol = list(atol)
     if not len(orders):
-        toret = Y[np.all([xx == cc for xx, cc in zip(X.T, center)], axis=0)]
+        toret = Y[np.all([np.isclose(xx, cc, rtol=0., atol=at) for xx, cc, at in zip(X.T, center, atol)], axis=0)]
         if not toret.size:
             raise ValueError('Global center point not found')
         return toret[0]
@@ -131,23 +138,24 @@ def deriv_nd(X, Y, orders, center=None):
     coord = np.unique(X[..., axis])
     if coord.size < ncoeffs:
         raise ValueError('Grid is not large enough ({:d} < {:d}) to estimate {:d}-th order derivative'.format(coord.size, ncoeffs, order))
-    cidx = np.flatnonzero(coord == center[axis])
+    cidx = np.flatnonzero(np.isclose(coord, center[axis], rtol=0., atol=atol[axis]))
     if not cidx.size:
         raise ValueError('Global center point not found')
     cidx = cidx[0]
     toret = 0.
     for coeff, offset in zip(*coefficients(order, acc, coord, cidx)):
-        mask = X[:, axis] == coord[cidx + offset]
+        mask = X[..., axis] == coord[cidx + offset]
         ncenter = center.copy()
         ncenter[axis] = coord[cidx + offset]
-        y = deriv_nd(X[mask], Y[mask], orders[:-1], center=ncenter)
+        # We could fill in atol[axis] = 0., but it should be useless?
+        y = deriv_nd(X[mask], Y[mask], orders[:-1], center=ncenter, atol=atol)
         toret += y * coeff
     return toret
 
 
 def deriv_grid(grids, current_order=0):
     """
-    Return grid of points to compute to estimate derivatives.
+    Return grid of points where to compute function to estimate its derivatives.
 
     Parameters
     ----------
@@ -157,7 +165,7 @@ def deriv_grid(grids, current_order=0):
     Returns
     -------
     grid : list
-        List of coordinates (list).
+        List of coordinates.
     """
     grid, orders, maxorder = grids[-1]
     toret = []
@@ -295,45 +303,50 @@ class Differentiation(BaseClass):
 
         self._grid_center, grids = {}, []
         for param in self.varied_params:
-            self._grid_center[param.name] = center = param.value
+            center = param.delta[0]
             if self.method[param.name] == 'finite' and self.order[param.name]:
                 size = deriv_ncoeffs(self.order[param.name], acc=self.accuracy[param.name])
-                center, delta = param.value, param.delta
-                ndelta = size // 2
-                edges = [center - delta_scale * ndelta * delta[0], center + delta_scale * ndelta * delta[1]]
-                edges = [max(edges[0], param.prior.limits[0]), min(edges[1], param.prior.limits[1])]
-                grid = None
-                # If center is super close from edges, put all points regularly on the other side
-                for edge, cindex in zip(edges, [0, size]):
-                    if np.abs(center - edge) < 1e-3 * np.abs(edges[1] - edges[0]):
-                        grid = np.linspace(*edges, num=size + 1)
-                        order = np.zeros(size + 1, dtype='i')
-                        for ord in range(self.order[param.name], 0, -1):
-                            s = deriv_ncoeffs(ord, acc=self.accuracy[param.name]) + 1
-                            order[max(cindex - s, 0):cindex + s] = ord
-                        order[cindex] = 0
-                        grid = (grid, order, self.order[param.name])
-                if grid is None:
-                    low, high = np.linspace(edges[0], center, size // 2 + 1), np.linspace(center, edges[1], size // 2 + 1)
-                    grid = np.concatenate([low, high[1:]])
-                    order = np.zeros(size, dtype='i')
-                    cindex = size // 2
-                    for ord in range(self.order[param.name], 0, -1):
-                        s = deriv_ncoeffs(ord, acc=self.accuracy[param.name])
-                        order[cindex - s // 2:cindex + s // 2 + 1] = ord
-                    order[cindex] = 0
-                    grid = (grid, order, self.order[param.name])
+                delta, limits = param.delta[1:], param.prior.limits
+                if not (limits[0] <= center <= limits[-1]):
+                    raise ValueError('for {} center {} is not within prior limits {}'.format(param.name, center, limits))
+                delta = tuple(delta_scale * dd for dd in delta)
+                hsize = size // 2
+                grid_min = limits[1] - hsize * (delta[0] + delta[1])  # if we start from upper limit
+                grid_min = max(limits[0], min(center - delta[0] * hsize, grid_min))
+                grid = [grid_min + np.arange(hsize + 1) * delta[0]]  # below center
+                center = grid[0][-1]
+                grid.append(center + np.arange(1, hsize + 1) * delta[1])  # above center
+                grid = np.concatenate(grid)
+                if grid[-1] > limits[1]:
+                    raise ValueError('for {}, cannot fit {:d} steps in prior limits {} with delta = {}; increase prior limits or decrease delta'.format(param.name, size, limits, delta))
+                cindex = hsize
+                order = np.zeros(len(grid), dtype='i')
+                for ord in range(self.order[param.name], 0, -1):
+                    s = deriv_ncoeffs(ord, acc=self.accuracy[param.name])
+                    order[cindex - s // 2:cindex + s // 2 + 1] = ord
+                order[cindex] = 0
+                grid = (grid, order, self.order[param.name])
                 if mpicomm.rank == 0:
                     self.log_info('{} grid is {}.'.format(param, grid[0]))
             else:
                 grid = (np.array([center]), np.array([0]), 0)
+            self._grid_center[param.name] = center
             grids.append(grid)
 
-        self._grid_samples = None
+        self._grid_samples = self._grid_cidx = None
         if mpicomm.rank == 0:
             samples = np.array(deriv_grid(grids)).T
             self._grid_samples = Samples(samples, params=self.varied_params)
-
+            self._grid_cidx = True
+            for array, grid in zip(self._grid_samples, grids):
+                grid = grid[0]
+                center = grid[len(grid) // 2]
+                atol = 0.
+                self._grid_cidx &= np.isclose(array, center, rtol=0., atol=atol)
+            self._grid_cidx = tuple(np.flatnonzero(self._grid_cidx))
+            assert len(self._grid_cidx) == 1
+            self.log_info('Differentiation will evaluate {:d} points.'.format(len(self._grid_samples)))
+        self._grid_cidx = mpicomm.bcast(self._grid_cidx, root=0)
         autoparams, autoorder, self.autoderivs = [], [], []
         for param, method in self.method.items():
             autoparams.append(param)
@@ -379,15 +392,30 @@ class Differentiation(BaseClass):
         params = {**self.pipeline.input_values, **params}
         params, values = list(params.keys()), list(params.values())
 
-        def __calculate(*values):
-            self.pipeline.input_values.update(dict(zip(params, values)))
-            values = self.pipeline.params.eval(**self.pipeline.input_values)
+        def __calculate(*values, derived=False):
+            pipeline = self.pipeline
+            assert len(params) == len(values)
+            pipeline.input_values.update(dict(zip(params, values)))
+            values = pipeline.params.eval(**pipeline.input_values)
 
-            for calculator in self.pipeline.calculators:  # start by first calculator, end by the last one
+            if derived:
+                pipeline.derived = Samples()
+
+            for calculator in pipeline.calculators:  # start with first calculator, end with the last one
                 runtime_info = calculator.runtime_info
-                force = any(param.basename in runtime_info.input_values for param in self.varied_params)
+                force = any(param.basename in runtime_info.input_values for param in self.varied_params) or None  # run if non-differentiated parameter is updated
                 runtime_info.set_input_values(values, full=True, force=force)
                 runtime_info.calculate()
+                if derived:
+                    pipeline.derived.update(runtime_info.derived)
+
+            if pipeline.more_calculate:
+                pipeline.more_calculate()
+
+            if derived and pipeline.more_derived:
+                tmp = pipeline.more_derived(0)
+                if tmp is not None: pipeline.derived.update(tmp)
+
             return getter()
 
         toret = []
@@ -397,13 +425,15 @@ class Differentiation(BaseClass):
                 if jax is None:
                     raise ValueError('jax is required to compute the Jacobian')
                 argnums = [params.index(p) for p in autoderiv]
-                #jac = getattr(jax, 'jacfwd' if iautoderiv else 'jacrev')(jac, argnums=argnums, has_aux=False, holomorphic=False)
-                jac = getattr(jax, 'jacfwd')(jac, argnums=argnums, has_aux=False, holomorphic=False)
+                funcname = 'jacfwd' # if iautoderiv else 'jacrev'
+                jac = getattr(jax, funcname)(jac, argnums=argnums, has_aux=False, holomorphic=False)
+                #jac = jax.jacfwd(jac, argnums=argnums, has_aux=False, holomorphic=False)
                 toret.append(jac(*values))
+                #jax.vjp(tmp, has_aux=False)[1](jnp.ones(len(autoderiv)))
         except Exception as exc:
             raise exc
         finally:
-            self._getter_sample = [__calculate(*values)] + toret
+            self._getter_sample = [__calculate(*values, derived=True)] + toret  # derived = True necessary to get derived parameters
         return toret
 
     def _more_derived(self, ipoint):
@@ -417,7 +447,7 @@ class Differentiation(BaseClass):
         if self.mpicomm.rank == 0:
             samples = self._grid_samples.copy()
             for param in self.all_params:
-                if param in self._grid_samples:
+                if param.name in self._grid_center:
                     offset = self.center[param.name] - self._grid_center[param.name]
                     samples[param] = self._grid_samples[param] + offset
                 else:
@@ -427,42 +457,39 @@ class Differentiation(BaseClass):
         calculate_bak, more_derived_bak, mpicomm_bak = self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm
         self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm = self._calculate, self._more_derived, self.mpicomm
         self.pipeline.mpicalculate(**(samples.to_dict(params=self.all_params) if self.mpicomm.rank == 0 else {}))
+        if self.pipeline.errors:
+            raise PipelineError('got these errors: {}'.format(self.pipeline.errors))
         self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm = calculate_bak, more_derived_bak, mpicomm_bak
-
-        states = self.mpicomm.gather(self._getter_samples, root=0)
         for getter_inst, getter_size in self.mpicomm.allgather((getattr(self, 'getter_inst', None), getattr(self, 'getter_size', None))):
             if getter_inst is not None:
                 self.getter_inst = getter_inst
                 self.getter_size = getter_size
                 break
         toret = None
-        if self.mpicomm.rank == 0:
+        if self.mpicomm.rank != 0:
+            for isample, sample in self._getter_samples.items():
+                self.mpicomm.send(sample, dest=0, tag=isample)
+        else:
             finiteparams, finiteorder, finiteaccuracy = [], [], []
-            for param, method in self.method.items():
-                if method == 'finite':
+            for param in self._grid_samples.names():
+                if self.method[param] == 'finite':
                     finiteparams.append(param)
                     finiteorder.append(self.order[param])
                     finiteaccuracy.append(self.accuracy[param])
-            self._getter_samples = [[[None for i in range(nsamples)] for i in range(len(self.autoderivs))] for i in range(max(self.getter_size, 1))]
-            for state in states:
-                for istate, items in state.items():
-                    for ideriv, derivs in enumerate(items):
-                        for iitem, item in enumerate(derivs):
-                            self._getter_samples[iitem][ideriv][istate] = item
-            del states
-            self._getter_samples = [[np.array(s) for s in getter_samples] for getter_samples in self._getter_samples]
+            getter_samples = [[[None for isample in range(nsamples)] for iautoderiv in range(len(self.autoderivs))] for igetter in range(max(self.getter_size, 1))]
+            for isample in range(nsamples):
+                items = self._getter_samples[isample] if isample in self._getter_samples else self.mpicomm.recv(tag=isample)
+                for ideriv, derivs in enumerate(items):
+                    for iitem, item in enumerate(derivs):
+                        getter_samples[iitem][ideriv][isample] = item
+            getter_samples = [[np.array(s) for s in getter_sample] for getter_sample in getter_samples]
+            self.getter_samples = getter_samples
             degrees, derivatives = [], [[] for i in range(max(self.getter_size, 1))]
+            cidx = self._grid_cidx
             if finiteparams:
                 X = np.concatenate([samples[param].reshape(nsamples, 1) for param in finiteparams], axis=-1)
                 ndim = X.shape[1]
-                #center = np.array([np.median(np.unique(xx)) for xx in X.T])
-                center = [self.center[param] for param in finiteparams]
-                cidx = np.flatnonzero(np.all([xx == cc for xx, cc in zip(X.T, center)], axis=0))
-                if not cidx.size:
-                    raise ValueError('Global center point not found')
-                cidx = tuple(cidx)
-            else:
-                cidx = (0,)
+                center = X[cidx]
 
             autodegrees, autoindices = [Deriv()], [()]
             for autoorder, autoderiv in enumerate(self.autoderivs):
@@ -480,7 +507,7 @@ class Differentiation(BaseClass):
                         nautodegrees.append(nautodegree)
                         nautoindices.append(nautoindex)
                         degrees.append(nautodegree)
-                        Y = [getter_samples[autoorder][(slice(None),) + nautoindex + (Ellipsis,)] for getter_samples in self._getter_samples]
+                        Y = [getter_sample[autoorder][(slice(None),) + nautoindex + (Ellipsis,)] for getter_sample in getter_samples]
                         if autodegree:  # with jax nan derivatives are zero derivatives...
                             for y in Y: y[np.isnan(y)] = 0.
                         for iy, y in enumerate(Y): derivatives[iy].append(y[cidx])
@@ -496,9 +523,9 @@ class Differentiation(BaseClass):
                                 if degree in degrees:
                                     continue
                                 orders = [(iparam, order, accuracy) for iparam, (order, accuracy) in enumerate(zip(orders, finiteaccuracy)) if order > 0]
-                                dx = [deriv_nd(X, y, orders, center=center) for y in Y]
+                                dx = [deriv_nd(X, y, orders, center=center, atol=0.) for y in Y]
                                 if any(np.isnan(ddx).any() for ddx in dx):
-                                    raise ValueError('Some derivatives are NaN')
+                                    raise ValueError('some derivatives are NaN')
                                 degrees.append(degree)
                                 for iy, (ddx, yshape) in enumerate(zip(dx, yshapes)): derivatives[iy].append(ddx.reshape(yshape))
                 autodegrees = nautodegrees
@@ -511,6 +538,7 @@ class Differentiation(BaseClass):
                 for param, derivative in zip(self.getter_inst.keys(), derivatives):
                     derivative.param = Parameter(param)
                     toret[param] = derivative
+                toret.attrs['center'] = self.center
             elif not self.getter_size:
                 toret = toret[0]
         self.samples = toret

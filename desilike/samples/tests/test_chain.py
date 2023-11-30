@@ -26,7 +26,6 @@ def test_misc():
     chain_dir = '_chains'
     params = ['like.a', 'like.b', 'like.c', 'like.d']
     mean, cov, chain = get_chain(params, nwalkers=10)
-
     chain['like.a'].param.update(latex='a', prior=ParameterPrior(limits=(-10., 10.)))
     assert isinstance(list(chain), list)
     pb = chain['like.b'].param
@@ -37,8 +36,11 @@ def test_misc():
     chain.save(fn)
     base_fn = os.path.join(chain_dir, 'chain')
     chain.write_getdist(base_fn, ichain=0)
-    chain2 = Chain.read_getdist(base_fn)
-    chain.to_getdist()
+    chain2 = Chain.read_getdist(base_fn, concatenate=True)
+    chain3 = Chain.from_getdist(chain.to_getdist())
+    for chain2 in [chain2, chain3]:
+        for param in chain2.params():
+            assert np.allclose(chain2[param], chain[param].ravel())
     chain.interval('like.a')
     chain2 = chain.deepcopy()
     chain['like.a'] += 1
@@ -58,6 +60,7 @@ def test_misc():
     assert not chain.concatenate(chain, chain)['like.a'].param.fixed
     assert chain.concatenate(chain, chain)._loglikelihood == 'LRG.loglikelihood'
     assert np.all(np.array(chain.match(chain)[0]) == np.array(np.unravel_index(np.arange(chain.size), shape=chain.shape)))
+    print(chain.mean('like.a'), chain.std('like.a'))
 
 
 def test_stats():
@@ -81,6 +84,8 @@ def test_stats():
     assert np.ndim(diagnostics.integrated_autocorrelation_time(chains, 'like.a')) == 0
     assert diagnostics.geweke(chains, params=['like.a'] * 2, first=0.25, last=0.75).shape == (2, len(chains))
     print(chain.to_stats(tablefmt='latex_raw'))
+    print(chain.to_stats(tablefmt='list_latex'))
+    assert isinstance(chain.to_stats(tablefmt='list')[0], list)
 
 
 def test_bcast():
@@ -102,11 +107,13 @@ def test_plot():
     params = ['like.a', 'like.b', 'like.c', 'like.d']
     chains = [get_chain(params, seed=ii)[-1] for ii in range(4)]
     plotting.plot_triangle(chains[0], fn=os.path.join(chain_dir, 'triangle.png'))
+    plotting.plot_triangle(chains[0], params=chains[0].params(varied=True), fn=os.path.join(chain_dir, 'triangle.png'))
     plotting.plot_triangle(chains[0], params='like.*', fn=os.path.join(chain_dir, 'triangle.png'))
     plotting.plot_triangle([chains[0], chains[1].select(name=params[1:])], params=params, fn=os.path.join(chain_dir, 'triangle.png'))
     plotting.plot_trace(chains[0], fn=os.path.join(chain_dir, 'trace.png'))
     plotting.plot_autocorrelation_time(chains[0], fn=os.path.join(chain_dir, 'autocorrelation_time.png'))
     plotting.plot_gelman_rubin(chains, fn=os.path.join(chain_dir, 'gelman_rubin.png'))
+    plotting.plot_gelman_rubin(chains[0], nsplits=8, fn=os.path.join(chain_dir, 'gelman_rubin.png'))
     plotting.plot_geweke(chains, fn=os.path.join(chain_dir, 'geweke.png'))
 
 
@@ -141,6 +148,8 @@ if __name__ == '__main__':
 
     setup_logging()
 
+    test_misc()
+    test_plot()
     test_bcast()
     test_misc()
     test_stats()

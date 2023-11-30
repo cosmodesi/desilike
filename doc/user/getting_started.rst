@@ -60,6 +60,12 @@ See :mod:`~desilike.theories.galaxy_clustering.full_shape` for all full shape mo
   # Or LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, etc.
   theory = KaiserTracerPowerSpectrumMultipoles(template=template)
 
+One can update the template (or any relevant calculator's options passed at initialization) with ``calculator.init.update(...)``:
+
+.. code-block:: python
+
+  theory.init.update(template=ShapeFitPowerSpectrumTemplate(z=1.))
+
 Then, we want to compare the theory to data (an *observable*), typically:
 
 - power spectrum multipoles, with :class:`~desilike.observables.galaxy_clustering.power_spectrum.TracerPowerSpectrumMultipolesObservable`,
@@ -119,7 +125,7 @@ The likelihood (and any other calculator) can be called at any point with:
 Parameters
 ----------
 
-Calculator parameters can be accessed e.g. with:
+Parameters of all calculators in the pipeline can be accessed e.g. with:
 
 .. code-block:: python
 
@@ -127,15 +133,16 @@ Calculator parameters can be accessed e.g. with:
   template.all_params  # df, qpar, qper, dm
   template.all_params.select(basename='q*')  # restrict to parameters with base name starting with q*: qpar, qper
 
-To get the parameters of a single calculator:
+To get only the parameters of the calculator:
 
 .. code-block:: python
 
-  theory.params  # b1, sn0
+  theory.init.params  # b1, sn0
 
 Above objects are :class:`~desilike.parameter.ParameterCollection`.
 
 Main parameter's attributes are (see :class:`~desilike.parameter.Parameter`):
+
 - its (base) name (basename)
 - its default value (value)
 - its prior (prior)
@@ -144,7 +151,20 @@ Main parameter's attributes are (see :class:`~desilike.parameter.Parameter`):
 - whether the parameter is fixed (fixed)
 - latex string (latex)
 
-They can be all updated with :meth:`~desilike.parameter.Parameter.update`, e.g.:
+They can be all updated with :meth:`~desilike.parameter.Parameter.update`. This can be done at the calculator level:
+
+.. code-block:: python
+
+  from desilike.theories import Cosmoprimo
+  from desilike.galaxy_clustering import DirectPowerSpectrumTemplate
+
+  cosmo = Cosmoprimo()
+  cosmo.init.params = {'Omega_m': {'value': 0.3}, 'h': {'value': 0.7}, 'sigma8': {'value': 0.8}}
+  cosmo.init.params['n_s'].update(value=0.96)
+
+  template = DirectPowerSpectrumTemplate(cosmo=cosmo, z=1.)
+
+Or at the pipeline level:
 
 .. code-block:: python
 
@@ -156,6 +176,16 @@ They can be all updated with :meth:`~desilike.parameter.Parameter.update`, e.g.:
   likelihood.all_params['b1'].update(value=2., fixed=True)
   # Now varied likelihood parameters are:
   likelihood.varied_params  # dm, df, sn0, qpar, qper
+
+.. note::
+
+  Changes to parameters at the calculator level (``calculator.init.params``) will be shared by all pipelines using this calculator instance;
+  e.g. if above ``cosmo`` is used by multiple templates ``template1``, ``template2``, etc.,
+  ``template1.all_params`` and ``template2.all_params`` would share the same Omega_m, h, sigma8 parameters.
+  However, updating parameters at the pipeline level, e.g. ``template1.all_params['n_s']`` leaves ``template2.all_params['n_s']`` untouched.
+  Also, if ``template1`` needs to be reinitialized, e.g. if passed to a theory, then changes to ``template1.all_params['n_s']`` will be lost.
+  Therefore, updates to ``calculator.all_params`` are only useful for the final calculator of the pipeline, typically the likelihood as illustrated above.
+
 
 The likelihood can be analytically marginalized over linear parameters (here ``sn0``):
 
@@ -181,22 +211,6 @@ One can reparameterize the whole likelihood as:
   likelihood.varied_params  # b1, sn0, df, dm, qiso, qap
 
 (a reparameterization we could have achieved in this particular case by passing ``apmode='qparqper'`` to ``ShapeFitPowerSpectrumTemplate``)
-
-To update the whole parameterization of a calculator, one can do:
-
-.. code-block:: python
-
-  cosmo = template.cosmo
-  cosmo.params = {'Omega_m': {'value': 0.3}, 'h': {'value': 0.7}, 'sigma8': {'value': 0.8}}
-  cosmo.params['n_s'].update(value=0.96)
-
-One can update the template (or any relevant calculator's options passed at initialization) with ``calculator.init.update(...)``:
-
-.. code-block:: python
-
-  from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate
-
-  theory.init.update(template=DirectPowerSpectrumTemplate(z=0.8))
 
 
 Bindings
@@ -315,11 +329,15 @@ These can be used with e.g.:
 
   from desilike.profilers import MinuitProfiler
 
-  profiler = MinuitProfiler(likelihood)
+  profiler = MinuitProfiler(likelihood)  # optinally, provide save_fn = 'profiles.npy' to save profiles to save_fn
   profiles = profiler.maximize(niterations=5)
   profiles = profiler.interval(params=['b1'])
   # To print relevant information
-  print(profiles.to_stats(tablefmt='pretty'))
+  if profiler.mpicomm.rank == 0:
+    print(profiles.to_stats(tablefmt='pretty'))
+    # If you saved profiles to 'profiles.npy', you can load the object with:
+    # from desilike.samples import Profiles
+    # profiles = Profiles.load('profiles.npy')
 
 See :class:`~desilike.samples.profiles.Profiles` to know more about this data class.
 
@@ -342,9 +360,23 @@ These can be used with e.g.:
 
   from desilike.samplers import EmceeSampler
 
-  sampler = EmceeSampler(likelihood)
+  sampler = EmceeSampler(likelihood, chains=4)  # optinally, provide save_fn = 'chain_*.npy' to save chains to save_fn
   chains = sampler.run(check={'max_eigen_gr': 0.05})  # run until Gelman-Rubin criterion < 0.05
   # To print relevant information
-  print(chains[0].to_stats(tablefmt='pretty'))
+  if sampler.mpicomm.rank == 0:  # chains only available on rank 0
+    chain = chains[0].concatenate([chain.remove_burnin(0.5)[::10] for chain in chains])  # removing burnin and thinning
+    print(chain.to_stats(tablefmt='pretty'))
+    # If you saved chains to 'chain_*.npy', you can load them with:
+    # from desilike.samples import Chain
+    # chain = Chain.concatenate([Chain.load('chain_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])  # remove burnin and thin by a factor 10
 
 See :class:`~desilike.samples.chain.Chain` to know more about this data class.
+
+
+MPI
+---
+All costly operations, e.g. emulation, Fisher (computation of numerical derivatives), profiling, sampling, are MPI-parallelized.
+Look at the emulator, profiler and sampler documentation for more information.
+In a nutshell, the code in the above sections (Emulators, Fisher, Profilers, Samplers) can be run without any change on several MPI processes;
+if written in a script ``yourscript.py``, it can be launched with e.g. 8 processes (or more, depending on your setup): ``mpiexec -np 8 yourscript.py``.
+On supercomputers using Slurm workload manager, one may have to use ``srun -n`` instead of ``mpiexec -np``.

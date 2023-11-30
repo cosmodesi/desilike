@@ -2,6 +2,7 @@ import numpy as np
 
 from desilike import utils
 from desilike.jax import numpy as jnp
+from desilike.jax import jit
 from .base import BaseEmulatorEngine
 from desilike import mpi
 
@@ -232,6 +233,7 @@ class MLPEmulatorEngine(BaseEmulatorEngine):
 
         self.operations = self.mpicomm.bcast(self.operations, root=0)
 
+    @jit(static_argnums=[0])
     def predict(self, X):
         x = X
         for operation in self.operations:

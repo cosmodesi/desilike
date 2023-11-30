@@ -88,6 +88,7 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         import pocomc
         diagonal = rescale == 'diagonal'
         rescale = bool(rescale)
+
         self.sampler = pocomc.Sampler(self.nwalkers, ndim, self.loglikelihood, self.logprior, bounds=bounds, threshold=threshold, scale=scale,
                                       rescale=rescale, diagonal=diagonal, flow_config=flow_config, train_config=train_config,
                                       vectorize_likelihood=True, vectorize_prior=True, infer_vectorization=False,
@@ -96,11 +97,15 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
             raise ValueError('save_fn must be provided, in order to save pocomc state')
         self.state_fn = [os.path.splitext(fn)[0] + '.pocomc.state' for fn in self.save_fn]
 
+    def loglikelihood(self, values):
+        return self.logposterior(values) - self.logprior(values)
+
     def logprior(self, params, bounds=None):
         return super(PocoMCSampler, self).logprior(params)
 
     def _prepare(self):
         self.resume = self.mpicomm.bcast(any(chain is not None for chain in self.chains), root=0)
+        #self.chains = [None] * len(self.chains)
 
     def _run_one(self, start, niterations=300, progress=False, **kwargs):
         if self.resume:
@@ -138,8 +143,8 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         #self.sampler.derived = [d[:-1] for d in self.derived]
         if self.mpicomm.rank == 0:
             self.sampler.save_state(self.state_fn[self._ichain])
-        data = [result['samples'][..., iparam] for iparam, param in enumerate(self.varied_params)] + [result['logprior'], result['loglikelihood']]
-        return Chain(data=data, params=self.varied_params + ['logprior', 'loglikelihood']).reshape(-1, self.nwalkers)
+        data = [result['samples'][..., iparam] for iparam, param in enumerate(self.varied_params)] + [result['loglikelihood'] + result['logprior']]
+        return Chain(data=data, params=self.varied_params + ['logposterior']).reshape(-1, self.nwalkers)
 
     @classmethod
     def install(cls, config):

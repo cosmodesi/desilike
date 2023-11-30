@@ -54,7 +54,7 @@ class BaseFootprint(BaseClass):
 
     """Base class to characterize 3D footprint: density and volume."""
 
-    def __init__(self, nbar=None, size=None, volume=None):
+    def __init__(self, nbar=None, size=None, volume=None, attrs=None):
         r"""
         Initialize footprint.
 
@@ -74,6 +74,7 @@ class BaseFootprint(BaseClass):
         for name in ['nbar', 'size', 'volume']:
             value = locals()[name]
             setattr(self, '_' + name, None if value is None else np.asarray(value))
+        self.attrs = dict(attrs or {})
 
     @property
     def volume(self):
@@ -96,22 +97,28 @@ class BaseFootprint(BaseClass):
         """Intersection of footprints ``self`` with ``other``."""
         return self.__class__(nbar=self._nbar + other._nbar, volume=min(self.volume, other.volume))
 
-
-class BoxFootprint(BaseFootprint):
-
     def __getstate__(self):
-        state = {}
+        state = {'attrs': self.attrs}
         for name in ['nbar', 'size', 'volume']:
             name = '_' + name
             state[name] = getattr(self, name)
         return state
+
+    def __setstate__(self, state):
+        state.setdefault('attrs', {})  # backward-compatibility
+        super(BaseFootprint, self).__setstate__(state)
+
+
+class BoxFootprint(BaseFootprint):
+
+    """Box footprint."""
 
 
 class CutskyFootprint(BaseFootprint):
 
     """Extend :class:`BaseFootprint` to cutsky: surface area, redshift range and redshift density."""
 
-    def __init__(self, nbar=None, size=None, area=None, zrange=None, cosmo=None):
+    def __init__(self, nbar=None, size=None, area=None, zrange=None, cosmo=None, attrs=None):
         r"""
         Initialize footprint.
 
@@ -138,14 +145,12 @@ class CutskyFootprint(BaseFootprint):
         if area is None or zrange is None:
             raise ValueError('provide area (in deg^2) and zrange (zmin, zmax)')
         for name in ['area', 'zrange', 'nbar']:
-            value = np.asarray(locals()[name])
+            value = np.asarray(locals()[name]).flatten()
             if value.size <= 1: value.shape = ()
             setattr(self, '_' + name, value)
         self._size = size
-        argsort = np.argsort(self._zrange)
-        self._zrange = self._zrange[argsort]
-        if self._nbar.size == self._zrange.size: self._nbar = self._nbar[argsort]
         self.cosmo = cosmo
+        self.attrs = dict(attrs or {})
 
     @property
     def cosmo(self):
@@ -177,8 +182,20 @@ class CutskyFootprint(BaseFootprint):
         z = (self._zrange[:-1] + self._zrange[1:]) / 2.
         if self._nbar.ndim:
             volume = np.diff(self.cosmo.comoving_radial_distance(self._zrange)**3)
-            nbar = (self._nbar[:-1] + self._nbar[1:]) / 2.
+            if self._nbar.size == self._zrange.size - 1: nbar = self._nbar
+            else: nbar = (self._nbar[:-1] + self._nbar[1:]) / 2.
             return np.average(z, weights=nbar * volume)
+        return np.mean(z)
+
+    @property
+    def zeff(self):
+        r"""Effective redshift."""
+        z = (self._zrange[:-1] + self._zrange[1:]) / 2.
+        if self._nbar.ndim:
+            volume = np.diff(self.cosmo.comoving_radial_distance(self._zrange)**3)
+            if self._nbar.size == self._zrange.size - 1: nbar = self._nbar
+            else: nbar = (self._nbar[:-1] + self._nbar[1:]) / 2.
+            return np.average(z, weights=nbar**2 * volume)
         return np.mean(z)
 
     @property
@@ -192,7 +209,8 @@ class CutskyFootprint(BaseFootprint):
             return self._size
         if self._nbar.ndim:
             volume = np.diff(self.cosmo.comoving_radial_distance(self._zrange)**3)
-            nbar = (self._nbar[:-1] + self._nbar[1:]) / 2.
+            if self._nbar.size == self._zrange.size - 1: nbar = self._nbar
+            else: nbar = (self._nbar[:-1] + self._nbar[1:]) / 2.
             return self.area / (180. / np.pi)**2 / 3. * np.sum(nbar * volume)
         return self.area * self._nbar
 
@@ -208,14 +226,31 @@ class CutskyFootprint(BaseFootprint):
         if self._size is not None or other._size is not None or self._nbar.ndim == 0 or other._nbar.ndim == 0:
             nbar = self._nbar + other._nbar
         else:
-            nbar = np.interp(zrange, self._zrange, self._nbar) + np.interp(zrange, other._zrange, other._nbar)
+            def interp_nbar(zrange, self_zrange, self_nbar):
+                if self_nbar.size == self_zrange.size - 1:
+                    zrange = (zrange[:-1] + zrange[1:]) / 2.
+                    self_zrange = (self_zrange[:-1] + self_zrange[1:]) / 2.
+                    return np.interp(zrange, self_zrange, self_nbar)
+                return np.interp(zrange, self_zrange, self_nbar)
+
+            m1 = True
+            zranges, nbars = [], []
+            for i, inst in enumerate([self, other]):
+                zranges.append(inst._zrange)
+                nbars.append(inst._nbar)
+                if inst._nbar.size != inst._zrange.size - 1: m1 = False
+            if not m1:
+                for i, inst in enumerate([self, other]):
+                    if inst._nbar.size == inst._zrange.size - 1: nbars[i] = (inst._nbar[:-1] + inst._nbar[1:]) / 2.
+
+            nbar = sum(interp_nbar(zrange, z, n) for z, n in zip(zranges, nbars))
         if zrange.size < 2:
             zrange = [zrange[0], zrange[1]]
-            nbar *= 0.
+            nbar = 0.
         return self.__class__(nbar=nbar, zrange=zrange, area=area, cosmo=self.cosmo)
 
     def __getstate__(self):
-        state = {}
+        state = {'attrs': self.attrs}
         for name in ['area', 'zrange', 'nbar', 'size']:
             name = '_' + name
             state[name] = getattr(self, name)
@@ -223,6 +258,7 @@ class CutskyFootprint(BaseFootprint):
         return state
 
     def __setstate__(self, state):
+        state.setdefault('attrs', {})  # backward-compatibility
         super(CutskyFootprint, self).__setstate__(state)
         if self._cosmo is not None:
             from cosmoprimo import Cosmology

@@ -13,11 +13,11 @@ class PowerModel(BaseCalculator):
         self.x = np.linspace(0.1, 1.1, 11)
         self.order = order
         for i in range(self.order):
-            self.params.set(Parameter('a{:d}'.format(i), value=1.5, ref={'limits': [1., 3.]}))
+            self.params.set(Parameter('a{:d}'.format(i), value=1.5, ref={'limits': [1., 3.]}, delta=0.1))
 
     def calculate(self, **kwargs):
         #self.model = sum(kwargs['a{:d}'.format(i)] * self.x**i for i in range(self.order))
-        self.model = jnp.prod(jnp.array([kwargs['a{:d}'.format(i)]**(i + 1) for i in range(self.order)])) * self.x
+        self.model = jnp.prod(jnp.array([kwargs['a{:d}'.format(i)]**(i + 2) for i in range(self.order)])) * self.x
 
     def __getstate__(self):
         return {name: getattr(self, name) for name in ['x', 'model']}
@@ -25,12 +25,13 @@ class PowerModel(BaseCalculator):
 
 def test_taylor_power(plot=False):
 
-    for order in [3, 4]:
+    for order in [3, 4][:0]:
         calculator = PowerModel()
         emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=order))
         emulator.set_samples()
         emulator.fit()
         emulator.check()
+        emulator.plot(show=plot)
 
         emulated_calculator = emulator.to_calculator()
 
@@ -42,20 +43,21 @@ def test_taylor_power(plot=False):
         #d = Differentiation(emulated_calculator, getter, order=1)()
         #assert not np.isnan(d).any()
 
-        if plot:
+        if True:
             from matplotlib import pyplot as plt
             ax = plt.gca()
             for i, dx in enumerate(np.linspace(-1., 1., 5)):
-                calculator(**{str(param): param.value + dx for param in calculator.runtime_info.params if param.varied})
-                emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.runtime_info.params if param.varied})
+                calculator(**{str(param): param.value + dx for param in calculator.varied_params})
+                emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.varied_params})
                 color = 'C{:d}'.format(i)
                 ax.plot(calculator.x, calculator.model, color=color, linestyle='--')
                 ax.plot(emulated_calculator.x, emulated_calculator.model, color=color, linestyle='-')
             plt.show()
 
-    for order in [3, 4]:
+    for order in [3, 4, 7]:
         calculator = PowerModel()
-        for param in calculator.all_params: param.update(value=1., prior={'limits': [1., 2.]})
+        for param in calculator.all_params: param.update(value=1.1, prior={'limits': [1., 2.]})
+        #calculator.all_params['a1'].update(fixed=True)
         emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=order, accuracy={'*': 2, 'a1': 4}))
         emulator.set_samples(method='finite')
         emulator.fit()
@@ -73,9 +75,9 @@ def test_taylor_power(plot=False):
         if plot:
             from matplotlib import pyplot as plt
             ax = plt.gca()
-            for i, dx in enumerate(np.linspace(1., 2., 5)):
-                calculator(**{str(param): param.value + dx for param in calculator.runtime_info.params if param.varied})
-                emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.runtime_info.params if param.varied})
+            for i, dx in enumerate(np.linspace(1., 4., 5)):
+                calculator(**{str(param): param.value + dx for param in calculator.varied_params})
+                emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.varied_params})
                 color = 'C{:d}'.format(i)
                 ax.plot(calculator.x, calculator.model, color=color, linestyle='--')
                 ax.plot(emulated_calculator.x, emulated_calculator.model, color=color, linestyle='-')
@@ -137,6 +139,6 @@ def test_likelihood():
 if __name__ == '__main__':
 
     setup_logging()
-    test_taylor_power(plot=False)
-    test_taylor(plot=True)
-    test_likelihood()
+    test_taylor_power(plot=True)
+    #test_taylor(plot=True)
+    #test_likelihood()

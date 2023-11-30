@@ -3,21 +3,20 @@ class: SimpleTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   sn0:
     prior:
       dist: norm
       loc: 0.
-      scale: 1e7
+      scale: 1000.
     ref:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 0.1
     latex: s_{n, 0}
-    fixed: False
   sigmapar:
     value: 0.
     prior:
@@ -29,6 +28,7 @@ params:
     latex: \Sigma_{\parallel}
     fixed: True
   sigmaper:
+    fixed: True
     value: 0.
     prior:
       limits: [0., 10]
@@ -37,7 +37,6 @@ params:
       loc: 5.
       scale: 2.
     latex: \Sigma_{\perp}
-    fixed: True
 
 ---
 
@@ -46,21 +45,20 @@ class: KaiserTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   sn0:
     prior:
       dist: norm
       loc: 0.
-      scale: 1e7
+      scale: 1000.
     ref:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 0.1
     latex: s_{n, 0}
-    fixed: False
   sigmapar:
     value: 0.
     prior:
@@ -89,10 +87,9 @@ class: KaiserTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   sigmapar:
     value: 0.
@@ -122,49 +119,15 @@ class: EFTLikeKaiserTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
-  b2:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{2}
-    fixed: True
-  bs:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{s}
-    fixed: True
-  b3:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{3}
-    fixed: True
   ct[:5:2]_2:
     prior:
       dist: norm
       loc: 0.
-      scale: 100
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -174,21 +137,21 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 1e7
+      scale: 1000.
     ref:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 0.1
     latex: s_{n, 0}
   sn[:5:2]_2:
     prior:
       dist: norm
       loc: 0.
-      scale: 1e7
+      scale: 1000.
     ref:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 0.1
     latex: s_{[], 2}
   sigmapar:
     value: 0.
@@ -218,49 +181,15 @@ class: EFTLikeKaiserTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
-  b2:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{2}
-    fixed: True
-  bs:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{s}
-    fixed: True
-  b3:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{3}
-    fixed: True
   ct[:5:2]_2:
     prior:
       dist: norm
       loc: 0.
-      scale: 100
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -295,10 +224,9 @@ class: TNSTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   b2:
     prior:
@@ -311,6 +239,7 @@ params:
       scale: 0.5
     latex: b_{2}
   bs:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -320,8 +249,8 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{s}
-    fixed: True
   b3:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -331,7 +260,29 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
+  sn0:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 0}
+  sigmav:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 20.
+      limits: [0., 10.]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    delta: 2.
+    latex: \sigma_{v}
+
 
 ---
 
@@ -340,10 +291,9 @@ class: TNSTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   b2:
     prior:
@@ -356,6 +306,7 @@ params:
       scale: 0.5
     latex: b_{2}
   bs:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -365,8 +316,8 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{s}
-    fixed: True
   b3:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -376,7 +327,18 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
+  sigmav:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 20.
+      limits: [0., 10.]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    delta: 2.
+    latex: \sigma_{v}
 
 
 ---
@@ -386,10 +348,9 @@ class: EFTLikeTNSTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   b2:
     prior:
@@ -402,6 +363,7 @@ params:
       scale: 0.5
     latex: b_{2}
   bs:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -411,8 +373,8 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{s}
-    fixed: True
   b3:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
@@ -422,12 +384,11 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
   ct[:5:2]_2:
     prior:
       dist: norm
       loc: 0.
-      scale: 100
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -437,22 +398,22 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 1e7
+      scale: 1000.
     ref:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 0.1
     latex: s_{n, 0}
   sn[:5:2]_2:
     prior:
       dist: norm
       loc: 0.
-      scale: 1e7
+      scale: 1000.
     ref:
       dist: norm
       loc: 0.
-      scale: 100.
-    latex: s_{[], 2}
+      scale: 0.1
+    latex: s_{n, [], 2}
 
 ---
 
@@ -461,10 +422,9 @@ class: EFTLikeTNSTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
-      limits: [1.0, 2.0]
+      limits: [1., 2.]
     latex: b_{1}
   b2:
     prior:
@@ -478,31 +438,32 @@ params:
     latex: b_{2}
     fixed: True
   bs:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 5.
     ref:
       dist: norm
       loc: 0.
       scale: 0.5
     latex: b_{s}
   b3:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 5.
     ref:
       dist: norm
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
   ct[:5:2]_2:
     prior:
       dist: norm
       loc: 0.
-      scale: 100
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
@@ -517,8 +478,7 @@ class: LPTVelocileptorsTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
-      limits: [-1., 4.0]
+      limits: [-1., 10.]
     ref:
       limits: [0.4, 0.6]
     latex: b_{1}
@@ -526,7 +486,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
@@ -536,43 +496,94 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 5.
     ref:
       dist: norm
       loc: 0.
       scale: 0.5
     latex: b_{s}
   b3:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 5.
     ref:
       dist: norm
       loc: 0.
       scale: 0.5
     latex: b_{3}
+  alpha0:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 30.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{0}
+  alpha2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{2}
+  alpha4:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{4}
+  alpha6:
     fixed: True
-  alpha[0:7:2]:
     prior:
       dist: norm
       loc: 0.
-      scale: 100
+      scale: 50.
     ref:
       dist: norm
       loc: 0.
       scale: 1.
-    latex: \alpha_{[]}
-  sn[:5:2]:
+    latex: \alpha_{6}
+  sn0:
     prior:
       dist: norm
       loc: 0.
-      scale: 1000.
+      scale: 4.
     ref:
       dist: norm
       loc: 0.
-      scale: 1.
-    latex: s_{n, []}
+      scale: 0.1
+    latex: s_{n, 0}
+  sn2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 2}
+  sn4:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 500.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 4}
 
 ---
 
@@ -581,8 +592,7 @@ class: LPTVelocileptorsTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
-      limits: [-1., 4.0]
+      limits: [-1., 10.]
     ref:
       limits: [0.4, 0.6]
     latex: b_{1}
@@ -590,7 +600,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
@@ -600,24 +610,55 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 3.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
       scale: 0.5
     latex: b_{s}
   b3:
+    fixed: True
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
       scale: 0.5
     latex: b_{3}
+  alpha0:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 30.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{0}
+  alpha2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{2}
+  alpha4:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{4}
+  alpha6:
     fixed: True
-  alpha[0:7:2]:
     prior:
       dist: norm
       loc: 0.
@@ -625,18 +666,8 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 1.0
-    latex: \alpha_{[]}
-  sn[:5:2]:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 50.
-    latex: s_{n, []}
+      scale: 1.
+    latex: \alpha_{6}
 
 ---
 
@@ -645,8 +676,7 @@ class: EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
-      limits: [-1., 4.0]
+      limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
     latex: b_{1}
@@ -681,16 +711,15 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
   alpha[0:7:2]:
     prior:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
-      scale: 1.0
+      scale: 1.
     latex: \alpha_{[]}
   sn[:5:2]:
     prior:
@@ -700,7 +729,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 0.1
     latex: s_{n, []}
   alpha:
     value: 0.
@@ -731,7 +760,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: s_{v}
   sigma0:
     prior:
@@ -741,7 +770,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: \sigma_{0}
   stoch_k0:
     prior:
@@ -751,7 +780,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: s_{k, 0}
   counterterm_c3:
     value: 0.
@@ -764,8 +793,7 @@ class: EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
-      limits: [-1., 4.0]
+      limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
     latex: b_{1}
@@ -800,16 +828,15 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
   alpha[0:7:2]:
     prior:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
-      scale: 1.0
+      scale: 1.
     latex: \alpha_{[]}
   sn[:5:2]:
     prior:
@@ -819,7 +846,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 0.1
     latex: s_{n, []}
   alpha:
     value: 0.
@@ -850,7 +877,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 100.
     latex: s_{v}
   sigma0:
     prior:
@@ -883,8 +910,7 @@ class: LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      dist: uniform
-      limits: [-1., 4.0]
+      limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
     latex: b_{1}
@@ -919,16 +945,15 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
   alpha[0:7:2]:
     prior:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
-      scale: 1.0
+      scale: 1.
     latex: \alpha_{[]}
   sn[:5:2]:
     prior:
@@ -938,7 +963,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 0.1
     latex: s_{n, []}
   alpha:
     value: 0.
@@ -969,7 +994,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: s_{v}
   sigma0:
     prior:
@@ -979,7 +1004,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: \sigma_{0}
   sigma0_stoch:
     prior:
@@ -989,7 +1014,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: s_{k, 0}
   counterterm_c3:
     value: 0.
@@ -1003,8 +1028,7 @@ class: LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      dist: uniform
-      limits: [-1., 4.0]
+      limits: [-1., 4.]
     ref:
       limits: [0.4, 0.6]
     latex: b_{1}
@@ -1039,16 +1063,15 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-    fixed: True
   alpha[0:7:2]:
     prior:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 100.
     ref:
       dist: norm
       loc: 0.
-      scale: 1.0
+      scale: 1.
     latex: \alpha_{[]}
   sn[:5:2]:
     prior:
@@ -1058,7 +1081,7 @@ params:
     ref:
       dist: norm
       loc: 0.
-      scale: 50.
+      scale: 0.1
     latex: s_{n, []}
   alpha:
     value: 0.
@@ -1089,7 +1112,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: s_{v}
   sigma0:
     prior:
@@ -1099,7 +1122,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: \sigma_{0}
   sigma0_stoch:
     prior:
@@ -1109,7 +1132,7 @@ params:
     ref:
       dist: norm
       loc: 0
-      scale: 50.
+      scale: 1.
     latex: s_{k, 0}
   counterterm_c3:
     value: 0.
@@ -1123,13 +1146,13 @@ class: PyBirdTracerPowerSpectrumMultipoles
 params:
   b1:
     prior:
-      limits: [0., 4.0]
+      limits: [0., 10.]
     ref:
       limits: [1.4, 1.6]
     latex: b_{1}
   b2:
     prior:
-      limits: [-10., 10.]
+      limits: [-15., 15.]
     ref:
       limits: [-1., 1.]
     latex: b_{2}
@@ -1137,7 +1160,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
@@ -1145,61 +1168,124 @@ params:
     latex: b_{3}
   b4:
     prior:
-      limits: [-10., 10.]
+      limits: [-15., 15.]
     ref:
       limits: [-1., 1.]
     latex: b_{4}
+  cct:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{t}
+  cr1:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{r, 1}
+  cr2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{r, 2}
+  cr4:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{r, 4}
+  cr6:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{r, 6}
+  ce0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{e, 0}
+  ce1:
+    fixed: True
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{e, 1}
+  ce2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{e, 2}
+  # velocileptors
+  bs:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 10.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{s}
   # west coast
   b2p4:
     prior:
-      limits: [-10., 10.]
+      limits: [-15., 15.]
     ref:
       limits: [-1., 1.]
     latex: '(b_{2} + b_{4})/\sqrt{2}'
   b2m4:
+    fixed: True
     prior:
-      limits: [-10., 10.]
+      limits: [-15., 15.]
     ref:
       limits: [-1., 1.]
     latex: '(b_{2} - b_{4})/\sqrt{2}'
-    fixed: True
-  cct:
+  # east coast
+  b2t:
     prior:
+      limits: [-15., 15.]
+    ref:
+      limits: [-1., 1.]
+    latex: 'b_{2t}'
+  b2g:
+    prior:
+      limits: [-15., 15.]
+    ref:
+      limits: [-1., 1.]
+    latex: 'b_{2g}'
+  b3g:
+    prior:
+      limits: [-15., 15.]
+    ref:
+      limits: [-1., 1.]
+    latex: 'b_{2g}'
+  c[:5:2]:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{[]}
+  ct:
+    prior:
+    ref:
       dist: norm
       loc: 0.
       scale: 100.
     latex: c_{t}
-  cr1:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 100.
-    latex: c_{r, 1}
-  cr2:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 100.
-    latex: c_{r, 2}
-  cr4:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 100.
-    latex: c_{r, 4}
-  cr6:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 100.
-    latex: c_{r, 6}
-  ce[:3]:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 100.
-    latex: c_{e, []}
-
 ---
 
 class: PyBirdTracerCorrelationFunctionMultipoles
@@ -1207,10 +1293,16 @@ class: PyBirdTracerCorrelationFunctionMultipoles
 params:
   b1:
     prior:
-      limits: [0., 4.0]
+      limits: [0., 4.]
     ref:
       limits: [1.4, 1.6]
     latex: b_{1}
+  b2:
+    prior:
+      limits: [-15., 15.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{2}
   b3:
     prior:
       dist: norm
@@ -1221,61 +1313,234 @@ params:
       loc: 0.
       scale: 0.5
     latex: b_{3}
-  b2:
-    prior:
-      limits: [-10., 10.]
-    ref:
-      limits: [-1., 1.]
-    latex: b_{2}
   b4:
     prior:
-      limits: [-10., 10.]
+      limits: [-15., 15.]
     ref:
       limits: [-1., 1.]
     latex: b_{4}
-  # west coast
-  b2p4:
-    prior:
-      limits: [-10., 10.]
-    latex: '(b_{2} + b_{4})/\sqrt{2}'
-  b2m4:
-    prior:
-      limits: [-10., 10.]
-    latex: '(b_{2} - b_{4})/\sqrt{2}'
-    fixed: True
   cct:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 2.
     latex: c_{t}
   cr1:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 4.
     latex: c_{r, 1}
   cr2:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 4.
     latex: c_{r, 2}
   cr4:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 10.
     latex: c_{r, 4}
   cr6:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 10.
     latex: c_{r, 6}
-  ce[:3]:
+  # velocileptors
+  bs:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 3.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{s}
+  # west coast
+  b2p4:
+    prior:
+      limits: [-15., 15.]
+    ref:
+      limits: [-1., 1.]
+    latex: '(b_{2} + b_{4})/\sqrt{2}'
+  b2m4:
+    fixed: True
+    prior:
+      limits: [-15., 15.]
+    ref:
+      limits: [-1., 1.]
+    latex: '(b_{2} - b_{4})/\sqrt{2}'
+  # east coast
+  b2t:
+    prior:
+      limits: [-15., 15.]
+    ref:
+      limits: [-1., 1.]
+    latex: 'b_{2t}'
+  b2g:
+    prior:
+      limits: [-15., 15.]
+    ref:
+      limits: [-1., 1.]
+    latex: 'b_{2g}'
+  b3g:
+    prior:
+      limits: [-15., 15.]
+    ref:
+      limits: [-1., 1.]
+    latex: 'b_{2g}'
+  c[:5:2]:
     prior:
       dist: norm
       loc: 0.
       scale: 100.
-    latex: c_{e, []}
+    latex: c_{[]}
+  ct:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    latex: c_{t}
+---
+
+class: FOLPSTracerPowerSpectrumMultipoles
+
+params:
+  b1:
+    prior:
+      limits: [0., 10.]
+    ref:
+      limits: [1.4, 1.6]
+    latex: b_{1}
+  b2:
+    prior:
+      limits: [-50., 50.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{2}
+  bs:
+    ref:
+      limits: [-1., 1.]
+    latex: b_{s}
+  b3:
+    fixed: True
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{3}
+  alpha0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{0}
+  alpha2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{2}
+  alpha4:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{4}
+  ct:
+    fixed: True
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{t}
+  sn0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 0}
+  sn2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 2}
+  sn4:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 4}
+
+---
+
+class: FOLPSTracerCorrelationFunctionMultipoles
+
+params:
+  b1:
+    prior:
+      limits: [0., 10.]
+    ref:
+      limits: [1.4, 1.6]
+    latex: b_{1}
+  b2:
+    prior:
+      limits: [-50., 50.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{2}
+  bs:
+    prior:
+    ref:
+      limits: [-1., 1.]
+    latex: b_{s}
+  b3:
+    fixed: True
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{3}
+  alpha0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{0}
+  alpha2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{2}
+  alpha4:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{4}
+  ct:
+    fixed: True
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{t}

@@ -7,9 +7,9 @@ from desilike import setup_logging
 
 class LinearModel(BaseCalculator):
 
-    params = {'a': {'value': 0.5, 'ref': {'limits': [-2., 2.]}}, 'b': {'value': 0.5, 'ref': {'limits': [-2., 2.]}}}
-    #params = {'a': {'value': 0.5, 'ref': {'limits': [-2., 2.]}}}
-    #params = {'b': {'value': 0.5, 'ref': {'limits': [-2., 2.]}}}
+    _params = {'a': {'value': 0.5, 'ref': {'limits': [-2., 2.]}}, 'b': {'value': 0.5, 'ref': {'limits': [-2., 2.]}}}
+    #_params = {'a': {'value': 0.5, 'ref': {'limits': [-2., 2.]}}}
+    #_params = {'b': {'value': 0.5, 'ref': {'limits': [-2., 2.]}}}
 
     def initialize(self):
         self.x = np.linspace(0.1, 1.1, 11)
@@ -33,8 +33,8 @@ def test_mlp_linear(plot=False):
         from matplotlib import pyplot as plt
         ax = plt.gca()
         for i, dx in enumerate(np.linspace(-1., 1., 5)):
-            calculator(**{str(param): param.value + dx for param in calculator.runtime_info.full_params if param.varied})
-            emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.runtime_info.full_params if param.varied})
+            calculator(**{str(param): param.value + dx for param in calculator.varied_params})
+            emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.varied_params})
             color = 'C{:d}'.format(i)
             ax.plot(calculator.x, calculator.model, color=color, linestyle='--')
             ax.plot(emulated_calculator.x, emulated_calculator.model, color=color, linestyle='-')
@@ -51,8 +51,8 @@ def test_mlp(plot=False):
     emulator.check(frac=1.)
 
     calculator = emulator.to_calculator()
-    calculator(**{str(param): param.value for param in calculator.params if param.varied})
-    calculator(**{str(param): param.value * 1.1 for param in calculator.params if param.varied})
+    calculator(**{str(param): param.value for param in calculator.varied_params})
+    calculator(**{str(param): param.value * 1.1 for param in calculator.varied_params})
     assert not np.allclose(calculator.power, power_bak)
 
     if plot:
@@ -68,5 +68,5 @@ def test_mlp(plot=False):
 if __name__ == '__main__':
 
     setup_logging()
-    #test_mlp_linear(plot=True)
+    test_mlp_linear(plot=True)
     test_mlp(plot=True)

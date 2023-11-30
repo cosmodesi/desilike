@@ -305,7 +305,7 @@ class Installer(BaseClass):
         try:
             return self.config[name]
         except KeyError as exc:
-            raise KeyError('Config option {} does not exist; maybe the corresponding calculator should be installed?'.format(name)) from exc
+            raise KeyError('Config option {} does not exist in config {}; maybe the corresponding calculator should be installed?'.format(name, self.config_fn)) from exc
 
     def __call__(self, obj):
         """

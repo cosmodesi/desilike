@@ -2,8 +2,69 @@ import numpy as np
 from scipy import special
 
 from desilike.jax import numpy as jnp
+from desilike.jax import jit
 from desilike.base import BaseCalculator
 from desilike import plotting, utils
+
+
+def window_matrix_bininteg(list_edges, resolution=1):
+    r"""
+    Build window matrix for binning, in the continuous limit, i.e. integral of :math:`\int dx x^2 f(x) / \int dx x^2` over each bin.
+
+    Parameters
+    ----------
+    resolution : int, default=1
+        Number of evaluation points in the integral.
+
+    Returns
+    -------
+    xin : array
+        Input theory coordinates.
+
+    full_matrix : array
+        Window matrix.
+    """
+    resolution = int(resolution)
+    if resolution <= 0:
+        raise ValueError('resolution must be a strictly positive integer')
+    if np.ndim(list_edges[0]) == 0:
+        list_edges = [list_edges]
+
+    step = min(np.diff(edges).min() for edges in list_edges) / resolution
+    start, stop = min(np.min(edges) for edges in list_edges), max(np.max(edges) for edges in list_edges)
+    xin = np.arange(start + step / 2., stop, step)
+
+    matrices = []
+    for edges in list_edges:
+        x, w = [], []
+        for ibin, bin in enumerate(zip(edges[:-1], edges[1:])):
+            x.append(np.linspace(*bin, resolution + 2)[1:-1])
+            edge = np.linspace(*bin, resolution + 1)
+            line = np.zeros((len(edges) - 1) * resolution, dtype='f8')
+            line[ibin * resolution:(ibin + 1) * resolution] = (edge[1:]**2 - edge[:-1]**2) / (edge[-1]**2 - edge[0]**2)  # dx is constant
+            w.append(line)
+        matrices.append(utils.matrix_lininterp(xin, np.concatenate(x)).dot(np.column_stack(w)))  # linear interpolation * integration weights
+    full_matrix = []
+    for iin, matin in enumerate(matrices):
+        line = []
+        for i, mat in enumerate(matrices):
+            if i == iin:
+                line.append(mat)
+            else:
+                line.append(np.zeros_like(mat))
+        full_matrix.append(line)
+    full_matrix = np.bmat(full_matrix).A
+    return xin, full_matrix
+
+
+def unpack(x, flatarray):
+    toret = []
+    nout = 0
+    for xx in x:
+        sl = slice(nout, nout + len(xx))
+        toret.append(flatarray[sl])
+        nout = sl.stop
+    return toret
 
 
 class WindowedPowerSpectrumMultipoles(BaseCalculator):
@@ -26,12 +87,14 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         Observed multipoles.
         Defaults to poles in ``klim``, if provided; else ``(0, 2, 4)``.
 
-    ellsin : tuple, default=None
-        Optionally, input theory multipoles.
-        If not specified, taken from ``wmatrix`` if provided, else ``(0, 2, 4)``.
-
-    wmatrix : str, Path, pypower.BaseMatrix, default=None
+    wmatrix : str, Path, pypower.BaseMatrix, dict, array, default=None
         Optionally, window matrix.
+        Can be e.g. {'resolution': 2}, specifying the number of theory :math:`k` to integrate over per observed bin.
+        If a 2D array (window matrix), output and input wavenumbers and multipoles ``k``, ``ells``, ``kin``, ``ellsin`` should be provided.
+
+    kin : array, default=None
+        If provided, linearly interpolate ``wmatrix`` along input wavenumbers to these wavenumbers,
+        or if ``wmatrix`` is a 2D array, assume those are the input wavenumbers.
 
     kinrebin : int, default=1
         If ``wmatrix`` (which is defined for input theory wavenumbers) is provided,
@@ -41,74 +104,112 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         If ``wmatrix`` (which is defined for input theory wavenumbers) is provided,
         limit theory wavenumbers in the provided range.
 
+    ellsin : tuple, default=None
+        Optionally, input theory multipoles.
+        If not specified, taken from ``wmatrix`` if provided, else ``(0, 2, 4)``.
+
     shotnoise : float, default=0.
         Shot noise (window matrix must be applied to power spectrum with shot noise).
 
-    fiber_collisions : BaseFiberCollisionsPowerSpectrumMultipoles
+    fiber_collisions : BaseFiberCollisionsPowerSpectrumMultipoles, default=None
         Optionally, fiber collisions.
+
+    systematic_templates : SystematicTemplatePowerSpectrumMultipoles, default=None
+        Optionally, systematic templates.
 
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory power spectrum multipoles, defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
     """
-    def initialize(self, klim=None, k=None, ells=None, ellsin=None, wmatrix=None, kinrebin=1, kinlim=None, shotnoise=0., fiber_collisions=None, theory=None):
+    def initialize(self, klim=None, k=None, ells=None, wmatrix=None, kin=None, kinrebin=1, kinlim=None, ellsin=None, shotnoise=None, fiber_collisions=None, systematic_templates=None, theory=None):
+        from scipy import linalg
+
         _default_step = 0.01
 
         if ells is None:
-            if klim is not None:
-                ells = klim.keys()
-            else:
-                ells = (0, 2, 4)
+            if klim is not None: ells = klim.keys()
+            else: ells = (0, 2, 4)
         self.ells = tuple(ells)
-        self.kedges = None
+        self.k = self.kmasklim = self.kedges = None
+        if k is not None:
+            if np.ndim(k[0]) == 0:
+                k = [k] * len(self.ells)
+            self.k = [np.array(kk, dtype='f8') for kk in k]
+            if len(self.k) != len(self.ells):
+                raise ValueError("provide as many k's as ells")
 
         if klim is not None:
             klim = dict(klim)
             self.kedges = []
-            for ell in self.ells:
+            if self.k is not None:
+                k, ells, self.kmasklim = [], [], {}
+                for ill, ell in enumerate(self.ells):
+                    kk = self.k[ill]
+                    self.kmasklim[ell] = np.zeros(len(kk), dtype='?')
+                    if ell not in klim: continue  # do not take this multipole
+                    self.kmasklim[ell][...] = True
+                    lim = klim[ell]
+                    if lim is not None:  # cut
+                        (lo, hi, *step) = klim[ell]
+                        kmask = (kk >= lo) & (kk <= hi)
+                        kk = kk[kmask]  # scale cuts
+                        self.kmasklim[ell][...] = kmask
+                    if kk.size:
+                        k.append(kk)
+                        ells.append(ell)
+                self.k, self.ells = k, tuple(ells)
+            elif list(self.ells) != list(klim.keys()):
+                raise ValueError('incompatible ells = {} and klim = {}; just remove ells?', self.ells, klim.keys())
+            for ill, ell in enumerate(self.ells):
                 if klim[ell] is None:
                     self.kedges = None
                     break
                 (lo, hi, *step) = klim[ell]
-                if not step: step = (_default_step,)
+                if not step:
+                    if self.k is not None: step = ((hi - lo) / self.k[ill].size,)
+                    else: step = (_default_step,)
                 self.kedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
+        else:
+            klim = {ell: None for ell in self.ells}
 
-        if k is None:
-            if self.kedges is None:
-                k = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
-            else:
-                k = [(edges[:-1] + edges[1:]) / 2. for edges in self.kedges]
+        if self.kedges is None:
+            self.kedges = [np.arange(0.01 - _default_step / 2., 0.2 + _default_step, _default_step)] * len(self.ells)  # gives k = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
 
-        if np.ndim(k[0]) == 0:
-            k = [k] * len(self.ells)
-        self.k = [np.array(kk, dtype='f8') for kk in k]
-        if len(self.k) != len(self.ells):
-            raise ValueError("Provided as many k's as ells")
+        if self.k is None:
+            self.k = [(edges[:-1] + edges[1:]) / 2. for edges in self.kedges]
 
         if theory is None:
             from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
             theory = KaiserTracerPowerSpectrumMultipoles()
         self.theory = theory
 
-        self.ellsin = ellsin
         self.matrix_full, self.kmask, self.offset = None, None, None
         if wmatrix is None:
+            self.ellsin = tuple(self.ells)
             self.kin = np.unique(np.concatenate(self.k, axis=0))
             if not all(kk.shape == self.kin.shape and np.allclose(kk, self.kin) for kk in self.k):
                 self.kmask = [np.searchsorted(self.kin, kk, side='left') for kk in self.k]
                 assert all(np.allclose(self.kin[kmask], kk) for kk, kmask in zip(self.k, self.kmask))
                 self.kmask = np.concatenate(self.kmask, axis=0)
-            if fiber_collisions is not None:
-                fiber_collisions.init.update(k=self.kin, ells=self.ells)
-                fiber_collisions = fiber_collisions.runtime_info.initialize()
-                self.matrix_full = np.bmat([list(kernel) for kernel in fiber_collisions.kernel_correlated]).A
-                if fiber_collisions.with_uncorrelated: self.offset = fiber_collisions.kernel_uncorrelated.ravel()
-                if self.kmask is not None:
-                    self.matrix_full = self.matrix_full[..., self.kmask]
-                    if fiber_collisions.with_uncorrelated: self.offset = self.offset[self.kmask]
-                self.ellsin, self.kin = fiber_collisions.ellsin, fiber_collisions.kin
-            else:
-                self.ellsin = tuple(self.ells)
-            self.theory.init.update(k=self.kin, ells=self.ellsin)
+        elif isinstance(wmatrix, dict):
+            self.ellsin = tuple(self.ells)
+            if self.kedges is None: raise ValueError('provide klim to compute the binning matrix')
+            self.kin, matrix_full = window_matrix_bininteg(self.kedges, **wmatrix)
+            self.matrix_full = matrix_full.T
+        elif isinstance(wmatrix, np.ndarray):
+            self.ellsin = tuple(self.ells or self.ells)
+            matrix_full = np.array(wmatrix).T
+            ksize = sum(len(k) for k in self.k)
+            if matrix_full.shape[0] != ksize:
+                raise ValueError('output "wmatrix" size is {:d}, but got {:d} output "k"'.format(matrix_full.shape[0], ksize))
+            kin = np.asarray(kin).flatten()
+            self.kin = kin.copy()
+            if kinrebin is not None:
+                self.kin = self.kin[::kinrebin]
+            # print(wmatrix.xout[0], max(kk.max() for kk in self.k) * 1.2)
+            if kinlim is not None:
+                self.kin = self.kin[(self.kin >= kinlim[0]) & (self.kin <= kinlim[-1])]
+            wmatrix_rebin = linalg.block_diag(*[utils.matrix_lininterp(self.kin, kin) for ell in self.ellsin])
+            self.matrix_full = matrix_full.dot(wmatrix_rebin.T)
         else:
             if utils.is_path(wmatrix):
                 from pypower import MeshFFTWindow, BaseMatrix
@@ -120,6 +221,31 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                     wmatrix = BaseMatrix.load(fn)
             else:
                 wmatrix = wmatrix.deepcopy()
+            # TODO: implement best match BaseMatrix method
+            for kk, ellout in zip(self.k, self.ells):
+                for iout, projout in enumerate(wmatrix.projsout):
+                    if projout.ell == ellout: break
+                if projout.ell != ellout:
+                    raise ValueError('ell = {:d} not found in wmatrix.projsout = {}'.format(ellout, wmatrix.projsout))
+                lim = klim.get(projout.ell, None)
+                if lim is not None:
+                    lo, hi, *step = lim
+                else:
+                    lo, hi = 2 * kk[0] - kk[1], 2 * kk[-1] - kk[-2]
+                nmk = np.sum((wmatrix.xout[iout] >= lo) & (wmatrix.xout[iout] <= hi))
+                factorout = nmk // kk.size
+                wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout, factorout), projsout=projout)
+                # wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout), projsout=projout)
+                # wmatrix.rebin_x(factorout=factorout, projsout=projout)
+                if lim is not None:
+                    istart = np.flatnonzero(wmatrix.xout[iout] >= lo)[0]
+                    ksize = np.flatnonzero(wmatrix.xout[iout] <= hi)[-1] - istart + 1
+                else:
+                    istart = np.nanargmin(np.abs(wmatrix.xout[iout] - kk[0]))
+                wmatrix.slice_x(sliceout=slice(istart, istart + ksize), projsout=projout)
+                self.k[iout] = wmatrix.xout[iout]
+                if lim is None and not np.allclose(wmatrix.xout[iout], kk, rtol=1e-4):
+                    raise ValueError('k-coordinates {} for ell = {:d} could not be found in input matrix (rebinning = {:d})'.format(kk, projout.ell, factorout))
             if ellsin is not None:
                 self.ellsin = list(ellsin)
             else:
@@ -128,75 +254,69 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                     assert proj.wa_order in (None, 0)
                     self.ellsin.append(proj.ell)
             projsin = [proj for proj in wmatrix.projsin if proj.ell in self.ellsin]
-            self.ellsin = [proj.ell for proj in projsin]
+            self.ellsin = tuple(proj.ell for proj in projsin)
             wmatrix.select_proj(projsout=[(ell, None) for ell in self.ells], projsin=projsin)
-            wmatrix.slice_x(slicein=slice(0, len(wmatrix.xin[0]) // kinrebin * kinrebin, kinrebin))
+            if kinrebin is not None:
+                wmatrix.slice_x(slicein=slice(0, len(wmatrix.xin[0]) // kinrebin * kinrebin, kinrebin))
             # print(wmatrix.xout[0], max(kk.max() for kk in self.k) * 1.2)
             if kinlim is not None:
                 wmatrix.select_x(xinlim=kinlim)
             self.kin = wmatrix.xin[0]
-            # print(wmatrix.xout[0])
-            assert all(np.allclose(xin, self.kin) for xin in wmatrix.xin)
-            # TODO: implement best match BaseMatrix method
-            for iout, (projout, kk) in enumerate(zip(wmatrix.projsout, self.k)):
-                ksize, factorout = None, 1
-                if klim is not None:
-                    lo, hi, *step = klim[projout.ell]
-                    if step: ksize = int((hi - lo) / step[0] + 0.5)  # nearest integer
-                else:
-                    lo, hi, ksize = 2 * kk[0] - kk[1], 2 * kk[-1] - kk[-2], kk.size
-                if ksize is not None:
-                    nmk = np.sum((wmatrix.xout[iout] >= lo) & (wmatrix.xout[iout] <= hi))
-                    factorout = nmk // ksize
-                wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout, factorout), projsout=projout)
-                # wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout), projsout=projout)
-                # wmatrix.rebin_x(factorout=factorout, projsout=projout)
-                if klim is not None:
-                    istart = np.flatnonzero(wmatrix.xout[iout] >= lo)[0]
-                    ksize = np.flatnonzero(wmatrix.xout[iout] <= hi)[-1] - istart + 1
-                else:
-                    istart = np.nanargmin(np.abs(wmatrix.xout[iout] - kk[0]))
-                wmatrix.slice_x(sliceout=slice(istart, istart + ksize), projsout=projout)
-                self.k[iout] = wmatrix.xout[iout]
-                if klim is None and not np.allclose(wmatrix.xout[iout], kk, rtol=1e-4):
-                    raise ValueError('k-coordinates {} for ell = {:d} could not be found in input matrix (rebinning = {:d})'.format(kk, projout.ell, factorout))
             self.matrix_full = wmatrix.value.T
-            self.theory.init.update(k=self.kin, ells=self.ellsin)
-            if fiber_collisions is not None:
-                fiber_collisions.init.update(k=self.kin, ells=self.ellsin, theory=self.theory)
-                fiber_collisions = fiber_collisions.runtime_info.initialize()
+            if kin is not None:
+                self.kin = np.asarray(kin).flatten()
+                wmatrix_rebin = linalg.block_diag(*[utils.matrix_lininterp(self.kin, xin) for xin in wmatrix.xin])
+                self.matrix_full = self.matrix_full.dot(wmatrix_rebin.T)
+            else:
+                assert all(np.allclose(xin, self.kin) for xin in wmatrix.xin), 'input coordinates of "wmatrix" are not the same for all multipoles; pass an k-coordinate array to "kin"'
+        if fiber_collisions is not None:
+            self.theory.init.update(k=self.kin, ells=self.ellsin)  # fiber_collisions takes kin, ellsin from theory
+            fiber_collisions.init.update(k=self.kin, ells=self.ellsin, theory=self.theory)
+            fiber_collisions = fiber_collisions.runtime_info.initialize()
+            if self.matrix_full is None:  # ellsin = ells
+                if fiber_collisions.with_uncorrelated: self.offset = fiber_collisions.kernel_uncorrelated.ravel()
+                self.matrix_full = np.bmat([list(kernel) for kernel in fiber_collisions.kernel_correlated]).A
+            else:
                 if fiber_collisions.with_uncorrelated: self.offset = self.matrix_full.dot(fiber_collisions.kernel_uncorrelated.ravel())
                 self.matrix_full = self.matrix_full.dot(np.bmat([list(kernel) for kernel in fiber_collisions.kernel_correlated]).A)
-                self.ellsin, self.kin = fiber_collisions.ellsin, fiber_collisions.kin
-        shotnoise = float(shotnoise)
+            self.ellsin, self.kin = fiber_collisions.ellsin, fiber_collisions.kin
+        if systematic_templates is not None:
+            if not isinstance(systematic_templates, SystematicTemplatePowerSpectrumMultipoles):
+                systematic_templates = SystematicTemplatePowerSpectrumMultipoles(templates=systematic_templates)
+            systematic_templates.init.update(k=self.k, ells=self.ells)
+        self.systematic_templates = systematic_templates
+        self.theory.init.update(k=self.kin, ells=self.ellsin)
+        if shotnoise is None:
+            shotnoise = 0.
+        else:
+            shotnoise = float(shotnoise)
+            if 'shotnoise' in getattr(self.theory, '_default_options', {}):
+                self.theory.init.update(shotnoise=shotnoise)
         self.shotnoise = np.array([shotnoise * (ell == 0) for ell in self.ellsin])
         self.flatshotnoise = np.concatenate([np.full_like(k, shotnoise * (ell == 0), dtype='f8') for ell, k in zip(self.ells, self.k)])
 
+    @jit(static_argnums=[0])
     def _apply(self, theory):
         theory = jnp.ravel(theory)
         if self.matrix_full is not None:
             theory = jnp.dot(self.matrix_full, theory)
-        if self.kmask is not None:
-            theory = theory[self.kmask]
         if self.offset is not None:
             theory = theory + self.offset
+        if self.kmask is not None:
+            theory = theory[self.kmask]
         return theory
 
     def calculate(self):
         self.flatpower = self._apply(self.theory.power + self.shotnoise[:, None]) - self.flatshotnoise
+        if self.systematic_templates is not None:
+            self.flatpower += self.systematic_templates.flatpower
 
     def get(self):
         return self.flatpower
 
     @property
     def power(self):
-        toret = []
-        nout = 0
-        for kk in self.k:
-            sl = slice(nout, nout + len(kk))
-            toret.append(self.flatpower[sl])
-            nout = sl.stop
-        return toret
+        return unpack(self.k, self.flatpower)
 
     def __getstate__(self):
         state = {}
@@ -206,12 +326,15 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         return state
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot window function effect on power spectrum multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -221,24 +344,32 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
 
         show : bool, default=False
             If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
-        fig, ax = plt.subplots()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         ax.plot([], [], linestyle='-', color='k', label='theory')
         ax.plot([], [], linestyle='--', color='k', label='window')
         for ill, ell in enumerate(self.ells):
             color = 'C{:d}'.format(ill)
+            ax.plot([], [], linestyle='-', color=color, label=r'$\ell = {:d}$'.format(ell))
             k = self.k[ill]
             if ell in self.ellsin:
                 illin = self.ellsin.index(ell)
                 maskin = (self.kin >= k[0]) & (self.kin <= k[-1])
                 ax.plot(self.kin[maskin], self.kin[maskin] * self.theory.power[illin][maskin], color=color, linestyle='-', label=None)
-            ax.plot(k, k * self.power[ill], color=color, linestyle='--', label=r'$\ell = {:d}$'.format(ell))
+            ax.plot(k, k * self.power[ill], color=color, linestyle='--', label=None)
         ax.grid(True)
         ax.legend()
         ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        return ax
+        return fig
 
 
 class WindowedCorrelationFunctionMultipoles(BaseCalculator):
@@ -247,54 +378,89 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
 
     Parameters
     ----------
+    slim : dict, default=None
+        Optionally, separation limits: a dictionary mapping multipoles to (min separation, max separation, (optionally) step (float)),
+        e.g. ``{0: (30., 160., 5.), 2: (30., 160., 5.)}``. If ``None``, no selection is applied for the given multipole.
+
     s : array, default=None
-        Observed separations :math:`s`, as an array or a list of such arrays (one for each multipole).
+        Optionally, observed separations :math:`s`, as an array or a list of such arrays (one for each multipole).
+        If not specified, defaults to edge centers, based on ``slim`` if provided;
+        else defaults to ``np.arange(20, 151, 5)``.
 
     ells : tuple, default=None
         Observed multipoles, defaults to ``(0, 2, 4)``.
 
-    fiber_collisions : BaseFiberCollisionsPowerSpectrumMultipoles
+    wmatrix : dict, default=None
+        Can be e.g. {'resolution': 2}, specifying the number of theory :math:`s` to integrate over per observed bin.
+        If a 2D array (window matrix), output and input separations and multipoles ``s``, ``ells``, ``sin``, ``ellsin`` should be provided.
+
+    sin : array, default=None
+        If ``wmatrix`` is a 2D array, assume those are the input separations.
+
+    fiber_collisions : BaseFiberCollisionsCorrelationFunctionMultipoles, default=None
         Optionally, fiber collisions.
+
+    systematic_templates : SystematicTemplateCorrelationFunctionMultipoles, default=None
+        Optionally, systematic templates.
 
     theory : BaseTheoryCorrelationFunctionMultipoles
         Theory correlation function multipoles, defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
     """
-    def initialize(self, slim=None, s=None, ells=None, fiber_collisions=None, theory=None):
-
+    def initialize(self, slim=None, s=None, ells=None, wmatrix=None, sin=None, sinrebin=1, sinlim=None, ellsin=None, fiber_collisions=None, systematic_templates=None, theory=None):
+        from scipy import linalg
         _default_step = 5.
 
         if ells is None:
-            if slim is not None:
-                ells = slim.keys()
-            else:
-                ells = (0, 2, 4)
+            if slim is not None: ells = slim.keys()
+            else: ells = (0, 2, 4)
         self.ells = tuple(ells)
+        self.s = self.smasklim = self.sedges = None
+        if s is not None:
+            if np.ndim(s[0]) == 0:
+                s = [s] * len(self.ells)
+            self.s = [np.array(ss, dtype='f8') for ss in s]
+            if len(self.s) != len(self.ells):
+                raise ValueError("provide as many s's as ells")
 
-        self.sedges = None
         if slim is not None:
             slim = dict(slim)
             self.sedges = []
-            for ell in self.ells:
+            if self.s is not None:
+                s, ells, self.smasklim = [], [], {}
+                for ill, ell in enumerate(self.ells):
+                    ss = self.s[ill]
+                    self.smasklim[ell] = np.zeros(len(ss), dtype='?')
+                    if ell not in slim: continue  # do not take this multipole
+                    self.smasklim[ell][...] = True
+                    lim = slim[ell]
+                    if lim is not None:  # cut
+                        (lo, hi, *step) = slim[ell]
+                        smask = (ss >= lo) & (ss <= hi)
+                        ss = ss[smask]  # scale cuts
+                        self.smasklim[ell][...] = smask
+                    if ss.size:
+                        s.append(ss)
+                        ells.append(ell)
+                self.s, self.ells = s, tuple(ells)
+            elif list(self.ells) != list(slim.keys()):
+                raise ValueError('incompatible ells = {} and klim = {}; just remove ells?', self.ells, slim.keys())
+            for ill, ell in enumerate(self.ells):
                 if slim[ell] is None:
                     self.sedges = None
                     break
                 (lo, hi, *step) = slim[ell]
-                if not step: step = (_default_step,)
+                if not step:
+                    if self.s is not None: step = ((hi - lo) / self.s[ill].size,)
+                    else: step = (_default_step,)
                 self.sedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
+        else:
+            slim = {ell: None for ell in self.ells}
 
-        if s is None:
-            if self.sedges is None:
-                s = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
-            else:
-                s = [(edges[:-1] + edges[1:]) / 2. for edges in self.sedges]
+        if self.sedges is None:
+            self.sedges = np.arange(20. - _default_step / 2., 150 + _default_step, _default_step)  # gives s = np.arange(20, 150 + _default_step / 2., _default_step)
 
-        if np.ndim(s[0]) == 0:
-            s = [s] * len(self.ells)
-        self.s = [np.array(ss, dtype='f8') for ss in s]
-        if len(self.s) != len(self.ells):
-            raise ValueError("Provided as many s's as ells")
-        # No matrix for the moment
-        self.ellsin = tuple(self.ells)
+        if self.s is None:
+            self.s = [(edges[:-1] + edges[1:]) / 2. for edges in self.sedges]
 
         if theory is None:
             from desilike.theories.galaxy_clustering import KaiserTracerCorrelationFunctionMultipoles
@@ -302,52 +468,103 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         self.theory = theory
 
         self.matrix_diag, self.matrix_full, self.smask, self.offset = None, None, None, None
-        self.sin = np.unique(np.concatenate(self.s, axis=0))
-        if not all(np.allclose(ss, self.sin) for ss in self.s):
-            self.smask = [np.searchsorted(self.sin, ss, side='left') for ss in self.s]
-            assert all(smask.min() >= 0 and smask.max() < ss.size for ss, smask in zip(self.s, self.smask))
-            self.smask = np.concatenate(self.smask, axis=0)
-        if theory is None:
-            from desilike.theories.galaxy_clustering import KaiserTracerCorrelationFunctionMultipoles
-            theory = KaiserTracerCorrelationFunctionMultipoles()
+        muedges = None
+        if isinstance(wmatrix, dict):
+            wmatrix = dict(wmatrix)
+            muedges = wmatrix.pop('muedges', None)
+            if not wmatrix: wmatrix = None
+        if wmatrix is None:
+            self.ellsin = tuple(self.ells)
+            self.sin = np.unique(np.concatenate(self.s, axis=0))
+            if not all(np.allclose(ss, self.sin) for ss in self.s):
+                self.smask = [np.searchsorted(self.sin, ss, side='left') for ss in self.s]
+                assert all(smask.min() >= 0 and smask.max() < ss.size for ss, smask in zip(self.s, self.smask))
+                self.smask = np.concatenate(self.smask, axis=0)
+        elif isinstance(wmatrix, dict):
+            self.ellsin = tuple(self.ells)
+            self.sin, matrix_full = window_matrix_bininteg(self.sedges, **wmatrix)
+            self.matrix_full = matrix_full.T
+        elif isinstance(wmatrix, np.ndarray):
+            self.ellsin = tuple(ellsin or self.ells)
+            matrix_full = np.array(wmatrix).T
+            ssize = sum(len(s) for s in self.s)
+            if matrix_full.shape[0] != ssize:
+                raise ValueError('output "wmatrix" size is {:d}, but got {:d} output "s"'.format(matrix_full.shape[0], ssize))
+            sin = np.asarray(sin).flatten()
+            self.sin = sin.copy()
+            if sinrebin is not None:
+                self.sin = self.sin[::sinrebin]
+            # print(wmatrix.xout[0], max(kk.max() for kk in self.k) * 1.2)
+            if sinlim is not None:
+                self.sin = self.sin[(self.sin >= sinlim[0]) & (self.sin <= sinlim[-1])]
+            wmatrix_rebin = linalg.block_diag(*[utils.matrix_lininterp(self.sin, sin) for ell in self.ellsin])
+            self.matrix_full = matrix_full.dot(wmatrix_rebin.T)
+        else:
+            raise ValueError('unrecognized wmatrix {}'.format(wmatrix))
+        if muedges is not None:
+            # This matrix will come *before* --- this isn't fully correct, but easier...
+            self.ellsin = tuple(ellsin or self.theory.init.get('ells', None) or self.ells)
+            matrix_diag = np.empty((len(self.ells), len(self.ellsin), len(self.sin)))
+            for ill, ell in enumerate(self.ells):
+                for illin, ellin in enumerate(self.ellsin):
+                    integ = (special.legendre(ell) * special.legendre(ellin)).integ()
+                    # shape (s[ill].size,) + (nmu(s), 2)
+                    tmp = [(2. * ell + 1.) / np.sum(me[:, 1] - me[:, 0]) * np.sum(integ(me[:, 1]) - integ(me[..., 0])) for me in muedges[ill]]
+                    matrix_diag[ill, illin] = np.interp(self.sin, self.s[ill], tmp)
+            if self.matrix_full is None:
+                if self.matrix_diag is None: self.matrix_diag = matrix_diag
+                else: self.matrix_diag = np.sum(self.matrix_diag[:, :, None, ...] * matrix_diag[None, ...], axis=1)
+            else:
+                self.matrix_full = self.matrix_full.dot(np.bmat([[np.diag(kk) for kk in kernel] for kernel in matrix_diag]).A)
         if fiber_collisions is not None:
-            fiber_collisions.init.update(s=self.sin, ells=self.ellsin, theory=theory)
+            self.theory.init.update(s=self.sin, ells=self.ellsin)  # fiber_collisions takes sin, ellsin from theory
+            fiber_collisions.init.update(ells=self.ellsin, theory=self.theory)
             fiber_collisions = fiber_collisions.runtime_info.initialize()
             self.ellsin = tuple(fiber_collisions.ellsin)
-            self.matrix_diag = fiber_collisions.kernel_correlated
-            if fiber_collisions.with_uncorrelated: self.offset = fiber_collisions.kernel_uncorrelated.ravel()
-            if self.smask is not None:
-                self.matrix_diag = self.matrix_diag[..., self.smask]
-                if fiber_collisions.with_uncorrelated: self.offset = self.offset[self.smask]
+            if self.matrix_full is None:
+                # kernel_correlated is (ellout, ellin, s)
+                matrix_diag = fiber_collisions.kernel_correlated
+                if self.matrix_diag is None:  # ellsin = ells, offset ok
+                    if fiber_collisions.with_uncorrelated: self.offset = fiber_collisions.kernel_uncorrelated.ravel()
+                    self.matrix_diag = matrix_diag
+                else:
+                    if fiber_collisions.with_uncorrelated: self.offset = np.sum(self.matrix_diag * fiber_collisions.kernel_uncorrelated[None, ...], axis=1).ravel()
+                    self.matrix_diag = np.sum(self.matrix_diag[:, :, None, ...] * matrix_diag[None, ...], axis=1)
+            else:
+                if fiber_collisions.with_uncorrelated: self.offset = self.matrix_full.dot(fiber_collisions.kernel_uncorrelated.ravel())
+                self.matrix_full = self.matrix_full.dot(np.bmat([[np.diag(kk) for kk in kernel] for kernel in fiber_collisions.kernel_correlated]).A)
+                self.ellsin, self.sin = fiber_collisions.ellsin, fiber_collisions.sin
         self.theory.init.update(s=self.sin, ells=self.ellsin)
+        if systematic_templates is not None:
+            if not isinstance(systematic_templates, SystematicTemplateCorrelationFunctionMultipoles):
+                systematic_templates = SystematicTemplateCorrelationFunctionMultipoles(templates=systematic_templates)
+            systematic_templates.init.update(s=self.s, ells=self.ells)
+        self.systematic_templates = systematic_templates
 
+    @jit(static_argnums=[0])
     def _apply(self, theory):
         if self.matrix_diag is not None:
             theory = jnp.sum(self.matrix_diag * theory[None, ...], axis=1)
         theory = jnp.ravel(theory)
         if self.matrix_full is not None:
             theory = jnp.dot(self.matrix_full, theory)
-        elif self.smask is not None:
-            theory = theory[self.smask]
         if self.offset is not None:
             theory = theory + self.offset
+        if self.smask is not None:
+            theory = theory[self.smask]
         return theory
 
     def calculate(self):
         self.flatcorr = self._apply(self.theory.corr)
+        if self.systematic_templates is not None:
+            self.flatcorr += self.systematic_templates.flatcorr
 
     def get(self):
         return self.flatcorr
 
     @property
     def corr(self):
-        toret = []
-        nout = 0
-        for ss in self.s:
-            sl = slice(nout, nout + len(ss))
-            toret.append(self.flatcorr[sl])
-            nout = sl.stop
-        return toret
+        return unpack(self.s, self.flatcorr)
 
     def __getstate__(self):
         state = {}
@@ -357,12 +574,15 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         return state
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot window function effect on correlation function multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -372,24 +592,32 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
 
         show : bool, default=False
             If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
-        fig, ax = plt.subplots()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         ax.plot([], [], linestyle='-', color='k', label='theory')
         ax.plot([], [], linestyle='--', color='k', label='window')
         for ill, ell in enumerate(self.ells):
             color = 'C{:d}'.format(ill)
+            ax.plot([], [], linestyle='-', color=color, label=r'$\ell = {:d}$'.format(ell))
             s = self.s[ill]
             if ell in self.ellsin:
                 illin = self.ellsin.index(ell)
                 maskin = (self.sin >= s[0]) & (self.sin <= s[-1])
                 ax.plot(self.sin[maskin], self.sin[maskin]**2 * self.theory.corr[illin][maskin], color=color, linestyle='-', label=None)
-            ax.plot(s, s**2 * self.corr[ill], color=color, linestyle='--', label=r'$\ell = {:d}$'.format(ell))
+            ax.plot(s, s**2 * self.corr[ill], color=color, linestyle='--', label=None)
         ax.grid(True)
         ax.legend()
         ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
-        return ax
+        return fig
 
 
 class BaseFiberCollisionsPowerSpectrumMultipoles(BaseCalculator):
@@ -421,12 +649,15 @@ class BaseFiberCollisionsPowerSpectrumMultipoles(BaseCalculator):
         # self.power = self.theory.power + self.uncorrelated()
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot fiber collision effect on power spectrum multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -438,7 +669,10 @@ class BaseFiberCollisionsPowerSpectrumMultipoles(BaseCalculator):
             If ``True``, show figure.
         """
         from matplotlib import pyplot as plt
-        fig, ax = plt.subplots()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         ax.plot([], [], linestyle='-', color='k', label='theory')
         ax.plot([], [], linestyle='--', color='k', label='fiber collisions')
         for ill, ell in enumerate(self.ells):
@@ -452,7 +686,7 @@ class BaseFiberCollisionsPowerSpectrumMultipoles(BaseCalculator):
         ax.legend()
         ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        return ax
+        return fig
 
 
 def _format_kernel(sep, kernel):
@@ -533,7 +767,7 @@ class FiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpectrumMul
         interp_kernel = RectBivariateSpline(k_perp, q_perp, integral_kernel, kx=3, ky=3, s=0)
 
         wq = utils.weights_trapz(self.kin)
-        diag = utils.matrix_lininterp(self.kin, self.k)
+        diag = utils.matrix_lininterp(self.kin, self.k).T
         self.kernel_correlated = []
         for ellout in self.ells:
             legout = special.legendre(ellout)
@@ -622,7 +856,7 @@ class TopHatFiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpect
 
         kk, qq = np.meshgrid(self.k, self.kin, indexing='ij')
         wq = utils.weights_trapz(self.kin)
-        diag = utils.matrix_lininterp(self.kin, self.k)
+        diag = utils.matrix_lininterp(self.kin, self.k).T
         self.kernel_correlated = []
         for ellout in self.ells:
             self.kernel_correlated.append([])
@@ -645,17 +879,21 @@ class TopHatFiberCollisionsPowerSpectrumMultipoles(BaseFiberCollisionsPowerSpect
 class BaseFiberCollisionsCorrelationFunctionMultipoles(BaseCalculator):
 
     def initialize(self, s=None, ells=(0, 2, 4), theory=None, with_uncorrelated=True):
-        if s is None: s = np.linspace(20., 200, 101)
-        self.s = np.array(s, dtype='f8')
         self.ells = tuple(ells)
 
         if theory is None:
             from desilike.theories.galaxy_clustering import KaiserTracerCorrelationFunctionMultipoles
-            theory = KaiserTracerCorrelationFunctionMultipoles(s=self.s)
+            theory = KaiserTracerCorrelationFunctionMultipoles()
         self.theory = theory
+        if s is not None: self.theory.init.update(s=s)
         self.theory.runtime_info.initialize()
+        self.s = np.array(self.theory.s, dtype='f8')
         self.ellsin = tuple(self.theory.ells)
         self.with_uncorrelated = bool(with_uncorrelated)
+
+    @property
+    def sin(self):
+        return self.s
 
     def correlated(self, corr):
         return jnp.sum(self.kernel_correlated * corr[None, ...], axis=1)
@@ -669,12 +907,15 @@ class BaseFiberCollisionsCorrelationFunctionMultipoles(BaseCalculator):
         self.corr = self.correlated(self.theory.corr) + self.uncorrelated()
 
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot fiber collision effect on correlation function multipoles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -684,9 +925,16 @@ class BaseFiberCollisionsCorrelationFunctionMultipoles(BaseCalculator):
 
         show : bool, default=False
             If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
-        fig, ax = plt.subplots()
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
         ax.plot([], [], linestyle='-', color='k', label='theory')
         ax.plot([], [], linestyle='--', color='k', label='fiber collisions')
         for ill, ell in enumerate(self.ells):
@@ -697,7 +945,7 @@ class BaseFiberCollisionsCorrelationFunctionMultipoles(BaseCalculator):
         ax.legend()
         ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
-        return ax
+        return fig
 
 
 def integral_cosn(n=0, range=(-np.pi, np.pi)):
@@ -827,3 +1075,187 @@ class TopHatFiberCollisionsCorrelationFunctionMultipoles(BaseFiberCollisionsCorr
                     tmp[mu_min > 0.] /= mu_min[mu_min > 0.]
                 self.kernel_correlated[-1].append(tmp)
         self.kernel_correlated = np.array(self.kernel_correlated)
+
+
+def get_templates(templates, ells=(0, 2, 4), x=None):
+    from collections.abc import Mapping
+    if templates is None:
+        templates = {}
+    if not isinstance(templates, Mapping) and not utils.is_sequence(templates):
+        templates = [templates]
+    if not isinstance(templates, Mapping):
+        templates = {'syst_{:d}'.format(i): v for i, v in enumerate(templates)}
+    toret = {}
+    for name, template in templates.items():
+        if x is not None:
+            if callable(template):
+                template = np.concatenate([template(ell, xx) for ell, xx in zip(ells, x)])
+            template = np.ravel(template)
+            sizes = [xx.size for xx in x]
+            size = sum(sizes)
+            if template.size != size:
+                raise ValueError('provided template is size {:d}, but expected {:d} = sum({:d})'.format(template.size, size, sizes))
+        toret[name] = template
+    return toret
+
+
+class BaseSystematicTemplateMultipoles(BaseCalculator):
+
+    @staticmethod
+    def _params(params, templates=None):
+        names = list(get_templates(templates=templates).keys())
+        for iname, name in enumerate(names):
+            params[name] = dict(value=0., ref=dict(limits=[-1e-3, 1e-3]), delta=0.005, latex='s_{{{:d}}}'.format(iname))
+        return params
+
+    @jit(static_argnums=[0])
+    def _apply(self, **params):
+        return jnp.array([params[name] for name in self.templates]).dot(jnp.array(list(self.templates.values())))
+
+
+class SystematicTemplatePowerSpectrumMultipoles(BaseSystematicTemplateMultipoles):
+    r"""
+    Systematic templates for power spectrum multipoles.
+
+    Parameters
+    ----------
+    templates : callable, list or dict, default=()
+        List of templates; one parameter called 'syst_{i:d}' will be created for each template i.
+        or dict of templates; the key will be used as parameter name.
+        Each template can be an array for all multipoles stacked, or a callable that takes (ell, k) as input
+        and returns an array of size ``k.size``.
+
+    k : array, list, default=None
+        Output wavenumbers. If list, one array for each multipole.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles.
+
+    """
+    def initialize(self, templates=tuple(), k=None, ells=(0, 2, 4)):
+        self.ells = tuple(ells)
+        if k is None: k = np.linspace(0.01, 0.2, 101)
+        if not isinstance(k, (tuple, list)):
+            k = [k] * len(self.ells)
+        self.k = tuple(k)
+        self.templates = get_templates(templates, ells=self.ells, x=self.k)
+
+    def calculate(self, **params):
+        self.flatpower = self._apply(**params)
+
+    @property
+    def power(self):
+        return unpack(self.k, self.flatpower)
+
+    @plotting.plotter
+    def plot(self, fig=None):
+        """
+        Plot systematic template multipoles.
+
+        Parameters
+        ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        """
+        from matplotlib import pyplot as plt
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
+        for ill, ell in enumerate(self.ells):
+            color = 'C{:d}'.format(ill)
+            k = self.k[ill]
+            ax.plot(k, k * self.power[ill], color=color, linestyle='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.grid(True)
+        ax.legend()
+        ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        return fig
+
+
+class SystematicTemplateCorrelationFunctionMultipoles(BaseSystematicTemplateMultipoles):
+    r"""
+    Systematic templates for correlation function multipoles.
+
+    Parameters
+    ----------
+    templates : callable, list or dict, default=()
+        List of templates; one parameter called 'syst_{i:d}' will be created for each template i.
+        or dict of templates; the key will be used as parameter name.
+        Each template can be an array for all multipoles stacked, or a callable that takes (ell, s) as input
+        and returns an array of size ``s.size``.
+
+    s : array, list, default=None
+        Output separations. If list, one array for each multipole.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles.
+
+    """
+    def initialize(self, templates=tuple(), s=None, ells=(0, 2, 4)):
+        self.ells = tuple(ells)
+        if s is None: s = np.linspace(20., 200, 101)
+        if not isinstance(s, (tuple, list)):
+            s = [s] * len(self.ells)
+        self.s = tuple(s)
+        self.templates = get_templates(templates, ells=self.ells, x=self.s)
+
+    def calculate(self, **params):
+        self.flatcorr = self._apply(**params)
+
+    @property
+    def corr(self):
+        return unpack(self.s, self.flatcorr)
+
+    @plotting.plotter
+    def plot(self, fig=None):
+        """
+        Plot systematic template multipoles.
+
+        Parameters
+        ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        """
+        from matplotlib import pyplot as plt
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
+        for ill, ell in enumerate(self.ells):
+            color = 'C{:d}'.format(ill)
+            s = self.s[ill]
+            ax.plot(s, s**2 * self.corr[ill], color=color, linestyle='--', label=r'$\ell = {:d}$'.format(ell))
+        ax.grid(True)
+        ax.legend()
+        ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
+        return fig

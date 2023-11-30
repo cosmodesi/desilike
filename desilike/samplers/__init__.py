@@ -6,4 +6,5 @@ from .pocomc import PocoMCSampler
 from .mcmc import MCMCSampler
 from .dynesty import StaticDynestySampler, DynamicDynestySampler
 from .polychord import PolychordSampler
+from .nautilus import NautilusSampler
 from .importance import ImportanceSampler

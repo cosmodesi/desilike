@@ -15,11 +15,17 @@ class PolychordSampler(BasePosteriorSampler):
     """
     Wrapper for polychord nested sampler.
 
+    Note
+    ----
+    Even the mpi4py version does not seem to run properly anymore (python3.10?) with more than one MPI process.
+    File a github issue if that is important for your work.
+
     Reference
     ---------
     - https://github.com/PolyChord/PolyChordLite
     - https://arxiv.org/abs/1502.01856
     - https://arxiv.org/abs/1506.00171
+
     """
     check = None
 
@@ -153,6 +159,7 @@ class PolychordSampler(BasePosteriorSampler):
 
     def _prepare(self):
         self.settings.read_resume = self.mpicomm.bcast(any(chain is not None for chain in self.chains), root=0)
+        self.chains = [None] * len(self.chains)
 
     def run(self, *args, **kwargs):
         """
@@ -166,11 +173,11 @@ class PolychordSampler(BasePosteriorSampler):
         Parameters
         ----------
         min_iterations : int, default=100
-            Minimum number of iterations (MCMC steps) to run (to avoid early stopping
+            Minimum number of iterations to run (to avoid early stopping
             if convergence criteria below are satisfied by chance at the beginning of the run).
 
         max_iterations : int, default=sys.maxsize
-            Maximum number of iterations (MCMC steps) to run.
+            Maximum number of iterations to run.
 
         compression_factor : float, default=np.exp(-1)
             How often to update the files and do clustering.
@@ -220,7 +227,6 @@ class PolychordSampler(BasePosteriorSampler):
                         pass
                     else:
                         nlive = len(live)
-                        print('LOOOOL', samples[0].shape, nlive)
                         #aweight, loglikelihood = [np.concatenate([sample, np.full(nlive, value, dtype='f8')]) for sample, value in zip(samples[:2], [0., np.nan])]
                         aweight = np.concatenate([samples[0], np.zeros(nlive, dtype='f8')])
                         points = [np.concatenate([sample, live[:, iparam]]) for iparam, sample in enumerate(samples[2: 2 + ndim])]
@@ -248,7 +254,7 @@ class PolychordSampler(BasePosteriorSampler):
         def loglikelihood(values):
             # Called by ranks > 0
             my_dumper()
-            return (max(self.loglikelihood(values), self.settings.logzero), [])
+            return (max(self.logposterior(values) - self.logprior(values), self.settings.logzero), [])
 
         self.pipeline.mpicomm = mpi.COMM_SELF
         loglikelihood_rank = 0 if self.mpicomm.size == 1 else 1

@@ -1,5 +1,6 @@
 import numpy as np
 
+from desilike.cosmo import is_external_cosmo
 from desilike.likelihoods.base import BaseCalculator
 
 
@@ -11,25 +12,25 @@ class ClTheory(BaseCalculator):
     ----------
     cls : dict, default=None
         Dictionary mapping types :math:`xy \in \{tt, ee, bb, te, pp, tp, ep\}` of :math:`C_{\ell}^{xy}` to max :math:`\ell`.
-    
+
     lensing : bool, default=None
         If ``True``, add lensing to theory :math:`C_{\ell}^{xy}`.
         If ``None``, compute lensing if potential :math:`C_{\ell}^{xy}` (:math:`xy \in \{pp, tp, ep\}`) are required in ``cls``.
-    
+
     non_linear : str, bool, default=None
         If ``True``, or string (e.g. 'mead'), add non-linear correction to theory :math:`C_{\ell}^{xy}`.
         If ``None``, compute non-linear correction with 'mead' if potential :math:`C_{\ell}^{xy}` (:math:`xy \in \{pp, tp, ep\}`),
         or B-modes :math:`C_{\ell}^{bb}` beyond :math:`\ell > 50` are required in ``cls``.
-    
+
     unit : str, default=None
         Unit, either ``None`` (no unit), or 'muK' (micro-Kelvin).
-    
+
     cosmo : BasePrimordialCosmology, default=None
         Cosmology calculator. Defaults to ``Cosmoprimo()``.
-    
+
     T0 : float, default=None
         If ``unit`` is 'muK', CMB temperature to assume. Defaults to :attr:`Cosmology.T_cmb`.
-    
+
     """
     def initialize(self, cls=None, lensing=None, non_linear=None, unit=None, cosmo=None, T0=None):
         self.requested_cls = dict(cls or {})
@@ -52,13 +53,21 @@ class ClTheory(BaseCalculator):
         if self.unit not in allowed_units:
             raise ValueError('Input unit must be one of {}, found {}'.format(allowed_units, self.unit))
         self.T0 = T0
-        if cosmo is None:
-            from desilike.theories.primordial_cosmology import Cosmoprimo
-            cosmo = Cosmoprimo()
         self.cosmo = cosmo
-        self.cosmo.init.update(lensing=self.cosmo.init.get('lensing', False) or lensing,
-                               ellmax_cl=max(self.cosmo.init.get('ellmax_cl', 0), ellmax),
-                               non_linear=self.cosmo.init.get('non_linear', '') or non_linear)
+        requires = {'lensing': self.cosmo.init.get('lensing', False) or lensing,
+                    'ellmax_cl': max(self.cosmo.init.get('ellmax_cl', 0), ellmax),
+                    'non_linear': self.cosmo.init.get('non_linear', '') or non_linear}
+        if is_external_cosmo(self.cosmo):
+            self.cosmo_requires = {'harmonic': {}}
+            if self.ell_max_lensed_cls:
+                self.cosmo_requires['harmonic']['lensed_cl'] = {'ellmax': self.ell_max_lensed_cls}
+            if self.ell_max_lens_potential_cls:
+                self.cosmo_requires['harmonic']['lens_potential_cl'] = {'ellmax': self.ell_max_lens_potential_cls}
+        else:
+            if self.cosmo is None:
+                from desilike.theories.primordial_cosmology import Cosmoprimo
+                self.cosmo = Cosmoprimo()
+            self.cosmo.init.update(**requires)
 
     def calculate(self):
         self.cls = {}

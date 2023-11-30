@@ -4,6 +4,7 @@ import numpy as np
 
 from desilike import mpi
 from desilike.jax import numpy as jnp
+from desilike.jax import jit
 from desilike.utils import expand_dict
 from desilike.parameter import Deriv
 from .base import BaseEmulatorEngine
@@ -43,16 +44,16 @@ class TaylorEmulatorEngine(BaseEmulatorEngine):
         from desilike import Differentiation
         options = {**self.sampler_options, **kwargs}
         differentiation = Differentiation(calculator, **options, mpicomm=self.mpicomm)
-        return differentiation()
+        return differentiation(**differentiation._grid_center)
 
     def fit(self, X, Y):
         if self.mpicomm.bcast(Y.derivs is None if self.mpicomm.rank == 0 else None, root=0):
             raise ValueError('Please provide samples with derivatives computed')
         self.center, self.derivatives, self.powers = None, None, None
         if self.mpicomm.rank == 0:
+            self.center = np.array([np.median(np.unique(xx)) for xx in X.T])
             Y = Y[0]  # only need one element
             self.derivatives, self.powers = [], []
-            self.center = np.array([np.median(np.unique(xx)) for xx in X.T])
             ndim = len(self.varied_params)
             max_order, max_param_order = 0, [0 for i in range(ndim)]
             for deriv in Y.derivs:
@@ -83,6 +84,7 @@ class TaylorEmulatorEngine(BaseEmulatorEngine):
         self.powers = self.mpicomm.bcast(self.powers, root=0)
         self.center = self.mpicomm.bcast(self.center, root=0)
 
+    @jit(static_argnums=[0])
     def predict(self, X):
         diffs = jnp.array(X - self.center)
         #diffs = jnp.where(self.powers > 0, diffs, 0.)  # a trick to avoid NaNs in the derivation

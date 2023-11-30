@@ -38,7 +38,37 @@ def test_logger():
     logger.info('This should be printed')
 
 
+def test_dict():
+
+    from desilike.io import BaseConfig
+
+    class Test(BaseConfig):
+
+        def __delitem__(self, name):
+            print('delitem', name)
+            super(Test, self).__delitem__(name)
+
+        def __setitem__(self, name, value):
+            print('setitem', name, value)
+            super(Test, self).__setitem__(name, value)
+
+    test = Test()
+    test.update(b=3)
+    test.pop('b')
+
+
+def test_task_manager():
+    from desilike.utils import TaskManager
+
+    with TaskManager(nprocs_per_task=2) as tm:
+
+        for task in tm.iterate(range(10)):
+            print(tm.basecomm.rank, task)
+
+
 if __name__ == '__main__':
 
     #test_misc()
-    test_logger()
+    #test_logger()
+    #test_dict()
+    test_task_manager()

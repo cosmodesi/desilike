@@ -251,6 +251,6 @@ if __name__ == '__main__':
     #test_likelihood()
     test_combined_likelihood()
     #test_params()
-    test_copy()
+    #test_copy()
     #test_cosmo()
     #test_install()

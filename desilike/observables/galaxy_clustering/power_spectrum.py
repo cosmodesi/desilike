@@ -25,7 +25,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         Data power spectrum measurement: flat array (of all multipoles), :class:`pypower.PowerSpectrumMultipoles` instance,
         or path to such instances, or list of such objects (in which case the average of them is taken).
         If dict, parameters to be passed to theory to generate mock measurement.
-        If a (list of) flat array, additionally provide list of multipoles ``ells`` and wavenumbers ``k``, and optionally ``shotnoise`` (see **kwargs).
+        If a (list of) flat array, additionally provide list of multipoles ``ells`` and wavenumbers ``k``, and optionally ``shotnoise`` (see ``kwargs``).
 
     covariance : array, list, default=None
         2D array, list of :class:`pypower.PowerSpectrumMultipoles` instance` instances, or paths to such instances;
@@ -38,17 +38,24 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
     wmatrix : str, Path, pypower.BaseMatrix, WindowedPowerSpectrumMultipoles, default=None
         Optionally, window matrix.
 
+    transform : array, default=None
+        Transform to gaussianize the likelihood of the power spectrum.
+        For 'cubic', see eq. 16 of https://arxiv.org/pdf/2302.07484.pdf.
+        If ``None``, no transform is applied.
+
     **kwargs : dict
         Optional arguments for :class:`WindowedPowerSpectrumMultipoles`, e.g.:
 
         - theory: defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
         - shotnoise: take shot noise from ``data``, or ``covariance`` (mocks) if provided.
         - fiber_collisions
+        - systematic_templates
         - if one only provided simple arrays for ``data`` and ``covariance``,
           one can provide the list of multipoles ``ells`` and the corresponding (list of) :math:`k` wavenumbers as a (list of) array ``k``,
           and optionally ``shotnoise``.
+
     """
-    def initialize(self, data=None, covariance=None, klim=None, wmatrix=None, **kwargs):
+    def initialize(self, data=None, covariance=None, klim=None, wmatrix=None, transform=None, **kwargs):
         self.k, self.kedges, self.ells, self.shotnoise = None, None, None, None
         self.flatdata, self.mocks, self.covariance = None, None, None
         if not isinstance(data, dict):
@@ -73,15 +80,26 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         if klim is not None:
             self.wmatrix.init.update(klim=klim)
         self.wmatrix.init.update(kwargs)
-        if self.shotnoise is None: self.shotnoise = 0.
         self.wmatrix.init.setdefault('shotnoise', self.shotnoise)
+        if self.shotnoise is None: self.shotnoise = 0.
         if self.flatdata is None:
             self.wmatrix(**data)
-            self.flatdata = self.flattheory.copy()
+            self.flatdata = self.wmatrix.flatpower.copy()
         else:
             self.wmatrix.runtime_info.initialize()
         for name in ['k', 'ells', 'kedges', 'shotnoise']:
             setattr(self, name, getattr(self.wmatrix, name))
+        kmasklim = self.wmatrix.kmasklim
+        if kmasklim is not None:  # cut has been applied to input k
+            cumsize = np.insert(np.cumsum([len(kk) for kk in kmasklim.values()]), 0, 0)
+            data = [self.flatdata[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
+            ells = list(kmasklim.keys())
+            self.flatdata = np.concatenate([data[ells.index(ell)][kmasklim[ell]] for ell in self.ells])
+
+        self.transform = transform
+        allowed_transform = [None, 'cubic']
+        if self.transform not in allowed_transform:
+            raise ValueError('transform must be one of {}'.format(allowed_transform))
 
     def load_data(self, data=None, klim=None):
 
@@ -114,7 +132,11 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             list_mocks = []
             for mocks in lmocks:
                 if utils.is_path(mocks):
-                    list_mocks += sorted(glob.glob(mocks))
+                    gmocks = glob.glob(mocks)
+                    if not gmocks:
+                        import warnings
+                        warnings.warn('file {mocks} is not found')
+                    list_mocks += sorted(gmocks)
                 else:
                     list_mocks.append(mocks)
 
@@ -122,9 +144,9 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             if len(fns):
                 nfns = 5
                 if len(fns) < nfns:
-                    msg = 'Loading {}.'.format(fns)
+                    msg = 'Loading 1 file {}.'.format(fns)
                 else:
-                    msg = 'Loading [{}].'.format(', ..., '.join(fns[::len(fns) // nfns]))
+                    msg = 'Loading {:d} files [{}].'.format(len(fns), ', ..., '.join(fns[::len(fns) // nfns]))
                 self.log_info(msg)
 
             list_y, list_shotnoise = [], []
@@ -159,8 +181,8 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         if self.shotnoise is None: self.shotnoise = shotnoise
         return flatdata, list_y
 
-    @plotting.plotter
-    def plot(self, scaling='kpk'):
+    @plotting.plotter(interactive={'kw_theory': {'color': 'black', 'label': 'reference'}})
+    def plot(self, scaling='kpk', kw_theory=None, fig=None):
         """
         Plot data and theory power spectrum multipoles.
 
@@ -169,6 +191,12 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         scaling : str, default='kpk'
             Either 'kpk' or 'loglog'.
 
+        kw_theory : list of dict, default=None
+            Change the default line parametrization of the theory, one dictionary for each ell or duplicate it.
+
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least ``1 + len(self.ells)`` axes.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -178,24 +206,47 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
         show : bool, default=False
             If ``True``, show figure.
+
+        interactive : bool, default=False
+            If ``True``, use interactive interface provided by ipywidgets.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
-        height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
-        figsize = (6, 1.5 * sum(height_ratios))
-        fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
-        fig.subplots_adjust(hspace=0)
+
+        if kw_theory is None:
+            kw_theory = {}
+        if isinstance(kw_theory, dict):
+            kw_theory = [kw_theory]
+        if len(kw_theory) != len(self.ells):
+            kw_theory = [{key: value for key, value in kw_theory[0].items() if (key != 'label') or (ill == 0)} for ill in range(len(self.ells))]
+        kw_theory = [{'color': 'C{:d}'.format(ill), **kw} for ill, kw in enumerate(kw_theory)]
+
+        if fig is None:
+            height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
+            figsize = (6, 1.5 * sum(height_ratios))
+            fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
+            fig.subplots_adjust(hspace=0.1)
+            show_legend = True
+        else:
+            lax = fig.axes
+            show_legend = False
+
         data, theory, std = self.data, self.theory, self.std
         k_exp = 1 if scaling == 'kpk' else 0
+
         for ill, ell in enumerate(self.ells):
             lax[0].errorbar(self.k[ill], self.k[ill]**k_exp * data[ill], yerr=self.k[ill]**k_exp * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o', label=r'$\ell = {:d}$'.format(ell))
-            lax[0].plot(self.k[ill], self.k[ill]**k_exp * theory[ill], color='C{:d}'.format(ill))
+            lax[0].plot(self.k[ill], self.k[ill]**k_exp * theory[ill], **kw_theory[ill])
         for ill, ell in enumerate(self.ells):
-            lax[ill + 1].plot(self.k[ill], (data[ill] - theory[ill]) / std[ill], color='C{:d}'.format(ill))
+            lax[ill + 1].plot(self.k[ill], (data[ill] - theory[ill]) / std[ill], **kw_theory[ill])
             lax[ill + 1].set_ylim(-4, 4)
             for offset in [-2., 2.]: lax[ill + 1].axhline(offset, color='k', linestyle='--')
             lax[ill + 1].set_ylabel(r'$\Delta P_{{{0:d}}} / \sigma_{{ P_{{{0:d}}} }}$'.format(ell))
         for ax in lax: ax.grid(True)
-        lax[0].legend()
+        if show_legend: lax[0].legend()
         if scaling == 'kpk':
             lax[0].set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         if scaling == 'loglog':
@@ -203,15 +254,18 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             lax[0].set_yscale('log')
             lax[0].set_xscale('log')
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        return lax
+        return fig
 
     @plotting.plotter
-    def plot_wiggles(self):
+    def plot_bao(self, fig=None):
         """
         Plot data and theory BAO power spectrum wiggles.
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least ``len(self.ells)`` axes.
+
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -221,16 +275,87 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
         show : bool, default=False
             If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
-        height_ratios = [1] * len(self.ells)
-        figsize = (6, 2 * sum(height_ratios))
-        fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=False)
-        lax = lax.flatten()  # in case only one ell
-        fig.subplots_adjust(hspace=0)
+        if fig is None:
+            height_ratios = [1] * len(self.ells)
+            figsize = (6, 2 * sum(height_ratios))
+            fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=False)
+            lax = lax.ravel()  # in case only one ell
+            fig.subplots_adjust(hspace=0)
+        else:
+            lax = fig.axes
         data, theory, std = self.data, self.theory, self.std
-        only_now = self.wmatrix.theory.template.only_now
-        self.wmatrix.theory.template.only_now = True
+        nobao = self.theory_nobao
+
+        for ill, ell in enumerate(self.ells):
+            lax[ill].errorbar(self.k[ill], self.k[ill] * (data[ill] - nobao[ill]), yerr=self.k[ill] * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o')
+            lax[ill].plot(self.k[ill], self.k[ill] * (theory[ill] - nobao[ill]), color='C{:d}'.format(ill))
+            lax[ill].set_ylabel(r'$k \Delta P_{{{:d}}}(k)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]'.format(ell))
+        for ax in lax: ax.grid(True)
+        lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+
+        return fig
+
+    def plot_wiggles(self, *args, **kwargs):
+        import warnings
+        warnings.warn('plot_wiggles is deprecated, use plot_bao instead')
+        self.plot_bao(*args, **kwargs)
+
+    @plotting.plotter
+    def plot_covariance_matrix(self, corrcoef=True, **kwargs):
+        """
+        Plot covariance matrix.
+
+        Parameters
+        ----------
+        corrcoef : bool, default=True
+            If ``True``, plot the correlation matrix; else the covariance.
+
+        barlabel : str, default=None
+            Optionally, label for the color bar.
+
+        figsize : int, tuple, default=None
+            Optionally, figure size.
+
+        norm : matplotlib.colors.Normalize, default=None
+            Scales the covariance / correlation to the canonical colormap range [0, 1] for mapping to colors.
+            By default, the covariance / correlation range is mapped to the color bar range using linear scaling.
+
+        labelsize : int, default=None
+            Optionally, size for labels.
+
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least ``len(self.ells) * len(self.ells)`` axes.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        """
+        from desilike.observables.plotting import plot_covariance_matrix
+        cumsize = np.insert(np.cumsum([len(k) for k in self.k]), 0, 0)
+        mat = [[self.covariance[start1:stop1, start2:stop2] for start2, stop2 in zip(cumsize[:-1], cumsize[1:])] for start1, stop1 in zip(cumsize[:-1], cumsize[1:])]
+        return plot_covariance_matrix(mat, x1=self.k, xlabel1=r'$k$ [$h/\mathrm{Mpc}$]', label1=[r'$\ell = {:d}$'.format(ell) for ell in self.ells], corrcoef=corrcoef, **kwargs)
+
+    def calculate(self):
+        self.flattheory = self.wmatrix.flatpower
+        if self.transform == 'cubic':
+            # See eq. 16 of https://arxiv.org/pdf/2302.07484.pdf
+            self.flattheory = (3. * (self.flattheory / self.flatdata)**(1. / 3.) - 2.) * self.flatdata
+
+    @property
+    def theory(self):
+        return self.wmatrix.power
+
+    @property
+    def theory_nobao(self):
+        template = self.wmatrix.theory.template
+        only_now = template.only_now
+        template.only_now = True
 
         def callback(calculator):
             all_requires.append(calculator)
@@ -246,36 +371,15 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         for calculator in all_requires:
             calculator.runtime_info.tocalculate = True
             calculator.runtime_info.calculate()
-        nowiggle = self.theory
 
-        for ill, ell in enumerate(self.ells):
-            lax[ill].errorbar(self.k[ill], self.k[ill] * (data[ill] - nowiggle[ill]), yerr=self.k[ill] * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o')
-            lax[ill].plot(self.k[ill], self.k[ill] * (theory[ill] - nowiggle[ill]), color='C{:d}'.format(ill))
-            lax[ill].set_ylabel(r'$k \Delta P_{{{:d}}}(k)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]'.format(ell))
-        for ax in lax: ax.grid(True)
-        lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        nobao = self.theory
 
-        self.wmatrix.theory.template.only_now = only_now
+        template.only_now = only_now
         for calculator in all_requires:
             calculator.runtime_info.tocalculate = True
             calculator.runtime_info.calculate()
 
-        return lax
-
-    @plotting.plotter
-    def plot_covariance_matrix(self, corrcoef=True):
-        from desilike.observables.plotting import plot_covariance_matrix
-        cumsize = np.insert(np.cumsum([len(k) for k in self.k]), 0, 0)
-        mat = [[self.covariance[start1:stop1, start2:stop2] for start2, stop2 in zip(cumsize[:-1], cumsize[1:])] for start1, stop1 in zip(cumsize[:-1], cumsize[1:])]
-        return plot_covariance_matrix(mat, x1=self.k, xlabel1=r'$k$ [$h/\mathrm{Mpc}$]', label1=[r'$\ell = {:d}$'.format(ell) for ell in self.ells], corrcoef=corrcoef)
-
-    @property
-    def flattheory(self):
-        return self.wmatrix.flatpower
-
-    @property
-    def theory(self):
-        return self.wmatrix.power
+        return nobao
 
     @property
     def data(self):
@@ -289,8 +393,8 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         return [diag[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
 
     def __getstate__(self):
-        state = super(TracerPowerSpectrumMultipolesObservable, self).__getstate__()
-        for name in ['k', 'ells']:
+        state = {}
+        for name in ['k', 'kedges', 'ells', 'flatdata', 'flattheory', 'shotnoise']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state

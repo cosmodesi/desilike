@@ -1,0 +1,5 @@
+# To be copy-pasted in the MontePython *.param file
+data.parameters['sigmapar'] = [0.0, 0.0, 10.0, 0.0, 1.0, 'nuisance']
+data.parameters['sigmaper'] = [0.0, 0.0, 10.0, 0.0, 1.0, 'nuisance']
+data.parameters['LRG_b1'] = [1.5, 0.0, 4.0, 0.28867513459481287, 1.0, 'nuisance']
+data.parameters['LRG_sn0'] = [0.0, None, None, 0.1, 1.0, 'nuisance']

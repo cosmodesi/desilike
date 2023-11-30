@@ -1,8 +1,10 @@
 import functools
+import logging
+import warnings
 
 import numpy as np
 
-from desilike import mpi, utils
+from desilike import utils, mpi, PipelineError
 from desilike.utils import BaseClass, expand_dict, TaskManager
 from desilike.samples import load_source
 from desilike.samples.profiles import Profiles, ParameterBestFit, ParameterGrid, ParameterProfiles
@@ -93,7 +95,7 @@ def _profiles_transform(self, profiles):
 
 def _iterate_over_params(self, params, method, **kwargs):
     nparams = len(params)
-    nprocs_per_param = max((self.mpicomm.size - 1) // nparams, 1)
+    nprocs_per_param = max(self.mpicomm.size // nparams, 1)
     if self.profiles is None:
         start = self._get_start()
     else:
@@ -231,27 +233,56 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         self.save_fn = save_fn
 
     @bcast_values
-    def loglikelihood(self, values):
-        values = self._params_forward_transform(values)
-        points = Samples(values.T, params=self.varied_params)
+    def logposterior(self, values):
+        logprior = self.logprior(values)
+        mask_finite_prior = ~np.isinf(logprior)
+        if not mask_finite_prior.any():
+            return logprior
+        points = Samples(self._params_forward_transform(values[mask_finite_prior]).T, params=self.varied_params)
         self.pipeline.mpicalculate(**points.to_dict())
-        toret = None
+        logposterior, raise_error = None, None
         if self.pipeline.mpicomm.rank == 0:
-            if self.derived is None:
-                self.derived = [points, self.pipeline.derived]
-            else:
-                self.derived = [Samples.concatenate([self.derived[0], points]),
-                                Samples.concatenate([self.derived[1], self.pipeline.derived])]
-            toret = self.pipeline.derived[self.likelihood._param_loglikelihood][()] + self.pipeline.derived[self.likelihood._param_logprior][()]
+            update_derived = True
+            di = {}
+            try:
+                di = {'loglikelihood': self.pipeline.derived[self.likelihood._param_loglikelihood],
+                      'logprior': self.pipeline.derived[self.likelihood._param_logprior]}
+            except KeyError:
+                di['loglikelihood'] = di['logprior'] = np.full(points.shape, -np.inf)
+                update_derived = False
+            if self.pipeline.errors:
+                for ipoint, error in self.pipeline.errors.items():
+                    if isinstance(error[0], self.likelihood.catch_errors):
+                        self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(error[0],
+                                       {k: v.flat[ipoint] for k, v in points.items()}, error[1]))
+                        for values in di.values():
+                            values[ipoint, ...] = -np.inf  # should be useless, as no step with -inf loglikelihood should be kept
+                    else:
+                        raise_error = error
+                        update_derived = False
+                    if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
+                        warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug to get full stack trace.'.format(error[0]))
+            if update_derived:
+                if self.derived is None:
+                    self.derived = [points, self.pipeline.derived]
+                else:
+                    self.derived = [Samples.concatenate([self.derived[0], points]),
+                                    Samples.concatenate([self.derived[1], self.pipeline.derived])]
+            logposterior = logprior.copy()
+            logposterior[mask_finite_prior] = 0.
+            for name, values in di.items():
+                values = values[()]
+                mask = np.isnan(values)
+                values[mask] = -np.inf
+                logposterior[mask_finite_prior] += values
+                if mask.any() and self.mpicomm.rank == 0:
+                    warnings.warn('{} is NaN for {}'.format(name, {k: v[mask] for k, v in points.items()}))
         else:
             self.derived = None
-        toret = self.pipeline.mpicomm.bcast(toret, root=0)
-        mask = np.isnan(toret)
-        toret[mask] = -np.inf
-        if mask.any() and self.mpicomm.rank == 0:
-            import warnings
-            warnings.warn('loglikelihood is NaN for {}'.format({k: v[mask] for k, v in points.items()}))
-        return toret
+        raise_error = self.likelihood.mpicomm.bcast(raise_error, root=0)
+        if raise_error:
+            raise PipelineError('Error "{}" occured with stack trace:\n{}'.format(*raise_error))
+        return self.likelihood.mpicomm.bcast(logposterior, root=0)
 
     @bcast_values
     def logprior(self, values):
@@ -259,13 +290,6 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         values = self._params_forward_transform(values)
         for param, value in zip(self.varied_params, values.T):
             toret += param.prior(value)
-        return toret
-
-    @bcast_values
-    def logposterior(self, values):
-        toret = self.logprior(values)
-        mask = ~np.isinf(toret)
-        toret[mask] = self.loglikelihood(values[mask])
         return toret
 
     def chi2(self, values):
@@ -366,10 +390,10 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                 start = [start]
             if niterations is None:
                 niterations = len(start)
-        if niterations is None: niterations = max(self.mpicomm.size - 1, 1)
+        if niterations is None: niterations = max(self.mpicomm.size, 1)
         niterations = int(niterations)
         start, logposterior = self._get_start(start=start, niterations=niterations)
-        nprocs_per_iteration = max((self.mpicomm.size - 1) // niterations, 1)
+        nprocs_per_iteration = max(self.mpicomm.size // niterations, 1)
         list_profiles = [None] * niterations
         mpicomm_bak = self.mpicomm
         with TaskManager(nprocs_per_task=nprocs_per_iteration, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
@@ -378,11 +402,11 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                 p = self._maximize_one(start[ii], self.chi2, self.transformed_params, **kwargs)
                 if self.mpicomm.rank == 0:
                     profiles = Profiles(start=Samples(start[ii], params=self.varied_params),
-                                        bestfit=ParameterBestFit(list(start[ii]) + [logposterior[ii]], params=self.varied_params + ['logposterior'],
-                                                                 logposterior='logposterior', loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior))
+                                        bestfit=ParameterBestFit(list(start[ii]), params=self.varied_params, loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior))
+                    profiles.bestfit.logposterior = logposterior[ii]
                     profiles.update(p)
                     profiles = _profiles_transform(self, profiles)
-                    for param in self.likelihood.params.select(fixed=True, derived=False):
+                    for param in self.likelihood.all_params.select(fixed=True, derived=False):
                         profiles.bestfit[param] = np.array(param.value, dtype='f8')
                     index_in_profile, index = self.derived[0].match(profiles.bestfit, params=profiles.start.params())
                     assert index_in_profile[0].size == 1
@@ -393,10 +417,12 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                     #    solved_params = ParameterCollection([self.likelihood.all_params[param] for deriv in logposterior.derivs for param in deriv.keys()])
                     #    covariance = ParameterPrecision(logposterior[0], params=solved_params).to_covariance()
                     for array in self.derived[1]:
-                        array = array[index]
-                        profiles.bestfit.set(array)
+                        profiles.bestfit.set(array[index])
                         #if array.param in covariance:
                         #    profiles.error[array.param] = covariance.std([array.param])
+                    if profiles.bestfit._logposterior not in profiles.bestfit:
+                        profiles.bestfit.logposterior = profiles.bestfit[profiles.bestfit._loglikelihood] + profiles.bestfit[profiles.bestfit._logprior]
+                    profiles.bestfit.logposterior.param.update(derived=True, latex=utils.outputs_to_latex(profiles.bestfit._logposterior))
                 else:
                     profiles = None
                 list_profiles[ii] = profiles
@@ -529,7 +555,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         grid = ParameterGrid(grid)
         grid_params = grid.params()
         nsamples = grid.size
-        nprocs_per_param = max((self.mpicomm.size - 1) // nsamples, 1)
+        nprocs_per_param = max(self.mpicomm.size // nsamples, 1)
         start = self._get_start(niterations=niterations)[0]
 
         flat_grid = grid.ravel()
@@ -541,6 +567,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
         states = {}
         mpicomm_bak = self.mpicomm
+
         with TaskManager(nprocs_per_task=nprocs_per_param, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
             self.mpicomm = tm.mpicomm
             for ipoint in tm.iterate(range(nsamples)):
@@ -569,7 +596,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             logposterior = {}
             for state in states: logposterior.update(state)
             logposterior = np.array([logposterior[i] for i in range(nsamples)])
-        grid['logposterior'] = self.mpicomm.bcast(logposterior, root=0)
+        grid.logposterior = self.mpicomm.bcast(logposterior, root=0)
         if self.profiles is None:
             self.profiles = Profiles()
         self.profiles.set(grid=grid)
@@ -621,7 +648,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             raise ValueError('Provide a list of grids, one for each of {}'.format(params))
 
         nparams = len(params)
-        nprocs_per_param = max((self.mpicomm.size - 1) // nparams, 1)
+        nprocs_per_param = max(self.mpicomm.size // nparams, 1)
         list_profiles = [None] * nparams
         profiles_bak, save_fn_bak, mpicomm_bak = self.profiles, self.save_fn, self.mpicomm
         self.save_fn = None

@@ -21,7 +21,7 @@ class RQuasiRandomSequence(qmc.QMCEngine):
             eq_check = phi**(self.d + 1) - phi - 1
         self.inv_phi = [phi**(-(1 + d)) for d in range(self.d)]
 
-    def random(self, n=1):
+    def _random(self, n=1, *, workers=1):
         self.num_generated += n
         return (self.seed + np.arange(self.num_generated + 1, self.num_generated + n + 1)[:, None] * self.inv_phi) % 1.
 

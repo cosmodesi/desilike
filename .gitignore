@@ -20,6 +20,9 @@ doc/_build/
 **/_chains
 **/tests/_*/
 **/*.pyc
+**/*.npz
+**/*.npy
+**/*.png
 
 # Unit test / coverage reports
 **/.coverage

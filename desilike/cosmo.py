@@ -4,7 +4,7 @@ from . import utils
 
 from cosmoprimo.cosmology import Cosmology, BaseEngine, BaseSection, CosmologyError
 from cosmoprimo.interpolator import PowerSpectrumInterpolator1D, PowerSpectrumInterpolator2D
-from cosmoprimo.utils import flatarray
+from cosmoprimo.utils import flatarray, addproperty
 
 
 def _make_list(li, length=None, isinst=(list, tuple)):
@@ -30,6 +30,10 @@ def merge(arrays):
     return np.unique(np.concatenate([np.atleast_1d(a) for a in arrays], axis=0))
 
 
+def is_external_cosmo(cosmo):
+    return isinstance(cosmo, str) and cosmo == 'external'
+
+
 class BaseExternalEngine(BaseEngine):
     """
     A base cosmoprimo's engine class, to be extended for specific external provider of cosmological calculation.
@@ -48,10 +52,10 @@ class BaseExternalEngine(BaseEngine):
             toret = d1.copy()
             for name, value in d2.items():
                 if name in d1:
-                    if isinstance(d1[name], dict) and isinstance(value, dict):
-                        value = _merge_dict(d1[name], value)
-                    elif d1[name] is None and value is None:
+                    if utils.deep_eq(d1[name], value):
                         pass
+                    elif isinstance(d1[name], dict) and isinstance(value, dict):
+                        value = _merge_dict(d1[name], value)
                     else:
                         value = _make_list(d1[name], isinst=(list,)) + _make_list(value, isinst=(list,))
                 toret[name] = value
@@ -65,10 +69,13 @@ class BaseExternalEngine(BaseEngine):
         for section, names in requires.items():
             for name, attrs in names.items():
                 if section == 'background':
+                    attrs = attrs or {}
                     attrs['z'] = merge(attrs.get('z', get_default('z')))
                 if section == 'primordial':
+                    attrs = attrs or {}
                     attrs['k'] = merge(attrs.get('k', get_default('k')))
                 if section == 'fourier':
+                    attrs = attrs or {}
                     if name == 'pk_interpolator':
                         attrs['of'] = list(set([tuple(_make_list(of, length=2)) for of in attrs['of']]))
                         for aname in ['z', 'k']: attrs[aname] = merge(attrs.get(aname, get_default(aname)))

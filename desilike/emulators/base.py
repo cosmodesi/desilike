@@ -33,7 +33,7 @@ def get_subsamples(samples, frac=1., nmax=np.inf, seed=42, mpicomm=None):
 
 
 def _setstate(self, state):
-    self.__dict__.update(state)
+    self.__dict__.update({name: value for name, value in state.items() if name not in self.emulator.in_calculator_state})
     self.__setstate__({name: value for name, value in state.items() if name in self.emulator.in_calculator_state})
 
 
@@ -41,7 +41,7 @@ class EmulatedCalculator(BaseCalculator):
 
     def initialize(self, emulator=None, **kwargs):
         self.emulator = emulator
-        self.calculate(**{name: self.params[name].value for name in self.emulator.varied_params})
+        self.calculate(**{param.basename: param.value for param in self.init.params})
 
     def calculate(self, **params):
         predict = self.emulator.predict(**params)
@@ -95,8 +95,8 @@ class Emulator(BaseClass):
         self.calculator = calculator
         self.pipeline = self.calculator.runtime_info.pipeline
 
-        self.params = self.pipeline.params.deepcopy()
-        self.varied_params = self.pipeline.varied_params.names()
+        self.params = self.pipeline.params.clone(namespace=None).deepcopy()
+        self.varied_params = self.pipeline.varied_params.clone(namespace=None).names()
         if not self.varied_params:
             raise ValueError('No parameters to be varied!')
 
@@ -226,7 +226,7 @@ class Emulator(BaseClass):
         if self.mpicomm.rank == 0:
             tmp = Samples(attrs=samples.attrs)
             for param in self.pipeline.varied_params + self.pipeline.params.select(name=list(self.engines.keys()), derived=True):
-                tmp[param] = samples[param.name]
+                tmp[param.clone(namespace=None)] = samples[param.name]
         for name, eng in self.engines.items():
             if eng is engine:
                 self.samples[name] = tmp
@@ -421,6 +421,10 @@ class Emulator(BaseClass):
 
         seed : int, default=None
             Random seed for sample downsampling.
+
+        Returns
+        -------
+        figs : list of matplotlib.figure.Figure
         """
         from matplotlib import pyplot as plt
 
@@ -440,7 +444,7 @@ class Emulator(BaseClass):
         pipeline = calculator.runtime_info.pipeline
         unique_samples = find_uniques(self.samples.values())
 
-        toret = []
+        figs = []
         for samples in unique_samples:
             samples_names = [name for name, s in self.samples.items() if s is samples]
             if samples_names:
@@ -459,12 +463,12 @@ class Emulator(BaseClass):
                         lax[0].set_ylabel(name)
                         lax[1].set_ylabel(r'$\Delta$ {}'.format(name))
                         for ax in lax: ax.grid(True)
-                        toret.append(lax)
+                        figs.append(fig)
                         if fn is not None:
                             plotting.savefig(fn, fig=fig, **(kw_save or {}))
-                        if show is None:
+                        if show:
                             plt.show()
-        return toret
+        return figs
 
     def __getstate__(self):
         state = {'engines': {}}

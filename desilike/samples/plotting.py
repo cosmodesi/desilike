@@ -43,10 +43,10 @@ def _get_default_chain_params(chains, params=None, **kwargs):
     if params is not None:
         params = _make_list(params)
         list_params = ParameterCollection()
-        for chain in chains[::-1]:
-            all_params = chain.params()
-            list_params += [all_params[param] for param in params if param in all_params]
-        return ParameterCollection([list_params[param] for param in params if param in list_params])
+        for param in params:
+            for chain in chains[::-1]:
+                list_params += chain.params(name=[str(param)])
+        return list_params
     list_params = [chain.params(**kwargs) for chain in chains]
     return ParameterCollection([params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])])
 
@@ -57,16 +57,17 @@ def _get_default_profiles_params(profiles, params=None, of='bestfit', **kwargs):
     if params is not None:
         params = _make_list(params)
         list_params = ParameterCollection()
-        for profile in profiles[::-1]:
-            all_params = profile.get(of).params()
-            list_params += [all_params[param] for param in params if param in all_params]
-        return ParameterCollection([list_params[param] for param in params if param in list_params])
+        list_params = ParameterCollection()
+        for param in params:
+            for profile in profiles[::-1]:
+                list_params += profile.get(of).params(name=[str(param)])
+        return list_params
     list_params = [profile.get(of).params(**kwargs) for profile in profiles]
     return ParameterCollection([params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])])
 
 
 @plotting.plotter
-def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, kw_plot=None):
+def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, kw_plot=None, fig=None):
     """
     Make trace plot as a function of steps, with a panel for each parameter.
 
@@ -102,10 +103,12 @@ def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, k
     show : bool, default=False
         If ``True``, show figure.
 
+    fig : matplotlib.figure.Figure, default=None
+        Optionally, a figure with at least as many axes as ``params``.
+
     Returns
     -------
-    lax : array
-        Array of axes.
+    fig : matplotlib.figure.Figure
     """
     from matplotlib import pyplot as plt
     chains = _make_list(chains)
@@ -116,8 +119,11 @@ def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, k
 
     steps = 1 + np.arange(max(chain.size for chain in chains))
     figsize = figsize or (8, 1.5 * nparams)
-    fig, lax = plt.subplots(nparams, sharex=True, sharey=False, figsize=figsize, squeeze=False)
-    lax = lax.ravel()
+    if fig is None:
+        fig, lax = plt.subplots(nparams, sharex=True, sharey=False, figsize=figsize, squeeze=False)
+        lax = lax.ravel()
+    else:
+        lax = fig.axes
 
     for ax, param in zip(lax, params):
         ax.grid(True)
@@ -128,11 +134,11 @@ def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, k
             ax.plot(steps[:len(tmp)], tmp, color=colors[ichain], **kw_plot)
 
     lax[-1].set_xlabel('step', fontsize=labelsize)
-    return lax
+    return fig
 
 
 @plotting.plotter
-def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, slices=None, labelsize=None, ax=None, **kwargs):
+def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, slices=None, offset=0, labelsize=None, fig=None, **kwargs):
     """
     Plot Gelman-Rubin statistics as a function of steps.
 
@@ -157,11 +163,14 @@ def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, s
         Defaults to ``np.arange(100, nsteps, 500)``, where ``nsteps`` is the minimum size of input ``chains``:
         Gelman-Rubin statistics is then plotted for chain slices (0, 100), (0, 600), ...
 
+    offset : float, default=0
+        Offset to apply to the Gelman-Rubin statistics, typically 0 or -1.
+
     labelsize : int, default=None
         Label sizes.
 
-    ax : matplotlib.axes.Axes, default=None
-        Axes where to plot Gelman-Rubin statistics. If ``None``, take current axes.
+    fig : matplotlib.figure.Figure, default=None
+        Optionally, a figure with at least 1 axis.
 
     **kwargs : dict
         Optional arguments for :func:`diagnostics.gelman_rubin` ('nsplits', 'check_valid').
@@ -178,9 +187,10 @@ def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, s
 
     Returns
     -------
-    ax : matplotlib.axes.Axes
+    fig : matplotlib.figure.Figure
     """
     from matplotlib import pyplot as plt
+    chains = _make_list(chains)
     params = _get_default_chain_params(chains, params=params, varied=True, derived=False)
     if slices is None:
         nsteps = min(chain.size for chain in chains)
@@ -191,25 +201,28 @@ def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, s
         chains_sliced = [chain.ravel()[:end] for chain in chains]
         if multivariate: gr_multi.append(diagnostics.gelman_rubin(chains_sliced, params, method='eigen', **kwargs).max())
         for param in gr: gr[param].append(diagnostics.gelman_rubin(chains_sliced, param, method='diag', **kwargs))
+    gr_multi = np.asarray(gr_multi)
     for param in gr: gr[param] = np.asarray(gr[param])
 
-    fig = None
-    if ax is None: fig, ax = plt.subplots()
+    if fig is None:
+        fig, ax = plt.subplots()
+    else:
+        ax = fig.axes[0]
     ax.grid(True)
     ax.set_xlabel('step', fontsize=labelsize)
-    ax.set_ylabel(r'$\hat{R}$', fontsize=labelsize)
+    ylabel = r'$\hat{{R}} {} {}$'.format('-' if (offset < 0) else '+', abs(offset)) if offset != 0 else r'$\hat{{R}}$'
+    ax.set_ylabel(ylabel, fontsize=labelsize)
 
-    if multivariate: ax.plot(slices, gr_multi, label='multi', linestyle='-', linewidth=1, color='k')
+    if multivariate: ax.plot(slices, gr_multi + offset, label='multi', linestyle='-', linewidth=1, color='k')
     for param in params:
-        ax.plot(slices, gr[param], label=chains[0][param].param.latex(inline=True), linestyle='--', linewidth=1)
+        ax.plot(slices, gr[param] + offset, label=chains[0][param].param.latex(inline=True), linestyle='--', linewidth=1)
     if threshold is not None: ax.axhline(y=threshold, xmin=0., xmax=1., linestyle='--', linewidth=1, color='k')
     ax.legend()
-
-    return ax
+    return fig
 
 
 @plotting.plotter
-def plot_geweke(chains, params=None, threshold=None, slices=None, labelsize=None, ax=None, **kwargs):
+def plot_geweke(chains, params=None, threshold=None, slices=None, labelsize=None, fig=None, **kwargs):
     """
     Plot Geweke statistics.
 
@@ -233,8 +246,8 @@ def plot_geweke(chains, params=None, threshold=None, slices=None, labelsize=None
     labelsize : int, default=None
         Label sizes.
 
-    ax : matplotlib.axes.Axes, default=None
-        Axes where to plot Geweke statistics. If ``None``, take current axes.
+    fig : matplotlib.figure.Figure, default=None
+        Optionally, a figure with at least 1 axis.
 
     **kwargs : dict
         Optional arguments for :func:`diagnostics.geweke` ('first', 'last').
@@ -251,7 +264,7 @@ def plot_geweke(chains, params=None, threshold=None, slices=None, labelsize=None
 
     Returns
     -------
-    ax : matplotlib.axes.Axes
+    fig : matplotlib.figure.Figure
     """
     from matplotlib import pyplot as plt
     params = _get_default_chain_params(chains, params=params, varied=True, derived=False)
@@ -264,8 +277,10 @@ def plot_geweke(chains, params=None, threshold=None, slices=None, labelsize=None
         for param in geweke: geweke[param].append(diagnostics.geweke(chains_sliced, param, **kwargs))
     for param in geweke: geweke[param] = np.asarray(geweke[param]).mean(axis=-1)
 
-    fig = None
-    if ax is None: fig, ax = plt.subplots()
+    if fig is None:
+        fig, ax = plt.subplots()
+    else:
+        ax = fig.axes[0]
     ax.grid(True)
     ax.set_xlabel('step', fontsize=labelsize)
     ax.set_ylabel(r'geweke', fontsize=labelsize)
@@ -274,12 +289,11 @@ def plot_geweke(chains, params=None, threshold=None, slices=None, labelsize=None
         ax.plot(slices, geweke[param], label=chains[0][param].param.latex(inline=True), linestyle='-', linewidth=1)
     if threshold is not None: ax.axhline(y=threshold, xmin=0., xmax=1., linestyle='--', linewidth=1, color='k')
     ax.legend()
-
-    return ax
+    return fig
 
 
 @plotting.plotter
-def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, labelsize=None, ax=None):
+def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, labelsize=None, fig=None):
     r"""
     Plot integrated autocorrelation time.
 
@@ -304,8 +318,8 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
     labelsize : int, default=None
         Label sizes.
 
-    ax : matplotlib.axes.Axes, default=None
-        Axes where to plot autocorrelation time. If ``None``, take current axes.
+    fig : matplotlib.figure.Figure, default=None
+        Optionally, a figure with at least 1 axis.
 
     fn : str, Path, default=None
         Optionally, path where to save figure.
@@ -319,7 +333,7 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
 
     Returns
     -------
-    ax : matplotlib.axes.Axes
+    fig : matplotlib.figure.Figure
     """
     from matplotlib import pyplot as plt
     chains = _make_list(chains)
@@ -335,8 +349,10 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
             autocorr[param].append(tmp)
     for param in autocorr: autocorr[param] = np.asarray(autocorr[param])
 
-    fig = None
-    if ax is None: fig, ax = plt.subplots()
+    if fig is None:
+        fig, ax = plt.subplots()
+    else:
+        ax = fig.axes[0]
     ax.grid(True)
     ax.set_xlabel('step $N$', fontsize=labelsize)
     ax.set_ylabel('$\tau$', fontsize=labelsize)
@@ -347,7 +363,7 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
         ax.plot(slices, slices * 1. / threshold, label='$N/{:d}$'.format(threshold), linestyle='--', linewidth=1, color='k')
     ax.legend()
 
-    return ax
+    return fig
 
 
 @plotting.plotter
@@ -379,7 +395,7 @@ def plot_triangle(chains, params=None, labels=None, g=None, **kwargs):
         Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
 
     g : getdist subplot_plotter()
-        can be created with `g = gdplt.get_subplot_plotter()` and can be modified with g.settings
+        can be created with `g = getdist.plots.get_subplot_plotter()` and can be modified with g.settings
 
     show : bool, default=False
         If ``True``, show figure.
@@ -389,14 +405,13 @@ def plot_triangle(chains, params=None, labels=None, g=None, **kwargs):
 
     Returns
     -------
-    lax : array
-        Array of axes.
+    g : getdist.plots.GetDistPlotter
     """
     from getdist import plots
     if g is None: g = plots.get_subplot_plotter()
     chains = _make_list(chains)
     labels = _make_list(labels, length=len(chains), default=None)
-    params = _get_default_chain_params(chains, params=params, varied=True)
+    params = _get_default_chain_params(chains, params=params, varied=True, input=True)
     chains = [chain.to_getdist(label=label, params=chain.params(name=params.names())) for chain, label in zip(chains, labels)]
     g.triangle_plot(chains, [str(param) for param in params], **kwargs)
     return g
@@ -405,7 +420,7 @@ def plot_triangle(chains, params=None, labels=None, g=None, **kwargs):
 @plotting.plotter
 def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None, error='error',
                  labelsize=None, ticksize=None, kw_scatter=None, yband=None, kw_mean=None, kw_truth=None, kw_yband=None,
-                 kw_legend=None, ax=None):
+                 kw_legend=None, fig=None):
     """
     Plot best fit estimates for single parameter.
 
@@ -468,8 +483,8 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
     kw_legend : dict, default=None
         Optional arguments for :meth:`matplotlib.axes.Axes.legend`.
 
-    ax : matplotlib.axes.Axes, default=None
-        Axes where to plot profiles. If ``None``, takes current axes.
+    fig : matplotlib.figure.Figure, default=None
+        Optionally, a figure with at least 1 axis.
 
     fn : str, Path, default=None
         Optionally, path where to save figure.
@@ -483,7 +498,7 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
 
     Returns
     -------
-    ax : matplotlib.axes.Axes
+    fig : matplotlib.figure.Figure
     """
     from matplotlib import pyplot as plt
     profiles = _make_list(profiles)
@@ -504,8 +519,10 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
 
     xmain = np.arange(len(profiles))
     xaux = np.linspace(-0.15, 0.15, maxpoints)
-    fig = None
-    if ax is None: fig, ax = plt.subplots()
+    if fig is None:
+        fig, ax = plt.subplots()
+    else:
+        ax = fig.axes[0]
     for iprof, prof in enumerate(profiles):
         if param not in prof.bestfit: continue
         ibest = prof.bestfit.logposterior.argmax()
@@ -544,11 +561,11 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
     ax.set_ylabel(profiles[0].bestfit[param].param.latex(inline=True), fontsize=labelsize)
     ax.tick_params(labelsize=ticksize)
     if add_legend: ax.legend(**{**{'ncol': maxpoints}, **kw_legend})
-    return ax
+    return fig
 
 
 @plotting.plotter
-def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=None, ybands=None, ylimits=None, figsize=None, **kwargs):
+def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=None, ybands=None, ylimits=None, figsize=None, fig=None, **kwargs):
     """
     Plot best fits, with a panel for each parameter.
 
@@ -581,6 +598,9 @@ def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=No
     figsize : float, tuple, default=None
         Figure size.
 
+    fig : matplotlib.figure.Figure, default=None
+        Optionally, a figure with at least as many axes as ``params``.
+
     fn : str, Path, default=None
         Optionally, path where to save figure.
         If not provided, figure is not saved.
@@ -593,8 +613,7 @@ def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=No
 
     Returns
     -------
-    lax : array
-        Array of axes.
+    fig : matplotlib.figure.Figure
     """
     from matplotlib import pyplot as plt
     profiles = _make_list(profiles)
@@ -606,28 +625,28 @@ def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=No
 
     nrows = len(params)
     ncols = len(profiles) if len(profiles) > 1 else maxpoints
-    figsize = figsize or (ncols, 3. * nrows)
-    plt.figure(figsize=figsize)
-    gs = gridspec.GridSpec(nrows, 1, wspace=0.1, hspace=0.1)
+    if fig is None:
+        figsize = figsize or (ncols, 3. * nrows)
+        fig, lax = plt.subplots(nrows, 1, figsize=figsize)
+        fig.subplots_adjust(wspace=0.1, hspace=0.1)
+    else:
+        lax = fig.axes
 
-    lax = []
     for iparam1, param1 in enumerate(params):
-        ax = plt.subplot(gs[iparam1])
-        plot_aligned(profiles, param=param1, ids=ids, labels=labels, truth=truths[iparam1], yband=ybands[iparam1], ax=ax, **kwargs)
+        ax = lax[iparam1]
+        plot_aligned(profiles, param=param1, ids=ids, labels=labels, truth=truths[iparam1], yband=ybands[iparam1], fig=ax, **kwargs)
         if (iparam1 < nrows - 1) or not ids: ax.get_xaxis().set_visible(False)
         ax.set_ylim(ylimits[iparam1])
         if iparam1 != 0:
             leg = ax.get_legend()
             if leg is not None: leg.remove()
-        lax.append(ax)
-
-    return np.array(lax)
+    return fig
 
 
 @plotting.plotter
 def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors=None, linestyles=None,
                  cl=(1, 2, 3), labelsize=None, ticksize=None, kw_profile=None, kw_cl=None,
-                 kw_legend=None, figsize=None):
+                 kw_legend=None, figsize=None, fig=None):
     """
     Plot profiles, with a panel for each parameter.
 
@@ -678,6 +697,9 @@ def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors
     figsize : float, tuple, default=None
         Figure size.
 
+    fig : matplotlib.figure.Figure, default=None
+        Optionally, a figure with at least as many axes as ``params``.
+
     fn : str, Path, default=None
         Optionally, path where to save figure.
         If not provided, figure is not saved.
@@ -690,8 +712,7 @@ def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors
 
     Returns
     -------
-    lax : array
-        Array of axes.
+    fig : matplotlib.figure.Figure
     """
     from matplotlib import pyplot as plt
     profiles = _make_list(profiles)
@@ -708,17 +729,18 @@ def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors
     xshift_cl = kw_cl.pop('xhift', 0.9)
     kw_legend = dict(kw_legend or {})
 
-    ncols = int(len(params) * 1. / nrows + 1.)
-    figsize = figsize or (4. * ncols, 4. * nrows)
-    plt.figure(figsize=figsize)
-    gs = gridspec.GridSpec(nrows, ncols, wspace=0.2, hspace=0.2)
+    ncols = int((len(params) + nrows - 1) * 1. / nrows)
 
-    def data_to_axis(ax, y):
-        axis_to_data = ax.transAxes + ax.transData.inverted()
-        return axis_to_data.inverted().transform((0, y))[1]
+    if fig is None:
+        figsize = figsize or (4. * ncols, 4. * nrows)
+        fig, lax = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+        lax = lax.ravel()
+        fig.subplots_adjust(wspace=0.2, hspace=0.2)
+    else:
+        lax = fig.axes
 
     for iparam1, param1 in enumerate(params):
-        ax = plt.subplot(gs[iparam1])
+        ax = lax[iparam1]
         for ipro, pro in enumerate(profiles):
             pro = pro.profile
             if param1 not in pro: continue
@@ -735,7 +757,7 @@ def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors
         if iparam1 == 0: ax.set_ylabel(r'$\Delta \chi^{2}$', fontsize=labelsize)
         if add_legend and iparam1 == 0: ax.legend(**kw_legend)
 
-    return gs
+    return fig
 
 
 def plot_profile_comparison(profiles, profiles_ref, params=None, labels=None, colors=None, **kwargs):
@@ -765,6 +787,9 @@ def plot_profile_comparison(profiles, profiles_ref, params=None, labels=None, co
         Optional arguments for :func:`plot_profile`
         ('nrows', 'cl', 'labelsize', 'ticksize', 'kw_profile', 'kw_cl', 'kw_legend', 'figsize').
 
+    fig : matplotlib.figure.Figure, default=None
+        Optionally, a figure with at least as many axes as ``params``.
+
     fn : str, Path, default=None
         Optionally, path where to save figure.
         If not provided, figure is not saved.
@@ -777,8 +802,7 @@ def plot_profile_comparison(profiles, profiles_ref, params=None, labels=None, co
 
     Returns
     -------
-    lax : array
-        Array of axes.
+    fig : matplotlib.figure.Figure
     """
     profiles = _make_list(profiles)
     profiles_ref = _make_list(profiles_ref)
@@ -791,4 +815,4 @@ def plot_profile_comparison(profiles, profiles_ref, params=None, labels=None, co
     offsets = [pro.bestfit.logposterior.max() for pro in profiles]
     colors = colors * 2
     linestyles = ['-'] * nprofiles + ['--'] * nprofiles
-    plot_profile(profiles + profiles_ref, params=params, offsets=offsets, labels=labels, colors=colors, linestyles=linestyles, **kwargs)
+    return plot_profile(profiles + profiles_ref, params=params, offsets=offsets, labels=labels, colors=colors, linestyles=linestyles, **kwargs)

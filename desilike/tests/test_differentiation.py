@@ -34,11 +34,14 @@ def test_jax():
     from desilike.jax import jax
     from desilike.jax import numpy as jnp
 
-    def f(a, b):
-        return jnp.sum(a * b)
+    def f(*values):
+        return jnp.sum(jnp.array(values))
 
-    jac = jax.jacrev(f)
-    jac(1., 3.)
+    jac = jax.jacrev(f, argnums=(1, 2))
+    print(jac(1., 1., 3.))
+
+    jac = jax.jacrev(jac, argnums=(0, 1, 2))
+    print(jac(1., 1., 3.))
 
     a = np.arange(10)
     number = 100000
@@ -112,16 +115,27 @@ def test_solve():
 
 def test_solve():
 
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import (DampedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles,
+                                                     LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate)
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, ObservablesCovarianceMatrix, BoxFootprint
     from desilike.likelihoods import ObservablesGaussianLikelihood
+
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
+    for param in theory.params.select(basename=['al*']): param.update(namespace='LRG', derived='.best')
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data={},
+                                                         theory=theory)
+    covariance = ObservablesCovarianceMatrix(observables=observable, footprints=BoxFootprint(volume=1e10, nbar=1e-2))
+    observable.init.update(covariance=covariance())
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     #theory = KaiserTracerPowerSpectrumMultipoles(template=template)
     #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
     theory = PyBirdTracerPowerSpectrumMultipoles(template=template)
     #for param in theory.params.select(basename=['df', 'dm', 'qpar', 'qper']): param.update(fixed=True)
-    for param in theory.params.select(basename=['alpha*', 'sn*', 'ce*']): param.update(derived='.best')
+    for param in theory.params.select(basename=['alpha*', 'sn*', 'ce*']): param.update(namespace='LRG', derived='.best')
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data={},
                                                          theory=theory)
@@ -144,7 +158,7 @@ def test_fisher_galaxy():
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
                                                          data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                          theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=False)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood.all_params['logA'].update(derived='jnp.log(10 *  {A_s})', prior=None)
     likelihood.all_params['A_s'] = {'prior': {'limits': [1.9, 2.2]}, 'ref': {'dist': 'norm', 'loc': 2.083, 'scale': 0.01}}
     for param in likelihood.all_params.select(name=['m_ncdm', 'w0_fld', 'wa_fld', 'Omega_k']):
@@ -160,6 +174,12 @@ def test_fisher_galaxy():
     fisher.mpicomm = mpi.COMM_SELF
     like = fisher()
     print(like.to_stats())
+    like2 = like.clone(params=['a', 'b'])
+    assert np.allclose(like2._hessian, 0.)
+    like2 = like.clone(params=['a', 'b'], center=np.ones(2), hessian=np.eye(2))
+    assert np.allclose(like2._center, np.ones(2))
+    assert np.allclose(like2._hessian, np.eye(2))
+    like2 += like
 
 
 def test_fisher_cmb():
@@ -193,6 +213,51 @@ def test_fisher_cmb():
     assert np.allclose(fisher_likelihood_clik2(), fisher_likelihood_clik())
 
 
+def test_speed():
+
+    import time
+    from cosmoprimo.fiducial import DESI
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles, FlexibleBAOWigglesTracerPowerSpectrumMultipoles, FlexibleBAOWigglesTracerCorrelationFunctionMultipoles
+    from desilike.theories.galaxy_clustering import FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TracerCorrelationFunctionMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+
+    footprint = BoxFootprint(volume=1e10, nbar=1e-4)
+
+    for theory_name in ['FOLPS', 'DampedBAOWiggles', 'FlexibleBAOWiggles'][:1]:
+        for observable_name in ['power', 'correlation']:
+            if observable_name == 'power':
+                theory = locals()[theory_name + 'TracerPowerSpectrumMultipoles']()
+                observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.3, 0.005], 2: [0.02, 0.3, 0.005]},
+                                                                     data={},
+                                                                     shotnoise=2e4,
+                                                                     theory=theory)
+            else:
+                theory = locals()[theory_name + 'TracerCorrelationFunctionMultipoles']()
+                observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 180., 4.], 2: [20., 180., 4.]},
+                                                                           data={},
+                                                                           theory=theory)
+
+            cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
+            observable.init.update(covariance=cov)
+            likelihood = ObservablesGaussianLikelihood(observables=[observable])
+            likelihood()
+            for param in likelihood.all_params.select(basename=theory.template.init.params.basenames()):
+                param.update(fixed=True)
+            for iparam, param in enumerate(likelihood.all_params.select(basename=['al*_*', 'ml*_*', 'alpha*', 'sn*'])):
+                param.update(derived='.best')
+            rng = np.random.RandomState(seed=42)
+            for i in range(2):
+                params = {param.name: param.prior.sample(random_state=rng) for param in likelihood.varied_params}
+                likelihood(**params)
+            niterations = 10
+            t0 = time.time()
+            for i in range(niterations):
+                params = {param.name: param.prior.sample(random_state=rng) for param in likelihood.varied_params}
+                likelihood(**params)
+            print(theory_name, observable_name, (time.time() - t0) / niterations)
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -201,3 +266,5 @@ if __name__ == '__main__':
     #test_solve()
     test_fisher_galaxy()
     #test_fisher_cmb()
+    #test_speed()
+    #test_jax()

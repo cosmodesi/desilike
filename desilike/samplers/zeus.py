@@ -115,10 +115,12 @@ class ZeusSampler(BaseBatchPosteriorSampler):
         py_random_state_bak, np_random_state_bak = random.getstate(), np.random.get_state()
         random.setstate(numpy_to_python_random_state(self.rng.get_state()))  # self.rng is same for all ranks
         np.random.set_state(self.rng.get_state())
+        #self.sampler.__dict__.update(getattr(self, '_state', {}))
         for _ in self.sampler.sample(start=start, iterations=niterations, progress=progress, thin_by=thin_by):
             pass
         chain = self.sampler.get_chain()
         data = [chain[..., iparam] for iparam, param in enumerate(self.varied_params)] + [self.sampler.get_log_prob()]
+        #self._state = self.sampler.__dict__.copy()
         self.sampler.reset()
         random.setstate(py_random_state_bak)
         np.random.set_state(np_random_state_bak)

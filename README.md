@@ -26,6 +26,7 @@ For ParameterArray, define when output should be a ParameterArray (e.g. under af
 ## Documentation
 
 Documentation in construction on Read the Docs, [desilike docs](https://desilike.readthedocs.io/).
+See in particular [getting started](https://desilike.readthedocs.io/en/latest/user/getting_started.html).
 
 ## Requirements
 
@@ -80,6 +81,7 @@ Just define your calculator (most commonly your likelihood), then in a python sc
 from desilike import Installer
 Installer(user=True)(likelihood)
 ```
+
 ## License
 
 **desilike** is free software distributed under a BSD3 license. For details see the [LICENSE](https://github.com/cosmodesi/desilike/blob/main/LICENSE).
@@ -87,13 +89,15 @@ Installer(user=True)(likelihood)
 
 ## Acknowledgments
 
-- Stephen Chen, Mark Maus and Martin White for wrappers for velocileptors: https://github.com/sfschen/velocileptors, https://github.com/martinjameswhite/CobayaLSS
-- Cullan Howlett, Yan Xiang Lai for wrapper for pybird: https://github.com/pierrexyz/pybird, https://github.com/CullanHowlett/pybird
-- Samuel Brieden, Hector Gil-Marin for ShapeFit
-- Stephen Chen and Mark Maus for Taylor expansion emulator: https://github.com/sfschen/velocileptors_shapefit
-- Stephen Chen and Joe DeRose for MLP emulator: https://github.com/sfschen/EmulateLSS
+- Stephen Chen, Mark Maus, Martin White for velocileptors wrapper: https://github.com/sfschen/velocileptors, https://github.com/martinjameswhite/CobayaLSS
+- Pierre Zhang, Cullan Howlett, Yan Xiang Lai for pybird wrapper: https://github.com/pierrexyz/pybird, https://github.com/CullanHowlett/pybird
+- Hernan E. Noriega, Alejandro Aviles for folps wrapper: https://github.com/henoriega/FOLPS-nu
+- Samuel Brieden, Hector Gil-Marin, Mark Maus for ShapeFit: https://arxiv.org/abs/2106.07641
+- Stephen Chen, Mark Maus for Taylor expansion emulator: https://github.com/sfschen/velocileptors_shapefit
+- Stephen Chen, Joe DeRose for MLP emulator: https://github.com/sfschen/EmulateLSS
 - Pat McDonald, Eva Maria Mueller, Antony Lewis for thoughts
-- Pat McDonald, Edmond Chaussidon, Uendert Andrade for early debugging
+- Pat McDonald, Edmond Chaussidon, Uendert Andrade, Daniel Forero Sanchez, Batia Friedman-Shaw, Svyatoslav Trusov, Nathan Findlay, Enrique Paillas, Vincenzo Aronica for early debugging and feedback
+- Ruiyang Zhao for systematics templates
+- Benedict Bahr-Kalus for turnover scale analysis: https://arxiv.org/pdf/2302.07484.pdf
 - Cobaya, CosmoSIS bindings inspired by firecrown: https://github.com/LSSTDESC/firecrown
 - Inspiration from Cobaya: https://github.com/CobayaSampler/cobaya
-- Uendert Andrade and Daniel Forero Sanchez for early feedback

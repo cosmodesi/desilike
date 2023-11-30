@@ -12,7 +12,7 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.003
+    delta: 0.03
     latex: h
   # If h is there, used instead of theta_mc below
   theta_MC_100:
@@ -23,7 +23,7 @@ params:
       dist: norm
       loc: 1.04092
       scale: 0.00031
-    delta: 0.0003
+    delta: 0.0005
     latex: 100 \theta_\mathrm{MC}
   omega_cdm:
     prior:
@@ -32,7 +32,7 @@ params:
       dist: norm
       loc: 0.12
       scale: 0.0012
-    delta: 0.0008
+    delta: 0.007
     latex: \omega_{cdm}
   omega_b:
     prior:
@@ -41,7 +41,7 @@ params:
       dist: norm
       loc: 0.02237
       scale: 0.00015
-    delta: 0.0001
+    delta: 0.0015
     latex: \omega_{b}
   logA:
     prior:
@@ -50,7 +50,7 @@ params:
       dist: norm
       loc: 3.036394
       scale: 0.014
-    delta: 0.005
+    delta: 0.05
     latex: \ln(10^{10} A_{s})
   n_s:
     prior:
@@ -59,7 +59,7 @@ params:
       dist: norm
       loc: 0.9649
       scale: 0.0042
-    delta: 0.002
+    delta: 0.005
     latex: n_{s}
   tau_reio:
     value: 0.0544
@@ -69,7 +69,7 @@ params:
       dist: norm
       loc: 0.0544
       scale: 0.01
-    delta: 0.004
+    delta: 0.01
     latex: \tau
   m_ncdm:
     prior:
@@ -78,17 +78,18 @@ params:
       dist: norm
       loc: 0.06
       scale: 0.12
-    delta: 0.01
+    delta: [0.31, 0.15, 0.15]
     latex: m_{ncdm}
     fixed: True
-  N_ur:
+  N_eff:
     prior:
-      limits: [0.05, 10.]
+      limits: [0.01, 10.]
     ref:
       dist: norm
-      loc: 2.0328
-      scale: 0.32
-    latex: N_{ur}
+      loc: 3.046
+      scale: 0.16
+    latex: N_{eff}
+    delta: 0.2
     fixed: True
   w0_fld:
     prior:
@@ -97,7 +98,7 @@ params:
       dist: norm
       loc: -1
       scale: 0.08
-    delta: 0.04
+    delta: 0.1
     latex: w_{0}
     fixed: True
   wa_fld:
@@ -107,7 +108,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.3
-    delta: 0.04
+    delta: 0.3
     latex: w_{a}
     fixed: True
   Omega_k:
@@ -117,6 +118,6 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    delta: 0.002
+    delta: 0.05  # 0.08
     latex: \Omega_{k}
     fixed: True

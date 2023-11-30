@@ -123,42 +123,42 @@ class Chain(Samples):
     def aweight(self):
         """Sample weights (floats)."""
         if self._aweight not in self:
-            self[Parameter(self._aweight, derived=True)] = np.ones(self.shape, dtype='f8')
+            self[Parameter(self._aweight, derived=True, latex=utils.outputs_to_latex(self._aweight))] = np.ones(self.shape, dtype='f8')
         return self[self._aweight]
 
     @property
     def fweight(self):
         """Sample frequency weights (integers)."""
         if self._fweight not in self:
-            self[Parameter(self._fweight, derived=True)] = np.ones(self.shape, dtype='i8')
+            self[Parameter(self._fweight, derived=True, latex=utils.outputs_to_latex(self._fweight))] = np.ones(self.shape, dtype='i8')
         return self[self._fweight]
 
     @property
     def logposterior(self):
         """Log-posterior."""
         if self._logposterior not in self:
-            self[Parameter(self._logposterior, derived=True)] = np.zeros(self.shape, dtype='f8')
+            self[Parameter(self._logposterior, derived=True, latex=utils.outputs_to_latex(self._logposterior))] = np.zeros(self.shape, dtype='f8')
         return self[self._logposterior]
 
     @aweight.setter
     def aweight(self, item):
         """Set weights (floats)."""
-        self[Parameter(self._aweight, derived=True)] = item
+        self[Parameter(self._aweight, derived=True, latex=utils.outputs_to_latex(self._aweight))] = item
 
     @fweight.setter
     def fweight(self, item):
         """Set frequency weights (integers)."""
-        self[Parameter(self._fweight, derived=True)] = item
+        self[Parameter(self._fweight, derived=True, latex=utils.outputs_to_latex(self._fweight))] = item
 
     @logposterior.setter
     def logposterior(self, item):
         """Set log-posterior."""
-        self[Parameter(self._logposterior, derived=True)] = item
+        self[Parameter(self._logposterior, derived=True, latex=utils.outputs_to_latex(self._logposterior))] = item
 
     @property
     def weight(self):
         """Return total weight, as the product of :attr:`aweight` and :attr:`fweight`."""
-        return ParameterArray(self.aweight * self.fweight, Parameter(self._weight, latex=utils.outputs_to_latex(self._weight)))
+        return ParameterArray(self.aweight * self.fweight, Parameter(self._weight, derived=True, latex=utils.outputs_to_latex(self._weight)))
 
     def remove_burnin(self, burnin=0):
         """
@@ -238,6 +238,76 @@ class Chain(Samples):
             raise KeyError('Column {} does not exist'.format(name))
 
     @classmethod
+    def from_getdist(cls, samples):
+        """
+        Turn getdist.MCSamples into a :class:`Chain` instance.
+
+        Note
+        ----
+        GetDist package is required.
+        """
+        params = ParameterCollection()
+        for param in samples.paramNames.names:
+            params.set(Parameter(param.name, latex=param.label, derived=param.isDerived, fixed=False))
+        for param in params:
+            limits = [samples.ranges.lower.get(param.name, -np.inf), samples.ranges.upper.get(param.name, np.inf)]
+            param.update(prior=ParameterPrior(limits=limits))
+        new = cls()
+        fweight, new.logposterior = samples.weights, -samples.loglikes
+        iweight = np.rint(fweight)
+        if np.allclose(fweight, iweight, atol=0., rtol=1e-9):
+            new.fweight = iweight.astype('i4')
+        else:
+            new.aweight = fweight
+        for param in params:
+            new.set(ParameterArray(samples[param.name], param=param))
+        for param in new.params(basename='chi2_*'):
+            namespace = re.match('chi2_[_]*(.*)$', param.name).groups()[0]
+            if namespace == 'prior':
+                new_param = param.clone(basename=new._logprior, derived=True)
+            else:
+                new_param = param.clone(basename=new._loglikelihood, namespace=namespace, derived=True)
+            new[new_param] = -0.5 * new[param]
+        return new
+
+    def to_getdist(self, params=None, label=None, **kwargs):
+        """
+        Return GetDist hook to samples.
+
+        Note
+        ----
+        GetDist package is required.
+
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
+
+        label : str, default=None
+            Name for  GetDist to use for these samples.
+
+        **kwargs : dict
+            Optional arguments for :class:`getdist.MCSamples`.
+
+        Returns
+        -------
+        samples : getdist.MCSamples
+        """
+        from getdist import MCSamples
+        toret = None
+        if params is None: params = self.params(varied=True)
+        else: params = [self[param].param for param in params]
+        if any(param.solved for param in params):
+            self = self.sample_solved()
+        params = [param for param in params if param.name not in [self._weight, self._logposterior]]
+        samples = self.to_array(params=params, struct=False, derivs=()).reshape(-1, self.size)
+        labels = [param.latex() for param in params]
+        names = [str(param) for param in params]
+        ranges = {str(param): tuple('N' if limit is None or not np.isfinite(limit) else limit for limit in param.prior.limits) for param in params}
+        toret = MCSamples(samples=samples.T, weights=np.asarray(self.weight.ravel()), loglikes=-np.asarray(self.logposterior.ravel()), names=names, labels=labels, label=label, ranges=ranges, **kwargs)
+        return toret
+
+    @classmethod
     def read_getdist(cls, base_fn, ichains=None, concatenate=False):
         """
         Load samples in *CosmoMC* format, i.e.:
@@ -315,17 +385,22 @@ class Chain(Samples):
             cls.log_info('Loading chain file: {}.'.format(chain_fn))
             array = np.loadtxt(chain_fn, unpack=True)
             new = cls()
-            new.fweight, new.logposterior = array[0], -array[1]
+            fweight, new.logposterior = array[0], -array[1]
+            iweight = np.rint(fweight)
+            if np.allclose(fweight, iweight, atol=0., rtol=1e-9):
+                new.fweight = iweight.astype('i4')
+            else:
+                new.aweight = fweight
             for param, values in zip(params, array[2:]):
                 new.set(ParameterArray(values, param))
             toret.append(new)
         for new in toret:
             for param in new.params(basename='chi2_*'):
-                namespace = param.name[4:]
+                namespace = re.match('chi2_[_]*(.*)$', param.name).groups()[0]
                 if namespace == 'prior':
-                    new_param = param.clone(basename=new._logprior)
+                    new_param = param.clone(basename=new._logprior, derived=True)
                 else:
-                    new_param = param.clone(basename=new._loglikelihood, namespace=namespace)
+                    new_param = param.clone(basename=new._loglikelihood, namespace=namespace, derived=True)
                 new[new_param] = -0.5 * new[param]
         if isscalar:
             return toret[0]
@@ -351,17 +426,14 @@ class Chain(Samples):
             Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
 
         ichain : int, default=None
-            If not ``None``, append '_{ichain:d}' to ``base_fn``.
+            Chain number to append to file name, i.e. sample values will be saved as '{base_fn}_{ichain}.txt'.
+            If ``None``, does not append any number, sample values will be saved as '{base_fn}.txt'.
 
         fmt : str, default='%.18e'
             How to format floats.
 
         delimiter : str, default=' '
             String or character separating columns.
-
-        ichain : int, default=None
-            Chain number to append to file name, i.e. sample values will be saved as '{base_fn}_{ichain}.txt'.
-            If ``None``, does not append any number, sample values will be saved as '{base_fn}.txt'.
 
         kwargs : dict
             Optional arguments for :func:`numpy.savetxt`.
@@ -403,42 +475,6 @@ class Chain(Samples):
         self.log_info('Saving parameter ranges to {}.'.format(ranges_fn))
         with open(ranges_fn, 'w') as file:
             file.write(output)
-
-    def to_getdist(self, params=None, label=None, **kwargs):
-        """
-        Return GetDist hook to samples.
-
-        Note
-        ----
-        GetDist package *is* required.
-
-        Parameters
-        ----------
-        params : list, ParameterCollection, default=None
-            Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
-
-        label : str, default=None
-            Name for  GetDist to use for these samples.
-
-        **kwargs : dict
-            Optional arguments for :class:`getdist.MCSamples`.
-
-        Returns
-        -------
-        samples : getdist.MCSamples
-        """
-        from getdist import MCSamples
-        toret = None
-        if params is None: params = self.params(varied=True)
-        else: params = [self[param].param for param in params]
-        if any(param.solved for param in params):
-            self = self.sample_solved()
-        samples = self.to_array(params=params, struct=False, derivs=()).reshape(-1, self.size)
-        labels = [param.latex() for param in params]
-        names = [str(param) for param in params]
-        ranges = {str(param): tuple('N' if limit is None or not np.isfinite(limit) else limit for limit in param.prior.limits) for param in params}
-        toret = MCSamples(samples=samples.T, weights=np.asarray(self.weight.ravel()), loglikes=-np.asarray(self.logposterior.ravel()), names=names, labels=labels, label=label, ranges=ranges, **kwargs)
-        return toret
 
     def to_anesthetic(self, params=None, label=None, **kwargs):
         """
@@ -584,15 +620,15 @@ class Chain(Samples):
         """Return correlation matrix array computed from (weighted) samples (optionally restricted to input parameters)."""
         return self.covariance(params=params, return_type=None).corrcoef()
 
-    @vectorize
     def var(self, params=None, ddof=1):
         """
         Return variance computed from (weighted) samples (optionally restricted to input parameters).
         If a single parameter is given as input and this parameter is a scalar, return a scalar.
         ``ddof`` is the number of degrees of freedom.
         """
+        isscalar = not is_parameter_sequence(params)
         cov = self.covariance(params, ddof=ddof, return_type='nparray')
-        if np.ndim(cov) == 0: return cov  # single param
+        if isscalar: return cov.flat[0]  # single param
         return np.diag(cov)
 
     def std(self, params=None, ddof=1):
@@ -782,9 +818,11 @@ class Chain(Samples):
             Number of significant digits.
             See :func:`utils.round_measurement`.
 
-        tablefmt : string, default='latex_raw'
+        tablefmt : str, default='latex_raw'
             Format for summary table.
             See :func:`tabulate.tabulate`.
+            If 'list', return table as list of list of strings, and headers.
+            If 'list_latex', return table as list of list of latex strings, and headers.
 
         fn : str, default=None
             If not ``None``, file name where to save summary table.
@@ -798,7 +836,7 @@ class Chain(Samples):
         if params is None: params = self.params(varied=True)
         else: params = [self[param].param for param in params]
         if quantities is None: quantities = ['argmax', 'mean', 'median', 'std', 'quantile:1sigma', 'interval:1sigma']
-        is_latex = 'latex_raw' in tablefmt
+        is_latex = 'latex' in tablefmt
 
         def round_errors(low, up):
             low, up = utils.round_measurement(0.0, low, up, sigfigs=sigfigs, positive_sign='u')[1:]
@@ -806,7 +844,7 @@ class Chain(Samples):
             return '{}/{}'.format(low, up)
 
         data = []
-        for iparam, param in enumerate(params):
+        for param in params:
             row = []
             row.append(param.latex(inline=True) if is_latex else str(param))
             ref_center = self.mean(param)
@@ -828,6 +866,8 @@ class Chain(Samples):
                 else:
                     raise RuntimeError('Unknown quantity {}.'.format(quantity))
             data.append(row)
+        if 'list' in tablefmt:
+            return data, quantities
         tab = tabulate.tabulate(data, headers=quantities, tablefmt=tablefmt)
         if fn is not None:
             utils.mkdir(os.path.dirname(fn))

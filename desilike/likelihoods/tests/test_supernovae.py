@@ -2,17 +2,16 @@ import numpy as np
 
 from desilike import setup_logging
 from desilike.install import Installer
-from desilike.likelihoods.supernovae import PantheonSNLikelihood
+from desilike.likelihoods.supernovae import PantheonSNLikelihood, PantheonPlusSNLikelihood, PantheonPlusSHOESSNLikelihood
 
 
 def test_install():
-    likelihood = PantheonSNLikelihood()
-    likelihood.params['pantheon.loglikelihood'] = {}
-    likelihood.params['pantheon.logprior'] = {}
-    installer = Installer(user=True)
-    installer(likelihood)
-    likelihood()
-    assert np.allclose((likelihood + likelihood)(), 2. * likelihood() - likelihood.logprior)
+    for Likelihood in [PantheonSNLikelihood, PantheonPlusSNLikelihood, PantheonPlusSHOESSNLikelihood][1:]:
+        likelihood = Likelihood()
+        installer = Installer(user=True)
+        installer(likelihood)
+        likelihood()
+        assert np.allclose((likelihood + likelihood)(), 2. * likelihood() - likelihood.logprior)
 
 
 if __name__ == '__main__':

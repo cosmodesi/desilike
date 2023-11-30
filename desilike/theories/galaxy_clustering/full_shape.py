@@ -881,7 +881,7 @@ class EFTLikeTNSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctio
 
 class BaseVelocileptorsPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
 
-    """Base class for velocileptor-based matter power spectrum multipoles."""
+    """Base class for velocileptors-based matter power spectrum multipoles."""
     _default_options = dict()
 
     def initialize(self, *args, **kwargs):
@@ -905,7 +905,7 @@ class BaseVelocileptorsPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, Ba
 
 class BaseVelocileptorsTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
-    """Base class for velocileptor-based tracer power spectrum multipoles."""
+    """Base class for velocileptors-based tracer power spectrum multipoles."""
 
     def calculate(self, **params):
         super(BaseVelocileptorsTracerPowerSpectrumMultipoles, self).calculate()
@@ -916,7 +916,7 @@ class BaseVelocileptorsTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMult
 
 class BaseVelocileptorsCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
 
-    """Base class for velocileptor-based matter correlation function multipoles."""
+    """Base class for velocileptors-based matter correlation function multipoles."""
 
     def initialize(self, *args, **kwargs):
         super(BaseVelocileptorsCorrelationFunctionMultipoles, self).initialize(*args, **kwargs)
@@ -928,7 +928,7 @@ class BaseVelocileptorsCorrelationFunctionMultipoles(BasePTCorrelationFunctionMu
 
 class BaseVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMultipoles):
 
-    """Base class for velocileptor-based tracer correlation function multipoles."""
+    """Base class for velocileptors-based tracer correlation function multipoles."""
 
     def calculate(self, **params):
         super(BaseVelocileptorsTracerCorrelationFunctionMultipoles, self).calculate()

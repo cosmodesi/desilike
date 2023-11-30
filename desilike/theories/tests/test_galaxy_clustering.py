@@ -689,7 +689,9 @@ def test_velocileptors():
     stoch = [1500., -1900., 0]
     pars = biases + cterms + stoch
     names = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2', 'sn4']
-    power = theory(**dict(zip(names, pars)))
+    values = dict(zip(names, pars))
+    values['Omega_k'] = 0.1
+    power = theory(**values)
 
     from velocileptors.LPT.lpt_rsd_fftw import LPT_RSD
     options = dict(kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, threads=1, jn=5)
@@ -717,7 +719,8 @@ def test_velocileptors():
     s = ref[0][0]
     s = s[(s > 0.) & (s < 150.)]
     theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template, s=s)
-    corr = theory(**dict(zip(names, pars)))
+    values = {name: value for name, value in values.items() if not name.startswith('sn')}
+    corr = theory(**values)
 
     ax = plt.gca()
     for ill, ell in enumerate((0, 2, 4)):
@@ -1388,6 +1391,9 @@ def plot_direct():
                 cosmo.init.params[param].update(fixed=False)
             template = DirectPowerSpectrumTemplate(cosmo=cosmo)
 
+            kaiser = Theories['kaiser'](template=template, k=np.linspace(0.001, 0.2, 20))
+            kaiser()
+
             ax = plt.gca()
             ax.set_title(theory)
             fn = '{}_omegak.png'.format(theory)
@@ -1400,7 +1406,11 @@ def plot_direct():
                 param = theory.all_params[param]
                 for ivalue, value in enumerate(values):
                     theory(**{param.name: value})
+                    kaiser(**{param.name: value})
                     color = cmap(ivalue / len(values))
+                    assert np.allclose(theory.pt.template.pk_dd, kaiser.pt.pk11)
+                    mask = theory.pt.template.k < theory.k[-1]
+                    ax.plot(theory.pt.template.k[mask], theory.pt.template.k[mask] * theory.pt.template.pk_dd[mask], color='k')
                     for ill, ell in enumerate(theory.ells):
                         ax.plot(theory.k, theory.k * theory.power[ill], color=color, linestyle='-', label='{} = {:.2f}'.format(param.latex(inline=True), value) if ill == 0 else None)
             ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
@@ -1416,7 +1426,7 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    #test_velocileptors()
+    test_velocileptors()
     #test_pybird()
     #test_folps()
     #test_params()
@@ -1427,7 +1437,7 @@ if __name__ == '__main__':
     #test_bao()
     #test_broadband_bao()
     #test_flexible_bao()
-    test_full_shape()
+    #test_full_shape()
     #test_emulator_direct()
     #plot_direct()
     #test_emulator_shapefit()

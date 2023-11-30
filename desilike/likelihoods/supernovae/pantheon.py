@@ -32,7 +32,7 @@ class PantheonSNLikelihood(BaseSNLikelihood):
 
     def calculate(self, Mb=0):
         z = self.light_curve_params['zcmb']
-        self.flattheory = 5 * np.log10(self.cosmo.luminosity_distance(z)) + 25
+        self.flattheory = 5 * np.log10(self.cosmo.luminosity_distance(z)/self.cosmo['h']) + 25
         self.flatdata = self.light_curve_params['mb'] - Mb - 5 * np.log10((1 + self.light_curve_params['zhel']) / (1 + z))
         super(PantheonSNLikelihood, self).calculate()
 

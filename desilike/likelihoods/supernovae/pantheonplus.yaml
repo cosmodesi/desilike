@@ -1,0 +1,11 @@
+class: PantheonPlusSNLikelihood
+
+init:
+  config_fn: config.dataset
+  
+params:
+  Mb:
+    value: -19.263
+    prior:
+      limits: [-20, -18]
+    latex: M_b

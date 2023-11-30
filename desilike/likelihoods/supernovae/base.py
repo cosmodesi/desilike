@@ -27,8 +27,8 @@ class BaseSNLikelihood(BaseGaussianLikelihood):
             from desilike.install import Installer
             data_dir = Installer()[self.installer_section]['data_dir']
         self.config = self.read_config(os.path.join(data_dir, config_fn))
-        self.covariance = self.read_covariance(os.path.join(data_dir, self.config['mag_covmat_file']))
         self.light_curve_params = self.read_light_curve_params(os.path.join(data_dir, self.config['data_file']))
+        self.covariance = self.read_covariance(os.path.join(data_dir, self.config['mag_covmat_file']))
         if cosmo is None:
             from desilike.theories.primordial_cosmology import Cosmoprimo
             cosmo = Cosmoprimo()

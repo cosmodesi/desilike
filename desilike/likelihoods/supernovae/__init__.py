@@ -1,1 +1,3 @@
 from .pantheon import PantheonSNLikelihood
+from .pantheonplus import PantheonPlusSNLikelihood
+from .pantheonplusshoes import PantheonPlusSHOESSNLikelihood

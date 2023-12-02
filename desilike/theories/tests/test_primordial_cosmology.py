@@ -37,6 +37,13 @@ def test_parameterization():
     cosmo(m_ncdm=0.)
     assert np.allclose(cosmo['N_eff'], N_eff)
 
+    cosmo(Omega_k=0.1)
+    assert np.allclose(cosmo['Omega_k'], 0.1)
+
+    cosmo.init.params['sigma8_m'] = {'derived': True}
+    cosmo()
+    print(cosmo.runtime_info.pipeline.derived['sigma8_m'])
+
 
 if __name__ == '__main__':
 

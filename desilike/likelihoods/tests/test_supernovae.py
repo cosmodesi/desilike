@@ -2,16 +2,21 @@ import numpy as np
 
 from desilike import setup_logging
 from desilike.install import Installer
+from desilike.theories import Cosmoprimo
 from desilike.likelihoods.supernovae import PantheonSNLikelihood, PantheonPlusSNLikelihood, PantheonPlusSHOESSNLikelihood
 
 
 def test_install():
-    for Likelihood in [PantheonSNLikelihood, PantheonPlusSNLikelihood, PantheonPlusSHOESSNLikelihood][1:]:
-        likelihood = Likelihood()
+    ref = [-5649.588564438464, -7526.797408441289, -7600.468586494155]
+    cosmo = Cosmoprimo(fiducial='DESI')
+    Mb = -19.
+    for ilike, Likelihood in enumerate([PantheonSNLikelihood, PantheonPlusSNLikelihood, PantheonPlusSHOESSNLikelihood]):
+        likelihood = Likelihood(cosmo=cosmo)
         installer = Installer(user=True)
         installer(likelihood)
-        likelihood()
-        assert np.allclose((likelihood + likelihood)(), 2. * likelihood() - likelihood.logprior)
+        likelihood(Mb=Mb)
+        assert np.allclose(likelihood.loglikelihood, ref[ilike])
+        assert np.allclose((likelihood + likelihood)(Mb=Mb), 2. * likelihood(Mb=Mb) - likelihood.logprior)
 
 
 if __name__ == '__main__':

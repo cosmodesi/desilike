@@ -1,7 +1,9 @@
 import os
 import numpy as np
 from desilike import plotting, utils
+from desilike.cosmo import is_external_cosmo
 from .base import BaseSNLikelihood
+
 
 class PantheonPlusSNLikelihood(BaseSNLikelihood):
     """
@@ -9,7 +11,7 @@ class PantheonPlusSNLikelihood(BaseSNLikelihood):
 
     Reference
     ---------
-    https://arxiv.org/abs/2202.04077 
+    https://arxiv.org/abs/2202.04077
 
     Parameters
     ----------
@@ -20,73 +22,39 @@ class PantheonPlusSNLikelihood(BaseSNLikelihood):
     config_fn = 'pantheonplus.yaml'
     installer_section = 'PantheonPlusSNLikelihood'
 
-    def initialize(self,*args, **kwargs):
-        super(PantheonPlusSNLikelihood, self).initialize(*args, **kwargs)
+    def initialize(self, *args, cosmo=None, **kwargs):
+        BaseSNLikelihood.initialize(self, *args, cosmo=cosmo, **kwargs)
+        zmask = self.light_curve_params['zcmb'] > 0.01  # Only those SNe at z > 0.01 are used for cosmology
+        self.light_curve_params = {name: value[zmask] for name, value in self.light_curve_params.items()}
+        self.covariance = self.covariance[np.ix_(zmask, zmask)]
         self.precision = utils.inv(self.covariance)
         self.std = np.diag(self.covariance)**0.5
-
+        if is_external_cosmo(self.cosmo):
+            self.cosmo_requires = {'background': {'luminosity_distance': {'z': self.light_curve_params['zcmb']}}}
 
     def calculate(self, Mb=0):
         z = self.light_curve_params['zcmb']
-        self.flattheory = 5 * np.log10(self.cosmo.luminosity_distance(z)/self.cosmo['h']) + 25
+        self.flattheory = 5 * np.log10(self.cosmo.luminosity_distance(z) / self.cosmo['h']) + 25
         self.flatdata = self.light_curve_params['mb'] - Mb - 5 * np.log10((1 + self.light_curve_params['zhel']) / (1 + z))
-        super(PantheonPlusSNLikelihood, self).calculate()
-    
-    def read_light_curve_params(self, fn):
-        from pandas import read_csv # Uses pandas for faster reading of the datafile
-        
-        data=read_csv(fn,delim_whitespace=True)
-        
-        self.N=len(data) # Number of datapoints in the full dataset
-        self.filter=(data['zHD']>0.01) # Only those SNe at z>0.01 are used for cosmology
-        data=data[self.filter]
-        
-        return {'zcmb':data['zHD'].to_numpy(),'zhel':data['zHEL'].to_numpy(),'mb':data['m_b_corr'].to_numpy()}
-    
-    
-    def read_covariance(self,fn):
-        """
-        Run once at the start to build the covariance matrix for the data.
-        Borrowed from the cosmosis likelihood implementation
-        """
-        filename = fn
-        print("Loading covariance from {}".format(filename))
+        BaseSNLikelihood.calculate(self)
 
-        # The file format for the covariance has the first line as an integer
-        # indicating the number of covariance elements, and the the subsequent
-        # lines being the elements.
-        # This function reads in the file and the nasty for loops trim down the covariance
-        # to match the only rows of data that are used for cosmology
-        with open(filename) as f:
-            line = f.readline()
-            n = int(len(self.light_curve_params['zcmb']))
-            C = np.zeros((n,n))
-            ii = -1
-            jj = -1
-            mine = 999
-            maxe = -999
-            for i in range(self.N):
-                jj = -1
-                if self.filter[i]:
-                    ii += 1
-                for j in range(self.N):
-                    if self.filter[j]:
-                        jj += 1
-                    val = float(f.readline())
-                    if self.filter[i]:
-                        if self.filter[j]:
-                            C[ii,jj] = val
-        print('Done')
-        return C
-    
+    def read_light_curve_params(self, fn):
+        data = BaseSNLikelihood.read_light_curve_params(self, fn, header='', sep=' ')
+        return {'zcmb': data['zHD'], 'zhel': data['zHEL'], 'mb': data['m_b_corr']}
+
     @plotting.plotter
-    def plot(self):
+    def plot(self, fig=None):
         """
         Plot Hubble diagram: Hubble residuals as a function of distance.
 
+        Parameters
+        ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 2 axes.
+
         fn : str, Path, default=None
-        Optionally, path where to save figure.
-        If not provided, figure is not saved.
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
 
         kw_save : dict, default=None
             Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
@@ -95,8 +63,11 @@ class PantheonPlusSNLikelihood(BaseSNLikelihood):
             If ``True``, show figure.
         """
         from matplotlib import pyplot as plt
-        fig, lax = plt.subplots(2, sharex=True, sharey=False, gridspec_kw={'height_ratios': (3, 1)}, figsize=(6, 6), squeeze=True)
-        fig.subplots_adjust(hspace=0)
+        if fig is None:
+            fig, lax = plt.subplots(2, sharex=True, sharey=False, gridspec_kw={'height_ratios': (3, 1)}, figsize=(6, 6), squeeze=True)
+            fig.subplots_adjust(hspace=0)
+        else:
+            lax = fig.axes
         alpha = 0.3
         argsort = np.argsort(self.light_curve_params['zcmb'])
         zdata = self.light_curve_params['zcmb'][argsort]
@@ -125,15 +96,10 @@ class PantheonPlusSNLikelihood(BaseSNLikelihood):
             github = 'https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/Pantheon%2B_Data/4_DISTANCES_AND_COVAR/'
             for fn in ['Pantheon+SH0ES.dat', 'Pantheon+SH0ES_STAT+SYS.cov']:
                 download(os.path.join(github, fn), os.path.join(data_dir, fn))
-            
-            #Creates config file to ensure compatibility with Base class            
-            config_fn=os.path.join(data_dir, 'config.dataset') 
-            try:
-                with open(config_fn,'r') as file:
-                    txt = file.read()
-                # txt = txt.replace('/your-path/', '')
-            except FileNotFoundError:
-                with open(config_fn, 'w') as file:
-                    for text in ['name = PantheonPlus\n','data_file = Pantheon+SH0ES.dat\n','mag_covmat_file = Pantheon+SH0ES_STAT+SYS.cov\n']:
-                        file.write(text)
+
+            # Creates config file to ensure compatibility with base class
+            config_fn = os.path.join(data_dir, 'config.dataset')
+            with open(config_fn, 'w') as file:
+                for text in ['name = PantheonPlus\n', 'data_file = Pantheon+SH0ES.dat\n', 'mag_covmat_file = Pantheon+SH0ES_STAT+SYS.cov\n']:
+                    file.write(text)
             installer.write({cls.__name__: {'data_dir': data_dir}})

@@ -59,9 +59,6 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
         seed : int, default=None
             Random seed.
 
-        max_tries : int, default=1000
-            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
-
         samples : str, Path, Samples
             Path to or samples to resume from.
 

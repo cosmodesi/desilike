@@ -29,8 +29,8 @@ class BaseSNLikelihood(BaseGaussianLikelihood):
             data_dir = Installer()[self.installer_section]['data_dir']
         self.config = self.read_config(os.path.join(data_dir, config_fn))
         self.light_curve_params = self.read_light_curve_params(os.path.join(data_dir, self.config['data_file']))
-        self.cosmo = cosmo
         self.covariance = self.read_covariance(os.path.join(data_dir, self.config['mag_covmat_file']))
+        self.cosmo = cosmo
         if is_external_cosmo(self.cosmo):
             self.cosmo_requires = {'background': {'luminosity_distance': {'z': np.linspace(0., 10., 1000)}}}
         elif self.cosmo is None:
@@ -72,18 +72,23 @@ class BaseSNLikelihood(BaseGaussianLikelihood):
         return Parser(fn)
 
     def read_covariance(self, fn):
+        if self.mpicomm.rank == 0:
+            self.log_info('Loading covariance from {}'.format(fn))
         with open(fn, 'r') as file:
             size = int(file.readline())
         return np.loadtxt(fn, skiprows=1).reshape(size, size)
 
-    def read_light_curve_params(self, fn):
-        sep = ' '
+    def read_light_curve_params(self, fn, header='#', sep=' '):
+        if self.mpicomm.rank == 0:
+            self.log_info('Loading light-curve from {}'.format(fn))
         with open(fn, 'r') as file:
-            for line in file.readlines():
-                if line.startswith('#'):
-                    names = [name.strip() for name in line[1:].split(sep)]
+            for iline, line in enumerate(file.readlines()):
+                if iline == 0:
+                    names = [name.strip() for name in line[len(header):].split(sep)]
                     values = {name: [] for name in names}
                 elif line:
                     for name, value in zip(names, line.split(sep)):
-                        values[name].append(value if name == 'name' else float(value))
+                        try: value = float(value)
+                        except ValueError: pass  # str
+                        values[name].append(value)
         return {name: np.array(value) for name, value in values.items()}

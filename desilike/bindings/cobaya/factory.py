@@ -387,7 +387,6 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, para
         if _derived is not None:
             for value in self.like.runtime_info.pipeline.derived:
                 if value.size == 1:
-                    print(value.param, value, value.shape)
                     _derived[value.param.name] = float(value)
         return loglikelihood
 

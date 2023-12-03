@@ -158,14 +158,19 @@ class BaseLikelihoodGenerator(BaseClass):
                         file.write(line + self.line_delimiter)
 
 
-def get_likelihood_params(likelihood):
+def get_likelihood_params(likelihood, derived=False):
     """
     Given a :class:`BaseLikelihood` instance,
     return its cosmological parameters and its "nuisance" parameters.
     """
     all_params = ParameterCollection()
-    for param in likelihood.runtime_info.pipeline.params:
-        if param.solved or param.derived and (not param.depends): continue
+    for param in likelihood.all_params:
+        if param.solved: continue
+        if param.derived and (not param.depends):
+            if isinstance(derived, bool):
+                if not derived: continue
+            else:
+                if param.ndim > derived: continue
         all_params.set(param)
     cosmo_names = likelihood.runtime_info.pipeline.get_cosmo_requires().get('params', {})
     cosmo_params, nuisance_params = ParameterCollection(), ParameterCollection()

@@ -312,7 +312,8 @@ def desilike_to_cobaya_params(params, engine=None):
         raise ValueError('unknown engine {}'.format(engine))
     toret = {}
     for param in params:
-        if param.solved or param.derived and (not param.depends) and (engine is None): continue
+        if param.solved: continue
+        if param.derived and (not param.depends) and ((engine is None) or (param.ndim > 0)): continue
         if param.fixed and not param.derived:
             toret[param.name] = param.value
         else:
@@ -335,8 +336,7 @@ def desilike_to_cobaya_params(params, engine=None):
 
 
 def cobaya_params(like):
-
-    cosmo_params, nuisance_params = get_likelihood_params(like)
+    cosmo_params, nuisance_params = get_likelihood_params(like, derived=0)
     return desilike_to_cobaya_params(nuisance_params)
 
 
@@ -384,6 +384,11 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, para
             cosmo = camb_or_classy_to_cosmoprimo(self._fiducial, self.provider, **params_values)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
         loglikelihood = self.like(**{name: value for name, value in params_values.items() if name in self._nuisance_params})
+        if _derived is not None:
+            for value in self.like.runtime_info.pipeline.derived:
+                if value.size == 1:
+                    print(value.param, value, value.shape)
+                    _derived[value.param.name] = float(value)
         return loglikelihood
 
     '''

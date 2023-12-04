@@ -312,7 +312,8 @@ def desilike_to_cobaya_params(params, engine=None):
         raise ValueError('unknown engine {}'.format(engine))
     toret = {}
     for param in params:
-        if param.solved or param.derived and (not param.depends) and (engine is None): continue
+        if param.solved: continue
+        if param.derived and (not param.depends) and (param.ndim > 0): continue
         if param.fixed and not param.derived:
             toret[param.name] = param.value
         else:
@@ -323,6 +324,8 @@ def desilike_to_cobaya_params(params, engine=None):
                 for name in names:
                     derived = derived.replace('{{{}}}'.format(name), name)
                 di['value'] = 'lambda {}: '.format(', '.join(names)) + derived
+            elif param.derived:
+                di['derived'] = True
             elif param.varied:
                 di['prior'] = decode_prior(param.prior)
                 if param.ref.is_proper():
@@ -335,8 +338,7 @@ def desilike_to_cobaya_params(params, engine=None):
 
 
 def cobaya_params(like):
-
-    cosmo_params, nuisance_params = get_likelihood_params(like)
+    cosmo_params, nuisance_params = get_likelihood_params(like, derived=0)
     return desilike_to_cobaya_params(nuisance_params)
 
 
@@ -352,7 +354,10 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, para
     if kw_like is None:
         kw_like = {}
     if params is not None:
-        params = cobaya_params(cls(**kw_like))
+        if params is True:
+            params = cobaya_params(cls(**kw_like))
+        else:
+            params = desilike_to_cobaya_params(ParameterCollection(params))
 
     def initialize(self):
         """Prepare any computation, importing any necessary code, files, etc."""
@@ -384,6 +389,10 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, para
             cosmo = camb_or_classy_to_cosmoprimo(self._fiducial, self.provider, **params_values)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
         loglikelihood = self.like(**{name: value for name, value in params_values.items() if name in self._nuisance_params})
+        if _derived is not None:
+            for value in self.like.runtime_info.pipeline.derived:
+                if value.param.ndim == 0:
+                    _derived[value.param.name] = float(value[()])
         return loglikelihood
 
     '''

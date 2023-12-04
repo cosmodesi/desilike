@@ -6,7 +6,7 @@ from desilike.io import BaseConfig
 from desilike.bindings.base import BaseLikelihoodGenerator, get_likelihood_params, Parameter, ParameterCollection
 
 
-from desilike.cosmo import Cosmology, BaseExternalEngine, BaseSection, PowerSpectrumInterpolator2D, flatarray, addproperty, _make_list, get_default, merge
+from desilike.cosmo import Cosmology, BaseExternalEngine, BaseSection, PowerSpectrumInterpolator1D, PowerSpectrumInterpolator2D, flatarray, addproperty, _make_list, get_default, merge
 
 
 """Mock up cosmoprimo with cobaya's camb / classy provider."""

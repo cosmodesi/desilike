@@ -313,7 +313,7 @@ def desilike_to_cobaya_params(params, engine=None):
     toret = {}
     for param in params:
         if param.solved: continue
-        if param.derived and (not param.depends) and ((engine is None) or (param.ndim > 0)): continue
+        if param.derived and (not param.depends) and (param.ndim > 0): continue
         if param.fixed and not param.derived:
             toret[param.name] = param.value
         else:
@@ -324,6 +324,8 @@ def desilike_to_cobaya_params(params, engine=None):
                 for name in names:
                     derived = derived.replace('{{{}}}'.format(name), name)
                 di['value'] = 'lambda {}: '.format(', '.join(names)) + derived
+            elif param.derived:
+                di['derived'] = True
             elif param.varied:
                 di['prior'] = decode_prior(param.prior)
                 if param.ref.is_proper():
@@ -352,7 +354,10 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, para
     if kw_like is None:
         kw_like = {}
     if params is not None:
-        params = cobaya_params(cls(**kw_like))
+        if params is True:
+            params = cobaya_params(cls(**kw_like))
+        else:
+            params = desilike_to_cobaya_params(ParameterCollection(params))
 
     def initialize(self):
         """Prepare any computation, importing any necessary code, files, etc."""
@@ -386,8 +391,8 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, para
         loglikelihood = self.like(**{name: value for name, value in params_values.items() if name in self._nuisance_params})
         if _derived is not None:
             for value in self.like.runtime_info.pipeline.derived:
-                if value.size == 1:
-                    _derived[value.param.name] = float(value)
+                if value.param.ndim == 0:
+                    _derived[value.param.name] = float(value[()])
         return loglikelihood
 
     '''

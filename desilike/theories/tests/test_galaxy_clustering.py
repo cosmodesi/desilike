@@ -1426,12 +1426,12 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    test_velocileptors()
+    #test_velocileptors()
     #test_pybird()
     #test_folps()
     #test_params()
     #test_integ()
-    #test_templates()
+    test_templates()
     #test_wiggle_split_template()
     #test_emulator_templates()
     #test_bao()

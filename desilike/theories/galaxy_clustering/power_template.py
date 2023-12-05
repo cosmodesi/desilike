@@ -208,24 +208,30 @@ class DirectPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         super(DirectPowerSpectrumTemplate, self).initialize(*args, **kwargs)
         self.cosmo_requires = {}
         self.cosmo = cosmo
+        # keep only derived parameters, others are transferred to Cosmoprimo
         params = self.params.select(derived=True)
         if is_external_cosmo(self.cosmo):
+            # cosmo_requires only used for external bindings (cobaya, cosmosis, montepython): specifies the input theory requirements
             self.cosmo_requires = {'fourier': {'sigma8_z': {'z': self.z, 'of': [('delta_cb', 'delta_cb'), ('theta_cb', 'theta_cb')]},
                                                'pk_interpolator': {'z': self.z, 'k': self.k, 'of': [('delta_cb', 'delta_cb')]}}}
         elif cosmo is None:
             self.cosmo = Cosmoprimo(fiducial=self.fiducial)
+            # transfer the parameters of the template (Omega_m, logA, h, etc.) to Cosmoprimo
             self.cosmo.params = [param for param in self.params if param not in params]
         self.params = params
+        # Alcock-Paczynski effect, that is known given the cosmo and fiducial
         self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, cosmo=self.cosmo, mode='geometry').runtime_info.initialize()
         if is_external_cosmo(self.cosmo):
-            self.cosmo_requires.update(self.apeffect.cosmo_requires)  # just background
+            # update cosmo_requires with background quantities
+            self.cosmo_requires.update(self.apeffect.cosmo_requires)
 
     def calculate(self):
+        # compute the power spectrum for the current cosmo
         BasePowerSpectrumExtractor.calculate(self)
         self.pk_dd = self.pk_dd_interpolator(self.k)
         if self.with_now:
             self.pknow_dd = self.pknow_dd_interpolator(self.k)
-        if self.only_now:
+        if self.only_now:  # only used if we want to take wiggles out of our model (e.g. for BAO)
             for name in ['dd_interpolator', 'dd']:
                 setattr(self, 'pk_' + name, getattr(self, 'pknow_' + name))
 
@@ -1236,19 +1242,25 @@ class DirectWiggleSplitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         super(DirectWiggleSplitPowerSpectrumTemplate, self).initialize(*args, with_now=with_now, **kwargs)
         self.cosmo_requires = {}
         self.cosmo = cosmo
+        # keep only derived parameters and qbao, sigmabao, others are transferred to Cosmoprimo
         params = self.params.select(derived=True) + self.params.select(basename=['qbao', 'sigmabao'])
         if is_external_cosmo(self.cosmo):
+            # cosmo_requires only used for external bindings (cobaya, cosmosis, montepython): specifies the input theory requirements
             self.cosmo_requires = {'fourier': {'sigma8_z': {'z': self.z, 'of': [('delta_cb', 'delta_cb'), ('theta_cb', 'theta_cb')]},
                                                'pk_interpolator': {'z': self.z, 'k': self.k, 'of': [('delta_cb', 'delta_cb')]}}}
         elif cosmo is None:
             self.cosmo = Cosmoprimo(fiducial=self.fiducial)
+            # transfer the parameters of the template (Omega_m, logA, h, etc.) to Cosmoprimo
             self.cosmo.params = [param for param in self.params if param not in params]
         self.params = params
+        # Alcock-Paczynski effect, that is known given the cosmo and fiducial
         self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, cosmo=self.cosmo, mode='geometry').runtime_info.initialize()
         if is_external_cosmo(self.cosmo):
-            self.cosmo_requires.update(self.apeffect.cosmo_requires)  # just background
+            # update cosmo_requires with background quantities
+            self.cosmo_requires.update(self.apeffect.cosmo_requires)
 
     def calculate(self, qbao=1., sigmabao=0.):
+        # compute the power spectrum for the current cosmo
         BasePowerSpectrumExtractor.calculate(self)
         k = self.pk_dd_interpolator_fid.k  # this is independent and much wider than self.k, typically
         k = k[(k > k[0] * 2.) & (k < k[-1] / 2.)]  # to avoid hitting boundaries with qbao
@@ -1257,6 +1269,6 @@ class DirectWiggleSplitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.pk_dd_interpolator = PowerSpectrumInterpolator1D(k, self.pknow_dd_interpolator(k) + wiggles)
         self.pk_dd = self.pk_dd_interpolator(self.k)
         self.pknow_dd = self.pknow_dd_interpolator(self.k)
-        if self.only_now:
+        if self.only_now:  # only used if we want to take wiggles out of our model (e.g. for BAO)
             for name in ['dd_interpolator', 'dd']:
                 setattr(self, 'pk_' + name, getattr(self, 'pknow_' + name))

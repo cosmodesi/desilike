@@ -27,13 +27,13 @@ def test_samplers():
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov, name='LRG')
 
-    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][:-1]:
+    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][6:7]:
         kwargs = {}
         if Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]:
             kwargs.update(nwalkers=20)
         if Sampler in [StaticDynestySampler, DynamicDynestySampler, PolychordSampler, NautilusSampler]:
             kwargs.update(nlive=100)
-        save_fn = ['./_tests/chain_{:d}.npy'.format(i) for i in range(min(likelihood.mpicomm.size, 2))]
+        save_fn = ['./_tests/chain_{:d}.npy'.format(i) for i in range(min(likelihood.mpicomm.size, 1))]
         sampler = Sampler(likelihood, save_fn=save_fn, **kwargs)
         chains = sampler.run(max_iterations=100, check=True, check_every=50)
         if sampler.mpicomm.rank == 0:

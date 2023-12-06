@@ -4,6 +4,26 @@ from desilike import setup_logging
 from desilike.theories import Cosmoprimo
 
 
+def test_omegak():
+    from matplotlib import pyplot as plt
+    from cosmoprimo.fiducial import DESI
+
+    ax = plt.gca()
+    fiducial = DESI()
+    size = 5
+    values = np.linspace(-0.1, 0.1, size)
+    cmap = plt.get_cmap('jet', len(values))
+
+    for i, Omega_k in enumerate(values):
+        cosmo = fiducial.clone(Omega_k=Omega_k)
+        pk = cosmo.get_fourier().pk_interpolator(of='delta_cb').to_1d(z=1.)
+        print(pk.k.min(), pk.k.max(), pk.pk.shape)
+        ax.loglog(pk.k, pk.pk, color=cmap(i), label='$\Omega_k = {:.2f}$'.format(Omega_k))
+    ax.legend()
+    plt.savefig('pklin_omegak.png')
+    plt.show()
+
+
 def test_parameterization():
 
     cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
@@ -48,4 +68,5 @@ def test_parameterization():
 if __name__ == '__main__':
 
     setup_logging()
-    test_parameterization()
+    test_omegak()
+    #test_parameterization()

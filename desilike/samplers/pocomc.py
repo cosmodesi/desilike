@@ -107,6 +107,36 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         self.resume = self.mpicomm.bcast(any(chain is not None for chain in self.chains), root=0)
         #self.chains = [None] * len(self.chains)
 
+    def run(self, *args, **kwargs):
+        """
+        Run chains. Sampling can be interrupted anytime, and resumed by providing the path to the saved chains in ``chains`` argument of :meth:`__init__`.
+
+        One will typically run sampling on ``nchains * nprocs_per_chain`` processes,
+        with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max(mpicomm.size // nchains, 1)``
+        the number of processes per chain.
+
+        Parameters
+        ----------
+        min_iterations : int, default=100
+            Minimum number of iterations (MCMC steps) to run (to avoid early stopping
+            if convergence criteria below are satisfied by chance at the beginning of the run).
+
+        max_iterations : int, default=sys.maxsize
+            Maximum number of iterations (MCMC steps) to run.
+
+        check_every : int, default=300
+            Samples are saved and convergence checks are run every ``check_every`` iterations.
+
+        check : bool, dict, default=None
+            If ``False``, no convergence checks are run.
+            If ``True`` or ``None``, convergence checks are run.
+            A dictionary of convergence criteria can be provided, see :meth:`check`.
+
+        thin_by : int, default=1
+            Thin samples by this factor.
+        """
+        return super(PocoMCSampler, self).run(*args, **kwargs)
+
     def _run_one(self, start, niterations=300, progress=False, **kwargs):
         if self.resume:
             self.sampler.load_state(self.state_fn[self._ichain])

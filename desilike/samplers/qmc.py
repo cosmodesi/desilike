@@ -22,8 +22,9 @@ class RQuasiRandomSequence(qmc.QMCEngine):
         self.inv_phi = [phi**(-(1 + d)) for d in range(self.d)]
 
     def _random(self, n=1, *, workers=1):
+        toret = (self.seed + np.arange(self.num_generated + 1, self.num_generated + n + 1)[:, None] * self.inv_phi) % 1.
         self.num_generated += n
-        return (self.seed + np.arange(self.num_generated + 1, self.num_generated + n + 1)[:, None] * self.inv_phi) % 1.
+        return toret
 
     def reset(self):
         self.num_generated = 0

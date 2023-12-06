@@ -295,9 +295,9 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         Run chains. Sampling can be interrupted anytime, and resumed by providing
         the path to the saved chains in ``chains`` argument of :meth:`__init__`.
 
-        One will typically run sampling on ``nchains * nprocs_per_chain + 1`` processes,
-        with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max((mpicomm.size - 1) // nchains, 1)``
-        the number of processes per chain --- plus 1 root process to distribute the work.
+        One will typically run sampling on ``nchains * nprocs_per_chain`` processes,
+        with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max(mpicomm.size // nchains, 1)``
+        the number of processes per chain.
         """
         #self.derived = None
         nprocs_per_chain = max(self.mpicomm.size  // self.nchains, 1)

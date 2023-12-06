@@ -855,12 +855,13 @@ def test_folps():
         ref = FOLPS.RSDmultipoles(k, NuisanParams, AP=False)[1:]
         print(theory.template.f0 / FOLPS.f0)
         power = theory(b1=b1, b2=b2, bs=bs2 + 4./7*(b1 - 1), b3=b3nl - 32./315*(b1 - 1),
-                    alpha0=alpha0, alpha2=alpha2, alpha4=alpha4, ct=ctilde, sn0=alphashot0, sn2=alphashot2)
+                        alpha0=alpha0, alpha2=alpha2, alpha4=alpha4, ct=ctilde, sn0=alphashot0, sn2=alphashot2)
 
         ax = plt.gca()
+        ax.plot(k, k * template.pk_dd)
         for ill, ell in enumerate((0, 2, 4)):
             ax.plot(k, k * ref[ill], color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
-            ax.plot(k, k * power[ill], color='C{:d}'.format(ill), ls='--')
+            #ax.plot(k, k * power[ill], color='C{:d}'.format(ill), ls='--')
             #ax.plot(k, k * (ref[ill] / power[ill] - 1.), color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
         ax.set_xlim([k[0], k[-1]])
         ax.grid(True)
@@ -1361,6 +1362,7 @@ def test_emulator_wigglesplit():
 def plot_direct():
     from desilike.theories import Cosmoprimo
     from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering.full_shape import KaiserPowerSpectrumMultipoles, LPTVelocileptorsPowerSpectrumMultipoles, FOLPSPowerSpectrumMultipoles, PyBirdPowerSpectrumMultipoles
     from matplotlib import pyplot as plt
 
     size = 5
@@ -1382,43 +1384,50 @@ def plot_direct():
                 'folps': FOLPSTracerPowerSpectrumMultipoles,
                 'pybird': PyBirdTracerPowerSpectrumMultipoles}
 
-    for theory, Theory in Theories.items():
-        if theory in todo:
-            cosmo = Cosmoprimo()
-            for param in cosmo.init.params.select(fixed=False):
-                param.update(fixed=True)
-            for param in param_values:
-                cosmo.init.params[param].update(fixed=False)
-            template = DirectPowerSpectrumTemplate(cosmo=cosmo)
+    for kthmin in [1e-4, 1e-3]:
 
-            kaiser = Theories['kaiser'](template=template, k=np.linspace(0.001, 0.2, 20))
-            kaiser()
+        KaiserPowerSpectrumMultipoles._klim = (kthmin, 10., 3000)
+        LPTVelocileptorsPowerSpectrumMultipoles._klim = (kthmin, 10., 3000)
+        FOLPSPowerSpectrumMultipoles._klim = (kthmin, 10., 3000)
+        PyBirdPowerSpectrumMultipoles._klim = (kthmin, 10., 3000)
 
-            ax = plt.gca()
-            ax.set_title(theory)
-            fn = '{}_omegak.png'.format(theory)
+        for theory, Theory in Theories.items():
+            if theory in todo:
+                cosmo = Cosmoprimo()
+                for param in cosmo.init.params.select(fixed=False):
+                    param.update(fixed=True)
+                for param in param_values:
+                    cosmo.init.params[param].update(fixed=False)
+                template = DirectPowerSpectrumTemplate(cosmo=cosmo)
 
-            theory = Theory(template=template, k=np.linspace(0.001, 0.2, 20))
-            theory()
+                #kaiser = Theories['kaiser'](template=template, k=np.linspace(0.001, 0.2, 20))
+                #kaiser()
 
-            for param, values in param_values.items():
-                cmap = plt.get_cmap('jet', len(values))
-                param = theory.all_params[param]
-                for ivalue, value in enumerate(values):
-                    theory(**{param.name: value})
-                    kaiser(**{param.name: value})
-                    color = cmap(ivalue / len(values))
-                    assert np.allclose(theory.pt.template.pk_dd, kaiser.pt.pk11)
-                    mask = theory.pt.template.k < theory.k[-1]
-                    ax.plot(theory.pt.template.k[mask], theory.pt.template.k[mask] * theory.pt.template.pk_dd[mask], color='k')
-                    for ill, ell in enumerate(theory.ells):
-                        ax.plot(theory.k, theory.k * theory.power[ill], color=color, linestyle='-', label='{} = {:.2f}'.format(param.latex(inline=True), value) if ill == 0 else None)
-            ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-            ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
-            ax.grid(True)
-            ax.legend()
-            plt.savefig(fn)
-            plt.show()
+                ax = plt.gca()
+                ax.set_title(theory)
+                fn = '{}_omegak_kthmin{:.4f}.png'.format(theory, kthmin)
+
+                theory = Theory(template=template, k=np.linspace(0.001, 0.2, 20))
+                theory()
+
+                for param, values in param_values.items():
+                    cmap = plt.get_cmap('jet', len(values))
+                    param = theory.all_params[param]
+                    for ivalue, value in enumerate(values):
+                        theory(**{param.name: value})
+                        #kaiser(**{param.name: value})
+                        color = cmap(ivalue / len(values))
+                        #assert np.allclose(theory.pt.template.pk_dd, kaiser.pt.pk11)
+                        #mask = theory.pt.template.k < theory.k[-1]
+                        #ax.plot(theory.pt.template.k[mask], theory.pt.template.k[mask] * theory.pt.template.pk_dd[mask], color='k')
+                        for ill, ell in enumerate(theory.ells):
+                            ax.plot(theory.k, theory.k * theory.power[ill], color=color, linestyle='-', label='{} = {:.2f}'.format(param.latex(inline=True), value) if ill == 0 else None)
+                ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+                ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+                ax.grid(True)
+                ax.legend()
+                plt.savefig(fn)
+                plt.show()
 
 
 
@@ -1429,9 +1438,10 @@ if __name__ == '__main__':
     #test_velocileptors()
     #test_pybird()
     #test_folps()
+    #test_velocileptors_omegak()
     #test_params()
     #test_integ()
-    test_templates()
+    #test_templates()
     #test_wiggle_split_template()
     #test_emulator_templates()
     #test_bao()
@@ -1442,7 +1452,7 @@ if __name__ == '__main__':
     #plot_direct()
     #test_emulator_shapefit()
     #test_emulator_wigglesplit()
-    #test_png()
+    test_png()
     #test_pk_to_xi()
     #test_ap_diff()
     #test_ptt()

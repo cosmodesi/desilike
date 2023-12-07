@@ -764,8 +764,8 @@ class Parameter(BaseClass):
             except AttributeError as exc:
                 raise AttributeError('reference distribution has no std(), probably because it is not proper... provide delta argument, or proposal, or proper reference distribution') from exc
             delta = (proposal_scale * proposal, proposal_scale * proposal)
-            center = self.value
-            delta = (min(delta[0], center - self.prior.limits[0]), min(delta[1], self.prior.limits[1] - center))
+            #center = self.value
+            #delta = (min(delta[0], center - self.prior.limits[0]), min(delta[1], self.prior.limits[1] - center))
         if len(delta) == 2:
             delta = (self.value,) + tuple(delta)
         return delta

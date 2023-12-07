@@ -310,6 +310,8 @@ class Differentiation(BaseClass):
                 if not (limits[0] <= center <= limits[-1]):
                     raise ValueError('for {} center {} is not within prior limits {}'.format(param.name, center, limits))
                 delta = tuple(delta_scale * dd for dd in delta)
+                if any(dd <= 0 for dd in delta):
+                    raise ValueError('for {} delta {} is not > 0'.format(param.name, delta))
                 hsize = size // 2
                 grid_min = limits[1] - hsize * (delta[0] + delta[1])  # if we start from upper limit
                 grid_min = max(limits[0], min(center - delta[0] * hsize, grid_min))

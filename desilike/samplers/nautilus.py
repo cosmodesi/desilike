@@ -161,8 +161,9 @@ class NautilusSampler(BasePosteriorSampler):
         n_eff = kwargs.get('n_eff', 10000)
         n_shell = kwargs.get('n_shell', 100)
 
-        from desilike.utils import TaskManager as MPIPool
-        pool = (FakePool(size=self.mpicomm.size), MPIPool(mpicomm=self.mpicomm))
+        #from desilike.utils import TaskManager as MPIPool
+        #pool = (FakePool(size=self.mpicomm.size), MPIPool(mpicomm=self.mpicomm))  # yields bugs, _check_same_input fails
+        pool = (FakePool(size=self.mpicomm.size), None)
 
         def write_derived(sampler):
             if self.mpicomm.rank == 0:
@@ -198,15 +199,16 @@ class NautilusSampler(BasePosteriorSampler):
         os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
         self.resume_derived, self.resume_chain = None, None
+        seed = self.rng.randint(0, high=0xffffffff)
         if self.resume:
             self.sampler = nautilus.Sampler(self.prior_transform, self.loglikelihood, n_dim=len(self.varied_params), pool=pool, pass_dict=False,
-                                            filepath=self.state_fn[self._ichain], **self.attrs)
+                                            filepath=self.state_fn[self._ichain], seed=seed, **self.attrs)
             source = load_source(self.save_fn[self._ichain])[0]
             self.resume_derived = [source] * 2
 
         elif not hasattr(self, 'sampler'):
             self.sampler = nautilus.Sampler(self.prior_transform, self.loglikelihood, n_dim=len(self.varied_params), pool=pool, pass_dict=False,
-                                            filepath=self.state_fn[self._ichain], resume=False, seed=self.rng.randint(0, high=0xffffffff), **self.attrs)
+                                            filepath=self.state_fn[self._ichain], resume=False, seed=seed, **self.attrs)
 
         def _run_one_batch(niterations):
             n_shell_current, n_eff_current = 0, 0

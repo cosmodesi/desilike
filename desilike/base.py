@@ -131,7 +131,7 @@ class BasePipeline(BaseClass):
             self.calculators.append(calculator)
             for require in calculator.runtime_info.requires:
                 require.runtime_info.initialize()
-                require.runtime_info._initialized_for_required_by.add(id(calculator))
+                require.runtime_info._initialized_for_required_by.append(id(calculator))
                 if require in self.calculators:
                     del self.calculators[self.calculators.index(require)]  # we want first dependencies at the end
                 callback(require)
@@ -317,12 +317,14 @@ class BasePipeline(BaseClass):
                         if tmp is not None: state.update(tmp)
                 finally:
                     states.append(state)
+
             if mpicomm.rank != 0:
                 mpicomm.send(states, dest=0, tag=42)
             else:
                 all_states += states
                 for irank in range(1, mpicomm.size):
                     all_states += mpicomm.recv(source=irank, tag=42)
+
             self.mpicomm, self.more_derived = mpicomm, more_derived
         if self.mpicomm.rank == 0:
             ref = None
@@ -562,7 +564,7 @@ class BasePipeline(BaseClass):
 
             footprints.append(tuple(calculator in calculators_to_calculate for calculator in self.calculators))
 
-        unique_footprints = list(set(row for row in footprints))
+        unique_footprints = sorted(set(row for row in footprints))
         param_blocks = [[p for ip, p in enumerate(params) if footprints[ip] == uf] for uf in unique_footprints]
         param_block_sizes = [len(b) for b in param_blocks]
 
@@ -655,13 +657,12 @@ class RuntimeInfo(BaseClass):
         self.namespace = None
         self.speed = None
         self.monitor = Monitor()
-        #self.required_by = set()
         if init is None: init = InitConfig()
         self.init = init
         if not isinstance(init, InitConfig):
             self.init = InitConfig(init)
         self._initialized = False
-        self._initialized_for_required_by = set()
+        self._initialized_for_required_by = []
         self._tocalculate = True
         self.calculated = False
         self.name = self.calculator.__class__.__name__
@@ -732,7 +733,7 @@ class RuntimeInfo(BaseClass):
         If not set, defaults to the :class:`BaseCalculator` instances in this calculator's ``__dict__``.
         """
         if getattr(self, '_requires', None) is None:
-            if getattr(self, '_initialization', False): return set()
+            if getattr(self, '_initialization', False): return []
             self.initialized = False
             self.initialize()
         return self._requires
@@ -740,7 +741,7 @@ class RuntimeInfo(BaseClass):
     @requires.setter
     def requires(self, requires):
         """Set list of calculators this calculator depends upon."""
-        self._requires = set(requires)
+        self._requires = list(requires)
         self.initialized = False
 
     @property
@@ -784,13 +785,14 @@ class RuntimeInfo(BaseClass):
             self.params = self.init.params
             self.init.params = bak
             self.initialized = True
-            self._initialized_for_required_by = set()
+            self._initialized_for_required_by = []
             self._initialization = False
             if getattr(self, '_requires', None) is None:
-                self._requires = set()
+                self._requires = []
                 for name, value in self.calculator.__dict__.items():
-                    if isinstance(value, BaseCalculator):
-                        self._requires.add(value)
+                    # never use set() when order may matter for MPI'ed code...
+                    if isinstance(value, BaseCalculator) and value not in self._requires:
+                        self._requires.append(value)
         return self.calculator
 
     @property

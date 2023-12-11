@@ -21,6 +21,7 @@ class PantheonPlusSNLikelihood(BaseSNLikelihood):
     """
     config_fn = 'pantheonplus.yaml'
     installer_section = 'PantheonPlusSNLikelihood'
+    name = 'PantheonPlusSN'
 
     def initialize(self, *args, cosmo=None, **kwargs):
         BaseSNLikelihood.initialize(self, *args, cosmo=cosmo, **kwargs)

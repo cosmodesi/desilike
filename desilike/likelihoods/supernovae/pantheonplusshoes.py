@@ -22,6 +22,7 @@ class PantheonPlusSHOESSNLikelihood(PantheonPlusSNLikelihood):
     """
     config_fn = 'pantheonplusshoes.yaml'
     installer_section = 'PantheonPlusSNLikelihood'
+    name = 'PantheonPlusSHOESSN'
 
     def initialize(self, *args, cosmo=None, **kwargs):
         BaseSNLikelihood.initialize(self, *args, cosmo=cosmo, **kwargs)

@@ -31,7 +31,7 @@ class CobayaEngine(BaseExternalEngine):
                         toret['Hubble'] = tmp
                     if name in ['comoving_radial_distance', 'angular_diameter_distance']:
                         toret[name] = tmp
-                    if name == 'comoving_angular_distance':
+                    if name in ['comoving_angular_distance', 'luminosity_distance']:
                         toret['angular_diameter_distance'] = tmp
                 elif section == 'thermodynamics':  # rs_drag
                     if name == 'rs_drag':
@@ -98,6 +98,10 @@ class Background(Section):
     @flatarray(dtype=np.float64)
     def comoving_angular_distance(self, z):
         return self.angular_diameter_distance(z) * (1. + z)
+
+    @flatarray(dtype=np.float64)
+    def luminosity_distance(self, z):
+        return self.angular_diameter_distance(z) * (1. + z)**2
 
 
 class Thermodynamics(Section):

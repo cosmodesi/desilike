@@ -54,9 +54,6 @@ class ClTheory(BaseCalculator):
             raise ValueError('Input unit must be one of {}, found {}'.format(allowed_units, self.unit))
         self.T0 = T0
         self.cosmo = cosmo
-        requires = {'lensing': self.cosmo.init.get('lensing', False) or lensing,
-                    'ellmax_cl': max(self.cosmo.init.get('ellmax_cl', 0), ellmax),
-                    'non_linear': self.cosmo.init.get('non_linear', '') or non_linear}
         if is_external_cosmo(self.cosmo):
             self.cosmo_requires = {'harmonic': {}}
             if self.ell_max_lensed_cls:
@@ -67,6 +64,9 @@ class ClTheory(BaseCalculator):
             if self.cosmo is None:
                 from desilike.theories.primordial_cosmology import Cosmoprimo
                 self.cosmo = Cosmoprimo()
+            requires = {'lensing': self.cosmo.init.get('lensing', False) or lensing,
+                        'ellmax_cl': max(self.cosmo.init.get('ellmax_cl', 0), ellmax),
+                        'non_linear': self.cosmo.init.get('non_linear', '') or non_linear}
             self.cosmo.init.update(**requires)
 
     def calculate(self):

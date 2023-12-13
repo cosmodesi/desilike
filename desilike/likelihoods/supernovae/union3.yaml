@@ -1,0 +1,11 @@
+class: Union3SNLikelihood
+
+init:
+  config_fn: config.dataset
+  
+params:
+  dM:
+    value: -9.2
+    prior:
+      limits: [-20, 20]
+    latex: \Delta \mathcal{M}_B

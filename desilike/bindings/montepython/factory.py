@@ -51,6 +51,10 @@ class Background(Section):
     def comoving_angular_distance(self, z):
         return self.angular_diameter_distance(z) * (1. + z)
 
+    @flatarray(dtype=np.float64)
+    def luminosity_distance(self, z):
+        return self.angular_diameter_distance(z) * (1. + z)**2
+
 
 class Thermodynamics(Section):
 

@@ -4,6 +4,7 @@ from desilike import plotting,utils
 from desilike.cosmo import is_external_cosmo
 from .base import BaseSNLikelihood
 
+
 class Union3SNLikelihood(BaseSNLikelihood):
     """
     Likelihood for the Union3&UNITY1.5 type Ia supernovae sample.
@@ -21,23 +22,23 @@ class Union3SNLikelihood(BaseSNLikelihood):
     config_fn = 'union3.yaml'
     installer_section = 'Union3SNLikelihood'
     name = 'Union3'
-    
+
     def initialize(self, *args, cosmo=None, **kwargs):
         BaseSNLikelihood.initialize(self, *args, cosmo=cosmo, **kwargs)
         self.precision = utils.inv(self.covariance)
         self.std = np.diag(self.covariance)**0.5
         if is_external_cosmo(self.cosmo):
             self.cosmo_requires = {'background': {'luminosity_distance': {'z': self.light_curve_params['zcmb']}}}
-    
+
     def calculate(self, dM=0):
         z = self.light_curve_params['zcmb']
-        # Dimensionless luminosity distance 
+        # Dimensionless luminosity distance
         # D_L = H0*d_L = 100*h * cosmoprimo.luminosity_distance(z) | Cosmoprimo returns distances in [Mpc/h]
         # Thus, the dependence on H0 is absorbed in dM
-        self.flattheory = 5 * np.log10(100*self.cosmo.luminosity_distance(z)) + 25
-        self.flatdata = self.light_curve_params['mu'] - dM 
+        self.flattheory = 5 * np.log10(100 * self.cosmo.luminosity_distance(z)) + 25
+        self.flatdata = self.light_curve_params['mu'] - dM
         BaseSNLikelihood.calculate(self)
-    
+
     @plotting.plotter
     def plot(self, fig=None):
         """
@@ -76,7 +77,7 @@ class Union3SNLikelihood(BaseSNLikelihood):
         lax[1].set_ylabel(r'Hubble res. [$\mathrm{mag}$]')
         lax[1].set_xlabel('$z$')
         return fig
-    
+
     @classmethod
     def install(cls, installer):
         try:
@@ -90,7 +91,7 @@ class Union3SNLikelihood(BaseSNLikelihood):
 
         if installer.reinstall or not exists_path(data_fn):
             github = 'https://raw.githubusercontent.com/rodri981/tmp-data/main/'
-            for fn in ['union3_mu.dat','union3.cov','union3.invcov']:
+            for fn in ['union3_mu.dat', 'union3.cov', 'union3.invcov']:
                 download(os.path.join(github, fn), os.path.join(data_dir, fn))
 
             # Creates config file to ensure compatibility with base class

@@ -76,7 +76,7 @@ class ParameterBestFit(Samples):
     @property
     def chi2min(self):
         r"""Minimum :math:`\chi^{2}` (= -2 * :attr:`logposterior.max()`)"""
-        return -2. * self.logposterior.max()
+        return -2. * float(self.logposterior.max())
 
     def choice(self, index='argmax', params=None, return_type='dict', **kwargs):
         """

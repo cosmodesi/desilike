@@ -92,7 +92,10 @@ class BaseLikelihoodGenerator(BaseClass):
             name_like = cls.__name__
         src_fn = os.path.abspath(sys.modules[cls.__module__].__file__)
         # src_dir = os.path.dirname(src_fn)
-        fn = os.path.join(self.dirname, os.path.relpath(src_fn, os.path.commonpath([self.dirname, src_fn])))
+        if src_fn.startswith(self.dirname):  # likelihood defined somewhere in dirname
+            fn = os.path.join(self.dirname, os.path.relpath(src_fn, os.path.commonpath([self.dirname, src_fn])))
+        else:
+            fn = os.path.join(self.dirname, os.path.basename(src_fn))
         if module is None:
             module = find_module_from_file(src_fn)
         if module is not None:  # check if this is a package, then assumed in pythonpath

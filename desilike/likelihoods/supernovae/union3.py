@@ -21,7 +21,7 @@ class Union3SNLikelihood(BaseSNLikelihood):
     """
     config_fn = 'union3.yaml'
     installer_section = 'Union3SNLikelihood'
-    name = 'Union3'
+    name = 'Union3SN'
 
     def initialize(self, *args, cosmo=None, **kwargs):
         BaseSNLikelihood.initialize(self, *args, cosmo=cosmo, **kwargs)

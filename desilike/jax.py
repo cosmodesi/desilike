@@ -46,13 +46,6 @@ def use_jax(array):
     return isinstance(array, tuple(array_types))
 
 
-def np_jax(array):
-    """Return numpy or jax.numpy depending on whether array is jax's object"""
-    if use_jax(array):
-        return jnp
-    return np
-
-
 def dist_name(dist):
     """
     Return distribution name, which should work with either scipy (where dist is a :class:`rv_continuous` instance)

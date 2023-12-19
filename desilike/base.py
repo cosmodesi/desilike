@@ -186,7 +186,7 @@ class BasePipeline(BaseClass):
         self._params = new_params.deepcopy()
         self._params.updated = False
         self._varied_params = self._params.select(varied=True, derived=False)
-        self.input_values = {param.name: param.value for param in self._params if param.input or param.depends}
+        self.input_values = {param.name: param.value for param in self._params if param.input or param.depends or param.drop}  # param.drop for depends
         self.derived = Samples()
         self._initialized = False
 
@@ -427,7 +427,7 @@ class BasePipeline(BaseClass):
                 try:
                     eq = all(deep_eq(value, values[0]) for value in values)
                 except Exception as exc:
-                    raise ValueError('unable to check equality of {} (type: {})'.format(name, type(values[0]))) from exc
+                    raise ValueError('Unable to check equality of {} (type: {})'.format(name, type(values[0]))) from exc
                 if eq:
                     fixed[-1][name] = values[0]
                 else:
@@ -1082,8 +1082,8 @@ class CollectionCalculator(BaseCalculator):
                 for param in calculator.all_params:
                     for depname in param.depends.values():
                         param = calculator.all_params[depname]
-                        if not any(param in calculator.runtime_info.params for calculator in calculator.runtime_info.pipeline.calculators):
-                            self.params[param] = param.clone(drop=True)  # add parameter to this calculator
+                        if not any(param in calc.runtime_info.params for calc in calculator.runtime_info.pipeline.calculators):
+                            self.init.params[param] = param.clone(drop=True)  # add parameter to this calculator
         self.all_calculators = {name: list(calculator.runtime_info.pipeline.calculators) for name, calculator in zip(self.names, self.calculators)}
         self.all_derived = {}
         for name, calculators in self.all_calculators.items():

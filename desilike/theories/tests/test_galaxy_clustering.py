@@ -1386,10 +1386,10 @@ def plot_direct():
 
     for kthmin in [1e-4, 1e-3]:
 
-        KaiserPowerSpectrumMultipoles._klim = (kthmin, 10., 3000)
-        LPTVelocileptorsPowerSpectrumMultipoles._klim = (kthmin, 10., 3000)
-        FOLPSPowerSpectrumMultipoles._klim = (kthmin, 10., 3000)
-        PyBirdPowerSpectrumMultipoles._klim = (kthmin, 10., 3000)
+        #KaiserPowerSpectrumMultipoles._klim = (kthmin, 10., 3000)
+        #LPTVelocileptorsPowerSpectrumMultipoles._klim = (kthmin, 10., 3000)
+        #FOLPSPowerSpectrumMultipoles._klim = (kthmin, 10., 3000)
+        #PyBirdPowerSpectrumMultipoles._klim = (kthmin, 10., 3000)
 
         for theory, Theory in Theories.items():
             if theory in todo:
@@ -1449,10 +1449,10 @@ if __name__ == '__main__':
     #test_flexible_bao()
     #test_full_shape()
     #test_emulator_direct()
-    #plot_direct()
+    plot_direct()
     #test_emulator_shapefit()
     #test_emulator_wigglesplit()
-    test_png()
+    #test_png()
     #test_pk_to_xi()
     #test_ap_diff()
     #test_ptt()

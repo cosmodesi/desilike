@@ -35,6 +35,11 @@ class RQuasiRandomSequence(qmc.QMCEngine):
         return self
 
 
+if not hasattr(qmc.QMCEngine, '_random'):  # old scipy version <= 1.8.1
+    RQuasiRandomSequence.random = RQuasiRandomSequence._random
+    del RQuasiRandomSequence._random
+
+
 def get_qmc_engine(engine):
 
     return {'sobol': Sobol, 'halton': Halton, 'lhs': LatinHypercube, 'rqrs': RQuasiRandomSequence}.get(engine, engine)
@@ -54,17 +59,8 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
         calculator : BaseCalculator
             Input calculator.
 
-        rng : np.random.RandomState, default=None
-            Random state. If ``None``, ``seed`` is used to set random state.
-
-        seed : int, default=None
-            Random seed.
-
         samples : str, Path, Samples
             Path to or samples to resume from.
-
-        ref_scale : float, default=1.
-            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor
 
         mpicomm : mpi.COMM_WORLD, default=None
             MPI communicator. If ``None``, defaults to ``calculator``'s :attr:`BaseCalculator.mpicomm`.
@@ -74,6 +70,9 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
 
         save_fn : str, Path, default=None
             If not ``None``, save samples to this location.
+
+        seed : int, default=None
+            Random seed.
 
         **kwargs : dict
             Optional engine-specific arguments.

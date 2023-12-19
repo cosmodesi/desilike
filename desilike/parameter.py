@@ -204,7 +204,7 @@ class ParameterError(Exception):
 class Deriv(dict):
     """
     This class encodes derivative orders.
-    It is a modification of https://github.com/python/cpython/blob/main/Lib/collections/__init__.py,
+    It is a modification of- :class:`Counter` in https://github.com/python/cpython/blob/main/Lib/collections/__init__.py,
     restricting to positive elements.
     """
     # References:
@@ -2143,7 +2143,7 @@ class Samples(BaseParameterCollection):
             for other in others:
                 other_names = other.names()
                 if set(other_names) != set(new_names):
-                    raise ValueError('Cannot concatenate values as parameters do not match: {} != {}.'.format(new_names, other_names))
+                    raise ValueError('cannot concatenate values as parameters do not match: {} != {}.'.format(new_names, other_names))
         for param in new_params:
             try:
                 value = np.concatenate([np.atleast_1d(other[param]) for other in others], axis=0)

@@ -70,7 +70,7 @@ class Emulator(BaseClass):
 
     def __init__(self, calculator, engine='taylor', mpicomm=None):
         """
-        Initialize calculator.
+        Initialize emulator.
 
         Parameters
         ----------
@@ -94,12 +94,10 @@ class Emulator(BaseClass):
             mpicomm = calculator.mpicomm
         self.calculator = calculator
         self.pipeline = self.calculator.runtime_info.pipeline
-
         self.params = self.pipeline.params.clone(namespace=None).deepcopy()
         self.varied_params = self.pipeline.varied_params.clone(namespace=None).names()
         if not self.varied_params:
             raise ValueError('No parameters to be varied!')
-
         calculators, fixed, varied = self.pipeline._classify_derived(self.pipeline.calculators)
         self.fixed, self.varied = {}, {}
 

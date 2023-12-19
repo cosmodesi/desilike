@@ -15,7 +15,7 @@ class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
 
     """Base class for perturbation theory matter power spectrum multipoles."""
     _default_options = dict()
-    _klim = (1e-4, 10., 3000)
+    _klim = (1e-3, 10., 3000)  # klim < 1e-3 h/Mpc causes problems in velocileptors and folps when Omega_k ~ 0.1
 
     def initialize(self, *args, template=None, **kwargs):
         self.options = self._default_options.copy()
@@ -36,7 +36,7 @@ class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
 class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipoles):
 
     _default_options = dict()
-    _klim = (1e-4, 10., 3000)
+    _klim = (1e-3, 10., 3000)
 
     def initialize(self, *args, template=None, **kwargs):
         self.options = self._default_options.copy()
@@ -1412,7 +1412,7 @@ class LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorre
 class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
     _default_options = dict(km=0.7, kr=0.25, accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=True, with_resum='full', eft_basis='eftoflss')
-    _klim = (1e-4, 11., 3000)  # numerical instability in pybird's fftlog at 10.
+    _klim = (1e-3, 11., 3000)  # numerical instability in pybird's fftlog at 10.
     _pt_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
                  'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol']
 
@@ -1612,7 +1612,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
 
     _default_options = dict(km=0.7, kr=0.25, accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=False, with_resum='full', eft_basis='eftoflss')
-    _klim = (1e-4, 11., 3000)  # numerical instability in pybird's fftlog at 10.
+    _klim = (1e-3, 11., 3000)  # numerical instability in pybird's fftlog at 10.
     _pt_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
                  'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol']
 

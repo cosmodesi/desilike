@@ -115,6 +115,7 @@ class PolychordSampler(BasePosteriorSampler):
 
         mpicomm : mpi.COMM_WORLD, default=None
             MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
+
         """
         super(PolychordSampler, self).__init__(*args, seed=seed, **kwargs)
         logzero = np.nan_to_num(-np.inf)

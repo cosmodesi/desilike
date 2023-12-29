@@ -13,7 +13,19 @@ from . import utils
 
 class ParameterBestFit(Samples):
 
-    """Class holding parameter best fits (in practice, :class:`Samples` with a log-posterior)."""
+    """
+    Class holding parameter best fits (in practice, :class:`Samples` with a log-posterior).
+
+    Parameter arrays can be accessed (and updated) as for a dictionary:
+
+    .. code-block:: python
+
+        bestfit = ParameterBestFit([np.ones(10), np.zeros(10), np.linspace(0., 1., 10)], params=['a', 'b', 'logposterior'])
+        di = bestfit.choice(index='argmax')  # dictionary of parameter values for best fit with larger log-posterior.
+        index = bestfit.logposterior.argmax()
+        assert {param.name: bestfit[param][index] for param in bestfit.params()} == di
+
+    """
 
     _attrs = Samples._attrs + ['_logposterior', '_loglikelihood', '_logprior']
 
@@ -298,7 +310,17 @@ class ParameterContours(BaseParameterCollection):
 
 class ParameterProfiles(Samples):
 
-    """Class holding parameter 1D profiles."""
+    """
+    Class holding parameter 1D profiles.
+
+    Parameter arrays can be accessed (and updated) as for a dictionary:
+
+    .. code-block:: python
+
+        profile = ParameterProfiles([np.array([np.ones(10), np.linspace(0., 1., 10)]).T], params=['a'])
+        profile['a']  # 2D array, profile['a'][:, 0] is 'a'-values, profile['a'][: 1] is the corresponding log-posterior
+
+    """
 
     def choice(self, index='argmax', params=None, return_type='dict', **kwargs):
         """

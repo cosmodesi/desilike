@@ -59,8 +59,21 @@ def _get_solved_covariance(chain, params=None):
 
 
 class Chain(Samples):
+    """
+    Class that holds samples drawn from posterior (in practice, :class:`Samples` with a log-posterior and optional weights).
 
-    """Class that holds samples drawn from posterior (in practice, :class:`Samples` with a log-posterior and optional weights)."""
+    Parameter arrays can be accessed (and updated) as for a dictionary:
+
+    .. code-block:: python
+
+        chain = Chain([np.ones(100), np.zeros(100)], params=['a', 'b'])
+        chain['a'] += 1.
+        print(chain['a'].mean())
+
+        chain['c'] = chain['b'] + 1
+        chain['c'].param.update(latex='c')
+
+    """
 
     _type = ParameterArray
     _attrs = Samples._attrs + ['_logposterior', '_loglikelihood', '_logprior', '_aweight', '_fweight', '_weight']

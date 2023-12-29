@@ -103,7 +103,6 @@ class BaseLikelihood(BaseCalculator):
                 likelihood.precision = likelihood._precision_original = getattr(likelihood, '_precision_original', likelihood.precision)
                 likelihood.flatdata = likelihood._flatdata_original = getattr(likelihood, '_flatdata_original', likelihood.flatdata)
             posterior_fisher = fisher(**values)
-            posterior_covariance = np.linalg.inv(- posterior_fisher._hessian)
             derivs = fisher.mpicomm.bcast(fisher.likelihood_differentiation.samples, root=0)
             for param in solved_params: values[param.name] = getattr(param.prior, 'loc', 0.)
             solve_likelihood(**values)
@@ -114,7 +113,7 @@ class BaseLikelihood(BaseCalculator):
                     derivp = flatderiv * precision
                 else:
                     derivp = flatderiv.dot(precision)
-                likelihood.precision = precision - derivp.T.dot(posterior_covariance).dot(derivp)
+                likelihood.precision = precision - derivp.T.dot(np.linalg.solve(- posterior_fisher._hessian, derivp))
                 likelihood.flatdata = likelihood._flatdata_original - (likelihood.flatdiff - derivs[()])  # flatdiff = flattheory - flatdata
 
     def _solve(self):

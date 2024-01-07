@@ -1,3 +1,4 @@
+ignore_unknown_cosmoprimo_params: true
 params:
   ELG.b1:
     latex: b_{1, \mathrm{ELG}}
@@ -21,6 +22,12 @@ params:
       dist: norm
       loc: 0.0
       scale: 0.1
+  loglikelihood:
+    derived: true
+    latex: L
+  logprior:
+    derived: true
+    latex: p
   sigmapar: 0.0
   sigmaper: 0.0
 stop_at_error: true

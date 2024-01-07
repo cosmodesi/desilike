@@ -686,9 +686,11 @@ class Parameter(BaseClass):
                     raise ParameterError('Prior must be one of {}, with no limits, to use analytic marginalisation for {}'.format(allowed_dists, self))
             else:
                 placeholders = re.finditer(r'\{.*?\}', derived)
+                nderived = len(derived)
                 for placeholder in placeholders:
                     placeholder = placeholder.group()
-                    key = '_' * len(derived) + '{:d}_'.format(len(self._depends) + 1)
+                    if placeholder not in derived: continue  # already replaced
+                    key = '_' * nderived + '{:d}_'.format(len(self._depends) + 1)
                     assert key not in derived
                     derived = derived.replace(placeholder, key)
                     self._depends[key] = placeholder[1:-1]

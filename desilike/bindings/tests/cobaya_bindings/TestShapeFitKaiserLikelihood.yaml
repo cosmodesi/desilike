@@ -1,3 +1,4 @@
+ignore_unknown_cosmoprimo_params: true
 params:
   b1:
     latex: b_{1}
@@ -33,6 +34,21 @@ params:
       max: 0.01
       min: -0.01
   dn: 0.0
+  f_sqrt_Ap:
+    derived: true
+    latex: f A_{p}^{1/2}
+  loglikelihood:
+    derived: true
+    latex: L
+  logprior:
+    derived: true
+    latex: p
+  m:
+    derived: true
+    latex: m
+  n:
+    derived: true
+    latex: n
   qpar:
     latex: q_{\parallel}
     prior:

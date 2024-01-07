@@ -1,3 +1,4 @@
+ignore_unknown_cosmoprimo_params: true
 params:
   LRG.b1:
     latex: b_{1, \mathrm{LRG}}
@@ -10,6 +11,8 @@ params:
       dist: uniform
       max: 2.0
       min: 1.0
+  LRG.sigmapar: 0.0
+  LRG.sigmaper: 0.0
   LRG.sn0:
     latex: s_{n, 0, \mathrm{LRG}}
     prior:
@@ -21,6 +24,10 @@ params:
       dist: norm
       loc: 0.0
       scale: 0.1
-  sigmapar: 0.0
-  sigmaper: 0.0
+  loglikelihood:
+    derived: true
+    latex: L
+  logprior:
+    derived: true
+    latex: p
 stop_at_error: true

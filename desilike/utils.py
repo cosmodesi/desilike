@@ -630,6 +630,11 @@ def subspace(X, precision=None, npcs=None, chi2min=None, fweights=None, aweights
 
     aweights : array, default=None
         Optionally, observation weights.
+
+    Returns
+    -------
+    eigenvectors : array of shape (ndim, npcs)
+        Eigenvectors.
     """
     X = np.asarray(X)
     X = X.reshape(X.shape[0], -1)

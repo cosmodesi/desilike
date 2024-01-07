@@ -1,3 +1,4 @@
+ignore_unknown_cosmoprimo_params: true
 params:
   a:
     latex: a
@@ -21,4 +22,10 @@ params:
       dist: norm
       loc: 0.0
       scale: 10.0
+  loglikelihood:
+    derived: true
+    latex: L
+  logprior:
+    derived: true
+    latex: p
 stop_at_error: true

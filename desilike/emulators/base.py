@@ -82,8 +82,8 @@ class Emulator(BaseClass):
             which can be a :class:`BaseEmulatorEngine` (type or instance) or one of ['taylor', 'mlp'].
             A single emulator engine can be provided, and used for all calculator's derived attributes.
 
-        mpicomm : mpi.COMM_WORLD, default=None
-            MPI communicator.
+        mpicomm : MPI communicator, default=None
+            Optionally, the MPI communicator.
         """
         self.is_calculator_sequence = utils.is_sequence(calculator)
         if self.is_calculator_sequence:
@@ -156,9 +156,10 @@ class Emulator(BaseClass):
 
         if not hasattr(engine, 'items'):
             engine = {'*': engine}
-        for engine in engine.values():
-            engine = get_engine(engine)
-        self.engines = expand_dict(engine, self.varied)
+        self.engines = engine
+        for key, engine in self.engines.items():
+            self.engines[key] = get_engine(engine)
+        self.engines = utils.expand_dict(self.engines, self.varied)
         for name, engine in self.engines.items():
             if engine is None:
                 raise ValueError('Engine not specified for varying attribute {}'.format(name))
@@ -523,7 +524,7 @@ class RegisteredEmulatorEngine(type(BaseClass)):
 
 def get_engine(engine):
     """
-    Return engine (class) for emulation.
+    Return engine for emulation.
 
     Parameters
     ----------
@@ -552,6 +553,8 @@ def get_engine(engine):
 
 
 class BaseEmulatorEngine(BaseClass, metaclass=RegisteredEmulatorEngine):
+
+    """Base class for emulator engine."""
 
     name = 'base'
 

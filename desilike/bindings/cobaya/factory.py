@@ -266,7 +266,7 @@ def cosmoprimo_to_classy_params(params):
     return toret
 
 
-def camb_or_classy_to_cosmoprimo(fiducial, provider, **params):
+def camb_or_classy_to_cosmoprimo(fiducial, provider, params, ignore_unknown_params=True):
     if fiducial: cosmo = Cosmology.from_state(fiducial)
     else: cosmo = Cosmology()
     convert = dict(_convert_camb_or_classy_to_cosmoprimo_params)
@@ -278,7 +278,7 @@ def camb_or_classy_to_cosmoprimo(fiducial, provider, **params):
             for param, value in p.current_state['params'].items():
                 if param in convert:
                     state[convert[param]] = value
-                else:
+                elif not ignore_unknown_params:
                     raise ValueError('cannot translate {} parameter {} to cosmoprimo'.format(p, param))
             try:
                 A_s = p.classy.get_current_derived_parameters(['A_s'])['A_s']  # classy
@@ -390,7 +390,7 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, para
         and return a log-likelihood.
         """
         if self._requires:
-            cosmo = camb_or_classy_to_cosmoprimo(self._fiducial, self.provider, **params_values)
+            cosmo = camb_or_classy_to_cosmoprimo(self._fiducial, self.provider, params_values, ignore_unknown_params=self.ignore_unknown_cosmoprimo_params)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
         loglikelihood = self.like(**{name: value for name, value in params_values.items() if name in self._nuisance_params})
         if _derived is not None:
@@ -432,7 +432,7 @@ class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
         cls, name_like, fn, code = super(CobayaLikelihoodGenerator, self).get_code(*args, **kwargs)
         dirname = os.path.dirname(fn)
         params = cobaya_params(cls(**self.kw_like))
-        BaseConfig(dict(stop_at_error=True, params=params)).write(os.path.join(dirname, name_like + '.yaml'))
+        BaseConfig(dict(stop_at_error=True, ignore_unknown_cosmoprimo_params=True, params=params)).write(os.path.join(dirname, name_like + '.yaml'))
 
         import_line = 'from .{} import *'.format(os.path.splitext(os.path.basename(fn))[0])
         with open(os.path.join(dirname, '__init__.py'), 'a+') as file:

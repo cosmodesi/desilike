@@ -326,7 +326,7 @@ def test_broadband_bao():
 
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles
 
-    if True:
+    if False:
         ax = plt.gca()
         theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(ells=(0, 2), k=np.linspace(0.001, 0.4, 100), broadband='pcs')
         for ill, ell in enumerate(theory.ells):
@@ -359,38 +359,39 @@ def test_broadband_bao():
         ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
         plt.show()
 
-    if False:
+    if True:
         fig, lax = plt.subplots(1, 2, sharex=False, sharey=True, figsize=(10, 4), squeeze=True)
         fig.subplots_adjust(wspace=0.25)
 
         def get_analytic(s, delta):
             from scipy.special import sici
             x = delta * s
-            sinx, cosx, cos2x = np.sin(x), np.cos(x), np.cos(2 * x)
-            Si_x, Si_2x = sici(x)[0], sici(2 * x)[0]
+            sinx, sin2x, sin3x, cosx, cos2x, cos3x = np.sin(x), np.sin(2 * x), np.sin(3 * x), np.cos(x), np.cos(2 * x), np.cos(3 * x)
+            Si_x, Si_2x, Si_3x = sici(x)[0], sici(2 * x)[0], sici(3 * x)[0]
             poly = {}
             poly['al2_-1'] = (16.0 - 8.0 * x**2 - 16.0 * cosx + x**2 * cosx - x * sinx + x**3 * Si_x) / (2.0 * x**3 * s**3)
             poly['al2_0'] = -2.0 * (12.0 - 16 * cosx + x**2 * cosx + 4.0 * cos2x - x**2 * cos2x - x * sinx + x * cosx * sinx + x**3 * Si_x - 2.0 * x**3 * Si_2x) / (x**3 * s**3)
+            poly['al2_1'] = 0.5 * (48.0 + 8.0 * x**2 - 96.0 * cosx + 6.0 * x**2 * cosx + 64.0 * cos2x - 16.0 * x**2 * cos2x - 16.0 * cos3x + 9.0 * x**2 * cos3x - 6.0 * x * sinx + 8.0 * x * sin2x - 3.0 * x * sin3x + 6.0 * x**3 * Si_x - 32.0 * x**3 * Si_2x + 27.0 * x**3 * Si_3x) / (x**3 * s**3)
             return poly
 
         theory = DampedBAOWigglesTracerCorrelationFunctionMultipoles(s=np.linspace(1., 130., 130), ells=(0, 2), broadband='pcs')
         for ill, ell in enumerate(theory.ells):
             ax = lax[ill]
-            names = theory.varied_params.names(basename=['{}l{:d}_[-1:1]'.format(prefix, ell) for prefix in ['a', 'b']][:1])
-            print(names)
+            names = theory.varied_params.names(basename=['{}l{:d}_[-1:2]'.format(prefix, ell) for prefix in ['a', 'b']][:1])
             cmap = plt.get_cmap('jet', len(names))
             for iname, name in enumerate(names):
                 xiref = theory(**{name: 0.})
                 xi = theory(**{name: 1e-3 if name.startswith('b') else 1.})
                 diff = xi[ill] - xiref[ill]
                 color = cmap(iname / len(names))
-                ax.plot(theory.s, theory.s**2 * diff, color=color)
+                ax.plot(theory.s, theory.s**2 * diff, color=color, label=name)
                 analytic = get_analytic(theory.s, delta=theory.power.kp)
                 if name in analytic:
                     ratio = diff[-1] / analytic[name][-1]
                     ax.plot(theory.s, theory.s**2 * analytic[name] * ratio, color=color, linestyle='--')
                 xi = theory(**{name: 0.})
             ax.grid(True)
+            ax.legend()
             ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
             ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
         plt.show()
@@ -637,6 +638,9 @@ def test_full_shape():
     test(theory)
     theory(dm=0.01, b1=1.).shape
     theory.pt
+
+    theory_Pzel = LPTVelocileptorsTracerPowerSpectrumMultipoles(use_Pzel=True)
+    theory_Pzel()
 
     from desilike.theories.galaxy_clustering import EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
     theory = EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
@@ -1447,9 +1451,9 @@ if __name__ == '__main__':
     #test_bao()
     #test_broadband_bao()
     #test_flexible_bao()
-    #test_full_shape()
+    test_full_shape()
     #test_emulator_direct()
-    plot_direct()
+    #plot_direct()
     #test_emulator_shapefit()
     #test_emulator_wigglesplit()
     #test_png()

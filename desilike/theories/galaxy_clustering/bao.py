@@ -831,7 +831,7 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
                 for ik in range(-2, 3):  # should be more than enough
                     # We are adding a very loose prior just to regularize the fit
                     param = dict(value=0., prior=dict(dist='norm', loc=0., scale=1e4), ref=dict(limits=[-1e2, 1e2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
-                    if broadband == 'pcs2' and (ell == 0 or ik not in [-1, 0]): param.update(fixed=True)
+                    if broadband == 'pcs2' and (ell == 0 or ik not in [0, 1]): param.update(fixed=True)
                     params['al{:d}_{:d}'.format(ell, ik)] = param
                 for ik in [0, 2]:
                     params['bl{:d}_{:d}'.format(ell, ik)] = dict(value=0., ref=dict(limits=[-1e-3, 1e-3]), delta=0.005, latex='b_{{{:d}, {:d}}}'.format(ell, ik))

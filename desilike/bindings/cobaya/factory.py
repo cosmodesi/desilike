@@ -430,11 +430,11 @@ class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
     def __init__(self, *args, **kwargs):
         super(CobayaLikelihoodGenerator, self).__init__(CobayaLikelihoodFactory, *args, **kwargs)
 
-    def get_code(self, *args, **kwargs):
+    def get_code(self, *args, kw_cobaya=None, **kwargs):
         cls, name_like, fn, code = super(CobayaLikelihoodGenerator, self).get_code(*args, **kwargs)
         dirname = os.path.dirname(fn)
         params = cobaya_params(cls(**self.kw_like))
-        kw_cobaya = dict(getattr(self.factory, 'kw_cobaya', {}) or {})
+        kw_cobaya = dict(kw_cobaya or {})
         BaseConfig(dict(stop_at_error=True, ignore_unknown_cosmoprimo_params=True, params=params, **kw_cobaya)).write(os.path.join(dirname, name_like + '.yaml'))
 
         import_line = 'from .{} import *'.format(os.path.splitext(os.path.basename(fn))[0])

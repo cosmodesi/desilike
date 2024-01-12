@@ -367,7 +367,7 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
     def initialize(self):
         """Prepare any computation, importing any necessary code, files, etc."""
 
-        _kw_cobaya = {name: getattr(self, name, value) for name in kw_cobaya.items()}
+        _kw_cobaya = {name: getattr(self, name, value) for name, value in kw_cobaya.items()}
         self.like = cls(**{**kw_like, **_kw_cobaya})
         from desilike import mpi
         self.like.mpicomm = mpi.COMM_SELF  # no likelihood-level MPI-parallelization
@@ -431,7 +431,7 @@ class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
         super(CobayaLikelihoodGenerator, self).__init__(CobayaLikelihoodFactory, *args, **kwargs)
 
     def get_code(self, *args, kw_cobaya=None, **kwargs):
-        cls, name_like, fn, code = super(CobayaLikelihoodGenerator, self).get_code(*args, **kwargs)
+        cls, name_like, fn, code = super(CobayaLikelihoodGenerator, self).get_code(*args, kw_cobaya=kw_cobaya, **kwargs)
         dirname = os.path.dirname(fn)
         params = cobaya_params(cls(**self.kw_like))
         kw_cobaya = dict(kw_cobaya or {})

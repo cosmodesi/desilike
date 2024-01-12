@@ -110,7 +110,9 @@ class BaseLikelihoodGenerator(BaseClass):
             code = 'from desilike.bindings.base import load_from_file\n'
             code += "{} = load_from_file('{}', '{}')\n".format(cls.__name__, src_fn, cls.__name__)
         code += "{} = {}({}, '{}', kw_like={}, module=__name__".format(name_like, self.factory.__name__, cls.__name__, name_like, kw_like)
-        code += ", ".join(['{}={}'.format(name, value) for name, value in kwargs.items()]) + ")"
+        if kwargs:
+            code += ", " + ", ".join(['{}={}'.format(name, value) for name, value in kwargs.items()])
+        code += ")"
         return cls, name_like, fn, code
 
     def __call__(self, likelihood, name_like=None, kw_like=None, module=None, overwrite=True, **kwargs):

@@ -348,7 +348,7 @@ def dict_to_yaml(d):
             v = float(v)
         elif isinstance(v, np.integer):
             v = int(v)
-        elif not isinstance(v, (bool, numbers.Number)):
+        elif (v is not None) and not isinstance(v, (bool, numbers.Number)):
             v = str(v)
         toret[k] = v
     return toret

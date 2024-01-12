@@ -232,19 +232,31 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                     lo, hi, *step = lim
                 else:
                     lo, hi = 2 * kk[0] - kk[1], 2 * kk[-1] - kk[-2]
-                nmk = np.sum((wmatrix.xout[iout] >= lo) & (wmatrix.xout[iout] <= hi))
+                xwout = wmatrix.xout[iout]
+                isnan = np.isnan(xwout)
+                if isnan.any():
+                    isnan = np.isnan(xwout)
+                    kkisnan = np.interp(np.flatnonzero(isnan), np.flatnonzero(~isnan), xwout[~isnan])
+                    #if self.mpicomm.rank == 0:
+                    #    self.log_warning('NaN found in k: {}, replaced by {}.'.format(xwout, kkisnan))
+                    xwout[isnan] = kkisnan
+                wmatrix.xout[iout] = xwout
+
+                nmk = np.sum((xwout >= lo) & (xwout <= hi))
                 factorout = nmk // kk.size
-                wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout, factorout), projsout=projout)
-                # wmatrix.slice_x(sliceout=slice(0, len(wmatrix.xout[iout]) // factorout * factorout), projsout=projout)
+                wmatrix.slice_x(sliceout=slice(0, len(xwout) // factorout * factorout, factorout), projsout=projout)
+                # wmatrix.slice_x(sliceout=slice(0, len(xwout) // factorout * factorout), projsout=projout)
                 # wmatrix.rebin_x(factorout=factorout, projsout=projout)
+                xwout = wmatrix.xout[iout]
                 if lim is not None:
-                    istart = np.flatnonzero(wmatrix.xout[iout] >= lo)[0]
-                    ksize = np.flatnonzero(wmatrix.xout[iout] <= hi)[-1] - istart + 1
+                    istart = np.flatnonzero(xwout >= lo)[0]
+                    ksize = np.flatnonzero(xwout <= hi)[-1] - istart + 1
                 else:
-                    istart = np.nanargmin(np.abs(wmatrix.xout[iout] - kk[0]))
+                    istart = np.nanargmin(np.abs(xwout - kk[0]))
+                    ksize = kk.size
                 wmatrix.slice_x(sliceout=slice(istart, istart + ksize), projsout=projout)
                 self.k[iout] = wmatrix.xout[iout]
-                if lim is None and not np.allclose(wmatrix.xout[iout], kk, rtol=1e-4):
+                if lim is None and not np.allclose(xwout, kk, rtol=1e-4):
                     raise ValueError('k-coordinates {} for ell = {:d} could not be found in input matrix (rebinning = {:d})'.format(kk, projout.ell, factorout))
             if ellsin is not None:
                 self.ellsin = list(ellsin)

@@ -38,6 +38,17 @@ def test_power_spectrum():
     assert np.allclose(likelihood.flatdiff, observable.wmatrix.flatpower - observable.flatdata)
     theory()
 
+    observable = TracerPowerSpectrumMultipolesObservable(klim=None,#klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data='../../tests/_pk/data.npy',
+                                                         covariance=glob.glob('../../tests/_pk/mock_*.npy'),
+                                                         wmatrix='../../tests/_pk/window.npy',
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
+    assert np.allclose(theory.nd, 1e-4)
+    assert np.allclose(likelihood.flatdiff, observable.wmatrix.flatpower - observable.flatdata, equal_nan=True)
+    theory()
+
     from pypower import PowerSpectrumMultipoles
     power = PowerSpectrumMultipoles.load('../../tests/_pk/data.npy').select((0., 1., 0.01))
 

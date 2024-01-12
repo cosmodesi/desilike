@@ -83,7 +83,7 @@ def plot_covariance_matrix(covariance, x1=None, x2=None, xlabel1=None, xlabel2=N
     norm = norm or Normalize(vmin=min(item.min() for row in mat for item in row), vmax=max(item.max() for row in mat for item in row))
     nrows, ncols = [len(x) for x in [size2, size1]]
     if fig is None:
-        figsize = figsize or tuple(max(n*3, 6) for n in [ncols, nrows])
+        figsize = figsize or tuple(max(n * 3, 6) for n in [ncols, nrows])
         if np.ndim(figsize) == 0: figsize = (figsize,) * 2
         xextend = 0.8
         fig, lax = plt.subplots(nrows=nrows, ncols=ncols, sharex=False, sharey=False,

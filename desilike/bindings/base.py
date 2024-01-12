@@ -61,7 +61,7 @@ class BaseLikelihoodGenerator(BaseClass):
         self.header += 'from {} import {}'.format(self.factory.__module__, self.factory.__name__)
         self.dirname = os.path.abspath(os.path.join(dirname, os.path.basename(os.path.dirname(sys.modules[self.factory.__module__].__file__))) + '_bindings')
 
-    def get_code(self, likelihood, name_like=None, kw_like=None, module=None):
+    def get_code(self, likelihood, name_like=None, kw_like=None, module=None, **kwargs):
         """
         Internal method to write code to generate likelihood object to be imported by the external inference code.
 
@@ -80,6 +80,9 @@ class BaseLikelihoodGenerator(BaseClass):
             Full module name where ``likelihood`` is defined.
             If ``None``, the full module name is searched with :func:`find_module_from_file`; if not in a package,
             absolute path to file where ``likelihood`` object is defined will be used to import it in the generated code.
+
+        **kwargs : dict
+            Other optional arguments for likelihood factory, e.g. ``kw_cobaya``.
 
         Returns
         -------
@@ -106,10 +109,11 @@ class BaseLikelihoodGenerator(BaseClass):
             # code += 'from {} import {}\n'.format(os.path.splitext(os.path.basename(fn))[0], cls.__name__)
             code = 'from desilike.bindings.base import load_from_file\n'
             code += "{} = load_from_file('{}', '{}')\n".format(cls.__name__, src_fn, cls.__name__)
-        code += "{} = {}({}, '{}', {}, __name__)".format(name_like, self.factory.__name__, cls.__name__, name_like, kw_like)
+        code += "{} = {}({}, '{}', kw_like={}, module=__name__".format(name_like, self.factory.__name__, cls.__name__, name_like, kw_like)
+        code += ", ".join(['{}={}'.format(name, value) for name, value in kwargs.items()]) + ")"
         return cls, name_like, fn, code
 
-    def __call__(self, likelihood, name_like=None, kw_like=None, module=None, overwrite=True):
+    def __call__(self, likelihood, name_like=None, kw_like=None, module=None, overwrite=True, **kwargs):
         """
         Generate file structure and code containing definition of likelihood such that it can be imported by the external inference code.
 
@@ -128,6 +132,9 @@ class BaseLikelihoodGenerator(BaseClass):
             Module where ``likelihood`` is defined.
             If ``None``, absolute path to file where ``likelihood`` object is defined
             will be used to import it in the generated code.
+
+        **kwargs : dict
+            Other optional arguments for likelihood factory, e.g. ``kw_cobaya``.
         """
         if not is_sequence(likelihood):
             likelihood = [likelihood]
@@ -145,7 +152,7 @@ class BaseLikelihoodGenerator(BaseClass):
             raise ValueError('Number of provided likelihood kwargs kw_like is not the same as the number of likelihoods')
         txt = {}
         for likelihood, name_like, kw_like, module in zip(likelihood, name_like, kw_like, module):
-            fn, code = self.get_code(likelihood, name_like=name_like, kw_like=kw_like, module=module)[2:]
+            fn, code = self.get_code(likelihood, name_like=name_like, kw_like=kw_like, module=module, **kwargs)[2:]
             txt[fn] = txt.get(fn, []) + [code]
         for fn in txt:
             self.log_debug('Saving likelihood in {}'.format(fn))

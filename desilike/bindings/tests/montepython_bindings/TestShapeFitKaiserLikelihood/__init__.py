@@ -2,5 +2,5 @@
 from desilike.bindings.montepython.factory import MontePythonLikelihoodFactory
 
 from desilike.bindings.tests.test_generator import TestShapeFitKaiserLikelihood
-TestShapeFitKaiserLikelihood = MontePythonLikelihoodFactory(TestShapeFitKaiserLikelihood, 'TestShapeFitKaiserLikelihood', {}, __name__)
+TestShapeFitKaiserLikelihood = MontePythonLikelihoodFactory(TestShapeFitKaiserLikelihood, 'TestShapeFitKaiserLikelihood', kw_like={}, module=__name__)
 

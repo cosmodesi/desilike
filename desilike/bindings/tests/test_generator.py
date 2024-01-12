@@ -94,6 +94,6 @@ if __name__ == '__main__':
     Likelihoods = [TestSimpleLikelihood, TestShapeFitKaiserLikelihood, TestDirectKaiserLikelihood, TestEmulatedDirectKaiserLikelihood]
 
     setup_logging('info')
-    CobayaLikelihoodGenerator()(Likelihoods)
+    CobayaLikelihoodGenerator()(Likelihoods, kw_cobaya={})
     CosmoSISLikelihoodGenerator()(Likelihoods)
     MontePythonLikelihoodGenerator()(Likelihoods)

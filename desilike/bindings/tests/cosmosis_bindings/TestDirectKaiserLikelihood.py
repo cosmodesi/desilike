@@ -2,7 +2,7 @@
 from desilike.bindings.cosmosis.factory import CosmoSISLikelihoodFactory
 
 from desilike.bindings.tests.test_generator import TestDirectKaiserLikelihood
-TestDirectKaiserLikelihood = CosmoSISLikelihoodFactory(TestDirectKaiserLikelihood, 'TestDirectKaiserLikelihood', {}, __name__)
+TestDirectKaiserLikelihood = CosmoSISLikelihoodFactory(TestDirectKaiserLikelihood, 'TestDirectKaiserLikelihood', kw_like={}, module=__name__)
 
 setup, execute, cleanup = TestDirectKaiserLikelihood.build_module()
 

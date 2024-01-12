@@ -346,7 +346,7 @@ def cobaya_params(like):
     return desilike_to_cobaya_params(nuisance_params)
 
 
-def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, params=None):
+def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_cobaya=None, params=None):
     """
     Pass ``params=True`` for dynamic bindings (when no likelihood *.yaml parameter file is written):
 
@@ -362,11 +362,13 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, para
             params = cobaya_params(cls(**kw_like))
         else:
             params = desilike_to_cobaya_params(ParameterCollection(params))
+    kw_cobaya = dict(kw_cobaya or {})
 
     def initialize(self):
         """Prepare any computation, importing any necessary code, files, etc."""
 
-        self.like = cls(**kw_like)
+        _kw_cobaya = {name: getattr(self, name, value) for name in kw_cobaya.items()}
+        self.like = cls(**{**kw_like, **_kw_cobaya})
         from desilike import mpi
         self.like.mpicomm = mpi.COMM_SELF  # no likelihood-level MPI-parallelization
         self._cosmo_params, self._nuisance_params = get_likelihood_params(self.like)
@@ -432,7 +434,8 @@ class CobayaLikelihoodGenerator(BaseLikelihoodGenerator):
         cls, name_like, fn, code = super(CobayaLikelihoodGenerator, self).get_code(*args, **kwargs)
         dirname = os.path.dirname(fn)
         params = cobaya_params(cls(**self.kw_like))
-        BaseConfig(dict(stop_at_error=True, ignore_unknown_cosmoprimo_params=True, params=params)).write(os.path.join(dirname, name_like + '.yaml'))
+        kw_cobaya = dict(getattr(self.factory, 'kw_cobaya', {}) or {})
+        BaseConfig(dict(stop_at_error=True, ignore_unknown_cosmoprimo_params=True, params=params, **kw_cobaya)).write(os.path.join(dirname, name_like + '.yaml'))
 
         import_line = 'from .{} import *'.format(os.path.splitext(os.path.basename(fn))[0])
         with open(os.path.join(dirname, '__init__.py'), 'a+') as file:

@@ -65,7 +65,7 @@ class BaseLikelihood(BaseCalculator):
         solved_params = []
         for param in all_params:
             solved = param.derived
-            if param.solved and solved == '.prec':
+            if param.solved and solved.startswith('.prec'):
                 solved_params.append(param)
 
         # Reset precision and flatdata
@@ -125,15 +125,15 @@ class BaseLikelihood(BaseCalculator):
         solved_params, indices_marg = [], []
         for param in all_params:
             solved = param.derived
-            if param.solved and solved != '.prec':
+            if param.solved and not solved.startswith('.prec'):
                 iparam = len(solved_params)
                 solved_params.append(param)
-                if solved == '.auto':
-                    solved = self.solved_default
-                if solved == '.marg':  # marg
+                if solved.startswith('.auto'):
+                    solved = solved.replace('.auto', self.solved_default)
+                if solved.startswith('.marg'):  # marg
                     indices_marg.append(iparam)
-                elif solved != '.best':
-                    raise ValueError('Unknown option for solved = {}'.format(solved))
+                elif not solved.startswith('.best'):
+                    raise ValueError('unknown option for solved = {}'.format(solved))
 
         dx, x, solve_likelihoods, derivs = [], [], [], None
 
@@ -186,14 +186,14 @@ class BaseLikelihood(BaseCalculator):
             # flatdiff is theory - data
             x = posterior_fisher.mean()
             dx = x - posterior_fisher._center
+            solved_indices = posterior_fisher._index(solved_params)
             derivs = [()]
-            for iparam1, param1 in enumerate(solved_params):
-                for param2 in solved_params[iparam1:]:
-                    derivs.append((param1.name, param2.name))
-            indices = posterior_fisher._index(solved_params)
             indices_derivs = [], []
-            for iindex1, index1 in enumerate(indices):
-                for index2 in indices[iindex1:]:
+            for iparam1, (param1, index1) in enumerate(zip(solved_params, solved_indices)):
+                if param1.derived.endswith('not_derived'): continue  # do not export to .derived
+                for param2, index2 in zip(solved_params[iparam1:], solved_indices[iparam1:]):
+                    if param2.derived.endswith('not_derived'): continue
+                    derivs.append((param1.name, param2.name))
                     indices_derivs[0].append(index1)
                     indices_derivs[1].append(index2)
             #indices_derivs = posterior_fisher._index([deriv[0] for deriv in derivs[1:]]), posterior_fisher._index([deriv[1] for deriv in derivs[1:]])

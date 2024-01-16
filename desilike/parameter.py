@@ -509,6 +509,13 @@ class ParameterArray(np.ndarray):
         except ValueError:
             return deriv, False
 
+    def isin(self, deriv):
+        """Test if input deriv in array."""
+        deriv, isderiv = self._isderiv(deriv)
+        if isderiv:
+            return (self.derivs is not None) and (deriv in self.derivs)
+        return np.isin(deriv, self)
+
     def _index(self, index):
         toret = index
         deriv, isderiv = self._isderiv(index)
@@ -584,7 +591,8 @@ class Parameter(BaseClass):
     """Class that represents a parameter."""
 
     _attrs = ['basename', 'namespace', 'value', 'fixed', 'derived', 'prior', 'ref', 'proposal', 'delta', 'latex', 'depends', 'shape', 'drop']
-    _allowed_solved = ['.best', '.marg', '.auto', '.prec']
+    _allowed_solved = ['.best', '.marg', '.auto', '.best_not_derived', '.marg_not_derived', '.auto_not_derived', '.prec']
+    #_allowed_solved += ['best', 'marg', 'auto', 'best_not_derived', 'marg_not_derived', 'auto_not_derived', 'prec']
 
     def __init__(self, basename, namespace='', value=None, fixed=None, derived=False, prior=None, ref=None, proposal=None, delta=None, latex=None, shape=(), drop=False):
         """
@@ -609,8 +617,13 @@ class Parameter(BaseClass):
         derived : bool, str, default=False
             ``True`` if parameter is taken from a calulator's attributes (or :meth:`BaseCalculator.__getstate__` at run time).
             '.best', '.marg', or '.auto' to solve for this parameter (given a Gaussian likelihood),
-            respectively taking the best-fit solution, performing analytic marginalization, or chosing
+            respectively taking the best-fit solution, performing analytic marginalization, or choosing
             between these two options depending on whether a profiler ('.best') or a sampler ('.marg') is used.
+            When using analytic marginalization, the hessian of the loglikelihood and of the prior is stored (as 'derived' parameters);
+            potentially yielding large (in terms of memory space) chains. To circumvent this, you can provide e.g. '.auto_not_derived'.
+            '.prec' can be used for linear parameters for which the gradient does not depend on the value of other parameters;
+            in this case, the likelihood's precision matrix is marginalized over this parameter at initialization, and the parameter
+            is ignored in the profiling / sampling.
             One can also define the value of this parameter as a function of others (e.g. 'a', 'b'), by providing
             e.g. the string '{a} + {b}' (or any other operation; numpy is available with 'np', scipy with 'sp',
             and their jax version with 'jnp' and 'jsp').

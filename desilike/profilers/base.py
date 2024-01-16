@@ -509,7 +509,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         Parameters
         ----------
         params : str, Parameter, list, ParameterCollection, default=None
-            Parameters for which to compute 1D profiles.
+            Parameters for the grid.
 
         grid : array, list, dict, default=None
             Parameter values on which to compute the profile, for each parameter. If grid is set, size and bound are ignored.

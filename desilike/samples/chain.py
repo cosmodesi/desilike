@@ -44,18 +44,30 @@ def vectorize(func):
 
 
 def _get_solved_covariance(chain, params=None):
-    solved_params = chain.params(solved=True)
-    if params is None:
-        params = solved_params
-    solved_indices = [solved_params.index(param) for param in params]
     logposterior = -(chain[chain._loglikelihood] + chain[chain._logprior])
-    if not logposterior.derivs:
+    if params is None:
+        params = chain.params(solved=True)
+    params = [str(param) for param in params]
+    solved_params = []
+    for param in params:
+        if logposterior.isin((param, param)):
+            solved_params.append(param)
+    if set(solved_params) != set(params):
         import warnings
-        warnings.warn('You need the covariance of analytically marginalized ("solved") parameters, but it has not been computed (maybe this chain has been obtained with an old version of the code). Assuming zero covariance.')
-        return np.zeros(chain.shape + (len(solved_indices), ) * 2, dtype='f8')
-    logposterior = np.array([[logposterior[param1, param2].ravel() for param2 in solved_params] for param1 in solved_params])
-    logposterior = np.moveaxis(logposterior, -1, 0).reshape(chain.shape + (len(solved_params),) * 2)
-    return np.linalg.inv(logposterior)[(Ellipsis,) + np.ix_(solved_indices, solved_indices)]
+        warnings.warn('You need the covariance of analytically marginalized ("solved") parameters, but it has not been computed / saved for {}. Assuming zero covariance.'.format([param for param in params if param not in solved_params]))
+    all_solved_params = [str(param) for param in chain.params(solved=True) if logposterior.isin((param, param))]
+    logposterior = np.array([[logposterior[param1, param2].ravel() for param2 in all_solved_params] for param1 in all_solved_params])
+    logposterior = np.moveaxis(logposterior, -1, 0).reshape(chain.shape + (len(all_solved_params),) * 2)
+    logposterior = np.linalg.inv(logposterior)
+    toret = np.zeros(chain.shape + (len(params), ) * 2, dtype='f8')
+    for iparam1, param1 in enumerate(all_solved_params):
+        if param1 not in params: continue
+        index1 = params.index(param1)
+        for iparam2, param2 in enumerate(all_solved_params):
+            if param2 not in params: continue
+            index2 = params.index(param2)
+            toret[..., index1, index2] = logposterior[..., iparam1, iparam2]
+    return toret
 
 
 class Chain(Samples):
@@ -195,7 +207,14 @@ class Chain(Samples):
     def sample_solved(self, size=1, seed=42):
         """Sample parameters that have been analytic marginalized over (``solved``)."""
         new = self.deepcopy()
-        solved_params = self.params(solved=True)
+        all_solved_params = self.params(solved=True)
+        solved_params = []
+        for param in all_solved_params:
+            if self[self._loglikelihood].isin((param, param)) and self[self._logprior].isin((param, param)):
+                solved_params.append(param)
+        if set(solved_params) != set(all_solved_params):
+            import warnings
+            warnings.warn('sample over parameters {}, derivatives for {} are not saved'.format(solved_params, [param for param in all_solved_params if param not in solved_params]))
         if not solved_params: return new
         covariance = _get_solved_covariance(self, params=solved_params)
         L = np.moveaxis(np.linalg.cholesky(covariance), (-2, -1), (0, 1))
@@ -720,7 +739,8 @@ class Chain(Samples):
 
             locs = value
             scales = _get_solved_covariance(self, [params])[..., 0, 0].ravel()**0.5
-            cdfs = [stats.norm(loc=loc, scale=scale).cdf for loc, scale in zip(locs, scales)]
+            if np.all(scales == 0.):
+                return utils.weighted_quantile(value, q=q, weights=weight, axis=0, method=method)
 
             isscalar = np.ndim(q) == 0
             q = np.atleast_1d(q)
@@ -728,8 +748,16 @@ class Chain(Samples):
 
             for iq, qq in enumerate(q.flat):
 
+                from scipy import special
+
                 def cdf(x):
-                    return sum(w * cdf(x) for w, cdf in zip(weight, cdfs)) - qq
+                    toret = np.empty_like(x)
+                    nx = len(x)
+                    nslabs = max(nx * len(locs) // int(1e8), 1)
+                    for islab in range(nslabs):
+                        start, stop = islab * nx // nslabs, (islab + 1) * nx // nslabs
+                        toret[start:stop] = np.sum(weight / 2. * (1. + special.erf((x[start:stop, None] - locs) / (2**0.5 * scales))), axis=-1)
+                    return toret
 
                 nsigmas = 100
                 limits = np.min(locs - nsigmas * scales), np.max(locs + nsigmas * scales)
@@ -739,8 +767,8 @@ class Chain(Samples):
                     res = limits[1]
                 else:
                     x = np.linspace(*limits, num=10000)
-                    cdf = cdf(x)
-                    idx = np.searchsorted(cdf, 0, side='right') - 1
+                    cdf = cdf(x) - qq
+                    idx = np.searchsorted(cdf, 0., side='right') - 1
                     res = (x[idx + 1] - x[idx]) / (cdf[idx + 1] - cdf[idx]) * cdf[idx + 1] + x[idx]
                     #print(cdf(x[idx]), cdf(x[idx + 1]))
                     #res = optimize.bisect(cdf, x[idx], x[idx + 1], xtol=1e-6 * np.mean(scales), disp=True)
@@ -779,15 +807,24 @@ class Chain(Samples):
 
             locs = value
             scales = _get_solved_covariance(self, [params])[..., 0, 0].ravel()**0.5
-            cdfs = [stats.norm(loc=loc, scale=scale).cdf for loc, scale in zip(locs, scales)]
 
-            def cdf(x):
-                return sum(w * cdf(x) for w, cdf in zip(weight, cdfs))
+            if not np.all(scales == 0.):
 
-            limits = np.min(locs - 2 * nsigmas * scales), np.max(locs + 2 * nsigmas * scales)
-            value = np.linspace(*limits, num=10000)
-            weight = cdf(value)
-            weight = np.concatenate([[weight[0]], np.diff(weight)[:-1], [1. - weight[-2]]])
+                from scipy import special
+
+                def cdf(x):
+                    toret = np.empty_like(x)
+                    nx = len(x)
+                    nslabs = max(nx * len(locs) // int(1e8), 1)
+                    for islab in range(nslabs):
+                        start, stop = islab * nx // nslabs, (islab + 1) * nx // nslabs
+                        toret[start:stop] = np.sum(weight / 2. * (1. + special.erf((x[start:stop, None] - locs) / (2**0.5 * scales))), axis=-1)
+                    return toret
+
+                limits = np.min(locs - 2 * nsigmas * scales), np.max(locs + 2 * nsigmas * scales)
+                value = np.linspace(*limits, num=10000)
+                weight = cdf(value)
+                weight = np.concatenate([[weight[0]], np.diff(weight)[:-1], [1. - weight[-2]]])
 
         return utils.interval(value, weights=weight, nsigmas=nsigmas)
 

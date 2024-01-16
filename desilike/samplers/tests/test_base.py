@@ -12,14 +12,15 @@ from desilike.samplers import (EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSam
 
 def test_samplers():
 
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, BAOPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
     from desilike.likelihoods import ObservablesGaussianLikelihood
 
-    template = ShapeFitPowerSpectrumTemplate(z=0.5)
-    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    template = BAOPowerSpectrumTemplate(z=0.5)
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
     #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
-    for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.marg')
+    for param in theory.params.select(basename=['al*']): param.update(derived='.marg')
+    for param in theory.params.select(basename=['al0_*']): param.update(derived='.marg_not_derived')
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data={},
                                                          theory=theory)
@@ -27,7 +28,7 @@ def test_samplers():
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov, name='LRG')
 
-    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][6:7]:
+    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][:1]:
         kwargs = {}
         if Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]:
             kwargs.update(nwalkers=20)
@@ -35,19 +36,26 @@ def test_samplers():
             kwargs.update(nlive=100)
         save_fn = ['./_tests/chain_{:d}.npy'.format(i) for i in range(min(likelihood.mpicomm.size, 1))]
         sampler = Sampler(likelihood, save_fn=save_fn, **kwargs)
-        chains = sampler.run(max_iterations=100, check=True, check_every=50)
+        kwargs = {}
+        if Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]:
+            kwargs.update(thin_by=2)
+        chains = sampler.run(max_iterations=100, check=True, check_every=50, **kwargs)
         if sampler.mpicomm.rank == 0:
             assert chains[0]['LRG.loglikelihood'].param.latex() == 'L_{\mathrm{LRG}}'
             assert chains[0]['LRG.loglikelihood'].param.derived
             assert chains[0].logposterior.param.latex() == '\mathcal{L}'
             assert chains[0].logposterior.param.derived
+            chains[0]['LRG.loglikelihood']['al2_0', 'al2_0']
+            with pytest.raises(KeyError):
+                chains[0]['LRG.loglikelihood']['al0_0', 'al0_0']
+            chains[0].sample_solved()
             assert np.allclose(chains[0].logposterior, chains[0]['LRG.loglikelihood'][()] + chains[0]['LRG.logprior'][()])
         size1 = sampler.mpicomm.bcast(chains[0].size if sampler.mpicomm.rank == 0 else None, root=0)
         chains = sampler.run(max_iterations=0, check=True, check_every=10)
         size2 = sampler.mpicomm.bcast(chains[0].size if sampler.mpicomm.rank == 0 else None, root=0)
         assert size2 == size1
         if sampler.mpicomm.rank == 0:
-            assert 'f_sqrt_Ap' in chains[0]
+            assert 'DV_over_rd' in chains[0]
             assert chains[0].concatenate(chains)._loglikelihood == 'LRG.loglikelihood'
             assert chains[0]['LRG.loglikelihood'].derivs is not None
             assert chains[0].sample_solved()['LRG.loglikelihood'].derivs is None

@@ -128,9 +128,12 @@ def test_solved():
     chain.set(ParameterArray(array, param='LRG.loglikelihood', derivs=[(), ('like.a',) * 2, ('like.a', 'like.b'), ('like.b',) * 2]))
     chain['logprior'] = chain['LRG.loglikelihood']
 
+    print(chain.median('like.a'), np.median(chain['like.a']))
     assert np.allclose(chain.median('like.a'), np.median(chain['like.a']), atol=1.)
-    print(chain.sample_solved().to_stats(tablefmt='pretty'))
     print(chain.to_stats(tablefmt='pretty'))
+    print(chain.sample_solved().to_stats(tablefmt='pretty'))
+    chain['like.c'].param.update(derived='.auto')
+    print(chain.sample_solved().to_stats(tablefmt='pretty'))
 
 
 def test_cholesky():
@@ -148,6 +151,8 @@ if __name__ == '__main__':
 
     setup_logging()
 
+    test_solved()
+    exit()
     test_misc()
     test_plot()
     test_bcast()

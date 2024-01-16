@@ -69,8 +69,8 @@ def test_solve():
                                                          theory=theory)
     covariance = ObservablesCovarianceMatrix(observables=observable, footprints=BoxFootprint(volume=1e10, nbar=1e-2))
     observable.init.update(covariance=covariance())
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood.params['LRG.loglikelihood'] = likelihood.params['LRG.logprior'] = {}
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], name='LRG')
+    #likelihood.params['LRG.loglikelihood'] = likelihood.params['LRG.logprior'] = {}
     likelihood()
     for param in likelihood.all_params.select(basename=['qpar', 'qper', 'dm']):
         param.update(fixed=True)
@@ -87,10 +87,14 @@ def test_solve():
     #profiler = ScipyProfiler(likelihood, method='lsq')
     profiles = profiler.maximize(niterations=2)
     print(profiles.to_stats())
-    for param in likelihood.all_params.select(basename=['sn*']): param.update(derived='.best')
+    for param in likelihood.all_params.select(basename=['sn*']): param.update(derived='.best_not_derived')
     profiler = MinuitProfiler(likelihood, rescale=False, seed=42)
     profiles = profiler.maximize(niterations=2)
     print(profiles.to_stats())
+    profiles.bestfit['LRG.loglikelihood']['ct2_2', 'ct2_2']
+    try: profiles.bestfit['LRG.loglikelihood']['sn0', 'sn0']
+    except KeyError: pass
+    else: raise ValueError
     for param in likelihood.all_params.select(basename=['sn*']): param.update(derived='.prec')
     profiler = MinuitProfiler(likelihood, rescale=False, seed=42)
     profiles = profiler.maximize(niterations=2)

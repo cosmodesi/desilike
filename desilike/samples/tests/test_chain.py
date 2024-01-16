@@ -32,8 +32,13 @@ def test_misc():
     pb.update(prior=ParameterPrior(dist='norm', loc=1.))
     pb = Parameter.from_state(pb.__getstate__())
     chain['logposterior'] = np.zeros(chain.shape, dtype='f8')
-    fn = os.path.join(chain_dir, 'chain.npy')
-    chain.save(fn)
+    for ff in ['chain.npy', 'chain.npz']:
+        fn = os.path.join(chain_dir, ff)
+        chain.save(fn)
+        chain2 = Chain.load(fn)
+        assert chain2.params() == chain.params()
+        assert chain2 == chain
+
     base_fn = os.path.join(chain_dir, 'chain')
     chain.write_getdist(base_fn, ichain=0)
     chain2 = Chain.read_getdist(base_fn, concatenate=True)
@@ -151,8 +156,6 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    test_solved()
-    exit()
     test_misc()
     test_plot()
     test_bcast()

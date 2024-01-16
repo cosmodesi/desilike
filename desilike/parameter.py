@@ -2085,6 +2085,39 @@ class Samples(BaseParameterCollection):
         else:
             super(Samples, self).__init__(data=data, attrs=attrs)
 
+    def save(self, filename):
+        """Save samples to disk."""
+        filename = str(filename)
+        state = {'__class__': utils.serialize_class(self.__class__), **self.__getstate__()}
+        self.log_info('Saving {}.'.format(filename))
+        utils.mkdir(os.path.dirname(filename))
+        if filename.endswith('.npz'):
+            statez = dict(state)
+            statez.pop('data', None)
+            statez['params'] = []
+            for iarray, array in enumerate(state['data']):
+                statez['data.{:d}'.format(iarray)] = array['value']
+                statez['params'].append({key: value for key, value in array.items() if key not in ['value']})
+            np.savez(filename, **statez)
+        else:
+            np.save(filename, state, allow_pickle=True)
+
+    @classmethod
+    def load(cls, filename):
+        """Load samples from disk."""
+        filename = str(filename)
+        cls.log_info('Loading {}.'.format(filename))
+        state = np.load(filename, allow_pickle=True)
+        if filename.endswith('.npz'):
+            state = dict(state)
+            data = [{**param, 'value': state.pop('data.{:d}'.format(iarray))} for iarray, param in enumerate(state.pop('params')[()])]
+            state = {**{name: value[()] for name, value in state.items()}, 'data': data}
+        else:
+            state = state[()]
+        state.pop('__class__', None)
+        new = cls.from_state(state)
+        return new
+
     @staticmethod
     def _get_param(item):
         return item.param

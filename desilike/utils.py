@@ -300,17 +300,26 @@ class BaseClass(object, metaclass=BaseMetaClass):
 
     @classmethod
     def load(cls, filename, fallback_class=None):
-        state = np.load(filename, allow_pickle=True)[()]
-        if (cls is BaseClass or fallback_class is not None) and '__class__' in state:
-            cls = state['__class__']
-            try:
-                cls = import_class(*cls)
-            except ImportError as exc:
-                if fallback_class is not None:
-                    cls = fallback_class
-                else:
-                    raise ImportError('Could not import file {} as {}'.format(filename, cls)) from exc
+        filename = str(filename)
+        state = np.load(filename, allow_pickle=True)
+        if (cls is BaseClass or fallback_class is not None):
+            is_npz = filename.endswith('.npz')
+            if is_npz:
+                cls = state['__class__'][()]
+            else:
+                cls = state[()].get('__class__', None)
+            if cls is not None:
+                try:
+                    cls = import_class(*cls)
+                except ImportError as exc:
+                    if fallback_class is not None:
+                        cls = fallback_class
+                    else:
+                        raise ImportError('Could not import file {} as {}'.format(filename, cls)) from exc
+            if is_npz:
+                return cls.load(filename)
         cls.log_info('Loading {}.'.format(filename))
+        state = state[()]
         state.pop('__class__', None)
         new = cls.from_state(state)
         return new

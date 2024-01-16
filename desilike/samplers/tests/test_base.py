@@ -34,7 +34,7 @@ def test_samplers():
             kwargs.update(nwalkers=20)
         if Sampler in [StaticDynestySampler, DynamicDynestySampler, PolychordSampler, NautilusSampler]:
             kwargs.update(nlive=100)
-        save_fn = ['./_tests/chain_{:d}.npy'.format(i) for i in range(min(likelihood.mpicomm.size, 1))]
+        save_fn = ['./_tests/chain_{:d}.npz'.format(i) for i in range(min(likelihood.mpicomm.size, 1))]
         sampler = Sampler(likelihood, save_fn=save_fn, **kwargs)
         kwargs = {}
         if Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]:

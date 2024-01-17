@@ -1,6 +1,6 @@
-from desilike.base import BaseCalculator
-from cosmosis.runtime.pipeline import LikelihoodPipeline
 import os
+
+from desilike.base import BaseCalculator
 
 
 
@@ -8,6 +8,7 @@ class DESY3Observable(BaseCalculator):
 
 
 	def initialize(self, ini_file_dir=None, ini_file_name=None, cosmosis_dir=None, theory=None):
+		from cosmosis.runtime.pipeline import LikelihoodPipeline
 		os.environ['COSMOSIS_STD_DIR'] = cosmosis_dir
 		os.environ['INI_FILE_DIR'] = ini_file_dir
 
@@ -25,5 +26,3 @@ class DESY3Observable(BaseCalculator):
 
 	def calculate(self):
 		self.flattheory = self.theory.theory_vector
-
-

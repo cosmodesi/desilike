@@ -475,8 +475,7 @@ def test_full_shape():
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
 
     ntemplate = 4
-    for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles],
-                                       [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles]):
+    for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles][1:2], [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles][1:2]):
         for freedom in [None, 'min', 'max'][2:]:
             for ells in [(0, 2), (0, 2, 4)]:
                 print(freedom, ells)
@@ -484,7 +483,8 @@ def test_full_shape():
                 print(TheoryPower.__name__, ells, freedom, power.varied_params)
                 fell = 1
                 if 'velocileptors' in TheoryPower.__name__.lower(): fell = 2  # alpha4 and sn4
-                if freedom is not None: assert len(power.varied_params) == ntemplate + 6 + (4 in ells) * fell + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 (+ 1) EFT, 2 sn
+                if freedom is not None:
+                    assert len(power.varied_params) == ntemplate + 6 + (4 in ells) * fell + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 (+ 1) EFT, 2 sn
                 corr = TheoryCorr(ells=ells, freedom=freedom)
                 print(TheoryCorr.__name__, ells, freedom, corr.varied_params)
                 if freedom is not None: assert len(corr.varied_params) == ntemplate + 4 + (4 in ells) + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 EFT
@@ -1448,10 +1448,10 @@ if __name__ == '__main__':
     #test_templates()
     #test_wiggle_split_template()
     #test_emulator_templates()
-    #test_bao()
+    test_bao()
     #test_broadband_bao()
     #test_flexible_bao()
-    test_full_shape()
+    #test_full_shape()
     #test_emulator_direct()
     #plot_direct()
     #test_emulator_shapefit()

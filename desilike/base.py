@@ -227,6 +227,7 @@ class BasePipeline(BaseClass):
         or if they depend on previous calculation that has been updated.
         Derived parameter values are stored in :attr:`derived`.
         """
+        self.error = None
         self_params = self.params
         if not self._initialized:
             if self.more_initialize is not None: self.more_initialize()
@@ -237,7 +238,7 @@ class BasePipeline(BaseClass):
         self.input_values.update(params)
         params = self_params.eval(**self.input_values)
         self.input_values.update(params)  # to update parameters with depends
-        self.derived, self.error = Samples(), None
+        self.derived = Samples()
         for param in self._params:
             if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
         for calculator in self.calculators:  # start by first calculator

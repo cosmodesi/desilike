@@ -60,7 +60,7 @@ def test_differentiation():
 
     from desilike import Differentiation
     theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.4))
-    theory.params['power'] = {'derived': True}
+    theory.init.params['power'] = {'derived': True}
     theory(sn0=100.)
     diff = Differentiation(theory, method=None, order=2)
     diff()
@@ -258,13 +258,140 @@ def test_speed():
             print(theory_name, observable_name, (time.time() - t0) / niterations)
 
 
+
+
+from desilike.base import BaseCalculator
+from desilike.likelihoods import BaseGaussianLikelihood
+
+
+class AffineModel(BaseCalculator):  # all calculators should inherit from BaseCalculator
+
+    # Model parameters; those can also be declared in a yaml file
+    _params = {'a': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}},
+               'b': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}}}
+
+    def initialize(self, x=None):
+        # Actual, non-trivial initialization must happen in initialize(); this is to be able to do AffineModel(x=...)
+        # without doing any actual work
+        self.x = x
+
+    def calculate(self, a=0., b=0.):
+        self.y = a * self.x + b  # simple, affine model
+
+    # Not mandatory, this is to return something in particular after calculate (else this will just be the instance)
+    def get(self):
+        return self.y
+
+    # This is only needed for emulation
+    def __getstate__(self):
+        return {'x': self.x, 'y': self.y}  # dictionary of Python base types and numpy arrays
+
+
+class Likelihood(BaseGaussianLikelihood):
+
+    def initialize(self, theory=None):
+        # Let us generate some fake data
+        self.xdata = np.linspace(0., 1., 10)
+        mean = np.zeros_like(self.xdata)
+        self.covariance = np.eye(len(self.xdata))
+        rng = np.random.RandomState(seed=42)
+        y = rng.multivariate_normal(mean, self.covariance)
+        super(Likelihood, self).initialize(y, covariance=self.covariance)
+        # Requirements
+        # AffineModel will be instantied with AffineModel(x=self.xdata)
+        if theory is None:
+            theory = AffineModel()
+        self.theory = theory
+        self.theory.init.update(x=self.xdata)  # we set x-coordinates, they will be passed to AffineModel's initialize
+
+    @property
+    def flattheory(self):
+        # Requirements (theory, requested in __init__) are accessed through .name
+        # The pipeline will make sure theory.run(a=..., b=...) has been called
+        return self.theory.y  # data - model
+
+
+def test_autodiff():
+    import jax
+    import jax.numpy as jnp
+    from jax import custom_jvp
+    """
+    from desilike import mpi
+    mpicomm = mpi.COMM_WORLD
+
+    def fun(a):
+        return mpicomm.bcast(a, root=0)
+
+    jac = jax.jacfwd(fun)
+    print(jac(jnp.array(10.)))
+    exit()
+    """
+    """
+    def g(x, y):
+        return jnp.sin(x) * y
+
+    @custom_jvp
+    def f(x, y):
+        return g(x, y)
+
+    @f.defjvp
+    def f_jvp(primals, tangents):
+        return jax.jvp(g, primals, tangents)
+
+    print(f(2., 3.))
+    y, y_dot = jax.jvp(f, (2., 3.), (1., 0.))
+    print(y)
+    print(y_dot)
+    print(jax.jacfwd(f)(2., 3.))
+
+
+    @custom_jvp
+    def f(x, y):
+        return jnp.sin(x) * y
+
+    @f.defjvp
+    def f_jvp(primals, tangents):
+        x, y = primals
+        x_dot, y_dot = tangents
+        primal_out = f(x, y)
+        tangent_out = jnp.cos(x) * x_dot * y + jnp.sin(x) * y_dot
+        return primal_out, tangent_out
+
+    print(f(2., 3.))
+    y, y_dot = jax.jvp(f, (2., 3.), (1., 0.))
+    print(y)
+    print(y_dot)
+    print(jax.jacfwd(f)(2., 3.))
+    """
+
+    """
+    likelihood = Likelihood()
+
+    fun = likelihood
+
+    fun = jax.jit(jax.vmap(fun))
+    print(fun({'a': jnp.ones(3), 'b': jnp.ones(3)}))
+    """
+    likelihood = Likelihood()
+    #likelihood.all_params['b'].update(derived='.best')
+    fun = likelihood
+
+    fun = jax.jit(jax.vmap(fun))
+    print(fun({'a': jnp.ones(3)}))
+
+    #jac = jax.jacfwd(fun)
+    #print(jac({'a': 1., 'b': 2.}))
+
+
+
 if __name__ == '__main__':
 
     setup_logging()
     #test_misc()
-    #test_differentiation()
+    test_differentiation()
     #test_solve()
-    test_fisher_galaxy()
+    #test_fisher_galaxy()
     #test_fisher_cmb()
     #test_speed()
     #test_jax()
+    #test_autodiff()

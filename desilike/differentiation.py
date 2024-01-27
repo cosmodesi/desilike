@@ -7,6 +7,7 @@ from .parameter import Parameter, ParameterCollection, ParameterArray, Samples, 
 from .utils import BaseClass, expand_dict, is_sequence
 from .jax import jax
 from .jax import numpy as jnp
+from . import mpi
 
 
 def deriv_ncoeffs(order, acc=2):
@@ -222,6 +223,7 @@ class Differentiation(BaseClass):
         """
         if mpicomm is None:
             mpicomm = calculator.mpicomm
+        self.mpicomm = mpicomm
         self.calculator = calculator
         self.calculator()  # dry run
         self.pipeline = self.calculator.runtime_info.pipeline
@@ -278,8 +280,7 @@ class Differentiation(BaseClass):
                 continue
             if method in [None, 'auto']:
                 try:
-                    self.autoderivs = [(), (param,)]
-                    self._calculate()  # This takes time because the model is evaluated for each parameter
+                    self._calculate({param: [self.pipeline.input_values[param]]}, autoderivs=[(), (param,)])  # This takes time because the model is evaluated for each parameter
                 except Exception as exc:
                     if method is None:
                         method = 'finite'
@@ -356,7 +357,7 @@ class Differentiation(BaseClass):
         self.autoderivs.append(())
         for maxorder in range(1, max([0] + autoorder) + 1):
             self.autoderivs.append([autoparams[i] for i, o in enumerate(autoorder) if o >= maxorder])
-        self.mpicomm = mpicomm
+        #self.mpicomm = mpicomm
 
     @property
     def mpicomm(self):
@@ -374,16 +375,31 @@ class Differentiation(BaseClass):
                 if grid_samples is not None: self._grid_samples = grid_samples
         self._mpicomm = mpicomm
 
-    def _calculate(self, **params):
+    def _calculate(self, params, autoderivs=None):
+        if autoderivs is None:
+            autoderivs = self.autoderivs
 
-        def getter():
+        mpicomm = self.pipeline.mpicomm
+
+        names = self.mpicomm.bcast(list(params) if self.mpicomm.rank == 0 else None, root=0)
+        values = []
+        for name in names:
+            value = np.atleast_1d(params[name]) if self.mpicomm.rank == 0 else None
+            values.append(value)
+            csize = self.mpicomm.bcast(value if self.mpicomm.rank == 0 else None)
+        getter_inst, getter_size = None, None
+
+        def __calculate(*values):
+            global getter_inst, getter_size
+            assert len(names) == len(values)
+            self.pipeline.calculate(dict(zip(names, values)))
             toret = self.getter()
-            self.getter_inst = toret
+            getter_inst = toret
             if hasattr(toret, 'values'):
                 toret = list(toret.values())
-            self.getter_size = int(is_sequence(toret))
-            if self.getter_size:
-                self.getter_size = len(toret)
+            getter_size = int(is_sequence(toret))
+            if getter_size:
+                getter_size = len(toret)
             else:
                 toret = [toret]
             toret = list(toret)
@@ -391,55 +407,51 @@ class Differentiation(BaseClass):
                 raise ValueError('getter returns nothing to differentiate')
             return toret
 
-        params = {**self.pipeline.input_values, **params}
-        params, values = list(params.keys()), list(params.values())
+        getter_samples, errors = [], []
+        max_chunk_size = getattr(self, '_mpi_max_chunk_size', 100)
+        nchunks = (csize // max_chunk_size) + 1
 
-        def __calculate(*values, derived=False):
-            pipeline = self.pipeline
-            assert len(params) == len(values)
-            pipeline.input_values.update(dict(zip(params, values)))
-            values = pipeline.params.eval(**pipeline.input_values)
+        for ichunk in range(nchunks):  # divide in chunks to save memory for MPI comm
+            self.pipeline.mpicomm = self.mpicomm
+            chunk_params = {}
+            for name, value in zip(names, values):
+                chunk_params[name] = mpi.scatter(value[csize * ichunk // nchunks:csize * (ichunk + 1) // nchunks] if self.mpicomm.rank == 0 else None, mpicomm=self.mpicomm, mpiroot=0)
+                chunk_size = len(chunk_params[name])
 
-            if derived:
-                pipeline.derived = Samples()
+            for ii in range(chunk_size):
+                chunk_values = [chunk_params[name][ii] for name in params]
+                toret = []
+                try:
+                    try:
+                        jac = __calculate
+                        for iautoderiv, autoderiv in enumerate(autoderivs[1:]):
+                            if jax is None:
+                                raise ValueError('jax is required to compute the Jacobian')
+                            argnums = [names.index(p) for p in autoderiv]
+                            funcname = 'jacfwd' # if iautoderiv else 'jacrev'
+                            jac = getattr(jax, funcname)(jac, argnums=argnums, has_aux=False, holomorphic=False)
+                            #jac = jax.jacfwd(jac, argnums=argnums, has_aux=False, holomorphic=False)
+                            toret.append(jac(*chunk_values))
+                            #jax.vjp(tmp, has_aux=False)[1](jnp.ones(len(autoderiv)))
+                    except Exception as exc:
+                        raise exc
+                    finally:
+                        getter_samples.append([__calculate(*values)] + toret)
+                except Exception as exc:
+                    errors.append(exc)
+                errors = self.mpicomm.allreduce(errors)
+                self.pipeline.mpicomm = mpicomm
+                if errors:
+                    raise PipelineError('got these errors: {}'.format(errors))
+                getter_samples += self.mpicomm.reduce(getter_samples, root=0)
 
-            for calculator in pipeline.calculators:  # start with first calculator, end with the last one
-                runtime_info = calculator.runtime_info
-                force = any(param.basename in runtime_info.input_values for param in self.varied_params) or None  # run if non-differentiated parameter is updated
-                runtime_info.set_input_values(values, full=True, force=force)
-                runtime_info.calculate()
-                if derived:
-                    pipeline.derived.update(runtime_info.derived)
-
-            if pipeline.more_calculate:
-                pipeline.more_calculate()
-
-            if derived and pipeline.more_derived:
-                tmp = pipeline.more_derived(0)
-                if tmp is not None: pipeline.derived.update(tmp)
-
-            return getter()
-
-        toret = []
-        try:
-            jac = __calculate
-            for iautoderiv, autoderiv in enumerate(self.autoderivs[1:]):
-                if jax is None:
-                    raise ValueError('jax is required to compute the Jacobian')
-                argnums = [params.index(p) for p in autoderiv]
-                funcname = 'jacfwd' # if iautoderiv else 'jacrev'
-                jac = getattr(jax, funcname)(jac, argnums=argnums, has_aux=False, holomorphic=False)
-                #jac = jax.jacfwd(jac, argnums=argnums, has_aux=False, holomorphic=False)
-                toret.append(jac(*values))
-                #jax.vjp(tmp, has_aux=False)[1](jnp.ones(len(autoderiv)))
-        except Exception as exc:
-            raise exc
-        finally:
-            self._getter_sample = [__calculate(*values, derived=True)] + toret  # derived = True necessary to get derived parameters
-        return toret
-
-    def _more_derived(self, ipoint):
-        self._getter_samples[ipoint] = self._getter_sample
+        toret = [[[None for isample in range(csize)] for iautoderiv in range(len(autoderivs))] for igetter in range(max(getter_size, 1))]
+        for isample in range(csize):
+            items = getter_samples[isample]
+            for ideriv, derivs in enumerate(items):
+                for iitem, item in enumerate(derivs):
+                   toret[iitem][ideriv][isample] = item
+        return toret, getter_inst, getter_size
 
     def run(self, **params):
         # Getter, or calculator, dict[param1, param2]
@@ -455,38 +467,19 @@ class Differentiation(BaseClass):
                 else:
                     samples[param] = np.full(samples.shape, self.center[param.name])
         nsamples = self.mpicomm.bcast(samples.size if self.mpicomm.rank == 0 else None, root=0)
-        self._getter_samples = {}
-        calculate_bak, more_derived_bak, mpicomm_bak = self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm
-        self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm = self._calculate, self._more_derived, self.mpicomm
-        self.pipeline.mpicalculate(**(samples.to_dict(params=self.all_params) if self.mpicomm.rank == 0 else {}))
-        if self.pipeline.errors:
-            raise PipelineError('got these errors: {}'.format(self.pipeline.errors))
-        self.pipeline.calculate, self.pipeline.more_derived, self.pipeline.mpicomm = calculate_bak, more_derived_bak, mpicomm_bak
-        for getter_inst, getter_size in self.mpicomm.allgather((getattr(self, 'getter_inst', None), getattr(self, 'getter_size', None))):
-            if getter_inst is not None:
-                self.getter_inst = getter_inst
-                self.getter_size = getter_size
-                break
-        toret = None
-        if self.mpicomm.rank != 0:
-            for isample, sample in self._getter_samples.items():
-                self.mpicomm.send(sample, dest=0, tag=isample)
-        else:
+
+        getter_samples, getter_inst, getter_size = self._calculate(samples.to_dict(params=self.all_params) if self.mpicomm.rank == 0 else {})
+
+        if self.mpicomm.rank == 0:
             finiteparams, finiteorder, finiteaccuracy = [], [], []
             for param in self._grid_samples.names():
                 if self.method[param] == 'finite':
                     finiteparams.append(param)
                     finiteorder.append(self.order[param])
                     finiteaccuracy.append(self.accuracy[param])
-            getter_samples = [[[None for isample in range(nsamples)] for iautoderiv in range(len(self.autoderivs))] for igetter in range(max(self.getter_size, 1))]
-            for isample in range(nsamples):
-                items = self._getter_samples[isample] if isample in self._getter_samples else self.mpicomm.recv(tag=isample)
-                for ideriv, derivs in enumerate(items):
-                    for iitem, item in enumerate(derivs):
-                        getter_samples[iitem][ideriv][isample] = item
             getter_samples = [[np.array(s) for s in getter_sample] for getter_sample in getter_samples]
-            self.getter_samples = getter_samples
-            degrees, derivatives = [], [[] for i in range(max(self.getter_size, 1))]
+            #self.getter_samples = getter_samples
+            degrees, derivatives = [], [[] for i in range(max(getter_size, 1))]
             cidx = self._grid_cidx
             if finiteparams:
                 X = np.concatenate([samples[param].reshape(nsamples, 1) for param in finiteparams], axis=-1)
@@ -533,15 +526,15 @@ class Differentiation(BaseClass):
                 autodegrees = nautodegrees
                 autoindices = nautoindices
             toret = derivatives = [ParameterArray(derivative, derivs=degrees, param=Parameter('param_{:d}'.format(ideriv), shape=derivative[0].shape)) for ideriv, derivative in enumerate(derivatives)]
-            if isinstance(self.getter_inst, dict):
+            if isinstance(getter_inst, dict):
                 toret = Samples()
                 for param in self.varied_params:
                     toret[param] = ParameterArray(self.center[param.name], param=param)
-                for param, derivative in zip(self.getter_inst.keys(), derivatives):
+                for param, derivative in zip(getter_inst, derivatives):
                     derivative.param = Parameter(param)
                     toret[param] = derivative
                 toret.attrs['center'] = self.center
-            elif not self.getter_size:
+            elif not getter_size:
                 toret = toret[0]
         self.samples = toret
 

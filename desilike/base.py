@@ -3,12 +3,11 @@ import re
 import sys
 import copy
 import warnings
-import functools
 import traceback
 
 import numpy as np
 
-from . import mpi
+from . import mpi, jax
 from .utils import BaseClass, UserDict, Monitor, deep_eq, is_sequence
 from .io import BaseConfig
 from .parameter import Parameter, ParameterCollection, ParameterConfig, ParameterCollectionConfig, ParameterArray, Samples
@@ -221,128 +220,136 @@ class BasePipeline(BaseClass):
         for calculator in self.calculators:
             calculator._mpicomm = mpicomm
 
-    def calculate(self, **params):
+    def calculate(self, *args, **kwargs):
         """
         Calculate, i.e. call calculators' :meth:`BaseCalculator.calculate` if their parameters are updated,
         or if they depend on previous calculation that has been updated.
         Derived parameter values are stored in :attr:`derived`.
         """
-        self_params = self.params
+        if not args: params = kwargs
+        elif len(args) == 1 and not kwargs: params = args[0]
+        else: raise PipelineError('could not interpret input args = {}, kwargs = {}'.format(args, kwargs))
         if not self._initialized:
             if self.more_initialize is not None: self.more_initialize()
             self._initialized = True
-        for name in params:
-            if name not in self_params:
-                raise PipelineError('Input parameter {} is not one of parameters: {}'.format(name, self_params))
-        self.input_values.update(params)
-        params = self_params.eval(**self.input_values)
-        self.input_values.update(params)  # to update parameters with depends
-        self.derived, self.error = Samples(), None
-        for param in self._params:
-            if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
-        for calculator in self.calculators:  # start by first calculator
-            runtime_info = calculator.runtime_info
-            runtime_info.set_input_values(params, full=True)
-            derived = None
-            try:
-                result = runtime_info.calculate()
-                derived = runtime_info.derived
-            except Exception as exc:
-                self.error = (exc, traceback.format_exc())
-                raise PipelineError('Error in method calculate of {} with calculator parameters {} and pipeline parameters {}'.format(calculator, runtime_info.input_values, self.input_values)) from exc
-            if derived is not None: self.derived.update(derived)
-        if self.more_calculate:
-            toret = self.more_calculate()
-            if toret is not None: result = toret
-        if self.more_derived:
-            tmp = self.more_derived(0)
-            if tmp is not None: self.derived.update(tmp)
-        return result
 
-    def mpicalculate(self, **params):
-        """MPI-parallel version of the above: one can pass arrays as input parameter values."""
-        self.params
-        if not self._initialized:
-            if self.more_initialize is not None: self.more_initialize()
-            self._initialized = True
-        size, cshape = 0, ()
         names = self.mpicomm.bcast(list(params.keys()) if self.mpicomm.rank == 0 else None, root=0)
-        max_chunk_size = getattr(self, '_mpi_max_chunk_size', 100)
-        csizes = []
+        self_params = self.params
+        for name in names:
+            if name not in self_params:
+                raise PipelineError('input parameter {} is not one of parameters: {}'.format(name, self_params))
+
+        csizes, cshapes = [], []
         for name in names:
             array = None
             if self.mpicomm.rank == 0:
-                array = np.asarray(params[name])
-                cshape = array.shape
-                array = array.ravel()
-                csizes.append(array.size)
+                array = jax.to_nparray(params[name])
+                if array is None:  # jax array
+                    cshapes.append(())
+                    csizes.append(0)
+                    array = params[name]  # for params[name] = array below
+                else:
+                    cshapes.append(array.shape)
+                    array = array.ravel()
+                    csizes.append(array.size)
             params[name] = array
-        self.derived, self.errors = Samples(), {}
+        csizes, cshapes = self.mpicomm.bcast((csizes, cshapes), root=0)
 
-        try: self.derived = self.derived[:0]
-        except (AttributeError, TypeError, IndexError): pass
-        if not names: return
+        def _all_eq(cshapes):
+            if cshapes:
+                return all(cshape == cshapes[0] for cshape in cshapes)
+            return True
 
-        csizes = self.mpicomm.bcast(csizes, root=0)
+        if not _all_eq(cshapes):
+            raise PipelineError('shapes are different: {}'.format(dict(zip(names, cshapes))))
+
+        self.derived, self.errors = Samples(), None
+
+        def calculate(params, more_derived=self.more_derived):
+            self.input_values.update(params)
+            params = self_params.eval(**self.input_values)
+            self.input_values.update(params)  # to update parameters with depends
+            derived, error = Samples(), None
+            for param in self._params:
+                if param.depends: derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
+            for calculator in self.calculators:  # start by first calculator
+                runtime_info = calculator.runtime_info
+                runtime_info.set_input_values(params)
+                derived = None
+                try:
+                    result = runtime_info.calculate()
+                    derived = runtime_info.derived
+                except Exception as exc:
+                    error = (exc, traceback.format_exc())
+                    raise PipelineError('error in method calculate of {} with calculator parameters {} and pipeline parameters {}'.format(calculator, runtime_info.input_values, self.input_values)) from exc
+                derived.update(derived)
+            if self.more_calculate:
+                toret = self.more_calculate()
+                if toret is not None: result = toret
+            if more_derived:
+                tmp = more_derived(0)
+                if tmp is not None: derived.update(tmp)
+            return result, derived, error
+
+        if (not cshapes) or (not cshapes[0]):  # no input parameters, or scalar input
+            result, self.derived, self.error = calculate(params)
+            return result
+
         all_size = csizes[0]
-        if not all(csize == all_size for csize in csizes):
-            raise PipelineError('input parameter arrays are of different sizes: {}'.format(dict(zip(names, csizes))))
-        if not all_size: return
-
+        max_chunk_size = getattr(self, '_mpi_max_chunk_size', 100)
         nchunks = (all_size // max_chunk_size) + 1
         mpicomm, more_derived = self.mpicomm, self.more_derived
         all_states = []
-        derived_bak = self.derived  # calculate will reset derived
         for ichunk in range(nchunks):  # divide in chunks to save memory for MPI comm
             chunk_offset = all_size * ichunk // nchunks
             chunk_params = {}
             for name in names:
                 chunk_params[name] = mpi.scatter(params[name][chunk_offset:all_size * (ichunk + 1) // nchunks] if mpicomm.rank == 0 else None, mpicomm=mpicomm, mpiroot=0)
-                size = len(chunk_params[name])
-            rank_offset = chunk_offset + sum(mpicomm.allgather(size)[:mpicomm.rank])
-            self.mpicomm, self.more_derived = mpi.COMM_SELF, None
+                chunk_size = len(chunk_params[name])
+            rank_offset = chunk_offset + sum(mpicomm.allgather(chunk_size)[:mpicomm.rank])
+            self.mpicomm = mpi.COMM_SELF
             states = []
-            for ivalue in range(size):
+            for ivalue in range(chunk_size):
                 istate = ivalue + rank_offset
+                state = [None] * 3
                 try:
-                    self.calculate(**{name: value[ivalue] for name, value in chunk_params.items()})
+                    state[0], derived, error = calculate({name: value[ivalue] for name, value in chunk_params.items()}, more_derived=None)
                 except PipelineError as exc:
-                    if self.error is None:
-                        self.error = (exc, traceback.format_exc())
-                    state = self.error
+                    if error is None:
+                        error = (exc, traceback.format_exc())
+                    state[2] = error
                 else:
-                    state = self.derived
                     if more_derived:
                         tmp = more_derived(istate)
-                        if tmp is not None: state.update(tmp)
+                        if tmp is not None: derived.update(tmp)
+                    state[1] = derived
                 finally:
                     states.append(state)
 
-            if mpicomm.rank != 0:
-                mpicomm.send(states, dest=0, tag=42)
-            else:
-                all_states += states
-                for irank in range(1, mpicomm.size):
-                    all_states += mpicomm.recv(source=irank, tag=42)
+            all_states += mpicomm.reduce(states, root=0)
+            self.mpicomm = mpicomm
 
-            self.mpicomm, self.more_derived = mpicomm, more_derived
+        results = None
         if self.mpicomm.rank == 0:
             ref = None
             for state in all_states:
-                if isinstance(state, Samples):
+                if state[2] is None:  # no error
                     ref = state
                     break
-            samples = []
+            results, samples = [], []
             for istate, state in enumerate(all_states):
-                if isinstance(state, Samples):
-                    samples.append(state)
+                if state[2] is None:  # no error
+                    results.append(state[0])
+                    samples.append(state[1])
                 else:
                     self.errors[istate] = state
                     if ref is not None:
-                        samples.append(ref)
-            self.derived = derived_bak
+                        results.append(ref[0])
+                        samples.append(ref[1])
             if samples:
-                self.derived = Samples.concatenate(samples).reshape(cshape)
+                self.derived = Samples.concatenate(samples).reshape(cshapes[0])
+            results = np.asarray(results).reshape(cshapes[0])
+        return results
 
     def get_cosmo_requires(self):
         """Return a dictionary mapping section to method's name and arguments,
@@ -709,9 +716,10 @@ class RuntimeInfo(BaseClass):
                     name = param.basename
                     if name in state: value = state[name]
                     else: value = getattr(self.calculator, name)
-                    value = np.asarray(value)
-                    param._shape = value.shape  # a bit hacky, but no need to update parameters for this...
-                    self._derived.set(ParameterArray(value, param=param))
+                    value = jax.to_nparray(value)
+                    if value is not None:
+                        param._shape = value.shape  # a bit hacky, but no need to update parameters for this...
+                        self._derived.set(ParameterArray(value, param=param))
         return self._derived
 
     @property
@@ -821,28 +829,19 @@ class RuntimeInfo(BaseClass):
         self._tocalculate = False
         return self._get
 
-    def set_input_values(self, input_values, full=False, force=None):
+    def set_input_values(self, input_values, force=None):
         """Update parameter values; if new, next :meth:`calculate` call will call calculator's :class:`BaseCalculator.calculate`."""
         self.params
-        if full:
-            for name, value in input_values.items():
-                name = str(name)
-                if name in self.input_names:
-                    basename = self.input_names[name]
-                    if force is not None:
-                        self._tocalculate = force
-                    elif type(self.input_values[basename]) is not type(value) or self.input_values[basename] != value:
-                        self._tocalculate = True
-                    self.input_values[basename] = value
-        else:
-            for basename, value in input_values.items():
-                basename = str(basename)
-                if basename in self.input_values:
-                    if force is not None:
-                        self._tocalculate = force
-                    elif self.input_values[basename] != value or type(self.input_values[basename]) is not type(value):
-                        self._tocalculate = True
-                    self.input_values[basename] = value
+        for name, value in input_values.items():
+            name = str(name)
+            invalue = jax.to_nparray(value)
+            if name in self.input_names:
+                basename = self.input_names[name]
+                if force is not None:
+                    self._tocalculate = force
+                elif invalue is None or type(self.input_values[basename]) is not type(invalue) or self.input_values[basename] != invalue:  # jax
+                    self._tocalculate = True
+                self.input_values[basename] = invalue if invalue is not None else value
 
     def __getstate__(self):
         """Return this class state dictionary."""
@@ -938,9 +937,9 @@ class BaseCalculator(BaseClass):
         """Return configuration at initialization."""
         return self.runtime_info.init
 
-    def __call__(self, **params):
+    def __call__(self, *args, **kwargs):
         """Take all parameters as input, calculate, and return the result of :attr:`get`"""
-        return self.runtime_info.pipeline.calculate(**params)
+        return self.runtime_info.pipeline.calculate(*args, **kwargs)
 
     def initialize(self, **kwargs):
         # Define this method, with takes meta parameters as input. Parameters can be accessed through self.params.

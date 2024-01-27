@@ -41,9 +41,19 @@ def jit(*args, **kwargs):
 
     return get_wrapper(args[0])
 
+
 def use_jax(array):
     """Whether to use jax.numpy depending on whether array is jax's object."""
     return isinstance(array, tuple(array_types))
+
+
+def to_nparray(array):
+    """Convert to numpy array if possible."""
+    import numpy as _np
+    try:
+        return _np.asarray(array)
+    except jax.errors.TracerArrayConversionError:
+        return
 
 
 def dist_name(dist):

@@ -198,8 +198,8 @@ class BaseLikelihood(BaseCalculator):
                     indices_derivs[1].append(index2)
             #indices_derivs = posterior_fisher._index([deriv[0] for deriv in derivs[1:]]), posterior_fisher._index([deriv[1] for deriv in derivs[1:]])
 
-        sum_loglikelihood = np.zeros(len(derivs) if solved_params else None, dtype='f8')
-        sum_logprior = np.zeros((), dtype='f8')
+        sum_loglikelihood = jnp.zeros(len(derivs) if solved_params else (), dtype='f8')
+        sum_logprior = jnp.zeros((), dtype='f8')
         derived = pipeline.derived
 
         for param, xx in zip(solved_params, x):
@@ -213,7 +213,7 @@ class BaseLikelihood(BaseCalculator):
         if solved_params:
             sum_logprior = np.insert(self.fisher.prior_fisher._hessian[indices_derivs], 0, sum_logprior)
         for likelihood in likelihoods:
-            loglikelihood = float(likelihood.loglikelihood)
+            loglikelihood = jnp.array(likelihood.loglikelihood)
             if likelihood in solve_likelihoods:
                 likelihood_fisher = self.fisher.likelihood_fishers[solve_likelihoods.index(likelihood)]
                 # Note: priors of solved params have already been added
@@ -234,14 +234,14 @@ class BaseLikelihood(BaseCalculator):
             sum_loglikelihood.flat[0] += 1. / 2. * np.sum(np.log(ip[ip > 0.]))  # logdet
             # sum_loglikelihood -= 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
         self.loglikelihood = sum_loglikelihood
-        sum_logprior.flat[0] += self.logprior
+        sum_logprior += self.logprior
         self.logprior = sum_logprior
 
-        if derived is not None:
-            derived.set(ParameterArray(self.loglikelihood, param=self._param_loglikelihood, derivs=derivs))
-            derived.set(ParameterArray(self.logprior, param=self._param_logprior, derivs=derivs))
+        #if derived is not None:
+        #    derived.set(ParameterArray(self.loglikelihood, param=self._param_loglikelihood, derivs=derivs))
+        #    derived.set(ParameterArray(self.logprior, param=self._param_logprior, derivs=derivs))
 
-        return self.loglikelihood.flat[0] + self.logprior.flat[0]
+        return self.loglikelihood + self.logprior
 
     @classmethod
     def sum(cls, *others):

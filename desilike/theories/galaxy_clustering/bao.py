@@ -477,7 +477,8 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
         for params in self.broadband_orders.values(): bb_params += list(params)
         self.init.params = self.init.params.select(basename=bb_params)
         for param in list(pt_params):
-            if param.basename in bb_params: del pt_params[param]
+            if param.basename in bb_params or (param.derived is True):
+                del pt_params[param]
         self.pt.init.params.update(pt_params, basename=True)
         if 'power' in self.broadband:  # even-power for the correlation function
             for ell in self.ells:

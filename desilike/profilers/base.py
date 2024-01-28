@@ -239,7 +239,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         if not mask_finite_prior.any():
             return logprior
         points = Samples(self._params_forward_transform(values[mask_finite_prior]).T, params=self.varied_params)
-        self.pipeline.mpicalculate(**points.to_dict())
+        self.pipeline.calculate(points.to_dict())
         logposterior, raise_error = None, None
         if self.pipeline.mpicomm.rank == 0:
             update_derived = True

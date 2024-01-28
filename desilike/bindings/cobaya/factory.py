@@ -369,6 +369,7 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
 
         _kw_cobaya = {name: getattr(self, name, value) for name, value in kw_cobaya.items()}
         self.like = cls(**{**kw_like, **_kw_cobaya})
+        self.ignore_unknown_cosmoprimo_params = getattr(self, 'ignore_unknown_cosmoprimo_params', True)
         from desilike import mpi
         self.like.mpicomm = mpi.COMM_SELF  # no likelihood-level MPI-parallelization
         self._cosmo_params, self._nuisance_params = get_likelihood_params(self.like)

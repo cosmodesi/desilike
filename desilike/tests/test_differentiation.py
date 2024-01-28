@@ -61,10 +61,12 @@ def test_differentiation():
     from desilike import Differentiation
     theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.4))
     theory.init.params['power'] = {'derived': True}
+    #for param in theory.all_params:
+    #    if param.basename != 'sn0': param.update(fixed=True)
     theory(sn0=100.)
     diff = Differentiation(theory, method=None, order=2)
     diff()
-    diff(sn0=50.)
+    print(diff(sn0=50.)['power'])
 
 
 def test_solve():
@@ -276,7 +278,7 @@ class AffineModel(BaseCalculator):  # all calculators should inherit from BaseCa
         self.x = x
 
     def calculate(self, a=0., b=0.):
-        self.y = a * self.x + b  # simple, affine model
+        self.y = a * b * self.x + b  # simple, affine model
 
     # Not mandatory, this is to return something in particular after calculate (else this will just be the instance)
     def get(self):
@@ -373,14 +375,26 @@ def test_autodiff():
     print(fun({'a': jnp.ones(3), 'b': jnp.ones(3)}))
     """
     likelihood = Likelihood()
-    #likelihood.all_params['b'].update(derived='.best')
+    """
+    from desilike import Differentiation
+
+    likelihood = Likelihood()
+    theory = likelihood.theory
+    theory.init.params['y'] = {'derived': True}
+
+    diff = Differentiation(theory, method=None)
+    print(diff(b=0.)['y'])
+    print(diff(b=1.)['y'])
+    """
+    likelihood.all_params['a'].update(derived='.marg')
     fun = likelihood
+    fun()
 
-    fun = jax.jit(jax.vmap(fun))
-    print(fun({'a': jnp.ones(3)}))
+    #fun = jax.jit(jax.vmap(fun))
+    #print(fun({'a': jnp.ones(3)}))
 
-    #jac = jax.jacfwd(fun)
-    #print(jac({'a': 1., 'b': 2.}))
+    jac = jax.jacfwd(fun)
+    print(jac({'a': 1., 'b': 2.}))
 
 
 
@@ -388,10 +402,10 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_misc()
-    test_differentiation()
+    #test_differentiation()
     #test_solve()
     #test_fisher_galaxy()
     #test_fisher_cmb()
     #test_speed()
     #test_jax()
-    #test_autodiff()
+    test_autodiff()

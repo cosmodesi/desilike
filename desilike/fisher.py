@@ -5,7 +5,7 @@ import numpy as np
 
 from .differentiation import Differentiation
 from .parameter import ParameterPrecision, ParameterCovariance, ParameterArray, ParameterCollection, Parameter, is_parameter_sequence
-from .base import BaseCalculator
+from .base import BaseCalculator, _args_or_kwargs
 from .utils import BaseClass, deep_eq
 from .jax import numpy as jnp
 from . import utils
@@ -696,13 +696,14 @@ class Fisher(BaseClass):
         prior_calculator = PriorCalculator()
         prior_calculator.params = [param for param in self.likelihood.all_params if param.depends or (not param.derived)]
         prior_simplified = all(param.prior.dist in ['norm', 'uniform'] and not param.depends for param in prior_calculator.params)
+        #prior_simplified = False
 
         def prior_getter():
             return prior_calculator.logprior
 
         def prior_finalize(derivs):
-            if prior_simplified:
-                offset, gradient, precision = 0., [], []
+            if prior_simplified:  # works but hopefully useless
+                offset, gradient, hessian = 0., [], []
                 for param in self.varied_params:
                     value = derivs[param.name]
                     loc, scale = getattr(param.prior, 'loc', 0.), getattr(param.prior, 'scale', np.inf)
@@ -710,8 +711,8 @@ class Fisher(BaseClass):
                     offset += - 0.5 * (value - loc)**2 * prec
                     # derivs[param]
                     gradient.append(- (value - loc) * prec)
-                    precision.append(- prec)
-                hessian = np.diag(precision)
+                    hessian.append(- prec)
+                hessian = np.diag(hessian)
                 return {'offset': offset, 'gradient': gradient, 'hessian': hessian}
             return {'gradient': derivs}  # offset, gradient and hessian are pulled out of gradient by :class:`LikelihoodFisher`
 
@@ -767,6 +768,7 @@ class Fisher(BaseClass):
             self.prior_differentiation = None
         else:
             self.prior_differentiation = Differentiation(prior_calculator, getter=prior_getter, order=2, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=mpicomm)
+        #self.prior_differentiation = Differentiation(prior_calculator, getter=prior_getter, order=2, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=mpicomm)
         self._prior_finalize = prior_finalize
         self.likelihood_differentiation = Differentiation(self.likelihood, getter=getter, order=order, method=method, accuracy=accuracy, delta_scale=delta_scale, mpicomm=mpicomm)
         self._likelihood_finalize = likelihood_finalize
@@ -785,19 +787,22 @@ class Fisher(BaseClass):
         except AttributeError:
             pass
 
-    def run(self, **params):
+    def run(self, *args, **kwargs):
+        params = _args_or_kwargs(args, kwargs)
         if self.prior_differentiation is None:
             center = diff = {**self.likelihood.runtime_info.pipeline.input_values, **params}
         else:
-            diff = self.mpicomm.bcast(self.prior_differentiation(**params), root=0)
+            diff = self.mpicomm.bcast(self.prior_differentiation(params), root=0)
             center = self.prior_differentiation.center
+        #diff = self.mpicomm.bcast(self.prior_differentiation(params), root=0)
+        #center = self.prior_differentiation.center
         self.prior_fisher = LikelihoodFisher(center=[center[str(param)] for param in self.varied_params], params=self.varied_params, **self._prior_finalize(diff))
         diff = self.mpicomm.bcast(self.likelihood_differentiation(**center), root=0)
         self.likelihood_fishers = [LikelihoodFisher(center=self.prior_fisher._center, params=self.varied_params, **kwargs) for kwargs in self._likelihood_finalize(diff)]
 
-    def __call__(self, **params):
+    def __call__(self, *args, **kwargs):
         """Return :class:`LikelihoodFisher` for input parameter values, as the sum of :attr:`prior_fisher` and :attr:`likelihood_fisher`."""
-        self.run(**params)
+        self.run(*args, **kwargs)
         posterior_fisher = LikelihoodFisher.sum(self.likelihood_fishers + [self.prior_fisher])
         posterior_fisher.with_prior = True
         return posterior_fisher

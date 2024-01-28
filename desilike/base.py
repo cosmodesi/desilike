@@ -113,6 +113,13 @@ class InitConfig(BaseConfig):
         return super(InitConfig, self).__getitem__(key)
 
 
+def _args_or_kwargs(args, kwargs):
+    if not args: params = kwargs
+    elif len(args) == 1 and not kwargs: params = args[0]
+    else: raise PipelineError('could not interpret input args = {}, kwargs = {}'.format(args, kwargs))
+    return params
+
+
 class BasePipeline(BaseClass):
     """
     Pipeline, used internally in the code, connecting all caclulators up to the calculator that it is attached to
@@ -226,9 +233,7 @@ class BasePipeline(BaseClass):
         or if they depend on previous calculation that has been updated.
         Derived parameter values are stored in :attr:`derived`.
         """
-        if not args: params = kwargs
-        elif len(args) == 1 and not kwargs: params = args[0]
-        else: raise PipelineError('could not interpret input args = {}, kwargs = {}'.format(args, kwargs))
+        params = _args_or_kwargs(args, kwargs)
         if not self._initialized:
             if self.more_initialize is not None: self.more_initialize()
             self._initialized = True
@@ -250,7 +255,6 @@ class BasePipeline(BaseClass):
                     array = params[name]  # for params[name] = array below
                 else:
                     cshapes.append(array.shape)
-                    array = array.ravel()
                     csizes.append(array.size)
             params[name] = array
         csizes, cshapes = self.mpicomm.bcast((csizes, cshapes), root=0)
@@ -263,43 +267,46 @@ class BasePipeline(BaseClass):
         if not _all_eq(cshapes):
             raise PipelineError('shapes are different: {}'.format(dict(zip(names, cshapes))))
 
-        self.derived, self.errors = Samples(), None
+        self.derived = Samples()
 
         def calculate(params, more_derived=self.more_derived):
             self.input_values.update(params)
             params = self_params.eval(**self.input_values)
             self.input_values.update(params)  # to update parameters with depends
-            derived, error = Samples(), None
+            result, self.derived, error = None, Samples(), None
             for param in self._params:
-                if param.depends: derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
+                if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
             for calculator in self.calculators:  # start by first calculator
                 runtime_info = calculator.runtime_info
                 runtime_info.set_input_values(params)
-                derived = None
+                derived = Samples()
                 try:
                     result = runtime_info.calculate()
                     derived = runtime_info.derived
                 except Exception as exc:
                     error = (exc, traceback.format_exc())
                     raise PipelineError('error in method calculate of {} with calculator parameters {} and pipeline parameters {}'.format(calculator, runtime_info.input_values, self.input_values)) from exc
-                derived.update(derived)
+                self.derived.update(derived)
             if self.more_calculate:
                 toret = self.more_calculate()
                 if toret is not None: result = toret
             if more_derived:
                 tmp = more_derived(0)
                 if tmp is not None: derived.update(tmp)
-            return result, derived, error
+            return result, self.derived, error
 
         if (not cshapes) or (not cshapes[0]):  # no input parameters, or scalar input
             result, self.derived, self.error = calculate(params)
             return result
+
+        self.errors = {}
 
         all_size = csizes[0]
         max_chunk_size = getattr(self, '_mpi_max_chunk_size', 100)
         nchunks = (all_size // max_chunk_size) + 1
         mpicomm, more_derived = self.mpicomm, self.more_derived
         all_states = []
+        params = {name: array.ravel() if mpicomm.rank == 0 else None for name, array in params.items()}
         for ichunk in range(nchunks):  # divide in chunks to save memory for MPI comm
             chunk_offset = all_size * ichunk // nchunks
             chunk_params = {}
@@ -313,7 +320,9 @@ class BasePipeline(BaseClass):
                 istate = ivalue + rank_offset
                 state = [None] * 3
                 try:
+                    derived_bak = self.derived
                     state[0], derived, error = calculate({name: value[ivalue] for name, value in chunk_params.items()}, more_derived=None)
+                    self.derived = derived_bak
                 except PipelineError as exc:
                     if error is None:
                         error = (exc, traceback.format_exc())
@@ -348,8 +357,11 @@ class BasePipeline(BaseClass):
                         samples.append(ref[1])
             if samples:
                 self.derived = Samples.concatenate(samples).reshape(cshapes[0])
-            results = np.asarray(results).reshape(cshapes[0])
+                results = np.asarray(results)
+                results.shape = cshapes[0] + results[0].shape
         return results
+
+    mpicalculate = calculate
 
     def get_cosmo_requires(self):
         """Return a dictionary mapping section to method's name and arguments,
@@ -416,7 +428,7 @@ class BasePipeline(BaseClass):
         input_values = {param.name: self.input_values[param.name] for param in self.varied_params}
         if calculators:
             for params in [{str(param): param.ref.sample(random_state=rng) for param in self.varied_params} for ii in range(niterations)] + [input_values]:
-                self.calculate(**params)
+                self.calculate(params)
                 for calculator, state in zip(calculators, states):
                     calcstate = calculator.__getstate__()
                     for name, value in calcstate.items():

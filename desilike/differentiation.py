@@ -3,6 +3,7 @@ import itertools
 import numpy as np
 
 from desilike import PipelineError
+from .base import _args_or_kwargs
 from .parameter import Parameter, ParameterCollection, ParameterArray, Samples, Deriv, ParameterPriorError
 from .utils import BaseClass, expand_dict, is_sequence
 from .jax import jax
@@ -386,7 +387,8 @@ class Differentiation(BaseClass):
         for name in names:
             value = np.atleast_1d(params[name]) if self.mpicomm.rank == 0 else None
             values.append(value)
-            csize = self.mpicomm.bcast(value if self.mpicomm.rank == 0 else None)
+            csize = self.mpicomm.bcast(value.size if self.mpicomm.rank == 0 else None)
+        global getter_inst, getter_size
         getter_inst, getter_size = None, None
 
         def __calculate(*values):
@@ -418,8 +420,8 @@ class Differentiation(BaseClass):
                 chunk_params[name] = mpi.scatter(value[csize * ichunk // nchunks:csize * (ichunk + 1) // nchunks] if self.mpicomm.rank == 0 else None, mpicomm=self.mpicomm, mpiroot=0)
                 chunk_size = len(chunk_params[name])
 
-            for ii in range(chunk_size):
-                chunk_values = [chunk_params[name][ii] for name in params]
+            for ivalue in range(chunk_size):
+                chunk_values = [chunk_params[name][ivalue] for name in params]
                 toret = []
                 try:
                     try:
@@ -439,23 +441,30 @@ class Differentiation(BaseClass):
                         getter_samples.append([__calculate(*values)] + toret)
                 except Exception as exc:
                     errors.append(exc)
-                errors = self.mpicomm.allreduce(errors)
-                self.pipeline.mpicomm = mpicomm
-                if errors:
-                    raise PipelineError('got these errors: {}'.format(errors))
-                getter_samples += self.mpicomm.reduce(getter_samples, root=0)
 
-        toret = [[[None for isample in range(csize)] for iautoderiv in range(len(autoderivs))] for igetter in range(max(getter_size, 1))]
-        for isample in range(csize):
-            items = getter_samples[isample]
-            for ideriv, derivs in enumerate(items):
-                for iitem, item in enumerate(derivs):
-                   toret[iitem][ideriv][isample] = item
+            errors = self.mpicomm.allreduce(errors)
+            self.pipeline.mpicomm = mpicomm
+            if errors:
+                raise PipelineError('got these errors: {}'.format(errors))
+            getter_samples += self.mpicomm.reduce(getter_samples, root=0)
+
+        for getter_size, getter_inst in self.mpicomm.gather((getter_size, getter_inst), root=0):
+            if getter_size is not None: break
+
+        if self.mpicomm.rank == 0:
+            toret = [[[None for isample in range(csize)] for iautoderiv in range(len(autoderivs))] for igetter in range(max(getter_size, 1))]
+            for isample in range(csize):
+                items = getter_samples[isample]
+                for ideriv, derivs in enumerate(items):
+                    for iitem, item in enumerate(derivs):
+                        toret[iitem][ideriv][isample] = item
         return toret, getter_inst, getter_size
 
-    def run(self, **params):
+    def run(self, *args, **kwargs):
+        params = _args_or_kwargs(args, kwargs)
         # Getter, or calculator, dict[param1, param2]
         self.center = {}
+        # print(self.pipeline.input_values)
         for param in self.all_params:
             self.center[param.name] = params.get(param.name, self.pipeline.input_values[param.name])
         if self.mpicomm.rank == 0:
@@ -467,7 +476,6 @@ class Differentiation(BaseClass):
                 else:
                     samples[param] = np.full(samples.shape, self.center[param.name])
         nsamples = self.mpicomm.bcast(samples.size if self.mpicomm.rank == 0 else None, root=0)
-
         getter_samples, getter_inst, getter_size = self._calculate(samples.to_dict(params=self.all_params) if self.mpicomm.rank == 0 else {})
 
         if self.mpicomm.rank == 0:
@@ -538,9 +546,9 @@ class Differentiation(BaseClass):
                 toret = toret[0]
         self.samples = toret
 
-    def __call__(self, **params):
+    def __call__(self, *args, **kwargs):
         """
         Return derivatives for input parameter values.
         If ``getter`` returns a list (resp. dict), a list (resp. :class:`Samples`) of derivatives."""
-        self.run(**params)
+        self.run(*args, **kwargs)
         return self.samples

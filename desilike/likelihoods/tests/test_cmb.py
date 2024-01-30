@@ -190,7 +190,7 @@ def test_emulator_direct():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_install()
+    test_install()
     #test_clik()
     #test_sum()
     #test_gaussian_likelihood()
@@ -198,4 +198,4 @@ if __name__ == '__main__':
     #test_help()
     #test_copy()
     #test_error()
-    test_emulator_direct()
+    #test_emulator_direct()

@@ -18,7 +18,7 @@ def test_power_spectrum():
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
 
     size = 10
-    ells = (0, 2)
+    ells = (2,)
     observable = TracerPowerSpectrumMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * len(ells)),
                                                          k=np.linspace(0.01, 0.1, size),
                                                          ells=ells,
@@ -26,14 +26,16 @@ def test_power_spectrum():
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
+    assert observable.ells == ells
 
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+    observable = TracerPowerSpectrumMultipolesObservable(klim={2: [0.05, 0.2, 0.01]}, #klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data='../../tests/_pk/data.npy',
                                                          covariance=glob.glob('../../tests/_pk/mock_*.npy'),
                                                          wmatrix='../../tests/_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
+    assert observable.ells == (2,)
     assert np.allclose(theory.nd, 1e-4)
     assert np.allclose(likelihood.flatdiff, observable.wmatrix.flatpower - observable.flatdata)
     theory()
@@ -181,7 +183,7 @@ def test_correlation_function():
     theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
     #theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template, ells=(0, 2))
     size = 5
-    ells = (0, 2)
+    ells = (2,)
     observable = TracerCorrelationFunctionMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * len(ells)),
                                                                s=np.linspace(20., 150., size),
                                                                slim={ell: (10, 160) for ell in ells},
@@ -191,7 +193,7 @@ def test_correlation_function():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
     observable.__getstate__()
-    assert np.all((observable.s[0] >= 10.) & (observable.s[0] <= 160.)) and len(observable.s[0]) == 5 and observable.ells == (0, 2)
+    assert np.all((observable.s[0] >= 10.) & (observable.s[0] <= 160.)) and len(observable.s[0]) == 5 and observable.ells == ells
 
     observable = TracerCorrelationFunctionMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * 3),
                                                                s=np.linspace(20., 150., size),
@@ -207,7 +209,7 @@ def test_correlation_function():
     observable = TracerCorrelationFunctionMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * 3),
                                                                s=np.linspace(20., 150., size),
                                                                slim={0: (10, 160), 2: (10, 160), 4: (-1., 1.)},
-                                                               covariance=np.eye(size * len(ells)),
+                                                               covariance=np.eye(size * 2),
                                                                theory=theory,
                                                                wmatrix={'resolution': 2})
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
@@ -901,7 +903,7 @@ if __name__ == '__main__':
 
     #test_systematic_templates()
     # test_bao()
-    test_power_spectrum()
+    #test_power_spectrum()
     test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()

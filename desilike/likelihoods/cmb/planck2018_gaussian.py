@@ -208,7 +208,8 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
             tar_fn = os.path.join(data_dir, tar_base)
             download(url, tar_fn, size=size)
             extract(tar_fn, data_dir)
-            installer.write({cls.installer_section: {'data_dir': data_dir}})
+
+        installer.write({cls.installer_section: {'data_dir': data_dir}})
 
 
 class FullGridPlanck2018GaussianLikelihood(BasePlanck2018GaussianLikelihood):

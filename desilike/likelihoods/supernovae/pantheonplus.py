@@ -103,4 +103,5 @@ class PantheonPlusSNLikelihood(BaseSNLikelihood):
             with open(config_fn, 'w') as file:
                 for text in ['name = PantheonPlus\n', 'data_file = Pantheon+SH0ES.dat\n', 'mag_covmat_file = Pantheon+SH0ES_STAT+SYS.cov\n']:
                     file.write(text)
-            installer.write({cls.__name__: {'data_dir': data_dir}})
+
+        installer.write({cls.__name__: {'data_dir': data_dir}})

@@ -99,4 +99,5 @@ class Union3SNLikelihood(BaseSNLikelihood):
             with open(config_fn, 'w') as file:
                 for text in ['name = Union3\n', 'data_file = union3_mu.dat\n', 'mag_covmat_file = union3.cov\n']: #,'inv_covmat = union3.invcov\n'
                     file.write(text)
-            installer.write({cls.__name__: {'data_dir': data_dir}})
+
+        installer.write({cls.__name__: {'data_dir': data_dir}})

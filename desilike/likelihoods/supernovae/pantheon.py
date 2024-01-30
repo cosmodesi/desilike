@@ -100,4 +100,5 @@ class PantheonSNLikelihood(BaseSNLikelihood):
             txt = txt.replace('/your-path/', '')
             with open(config_fn, 'w') as file:
                 file.write(txt)
-            installer.write({cls.__name__: {'data_dir': data_dir}})
+
+        installer.write({cls.__name__: {'data_dir': data_dir}})

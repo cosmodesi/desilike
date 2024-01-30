@@ -227,7 +227,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             else:
                 wmatrix = wmatrix.deepcopy()
             # TODO: implement best match BaseMatrix method
-            for kk, ellout in zip(self.k, self.ells):
+            for illout, (kk, ellout) in enumerate(zip(self.k, self.ells)):
                 for iout, projout in enumerate(wmatrix.projsout):
                     if projout.ell == ellout: break
                 if projout.ell != ellout:
@@ -260,7 +260,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                     istart = np.nanargmin(np.abs(xwout - kk[0]))
                     ksize = kk.size
                 wmatrix.slice_x(sliceout=slice(istart, istart + ksize), projsout=projout)
-                self.k[iout] = xwout = wmatrix.xout[iout]
+                self.k[illout] = xwout = wmatrix.xout[iout]
                 if lim is None and not np.allclose(xwout, kk, rtol=1e-4):
                     raise ValueError('k-coordinates {} for ell = {:d} could not be found in input matrix (rebinning = {:d})'.format(kk, projout.ell, factorout))
             if ellsin is not None:

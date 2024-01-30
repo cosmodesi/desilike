@@ -181,7 +181,8 @@ class BasePlanck2018ClikLikelihood(BaseLikelihood):
             tar_fn = os.path.join(data_dir, tar_base)
             download(url, tar_fn)
             extract(tar_fn, data_dir)
-            installer.write({cls.installer_section: {'data_dir': data_dir}})
+
+        installer.write({cls.installer_section: {'data_dir': data_dir}})
 
     def __del__(self):
         try:

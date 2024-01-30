@@ -1,20 +1,21 @@
-from cosmosis.runtime.pipeline import LikelihoodPipeline
-from desilike.base import BaseCalculator
 import os
+
+from desilike.base import BaseCalculator
 
 
 class DESY3Theory(BaseCalculator):
 
     def initialize(self, cosmo=None, ini_file_dir=None, ini_file_name=None, cosmosis_dir=None, cosmosis_param_dict=None):
+        from cosmosis.runtime.pipeline import LikelihoodPipeline
         self.cosmo = cosmo
-        self.ini_file = ini_file_dir + '/' + ini_file_name
+        self.ini_file = os.path.join(ini_file_dir, ini_file_name)
         self.cosmosis_param_dict = cosmosis_param_dict
+        environ_bak = os.environ.copy()
         os.environ['COSMOSIS_STD_DIR'] = cosmosis_dir
         os.environ['INI_FILE_DIR'] = ini_file_dir
 
         self.cosmosis_pipe = LikelihoodPipeline(self.ini_file)
         self.cosmosis_data = self.cosmosis_pipe.build_starting_block([])
-
 
         if self.cosmosis_param_dict == None:
             #ccoem code copied from https://github.com/cosmodesi/desilike/blob/main/desilike/bindings/cosmosis/factory.py
@@ -36,10 +37,10 @@ class DESY3Theory(BaseCalculator):
                                    'Omega_k'  : ('cosmological_parameters', 'omega_k'),
                                    'Omega_m'  : ('cosmological_parameters', 'omega_m'),
                                    #now all the photo_z nuisance parameters
-                                   'shear_calibration_parameters_m1'  :  ('shear_calibration_parameters', 'm1'), 
-                                   'shear_calibration_parameters_m2'  :  ('shear_calibration_parameters', 'm2'),    
-                                   'shear_calibration_parameters_m3'  :  ('shear_calibration_parameters', 'm3'),    
-                                   'shear_calibration_parameters_m4'  :  ('shear_calibration_parameters', 'm4'), 
+                                   'shear_calibration_parameters_m1'  :  ('shear_calibration_parameters', 'm1'),
+                                   'shear_calibration_parameters_m2'  :  ('shear_calibration_parameters', 'm2'),
+                                   'shear_calibration_parameters_m3'  :  ('shear_calibration_parameters', 'm3'),
+                                   'shear_calibration_parameters_m4'  :  ('shear_calibration_parameters', 'm4'),
                                    'wl_photo_z_errors_bias_1'         :  ('wl_photo_z_errors_bias', 'bias_1'),
                                    'wl_photo_z_errors_bias_2'         :  ('wl_photo_z_errors_bias', 'bias_2'),
                                    'wl_photo_z_errors_bias_3'         :  ('wl_photo_z_errors_bias', 'bias_3'),
@@ -75,23 +76,17 @@ class DESY3Theory(BaseCalculator):
                                    'intrinsic_alignment_parameters_alpha2'   :  ('intrinsic_alignment_parameters' , 'alpha2'),
                                    'intrinsic_alignment_parameters_bias_ta'   :  ('intrinsic_alignment_parameters' , 'bias_ta'),
                                    }
-
-
+        os.environ.clear()
+        os.environ.update(environ_bak)
 
     def calculate(self):
-
-        #do the translation
+        # do the translation
         for key in self.cosmo.varied_params:
             self.cosmosis_data[self.cosmosis_param_dict[str(key)][0], self.cosmosis_param_dict[str(key)][1]] = self.cosmo[str(key)]
 
-
-
-        #run cosmosis
+        # run cosmosis
         self.cosmosis_pipe.run(self.cosmosis_data)
-        self.theory_vector = self.cosmosis_data['data_vector','2pt_theory']
+        self.theory_vector = self.cosmosis_data['data_vector', '2pt_theory']
 
     def get(self):
         return self.theory_vector
-
-
-

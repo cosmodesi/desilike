@@ -4,7 +4,7 @@ import numpy as np
 from scipy import interpolate
 
 from desilike.jax import numpy as jnp
-from desilike.jax import jit
+from desilike.jax import jit, interp1d
 from desilike import plotting, utils, BaseCalculator
 from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
 from .base import BaseTheoryPowerSpectrumMultipoles, BaseTheoryCorrelationFunctionMultipoles, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
@@ -303,9 +303,9 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
         sigmanl2 = self.k[:, None]**2 * (sigmapar**2 * self.mu**2 + sigmaper**2 * (1. - self.mu**2))
-        damping = np.exp(-sigmanl2 / 2.)
+        damping = jnp.exp(-sigmanl2 / 2.)
         #pkmu = jac * damping * (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0 / self.nd
-        pkmu = jac * damping * (b1 + f * muap**2)**2 * interpolate.interp1d(np.log10(self.template.k), self.template.pk_dd, kind='cubic', axis=-1)(np.log10(kap)) + sn0 / self.nd
+        pkmu = jac * damping * (b1 + f * muap**2)**2 * interp1d(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd, method='cubic') + sn0 / self.nd
         self.power = self.to_poles(pkmu)
 
     def get(self):
@@ -385,12 +385,12 @@ class KaiserPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPow
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
         sigmanl2 = kap**2 * (sigmapar**2 * muap**2 + sigmaper**2 * (1. - muap**2))
-        damping = np.exp(-sigmanl2 / 2.)
+        damping = jnp.exp(-sigmanl2 / 2.)
 
         self.pktable = []
         self.k11 = self.template.k
         self.pk11 = self.template.pk_dd
-        pktable = jac * damping * interpolate.interp1d(np.log10(self.k11), self.pk11, kind='cubic', axis=-1)(np.log10(kap))
+        pktable = jac * damping * interp1d(jnp.log10(kap), jnp.log10(self.k11), self.pk11, method='cubic')
         self.pktable = {'pk_dd': self.to_poles(pktable), 'pk_dt': self.to_poles(f * muap**2 * pktable), 'pk_tt': self.to_poles(f**2 * muap**4 * pktable)}
         self.pktable['pk11'] = self.pktable['pk_dd']
 

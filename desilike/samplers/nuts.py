@@ -133,9 +133,10 @@ class NUTSSampler(BaseBatchPosteriorSampler):
             return self.likelihood(dict(zip(names, values)))
 
         if self.hyp is None:
-            adaptation = dict(self.attrs['adaptation'])
-            niterations = adaptation.pop('niterations', 1000)
+            adaptation = self.attrs['adaptation']
             if isinstance(adaptation, dict):
+                adaptation = dict(adaptation)
+                niterations = adaptation.pop('niterations', 1000)
                 adaptation.setdefault('initial_step_size', self.attrs['step_size'])
                 warmup = blackjax.window_adaptation(blackjax.nuts, logdensity_fn=logdensity_fn, **adaptation)
                 (initial_state, warmup_params), _ = warmup.run(warmup_key, start, niterations)

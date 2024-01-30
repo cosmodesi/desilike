@@ -2,7 +2,7 @@ import numpy as np
 from scipy import special
 
 from desilike.jax import numpy as jnp
-from desilike.jax import InterpolatedUnivariateSpline, jit
+from desilike.jax import interp1d, jit
 from desilike.cosmo import is_external_cosmo
 from desilike.theories.primordial_cosmology import get_cosmo, Cosmoprimo, constants
 from desilike.base import BaseCalculator
@@ -51,8 +51,8 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
     def initialize(self, s=None, power=None, interp_order=1, **kwargs):
         if s is None: s = np.linspace(20., 200, 101)
         self.s = np.array(s, dtype='f8')
-        self.interp_order = int(interp_order)
-        allowed_interp_order = [1, 2, 3]
+        self.interp_order = {'linear': 1, 'cubic': 3}.get(interp_order, interp_order)
+        allowed_interp_order = [1, 3]
         if self.interp_order not in allowed_interp_order:
             raise ValueError('interp_order must be one of {}'.format(allowed_interp_order))
         if power is None:
@@ -84,10 +84,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         tmp = []
         for pk in power:
             slope_high = (pk[-1] - pk[-2]) / np.log10(self.kin[-1] / self.kin[-2])
-            if self.interp_order == 1:
-                interp = jnp.interp(np.log10(self.k_mid), np.log10(self.kin), pk)
-            else:
-                interp = InterpolatedUnivariateSpline(np.log10(self.kin), pk, k=self.interp_order)(np.log10(self.k_mid))
+            interp = interp1d(np.log10(self.k_mid), np.log10(self.kin), pk, method=self.interp_order)
             tmp.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.k_high) * self.pad_high], axis=-1))
         s, corr = self.fftlog(jnp.vstack(tmp))
         return jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])

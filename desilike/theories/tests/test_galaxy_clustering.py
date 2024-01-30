@@ -1434,6 +1434,23 @@ def plot_direct():
                 plt.show()
 
 
+def test_autodiff():
+    import jax
+    from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import (DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, SimpleTracerPowerSpectrumMultipoles,
+                                                     EFTLikeKaiserTracerPowerSpectrumMultipoles, PNGTracerPowerSpectrumMultipoles)
+
+    for theory in [DampedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPowerSpectrumTemplate()),
+                   ResummedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPowerSpectrumTemplate()),
+                   PNGTracerPowerSpectrumMultipoles(template=StandardPowerSpectrumTemplate()),
+                   SimpleTracerPowerSpectrumMultipoles(template=FixedPowerSpectrumTemplate()),
+                   KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate()),
+                   EFTLikeKaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate())]:
+        params = {param.name: param.value for param in theory.all_params}
+        jax.jacfwd(theory)(params)
+
+
+
 
 if __name__ == '__main__':
 
@@ -1448,7 +1465,8 @@ if __name__ == '__main__':
     #test_templates()
     #test_wiggle_split_template()
     #test_emulator_templates()
-    test_bao()
+    #test_bao()
+    test_autodiff()
     #test_broadband_bao()
     #test_flexible_bao()
     #test_full_shape()

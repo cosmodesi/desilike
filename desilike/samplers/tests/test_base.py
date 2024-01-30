@@ -394,6 +394,45 @@ def test_marg():
     plotting.plot_triangle([chain_full, chain_marg, chain_bf], labels=['ref', 'marg', 'bestfit'], show=True, fn='./_tests/fig.png')
 
 
+def test_bao_hmc():
+
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, BAOPowerSpectrumTemplate
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike.samples import plotting
+
+
+    template = BAOPowerSpectrumTemplate(z=0.5)
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
+    #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
+    for param in theory.params.select(basename=['al*']): param.update(derived='.best')
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.3, 0.005], 2: [0.05, 0.3, 0.005]},
+                                                         data={},
+                                                         theory=theory)
+    footprint = BoxFootprint(volume=1e10, nbar=1e-3)
+    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov, name='LRG')
+
+    for param in likelihood.varied_params.select(basename=['q*', 'dbeta']):
+        param.update(prior={'dist': 'norm', 'loc': 1., 'scale': 1.})
+
+    for param in likelihood.varied_params.select(basename='sigma*'):
+        param.update(prior={'dist': 'norm', 'loc': param.prior.center(), 'scale': 2.})
+
+    chains = {}
+    for Sampler in [NUTSSampler, MCLMCSampler][:1]:
+        save_fn = ['./_tests/chain_{:d}.npz'.format(i) for i in range(min(likelihood.mpicomm.size, 1))]
+        kwargs = {}
+        if Sampler is MCLMCSampler:
+            #kwargs['adaptation'] = {'niterations': 1000, 'num_effective_samples': 200}
+            kwargs['adaptation'] = False
+            kwargs['L'] = 1.
+        sampler = Sampler(likelihood, seed=12, save_fn=save_fn, **kwargs)
+        chains[Sampler.__name__] = sampler.run(max_iterations=10000, check={'max_eigen_gr': 1., 'min_ess': 50}, check_every=200)[0]
+
+    plotting.plot_triangle(list(chains.values()), labels=list(chains.keys()), show=True)
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -402,7 +441,8 @@ if __name__ == '__main__':
     #test_fixed()
     #test_importance()
     #test_error()
-    test_mcmc()
+    #test_mcmc()
     #test_hmc()
     #test_nested()
     #test_marg()
+    test_bao_hmc()

@@ -26,6 +26,6 @@ setup(name=package_basename,
       license='BSD3',
       url='http://github.com/cosmodesi/desilike',
       install_requires=['numpy', 'scipy', 'pyyaml', 'mpi4py', 'cosmoprimo @ git+https://github.com/cosmodesi/cosmoprimo'],
-      extras_require={'plotting': ['matplotlib', 'tabulate', 'getdist', 'anesthetic @ git+https://github.com/handley-lab/anesthetic'], 'jax': ['jax[cpu]']},
+      extras_require={'plotting': ['matplotlib', 'tabulate', 'getdist', 'anesthetic @ git+https://github.com/handley-lab/anesthetic'], 'jax': ['jax', 'interpax']},
       packages=find_packages(),
       package_data={package_basename: list(get_yaml_files())})

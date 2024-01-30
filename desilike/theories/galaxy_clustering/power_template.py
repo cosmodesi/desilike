@@ -615,7 +615,7 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
 
     def calculate(self, df=1., dm=0., dn=0.):
         super(ShapeFitPowerSpectrumTemplate, self).calculate()
-        factor = np.exp(dm / self.a * np.tanh(self.a * np.log(self.k / self.kp)) + dn * np.log(self.k / self.kp))
+        factor = jnp.exp(dm / self.a * jnp.tanh(self.a * jnp.log(self.k / self.kp)) + dn * jnp.log(self.k / self.kp))
         #factor = np.exp(dm * np.log(self.k / self.kp))
         self.pk_dd = self.pk_dd_fid * factor
         if self.with_now:
@@ -1265,7 +1265,7 @@ class DirectWiggleSplitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         k = self.pk_dd_interpolator_fid.k  # this is independent and much wider than self.k, typically
         k = k[(k > k[0] * 2.) & (k < k[-1] / 2.)]  # to avoid hitting boundaries with qbao
         wiggles = np.exp(- (k * sigmabao)**2) * (self.pk_dd_interpolator(k / qbao) - self.pknow_dd_interpolator(k / qbao))
-        # creating a new interpolator in case we need it (only used by BAO models)
+        # creating a new interpolator in case we need it (actually never used anywhere)
         self.pk_dd_interpolator = PowerSpectrumInterpolator1D(k, self.pknow_dd_interpolator(k) + wiggles)
         self.pk_dd = self.pk_dd_interpolator(self.k)
         self.pknow_dd = self.pknow_dd_interpolator(self.k)

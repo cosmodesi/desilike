@@ -16,7 +16,7 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
     """
     name = 'nuts'
 
-    def __init__(self, *args, adaptation=True, L=None, step_size=1e-3, integrator='isokinetic_mclachlan', **kwargs):
+    def __init__(self, *args, adaptation=True, L=None, step_size=1e-4, integrator='isokinetic_mclachlan', **kwargs):
         """
         Initialize NUTS HMC sampler.
 
@@ -33,7 +33,7 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
         L : float, default=None
             Momentum decoherence scale.
 
-        step_size : float, default=1e-3
+        step_size : float, default=1e-4
             The value to use for the step size in the integrator.
 
         max_num_doublings : int, default=10
@@ -120,9 +120,10 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
             return self.likelihood(dict(zip(names, values)))
 
         if self.hyp is None:
-            adaptation = dict(self.attrs['adaptation'])
-            niterations = adaptation.pop('niterations', 1000)
+            adaptation = self.attrs['adaptation']
             if isinstance(adaptation, dict):
+                adaptation = dict(adaptation)
+                niterations = adaptation.pop('niterations', 1000)
                 initial_state = blackjax.mcmc.mclmc.init(position=start, logdensity_fn=logdensity_fn, rng_key=key)
                 # build the kernel
                 kernel = blackjax.mcmc.mclmc.build_kernel(logdensity_fn=logdensity_fn, integrator=self.attrs['integrator'])
@@ -132,6 +133,7 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
             else:
                 self.hyp = {name: self.attrs[name] for name in ['step_size', 'L']}
         # use the quick wrapper to build a new kernel with the tuned parameters
+        self.log_info('Using hyperparameters: {}.'.format(self.hyp))
         attrs = {name: self.attrs[name] for name in ['integrator']}
         sampling_alg = blackjax.mclmc(logdensity_fn, **attrs, **self.hyp)
 

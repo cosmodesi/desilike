@@ -1,7 +1,9 @@
 import numpy as np
-from scipy import constants, interpolate
+from scipy import constants
 
 from desilike import plotting
+from desilike.jax import interp1d
+from desilike.jax import numpy as jnp
 from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
 from .power_template import FixedPowerSpectrumTemplate
 
@@ -101,9 +103,9 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
         else:
             bfnl_loc = params['bfnl_loc']
         # bfnl_loc is typically 2 * delta_c * (b1 - p)
-        bias = b1 + bfnl_loc * interpolate.interp1d(np.log10(kin), alpha, kind='cubic', axis=-1)(np.log10(kap))
+        bias = b1 + bfnl_loc * interp1d(jnp.log10(kap), np.log10(kin), alpha)
         fog = 1. / (1. + sigmas**2 * kap**2 * muap**2 / 2.)**2.
-        pkmu = jac * fog * (bias + f * muap**2)**2 * interpolate.interp1d(np.log10(kin), pk_dd, kind='cubic', axis=-1)(np.log10(kap)) + sn0 / self.nd
+        pkmu = jac * fog * (bias + f * muap**2)**2 * interp1d(jnp.log10(kap), np.log10(kin), pk_dd) + sn0 / self.nd
         self.power = self.to_poles(pkmu)
 
     def get(self):

@@ -367,7 +367,10 @@ class BasePipeline(BaseClass):
                 results.shape = cshapes[0] + results[0].shape
         return results
 
-    mpicalculate = calculate
+    def mpicalculate(self, *args, **kwargs):
+        import warnings
+        warnings.warn('mpicalculate is deprecated, use calculate instead')
+        return self.mpicalculate(*args, **kwargs)
 
     def get_cosmo_requires(self):
         """Return a dictionary mapping section to method's name and arguments,

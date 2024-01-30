@@ -448,9 +448,9 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
 
     def check(self, nsplits=4, burnin=0.5, stable_over=2,
               max_eigen_gr=0.03, max_diag_gr=None, max_cl_diag_gr=None, nsigmas_cl_diag_gr=1., max_geweke=None, max_geweke_pvalue=None,
-              ess=None, reliable_ess=50, max_dact=None,
+              min_ess=None, reliable_ess=50, max_dact=None,
               min_eigen_gr=None, min_diag_gr=None, min_cl_diag_gr=None, min_geweke=None, min_geweke_pvalue=None,
-              max_iterations_over_iact=None, min_dact=None, diagnostics=None, quiet=False):
+              max_ess=None, min_dact=None, diagnostics=None, quiet=False):
         """
         Run convergence checks.
 
@@ -478,7 +478,7 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
         nsigmas_cl_diag_gr : int, default=1
             Number of sigmas for the interval of ``max_cl_diag_gr`` test.
 
-        ess : int, default=None
+        min_ess : int, default=None
             Minimal number of iterations over integrated auto-correlation time (~ # of independent samples). Typically of order ~ 1e3.
 
         reliable_ess : int, default=50
@@ -629,7 +629,7 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
                 name = 'effective sample size = ({:d} iterations / integrated autocorrelation time)'.format(niterations)
                 if reliable_ess * iact < niterations:
                     name = '{} (reliable)'.format(name)
-                toret &= full_test('iterations_over_iact', name, niterations / iact, ess, max_iterations_over_iact)
+                toret &= full_test('iterations_over_iact', name, niterations / iact, min_ess, max_ess)
 
                 iact = diagnostics['iact']
                 if len(iact) >= 2:

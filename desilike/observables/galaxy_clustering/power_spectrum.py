@@ -370,14 +370,14 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
         for calculator in all_requires:
             calculator.runtime_info.tocalculate = True
-            calculator.runtime_info.calculate()
+            calculator.runtime_info.calculate(calculator.runtime_info.input_values)
 
         nobao = self.theory
 
         template.only_now = only_now
         for calculator in all_requires:
             calculator.runtime_info.tocalculate = True
-            calculator.runtime_info.calculate()
+            calculator.runtime_info.calculate(calculator.runtime_info.input_values)
 
         return nobao
 

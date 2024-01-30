@@ -9,9 +9,15 @@ from desilike.base import BaseCalculator
 from desilike.cosmo import is_external_cosmo
 from desilike import plotting
 from desilike.jax import numpy as jnp
-from desilike.jax import jit
+from desilike.jax import jit, interp1d
 from .power_template import BAOPowerSpectrumTemplate
 from .base import (BaseTheoryPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles)
+
+
+def _interp(template, name, k):
+    return interp1d(jnp.log10(k), jnp.log10(template.k), getattr(template, name), method='cubic')
+    #return getattr(template, name + '_interpolator')(k)
+
 
 
 def _get_orders(base, params, ells):
@@ -58,6 +64,8 @@ class BaseBAOWigglesPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
 
     """Base class for theory BAO power spectrum multipoles, without broadband terms."""
 
+    _klim = (1e-4, 1., 2000)
+
     def initialize(self, *args, template=None, mode='', smoothing_radius=15., ells=(0, 2), **kwargs):
         super(BaseBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, ells=ells, **kwargs)
         self.mode = str(mode)
@@ -68,6 +76,8 @@ class BaseBAOWigglesPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         if template is None:
             template = BAOPowerSpectrumTemplate()
         self.template = template
+        kin = np.geomspace(min(self._klim[0], self.k[0] / 2, self.template.init.get('k', [1.])[0]), max(self._klim[1], self.k[-1] * 2, self.template.init.get('k', [0.])[0]), self._klim[2])  # margin for AP effect
+        self.template.init.update(k=kin)
         self.template.init.setdefault('with_now', 'peakaverage')
         self.z = self.template.z
         self.rs_drag_fid = self.template.fiducial.rs_drag
@@ -108,18 +118,18 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
         super(DampedBAOWigglesPowerSpectrumMultipoles, self).calculate()
         f = dbeta * self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        pknow = self.template.pknow_dd_interpolator(kap)
-        pk = self.template.pk_dd_interpolator(kap)
+        pknow = _interp(self.template, 'pknow_dd', kap)
+        pk = _interp(self.template, 'pk_dd', kap)
         if 'fix-damping' in self.model: k, mu = self.k[:, None], self.mu
         else: k, mu = kap, muap
         sigma_nl2 = k**2 * (sigmapar**2 * mu**2 + sigmaper**2 * (1. - mu**2))
-        damped_wiggles = (pk - pknow) / pknow * np.exp(-sigma_nl2 / 2.)
+        damped_wiggles = (pk - pknow) / pknow * jnp.exp(-sigma_nl2 / 2.)
         if 'move-all' in self.model: k, mu = kap, muap
         else: k, mu = self.k[:, None], self.mu
         pknow = self.template.pknow_dd_interpolator(k)
         fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
         sk = 0.
-        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (k * self.smoothing_radius)**2)
+        if self.mode == 'reciso': sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)
         pksmooth = (b1 + f * mu**2 * (1 - sk))**2 * pknow
         if 'fog-damping' in self.model:  # Beutler2016
             pkmu = pksmooth * fog * (1. + damped_wiggles)
@@ -170,7 +180,7 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
         q = self.template.cosmo.rs_drag
         j0 = special.jn(0, q * k)
         sk = 0.
-        if self.mode: sk = np.exp(-1. / 2. * (k * self.smoothing_radius)**2)
+        if self.mode: sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)
         # https://www.overleaf.com/project/633e1b59130591a7bf55a9cd eq. 17
         skc = 1. - sk
         self.sigma_sn2 = 1. / self.smoothing_radius / 6 / np.pi**(3. / 2.)
@@ -181,22 +191,22 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
 
     def wiggles(self, k, mu, b1=1., f=0., d=1.):
         # b1 Eulerian bias, d scaling the growth factor, sigmas FoG
-        wiggles = self.template.pk_dd_interpolator(k) - self.template.pknow_dd_interpolator(k)
+        wiggles = _interp(self.template, 'pk_dd', k) - _interp(self.template, 'pknow_dd', k)
         ksq = (1 + f * (f + 2) * mu**2) * k**2
         d2 = d**2
         sigma_dd2 = self.sigma_dd2 + self.shotnoise * self.sigma_sn2 / b1**2
-        sk = np.exp(-1. / 2. * (k * self.smoothing_radius)**2)
+        sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)
         skc = 1. - sk
         if self.mode == 'recsym':
-            resummed_wiggles = (b1 + f * mu**2)**2 * np.exp(-1. / 2. * ksq * d2 * sigma_dd2)
+            resummed_wiggles = (b1 + f * mu**2)**2 * jnp.exp(-1. / 2. * ksq * d2 * sigma_dd2)
         elif self.mode == 'reciso':
-            resummed_wiggles = (b1 + f * mu**2 * skc - sk)**2 * np.exp(-1. / 2. * ksq * d2 * sigma_dd2)
+            resummed_wiggles = (b1 + f * mu**2 * skc - sk)**2 * jnp.exp(-1. / 2. * ksq * d2 * sigma_dd2)
             sigma_ds2 = (1. + f * mu**2) * sigma_dd2 + f * (1. + f) * mu**2 * self.sigma_x2
-            resummed_wiggles += 2. * (b1 + f * mu**2 * skc - sk) * (1 + f * mu**2) * sk * np.exp(-1. / 2. * ksq * d2 * sigma_ds2)
+            resummed_wiggles += 2. * (b1 + f * mu**2 * skc - sk) * (1 + f * mu**2) * sk * jnp.exp(-1. / 2. * ksq * d2 * sigma_ds2)
             sigma_ss2 = sigma_dd2 + f**2 * mu**2 * self.sigma_nl2 + 2 * f * mu**2 * self.sigma_x2
-            resummed_wiggles += (1 + f * mu**2)**2 * sk**2 * np.exp(-1. / 2. * ksq * d2 * sigma_ss2)
+            resummed_wiggles += (1 + f * mu**2)**2 * sk**2 * jnp.exp(-1. / 2. * ksq * d2 * sigma_ss2)
         else:  # redshift-space, no reconstruction
-            resummed_wiggles = (b1 + f * mu**2)**2 * np.exp(-1. / 2. * ksq * d2 * sigma_dd2)
+            resummed_wiggles = (b1 + f * mu**2)**2 * jnp.exp(-1. / 2. * ksq * d2 * sigma_dd2)
         return resummed_wiggles * wiggles
 
 
@@ -227,14 +237,14 @@ class ResummedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
         super(ResummedBAOWigglesPowerSpectrumMultipoles, self).calculate()
         f = dbeta * self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        pknow = self.template.pknow_dd_interpolator(kap)
+        pknow = _interp(self.template, 'pknow_dd', kap)
         damped_wiggles = 0. if self.template.only_now else self.wiggles.wiggles(kap, muap, b1=b1, f=f, d=d, **kwargs) / pknow
         if 'move-all' in self.model: k, mu = kap, muap
         else: k, mu = self.k[:, None], self.mu
-        pknow = self.template.pknow_dd_interpolator(k)
+        pknow = _interp(self.template, 'pknow_dd', k)
         fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
         sk = 0.
-        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (k * self.smoothing_radius)**2)
+        if self.mode == 'reciso': sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)
         pksmooth = (b1 + f * mu**2 * (1 - sk))**2 * pknow
         if 'fog-damping' in self.model:  # Beutler2016
             pkmu = pksmooth * fog * (1. + damped_wiggles)
@@ -346,13 +356,13 @@ class FlexibleBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
         f = dbeta * self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknow = self.template.pknow_dd_interpolator(kap)
-        pk = self.template.pk_dd_interpolator(kap)
+        pk = _interp(self.template, 'pk_dd', kap)
         damped_wiggles = self.get_wiggles(pk - pknow, **kwargs) / pknow
         if 'move-all' in self.model: k, mu = kap, muap
         else: k, mu = self.k[:, None], self.mu
-        pknow = self.template.pknow_dd_interpolator(k)
+        pknow = _interp(self.template, 'pknow_dd', k)
         sk = 0.
-        if self.mode == 'reciso': sk = np.exp(-1. / 2. * (k * self.smoothing_radius)**2)
+        if self.mode == 'reciso': sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)
         pksmooth = (b1 + f * mu**2 * (1 - sk))**2 * pknow
         pkmu = pksmooth * (1. + damped_wiggles)
         self.power = self.to_poles(pkmu)

@@ -163,7 +163,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                         self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(repr(error[0]),
                                        {k: v.flat[ipoint] for k, v in points.items()}, error[1]))
                         for values in di.values():
-                            values[ipoint, ...] = -np.inf  # should be useless, as no step with -inf loglikelihood should be kept
+                            values[ipoint, ...] = -np.inf  # should be not be required, as no step with -inf loglikelihood should be kept
                     else:
                         raise_error = error
                         update_derived = False
@@ -281,10 +281,11 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         chain = Chain(chain, loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior)
         for param in self.pipeline.params.select(fixed=True, derived=False):
             chain[param] = np.full(chain.shape, param.value, dtype='f8')
-        indices_in_chain, indices = self.derived[0].match(chain, params=self.varied_params)
-        assert indices_in_chain[0].size == chain.size, '{:d} != {:d}'.format(indices_in_chain[0].size, chain.size)
-        for array in self.derived[1]:
-            chain.set(array[indices].reshape(chain.shape + array.shape[1:]))
+        if self.derived is not None:
+            indices_in_chain, indices = self.derived[0].match(chain, params=self.varied_params)
+            assert indices_in_chain[0].size == chain.size, '{:d} != {:d}'.format(indices_in_chain[0].size, chain.size)
+            for array in self.derived[1]:
+                chain.set(array[indices].reshape(chain.shape + array.shape[1:]))
         if chain._logposterior not in chain:
             chain.logposterior = chain[chain._loglikelihood][()] + chain[chain._logprior][()]
         chain.logposterior.param.update(derived=True, latex=utils.outputs_to_latex(chain._logposterior))
@@ -313,7 +314,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                 self._ichain = ichain
                 chain = self._run_one(start[ichain], **kwargs)
                 if self.mpicomm.rank == 0:
-                    ncalls[ichain] = self.derived[1][self.likelihood._param_loglikelihood].size if self.derived is not None else 0
+                    ncalls[ichain] = self.derived[1].size if self.derived is not None else 0
                     if chain is not None:
                         chains[ichain] = self._set_derived(chain)
         self.mpicomm = mpicomm_bak
@@ -447,7 +448,7 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
 
     def check(self, nsplits=4, burnin=0.5, stable_over=2,
               max_eigen_gr=0.03, max_diag_gr=None, max_cl_diag_gr=None, nsigmas_cl_diag_gr=1., max_geweke=None, max_geweke_pvalue=None,
-              min_iterations_over_iact=None, reliable_iterations_over_iact=50, max_dact=None,
+              ess=None, reliable_ess=50, max_dact=None,
               min_eigen_gr=None, min_diag_gr=None, min_cl_diag_gr=None, min_geweke=None, min_geweke_pvalue=None,
               max_iterations_over_iact=None, min_dact=None, diagnostics=None, quiet=False):
         """
@@ -477,11 +478,11 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
         nsigmas_cl_diag_gr : int, default=1
             Number of sigmas for the interval of ``max_cl_diag_gr`` test.
 
-        min_iterations_over_iact : int, default=None
+        ess : int, default=None
             Minimal number of iterations over integrated auto-correlation time (~ # of independent samples). Typically of order ~ 1e3.
 
-        reliable_iterations_over_iact : int, default=50
-            After ``reliable_iterations_over_iact`` auto-correlation time estimation is considered reliable.
+        reliable_ess : int, default=50
+            After ``reliable_ess`` auto-correlation time estimation is considered reliable.
 
         diagnostics : dict, default=None
             Dictionary where computed statistics are added.
@@ -625,10 +626,10 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
                 add_diagnostics('iact', iact)
                 niterations = len(split_samples[0])
                 iact = iact.max()
-                name = '({:d} iterations / integrated autocorrelation time)'.format(niterations)
-                if reliable_iterations_over_iact * iact < niterations:
+                name = 'effective sample size = ({:d} iterations / integrated autocorrelation time)'.format(niterations)
+                if reliable_ess * iact < niterations:
                     name = '{} (reliable)'.format(name)
-                toret &= full_test('iterations_over_iact', name, niterations / iact, min_iterations_over_iact, max_iterations_over_iact)
+                toret &= full_test('iterations_over_iact', name, niterations / iact, ess, max_iterations_over_iact)
 
                 iact = diagnostics['iact']
                 if len(iact) >= 2:

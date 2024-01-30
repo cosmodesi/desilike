@@ -227,7 +227,7 @@ class BasePipeline(BaseClass):
         for calculator in self.calculators:
             calculator._mpicomm = mpicomm
 
-    def calculate(self, *args, **kwargs):
+    def calculate(self, *args, force=None, **kwargs):
         """
         Calculate, i.e. call calculators' :meth:`BaseCalculator.calculate` if their parameters are updated,
         or if they depend on previous calculation that has been updated.
@@ -270,18 +270,19 @@ class BasePipeline(BaseClass):
         self.derived = Samples()
 
         def calculate(params, more_derived=self.more_derived):
+            bak_input_values = dict(self.input_values)
             self.input_values.update(params)
             params = self_params.eval(**self.input_values)
+            # Here we updated self.input_values as we need to access it (in e.g. BaseLikelihood._solve)
             self.input_values.update(params)  # to update parameters with depends
             result, self.derived, error = None, Samples(), None
             for param in self._params:
                 if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
             for calculator in self.calculators:  # start by first calculator
                 runtime_info = calculator.runtime_info
-                runtime_info.set_input_values(params)
                 derived = Samples()
                 try:
-                    result = runtime_info.calculate()
+                    result = runtime_info.calculate(params, force=force)
                     derived = runtime_info.derived
                 except Exception as exc:
                     error = (exc, traceback.format_exc())
@@ -293,6 +294,11 @@ class BasePipeline(BaseClass):
             if more_derived:
                 tmp = more_derived(0)
                 if tmp is not None: derived.update(tmp)
+            # Now we update self.input_values only with non-traced arrays
+            for name, value in self.input_values.items():
+                value = jax.to_nparray(value)
+                if value is not None: bak_input_values[name] = value
+            self.input_values = bak_input_values
             return result, self.derived, error
 
         if (not cshapes) or (not cshapes[0]):  # no input parameters, or scalar input
@@ -824,11 +830,26 @@ class RuntimeInfo(BaseClass):
     def tocalculate(self, tocalculate):
         self._tocalculate = tocalculate
 
-    def calculate(self):
+    def calculate(self, params, force=None):
         """
         If calculator's :class:`BaseCalculator.calculate` has not be called with input parameter values, call it,
         keeping track of running time with :attr:`monitor`.
         """
+        self.params
+        if force is None and getattr(self, '_traced', True): force = True
+        self._traced = False
+        for name, value in params.items():
+            name = str(name)
+            if name in self.input_names:
+                invalue = jax.to_nparray(value)
+                basename = self.input_names[name]
+                if force is not None:
+                    self._tocalculate = force
+                elif invalue is None or self.input_values[basename] != invalue:  # jax
+                    self._tocalculate = True
+                if invalue is not None: value = invalue
+                else: self._traced = True
+                self.input_values[basename] = value
         if self.tocalculate:
             self.monitor.start()
             self.calculator.calculate(**self.input_values)
@@ -840,20 +861,6 @@ class RuntimeInfo(BaseClass):
             self.calculated = False
         self._tocalculate = False
         return self._get
-
-    def set_input_values(self, input_values, force=None):
-        """Update parameter values; if new, next :meth:`calculate` call will call calculator's :class:`BaseCalculator.calculate`."""
-        self.params
-        for name, value in input_values.items():
-            name = str(name)
-            invalue = jax.to_nparray(value)
-            if name in self.input_names:
-                basename = self.input_names[name]
-                if force is not None:
-                    self._tocalculate = force
-                elif invalue is None or type(self.input_values[basename]) is not type(invalue) or self.input_values[basename] != invalue:  # jax
-                    self._tocalculate = True
-                self.input_values[basename] = invalue if invalue is not None else value
 
     def __getstate__(self):
         """Return this class state dictionary."""

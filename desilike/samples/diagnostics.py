@@ -140,10 +140,12 @@ def autocorrelation(chains, params=None):
     return toret / len(chains)
 
 
-def integrated_autocorrelation_time(chains, params=None, min_corr=None, c=5, reliable=50, check_valid='warn'):
-    """
+def integrated_autocorrelation_time(chains, params=None, criterion='sokal', min_corr=None, reliable=50, check_valid='warn', **kwargs):
+    r"""
     Estimate integrated autocorrelation time (averaged over all chains).
     Adapted from https://github.com/dfm/emcee/blob/main/src/emcee/autocorr.py
+    and https://github.com/blackjax-devs/blackjax/blob/main/blackjax/diagnostics.py
+    Effective sample size (ESS) can be computed as (number of samples) / (integrated autocorrelation time).
 
     Parameters
     ----------
@@ -153,6 +155,17 @@ def integrated_autocorrelation_time(chains, params=None, min_corr=None, c=5, rel
     params : list, ParameterCollection
         Parameters to compute integrated autocorrelation time for.
         Defaults to all parameters.
+
+    criterion : str, default='sokal'
+        Criterion to stop (:math:`N`) the integration of autocorrelation time:
+
+        .. math::
+
+            \hat{\tau} = -1 + 2 \sum_{t=0}^{N} \hat{\rho}_{t}
+
+        If 'min_corr', maximum index :math:`N` for which :math:`\hat{\rho}_{N} > \mathrm{min_corr}`. ``min_corr`` can be provided in ``kwargs``.
+        If 'sokal', minimum index :math:`N` for which :math:`N > C \hat{\rho}_{N}`. . ``c`` can be provided in ``kwargs``, defaults to 5.
+        If 'geyer', maximum index :math:`N` for which :math:`\hat{\rho}_{2N} + \hat{\rho}_{2N + 1} > 0`.
 
     min_corr : float, default=None
         Integrate starting from this lower autocorrelation threshold.
@@ -183,7 +196,7 @@ def integrated_autocorrelation_time(chains, params=None, min_corr=None, c=5, rel
     if params is None: params = chains[0].params(varied=True)
 
     if is_parameter_sequence(params):
-        return np.array([integrated_autocorrelation_time(chains, param, min_corr=min_corr, c=c, reliable=reliable, check_valid=check_valid) for param in params])
+        return np.array([integrated_autocorrelation_time(chains, param, criterion=criterion, reliable=reliable, check_valid=check_valid, **kwargs) for param in params])
 
     # Automated windowing procedure following Sokal (1989)
     def auto_window(taus, c):
@@ -201,15 +214,38 @@ def integrated_autocorrelation_time(chains, params=None, min_corr=None, c=5, rel
     size = chains[0].size
     corr = autocorrelation(chains, params)
     toret = None
-    if min_corr is not None:
-        ix = np.argmin(corr > min_corr * corr[0])
-        toret = 1 + 2 * np.sum(corr[1:ix])
-    elif c is not None:
-        taus = 2 * np.cumsum(corr) - 1  # 1 + 2 sum_{i=1}^{N} f_{i}
+    if criterion == 'min_corr':
+        min_corr = kwargs.get('min_corr', 0.)
+        mask = corr > min_corr * corr[0] # 1's, then 0's
+        ix = len(corr) if mask.all() else np.argmin(mask)
+        ix = np.argmin(corr > min_corr * corr[0])  # 1 + 2 sum_{i=1}^{N} f_{i} as corr[0] = 1.
+        toret = 2 * np.sum(corr[:ix]) - 1.
+    elif criterion == 'sokal':
+        c = kwargs.get('c', 5.)
+        taus = 2 * np.cumsum(corr) - 1.  # 1 + 2 sum_{i=1}^{N} f_{i} as corr[0] = 1.
         window = auto_window(taus, c)
         toret = taus[window]
+    elif criterion == 'geyer':
+        size_even = size - size % 2
+        corr = corr[:size_even]
+        corr_even = corr[0::2]
+        corr_odd = corr[1::2]
+        corr_sum = corr_even + corr_odd
+        mask = corr_sum > 0.
+        mask = np.ones_like(corr_sum, dtype='?')
+        ix = np.argmin(mask)
+        mask[:ix] = False
+        corr_odd[mask] = 0.
+        if ix < len(mask): mask[ix] = corr_even[ix] <= 0.
+        corr_even[mask] = 0.
+        corr_sum = corr_even + corr_odd
+        updated = np.minimum.accumulate(corr_sum)
+        corr_even[corr_sum > updated] = updated / 2.
+        corr_odd[corr_sum > updated] = updated / 2.
+        corr_sum = corr_even + corr_odd
+        toret = 2 * np.sum(corr_sum) - 1. - corr_even[ix]
     else:
-        raise ValueError('A criterion must be provided to stop integration of correlation time')
+        raise ValueError('could not understand {}; criterion must be provided to stop integration of correlation time'.format(criterion))
     if reliable * toret > size:
         msg = 'The chain is shorter than {:d} times the integrated autocorrelation time for {}. Use this estimate with caution and run a longer chain!\n'.format(reliable, params)
         msg += 'N/{:d} = {:.0f};\ntau: {}'.format(reliable, size / reliable, toret)

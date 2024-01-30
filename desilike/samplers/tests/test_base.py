@@ -7,7 +7,7 @@ import numpy as np
 from desilike import PipelineError, setup_logging
 from desilike.samplers import (EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler,
                                StaticDynestySampler, DynamicDynestySampler, PolychordSampler, NautilusSampler,
-                               GridSampler, QMCSampler, ImportanceSampler)
+                               NUTSSampler, MCLMCSampler, GridSampler, QMCSampler, ImportanceSampler)
 
 
 def test_samplers():
@@ -197,7 +197,9 @@ class AffineModel(BaseCalculator):  # all calculators should inherit from BaseCa
         self.x = x
 
     def calculate(self, a=0., b=0.):
-        self.y = a * self.x + b  # simple, affine model
+        c = a + b
+        d = a - b
+        self.y = c * self.x + d  # simple, affine model
 
     # Not mandatory, this is to return something in particular after calculate (else this will just be the instance)
     def get(self):
@@ -278,29 +280,40 @@ def test_mcmc():
 
     from desilike.samples import plotting
 
-    from desilike import LikelihoodFisher
-    params = {'a': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}, 'ref': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
-              'b': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}, 'ref': {'dist': 'norm', 'loc': 0., 'scale': 1.}}}
-    fisher = LikelihoodFisher(center=[0., 0.], params=params, hessian=-np.eye(2))
+    if 0:
+        from desilike import LikelihoodFisher
+        params = {'a': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}, 'ref': {'dist': 'norm', 'loc': 0., 'scale': 1.}},
+                'b': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}, 'ref': {'dist': 'norm', 'loc': 0., 'scale': 1.}}}
+        fisher = LikelihoodFisher(center=[0., 0.], params=params, hessian=-np.eye(2))
+    else:
+        likelihood = Likelihood(theory=PolyModel())
+        from desilike import Fisher
+        fisher = Fisher(likelihood, method='auto')
+        fisher = fisher()
 
     likelihood = fisher.to_likelihood()  # MyGaussianLikelihood()
     #likelihood.varied_params['a'].update(prior={'dist': 'norm', 'loc': 0., 'scale': 0.2})
     #likelihood.varied_params['b'].update(fixed=True)
-    for param in likelihood.varied_params:
-        param.update(prior=None)
+    #for param in likelihood.varied_params:
+    #    param.update(prior=None)
 
     chains, timing = {}, {}
-    for Sampler in [EmceeSampler, MCMCSampler]:
+    for Sampler in [EmceeSampler, NUTSSampler, MCLMCSampler, MCMCSampler][:3]:
         kwargs, check = {}, True
         ensemble = Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]
         if ensemble:
             kwargs.update(nwalkers=10)
-            check = {'max_eigen_gr': 0.005, 'stable_over': 10}
+            check = {'max_eigen_gr': 0.01, 'stable_over': 3}
+        if Sampler is NUTSSampler:
+            likelihood.varied_params['a'].update(derived='.best')
+            check = {'max_eigen_gr': 0.01, 'stable_over': 3}
         save_fn = './_tests/chain_{}_0.npy'.format(Sampler.__name__.replace('Sampler', '').lower())
+        nchains = save_fn if os.path.isfile(save_fn) else 1
+        nchains = 1
         #os.remove(save_fn)
-        sampler = Sampler(likelihood, chains=save_fn if os.path.isfile(save_fn) else 1, save_fn=save_fn, **kwargs)
+        sampler = Sampler(likelihood, chains=nchains, save_fn=save_fn, **kwargs)
         t0 = time.time()
-        chain = sampler.run(check=check, min_iterations=10000)[0]
+        chain = sampler.run(check=check, min_iterations=100)[0]
         timing[Sampler.__name__] = time.time() - t0
         chain = chain.remove_burnin(0.5)
         if ensemble: chain = chain[::10]
@@ -334,6 +347,20 @@ def test_nested():
 
     print(chains)
     plotting.plot_triangle(list(chains.values()), labels=list(chains.keys()), show=True)
+
+
+def test_hmc():
+
+    likelihood = Likelihood()
+    #likelihood.varied_params['a'].update(prior={'dist': 'norm', 'loc': 0., 'scale': 0.2, 'limits': [-0.5, 0.5]})
+    #likelihood.all_params['a'].update(derived='.marg')
+    likelihood()
+
+    from desilike.samples import plotting
+    for Sampler in [NUTSSampler, MCLMCSampler][1:]:
+        sampler = Sampler(likelihood, save_fn='./_tests/chain_*.npy')
+        chain = sampler.run(min_iterations=100, max_iterations=2000, check_every=200)[0]
+        plotting.plot_triangle(chain.remove_burnin(0.2), show=True)
 
 
 def test_marg():
@@ -371,10 +398,11 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_nautilus()
-    test_samplers()
+    #test_samplers()
     #test_fixed()
     #test_importance()
     #test_error()
-    #test_mcmc()
+    test_mcmc()
+    #test_hmc()
     #test_nested()
     #test_marg()

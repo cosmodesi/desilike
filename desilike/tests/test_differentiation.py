@@ -387,14 +387,16 @@ def test_autodiff():
     print(diff(b=1.)['y'])
     """
     likelihood.all_params['a'].update(derived='.marg')
+    likelihood()
     fun = likelihood
-    fun()
 
-    #fun = jax.jit(jax.vmap(fun))
-    #print(fun({'a': jnp.ones(3)}))
+    def logdensity_fn(b):
+        return likelihood(b=b)
 
-    jac = jax.jacfwd(fun)
-    print(jac({'a': 1., 'b': 2.}))
+    #likelihood(b=0.02)
+    grad = jax.value_and_grad(logdensity_fn, argnums=0)
+    grad(0.01)
+    grad(0.04)
 
 
 

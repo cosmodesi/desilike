@@ -153,6 +153,7 @@ class BaseLikelihood(BaseCalculator):
             derived = pipeline.derived
             #pipeline.more_calculate = lambda: None
             self.fisher = getattr(self, 'fisher', None)
+
             if self.fisher is None or self.fisher.mpicomm is not self.mpicomm:
                 #if self.fisher is not None: print(self.fisher.mpicomm is not self.mpicomm, self.fisher.varied_params != solved_params)
                 with warnings.catch_warnings():
@@ -181,6 +182,7 @@ class BaseLikelihood(BaseCalculator):
                         solve_likelihood({**params, **dict(zip(names, values))})
                         return [likelihood.flatdiff for likelihood in solve_likelihood.likelihoods]
 
+                    #flatdiffs = [likelihood.flatdiff for likelihood in solve_likelihood.likelihoods]
                     flatderivs = jax.jacfwd(getter, argnums=0, has_aux=False, holomorphic=False)(values)
                     flatdiffs = getter(values)
                     #print(values)
@@ -298,7 +300,7 @@ class BaseLikelihood(BaseCalculator):
             ip = jnp.diag(prior_hessian)[indices_marg]
             marg_likelihood += 1. / 2. * jnp.sum(jnp.log(jnp.where(ip > 0, ip, 1.)))  # logdet
             # sum_loglikelihood -= 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
-            if derived is not None: sum_loglikelihood = np.insert(sum_loglikelihood, 0, sum_loglikelihood[0] + marg_likelihood)
+            if derived is not None: np.add.at(sum_loglikelihood, 0, marg_likelihood)
             else: sum_loglikelihood += marg_likelihood
 
         self.loglikelihood = sum_loglikelihood
@@ -308,9 +310,7 @@ class BaseLikelihood(BaseCalculator):
             derived.set(ParameterArray(self.loglikelihood, param=self._param_loglikelihood, derivs=derivs))
             derived.set(ParameterArray(self.logprior, param=self._param_logprior, derivs=derivs))
 
-        if derived is not None:
-            return self.loglikelihood.flat[0] + self.logprior.flat[0]
-        return self.loglikelihood + self.logprior
+        return self.loglikelihood.ravel()[0] + self.logprior.ravel()[0]
 
     @classmethod
     def sum(cls, *others):

@@ -148,6 +148,7 @@ class BasePipeline(BaseClass):
             calculator.runtime_info.initialized = True
         self.calculators = self.calculators[::-1]
         self.mpicomm = calculator._mpicomm
+        #print('INIT', type(self.calculators[-1]))
         for calculator in self.calculators:
             calculator.runtime_info.tocalculate = True
             more_initialize = getattr(calculator, '_more_initialize', None)
@@ -839,8 +840,7 @@ class RuntimeInfo(BaseClass):
         keeping track of running time with :attr:`monitor`.
         """
         self.params
-        if force is None and getattr(self, '_traced', True): force = True
-        self._traced = False
+        #print('calculate', force, type(self.calculator), self.tocalculate, self._tocalculate, any(require.runtime_info.calculated for require in self.requires))
         for name, value in params.items():
             name = str(name)
             if name in self.input_names:
@@ -848,12 +848,13 @@ class RuntimeInfo(BaseClass):
                 basename = self.input_names[name]
                 if force is not None:
                     self._tocalculate = force
-                elif invalue is None or self.input_values[basename] != invalue:  # jax
+                elif value is not self.input_values[basename]:  # jax
                     self._tocalculate = True
-                if invalue is not None: value = invalue
-                else: self._traced = True
+                if invalue is not None:
+                    value = invalue
                 self.input_values[basename] = value
         if self.tocalculate:
+            #print('calculate', force, type(self.calculator))
             self.monitor.start()
             self.calculator.calculate(**self.input_values)
             self._derived = None
@@ -1039,7 +1040,7 @@ class BaseCalculator(BaseClass):
             if getattr(self.runtime_info, '_pipeline', None) is not None:  # no need if self.runtime_info.pipeline isn't created
                 params = ParameterCollection([param.copy() for param in self.runtime_info.pipeline.params if param.derived is not True])
                 new.runtime_info.pipeline._set_params(params)  # to preserve depends
-                new(**self.runtime_info.pipeline.input_values)
+                new.runtime_info.pipeline.input_values = dict(self.runtime_info.pipeline.input_values)
         return new
 
     def deepcopy(self):

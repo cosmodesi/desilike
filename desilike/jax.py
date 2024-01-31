@@ -216,9 +216,8 @@ def interp1d(xq, x, f, method='cubic'):
     """
     method = {1: 'linear', 3: 'cubic'}.get(method, method)
     if interpax is not None:
-        xq = numpy.array(xq)
         shape = xq.shape
-        return interpax.interp1d(xq.reshape(-1), x, f, method=method).reshape(shape)
+        return interpax.interp1d(xq.reshape(-1), x, f, method=method).reshape(shape + f.shape[1:])
 
     from scipy import interpolate
     return interpolate.interp1d(x, f, kind=method, fill_value='extrapolate', axis=0)(xq)

@@ -1438,18 +1438,18 @@ def test_autodiff():
     import jax
     from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate
     from desilike.theories.galaxy_clustering import (DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, SimpleTracerPowerSpectrumMultipoles,
-                                                     EFTLikeKaiserTracerPowerSpectrumMultipoles, PNGTracerPowerSpectrumMultipoles)
+                                                     EFTLikeKaiserTracerPowerSpectrumMultipoles, TNSTracerCorrelationFunctionMultipoles, PNGTracerPowerSpectrumMultipoles)
 
     for theory in [DampedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPowerSpectrumTemplate()),
                    ResummedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPowerSpectrumTemplate()),
                    PNGTracerPowerSpectrumMultipoles(template=StandardPowerSpectrumTemplate()),
                    SimpleTracerPowerSpectrumMultipoles(template=FixedPowerSpectrumTemplate()),
                    KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate()),
-                   EFTLikeKaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate())]:
+                   EFTLikeKaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate()),
+                   TNSTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate())][-1:]:
         params = {param.name: param.value for param in theory.all_params}
+        #theory(params)
         jax.jacfwd(theory)(params)
-
-
 
 
 if __name__ == '__main__':

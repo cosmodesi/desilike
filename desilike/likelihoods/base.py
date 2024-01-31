@@ -183,7 +183,9 @@ class BaseLikelihood(BaseCalculator):
                         return [likelihood.flatdiff for likelihood in solve_likelihood.likelihoods]
 
                     #flatdiffs = [likelihood.flatdiff for likelihood in solve_likelihood.likelihoods]
+                    #print('deriv')
                     flatderivs = jax.jacfwd(getter, argnums=0, has_aux=False, holomorphic=False)(values)
+                    #print('diff')
                     flatdiffs = getter(values)
                     #print(values)
                     likelihoods_gradient, likelihoods_hessian = [], []
@@ -242,7 +244,9 @@ class BaseLikelihood(BaseCalculator):
                 #pipeline._params, pipeline._varied_params = params_bak, varied_params_bak
             #self.fisher.likelihood.runtime_info.pipeline.input_values = values
             #self.fisher.mpicomm = self.mpicomm
+            #print('start fisher')
             x, dx, posterior_hessian, prior_hessian, likelihoods_hessian, likelihoods_gradient = self.fisher(values)
+            #print('stop fisher')
             #pipeline.derived = derived
             #pipeline.more_calculate = self._solve
             # flatdiff is theory - data

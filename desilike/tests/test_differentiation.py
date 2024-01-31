@@ -34,6 +34,60 @@ def test_jax():
     from desilike.jax import jax
     from desilike.jax import numpy as jnp
 
+    from functools import partial
+
+    def unjitted_loop_body(prev_i):
+        return prev_i + 1
+
+    def g_inner_jitted_partial(x, n):
+        i = 0
+        while i < n:
+            # Don't do this! each time the partial returns
+            # a function with different hash
+            i = jax.jit(partial(unjitted_loop_body))(i)
+        return x + i
+
+    def g_inner_jitted_lambda(x, n):
+        i = 0
+        while i < n:
+            # Don't do this!, lambda will also return
+            # a function with a different hash
+            i = jax.jit(lambda x: unjitted_loop_body(x))(i)
+        return x + i
+
+    def g_inner_jitted_normal(x, n):
+        i = 0
+        while i < n:
+            # this is OK, since JAX can find the
+            # cached, compiled function
+            i = jax.jit(unjitted_loop_body)(i)
+        return x + i
+
+    def g_inner_jitted_normal2(x, n):
+
+        @jax.jit
+        def unjitted_loop_body(prev_i):
+            return prev_i + 1
+
+        i = 0
+        while i < n:
+            # this is OK, since JAX can find the
+            # cached, compiled function
+            i = unjitted_loop_body(i)
+        return x + i
+
+    d = {}
+    number = 10
+    d['jit called in a loop with partials'] = {'stmt': 'g_inner_jitted_partial(10, 20).block_until_ready()', 'number': number}
+    d['jit called in a loop with lambdas'] = {'stmt': 'g_inner_jitted_lambda(10, 20).block_until_ready()', 'number': number}
+    d['jit called in a loop with caching'] = {'stmt': 'g_inner_jitted_normal(10, 20).block_until_ready()', 'number': number}
+    d['jit called in a loop with caching2'] = {'stmt': 'g_inner_jitted_normal2(10, 20).block_until_ready()', 'number': number}
+
+    for key, value in d.items():
+        dt = timeit.timeit(**value, globals={**globals(), **locals()}) #/ value['number'] * 1e3
+        print('{} takes {: .3f} milliseconds'.format(key, dt))
+
+    """
     def f(*values):
         return jnp.sum(jnp.array(values))
 
@@ -52,6 +106,7 @@ def test_jax():
     for key, value in d.items():
         dt = timeit.timeit(**value, globals={**globals(), **locals()}) #/ value['number'] * 1e3
         print('{} takes {: .3f} milliseconds'.format(key, dt))
+    """
 
 
 def test_differentiation():
@@ -163,11 +218,15 @@ def test_fisher_galaxy():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood.all_params['logA'].update(derived='jnp.log(10 *  {A_s})', prior=None)
     likelihood.all_params['A_s'] = {'prior': {'limits': [1.9, 2.2]}, 'ref': {'dist': 'norm', 'loc': 2.083, 'scale': 0.01}}
-    for param in likelihood.all_params.select(name=['m_ncdm', 'w0_fld', 'wa_fld', 'Omega_k']):
+    for param in likelihood.all_params:
+        param.update(fixed=True)
+    #for param in likelihood.all_params.select(name=['m_ncdm', 'w0_fld', 'wa_fld', 'Omega_k']):
+    #    param.update(fixed=False)
+    for param in likelihood.all_params.select(name=['wa_fld']):
         param.update(fixed=False)
 
     #print(likelihood(w0_fld=-1), likelihood(w0_fld=-1.1))
-    #print(likelihood(wa_fld=0), likelihood(wa_fld=0.1))
+    print(likelihood(wa_fld=0), likelihood(wa_fld=0.1))
     from desilike import Fisher
     fisher = Fisher(likelihood)
     #like = fisher()
@@ -175,6 +234,8 @@ def test_fisher_galaxy():
     from desilike import mpi
     fisher.mpicomm = mpi.COMM_SELF
     like = fisher()
+    print(like.params())
+    print(np.diag(like._hessian))
     print(like.to_stats())
     like2 = like.clone(params=['a', 'b'])
     assert np.allclose(like2._hessian, 0.)
@@ -278,7 +339,33 @@ class AffineModel(BaseCalculator):  # all calculators should inherit from BaseCa
         self.x = x
 
     def calculate(self, a=0., b=0.):
-        self.y = a * b * self.x + b  # simple, affine model
+        self.y = a * self.x + b  # simple, affine model
+
+    # Not mandatory, this is to return something in particular after calculate (else this will just be the instance)
+    def get(self):
+        return self.y
+
+    # This is only needed for emulation
+    def __getstate__(self):
+        return {'x': self.x, 'y': self.y}  # dictionary of Python base types and numpy arrays
+
+
+class AffineModel2(BaseCalculator):  # all calculators should inherit from BaseCalculator
+
+    # Model parameters; those can also be declared in a yaml file
+    _params = {'c': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}}}
+
+    def initialize(self, x=None, theory=None):
+        # Actual, non-trivial initialization must happen in initialize(); this is to be able to do AffineModel(x=...)
+        # without doing any actual work
+        self.x = x
+        if theory is None:
+            theory = AffineModel()
+        self.theory = theory
+        self.theory.init.update(x=self.x)
+
+    def calculate(self, c=0.):
+        self.y = c * self.theory.y  # simple, affine model
 
     # Not mandatory, this is to return something in particular after calculate (else this will just be the instance)
     def get(self):
@@ -302,7 +389,7 @@ class Likelihood(BaseGaussianLikelihood):
         # Requirements
         # AffineModel will be instantied with AffineModel(x=self.xdata)
         if theory is None:
-            theory = AffineModel()
+            theory = AffineModel2()
         self.theory = theory
         self.theory.init.update(x=self.xdata)  # we set x-coordinates, they will be passed to AffineModel's initialize
 
@@ -386,9 +473,13 @@ def test_autodiff():
     print(diff(b=0.)['y'])
     print(diff(b=1.)['y'])
     """
-    likelihood.all_params['a'].update(derived='.marg')
+    print('STEP1')
+    likelihood.all_params['c'].update(derived='.marg')
+    print('STEP2')
     likelihood()
-    fun = likelihood
+    print('STEP3')
+    likelihood(a=2., b=1.)
+    likelihood(a=1., b=2.)
 
     def logdensity_fn(b):
         return likelihood(b=b)

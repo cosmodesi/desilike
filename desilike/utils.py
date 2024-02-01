@@ -16,6 +16,7 @@ from numpy.linalg import LinAlgError
 import scipy as sp
 
 from . import mpi, jax
+from .jax import numpy as jnp
 from .mpi import CurrentMPIComm
 
 
@@ -575,7 +576,7 @@ def weights_trapz(x):
         return np.ones(x.size)
     if x.size == 2:
         return np.ones(x.size) / 2. * (x[1] - x[0])
-    return np.concatenate([[x[1] - x[0]], x[2:] - x[:-2], [x[-1] - x[-2]]]) / 2.
+    return jnp.insert(x[2:] - x[:-2], jnp.array([0, len(x) - 1]), jnp.array([x[1] - x[0], x[-1] - x[-2]])) / 2.
 
 
 def weights_leggauss(nx, sym=False):
@@ -591,7 +592,7 @@ def weights_mu(mu, method='leggauss', sym=True):
         if np.ndim(mu) == 0:
             mu = np.linspace(0., 1., mu)
         else:
-            mu = np.asarray(mu)
+            mu = jnp.asarray(mu)
         return mu, weights_trapz(mu) / (mu[-1] - mu[0])
     if method == 'leggauss':
         if np.ndim(mu) == 0:

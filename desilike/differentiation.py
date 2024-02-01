@@ -438,7 +438,7 @@ class Differentiation(BaseClass):
                     except Exception as exc:
                         raise exc
                     finally:
-                        getter_samples.append([__calculate(*values)] + toret)
+                        getter_samples.append([__calculate(*chunk_values)] + toret)
                 except Exception as exc:
                     errors.append(exc)
 
@@ -476,8 +476,9 @@ class Differentiation(BaseClass):
                 else:
                     samples[param] = np.full(samples.shape, self.center[param.name])
         nsamples = self.mpicomm.bcast(samples.size if self.mpicomm.rank == 0 else None, root=0)
+        print('start')
         getter_samples, getter_inst, getter_size = self._calculate(samples.to_dict(params=self.all_params) if self.mpicomm.rank == 0 else {})
-
+        print('stop')
         if self.mpicomm.rank == 0:
             finiteparams, finiteorder, finiteaccuracy = [], [], []
             for param in self._grid_samples.names():

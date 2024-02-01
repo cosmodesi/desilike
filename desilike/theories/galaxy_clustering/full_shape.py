@@ -562,76 +562,78 @@ class EFTLikeKaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunc
     """
 
 
-#@jit(static_argnames=['kernels'])
-def tns_pt(k11, q, pk_q, kernels=None):
-    pktable = []
-    # We could have a speed-up with FFTlog, see https://arxiv.org/pdf/1603.04405.pdf
-    k = k11[:, None]
-    wq = utils.weights_trapz(q)
+def tns_kernels(k, q, wq):
     jq = q**2 * wq / (4. * np.pi**2)
-    mus, wmus = utils.weights_mu(20, method='leggauss', sym=False)
+    k = k[:, None]
     x = q / k
-    # Kernel for P13
-    if kernels is None:
+    kernels = [None] * 3
+    # Integral of F3(q, -q, k) over mu cosine angle between k and q
+    def kernel_ff(x):
+        x = np.array(x)
+        toret = (6. / x**2 - 79. + 50. * x**2 - 21. * x**4 + 0.75 * (1. / x - x)**3 * (2. + 7. * x**2) * 2 * np.log(np.abs((x - 1.) / (x + 1.)))) / 504.
+        mask = x > 10.
+        toret[mask] = - 61. / 630. + 2. / 105. / x[mask]**2 - 10. / 1323. / x[mask]**4
+        dx = x - 1.
+        mask = np.abs(dx) < 0.01
+        toret[mask] = - 11. / 126. + dx[mask] / 126. - 29. / 252. * dx[mask]**2
+        return toret / x**2
 
-        kernels = [None] * 3
+    def kernel_gg(x):
+        x = np.array(x)
+        toret = (6. / x**2 - 41. + 2. * x**2 - 3. * x**4 + 0.75 * (1. / x - x)**3 * (2. + x**2) * 2 * np.log(np.abs((x - 1.) / (x + 1.)))) / 168.
+        mask = x > 10.
+        toret[mask] = - 3. / 10. + 26. / 245. / x[mask]**2 - 38. / 2205. / x[mask]**4
+        dx = x - 1.
+        mask = np.abs(dx) < 0.01
+        toret[mask] = - 3. / 14. - 5. / 42. * dx[mask] - 1. / 84. * dx[mask]**2
+        return toret / x**2
 
-        # Integral of F3(q, -q, k) over mu cosine angle between k and q
-        def kernel_ff(x):
-            x = np.array(x)
-            toret = (6. / x**2 - 79. + 50. * x**2 - 21. * x**4 + 0.75 * (1. / x - x)**3 * (2. + 7. * x**2) * 2 * np.log(np.abs((x - 1.) / (x + 1.)))) / 504.
-            mask = x > 10.
-            toret[mask] = - 61. / 630. + 2. / 105. / x[mask]**2 - 10. / 1323. / x[mask]**4
-            dx = x - 1.
-            mask = np.abs(dx) < 0.01
-            toret[mask] = - 11. / 126. + dx[mask] / 126. - 29. / 252. * dx[mask]**2
-            return toret / x**2
+    kernels[0] = 2 * jq * kernel_ff(x)
+    kernels[1] = 2 * jq * kernel_gg(x)
 
-        def kernel_gg(x):
-            x = np.array(x)
-            toret = (6. / x**2 - 41. + 2. * x**2 - 3. * x**4 + 0.75 * (1. / x - x)**3 * (2. + x**2) * 2 * np.log(np.abs((x - 1.) / (x + 1.)))) / 168.
-            mask = x > 10.
-            toret[mask] = - 3. / 10. + 26. / 245. / x[mask]**2 - 38. / 2205. / x[mask]**4
-            dx = x - 1.
-            mask = np.abs(dx) < 0.01
-            toret[mask] = - 3. / 14. - 5. / 42. * dx[mask] - 1. / 84. * dx[mask]**2
-            return toret / x**2
+    def kernel_a(x):
+        toret = np.zeros((5,) + x.shape, dtype='f8')
+        logx = np.zeros_like(x)
+        mask = np.abs(x - 1) > 1e-16
+        logx[mask] = np.log(np.abs((x[mask] + 1) / (x[mask] - 1)))
+        toret[0] = -1. / 84. / x * (2 * x * (19 - 24 * x**2 + 9 * x**4) - 9 * (x**2 - 1)**3 * logx)
+        toret[1] = 1. / 112. / x**3 * (2 * x * (x**2 + 1) * (3 - 14 * x**2 + 3 * x**4) - 3 * (x**2 - 1)**4 * logx)
+        toret[2] = 1. / 336. / x**3 * (2 * x * (9 - 185 * x**2 + 159 * x**4 - 63 * x**6) + 9 * (x**2 - 1)**3 * (7 * x**2 + 1) * logx)
+        toret[4] = 1. / 336. / x**3 * (2 * x * (9 - 109 * x**2 + 63 * x**4 - 27 * x**6) + 9 * (x**2 - 1)**3 * (3 * x**2 + 1) * logx)
 
-        kernels[0] = 2 * jq * kernel_ff(x)
-        kernels[1] = 2 * jq * kernel_gg(x)
+        mask = x < 1e-4
+        xm = x[mask]
+        toret[0][mask] = 8 * xm**8 / 735 + 24 * xm**6 / 245 - 24 * xm**4 / 35 + 8 * xm**2 / 7 - 2. / 3
+        toret[1][mask] = - 16 * xm**8 / 8085 - 16 * xm**6 / 735 + 48 * xm**4 / 245 - 16 * xm**2 / 35
+        toret[2][mask] = 32 * xm**8 / 1617 + 128 * xm**6 / 735 - 288 * xm**4 / 245 + 64 * xm**2 / 35 - 4. / 3
+        toret[4][mask] = 24 * xm**8 / 2695 + 8 * xm**6 / 105 - 24 * xm**4 / 49 + 24 * xm**2 / 35 - 2. / 3
 
-        def kernel_a(x):
-            toret = np.zeros((5,) + x.shape, dtype='f8')
-            logx = np.zeros_like(x)
-            mask = np.abs(x - 1) > 1e-16
-            logx[mask] = np.log(np.abs((x[mask] + 1) / (x[mask] - 1)))
-            toret[0] = -1. / 84. / x * (2 * x * (19 - 24 * x**2 + 9 * x**4) - 9 * (x**2 - 1)**3 * logx)
-            toret[1] = 1. / 112. / x**3 * (2 * x * (x**2 + 1) * (3 - 14 * x**2 + 3 * x**4) - 3 * (x**2 - 1)**4 * logx)
-            toret[2] = 1. / 336. / x**3 * (2 * x * (9 - 185 * x**2 + 159 * x**4 - 63 * x**6) + 9 * (x**2 - 1)**3 * (7 * x**2 + 1) * logx)
-            toret[4] = 1. / 336. / x**3 * (2 * x * (9 - 109 * x**2 + 63 * x**4 - 27 * x**6) + 9 * (x**2 - 1)**3 * (3 * x**2 + 1) * logx)
+        mask = x > 1e2
+        xm = x[mask]
+        toret[0][mask] = 2. / 105 - 24 / (245 * xm**2) - 8 / (735 * xm**4) - 8 / (2695 * xm**6) - 8 / (7007 * xm**8)
+        toret[1][mask] = -16. / 35 + 48 / (245 * xm**2) - 16 / (735 * xm**4) - 16 / (8085 * xm**6) - 16 / (35035 * xm**8)
+        toret[2][mask] = -44. / 105 - 32 / (735 * xm**4) - 64 / (8085 * xm**6) - 96 / (35035 * xm**8)
+        toret[4][mask] = -46. / 105 + 24 / (245 * xm**2) - 8 / (245 * xm**4) - 8 / (1617 * xm**6) - 8 / (5005 * xm**8)
 
-            mask = x < 1e-4
-            xm = x[mask]
-            toret[0][mask] = 8 * xm**8 / 735 + 24 * xm**6 / 245 - 24 * xm**4 / 35 + 8 * xm**2 / 7 - 2. / 3
-            toret[1][mask] = - 16 * xm**8 / 8085 - 16 * xm**6 / 735 + 48 * xm**4 / 245 - 16 * xm**2 / 35
-            toret[2][mask] = 32 * xm**8 / 1617 + 128 * xm**6 / 735 - 288 * xm**4 / 245 + 64 * xm**2 / 35 - 4. / 3
-            toret[4][mask] = 24 * xm**8 / 2695 + 8 * xm**6 / 105 - 24 * xm**4 / 49 + 24 * xm**2 / 35 - 2. / 3
+        toret[3] = toret[1]
+        return toret / x**2
 
-            mask = x > 1e2
-            xm = x[mask]
-            toret[0][mask] = 2. / 105 - 24 / (245 * xm**2) - 8 / (735 * xm**4) - 8 / (2695 * xm**6) - 8 / (7007 * xm**8)
-            toret[1][mask] = -16. / 35 + 48 / (245 * xm**2) - 16 / (735 * xm**4) - 16 / (8085 * xm**6) - 16 / (35035 * xm**8)
-            toret[2][mask] = -44. / 105 - 32 / (735 * xm**4) - 64 / (8085 * xm**6) - 96 / (35035 * xm**8)
-            toret[4][mask] = -46. / 105 + 24 / (245 * xm**2) - 8 / (245 * xm**4) - 8 / (1617 * xm**6) - 8 / (5005 * xm**8)
+    kernels[2] = jq * kernel_a(x)
+    return kernels
 
-            toret[3] = toret[1]
-            return toret / x**2
 
-        kernels[2] = jq * kernel_a(x)
+@jit
+def tns_pt(k, q, wq, pk_q, kernel13_d, kernel13_t, kernel_a):
+    # We could have a speed-up with FFTlog, see https://arxiv.org/pdf/1603.04405.pdf
+    k11 = k
+    k = k[:, None]
+    jq = q**2 * wq / (4. * np.pi**2)
+    x = q / k
 
-    kernel13_d, kernel13_t, kernel_a = kernels
+    mus, wmus = utils.weights_mu(10, method='leggauss', sym=False)
+
     # Compute P22
-    pk22_dd, pk22_dt, pk22_tt = (0., ) * 3
+    pk22_dd, pk22_dt, pk22_tt = (0.,) * 3
     pk_b2d, pk_bs2d, pk_b2t, pk_bs2t, sig3sq, pk_b22, pk_b2s2, pk_bs22 = (0.,) * 8
     A = jnp.zeros((5,) + k11.shape, dtype='f8')
     B = [jnp.zeros(k11.shape, dtype='f8') for i in range(12)]
@@ -700,10 +702,7 @@ def tns_pt(k11, q, pk_q, kernels=None):
     pk_dt = pk11 + pk22_dt + pk13_dt
     pk_tt = pk11 + pk22_tt + pk13_tt
 
-    pktable = {name: value for name, value in zip(['pk11', 'pk_dd', 'pk_b2d', 'pk_bs2d', 'pk_sig3sq', 'pk_b22', 'pk_b2s2', 'pk_bs22', 'pk_dt', 'pk_b2t', 'pk_bs2t', 'pk_tt', 'A', 'B'],
-                                                  [pk11, pk_dd, pk_b2d, pk_bs2d, pk_sig3sq, pk_b22, pk_b2s2, pk_bs22, pk_dt, pk_b2t, pk_bs2t, pk_tt, A, B])}
-
-    return pktable, kernels
+    return [pk11, pk_dd, pk_b2d, pk_bs2d, pk_sig3sq, pk_b22, pk_b2s2, pk_bs22, pk_dt, pk_b2t, pk_bs2t, pk_tt, A, B]
 
 
 class TNSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
@@ -736,6 +735,7 @@ class TNSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerS
             raise ValueError('fog must be lorentzian or gaussian')
 
     def calculate(self, sigmav=0):
+        import time
         super(TNSPowerSpectrumMultipoles, self).calculate()
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
@@ -746,10 +746,14 @@ class TNSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerS
             damping = jnp.exp(-(sigmav * kap * muap)**2)
 
         k11 = jnp.linspace(self.k[0] * 0.8, self.k[-1] * 1.2, int(len(self.k) * 1.4 + 0.5))
-        pktable, self.kernels = tns_pt(k11, self.template.k, self.template.pk_dd, kernels=getattr(self, 'kernels', None))
-        names = list(pktable.keys())
-        pktable = list(pktable.values())
+        q = self.template.k
+        wq = utils.weights_trapz(q)
+        jq = q**2 * wq / (4. * np.pi**2)
+        if getattr(self, 'kernels', None) is None:
+            self.kernels = tns_kernels(k11, q, wq)
 
+        pktable = tns_pt(k11, q, wq, self.template.pk_dd, *self.kernels)
+        names = ['pk11', 'pk_dd', 'pk_b2d', 'pk_bs2d', 'pk_sig3sq', 'pk_b22', 'pk_b2s2', 'pk_bs22', 'pk_dt', 'pk_b2t', 'pk_bs2t', 'pk_tt', 'A', 'B']
         pktable = jnp.concatenate([array[None, :] for array in pktable[:-2]] + pktable[-2:], axis=0)
         pktable = jac * damping * jnp.moveaxis(interp1d(jnp.log10(kap), np.log10(k11), pktable.T, method='cubic'), [0, 1], [1, 2])
         A = pktable[12:]

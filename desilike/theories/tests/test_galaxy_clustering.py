@@ -859,7 +859,7 @@ def test_folps():
         ref = FOLPS.RSDmultipoles(k, NuisanParams, AP=False)[1:]
         print(theory.template.f0 / FOLPS.f0)
         power = theory(b1=b1, b2=b2, bs=bs2 + 4./7*(b1 - 1), b3=b3nl - 32./315*(b1 - 1),
-                        alpha0=alpha0, alpha2=alpha2, alpha4=alpha4, ct=ctilde, sn0=alphashot0, sn2=alphashot2)
+                       alpha0=alpha0, alpha2=alpha2, alpha4=alpha4, ct=ctilde, sn0=alphashot0, sn2=alphashot2)
 
         ax = plt.gca()
         ax.plot(k, k * template.pk_dd)
@@ -1435,6 +1435,7 @@ def plot_direct():
 
 
 def test_autodiff():
+    import time
     import jax
     from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate
     from desilike.theories.galaxy_clustering import (DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, SimpleTracerPowerSpectrumMultipoles,
@@ -1448,7 +1449,13 @@ def test_autodiff():
                    EFTLikeKaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate()),
                    TNSTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate())][-1:]:
         params = {param.name: param.value for param in theory.all_params}
-        #theory(params)
+        theory(params)
+        theory.plot(show=True)
+        t0 = time.time()
+        niterations = 2
+        for i in range(niterations):
+            theory({param.name: param.prior.sample() if param.prior.is_proper() else param.value for param in theory.all_params})
+        print((time.time() - t0) / niterations)
         jax.jacfwd(theory)(params)
 
 

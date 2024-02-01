@@ -211,18 +211,18 @@ def test_fisher_galaxy():
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=0.5))
-    for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
+    #for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
                                                          data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood.all_params['logA'].update(derived='jnp.log(10 *  {A_s})', prior=None)
     likelihood.all_params['A_s'] = {'prior': {'limits': [1.9, 2.2]}, 'ref': {'dist': 'norm', 'loc': 2.083, 'scale': 0.01}}
-    for param in likelihood.all_params:
-        param.update(fixed=True)
-    #for param in likelihood.all_params.select(name=['m_ncdm', 'w0_fld', 'wa_fld', 'Omega_k']):
+    #for param in likelihood.all_params:
+    #    param.update(fixed=True)
+    #for param in likelihood.all_params.select(name=['wa_fld']):
     #    param.update(fixed=False)
-    for param in likelihood.all_params.select(name=['wa_fld']):
+    for param in likelihood.all_params.select(name=['m_ncdm', 'w0_fld', 'wa_fld', 'Omega_k']):
         param.update(fixed=False)
 
     #print(likelihood(w0_fld=-1), likelihood(w0_fld=-1.1))

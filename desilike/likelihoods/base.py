@@ -22,7 +22,9 @@ class BaseLikelihood(BaseCalculator):
     name = None
     solved_default = '.marg'
 
-    def initialize(self, catch_errors=None):
+    def initialize(self, catch_errors=None, **kwargs):
+        if 'name' in kwargs:
+            self.name = kwargs['name']
         for name in self._attrs:
             if name not in self.params.basenames():
                 self.params.set(Parameter(basename=name, namespace=self.name, latex=utils.outputs_to_latex(name), derived=True))
@@ -351,8 +353,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
     precision : array, default=None
         Precision matrix to be used instead of the inverse covariance.
     """
-    def initialize(self, observables, covariance=None, scale_covariance=1., correct_covariance='hartlap-percival2014', precision=None, name=None, **kwargs):
-        self.name = name
+    def initialize(self, observables, covariance=None, scale_covariance=1., correct_covariance='hartlap-percival2014', precision=None, **kwargs):
         if not utils.is_sequence(observables):
             observables = [observables]
         self.nobs = None

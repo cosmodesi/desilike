@@ -399,8 +399,8 @@ def test_broadband_bao():
 
 def test_full_shape():
 
-    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles
-    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles
+    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles
 
     def clean_folps():
         import FOLPSnu as FOLPS
@@ -475,7 +475,8 @@ def test_full_shape():
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
 
     ntemplate = 4
-    for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles][1:2], [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles][1:2]):
+    for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles],
+                                        [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles]):
         for freedom in [None, 'min', 'max'][2:]:
             for ells in [(0, 2), (0, 2, 4)]:
                 print(freedom, ells)
@@ -681,6 +682,16 @@ def test_full_shape():
     test(theory)  # no P(k) computed
     theory(logA=3.04, b1=1.).shape
 
+    from desilike.theories.galaxy_clustering import FOLPSAXTracerPowerSpectrumMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles
+
+    theory = FOLPSAXTracerPowerSpectrumMultipoles()
+    test(theory)
+    theory(logA=3.04, b1=1.).shape
+
+    theory = FOLPSAXTracerCorrelationFunctionMultipoles()
+    test(theory)  # no P(k) computed
+    theory(logA=3.04, b1=1.).shape
+
 
 def test_velocileptors():
     from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
@@ -862,10 +873,9 @@ def test_folps():
                        alpha0=alpha0, alpha2=alpha2, alpha4=alpha4, ct=ctilde, sn0=alphashot0, sn2=alphashot2)
 
         ax = plt.gca()
-        ax.plot(k, k * template.pk_dd)
         for ill, ell in enumerate((0, 2, 4)):
             ax.plot(k, k * ref[ill], color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
-            #ax.plot(k, k * power[ill], color='C{:d}'.format(ill), ls='--')
+            ax.plot(k, k * power[ill], color='C{:d}'.format(ill), ls='--')
             #ax.plot(k, k * (ref[ill] / power[ill] - 1.), color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
         ax.set_xlim([k[0], k[-1]])
         ax.grid(True)
@@ -875,6 +885,62 @@ def test_folps():
         plt.show()
 
     theory = FOLPSTracerCorrelationFunctionMultipoles()
+    theory()
+    theory.plot(show=True)
+
+
+def test_folpsax():
+    from matplotlib import pyplot as plt
+    z_pk = 0.5
+    k = np.logspace(np.log10(0.01), np.log10(0.3), num=50) # array of k_ev in [h/Mpc]
+    PshotP = 1. / 0.0002118763
+    # bias parameters
+    b1 = 1.645
+    b2 = -0.46
+    bs2 = -4./7*(b1 - 1)
+    b3nl = 32./315*(b1 - 1)
+    # EFT parameters
+    alpha0 = 3                 #units: [Mpc/h]^2
+    alpha2 = -28.9             #units: [Mpc/h]^2
+    alpha4 = 0.0               #units: [Mpc/h]^2
+    ctilde = 0.0               #units: [Mpc/h]^4
+    # Stochatics parameters
+    alphashot0 = 0.08
+    alphashot2 = -8.1          #units: [Mpc/h]^2
+    NuisanParams = [b1, b2, bs2, b3nl, alpha0, alpha2, alpha4, ctilde, alphashot0, alphashot2, PshotP]
+
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, FOLPSAXTracerPowerSpectrumMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles
+    template = DirectPowerSpectrumTemplate(z=z_pk)
+    theory = FOLPSAXTracerPowerSpectrumMultipoles(template=template, k=k, shotnoise=PshotP, mu=3)
+
+    for m_ncdm in [0.2, 0.5]:
+        theory(m_ncdm=m_ncdm)
+        cosmo = template.cosmo
+        omega_b, omega_cdm, omega_ncdm, h = cosmo['omega_b'], cosmo['omega_cdm'], cosmo['omega_ncdm_tot'], cosmo['h']
+        CosmoParams = [z_pk, omega_b, omega_cdm, omega_ncdm, h]
+        inputpkT = [template.k, template.pk_dd]
+
+        import FOLPSnu as FOLPS
+        matrices = FOLPS.Matrices()
+        nonlinear = FOLPS.NonLinear(inputpkT, CosmoParams)
+        ref = FOLPS.RSDmultipoles(k, NuisanParams, AP=False)[1:]
+        print(theory.template.f0 / FOLPS.f0)
+        power = theory(b1=b1, b2=b2, bs=bs2 + 4./7*(b1 - 1), b3=b3nl - 32./315*(b1 - 1),
+                       alpha0=alpha0, alpha2=alpha2, alpha4=alpha4, ct=ctilde, sn0=alphashot0, sn2=alphashot2)
+
+        ax = plt.gca()
+        for ill, ell in enumerate((0, 2, 4)):
+            ax.plot(k, k * ref[ill], color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
+            ax.plot(k, k * power[ill], color='C{:d}'.format(ill), ls='--')
+            #ax.plot(k, k * (ref[ill] / power[ill] - 1.), color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.set_xlim([k[0], k[-1]])
+        ax.grid(True)
+        ax.legend()
+        ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        plt.show()
+
+    theory = FOLPSAXTracerCorrelationFunctionMultipoles()
     theory()
     theory.plot(show=True)
 
@@ -1466,6 +1532,7 @@ if __name__ == '__main__':
     #test_velocileptors()
     #test_pybird()
     #test_folps()
+    #test_folpsax()
     #test_velocileptors_omegak()
     #test_params()
     #test_integ()
@@ -1473,10 +1540,10 @@ if __name__ == '__main__':
     #test_wiggle_split_template()
     #test_emulator_templates()
     #test_bao()
-    test_autodiff()
+    #test_autodiff()
     #test_broadband_bao()
     #test_flexible_bao()
-    #test_full_shape()
+    test_full_shape()
     #test_emulator_direct()
     #plot_direct()
     #test_emulator_shapefit()

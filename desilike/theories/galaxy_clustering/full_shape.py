@@ -1917,6 +1917,123 @@ class FOLPSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFrom
     Reference
     ---------
     - https://arxiv.org/abs/2208.02791
-    - https://github.com/henoriega/FOLPS-nu
+    - https://github.com/cosmodesi/folpsax
     """
     _params = FOLPSTracerPowerSpectrumMultipoles._params
+
+
+class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+
+    _default_options = dict(kernels='fk')
+    _pt_attrs = ['jac', 'kap', 'muap', 'kt', 'table', 'table_now', 'scalars', 'scalars_now']
+
+    def initialize(self, *args, mu=6, **kwargs):
+        super(FOLPSAXPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
+        from folpsax import get_mmatrices
+        self.matrices = get_mmatrices()
+        self.template.init.update(with_now='peakaverage')
+
+    def calculate(self):
+        super(FOLPSAXPowerSpectrumMultipoles, self).calculate()
+        # [z, omega_b, omega_cdm, omega_ncdm, h]
+        # only used for neutrinos
+        # sensitive to omega_b + omega_cdm, not omega_b, omega_cdm separately
+        cosmo_params = {'z': self.z, 'fnu': 0., 'Omega_m': 0.3, 'h': 0.7}
+        cosmo = getattr(self.template, 'cosmo', None)
+        if cosmo is not None:
+            cosmo_params['fnu'] = cosmo['Omega_ncdm_tot'] / cosmo['Omega_m']
+            cosmo_params['Omega_m'] = cosmo['Omega_m']
+            cosmo_params['h'] = cosmo['h']
+
+        from folpsax import get_non_linear
+        table, table_now = get_non_linear(self.template.k, self.template.pk_dd, self.matrices,
+                                          pknow=self.template.pknow_dd,  kminout=self.k[0] * 0.8, kmaxout=self.k[-1] * 1.2, nk=max(len(self.k), 120),
+                                          kernels=self.options['kernels'], **cosmo_params)
+
+        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        self.pt = Namespace(jac=jac, kap=kap, muap=muap, kt=table[0], table=table[1:26], table_now=table_now[1:26], scalars=table[26:], scalars_now=table_now[26:])
+
+    def combine_bias_terms_poles(self, pars, nd=1e-4):
+        table = (self.pt.kt,) + tuple(self.pt.table) + tuple(self.pt.scalars)
+        table_now = (self.pt.kt,) + tuple(self.pt.table_now) + tuple(self.pt.scalars_now)
+        from folpsax import get_rsd_pkmu
+        pars = list(pars) + [1. / nd]  # add shot noise
+        b1 = pars[0]
+        # add co-evolution part
+        pars[2] = pars[2] - 4. / 7. * (b1 - 1.)  # bs
+        pars[3] = pars[3] + 32. / 315. * (b1 - 1.)  # b3
+        pkmu = self.pt.jac * get_rsd_pkmu(self.pt.kap, self.pt.muap, pars, table, table_now)
+        return self.to_poles(pkmu)
+
+    def __getstate__(self):
+        state = {}
+        for name in ['k', 'z', 'ells', 'wmu']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        for name in self._pt_attrs:
+            if hasattr(self.pt, name):
+                state[name] = getattr(self.pt, name)
+        return state
+
+    def __setstate__(self, state):
+        for name in ['k', 'z', 'ells', 'wmu']:
+            if name in state: setattr(self, name, state.pop(name))
+        self.pt = Namespace(**state)
+
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/cosmodesi/folpsax')
+
+
+class FOLPSAXTracerPowerSpectrumMultipoles(FOLPSTracerPowerSpectrumMultipoles):
+    """
+    FOLPS tracer power spectrum multipoles.
+    Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
+    By default, bs and b3 are fixed to 0, following co-evolution.
+    For the matter (unbiased) power spectrum, set b1=1 and all other bias parameters to 0.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    shotnoise : float, default=1e4
+        Shot noise (which is usually marginalized over).
+
+    Reference
+    ---------
+    - https://arxiv.org/abs/2208.02791
+    - https://github.com/cosmodesi/folpsax
+    """
+
+
+class FOLPSAXTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
+    """
+    FOLPS tracer correlation function multipoles.
+    Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
+    By default, bs and b3 are fixed to 0, following co-evolution.
+    For the matter (unbiased) correlation function, set b1=1 and all other bias parameters to 0.
+
+    Parameters
+    ----------
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    Reference
+    ---------
+    - https://arxiv.org/abs/2208.02791
+    - https://github.com/cosmodesi/folpsax
+    """
+    _params = FOLPSAXTracerPowerSpectrumMultipoles._params

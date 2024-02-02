@@ -106,6 +106,7 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
     def _run_one(self, start, niterations=300, thin_by=1):
         import jax
         import blackjax
+        from desilike import mpi
         key = jax.random.PRNGKey(self.rng.randint(0, high=0xffffffff))
         warmup_key, run_key = jax.random.split(key, 2)
         start = jnp.ravel(start)
@@ -115,6 +116,8 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
             warnings.warn('MCLMCSampler does not benefit from several processes per chain, please ask for {:d} processes'.format(len(self.chains)))
 
         names = self.varied_params.names()
+        mpicomm = self.likelihood.mpicomm
+        self.likelihood.mpicomm = mpi.COMM_SELF
 
         def logdensity_fn(values):
             return self.likelihood(dict(zip(names, values)))
@@ -141,6 +144,7 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
         _, chain, _ = blackjax.util.run_inference_algorithm(rng_key=run_key, initial_state_or_position=start, inference_algorithm=sampling_alg, num_steps=niterations, progress_bar=False)
         data = [chain.position[::thin_by, iparam] for iparam, param in enumerate(self.varied_params)] + [chain.logdensity]
         chain = Chain(data=data, params=self.varied_params + ['logposterior'], attrs={'hyp': self.hyp})
+        self.likelihood.mpicomm = mpicomm
         #self.derived = [chain.select(name=self.varied_params.names()), Samples()]
         #logprior = sum(param.prior(chain[param]) for param in self.varied_params)
         #self.derived[1][self.likelihood._param_logprior] = logprior

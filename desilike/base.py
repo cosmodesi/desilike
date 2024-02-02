@@ -341,8 +341,9 @@ class BasePipeline(BaseClass):
                     state[1] = derived
                 finally:
                     states.append(state)
-
-            all_states += mpicomm.reduce(states, root=0)
+            tmp_states = mpicomm.reduce(states, root=0)
+            if mpicomm.rank == 0:
+                all_states += tmp_states
             self.mpicomm = mpicomm
 
         results = None

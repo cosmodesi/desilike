@@ -430,14 +430,15 @@ def test_bao_hmc():
         sampler = Sampler(likelihood, seed=12, save_fn=save_fn, **kwargs)
         chains[Sampler.__name__] = sampler.run(max_iterations=10000, check={'max_eigen_gr': 1., 'min_ess': 50}, check_every=200)[0]
 
-    plotting.plot_triangle(list(chains.values()), labels=list(chains.keys()), show=True)
+    if likelihood.mpicomm.rank == 0:
+        plotting.plot_triangle(list(chains.values()), labels=list(chains.keys()), show=True)
 
 
 if __name__ == '__main__':
 
     setup_logging()
     #test_nautilus()
-    #test_samplers()
+    test_samplers()
     #test_fixed()
     #test_importance()
     #test_error()
@@ -445,4 +446,4 @@ if __name__ == '__main__':
     #test_hmc()
     #test_nested()
     #test_marg()
-    test_bao_hmc()
+    #test_bao_hmc()

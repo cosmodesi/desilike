@@ -446,7 +446,9 @@ class Differentiation(BaseClass):
             self.pipeline.mpicomm = mpicomm
             if errors:
                 raise PipelineError('got these errors: {}'.format(errors))
-            getter_samples += self.mpicomm.reduce(getter_samples, root=0)
+            tmp_samples = self.mpicomm.reduce(getter_samples, root=0)
+            if self.mpicomm.rank == 0:
+                getter_samples += tmp_samples
 
         for getter_size, getter_inst in self.mpicomm.gather((getter_size, getter_inst), root=0):
             if getter_size is not None: break

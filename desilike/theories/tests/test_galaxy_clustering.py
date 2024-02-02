@@ -1505,7 +1505,7 @@ def test_autodiff():
     import jax
     from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate
     from desilike.theories.galaxy_clustering import (DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, SimpleTracerPowerSpectrumMultipoles,
-                                                     EFTLikeKaiserTracerPowerSpectrumMultipoles, TNSTracerCorrelationFunctionMultipoles, PNGTracerPowerSpectrumMultipoles)
+                                                     EFTLikeKaiserTracerPowerSpectrumMultipoles, TNSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles, PNGTracerPowerSpectrumMultipoles)
 
     for theory in [DampedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPowerSpectrumTemplate()),
                    ResummedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPowerSpectrumTemplate()),
@@ -1513,7 +1513,8 @@ def test_autodiff():
                    SimpleTracerPowerSpectrumMultipoles(template=FixedPowerSpectrumTemplate()),
                    KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate()),
                    EFTLikeKaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate()),
-                   TNSTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate())][-1:]:
+                   TNSTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate()),
+                   FOLPSAXTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate())][-1:]:
         params = {param.name: param.value for param in theory.all_params}
         theory(params)
         theory.plot(show=True)
@@ -1540,10 +1541,10 @@ if __name__ == '__main__':
     #test_wiggle_split_template()
     #test_emulator_templates()
     #test_bao()
-    #test_autodiff()
+    test_autodiff()
     #test_broadband_bao()
     #test_flexible_bao()
-    test_full_shape()
+    #test_full_shape()
     #test_emulator_direct()
     #plot_direct()
     #test_emulator_shapefit()

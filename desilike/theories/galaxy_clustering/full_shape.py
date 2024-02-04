@@ -745,7 +745,7 @@ class TNSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerS
         else:
             damping = jnp.exp(-(sigmav * kap * muap)**2)
 
-        k11 = jnp.linspace(self.k[0] * 0.8, self.k[-1] * 1.2, int(len(self.k) * 1.4 + 0.5))
+        k11 = np.linspace(self.k[0] * 0.8, self.k[-1] * 1.2, int(len(self.k) * 1.4 + 0.5))
         q = self.template.k
         wq = utils.weights_trapz(q)
         jq = q**2 * wq / (4. * np.pi**2)
@@ -1944,6 +1944,7 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             cosmo_params['fnu'] = cosmo['Omega_ncdm_tot'] / cosmo['Omega_m']
             cosmo_params['Omega_m'] = cosmo['Omega_m']
             cosmo_params['h'] = cosmo['h']
+            cosmo_params['f0'] = self.template.f0
 
         from folpsax import get_non_linear
         table, table_now = get_non_linear(self.template.k, self.template.pk_dd, self.matrices,

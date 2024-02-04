@@ -1,5 +1,6 @@
 import numpy as np
 from desilike.jax import numpy as jnp
+from desilike.jax import jit
 
 from desilike.samples import Chain, load_source
 from .base import BaseBatchPosteriorSampler
@@ -73,6 +74,7 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
             integrator = getattr(blackjax.mcmc.integrators, integrator)
         self.attrs = dict(adaptation=adaptation, L=L, step_size=step_size, integrator=integrator)
         self.hyp = self.mpicomm.bcast(getattr(self.chains[0], 'attrs', {}).get('hyp', None), root=0)
+        self.algorithm = None
 
     def run(self, *args, **kwargs):
         """
@@ -103,6 +105,12 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
         """
         return super(MCLMCSampler, self).run(*args, **kwargs)
 
+    @jit(static_argnums=[0])
+    def _one_step(self, state, xs):
+        _, rng_key = xs
+        state, info = self.algorithm.step(rng_key, state)
+        return state, (state, info)
+
     def _run_one(self, start, niterations=300, thin_by=1):
         import jax
         import blackjax
@@ -115,14 +123,14 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
             import warnings
             warnings.warn('MCLMCSampler does not benefit from several processes per chain, please ask for {:d} processes'.format(len(self.chains)))
 
-        names = self.varied_params.names()
         mpicomm = self.likelihood.mpicomm
         self.likelihood.mpicomm = mpi.COMM_SELF
 
-        def logdensity_fn(values):
-            return self.likelihood(dict(zip(names, values)))
+        if self.algorithm is None:
 
-        if self.hyp is None:
+            def logdensity_fn(values):
+                return self.likelihood(dict(zip(self.varied_params.names(), values)))
+
             adaptation = self.attrs['adaptation']
             if isinstance(adaptation, dict):
                 adaptation = dict(adaptation)
@@ -133,15 +141,19 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
                 (initial_state, warmup_params) = blackjax.mclmc_find_L_and_step_size(mclmc_kernel=kernel, num_steps=niterations, state=initial_state, rng_key=warmup_key)
                 start = initial_state.position
                 self.hyp = dict(step_size=warmup_params.step_size, L=warmup_params.L)
-            else:
+            elif self.hyp is None:
                 self.hyp = {name: self.attrs[name] for name in ['step_size', 'L']}
-        # use the quick wrapper to build a new kernel with the tuned parameters
-        self.log_info('Using hyperparameters: {}.'.format(self.hyp))
-        attrs = {name: self.attrs[name] for name in ['integrator']}
-        sampling_alg = blackjax.mclmc(logdensity_fn, **attrs, **self.hyp)
+            # use the quick wrapper to build a new kernel with the tuned parameters
+            self.log_info('Using hyperparameters: {}.'.format(self.hyp))
+            attrs = {name: self.attrs[name] for name in ['integrator']}
+            self.algorithm = blackjax.mclmc(logdensity_fn, **attrs, **self.hyp)
 
-        # run the sampler
-        _, chain, _ = blackjax.util.run_inference_algorithm(rng_key=run_key, initial_state_or_position=start, inference_algorithm=sampling_alg, num_steps=niterations, progress_bar=False)
+        initial_state = self.algorithm.init(start, warmup_key)
+        keys = jax.random.split(run_key, niterations)
+        xs = (jnp.arange(niterations), keys)
+        # run the sampler, following https://github.com/blackjax-devs/blackjax/blob/54023350cac935af79fc309006bf37d1603bb945/blackjax/util.py#L143
+        final_state, (chain, info_history) = jax.lax.scan(self._one_step, initial_state, xs)
+
         data = [chain.position[::thin_by, iparam] for iparam, param in enumerate(self.varied_params)] + [chain.logdensity]
         chain = Chain(data=data, params=self.varied_params + ['logposterior'], attrs={'hyp': self.hyp})
         self.likelihood.mpicomm = mpicomm

@@ -1,5 +1,6 @@
 import numpy as np
 from desilike.jax import numpy as jnp
+from desilike.jax import jit
 
 from desilike.samples import Chain, load_source
 from .base import BaseBatchPosteriorSampler
@@ -86,6 +87,7 @@ class NUTSSampler(BaseBatchPosteriorSampler):
         covariance = self.mpicomm.bcast(covariance, root=0)
         self.attrs['inverse_mass_matrix'] = jnp.array(covariance)
         self.hyp = self.mpicomm.bcast(getattr(self.chains[0], 'attrs', {}).get('hyp', None), root=0)
+        self.algorithm = None
 
     def run(self, *args, **kwargs):
         """
@@ -116,6 +118,12 @@ class NUTSSampler(BaseBatchPosteriorSampler):
         """
         return super(NUTSSampler, self).run(*args, **kwargs)
 
+    @jit(static_argnums=[0])
+    def _one_step(self, state, xs):
+        _, rng_key = xs
+        state, info = self.algorithm.step(rng_key, state)
+        return state, (state, info)
+
     def _run_one(self, start, niterations=300, thin_by=1):
         import jax
         import blackjax
@@ -128,14 +136,14 @@ class NUTSSampler(BaseBatchPosteriorSampler):
             import warnings
             warnings.warn('NUTSSampler does not benefit from several processes per chain, please ask for {:d} processes'.format(len(self.chains)))
 
-        names = self.varied_params.names()
         mpicomm = self.likelihood.mpicomm
         self.likelihood.mpicomm = mpi.COMM_SELF
 
-        def logdensity_fn(values):
-            return self.likelihood(dict(zip(names, values)))
+        if self.algorithm is None:
 
-        if self.hyp is None:
+            def logdensity_fn(values):
+                return self.likelihood(dict(zip(self.varied_params.names(), values)))
+
             adaptation = self.attrs['adaptation']
             if isinstance(adaptation, dict):
                 adaptation = dict(adaptation)
@@ -143,16 +151,20 @@ class NUTSSampler(BaseBatchPosteriorSampler):
                 adaptation.setdefault('initial_step_size', self.attrs['step_size'])
                 warmup = blackjax.window_adaptation(blackjax.nuts, logdensity_fn=logdensity_fn, **adaptation)
                 (initial_state, warmup_params), _ = warmup.run(warmup_key, start, niterations)
-                start = initial_state.position
                 self.hyp = dict(warmup_params)
-            else:
+            elif self.hyp is None:
                 self.hyp = {name: self.attrs[name] for name in ['step_size', 'inverse_mass_matrix']}
-        # use the quick wrapper to build a new kernel with the tuned parameters
-        attrs = {name: self.attrs[name] for name in ['max_num_doublings', 'divergence_threshold', 'integrator']}
-        sampling_alg = blackjax.nuts(logdensity_fn, **attrs, **self.hyp)
+            self.log_info('Using hyperparameters: {}.'.format(self.hyp))
+            # use the quick wrapper to build a new kernel with the tuned parameters
+            attrs = {name: self.attrs[name] for name in ['max_num_doublings', 'divergence_threshold', 'integrator']}
+            self.algorithm = blackjax.nuts(logdensity_fn, **attrs, **self.hyp)
 
-        # run the sampler
-        _, chain, _ = blackjax.util.run_inference_algorithm(rng_key=run_key, initial_state_or_position=start, inference_algorithm=sampling_alg, num_steps=niterations, progress_bar=False)
+        initial_state = self.algorithm.init(start, warmup_key)
+        keys = jax.random.split(run_key, niterations)
+        xs = (jnp.arange(niterations), keys)
+        # run the sampler, following https://github.com/blackjax-devs/blackjax/blob/54023350cac935af79fc309006bf37d1603bb945/blackjax/util.py#L143
+        final_state, (chain, info_history) = jax.lax.scan(self._one_step, initial_state, xs)
+
         data = [chain.position[::thin_by, iparam] for iparam, param in enumerate(self.varied_params)] + [chain.logdensity]
         chain = Chain(data=data, params=self.varied_params + ['logposterior'], attrs={'hyp': self.hyp})
         self.likelihood.mpicomm = mpicomm

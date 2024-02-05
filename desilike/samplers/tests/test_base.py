@@ -434,6 +434,72 @@ def test_bao_hmc():
         plotting.plot_triangle(list(chains.values()), labels=list(chains.keys()), show=True)
 
 
+def test_folpsax_hmc():
+
+    import time
+    import jax
+    from jax import numpy as jnp
+    from desilike.theories.galaxy_clustering import FOLPSAXTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, BAOPowerSpectrumTemplate
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike.samples import plotting
+
+    def get_theory(z):
+        template = ShapeFitPowerSpectrumTemplate(z=z)
+        theory = FOLPSAXTracerPowerSpectrumMultipoles(template=template)
+        for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
+        return theory
+
+    def get_theory(z):
+        template = BAOPowerSpectrumTemplate(z=z)
+        theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
+        for param in theory.params.select(basename=['al*']): param.update(derived='.best')
+        return theory
+
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.3, 0.005], 2: [0.05, 0.3, 0.005]},
+                                                         data={},
+                                                         theory=get_theory(z=0.5))
+    footprint = BoxFootprint(volume=1e10, nbar=1e-3)
+    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=1)()
+
+    observable2 = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.3, 0.005], 2: [0.05, 0.3, 0.005]},
+                                                         data={},
+                                                         theory=get_theory(z=1.))
+
+    #likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov, name='LRG')
+    #likelihood()
+    cov = np.eye(cov.shape[0] * 2)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable, observable2], covariance=cov, name='LRG')
+    likelihood()
+    t0 = time.time()
+    start = jnp.array([param.prior.sample() if param.prior.is_proper() else param.value for param in likelihood.varied_params])
+
+    def fn(values):
+        return likelihood(dict(zip(likelihood.varied_params.names(), values)))
+    fn(start - 1e-6)
+
+    grad = jax.value_and_grad(fn)
+    grad = jax.jit(grad)
+    grad(start)
+    print(time.time() - t0)
+    exit()
+
+    chains = {}
+    for Sampler in [NUTSSampler, MCLMCSampler][:1]:
+        save_fn = ['./_tests/chain_{:d}.npz'.format(i) for i in range(min(likelihood.mpicomm.size, 1))]
+        kwargs = {}
+        if Sampler is MCLMCSampler:
+            #kwargs['adaptation'] = {'niterations': 1000, 'num_effective_samples': 200}
+            kwargs['adaptation'] = False
+            kwargs['L'] = 1.
+        sampler = Sampler(likelihood, seed=12, save_fn=save_fn, **kwargs)
+        chains[Sampler.__name__] = sampler.run(max_iterations=10000, check={'max_eigen_gr': 1., 'min_ess': 50}, check_every=200)[0]
+
+    if likelihood.mpicomm.rank == 0:
+        plotting.plot_triangle(list(chains.values()), labels=list(chains.keys()), show=True)
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -443,7 +509,8 @@ if __name__ == '__main__':
     #test_importance()
     #test_error()
     #test_mcmc()
-    test_hmc()
+    #test_hmc()
     #test_nested()
     #test_marg()
     #test_bao_hmc()
+    test_folpsax_hmc()

@@ -118,12 +118,6 @@ class NUTSSampler(BaseBatchPosteriorSampler):
         """
         return super(NUTSSampler, self).run(*args, **kwargs)
 
-    @jit(static_argnums=[0])
-    def _one_step(self, state, xs):
-        _, rng_key = xs
-        state, info = self.algorithm.step(rng_key, state)
-        return state, (state, info)
-
     def _run_one(self, start, niterations=300, thin_by=1):
         import jax
         import blackjax
@@ -163,9 +157,20 @@ class NUTSSampler(BaseBatchPosteriorSampler):
         keys = jax.random.split(run_key, niterations)
         xs = (jnp.arange(niterations), keys)
         # run the sampler, following https://github.com/blackjax-devs/blackjax/blob/54023350cac935af79fc309006bf37d1603bb945/blackjax/util.py#L143
-        final_state, (chain, info_history) = jax.lax.scan(self._one_step, initial_state, xs)
 
-        data = [chain.position[::thin_by, iparam] for iparam, param in enumerate(self.varied_params)] + [chain.logdensity]
+        @jit
+        def one_step(state, xs):
+            _, rng_key = xs
+            state, info = self.algorithm.step(rng_key, state)
+            return state, (state, info)
+
+        #final_state, (chain, info_history) = jax.lax.scan(_one_step, initial_state, xs)
+        #position, logdensity = chain.position[::thin_by], chain.logdensity[::thin_by]
+        states = [initial_state]
+        for xx in xs: states.append(one_step(states[-1], xx)[0])
+        position, logdensity = np.array([state.position for state in states[::thin_by]]), np.array([state.logdensity for state in states[::thin_by]])
+
+        data = [position[:, iparam] for iparam, param in enumerate(self.varied_params)] + [logdensity]
         chain = Chain(data=data, params=self.varied_params + ['logposterior'], attrs={'hyp': self.hyp})
         self.likelihood.mpicomm = mpicomm
         #self.derived = [chain.select(name=self.varied_params.names()), Samples()]

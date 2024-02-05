@@ -154,7 +154,7 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
         # run the sampler, following https://github.com/blackjax-devs/blackjax/blob/54023350cac935af79fc309006bf37d1603bb945/blackjax/util.py#L143
         final_state, (chain, info_history) = jax.lax.scan(self._one_step, initial_state, xs)
 
-        data = [chain.position[::thin_by, iparam] for iparam, param in enumerate(self.varied_params)] + [chain.logdensity]
+        data = [chain.position[::thin_by, iparam] for iparam, param in enumerate(self.varied_params)] + [chain.logdensity[::thin_by]]
         chain = Chain(data=data, params=self.varied_params + ['logposterior'], attrs={'hyp': self.hyp})
         self.likelihood.mpicomm = mpicomm
         #self.derived = [chain.select(name=self.varied_params.names()), Samples()]

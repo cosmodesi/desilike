@@ -446,15 +446,15 @@ def test_folpsax_hmc():
     from desilike.samples import plotting
 
     def get_theory(z):
-        template = ShapeFitPowerSpectrumTemplate(z=z)
-        theory = FOLPSAXTracerPowerSpectrumMultipoles(template=template)
-        for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
-        return theory
-
-    def get_theory(z):
         template = BAOPowerSpectrumTemplate(z=z)
         theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
         for param in theory.params.select(basename=['al*']): param.update(derived='.best')
+        return theory
+
+    def get_theory(z):
+        template = ShapeFitPowerSpectrumTemplate(z=z)
+        theory = FOLPSAXTracerPowerSpectrumMultipoles(template=template)
+        for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
         return theory
 
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.3, 0.005], 2: [0.05, 0.3, 0.005]},
@@ -467,28 +467,18 @@ def test_folpsax_hmc():
                                                          data={},
                                                          theory=get_theory(z=1.))
 
-    #likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov, name='LRG')
-    #likelihood()
-    cov = np.eye(cov.shape[0] * 2)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable, observable2], covariance=cov, name='LRG')
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov, name='LRG')
     likelihood()
-    t0 = time.time()
-    start = jnp.array([param.prior.sample() if param.prior.is_proper() else param.value for param in likelihood.varied_params])
-
-    def fn(values):
-        return likelihood(dict(zip(likelihood.varied_params.names(), values)))
-    fn(start - 1e-6)
-
-    grad = jax.value_and_grad(fn)
-    grad = jax.jit(grad)
-    grad(start)
-    print(time.time() - t0)
-    exit()
+    #cov = np.eye(cov.shape[0] * 2)
+    #likelihood = ObservablesGaussianLikelihood(observables=[observable, observable2], covariance=cov, name='LRG')
+    #likelihood()
+    import jax
+    jax.config.update("jax_log_compiles", True)
 
     chains = {}
     for Sampler in [NUTSSampler, MCLMCSampler][:1]:
         save_fn = ['./_tests/chain_{:d}.npz'.format(i) for i in range(min(likelihood.mpicomm.size, 1))]
-        kwargs = {}
+        kwargs = {'adaptation': False}
         if Sampler is MCLMCSampler:
             #kwargs['adaptation'] = {'niterations': 1000, 'num_effective_samples': 200}
             kwargs['adaptation'] = False

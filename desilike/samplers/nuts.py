@@ -149,9 +149,17 @@ class NUTSSampler(BaseBatchPosteriorSampler):
             adaptation = self.attrs['adaptation']
             if isinstance(adaptation, dict):
                 adaptation = dict(adaptation)
-                niterations_adaptation = adaptation.pop('niterations', 10000)  # better spend time on good adaptation
+                niterations_adaptation = adaptation.pop('niterations', 1000)  # better spend time on good adaptation
                 adaptation.setdefault('initial_step_size', self.attrs['step_size'])
+
+                #def integrator(logdensity_fn, kinetic_energy_fn):
+                #    return jax.jit(self.attrs['integrator'](logdensity_fn, kinetic_energy_fn))
+
+                #adaptation['integrator'] = integrator
+                #warmup = window_adaptation(blackjax.nuts, logdensity_fn=logdensity_fn, **adaptation)
                 warmup = blackjax.window_adaptation(blackjax.nuts, logdensity_fn=logdensity_fn, **adaptation)
+
+
                 (initial_state, warmup_params), _ = warmup.run(warmup_key, start, niterations_adaptation)
                 self.hyp = dict(warmup_params)
             elif self.hyp is None:
@@ -160,23 +168,27 @@ class NUTSSampler(BaseBatchPosteriorSampler):
             # use the quick wrapper to build a new kernel with the tuned parameters
             attrs = {name: self.attrs[name] for name in ['max_num_doublings', 'divergence_threshold', 'integrator']}
             self.algorithm = blackjax.nuts(logdensity_fn, **attrs, **self.hyp)
+            self.step = jax.jit(self.algorithm.step)
+            #self.step = self.algorithm.step
 
         initial_state = self.algorithm.init(start, warmup_key)
+        print('compiling')
+        import time
+        t0 = time.time()
+        self.step(run_key, initial_state)
+        print('done compiling', time.time() - t0)
         keys = jax.random.split(run_key, niterations)
         xs = (jnp.arange(niterations), keys)
         # run the sampler, following https://github.com/blackjax-devs/blackjax/blob/54023350cac935af79fc309006bf37d1603bb945/blackjax/util.py#L143
 
-        @jit
         def one_step(state, xs):
             _, rng_key = xs
-            state, info = self.algorithm.step(rng_key, state)
+            state, info = self.step(rng_key, state)
             return state, (state, info)
 
-        #final_state, (chain, info_history) = jax.lax.scan(_one_step, initial_state, xs)
-        #position, logdensity = chain.position[::thin_by], chain.logdensity[::thin_by]
-        states = [initial_state]
-        for xx in xs: states.append(one_step(states[-1], xx)[0])
-        position, logdensity = np.array([state.position for state in states[::thin_by]]), np.array([state.logdensity for state in states[::thin_by]])
+        #final_state, (chain, info_history) = jax.lax.scan(one_step, initial_state, xs)
+        final_state, (chain, info_history) = my_scan(one_step, initial_state, xs)
+        position, logdensity = chain.position[::thin_by], chain.logdensity[::thin_by]
 
         data = [position[:, iparam] for iparam, param in enumerate(self.varied_params)] + [logdensity]
         chain = Chain(data=data, params=self.varied_params + ['logposterior'], attrs={'hyp': self.hyp})
@@ -190,3 +202,125 @@ class NUTSSampler(BaseBatchPosteriorSampler):
     @classmethod
     def install(cls, config):
         config.pip('blackjax')
+
+
+def window_adaptation(algorithm,
+    logdensity_fn,
+    is_mass_matrix_diagonal: bool = True,
+    initial_step_size: float = 1.0,
+    target_acceptance_rate: float = 0.80,
+    **extra_parameters):
+    """Adapt the value of the inverse mass matrix and step size parameters of
+    algorithms in the HMC fmaily.
+
+    Algorithms in the HMC family on a euclidean manifold depend on the value of
+    at least two parameters: the step size, related to the trajectory
+    integrator, and the mass matrix, linked to the euclidean metric.
+
+    Good tuning is very important, especially for algorithms like NUTS which can
+    be extremely inefficient with the wrong parameter values. This function
+    provides a general-purpose algorithm to tune the values of these parameters.
+    Originally based on Stan's window adaptation, the algorithm has evolved to
+    improve performance and quality.
+
+    Parameters
+    ----------
+    algorithm
+        The algorithm whose parameters are being tuned.
+    logdensity_fn
+        The log density probability density function from which we wish to
+        sample.
+    is_mass_matrix_diagonal
+        Whether we should adapt a diagonal mass matrix.
+    initial_step_size
+        The initial step size used in the algorithm.
+    target_acceptance_rate
+        The acceptance rate that we target during step size adaptation.
+    progress_bar
+        Whether we should display a progress bar.
+    **extra_parameters
+        The extra parameters to pass to the algorithm, e.g. the number of
+        integration steps for HMC.
+
+    Returns
+    -------
+    A function that runs the adaptation and returns an `AdaptationResult` object.
+
+    """
+    import jax
+    from blackjax.base import AdaptationAlgorithm
+    from blackjax.adaptation.window_adaptation import base, build_schedule
+    from blackjax.adaptation.base import AdaptationInfo, AdaptationResults
+
+    mcmc_kernel = algorithm.build_kernel(**{name: extra_parameters.pop(name) for name in ['integrator'] if name in extra_parameters})
+
+    adapt_init, adapt_step, adapt_final = base(
+        is_mass_matrix_diagonal,
+        target_acceptance_rate=target_acceptance_rate,
+    )
+
+    def one_step(carry, xs):
+        _, rng_key, adaptation_stage = xs
+        state, adaptation_state = carry
+
+        new_state, info = mcmc_kernel(
+            rng_key,
+            state,
+            logdensity_fn,
+            adaptation_state.step_size,
+            adaptation_state.inverse_mass_matrix,
+            **extra_parameters,
+        )
+        new_adaptation_state = adapt_step(
+            adaptation_state,
+            adaptation_stage,
+            new_state.position,
+            info.acceptance_rate,
+        )
+
+        return (
+            (new_state, new_adaptation_state),
+            AdaptationInfo(new_state, info, new_adaptation_state),
+        )
+
+    def run(rng_key, position, num_steps: int = 1000):
+        init_state = algorithm.init(position, logdensity_fn)
+        init_adaptation_state = adapt_init(position, initial_step_size)
+
+        keys = jax.random.split(rng_key, num_steps)
+        schedule = build_schedule(num_steps)
+
+        #last_state, info = jax.lax.scan(
+        last_state, info = my_scan(
+            one_step,
+            (init_state, init_adaptation_state),
+            (jnp.arange(num_steps), keys, schedule),
+        )
+        last_chain_state, last_warmup_state, *_ = last_state
+
+        step_size, inverse_mass_matrix = adapt_final(last_warmup_state)
+        parameters = {
+            "step_size": step_size,
+            "inverse_mass_matrix": inverse_mass_matrix,
+            **extra_parameters,
+        }
+
+        return (
+            AdaptationResults(
+                last_chain_state,
+                parameters,
+            ),
+            info,
+        )
+
+    return AdaptationAlgorithm(run)
+
+
+def my_scan(f, init, xs):
+    import jax.tree_util as jtu
+    carry = init
+    outs = []
+    for xx in zip(*xs):
+        carry, out = f(carry, xx)
+        outs.append(out)
+    return carry, jtu.tree_map(lambda *v: jnp.stack(v), *outs)

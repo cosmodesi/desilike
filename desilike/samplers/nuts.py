@@ -6,6 +6,14 @@ from desilike.samples import Chain, load_source
 from .base import BaseBatchPosteriorSampler
 
 
+def diag_if_diag(mat, rtol=1e-05, atol=1e-08):
+    mat = np.asarray(mat)
+    diag = np.diag(mat)
+    if np.allclose(np.diag(diag), mat, rtol=rtol, atol=atol):
+        return diag
+    return mat
+
+
 class NUTSSampler(BaseBatchPosteriorSampler):
     """
     Wrapper for the No U-Turn sampler.
@@ -85,7 +93,7 @@ class NUTSSampler(BaseBatchPosteriorSampler):
         if self.mpicomm.rank == 0:
             covariance = load_source(**covariance, cov=True, params=self.varied_params, return_type='nparray')
         covariance = self.mpicomm.bcast(covariance, root=0)
-        self.attrs['inverse_mass_matrix'] = jnp.array(covariance)
+        self.attrs['inverse_mass_matrix'] = diag_if_diag(np.array(covariance))
         self.hyp = self.mpicomm.bcast(getattr(self.chains[0], 'attrs', {}).get('hyp', None), root=0)
         self.algorithm = None
 
@@ -147,10 +155,10 @@ class NUTSSampler(BaseBatchPosteriorSampler):
             adaptation = self.attrs['adaptation']
             if isinstance(adaptation, dict):
                 adaptation = dict(adaptation)
-                niterations = adaptation.pop('niterations', 1000)
+                niterations_adaptation = adaptation.pop('niterations', 10000)  # better spend time on good adaptation
                 adaptation.setdefault('initial_step_size', self.attrs['step_size'])
                 warmup = blackjax.window_adaptation(blackjax.nuts, logdensity_fn=logdensity_fn, **adaptation)
-                (initial_state, warmup_params), _ = warmup.run(warmup_key, start, niterations)
+                (initial_state, warmup_params), _ = warmup.run(warmup_key, start, niterations_adaptation)
                 self.hyp = dict(warmup_params)
             elif self.hyp is None:
                 self.hyp = {name: self.attrs[name] for name in ['step_size', 'inverse_mass_matrix']}

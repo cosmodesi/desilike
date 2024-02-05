@@ -61,7 +61,7 @@ class BaseLikelihoodGenerator(BaseClass):
         self.header += 'from {} import {}'.format(self.factory.__module__, self.factory.__name__)
         self.dirname = os.path.abspath(os.path.join(dirname, os.path.basename(os.path.dirname(sys.modules[self.factory.__module__].__file__))) + '_bindings')
 
-    def get_code(self, likelihood, name_like=None, kw_like=None, module=None, **kwargs):
+    def get_code(self, likelihood, name_like=None, kw_like=None, module=None, fn=None, **kwargs):
         """
         Internal method to write code to generate likelihood object to be imported by the external inference code.
 
@@ -81,6 +81,10 @@ class BaseLikelihoodGenerator(BaseClass):
             If ``None``, the full module name is searched with :func:`find_module_from_file`; if not in a package,
             absolute path to file where ``likelihood`` object is defined will be used to import it in the generated code.
 
+        fn : Path, str, default=None
+            Where to save the likelihood definition for the inference code.
+            It is prefixed by :attr:`dirname`.
+
         **kwargs : dict
             Other optional arguments for likelihood factory, e.g. ``kw_cobaya``.
 
@@ -95,10 +99,13 @@ class BaseLikelihoodGenerator(BaseClass):
             name_like = cls.__name__
         src_fn = os.path.abspath(sys.modules[cls.__module__].__file__)
         # src_dir = os.path.dirname(src_fn)
-        if src_fn.startswith(self.dirname):  # likelihood defined somewhere in dirname
-            fn = os.path.join(self.dirname, os.path.relpath(src_fn, os.path.commonpath([self.dirname, src_fn])))
+        if fn is None:
+            if src_fn.startswith(self.dirname):  # likelihood defined somewhere in dirname
+                fn = os.path.join(self.dirname, os.path.relpath(src_fn, os.path.commonpath([self.dirname, src_fn])))
+            else:
+                fn = os.path.join(self.dirname, os.path.basename(src_fn))
         else:
-            fn = os.path.join(self.dirname, os.path.basename(src_fn))
+            fn = os.path.abspath(os.path.join(self.dirname, os.path.normpath(fn)))
         if module is None:
             module = find_module_from_file(src_fn)
         if module is not None:  # check if this is a package, then assumed in pythonpath
@@ -157,7 +164,7 @@ class BaseLikelihoodGenerator(BaseClass):
             fn, code = self.get_code(likelihood, name_like=name_like, kw_like=kw_like, module=module, **kwargs)[2:]
             txt[fn] = txt.get(fn, []) + [code]
         for fn in txt:
-            self.log_debug('Saving likelihood in {}'.format(fn))
+            self.log_info('Saving likelihood in {}'.format(fn))
             current = ''
             if not overwrite:
                 try:

@@ -85,6 +85,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             data = [self.flatdata[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
             ells = list(smasklim.keys())
             self.flatdata = np.concatenate([data[ells.index(ell)][smasklim[ell]] for ell in self.ells])
+        del self.mocks
 
     def load_data(self, data=None, slim=None, ignore_nan=False):
 

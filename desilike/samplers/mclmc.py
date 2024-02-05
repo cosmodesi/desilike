@@ -134,11 +134,11 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
             adaptation = self.attrs['adaptation']
             if isinstance(adaptation, dict):
                 adaptation = dict(adaptation)
-                niterations = adaptation.pop('niterations', 1000)
+                niterations_adaptation = adaptation.pop('niterations', 1000)
                 initial_state = blackjax.mcmc.mclmc.init(position=start, logdensity_fn=logdensity_fn, rng_key=key)
                 # build the kernel
                 kernel = blackjax.mcmc.mclmc.build_kernel(logdensity_fn=logdensity_fn, integrator=self.attrs['integrator'])
-                (initial_state, warmup_params) = blackjax.mclmc_find_L_and_step_size(mclmc_kernel=kernel, num_steps=niterations, state=initial_state, rng_key=warmup_key)
+                (initial_state, warmup_params) = blackjax.mclmc_find_L_and_step_size(mclmc_kernel=kernel, num_steps=niterations_adaptation, state=initial_state, rng_key=warmup_key)
                 start = initial_state.position
                 self.hyp = dict(step_size=warmup_params.step_size, L=warmup_params.L)
             elif self.hyp is None:

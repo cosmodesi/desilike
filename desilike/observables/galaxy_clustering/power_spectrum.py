@@ -100,7 +100,6 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         allowed_transform = [None, 'cubic']
         if self.transform not in allowed_transform:
             raise ValueError('transform must be one of {}'.format(allowed_transform))
-        del self.mocks
 
     def load_data(self, data=None, klim=None):
 

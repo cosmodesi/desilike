@@ -29,6 +29,8 @@ def test_profilers():
                              (BOBYQAProfiler, {})]:
         profiler = Profiler(likelihood, seed=42, **kwargs)
         profiles = profiler.maximize(niterations=2)
+        assert profiles.bestfit.attrs['ndof']
+        assert profiles.bestfit.attrs['hartlap2007_factor'] is not None
         assert profiles.bestfit['LRG.loglikelihood'].param.latex() == 'L_{\mathrm{LRG}}'
         assert profiles.bestfit['LRG.loglikelihood'].param.derived
         assert profiles.bestfit.logposterior.param.latex() == '\mathcal{L}'
@@ -149,6 +151,6 @@ def test_bao():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_profilers()
-    test_solve()
+    test_profilers()
+    #test_solve()
     #test_bao()

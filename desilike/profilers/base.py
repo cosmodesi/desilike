@@ -441,12 +441,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         else:
             self.profiles = Profiles.concatenate(self.profiles, profiles)
 
-        attrs = {name: getattr(self.likelihood, name, None) for name in ['size', 'nvaried', 'ndof']}
-        for name, value in attrs.items():
-            for value in self.mpicomm.allgather(value):
-                if value is not None:
-                    attrs[name] = value
-                    break
+        attrs = {name: self.mpicomm.bcast(getattr(self.likelihood, name, None), root=0) for name in ['size', 'nvaried', 'ndof', 'hartlap2007_factor', 'percival2014_factor']}
         self.profiles.bestfit.attrs.update(attrs)
 
         if self.mpicomm.rank == 0 and self.save_fn is not None:

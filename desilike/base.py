@@ -137,7 +137,7 @@ class BasePipeline(BaseClass):
             self.calculators.append(calculator)
             for require in calculator.runtime_info.requires:
                 require.runtime_info.initialize()
-                require.runtime_info._initialized_for_required_by.append(id(calculator))
+                require.runtime_info._initialized_for_pipeline.append(id(self))
                 if require in self.calculators:
                     del self.calculators[self.calculators.index(require)]  # we want first dependencies at the end
                 callback(require)
@@ -247,9 +247,9 @@ class BasePipeline(BaseClass):
 
         csizes, cshapes = [], []
         for name in names:
-            array = None
-            if self.mpicomm.rank == 0:
-                array = jax.to_nparray(params[name])
+            array = params[name]
+            if array is not None:
+                array = jax.to_nparray(array)
                 if array is None:  # jax array
                     cshapes.append(())
                     csizes.append(0)
@@ -692,7 +692,7 @@ class RuntimeInfo(BaseClass):
         if not isinstance(init, InitConfig):
             self.init = InitConfig(init)
         self._initialized = False
-        self._initialized_for_required_by = []
+        self._initialized_for_pipeline = []
         self._tocalculate = True
         self.calculated = False
         self.name = self.calculator.__class__.__name__
@@ -752,7 +752,7 @@ class RuntimeInfo(BaseClass):
             self._pipeline = BasePipeline(self.calculator)
         else:
             for calculator in self._pipeline.calculators[:-1]:
-                if not calculator.runtime_info._initialized_for_required_by:
+                if not calculator.runtime_info.initialized or id(self._pipeline) not in calculator.runtime_info._initialized_for_pipeline:
                     self._pipeline = BasePipeline(self.calculator)
                     break
         return self._pipeline
@@ -780,6 +780,7 @@ class RuntimeInfo(BaseClass):
         """Has this calculator been initialized?"""
         if self.init.updated:
             self._initialized = False
+            self._initialized_for_pipeline.clear()
         return self._initialized
 
     @initialized.setter
@@ -816,7 +817,7 @@ class RuntimeInfo(BaseClass):
             self.params = self.init.params
             self.init.params = bak
             self.initialized = True
-            self._initialized_for_required_by = []
+            self._initialized_for_pipeline = []
             self._initialization = False
             if getattr(self, '_requires', None) is None:
                 self._requires = []

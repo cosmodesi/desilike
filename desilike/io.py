@@ -371,7 +371,7 @@ class BaseConfig(BaseClass, UserDict, metaclass=MetaClass):
         yaml.add_representer(list, list_rep)
 
         with open(fn, 'w') as file:
-            yaml.dump_all(data, file, default_flow_style=False)
+            yaml.dump_all(data, file, sort_keys=False, default_flow_style=False)
 
     @write.instancemethod
     def write(self, fn):

@@ -41,6 +41,8 @@ def test_samplers():
             kwargs.update(thin_by=2)
         chains = sampler.run(max_iterations=100, check=True, check_every=50, **kwargs)
         if sampler.mpicomm.rank == 0:
+            assert chains[0].attrs['ndof']
+            assert chains[0].attrs['hartlap2007_factor'] is None
             assert chains[0]['LRG.loglikelihood'].param.latex() == 'L_{\mathrm{LRG}}'
             assert chains[0]['LRG.loglikelihood'].param.derived
             assert chains[0].logposterior.param.latex() == '\mathcal{L}'
@@ -490,11 +492,12 @@ def test_folpsax_hmc():
         plotting.plot_triangle(list(chains.values()), labels=list(chains.keys()), show=True)
 
 
+
 if __name__ == '__main__':
 
     setup_logging()
+    test_samplers()
     #test_nautilus()
-    #test_samplers()
     #test_fixed()
     #test_importance()
     #test_error()
@@ -503,4 +506,3 @@ if __name__ == '__main__':
     #test_nested()
     #test_marg()
     #test_bao_hmc()
-    test_folpsax_hmc()

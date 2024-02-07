@@ -336,13 +336,8 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                         self.chains[ichain] = new_chain.deepcopy()
                     else:
                         self.chains[ichain] = Chain.concatenate(chain, new_chain)
-                    for name in ['size', 'nvaried', 'ndof']:
-                        try:
-                            value = getattr(self.likelihood, name)
-                        except AttributeError:
-                            pass
-                        else:
-                            self.chains[ichain].attrs[name] = value
+                    attrs = {name: self.mpicomm.bcast(getattr(self.likelihood, name, None), root=0) for name in ['size', 'nvaried', 'ndof', 'hartlap2007_factor', 'percival2014_factor']}
+                    self.chains[ichain].attrs.update(attrs)
             if self.save_fn is not None:
                 for ichain, chain in enumerate(self.chains):
                     if chain is not None: chain.save(self.save_fn[ichain])
@@ -426,13 +421,8 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
                             self.chains[ichain] = new_chain.deepcopy()
                         else:
                             self.chains[ichain] = Chain.concatenate(chain, new_chain)
-                        for name in ['size', 'nvaried', 'ndof']:
-                            try:
-                                value = getattr(self.likelihood, name)
-                            except AttributeError:
-                                pass
-                            else:
-                                self.chains[ichain].attrs[name] = value
+                        attrs = {name: self.mpicomm.bcast(getattr(self.likelihood, name, None), root=0) for name in ['size', 'nvaried', 'ndof', 'hartlap2007_factor', 'percival2014_factor']}
+                        self.chains[ichain].attrs.update(attrs)
                 if self.save_fn is not None:
                     for ichain, chain in enumerate(self.chains):
                         if chain is not None: chain.save(self.save_fn[ichain])

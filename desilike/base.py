@@ -247,9 +247,9 @@ class BasePipeline(BaseClass):
 
         csizes, cshapes = [], []
         for name in names:
-            array = None
-            if self.mpicomm.rank == 0:
-                array = jax.to_nparray(params[name])
+            array = params[name]
+            if array is not None:
+                array = jax.to_nparray(array)
                 if array is None:  # jax array
                     cshapes.append(())
                     csizes.append(0)

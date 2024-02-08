@@ -165,13 +165,13 @@ class SOSampler(IndexCycler):
         self.loop_index = (self.loop_index + 1) % self.ndim
         if self.loop_index == 0:
             self.rotmat = special_ortho_group.rvs(self.ndim, random_state=self.rng)
+        # print(np.sum(self.rotmat[:, self.loop_index]**2)**0.5, self.sample_r())
         return self.rotmat[:, self.loop_index] * self.sample_r()
 
     def sample_r(self):
         """
         Radial proposal. A mixture of an exponential and 2D Gaussian radial
-        proposal (to make wider tails and more mass near zero, so more robust to scale
-        misestimation).
+        proposal (to make wider tails and more mass near zero, so more robust to scale misestimation).
         """
         if self.rng.uniform() < 0.33:
             return self.rng.standard_exponential()
@@ -271,19 +271,19 @@ class BlockProposer(object):
             self.nsamples_slow += 1
         else:
             self.nsamples_fast += 1
-        return self._get_block_proposal(current_iblock, params)
+        return self._get_block_proposal(current_iblock, params=params)
 
     @vectorize
     def slow(self, params=None):
         current_iblock_slow = self.param_block_indices[self.param_cycler_slow.next()]
         self.nsamples_slow += 1
-        return self._get_block_proposal(current_iblock_slow, params)
+        return self._get_block_proposal(current_iblock_slow, params=params)
 
     @vectorize
     def fast(self, params=None):
         current_iblock_fast = self.param_block_indices[self.param_cycler_slow.ndim + self.param_cycler_fast.next()]
         self.nsamples_fast += 1
-        return self._get_block_proposal(current_iblock_fast, params)
+        return self._get_block_proposal(current_iblock_fast, params=params)
 
     def _get_block_proposal(self, iblock, params=None):
         if params is None:
@@ -512,6 +512,7 @@ class MCMCSampler(BaseBatchPosteriorSampler):
         return super(MCMCSampler, self).run(*args, **kwargs)
 
     def _run_one(self, start, niterations=300, thin_by=1):
+        self.sampler.reset()
         self.sampler.vectorize = self.mpicomm.size
         self.sampler.mpicomm = self.mpicomm
         if thin_by == 'auto':
@@ -521,6 +522,19 @@ class MCMCSampler(BaseBatchPosteriorSampler):
         chain = self.sampler.get_chain()
         if chain.size:
             data = [chain[..., iparam] for iparam, param in enumerate(self.varied_params)] + [self.sampler.get_weight(), self.sampler.get_log_prob()]
-            self.sampler.reset()
             return Chain(data=data, params=self.varied_params + ['fweight', 'logposterior'])
         return None
+
+    '''
+    def _add_check(self, diagnostics, quiet=False, **kwargs):
+        """Extend :meth:`BaseBatchPosteriorSampler.check` with acceptance rate."""
+        acceptance_rate = self.mpicomm.gather(self.sampler.get_acceptance_rate())
+        if self.mpicomm.rank == 0:
+            acceptance_rate = np.mean(acceptance_rate)
+            diagnostics.add_test('current_acceptance_rate', 'current mean acceptance rate', acceptance_rate, quiet=quiet)
+            acceptance_rate = [chain.fweight.size / chain.fweight.sum() for chain in self.chains if chain is not None]
+            if acceptance_rate:
+                diagnostics.add_test('total_acceptance_rate', 'total mean acceptance rate', np.mean(acceptance_rate), quiet=quiet)
+        diagnostics.update(self.mpicomm.bcast(diagnostics))
+        return True
+    '''

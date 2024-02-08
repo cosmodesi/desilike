@@ -435,12 +435,11 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
         batch_iterate(_run_batch, min_iterations=min_iterations, max_iterations=max_iterations, check_every=check_every)
         return self.chains
 
-
     def check(self, nsplits=4, burnin=0.5, stable_over=2,
               max_eigen_gr=0.03, max_diag_gr=None, max_cl_diag_gr=None, nsigmas_cl_diag_gr=1., max_geweke=None, max_geweke_pvalue=None,
               min_ess=None, reliable_ess=50, max_dact=None,
               min_eigen_gr=None, min_diag_gr=None, min_cl_diag_gr=None, min_geweke=None, min_geweke_pvalue=None,
-              max_ess=None, min_dact=None, diagnostics=None, quiet=False):
+              max_ess=None, min_dact=None, diagnostics=None, quiet=False, **kwargs):
         """
         Run convergence checks.
 
@@ -491,63 +490,13 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
             ``True`` if current chains pass convergence tests.
         """
         toret = None
-        if diagnostics is None:
-            diagnostics = self.diagnostics
-        verbose = not quiet
+        has_input_diagnostics = diagnostics is not None
+        diagnostics_bak = diagnostics if has_input_diagnostics else self.diagnostics
+        diagnostics = Diagnostics(diagnostics_bak)
         if self.mpicomm.bcast(any(chain is None for chain in self.chains), root=0):
             return False
 
         if self.mpicomm.rank == 0:
-
-            def add_diagnostics(name, value):
-                if name not in diagnostics:
-                    diagnostics[name] = [value]
-                else:
-                    diagnostics[name].append(value)
-                return value
-
-            def is_stable(name):
-                if len(diagnostics[name]) < stable_over:
-                    return False
-                return all(diagnostics[name][-stable_over:])
-
-            def bool_test(value, low=None, up=None):
-                test = True
-                if low is not None:
-                    test &= value > low
-                if up is not None:
-                    test &= value < up
-                return test
-
-            def log_test(msg, test, low=None, up=None):
-                if verbose:
-                    if low is None: low = ''
-                    else: low = '{:.3g}'.format(low)
-                    if up is None: up = ''
-                    else: up = '{:.3g}'.format(up)
-                    isnot = '' if test else 'not '
-                    if not (low or up):
-                        msg = '{}.'.format(msg)
-                    elif (low and up):
-                        msg = '{}; {}in [{}, {}].'.format(msg, isnot, low, up)
-                    elif low:
-                        msg = '{}; {}> {}.'.format(msg, isnot, low)
-                    elif up:
-                        msg = '{}; {}< {}.'.format(msg, isnot, up)
-                    self.log_info(msg)
-
-            def full_test(key, name, value, low=None, up=None):
-                add_diagnostics(key, value)
-                key = '{}_test'.format(key)
-                msg = '{}{} is {:.3g}'.format(item, name, value)
-                if any(lu is not None for lu in (low, up)):
-                    test = bool_test(value, low=low, up=up)
-                    log_test(msg, test, low=low, up=up)
-                    add_diagnostics(key, test)
-                    return is_stable(key)
-                if verbose:
-                    self.log_info('{}.'.format(msg))
-                return True
 
             if 0 < burnin < 1:
                 burnin = int(burnin * self.chains[0].shape[0] + 0.5)
@@ -559,21 +508,21 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
             if any(samples.size < 1 for samples in split_samples):
                 toret = False
             else:
-                if verbose: self.log_info('Diagnostics:')
-                item = '- '
+                kw = dict(stable_over=stable_over, quiet=quiet)
+                if not quiet: self.log_info('Diagnostics:')
                 toret = True
 
                 try:
                     eigen_gr = sample_diagnostics.gelman_rubin(split_samples, self.varied_params, method='eigen', check_valid='ignore').max() - 1
                 except ValueError:
                     eigen_gr = np.nan
-                toret &= full_test('eigen_gr', 'max eigen Gelman-Rubin - 1', eigen_gr, min_eigen_gr, max_eigen_gr)
+                toret &= diagnostics.add_test('eigen_gr', 'max eigen Gelman-Rubin - 1', eigen_gr, limits=(min_eigen_gr, max_eigen_gr), **kw)
 
                 try:
                     diag_gr = sample_diagnostics.gelman_rubin(split_samples, self.varied_params, method='diag').max() - 1
                 except ValueError:
                     diag_gr = np.nan
-                toret &= full_test('diag_gr', 'max diag Gelman-Rubin - 1', diag_gr, min_diag_gr, max_diag_gr)
+                toret &= diagnostics.add_test('diag_gr', 'max diag Gelman-Rubin - 1', diag_gr, limits=(min_diag_gr, max_diag_gr), **kw)
 
                 def cl_lower(samples, params):
                     return np.array([samples.interval(param, nsigmas=nsigmas_cl_diag_gr)[0] for param in params])
@@ -586,7 +535,7 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
                                          sample_diagnostics.gelman_rubin(split_samples, self.varied_params, statistic=cl_upper, method='diag')]) - 1
                 except ValueError:
                     cl_diag_gr = np.nan
-                toret &= full_test('cl_diag_gr', 'max diag Gelman-Rubin - 1 at {:.1f} sigmas'.format(nsigmas_cl_diag_gr), cl_diag_gr, min_cl_diag_gr, max_cl_diag_gr)
+                toret &= diagnostics.add_test('cl_diag_gr', 'max diag Gelman-Rubin - 1 at {:.1f} sigmas'.format(nsigmas_cl_diag_gr), cl_diag_gr, limits=(min_cl_diag_gr, max_cl_diag_gr), **kw)
 
                 try:
                     # Source: https://github.com/JohannesBuchner/autoemcee/blob/38feff48ae524280c8ea235def1f29e1649bb1b6/autoemcee.py#L337
@@ -594,14 +543,14 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
                 except ValueError:
                     all_geweke = np.nan
                 geweke = np.max(all_geweke)
-                toret &= full_test('geweke', 'max Geweke', geweke, min_geweke, max_geweke)
+                toret &= diagnostics.add_test('geweke', 'max Geweke', geweke, limits=(min_geweke, max_geweke), **kw)
 
                 from scipy import stats
                 try:
                     geweke_pvalue = stats.normaltest(all_geweke, axis=None).pvalue
                 except ValueError:
                     geweke_pvalue = np.nan
-                toret &= full_test('geweke_pvalue', 'Geweke p-value', geweke_pvalue, min_geweke_pvalue, max_geweke_pvalue)
+                toret &= diagnostics.add_test('geweke_pvalue', 'Geweke p-value', geweke_pvalue, limits=(min_geweke_pvalue, max_geweke_pvalue), **kw)
 
                 split_samples = []
                 for chain in self.chains:
@@ -613,19 +562,94 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
                     iact = sample_diagnostics.integrated_autocorrelation_time(split_samples, self.varied_params, check_valid='ignore')
                 except ValueError:
                     iact = np.full(len(self.varied_params), np.nan, dtype='f8')
-                add_diagnostics('iact', iact)
+                diagnostics.add('iact', iact)
                 niterations = len(split_samples[0])
                 iact = iact.max()
                 name = 'effective sample size = ({:d} iterations / integrated autocorrelation time)'.format(niterations)
                 if reliable_ess * iact < niterations:
                     name = '{} (reliable)'.format(name)
-                toret &= full_test('iterations_over_iact', name, niterations / iact, min_ess, max_ess)
+                toret &= diagnostics.add_test('iterations_over_iact', name, niterations / iact, limits=(min_ess, max_ess), **kw)
 
                 iact = diagnostics['iact']
                 if len(iact) >= 2:
                     rel = np.abs(iact[-2] / iact[-1] - 1).max()
-                    toret &= full_test('dact', 'max variation of integrated autocorrelation time', rel, min_dact, max_dact)
+                    toret &= diagnostics.add_test('dact', 'max variation of integrated autocorrelation time', rel, limits=(min_dact, max_dact), **kw)
 
-        diagnostics.update(self.mpicomm.bcast(diagnostics, root=0))
+        toret = self.mpicomm.bcast(toret, root=0)
+        diagnostics = self.mpicomm.bcast(diagnostics, root=0)
+        toret &= self._add_check(diagnostics, quiet=quiet, stable_over=stable_over, **kwargs)
 
-        return self.mpicomm.bcast(toret, root=0)
+        diagnostics_bak.update(self.mpicomm.bcast(diagnostics, root=0))
+
+        toret = self.mpicomm.bcast(toret, root=0)
+        if has_input_diagnostics:
+            return toret, diagnostics
+        return toret
+
+    def _add_check(self, diagnostics, quiet=False, stable_over=2, **kwargs):
+        """Implement sampler-specific checks."""
+        return True
+
+
+
+from desilike.utils import UserDict, BaseClass
+
+class MetaClass(type(BaseClass), type(UserDict)):
+
+    pass
+
+
+class Diagnostics(UserDict, BaseClass, metaclass=MetaClass):
+
+    def add(self, key, value):
+        if key not in self:
+            self[key] = [value]
+        else:
+            self[key].append(value)
+        return value
+
+    def is_stable(self, key, stable_over=2):
+        if len(self[key]) < stable_over:
+            return False
+        return all(self[key][-stable_over:])
+
+    def add_test(self, key, name, value, limits=None, stable_over=2, quiet=False):
+        item = '- '
+        self.add(key, value)
+        key = '{}_test'.format(key)
+        msg = '{}{} is {:.3g}'.format(item, name, value)
+        if limits is None: limits = [None] * 2
+
+        def bool_test(value, low=None, up=None):
+            test = True
+            if low is not None:
+                test &= value > low
+            if up is not None:
+                test &= value < up
+            return test
+
+        def log_test(msg, test, low=None, up=None):
+            if low is None: low = ''
+            else: low = '{:.3g}'.format(low)
+            if up is None: up = ''
+            else: up = '{:.3g}'.format(up)
+            isnot = '' if test else 'not '
+            if not (low or up):
+                msg = '{}.'.format(msg)
+            elif (low and up):
+                msg = '{}; {}in [{}, {}].'.format(msg, isnot, low, up)
+            elif low:
+                msg = '{}; {}> {}.'.format(msg, isnot, low)
+            elif up:
+                msg = '{}; {}< {}.'.format(msg, isnot, up)
+            self.log_info(msg)
+
+        if any(li is not None for li in limits):
+            test = bool_test(value, *limits)
+            if not quiet: log_test(msg, test, *limits)
+            self.add(key, test)
+            return self.is_stable(key, stable_over=stable_over)
+
+        if not quiet:
+            self.log_info('{}.'.format(msg))
+        return True

@@ -309,7 +309,7 @@ def test_mcmc():
         if Sampler is NUTSSampler:
             likelihood.varied_params['a'].update(derived='.best')
             check = {'max_eigen_gr': 0.01, 'stable_over': 3}
-        save_fn = './_tests/chain_{}_0.npy'.format(Sampler.__name__.replace('Sampler', '').lower())
+        save_fn = './_tests/chain_{}_0.npy'
         nchains = save_fn if os.path.isfile(save_fn) else 1
         nchains = 1
         #os.remove(save_fn)
@@ -503,17 +503,25 @@ def test_cobaya_mcmc():
             super(MyGaussianLikelihood, self).initialize(y, covariance=self.covariance)
 
         def calculate(self, **kwargs):
-            self.flattheory = np.array([kwargs[name] for name in self.params.names()])
+            from jax import numpy as jnp
+            self.flattheory = jnp.array([kwargs[name] for name in self.params.names()])
             super(MyGaussianLikelihood, self).calculate()
 
 
-    likelihood = MyGaussianLikelihood(mean=[0.2, 0], covariance=[[0.1, 0.05], [0.05, 0.2]])
+    likelihood = MyGaussianLikelihood(mean=[0., 0.], covariance=[[0.1, 0.05], [0.05, 0.2]])
     likelihood.init.params = {'a': {'prior': {'limits': [-0.5, 3]}, 'proposal': 0.4}, 'b': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}, 'proposal': 0.5}}
+    #likelihood.init.params = {'a': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}, 'proposal': 0.5}, 'b': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}, 'proposal': 0.5}}
     from desilike.samplers import MCMCSampler
     from desilike.samples import plotting
 
-    sampler = MCMCSampler(likelihood, proposal_scale=2.4)
-    chain_desilike = sampler.run(check_every=300, check={'max_eigen_gr': 0.01})[0].remove_burnin(0.3)
+    from desilike import Fisher
+    fisher = Fisher(likelihood, method='auto')
+    fisher = fisher()
+
+    sampler = MCMCSampler(likelihood, proposal_scale=2.4, seed=42)
+    niterations = 10000
+    gr = 0.03
+    chain_desilike = sampler.run(check_every=300, max_iterations=niterations, check={'max_eigen_gr': gr, 'stable_over': 2})[0].remove_burnin(0.3)
 
     #likelihood = {'gaussian_mixture': {'means': [0.2, 0], 'covs': [[0.1, 0.05], [0.05, 0.2]]}}
     #params = {'a': {'prior': {'min': -0.5, 'max': 3}, 'proposal': 0.4}, 'b': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}, 'proposal': 0.5}}
@@ -522,30 +530,78 @@ def test_cobaya_mcmc():
     def get_likelihood():
         return likelihood
 
-    clikelihood = CobayaLikelihoodFactory(get_likelihood, params=True)
-    params = {}
-    sampler = {'mcmc': {'proposal_scale': 2.4, 'Rminus1_stop': 0.04, 'Rminus1_cl_stop': 1., 'output_every': 300}}
-    info = {'likelihood': {'my_likelihood': clikelihood}, 'params': params, 'sampler': sampler, 'output': None}
+    likelihood_cobaya = CobayaLikelihoodFactory(get_likelihood, params=True)
+    sampler = {'mcmc': {'proposal_scale': 2.4, 'max_samples': niterations, 'Rminus1_stop': gr, 'Rminus1_cl_stop': 1., 'learn_every': 300, 'output_every': 300}}
+    info = {'likelihood': {'my_likelihood': likelihood_cobaya}, 'sampler': sampler, 'output': None}
     from cobaya.run import run
     updated_info, sampler = run(info)
     from desilike.samples import Chain
     samples = sampler.products()['sample']
-    chain_cobaya = Chain({name: samples[name] for name in ['a', 'b']}).remove_burnin(0.3)
+    samples = {name: samples[name] for name in ['a', 'b', 'weight']}
+    samples['fweight'] = samples.pop('weight')
+    print(samples['fweight'].min(), samples['fweight'].max())
+    chain_cobaya = Chain(samples).remove_burnin(0.3)
     for param in chain_cobaya.params(): param.update(fixed=False)
 
-    print(len(chain_desilike), len(chain_cobaya))
+    print(len(chain_desilike), chain_desilike['a'].sum(), len(chain_cobaya))
     from desilike.samples import diagnostics
-    gr_desilike = diagnostics.gelman_rubin(chain_desilike[:len(chain_cobaya)], nsplits=4, statistic='mean', method='eigen', return_matrices=False, check_valid='raise').max()
-    gr_cobaya = diagnostics.gelman_rubin(chain_cobaya, nsplits=4, statistic='mean', method='eigen', return_matrices=False, check_valid='raise').max()
-    print(gr_desilike, gr_cobaya)
-    plotting.plot_triangle([chain_desilike, chain_cobaya], labels=['desilike', 'cobaya'], show=True)
+    from matplotlib import pyplot as plt
+
+    def gelman_rubin_cobaya(chains, params=None, nsplits=None, statistic='mean', method='eigen', return_matrices=False, check_valid='raise'):
+        from desilike import utils
+        if not utils.is_sequence(chains):
+            chains = [chains]
+        nchains = len(chains)
+        if nchains < 2:
+            if nsplits is None or nchains * nsplits < 2:
+                raise ValueError('Provide a list of at least 2 chains to estimate Gelman-Rubin, or specify nsplits >= {:d}'.format(int(2. / nchains + 0.5)))
+            chains = [chain[islab * len(chain) // nsplits:(islab + 1) * len(chain) // nsplits] for islab in range(nsplits) for chain in chains]
+        sizes = [chain.size for chain in chains]
+        if any(size < 2 for size in sizes):
+            raise ValueError('Not enough samples ({}) to estimate Gelman-Rubin'.format(sizes))
+        if params is None: params = chains[0].params(varied=True)
+        nchains = len(chains)
+
+        if statistic == 'mean':
+
+            def statistic(chain, params):
+                return [chain.mean(param) for param in params]
+
+        means = np.asarray([statistic(chain, params) for chain in chains])
+        covs = np.asarray([chain.covariance(params) for chain in chains])
+        wsums = np.asarray([chain.weight.sum() for chain in chains])
+        mean_of_covs = np.average(covs, weights=wsums, axis=0)
+        cov_of_means = np.atleast_2d(np.cov(means.T))
+        d = np.sqrt(np.diag(cov_of_means))
+        corr_of_means = (cov_of_means / d).T / d
+        norm_mean_of_covs = (mean_of_covs / d).T / d
+        # Cholesky of (normalized) mean of covs and eigvals of Linv*cov_of_means*L
+        L = np.linalg.cholesky(norm_mean_of_covs)
+        Linv = np.linalg.inv(L)
+        eigvals = np.linalg.eigvalsh(Linv.dot(corr_of_means).dot(Linv.T))
+        return np.abs(eigvals) + 1.
+
+    def plot_gelman_rubin(chain, label, func=diagnostics.gelman_rubin):
+        nsteps = np.arange(100, chain.size + 1, 100)
+        gr = np.array([func(chain[:end], nsplits=4, statistic='mean', method='eigen', return_matrices=False, check_valid='raise').max() for end in nsteps])
+        plt.plot(nsteps, gr, label=label)
+        return gr
+
+    gr = plot_gelman_rubin(chain_desilike, label='desilike')
+    gr = plot_gelman_rubin(chain_cobaya, label='cobaya')
+    gr_c = plot_gelman_rubin(chain_cobaya, label='cobaya gr', func=gelman_rubin_cobaya)
+    print((gr_c - 1.) / (gr - 1.))
+    plt.legend()
+    plt.show()
+
+    plotting.plot_triangle([fisher, chain_desilike, chain_cobaya], labels=['fisher', 'desilike', 'cobaya'], show=True)
 
 
 
 if __name__ == '__main__':
 
     setup_logging()
-    #test_samplers()
+    test_samplers()
     #test_nautilus()
     #test_fixed()
     #test_importance()
@@ -555,4 +611,4 @@ if __name__ == '__main__':
     #test_nested()
     #test_marg()
     #test_bao_hmc()
-    test_cobaya_mcmc()
+    #test_cobaya_mcmc()

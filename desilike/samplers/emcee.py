@@ -1,3 +1,5 @@
+import numpy as np
+
 from desilike.samples import Chain
 from desilike import utils
 from .base import BaseBatchPosteriorSampler
@@ -96,6 +98,7 @@ class EmceeSampler(BaseBatchPosteriorSampler):
         return super(EmceeSampler, self).run(*args, **kwargs)
 
     def _run_one(self, start, niterations=300, thin_by=1, progress=False):
+        self.sampler.reset()
         self.sampler._random = self.rng
         for _ in self.sampler.sample(initial_state=start, iterations=niterations, progress=progress, store=True, thin_by=thin_by, skip_initial_state_check=False):
             pass
@@ -104,8 +107,16 @@ class EmceeSampler(BaseBatchPosteriorSampler):
         except AttributeError:
             return None
         data = [chain[..., iparam] for iparam, param in enumerate(self.varied_params)] + [self.sampler.get_log_prob()]
-        self.sampler.reset()
         return Chain(data=data, params=self.varied_params + ['logposterior'])
+
+    def _add_check(self, diagnostics, quiet=False, **kwargs):
+        """Extend :meth:`BaseBatchPosteriorSampler.check` with acceptance rate."""
+        acceptance_rate = self.mpicomm.gather(self.sampler.acceptance_fraction)
+        if self.mpicomm.rank == 0:
+            acceptance_rate = np.mean(acceptance_rate)
+            diagnostics.add_test('current_acceptance_rate', 'current mean acceptance rate', acceptance_rate, quiet=quiet)
+        diagnostics.update(self.mpicomm.bcast(diagnostics))
+        return True
 
     @classmethod
     def install(cls, config):

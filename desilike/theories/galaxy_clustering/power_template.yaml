@@ -17,15 +17,15 @@ params:
       scale: 0.005
     delta: 0.03
     latex: h
-  Omega_m:
+  omega_cdm:
     prior:
-      limits: [0.01, 1.]
+      limits: [0.01, 0.99]
     ref:
       dist: norm
-      loc: 0.3153
-      scale: 0.0073
-    delta: 0.02
-    latex: \Omega_{m}
+      loc: 0.12
+      scale: 0.0012
+    delta: 0.01
+    latex: \omega_{cdm}
   omega_b:
     prior:
       dist: norm

@@ -11,7 +11,7 @@ from desilike.likelihoods import ObservablesGaussianLikelihood
 def test_power_spectrum():
 
     from cosmoprimo.fiducial import DESI
-    from desilike.theories.galaxy_clustering import ResummedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import ResummedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TopHatFiberCollisionsPowerSpectrumMultipoles, BoxFootprint, ObservablesCovarianceMatrix
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5, fiducial=DESI())
@@ -47,6 +47,19 @@ def test_power_spectrum():
     assert observable.ells == (2,)
     assert np.allclose(theory.nd, 1e-4)
     assert np.allclose(likelihood.flatdiff, observable.wmatrix.flatpower - observable.flatdata)
+    theory()
+
+
+
+    observable = TracerPowerSpectrumMultipolesObservable(klim={2: [0.05, 0.2, 0.01]}, #klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data='../../tests/_pk/data.npy',
+                                                         covariance=glob.glob('../../tests/_pk/mock_*.npy'),
+                                                         wmatrix='../../tests/_pk/window.npy',
+                                                         theory=LPTVelocileptorsTracerPowerSpectrumMultipoles())
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
+    assert np.allclose(observable.wmatrix.theory.nd, 1e-4)
+    assert not np.allclose(observable.wmatrix.theory.fnd, 1.)
     theory()
 
     observable = TracerPowerSpectrumMultipolesObservable(klim=None,#klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},

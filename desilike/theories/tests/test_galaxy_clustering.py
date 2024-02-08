@@ -477,7 +477,7 @@ def test_full_shape():
     ntemplate = 4
     for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles],
                                         [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles]):
-        for freedom in [None, 'min', 'max'][2:]:
+        for freedom in [None, 'min', 'max']:
             for ells in [(0, 2), (0, 2, 4)]:
                 print(freedom, ells)
                 power = TheoryPower(ells=ells, freedom=freedom)
@@ -499,7 +499,7 @@ def test_full_shape():
                         if param.basename in basenames:
                             assert param.namespace == 'LRG'
                 if 'velocileptors' in TheoryPower.__name__.lower() and freedom == 'max':
-                    for name in ['LRG.b2', 'LRG.bs', 'LRG.b3']:
+                    for name in ['LRG.b2p', 'LRG.bsp', 'LRG.b3p']:
                         assert theory.all_params[name].prior.dist == 'uniform'
 
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
@@ -630,14 +630,15 @@ def test_full_shape():
 
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    theory(dm=0.01, b1=1.).shape
+    theory(dm=0.01, b1p=1.).shape
+    print(theory.runtime_info.pipeline.derived['b1'])
     assert not np.allclose(theory(dm=-0.01), theory(dm=0.01))
     assert not np.allclose(theory(qpar=0.99), theory(qper=1.01))
     test(theory, emulate='pt')
     test(theory, emulate=None, test_likelihood=False)
     theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=0.5))
     test(theory)
-    theory(dm=0.01, b1=1.).shape
+    theory(dm=0.01, b1p=1.).shape
     theory.pt
 
     theory_Pzel = LPTVelocileptorsTracerPowerSpectrumMultipoles(use_Pzel=True)
@@ -698,18 +699,20 @@ def test_velocileptors():
     z = 0.5
     template = DirectPowerSpectrumTemplate(z=z)
     k = np.arange(0.005, 0.3, 0.01)
-    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, k=k, shotnoise=1.)
+    options = dict(use_Pzel=True, kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, jn=5)
+    #options = dict(use_Pzel=True, kIR=0.2, cutoff=10, extrap_min=-4, extrap_max=3, N=2048, jn=5)
+    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, k=k, freedom='max', prior_basis='std', use_Pzel=True) #, **options)
     biases = [0.71, 0.26, 0.67, 0.52]
     cterms = [-3.4, -1.7, 6.5, 0]
     stoch = [1500., -1900., 0]
     pars = biases + cterms + stoch
     names = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2', 'sn4']
     values = dict(zip(names, pars))
-    values['Omega_k'] = 0.1
+    for name in names[-3:]:
+        values[name] = values[name] / 1e4
     power = theory(**values)
 
     from velocileptors.LPT.lpt_rsd_fftw import LPT_RSD
-    options = dict(kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, threads=1, jn=5)
     lpt = LPT_RSD(template.k, template.pk_dd, **options)
     lpt.make_pltable(template.f, kv=k, nmax=4, apar=1, aperp=1)
     ref = lpt.combine_bias_terms_pkell(pars)[1:]
@@ -729,23 +732,30 @@ def test_velocileptors():
 
     stoch = [0, 0, 0]
     pars = biases + cterms + stoch
+    lpt = LPT_RSD(template.k, template.pk_dd, **options)
     lpt.make_pltable(template.f, apar=1, aperp=1, kmin=5e-3, kmax=1.0, nk=60, nmax=4)
+    #lpt.make_pltable(template.f, apar=1, aperp=1, kmin=1e-4, kmax=0.6, nk=300, ngauss=4)
     ref = lpt.combine_bias_terms_xiell(pars)
     s = ref[0][0]
     s = s[(s > 0.) & (s < 150.)]
-    theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template, s=s)
+    theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template, s=s, prior_basis='std', use_Pzel=True) #, **options)
     values = {name: value for name, value in values.items() if not name.startswith('sn')}
     corr = theory(**values)
+
+    lpt = LPT_RSD(template.k, template.pk_dd, **options)
+    lpt.make_pltable(template.f, apar=1, aperp=1, kmin=5e-3, kmax=1.0, nk=60, nmax=4)
+    #lpt.make_pltable(template.f, apar=1, aperp=1, kmin=5e-3, kmax=0.6, nk=60, ngauss=4)
+    ref = lpt.combine_bias_terms_xiell(pars)
 
     ax = plt.gca()
     for ill, ell in enumerate((0, 2, 4)):
         ax.plot(ref[ill][0], ref[ill][0]**2 * ref[ill][1], color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
         ax.plot(s, s**2 * corr[ill], color='C{:d}'.format(ill), ls='--')
     ax.set_xlim([s[0], s[-1]])
-    ax.set_ylim(-80., 80.)
+    ax.set_ylim(-100., 100.)
     ax.grid(True)
     ax.legend()
-    ax.set_ylabel(r'$s^{2} \Delta \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
+    ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
     ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
     plt.show()
 
@@ -1540,8 +1550,8 @@ if __name__ == '__main__':
     #test_templates()
     #test_wiggle_split_template()
     #test_emulator_templates()
-    #test_bao()
-    test_autodiff()
+    test_bao()
+    #test_autodiff()
     #test_broadband_bao()
     #test_flexible_bao()
     #test_full_shape()

@@ -61,8 +61,9 @@ class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
     _initialize_with_namespace = True  # to properly forward parameters to pt
     _default_options = dict()
 
-    def initialize(self, pt=None, template=None, shotnoise=1e4, **kwargs):
+    def initialize(self, pt=None, template=None, **kwargs):
         self.options = self._default_options.copy()
+        shotnoise = kwargs.get('shotnoise', 1e4)
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
         self.nd = 1. / float(shotnoise)
@@ -735,7 +736,6 @@ class TNSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerS
             raise ValueError('fog must be lorentzian or gaussian')
 
     def calculate(self, sigmav=0):
-        import time
         super(TNSPowerSpectrumMultipoles, self).calculate()
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
@@ -996,13 +996,15 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
         self.pt.make_pltable(self.template.f, kv=self.k, apar=self.template.qpar, aperp=self.template.qper, ngauss=len(self.mu))
         pktable = {0: self.pt.p0ktable, 2: self.pt.p2ktable, 4: self.pt.p4ktable}
         self.pktable = np.array([pktable[ell] for ell in self.ells])
+        self.sigma8 = self.template.sigma8
+        self.fsigma8 = self.template.fsigma8
 
     def combine_bias_terms_poles(self, pars, nd=1e-4):
         return lptvel_combine_bias_terms_poles(self.pktable, pars, nd=nd)
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'z', 'ells', 'pktable']:
+        for name in ['k', 'z', 'ells', 'pktable', 'sigma8', 'fsigma8']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
@@ -1041,10 +1043,15 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     - https://arxiv.org/abs/2012.04636
     - https://github.com/sfschen/velocileptors
     """
-    _default_options = dict(freedom=None)
+    _default_options = dict(freedom=None, prior_basis='physical', shotnoise=1e4, fsat=0.1, sigv=5.)
+
+    def initialize(self, *args, **kwargs):
+        super(LPTVelocileptorsTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
+        kvec = np.concatenate([[min(0.0005, self.k[0])], np.geomspace(0.0015, 0.025, 10, endpoint=True), np.arange(0.03, max(0.5, self.k[-1]) + 0.005, 0.01)])
+        self.pt.init.update(k=kvec, ells=(0, 2, 4))
 
     @staticmethod
-    def _params(params, freedom=None):
+    def _params(params, freedom=None, prior_basis='physical'):
         fix = []
         if freedom == 'max':
             for param in params.select(basename=['b1', 'b2', 'bs', 'b3']):
@@ -1056,22 +1063,50 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
             fix += ['b3', 'bs', 'alpha6']  #, 'sn4']
         for param in params.select(basename=fix):
             param.update(value=0., fixed=True)
+        if prior_basis == 'physical':
+            for param in list(params):
+                basename = param.basename
+                param.update(basename=basename + 'p')
+                params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
         return params
 
     def set_params(self):
-        self.required_bias_params = dict(b1=0.69, b2=-1.17, bs=0., b3=0., alpha0=0., alpha2=0., alpha4=0., alpha6=0., sn0=0., sn2=0., sn4=0.)
+        self.required_bias_params = dict(b1=1., b2=0., bs=0., b3=0., alpha0=0., alpha2=0., alpha4=0., alpha6=0., sn0=0., sn2=0., sn4=0.)
+        self.is_physical_prior = self.options['prior_basis'] == 'physical'
+        if self.is_physical_prior:
+            for name in list(self.required_bias_params):
+                self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
         super().set_params(pt_params=[])
         fix = []
-        if 4 not in self.ells: fix += ['alpha4', 'alpha6', 'sn4']
-        if 2 not in self.ells: fix += ['alpha2', 'sn2']
+        if 4 not in self.ells: fix += ['alpha4*', 'alpha6*', 'sn4*']  # * to capture p
+        if 2 not in self.ells: fix += ['alpha2*', 'sn2*']
         for param in self.init.params.select(basename=fix):
             param.update(value=0., fixed=True)
+        self.nd = 1e-4
+        self.fnd = 1.
+        if self.is_physical_prior:
+            self.fnd = self.options['fsat'] * self.options['shotnoise'] * self.nd  # normalized by 1e-4
 
     def calculate(self, **params):
-        super(BaseVelocileptorsTracerPowerSpectrumMultipoles, self).calculate()
-        pars = [params.get(name, value) for name, value in self.required_bias_params.items()]
+        for name in ['z']:
+            setattr(self, name, getattr(self.pt, name))
+        params = {**self.required_bias_params, **params}
+        if self.is_physical_prior:
+            sigma8 = self.pt.sigma8
+            f = self.pt.fsigma8 / sigma8
+            pars = [params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p'] / sigma8**3]
+            b1 = pars[0]
+            pars += [(1 + b1)**2 * params['alpha0p'], f * (1 + b1) * (params['alpha0p'] + params['alpha2p']),
+                     f**2 * (params['alpha2p'] + (1 + b1) * params['alpha4p']), f**3 * params['alpha4p']]
+            sigv = self.options['sigv']
+            pars += [params['sn{:d}p'.format(i)] * self.fnd * sigv**i for i in [0, 2, 4]]
+        else:
+            pars = [params[name] for name in self.required_bias_params]
+        self.__dict__.update(dict(zip(['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2', 'sn4'], pars)))  # for derived parameters
         opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
-        self.power = self.pt.combine_bias_terms_poles(pars, **opts, nd=self.nd)
+        index = np.array([self.pt.ells.index(ell) for ell in self.ells])
+        self.power = interp1d(self.k, self.pt.k, self.pt.combine_bias_terms_poles(pars, **opts, nd=self.nd)[index].T).T
+        #self.power = self.pt.combine_bias_terms_poles(pars, **opts, nd=self.nd)
 
 
 class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):

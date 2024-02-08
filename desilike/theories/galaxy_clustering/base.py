@@ -63,12 +63,14 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         self.power.init.update(**kwargs)
         kin = self.power.init.get('k', None)
         # Important to have high enough sampling, otherwise wiggles can be seen at small s
-        if kin is None: self.kin = np.geomspace(self.k[0], 0.6, int(300. / self.interp_order + 0.5))
+        if kin is None: self.kin = np.geomspace(self.k[0], 0.6, int(300. / self.interp_order + 0.5))  # kmax = 1. may be better
         else: self.kin = np.array(kin, dtype='f8')
         self.power.init['k'] = self.kin
         mask = self.k > self.kin[-1]
-        self.k_high = np.log10(self.k[mask] / self.kin[-1])
-        self.pad_high = np.exp(-(self.k[mask] / self.kin[-1] - 1.)**2 / (2. * (10.)**2))
+        #self.logk_high = np.log10(self.k[mask] / self.kin[-1])
+        #self.damp_high = np.exp(-(self.k[mask] / self.kin[-1] - 1.)**2 / (2. * (10.)**2))
+        self.k_high = self.k[mask] / self.kin[-1]
+        self.damp = np.exp(-(self.k / 10.)**2)
         self.k_mid = self.k[~mask]
         self.ells = self.power.ells
         from cosmoprimo import PowerToCorrelation
@@ -79,13 +81,55 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         self.power.init.params = self.init.params.copy()
         self.init.params.clear()
 
+    # Below several methods for pk -> xi. In the end, differences do not matter for s > 20 Mpc / h.
+    """
     @jit(static_argnums=[0])
     def get_corr(self, power):
         tmp = []
         for pk in power:
             slope_high = (pk[-1] - pk[-2]) / np.log10(self.kin[-1] / self.kin[-2])
             interp = interp1d(np.log10(self.k_mid), np.log10(self.kin), pk, method=self.interp_order)
-            tmp.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.k_high) * self.pad_high], axis=-1))
+            tmp.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.logk_high) * self.damp_high], axis=-1))
+        s, corr = self.fftlog(jnp.vstack(tmp))
+        return jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
+
+    def get_corr(self, power):
+        tmp = []
+        print(power[0].sum(), power[1].sum(), power[2].sum(), self.kin[0], self.kin[-1], self.kin.shape)
+        for pk in power:
+            slope_high = np.log10(np.abs(pk[-1] / pk[-2])) / np.log10(self.kin[-1] / self.kin[-2])
+            r = -2
+            from scipy.misc import derivative
+            from scipy.interpolate import InterpolatedUnivariateSpline as interpolate
+            pki = interpolate(self.kin, pk, k=5)
+            slope_high2 = derivative(pki, self.kin[r], dx=self.kin[r] * 1e-6, order=9) * self.kin[r] / pk[r]
+            print(slope_high, slope_high2)
+            interp = interp1d(np.log10(self.k_mid), np.log10(self.kin), pk, method=self.interp_order)
+            #tmp.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.k_high) * self.damp_high], axis=-1))
+            tmp.append(jnp.concatenate([interp, pk[-1] * self.k_high**slope_high2], axis=-1) * self.damp)
+        from matplotlib import pyplot as plt
+        ax = plt.gca()
+        for tt in tmp:
+            ax.loglog(self.k, tt)
+        plt.show()
+        #s, corr = self.fftlog(jnp.vstack(tmp))
+        from velocileptors.Utils.spherical_bessel_transform import SphericalBesselTransform as SphericalBesselTransformNP
+        sphr = SphericalBesselTransformNP(self.k, L=5, fourier=True)
+        ss0, xi0 = sphr.sph(0, tmp[0])
+        ss2, xi2 = sphr.sph(2, tmp[1]); xi2 *= -1
+        ss4, xi4 = sphr.sph(4, tmp[2])
+        s = [ss0, ss2, ss4]
+        corr = [xi0, xi2, xi4]
+        return jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
+    """
+    @jit(static_argnums=[0])
+    def get_corr(self, power):
+        tmp = []
+        for pk in power:
+            slope_high = jnp.log10(jnp.abs(pk[-1] / pk[-2])) / np.log10(self.kin[-1] / self.kin[-2])
+            interp = interp1d(np.log10(self.k_mid), np.log10(self.kin), pk, method=self.interp_order)
+            #tmp.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.k_high) * self.damp_high], axis=-1))
+            tmp.append(jnp.concatenate([interp, pk[-1] * self.k_high**slope_high], axis=-1) * self.damp)
         s, corr = self.fftlog(jnp.vstack(tmp))
         return jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
 

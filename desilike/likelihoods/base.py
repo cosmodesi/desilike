@@ -100,6 +100,7 @@ class BaseLikelihood(BaseCalculator):
                         param = param.clone(derived=False if param in solved_params or param.depends else param.derived, fixed=param not in solved_params)
                         all_params.set(param)
                 solve_likelihood.all_params = all_params
+
             fisher = Fisher(solve_likelihood, method='auto')
             for likelihood in solve_likelihood.likelihoods:
                 likelihood.precision = likelihood._precision_original = getattr(likelihood, '_precision_original', likelihood.precision)

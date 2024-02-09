@@ -414,7 +414,7 @@ class Differentiation(BaseClass):
         nchunks = (csize // max_chunk_size) + 1
 
         for ichunk in range(nchunks):  # divide in chunks to save memory for MPI comm
-            self.pipeline.mpicomm = self.mpicomm
+            self.pipeline.mpicomm = mpi.COMM_SELF
             chunk_params = {}
             for name, value in zip(names, values):
                 chunk_params[name] = mpi.scatter(value[csize * ichunk // nchunks:csize * (ichunk + 1) // nchunks] if self.mpicomm.rank == 0 else None, mpicomm=self.mpicomm, mpiroot=0)
@@ -450,7 +450,7 @@ class Differentiation(BaseClass):
             if self.mpicomm.rank == 0:
                 getter_samples += tmp_samples
 
-        for getter_size, getter_inst in self.mpicomm.gather((getter_size, getter_inst), root=0):
+        for getter_size, getter_inst in (self.mpicomm.gather((getter_size, getter_inst), root=0) or []):
             if getter_size is not None: break
 
         if self.mpicomm.rank == 0:

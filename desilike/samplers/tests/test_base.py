@@ -527,10 +527,7 @@ def test_cobaya_mcmc():
     #params = {'a': {'prior': {'min': -0.5, 'max': 3}, 'proposal': 0.4}, 'b': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}, 'proposal': 0.5}}
     from desilike.bindings.cobaya import CobayaLikelihoodFactory
 
-    def get_likelihood():
-        return likelihood
-
-    likelihood_cobaya = CobayaLikelihoodFactory(get_likelihood, params=True)
+    likelihood_cobaya = CobayaLikelihoodFactory(lambda: likelihood, params=True)
     sampler = {'mcmc': {'proposal_scale': 2.4, 'max_samples': niterations, 'Rminus1_stop': gr, 'Rminus1_cl_stop': 1., 'learn_every': 300, 'output_every': 300}}
     info = {'likelihood': {'my_likelihood': likelihood_cobaya}, 'sampler': sampler, 'output': None}
     from cobaya.run import run

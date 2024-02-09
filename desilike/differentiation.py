@@ -440,7 +440,6 @@ class Differentiation(BaseClass):
                     finally:
                         getter_samples.append([__calculate(*chunk_values)] + toret)
                 except Exception as exc:
-                    raise exc
                     errors.append(exc)
 
             errors = self.mpicomm.allreduce(errors)

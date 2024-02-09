@@ -1540,7 +1540,7 @@ if __name__ == '__main__':
 
     setup_logging()
 
-    #test_velocileptors()
+    test_velocileptors()
     #test_pybird()
     #test_folps()
     #test_folpsax()
@@ -1550,7 +1550,7 @@ if __name__ == '__main__':
     #test_templates()
     #test_wiggle_split_template()
     #test_emulator_templates()
-    test_bao()
+    #test_bao()
     #test_autodiff()
     #test_broadband_bao()
     #test_flexible_bao()

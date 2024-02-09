@@ -67,10 +67,10 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         else: self.kin = np.array(kin, dtype='f8')
         self.power.init['k'] = self.kin
         mask = self.k > self.kin[-1]
-        #self.logk_high = np.log10(self.k[mask] / self.kin[-1])
-        #self.damp_high = np.exp(-(self.k[mask] / self.kin[-1] - 1.)**2 / (2. * (10.)**2))
-        self.k_high = self.k[mask] / self.kin[-1]
-        self.damp = np.exp(-(self.k / 10.)**2)
+        self.logk_high = np.log10(self.k[mask] / self.kin[-1])
+        self.damp_high = np.exp(-(self.k[mask] / self.kin[-1] - 1.)**2 / (2. * (30.)**2))
+        #self.k_high = self.k[mask] / self.kin[-1]
+        #self.damp = np.exp(-(self.k / 10.)**2)
         self.k_mid = self.k[~mask]
         self.ells = self.power.ells
         from cosmoprimo import PowerToCorrelation
@@ -83,16 +83,6 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
 
     # Below several methods for pk -> xi. In the end, differences do not matter for s > 20 Mpc / h.
     """
-    @jit(static_argnums=[0])
-    def get_corr(self, power):
-        tmp = []
-        for pk in power:
-            slope_high = (pk[-1] - pk[-2]) / np.log10(self.kin[-1] / self.kin[-2])
-            interp = interp1d(np.log10(self.k_mid), np.log10(self.kin), pk, method=self.interp_order)
-            tmp.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.logk_high) * self.damp_high], axis=-1))
-        s, corr = self.fftlog(jnp.vstack(tmp))
-        return jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
-
     def get_corr(self, power):
         tmp = []
         print(power[0].sum(), power[1].sum(), power[2].sum(), self.kin[0], self.kin[-1], self.kin.shape)
@@ -121,7 +111,7 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         s = [ss0, ss2, ss4]
         corr = [xi0, xi2, xi4]
         return jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
-    """
+
     @jit(static_argnums=[0])
     def get_corr(self, power):
         tmp = []
@@ -129,7 +119,18 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
             slope_high = jnp.log10(jnp.abs(pk[-1] / pk[-2])) / np.log10(self.kin[-1] / self.kin[-2])
             interp = interp1d(np.log10(self.k_mid), np.log10(self.kin), pk, method=self.interp_order)
             #tmp.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.k_high) * self.damp_high], axis=-1))
+            #print(np.array(pk[-1]), np.array(slope_high))
             tmp.append(jnp.concatenate([interp, pk[-1] * self.k_high**slope_high], axis=-1) * self.damp)
+        s, corr = self.fftlog(jnp.vstack(tmp))
+        return jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
+    """
+    @jit(static_argnums=[0])
+    def get_corr(self, power):
+        tmp = []
+        for pk in power:
+            slope_high = (pk[-1] - pk[-2]) / np.log10(self.kin[-1] / self.kin[-2])
+            interp = interp1d(np.log10(self.k_mid), np.log10(self.kin), pk, method=self.interp_order)
+            tmp.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.logk_high) * self.damp_high], axis=-1))
         s, corr = self.fftlog(jnp.vstack(tmp))
         return jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
 

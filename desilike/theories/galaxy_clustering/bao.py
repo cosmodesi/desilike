@@ -126,7 +126,7 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
         damped_wiggles = (pk - pknow) / pknow * jnp.exp(-sigma_nl2 / 2.)
         if 'move-all' in self.model: k, mu = kap, muap
         else: k, mu = self.k[:, None], self.mu
-        pknow = self.template.pknow_dd_interpolator(k)
+        pknow = _interp(self.template, 'pknow_dd', k)
         fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
         sk = 0.
         if self.mode == 'reciso': sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)
@@ -175,8 +175,8 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
 
     def calculate(self):
         self.z = self.template.z
-        k = self.template.pknow_dd_interpolator.k
-        pklin = self.template.pknow_dd_interpolator.pk
+        k = self.template.k
+        pklin = self.template.pknow_dd
         q = self.template.cosmo.rs_drag
         j0 = special.jn(0, q * k)
         sk = 0.
@@ -355,7 +355,7 @@ class FlexibleBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
         super(FlexibleBAOWigglesPowerSpectrumMultipoles, self).calculate()
         f = dbeta * self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        pknow = self.template.pknow_dd_interpolator(kap)
+        pknow = _interp(self.template, 'pknow_dd', kap)
         pk = _interp(self.template, 'pk_dd', kap)
         damped_wiggles = self.get_wiggles(pk - pknow, **kwargs) / pknow
         if 'move-all' in self.model: k, mu = kap, muap
@@ -494,7 +494,7 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
             for ell in self.ells:
                 self.broadband_matrix[ell] = jnp.array([(self.k / self.kp)**pow for pow in self.broadband_orders[ell].values()])
         elif self.broadband in ['ngp', 'cic', 'tsc', 'pcs']:
-            pk_now = self.template.pknow_dd_interpolator_fid
+            pk_now = lambda k: _interp(self.template, 'pknow_dd_fid', k)
             for ell in self.ells:
                 tmp, bb_orders = [], {}
                 for name, ik in self.broadband_orders[ell].items():

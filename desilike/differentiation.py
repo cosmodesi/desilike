@@ -421,7 +421,7 @@ class Differentiation(BaseClass):
                 chunk_size = len(chunk_params[name])
 
             for ivalue in range(chunk_size):
-                chunk_values = [chunk_params[name][ivalue] for name in params]
+                chunk_values = [chunk_params[name][ivalue] for name in chunk_params]
                 toret = []
                 try:
                     try:
@@ -440,6 +440,7 @@ class Differentiation(BaseClass):
                     finally:
                         getter_samples.append([__calculate(*chunk_values)] + toret)
                 except Exception as exc:
+                    raise exc
                     errors.append(exc)
 
             errors = self.mpicomm.allreduce(errors)
@@ -450,6 +451,7 @@ class Differentiation(BaseClass):
             if self.mpicomm.rank == 0:
                 getter_samples += tmp_samples
 
+        toret = None
         for getter_size, getter_inst in (self.mpicomm.gather((getter_size, getter_inst), root=0) or []):
             if getter_size is not None: break
 
@@ -479,6 +481,7 @@ class Differentiation(BaseClass):
                     samples[param] = np.full(samples.shape, self.center[param.name])
         nsamples = self.mpicomm.bcast(samples.size if self.mpicomm.rank == 0 else None, root=0)
         getter_samples, getter_inst, getter_size = self._calculate(samples.to_dict(params=self.all_params) if self.mpicomm.rank == 0 else {})
+        toret = None
         if self.mpicomm.rank == 0:
             finiteparams, finiteorder, finiteaccuracy = [], [], []
             for param in self._grid_samples.names():

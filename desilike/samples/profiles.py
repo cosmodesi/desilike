@@ -717,3 +717,11 @@ class Profiles(BaseClass):
     def __eq__(self, other):
         """Is ``self`` equal to ``other``, i.e. same type and attributes?"""
         return all(other.get(name, None) == self.get(name, None) for name in self._attrs)
+    
+    # Intended for Users (should output a more clean format)
+    def __str__(self):
+        return str(self)
+    
+    # Intended for developers (can output the internals of the class for development purposes)
+    def __repr__(self):
+        return repr(self)

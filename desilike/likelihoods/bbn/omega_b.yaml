@@ -1,5 +1,0 @@
-class: BBNOmegaBLikelihood
-
-init:
-  mean: 0.02235
-  std: 0.00037

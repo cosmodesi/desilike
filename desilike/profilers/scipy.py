@@ -156,7 +156,7 @@ class ScipyProfiler(BaseProfiler):
                 else:
                     kwargs.setdefault('max_nfev', max_iterations)
                 result = optimize.curve_fit(f, xdata=np.linspace(0., 1., sigma.shape[0]), ydata=np.zeros(sigma.shape[0], dtype='f8'), p0=start, sigma=sigma,
-                                                check_finite=True, bounds=bounds, method=method, jac=None, **kwargs)
+                                             check_finite=True, bounds=bounds, method=method, jac=None, **kwargs)
             except RuntimeError:
                 if self.mpicomm.rank == 0:
                     self.log_warning('Finished unsuccessfully.')
@@ -165,7 +165,7 @@ class ScipyProfiler(BaseProfiler):
             attrs = {}
             #try: attrs['message'], attrs['status'] = result[2:]  # for version 1.9, with full_output=True
             #except ValueError: pass
-            profiles.set(bestfit=ParameterBestFit(list(popt) + [- 0.5 * self.chi2(popt)], params=varied_params + ['logposterior'], attrs=attrs))
+            profiles.set(bestfit=ParameterBestFit([np.atleast_1d(xx) for xx in popt] + [- 0.5 * self.chi2(popt)], params=varied_params + ['logposterior'], attrs=attrs))
             profiles.set(error=Samples(np.diag(pcov)**0.5, params=varied_params, attrs=attrs))
             profiles.set(covariance=ParameterCovariance(pcov, params=varied_params, attrs=attrs))
         else:
@@ -180,7 +180,7 @@ class ScipyProfiler(BaseProfiler):
                 self.log_error('Finished unsuccessfully.')
             profiles = Profiles()
             attrs = {name: getattr(result, name) for name in ['success', 'status', 'message', 'nit']}
-            profiles.set(bestfit=ParameterBestFit(list(result.x) + [- 0.5 * result.fun], params=varied_params + ['logposterior']), attrs=attrs)
+            profiles.set(bestfit=ParameterBestFit([np.atleast_1d(xx) for xx in result.x] + [- 0.5 * np.atleast_1d(result.fun)], params=varied_params + ['logposterior']), attrs=attrs)
             if getattr(result, 'hess_inv', None) is not None:
                 try:
                     cov = result.hess_inv.toarray()

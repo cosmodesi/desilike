@@ -72,7 +72,7 @@ class BOBYQAProfiler(BaseProfiler):
             self.log_error('Finished unsuccessfully.')
             return profiles
         attrs = {name: getattr(result, name) for name in ['nf', 'nx', 'nruns', 'flag', 'msg']}
-        profiles.set(bestfit=ParameterBestFit(list(result.x) + [- 0.5 * result.f], params=varied_params + ['logposterior'], attrs=attrs))
+        profiles.set(bestfit=ParameterBestFit([np.atleast_1d(xx) for xx in result.x] + [- 0.5 * np.atleast_1d(result.f)], params=varied_params + ['logposterior'], attrs=attrs))
         cov = utils.inv(result.hessian)
         profiles.set(error=Samples(np.diag(cov)**0.5, params=varied_params, attrs=attrs))
         profiles.set(covariance=ParameterCovariance(cov, params=varied_params, attrs=attrs))

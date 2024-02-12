@@ -11,6 +11,7 @@ from desilike.utils import BaseClass, TaskManager, is_path
 from desilike.samples import Chain, Samples, load_source
 from desilike.samples import diagnostics as sample_diagnostics
 from desilike.parameter import ParameterPriorError
+from desilike.jax import jit
 
 
 class RegisteredSampler(type(BaseClass)):
@@ -112,7 +113,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         if self.mpicomm.rank == 0:
             self.log_info('Varied parameters: {}.'.format(self.varied_params.names()))
         if not self.varied_params:
-            raise ValueError('No parameters to be varied!')
+            raise ValueError('no parameters to be varied!')
         if self.mpicomm.rank == 0:
             if chains is None:
                 if save_fn is not None and not is_path(save_fn):
@@ -146,19 +147,21 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         if not mask_finite_prior.any():
             return logprior
         points = Samples(values[mask_finite_prior].T, params=self.varied_params)
-        self.pipeline.calculate(points.to_dict())
+        results = self._vlikelihood(points.to_dict())
+
         logposterior, raise_error = None, None
         if self.pipeline.mpicomm.rank == 0:
+            (logposterior, derived), errors = results
             update_derived = True
             di = {}
             try:
-                di = {'loglikelihood': self.pipeline.derived[self.likelihood._param_loglikelihood],
-                      'logprior': self.pipeline.derived[self.likelihood._param_logprior]}
+                di = {'loglikelihood': derived[self.likelihood._param_loglikelihood],
+                      'logprior': derived[self.likelihood._param_logprior]}
             except KeyError:
                 di['loglikelihood'] = di['logprior'] = np.full(points.shape, -np.inf)
                 update_derived = False
-            if self.pipeline.errors:
-                for ipoint, error in self.pipeline.errors.items():
+            if errors:
+                for ipoint, error in errors.items():
                     if isinstance(error[0], self.likelihood.catch_errors):
                         self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(repr(error[0]),
                                        {k: v.flat[ipoint] for k, v in points.items()}, error[1]))
@@ -171,10 +174,10 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                         warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0])))
             if update_derived:
                 if self.derived is None:
-                    self.derived = [points, self.pipeline.derived]
+                    self.derived = [points, derived]
                 else:
                     self.derived = [Samples.concatenate([self.derived[0], points], intersection=True),
-                                    Samples.concatenate([self.derived[1], self.pipeline.derived], intersection=True)]
+                                    Samples.concatenate([self.derived[1], derived], intersection=True)]
             logposterior = logprior.copy()
             logposterior[mask_finite_prior] = 0.
             for name, values in di.items():
@@ -192,6 +195,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         return self.likelihood.mpicomm.bcast(logposterior, root=0)
 
     @bcast_values
+    @jit(static_argnums=[0])
     def logprior(self, values):
         toret = 0.
         for param, value in zip(self.varied_params, values.T):
@@ -209,6 +213,47 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         if self.rng is None:
             seed = mpi.bcast_seed(seed=seed, mpicomm=self.mpicomm, size=None)
             self.rng = np.random.RandomState(seed=seed)
+
+    def _set_vlikelihood(self):
+        """Vectorize the likelihood."""
+        def get_start(size=1):
+            toret = {}
+            for param in self.varied_params:
+                try:
+                    toret[param.name] = param.ref.sample(size=size, random_state=self.rng)
+                except ParameterPriorError as exc:
+                    raise ParameterPriorError('Error in ref/prior distribution of parameter {}'.format(param)) from exc
+            return toret
+
+        self.likelihood()  # initialize before jit
+        vlikelihood = self.likelihood
+        from desilike import vmap
+        try:
+            import jax
+            _vlikelihood = vmap(vlikelihood, backend='jax', errors='return', return_derived=True)
+            _vlikelihood(get_start())
+            #raise ValueError
+        except:
+            if self.mpicomm.rank == 0:
+                self.log_info('Could *not* vmap input likelihood.')
+            vlikelihood = vmap(vlikelihood, backend=None, errors='return', return_derived=True)
+        else:
+            if self.mpicomm.rank == 0:
+                self.log_info('Successfully vmap input likelihood.')
+            vlikelihood = _vlikelihood
+        try:
+            import jax
+            _vlikelihood = jax.jit(vlikelihood)
+            _vlikelihood(get_start())
+            #raise ValueError
+        except:
+            if self.mpicomm.rank == 0:
+                self.log_info('Could *not* jit input likelihood.')
+        else:
+            if self.mpicomm.rank == 0:
+                self.log_info('Successfully jit input likelihood.')
+            vlikelihood = _vlikelihood
+        self._vlikelihood = vmap(vlikelihood, backend='mpi', errors='return')
 
     def _prepare(self):
         pass
@@ -231,6 +276,9 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                 except ParameterPriorError as exc:
                     raise ParameterPriorError('Error in ref/prior distribution of parameter {}'.format(param)) from exc
             return np.array(toret).T
+
+        if getattr(self, '_vlikelihood', None) is None:
+            self._set_vlikelihood()
 
         shape = (self.nchains, self.nwalkers, len(self.varied_params))
         if start is not None:
@@ -283,7 +331,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
             chain[param] = np.full(chain.shape, param.value, dtype='f8')
         if self.derived is not None:
             indices_in_chain, indices = self.derived[0].match(chain, params=self.varied_params)
-            assert indices_in_chain[0].size == chain.size, '{:d} != {:d}'.format(indices_in_chain[0].size, chain.size)
+            assert indices_in_chain[0].size == chain.size, '{:d} != {:d}, {}, {}'.format(indices_in_chain[0].size, chain.size, indices_in_chain, indices)
             for array in self.derived[1]:
                 chain.set(array[indices].reshape(chain.shape + array.shape[1:]))
         if chain._logposterior not in chain:
@@ -310,13 +358,13 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
             self.mpicomm = tm.mpicomm
             for ichain in tm.iterate(range(self.nchains)):
                 self._set_rng(rng=self.rng)
-                self.derived = None
                 self._ichain = ichain
                 chain = self._run_one(start[ichain], **kwargs)
                 if self.mpicomm.rank == 0:
                     ncalls[ichain] = self.derived[1].size if self.derived is not None else 0
                     if chain is not None:
                         chains[ichain] = self._set_derived(chain)
+                self.derived = None
         self.mpicomm = mpicomm_bak
         for ichain, chain in enumerate(chains):
             mpiroot_worker = self.mpicomm.rank if ncalls[ichain] is not None else None
@@ -393,13 +441,13 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
                 self.mpicomm = tm.mpicomm
                 for ichain in tm.iterate(range(self.nchains)):
                     self._set_rng(rng=self.rng)
-                    self.derived = None
                     self._ichain = ichain
                     chain = self._run_one(start[ichain], niterations=niterations, **kwargs)
                     if self.mpicomm.rank == 0:
                         ncalls[ichain] = self.derived[1][self.likelihood._param_loglikelihood].size if self.derived is not None else 0
                         if chain is not None:
                             chains[ichain] = self._set_derived(chain)
+                    self.derived = None
             self.mpicomm = mpicomm_bak
 
             for ichain, chain in enumerate(chains):

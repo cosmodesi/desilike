@@ -155,6 +155,8 @@ def test_cholesky():
 if __name__ == '__main__':
 
     setup_logging()
+    test_solved()
+    exit()
 
     test_misc()
     test_plot()

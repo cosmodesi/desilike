@@ -26,15 +26,23 @@ def test_deriv():
 def test_param_array():
     param = Parameter('a', shape=4)
     array = ParameterArray(np.ones((1, 4)))
-    array *= 2
+    array * 2
     array = ParameterArray(np.ones(4), param=param)
     print((array + array).param)
-    array = ParameterArray(np.ones((1, 4)), param=param, derivs=[(param,)])
+    array = ParameterArray(np.ones((2, 1, 4)), param=param, derivs=[(param,)])
     print((array + array)[param])
     array[param] += 1.
     print((array + array)[param])
-
+    assert isinstance(array.ravel(), ParameterArray)
+    #assert isinstance(array.reshape(-1), ParameterArray)
+    assert array.reshape(-1).derivs is None
+    print(array)
     samples = Samples([array])
+    print(samples['a'].shape)
+    array2 = array.clone(param=Parameter('b', shape=4))
+    samples.set(array2)
+    assert samples.shape == (2,)
+    print(samples['b'].shape)
     print(samples[:10]['a'].derivs)
     samples['b'] = samples['a'].clone(param=param.clone(basename='b')) * 2
     samples['c'] = samples['a'] * 1.2
@@ -83,6 +91,7 @@ def test_matrix():
 
 if __name__ == '__main__':
 
+    #test_param_array()
     test_prior()
     test_deriv()
     test_param_array()

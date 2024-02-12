@@ -140,8 +140,9 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
     def _run_one(self, start, niterations=300, progress=False, **kwargs):
         if self.resume:
             self.sampler.load_state(self.state_fn[self._ichain])
-            #self.derived = self.sampler.derived
-            #del self.sampler.derived
+            if self.mpicomm.rank == 0:
+                self.derived = self.sampler.derived
+                del self.sampler.derived
             from pocomc.tools import FunctionWrapper
             # Because dill is unable to cope with our loglikelihood and logprior
             self.sampler.log_likelihood = FunctionWrapper(self.loglikelihood, args=None, kwargs=None)
@@ -153,11 +154,10 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         self.sampler.random_state = self.rng.randint(0, high=0xffffffff)
         np.random.set_state(self.rng.get_state())  # self.rng is same for all ranks
         torch.set_rng_state(self.mpicomm.bcast(torch_random_state_bak, root=0))
-
         if not self.resume:
             self.sampler.run(prior_samples=start, progress=progress, **kwargs)
 
-        self.sampler.add_samples(n=niterations)
+        #self.sampler.add_samples(n=niterations)
         np.random.set_state(np_random_state_bak)
         torch.set_rng_state(torch_random_state_bak)
         try:
@@ -170,10 +170,10 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         for name in self.sampler.__dict__:
             if name.startswith('saved_'): setattr(self.sampler, name, [])
         # Save last parameters, which be reused in the next run
-        #self.sampler.derived = [d[:-1] for d in self.derived]
         if self.mpicomm.rank == 0:
-            self.sampler.save_state(self.state_fn[self._ichain])
-        data = [result['samples'][..., iparam] for iparam, param in enumerate(self.varied_params)] + [result['loglikelihood'] + result['logprior']]
+            self.sampler.derived = [d[-1:] for d in self.derived]
+            self.sampler.save_state(self.state_fn[self._ichain])  # save ~ all self.sampler.__dict__
+        data = [np.asarray(result['samples'][..., iparam], dtype='f8') for iparam, param in enumerate(self.varied_params)] + [np.asarray(result['loglikelihood'] + result['logprior'], dtype='f8')]
         return Chain(data=data, params=self.varied_params + ['logposterior']).reshape(-1, self.nwalkers)
 
     @classmethod

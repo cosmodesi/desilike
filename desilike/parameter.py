@@ -18,7 +18,7 @@ import numpy as np
 import scipy as sp
 from .jax import numpy as jnp
 from .jax import scipy as jsp
-from .jax import rv_frozen, use_jax, jit
+from .jax import rv_frozen, use_jax, register_pytree_node_class
 
 from .io import BaseConfig
 from . import mpi, utils
@@ -399,11 +399,12 @@ class Deriv(dict):
         return self._keep_positive()
 
 
-class ParameterArray(np.ndarray):
+import numpy.lib.mixins
 
-    """Extend :class:`np.ndarray` with a parameter, and derivative orders."""
+@register_pytree_node_class
+class ParameterArray(numpy.lib.mixins.NDArrayOperatorsMixin):
 
-    def __new__(cls, value, param=None, derivs=None, copy=False, dtype=None, **kwargs):
+    def __init__(self, value, param=None, derivs=None, copy=False, dtype=None, **kwargs):
         """
         Initalize :class:`ParameterArray`.
 
@@ -427,80 +428,108 @@ class ParameterArray(np.ndarray):
         **kwargs : dict
             Optional arguments for :func:`np.array`.
         """
-        value = np.array(value, copy=copy, dtype=dtype, **kwargs)
-        obj = value.view(cls)
-        obj.param = None if param is None else Parameter(param)
-        obj.derivs = None if derivs is None else [Deriv(deriv) for deriv in derivs]
-        return obj
+        if isinstance(value, ParameterArray):
+            value = value.value
+        if copy or dtype:
+            value = np.array(value, copy=copy, dtype=dtype, **kwargs)
+        self._value = value
+        self.param = None if param is None else Parameter(param)
+        self._derivs = None if derivs is None else tuple(Deriv(deriv) for deriv in derivs)
 
-    def __array_finalize__(self, obj):
-        self.param = getattr(obj, 'param', None)
-        self.derivs = getattr(obj, 'derivs', None)
+    @property
+    def value(self):
+        return self._value
 
-    def __array_ufunc__(self, ufunc, method, *inputs, out=None, **kwargs):
-        args = []
-        for i, input_ in enumerate(inputs):
-            if isinstance(input_, ParameterArray):
-                args.append(input_.view(np.ndarray))
-            else:
-                args.append(input_)
+    @property
+    def derivs(self):
+        return self._derivs
 
-        outputs = out
-        if outputs:
-            out_args = []
-            for j, output in enumerate(outputs):
-                if isinstance(output, ParameterArray):
-                    out_args.append(output.view(np.ndarray))
-                else:
-                    out_args.append(output)
-            kwargs['out'] = tuple(out_args)
-        else:
-            outputs = (None,) * ufunc.nout
+    @property
+    def shape(self):
+        return self.value.shape
 
-        results = super().__array_ufunc__(ufunc, method, *args, **kwargs)
-        if results is NotImplemented:
-            return NotImplemented
+    def __float__(self):
+        return float(self.value)
 
-        if method == 'at':
-            if isinstance(inputs[0], ParameterArray):
-                inputs[0].param = self.param
-                inputs[0].derivs = self.derivs
-            return
+    def __len__(self):
+        return len(self.value)
 
-        if ufunc.nout == 1:
-            results = (results,)
+    @property
+    def zero(self):
+        """Return zero-order derivative."""
+        if self.derivs is not None:
+            return self[()]
+        return self
 
-        results = tuple((np.asarray(result).view(ParameterArray)
-                         if output is None else output)
-                        for result, output in zip(results, outputs))
+    @property
+    def pndim(self):
+        """Number of dimensions of stored parameter, plus 1 if derivatives."""
+        return int(self.derivs is not None) + (self.param.ndim if self.param is not None else 0)
 
-        for result in results:
-            if isinstance(result, ParameterArray):
-                result.param = self.param
-                result.derivs = self.derivs
+    @property
+    def andim(self):
+        """Number of dimensions of array, minus parameter dimensions and derivatives (if any)."""
+        return self.value.ndim - self.pndim
 
-        return results[0] if len(results) == 1 else results
+    @property
+    def pshape(self):
+        """Parameter shape, including derivatives along first dimension (if any)."""
+        return self.value.shape[self.andim:]
+
+    @property
+    def ashape(self):
+        """Array shape, removing parameter shape and derivatives (if any)."""
+        return self.value.shape[:self.andim]
+
+    @ashape.setter
+    def ashape(self, shape):
+        self.value.shape = self.ashape + tuple(shape)
+
+    def __array_finalize__(self, obj, copy=False):
+        if obj.derivs is not None and (self.shape[-obj.pndim:] == obj.shape[-obj.pndim:]):
+            self._derivs = tuple(Deriv(deriv) for deriv in obj.derivs) if copy else obj.derivs
+        if obj.param is not None:
+            self.param = Parameter(obj.param) if copy else obj.param
+
+    def __copy__(self):
+        return self.clone(value=self.value.copy())
+
+    def copy(self, *args, **kwargs):
+        return self.__copy__(*args, **kwargs)
 
     def __repr__(self):
-        return '{}({}, {}, {})'.format(self.__class__.__name__, self.param, self.derivs, self)
+        return '{}({}, {}, {})'.format(self.__class__.__name__, self.param, self.derivs, self.value)
 
-    def __reduce__(self):
-        # See https://stackoverflow.com/questions/26598109/preserve-custom-attributes-when-pickling-subclass-of-numpy-array
-        # Get the parent's __reduce__ tuple
-        pickled_state = super(ParameterArray, self).__reduce__()
-        # Create our own tuple to pass to __setstate__
-        new_state = pickled_state[2] + (None if self.param is None else self.param.__getstate__(), self.derivs)
-        # Return a tuple that replaces the parent's __setstate__ tuple with our own
-        return (pickled_state[0], pickled_state[1], new_state)
+    def __array__(self, *args, **kwargs):
+        return np.asarray(self._value, *args, **kwargs)
 
-    def __setstate__(self, state):
-        self.param = None if state[-2] is None else Parameter.from_state(state[-2])  # Set the info attribute
-        self.derivs = state[-1]
-        # Call the parent's __setstate__ with the other tuple elements.
-        super(ParameterArray, self).__setstate__(state[:-2])
+    def __format__(self, *args, **kwargs):
+        return self._value.__format__(*args, **kwargs)
 
-    def __getstate__(self):
-        return {'value': self.view(np.ndarray), 'param': None if self.param is None else self.param.__getstate__(), 'derivs': self.derivs}
+    def __array_ufunc__(self, ufunc, method, *inputs, out=None, **kwargs):
+        # Only authorise operations between arrays of same parameter / derivs
+        input_param_derivs = [(input.param, input.derivs) for input in inputs if isinstance(input, self.__class__)]
+        input_values = [input.value if isinstance(input, self.__class__) else input for input in inputs]
+        if isinstance(out, self.__class__):
+            new = self.__class__(getattr(ufunc, method)(*input_values, out=out, **kwargs))
+            new.__array_finalize__(self)
+            return new
+        new = getattr(ufunc, method)(*input_values, **kwargs)
+        if input_param_derivs:
+            param, derivs = input_param_derivs[0]
+            if any(param_derivs[0] != param for param_derivs in input_param_derivs[1:]):
+                param = None
+            if any(param_derivs[1] != derivs for param_derivs in input_param_derivs[1:]):
+                derivs = None
+            if param is not None:
+                param = Parameter(param)
+            if derivs is not None:
+                if (new.shape[-self.pndim:] == self.shape[-self.pndim:]):
+                    derivs = tuple(Deriv(deriv) for deriv in derivs)
+                else:
+                    derivs = None
+            return self.__class__(new, param=param, derivs=derivs)
+        return new
 
     def _isderiv(self, deriv):
         try:
@@ -535,44 +564,28 @@ class ParameterArray(np.ndarray):
                 toret = Ellipsis
         return toret
 
-    @property
-    def zero(self):
-        """Return zero-order derivative."""
-        if self.derivs is not None:
-            return self[()]
-        return self
-
-    @property
-    def pndim(self):
-        """Number of dimensions of stored parameter, plus 1 if derivatives."""
-        return int(self.derivs is not None) + (self.param.ndim if self.param is not None else 0)
-
-    @property
-    def andim(self):
-        """Number of dimensions of array, minus parameter dimensions and derivatives (if any)."""
-        return self.ndim - self.pndim
-
-    @property
-    def pshape(self):
-        """Parameter shape, including derivatives along first dimension (if any)."""
-        return self.shape[self.andim:]
-
-    @property
-    def ashape(self):
-        """Array shape, removing parameter shape and derivatives (if any)."""
-        return self.shape[:self.andim]
-
     def __getitem__(self, deriv):
         """Derivative w.r.t. parameter 'a' can be obtained (if exists) as array[('a',)]."""
         deriv, isderiv = self._isderiv(deriv)
-        toret = super(ParameterArray, self).__getitem__(self._index(deriv))
-        if isderiv:
-            toret.derivs = None
-        return toret
+        return self.__class__(self.value.__getitem__(self._index(deriv)), param=self.param, derivs=None if isderiv else self.derivs)
 
     def __setitem__(self, deriv, item):
         """Derivative w.r.t. parameter 'a' can be set (if exists) as array[('a',)] = deriv."""
-        return super(ParameterArray, self).__setitem__(self._index(deriv), item)
+        return self.value.__setitem__(self._index(deriv), item)
+
+    def __setstate__(self, state):
+        self._value = state['value']
+        self.param = state['param']
+        if self.param is not None: self.param = Parameter.from_state(self.param)  # Set the info attribute
+        self._derivs = state['derivs']
+
+    def __getstate__(self):
+        state = {name: getattr(self, name) for name in ['value', 'param', 'derivs']}
+        if self.param is not None: state['param'] = self.param.__getstate__()
+        return state
+
+    def __getattr__(self, name):
+        return object.__getattribute__(self._value, name)
 
     @classmethod
     def from_state(cls, state):
@@ -581,9 +594,30 @@ class ParameterArray(np.ndarray):
 
     def clone(self, **kwargs):
         """Clone :class:`ParameterArray`, optionally updating :attr:`value`, :attr:`param` or :attr:`derivs`."""
-        state = {'value': self.view(np.ndarray), 'param': self.param, 'derivs': self.derivs}
+        state = {name: getattr(self, name) for name in ['value', 'param', 'derivs']}
         state.update(**kwargs)
         return self.__class__(**state)
+
+    def tree_flatten(self):
+        return (self.value,), {name: getattr(self, name) for name in ['param', 'derivs']}
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(*children, **aux_data)
+
+
+def get_wrapper(func):
+
+    def wrapper(self, *args, **kwargs):
+        new = self.__class__(getattr(self.value, func)(*args, **kwargs))
+        new.__array_finalize__(self, copy=True)
+        return new
+
+    return wrapper
+
+
+for name in ['ravel', 'reshape']:
+    setattr(ParameterArray, name, get_wrapper(name))
 
 
 class Parameter(BaseClass):
@@ -985,7 +1019,9 @@ class BaseParameterCollection(BaseClass):
             param = item
         else:
             param = cls._get_param(item)
-        return param.name
+            if param is None:
+                return None
+        return str(param.name)
 
     @classmethod
     def _get_param(cls, item):
@@ -1574,7 +1610,7 @@ class ParameterCollectionConfig(BaseParameterCollection):
         try:
             self.data[name] = item
         except TypeError:
-            item_name = str(self._get_name(item))
+            item_name = self._get_name(item)
             if str(name) != item_name:
                 raise KeyError('Parameter {} must be indexed by name (incorrect name {})'.format(item_name, name))
             self.data[self._index_name(name)] = item
@@ -1790,7 +1826,7 @@ class ParameterCollection(BaseParameterCollection):
         try:
             self.data[name] = item
         except TypeError:
-            item_name = str(self._get_name(item))
+            item_name = self._get_name(item)
             if str(name) != item_name:
                 raise KeyError('Parameter {} must be indexed by name (incorrect {})'.format(item_name, name))
             self.set(item)
@@ -1915,7 +1951,7 @@ class ParameterPrior(BaseClass):
     def __hash__(self):
         return super().__hash__()
 
-    @jit(static_argnums=[0, 2])
+    #@jit(static_argnums=[0, 2])
     def logpdf(self, x, remove_zerolag=True):
         """
         Return log-probability density at ``x``.
@@ -2048,6 +2084,7 @@ def _reshape(array, shape):
         raise ValueError('Error with array {}'.format(repr(array))) from exc
 
 
+@register_pytree_node_class
 class Samples(BaseParameterCollection):
 
     """Class that holds samples, as a collection of :class:`ParameterArray`."""
@@ -2088,12 +2125,15 @@ class Samples(BaseParameterCollection):
     def save(self, filename):
         """Save samples to disk."""
         filename = str(filename)
-        state = {'__class__': utils.serialize_class(self.__class__), **self.__getstate__()}
+        state = self.__getstate__()
+        for array in state['data']: array['value'] = np.asarray(array['value'])  # could be jax
+        state = {'__class__': utils.serialize_class(self.__class__), **state}
         self.log_info('Saving {}.'.format(filename))
         utils.mkdir(os.path.dirname(filename))
         if filename.endswith('.npz'):
-            statez = dict(state)
-            statez.pop('data', None)
+            statez = {'others': dict(state)}
+            statez['others'].pop('data', None)
+            statez['__class__'] = statez['others'].pop('__class__')
             statez['params'] = []
             for iarray, array in enumerate(state['data']):
                 statez['data.{:d}'.format(iarray)] = array['value']
@@ -2111,7 +2151,11 @@ class Samples(BaseParameterCollection):
         if filename.endswith('.npz'):
             state = dict(state)
             data = [{**param, 'value': state.pop('data.{:d}'.format(iarray))} for iarray, param in enumerate(state.pop('params')[()])]
-            state = {**{name: value[()] for name, value in state.items()}, 'data': data}
+            if 'others' in state:  # better as does not change type, e.g. _derived remains a list
+                others = {name: value for name, value in state['others'][()].items()}
+            else:  # backward-compatibility
+                others = {name: value[()] for name, value in state.items()}
+            state = {**others, 'data': data}
         else:
             state = state[()]
         state.pop('__class__', None)
@@ -2192,9 +2236,16 @@ class Samples(BaseParameterCollection):
                 other_names = other.names()
                 if set(other_names) != set(new_names):
                     raise ValueError('cannot concatenate values as parameters do not match: {} != {}.'.format(new_names, other_names))
+
+        def atleast_1d(item):
+            shape = item.ashape
+            if not shape: shape = (1,)
+            item = _reshape(item, shape)
+            return item
+
         for param in new_params:
             try:
-                value = np.concatenate([np.atleast_1d(other[param]) for other in others], axis=0)
+                value = np.concatenate([atleast_1d(other[param]) for other in others], axis=0)
             except ValueError as exc:
                 raise ValueError('error while concatenating array for parameter {}'.format(param)) from exc
             new[param] = others[0][param].clone(value=value)
@@ -2219,7 +2270,7 @@ class Samples(BaseParameterCollection):
             shape = self.shape
         else:
             shape = item.ashape
-            if not shape: shape = (1,)
+            #if not shape: shape = (1,)
         item = _reshape(item, shape)
         super(Samples, self).set(item)
 
@@ -2253,7 +2304,7 @@ class Samples(BaseParameterCollection):
         try:
             self.data[name] = item  # list index
         except TypeError:
-            item_name = str(self._get_name(item))
+            item_name = self._get_name(item)
             if str(name) != item_name:
                 item = item.copy()
                 if isinstance(name, Parameter):
@@ -2330,7 +2381,7 @@ class Samples(BaseParameterCollection):
         if params is None: params = self.params()
         return {str(param): self[param] for param in params}
 
-    def match(self, other, eps=1e-8, params=None):
+    def match(self, other, eps=1e-7, params=None):
         """
         Match other :class:`Samples` against ``self``, for parameters ``params``.
 
@@ -2339,8 +2390,9 @@ class Samples(BaseParameterCollection):
         other : Samples
             Samples to match.
 
-        eps : float, default=1e-8
+        eps : float, default=1e-7
             Distance upper bound above which samples are not considered equal.
+            1e-7 to handle float32/float64 conversions.
 
         params : ParameterCollection, list, default=None
             Parameters to use. Defaults to all parameters that are not derived.
@@ -2401,6 +2453,29 @@ class Samples(BaseParameterCollection):
         if mpicomm.rank == dest:
             toret = cls.recv(source=source, tag=tag, mpicomm=mpicomm)
         return toret
+
+    def tree_flatten(self):
+        data = [array.value for array in self.data]
+        param_derivs = [(array.param, array.derivs) for array in self.data]
+        return tuple(data), (param_derivs, {name: getattr(self, name) for name in self._attrs})
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        new = cls([ParameterArray(value, *param_derivs) for value, param_derivs in zip(children, aux_data[0])])
+        for name, value in aux_data[1].items():
+            setattr(new, name, value)
+        return new
+
+    def tree_flatten(self):
+        return self.data, {name: getattr(self, name) for name in self._attrs}
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        new = cls()
+        new.data = children
+        for name, value in aux_data.items():
+            setattr(new, name, value)
+        return new
 
 
 def is_parameter_sequence(params):

@@ -13,6 +13,7 @@ try:
     import jax, jaxlib
     from jax.config import config; config.update('jax_enable_x64', True)
     from jax import numpy, scipy
+    from jax.tree_util import register_pytree_node_class
     array_types = []
     for line in ['jaxlib.xla_extension.DeviceArrayBase', 'type(numpy.array(0))', 'jax.core.Tracer']:
         try:
@@ -25,6 +26,8 @@ except ImportError:
     jax = None
     import numpy
     import scipy
+    def register_pytree_node_class(cls):
+        return cls
 
 
 def jit(*args, **kwargs):

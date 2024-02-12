@@ -5,7 +5,7 @@ import numpy as np
 
 from .differentiation import Differentiation
 from .parameter import ParameterPrecision, ParameterCovariance, ParameterArray, ParameterCollection, Parameter, is_parameter_sequence
-from .base import BaseCalculator, _args_or_kwargs
+from .base import BaseCalculator, _params_args_or_kwargs
 from .utils import BaseClass, deep_eq
 from .jax import numpy as jnp
 from . import utils
@@ -788,7 +788,7 @@ class Fisher(BaseClass):
             pass
 
     def run(self, *args, **kwargs):
-        params = _args_or_kwargs(args, kwargs)
+        params = _params_args_or_kwargs(args, kwargs)
         if self.prior_differentiation is None:
             center = diff = {**self.likelihood.runtime_info.pipeline.input_values, **params}
         else:

@@ -475,20 +475,39 @@ def test_autodiff():
     """
     print('STEP1')
     likelihood.all_params['c'].update(derived='.marg')
-    print('STEP2')
     likelihood()
-    print('STEP3')
     likelihood(a=2., b=1.)
     likelihood(a=1., b=2.)
-
-    def logdensity_fn(b):
-        return likelihood(b=b)
-
     #likelihood(b=0.02)
-    grad = jax.value_and_grad(logdensity_fn, argnums=0)
-    grad(0.01)
-    grad(0.04)
+    grad = jax.value_and_grad(likelihood, argnums=0)
+    print(grad({'b': 0.01}))
+    print(grad({'b': 0.04}))
 
+    if False:
+        def likelihood(di, return_derived=False):
+            if return_derived:
+                return di, di
+            return di
+
+    import functools
+    likelihood = jax.vmap(functools.partial(likelihood, return_derived=True))
+    print(likelihood({'b': jnp.array([0.01, 0.04])}))
+
+
+def test_parameter():
+
+    import jax
+    from jax import numpy as jnp
+    from desilike import Parameter, ParameterArray, Samples
+
+    def fun(x):
+        array = ParameterArray(x, param='x')
+        return Samples([array])
+
+    print(jax.jacfwd(fun)(jnp.array([5., 10.])))
+    print(jax.vmap(fun)(jnp.array([5., 10.])))
+    fun = jax.jit(fun)
+    print(fun(jnp.array(10.)))
 
 
 if __name__ == '__main__':
@@ -497,8 +516,9 @@ if __name__ == '__main__':
     #test_misc()
     #test_differentiation()
     #test_solve()
-    test_fisher_galaxy()
+    #test_fisher_galaxy()
     #test_fisher_cmb()
     #test_speed()
     #test_jax()
-    #test_autodiff()
+    test_autodiff()
+    #test_parameter()

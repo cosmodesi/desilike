@@ -263,8 +263,7 @@ class BaseLikelihood(BaseCalculator):
                     indices_derivs[0].append(iparam1)
                     indices_derivs[1].append(iparam1 + iparam2)
 
-        from desilike import jax
-        derived = None if jax.to_nparray(self.loglikelihood) is None else pipeline.derived
+        derived = pipeline.derived
         sum_loglikelihood = jnp.zeros(len(derivs) if solved_params and derived is not None else (), dtype='f8')
         sum_logprior = jnp.zeros((), dtype='f8')
 
@@ -277,7 +276,7 @@ class BaseLikelihood(BaseCalculator):
                 derived.set(ParameterArray(xx, param=param))
 
         if solved_params and derived is not None:
-            sum_logprior = np.insert(prior_hessian[indices_derivs], 0, sum_logprior + self.logprior)
+            sum_logprior = jnp.insert(prior_hessian[indices_derivs], 0, sum_logprior + self.logprior)
         else:
             sum_logprior += self.logprior
 
@@ -291,13 +290,9 @@ class BaseLikelihood(BaseCalculator):
                 loglikelihood += likelihoods_gradient[likelihood_index].dot(dx)
                 # Set derived values
                 if derived is not None:
-                    loglikelihood = np.insert(likelihood_hessian[indices_derivs], 0, loglikelihood)
+                    loglikelihood = jnp.insert(likelihood_hessian[indices_derivs], 0, loglikelihood)
                     derived.set(ParameterArray(loglikelihood, param=likelihood._param_loglikelihood, derivs=derivs))
             sum_loglikelihood += loglikelihood
-
-        if derived is not None:
-            sum_loglikelihood = jax.to_nparray(sum_loglikelihood)
-            sum_logprior = jax.to_nparray(sum_logprior)
 
         if indices_marg.size:
             marg_likelihood = -1. / 2. * jnp.linalg.slogdet(- posterior_hessian[np.ix_(indices_marg, indices_marg)])[1]
@@ -307,8 +302,9 @@ class BaseLikelihood(BaseCalculator):
             ip = jnp.diag(prior_hessian)[indices_marg]
             marg_likelihood += 1. / 2. * jnp.sum(jnp.log(jnp.where(ip > 0, ip, 1.)))  # logdet
             # sum_loglikelihood -= 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
-            if derived is not None: np.add.at(sum_loglikelihood, 0, marg_likelihood)
-            else: sum_loglikelihood += marg_likelihood
+            if derived is not None:
+                marg_likelihood = marg_likelihood * np.array([1.] + [0.] * (len(derivs) - 1), dtype='f8')
+            sum_loglikelihood += marg_likelihood
 
         self.loglikelihood = sum_loglikelihood
         self.logprior = sum_logprior

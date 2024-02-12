@@ -86,8 +86,8 @@ class MinuitProfiler(BaseProfiler):
                 self.log_warning('hesse failed: {}'.format(exc))
         bestfit_attrs = {name: getattr(minuit.fmin, name) for name in ['nfcn', 'ngrad', 'is_valid', 'is_above_max_edm', 'has_reached_call_limit', 'time']}
         covariance_attrs = {name: getattr(minuit.fmin, name) for name in ['has_accurate_covar', 'has_posdef_covar', 'has_made_posdef_covar']}
-        profiles.set(bestfit=ParameterBestFit([minuit.values[str(param)] for param in varied_params] + [- 0.5 * minuit.fval], params=varied_params + ['logposterior'], attrs=bestfit_attrs))
-        profiles.set(error=Samples([minuit.errors[str(param)] for param in varied_params], params=varied_params, attrs=covariance_attrs))
+        profiles.set(bestfit=ParameterBestFit([np.atleast_1d(minuit.values[str(param)]) for param in varied_params] + [- 0.5 * np.atleast_1d(minuit.fval)], params=varied_params + ['logposterior'], attrs=bestfit_attrs))
+        profiles.set(error=Samples([np.atleast_1d(minuit.errors[str(param)]) for param in varied_params], params=varied_params, attrs=covariance_attrs))
         if minuit.covariance is not None:
             profiles.set(covariance=ParameterCovariance(np.array(minuit.covariance), params=varied_params, attrs=covariance_attrs))
         return profiles
@@ -123,7 +123,7 @@ class MinuitProfiler(BaseProfiler):
                 self.log_warning('interval failed: {}'.format(exc))
             return profiles
         merrors = minuit.merrors[name]
-        interval = (merrors.lower, merrors.upper)
+        interval = np.array([merrors.lower, merrors.upper])
         attrs = {name: getattr(merrors, name) for name in ['is_valid', 'lower_valid', 'upper_valid', 'at_lower_limit', 'at_upper_limit', 'at_lower_max_fcn', 'at_upper_max_fcn',
                                                            'lower_new_min', 'upper_new_min', 'nfcn', 'min']}
         profiles.set(interval=Samples([interval], params=[param], attrs={name: attrs}))
@@ -167,7 +167,7 @@ class MinuitProfiler(BaseProfiler):
             if self.mpicomm.rank == 0:
                 self.log_warning('contour failed: {}'.format(exc))
             return profiles
-        profiles.set(profile=ParameterContours([(ParameterArray(x1, param1), ParameterArray(x2, param2))]))
+        profiles.set(profile=ParameterContours([(ParameterArray(x1, param1, copy=True), ParameterArray(x2, param2, copy=True))]))
         return profiles
 
     def profile(self, *args, **kwargs):

@@ -113,11 +113,203 @@ class InitConfig(BaseConfig):
         return super(InitConfig, self).__getitem__(key)
 
 
-def _args_or_kwargs(args, kwargs):
+def _params_args_or_kwargs(args, kwargs):
     if not args: params = kwargs
     elif len(args) == 1 and not kwargs: params = args[0]
     else: raise PipelineError('could not interpret input args = {}, kwargs = {}'.format(args, kwargs))
     return params
+
+
+def _check_params(params):
+    cshapes = []
+    params = dict(params)
+    names = list(params.keys())
+    for name in names:
+        array = params[name]
+        if array is not None:
+            array = jax.to_nparray(array)
+            if array is None:
+                raise ValueError('is input array {}: {} a JAX array? if so, use jax.vmap instead'.format(name, array))
+            if not array.shape:
+                raise ValueError('input array {}: {} must be of rank >= 1 for lmap'.format(name, array))
+            cshapes.append(array.shape)
+            params[name] = array.ravel()
+
+    def _all_eq(cshapes):
+        if cshapes:
+            return all(cshape == cshapes[0] for cshape in cshapes)
+        return True
+
+    if not _all_eq(cshapes):
+        raise ValueError('input shapes are different: {}'.format(dict(zip(names, cshapes))))
+
+    return params, cshapes[0]
+
+
+def _concatenate_results(results, shape, add_dims=True):
+
+    def concatenate(results):
+        if isinstance(results[0], Samples):
+            return Samples.concatenate([result[None, ...] if add_dims else result for result in results]).reshape(shape)
+        if jax.to_nparray(results[0]) is not None:
+            if add_dims:
+                results = np.asarray(results)
+                results.shape = shape + results[0].shape
+            else:
+                results = np.concatenate(results)
+        else:
+            from jax import numpy as jnp
+            if add_dims:
+                results = jnp.asarray(results)
+                results = results.reshape(shape + results[0].shape)
+            else:
+                results = jnp.concatenate(results)
+        return results
+
+    if results:
+        if isinstance(results[0], (tuple, list)):
+            results = type(results[0])(concatenate([res[i] for res in results]) for i in range(len(results[0])))
+        else:
+            results = concatenate(results)
+
+    return results
+
+
+def _check_states(states):
+    results, errors = [], {}
+    for state in states:
+        if state[1] is None:  # no error
+            ref = state
+            break
+    for istate, state in enumerate(states):
+        if state[1] is None:  # no error
+            results.append(state[0])
+        else:
+            errors[istate] = state
+            if ref is not None:
+                results.append(ref[0])
+
+    return results, errors
+
+
+import functools
+# Set map routines
+
+def vmap(calculate, backend=None, errors='raise', mpi_max_chunk_size=100, **kwargs):
+
+    __wrapped__vmap__ = getattr(calculate, '__wrapped__vmap__', None)
+    __wrapped__errors__ = getattr(calculate, '__wrapped__errors__', None)
+    errors = str(errors)
+
+    if backend is None:
+
+        if __wrapped__vmap__ is not None: calculate =  __wrapped__vmap__
+        # Standard map, no MPI nor jax
+        @functools.wraps(calculate)
+        def wrapper(params, **kw):
+            kw = {**kwargs, **kw}
+            params, shape = _check_params(params)
+
+            states = []
+            size = np.prod(shape, dtype='i')
+            for ivalue in range(size):
+                state = [None, None]
+                try:
+                    state[0] = calculate({name: value[ivalue] for name, value in params.items()}, **kw)
+                except PipelineError as exc:
+                    if errors == 'raise':
+                        raise exc
+                    state[1] = (exc, traceback.format_exc())
+                finally:
+                    states.append(state)
+
+            results, errs = _check_states(states)
+            results = _concatenate_results(results, shape, add_dims=True)
+            if errors == 'return':
+                return results, errs
+            return results
+
+    if backend == 'jax':
+
+        if __wrapped__vmap__ is not None: calculate = __wrapped__vmap__
+
+        import jax
+        jwrapper = jax.vmap(functools.partial(calculate, **kwargs))
+
+        def wrapper(params, **kw):
+            _jwrapper = jwrapper
+            if kw: _jwrapper = jax.vmap(functools.partial(calculate, **{**kwargs, **kw}))
+            toret = _jwrapper(params)
+            if errors == 'return':
+                return toret, {}
+            return toret
+
+    if backend == 'mpi':
+
+        @functools.wraps(calculate)
+        def wrapper(params, **kw):
+            kw = {**kwargs, **kw}
+            if __wrapped__vmap__ is None: mpicomm = calculate._mpicomm
+            else: mpicomm = __wrapped__vmap__._mpicomm
+            params = dict(params)
+            if mpicomm.rank == 0:
+                params, shape = _check_params(params)
+            params = {name: array if mpicomm.rank == 0 else None for name, array in params.items()}
+            shape = mpicomm.bcast(shape if mpicomm.rank == 0 else None, root=0)
+            all_size = np.prod(shape, dtype='i')
+
+            nchunks = (all_size // mpi_max_chunk_size) + 1
+            all_states = []
+            for ichunk in range(nchunks):  # divide in chunks to save memory for MPI comm
+                chunk_offset = all_size * ichunk // nchunks
+                chunk_params = {}
+                for name in params:
+                    chunk_params[name] = mpi.scatter(params[name][chunk_offset:all_size * (ichunk + 1) // nchunks] if mpicomm.rank == 0 else None, mpicomm=mpicomm, mpiroot=0)
+                    chunk_size = len(chunk_params[name])
+                calculate.mpicomm = mpi.COMM_SELF
+                states = []
+                error = None
+                if __wrapped__vmap__ is None:
+                    for ivalue in range(chunk_size):
+                        state = [None, None]
+                        try:
+                            state[0] = calculate({name: value[ivalue] for name, value in chunk_params.items()}, **kw)
+                        except PipelineError as exc:
+                            error = state[1] = (exc, traceback.format_exc())
+                        finally:
+                            states.append(state)
+                else:  # e.g. previous vmap
+                    states = calculate(chunk_params, **kw)
+                    if __wrapped__errors__ != 'return':
+                        states = (states, {})  # adding empty error
+                    states = (states[0], {chunk_offset + ierror: error for ierror, error in states[1].items()})
+                    for error in states[1].values():
+                        break
+                    states = [states]
+                tmp_states = mpicomm.reduce(states, root=0)
+                if mpicomm.rank == 0:
+                    all_states += tmp_states
+                calculate.mpicomm = mpicomm
+                if errors == 'raise' and error:
+                    raise PipelineError('found error: {}'.format(error))
+
+            if __wrapped__vmap__ is None:
+                results, errs = _check_states(all_states)
+                results = _concatenate_results(results, shape, add_dims=True)
+            else:
+                results = _concatenate_results([states[0] for states in all_states], shape, add_dims=False)
+                errs = {}
+                for states in all_states:
+                    errs.update(states[1])
+            if errors == 'return':
+                return results, errs
+            return results
+
+    wrapper.__wrapped__vmap__ = calculate if __wrapped__vmap__ is None else __wrapped__vmap__
+    wrapper.__wrapped__errors__ = errors
+
+    return wrapper
+
 
 
 class BasePipeline(BaseClass):
@@ -228,151 +420,58 @@ class BasePipeline(BaseClass):
         for calculator in self.calculators:
             calculator._mpicomm = mpicomm
 
-    def calculate(self, *args, force=None, **kwargs):
+    def calculate(self, *args, force=None, return_derived=False, **kwargs):
         """
         Calculate, i.e. call calculators' :meth:`BaseCalculator.calculate` if their parameters are updated,
         or if they depend on previous calculation that has been updated.
         Derived parameter values are stored in :attr:`derived`.
         """
-        params = _args_or_kwargs(args, kwargs)
+        params = _params_args_or_kwargs(args, kwargs)
         if not self._initialized:
             if self.more_initialize is not None: self.more_initialize()
             self._initialized = True
 
-        names = self.mpicomm.bcast(list(params.keys()) if self.mpicomm.rank == 0 else None, root=0)
+        names = list(params.keys())
         self_params = self.params
         for name in names:
             if name not in self_params:
                 raise PipelineError('input parameter {} is not one of parameters: {}'.format(name, self_params))
 
-        csizes, cshapes = [], []
-        for name in names:
-            array = params[name]
-            if array is not None:
-                array = jax.to_nparray(array)
-                if array is None:  # jax array
-                    cshapes.append(())
-                    csizes.append(0)
-                    array = params[name]  # for params[name] = array below
-                else:
-                    cshapes.append(array.shape)
-                    csizes.append(array.size)
-            params[name] = array
-        csizes, cshapes = self.mpicomm.bcast((csizes, cshapes), root=0)
-
-        def _all_eq(cshapes):
-            if cshapes:
-                return all(cshape == cshapes[0] for cshape in cshapes)
-            return True
-
-        if not _all_eq(cshapes):
-            raise PipelineError('shapes are different: {}'.format(dict(zip(names, cshapes))))
-
-        self.derived = Samples()
-
-        def calculate(params, more_derived=self.more_derived):
-            bak_input_values = dict(self.input_values)
-            self.input_values.update(params)
-            params = self_params.eval(**self.input_values)
-            # Here we updated self.input_values as we need to access it (in e.g. BaseLikelihood._solve)
-            self.input_values.update(params)  # to update parameters with depends
-            result, self.derived, error = None, Samples(), None
+        bak_input_values = dict(self.input_values)
+        self.input_values.update(params)
+        params = self_params.eval(**self.input_values)
+        # Here we updated self.input_values as we need to access it (in e.g. BaseLikelihood._solve)
+        self.input_values.update(params)  # to update parameters with depends
+        result, self.derived = None, (Samples() if return_derived else None)
+        if self.derived is not None:
             for param in self._params:
-                if param.depends: self.derived.set(ParameterArray(np.asarray(params[param.name]), param=param))
-            for calculator in self.calculators:  # start by first calculator
-                runtime_info = calculator.runtime_info
-                derived = Samples()
-                try:
-                    result = runtime_info.calculate(params, force=force)
+                if param.depends:
+                    self.derived.set(ParameterArray(params[param.name], param=param))
+        for calculator in self.calculators:  # start by first calculator
+            runtime_info = calculator.runtime_info
+            derived = Samples()
+            try:
+                result = runtime_info.calculate(params, force=force)
+                if self.derived is not None:
                     derived = runtime_info.derived
-                except Exception as exc:
-                    error = (exc, traceback.format_exc())
-                    raise PipelineError('error in method calculate of {} with calculator parameters {} and pipeline parameters {}'.format(calculator, runtime_info.input_values, self.input_values)) from exc
+            except Exception as exc:
+                raise PipelineError('error in method calculate of {} with calculator parameters {} and pipeline parameters {}'.format(calculator, runtime_info.input_values, self.input_values)) from exc
+            if self.derived is not None:
                 self.derived.update(derived)
-            if self.more_calculate:
-                toret = self.more_calculate()
-                if toret is not None: result = toret
-            if more_derived:
-                tmp = more_derived(0)
-                if tmp is not None: derived.update(tmp)
-            # Now we update self.input_values only with non-traced arrays
-            for name, value in self.input_values.items():
-                value = jax.to_nparray(value)
-                if value is not None: bak_input_values[name] = value
-            self.input_values = bak_input_values
-            return result, self.derived, error
-
-        if (not cshapes) or (not cshapes[0]):  # no input parameters, or scalar input
-            result, self.derived, self.error = calculate(params)
-            return result
-
-        self.errors = {}
-
-        all_size = csizes[0]
-        max_chunk_size = getattr(self, '_mpi_max_chunk_size', 100)
-        nchunks = (all_size // max_chunk_size) + 1
-        mpicomm, more_derived = self.mpicomm, self.more_derived
-        all_states = []
-        params = {name: array.ravel() if mpicomm.rank == 0 else None for name, array in params.items()}
-        for ichunk in range(nchunks):  # divide in chunks to save memory for MPI comm
-            chunk_offset = all_size * ichunk // nchunks
-            chunk_params = {}
-            for name in names:
-                chunk_params[name] = mpi.scatter(params[name][chunk_offset:all_size * (ichunk + 1) // nchunks] if mpicomm.rank == 0 else None, mpicomm=mpicomm, mpiroot=0)
-                chunk_size = len(chunk_params[name])
-            rank_offset = chunk_offset + sum(mpicomm.allgather(chunk_size)[:mpicomm.rank])
-            self.mpicomm = mpi.COMM_SELF
-            states = []
-            for ivalue in range(chunk_size):
-                istate = ivalue + rank_offset
-                state = [None] * 3
-                try:
-                    derived_bak = self.derived
-                    state[0], derived, error = calculate({name: value[ivalue] for name, value in chunk_params.items()}, more_derived=None)
-                    self.derived = derived_bak
-                except PipelineError as exc:
-                    if error is None:
-                        error = (exc, traceback.format_exc())
-                    state[2] = error
-                else:
-                    if more_derived:
-                        tmp = more_derived(istate)
-                        if tmp is not None: derived.update(tmp)
-                    state[1] = derived
-                finally:
-                    states.append(state)
-            tmp_states = mpicomm.reduce(states, root=0)
-            if mpicomm.rank == 0:
-                all_states += tmp_states
-            self.mpicomm = mpicomm
-
-        results = None
-        if self.mpicomm.rank == 0:
-            ref = None
-            for state in all_states:
-                if state[2] is None:  # no error
-                    ref = state
-                    break
-            results, samples = [], []
-            for istate, state in enumerate(all_states):
-                if state[2] is None:  # no error
-                    results.append(state[0])
-                    samples.append(state[1])
-                else:
-                    self.errors[istate] = state
-                    if ref is not None:
-                        results.append(ref[0])
-                        samples.append(ref[1])
-            if samples:
-                self.derived = Samples.concatenate(samples).reshape(cshapes[0])
-                results = np.asarray(results)
-                results.shape = cshapes[0] + results[0].shape
-        return results
-
-    def mpicalculate(self, *args, **kwargs):
-        import warnings
-        warnings.warn('mpicalculate is deprecated, use calculate instead')
-        return self.mpicalculate(*args, **kwargs)
+        if self.more_calculate:
+            toret = self.more_calculate()
+            if toret is not None: result = toret
+        if self.more_derived and self.derived is not None:
+            tmp = self.more_derived()
+            if tmp is not None: self.derived.update(tmp)
+        # Now we update self.input_values only with non-traced arrays
+        for name, value in self.input_values.items():
+            value = jax.to_nparray(value)
+            if value is not None: bak_input_values[name] = value
+        self.input_values = bak_input_values
+        if return_derived:
+            return result, self.derived
+        return result
 
     def get_cosmo_requires(self):
         """Return a dictionary mapping section to method's name and arguments,
@@ -739,10 +838,8 @@ class RuntimeInfo(BaseClass):
                     name = param.basename
                     if name in state: value = state[name]
                     else: value = getattr(self.calculator, name)
-                    value = jax.to_nparray(value)
-                    if value is not None:
-                        param._shape = value.shape  # a bit hacky, but no need to update parameters for this...
-                        self._derived.set(ParameterArray(value, param=param))
+                    param._shape = value.shape  # a bit hacky, but no need to update parameters for this...
+                    self._derived.set(ParameterArray(value, param=param))
         return self._derived
 
     @property
@@ -1147,7 +1244,7 @@ class CollectionCalculator(BaseCalculator):
                 try:
                     return getattr(self[calcname], basename)
                 except AttributeError:
-                    return self.all_derived[calcname][basename].runtime_info.derived[basename][0]  # Samples, so remove the first axis
+                    return self.all_derived[calcname][basename].runtime_info.derived[basename]
         raise AttributeError('calculator {} has no attribute {};'
                              'have you run any calculation already by calling this calculator or calculators'
                              'that depend on it (typically, a likelihood?)'.format(self.__class__.__name__, name))

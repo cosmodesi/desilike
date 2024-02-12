@@ -3,7 +3,7 @@ import itertools
 import numpy as np
 
 from desilike import PipelineError
-from .base import _args_or_kwargs
+from .base import _params_args_or_kwargs
 from .parameter import Parameter, ParameterCollection, ParameterArray, Samples, Deriv, ParameterPriorError
 from .utils import BaseClass, expand_dict, is_sequence
 from .jax import jax
@@ -412,6 +412,7 @@ class Differentiation(BaseClass):
         getter_samples, errors = [], []
         max_chunk_size = getattr(self, '_mpi_max_chunk_size', 100)
         nchunks = (csize // max_chunk_size) + 1
+        import traceback
 
         for ichunk in range(nchunks):  # divide in chunks to save memory for MPI comm
             self.pipeline.mpicomm = mpi.COMM_SELF
@@ -440,7 +441,7 @@ class Differentiation(BaseClass):
                     finally:
                         getter_samples.append([__calculate(*chunk_values)] + toret)
                 except Exception as exc:
-                    errors.append(exc)
+                    errors.append((exc, traceback.format_exc()))
 
             errors = self.mpicomm.allreduce(errors)
             self.pipeline.mpicomm = mpicomm
@@ -464,7 +465,7 @@ class Differentiation(BaseClass):
         return toret, getter_inst, getter_size
 
     def run(self, *args, **kwargs):
-        params = _args_or_kwargs(args, kwargs)
+        params = _params_args_or_kwargs(args, kwargs)
         # Getter, or calculator, dict[param1, param2]
         self.center = {}
         # print(self.pipeline.input_values)

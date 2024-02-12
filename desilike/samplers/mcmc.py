@@ -525,7 +525,6 @@ class MCMCSampler(BaseBatchPosteriorSampler):
             return Chain(data=data, params=self.varied_params + ['fweight', 'logposterior'])
         return None
 
-    '''
     def _add_check(self, diagnostics, quiet=False, **kwargs):
         """Extend :meth:`BaseBatchPosteriorSampler.check` with acceptance rate."""
         acceptance_rate = self.mpicomm.gather(self.sampler.get_acceptance_rate())
@@ -537,4 +536,3 @@ class MCMCSampler(BaseBatchPosteriorSampler):
                 diagnostics.add_test('total_acceptance_rate', 'total mean acceptance rate', np.mean(acceptance_rate), quiet=quiet)
         diagnostics.update(self.mpicomm.bcast(diagnostics))
         return True
-    '''

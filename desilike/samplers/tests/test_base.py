@@ -21,6 +21,7 @@ def test_samplers():
     #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
     for param in theory.params.select(basename=['al*']): param.update(derived='.marg')
     for param in theory.params.select(basename=['al0_*']): param.update(derived='.marg_not_derived')
+    #for param in theory.params.select(basename=['al*']): param.update(derived='.marg_not_derived')
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data={},
                                                          theory=theory)
@@ -28,8 +29,8 @@ def test_samplers():
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov, name='LRG')
 
-    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][:1]:
-        kwargs = {}
+    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][:-1]:
+        kwargs = {'seed': 42}
         if Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]:
             kwargs.update(nwalkers=20)
         if Sampler in [StaticDynestySampler, DynamicDynestySampler, PolychordSampler, NautilusSampler]:
@@ -37,7 +38,7 @@ def test_samplers():
         save_fn = ['./_tests/chain_{:d}.npz'.format(i) for i in range(min(likelihood.mpicomm.size, 1))]
         sampler = Sampler(likelihood, save_fn=save_fn, **kwargs)
         kwargs = {}
-        if Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]:
+        if Sampler in [EmceeSampler, ZeusSampler]:
             kwargs.update(thin_by=2)
         chains = sampler.run(max_iterations=100, check=True, check_every=50, **kwargs)
         if sampler.mpicomm.rank == 0:
@@ -47,6 +48,7 @@ def test_samplers():
             assert chains[0]['LRG.loglikelihood'].param.derived
             assert chains[0].logposterior.param.latex() == '\mathcal{L}'
             assert chains[0].logposterior.param.derived
+            #print(chains[0]['LRG.loglikelihood'].derivs)
             chains[0]['LRG.loglikelihood']['al2_0', 'al2_0']
             with pytest.raises(KeyError):
                 chains[0]['LRG.loglikelihood']['al0_0', 'al0_0']
@@ -518,23 +520,24 @@ def test_cobaya_mcmc():
     fisher = Fisher(likelihood, method='auto')
     fisher = fisher()
 
-    sampler = MCMCSampler(likelihood, proposal_scale=2.4, seed=42)
+    sampler = MCMCSampler(likelihood, proposal_scale=2.4)
     niterations = 10000
     gr = 0.03
-    chain_desilike = sampler.run(check_every=300, max_iterations=niterations, check={'max_eigen_gr': gr, 'stable_over': 2})[0].remove_burnin(0.3)
+    learn_every = 80
+    chain_desilike = sampler.run(check_every=learn_every, max_iterations=niterations, check={'max_eigen_gr': gr, 'stable_over': 2})[0].remove_burnin(0.3)
 
     #likelihood = {'gaussian_mixture': {'means': [0.2, 0], 'covs': [[0.1, 0.05], [0.05, 0.2]]}}
     #params = {'a': {'prior': {'min': -0.5, 'max': 3}, 'proposal': 0.4}, 'b': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}, 'proposal': 0.5}}
     from desilike.bindings.cobaya import CobayaLikelihoodFactory
 
     likelihood_cobaya = CobayaLikelihoodFactory(lambda: likelihood, params=True)
-    sampler = {'mcmc': {'proposal_scale': 2.4, 'max_samples': niterations, 'Rminus1_stop': gr, 'Rminus1_cl_stop': 1., 'learn_every': 300, 'output_every': 300}}
+    sampler = {'mcmc': {'proposal_scale': 2.4, 'max_samples': niterations, 'Rminus1_stop': gr, 'Rminus1_cl_stop': 1., 'learn_every': learn_every, 'output_every': learn_every}}
     info = {'likelihood': {'my_likelihood': likelihood_cobaya}, 'sampler': sampler, 'output': None}
     from cobaya.run import run
     updated_info, sampler = run(info)
     from desilike.samples import Chain
     samples = sampler.products()['sample']
-    samples = {name: samples[name] for name in ['a', 'b', 'weight']}
+    samples = {name: np.asarray(samples[name]) for name in ['a', 'b', 'weight']}
     samples['fweight'] = samples.pop('weight')
     print(samples['fweight'].min(), samples['fweight'].max())
     chain_cobaya = Chain(samples).remove_burnin(0.3)

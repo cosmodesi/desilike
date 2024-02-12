@@ -236,11 +236,62 @@ def test_install():
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
                                                          data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
                                                          theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=False)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
     from desilike import Installer
     Installer()(likelihood)
     from desilike.samplers import EmceeSampler
     Installer()(EmceeSampler)
+
+
+def test_vmap():
+
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles
+    from desilike import vmap
+    import jax
+
+    theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    for param in theory.params.select(basename=['sn*']):
+        param.update(derived='.marg')
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
+                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
+
+    size = (3,)
+    params = {param.name: param.ref.sample(size=size, random_state=42) if param.ref.is_proper() else np.full(param.value, size) for param in likelihood.varied_params}
+    if False:
+        vlikelihood = vmap(likelihood, errors='return')
+        toret = vlikelihood(params, return_derived=True)
+        if likelihood.mpicomm.rank == 0:
+            print(toret)
+    if True:
+        vlikelihood = vmap(likelihood, backend='jax', errors='return')
+        toret = vlikelihood(params, return_derived=True)
+        if likelihood.mpicomm.rank == 0:
+            print(toret[0][1]['loglikelihood'].derivs)
+            print(toret)
+        toret = jax.jit(vlikelihood, static_argnames=['return_derived'])(params, return_derived=True)
+        if likelihood.mpicomm.rank == 0:
+            print(toret)
+        exit()
+    if True:
+        vlikelihood = vmap(likelihood, backend='mpi', errors='return', return_derived=True)
+        toret = vlikelihood(params)
+        if likelihood.mpicomm.rank == 0:
+            print(toret)
+    if True:
+        vlikelihood = vmap(jax.jit(likelihood, static_argnames=['return_derived']), backend='mpi', errors='return')
+        toret = vlikelihood(params, return_derived=True)
+        if likelihood.mpicomm.rank == 0:
+            print(toret)
+    if True:
+        vlikelihood = vmap(jax.jit(vmap(likelihood, backend='jax', errors='return'), static_argnames=['return_derived']), backend='mpi', errors='return')
+        toret = vlikelihood(params, return_derived=True)
+        if likelihood.mpicomm.rank == 0:
+            print(toret)
 
 
 if __name__ == '__main__':
@@ -249,8 +300,9 @@ if __name__ == '__main__':
     #test_init()
     #test_observable()
     #test_likelihood()
-    test_combined_likelihood()
+    #test_combined_likelihood()
     #test_params()
     #test_copy()
     #test_cosmo()
     #test_install()
+    test_vmap()

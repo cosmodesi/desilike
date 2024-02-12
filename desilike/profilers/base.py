@@ -9,6 +9,7 @@ from desilike.utils import BaseClass, expand_dict, TaskManager
 from desilike.samples import load_source
 from desilike.samples.profiles import Profiles, ParameterBestFit, ParameterGrid, ParameterProfiles
 from desilike.parameter import ParameterPriorError, Samples, ParameterCollection, is_parameter_sequence
+from desilike.jax import jit
 
 
 class RegisteredProfiler(type(BaseClass)):
@@ -239,35 +240,37 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         if not mask_finite_prior.any():
             return logprior
         points = Samples(self._params_forward_transform(values[mask_finite_prior]).T, params=self.varied_params)
-        self.pipeline.calculate(points.to_dict())
+        results = self._vlikelihood(points.to_dict())
+
         logposterior, raise_error = None, None
         if self.pipeline.mpicomm.rank == 0:
+            (logposterior, derived), errors = results
             update_derived = True
             di = {}
             try:
-                di = {'loglikelihood': self.pipeline.derived[self.likelihood._param_loglikelihood],
-                      'logprior': self.pipeline.derived[self.likelihood._param_logprior]}
+                di = {'loglikelihood': derived[self.likelihood._param_loglikelihood],
+                      'logprior': derived[self.likelihood._param_logprior]}
             except KeyError:
                 di['loglikelihood'] = di['logprior'] = np.full(points.shape, -np.inf)
                 update_derived = False
-            if self.pipeline.errors:
-                for ipoint, error in self.pipeline.errors.items():
+            if errors:
+                for ipoint, error in errors.items():
                     if isinstance(error[0], self.likelihood.catch_errors):
-                        self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(error[0],
+                        self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(repr(error[0]),
                                        {k: v.flat[ipoint] for k, v in points.items()}, error[1]))
                         for values in di.values():
-                            values[ipoint, ...] = -np.inf  # should be useless, as no step with -inf loglikelihood should be kept
+                            values[ipoint, ...] = -np.inf  # should be not be required, as no step with -inf loglikelihood should be kept
                     else:
                         raise_error = error
                         update_derived = False
                     if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
-                        warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug to get full stack trace.'.format(error[0]))
+                        warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0])))
             if update_derived:
                 if self.derived is None:
-                    self.derived = [points, self.pipeline.derived]
+                    self.derived = [points, derived]
                 else:
-                    self.derived = [Samples.concatenate([self.derived[0], points]),
-                                    Samples.concatenate([self.derived[1], self.pipeline.derived])]
+                    self.derived = [Samples.concatenate([self.derived[0], points], intersection=True),
+                                    Samples.concatenate([self.derived[1], derived], intersection=True)]
             logposterior = logprior.copy()
             logposterior[mask_finite_prior] = 0.
             for name, values in di.items():
@@ -285,6 +288,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         return self.likelihood.mpicomm.bcast(logposterior, root=0)
 
     @bcast_values
+    @jit(static_argnums=[0])
     def logprior(self, values):
         toret = 0.
         values = self._params_forward_transform(values)
@@ -310,6 +314,48 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
     def _set_profiler(self):
         raise NotImplementedError
 
+    def _set_vlikelihood(self):
+        """Vectorize the likelihood."""
+        def get_start(size=1):
+            toret = {}
+            for param in self.varied_params:
+                try:
+                    toret[param.name] = param.ref.sample(size=size, random_state=self.rng)
+                except ParameterPriorError as exc:
+                    raise ParameterPriorError('Error in ref/prior distribution of parameter {}'.format(param)) from exc
+            return toret
+
+        self.likelihood()  # initialize before jit
+        vlikelihood = self.likelihood
+        from desilike import vmap
+        try:
+            import jax
+            _vlikelihood = vmap(vlikelihood, backend='jax', errors='return', return_derived=True)
+            _vlikelihood(get_start())
+            #raise ValueError
+        except:
+            if self.mpicomm.rank == 0:
+                self.log_info('Could *not* vmap input likelihood.')
+            vlikelihood = vmap(vlikelihood, backend=None, errors='return', return_derived=True)
+        else:
+            if self.mpicomm.rank == 0:
+                self.log_info('Successfully vmap input likelihood.')
+            vlikelihood = _vlikelihood
+        try:
+            import jax
+            _vlikelihood = jax.jit(vlikelihood)
+            _vlikelihood(get_start())
+            #raise ValueError
+        except:
+            if self.mpicomm.rank == 0:
+                self.log_info('Could *not* jit input likelihood.')
+        else:
+            if self.mpicomm.rank == 0:
+                self.log_info('Successfully jit input likelihood.')
+            vlikelihood = _vlikelihood
+        self._vlikelihood = vmap(vlikelihood, backend='mpi', errors='return')
+
+
     def _get_start(self, start=None, niterations=1, max_tries=None):
         if max_tries is None:
             max_tries = self.max_tries
@@ -324,6 +370,9 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                 else:
                     toret.append([param.value] * size)
             return np.array(toret).T
+
+        if getattr(self, '_vlikelihood', None) is None:
+            self._set_vlikelihood()
 
         shape = (niterations, len(self.varied_params))
         if start is not None:
@@ -401,13 +450,13 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             for ii in tm.iterate(range(niterations)):
                 p = self._maximize_one(start[ii], self.chi2, self.transformed_params, **kwargs)
                 if self.mpicomm.rank == 0:
-                    profiles = Profiles(start=Samples(start[ii], params=self.varied_params),
-                                        bestfit=ParameterBestFit(list(start[ii]), params=self.varied_params, loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior))
-                    profiles.bestfit.logposterior = logposterior[ii]
+                    profiles = Profiles(start=Samples(start[ii][..., None], params=self.varied_params),
+                                        bestfit=ParameterBestFit(start[ii][..., None], params=self.varied_params, loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior))
+                    profiles.bestfit.logposterior = logposterior[ii:ii+1]
                     profiles.update(p)
                     profiles = _profiles_transform(self, profiles)
                     for param in self.likelihood.all_params.select(fixed=True, derived=False):
-                        profiles.bestfit[param] = np.array(param.value, dtype='f8')
+                        profiles.bestfit[param] = np.array([param.value], dtype='f8')
                     index_in_profile, index = self.derived[0].match(profiles.bestfit, params=profiles.start.params())
                     assert index_in_profile[0].size == 1
                     #logposterior = -(self.derived[1][self.likelihood._param_loglikelihood][index] + self.derived[1][self.likelihood._param_logprior][index])

@@ -497,10 +497,10 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
             pk_now = lambda k: _interp(self.template, 'pknow_dd_fid', k)
             for ell in self.ells:
                 tmp, bb_orders = [], {}
-                for name, ik in self.broadband_orders[ell].items():
-                    kernel = _kernel_func(np.abs(self.k / self.kp - ik), kernel=self.broadband)
+                for name, ik in self.broadband_orders[ell].items():  # iterate over nodes
+                    kernel = _kernel_func(np.abs(self.k / self.kp - ik), kernel=self.broadband)  # the kernel function
                     if not np.allclose(kernel, 0., rtol=0., atol=1e-8):
-                        tmp.append(kernel * pk_now(np.clip(ik * self.kp, self.k[0], self.k[-1])))
+                        tmp.append(kernel * pk_now(np.clip(ik * self.kp, self.k[0], self.k[-1])))  # scale kernel by typical amplitude of Pnowiggle
                         bb_orders[name] = ik
                 self.broadband_orders[ell] = bb_orders
                 self.broadband_matrix[ell] = jnp.array(tmp)

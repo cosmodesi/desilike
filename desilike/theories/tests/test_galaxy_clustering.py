@@ -499,8 +499,10 @@ def test_full_shape():
                         if param.basename in basenames:
                             assert param.namespace == 'LRG'
                 if 'velocileptors' in TheoryPower.__name__.lower() and freedom == 'max':
-                    for name in ['LRG.b2p', 'LRG.bsp', 'LRG.b3p']:
+                    for name in ['LRG.b1p']:
                         assert theory.all_params[name].prior.dist == 'uniform'
+                    for name in ['LRG.b2p', 'LRG.bsp', 'LRG.b3p']:
+                        assert theory.all_params[name].prior.dist == 'norm'
 
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
     from desilike.theories.galaxy_clustering import SimpleTracerPowerSpectrumMultipoles

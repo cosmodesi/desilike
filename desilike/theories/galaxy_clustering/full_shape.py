@@ -1022,7 +1022,7 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
 
 
 class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPowerSpectrumMultipoles):
-    """
+    r"""
     Velocileptors Lagrangian perturbation theory (LPT) tracer power spectrum multipoles.
     Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn*.
     For the matter (unbiased) power spectrum, set all bias parameters to 0.
@@ -1038,8 +1038,25 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
 
+    prior_basis : str, default='physical'
+        If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
+        :math:`b_{1}^\prime = (1 + b_{1}) \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
+        :math:`\alpha_{0} = (1 + b_{1})^{2} \alpha_{0}^\prime, \alpha_{2} = (1 + b_{1}) f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + (1 + b_{1}) \alpha_{4}^\prime,
+        , \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`
+        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} * \sigma_{v}^{i} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} * \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} * \sigma_{v}^{4} s_{n, 4}^\prime`
+        In this case, ``use_Pzel = False``.
+
+    tracer : str, default=None
+        If ``prior_basis = 'physical'``, tracer to load preset ``fsat`` and ``sigv``. One of ['LRG', 'ELG', 'QSO'].
+
+    fsat : float, default=None
+        If ``prior_basis = 'physical'``, satellite fraction to assume.
+
+    sigv : float, default=None
+        If ``prior_basis = 'physical'``, velocity dispersion to assume.
+
     shotnoise : float, default=1e4
-        Shot noise (which is usually marginalized over).
+        Shot noise, to scale stochastic terms.
 
     **kwargs : dict
         Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=None, jn=5, mu=8``.
@@ -1050,14 +1067,14 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     - https://arxiv.org/abs/2012.04636
     - https://github.com/sfschen/velocileptors
     """
-    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, shotnoise=1e4, fsat=None, sigv=None)
+    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4)
 
     def initialize(self, *args, k=None, **kwargs):
         super(LPTVelocileptorsTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         if k is not None:
             self.k = np.array(k, dtype='f8')
         kvec = np.concatenate([[min(0.0005, self.k[0])], np.geomspace(0.0015, 0.025, 10, endpoint=True), np.arange(0.03, max(0.5, self.k[-1]) + 0.005, 0.01)])
-        self.pt.init.update(k=kvec, ells=(0, 2, 4))
+        self.pt.init.update(k=kvec, ells=(0, 2, 4), use_Pzel=False)
 
     @staticmethod
     def _params(params, freedom=None, prior_basis='physical'):
@@ -1077,6 +1094,10 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
                 basename = param.basename
                 param.update(basename=basename + 'p')
                 params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
+            for param in params.select(basename='b1p'):
+                param.update(prior={'dist': 'uniform', 'limits': [0., 3.]}, ref={'dist': 'norm', 'loc': 1., 'scale': 1.})
+            for param in params.select(basename=['b2p', 'bsp', 'b3p']):
+                param.update(prior={'dist': 'norm', 'loc': 0., 'scale': 5.}, ref={'dist': 'norm', 'loc': 0., 'scale': 1.})
             for param in params.select(basename='alpha*p'):
                 param.update(prior={'dist': 'norm', 'loc': 0., 'scale': 5.}, ref={'dist': 'norm', 'loc': 0., 'scale': 1.})
             for param in params.select(basename='sn*p'):
@@ -1156,9 +1177,14 @@ class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationF
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
 
+    prior_basis : str, default='physical'
+        If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
+        :math:`b_{1}^\prime = (1 + b_{1}) \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
+        :math:`\alpha_{0} = (1 + b_{1})^{2} \alpha_{0}^\prime, \alpha_{2} = (1 + b_{1}) f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + (1 + b_{1}) \alpha_{4}^\prime,
+        , \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`
+
     **kwargs : dict
         Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=None, jn=5, mu=8``.
-
 
     Reference
     ---------

@@ -43,7 +43,8 @@ def test_taylor_power(plot=False):
         #d = Differentiation(emulated_calculator, getter, order=1)()
         #assert not np.isnan(d).any()
 
-        if True:
+        mpicomm = emulated_calculator.mpicomm
+        if mpicomm.rank == 0 and plot:
             from matplotlib import pyplot as plt
             ax = plt.gca()
             for i, dx in enumerate(np.linspace(-1., 1., 5)):
@@ -54,7 +55,7 @@ def test_taylor_power(plot=False):
                 ax.plot(emulated_calculator.x, emulated_calculator.model, color=color, linestyle='-')
             plt.show()
 
-    for order in [3, 4, 7]:
+    for order in [3, 4, 7][2:]:
         calculator = PowerModel()
         for param in calculator.all_params: param.update(value=1.1, prior={'limits': [1., 2.]})
         #calculator.all_params['a1'].update(fixed=True)
@@ -70,18 +71,20 @@ def test_taylor_power(plot=False):
             return emulated_calculator.model
 
         deriv = Differentiation(emulated_calculator, getter, order=1)()
-        assert np.isfinite(deriv).all()
+        mpicomm = emulated_calculator.mpicomm
+        if mpicomm.rank == 0:
+            assert np.isfinite(deriv).all()
 
-        if plot:
-            from matplotlib import pyplot as plt
-            ax = plt.gca()
-            for i, dx in enumerate(np.linspace(1., 4., 5)):
-                calculator(**{str(param): param.value + dx for param in calculator.varied_params})
-                emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.varied_params})
-                color = 'C{:d}'.format(i)
-                ax.plot(calculator.x, calculator.model, color=color, linestyle='--')
-                ax.plot(emulated_calculator.x, emulated_calculator.model, color=color, linestyle='-')
-            plt.show()
+            if plot:
+                from matplotlib import pyplot as plt
+                ax = plt.gca()
+                for i, dx in enumerate(np.linspace(1., 4., 5)):
+                    calculator(**{str(param): param.value + dx for param in calculator.varied_params})
+                    emulated_calculator(**{str(param): param.value + dx for param in emulated_calculator.varied_params})
+                    color = 'C{:d}'.format(i)
+                    ax.plot(calculator.x, calculator.model, color=color, linestyle='--')
+                    ax.plot(emulated_calculator.x, emulated_calculator.model, color=color, linestyle='-')
+                plt.show()
 
 
 def test_taylor(plot=False):

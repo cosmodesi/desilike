@@ -409,7 +409,7 @@ class Differentiation(BaseClass):
                 raise ValueError('getter returns nothing to differentiate')
             return toret
 
-        getter_samples, errors = [], []
+        getter_samples = []
         max_chunk_size = getattr(self, '_mpi_max_chunk_size', 100)
         nchunks = (csize // max_chunk_size) + 1
         import traceback
@@ -421,9 +421,10 @@ class Differentiation(BaseClass):
                 chunk_params[name] = mpi.scatter(value[csize * ichunk // nchunks:csize * (ichunk + 1) // nchunks] if self.mpicomm.rank == 0 else None, mpicomm=self.mpicomm, mpiroot=0)
                 chunk_size = len(chunk_params[name])
 
+            tmp_samples, errors = [], []
             for ivalue in range(chunk_size):
                 chunk_values = [chunk_params[name][ivalue] for name in chunk_params]
-                toret = []
+                tmp_i_samples = []
                 try:
                     try:
                         jac = __calculate
@@ -434,12 +435,12 @@ class Differentiation(BaseClass):
                             funcname = 'jacfwd' # if iautoderiv else 'jacrev'
                             jac = getattr(jax, funcname)(jac, argnums=argnums, has_aux=False, holomorphic=False)
                             #jac = jax.jacfwd(jac, argnums=argnums, has_aux=False, holomorphic=False)
-                            toret.append(jac(*chunk_values))
+                            tmp_i_samples.append(jac(*chunk_values))
                             #jax.vjp(tmp, has_aux=False)[1](jnp.ones(len(autoderiv)))
                     except Exception as exc:
                         raise exc
                     finally:
-                        getter_samples.append([__calculate(*chunk_values)] + toret)
+                        tmp_samples.append([__calculate(*chunk_values)] + tmp_i_samples)
                 except Exception as exc:
                     errors.append((exc, traceback.format_exc()))
 
@@ -447,7 +448,7 @@ class Differentiation(BaseClass):
             self.pipeline.mpicomm = mpicomm
             if errors:
                 raise PipelineError('got these errors: {}'.format(errors))
-            tmp_samples = self.mpicomm.reduce(getter_samples, root=0)
+            tmp_samples = self.mpicomm.reduce(tmp_samples, root=0)
             if self.mpicomm.rank == 0:
                 getter_samples += tmp_samples
 

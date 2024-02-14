@@ -475,8 +475,8 @@ def test_full_shape():
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
 
     ntemplate = 4
-    for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles][:1],
-                                        [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles][:1]):
+    for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles],
+                                        [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles]):
         for freedom in [None, 'min', 'max']:
             for ells in [(0, 2), (0, 2, 4)]:
                 print(freedom, ells)
@@ -630,8 +630,8 @@ def test_full_shape():
 
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(tracer='ELG', template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    theory(dm=0.01, b1p=1.).shape
-    print(theory.runtime_info.pipeline.derived['b1'])
+    power, derived = theory(dm=0.01, b1p=1., return_derived=True)
+    print(derived['b1'])
     assert np.allclose(theory.options['sigv'], 3.105295017040594)
     assert np.allclose(theory.options['fsat'], 0.1)
     assert not np.allclose(theory(dm=-0.01), theory(dm=0.01))
@@ -645,19 +645,16 @@ def test_full_shape():
 
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(tracer='LRG', template=ShapeFitPowerSpectrumTemplate(z=0.5))
     theory(dm=0.01, b1p=1.).shape
-    print(theory.runtime_info.pipeline.derived['b1'])
     assert np.allclose(theory.options['sigv'], 6.193880254279262)
     assert np.allclose(theory.options['fsat'], 0.15)
 
     theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(tracer='QSO', template=ShapeFitPowerSpectrumTemplate(z=0.5))
     theory(dm=0.01, b1p=1.).shape
-    print(theory.runtime_info.pipeline.derived['b1'])
     assert np.allclose(theory.options['sigv'], 5.681096590210249)
     assert np.allclose(theory.options['fsat'], 0.03)
 
     theory_Pzel = LPTVelocileptorsTracerPowerSpectrumMultipoles(use_Pzel=True)
     theory_Pzel()
-    exit()
 
     from desilike.theories.galaxy_clustering import EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
     theory = EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))

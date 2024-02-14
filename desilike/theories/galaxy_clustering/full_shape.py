@@ -909,6 +909,13 @@ class EFTLikeTNSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctio
     """
 
 
+def get_nthreads(nthreads=None):
+    if nthreads is None:
+        import os
+        nthreads = os.getenv('OMP_NUM_THREADS', '1')
+    return int(nthreads)
+
+
 class BaseVelocileptorsPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
 
     """Base class for velocileptors-based matter power spectrum multipoles."""
@@ -916,7 +923,7 @@ class BaseVelocileptorsPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, Ba
 
     def initialize(self, *args, **kwargs):
         super(BaseVelocileptorsPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
-        self.options['threads'] = self.options.pop('nthreads', 1)
+        self.options['threads'] = get_nthreads(self.options.pop('nthreads', None))
 
     @classmethod
     def install(cls, installer):
@@ -950,7 +957,7 @@ class BaseVelocileptorsCorrelationFunctionMultipoles(BasePTCorrelationFunctionMu
 
     def initialize(self, *args, **kwargs):
         super(BaseVelocileptorsCorrelationFunctionMultipoles, self).initialize(*args, **kwargs)
-        self.options['threads'] = self.options.pop('nthreads', 1)
+        self.options['threads'] = get_nthreads(self.options.pop('nthreads', None))
 
     def combine_bias_terms_poles(self, pars, **opts):
         return np.array([self.pt.compute_xi_ell(ss, self.template.f, *pars, apar=self.template.qpar, aperp=self.template.qper, **self.options, **opts) for ss in self.s]).T
@@ -975,7 +982,7 @@ def lptvel_combine_bias_terms_poles(pktable, pars, nd=1e-4):
 
 class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMultipoles):
 
-    _default_options = dict(use_Pzel=False, kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5)
+    _default_options = dict(use_Pzel=False, kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=None, jn=5)
     # Slow, ~ 4 sec per iteration
 
     def initialize(self, *args, mu=4, **kwargs):
@@ -1035,7 +1042,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
         Shot noise (which is usually marginalized over).
 
     **kwargs : dict
-        Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5, mu=8``.
+        Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=None, jn=5, mu=8``.
 
     Reference
     ---------
@@ -1043,7 +1050,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     - https://arxiv.org/abs/2012.04636
     - https://github.com/sfschen/velocileptors
     """
-    _default_options = dict(freedom=None, prior_basis='physical', shotnoise=1e4, fsat=0.1, sigv=5.)
+    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, shotnoise=1e4, fsat=None, sigv=None)
 
     def initialize(self, *args, **kwargs):
         super(LPTVelocileptorsTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
@@ -1068,6 +1075,10 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
                 basename = param.basename
                 param.update(basename=basename + 'p')
                 params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
+            for param in params.select(basename='alpha*p'):
+                param.update(prior={'dist': 'norm', 'loc': 0., 'scale': 5.}, ref={'dist': 'norm', 'loc': 0., 'scale': 1.})
+            for param in params.select(basename='sn*p'):
+                param.update(prior={'dist': 'norm', 'loc': 0., 'scale': 2. if 'sn0' in param.basename else 5.}, ref={'dist': 'norm', 'loc': 0., 'scale': 1.})
         return params
 
     def set_params(self):
@@ -1076,6 +1087,23 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
         if self.is_physical_prior:
             for name in list(self.required_bias_params):
                 self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
+            tracer = self.options['tracer']
+            if tracer is not None:
+                tracer = str(tracer).upper()
+                settings = {'LRG': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2) / 70.},
+                            'ELG': {'fsat': 0.1, 'sigv': 150*2.1**(1/2) / 70.},
+                            'QSO': {'fsat': 0.03, 'sigv': 150*(10)**(0.7/3)*(2.4)**(1/2) / 70.}}
+                try:
+                    settings = settings[tracer]
+                except KeyError:
+                    raise ValueError('unknown tracer: {}, please use any of {}'.format(tracer, list(settings.keys())))
+            else:
+                settings = {'fsat': 0.1, 'sigv': 5.}
+            for name, value in settings.items():
+                if self.options[name] is None:
+                    self.options[name] = value
+            if self.mpicomm.rank == 0:
+                self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
         super().set_params(pt_params=[])
         fix = []
         if 4 not in self.ells: fix += ['alpha4*', 'alpha6*', 'sn4*']  # * to capture p
@@ -1127,7 +1155,7 @@ class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationF
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
 
     **kwargs : dict
-        Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5, mu=8``.
+        Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=None, jn=5, mu=8``.
 
 
     Reference
@@ -1146,7 +1174,7 @@ class EPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpect
 
     _default_options = dict(rbao=110, beyond_gauss=True,
                             one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000,
-                            nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False)
+                            nthreads=None, extrap_min=-5, extrap_max=3, import_wisdom=False)
     _pt_attrs = ['kap', 'muap', 'f', 'pktable', 'vktable', 's0ktable', 's2ktable', 'g1ktable', 'g3ktable', 'k0', 'k2', 'k4', 'plin_ir']
 
     def initialize(self, *args, mu=4, method='leggauss', **kwargs):
@@ -1234,7 +1262,7 @@ class EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTrac
 
     **kwargs : dict
         Velocileptors options, defaults to: ``rbao=110, kmin=1e-2, kmax=0.5, nk=100, beyond_gauss=True,
-        one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000, nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False, reduce=True, mu=4``.
+        one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000, nthreads=None, extrap_min=-5, extrap_max=3, import_wisdom=False, reduce=True, mu=4``.
 
 
     Reference
@@ -1282,7 +1310,7 @@ class EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorre
 
     **kwargs : dict
         Velocileptors options, defaults to: ``rbao=110, kmin=1e-2, kmax=0.5, nk=100, beyond_gauss=True,
-        one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000, nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False, reduce=True, mu=8``.
+        one_loop=True, shear=True, third_order=True, cutoff=20, jn=5, N=4000, nthreads=None, extrap_min=-5, extrap_max=3, import_wisdom=False, reduce=True, mu=8``.
 
 
     Reference
@@ -1296,7 +1324,7 @@ class EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorre
 class LPTMomentsVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMultipoles):
 
     _default_options = dict(beyond_gauss=False, one_loop=True,
-                            shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=1,
+                            shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=None,
                             extrap_min=-5, extrap_max=3, import_wisdom=False)
     _pt_attrs = ['kap', 'muap', 'f', 'pktable', 'vktable', 'stracektable', 'sparktable', 'gamma1ktable', 'kappaktable', 'third_order']
 
@@ -1408,7 +1436,7 @@ class LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTrac
 
     **kwargs : dict
         Velocileptors options, defaults to: ``kmin=5e-3, kmax=0.3, nk=50, beyond_gauss=False, one_loop=True,
-        shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False, mu=8``.
+        shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=None, extrap_min=-5, extrap_max=3, import_wisdom=False, mu=8``.
 
 
     Reference
@@ -1463,7 +1491,7 @@ class LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorre
 
     **kwargs : dict
         Velocileptors options, defaults to: ``kmin=5e-3, kmax=0.3, nk=50, beyond_gauss=False, one_loop=True,
-        shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=1, extrap_min=-5, extrap_max=3, import_wisdom=False``.
+        shear=True, third_order=True, cutoff=10, jn=5, N=2000, nthreads=None, extrap_min=-5, extrap_max=3, import_wisdom=False``.
 
 
     Reference

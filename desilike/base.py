@@ -176,7 +176,7 @@ def _concatenate_results(results, shape, add_dims=True):
 
 
 def _check_states(states):
-    results, errors = [], {}
+    ref, results, errors = None, [], {}
     for state in states:
         if state[1] is None:  # no error
             ref = state
@@ -838,8 +838,9 @@ class RuntimeInfo(BaseClass):
                     name = param.basename
                     if name in state: value = state[name]
                     else: value = getattr(self.calculator, name)
-                    param._shape = value.shape  # a bit hacky, but no need to update parameters for this...
-                    self._derived.set(ParameterArray(value, param=param))
+                    array = ParameterArray(value, param=param)
+                    array.param._shape = array.shape  # a bit hacky, but no need to update parameters for this...
+                    self._derived.set(array)
         return self._derived
 
     @property

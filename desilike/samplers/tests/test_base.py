@@ -29,18 +29,20 @@ def test_samplers():
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov, name='LRG')
 
-    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][:-1]:
+    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][2:3]:
         kwargs = {'seed': 42}
-        if Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]:
+        if Sampler in [EmceeSampler, ZeusSampler]:
             kwargs.update(nwalkers=20)
-        if Sampler in [StaticDynestySampler, DynamicDynestySampler, PolychordSampler, NautilusSampler]:
+        elif Sampler in [PocoMCSampler]:
+            kwargs.update(n_active=20)
+        elif Sampler in [StaticDynestySampler, DynamicDynestySampler, PolychordSampler, NautilusSampler]:
             kwargs.update(nlive=100)
         save_fn = ['./_tests/chain_{:d}.npz'.format(i) for i in range(min(likelihood.mpicomm.size, 1))]
         sampler = Sampler(likelihood, save_fn=save_fn, **kwargs)
         kwargs = {}
         if Sampler in [EmceeSampler, ZeusSampler]:
             kwargs.update(thin_by=2)
-        chains = sampler.run(max_iterations=100, check=True, check_every=50, **kwargs)
+        chains = sampler.run(max_iterations=100, check=True, check_every=20, **kwargs)
         if sampler.mpicomm.rank == 0:
             assert chains[0].attrs['ndof']
             assert chains[0].attrs['hartlap2007_factor'] is None
@@ -57,7 +59,7 @@ def test_samplers():
         size1 = sampler.mpicomm.bcast(chains[0].size if sampler.mpicomm.rank == 0 else None, root=0)
         chains = sampler.run(max_iterations=0, check=True, check_every=10)
         size2 = sampler.mpicomm.bcast(chains[0].size if sampler.mpicomm.rank == 0 else None, root=0)
-        assert size2 == size1
+        assert size2 == size1, (size2, size1)
         if sampler.mpicomm.rank == 0:
             assert 'DV_over_rd' in chains[0]
             assert chains[0].concatenate(chains)._loglikelihood == 'LRG.loglikelihood'

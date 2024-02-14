@@ -1052,8 +1052,10 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     """
     _default_options = dict(freedom=None, prior_basis='physical', tracer=None, shotnoise=1e4, fsat=None, sigv=None)
 
-    def initialize(self, *args, **kwargs):
+    def initialize(self, *args, k=None, **kwargs):
         super(LPTVelocileptorsTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
+        if k is not None:
+            self.k = np.array(k, dtype='f8')
         kvec = np.concatenate([[min(0.0005, self.k[0])], np.geomspace(0.0015, 0.025, 10, endpoint=True), np.arange(0.03, max(0.5, self.k[-1]) + 0.005, 0.01)])
         self.pt.init.update(k=kvec, ells=(0, 2, 4))
 

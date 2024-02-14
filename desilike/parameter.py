@@ -430,7 +430,8 @@ class ParameterArray(numpy.lib.mixins.NDArrayOperatorsMixin):
         """
         if isinstance(value, ParameterArray):
             value = value.value
-        if copy or dtype:
+        from desilike import jax
+        if value is not None and (copy or dtype or (not jax.use_jax(value) and not isinstance(value, np.ndarray))):
             value = np.array(value, copy=copy, dtype=dtype, **kwargs)
         self._value = value
         self.param = None if param is None else Parameter(param)

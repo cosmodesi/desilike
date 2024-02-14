@@ -250,15 +250,16 @@ class Emulator(BaseClass):
                 X = np.concatenate([samples[name].reshape(nsamples, 1) for name in self._get_varied_params(yname)], axis=-1)
                 Y = samples[yname]
                 yshape = Y.shape[Y.andim:]
-                if Y.derivs is not None:
+                derivs = Y.derivs
+                if derivs is not None:
                     yshape = yshape[1:]
                     if with_deriv:
-                        Y = Y.reshape((nsamples, Y.shape[Y.andim], -1))
+                        Y = Y.reshape(nsamples, Y.shape[Y.andim], -1)
                     else:
                         Y = Y.zero.reshape(nsamples, -1)
                 else:
                     Y = Y.reshape(nsamples, -1)
-                Y.param = Y.param.clone(shape=np.prod(yshape))
+                Y = Y.clone(param=Y.param.clone(shape=np.prod(yshape)), derivs=derivs)
                 self.varied_shape[yname] = yshape
             self.varied_shape[yname] = self.mpicomm.bcast(self.varied_shape[yname], root=0)
             return X, Y

@@ -4,7 +4,7 @@ import re
 import numpy as np
 
 from desilike import utils, plotting
-from desilike.base import BaseCalculator
+from desilike.base import BaseCalculator, vmap
 from desilike.jax import numpy as jnp
 from desilike.utils import BaseClass, serialize_class, import_class, expand_dict
 from desilike.io import BaseConfig
@@ -362,15 +362,17 @@ class Emulator(BaseClass):
 
         toret = True
         calculator = self.to_calculator(derived=['emulator.{}'.format(name) for name in self.engines])
-        pipeline = calculator.runtime_info.pipeline
+        calculator()
 
         unique_samples = find_uniques(self.samples.values())
         for samples in unique_samples:
             subsamples = get_subsamples(samples, frac=frac, mpicomm=self.mpicomm, **kwargs)
-            pipeline.mpicalculate(**{name: subsamples[name] if self.mpicomm.rank == 0 else None for name in self.varied_params})
-            derived = pipeline.derived
+            vcalculate = vmap(calculator, backend='mpi', return_derived=True)
+            _derived = vcalculate({name: subsamples[name] if self.mpicomm.rank == 0 else None for name in self.varied_params})
 
             if self.mpicomm.rank == 0:
+
+                derived = _derived[1]
 
                 def add_diagnostics(name, value):
                     if name not in diagnostics:
@@ -441,7 +443,7 @@ class Emulator(BaseClass):
         fns = {name: ff for name, ff in zip(names, fns)}
 
         calculator = self.to_calculator(derived=['emulator.{}'.format(name) for name in self.engines])
-        pipeline = calculator.runtime_info.pipeline
+        calculator()
         unique_samples = find_uniques(self.samples.values())
 
         figs = []
@@ -449,10 +451,11 @@ class Emulator(BaseClass):
             samples_names = [name for name, s in self.samples.items() if s is samples]
             if samples_names:
                 subsamples = get_subsamples(samples, nmax=nmax, mpicomm=self.mpicomm, **kwargs)
-                pipeline.mpicalculate(**{name: subsamples[name] if self.mpicomm.rank == 0 else None for name in self.varied_params})
-                derived = pipeline.derived
+                vcalculate = vmap(calculator, backend='mpi', return_derived=True)
+                _derived = vcalculate({name: subsamples[name] if self.mpicomm.rank == 0 else None for name in self.varied_params})
 
                 if self.mpicomm.rank == 0:
+                    derived = _derived[1]
                     for name in samples_names:
                         plt.close(plt.gcf())
                         fig, lax = plt.subplots(2, sharex=True, sharey=False, gridspec_kw={'height_ratios': (2, 1)}, figsize=(6, 6), squeeze=True)

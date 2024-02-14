@@ -2,6 +2,7 @@ import itertools
 
 import numpy as np
 
+from desilike.base import vmap
 from desilike.parameter import ParameterPriorError, Samples
 from desilike.utils import BaseClass, expand_dict
 from .base import RegisteredSampler
@@ -104,12 +105,15 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
         A new grid can be set by providing arguments 'size', 'ref_scale', 'grid' or 'sphere', see :meth:`__init__`.
         """
         if kwargs: self.set_grid(**kwargs)
-        self.pipeline.mpicalculate(**(self.samples.to_dict(params=self.varied_params) if self.mpicomm.rank == 0 else {}))
+
+        vcalculate = vmap(self.pipeline.calculators[-1], backend='mpi', return_derived=True)
+        _derived = vcalculate(self.samples.to_dict() if self.mpicomm.rank == 0 else {})
 
         if self.mpicomm.rank == 0:
+            derived = _derived[1]
             for param in self.pipeline.params.select(fixed=True, derived=False):
                 self.samples[param] = np.full(self.samples.shape, param.value, dtype='f8')
-            self.samples.update(self.pipeline.derived)
+            self.samples.update(derived)
             if self.save_fn is not None:
                 self.samples.save(self.save_fn)
         else:

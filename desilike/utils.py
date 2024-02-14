@@ -365,6 +365,7 @@ def dict_to_yaml(d):
 
 
 def deep_eq(obj1, obj2, equal_nan=True):
+    from desilike.parameter import ParameterArray
     """(Recursively) test equality between ``obj1`` and ``obj2``."""
     if type(obj2) is type(obj1):
         if isinstance(obj1, dict):
@@ -373,7 +374,7 @@ def deep_eq(obj1, obj2, equal_nan=True):
         elif isinstance(obj1, (tuple, list)):
             if len(obj2) == len(obj1):
                 return all(deep_eq(o1, o2) for o1, o2 in zip(obj1, obj2))
-        elif isinstance(obj1, (np.ndarray,) + jax.array_types):
+        elif isinstance(obj1, (np.ndarray, ParameterArray) + jax.array_types):
             return np.array_equal(obj2, obj1, equal_nan=equal_nan)
         else:
             return obj2 == obj1

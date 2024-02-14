@@ -3,6 +3,7 @@ import numpy as np
 from scipy.stats import qmc
 from scipy.stats.qmc import Sobol, Halton, LatinHypercube
 
+from desilike.base import vmap
 from desilike.parameter import ParameterPriorError, Samples
 from desilike.utils import BaseClass
 from .base import RegisteredSampler
@@ -120,12 +121,14 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
             samples = qmc.scale(self.engine.random(n=niterations), lower, upper)
             samples = Samples(samples.T, params=self.varied_params)
 
-        self.pipeline.mpicalculate(**(samples.to_dict() if self.mpicomm.rank == 0 else {}))
+        vcalculate = vmap(self.pipeline.calculators[-1], backend='mpi', return_derived=True)
+        _derived = vcalculate(samples.to_dict() if self.mpicomm.rank == 0 else {})
 
         if self.mpicomm.rank == 0:
+            derived = _derived[1]
             for param in self.pipeline.params.select(fixed=True, derived=False):
                 samples[param] = np.full(samples.shape, param.value, dtype='f8')
-            samples.update(self.pipeline.derived)
+            samples.update(derived)
             if self.samples is None:
                 self.samples = samples
             else:

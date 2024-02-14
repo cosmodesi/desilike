@@ -151,6 +151,8 @@ def _concatenate_results(results, shape, add_dims=True):
     def concatenate(results):
         if isinstance(results[0], Samples):
             return Samples.concatenate([result[None, ...] if add_dims else result for result in results]).reshape(shape)
+        if results[0] is None:
+            return None
         if jax.to_nparray(results[0]) is not None:
             if add_dims:
                 results = np.asarray(results)
@@ -1074,7 +1076,7 @@ class BaseCalculator(BaseClass):
 
     def get(self):
         """Return quantity of main interest, e.g. loglikelihood + logprior if ``self`` is a likelihood."""
-        return self
+        return None
 
     def __getattr__(self, name):
         if not getattr(self.runtime_info, '_initialization', False):

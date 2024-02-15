@@ -368,11 +368,9 @@ class Emulator(BaseClass):
         for samples in unique_samples:
             subsamples = get_subsamples(samples, frac=frac, mpicomm=self.mpicomm, **kwargs)
             vcalculate = vmap(calculator, backend='mpi', return_derived=True)
-            _derived = vcalculate({name: subsamples[name] if self.mpicomm.rank == 0 else None for name in self.varied_params})
+            derived = vcalculate({name: subsamples[name] if self.mpicomm.rank == 0 else None for name in self.varied_params})[1]
 
             if self.mpicomm.rank == 0:
-
-                derived = _derived[1]
 
                 def add_diagnostics(name, value):
                     if name not in diagnostics:
@@ -452,10 +450,9 @@ class Emulator(BaseClass):
             if samples_names:
                 subsamples = get_subsamples(samples, nmax=nmax, mpicomm=self.mpicomm, **kwargs)
                 vcalculate = vmap(calculator, backend='mpi', return_derived=True)
-                _derived = vcalculate({name: subsamples[name] if self.mpicomm.rank == 0 else None for name in self.varied_params})
+                derived = vcalculate({name: subsamples[name] if self.mpicomm.rank == 0 else None for name in self.varied_params})[1]
 
                 if self.mpicomm.rank == 0:
-                    derived = _derived[1]
                     for name in samples_names:
                         plt.close(plt.gcf())
                         fig, lax = plt.subplots(2, sharex=True, sharey=False, gridspec_kw={'height_ratios': (2, 1)}, figsize=(6, 6), squeeze=True)

@@ -950,13 +950,16 @@ class RuntimeInfo(BaseClass):
                 basename = self.input_names[name]
                 if force is not None:
                     self._tocalculate = force
-                elif value is not self.input_values[basename]:  # jax
-                    self._tocalculate = True
-                if invalue is not None:
+                elif invalue is None:
+                    if value is not self.input_values[basename]:  # jax
+                        self._tocalculate = True
+                else:
                     value = invalue
+                    if type(value) != type(self.input_values[basename]) or value != self.input_values[basename]:
+                        self._tocalculate = True
                 self.input_values[basename] = value
         if self.tocalculate:
-            #print('calculate', force, type(self.calculator))
+            # print('calculate', type(self.calculator), self.input_values)
             self.monitor.start()
             self.calculator.calculate(**self.input_values)
             self._derived = None

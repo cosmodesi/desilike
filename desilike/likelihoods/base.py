@@ -143,15 +143,14 @@ class BaseLikelihood(BaseCalculator):
 
         if solved_params:
             solved_params = ParameterCollection(solved_params)
-
             solve_likelihoods, values = [], {}
             for likelihood in likelihoods:
                 if any(param in solved_params for param in likelihood.all_params):
                     solve_likelihoods.append(likelihood)
                     values.update({param.name: pipeline.input_values[param.name] for param in likelihood.all_params if param.name in pipeline.input_values})
-            for param in solved_params:
+            #for param in solved_params:
                 #if not jnp.isfinite(values[param.name]):
-                values[param.name] = param.value
+            #    values[param.name] = param.value
 
             derived = pipeline.derived
             #pipeline.more_calculate = lambda: None

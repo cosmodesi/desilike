@@ -833,7 +833,7 @@ class Parameter(BaseClass):
     @property
     def solved(self):
         """Whether parameter is solved, i.e. fixed at best fit or marginalized over."""
-        return not self._fixed and self._derived in self._allowed_solved
+        return (not self._fixed) and self._derived in self._allowed_solved
 
     @property
     def input(self):

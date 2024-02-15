@@ -2,7 +2,7 @@ import numpy as np
 from desilike.jax import numpy as jnp
 from desilike.jax import jit
 
-from desilike.samples import Chain, load_source
+from desilike.samples import Chain, Samples, load_source
 from .base import BaseBatchPosteriorSampler
 
 
@@ -172,11 +172,11 @@ class NUTSSampler(BaseBatchPosteriorSampler):
             #self.step = self.algorithm.step
 
         initial_state = self.algorithm.init(start, warmup_key)
-        print('compiling')
-        import time
-        t0 = time.time()
-        self.step(run_key, initial_state)
-        print('done compiling', time.time() - t0)
+        #print('compiling')
+        #import time
+        #t0 = time.time()
+        #self.step(run_key, initial_state)
+        #print('done compiling', time.time() - t0)
         keys = jax.random.split(run_key, niterations)
         xs = (jnp.arange(niterations), keys)
         # run the sampler, following https://github.com/blackjax-devs/blackjax/blob/54023350cac935af79fc309006bf37d1603bb945/blackjax/util.py#L143
@@ -186,13 +186,14 @@ class NUTSSampler(BaseBatchPosteriorSampler):
             state, info = self.step(rng_key, state)
             return state, (state, info)
 
-        #final_state, (chain, info_history) = jax.lax.scan(one_step, initial_state, xs)
-        final_state, (chain, info_history) = my_scan(one_step, initial_state, xs)
+        final_state, (chain, info_history) = jax.lax.scan(one_step, initial_state, xs)
+        #final_state, (chain, info_history) = my_scan(one_step, initial_state, xs)
         position, logdensity = chain.position[::thin_by], chain.logdensity[::thin_by]
 
         data = [position[:, iparam] for iparam, param in enumerate(self.varied_params)] + [logdensity]
         chain = Chain(data=data, params=self.varied_params + ['logposterior'], attrs={'hyp': self.hyp})
         self.likelihood.mpicomm = mpicomm
+        self.derived = None
         #self.derived = [chain.select(name=self.varied_params.names()), Samples()]
         #logprior = sum(param.prior(chain[param]) for param in self.varied_params)
         #self.derived[1][self.likelihood._param_logprior] = logprior

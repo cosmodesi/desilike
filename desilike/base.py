@@ -964,9 +964,10 @@ class RuntimeInfo(BaseClass):
                     if value is not self.input_values[basename]:  # jax
                         self._tocalculate = True
                 else:
-                    value = invalue
-                    if type(value) != type(self.input_values[basename]) or value != self.input_values[basename]:
+                    if type(invalue) != type(self.input_values[basename]) or invalue != self.input_values[basename]:
                         self._tocalculate = True
+                if invalue is not None:
+                    value = invalue
                 self.input_values[basename] = value
         if self.tocalculate:
             # print('calculate', type(self.calculator), self.input_values)

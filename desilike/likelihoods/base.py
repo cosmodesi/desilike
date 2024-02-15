@@ -116,8 +116,8 @@ class BaseLikelihood(BaseCalculator):
                     derivp = flatderiv * precision
                 else:
                     derivp = flatderiv.dot(precision)
-                likelihood.precision = precision - derivp.T.dot(np.linalg.solve(- posterior_fisher._hessian, derivp))
-                likelihood.flatdata = likelihood._flatdata_original - (likelihood.flatdiff - derivs[()])  # flatdiff = flattheory - flatdata
+                likelihood.precision = np.asarray(precision - derivp.T.dot(np.linalg.solve(- posterior_fisher._hessian, derivp)))
+                likelihood.flatdata = np.asarray(likelihood._flatdata_original - (likelihood.flatdiff - derivs[()]))  # flatdiff = flattheory - flatdata
 
     def _solve(self):
         # Analytic marginalization, to be called, if desired, in get()

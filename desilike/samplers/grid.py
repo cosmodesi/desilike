@@ -107,10 +107,9 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
         if kwargs: self.set_grid(**kwargs)
 
         vcalculate = vmap(self.pipeline.calculators[-1], backend='mpi', return_derived=True)
-        _derived = vcalculate(self.samples.to_dict() if self.mpicomm.rank == 0 else {})
+        derived = vcalculate(self.samples.to_dict() if self.mpicomm.rank == 0 else {})[1]
 
         if self.mpicomm.rank == 0:
-            derived = _derived[1]
             for param in self.pipeline.params.select(fixed=True, derived=False):
                 self.samples[param] = np.full(self.samples.shape, param.value, dtype='f8')
             self.samples.update(derived)

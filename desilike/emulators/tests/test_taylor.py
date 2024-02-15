@@ -25,7 +25,7 @@ class PowerModel(BaseCalculator):
 
 def test_taylor_power(plot=False):
 
-    for order in [3, 4][:0]:
+    for order in [3, 4][:1]:
         calculator = PowerModel()
         emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=order))
         emulator.set_samples()

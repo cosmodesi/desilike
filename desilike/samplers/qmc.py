@@ -122,10 +122,9 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
             samples = Samples(samples.T, params=self.varied_params)
 
         vcalculate = vmap(self.pipeline.calculators[-1], backend='mpi', return_derived=True)
-        _derived = vcalculate(samples.to_dict() if self.mpicomm.rank == 0 else {})
+        derived = vcalculate(samples.to_dict() if self.mpicomm.rank == 0 else {})[1]
 
         if self.mpicomm.rank == 0:
-            derived = _derived[1]
             for param in self.pipeline.params.select(fixed=True, derived=False):
                 samples[param] = np.full(samples.shape, param.value, dtype='f8')
             samples.update(derived)

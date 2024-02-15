@@ -197,11 +197,28 @@ def _check_states(states):
 import functools
 # Set map routines
 
-def vmap(calculate, backend=None, errors='raise', mpi_max_chunk_size=100, **kwargs):
+def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_size=100, **kwargs):
 
     __wrapped__vmap__ = getattr(calculate, '__wrapped__vmap__', None)
     __wrapped__errors__ = getattr(calculate, '__wrapped__errors__', None)
     errors = str(errors)
+
+    def _calculate_map(params, **kw):
+        for value in params.values():
+            size = len(value)
+            break
+        states = []
+        for ivalue in range(size):
+            state = [None, None]
+            try:
+                state[0] = calculate({name: value[ivalue] for name, value in params.items()}, **kw)
+            except PipelineError as exc:
+                if errors == 'raise':
+                    raise exc
+                state[1] = (exc, traceback.format_exc())
+            finally:
+                states.append(state)
+        return states
 
     if backend is None:
 
@@ -211,20 +228,7 @@ def vmap(calculate, backend=None, errors='raise', mpi_max_chunk_size=100, **kwar
         def wrapper(params, **kw):
             kw = {**kwargs, **kw}
             params, shape = _check_params(params)
-
-            states = []
-            size = np.prod(shape, dtype='i')
-            for ivalue in range(size):
-                state = [None, None]
-                try:
-                    state[0] = calculate({name: value[ivalue] for name, value in params.items()}, **kw)
-                except PipelineError as exc:
-                    if errors == 'raise':
-                        raise exc
-                    state[1] = (exc, traceback.format_exc())
-                finally:
-                    states.append(state)
-
+            states = _calculate_map(params, **kw)
             results, errs = _check_states(states)
             results = _concatenate_results(results, shape, add_dims=True)
             if errors == 'return':
@@ -248,11 +252,14 @@ def vmap(calculate, backend=None, errors='raise', mpi_max_chunk_size=100, **kwar
 
     if backend == 'mpi':
 
+        has_input_mpicomm = mpicomm is not None
+
         @functools.wraps(calculate)
         def wrapper(params, **kw):
             kw = {**kwargs, **kw}
-            if __wrapped__vmap__ is None: mpicomm = calculate._mpicomm
-            else: mpicomm = __wrapped__vmap__._mpicomm
+            if not has_input_mpicomm:
+                if __wrapped__vmap__ is None: mpicomm = calculate._mpicomm
+                else: mpicomm = __wrapped__vmap__._mpicomm
             params = dict(params)
             if mpicomm.rank == 0:
                 params, shape = _check_params(params)
@@ -267,20 +274,13 @@ def vmap(calculate, backend=None, errors='raise', mpi_max_chunk_size=100, **kwar
                 chunk_params = {}
                 for name in params:
                     chunk_params[name] = mpi.scatter(params[name][chunk_offset:all_size * (ichunk + 1) // nchunks] if mpicomm.rank == 0 else None, mpicomm=mpicomm, mpiroot=0)
-                    chunk_size = len(chunk_params[name])
-                calculate.mpicomm = mpi.COMM_SELF
+                if not has_input_mpicomm:
+                    calculate.mpicomm = mpi.COMM_SELF
                 states = []
                 error = None
                 if __wrapped__vmap__ is None:
-                    for ivalue in range(chunk_size):
-                        state = [None, None]
-                        try:
-                            state[0] = calculate({name: value[ivalue] for name, value in chunk_params.items()}, **kw)
-                        except PipelineError as exc:
-                            error = state[1] = (exc, traceback.format_exc())
-                        finally:
-                            states.append(state)
-                else:  # e.g. previous vmap
+                    states = _calculate_map(chunk_params, **kw)
+                else:  # calculate already vmap
                     states = calculate(chunk_params, **kw)
                     if __wrapped__errors__ != 'return':
                         states = (states, {})  # adding empty error
@@ -291,7 +291,8 @@ def vmap(calculate, backend=None, errors='raise', mpi_max_chunk_size=100, **kwar
                 tmp_states = mpicomm.reduce(states, root=0)
                 if mpicomm.rank == 0:
                     all_states += tmp_states
-                calculate.mpicomm = mpicomm
+                if not has_input_mpicomm:
+                    calculate.mpicomm = mpicomm
                 if errors == 'raise' and error:
                     raise PipelineError('found error: {}'.format(error))
 
@@ -303,6 +304,15 @@ def vmap(calculate, backend=None, errors='raise', mpi_max_chunk_size=100, **kwar
                 errs = {}
                 for states in all_states:
                     errs.update(states[1])
+            # For MPI ranks != 0, let's put the correct structure for unpacking
+            none_result = None
+            if mpicomm.rank == 0:
+                if isinstance(results, (tuple, list)):
+                    none_result = type(results)([None] * len(results))
+            none_result = mpicomm.bcast(none_result, root=0)
+            if mpicomm.rank != 0:
+                results = none_result
+
             if errors == 'return':
                 return results, errs
             return results

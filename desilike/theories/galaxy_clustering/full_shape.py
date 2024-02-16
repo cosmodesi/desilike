@@ -1073,7 +1073,9 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
         super(LPTVelocileptorsTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         if k is not None:
             self.k = np.array(k, dtype='f8')
-        kvec = np.concatenate([[min(0.0005, self.k[0])], np.geomspace(0.0015, 0.025, 10, endpoint=True), np.arange(0.03, max(0.5, self.k[-1]) + 0.005, 0.01)])
+        # increasing the resolution
+        boost_prec = 2
+        kvec = np.concatenate([[min(0.0005, self.k[0])], np.geomspace(0.0015, 0.025, 10 * boost_prec, endpoint=True), np.arange(0.03, max(0.5, self.k[-1]) + 0.005 / boost_prec, 0.01 / boost_prec)])
         self.pt.init.update(k=kvec, ells=(0, 2, 4), use_Pzel=False)
 
     @staticmethod

@@ -62,7 +62,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         self.wmatrix = wmatrix
         if not isinstance(wmatrix, WindowedCorrelationFunctionMultipoles):
             self.wmatrix = WindowedCorrelationFunctionMultipoles()
-            if wmatrix is None: wmatrix = {}
+            #if wmatrix is None: wmatrix = {}
             if self.RR and isinstance(wmatrix, dict):
                 wmatrix = {**self.RR, **wmatrix}
             self.wmatrix.init.update(wmatrix=wmatrix)

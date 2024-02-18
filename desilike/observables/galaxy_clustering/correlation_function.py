@@ -46,7 +46,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
 
     """
     def initialize(self, data=None, covariance=None, slim=None, wmatrix=None, ignore_nan=False, **kwargs):
-        self.s, self.sedges, self.muedges, self.ells = None, None, None, None
+        self.s, self.sedges, self.RR, self.ells = None, None, None, None
         self.flatdata, self.mocks, self.covariance = None, None, None
         if not isinstance(data, dict):
             self.flatdata = self.load_data(data=data, slim=slim, ignore_nan=ignore_nan)[0]
@@ -63,8 +63,8 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         if not isinstance(wmatrix, WindowedCorrelationFunctionMultipoles):
             self.wmatrix = WindowedCorrelationFunctionMultipoles()
             if wmatrix is None: wmatrix = {}
-            if self.muedges and isinstance(wmatrix, dict):
-                wmatrix = {'muedges': self.muedges, **wmatrix}
+            if self.RR and isinstance(wmatrix, dict):
+                wmatrix = {**self.RR, **wmatrix}
             self.wmatrix.init.update(wmatrix=wmatrix)
         if self.sedges:  # set by data
             slim = {ell: (edges[0], edges[-1], np.mean(np.diff(edges))) for ell, edges in zip(self.ells, self.sedges)}
@@ -106,27 +106,22 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         def lim_data(corr, slim=slim):
             if slim is None:
                 slim = {ell: (0, np.inf) for ell in (0, 2, 4)}
-            ells, list_s, list_sedges, list_muedges, list_data = [], [], [], [], []
+            ells, list_s, list_sedges, RR, list_data = [], [], [], None, []
+            try:
+                RR = {'sedges': corr.R1R2.edges[0], 'muedges': corr.R1R2.edges[1], 'wcounts': corr.R1R2.wcounts}
+            except AttributeError:
+                RR = None
             for ell, lim in slim.items():
                 corr_slice = corr.copy().select(lim)
                 ells.append(ell)
                 list_s.append(corr_slice.sepavg())
                 list_sedges.append(corr_slice.edges[0])
                 try:
-                    d, mask_mu = corr_slice.get_corr(ell=ell, ignore_nan=ignore_nan, return_mask=True, return_cov=False, return_sep=False)  # pycorr
+                    d = corr_slice.get_corr(ell=ell, ignore_nan=ignore_nan, return_cov=False, return_sep=False)  # pycorr
                 except TypeError:
-                    d, mask_mu = corr_slice(ell=ell), None  # pypower
+                    d = corr_slice(ell=ell)  # pypower
                 list_data.append(d)
-                try:
-                    muedges = corr_slice.edges[1]
-                except IndexError:
-                    pass
-                else:
-                    if mask_mu is not None:
-                        muedges = np.array(list(zip(muedges[:-1], muedges[1:])))
-                        muedges = [muedges[mm] for mm in mask_mu]
-                        list_muedges.append(muedges)
-            return list_s, list_sedges, list_muedges, ells, list_data
+            return list_s, list_sedges, RR, ells, list_data
 
         def load_all(lmocks):
 
@@ -154,9 +149,9 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             for mock in list_mocks:
                 if utils.is_path(mock):
                     mock = load_data(mock)
-                mock_s, mock_sedges, mock_muedges, mock_ells, mock_y = lim_data(mock)
+                mock_s, mock_sedges, mock_RR, mock_ells, mock_y = lim_data(mock)
                 if self.s is None:
-                    self.s, self.sedges, self.muedges, self.ells = mock_s, mock_sedges, mock_muedges, mock_ells
+                    self.s, self.sedges, self.RR, self.ells = mock_s, mock_sedges, mock_RR, mock_ells
                 if not all(np.allclose(ss, ms, atol=0., rtol=1e-3) for ss, ms in zip(self.sedges, mock_sedges)):
                     raise ValueError('{} does not have expected s-edges (based on previous data)'.format(mock))
                 if mock_ells != self.ells:
@@ -174,7 +169,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             else:
                 list_y = list(data)
             flatdata = np.mean(list_y, axis=0)
-        self.s, self.sedges, self.muedges, self.ells, flatdata = self.mpicomm.bcast((self.s, self.sedges, self.muedges, self.ells, flatdata) if self.mpicomm.rank == 0 else None, root=0)
+        self.s, self.sedges, self.RR, self.ells, flatdata = self.mpicomm.bcast((self.s, self.sedges, self.RR, self.ells, flatdata) if self.mpicomm.rank == 0 else None, root=0)
         return flatdata, list_y
 
     @plotting.plotter(interactive={'kw_theory': {'color': 'black', 'label': 'reference'}})
@@ -377,7 +372,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
 
     def __getstate__(self):
         state = {}
-        for name in ['s', 'sedges', 'muedges', 'ells', 'flatdata', 'shotnoise', 'flattheory']:
+        for name in ['s', 'sedges', 'RR', 'ells', 'flatdata', 'shotnoise', 'flattheory']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state

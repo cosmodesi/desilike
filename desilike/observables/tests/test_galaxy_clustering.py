@@ -203,6 +203,7 @@ def test_correlation_function():
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
+
     #theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template, ells=(0, 2))
     size = 5
     ells = (2,)
@@ -281,6 +282,7 @@ def test_correlation_function():
     theory.power.template.init.update(z=1.)
     observable()
     observable.plot(show=True)
+
     print(observable.runtime_info.pipeline.varied_params)
     assert theory.power.template.z == 1.
 
@@ -925,8 +927,8 @@ if __name__ == '__main__':
 
     #test_systematic_templates()
     # test_bao()
-    test_power_spectrum()
-    #test_correlation_function()
+    #test_power_spectrum()
+    test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()

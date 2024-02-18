@@ -57,6 +57,73 @@ def window_matrix_bininteg(list_edges, resolution=1):
     return xin, full_matrix
 
 
+def window_matrix_RR(soutedges, sedges, muedges, wcounts, ellsin=(0, 2, 4), resolution=1):
+    r"""
+    Build window matrix for binning, in the continuous limit, i.e. integral of :math:`\int dx x^2 f(x) / \int dx x^2` over each bin.
+
+    Parameters
+    ----------
+    soutedges : dict
+        :math:`s`-edges, for each output :math:`\ell`.
+
+    muedges : array
+        :math:`\mu`-edges.
+
+    wcounts : 2D array
+        RR (weighted) pair counts, of shape ``(len(sedges) - 1, len(muedges) - 1)``.
+
+    ellsin : tuple, default=(0, 2, 4)
+        Input, theory, :math:`\ell`.
+
+    resolution : int, default=1
+        Number of evaluation points in the integral, in addition to the rebinning factor ``(len(sedges) - 1) / (len(list_sedges[0]) - 1)``.
+
+    Returns
+    -------
+    sin : array
+        Input theory coordinates.
+
+    full_matrix : array
+        Window matrix.
+    """
+    sin, binmatrix = window_matrix_bininteg(sedges, resolution=resolution)  # binmatrix shape (len(sin), len(sinedges) - 1)
+    full_matrix, idxin = [], []
+    for ellout, soutedges in soutedges.items():
+        idx = np.flatnonzero(sedges == soutedges[0])
+        if not idx.size:
+            raise ValueError('output edges {} not found in RR s-edges {}'.format(soutedges, sedges))
+        idx = idx[0]
+        diffout = soutedges[1] - soutedges[0]
+        diffin = sedges[idx + 1] - sedges[idx]
+        factor = np.rint(diffout / diffin).astype('i4')
+        if factor == 0:
+            raise ValueError('s-resolution {} of RR counts is larger than required output s-binning {}'.format(sedges, soutedges))
+        line = []
+        for ellin in ellsin:
+            integ = (special.legendre(ellout) * special.legendre(ellin)).integ()
+            matrix = np.zeros((len(sedges) - 1, len(soutedges) - 1), dtype='f8')
+            for iout in range(matrix.shape[1]):
+                iin = idx + factor * iout
+                wc = wcounts[iin:iin + factor]
+                wcmu = np.sum(wc, axis=0)
+                mask_nonzero = wcmu != 0.
+                wcmu[~mask_nonzero] = 1.
+                tmp = wc / wcmu
+                # Integration over mu
+                tmp = (2. * ellout + 1.) * np.sum(tmp * (integ(muedges[1:]) - integ(muedges[:-1])), axis=-1) / np.sum(mask_nonzero * (muedges[1:] - muedges[:-1]))  # normalization of mu-integral over non-empty s-rebinned RR(s, mu) bins
+                matrix[iin:iin + factor, iout] = tmp
+            matrix = binmatrix.dot(matrix)
+            line.append(matrix.T)
+        full_matrix.append(line)
+        idxin.append(np.any([np.any(matrix != 0, axis=0) for matrix in line], axis=0))  # all sin for which wmatrix != 0
+    idxin = np.any(idxin, axis=0)
+    # Let's remove useless sin
+    sin = sin[idxin]
+    full_matrix = [[matrix[:, idxin] for matrix in line] for line in full_matrix]
+    full_matrix = np.bmat(full_matrix).A
+    return sin, full_matrix.T
+
+
 def unpack(x, flatarray):
     toret = []
     nout = 0
@@ -404,6 +471,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
 
     wmatrix : dict, default=None
         Can be e.g. {'resolution': 2}, specifying the number of theory :math:`s` to integrate over per observed bin.
+        Or {'sedges': sedges, 'muedges': muedges, 'RR': RR}, specifying the tabulated RR counts.
         If a 2D array (window matrix), output and input separations and multipoles ``s``, ``ells``, ``sin``, ``ellsin`` should be provided.
 
     sin : array, default=None
@@ -480,11 +548,6 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         self.theory = theory
 
         self.matrix_diag, self.matrix_full, self.smask, self.offset = None, None, None, None
-        muedges = None
-        if isinstance(wmatrix, dict):
-            wmatrix = dict(wmatrix)
-            muedges = wmatrix.pop('muedges', None)
-            if not wmatrix: wmatrix = None
         if wmatrix is None:
             self.ellsin = tuple(self.ells)
             self.sin = np.unique(np.concatenate(self.s, axis=0))
@@ -493,8 +556,12 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
                 assert all(smask.min() >= 0 and smask.max() < ss.size for ss, smask in zip(self.s, self.smask))
                 self.smask = np.concatenate(self.smask, axis=0)
         elif isinstance(wmatrix, dict):
-            self.ellsin = tuple(self.ells)
-            self.sin, matrix_full = window_matrix_bininteg(self.sedges, **wmatrix)
+            if 'wcounts' in wmatrix:
+                self.ellsin = tuple(ellsin or self.theory.init.get('ells', None) or self.ells)
+                self.sin, matrix_full = window_matrix_RR({ell: self.sedges[ill] for ill, ell in enumerate(self.ells)}, ellsin=self.ellsin, **wmatrix)
+            else:
+                self.ellsin = tuple(self.ells)
+                self.sin, matrix_full = window_matrix_bininteg(self.sedges, **wmatrix)
             self.matrix_full = matrix_full.T
         elif isinstance(wmatrix, np.ndarray):
             self.ellsin = tuple(ellsin or self.ells)
@@ -513,21 +580,6 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
             self.matrix_full = matrix_full.dot(wmatrix_rebin.T)
         else:
             raise ValueError('unrecognized wmatrix {}'.format(wmatrix))
-        if muedges is not None:
-            # This matrix will come *before* --- this isn't fully correct, but easier...
-            self.ellsin = tuple(ellsin or self.theory.init.get('ells', None) or self.ells)
-            matrix_diag = np.empty((len(self.ells), len(self.ellsin), len(self.sin)))
-            for ill, ell in enumerate(self.ells):
-                for illin, ellin in enumerate(self.ellsin):
-                    integ = (special.legendre(ell) * special.legendre(ellin)).integ()
-                    # shape (s[ill].size,) + (nmu(s), 2)
-                    tmp = [(2. * ell + 1.) / np.sum(me[:, 1] - me[:, 0]) * np.sum(integ(me[:, 1]) - integ(me[..., 0])) for me in muedges[ill]]
-                    matrix_diag[ill, illin] = np.interp(self.sin, self.s[ill], tmp)
-            if self.matrix_full is None:
-                if self.matrix_diag is None: self.matrix_diag = matrix_diag
-                else: self.matrix_diag = np.sum(self.matrix_diag[:, :, None, ...] * matrix_diag[None, ...], axis=1)
-            else:
-                self.matrix_full = self.matrix_full.dot(np.bmat([[np.diag(kk) for kk in kernel] for kernel in matrix_diag]).A)
         if fiber_collisions is not None:
             self.theory.init.update(s=self.sin, ells=self.ellsin)  # fiber_collisions takes sin, ellsin from theory
             fiber_collisions.init.update(ells=self.ellsin, theory=self.theory)

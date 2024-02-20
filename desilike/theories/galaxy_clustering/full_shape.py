@@ -1152,7 +1152,8 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
             pars += [(1 + b1)**2 * params['alpha0p'], f * (1 + b1) * (params['alpha0p'] + params['alpha2p']),
                      f**2 * (params['alpha2p'] + (1 + b1) * params['alpha4p']), f**3 * params['alpha4p']]
             sigv = self.options['sigv']
-            pars += [params['sn{:d}p'.format(i)] * self.fnd * sigv**i for i in [0, 2, 4]]
+            pars += [params['sn0p'] * self.fnd / self.options['fsat']]
+            pars += [params['sn{:d}p'.format(i)] * self.fnd * sigv**i for i in [2, 4]]
         else:
             pars = [params[name] for name in self.required_bias_params]
         self.__dict__.update(dict(zip(['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2', 'sn4'], pars)))  # for derived parameters

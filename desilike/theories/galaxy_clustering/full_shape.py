@@ -1073,7 +1073,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
         super(LPTVelocileptorsTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         if k is not None:
             self.k = np.array(k, dtype='f8')
-        # increasing the resolution
+        # increasing the resolution, necessary
         boost_prec = 2
         kvec = np.concatenate([[min(0.0005, self.k[0])], np.geomspace(0.0015, 0.025, 10 * boost_prec, endpoint=True), np.arange(0.03, max(0.5, self.k[-1]) + 0.005 / boost_prec, 0.01 / boost_prec)])
         self.pt.init.update(k=kvec, ells=(0, 2, 4), use_Pzel=False)
@@ -1136,9 +1136,9 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
         for param in self.init.params.select(basename=fix):
             param.update(value=0., fixed=True)
         self.nd = 1e-4
-        self.fnd = 1.
+        self.fsat = self.snd = 1.
         if self.is_physical_prior:
-            self.fnd = self.options['fsat'] * self.options['shotnoise'] * self.nd  # normalized by 1e-4
+            self.fsat, self.snd = self.options['fsat'], self.options['shotnoise'] * self.nd  # normalized by 1e-4
 
     def calculate(self, **params):
         for name in ['z']:
@@ -1152,7 +1152,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
             pars += [(1 + b1)**2 * params['alpha0p'], f * (1 + b1) * (params['alpha0p'] + params['alpha2p']),
                      f**2 * (params['alpha2p'] + (1 + b1) * params['alpha4p']), f**3 * params['alpha4p']]
             sigv = self.options['sigv']
-            pars += [params['sn{:d}p'.format(i)] * self.fnd * sigv**i for i in [0, 2, 4]]
+            pars += [params['sn{:d}p'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2, 4]]
         else:
             pars = [params[name] for name in self.required_bias_params]
         self.__dict__.update(dict(zip(['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2', 'sn4'], pars)))  # for derived parameters

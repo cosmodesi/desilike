@@ -25,23 +25,22 @@ class PantheonPlusSNLikelihood(BaseSNLikelihood):
 
     def initialize(self, *args, cosmo=None, **kwargs):
         BaseSNLikelihood.initialize(self, *args, cosmo=cosmo, **kwargs)
-        zmask = self.light_curve_params['zcmb'] > 0.01  # Only those SNe at z > 0.01 are used for cosmology
+        zmask = self.light_curve_params['zHD'] > 0.01  # Only those SNe at z > 0.01 are used for cosmology
         self.light_curve_params = {name: value[zmask] for name, value in self.light_curve_params.items()}
         self.covariance = self.covariance[np.ix_(zmask, zmask)]
         self.precision = utils.inv(self.covariance)
         self.std = np.diag(self.covariance)**0.5
         if is_external_cosmo(self.cosmo):
-            self.cosmo_requires = {'background': {'luminosity_distance': {'z': self.light_curve_params['zcmb']}}}
+            self.cosmo_requires = {'background': {'luminosity_distance': {'z': self.light_curve_params['zHD']}}}
 
     def calculate(self, Mb=0):
-        z = self.light_curve_params['zcmb']
+        z = self.light_curve_params['zHD']
         self.flattheory = 5 * np.log10(self.cosmo.luminosity_distance(z) / self.cosmo['h']) + 25
-        self.flatdata = self.light_curve_params['mb'] - Mb - 5 * np.log10((1 + self.light_curve_params['zhel']) / (1 + z))
+        self.flatdata = self.light_curve_params['m_b_corr'] - Mb - 5 * np.log10((1 + self.light_curve_params['zHEL']) / (1 + z))
         BaseSNLikelihood.calculate(self)
 
     def read_light_curve_params(self, fn):
-        data = BaseSNLikelihood.read_light_curve_params(self, fn, header='', sep=' ')
-        return {'zcmb': data['zHD'], 'zhel': data['zHEL'], 'mb': data['m_b_corr']}
+        return BaseSNLikelihood.read_light_curve_params(self, fn, header='', sep=' ')
 
     @plotting.plotter
     def plot(self, fig=None):
@@ -70,8 +69,8 @@ class PantheonPlusSNLikelihood(BaseSNLikelihood):
         else:
             lax = fig.axes
         alpha = 0.3
-        argsort = np.argsort(self.light_curve_params['zcmb'])
-        zdata = self.light_curve_params['zcmb'][argsort]
+        argsort = np.argsort(self.light_curve_params['zHD'])
+        zdata = self.light_curve_params['zHD'][argsort]
         flatdata, flattheory, std = self.flatdata[argsort], self.flattheory[argsort], self.std[argsort]
         lax[0].plot(zdata, flatdata, marker='o', markeredgewidth=0., linestyle='none', alpha=alpha, color='b')
         lax[0].plot(zdata, flattheory, linestyle='-', marker=None, color='k')
@@ -92,16 +91,17 @@ class PantheonPlusSNLikelihood(BaseSNLikelihood):
         from desilike.install import exists_path, download
 
         data_fn = os.path.join(data_dir, 'Pantheon+SH0ES.dat')
+        cov_fn = os.path.join(data_dir, 'Pantheon+SH0ES_STAT+SYS.cov')
 
         if installer.reinstall or not exists_path(data_fn):
             github = 'https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/Pantheon%2B_Data/4_DISTANCES_AND_COVAR/'
-            for fn in ['Pantheon+SH0ES.dat', 'Pantheon+SH0ES_STAT+SYS.cov']:
-                download(os.path.join(github, fn), os.path.join(data_dir, fn))
+            for fn in [data_fn, cov_fn]:
+                download(os.path.join(github, os.path.basename(fn)), fn)
 
             # Creates config file to ensure compatibility with base class
             config_fn = os.path.join(data_dir, 'config.dataset')
             with open(config_fn, 'w') as file:
-                for text in ['name = PantheonPlus\n', 'data_file = Pantheon+SH0ES.dat\n', 'mag_covmat_file = Pantheon+SH0ES_STAT+SYS.cov\n']:
-                    file.write(text)
+                for text in ['name = PantheonPlus', 'data_file = {}'.format(os.path.basename(data_fn)), 'mag_covmat_file = {}'.format(os.path.basename(cov_fn))]:
+                    file.write(text + '\n')
 
         installer.write({cls.__name__: {'data_dir': data_dir}})

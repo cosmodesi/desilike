@@ -78,17 +78,26 @@ class BaseSNLikelihood(BaseGaussianLikelihood):
             size = int(file.readline())
         return np.loadtxt(fn, skiprows=1).reshape(size, size)
 
-    def read_light_curve_params(self, fn, header='#', sep=' '):
+    def read_light_curve_params(self, fn, header='#', sep=' ', skip=None):
         if self.mpicomm.rank == 0:
             self.log_info('Loading light-curve from {}'.format(fn))
         with open(fn, 'r') as file:
+            start = True
             for iline, line in enumerate(file.readlines()):
-                if iline == 0:
+                if skip is not None:
+                    if isinstance(skip, str):
+                        if line.strip().startswith(skip):
+                            continue
+                    elif iline <= skip:
+                        continue
+                if start:
                     names = [name.strip() for name in line[len(header):].split(sep)]
                     values = {name: [] for name in names}
-                elif line:
-                    for name, value in zip(names, line.split(sep)):
-                        try: value = float(value)
-                        except ValueError: pass  # str
-                        values[name].append(value)
+                    start = False
+                    continue
+                line = [el for el in line.split(sep) if el]
+                for name, value in zip(names, line):
+                    try: value = float(value)
+                    except ValueError: pass  # str
+                    values[name].append(value)
         return {name: np.array(value) for name, value in values.items()}

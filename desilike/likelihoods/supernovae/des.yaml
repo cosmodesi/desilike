@@ -1,0 +1,11 @@
+class: DESY5SNLikelihood
+
+init:
+  config_fn: config.dataset
+
+params:
+  Mb:
+    value: 0.
+    prior:
+      limits: [-5, 5]
+    latex: M_b

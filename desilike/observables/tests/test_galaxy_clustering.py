@@ -49,8 +49,6 @@ def test_power_spectrum():
     assert np.allclose(likelihood.flatdiff, observable.wmatrix.flatpower - observable.flatdata)
     theory()
 
-
-
     observable = TracerPowerSpectrumMultipolesObservable(klim={2: [0.05, 0.2, 0.01]}, #klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data='../../tests/_pk/data.npy',
                                                          covariance=glob.glob('../../tests/_pk/mock_*.npy'),
@@ -59,7 +57,8 @@ def test_power_spectrum():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood()
     assert np.allclose(observable.wmatrix.theory.nd, 1e-4)
-    assert not np.allclose(observable.wmatrix.theory.fnd, 1.)
+    print(observable.wmatrix.theory.snd)
+    assert not np.allclose(observable.wmatrix.theory.snd, 1.)
     theory()
 
     observable = TracerPowerSpectrumMultipolesObservable(klim=None,#klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
@@ -927,8 +926,8 @@ if __name__ == '__main__':
 
     #test_systematic_templates()
     # test_bao()
-    #test_power_spectrum()
-    test_correlation_function()
+    test_power_spectrum()
+    #test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()

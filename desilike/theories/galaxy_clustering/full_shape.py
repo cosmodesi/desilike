@@ -1075,8 +1075,8 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
             self.k = np.array(k, dtype='f8')
         # increasing the resolution
         boost_prec = 2
-        kvec = np.concatenate([[min(0.0005, self.k[0])], np.geomspace(0.0015, 0.025, 10 * boost_prec, endpoint=True), np.arange(0.03, max(0.5, self.k[-1]) + 0.005 / boost_prec, 0.01 / boost_prec)])
-        self.pt.init.update(k=kvec, ells=(0, 2, 4), use_Pzel=False)
+        kvec = np.concatenate([[min(0.0005, self.k[0])], np.geomspace(0.0015, 0.025, 10 * boost_prec, endpoint=True), np.arange(0.03, max(0.5, self.k[-1]) + 0.015 / boost_prec, 0.01 / boost_prec)])  # margin for interpolation below (and numerical noise in endpoint)
+        self.pt.init.update(k=kvec, ells=self.ells, use_Pzel=False)
 
     @staticmethod
     def _params(params, freedom=None, prior_basis='physical'):

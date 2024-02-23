@@ -286,6 +286,15 @@ def camb_or_classy_to_cosmoprimo(fiducial, provider, params, ignore_unknown_para
                 A_s = p.get_param('As')  # camb
     if not any(name in state for name in ['H0', 'h']):
         state['H0'] = np.squeeze(provider.get_Hubble(0.))
+    from cosmoprimo.cosmology import find_conflicts
+    conf = {}
+    for name in list(state):
+        conf[name] = name
+        for eq in find_conflicts(name, Cosmology._conflict_parameters):  # always ordered in the same way, e.g. ['A_s', ..., 'sigma8']
+            if eq in state:
+                conf[name] = eq  # set A_s if in state, else sigma8
+                break
+    state = {name: value for name, value in state.items() if conf[name] == name}  # prune conflicting parameters
     cosmo = cosmo.clone(**state, engine=CobayaEngine)
     cosmo._engine.provider = provider
     cosmo._engine._derived['A_s'] = A_s

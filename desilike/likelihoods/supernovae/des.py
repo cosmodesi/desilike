@@ -1,17 +1,17 @@
 import os
 import numpy as np
-from desilike import plotting,utils
+from desilike import plotting, utils
 from desilike.cosmo import is_external_cosmo
 from .base import BaseSNLikelihood
 
 
-class Union3SNLikelihood(BaseSNLikelihood):
+class DESY5SNLikelihood(BaseSNLikelihood):
     """
-    Likelihood for the Union3&UNITY1.5 type Ia supernovae sample.
+    Likelihood for DES-Y5 type Ia supernovae sample.
 
     Reference
     ---------
-    https://arxiv.org/pdf/2311.12098.pdf
+    https://arxiv.org/abs/2401.02929
 
     Parameters
     ----------
@@ -19,25 +19,26 @@ class Union3SNLikelihood(BaseSNLikelihood):
         Data directory. Defaults to path saved in desilike's configuration,
         as provided by :class:`Installer` if likelihood has been installed.
     """
-    config_fn = 'union3.yaml'
-    installer_section = 'Union3SNLikelihood'
-    name = 'Union3SN'
+    config_fn = 'des.yaml'
+    installer_section = 'DESY5SNLikelihood'
+    name = 'DESY5SN'
 
     def initialize(self, *args, cosmo=None, **kwargs):
         BaseSNLikelihood.initialize(self, *args, cosmo=cosmo, **kwargs)
+        self.covariance = self.covariance + np.diag(self.light_curve_params['MUERR'])**2
         self.precision = utils.inv(self.covariance)
         self.std = np.diag(self.covariance)**0.5
         if is_external_cosmo(self.cosmo):
-            self.cosmo_requires = {'background': {'luminosity_distance': {'z': self.light_curve_params['zcmb']}}}
+            self.cosmo_requires = {'background': {'luminosity_distance': {'z': self.light_curve_params['zHD']}}}
 
-    def calculate(self, dM=0):
-        z = self.light_curve_params['zcmb']
-        # Dimensionless luminosity distance
-        # D_L = H0*d_L = 100*h * cosmoprimo.luminosity_distance(z) | Cosmoprimo returns distances in [Mpc/h]
-        # Thus, the dependence on H0 is absorbed in dM
-        self.flattheory = 5 * np.log10(100 * self.cosmo.luminosity_distance(z)) + 25
-        self.flatdata = self.light_curve_params['mu'] - dM
+    def calculate(self, Mb=0):
+        z = self.light_curve_params['zHD']
+        self.flattheory = 5 * np.log10(self.cosmo.luminosity_distance(z) / self.cosmo['h']) + 25
+        self.flatdata = self.light_curve_params['MU'] - Mb - 5 * np.log10((1 + self.light_curve_params['zHEL']) / (1 + z))
         BaseSNLikelihood.calculate(self)
+
+    def read_light_curve_params(self, fn):
+        return BaseSNLikelihood.read_light_curve_params(self, fn, header='', sep=' ', skip='#')
 
     @plotting.plotter
     def plot(self, fig=None):
@@ -66,8 +67,8 @@ class Union3SNLikelihood(BaseSNLikelihood):
         else:
             lax = fig.axes
         alpha = 0.3
-        argsort = np.argsort(self.light_curve_params['zcmb'])
-        zdata = self.light_curve_params['zcmb'][argsort]
+        argsort = np.argsort(self.light_curve_params['zHD'])
+        zdata = self.light_curve_params['zHD'][argsort]
         flatdata, flattheory, std = self.flatdata[argsort], self.flattheory[argsort], self.std[argsort]
         lax[0].plot(zdata, flatdata, marker='o', markeredgewidth=0., linestyle='none', alpha=alpha, color='b')
         lax[0].plot(zdata, flattheory, linestyle='-', marker=None, color='k')
@@ -76,7 +77,7 @@ class Union3SNLikelihood(BaseSNLikelihood):
         lax[0].set_ylabel(r'distance modulus [$\mathrm{mag}$]')
         lax[1].set_ylabel(r'Hubble res. [$\mathrm{mag}$]')
         lax[1].set_xlabel('$z$')
-        return fig
+        return lax
 
     @classmethod
     def install(cls, installer):
@@ -87,18 +88,18 @@ class Union3SNLikelihood(BaseSNLikelihood):
 
         from desilike.install import exists_path, download
 
-        data_fn = os.path.join(data_dir, 'union3_mu.dat')
-        cov_fn = os.path.join(data_dir, 'union3.cov')
+        data_fn = os.path.join(data_dir, 'hubble_diagram.txt')
+        cov_fn = os.path.join(data_dir, 'covsys_000.txt')
 
         if installer.reinstall or not exists_path(data_fn):
-            github = 'https://raw.githubusercontent.com/rodri981/tmp-data/main/'
-            for fn in [data_fn, cov_fn]:
-                download(os.path.join(github, os.path.basename(fn)), fn)
+            github = ''  # not public yet, to be added by hand
+            #for fn in [data_fn, cov_fn]:
+            #    download(os.path.join(github, os.path.basename(fn)), fn)
 
             # Creates config file to ensure compatibility with base class
             config_fn = os.path.join(data_dir, 'config.dataset')
             with open(config_fn, 'w') as file:
-                for text in ['name = Union3', 'data_file = {}'.format(os.path.basename(data_fn)), 'mag_covmat_file = {}'.format(os.path.basename(cov_fn))]:
+                for text in ['name = DESY5', 'data_file = {}'.format(os.path.basename(data_fn)), 'mag_covmat_file = {}'.format(os.path.basename(cov_fn))]:
                     file.write(text + '\n')
 
         installer.write({cls.__name__: {'data_dir': data_dir}})

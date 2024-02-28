@@ -93,7 +93,7 @@ class PantheonSNLikelihood(BaseSNLikelihood):
 
         if installer.reinstall or not exists_path(config_fn):
             github = 'https://raw.githubusercontent.com/dscolnic/Pantheon/master/'
-            for fn in ['full_long.dataset', 'lcparam_full_long.txt', 'lcparam_full_long_zhel.txt', 'sys_full_long.txt']:
+            for fn in [os.path.basename(config_fn), 'lcparam_full_long.txt', 'lcparam_full_long_zhel.txt', 'sys_full_long.txt']:
                 download(os.path.join(github, fn), os.path.join(data_dir, fn))
             with open(config_fn, 'r') as file:
                 txt = file.read()

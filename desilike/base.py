@@ -442,6 +442,7 @@ class BasePipeline(BaseClass):
         if not self._initialized:
             if self.more_initialize is not None: self.more_initialize()
             self._initialized = True
+            for calculator in self.calculators: calculator.runtime_info.tocalculate = True
 
         names = list(params.keys())
         self_params = self.params
@@ -459,6 +460,7 @@ class BasePipeline(BaseClass):
             for param in self._params:
                 if param.depends:
                     self.derived.set(ParameterArray(params[param.name], param=param))
+
         for calculator in self.calculators:  # start by first calculator
             runtime_info = calculator.runtime_info
             derived = Samples()

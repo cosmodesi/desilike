@@ -404,12 +404,12 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
         if self._requires:
             cosmo = camb_or_classy_to_cosmoprimo(self._fiducial, self.provider, params_values, ignore_unknown_params=self.ignore_unknown_cosmoprimo_params)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
-        loglikelihood = self.like(**{name: value for name, value in params_values.items() if name in self._nuisance_params})
+        loglikelihood, derived = self.like({name: value for name, value in params_values.items() if name in self._nuisance_params}, return_derived=True)
         if _derived is not None:
-            for value in self.like.runtime_info.pipeline.derived:
+            for value in derived:
                 if value.param.ndim == 0:
                     _derived[value.param.name] = float(value[()])
-        return loglikelihood
+        return float(loglikelihood)
 
     '''
     @classmethod

@@ -232,6 +232,7 @@ class BasePipeline(BaseClass):
         if not self._initialized:
             if self.more_initialize is not None: self.more_initialize()
             self._initialized = True
+            for calculator in self.calculators: calculator.runtime_info.tocalculate = True
         for name in params:
             if name not in self_params:
                 raise PipelineError('Input parameter {} is not one of parameters: {}'.format(name, self_params))

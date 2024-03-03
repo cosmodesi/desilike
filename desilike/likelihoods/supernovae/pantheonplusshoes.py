@@ -27,7 +27,7 @@ class PantheonPlusSHOESSNLikelihood(PantheonPlusSNLikelihood):
     def initialize(self, *args, cosmo=None, **kwargs):
         BaseSNLikelihood.initialize(self, *args, cosmo=cosmo, **kwargs)
         # Select only those SNe at z > 0.01 or the ones used as calibrators
-        zmask = (self.light_curve_params['zcmb'] > 0.01) | (self.light_curve_params['is_calibrator'])
+        zmask = (self.light_curve_params['zcmb'] > 0.01) | self.light_curve_params['is_calibrator']
         self.light_curve_params = {name: value[zmask] for name, value in self.light_curve_params.items()}
         self.covariance = self.covariance[np.ix_(zmask, zmask)]
         self.precision = utils.inv(self.covariance)

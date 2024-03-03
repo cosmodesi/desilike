@@ -7,7 +7,7 @@ from .base import BaseSNLikelihood
 
 class Union3SNLikelihood(BaseSNLikelihood):
     """
-    Likelihood for the Union3&UNITY1.5 type Ia supernovae sample.
+    Likelihood for the Union3 & UNITY1.5 type Ia supernovae sample.
 
     Reference
     ---------

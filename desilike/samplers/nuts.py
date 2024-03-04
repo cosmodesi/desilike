@@ -34,7 +34,7 @@ class NUTSSampler(BaseBatchPosteriorSampler):
             Input likelihood.
 
         adaptation : bool, dict, default=True
-            Adapt inverse mass matrix (``covariance``) and ``step_size``.*
+            Adapt inverse mass matrix (``covariance``) and ``step_size``.
             Can be ``{'is_mass_matrix_diagonal': True, 'target_acceptance_rate': 0.8}``
 
         covariance : str, dict, Chain, Profiles, ParameterCovariance, default=None

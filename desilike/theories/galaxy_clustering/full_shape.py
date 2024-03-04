@@ -1004,7 +1004,7 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
         pktable = {0: self.pt.p0ktable, 2: self.pt.p2ktable, 4: self.pt.p4ktable}
         self.pktable = np.array([pktable[ell] for ell in self.ells])
         self.sigma8 = self.template.sigma8
-        self.fsigma8 = self.template.fsigma8
+        self.fsigma8 = self.template.f * self.sigma8
 
     def combine_bias_terms_poles(self, pars, nd=1e-4):
         return lptvel_combine_bias_terms_poles(self.pktable, pars, nd=nd)

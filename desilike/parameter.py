@@ -455,6 +455,17 @@ class ParameterArray(numpy.lib.mixins.NDArrayOperatorsMixin):
     def __len__(self):
         return len(self.value)
 
+    def __iter__(self):
+        values = self.value.__iter__()  # to raise TypeError in case of 0d array
+        # yield would not raise an error in case of 0d array
+
+        def get(value):
+            new = self.__class__(value)
+            new.__array_finalize__(self, copy=True)
+            return new
+
+        return (get(value) for value in values)
+
     @property
     def zero(self):
         """Return zero-order derivative."""
@@ -568,7 +579,12 @@ class ParameterArray(numpy.lib.mixins.NDArrayOperatorsMixin):
     def __getitem__(self, deriv):
         """Derivative w.r.t. parameter 'a' can be obtained (if exists) as array[('a',)]."""
         deriv, isderiv = self._isderiv(deriv)
-        return self.__class__(self.value.__getitem__(self._index(deriv)), param=self.param, derivs=None if isderiv else self.derivs)
+        #return self.__class__(self.value.__getitem__(self._index(deriv)), param=self.param, derivs=None if isderiv else self.derivs)
+        if isderiv:
+            return self.__class__(self.value.__getitem__(self._index(deriv)), param=self.param, derivs=None)
+        new = self.__class__(self.value.__getitem__(deriv))
+        new.__array_finalize__(self, copy=True)
+        return new
 
     def __setitem__(self, deriv, item):
         """Derivative w.r.t. parameter 'a' can be set (if exists) as array[('a',)] = deriv."""

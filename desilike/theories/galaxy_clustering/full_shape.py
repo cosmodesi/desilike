@@ -1150,7 +1150,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
             pars = [params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p'] / sigma8**3]
             b1 = pars[0]
             pars += [(1 + b1)**2 * params['alpha0p'], f * (1 + b1) * (params['alpha0p'] + params['alpha2p']),
-                     f**2 * (params['alpha2p'] + (1 + b1) * params['alpha4p']), f**3 * params['alpha4p']]
+                     f * (f * params['alpha2p'] + (1 + b1) * params['alpha4p']), f**2 * params['alpha4p']]
             sigv = self.options['sigv']
             pars += [params['sn{:d}p'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2, 4]]
         else:

@@ -140,7 +140,6 @@ class BaseLikelihood(BaseCalculator):
 
         indices_marg = np.array(indices_marg)
         x, dx, solve_likelihoods, derivs = [], [], [], None
-
         if solved_params:
             solved_params = ParameterCollection(solved_params)
             solve_likelihoods, values = [], {}

@@ -346,7 +346,8 @@ class BasePipeline(BaseClass):
                     del self.calculators[self.calculators.index(require)]  # we want first dependencies at the end
                 callback(require)
 
-        calculator.runtime_info.initialized = False  # may depend on the whole pipeline
+        if not getattr(calculator.runtime_info, '_calculation', False):
+            calculator.runtime_info.initialized = False  # may depend on the whole pipeline
         callback(calculator.runtime_info.initialize())
         # To avoid loops created by one calculator, which when updated, requests reinitialization of the calculators which depend on it
         for calculator in self.calculators:
@@ -443,7 +444,6 @@ class BasePipeline(BaseClass):
             if self.more_initialize is not None: self.more_initialize()
             self._initialized = True
             for calculator in self.calculators: calculator.runtime_info.tocalculate = True
-
         names = list(params.keys())
         self_params = self.params
         for name in names:
@@ -972,13 +972,14 @@ class RuntimeInfo(BaseClass):
                     value = invalue
                 self.input_values[basename] = value
         if self.tocalculate:
-            # print('calculate', type(self.calculator), self.input_values)
+            self._calculation = True
             self.monitor.start()
             self.calculator.calculate(**self.input_values)
             self._derived = None
             self.calculated = True
             self._get = self.calculator.get()
             self.monitor.stop()
+            self._calculation = False
         else:
             self.calculated = False
         self._tocalculate = False

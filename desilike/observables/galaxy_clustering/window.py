@@ -117,6 +117,8 @@ def window_matrix_RR(soutedges, sedges, muedges, wcounts, ellsin=(0, 2, 4), reso
                 tmp = wc / wcmu
                 # Integration over mu
                 tmp = (2. * ellout + 1.) * np.sum(tmp * mask_nonzero * (integ(muedges[1:]) - integ(muedges[:-1])), axis=-1) / np.sum(mask_nonzero * (muedges[1:] - muedges[:-1]))  # normalization of mu-integral over non-empty s-rebinned RR(s, mu) bins
+                #if ellout != ellin:
+                #    print(ellin, ellout, mask_nonzero.all(), integ(muedges[-1]) - integ(muedges[0]), np.abs(tmp).max())
                 matrix[iin:iin + factor, iout] = tmp
             matrix = binmatrix.dot(matrix)
             line.append(matrix.T)
@@ -612,6 +614,8 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         self.systematic_templates = systematic_templates
         #diff = (self.matrix_full.dot(self.sin) - s[0]) / s[0]
         #print(diff, self.sin.shape)
+        #print(np.sum(self.matrix_full[len(self.s[0]):, :len(self.sin)], axis=-1))
+        #exit()
 
     @jit(static_argnums=[0])
     def _apply(self, theory):

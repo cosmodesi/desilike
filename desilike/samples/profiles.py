@@ -526,6 +526,20 @@ class Profiles(BaseClass):
                 raise ValueError('Cannot concatenate two profiles if both do not have same attributes.')
         for name in attrs:
             setattr(new, name, new._attrs[name].concatenate(*[other.get(name) for other in others], **kwargs))
+        notconcatenable_attrs = [attr for attr in new._attrs.keys() if attr not in concatenable_attrs]
+        best = {'covariance': np.inf}
+        for other in others[::-1]:
+            for attr in notconcatenable_attrs:
+                tmp = other.get(attr, None)
+                if tmp is not None:
+                    tmp = tmp.deepcopy()
+                    if attr == 'covariance' and np.isfinite(tmp._value).all():
+                        bestfit = other.get('bestfit', None)
+                        if bestfit is not None and bestfit.chi2min < best[attr]:  # select the covariance at bestfit
+                            setattr(new, attr, tmp)
+                            best[attr] = bestfit.chi2min
+                    else:
+                        setattr(new, attr, tmp)
         return new
 
     def extend(self, other):
@@ -571,7 +585,7 @@ class Profiles(BaseClass):
         precision = self.covariance.to_precision(params=params, return_type=None)
         params = precision._params
         mean = self.bestfit.choice(params=params, return_type='nparray', **kwargs)
-        return LikelihoodFisher(center=mean, params=params, offset=self.bestfit.logposterior.max(), hessian=precision, with_prior=True)
+        return LikelihoodFisher(center=mean, params=params, offset=self.bestfit.logposterior.max(), hessian=-precision.view(params=params, return_type='nparray'), with_prior=True)
 
     def to_getdist(self, params=None, label=None, ignore_limits=True):
         """

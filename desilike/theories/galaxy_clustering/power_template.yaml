@@ -157,16 +157,16 @@ params:
     latex: q_{\mathrm{ap}}
   DM_over_rd:
     derived: True
-    latex: D_{\mathrm{M}}/r_{d}
+    latex: D_{\mathrm{M}}/r_{\mathrm{d}}
   DH_over_rd:
     derived: True
-    latex: D_{\mathrm{H}}/r_{d}
+    latex: D_{\mathrm{H}}/r_{\mathrm{d}}
   DH_over_DM:
     derived: True
     latex: D_{\mathrm{H}}/D_{\mathrm{M}}
   DV_over_rd:
     derived: True
-    latex: D_{\mathrm{V}}/r_{d}
+    latex: D_{\mathrm{V}}/r_{\mathrm{d}}
 
 ---
 

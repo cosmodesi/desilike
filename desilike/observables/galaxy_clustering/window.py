@@ -32,16 +32,21 @@ def window_matrix_bininteg(list_edges, resolution=1):
 
     step = min(np.diff(edges).min() for edges in list_edges) / resolution
     start, stop = min(np.min(edges) for edges in list_edges), max(np.max(edges) for edges in list_edges)
-    xin = np.arange(start + step / 2., stop, step)
+    #xin = np.arange(start + step / 2., stop, step)
+    edges = np.arange(start, stop + step / 2., step)
+    xin = 3. / 4. * (edges[1:]**4 - edges[:-1]**4) / (edges[1:]**3 - edges[:-1]**3)
+    #print(xin)
 
     matrices = []
     for edges in list_edges:
         x, w = [], []
         for ibin, bin in enumerate(zip(edges[:-1], edges[1:])):
-            x.append(np.linspace(*bin, resolution + 2)[1:-1])
             edge = np.linspace(*bin, resolution + 1)
+            #x.append((edge[1:] + edge[:-1]) / 2.)
+            x.append(3. / 4. * (edge[1:]**4 - edge[:-1]**4) / (edge[1:]**3 - edge[:-1]**3))
             line = np.zeros((len(edges) - 1) * resolution, dtype='f8')
-            line[ibin * resolution:(ibin + 1) * resolution] = (edge[1:]**2 - edge[:-1]**2) / (edge[-1]**2 - edge[0]**2)  # dx is constant
+            tmp = edge[1:]**3 - edge[:-1]**3
+            line[ibin * resolution:(ibin + 1) * resolution] = tmp / tmp.sum()
             w.append(line)
         matrices.append(utils.matrix_lininterp(xin, np.concatenate(x)).dot(np.column_stack(w)))  # linear interpolation * integration weights
     full_matrix = []
@@ -102,6 +107,7 @@ def window_matrix_RR(soutedges, sedges, muedges, wcounts, ellsin=(0, 2, 4), reso
         for ellin in ellsin:
             integ = (special.legendre(ellout) * special.legendre(ellin)).integ()
             matrix = np.zeros((len(sedges) - 1, len(soutedges) - 1), dtype='f8')
+            #print(idx)
             for iout in range(matrix.shape[1]):
                 iin = idx + factor * iout
                 wc = wcounts[iin:iin + factor]
@@ -110,7 +116,7 @@ def window_matrix_RR(soutedges, sedges, muedges, wcounts, ellsin=(0, 2, 4), reso
                 wcmu[~mask_nonzero] = 1.
                 tmp = wc / wcmu
                 # Integration over mu
-                tmp = (2. * ellout + 1.) * np.sum(tmp * (integ(muedges[1:]) - integ(muedges[:-1])), axis=-1) / np.sum(mask_nonzero * (muedges[1:] - muedges[:-1]))  # normalization of mu-integral over non-empty s-rebinned RR(s, mu) bins
+                tmp = (2. * ellout + 1.) * np.sum(tmp * mask_nonzero * (integ(muedges[1:]) - integ(muedges[:-1])), axis=-1) / np.sum(mask_nonzero * (muedges[1:] - muedges[:-1]))  # normalization of mu-integral over non-empty s-rebinned RR(s, mu) bins
                 matrix[iin:iin + factor, iout] = tmp
             matrix = binmatrix.dot(matrix)
             line.append(matrix.T)
@@ -604,6 +610,8 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
                 systematic_templates = SystematicTemplateCorrelationFunctionMultipoles(templates=systematic_templates)
             systematic_templates.init.update(s=self.s, ells=self.ells)
         self.systematic_templates = systematic_templates
+        #diff = (self.matrix_full.dot(self.sin) - s[0]) / s[0]
+        #print(diff, self.sin.shape)
 
     @jit(static_argnums=[0])
     def _apply(self, theory):

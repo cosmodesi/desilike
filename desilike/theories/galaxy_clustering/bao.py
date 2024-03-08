@@ -118,23 +118,41 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
         super(DampedBAOWigglesPowerSpectrumMultipoles, self).calculate()
         f = dbeta * self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        pknow = _interp(self.template, 'pknow_dd', kap)
-        pk = _interp(self.template, 'pk_dd', kap)
-        if 'fix-damping' in self.model: k, mu = self.k[:, None], self.mu
-        else: k, mu = kap, muap
-        sigma_nl2 = k**2 * (sigmapar**2 * mu**2 + sigmaper**2 * (1. - mu**2))
-        damped_wiggles = (pk - pknow) / pknow * jnp.exp(-sigma_nl2 / 2.)
-        if 'move-all' in self.model: k, mu = kap, muap
-        else: k, mu = self.k[:, None], self.mu
-        pknow = _interp(self.template, 'pknow_dd', k)
-        fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
-        sk = 0.
-        if self.mode == 'reciso': sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)
-        pksmooth = (b1 + f * mu**2 * (1 - sk))**2 * pknow
-        if 'fog-damping' in self.model:  # Beutler2016
-            pkmu = pksmooth * fog * (1. + damped_wiggles)
-        else:  # Howlett 2023
-            pkmu = pksmooth * (fog + damped_wiggles)
+        pknowap = _interp(self.template, 'pknow_dd', kap)
+        pkap = _interp(self.template, 'pk_dd', kap)
+        if self.model == 'standard':  # Chen 2023
+            f = dbeta * self.template.f
+            jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+            k, mu = self.k[:, None], self.mu
+            pknowap = _interp(self.template, 'pknow_dd', kap)
+            pkap = _interp(self.template, 'pk_dd', kap)
+            pkwap = pkap - pknowap
+            sigma_nl2ap = kap**2 * (sigmapar**2 * muap**2 + sigmaper**2 * (1. - muap**2))
+            sk = 0.
+            if self.mode == 'reciso': sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)  # taken at fiducial coordinates
+            Cap = (b1 + f * muap**2 * (1 - sk))**2 * jnp.exp(-sigma_nl2ap / 2.)
+            #C = (b1 + f * mu**2)**2 * jnp.exp(-sigma_nl2 / 2.)
+            fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
+            B = (b1 + f * mu**2 * (1 - sk))**2 * fog
+            pk = _interp(self.template, 'pk_dd', k)
+            pkmu = B * pk + Cap * pkwap
+            self.power = self.to_poles(pkmu)
+        else:
+            if 'fix-damping' in self.model: k, mu = self.k[:, None], self.mu
+            else: k, mu = kap, muap
+            sigma_nl2 = k**2 * (sigmapar**2 * mu**2 + sigmaper**2 * (1. - mu**2))
+            damped_wiggles = (pkap - pknowap) / pknowap * jnp.exp(-sigma_nl2 / 2.)
+            if 'move-all' in self.model: k, mu = kap, muap
+            else: k, mu = self.k[:, None], self.mu
+            pknow = _interp(self.template, 'pknow_dd', k)
+            fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
+            sk = 0.
+            if self.mode == 'reciso': sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)
+            pksmooth = (b1 + f * mu**2 * (1 - sk))**2 * pknow
+            if 'fog-damping' in self.model:  # Beutler2016
+                pkmu = pksmooth * fog * (1. + damped_wiggles)
+            else:  # Howlett 2023
+                pkmu = pksmooth * (fog + damped_wiggles)
         self.power = self.to_poles(pkmu)
 
 

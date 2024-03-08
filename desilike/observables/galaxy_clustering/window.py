@@ -264,6 +264,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             if not all(kk.shape == self.kin.shape and np.allclose(kk, self.kin) for kk in self.k):
                 self.kmask = [np.searchsorted(self.kin, kk, side='left') for kk in self.k]
                 assert all(np.allclose(self.kin[kmask], kk) for kk, kmask in zip(self.k, self.kmask))
+                self.kmask = [self.kin.size * i + kmask for i, kmask in enumerate(self.kmask)]
                 self.kmask = np.concatenate(self.kmask, axis=0)
         elif isinstance(wmatrix, dict):
             self.ellsin = tuple(self.ells)
@@ -562,6 +563,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
             if not all(np.allclose(ss, self.sin) for ss in self.s):
                 self.smask = [np.searchsorted(self.sin, ss, side='left') for ss in self.s]
                 assert all(smask.min() >= 0 and smask.max() < ss.size for ss, smask in zip(self.s, self.smask))
+                self.smask = [self.sin.size * i + smask for i, smask in enumerate(self.smask)]
                 self.smask = np.concatenate(self.smask, axis=0)
         elif isinstance(wmatrix, dict):
             if 'wcounts' in wmatrix:

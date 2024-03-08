@@ -117,10 +117,15 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
     systematic_templates : SystematicTemplatePowerSpectrumMultipoles, default=None
         Optionally, systematic templates.
 
+    ric_correction: dict, default=None
+        Optionally, parameters for the RIC correction model for each multipole that will be built in RicCorrectionTemplatePowerSpectrumMultipoles.
+        e.g. {'0': [kmin, kmax, [1, 0, 1, 0]], '2': [kmin, kmax, [1, 0, 1, 0]], '4': [kmin, kmax, [1, 0, 1, 0]]}.
+        Note: outside the range of validity (kmin, kmax) of this correction the observed theory will be set as np.nan.
+
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory power spectrum multipoles, defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
     """
-    def initialize(self, klim=None, k=None, ells=None, wmatrix=None, kin=None, kinrebin=1, kinlim=None, ellsin=None, shotnoise=None, fiber_collisions=None, systematic_templates=None, theory=None):
+    def initialize(self, klim=None, k=None, ells=None, wmatrix=None, kin=None, kinrebin=1, kinlim=None, ellsin=None, shotnoise=None, fiber_collisions=None, systematic_templates=None, ric_correction=None, theory=None):
         from scipy import linalg
 
         _default_step = 0.01
@@ -297,6 +302,9 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 systematic_templates = SystematicTemplatePowerSpectrumMultipoles(templates=systematic_templates)
             systematic_templates.init.update(k=self.k, ells=self.ells)
         self.systematic_templates = systematic_templates
+        if ric_correction is not None:
+            ric_correction = RicCorrectionTemplatePowerSpectrumMultipoles(ric_correction=ric_correction, k=self.k, ells=self.ells)
+        self.ric_correction = ric_correction
         self.theory.init.update(k=self.kin, ells=self.ellsin)
         if shotnoise is None:
             shotnoise = 0.
@@ -322,6 +330,8 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         self.flatpower = self._apply(self.theory.power + self.shotnoise[:, None]) - self.flatshotnoise
         if self.systematic_templates is not None:
             self.flatpower += self.systematic_templates.flatpower
+        if self.ric_correction is not None:
+            self.flatpower = self.ric_correction.flatratio * self.flatpower
 
     def get(self):
         return self.flatpower
@@ -1270,4 +1280,79 @@ class SystematicTemplateCorrelationFunctionMultipoles(BaseSystematicTemplateMult
         ax.legend()
         ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
+        return fig
+
+
+class RicCorrectionTemplatePowerSpectrumMultipoles(BaseSystematicTemplateMultipoles):
+    r"""
+    Multipicative template in order to correct the Radial Integral Constraints (RICs).
+
+    Parameters
+    ----------
+    ric_correction: dict, default=None
+        Parameters for the RIC correction model for each multipole that contain the effective range of the correction kmin, kmax
+        and the optimal set of parameters found for the model used here (simple arctan).
+        e.g. {'0': [kmin, kmax, [1, 0, 1, 0]], '2': [kmin, kmax, [1, 0, 1, 0]], '4': [kmin, kmax, [1, 0, 1, 0]]}.
+        Note: outside the range of validity (kmin, kmax) of this correction the observed theory will be set as np.nan 
+        and will lead to np.nan in the likelihood evaluation. 
+
+    k : array, list, default=None
+        Wavenumbers where the power spectrum is evaluated.
+
+    ells : tuple, default=None
+        Multipoles on which the power spectrum is evaluated.
+    """
+    def initialize(self, ric_correction=None, k=None, ells=None):
+        self.ells = tuple(ells)
+        self.k = tuple(k)
+        self.ric_correction = ric_correction
+
+        def model(x, a=1, b=0, c=1, d=0):
+            return a * np.arctan((x - b) * c) + d
+
+        self.flatratio = np.array([])
+        for ill, ell in enumerate(self.ells):
+            kmin, kmax, opt_params = self.ric_correction[ell]
+            ratio = model(self.k[ill], *opt_params)
+            ratio[(self.k[ill] < kmin) | (self.k[ill] > kmax)] = np.nan
+            self.flatratio = np.append(self.flatratio, ratio)
+
+    @plotting.plotter
+    def plot(self, fig=None):
+        """
+        Plot systematic template multipoles.
+
+        Parameters
+        ----------
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least 1 axis.
+
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+        show : bool, default=False
+            If ``True``, show figure.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        """
+        from matplotlib import pyplot as plt
+        if fig is None:
+            fig, ax = plt.subplots()
+        else:
+            ax = fig.axes[0]
+
+        ratio = unpack(self.k, self.flatratio)
+        for ill, ell in enumerate(self.ells):
+            color = 'C{:d}'.format(ill)
+            ax.plot(self.k[ill], ratio[ill], color=color, linestyle='--', label=r'$\ell = {:d}$'.format(ell))
+        ax.grid(True)
+        ax.legend()
+        ax.set_ylabel(r'$Ratio$')
+        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
         return fig

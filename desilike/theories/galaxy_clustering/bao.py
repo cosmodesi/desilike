@@ -121,21 +121,16 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
         pknowap = _interp(self.template, 'pknow_dd', kap)
         pkap = _interp(self.template, 'pk_dd', kap)
         if self.model == 'standard':  # Chen 2023
-            f = dbeta * self.template.f
-            jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
             k, mu = self.k[:, None], self.mu
-            pknowap = _interp(self.template, 'pknow_dd', kap)
-            pkap = _interp(self.template, 'pk_dd', kap)
             pkwap = pkap - pknowap
             sigma_nl2ap = kap**2 * (sigmapar**2 * muap**2 + sigmaper**2 * (1. - muap**2))
             sk = 0.
             if self.mode == 'reciso': sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)  # taken at fiducial coordinates
             Cap = (b1 + f * muap**2 * (1 - sk))**2 * jnp.exp(-sigma_nl2ap / 2.)
-            #C = (b1 + f * mu**2)**2 * jnp.exp(-sigma_nl2 / 2.)
             fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
             B = (b1 + f * mu**2 * (1 - sk))**2 * fog
-            pk = _interp(self.template, 'pk_dd', k)
-            pkmu = B * pk + Cap * pkwap
+            pknow = _interp(self.template, 'pknow_dd', k)
+            pkmu = B * pknow + Cap * pkwap
             self.power = self.to_poles(pkmu)
         else:
             if 'fix-damping' in self.model: k, mu = self.k[:, None], self.mu
@@ -858,8 +853,8 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
         else:
             for ell in ells:
                 for ik in range(-2, 3):  # should be more than enough
-                    # We are adding a very loose prior just to regularize the fit
-                    param = dict(value=0., prior=dict(dist='norm', loc=0., scale=1e4), ref=dict(limits=[-1e2, 1e2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
+                    # Infinite prior
+                    param = dict(value=0., prior=None, ref=dict(limits=[-1e2, 1e2]), delta=0.005, latex='a_{{{:d}, {:d}}}'.format(ell, ik))
                     if broadband == 'pcs2' and (ell == 0 or ik not in [0, 1]): param.update(fixed=True)
                     params['al{:d}_{:d}'.format(ell, ik)] = param
                 for ik in [0, 2]:

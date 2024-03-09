@@ -381,7 +381,7 @@ def test_broadband_bao():
             cmap = plt.get_cmap('jet', len(names))
             for iname, name in enumerate(names):
                 xiref = theory(**{name: 0.})
-                xi = theory(**{name: 1e-3 if name.startswith('b') else 1.})
+                xi = theory(**{name: 1e-3 if name.startswith('b') else 10.})
                 diff = xi[ill] - xiref[ill]
                 color = cmap(iname / len(names))
                 ax.plot(theory.s, theory.s**2 * diff, color=color, label=name)

@@ -5,6 +5,7 @@ import numpy as np
 
 from desilike.utils import BaseClass, is_path, TaskManager
 from desilike.samples import Chain, load_source
+from .base import BasePosteriorSampler
 
 
 class ImportanceSampler(BaseClass):
@@ -67,6 +68,9 @@ class ImportanceSampler(BaseClass):
 
     def run(self):
         """Run importance sampling."""
+        if getattr(self, '_vlikelihood', None) is None:
+            self._set_vlikelihood()
+
         nprocs_per_chain = max((self.mpicomm.size - 1) // self.nchains, 1)
         chains = [None] * self.nchains
         self.chains = [None] * self.nchains
@@ -82,14 +86,17 @@ class ImportanceSampler(BaseClass):
                 if self.mpicomm.rank == 0:
                     chain = self.input_chains[ichain].deepcopy()
                     points = chain.to_dict(params=self.varied_params)
-                self.pipeline.mpicalculate(**(points if self.mpicomm.rank == 0 else {}))
+
+                results = self._vlikelihood(points if self.mpicomm.rank == 0 else {})
+
                 raise_error = None
                 if self.mpicomm.rank == 0:
+                    (logposterior, derived), errors = results
                     for param in self.pipeline.params.select(fixed=True, derived=False):
                         chain[param] = np.full(chain.shape, param.value, dtype='f8')
-                    chain.update(self.pipeline.derived)
-                    if self.pipeline.errors:
-                        for ipoint, error in self.pipeline.errors.items():
+                    chain.update(derived)
+                    if errors:
+                        for ipoint, error in errors.items():
                             if isinstance(error[0], self.likelihood.catch_errors):
                                 self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(repr(error[0]), {k: v.flat[ipoint] for k, v in points.items()}, error[1]))
                                 for param in [self.likelihood._param_loglikelihood, self.likelihood._param_logprior]:
@@ -139,3 +146,6 @@ class ImportanceSampler(BaseClass):
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
         pass
+
+
+ImportanceSampler._set_vlikelihood = BasePosteriorSampler._set_vlikelihood

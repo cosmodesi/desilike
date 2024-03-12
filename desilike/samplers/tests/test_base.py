@@ -603,10 +603,10 @@ def test_cobaya_mcmc():
 if __name__ == '__main__':
 
     setup_logging()
-    test_samplers()
+    #test_samplers()
     #test_nautilus()
     #test_fixed()
-    #test_importance()
+    test_importance()
     #test_error()
     #test_mcmc()
     #test_hmc()

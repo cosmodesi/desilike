@@ -220,7 +220,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
             toret = {}
             for param in self.varied_params:
                 try:
-                    toret[param.name] = param.ref.sample(size=size, random_state=self.rng)
+                    toret[param.name] = param.ref.sample(size=size, random_state=42)
                 except ParameterPriorError as exc:
                     raise ParameterPriorError('Error in ref/prior distribution of parameter {}'.format(param)) from exc
             return toret

@@ -260,9 +260,9 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
             if not has_input_mpicomm:
                 if __wrapped__vmap__ is None: mpicomm = calculate._mpicomm
                 else: mpicomm = __wrapped__vmap__._mpicomm
-            params = dict(params)
             if mpicomm.rank == 0:
                 params, shape = _check_params(params)
+            params, shape = mpicomm.bcast((params, shape) if mpicomm.rank == 0 else None, root=0)
             params = {name: array if mpicomm.rank == 0 else None for name, array in params.items()}
             shape = mpicomm.bcast(shape if mpicomm.rank == 0 else None, root=0)
             all_size = np.prod(shape, dtype='i')

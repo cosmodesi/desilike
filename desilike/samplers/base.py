@@ -151,7 +151,8 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
 
         logposterior, raise_error = None, None
         if self.pipeline.mpicomm.rank == 0:
-            (logposterior, derived), errors = results
+            results, errors = results
+            logposterior, derived = results if results else (None, {})
             update_derived = True
             di = {}
             try:
@@ -228,6 +229,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         self.likelihood()  # initialize before jit
         vlikelihood = self.likelihood
         from desilike import vmap
+        import traceback
         try:
             import jax
             _vlikelihood = vmap(vlikelihood, backend='jax', errors='return', return_derived=True)
@@ -235,7 +237,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
             #raise ValueError
         except:
             if self.mpicomm.rank == 0:
-                self.log_info('Could *not* vmap input likelihood.')
+                self.log_info('Could *not* vmap input likelihood, got error:\n{}'.format(traceback.format_exc()))
             vlikelihood = vmap(vlikelihood, backend=None, errors='return', return_derived=True)
         else:
             if self.mpicomm.rank == 0:

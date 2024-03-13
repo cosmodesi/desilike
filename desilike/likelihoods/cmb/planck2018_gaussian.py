@@ -6,7 +6,7 @@ from desilike.jax import numpy as jnp
 from desilike import utils
 
 
-convert_planck2018_params = {'omegabh2': 'omega_b', 'omegach2': 'omega_cdm', 'omegak': 'Omega_k', 'w': 'w0_fld', 'wa': 'wa_fld', 'theta': 'theta_MC_100', 'tau': 'tau_reio', 'mnu': 'm_ncdm', 'logA': 'logA', 'ns': 'n_s', 'nrun': 'alpha_s', 'r': 'r', 'H0': 'H0', 'omegam': 'Omega_m', 'omegal': 'Omega_Lambda', 'omegam': 'Omega_m', 'rdrag': 'rs_drag', 'zdrag': 'z_drag'}
+convert_planck2018_params = {'omegabh2': 'omega_b', 'omegach2': 'omega_cdm', 'omegak': 'Omega_k', 'w': 'w0_fld', 'wa': 'wa_fld', 'theta': 'theta_MC_100', 'tau': 'tau_reio', 'mnu': 'm_ncdm_tot', 'logA': 'logA', 'ns': 'n_s', 'nrun': 'alpha_s', 'r': 'r', 'H0': 'H0', 'omegam': 'Omega_m', 'omegal': 'Omega_Lambda', 'omegam': 'Omega_m', 'rdrag': 'rs_drag', 'zdrag': 'z_drag'}
 
 convert_planck2018_params.update({'calPlanck': 'A_planck', 'cal0': 'calib_100T', 'cal2': 'calib_217T', 'acib217': 'A_cib_217', 'xi': 'xi_sz_cib',
                                   'asz143': 'A_sz', 'aksz': 'ksz_norm',

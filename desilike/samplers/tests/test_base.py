@@ -166,21 +166,21 @@ def test_error():
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
 
-    likelihood.varied_params['Omega_m'].update(prior=dict(), ref=dict(limits=(-10., -9.)))
+    likelihood.varied_params['omega_cdm'].update(prior=dict(), ref=dict(limits=(-10., -9.)))
 
     sampler = EmceeSampler(likelihood, seed=42, max_tries=10)
     with pytest.raises(ValueError):
-        sampler.run(max_iterations=100)
+        sampler.run(max_iterations=10)
 
     likelihood.init.update(catch_errors=[])
-    likelihood.varied_params['Omega_m'].update(prior=dict(), ref=dict(limits=(-10., -9.)))
+    likelihood.varied_params['omega_cdm'].update(prior=dict(), ref=dict(limits=(-10., -9.)))
 
     sampler = EmceeSampler(likelihood, seed=42, max_tries=10)
     with pytest.raises(PipelineError):
-        sampler.run(max_iterations=100)
+        sampler.run(max_iterations=10)
 
     likelihood.init.update(catch_errors=None)
-    likelihood.varied_params['Omega_m'].update(prior=dict(), ref=dict(limits=(-0.1, 0.3)))
+    likelihood.varied_params['omega_cdm'].update(prior=dict(), ref=dict(limits=(-0.1, 0.3)))
 
     sampler = EmceeSampler(likelihood, seed=42, max_tries=100)
     chain = sampler.run(max_iterations=4)[0]
@@ -606,8 +606,8 @@ if __name__ == '__main__':
     #test_samplers()
     #test_nautilus()
     #test_fixed()
-    test_importance()
-    #test_error()
+    #test_importance()
+    test_error()
     #test_mcmc()
     #test_hmc()
     #test_nested()

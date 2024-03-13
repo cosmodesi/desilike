@@ -187,10 +187,18 @@ def test_emulator_direct():
                 plt.show()
 
 
+def test_cmb():
+    from desilike.likelihoods.cmb import TTHighlPlanck2018PlikLikelihood
+    from desilike.theories import Cosmoprimo
+    cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
+    likelihood = TTHighlPlanck2018PlikLikelihood(cosmo=cosmo)
+    likelihood()
+
+
 if __name__ == '__main__':
 
     setup_logging()
-    test_install()
+    #test_install()
     #test_clik()
     #test_sum()
     #test_gaussian_likelihood()
@@ -199,3 +207,4 @@ if __name__ == '__main__':
     #test_copy()
     #test_error()
     #test_emulator_direct()
+    test_cmb()

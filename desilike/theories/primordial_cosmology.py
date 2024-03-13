@@ -62,10 +62,6 @@ def get_from_cosmo(cosmo, name):
 def _clone(self, params, base='input'):
     cparams = {}
     for name, value in params.items():
-        try:
-            value = float(value)
-        except ValueError:
-            pass
         cparams[conversions.get(name, name)] = value
 
     theta_MC_100 = cparams.pop('theta_MC_100', None)

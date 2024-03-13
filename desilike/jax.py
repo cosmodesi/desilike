@@ -11,7 +11,11 @@ interpax = None
 try:
     # raise ImportError
     import jax, jaxlib
-    from jax.config import config; config.update('jax_enable_x64', True)
+    try:
+        from jax.config import config
+    except ImportError:
+        from jax import config
+    config.update('jax_enable_x64', True)
     from jax import numpy, scipy
     from jax.tree_util import register_pytree_node_class
     array_types = []

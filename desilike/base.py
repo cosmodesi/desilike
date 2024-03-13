@@ -187,7 +187,7 @@ def _check_states(states):
         if state[1] is None:  # no error
             results.append(state[0])
         else:
-            errors[istate] = state
+            errors[istate] = state[1]
             if ref is not None:
                 results.append(ref[0])
 
@@ -212,7 +212,7 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
             state = [None, None]
             try:
                 state[0] = calculate({name: value[ivalue] for name, value in params.items()}, **kw)
-            except PipelineError as exc:
+            except Exception as exc:
                 if errors == 'raise':
                     raise exc
                 state[1] = (exc, traceback.format_exc())
@@ -468,8 +468,9 @@ class BasePipeline(BaseClass):
                 result = runtime_info.calculate(params, force=force)
                 if self.derived is not None:
                     derived = runtime_info.derived
-            except Exception as exc:
-                raise PipelineError('error in method calculate of {} with calculator parameters {} and pipeline parameters {}'.format(calculator, runtime_info.input_values, self.input_values)) from exc
+            except Exception:  # we want to keep track of the Exception class, so do not raise PipelineError
+                self.log_debug('error in method calculate of {} with calculator parameters {} and pipeline parameters {}'.format(calculator, runtime_info.input_values, self.input_values))
+                raise
             if self.derived is not None:
                 self.derived.update(derived)
         if self.more_calculate:

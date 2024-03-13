@@ -244,7 +244,8 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
         logposterior, raise_error = None, None
         if self.pipeline.mpicomm.rank == 0:
-            (logposterior, derived), errors = results
+            results, errors = results
+            logposterior, derived = results if results else (None, {})
             update_derived = True
             di = {}
             try:

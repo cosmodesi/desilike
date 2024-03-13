@@ -64,7 +64,7 @@ def test_templates():
                                                      StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate,
                                                      BandVelocityPowerSpectrumTemplate, TurnOverPowerSpectrumTemplate, DirectWiggleSplitPowerSpectrumTemplate)
 
-    for template in [BAOPowerSpectrumTemplate(), FixedPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), DirectWiggleSplitPowerSpectrumTemplate()]:
+    for template in [BAOPowerSpectrumTemplate(), FixedPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(engine='class'), DirectPowerSpectrumTemplate(engine='camb'), DirectWiggleSplitPowerSpectrumTemplate()]:
         theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
         theory()
 
@@ -1561,12 +1561,12 @@ if __name__ == '__main__':
     #test_velocileptors_omegak()
     #test_params()
     #test_integ()
-    #test_templates()
+    test_templates()
     #test_wiggle_split_template()
     #test_emulator_templates()
     #test_bao()
     #test_autodiff()
-    test_broadband_bao()
+    #test_broadband_bao()
     #test_flexible_bao()
     #test_full_shape()
     #test_emulator_direct()

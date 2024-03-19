@@ -149,6 +149,118 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
             else:  # Howlett 2023
                 pkmu = pksmooth * (fog + damped_wiggles)
         self.power = self.to_poles(pkmu)
+        
+        
+class DampedBAOWigglesDTVoidPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+    """
+    Theory BAO power spectrum multipoles, without broadband terms,
+    used in the BOSS DR12 BAO analysis by Beutler et al. 2017.
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1607.03149
+    """
+    def initialize(self, *args, mu=10, method='leggauss', model='standard', **kwargs):
+        super(DampedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
+        self.model = str(model)
+        self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
+        if self.template.only_now:
+            for param in self.init.params.select(basename=['sigmapar', 'sigmaper']):
+                param.update(fixed=True)
+
+    def calculate(self, b1a=1., b1b=1., dbeta=1., sigmas=0., sigmapar=9., sigmaper=6., cex = 0.):
+        super(DampedBAOWigglesPowerSpectrumMultipoles, self).calculate()
+        f = dbeta * self.template.f
+        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        pknowap = _interp(self.template, 'pknow_dd', kap)
+        pkap = _interp(self.template, 'pk_dd', kap)
+        if self.model == 'standard':  # Chen 2023
+            k, mu = self.k[:, None], self.mu
+            pkwap = pkap - pknowap
+            sigma_nl2ap = kap**2 * (sigmapar**2 * muap**2 + sigmaper**2 * (1. - muap**2))
+            sk = 0.
+            if self.mode == 'reciso': sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)  # taken at fiducial coordinates
+            Cap = (b1a + f * muap**2 * (1 - sk)) * (b1b + f * muap**2 * (1 - sk)) * jnp.exp(-sigma_nl2ap / 2.)
+            fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
+            B = (b1a + f * mu**2 * (1 - sk)) * (b1b + f * mu**2 * (1 - sk)) * fog
+            exclusion_factor = (1 + cex * k**2)
+            pknow = _interp(self.template, 'pknow_dd', k)
+            pkmu = (B * pknow + Cap * pkwap) * exclusion_factor
+            self.power = self.to_poles(pkmu)
+        else:
+            if 'fix-damping' in self.model: k, mu = self.k[:, None], self.mu
+            else: k, mu = kap, muap
+            sigma_nl2 = k**2 * (sigmapar**2 * mu**2 + sigmaper**2 * (1. - mu**2))
+            damped_wiggles = (pkap - pknowap) / pknowap * jnp.exp(-sigma_nl2 / 2.)
+            if 'move-all' in self.model: k, mu = kap, muap
+            else: k, mu = self.k[:, None], self.mu
+            pknow = _interp(self.template, 'pknow_dd', k)
+            fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
+            sk = 0.
+            if self.mode == 'reciso': sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)
+            pksmooth = (b1a + f * mu**2 * (1 - sk)) * (b1b + f * mu**2 * (1 - sk)) * pknow
+            exclusion_factor = (1 + cex * k**2)
+            if 'fog-damping' in self.model:  # Beutler2016
+                pkmu = (pksmooth * fog * (1. + damped_wiggles)) * exclusion_factor
+            else:  # Howlett 2023
+                pkmu = (pksmooth * (fog + damped_wiggles)) * exclusion_factor
+        self.power = self.to_poles(pkmu)
+        
+        
+class DampedBAOWigglesCrossPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+    """
+    Theory BAO power spectrum multipoles, without broadband terms,
+    used in the BOSS DR12 BAO analysis by Beutler et al. 2017.
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1607.03149
+    """
+    def initialize(self, *args, mu=10, method='leggauss', model='standard', **kwargs):
+        super(DampedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
+        self.model = str(model)
+        self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
+        if self.template.only_now:
+            for param in self.init.params.select(basename=['sigmapar', 'sigmaper']):
+                param.update(fixed=True)
+
+    def calculate(self, b1a=1., b1b=1., dbeta=1., sigmas=0., sigmapar=9., sigmaper=6.):
+        super(DampedBAOWigglesPowerSpectrumMultipoles, self).calculate()
+        f = dbeta * self.template.f
+        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        pknowap = _interp(self.template, 'pknow_dd', kap)
+        pkap = _interp(self.template, 'pk_dd', kap)
+        if self.model == 'standard':  # Chen 2023
+            k, mu = self.k[:, None], self.mu
+            pkwap = pkap - pknowap
+            sigma_nl2ap = kap**2 * (sigmapar**2 * muap**2 + sigmaper**2 * (1. - muap**2))
+            sk = 0.
+            if self.mode == 'reciso': sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)  # taken at fiducial coordinates
+            Cap = (b1a + f * muap**2 * (1 - sk)) * (b1b + f * muap**2 * (1 - sk)) * jnp.exp(-sigma_nl2ap / 2.)
+            fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
+            B = (b1a + f * mu**2 * (1 - sk)) * (b1b + f * mu**2 * (1 - sk)) * fog
+            pknow = _interp(self.template, 'pknow_dd', k)
+            pkmu = (B * pknow + Cap * pkwap) 
+            self.power = self.to_poles(pkmu)
+        else:
+            if 'fix-damping' in self.model: k, mu = self.k[:, None], self.mu
+            else: k, mu = kap, muap
+            sigma_nl2 = k**2 * (sigmapar**2 * mu**2 + sigmaper**2 * (1. - mu**2))
+            damped_wiggles = (pkap - pknowap) / pknowap * jnp.exp(-sigma_nl2 / 2.)
+            if 'move-all' in self.model: k, mu = kap, muap
+            else: k, mu = self.k[:, None], self.mu
+            pknow = _interp(self.template, 'pknow_dd', k)
+            fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
+            sk = 0.
+            if self.mode == 'reciso': sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)
+            pksmooth = (b1a + f * mu**2 * (1 - sk)) * (b1b + f * mu**2 * (1 - sk)) * pknow
+            if 'fog-damping' in self.model:  # Beutler2016
+                pkmu = (pksmooth * fog * (1. + damped_wiggles)) 
+            else:  # Howlett 2023
+                pkmu = (pksmooth * (fog + damped_wiggles))
+        self.power = self.to_poles(pkmu)
 
 
 class SimpleBAOWigglesPowerSpectrumMultipoles(DampedBAOWigglesPowerSpectrumMultipoles):
@@ -578,6 +690,103 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
 
 
 class DampedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpectrumMultipoles):
+    r"""
+    Theory BAO power spectrum multipoles, with broadband terms, used in the BOSS DR12 BAO analysis by Beutler et al. 2017.
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mode : str, default=''
+        Reconstruction mode:
+
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+    model : str, default='standard'
+        'fog-damping' to apply Finger-of-God to the wiggle part (in addition to the no-wiggle part).
+        'move-all' to move the no-wiggle part (in addition to the wiggle part) with scaling parameters.
+        'fog-damping_move-all' to use the model of https://arxiv.org/abs/1607.03149.
+
+    broadband : str, default='power'
+        Broadband parameterization: 'power' for powers of :math:`k`,
+        'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels.
+
+    kp : float, default=None
+        For 'power' kernel, the pivot :math:`k`.
+        For other kernels, their :math:`k`-period.
+        Defaults to :math:`2 \pi / r_{d}`.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1607.03149
+    """
+    
+    
+class DampedBAOWigglesTracerDTVoidPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpectrumMultipoles):
+    r"""
+    Theory BAO power spectrum multipoles, with broadband terms, used in the BOSS DR12 BAO analysis by Beutler et al. 2017.
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mode : str, default=''
+        Reconstruction mode:
+
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+    model : str, default='standard'
+        'fog-damping' to apply Finger-of-God to the wiggle part (in addition to the no-wiggle part).
+        'move-all' to move the no-wiggle part (in addition to the wiggle part) with scaling parameters.
+        'fog-damping_move-all' to use the model of https://arxiv.org/abs/1607.03149.
+
+    broadband : str, default='power'
+        Broadband parameterization: 'power' for powers of :math:`k`,
+        'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels.
+
+    kp : float, default=None
+        For 'power' kernel, the pivot :math:`k`.
+        For other kernels, their :math:`k`-period.
+        Defaults to :math:`2 \pi / r_{d}`.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1607.03149
+    """
+
+class DampedBAOWigglesTracerCrossPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpectrumMultipoles):
     r"""
     Theory BAO power spectrum multipoles, with broadband terms, used in the BOSS DR12 BAO analysis by Beutler et al. 2017.
     Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.

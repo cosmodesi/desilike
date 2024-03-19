@@ -563,6 +563,19 @@ def test_compression():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     test(likelihood, test_zero=True)
 
+    observable = TurnOverCompressionObservable(data=[1.], covariance=[[0.01]], quantities=['qto'], z=2.)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    test(likelihood, test_zero=True)
+
+    # Define cosmo, to be shared by the observables
+    from desilike.theories import Cosmoprimo
+    cosmo = Cosmoprimo(fiducial='DESI', engine='class')
+    cosmo.init.params = {'h': {'prior': {'limits': [0.1, 1.]}, 'ref': {'dist': 'norm', 'loc': 0.6736, 'scale': 0.005}, 'delta': 0.03, 'latex': 'h'},
+                        'Omega_m': {'prior': {'limits': [0.01, 1.]}, 'ref': {'dist': 'norm', 'loc': 0.3153, 'scale': 0.0073}, 'delta': 0.02, 'latex': '\Omega_{m}'}}
+    observables = [TurnOverCompressionObservable(data=[0.911], quantities=['qto'], z=0.732, cosmo=cosmo), TurnOverCompressionObservable(data=[0.967], quantities=['qto'], z=1.4936707295213962, cosmo=cosmo)]
+    likelihood = ObservablesGaussianLikelihood(observables=observables, covariance=[[0.087**2, 0.], [0., 0.079**2]])
+    test(likelihood)
+
     from desilike import ParameterCovariance
     covariance = ParameterCovariance(value=np.diag([0.01, 0.01, 0.01]), params=['qpar', 'qper', 'df'])
     observable = StandardCompressionObservable(data={}, covariance=covariance, quantities=['qpar', 'qper', 'df'], z=2.)
@@ -926,12 +939,12 @@ if __name__ == '__main__':
 
     #test_systematic_templates()
     # test_bao()
-    test_power_spectrum()
+    # test_power_spectrum()
     #test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    # test_compression()
+    test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

@@ -1651,7 +1651,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     - https://arxiv.org/abs/2003.07956
     - https://github.com/pierrexyz/pybird
     """
-    _default_options = dict(with_nnlo_counterterm=False, with_stoch=True, eft_basis=None, freedom=None)
+    _default_options = dict(with_nnlo_counterterm=False, with_stoch=True, eft_basis=None, freedom=None, shotnoise=1e4)
 
     @staticmethod
     def _params(params, freedom=None):

@@ -1076,7 +1076,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
         # increasing the resolution, necessary
         boost_prec = 2
         kvec = np.concatenate([[min(0.0005, self.k[0])], np.geomspace(0.0015, 0.025, 10 * boost_prec, endpoint=True), np.arange(0.03, max(0.5, self.k[-1]) + 0.015 / boost_prec, 0.01 / boost_prec)])  # margin for interpolation below (and numerical noise in endpoint)
-        self.pt.init.update(k=kvec, ells=self.ells, use_Pzel=False)
+        self.pt.init.update(k=kvec, ells=self.ells, use_Pzel=not self.is_physical_prior)
 
     @staticmethod
     def _params(params, freedom=None, prior_basis='physical'):
@@ -1086,9 +1086,15 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
                 param.update(fixed=False)
             for param in params.select(basename=['b2', 'bs', 'b3']):
                 param.update(prior=dict(limits=[-15., 15.]))
+            for param in params.select(basename=['alpha*', 'sn*']):
+                param.update(prior=None)
             fix += ['alpha6']  #, 'sn4']
         if freedom == 'min':
             fix += ['b3', 'bs', 'alpha6']  #, 'sn4']
+            for param in params.select(basename=['b2']):
+                param.update(prior=dict(dist='norm', loc=0., scale=10.))
+            for param in params.select(basename=['alpha*', 'sn*']):
+                param.update(prior=None)
         for param in params.select(basename=fix):
             param.update(value=0., fixed=True)
         if prior_basis == 'physical':
@@ -1097,13 +1103,13 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
                 param.update(basename=basename + 'p')
                 params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
             for param in params.select(basename='b1p'):
-                param.update(prior={'dist': 'uniform', 'limits': [0., 3.]}, ref={'dist': 'norm', 'loc': 1., 'scale': 1.})
+                param.update(prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=1.))
             for param in params.select(basename=['b2p', 'bsp', 'b3p']):
-                param.update(prior={'dist': 'norm', 'loc': 0., 'scale': 5.}, ref={'dist': 'norm', 'loc': 0., 'scale': 1.})
+                param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
             for param in params.select(basename='alpha*p'):
-                param.update(prior={'dist': 'norm', 'loc': 0., 'scale': 5.}, ref={'dist': 'norm', 'loc': 0., 'scale': 1.})
+                param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
             for param in params.select(basename='sn*p'):
-                param.update(prior={'dist': 'norm', 'loc': 0., 'scale': 2. if 'sn0' in param.basename else 5.}, ref={'dist': 'norm', 'loc': 0., 'scale': 1.})
+                param.update(prior=dict(dist='norm', loc=0., scale=2. if 'sn0' in param.basename else 5.), ref=dict(dist='norm', loc=0., scale=1.))
         return params
 
     def set_params(self):
@@ -1656,6 +1662,13 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     @staticmethod
     def _params(params, freedom=None):
         fix = []
+        if freedom in ['min', 'max']:
+            for param in params.select(basename=['b1']):
+                param.update(prior=dict(limits=[0., 4.]))
+            for param in params.select(basename=['b4']):
+                param.update(prior=dict(limits=[-15., 15.]))
+            for param in params.select(basename=['b2', 'b3', 'bs', 'b2p4', 'b2m4', 'b2t', 'b2g', 'b3g', 'c*']):
+                param.update(prior=None)
         if freedom == 'max':
             for param in params.select(basename=['b1', 'b2', 'b3', 'b4', 'bs', 'b2p4', 'b2m4', 'b2t', 'b2g', 'b3g']):
                 param.update(fixed=False)
@@ -1961,6 +1974,13 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     @staticmethod
     def _params(params, freedom=None):
         fix = []
+        if freedom in ['min', 'max']:
+            for param in params.select(basename=['b1']):
+                param.update(prior=dict(limits=[0., 10.]))
+            for param in params.select(basename=['b2']):
+                param.update(prior=dict(limits=[-50., 50.]))
+            for param in params.select(basename=['bs', 'b3', 'alpha*', 'sn*']):
+                param.update(prior=None)
         if freedom == 'max':
             for param in params.select(basename=['b1', 'b2', 'bs', 'b3']):
                 param.update(fixed=False)

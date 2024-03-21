@@ -464,16 +464,14 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
 
         self.precision = check_matrix(precision, 'precision')
         self.covariance = check_matrix(covariance, 'covariance')
-
         if self.covariance is not None:
             self.covariance *= scale_covariance
-            # Set each observable's covariance (for, e.g., plots)
             start, slices = 0, []
             for obs in observables:
                 stop = start + len(obs.flatdata)
                 sl = slice(start, stop)
                 slices.append(sl)
-                obs.covariance = self.covariance[sl, sl]
+                #obs.covariance = self.covariance[sl, sl]  # Set each observable's covariance (for, e.g., plots)
                 start = stop
             if self.precision is None:
                 # Block-inversion is usually more numerically stable

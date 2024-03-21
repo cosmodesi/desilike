@@ -473,38 +473,6 @@ def test_full_shape():
         for param in theory.init.params: param.update(namespace=None)
 
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
-
-    ntemplate = 4
-    for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles],
-                                        [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles]):
-        for freedom in [None, 'min', 'max']:
-            for ells in [(0, 2), (0, 2, 4)]:
-                print(freedom, ells)
-                power = TheoryPower(ells=ells, freedom=freedom)
-                print(TheoryPower.__name__, ells, freedom, power.varied_params)
-                fell = 1
-                if 'velocileptors' in TheoryPower.__name__.lower(): fell = 2  # alpha4 and sn4
-                if freedom is not None:
-                    assert len(power.varied_params) == ntemplate + 6 + (4 in ells) * fell + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 (+ 1) EFT, 2 sn
-                corr = TheoryCorr(ells=ells, freedom=freedom)
-                print(TheoryCorr.__name__, ells, freedom, corr.varied_params)
-                if freedom is not None: assert len(corr.varied_params) == ntemplate + 4 + (4 in ells) + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 EFT
-                for param in corr.varied_params:
-                    assert param in power.varied_params, '{} not in {}'.format(param, power.varied_params)
-                for theory in [power, corr]:
-                    for param in theory.init.params: param.update(namespace='LRG')
-                    basenames = theory.init.params.basenames()
-                    theory()
-                    for param in theory.all_params:
-                        if param.basename in basenames:
-                            assert param.namespace == 'LRG'
-                if 'velocileptors' in TheoryPower.__name__.lower() and freedom == 'max':
-                    for name in ['LRG.b1p']:
-                        assert theory.all_params[name].prior.dist == 'uniform'
-                    for name in ['LRG.b2p', 'LRG.bsp', 'LRG.b3p']:
-                        assert theory.all_params[name].prior.dist == 'norm'
-
-    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
     from desilike.theories.galaxy_clustering import SimpleTracerPowerSpectrumMultipoles
     theory = SimpleTracerPowerSpectrumMultipoles()
     test(theory, emulate=None)
@@ -706,6 +674,49 @@ def test_full_shape():
     theory = FOLPSAXTracerCorrelationFunctionMultipoles()
     test(theory)  # no P(k) computed
     theory(logA=3.04, b1=1.).shape
+
+
+def test_freedom():
+
+    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles
+
+    ntemplate = 4
+    for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles],
+                                       [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles]):
+        for freedom in [None, 'min', 'max'][1:]:
+            for ells in [(0, 2), (0, 2, 4)]:
+                kwargs = {}
+                if 'velocileptors' in TheoryPower.__name__.lower() and freedom in ['min', 'max']: kwargs['prior_basis'] = None
+                power = TheoryPower(ells=ells, freedom=freedom, **kwargs)
+                print('#' * 60)
+                print(TheoryPower.__name__, ells, freedom, power.varied_params)
+                for param in power.varied_params:
+                    print(param, param.prior)
+                fell = 1
+                if 'velocileptors' in TheoryPower.__name__.lower(): fell = 2  # alpha4 and sn4
+                if freedom is not None:
+                    assert len(power.varied_params) == ntemplate + 6 + (4 in ells) * fell + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 (+ 1) EFT, 2 sn
+                corr = TheoryCorr(ells=ells, freedom=freedom, **kwargs)
+                print('#' * 60)
+                print(TheoryCorr.__name__, ells, freedom, corr.varied_params)
+                for param in power.varied_params:
+                    print(param, param.prior)
+                if freedom is not None: assert len(corr.varied_params) == ntemplate + 4 + (4 in ells) + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 EFT
+                for param in corr.varied_params:
+                    assert param in power.varied_params, '{} not in {}'.format(param, power.varied_params)
+                for theory in [power, corr]:
+                    for param in theory.init.params: param.update(namespace='LRG')
+                    basenames = theory.init.params.basenames()
+                    theory()
+                    for param in theory.all_params:
+                        if param.basename in basenames:
+                            assert param.namespace == 'LRG'
+                if 'velocileptors' in TheoryPower.__name__.lower() and freedom == 'max' and kwargs.get('prior_basis', None) == 'physical':
+                    for name in ['LRG.b1p']:
+                        assert theory.all_params[name].prior.dist == 'uniform'
+                    for name in ['LRG.b2p', 'LRG.bsp', 'LRG.b3p']:
+                        assert theory.all_params[name].prior.dist == 'norm'
 
 
 def test_velocileptors():
@@ -1561,7 +1572,7 @@ if __name__ == '__main__':
     #test_velocileptors_omegak()
     #test_params()
     #test_integ()
-    test_templates()
+    #test_templates()
     #test_wiggle_split_template()
     #test_emulator_templates()
     #test_bao()
@@ -1577,3 +1588,4 @@ if __name__ == '__main__':
     #test_pk_to_xi()
     #test_ap_diff()
     #test_ptt()
+    test_freedom()

@@ -17,6 +17,21 @@ def test_power_spectrum():
     template = ShapeFitPowerSpectrumTemplate(z=0.5, fiducial=DESI())
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
 
+    from pypower import PowerSpectrumMultipoles
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.02], 2: [0.05, 0.2, 0.01]},
+                                                         data='../../tests/_pk/data.npy',
+                                                         covariance='../../tests/_pk/mock_*.npy',
+                                                         #data=PowerSpectrumMultipoles.load('../../tests/_pk/data.npy'),
+                                                         #covariance=[PowerSpectrumMultipoles.load(fn) for fn in glob.glob('../../tests/_pk/mock_*.npy')],
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
+    print(likelihood())
+    print(np.mean(likelihood.covariance), np.mean(observable.covariance), observable)
+    #print(len(observable.flatdata))
+    observable.plot(show=True)
+    exit()
+
+
     size = 10
     ells = (2,)
     observable = TracerPowerSpectrumMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * len(ells)),
@@ -939,12 +954,12 @@ if __name__ == '__main__':
 
     #test_systematic_templates()
     # test_bao()
-    # test_power_spectrum()
+    test_power_spectrum()
     #test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    test_compression()
+    # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

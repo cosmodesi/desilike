@@ -356,7 +356,6 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             vlikelihood = _vlikelihood
         self._vlikelihood = vmap(vlikelihood, backend='mpi', errors='return')
 
-
     def _get_start(self, start=None, niterations=1, max_tries=None):
         if max_tries is None:
             max_tries = self.max_tries

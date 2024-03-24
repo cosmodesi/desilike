@@ -26,11 +26,9 @@ def test_power_spectrum():
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
     print(likelihood())
-    print(np.mean(likelihood.covariance), np.mean(observable.covariance), observable)
+    assert np.allclose(likelihood.covariance, observable.covariance)
     #print(len(observable.flatdata))
     observable.plot(show=True)
-    exit()
-
 
     size = 10
     ells = (2,)

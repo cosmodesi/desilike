@@ -425,7 +425,8 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
         if not utils.is_sequence(observables):
             observables = [observables]
         self.nobs = None
-        self.observables = [obs.runtime_info.initialize() for obs in observables]
+        self.observables = list(observables)
+        for obs in observables: obs.all_params  # to set observable's pipelines, and initialize once (percival factor below requires all_params)
         covariance, scale_covariance, precision = (self.mpicomm.bcast(obj if self.mpicomm.rank == 0 else None, root=0) for obj in (covariance, scale_covariance, precision))
         if covariance is None:
             nmocks = [self.mpicomm.bcast(len(obs.mocks) if self.mpicomm.rank == 0 and getattr(obs, 'mocks', None) is not None else 0) for obs in self.observables]
@@ -464,14 +465,15 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
 
         self.precision = check_matrix(precision, 'precision')
         self.covariance = check_matrix(covariance, 'covariance')
+        self.runtime_info.requires = self.observables
         if self.covariance is not None:
             self.covariance *= scale_covariance
-            start, slices = 0, []
+            start, slices, covariances = 0, [], []
             for obs in observables:
                 stop = start + len(obs.flatdata)
                 sl = slice(start, stop)
                 slices.append(sl)
-                #obs.covariance = self.covariance[sl, sl]  # Set each observable's covariance (for, e.g., plots)
+                obs.covariance = self.covariance[sl, sl]  # Set each observable's (scaled) covariance (for, e.g., plots)
                 start = stop
             if self.precision is None:
                 # Block-inversion is usually more numerically stable
@@ -479,7 +481,6 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
         else:
             self.precision /= scale_covariance
         nbins = self.precision.shape[0]
-        self.runtime_info.requires = self.observables
         if self.nobs is not None:
             if 'hartlap' in correct_covariance:
                 self.hartlap2007_factor = (self.nobs - nbins - 2.) / (self.nobs - 1.)

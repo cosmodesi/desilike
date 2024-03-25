@@ -5,7 +5,7 @@ import pytest
 import numpy as np
 
 from desilike import PipelineError, setup_logging
-from desilike.samplers import (EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler,
+from desilike.samplers import (EmceeSampler, ZeusSampler, PocoMCSampler,
                                StaticDynestySampler, DynamicDynestySampler, PolychordSampler, NautilusSampler,
                                NUTSSampler, MCLMCSampler, GridSampler, QMCSampler, ImportanceSampler)
 
@@ -29,7 +29,7 @@ def test_samplers():
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov, name='LRG')
 
-    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][2:3]:
+    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][2:3]:
         kwargs = {'seed': 42}
         if Sampler in [EmceeSampler, ZeusSampler]:
             kwargs.update(nwalkers=20)
@@ -304,7 +304,7 @@ def test_mcmc():
     #    param.update(prior=None)
 
     chains, timing = {}, {}
-    for Sampler in [EmceeSampler, NUTSSampler, MCLMCSampler, MCMCSampler][:3]:
+    for Sampler in [EmceeSampler, NUTSSampler, MCLMCSampler][:3]:
         kwargs, check = {}, True
         ensemble = Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]
         if ensemble:
@@ -338,7 +338,7 @@ def test_nested():
     likelihood.varied_params['b'].update(fixed=True)
 
     chains = {}
-    #for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler]:
+    #for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler]:
     for Sampler in [EmceeSampler, StaticDynestySampler, DynamicDynestySampler]:
         kwargs, check = {}, True
         ensemble = Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]

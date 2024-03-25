@@ -21,7 +21,7 @@ class ImportanceSampler(BaseClass):
         likelihood : BaseLikelihood
             Input likelihood.
 
-        input_chains : str, Path, Chain
+        chains : str, Path, Chain
             Path to or chains to importance sample.
 
         save_fn : str, Path, default=None

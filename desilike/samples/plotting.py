@@ -48,6 +48,7 @@ def _get_default_chain_params(chains, params=None, **kwargs):
                 list_params += chain.params(name=[str(param)])
         return list_params
     list_params = [chain.params(**kwargs) for chain in chains]
+    #print(list_params)
     return ParameterCollection([params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])])
 
 
@@ -412,6 +413,8 @@ def plot_triangle(chains, params=None, labels=None, g=None, **kwargs):
     chains = _make_list(chains)
     labels = _make_list(labels, length=len(chains), default=None)
     params = _get_default_chain_params(chains, params=params, varied=True, input=True)
+    #print([chain.params(name=params.names()) for chain in chains])
+    #print(params)
     chains = [chain.to_getdist(label=label, params=chain.params(name=params.names())) for chain, label in zip(chains, labels)]
     g.triangle_plot(chains, [str(param) for param in params], **kwargs)
     return g

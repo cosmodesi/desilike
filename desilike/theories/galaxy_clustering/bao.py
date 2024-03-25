@@ -162,7 +162,7 @@ class DampedBAOWigglesDTVoidPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumM
     https://arxiv.org/abs/1607.03149
     """
     def initialize(self, *args, mu=10, method='leggauss', model='standard', **kwargs):
-        super(DampedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
+        super(DampedBAOWigglesDTVoidPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.model = str(model)
         self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
         if self.template.only_now:
@@ -170,7 +170,7 @@ class DampedBAOWigglesDTVoidPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumM
                 param.update(fixed=True)
 
     def calculate(self, b1a=1., b1b=1., dbeta=1., sigmas=0., sigmapar=9., sigmaper=6., cex = 0.):
-        super(DampedBAOWigglesPowerSpectrumMultipoles, self).calculate()
+        super(DampedBAOWigglesDTVoidPowerSpectrumMultipoles, self).calculate()
         f = dbeta * self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknowap = _interp(self.template, 'pknow_dd', kap)
@@ -219,7 +219,7 @@ class DampedBAOWigglesCrossPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMu
     https://arxiv.org/abs/1607.03149
     """
     def initialize(self, *args, mu=10, method='leggauss', model='standard', **kwargs):
-        super(DampedBAOWigglesPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
+        super(DampedBAOWigglesCrossPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.model = str(model)
         self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
         if self.template.only_now:
@@ -227,7 +227,7 @@ class DampedBAOWigglesCrossPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMu
                 param.update(fixed=True)
 
     def calculate(self, b1a=1., b1b=1., dbeta=1., sigmas=0., sigmapar=9., sigmaper=6.):
-        super(DampedBAOWigglesPowerSpectrumMultipoles, self).calculate()
+        super(DampedBAOWigglesCrossPowerSpectrumMultipoles, self).calculate()
         f = dbeta * self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pknowap = _interp(self.template, 'pknow_dd', kap)

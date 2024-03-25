@@ -76,7 +76,6 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
                 self.wmatrix.init.update(wmatrix=wmatrix)
         if self.kedges is not None:  # set by data
             klim = {ell: (edges[0], edges[-1], np.mean(np.diff(edges))) for ell, edges in zip(self.ells, self.kedges)}
-            print(klim, flush=True)
             #self.wmatrix.init.update(k=self.k)
         if klim is not None:
             self.wmatrix.init.update(klim=klim)
@@ -122,8 +121,17 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
                 klim = {ell: (0, np.inf) for ell in power.ells}
             ells, list_k, list_kedges, list_data = [], [], [], []
             for ell, lim in klim.items():
-                dk = np.diff(power.edges[0]).mean()
-                power_slice = power.copy()[::int(lim[-1]//dk)].select(lim)
+                #import pypower
+                #print(pypower.__version__)
+                #print("lim", lim)
+                #print("Edges before:", power.edges)
+                #power.select(lim)
+                #print("Edges after:", power.select(lim).edges, flush = True)
+                #exit()
+                
+                #dk = np.diff(power.edges[0]).mean()
+                #power_slice = power.copy()[::int(lim[-1]//dk)].select(lim)
+                power_slice = power.copy().select(lim)
                 ells.append(ell)
                 list_k.append(power_slice.modeavg())
                 list_kedges.append(power_slice.edges[0])

@@ -1,6 +1,7 @@
 import functools
 import logging
 import warnings
+import traceback
 
 import numpy as np
 
@@ -336,7 +337,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             #raise ValueError
         except:
             if self.mpicomm.rank == 0:
-                self.log_info('Could *not* vmap input likelihood.')
+                self.log_info('Could *not* vmap input likelihood, got error:\n{}'.format(traceback.format_exc()))
             vlikelihood = vmap(vlikelihood, backend=None, errors='return', return_derived=True)
         else:
             if self.mpicomm.rank == 0:
@@ -355,7 +356,6 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                 self.log_info('Successfully jit input likelihood.')
             vlikelihood = _vlikelihood
         self._vlikelihood = vmap(vlikelihood, backend='mpi', errors='return')
-
 
     def _get_start(self, start=None, niterations=1, max_tries=None):
         if max_tries is None:

@@ -3,6 +3,7 @@ import numbers
 import functools
 import logging
 import warnings
+import traceback
 
 import numpy as np
 
@@ -229,7 +230,6 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         self.likelihood()  # initialize before jit
         vlikelihood = self.likelihood
         from desilike import vmap
-        import traceback
         try:
             import jax
             _vlikelihood = vmap(vlikelihood, backend='jax', errors='return', return_derived=True)

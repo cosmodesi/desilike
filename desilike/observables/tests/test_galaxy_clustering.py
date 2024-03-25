@@ -17,6 +17,19 @@ def test_power_spectrum():
     template = ShapeFitPowerSpectrumTemplate(z=0.5, fiducial=DESI())
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
 
+    from pypower import PowerSpectrumMultipoles
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.02], 2: [0.05, 0.2, 0.01]},
+                                                         data='../../tests/_pk/data.npy',
+                                                         covariance='../../tests/_pk/mock_*.npy',
+                                                         #data=PowerSpectrumMultipoles.load('../../tests/_pk/data.npy'),
+                                                         #covariance=[PowerSpectrumMultipoles.load(fn) for fn in glob.glob('../../tests/_pk/mock_*.npy')],
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
+    print(likelihood())
+    assert np.allclose(likelihood.covariance, observable.covariance)
+    #print(len(observable.flatdata))
+    observable.plot(show=True)
+
     size = 10
     ells = (2,)
     observable = TracerPowerSpectrumMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * len(ells)),
@@ -562,6 +575,19 @@ def test_compression():
     observable = TurnOverCompressionObservable(data=[1.], covariance=np.diag([0.01]), quantities=['qto'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     test(likelihood, test_zero=True)
+
+    observable = TurnOverCompressionObservable(data=[1.], covariance=[[0.01]], quantities=['qto'], z=2.)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    test(likelihood, test_zero=True)
+
+    # Define cosmo, to be shared by the observables
+    from desilike.theories import Cosmoprimo
+    cosmo = Cosmoprimo(fiducial='DESI', engine='class')
+    cosmo.init.params = {'h': {'prior': {'limits': [0.1, 1.]}, 'ref': {'dist': 'norm', 'loc': 0.6736, 'scale': 0.005}, 'delta': 0.03, 'latex': 'h'},
+                        'Omega_m': {'prior': {'limits': [0.01, 1.]}, 'ref': {'dist': 'norm', 'loc': 0.3153, 'scale': 0.0073}, 'delta': 0.02, 'latex': '\Omega_{m}'}}
+    observables = [TurnOverCompressionObservable(data=[0.911], quantities=['qto'], z=0.732, cosmo=cosmo), TurnOverCompressionObservable(data=[0.967], quantities=['qto'], z=1.4936707295213962, cosmo=cosmo)]
+    likelihood = ObservablesGaussianLikelihood(observables=observables, covariance=[[0.087**2, 0.], [0., 0.079**2]])
+    test(likelihood)
 
     from desilike import ParameterCovariance
     covariance = ParameterCovariance(value=np.diag([0.01, 0.01, 0.01]), params=['qpar', 'qper', 'df'])

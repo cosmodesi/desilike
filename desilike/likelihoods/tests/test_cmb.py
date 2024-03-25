@@ -195,6 +195,19 @@ def test_cmb():
     likelihood()
 
 
+def test_profile():
+    from desilike.likelihoods.cmb import (TTTEEEHighlPlanck2018PlikLiteLikelihood,
+                                          TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood)
+    from desilike.theories import Cosmoprimo
+    cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
+    likelihood = TTTEEEHighlPlanck2018PlikLiteLikelihood(cosmo=cosmo) + TTLowlPlanck2018ClikLikelihood(cosmo=cosmo) + EELowlPlanck2018ClikLikelihood(cosmo=cosmo)
+    likelihood()
+    from desilike.profilers import MinuitProfiler
+    profiler = MinuitProfiler(likelihood, seed=42)
+    profiles = profiler.maximize(niterations=5)
+    print(profiles.bestfit)
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -207,4 +220,5 @@ if __name__ == '__main__':
     #test_copy()
     #test_error()
     #test_emulator_direct()
-    test_cmb()
+    #test_cmb()
+    test_profile()

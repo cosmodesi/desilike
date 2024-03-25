@@ -1,5 +1,7 @@
 import functools
 import logging
+import warnings
+import traceback
 
 logging.getLogger('jax._src.lib.xla_bridge').addFilter(logging.Filter('No GPU/TPU found, falling back to CPU.'))
 
@@ -8,36 +10,29 @@ logging.getLogger('jax._src.lib.xla_bridge').addFilter(logging.Filter('No GPU/TP
 array_types = ()
 interpax = None
 
-#try:
-# raise ImportError
-import jax, jaxlib
-print(jax.__version__, jaxlib.__version__)
-#from jax.config import config
-from jax import config as config
-#try:
-#    from jax.config import config
-#except ImportError:
-#    from jax import config
+try:
+    # raise ImportError
+    import jax, jaxlib
+    from jax import config
+    config.update('jax_enable_x64', True)
+    from jax import numpy, scipy
+    from jax.tree_util import register_pytree_node_class
+    array_types = []
+    for line in ['jaxlib.xla_extension.DeviceArrayBase', 'type(numpy.array(0))', 'jax.core.Tracer']:
+        try:
+            array_types.append(eval(line))
+        except AttributeError:
+            pass
+    array_types = tuple(array_types)
+    import interpax
+except ImportError:
+    warnings.warn('Could *not* import jax and dependencies, got error:\n{}. You will not be able to analytically marginalize parameters.'.format(traceback.format_exc()))
+    jax = None
+    import numpy
+    import scipy
+    def register_pytree_node_class(cls):
+        return cls
 
-#config.update('jax_enable_x64', True)
-from jax import numpy, scipy
-from jax.tree_util import register_pytree_node_class
-array_types = []
-for line in ['jaxlib.xla_extension.DeviceArrayBase', 'type(numpy.array(0))', 'jax.core.Tracer']:
-    try:
-        array_types.append(eval(line))
-    except AttributeError:
-        pass
-array_types = tuple(array_types)
-import interpax
-print(interpax.__version__, flush=True)
-#except ImportError:
-#    print("Error importin JAX", flush=True)
-#    jax = None
-#    import numpy
-#    import scipy
-#    def register_pytree_node_class(cls):
-#        return cls
 
 
 def jit(*args, **kwargs):

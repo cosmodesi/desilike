@@ -1,5 +1,7 @@
 import functools
 import logging
+import warnings
+import traceback
 
 logging.getLogger('jax._src.lib.xla_bridge').addFilter(logging.Filter('No GPU/TPU found, falling back to CPU.'))
 
@@ -24,6 +26,7 @@ try:
     array_types = tuple(array_types)
     import interpax
 except ImportError:
+    warnings.warn('Could *not* import jax and dependencies, got error:\n{}. You will not be able to analytically marginalize parameters.'.format(traceback.format_exc()))
     jax = None
     import numpy
     import scipy

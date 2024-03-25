@@ -36,6 +36,7 @@ class MinuitProfiler(BaseProfiler):
         import iminuit
         minuit_params = {}
         minuit_params['name'] = parameter_names = [str(param) for param in varied_params]
+
         minuit = iminuit.Minuit(chi2m, **dict(zip(parameter_names, [param.value for param in varied_params])), **minuit_params)
         minuit.errordef = 1.0
         for param, value in zip(varied_params, start):

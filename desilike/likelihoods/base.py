@@ -465,8 +465,11 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
 
         self.precision = check_matrix(precision, 'precision')
         self.covariance = check_matrix(covariance, 'covariance')
+
         self.runtime_info.requires = self.observables
+
         if self.covariance is not None:
+            self.log_info('Rescaling covariance with a factor {:.4e}'.format(scale_covariance))
             self.covariance *= scale_covariance
             start, slices, covariances = 0, [], []
             for obs in observables:
@@ -479,6 +482,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
                 # Block-inversion is usually more numerically stable
                 self.precision = utils.blockinv([[self.covariance[sl1, sl2] for sl2 in slices] for sl1 in slices])
         else:
+            self.log_info('Rescaling precision with a factor {:.4e}'.format(1/scale_covariance))
             self.precision /= scale_covariance
         nbins = self.precision.shape[0]
         if self.nobs is not None:

@@ -121,6 +121,16 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
                 klim = {ell: (0, np.inf) for ell in power.ells}
             ells, list_k, list_kedges, list_data = [], [], [], []
             for ell, lim in klim.items():
+                #import pypower
+                #print(pypower.__version__)
+                #print("lim", lim)
+                #print("Edges before:", power.edges)
+                #power.select(lim)
+                #print("Edges after:", power.select(lim).edges, flush = True)
+                #exit()
+                
+                #dk = np.diff(power.edges[0]).mean()
+                #power_slice = power.copy()[::int(lim[-1]//dk)].select(lim)
                 power_slice = power.copy().select(lim)
                 ells.append(ell)
                 list_k.append(power_slice.modeavg())

@@ -25,7 +25,7 @@ class DESY5SNLikelihood(BaseSNLikelihood):
 
     def initialize(self, *args, cosmo=None, **kwargs):
         BaseSNLikelihood.initialize(self, *args, cosmo=cosmo, **kwargs)
-        self.covariance = self.covariance + np.diag(self.light_curve_params['MUERR'])**2
+        self.covariance = self.covariance + np.diag(self.light_curve_params['MUERR_FINAL'])**2
         self.precision = utils.inv(self.covariance)
         self.std = np.diag(self.covariance)**0.5
         if is_external_cosmo(self.cosmo):
@@ -38,7 +38,7 @@ class DESY5SNLikelihood(BaseSNLikelihood):
         BaseSNLikelihood.calculate(self)
 
     def read_light_curve_params(self, fn):
-        return BaseSNLikelihood.read_light_curve_params(self, fn, header='', sep=' ', skip='#')
+        return BaseSNLikelihood.read_light_curve_params(self, fn, header='', sep=',', skip='#')
 
     @plotting.plotter
     def plot(self, fig=None):
@@ -86,15 +86,17 @@ class DESY5SNLikelihood(BaseSNLikelihood):
         except KeyError:
             data_dir = installer.data_dir(cls.installer_section)
 
-        from desilike.install import exists_path, download
+        from desilike.install import exists_path, download, extract
 
-        data_fn = os.path.join(data_dir, 'hubble_diagram.txt')
-        cov_fn = os.path.join(data_dir, 'covsys_000.txt')
+        data_fn = os.path.join(data_dir, 'DES-SN5YR_HD.csv')
+        cov_fn = os.path.join(data_dir, 'STAT+SYS.txt')
 
         if installer.reinstall or not exists_path(data_fn):
-            github = ''  # not public yet, to be added by hand
-            #for fn in [data_fn, cov_fn]:
-            #    download(os.path.join(github, os.path.basename(fn)), fn)
+            github = 'https://raw.githubusercontent.com/des-science/DES-SN5YR/main/4_DISTANCES_COVMAT/'
+            for fn in [data_fn, cov_fn]:
+                fngz = fn.replace('.txt', '.txt.gz')
+                download(os.path.join(github, os.path.basename(fngz)), fngz)
+                if fngz.endswith('.gz'): extract(fngz, fn, remove=True)
 
             # Creates config file to ensure compatibility with base class
             config_fn = os.path.join(data_dir, 'config.dataset')

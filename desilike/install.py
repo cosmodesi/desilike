@@ -76,13 +76,18 @@ def extract(in_fn, out_fn, remove=True):
         If ``True``, remove input file ``in_fn``.
     """
     in_fn, out_fn = (os.path.normpath(fn) for fn in [in_fn, out_fn])
-    ext = os.path.splitext(in_fn)[-1][1:]
-    if ext == 'zip':
+    if any(in_fn.endswith(ext) and not in_fn.endswith('tar' + ext) for ext in ['.gz']):
+        import gzip
+        with open(out_fn, 'wb') as out:
+            with gzip.open(in_fn, 'r') as gz:
+                out.write(gz.read())
+    elif any(in_fn.endswith(ext) and not in_fn.endswith('tar' + ext) for ext in ['.zip']):
         from zipfile import ZipFile
         with ZipFile(in_fn, 'r') as zip:
             zip.extractall(out_fn)
     else:
         import tarfile
+        ext = os.path.splitext(in_fn)[-1][1:]
         if ext == 'tgz': ext = 'gz'
         with tarfile.open(in_fn, 'r:' + ext) as tar:
             tar.extractall(out_fn)

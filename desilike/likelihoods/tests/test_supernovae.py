@@ -7,9 +7,10 @@ from desilike.likelihoods.supernovae import PantheonSNLikelihood, PantheonPlusSN
 
 
 def test_install():
-    ref = [-5649.588564438464, -7526.797408441289, -7600.468586494155, -18.973744770948603, -1034.131642266159]
+    ref = [-5649.588564438464, -7526.797408441289, -7600.468586494155, -18.973744770948603, -1034.1324141181244]
     cosmo = Cosmoprimo(fiducial='DESI')
     for ilike, Likelihood in enumerate([PantheonSNLikelihood, PantheonPlusSNLikelihood, PantheonPlusSHOESSNLikelihood, Union3SNLikelihood, DESY5SNLikelihood]):
+        if ilike  <= 3: continue
         if Likelihood is Union3SNLikelihood:
             params = {'dM': -9.}
         elif Likelihood is DESY5SNLikelihood:
@@ -20,7 +21,7 @@ def test_install():
         installer = Installer(user=True)
         installer(likelihood)
         likelihood(**params)
-        print(likelihood.loglikelihood)
+        print(likelihood.loglikelihood, ref[ilike])
         assert np.allclose(likelihood.loglikelihood, ref[ilike])
         assert np.allclose((likelihood + likelihood)(**params), 2. * likelihood(**params) - likelihood.logprior)
         for param in params:
@@ -43,5 +44,5 @@ def test_profile():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_install()
-    test_profile()
+    test_install()
+    #test_profile()

@@ -24,6 +24,7 @@ def test_profilers():
     # for param in likelihood.varied_params:
     #     print(param, [likelihood(**{param.name: param.value + param.proposal * scale}) for scale in [-1., 1.]])
     for Profiler, kwargs in [(MinuitProfiler, {}),
+                             (MinuitProfiler, {'gradient': True}),
                              #(ScipyProfiler, {'method': 'lsq'}),
                              (ScipyProfiler, {'method': 'BFGS'}),
                              (BOBYQAProfiler, {})]:
@@ -36,8 +37,11 @@ def test_profilers():
         assert profiles.bestfit.logposterior.param.latex() == '\mathcal{L}'
         assert profiles.bestfit.logposterior.param.derived
         profiler.profile(params=['df'], size=4)
-        #profiler.grid(params=['df', 'qpar'], size=(2, 2))
-        print(print(profiler.profiles.to_stats()))
+        profiler.grid(params=['df', 'dm'], size=(2, 2))
+        if Profiler is MinuitProfiler:
+            profiler.interval(params=['df'])
+            profiler.contour(params=['df', 'dm'], size=10)
+        print(profiler.profiles.to_stats())
         #likelihood()
         #observable.plot(show=True)
 
@@ -90,7 +94,8 @@ def test_solve():
     profiles = profiler.maximize(niterations=2)
     print(profiles.to_stats())
     for param in likelihood.all_params.select(basename=['sn*']): param.update(derived='.best_not_derived')
-    profiler = MinuitProfiler(likelihood, rescale=False, seed=42)
+    print('GRADIENT')
+    profiler = MinuitProfiler(likelihood, rescale=False, gradient=True, seed=42)
     profiles = profiler.maximize(niterations=2)
     print(profiles.to_stats())
     profiles.bestfit['LRG.loglikelihood']['ct2_2', 'ct2_2']
@@ -151,6 +156,6 @@ def test_bao():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_profilers()
-    test_solve()
+    test_profilers()
+    #test_solve()
     #test_bao()

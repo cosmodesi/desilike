@@ -1043,7 +1043,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
         :math:`b_{1}^\prime = (1 + b_{1}) \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
         :math:`\alpha_{0} = (1 + b_{1})^{2} \alpha_{0}^\prime, \alpha_{2} = (1 + b_{1}) f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + (1 + b_{1}) \alpha_{4}^\prime,
         , \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`
-        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} * \sigma_{v}^{i} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} * \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} * \sigma_{v}^{4} s_{n, 4}^\prime`
+        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{i} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{4} s_{n, 4}^\prime`
         In this case, ``use_Pzel = False``.
 
     tracer : str, default=None

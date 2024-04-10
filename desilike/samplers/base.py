@@ -218,13 +218,15 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
 
     def _set_vlikelihood(self):
         """Vectorize the likelihood."""
+
         def get_start(size=1):
             toret = {}
             for param in self.varied_params:
-                try:
-                    toret[param.name] = param.ref.sample(size=size, random_state=42)
-                except ParameterPriorError as exc:
-                    raise ParameterPriorError('Error in ref/prior distribution of parameter {}'.format(param)) from exc
+                if param.ref.is_proper():
+                    value = param.ref.sample(size=size, random_state=self.rng)
+                else:
+                    value = np.full(size, param.value)
+                toret[param.name] = value
             return toret
 
         self.likelihood()  # initialize before jit
@@ -273,11 +275,12 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         def get_start(size=1):
             toret = []
             for param in self.varied_params:
-                try:
-                    toret.append(param.ref.sample(size=size, random_state=self.rng))
-                except ParameterPriorError as exc:
-                    raise ParameterPriorError('Error in ref/prior distribution of parameter {}'.format(param)) from exc
-            return np.array(toret).T
+                if param.ref.is_proper():
+                    value = param.ref.sample(size=size, random_state=self.rng)
+                else:
+                    value = np.full(size, param.value)
+                toret.append(value)
+            return np.column_stack(toret)
 
         if getattr(self, '_vlikelihood', None) is None:
             self._set_vlikelihood()

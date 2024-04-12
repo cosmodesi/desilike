@@ -1322,29 +1322,36 @@ def test_emulator_direct():
 
             theory = Theory(template=template, k=np.linspace(0.001, 0.25, 20))
             theory()
-            emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(order=4))
+            emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(order=4, method='finite'))
             emulator.set_samples()
             emulator.fit()
             emulated_theory = theory.deepcopy()
             emulated_theory.init.update(pt=emulator.to_calculator())
 
-            for param, values in param_values.items():
-                cmap = plt.get_cmap('jet', len(values))
-                ax = plt.gca()
-                param = theory.all_params[param]
-                ax.set_title(param.latex(inline=True))
-                center = param.value
-                for ivalue, value in enumerate(values):
-                    theory(**{param.name: value})
-                    emulated_theory(**{param.name: value})
-                    color = cmap(ivalue / len(values))
-                    print(np.abs(emulated_theory.power[0] / theory.power[0] - 1).max())
-                    for ill, ell in enumerate(theory.ells):
-                        ax.plot(theory.k, theory.k * theory.power[ill], color=color, linestyle='-')
-                        ax.plot(theory.k, theory.k * emulated_theory.power[ill], color=color, linestyle='--')
-                theory(**{param.name: center})
-                emulated_theory(**{param.name: center})
-                plt.show()
+            def plot():
+                for param, values in param_values.items():
+                    cmap = plt.get_cmap('jet', len(values))
+                    ax = plt.gca()
+                    param = theory.all_params[param]
+                    ax.set_title(param.latex(inline=True))
+                    center = param.value
+                    for ivalue, value in enumerate(values):
+                        theory(**{param.name: value})
+                        emulated_theory(**{param.name: value})
+                        color = cmap(ivalue / len(values))
+                        print(np.abs(emulated_theory.power[0] / theory.power[0] - 1).max())
+                        for ill, ell in enumerate(emulated_theory.ells):
+                            ax.plot(theory.k, theory.k * theory.power[ill], color=color, linestyle='-')
+                            ax.plot(theory.k, theory.k * emulated_theory.power[ill], color=color, linestyle='--')
+                    theory(**{param.name: center})
+                    emulated_theory(**{param.name: center})
+                    plt.show()
+
+            plot()
+
+            if Theory is LPTVelocileptorsTracerPowerSpectrumMultipoles:
+                emulated_theory.init.update(ells=(0, 2))
+                plot()
 
 
 def test_emulator_shapefit():
@@ -1580,7 +1587,7 @@ if __name__ == '__main__':
     #test_broadband_bao()
     #test_flexible_bao()
     #test_full_shape()
-    #test_emulator_direct()
+    test_emulator_direct()
     #plot_direct()
     #test_emulator_shapefit()
     #test_emulator_wigglesplit()
@@ -1588,4 +1595,4 @@ if __name__ == '__main__':
     #test_pk_to_xi()
     #test_ap_diff()
     #test_ptt()
-    test_freedom()
+    #test_freedom()

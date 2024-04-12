@@ -732,6 +732,10 @@ class Parameter(BaseClass):
         self._prior = prior if isinstance(prior, ParameterPrior) else ParameterPrior(**(prior or {}))
         if ref is not None:
             self._ref = ref if isinstance(ref, ParameterPrior) else ParameterPrior(**(ref or {}))
+            # Propagate prior's hard limits to ref
+            state = self._ref.__getstate__()
+            state['limits'] = (max(self._prior.limits[0], self._ref.limits[0]), min(self._prior.limits[1], self._ref.limits[1]))
+            self._ref = ParameterPrior.from_state(state)
         else:
             self._ref = self._prior.copy()
         self._latex = latex

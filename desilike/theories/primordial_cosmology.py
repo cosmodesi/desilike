@@ -95,8 +95,8 @@ class Cosmoprimo(BasePrimordialCosmology):
         # engine-specific parameters
         if engine == 'axiclass':
             for name in ['w0_fld', 'wa_fld']: del params[name]  # do not seem supported by axiclass?
-            params['fraction_axion_ac'] = dict(prior=dict(limits=[0.0, 0.5]), ref=dict(dist='norm', loc=0.02, scale=0.1), proposal=0.01, latex='f_{\rm ede}(a_c)')
-            params['log10_axion_ac'] = dict(value=-3.586941554, prior=dict(limits=[-4.5, -3.0]), ref=dict(dist='norm', loc=-3.5, scale=0.5), proposal=0.1, latex='\log_{10}a_c')
+            params['fraction_axion_ac'] = dict(prior=dict(limits=[1e-4, 0.5]), ref=dict(dist='norm', loc=0.02, scale=0.1), proposal=0.01, delta=0.05, latex='f_{\rm ede}(a_c)')  # axiclass seems to complain when fraction_axion_ac is exactly 0
+            params['log10_axion_ac'] = dict(value=-3.586941554, prior=dict(limits=[-4.5, -3.0]), ref=dict(dist='norm', loc=-3.5, scale=0.5), proposal=0.1, delta=0.1, latex='\log_{10}a_c')
         return params
 
     def initialize(self, fiducial=None, **kwargs):

@@ -15,7 +15,7 @@ from .base import APEffect
 class BasePowerSpectrumExtractor(BaseCalculator):
 
     """Base class to extract shape parameters from linear power spectrum."""
-    config_fn = 'power_template_ede.yaml'
+    config_fn = 'power_template.yaml'
 
     def initialize(self, z=1., with_now=False, cosmo=None, fiducial='DESI'):
         self.z = float(z)
@@ -59,8 +59,7 @@ class BasePowerSpectrumExtractor(BaseCalculator):
 class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
 
     """Base class for linear power spectrum template."""
-    # config_fn = 'power_template.yaml'
-    config_fn = 'power_template_ede.yaml'
+    config_fn = 'power_template.yaml'
     _interpolator_k = np.logspace(-5., 2., 1000)  # more than classy
 
     def initialize(self, k=None, z=1., with_now=False, apmode='qparqper', fiducial='DESI', only_now=False, **kwargs):
@@ -262,8 +261,7 @@ class BAOExtractor(BasePowerSpectrumExtractor):
         - :class:`cosmoprimo.Cosmology`: Cosmology instance
 
     """
-    config_fn = 'power_template_ede.yaml'
-    # config_fn = 'power_template.yaml'
+    config_fn = 'power_template.yaml'
     conflicts = [('DM_over_rd', 'qper'), ('DH_over_rd', 'qper'), ('DM_over_DH', 'qap'), ('DV_over_rd', 'qiso')]
 
     def initialize(self, z=1., eta=1. / 3., cosmo=None, fiducial='DESI'):
@@ -1124,8 +1122,7 @@ class TurnOverPowerSpectrumExtractor(BasePowerSpectrumExtractor):
     ---------
     https://arxiv.org/pdf/2302.07484.pdf
     """
-    config_fn = 'power_template_ede.yaml'
-    # config_fn = 'power_template.yaml'
+    config_fn = 'power_template.yaml'
     conflicts = [('DM_over_DH', 'qap'), ('DV_times_kTO', 'qto')]
 
     def initialize(self, *args, r=8., eta=1. / 3., **kwargs):

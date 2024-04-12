@@ -45,15 +45,14 @@ def get_from_cosmo(cosmo, name):
         scale = 100.
     if name == 'k_pivot':
         return cosmo.k_pivot * cosmo.h
-    try:
-        #Rafaela edit: depending on what hyperparameters are set for EDE
+    if name == 'n_s':
+        # Rafaela edit for axiclass: depending on what hyperparameters are set for EDE
         # calling ns as an attribute for the cosmology leads to segementation fault
         # Don't really know why...
-        # that's why this quick fix: 
-        if 'axiclassy' in str(cosmo._engine) and name == 'n_s':
-            toret = cosmo[name]
-        else:           
-            toret = getattr(cosmo, name)
+        # that's why this quick fix:
+        return cosmo['n_s']
+    try:
+        toret = getattr(cosmo, name)
     except AttributeError:
         try:
             toret = cosmo[name]  # parameter
@@ -88,8 +87,17 @@ def _clone(self, params, base='input'):
 class Cosmoprimo(BasePrimordialCosmology):
 
     """Primordial cosmology calculation, based on :mod:`cosmoprimo`."""
-    config_fn = 'primordial_cosmology_ede.yaml'
+    config_fn = 'primordial_cosmology.yaml'
     _likelihood_catch_errors = (CosmologyError,)
+
+    @staticmethod
+    def _params(params, engine=None):
+        # engine-specific parameters
+        if engine == 'axiclass':
+            for name in ['w0_fld', 'wa_fld']: del params[name]  # do not seem supported by axiclass?
+            params['fraction_axion_ac'] = dict(prior=dict(limits=[0.0, 0.5]), ref=dict(dist='norm', loc=0.02, scale=0.1), proposal=0.01, latex='f_{\rm ede}(a_c)')
+            params['log10_axion_ac'] = dict(value=-3.586941554, prior=dict(limits=[-4.5, -3.0]), ref=dict(dist='norm', loc=-3.5, scale=0.5), proposal=0.1, latex='\log_{10}a_c')
+        return params
 
     def initialize(self, fiducial=None, **kwargs):
         """
@@ -115,25 +123,22 @@ class Cosmoprimo(BasePrimordialCosmology):
             self.fiducial = Cosmology()
         else:
             self.fiducial = get_cosmo(fiducial)
-        #Rafaela edit:
-        # axiclass has sometimes problems if hyperparameters are initalised 
-        # before cosmological parameters
-        if kwargs != None and kwargs['engine'] == 'axiclass' and 'extra_params' in kwargs.keys():
-            if any(name in self.params.basenames(input=True) for name in ['h', 'H0']):
-                for param in self.params.select(basename='theta_MC_100'):
-                    del self.params[param]
-            # in order not to raise an error it will anyway be initialised with yaml file        
-            basis_old = {param.name: param.value for param in self.params.select(input=True)}
-            basis_old.update(kwargs)
-            self.fiducial = _clone(self, basis_old)
-            # in case there was a fiducial cosmology given, it will be updated later
-        else: 
-            # original
-            self.fiducial = _clone(self, kwargs)
-            if any(name in self.params.basenames(input=True) for name in ['h', 'H0']):
-                for param in self.params.select(basename='theta_MC_100'):
-                    del self.params[param]
-        # updating parameters according to input
+        engine = kwargs.get('engine', None)
+        if engine == 'axiclass':
+            extra_params = dict(scf_parameters=[2.72, 0.0], do_shooting=True, do_shooting_scf=True,
+                                scf_potential='axion', n_axion=3, security_small_Omega_scf=0.001,
+                                n_axion_security=2.09, use_big_theta_scf=True, scf_has_perturbations=True,
+                                attractor_ic_scf=False, scf_tuning_index=0)
+            kwargs['extra_params'] = {**kwargs.get('extra_params', {}), **extra_params}
+            # Rafaela Gsponer edit:
+            # axiclass has sometimes problems if hyperparameters are initialized
+            # before cosmological parameters
+            for param in self.params.select(basename='*axion*', input=True):
+                kwargs.setdefault(param.name, param.value)
+        self.fiducial = _clone(self, kwargs)
+        if any(name in self.params.basenames(input=True) for name in ['h', 'H0']):
+            for param in self.params.select(basename='theta_MC_100'):
+                del self.params[param]
         if fiducial_input:
             for param in self.params:
                 param.update(value=get_from_cosmo(self.fiducial, param.basename))

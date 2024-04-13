@@ -65,7 +65,8 @@ def _profiles_transform(self, profiles):
             item._params = self.varied_params.sort(key=iparams)
             item._value = item._value * (self._params_transform_scale[iparams, None] * self._params_transform_scale[iparams])
         elif name == 'contour':
-            item.data = [tuple(transform_array(array) for array in arrays) for arrays in item.data]
+            for contour in item.values():
+                contour.data = [tuple(transform_array(array) for array in arrays) for arrays in contour.data]
         else:  # 'start', 'bestfit', 'error', 'interval', 'profile'
             item.data = [transform_array(array, scale_only=(name in ['error', 'interval'])) for array in item.data]
         toret.set(name=item)
@@ -468,7 +469,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         if gradient is not None: kwargs['gradient'] = gradient
         return _iterate_over_params(self, params, self._interval_one, chi2=chi2, **kwargs)
 
-    def contour(self, params=None, **kwargs):
+    def contour(self, params=None, cl=1, **kwargs):
         """
         Compute 2D contours for :attr:`likelihood`.
         The following attributes are added to :attr:`profiles`:
@@ -481,18 +482,27 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             List of tuples of parameters for which to compute 2D contours.
             If a list of parameters is provided instead, contours are computed for unique tuples of parameters.
 
+        cl : float, int, default=1
+            Confidence level for the confidence contour.
+            If not set or None, a standard 68.3 % confidence contour is produced.
+            If 0 < cl < 1, the value is interpreted as the confidence level (a probability).
+            If cl >= 1, it is interpreted as number of standard deviations. For example, cl = 3 produces a 3 sigma contour.
+
         **kwargs : dict
             Optional arguments for specific profiler.
         """
         if params is None:
             params = self.varied_params
         params = list(params)
+        if cl < 1.:
+            from scipy import stats
+            cl = - stats.norm.ppf(cl / 2.)
         if not is_parameter_sequence(params[0]):
             params = [(param1, param2) for iparam1, param1 in enumerate(params) for param2 in params[iparam1 + 1:]]
         params = [(self.varied_params[param1], self.varied_params[param2]) for param1, param2 in params]
         chi2, gradient = self._get_vchi2()
         if gradient is not None: kwargs['gradient'] = gradient
-        return _iterate_over_params(self, params, self._contour_one, chi2=chi2, **kwargs)
+        return _iterate_over_params(self, params, self._contour_one, chi2=chi2, cl=cl, **kwargs)
 
     def grid(self, params=None, grid=None, size=1, cl=2, niterations=1, **kwargs):
         """

@@ -1,4 +1,5 @@
 import numpy as np
+from matplotlib import pyplot as plt
 from matplotlib import gridspec, transforms
 
 from desilike import plotting
@@ -54,15 +55,26 @@ def _get_default_chain_params(chains, params=None, **kwargs):
 def _get_default_profiles_params(profiles, params=None, of='bestfit', **kwargs):
     from desilike.parameter import ParameterCollection
     profiles = _make_list(profiles)
+    of = _make_list(of)
     if params is not None:
         params = _make_list(params)
         list_params = ParameterCollection()
         list_params = ParameterCollection()
         for param in params:
             for profile in profiles[::-1]:
-                list_params += profile.get(of).params(name=[str(param)])
+                for off in of:
+                    tmp = profile.get(off, None)
+                    if tmp is not None:
+                        list_params += tmp.params(name=[str(param)])
         return list_params
-    list_params = [profile.get(of).params(**kwargs) for profile in profiles]
+    list_params = []
+    for profile in profiles:
+        lparams = []
+        for off in of:
+            tmp = profile.get(off, None)
+            if tmp is not None:
+                lparams += tmp.params(**kwargs)
+        list_params.append(lparams)
     return ParameterCollection([params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])])
 
 
@@ -110,7 +122,6 @@ def plot_trace(chains, params=None, figsize=None, colors=None, labelsize=None, k
     -------
     fig : matplotlib.figure.Figure
     """
-    from matplotlib import pyplot as plt
     chains = _make_list(chains)
     params = _get_default_chain_params(chains, params=params, varied=True, derived=False)
     nparams = len(params)
@@ -189,7 +200,6 @@ def plot_gelman_rubin(chains, params=None, multivariate=False, threshold=None, s
     -------
     fig : matplotlib.figure.Figure
     """
-    from matplotlib import pyplot as plt
     chains = _make_list(chains)
     params = _get_default_chain_params(chains, params=params, varied=True, derived=False)
     if slices is None:
@@ -266,7 +276,6 @@ def plot_geweke(chains, params=None, threshold=None, slices=None, labelsize=None
     -------
     fig : matplotlib.figure.Figure
     """
-    from matplotlib import pyplot as plt
     params = _get_default_chain_params(chains, params=params, varied=True, derived=False)
     if slices is None:
         nsteps = min(chain.size for chain in chains)
@@ -335,7 +344,6 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
     -------
     fig : matplotlib.figure.Figure
     """
-    from matplotlib import pyplot as plt
     chains = _make_list(chains)
     params = _get_default_chain_params(chains, params=params, varied=True, derived=False)
     if slices is None:
@@ -366,26 +374,214 @@ def plot_autocorrelation_time(chains, params=None, threshold=50, slices=None, la
     return fig
 
 
-@plotting.plotter
-def plot_triangle(chains, params=None, labels=None, g=None, **kwargs):
+def add_legend(labels, colors=None, linestyles=None, fig=None, kw_handle=None, **kwargs):
     """
-    Triangle plot.
-
-    Note
-    ----
-    *GetDist* package is required.
+    Add legend to figure.
 
     Parameters
     ----------
-    chains : list, default=None
-        List of (or single) :class:`Chain` instance(s).
+    labels : list, str
+        Label(s) for profiles within each :class:`Profiles` instance.
+
+    colors : list, str, default=None
+        Color(s) for profiles within each :class:`Profiles` instance.
+
+    linestyles : list, str, default=None
+        Linestyle(s) for profiles within each :class:`Profiles` instance.
+
+    fig : matplotlib.figure.Figure, default=None
+        Optionally, figure to add legend to. Else, take ``plt.gcf()``.
+
+    **kwargs : dict
+        Other arguments for :meth:`fig.legend`.
+    """
+    if fig is None: fig = plt.gcf()
+    labels = _make_list(labels)
+    nlabels = len(labels)
+    colors = _make_list(colors, length=nlabels, default=None)
+    for i, color in enumerate(colors):
+        if color is None: colors[i] = 'C{:d}'.format(i)
+    linestyles = _make_list(linestyles, length=nlabels, default=None)
+    kw_handle = dict(kw_handle or {})
+    from matplotlib.lines import Line2D
+    handles = [Line2D([0, 1], [0, 1], color=color, linestyle=linestyle, **kw_handle) for color, linestyle in zip(colors, linestyles)]
+    kwargs.setdefault('handles', handles)
+    kwargs.setdefault('labels', labels)
+    fig.legend(**kwargs)
+
+
+def add_1d_profile(profile, param, ax=None, **kwargs):
+    """
+    Add 1D profile to axes.
+    Requires :attr:`Profiles.profile` (or :attr:`Profiles.bestfit` and :attr:`Profiles.error` or :attr:`Profiles.covariance` for Gaussian approximation).
+
+    Parameters
+    ----------
+    profile : Profile
+        :class:`Profile` instance.
+
+    param : Parameter, str
+        Parameter to plot profile for.
+
+    ax : matplotlib.axes.Axes, default=None
+        Axes where to add profile. Defaults to ``plt.gca()``.
+
+    **kwargs : dict
+        Other arguments for :meth:`plt.plot`.
+    """
+    if ax is None: ax = plt.gca()
+
+    def get_gaussian_1d_profile(mean, std, nsigma=3):
+        t = np.linspace(mean - nsigma * std, mean + nsigma * std, endpoint=False)
+        return t, np.exp(-(t - mean)**2 / (2 * std**2))
+
+    pro = profile.get('profile', {})
+    if param in pro:
+        x = pro[param][:, 0]
+        pdf = np.exp(pro[param][:, 1])
+        pdf /= pdf.max()
+    else:
+        mean = profile.get('bestfit', None)
+        std = profile.get('error', None)
+        is_cov = std is None
+        if is_cov: std = profile.get('covariance', None)
+        if mean is not None and std is not None and (param in mean.params() and param in std.params()):
+            index = mean.logposterior.argmax()
+            mean = mean[param][index]
+            std = std.std(param) if is_cov else std[param][index]
+            x, pdf = get_gaussian_1d_profile(mean, std)
+        else:
+            return
+    ax.plot(x, pdf, **kwargs)
+
+
+def add_2d_contour(profile, param1, param2, ax=None, cl=(1, 2), color='C0', filled=False, pale_factor=0.6, alpha=1., **kwargs):
+    r"""
+    Add 2D contour to axes.
+    Requires :attr:`Profiles.contour` (or :attr:`Profiles.bestfit` and :attr:`Profiles.covariance` for Gaussian approximation).
+
+    Parameters
+    ----------
+    profile : Profile
+        :class:`Profile` instance.
+
+    param1 : Parameter, str
+        First parameter to plot contour for.
+
+    param2 : Parameter, str
+        Second parameter to plot contour for.
+
+    ax : matplotlib.axes.Axes, default=None
+        Axes where to add profile. Defaults to ``plt.gca()``.
+
+    cl : int, default=2
+        Plot contours up to ``cl`` :math:`\sigma`.
+
+    color : str, default='C0'
+        Color.
+
+    filled : bool, default=False
+        If ``True``, draw filled contours.
+
+    pale_factor : float, default=0.6
+        When ``filled``, lightens contour colors of increasing confidence levels by this amount.
+
+    alpha : float, default=1.
+        Opacity.
+
+    **kwargs : dict
+        Other arguments for :meth:`plt.plot`.
+    """
+    if ax is None: ax = plt.gca()
+
+    def pale_colors(color, nlevels, pale_factor=pale_factor):
+        """Make color paler. Same as GetDist."""
+        from matplotlib.colors import colorConverter
+        color = colorConverter.to_rgb(color)
+        colors = [color]
+        for _ in range(1, nlevels):
+            colors.append([c * (1 - pale_factor) + pale_factor for c in colors[-1]])
+        return colors
+
+    def get_gaussian_2d_contour(mean, cov, nsigma):
+        radius = utils.nsigmas_to_deltachi2(nsigma, ddof=2)**0.5
+        t = np.linspace(0., 2. * np.pi, 1000, endpoint=False)
+        ct, st = np.cos(t), np.sin(t)
+        sigx2, sigy2, sigxy = cov[0, 0], cov[1, 1], cov[0, 1]
+        a = radius * np.sqrt(0.5 * (sigx2 + sigy2) + np.sqrt(0.25 * (sigx2 - sigy2)**2. + sigxy**2.))
+        b = radius * np.sqrt(0.5 * (sigx2 + sigy2) - np.sqrt(0.25 * (sigx2 - sigy2)**2. + sigxy**2.))
+        th = 0.5 * np.arctan2(2. * sigxy, sigx2 - sigy2)
+        x1 = mean[0] + a * ct * np.cos(th) - b * st * np.sin(th)
+        x2 = mean[1] + a * ct * np.sin(th) + b * st * np.cos(th)
+        x1, x2 = (np.concatenate([xx, xx[:1]], axis=0) for xx in (x1, x2))
+        return x1, x2
+
+    cl = _make_list(cl)
+    ccolors = dict(zip(cl, pale_colors(color, len(cl), pale_factor=pale_factor)))
+    for nsigma in cl[::-1]:
+        contour = profile.get('contour', {nsigma: {}})[nsigma]
+        if (param1, param2) in contour:
+            x1, x2 = contour[param1, param2]
+        else:
+            mean = profile.get('bestfit', None)
+            cov = profile.get('covariance', None)
+            if mean is not None and cov is not None and all(param in mean.params() and param in cov.params() for param in [param1, param2]):
+                mean = mean.choice(params=[param1, param2], return_type='nparray')
+                cov = cov.view(params=[param1, param2], return_type='nparray')
+                x1, x2 = get_gaussian_2d_contour(mean, cov, nsigma)
+            else:
+                continue
+        if filled:
+            ax.fill(x1, x2, color=ccolors[nsigma], alpha=alpha)
+        ax.plot(x1, x2, color=ccolors[cl[0]], **kwargs)
+
+
+@plotting.plotter
+def plot_triangle_contours(profiles, params=None, labels=None, colors=None, linestyles=None, filled=False, pale_factor=0.6, cl=2, alpha=1.,
+                           kw_contour=None, labelsize=None, kw_legend=None, figsize=None, fig=None):
+    r"""
+    Triangle plot for likelihood profiling.
+    Requires :attr:`Profiles.profile` (or :attr:`Profiles.bestfit` and :attr:`Profiles.error` or :attr:`Profiles.covariance` for Gaussian approximation)
+    and :attr:`Profiles.contour` (or :attr:`Profiles.bestfit` and :attr:`Profiles.covariance` for Gaussian approximation).
+
+    Parameters
+    ----------
+    profiles : list, default=None
+        List of (or single) :class:`Profiles` instance(s).
 
     params : list, ParameterCollection, default=None
         Parameters to plot distribution for.
         Defaults to varied and not derived parameters.
 
-    labels : str, list, default=None
-        Name for  *GetDist* to use for input chains.
+    labels : list, str
+        Label(s) for profiles within each :class:`Profiles` instance.
+
+    colors : list, str, default=None
+        Color(s) for profiles within each :class:`Profiles` instance.
+
+    linestyles : list, str, default=None
+        Linestyle(s) for profiles within each :class:`Profiles` instance.
+
+    filled : list, bool, default=None
+        If ``True``, draw filled contours. Can be provided for each :class:`Profiles` instance.
+
+    pale_factor : float, default=0.6
+        When ``filled``, lightens contour colors of increasing confidence levels by this amount.
+
+    cl : int, default=2
+        Plot contours up to ``cl`` :math:`\sigma`.
+
+    alpha : list, float, default=1.
+        Opacity(ies). Can be provided for each :class:`Profiles` instance.
+
+    kw_contour : dict, default=None
+        Other options for plots.
+
+    labelsize : int, default=None
+        Label sizes.
+
+    fig : matplotlib.figure.Figure, list, array, default=None
+        Optionally, figure or array / list of axes.
 
     fn : str, Path, default=None
         Optionally, path where to save figure.
@@ -394,7 +590,130 @@ def plot_triangle(chains, params=None, labels=None, g=None, **kwargs):
     kw_save : dict, default=None
         Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
 
-    g : getdist subplot_plotter()
+    show : bool, default=False
+        If ``True``, show figure.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    profiles = _make_list(profiles)
+    params = _get_default_profiles_params(profiles, params=params, of=['bestfit', 'profile'], varied=True, derived=False)
+    nprofiles = len(profiles)
+    labels = _make_list(labels, length=nprofiles, default=None)
+    colors = _make_list(colors, length=nprofiles, default=None)
+    for i, color in enumerate(colors):
+        if color is None: colors[i] = 'C{:d}'.format(i)
+    alpha = _make_list(alpha, length=nprofiles, default=1.)
+    filled = _make_list(filled, length=nprofiles, default=False)
+    linestyles = _make_list(linestyles, length=nprofiles, default=None)
+    _add_legend = any(label is not None for label in labels)
+    kw_contour = dict(kw_contour or {})
+    kw_legend = dict(kw_legend or {})
+
+    ncols = nrows = len(params)
+    if fig is None:
+        from matplotlib.ticker import MaxNLocator
+        max_nticks = 5
+        factor = 2
+        pltdim = factor * nrows
+        lbdim = 0.5 * factor  # size of left/bottom margin
+        trdim = 0.2 * factor  # size of top/right margin
+        dim = lbdim + pltdim + trdim
+        figsize = figsize or (dim, dim)
+        #fig, lax = plt.subplots(nrows=nrows, ncols=ncols, figsize=(dim, dim))
+        fig = plt.figure(figsize=figsize)
+        gs = gridspec.GridSpec(nrows=nrows, ncols=ncols, figure=fig, wspace=0., hspace=0.)
+        lax = np.ndarray((nrows, ncols), dtype=object)
+        lax[...] = None
+        for i1, param1 in enumerate(params):
+            for i2 in range(nrows - 1, i1, -1):
+                param2 = params[i2]
+                ax = lax[i2, i1] = fig.add_subplot(gs[i2, i1], sharex=lax[nrows - 1, i1] if i2 != nrows - 1 else None, sharey=lax[i2, 0] if i1 > 0 else None)
+                if i1 > 0:
+                    ax.get_yaxis().set_visible(False)
+                else:
+                    if i2 < nrows - 1: ax.yaxis.set_major_locator(MaxNLocator(max_nticks, prune='lower'))
+                    ax.set_ylabel(param2.latex(inline=True), fontsize=labelsize)
+                if i2 < nrows - 1:
+                    ax.get_xaxis().set_visible(False)
+                else:
+                    if i1 > 0: ax.xaxis.set_major_locator(MaxNLocator(max_nticks, prune='lower'))
+                    ax.set_xlabel(param1.latex(inline=True), fontsize=labelsize)
+                #ax.set_aspect('equal', adjustable='box')
+                #ax.set_box_aspect(1)
+            #for i2 in range(i1 - 1, -1, -1):
+            #    ax = lax[i2, i1]
+            #    ax.set_frame_on(False)
+            #    ax.set_xticks([])
+            #    ax.set_yticks([])
+            ax = lax[i1, i1] = fig.add_subplot(gs[i1, i1], sharex=lax[nrows - 1, i1] if i1 != nrows - 1 else None)
+            #ax.set_box_aspect(1)
+            ax.set_ylim(0., 1.1)
+            ax.get_yaxis().set_visible(False)
+            if i1 < nrows - 1:
+                ax.get_xaxis().set_visible(False)
+            else:
+                if i1 > 0: ax.xaxis.set_major_locator(MaxNLocator(max_nticks, prune='lower'))
+                ax.set_xlabel(param1.latex(inline=True), fontsize=labelsize)
+            #ax.set_aspect('equal', adjustable='box')
+        # Format the figure.
+        lb = lbdim / dim
+        tr = (lbdim + pltdim) / dim
+        fig.subplots_adjust(left=lb, bottom=lb, right=tr, top=tr, wspace=0., hspace=0.)
+    else:
+        lax = fig.axes
+    lax = np.ravel(lax)
+
+    nsigmas = min(max([cl for pro in profiles for cl in pro.get('contour', [])] + [cl]), cl)
+    nsigmas = list(range(1, 1 + nsigmas))
+    for i1, param1 in enumerate(params):
+        for i2 in range(nrows - 1, i1, -1):
+            param2 = params[i2]
+            i = i2 * nrows + i1
+            for ipro, pro in enumerate(profiles):
+                color = colors[ipro]
+                add_2d_contour(pro, param1, param2, ax=lax[i], cl=nsigmas, color=colors[ipro], pale_factor=pale_factor,
+                               filled=filled[ipro], alpha=alpha[ipro], linestyle=linestyles[ipro], **kw_contour)
+        i = i1 * (nrows + 1)
+        for ipro, pro in enumerate(profiles):
+            add_1d_profile(pro, param1, ax=lax[i], color=colors[ipro], linestyle=linestyles[ipro], **kw_contour)
+
+    if _add_legend:
+        add_legend(colors=colors, labels=labels, kw_handle=kw_contour, fig=fig)
+
+    return fig
+
+'''
+Version not using profiles.
+
+@plotting.plotter
+def plot_triangle(samples, params=None, labels=None, g=None, **kwargs):
+    """
+    Triangle plot, specifically for chains, or Gaussian approximations.
+    For likelihood profiling, use :func:`plot_triangle_contours` instead.
+    Uses *GetDist* package as a backend.
+
+    Parameters
+    ----------
+    samples : list, default=None
+        List of (or single) :class:`Chain`, :class:`Profiles` or :class:`LikelihoodFisher` instance(s).
+
+    params : list, ParameterCollection, default=None
+        Parameters to plot distribution for.
+        Defaults to varied and not derived parameters.
+
+    labels : str, list, default=None
+        Name for  *GetDist* to use for input samples.
+
+    fn : str, Path, default=None
+        Optionally, path where to save figure.
+        If not provided, figure is not saved.
+
+    kw_save : dict, default=None
+        Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+    g : getdist subplot_plotter
         can be created with `g = getdist.plots.get_subplot_plotter()` and can be modified with g.settings
 
     show : bool, default=False
@@ -409,11 +728,116 @@ def plot_triangle(chains, params=None, labels=None, g=None, **kwargs):
     """
     from getdist import plots
     if g is None: g = plots.get_subplot_plotter()
-    chains = _make_list(chains)
-    labels = _make_list(labels, length=len(chains), default=None)
-    params = _get_default_chain_params(chains, params=params, varied=True, input=True)
-    chains = [chain.to_getdist(label=label, params=chain.params(name=params.names())) for chain, label in zip(chains, labels)]
-    g.triangle_plot(chains, [str(param) for param in params], **kwargs)
+    samples = _make_list(samples)
+    labels = _make_list(labels, length=len(samples), default=None)
+    params = _get_default_chain_params(samples, params=params, varied=True, input=True)
+    samples = [sample.to_getdist(label=label, params=sample.params(name=params.names())) for sample, label in zip(samples, labels)]
+    g.triangle_plot(samples, [str(param) for param in params], **kwargs)
+    return g
+'''
+
+
+@plotting.plotter
+def plot_triangle(samples, params=None, labels=None, g=None, contour_colors=None, contour_ls=None, filled=False, legend_ncol=None, legend_loc=None, **kwargs):
+    """
+    Triangle plot.
+    *GetDist* package is used to plot chains.
+    If :class:`Profiles` are provided, requires :attr:`Profiles.profile` (or :attr:`Profiles.bestfit` and :attr:`Profiles.error` or :attr:`Profiles.covariance` for Gaussian approximation)
+    and :attr:`Profiles.contour` (or :attr:`Profiles.bestfit` and :attr:`Profiles.covariance` for Gaussian approximation).
+
+    Parameters
+    ----------
+    samples : list, default=None
+        List of (or single) :class:`Chain`, :class:`Profiles` or :class:`LikelihoodFisher` instance(s).
+
+    params : list, ParameterCollection, default=None
+        Parameters to plot distribution for.
+        Defaults to varied and not derived parameters.
+
+    labels : str, list, default=None
+        Name for  *GetDist* to use for input samples.
+
+    fn : str, Path, default=None
+        Optionally, path where to save figure.
+        If not provided, figure is not saved.
+
+    kw_save : dict, default=None
+        Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+
+    g : getdist subplot_plotter
+        can be created with `g = getdist.plots.get_subplot_plotter()` and can be modified with g.settings
+
+    show : bool, default=False
+        If ``True``, show figure.
+
+    **kwargs : dict
+        Optional parameters for :meth:`GetDistPlotter.triangle_plot`.
+
+    Returns
+    -------
+    g : getdist.plots.GetDistPlotter
+    """
+    from desilike.samples import Chain, Profiles
+    from getdist import plots
+    if g is None: g = plots.get_subplot_plotter()
+    samples = _make_list(samples)
+    nsamples = len(samples)
+    labels = _make_list(labels, length=nsamples, default=None)
+    contour_colors = _make_list(contour_colors, length=nsamples, default=None)
+    for i, color in enumerate(contour_colors):
+        if color is None: contour_colors[i] = g.settings.solid_colors[i]
+    filled = _make_list(filled, length=nsamples, default=False)
+    contour_ls = _make_list(contour_ls, length=nsamples, default=None)
+
+    params = _get_default_chain_params([sample for sample in samples if isinstance(sample, Chain)], params=params, varied=True, input=True)
+    params += _get_default_profiles_params([sample for sample in samples if isinstance(sample, Profiles)], of=['bestfit', 'profile'], params=params, varied=True, input=True)
+    for_getdist, getdist_contour_colors, getdist_contour_ls, getdist_filled = [], [], [], []
+    profiles, profiles_colors, profiles_linestyles, profiles_filled = [], [], [], []
+    # Sort between what GetDist can handle (chains) and profiles
+    for idx, (sample, label) in enumerate(zip(samples, labels)):
+        if isinstance(sample, Chain) or (not hasattr(sample, 'profile') and not hasattr(sample, 'contour')):
+            for_getdist.append(sample.to_getdist(label=label, params=sample.params(name=params.names())))
+            getdist_contour_colors.append(contour_colors[idx])
+            getdist_contour_ls.append(contour_ls[idx])
+            getdist_filled.append(filled[idx])
+        else:
+            profiles.append(sample)
+            profiles_colors.append(contour_colors[idx])
+            profiles_linestyles.append(contour_ls[idx])
+            profiles_filled.append(filled[idx])
+
+    if for_getdist:
+        g.triangle_plot(for_getdist, [str(param) for param in params], contour_colors=getdist_contour_colors, contour_ls=getdist_contour_ls, filled=filled,
+                        legend_ncol=legend_ncol, legend_loc=legend_loc, **kwargs)
+        pale_factor = g.settings.solid_contour_palefactor
+        cl = g.settings.num_plot_contours
+        alpha = g.settings.alpha_factor_contour_lines
+        fig = g.subplots
+        kwargs = {}
+    else:
+        fig = None
+    fig = plot_triangle_contours(profiles, params=params, colors=profiles_colors, linestyles=profiles_linestyles, filled=profiles_filled,
+                                 pale_factor=pale_factor, cl=cl, alpha=alpha, fig=fig, **kwargs)
+    if for_getdist and profiles:
+        # From GetDist
+        if not legend_loc and g.settings.figure_legend_loc == 'upper center' and len(params) < 4:
+            legend_loc = 'upper right'
+        else:
+            legend_loc = legend_loc or g.settings.figure_legend_loc
+        args = {}
+        if 'upper' in legend_loc:
+            args['bbox_to_anchor'] = (g.plot_col / (2 if 'center' in legend_loc else 1), 1)
+            args['bbox_transform'] = g.subplots[0, 0].transAxes
+            args['borderaxespad'] = 0
+        profiles_lines = [dict(color=color, linestyle=linestyle) for color, linestyle in zip(profiles_colors, profiles_linestyles)]
+        g.contours_added += [None] * len(profiles_lines)
+        try: g.legend.remove()
+        except: pass
+        g.lines_added.update({len(for_getdist) + i: line for i, line in enumerate(profiles_lines)})
+        g.finish_plot(labels, legend_ncol=legend_ncol or g.settings.figure_legend_ncol, legend_loc=legend_loc,
+                      no_extra_legend_space=True, **args)
+    elif profiles:
+        add_legend(labels=labels, colors=contour_colors, linestyles=contour_ls, fig=fig)
     return g
 
 
@@ -500,7 +924,6 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
     -------
     fig : matplotlib.figure.Figure
     """
-    from matplotlib import pyplot as plt
     profiles = _make_list(profiles)
     if truth is True or (truth is None and kw_truth is not None):
         truth = profiles[0].bestfit[param].param.value
@@ -615,7 +1038,6 @@ def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=No
     -------
     fig : matplotlib.figure.Figure
     """
-    from matplotlib import pyplot as plt
     profiles = _make_list(profiles)
     params = _get_default_profiles_params(profiles, params=params, varied=True, derived=False)
     truths = _make_list(truths, length=len(params), default=None)
@@ -627,10 +1049,11 @@ def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=No
     ncols = len(profiles) if len(profiles) > 1 else maxpoints
     if fig is None:
         figsize = figsize or (ncols, 3. * nrows)
-        fig, lax = plt.subplots(nrows, 1, figsize=figsize)
+        fig, lax = plt.subplots(nrows, 1, figsize=figsize, squeeze=False)
         fig.subplots_adjust(wspace=0.1, hspace=0.1)
     else:
         lax = fig.axes
+    lax = np.ravel(lax)
 
     for iparam1, param1 in enumerate(params):
         ax = lax[iparam1]
@@ -714,7 +1137,6 @@ def plot_profile(profiles, params=None, offsets=0., nrows=1, labels=None, colors
     -------
     fig : matplotlib.figure.Figure
     """
-    from matplotlib import pyplot as plt
     profiles = _make_list(profiles)
     params = _get_default_profiles_params(profiles, params=params, of='profile', varied=True, derived=False)
     nprofiles = len(profiles)

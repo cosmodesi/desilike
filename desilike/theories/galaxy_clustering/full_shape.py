@@ -1101,7 +1101,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
             for param in list(params):
                 basename = param.basename
                 param.update(basename=basename + 'p')
-                params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
+                #params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
             for param in params.select(basename='b1p'):
                 param.update(prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=1.))
             for param in params.select(basename=['b2p', 'bsp', 'b3p']):
@@ -1161,7 +1161,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
             pars += [params['sn{:d}p'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2, 4]]
         else:
             pars = [params[name] for name in self.required_bias_params]
-        self.__dict__.update(dict(zip(['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2', 'sn4'], pars)))  # for derived parameters
+        #self.__dict__.update(dict(zip(['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2', 'sn4'], pars)))  # for derived parameters
         opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
         index = np.array([self.pt.ells.index(ell) for ell in self.ells])
         self.power = interp1d(self.k, self.pt.k, self.pt.combine_bias_terms_poles(pars, **opts, nd=self.nd)[index].T).T

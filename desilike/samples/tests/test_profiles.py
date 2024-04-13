@@ -11,15 +11,15 @@ def get_profiles(params):
     profiles.set(start=Samples([0. for param in params], params=params))
     params = profiles.start.params()
     for param in params: param.update(fixed=False)
-    profiles.set(bestfit=ParameterBestFit([rng.normal(0., 0.1) for param in params] + [-0.5], params=params + ['logposterior'], loglikelihood='LRG.loglikelihood'))
-    profiles.set(error=Samples([0.5 for param in params], params=params))
+    profiles.set(bestfit=ParameterBestFit([rng.normal(0., 0.1, size=1) for param in params] + [-0.5], params=params + ['logposterior'], loglikelihood='LRG.loglikelihood'))
+    profiles.set(error=Samples([[0.5] for param in params], params=params))
     profiles.set(covariance=ParameterCovariance(np.eye(len(params)), params=params))
     profiles.set(interval=Samples([(-0.5, 0.5) for param in params], params=params))
     x = np.linspace(-1., 1., 101)
     profiles.set(profile=Samples([[x, 1. + x**2] for param in params], params=params))
     t = np.linspace(0., 2. * np.pi, 101)
-    params2 = [(param1, param2) for param1 in params for param2 in params]
-    profiles.set(contour=ParameterContours([(np.cos(t), np.sin(t)) for param in params2], params=params2))
+    params2 = [(param1, param2) for i1, param1 in enumerate(params) for param2 in params[:i1 + 1]]
+    profiles.set(contour=ParameterContours({1: [(np.cos(t), np.sin(t)) for param in params2]}, params=params2))
     grid = np.meshgrid(*(np.linspace(0., 0.1, 3),) * (len(params) + 1), indexing='ij')
     profiles.set(grid=ParameterGrid(grid, params=params + ['logposterior']))
     return profiles
@@ -32,6 +32,7 @@ def test_misc():
     profiles = Profiles.concatenate(*profiles)
     assert profiles.bestfit._loglikelihood == 'LRG.loglikelihood'
     assert profiles.bestfit.shape == profiles.bestfit['logposterior'].shape == (5,)
+    assert profiles.contour[1]['params.b', 'params.a'][::-1] == profiles.contour[1]['params.a', 'params.b']
     fn = os.path.join(profiles_dir, 'profile.npy')
     profiles.save(fn)
     profiles2 = profiles.load(fn)

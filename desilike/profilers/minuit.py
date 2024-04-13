@@ -151,7 +151,7 @@ class MinuitProfiler(BaseProfiler):
             List of tuples of parameters for which to compute 2D contours.
             If a list of parameters is provided instead, contours are computed for unique tuples of parameters.
 
-        cl : float, int, default=None
+        cl : float, int, default=1
             Confidence level for the confidence contour.
             If not set or None, a standard 68.3 % confidence contour is produced.
             If 0 < cl < 1, the value is interpreted as the confidence level (a probability).
@@ -178,7 +178,7 @@ class MinuitProfiler(BaseProfiler):
                 self.log_warning('contour failed: {}'.format(exc))
             return profiles
         x1, x2 = x1x2.T
-        profiles.set(contour=ParameterContours([(ParameterArray(x1, param1, copy=True), ParameterArray(x2, param2, copy=True))]))
+        profiles.set(contour=ParameterContours({cl: [(ParameterArray(x1, param1, copy=True), ParameterArray(x2, param2, copy=True))]}))
         return profiles
 
     def profile(self, *args, **kwargs):

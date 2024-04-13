@@ -1,6 +1,7 @@
 """Definition of :class:`Profiles`, to hold products of likelihood profiling."""
 
 import os
+from collections import UserDict
 
 import numpy as np
 
@@ -134,7 +135,7 @@ class ParameterBestFit(Samples):
         return toret
 
 
-class ParameterContours(BaseParameterCollection):
+class ParameterContour(BaseParameterCollection):
 
     """Class holding parameter 2D contours (in practice, :class:`BaseParameterCollection` indexed by two parameters)."""
 
@@ -153,7 +154,7 @@ class ParameterContours(BaseParameterCollection):
             else:
                 param = item.param
             toret.append(param.name)
-        return tuple(toret)
+        return dict.fromkeys(toret)  # rather than tuple, as (a, b) <-> (b, a)
 
     @staticmethod
     def _get_param(items):
@@ -186,7 +187,26 @@ class ParameterContours(BaseParameterCollection):
             for param, value in zip(params, data):
                 self[param] = value
         else:
-            super(ParameterContours, self).__init__(data=data, attrs=attrs)
+            super(ParameterContour, self).__init__(data=data, attrs=attrs)
+
+    def __getitem__(self, name):
+        """
+        Return contour corresponding to parameters ``name``.
+
+        Parameters
+        ----------
+        name : Parameter, str, int
+            Parameter name.
+            If :class:`Parameter` instance, search for parameter with same name.
+            If integer, index in collection.
+        """
+        try:
+            return self.data[name]
+        except TypeError:
+            name = self._get_name(name)
+            items = self.data[self.index(name)]
+            item_names = [item.param.name for item in items]
+            return tuple(items[item_names.index(name)] for name in name)  # reorder given input names
 
     def __setitem__(self, name, item):
         """
@@ -306,6 +326,74 @@ class ParameterContours(BaseParameterCollection):
         if mpicomm.rank == dest:
             toret = cls.recv(source=source, tag=tag, mpicomm=mpicomm)
         return toret
+
+
+class MetaClass(type(BaseClass), type(UserDict)):
+
+    pass
+
+
+class ParameterContours(BaseClass, UserDict, metaclass=MetaClass):
+
+    def __init__(self, data=None, **kwargs):
+        self.data = dict(data or {})
+        for name, value in self.items():
+            self[name] = ParameterContour(value, **kwargs)
+
+    @property
+    def levels(self):
+        return list(self.data)
+
+    def deepcopy(self):
+        """Return a deep copy."""
+        import copy
+        return copy.deepcopy(self)
+
+    def update(self, other):
+        """Update contours."""
+        for cl, contour in other.items():
+            contour = ParameterContour(contour)
+            if cl in self.data:
+                self[cl].update(contour)
+            else:
+                self[cl] = contour
+
+    def clone(self, *args, **kwargs):
+        """Clone, i.e. copy and optionally update."""
+        new = self.copy()
+        new.update(*args, **kwargs)
+        return new
+
+    def __getstate__(self):
+        """Return this class' state dictionary."""
+        state = {name: value.__getstate__() for name, value in self.items()}
+        return state
+
+    def __setstate__(self, state):
+        """Set this class' state dictionary."""
+        self.data = {name: ParameterContour.from_state(state[name]) for name in state}
+
+    @classmethod
+    @CurrentMPIComm.enable
+    def bcast(cls, value, mpicomm=None, mpiroot=0):
+        """Broadcast input contours ``value`` from rank ``mpiroot`` to other processes."""
+        state = None
+        if mpicomm.rank == mpiroot:
+            state = value.__getstate__()
+            for name in state: state[name] = None
+        state = mpicomm.bcast(state, root=mpiroot)
+        for name in state:
+            if mpicomm.bcast(name in value if mpicomm.rank == mpiroot else None, root=mpiroot):
+                state[name] = ParameterContour.bcast(value.get(name) if mpicomm.rank == mpiroot else None, mpicomm=mpicomm, mpiroot=mpiroot).__getstate__()
+            else:
+                del state[name]
+        return cls.from_state(state)
+
+    def __eq__(self, other):
+        """Is ``self`` equal to ``other``, i.e. same type and attributes?"""
+        if not isinstance(other, ParameterContours):
+            return NotImplemented
+        return self.levels == other.levels and all(other.get(name, None) == self.get(name, None) for name in self.data)
 
 
 class ParameterProfiles(Samples):

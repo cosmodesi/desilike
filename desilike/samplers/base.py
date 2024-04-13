@@ -239,7 +239,8 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
             #raise ValueError
         except:
             if self.mpicomm.rank == 0:
-                self.log_info('Could *not* vmap input likelihood, got error:\n{}'.format(traceback.format_exc()))
+                self.log_info('Could *not* vmap input likelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.')
+                self.log_debug('Error was {}.'.format(traceback.format_exc()))
             vlikelihood = vmap(vlikelihood, backend=None, errors='return', return_derived=True)
         else:
             if self.mpicomm.rank == 0:

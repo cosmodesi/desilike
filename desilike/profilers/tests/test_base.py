@@ -40,7 +40,10 @@ def test_profilers():
         profiler.grid(params=['df', 'dm'], size=(2, 2))
         if Profiler is MinuitProfiler:
             profiler.interval(params=['df'])
-            profiler.contour(params=['df', 'dm'], size=10)
+            profiler.contour(params=['df', 'dm'], cl=1, size=10)
+            profiler.contour(params=['df', 'dm'], cl=2, size=10)
+            profiler.contour(params=['df', 'b1'], cl=2, size=10)
+            print(profiles.contour)
         print(profiler.profiles.to_stats())
         #likelihood()
         #observable.plot(show=True)

@@ -1071,12 +1071,12 @@ class BaseParameterCollection(BaseClass):
 
         if utils.is_sequence(data):
             dd = data
-            data = {}
             for item in dd:
-                data[self._get_name(item)] = item  # only name is provided
+                self[self._get_name(item)] = item  # only name is provided
 
-        for name, item in data.items():
-            self[name] = item
+        else:
+            for name, item in data.items():
+                self[name] = item
 
     def __setitem__(self, name, item):
         """
@@ -1176,7 +1176,7 @@ class BaseParameterCollection(BaseClass):
             has_default = True
             default = kwargs['default']
         try:
-            return self.data[self.index(name)]
+            return self[name]
         except KeyError:
             if has_default:
                 return default
@@ -2337,7 +2337,7 @@ class Samples(BaseParameterCollection):
         else return copy with local slice of samples.
         """
         if isinstance(name, (Parameter, str)):
-            return self.get(name)
+            return super().__getitem__(name)
         new = self.copy()
         try:
             index = [name] if not isinstance(name, slice) and np.ndim(name) == 0 else name

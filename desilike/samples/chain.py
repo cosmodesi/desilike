@@ -235,39 +235,23 @@ class Chain(Samples):
         new.logposterior[...] += dlogposterior
         return new
 
-    def get(self, name, *args, **kwargs):
+    def __getitem__(self, name):
         """
-        Return parameter array of name ``name`` in chain.
+        Return item corresponding to parameter ``name``.
 
         Parameters
         ----------
-        name : Parameter, str
+        name : Parameter, str, int
             Parameter name.
             If :class:`Parameter` instance, search for parameter with same name.
-
-        Returns
-        -------
-        array : ParameterArray
         """
-        has_default = False
-        if args:
-            if len(args) > 1:
-                raise SyntaxError('Too many arguments!')
-            has_default = True
-            default = args[0]
-        if kwargs:
-            if len(kwargs) > 1:
-                raise SyntaxError('Too many arguments!')
-            has_default = True
-            default = kwargs['default']
         try:
-            return self.data[self.index(name)]
+            return super().__getitem__(name)
         except KeyError:
             if name == self._weight:
                 return self.weight
-            if has_default:
-                return default
-            raise KeyError('Column {} does not exist'.format(name))
+            else:
+                raise
 
     @classmethod
     def from_getdist(cls, samples):
@@ -615,7 +599,7 @@ class Chain(Samples):
         """
         if params is None: params = self.params()
         if not is_parameter_sequence(params): params = [params]
-        params = [self[param].param for param in params]
+        params = ParameterCollection([self[param].param for param in params])  # eliminates duplicates
         values = [self[param].reshape(self.size, -1) for param in params]
         values = np.concatenate(values, axis=-1)
         covariance = np.atleast_2d(np.cov(values, rowvar=False, fweights=self.fweight.ravel(), aweights=self.aweight.ravel(), ddof=ddof))

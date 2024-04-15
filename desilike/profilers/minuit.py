@@ -26,6 +26,47 @@ class MinuitProfiler(BaseProfiler):
     name = 'minuit'
 
     def __init__(self, *args, gradient=False, **kwargs):
+        """
+        Initialize profiler.
+
+        Parameters
+        ----------
+        likelihood : BaseLikelihood
+            Input likelihood.
+
+        rng : np.random.RandomState, default=None
+            Random state. If ``None``, ``seed`` is used to set random state.
+
+        seed : int, default=None
+            Random seed.
+
+        max_tries : int, default=1000
+            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
+
+        profiles : str, Path, Profiles
+            Path to or profiles, to which new profiling results will be added.
+
+        ref_scale : float, default=1.
+            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor
+
+        rescale : bool, default=False
+            If ``True``, internally rescale parameters such their variation range is ~ unity.
+            Provide ``covariance`` to take parameter variations from;
+            else parameters' :attr:`Parameter.proposal` will be used.
+
+        covariance : str, Path, ParameterCovariance, Chain, default=None
+            If ``rescale``, path to or covariance or chain, which is used for rescaling parameters.
+            If ``None``, parameters' :attr:`Parameter.proposal` will be used instead.
+
+        gradient : bool, default=False
+            If ``True``, try to take the likelihood gradient (requires jax).
+
+        save_fn : str, Path, default=None
+            If not ``None``, save profiles to this location.
+
+        mpicomm : mpi.COMM_WORLD, default=None
+            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`
+        """
         super(MinuitProfiler, self).__init__(*args, **kwargs)
         self.with_gradient = bool(gradient)
 

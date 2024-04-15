@@ -97,7 +97,7 @@ class LikelihoodFisher(BaseClass):
         self._params = hessian.params()
         self._center = np.concatenate([np.ravel(c) for c in center])
         if self._center.size != hessian.shape[0]:
-            raise ValueError('Input center and hessian matrix have different sizes: {:d} vs {:d}'.format(self.center.size, hessian.shape[0]))
+            raise ValueError('Input center and hessian matrix have different sizes: {:d} vs {:d}'.format(self._center.size, hessian.shape[0]))
         gradient_has_derivs = getattr(gradient, 'derivs', None) is not None
         if gradient is None:
             self._gradient = np.zeros_like(center)

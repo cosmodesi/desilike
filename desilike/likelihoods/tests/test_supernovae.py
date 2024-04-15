@@ -7,10 +7,13 @@ from desilike.likelihoods.supernovae import PantheonSNLikelihood, PantheonPlusSN
 
 
 def test_install():
-    ref = [-5649.588564438464, -7526.797408441289, -7600.468586494155, -18.973744770948603, -1034.1324141181244]
+
     cosmo = Cosmoprimo(fiducial='DESI')
-    for ilike, Likelihood in enumerate([PantheonSNLikelihood, PantheonPlusSNLikelihood, PantheonPlusSHOESSNLikelihood, Union3SNLikelihood, DESY5SNLikelihood]):
-        if ilike  <= 3: continue
+    for Likelihood, ref in [(PantheonSNLikelihood, -5649.588564438464),
+                            (PantheonPlusSNLikelihood, -7526.797408441289),
+                            (PantheonPlusSHOESSNLikelihood, -7600.468586494155),
+                            (Union3SNLikelihood, -18.973744770948603),
+                            (DESY5SNLikelihood, -1034.1324141181244)]:
         if Likelihood is Union3SNLikelihood:
             params = {'dM': -9.}
         elif Likelihood is DESY5SNLikelihood:
@@ -21,8 +24,8 @@ def test_install():
         installer = Installer(user=True)
         installer(likelihood)
         likelihood(**params)
-        print(likelihood.loglikelihood, ref[ilike])
-        assert np.allclose(likelihood.loglikelihood, ref[ilike])
+        print(likelihood.loglikelihood, ref)
+        assert np.allclose(likelihood.loglikelihood, ref)
         assert np.allclose((likelihood + likelihood)(**params), 2. * likelihood(**params) - likelihood.logprior)
         for param in params:
             likelihood.all_params[param].update(prior=None, derived='.prec')

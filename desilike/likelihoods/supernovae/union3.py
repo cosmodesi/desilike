@@ -36,7 +36,7 @@ class Union3SNLikelihood(BaseSNLikelihood):
         # D_L = H0*d_L = 100*h * cosmoprimo.luminosity_distance(z) | Cosmoprimo returns distances in [Mpc/h]
         # Thus, the dependence on H0 is absorbed in dM
         self.flattheory = 5 * np.log10(100 * self.cosmo.luminosity_distance(z)) + 25
-        self.flatdata = self.light_curve_params['mu'] - dM
+        self.flatdata = self.light_curve_params['mb'] - dM
         BaseSNLikelihood.calculate(self)
 
     @plotting.plotter
@@ -87,11 +87,11 @@ class Union3SNLikelihood(BaseSNLikelihood):
 
         from desilike.install import exists_path, download
 
-        data_fn = os.path.join(data_dir, 'union3_mu.dat')
-        cov_fn = os.path.join(data_dir, 'union3.cov')
+        data_fn = os.path.join(data_dir, 'lcparam_full.txt')
+        cov_fn = os.path.join(data_dir, 'mag_covmat.txt')
 
         if installer.reinstall or not exists_path(data_fn):
-            github = 'https://raw.githubusercontent.com/rodri981/tmp-data/main/'
+            github = 'https://raw.githubusercontent.com/CobayaSampler/sn_data/master/Union3/'
             for fn in [data_fn, cov_fn]:
                 download(os.path.join(github, os.path.basename(fn)), fn)
 

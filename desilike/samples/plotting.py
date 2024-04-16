@@ -789,7 +789,7 @@ def plot_triangle(samples, params=None, labels=None, g=None, contour_colors=None
     filled = _make_list(filled, length=nsamples, default=False)
     contour_ls = _make_list(contour_ls, length=nsamples, default=None)
 
-    params = _get_default_chain_params([sample for sample in samples if isinstance(sample, Chain)], params=params, varied=True, input=True)
+    params = _get_default_chain_params([sample for sample in samples if not isinstance(sample, Profiles)], params=params, varied=True, input=True)
     params += _get_default_profiles_params([sample for sample in samples if isinstance(sample, Profiles)], of=['bestfit', 'profile'], params=params, varied=True, input=True)
     for_getdist, getdist_contour_colors, getdist_contour_ls, getdist_filled = [], [], [], []
     profiles, profiles_colors, profiles_linestyles, profiles_filled = [], [], [], []

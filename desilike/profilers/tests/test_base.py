@@ -159,6 +159,6 @@ def test_bao():
 if __name__ == '__main__':
 
     setup_logging()
-    test_profilers()
-    #test_solve()
+    #test_profilers()
+    test_solve()
     #test_bao()

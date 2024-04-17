@@ -268,6 +268,8 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         except:
             if self.mpicomm.rank == 0:
                 self.log_info('Could *not* jit input likelihood.')
+                self.log_info('Could *not* vmap input likelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.')
+                self.log_debug('Error was {}.'.format(traceback.format_exc()))
         else:
             if self.mpicomm.rank == 0:
                 self.log_info('Successfully jit input likelihood.')

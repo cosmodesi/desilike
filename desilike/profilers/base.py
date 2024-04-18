@@ -218,19 +218,21 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         values = self._params_forward_transform(values)
         points = {param.name: value for param, value in zip(self.varied_params, values)}
         raise_error = None
+        logposterior = -np.inf
         try:
             logposterior = self.likelihood(points)
         except Exception as exc:
             import traceback
             error = (exc, traceback.format_exc())
-            if isinstance(error, self.likelihood.catch_errors):
+            if isinstance(error[0], self.likelihood.catch_errors):
                 self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(repr(error[0]),
                                 points, error[1]))
-                logposterior = -np.inf
             else:
                 raise_error = error
             if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
                 warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0])))
+            if raise_error:
+                raise PipelineError('Error "{}" occured with stack trace:\n{}'.format(*raise_error))
         return -2. * logposterior
 
     def __getstate__(self):
@@ -270,6 +272,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                 self.log_info('Could *not* jit input likelihood.')
                 self.log_info('Could *not* vmap input likelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.')
                 self.log_debug('Error was {}.'.format(traceback.format_exc()))
+            vchi2(start[0], **aux)
         else:
             if self.mpicomm.rank == 0:
                 self.log_info('Successfully jit input likelihood.')
@@ -292,6 +295,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                 except:
                     if self.mpicomm.rank == 0:
                         self.log_info('Could *not* jit input gradient.')
+                    gchi2(start[0], **aux)
                 else:
                     if self.mpicomm.rank == 0:
                         self.log_info('Successfully jit input gradient.')

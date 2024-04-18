@@ -269,7 +269,7 @@ class BaseLikelihood(BaseCalculator):
             sum_logprior += param.prior(xx)
             # hack to run faster than calling param.prior --- saving ~ 0.0005 s
             #sum_logprior += -0.5 * (xx - param.prior.attrs['loc'])**2 / param.prior.attrs['scale']**2 if param.prior.dist == 'norm' else 0.
-            pipeline.input_values[param.name] = xx
+            #pipeline.input_values[param.name] = xx  # may lead to instabilities
             if derived is not None:
                 derived.set(ParameterArray(xx, param=param))
 

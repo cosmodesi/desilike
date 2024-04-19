@@ -286,7 +286,7 @@ class BAOExtractor(BasePowerSpectrumExtractor):
             for name in ['DH', 'DM', 'DV', 'DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd']:
                 setattr(self, name + '_fid', getattr(self, name))
                 delattr(self, name)
-
+ 
     def calculate(self):
         rd = self.cosmo.rs_drag
         self.DH = (constants.c / 1e3) / (100. * self.cosmo.efunc(self.z))
@@ -325,7 +325,9 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         - 'qap': single, Alcock-Paczynski parameter 'qap'
         - 'qisoqap': two parameters 'qiso', 'qap'
         - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
-
+        - 'qisobeta': two parameters 'qiso' (single isotropic parameter), 'betaphi' (Neff induced phase shift)
+        - 'qparqperbeta': three parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight),  'betaphi' (Neff induced phase shift)
+        
     fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
         Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
 

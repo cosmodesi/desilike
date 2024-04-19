@@ -21,3 +21,8 @@ params:
       dist: uniform
       limits: [0.8, 1.2]
     latex: '\alpha_{\mathrm{ap}}'
+  betaphi:
+    prior:
+      dist: uniform
+      limits: [-8.0, 10.0]
+    latex: '\beta_{\phi}'

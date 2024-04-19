@@ -290,13 +290,17 @@ class APEffect(BaseCalculator):
             self.params = self.params.select(basename=['qiso', 'qap'])
         elif self.mode == 'qparqper':
             self.params = self.params.select(basename=['qpar', 'qper'])
+        elif self.mode == 'qisobeta':
+            self.params = self.params.select(basename=['qiso', 'betaphi'])
+        elif self.mode == 'qparqperbeta': 
+            self.params = self.params.select(basename=['qpar', 'qper', 'betaphi'])
         elif self.mode in ['geometry', 'bao']:
             self.params = self.params.clear()
             if is_external_cosmo(cosmo):
                 self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
                 if self.mode == 'bao': self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
         else:
-            raise ValueError('unknown mode {}; it must be one of ["qiso", "qap", "qisoqap", "qparqper", "geometry", "bao"]'.format(self.mode))
+            raise ValueError('unknown mode {}; it must be one of ["qiso", "qap", "qisoqap", "qparqper", "qisobeta", "qparqperbeta", "geometry", "bao"]'.format(self.mode))
         self.cosmo = cosmo
         if self.mode in ['geometry', 'bao']:
             if cosmo is None:
@@ -336,6 +340,12 @@ class APEffect(BaseCalculator):
         elif self.mode == 'qisoqap':
             qiso, qap = params['qiso'], params['qap']  # qpar / qper
             qpar, qper = qiso * qap**(1 - self.eta), qiso * qap**(-self.eta)
+        elif self.mode == 'qisobeta':
+            qap, betaphi = params['qiso'], params['betaphi']
+            self.betaphi = betaphi
+        elif self.mode == 'qparperbeta': 
+            qpar, qper, betaphi = params['qpar'], params['qper'], params['betaphi']
+            self.betaphi = betaphi
         else:
             qpar, qper = params['qpar'], params['qper']
         self.qpar, self.qper = qpar, qper

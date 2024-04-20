@@ -1123,9 +1123,11 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
             tracer = self.options['tracer']
             if tracer is not None:
                 tracer = str(tracer).upper()
-                settings = {'LRG': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2) / 70.},
-                            'ELG': {'fsat': 0.1, 'sigv': 150*2.1**(1/2) / 70.},
-                            'QSO': {'fsat': 0.03, 'sigv': 150*(10)**(0.7/3)*(2.4)**(1/2) / 70.}}
+                # Mark Maus, Ruiyang Zhao
+                settings = {'BGS': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.2)**(1/2)/70.},
+                            'LRG': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
+                            'ELG': {'fsat': 0.10, 'sigv': 150*2.1**(1/2)/70.},
+                            'QSO': {'fsat': 0.03, 'sigv': 150*(10)**(0.7/3)*(2.4)**(1/2)/70.}}
                 try:
                     settings = settings[tracer]
                 except KeyError:

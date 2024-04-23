@@ -342,18 +342,20 @@ class APEffect(BaseCalculator):
             qpar, qper = qiso * qap**(1 - self.eta), qiso * qap**(-self.eta)
         elif self.mode == 'qisobeta':
             qap, betaphi = params['qiso'], params['betaphi']
-            self.betaphi = betaphi
         elif self.mode == 'qparperbeta': 
             qpar, qper, betaphi = params['qpar'], params['qper'], params['betaphi']
-            self.betaphi = betaphi
         else:
             qpar, qper = params['qpar'], params['qper']
         self.qpar, self.qper = qpar, qper
         self.qap = self.qpar / self.qper
         self.qiso = self.qpar**self.eta * self.qper**(1. - self.eta)
-
+        self.betaphi = params['betaphi']
+        
     def ap_k_mu(self, k, mu):
         return ap_k_mu(k, mu, qpar=self.qpar, qper=self.qper)
 
     def ap_s_mu(self, s, mu):
         return ap_s_mu(s, mu, qpar=self.qpar, qper=self.qper)
+
+    def ap_beta(self):
+        return self.betaphi

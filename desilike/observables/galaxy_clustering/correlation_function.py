@@ -128,10 +128,10 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             list_mocks = []
             for mocks in lmocks:
                 if utils.is_path(mocks):
-                    gmocks = glob.glob(mocks)
+                    gmocks = glob.glob(str(mocks))  # glob takes str
                     if not gmocks:
                         import warnings
-                        warnings.warn('file {mocks} is not found')
+                        warnings.warn('file {} is not found'.format(mocks))
                     list_mocks += sorted(gmocks)
                 else:
                     list_mocks.append(mocks)

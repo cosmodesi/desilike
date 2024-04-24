@@ -103,6 +103,10 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
                 setattr(self, 'pk_' + name, getattr(self, 'pknow_' + name + '_fid'))
 
     @property
+    def eta(self):
+        return self.apeffect.eta
+
+    @property
     def qpar(self):
         return self.apeffect.qpar
 
@@ -115,7 +119,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'z', 'fiducial', 'only_now', 'with_now', 'qpar', 'qper']:
+        for name in ['k', 'z', 'fiducial', 'only_now', 'with_now', 'qpar', 'qper', 'eta']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         for suffix in ['', '_fid']:
@@ -146,8 +150,8 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
                 state[name[:-2]] = PowerSpectrumInterpolator1D(k, pk)
         class TmpAPEffect(object): pass
         TmpAPEffect.ap_k_mu = APEffect.ap_k_mu
-        state['apeffect'] = TmpAPEffect()
-        state['apeffect'].qpar, state['apeffect'].qper = state.pop('qpar'), state.pop('qper')
+        state['apeffect'] = tmpap = TmpAPEffect()
+        tmpap.qpar, tmpap.qper, tmpap.eta = state.pop('qpar'), state.pop('qper'), state.pop('eta')
         super(BasePowerSpectrumTemplate, self).__setstate__(state)
 
 
@@ -337,12 +341,10 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     def initialize(self, *args, with_now='peakaverage', **kwargs):
         super(BAOPowerSpectrumTemplate, self).initialize(*args, with_now=with_now, **kwargs)
         # Set DM_over_rd, etc.
-        self.eta = self.apeffect.eta
         BAOExtractor.calculate(self)
         for name in ['DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd']:
             setattr(self, name + '_fid', getattr(self, name))
             delattr(self, name)
-        # No self.k defined
 
     def calculate(self, df=1.):
         super(BAOPowerSpectrumTemplate, self).calculate()
@@ -352,9 +354,15 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     def get(self):
         self.DH_over_rd = self.qpar * self.DH_over_rd_fid
         self.DM_over_rd = self.qper * self.DM_over_rd_fid
-        self.DV_over_rd = self.apeffect.qiso * self.DV_over_rd_fid
-        self.DH_over_DM = self.apeffect.qap * self.DH_over_DM_fid
+        self.DV_over_rd = self.qpar**self.eta * self.qper**(1. - self.eta) * self.DV_over_rd_fid
+        self.DH_over_DM = self.qpar / self.qper * self.DH_over_DM_fid
         return self
+
+    def __getstate__(self):
+        state = super().__getstate__()
+        for name in ['DH_over_rd_fid', 'DM_over_rd_fid', 'DH_over_DM_fid', 'DV_over_rd_fid']:
+            state[name] = getattr(self, name)
+        return state
 
 
 class StandardPowerSpectrumExtractor(BasePowerSpectrumExtractor):
@@ -449,7 +457,6 @@ class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate, StandardPowerSpec
         self.r = float(r)
         super(StandardPowerSpectrumTemplate, self).initialize(*args, **kwargs)
         self.DV = self.DV_fid = 1.
-        self.eta = self.apeffect.eta
         StandardPowerSpectrumExtractor.calculate(self)
         for name in ['DH', 'DM', 'DV', 'DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd', 'sigmar', 'fsigmar', 'f']:
             setattr(self, name + '_fid', getattr(self, name))
@@ -607,7 +614,6 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
         self.n_varied = self.params['dn'].varied
         self.r = float(r)
         super(ShapeFitPowerSpectrumTemplate, self).initialize(*args, with_now=with_now, **kwargs)
-        self.eta = self.apeffect.eta
         ShapeFitPowerSpectrumExtractor.calculate(self)
         for name in ['DH', 'DM', 'DV', 'DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd', 'Ap', 'f_sqrt_Ap', 'f_sigmar', 'n', 'm']:
             setattr(self, name + '_fid', getattr(self, name))
@@ -1042,7 +1048,6 @@ class WiggleSplitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.r = float(r)
         WiggleSplitPowerSpectrumExtractor.set_kernel(self, kernel=kernel)
         super(WiggleSplitPowerSpectrumTemplate, self).initialize(*args, apmode='qap', with_now=with_now, **kwargs)
-        self.eta = self.apeffect.eta
         WiggleSplitPowerSpectrumExtractor.calculate(self)
         for name in ['pk_tt_interpolator', 'sigmar', 'fsigmar', 'm']:
             setattr(self, name + '_fid', getattr(self, name))
@@ -1183,7 +1188,6 @@ class TurnOverPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     """
     def initialize(self, *args, **kwargs):
         super(TurnOverPowerSpectrumTemplate, self).initialize(*args, with_now=False, apmode='qap', **kwargs)
-        self.eta = self.apeffect.eta
         TurnOverPowerSpectrumExtractor.calculate(self)
         for name in ['DH_over_DM', 'DV_times_kTO', 'kTO', 'pkTO_dd']:
             setattr(self, name + '_fid', getattr(self, name))
@@ -1202,10 +1206,10 @@ class TurnOverPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.pknow_dd = self.pk_dd
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
-
-    def get(self):
         self.DV_times_kTO = self.apeffect.qiso * self.DV_times_kTO_fid
         self.DH_over_DM = self.apeffect.qap * self.DH_over_DM_fid
+
+    def get(self):
         return self
 
 

@@ -251,6 +251,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
 
         if self.k is None:
             self.k = [(edges[:-1] + edges[1:]) / 2. for edges in self.kedges]
+        self.k = [np.array(kk) for kk in self.k]
 
         if theory is None:
             from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
@@ -550,6 +551,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
 
         if self.s is None:
             self.s = [(edges[:-1] + edges[1:]) / 2. for edges in self.sedges]
+        self.s = [np.array(ss) for ss in self.s]
 
         if theory is None:
             from desilike.theories.galaxy_clustering import KaiserTracerCorrelationFunctionMultipoles
@@ -560,9 +562,9 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         if wmatrix is None:
             self.ellsin = tuple(self.ells)
             self.sin = np.unique(np.concatenate(self.s, axis=0))
-            if not all(np.allclose(ss, self.sin) for ss in self.s):
+            if not all(ss.shape == self.sin.shape and np.allclose(ss, self.sin) for ss in self.s):
                 self.smask = [np.searchsorted(self.sin, ss, side='left') for ss in self.s]
-                assert all(smask.min() >= 0 and smask.max() < ss.size for ss, smask in zip(self.s, self.smask))
+                assert all(np.allclose(self.sin[smask], ss) for ss, smask in zip(self.s, self.smask))
                 self.smask = [self.sin.size * i + smask for i, smask in enumerate(self.smask)]
                 self.smask = np.concatenate(self.smask, axis=0)
         elif isinstance(wmatrix, dict):

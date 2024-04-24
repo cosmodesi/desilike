@@ -47,6 +47,13 @@ class InitConfig(BaseConfig):
         self._func_params, self._args_func_params = None, tuple()
         super(InitConfig, self).__init__(*arg, **kwargs)
 
+    def setdefault(self, name, value, if_none=False):
+        if if_none:
+            if self.get(name, None) is None:
+                self[name] = value
+        else:
+            super().setdefault(name, value)
+
     @property
     def updated(self):
         """Whether the configuration parameters have been updated (which requires reinitialization of the calculator)."""

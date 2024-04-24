@@ -81,7 +81,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             self.wmatrix.init.update(klim=klim)
         self.wmatrix.init.update(kwargs)
         self.wmatrix.init.setdefault('shotnoise', self.shotnoise)
-        if self.shotnoise is None: self.shotnoise = 0.
+        #if self.shotnoise is None: self.shotnoise = 0.
         if self.flatdata is None:
             self.wmatrix(**data)
             self.flatdata = self.wmatrix.flatpower.copy()
@@ -132,10 +132,10 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             list_mocks = []
             for mocks in lmocks:
                 if utils.is_path(mocks):
-                    gmocks = glob.glob(mocks)
+                    gmocks = glob.glob(str(mocks))  # glob takes str
                     if not gmocks:
                         import warnings
-                        warnings.warn('file {mocks} is not found')
+                        warnings.warn('file {} is not found'.format(mocks))
                     list_mocks += sorted(gmocks)
                 else:
                     list_mocks.append(mocks)

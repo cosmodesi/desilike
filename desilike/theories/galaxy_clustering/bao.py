@@ -78,7 +78,7 @@ class BaseBAOWigglesPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         self.template = template
         kin = np.geomspace(min(self._klim[0], self.k[0] / 2, self.template.init.get('k', [1.])[0]), max(self._klim[1], self.k[-1] * 2, self.template.init.get('k', [0.])[0]), self._klim[2])  # margin for AP effect
         self.template.init.update(k=kin)
-        self.template.init.setdefault('with_now', 'peakaverage')
+        self.template.init.setdefault('with_now', 'peakaverage', if_none=True)
         self.z = self.template.z
         self.rs_drag_fid = self.template.fiducial.rs_drag
         if tuple(self.ells) == (0,):  # one should be able to initialize pt without parameters  --- just to k and ells

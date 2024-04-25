@@ -8,6 +8,7 @@ import traceback
 import numpy as np
 
 from . import mpi, jax
+from .jax import numpy as jnp
 from .utils import BaseClass, UserDict, Monitor, deep_eq, is_sequence
 from .io import BaseConfig
 from .parameter import Parameter, ParameterCollection, ParameterConfig, ParameterCollectionConfig, ParameterArray, Samples
@@ -127,20 +128,25 @@ def _params_args_or_kwargs(args, kwargs):
     return params
 
 
-def _check_params(params):
+def _check_params(params, with_jax=False):
     cshapes = []
     params = dict(params)
     names = list(params.keys())
     for name in names:
         array = params[name]
         if array is not None:
-            array = jax.to_nparray(array)
-            if array is None:
-                raise ValueError('is input array {}: {} a JAX array? if so, use jax.vmap instead'.format(name, array))
-            if not array.shape:
-                raise ValueError('input array {}: {} must be of rank >= 1 for lmap'.format(name, array))
-            cshapes.append(array.shape)
-            params[name] = array.ravel()
+            if with_jax:
+                arr = jnp.asarray(array)
+                cshapes.append(arr.shape)
+                params[name] = arr
+            else:
+                arr = jax.to_nparray(array)
+                if arr is None:
+                    raise ValueError('is input array {}: {} a JAX array? if so, use jax.vmap instead'.format(name, array))
+                if not arr.shape:
+                    raise ValueError('input array {}: {} must be of rank >= 1 for lmap'.format(name, array))
+                cshapes.append(arr.shape)
+                params[name] = arr.ravel()
 
     def _all_eq(cshapes):
         if cshapes:
@@ -197,6 +203,8 @@ def _check_states(states):
             errors[istate] = state[1]
             if ref is not None:
                 results.append(ref[0])
+            else:
+                results.append(None)
 
     return results, errors
 
@@ -252,6 +260,7 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
         def wrapper(params, **kw):
             _jwrapper = jwrapper
             if kw: _jwrapper = jax.vmap(functools.partial(calculate, **{**kwargs, **kw}))
+            params, shape = _check_params(params, with_jax=True)
             toret = _jwrapper(params)
             if errors == 'return':
                 return toret, {}
@@ -289,12 +298,16 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
                     states = _calculate_map(chunk_params, **kw)
                 else:  # calculate already vmap
                     states = calculate(chunk_params, **kw)
-                    if __wrapped__errors__ != 'return':
-                        states = (states, {})  # adding empty error
-                    states = (states[0], {chunk_offset + ierror: error for ierror, error in states[1].items()})
-                    for error in states[1].values():
-                        break
-                    states = [states]
+                    local_chunk_size = len(chunk_params[name])
+                    if local_chunk_size:
+                        if __wrapped__errors__ != 'return':
+                            states = (states, {})  # adding empty error
+                        states = (states[0], {chunk_offset + ierror: error for ierror, error in states[1].items()}, local_chunk_size)
+                        for error in states[1].values():
+                            break
+                        states = [states]
+                    else:
+                        states = []
                 tmp_states = mpicomm.reduce(states, root=0)
                 if mpicomm.rank == 0:
                     all_states += tmp_states
@@ -307,10 +320,22 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
                 results, errs = _check_states(all_states)
                 results = _concatenate_results(results, shape, add_dims=True)
             else:
-                results = _concatenate_results([states[0] for states in all_states], shape, add_dims=False)
                 errs = {}
                 for states in all_states:
                     errs.update(states[1])
+                if errs:  # fill in with results with placeholder
+                    ref = None
+                    for istates, states in enumerate(all_states):
+                        if len(states[1]) != states[2]:
+                            if isinstance(states[0], (tuple, list)):
+                                ref = type(states[0])(s[:1] if s is not None else None for s in states[0])
+                            else:
+                                ref = states[0][:1] if states[0] is not None else None
+                            break
+                    for istates, states in enumerate(all_states):
+                        if len(states[1]) == states[2]:  # all errors
+                            all_states[istates] = (_concatenate_results([ref] * states[2], (states[2],), add_dims=False),)
+                results = _concatenate_results([states[0] for states in all_states], shape, add_dims=False)
             # For MPI ranks != 0, let's put the correct structure for unpacking
             none_result = None
             if mpicomm.rank == 0:

@@ -515,6 +515,9 @@ class ParameterArray(numpy.lib.mixins.NDArrayOperatorsMixin):
     def __array__(self, *args, **kwargs):
         return np.asarray(self._value, *args, **kwargs)
 
+    def __jax_array__(self, *args, **kwargs):
+        return jnp.asarray(self._value, *args, **kwargs)
+
     def __format__(self, *args, **kwargs):
         return self._value.__format__(*args, **kwargs)
 

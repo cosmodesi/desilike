@@ -381,8 +381,11 @@ class BasePipeline(BaseClass):
                     if param.derived and param.fixed:
                         msg = 'Derived parameter {} of {} is already derived in {}.'.format(param, calculator, params_from_calculator[param.name])
                         if self.mpicomm.rank == 0: warnings.warn(msg)
-                    elif param != new_params[param]:
-                        raise PipelineError('Parameter {} of {} is different from that of {}: {}.'.format(param, calculator, params_from_calculator[param.name], param.__diff__(new_params[param])))
+                    else:
+                        diff = param.__diff__(new_params[param])
+                        if diff: # and list(diff) != ['value']:
+                            msg = 'Parameter {} of {} is different from that of {}: {}.'.format(param, calculator, params_from_calculator[param.name], diff)
+                            if self.mpicomm.rank == 0: warnings.warn(msg)
                 params_from_calculator[param.name] = calculator
                 #new_calculator_params.set(param)
                 new_params.set(param)

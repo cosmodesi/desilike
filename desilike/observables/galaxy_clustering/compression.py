@@ -2,7 +2,7 @@ from desilike.jax import numpy as jnp
 from desilike.parameter import Parameter
 from desilike.base import BaseCalculator
 from desilike.samples import load_source
-from desilike.theories.galaxy_clustering.power_template import BAOExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor
+from desilike.theories.galaxy_clustering.power_template import BAOExtractor, BAOPhaseShiftExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor
 
 
 def get_quantities(conflict_names):
@@ -107,6 +107,50 @@ class BAOCompressionObservable(BaseCompressionObservable):
     """
     def initialize(self, *args, **kwargs):
         super(BAOCompressionObservable, self).initialize(*args, extractor=BAOExtractor(), **kwargs)
+
+
+class BAOPhaseShiftCompressionObservable(BaseCompressionObservable):
+    """
+    BAO observable with phase shift: compare (compressed) BAO measurements
+    (in terms of ratios of distances to the sound horizon scale at the drag epoch, and shift) to theory predictions.
+
+    Reference
+    ---------
+    https://arxiv.org/pdf/1803.10741
+
+    Parameters
+    ----------
+    data : str, Path, array, Profiles, Chain
+        BAO parameters. If array, provide corresponding ``quantities``.
+        Else, chain, profiles or path to such objects.
+
+    covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
+        Covariance for BAO parameters. If 2D array, provide corresponding ``quantities``.
+        Else, chain, profiles, covariance or path to such objects.
+
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
+
+    quantities : list, tuple
+        Quantities to take from ``data`` and ``covariance``:
+        chose from ``['DM_over_rd', 'DH_over_rd', 'DV_over_rd', 'DM_over_DH', 'DV_over_rd', 'qpar', 'qper', 'qiso', 'qap', 'baoshift']``.
+
+    z : float, default=None
+        Effective redshift.
+
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiducial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+
+    **kwargs: dict
+        Optional arguments for :class:`BAOExtractor`.
+    """
+    def initialize(self, *args, **kwargs):
+        super(BAOPhaseShiftCompressionObservable, self).initialize(*args, extractor=BAOPhaseShiftExtractor(), **kwargs)
 
 
 class StandardCompressionObservable(BaseCompressionObservable):

@@ -365,6 +365,116 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         return state
 
 
+class BAOPhaseShiftExtractor(BAOExtractor):
+    """
+    Extract BAO + phase shift parameters from base cosmological parameters.
+
+    Reference
+    ---------
+    https://arxiv.org/pdf/1803.10741
+
+    Parameters
+    ----------
+    z : float, default=1.
+        Effective redshift.
+
+    eta : float, default=1./3.
+        Relation between 'qpar', 'qper' and 'qiso', 'qap' parameters:
+        ``qiso = qpar ** eta * qper ** (1 - eta)``.
+
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
+
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+
+    """
+    conflicts = BAOExtractor.conflicts + [('baoshift',)]
+
+    def initialize(self, *args, **kwargs):
+        super(BAOPhaseShiftExtractor, self).initialize(*args, **kwargs)
+        if self.fiducial is not None:
+            for name in ['N_eff']:
+                setattr(self, name + '_fid', getattr(self, name))
+                delattr(self, name)
+
+    def calculate(self):
+        super(BAOPhaseShiftExtractor, self).calculate()
+        self.N_eff = self.cosmo.N_eff
+
+    def get(self):
+        super(BAOPhaseShiftExtractor, self).get()
+        if self.fiducial is not None:
+            a_nu = 8.0 / 7.0 * ((11.0 / 4.0)**(4.0 / 3.0))
+            self.baoshift = (self.N_eff * (self.N_eff_fid + a_nu)) / (self.N_eff_fid * (self.N_eff + a_nu))
+        return self
+
+
+class BAOPhaseShiftPowerSpectrumTemplate(BAOPowerSpectrumTemplate):
+    r"""
+    BAO power spectrum template, including :math:`N_\mathrm{eff}`-induced phase shift, following Baumann et al 2018.
+
+    parameterization of the BAO phase shift due to the effective number of neutrino species.
+    From the Baumann et al 2018, best fit values for parameters in this function for a range of cosmologies are:
+
+    phi_inf = 0.227
+    kstar = 0.0324 h/Mpc
+    epsilon = 0.872
+
+    Reference
+    ---------
+    https://arxiv.org/pdf/1803.10741
+
+    Parameters
+    ----------
+    z : float, default=1.
+        Effective redshift.
+
+    with_now : str, default='peakaverage'
+        Compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
+
+    apmode : str, default='qparqper'
+        Alcock-Paczynski parameterization:
+
+        - 'qiso': single istropic parameter 'qiso'
+        - 'qap': single, Alcock-Paczynski parameter 'qap'
+        - 'qisoqap': two parameters 'qiso', 'qap'
+        - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
+
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+    """
+    def initialize(self, *args, phiinf=0.227, kstar=0.0324, epsilon=0.872, **kwargs):
+        super(BAOPhaseShiftPowerSpectrumTemplate, self).initialize(*args, **kwargs)
+        self.phiinf = float(phiinf)
+        self.kstar = float(kstar)
+        self.epsilon = float(epsilon)
+
+    def calculate(self, df=1., baoshift=1.):
+        super(BAOPhaseShiftPowerSpectrumTemplate, self).calculate(df=df)
+        k = self.pk_dd_interpolator_fid.k  # this is independent and much wider than self.k, typically
+        k = k[(k > k[0] * 2.) & (k < k[-1] / 2.)]  # to avoid hitting boundaries with qbao
+        kshift = self.phiinf / (1.0 + (self.kstar / k)**self.epsilon)  # eq. 3.3 of https://arxiv.org/pdf/1803.10741
+        wiggles = self.pk_dd_interpolator_fid(k + baoshift * kshift) - self.pknow_dd_interpolator_fid(k + baoshift * kshift)
+        # creating a new interpolator in case we need it (actually never used anywhere)
+        self.pk_dd_interpolator = PowerSpectrumInterpolator1D(k, self.pknow_dd_interpolator_fid(k) + wiggles)
+        self.pk_dd = self.pk_dd_interpolator(self.k)
+        self.pknow_dd = self.pknow_dd_interpolator(self.k)
+        if self.only_now:  # only used if we want to take wiggles out of our model (e.g. for BAO)
+            for name in ['dd_interpolator', 'dd']:
+                setattr(self, 'pk_' + name, getattr(self, 'pknow_' + name))
+
+
 class StandardPowerSpectrumExtractor(BasePowerSpectrumExtractor):
     r"""
     Extract standard RSD parameters :math:`(q_{\parallel}, q_{\perp}, df)`.

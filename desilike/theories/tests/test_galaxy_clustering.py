@@ -60,7 +60,7 @@ def test_templates():
     assert np.allclose([kTO, pkTO], [k0, 1.])
 
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles
-    from desilike.theories.galaxy_clustering import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BAOPowerSpectrumTemplate,
+    from desilike.theories.galaxy_clustering import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BAOPowerSpectrumTemplate, BAOPhaseShiftPowerSpectrumTemplate,
                                                      StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate,
                                                      BandVelocityPowerSpectrumTemplate, TurnOverPowerSpectrumTemplate, DirectWiggleSplitPowerSpectrumTemplate)
 
@@ -79,7 +79,7 @@ def test_templates():
     theory()
     assert 'n_s' not in theory.varied_params
 
-    for template in [FixedPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), BAOPowerSpectrumTemplate(),
+    for template in [FixedPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), BAOPowerSpectrumTemplate(), BAOPhaseShiftPowerSpectrumTemplate(),
                      StandardPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(apmode='qisoqap'),
                      WiggleSplitPowerSpectrumTemplate(), WiggleSplitPowerSpectrumTemplate(kernel='tophat'), DirectWiggleSplitPowerSpectrumTemplate(),
                      BandVelocityPowerSpectrumTemplate(kp=np.linspace(0.01, 0.1, 10)), TurnOverPowerSpectrumTemplate()]:
@@ -88,14 +88,15 @@ def test_templates():
         theory()
         template.f, template.f0
         template.init.update(only_now=True)
-        theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-        theory()
+        if 'turnover' not in template.__class__.__name__.lower():
+            theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
+            theory()
 
-    from desilike.theories.galaxy_clustering import BAOExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor
+    from desilike.theories.galaxy_clustering import BAOExtractor, BAOPhaseShiftExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor
     extractor = ShapeFitPowerSpectrumExtractor()
     dm = 0.02
     assert np.allclose(extractor(n_s=0.96 + dm).dm - extractor(n_s=0.96).dm, dm, atol=0., rtol=1e-5)
-    for extractor in [BAOExtractor(), StandardPowerSpectrumExtractor(),
+    for extractor in [BAOExtractor(), BAOPhaseShiftExtractor(), StandardPowerSpectrumExtractor(),
                       ShapeFitPowerSpectrumExtractor(), ShapeFitPowerSpectrumExtractor(dfextractor='fsigmar'),
                       WiggleSplitPowerSpectrumExtractor(), WiggleSplitPowerSpectrumExtractor(kernel='tophat'),
                       BandVelocityPowerSpectrumExtractor(kp=np.linspace(0.01, 0.1, 10)), TurnOverPowerSpectrumExtractor()]:
@@ -1579,7 +1580,7 @@ if __name__ == '__main__':
     #test_velocileptors_omegak()
     #test_params()
     #test_integ()
-    #test_templates()
+    test_templates()
     #test_wiggle_split_template()
     #test_emulator_templates()
     #test_bao()
@@ -1587,7 +1588,7 @@ if __name__ == '__main__':
     #test_broadband_bao()
     #test_flexible_bao()
     #test_full_shape()
-    test_emulator_direct()
+    #test_emulator_direct()
     #plot_direct()
     #test_emulator_shapefit()
     #test_emulator_wigglesplit()

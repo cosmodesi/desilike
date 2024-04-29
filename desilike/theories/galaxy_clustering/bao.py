@@ -4,6 +4,7 @@ import re
 
 import numpy as np
 from scipy import special, integrate
+from scipy.interpolate import splev, splrep 
 
 from desilike.base import BaseCalculator
 from desilike.cosmo import is_external_cosmo
@@ -13,6 +14,21 @@ from desilike.jax import jit, interp1d
 from .power_template import BAOPowerSpectrumTemplate
 from .base import (BaseTheoryPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles)
 
+
+def beta_fitting_func_baumann_et_al_18(k, phi_inf=0.227, kstar=0.0324, epsilon=0.872):
+        
+        """Fitting function for the scale-dependent component of the Baumann et al 2018 
+        parameterization of the BAO phase shift due to the effective number of neutrino species.
+        From the Baumann et al 2018, best fit values for parameters in this function for a range of cosmologies are:
+        
+        phi_infinity = 0.227
+        k_* = 0.0324 h/Mpc 
+        epsilon = 0.872
+        
+        """
+        
+        return phi_inf/( 1.0 + ((kstar/k) ** epsilon) )    
+    
 
 def _interp(template, name, k):
     return interp1d(jnp.log10(k), jnp.log10(template.k), getattr(template, name), method='cubic')
@@ -118,11 +134,15 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
         super(DampedBAOWigglesPowerSpectrumMultipoles, self).calculate()
         f = dbeta * self.template.f
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        kap_phaseshift = kap + (self.template.ap_beta()-1.0)*beta_fitting_func_baumann_et_al_18(kap)/self.rs_drag_fid # k + phase-shift from neutrinos 
         pknowap = _interp(self.template, 'pknow_dd', kap)
-        pkap = _interp(self.template, 'pk_dd', kap)
+        pkap = _interp(self.template, 'pk_dd', kap) 
+        pknowap_phaseshift = _interp(self.template, 'pknow_dd', kap_phaseshift)
+        pkap_phaseshift = _interp(self.template, 'pk_dd', kap_phaseshift) 
         if self.model == 'standard':  # Chen 2023
             k, mu = self.k[:, None], self.mu
-            pkwap = pkap - pknowap
+            pkwap = pkap - pknowap 
+            pkwap_phaseshift = pkap_phaseshift - pknowap_phaseshift # k + phase-shift from neutrinos 
             sigma_nl2ap = kap**2 * (sigmapar**2 * muap**2 + sigmaper**2 * (1. - muap**2))
             sk = 0.
             if self.mode == 'reciso': sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)  # taken at fiducial coordinates
@@ -130,13 +150,14 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
             fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
             B = (b1 + f * mu**2 * (1 - sk))**2 * fog
             pknow = _interp(self.template, 'pknow_dd', k)
-            pkmu = B * pknow + Cap * pkwap
+            pkmu = B * pknow + Cap * pkwap_phaseshift
             self.power = self.to_poles(pkmu)
         else:
             if 'fix-damping' in self.model: k, mu = self.k[:, None], self.mu
             else: k, mu = kap, muap
             sigma_nl2 = k**2 * (sigmapar**2 * mu**2 + sigmaper**2 * (1. - mu**2))
-            damped_wiggles = (pkap - pknowap) / pknowap * jnp.exp(-sigma_nl2 / 2.)
+            damped_wiggles = (pkap_phaseshift - pknowap_phaseshift)
+            damped_wiggles /= pknowap * jnp.exp(-sigma_nl2 / 2.)
             if 'move-all' in self.model: k, mu = kap, muap
             else: k, mu = self.k[:, None], self.mu
             pknow = _interp(self.template, 'pknow_dd', k)

@@ -155,6 +155,14 @@ params:
       limits: [0.99, 1.01]
     delta: 0.008
     latex: q_{\mathrm{ap}}
+  betaphi:
+    value: 1.
+    prior:
+      limits: [-8.0, 10.0]
+    ref:
+      limits: [-8.0, 10.0]
+    delta: 8.0
+    latex: \beta_{\phi}
   DM_over_rd:
     derived: True
     latex: D_{\mathrm{M}}/r_{\mathrm{d}}

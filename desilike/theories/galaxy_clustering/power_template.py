@@ -113,9 +113,16 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
     @property
     def qper(self):
         return self.apeffect.qper
+    
+    @property
+    def betaphi(self):
+        return self.apeffect.betaphi
 
     def ap_k_mu(self, k, mu):
         return self.apeffect.ap_k_mu(k, mu)
+    
+    def ap_beta(self):
+        return self.apeffect.ap_beta() 
 
     def __getstate__(self):
         state = {}
@@ -287,10 +294,10 @@ class BAOExtractor(BasePowerSpectrumExtractor):
             self.cosmo = self.fiducial
             self.calculate()
             self.cosmo = cosmo
-            for name in ['DH', 'DM', 'DV', 'DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd']:
+            for name in ['DH', 'DM', 'DV', 'DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd', 'Neff']:
                 setattr(self, name + '_fid', getattr(self, name))
                 delattr(self, name)
-
+ 
     def calculate(self):
         rd = self.cosmo.rs_drag
         self.DH = (constants.c / 1e3) / (100. * self.cosmo.efunc(self.z))
@@ -300,6 +307,7 @@ class BAOExtractor(BasePowerSpectrumExtractor):
         self.DM_over_rd = self.DM / rd
         self.DH_over_DM = self.DH / self.DM
         self.DV_over_rd = self.DV / rd
+        self.Neff = self.cosmo.N_eff 
 
     def get(self):
         if self.fiducial is not None:
@@ -307,6 +315,8 @@ class BAOExtractor(BasePowerSpectrumExtractor):
             self.qper = self.DM_over_rd / self.DM_over_rd_fid
             self.qiso = self.DV_over_rd / self.DV_over_rd_fid
             self.qap = self.DH_over_DM / self.DH_over_DM_fid
+            a_nu = 8.0/7.0 * ((11.0/4.0)**(4.0/3.0))
+            self.betaphi = ( self.Neff * (self.Neff_fid + a_nu) ) / ( self.Neff_fid * (self.Neff + a_nu) )
         return self
 
 
@@ -329,7 +339,9 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         - 'qap': single, Alcock-Paczynski parameter 'qap'
         - 'qisoqap': two parameters 'qiso', 'qap'
         - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
-
+        - 'qisobeta': two parameters 'qiso' (single isotropic parameter), 'betaphi' (Neff induced phase shift)
+        - 'qparqperbeta': three parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight),  'betaphi' (Neff induced phase shift)
+        
     fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
         Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
 

@@ -218,21 +218,26 @@ def test_fisher_galaxy():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     likelihood.all_params['logA'].update(derived='jnp.log(10 *  {A_s})', prior=None)
     likelihood.all_params['A_s'] = {'prior': {'limits': [1.9, 2.2]}, 'ref': {'dist': 'norm', 'loc': 2.083, 'scale': 0.01}}
-    #for param in likelihood.all_params:
-    #    param.update(fixed=True)
+    likelihood.all_params['sn0'].update(derived='.prec')
+    for param in likelihood.varied_params:
+        param.update(fixed=True)
+    for param in likelihood.all_params.select(name=['logA', 'A_s', 'sn0']):
+        param.update(fixed=False)
     #for param in likelihood.all_params.select(name=['wa_fld']):
     #    param.update(fixed=False)
-    for param in likelihood.all_params.select(name=['m_ncdm', 'w0_fld', 'wa_fld', 'Omega_k']):
-        param.update(fixed=False)
+    #for param in likelihood.all_params.select(name=['m_ncdm', 'w0_fld', 'wa_fld', 'Omega_k']):
+    #    param.update(fixed=False)
 
     #print(likelihood(w0_fld=-1), likelihood(w0_fld=-1.1))
-    print(likelihood(wa_fld=0), likelihood(wa_fld=0.1))
+    #print(likelihood(wa_fld=0), likelihood(wa_fld=0.1))
+    print(likelihood(sn0=0.0), likelihood(sn0=0.01))
     from desilike import Fisher
-    fisher = Fisher(likelihood)
+    fisher = Fisher(likelihood, method='finite')
     #like = fisher()
     #print(like.to_stats())
     from desilike import mpi
     fisher.mpicomm = mpi.COMM_SELF
+    print('=' * 60)
     like = fisher()
     print(like.params())
     print(np.diag(like._hessian))
@@ -516,9 +521,9 @@ if __name__ == '__main__':
     #test_misc()
     #test_differentiation()
     #test_solve()
-    #test_fisher_galaxy()
+    test_fisher_galaxy()
     #test_fisher_cmb()
     #test_speed()
     #test_jax()
-    test_autodiff()
+    #test_autodiff()
     #test_parameter()

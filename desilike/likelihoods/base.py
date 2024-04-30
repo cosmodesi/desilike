@@ -81,8 +81,6 @@ class BaseLikelihood(BaseCalculator):
 
         if solved_params:
             solved_params = ParameterCollection(solved_params)
-            values = dict(pipeline.input_values)
-            for param in solved_params: values[param.name] = 0.
 
             from desilike.fisher import Fisher
             solve_likelihoods = [likelihood for likelihood in likelihoods if any(param in solved_params for param in likelihood.all_params)]
@@ -100,6 +98,12 @@ class BaseLikelihood(BaseCalculator):
                         param = param.clone(derived=False if param in solved_params or param.depends else param.derived, fixed=param not in solved_params)
                         all_params.set(param)
                 solve_likelihood.all_params = all_params
+
+            # Just to reject from ``values`` parameters from which base ones are derived, and are not kept in solve_likelihood.all_params
+            input_params = [param for param in solve_likelihood.all_params if param.name in pipeline.input_values]
+            values = {param.name: pipeline.input_values[param.name] for param in input_params}
+            #print(values)
+            for param in solved_params: values[param.name] = 0.
 
             fisher = Fisher(solve_likelihood, method='auto')
             for likelihood in solve_likelihood.likelihoods:
@@ -142,14 +146,10 @@ class BaseLikelihood(BaseCalculator):
         x, dx, solve_likelihoods, derivs = [], [], [], None
         if solved_params:
             solved_params = ParameterCollection(solved_params)
-            solve_likelihoods, values = [], {}
+            solve_likelihoods = []
             for likelihood in likelihoods:
                 if any(param in solved_params for param in likelihood.all_params):
                     solve_likelihoods.append(likelihood)
-                    values.update({param.name: pipeline.input_values[param.name] for param in likelihood.all_params if param.name in pipeline.input_values})
-            #for param in solved_params:
-                #if not jnp.isfinite(values[param.name]):
-            #    values[param.name] = param.value
 
             derived = pipeline.derived
             #pipeline.more_calculate = lambda: None
@@ -171,6 +171,8 @@ class BaseLikelihood(BaseCalculator):
                     solve_likelihood.all_params = all_params
                     # Such that when initializing, Fisher calls the pipeline (on all ranks of likelihood.mpicomm) at its current parameters
                     # and does not use default ones (call to self.fisher(**values) below only updates the calculator states on the last rank)
+                    input_params = [param for param in solve_likelihood.all_params if param.name in pipeline.input_values]
+                    values = {param.name: pipeline.input_values[param.name] for param in input_params}
                     solve_likelihood.runtime_info.pipeline.input_values = values
 
                 def fisher(params):
@@ -233,6 +235,7 @@ class BaseLikelihood(BaseCalculator):
                         #print(np.diag(posterior_hessian), p._gradient)
                         return x, dx, posterior_hessian, prior_hessian, likelihoods_hessian, likelihoods_gradient
                 """
+                fisher.input_params = input_params
                 fisher.mpicomm = self.mpicomm
                 self.fisher = fisher
                 #self.fisher.varied_params = solved_params  # just to get same _derived attribute for solved_params != self.fisher.varied_params not to fail
@@ -246,6 +249,7 @@ class BaseLikelihood(BaseCalculator):
             #self.fisher.likelihood.runtime_info.pipeline.input_values = values
             #self.fisher.mpicomm = self.mpicomm
             #print('start fisher')
+            values = {param.name: pipeline.input_values[param.name] for param in self.fisher.input_params}
             x, dx, posterior_hessian, prior_hessian, likelihoods_hessian, likelihoods_gradient = self.fisher(values)
             #print('stop fisher')
             #pipeline.derived = derived

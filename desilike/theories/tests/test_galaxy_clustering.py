@@ -1546,18 +1546,19 @@ def plot_direct():
 def test_autodiff():
     import time
     import jax
-    from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, BAOPowerSpectrumTemplate, BAOPhaseShiftPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate
     from desilike.theories.galaxy_clustering import (DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, SimpleTracerPowerSpectrumMultipoles,
                                                      EFTLikeKaiserTracerPowerSpectrumMultipoles, TNSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles, PNGTracerPowerSpectrumMultipoles)
 
     for theory in [DampedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPowerSpectrumTemplate()),
+                   DampedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPhaseShiftPowerSpectrumTemplate()),
                    ResummedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPowerSpectrumTemplate()),
                    PNGTracerPowerSpectrumMultipoles(template=StandardPowerSpectrumTemplate()),
                    SimpleTracerPowerSpectrumMultipoles(template=FixedPowerSpectrumTemplate()),
                    KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate()),
                    EFTLikeKaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate()),
                    TNSTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate()),
-                   FOLPSAXTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate())][-1:]:
+                   FOLPSAXTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate())]:
         params = {param.name: param.value for param in theory.all_params}
         theory(params)
         theory.plot(show=True)
@@ -1567,6 +1568,19 @@ def test_autodiff():
             theory({param.name: param.prior.sample() if param.prior.is_proper() else param.value for param in theory.all_params})
         print((time.time() - t0) / niterations)
         jax.jacfwd(theory)(params)
+
+
+def test_bao_phaseshift():
+
+    from desilike.theories.galaxy_clustering import BAOPhaseShiftPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles
+
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPhaseShiftPowerSpectrumTemplate(z=1.))
+    theory()
+    fig = theory.plot()
+    theory(baoshift=3.)
+    theory.plot(fig=fig, show=True)
+
 
 
 if __name__ == '__main__':
@@ -1580,7 +1594,7 @@ if __name__ == '__main__':
     #test_velocileptors_omegak()
     #test_params()
     #test_integ()
-    test_templates()
+    #test_templates()
     #test_wiggle_split_template()
     #test_emulator_templates()
     #test_bao()
@@ -1597,3 +1611,4 @@ if __name__ == '__main__':
     #test_ap_diff()
     #test_ptt()
     #test_freedom()
+    test_bao_phaseshift()

@@ -2,7 +2,6 @@ import re
 
 import numpy as np
 from cosmoprimo import PowerSpectrumBAOFilter, PowerSpectrumInterpolator1D
-from scipy import interpolate
 
 from desilike.jax import numpy as jnp
 from desilike.base import BaseCalculator
@@ -415,6 +414,13 @@ class BAOPhaseShiftExtractor(BAOExtractor):
         return self
 
 
+
+def _interp(k, k1, pk1):
+    from desilike.jax import numpy as jnp
+    from desilike.jax import interp1d
+    return interp1d(jnp.log10(k), jnp.log10(k1), pk1, method='cubic')
+
+
 class BAOPhaseShiftPowerSpectrumTemplate(BAOPowerSpectrumTemplate):
     r"""
     BAO power spectrum template, including :math:`N_\mathrm{eff}`-induced phase shift, following Baumann et al 2018.
@@ -462,16 +468,13 @@ class BAOPhaseShiftPowerSpectrumTemplate(BAOPowerSpectrumTemplate):
 
     def calculate(self, df=1., baoshift=1.):
         super(BAOPhaseShiftPowerSpectrumTemplate, self).calculate(df=df)
-        k = self.pk_dd_interpolator_fid.k  # this is independent and much wider than self.k, typically
-        k = k[(k > k[0] * 2.) & (k < k[-1] / 2.)]  # to avoid hitting boundaries with qbao
-        kshift = self.phiinf / (1.0 + (self.kstar / k)**self.epsilon)  # eq. 3.3 of https://arxiv.org/pdf/1803.10741
-        wiggles = self.pk_dd_interpolator_fid(k + baoshift * kshift) - self.pknow_dd_interpolator_fid(k + baoshift * kshift)
+        kshift = self.phiinf / (1.0 + (self.kstar / self.k)**self.epsilon) / self.fiducial.rs_drag  # eq. 3.3 of https://arxiv.org/pdf/1803.10741
+        wiggles = _interp(self.k + (baoshift - 1.) * kshift, self.pk_dd_interpolator_fid.k, self.pk_dd_interpolator_fid.pk)
+        wiggles -= _interp(self.k + (baoshift - 1.) * kshift, self.pknow_dd_interpolator_fid.k, self.pknow_dd_interpolator_fid.pk)
         # creating a new interpolator in case we need it (actually never used anywhere)
-        self.pk_dd_interpolator = PowerSpectrumInterpolator1D(k, self.pknow_dd_interpolator_fid(k) + wiggles)
-        self.pk_dd = self.pk_dd_interpolator(self.k)
-        self.pknow_dd = self.pknow_dd_interpolator(self.k)
+        self.pk_dd = self.pknow_dd_fid + wiggles
         if self.only_now:  # only used if we want to take wiggles out of our model (e.g. for BAO)
-            for name in ['dd_interpolator', 'dd']:
+            for name in ['dd']:
                 setattr(self, 'pk_' + name, getattr(self, 'pknow_' + name))
 
 

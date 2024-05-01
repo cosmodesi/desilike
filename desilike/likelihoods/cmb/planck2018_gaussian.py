@@ -3,6 +3,7 @@ import numpy as np
 
 from desilike.likelihoods import BaseGaussianLikelihood
 from desilike.jax import numpy as jnp
+from desilike.parameter import ParameterCollection
 from desilike import utils
 
 
@@ -162,29 +163,43 @@ class BasePlanck2018GaussianLikelihood(BaseGaussianLikelihood):
     installer_section = 'BasePlanck2018GaussianLikelihood'
     data_file_id = 'COM_CosmoParams_base-plikHM_R3.01.zip'
 
-    def initialize(self, cosmo=None, data_dir=None, basename='base_plikHM_TTTEEE_lowl_lowE_lensing', source=None, weights=None):
+    def initialize(self, cosmo=None, fiducial=None, data_dir=None, params=None, basename='base_plikHM_TTTEEE_lowl_lowE_lensing', source=None, weights=None):
         self.name = basename
         self.base_chain_fn, self.base_dist_fn = planck2018_base_fn(basename, data_dir=data_dir)
         if cosmo is None:
             from desilike.theories.primordial_cosmology import Cosmoprimo
             cosmo = Cosmoprimo()
+        if params is None:
+            params = cosmo.init.params.select(varied=True)
+        else:
+            params = ParameterCollection(params)
         self.cosmo = cosmo
-        basenames = ['omegabh2', 'omegach2', 'omegak', 'w', 'wa', 'theta', 'tau', 'mnu', 'logA', 'ns', 'nrun', 'r']
         if source is None:
             source = 'covmat' if weights is None else 'chains'
         if source == 'covmat':
             if weights: raise ValueError('use source = "chains" to reweight chains')
             from desilike import LikelihoodFisher
+            convert = {param2: param1 for param1, param2 in convert_planck2018_params.items()}
+            basenames = []
+            for param in params:
+                if param.name in convert:
+                    basenames.append(convert[param.name])
+                else:
+                    raise ValueError('parameter {} not found in covariance matrix. Try source = "chains"'.format(param))
             self.fisher = LikelihoodFisher.read_getdist(self.base_dist_fn, basename=basenames)
+            for param in self.fisher.params(): param.update(name=convert_planck2018_params[param.name])
         elif source == 'chains':
-            chain = read_planck2018_chain(basename=basename, data_dir=data_dir, weights=weights)
-            self.fisher = chain.select(basename=basenames).to_fisher()
+            chain = read_planck2018_chain(basename=basename, data_dir=data_dir, params=params, weights=weights)
+            self.fisher = chain.select(name=params.names()).to_fisher()
         else:
             raise ValueError('source must be one of ["covmat", "chains"]')
-        for param in self.fisher.params(): param.update(name=convert_planck2018_params[param.name])
         params = self.fisher.params()
         self.cosmo_quantities = params.basenames()
-        super(BasePlanck2018GaussianLikelihood, self).initialize(data=self.fisher.mean(params=params), covariance=self.fisher.covariance(params=params))
+        if fiducial is not None:
+            data = np.array([fiducial[param.name] for param in params])
+        else:
+            data = self.fisher.mean(params=params)
+        super(BasePlanck2018GaussianLikelihood, self).initialize(data=data, covariance=self.fisher.covariance(params=params))
 
     @property
     def flattheory(self):

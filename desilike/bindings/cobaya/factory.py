@@ -308,6 +308,8 @@ def desilike_to_cobaya_params(params, engine=None):
         di['dist'] = prior.dist
         if prior.is_limited():
             di['min'], di['max'] = prior.limits
+        elif prior.dist == 'uniform':
+            di['min'], di['max'] = -np.inf, np.inf
         for name in ['loc', 'scale']:
             if hasattr(prior, name):
                 di[name] = getattr(prior, name)

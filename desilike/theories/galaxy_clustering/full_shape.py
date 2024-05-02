@@ -2063,10 +2063,18 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             cosmo_params['h'] = cosmo['h']
             cosmo_params['f0'] = self.template.f0
 
-        from folpsax import get_non_linear
-        table, table_now = get_non_linear(self.template.k, self.template.pk_dd, self.matrices,
-                                          pknow=self.template.pknow_dd,  kminout=self.k[0] * 0.8, kmaxout=self.k[-1] * 1.2, nk=max(len(self.k), 120),
-                                          kernels=self.options['kernels'], **cosmo_params)
+        if getattr(self, '_get_non_linear', None) is None:
+
+            from folpsax import get_non_linear
+
+            def _get_non_linear(pk_dd, pknow_dd, **cosmo_params):
+                return get_non_linear(self.template.k, pk_dd, self.matrices, pknow=pknow_dd,
+                                      kminout=self.k[0] * 0.8, kmaxout=self.k[-1] * 1.2, nk=max(len(self.k), 120),
+                                      kernels=self.options['kernels'], **cosmo_params)
+
+            self._get_non_linear = jit(_get_non_linear)
+
+        table, table_now = self._get_non_linear(self.template.pk_dd, self.template.pknow_dd, **cosmo_params)
 
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         self.pt = Namespace(jac=jac, kap=kap, muap=muap, kt=table[0], table=table[1:26], table_now=table_now[1:26], scalars=table[26:], scalars_now=table_now[26:])
@@ -2074,14 +2082,26 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
     def combine_bias_terms_poles(self, pars, nd=1e-4):
         table = (self.pt.kt,) + tuple(self.pt.table) + tuple(self.pt.scalars)
         table_now = (self.pt.kt,) + tuple(self.pt.table_now) + tuple(self.pt.scalars_now)
-        from folpsax import get_rsd_pkmu
         pars = list(pars) + [1. / nd]  # add shot noise
         b1 = pars[0]
         # add co-evolution part
         pars[2] = pars[2] - 4. / 7. * (b1 - 1.)  # bs
         pars[3] = pars[3] + 32. / 315. * (b1 - 1.)  # b3
-        pkmu = self.pt.jac * get_rsd_pkmu(self.pt.kap, self.pt.muap, pars, table, table_now)
-        return self.to_poles(pkmu)
+        ncols = len(table)
+
+        if getattr(self, '_get_poles', None) is None:
+
+            from folpsax import get_rsd_pkmu
+
+            def _get_poles(jac, kap, muap, pars, *table):
+                return self.to_poles(jac * get_rsd_pkmu(kap, muap, pars, table[:ncols], table[ncols:]))
+
+            self._get_poles = jit(_get_poles)
+
+        return self._get_poles(self.pt.jac, self.pt.kap, self.pt.muap, jnp.array(pars), *table, *table_now)
+
+        #pkmu = self.pt.jac * get_rsd_pkmu(self.pt.kap, self.pt.muap, pars, table, table_now)
+        #return self.to_poles(pkmu)
 
     def __getstate__(self):
         state = {}

@@ -929,7 +929,7 @@ def test_folpsax():
     from matplotlib import pyplot as plt
     z_pk = 0.5
     k = np.logspace(np.log10(0.01), np.log10(0.3), num=50) # array of k_ev in [h/Mpc]
-    PshotP = 1. / 0.0002118763
+    PshotP = 1e4 #1. / 0.0002118763
     # bias parameters
     b1 = 1.645
     b2 = -0.46
@@ -947,7 +947,7 @@ def test_folpsax():
 
     from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, FOLPSAXTracerPowerSpectrumMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles
     template = DirectPowerSpectrumTemplate(z=z_pk)
-    theory = FOLPSAXTracerPowerSpectrumMultipoles(template=template, k=k, shotnoise=PshotP, mu=3)
+    theory = FOLPSAXTracerPowerSpectrumMultipoles(template=template, k=k, mu=3)
 
     for m_ncdm in [0.2, 0.5]:
         theory(m_ncdm=m_ncdm)
@@ -1590,7 +1590,7 @@ if __name__ == '__main__':
     #test_velocileptors()
     #test_pybird()
     #test_folps()
-    #test_folpsax()
+    test_folpsax()
     #test_velocileptors_omegak()
     #test_params()
     #test_integ()
@@ -1611,4 +1611,4 @@ if __name__ == '__main__':
     #test_ap_diff()
     #test_ptt()
     #test_freedom()
-    test_bao_phaseshift()
+    #test_bao_phaseshift()

@@ -2061,7 +2061,7 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             cosmo_params['fnu'] = cosmo['Omega_ncdm_tot'] / cosmo['Omega_m']
             cosmo_params['Omega_m'] = cosmo['Omega_m']
             cosmo_params['h'] = cosmo['h']
-            cosmo_params['f0'] = self.template.f0
+        cosmo_params['f0'] = self.template.f0
 
         if getattr(self, '_get_non_linear', None) is None:
 

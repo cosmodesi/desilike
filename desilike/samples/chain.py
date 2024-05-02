@@ -600,7 +600,7 @@ class Chain(Samples):
         if params is None: params = self.params()
         if not is_parameter_sequence(params): params = [params]
         params = ParameterCollection([self[param].param for param in params])  # eliminates duplicates
-        values = [self[param].reshape(self.size, -1) for param in params]
+        values = [self[param][()].reshape(self.size, -1) for param in params]  # [()] to take order 0 derivatives
         values = np.concatenate(values, axis=-1)
         covariance = np.atleast_2d(np.cov(values, rowvar=False, fweights=self.fweight.ravel(), aweights=self.aweight.ravel(), ddof=ddof))
         solved_params = [param for param in params if param.solved]

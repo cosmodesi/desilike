@@ -2097,7 +2097,6 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
                 return self.to_poles(jac * get_rsd_pkmu(kap, muap, pars, table[:ncols], table[ncols:]))
 
             self._get_poles = jit(_get_poles)
-
         return self._get_poles(self.pt.jac, self.pt.kap, self.pt.muap, jnp.array(pars), *table, *table_now)
 
         #pkmu = self.pt.jac * get_rsd_pkmu(self.pt.kap, self.pt.muap, pars, table, table_now)

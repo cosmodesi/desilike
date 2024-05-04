@@ -145,7 +145,7 @@ def MontePythonLikelihoodFactory(cls, name_like=None, kw_like=None, module=None)
             cosmo = montepython_to_cosmoprimo(self._fiducial, classy)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
         # nuisance_parameter_names = data.get_mcmc_parameters(['nuisance'])
-        loglikelihood = self.like(**{name: data.mcmc_parameters[mname]['current'] * data.mcmc_parameters[mname]['scale'] for mname, name in self._nuisance_params.items()})
+        loglikelihood = self.like({name: data.mcmc_parameters[mname]['current'] * data.mcmc_parameters[mname]['scale'] for mname, name in self._nuisance_params.items()})
         return loglikelihood
 
     d = {'__init__': __init__, 'loglkl': loglkl}

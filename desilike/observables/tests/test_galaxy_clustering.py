@@ -568,6 +568,13 @@ def test_compression():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     test(likelihood)
 
+    rng = np.random.RandomState(seed=42)
+    observable = ShapeFitCompressionObservable(data=[1., 1., 0., 1.], covariance=rng.uniform(0., 1., (100, 4)), quantities=['qiso', 'qap', 'dm', 'df'], z=2.)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    assert likelihood.covariance.shape == (4,) * 2
+    assert not np.allclose(likelihood.hartlap2007_factor, 1.)
+    test(likelihood)
+
     observable = WiggleSplitCompressionObservable(data=[1., 1., 1., 0.], covariance=np.diag([0.01, 0.01, 0.01, 0.01]), quantities=['qap', 'qbao', 'df', 'dm'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     test(likelihood)

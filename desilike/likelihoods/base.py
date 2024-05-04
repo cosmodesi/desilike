@@ -421,6 +421,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
         Only applies if mocks are provided to input observables.
         'hartlap' to apply Hartlap 2007 factor (https://arxiv.org/abs/astro-ph/0608064).
         'percival2014' to apply Percival 2014 factor (https://arxiv.org/abs/1312.4841).
+        Can be a dictionary to specify the number of observations, ``{'nobs': nobs, 'correction': 'hartlap-percival2014'}``.
 
     precision : array, default=None
         Precision matrix to be used instead of the inverse covariance.
@@ -429,13 +430,16 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
         if not utils.is_sequence(observables):
             observables = [observables]
         self.nobs = None
+        if isinstance(correct_covariance, dict):
+            self.nobs = correct_covariance.get('nobs', None)
+            correct_covariance = correct_covariance['correction']
         self.observables = list(observables)
         for obs in observables: obs.all_params  # to set observable's pipelines, and initialize once (percival factor below requires all_params)
         covariance, scale_covariance, precision = (self.mpicomm.bcast(obj if self.mpicomm.rank == 0 else None, root=0) for obj in (covariance, scale_covariance, precision))
         if covariance is None:
             nmocks = [self.mpicomm.bcast(len(obs.mocks) if self.mpicomm.rank == 0 and getattr(obs, 'mocks', None) is not None else 0) for obs in self.observables]
             if any(nmocks):
-                self.nobs = nmocks[0]
+                if self.nobs is None: self.nobs = nmocks[0]
                 if not all(nmock == nmocks[0] for nmock in nmocks):
                     raise ValueError('Provide the same number of mocks for each observable, found {}'.format(nmocks))
                 if self.mpicomm.rank == 0:

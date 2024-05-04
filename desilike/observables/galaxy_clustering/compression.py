@@ -1,3 +1,4 @@
+import numpy as np
 from desilike.jax import numpy as jnp
 from desilike.parameter import Parameter
 from desilike.base import BaseCalculator
@@ -49,7 +50,7 @@ class BaseCompressionObservable(BaseCalculator):
             source = load_source(data, params=quantities or None, choice=True, return_type='dict')
             quantities = [Parameter(quantity) for quantity in source.keys()]
             self.quantities = [quantity.basename for quantity in quantities]
-            self.flatdata = [source[quantity.name] for quantity in quantities]
+            self.flatdata = np.array([source[quantity.name] for quantity in quantities])
         if self.mpicomm.rank == 0:
             self.log_info('Found quantities {}.'.format(self.quantities))
         for conflicts in self.conflict_names:
@@ -57,7 +58,11 @@ class BaseCompressionObservable(BaseCalculator):
                 raise ValueError('Found conflicting quantities: {}'.format(conflicts))
         self.covariance = None
         if covariance is not None:
-            self.covariance = load_source(covariance, params=quantities or None, cov=True, return_type='nparray')
+            # List of observations
+            if isinstance(covariance, np.ndarray) and covariance.ndim == 2 and covariance.shape[0] > covariance.shape[1]:
+                self.mocks = covariance  # ObservablesGaussianLikelihood takes care of the computation of the covariance
+            else:
+                self.covariance = load_source(covariance, params=quantities or None, cov=True, return_type='nparray')
 
     def calculate(self):
         self.flattheory = jnp.array([getattr(self.extractor, quantity) for quantity in self.quantities])
@@ -81,7 +86,8 @@ class BAOCompressionObservable(BaseCompressionObservable):
         Else, chain, profiles or path to such objects.
 
     covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
-        Covariance for BAO parameters. If 2D array, provide corresponding ``quantities``.
+        Covariance for BAO parameters. If 2D array, provide corresponding ``quantities``;
+        if ``covariance.shape[0] > covariance.shape[1]``, considered a list of observations.
         Else, chain, profiles, covariance or path to such objects.
 
     cosmo : BasePrimordialCosmology, default=None
@@ -164,7 +170,8 @@ class StandardCompressionObservable(BaseCompressionObservable):
         Else, chain, profiles or path to such objects.
 
     covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
-        Covariance for compressed parameters. If 2D array, provide corresponding ``quantities``.
+        Covariance for compressed parameters. If 2D array, provide corresponding ``quantities``;
+        if ``covariance.shape[0] > covariance.shape[1]``, considered a list of observations.
         Else, chain, profiles, covariance or path to such objects.
 
     cosmo : BasePrimordialCosmology, default=None
@@ -203,7 +210,8 @@ class ShapeFitCompressionObservable(BaseCompressionObservable):
         Else, chain, profiles or path to such objects.
 
     covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
-        Covariance for ShapeFit parameters. If 2D array, provide corresponding ``quantities``.
+        Covariance for ShapeFit parameters. If 2D array, provide corresponding ``quantities``;
+        if ``covariance.shape[0] > covariance.shape[1]``, considered a list of observations.
         Else, chain, profiles, covariance or path to such objects.
 
     cosmo : BasePrimordialCosmology, default=None
@@ -250,7 +258,8 @@ class WiggleSplitCompressionObservable(BaseCompressionObservable):
         Else, chain, profiles or path to such objects.
 
     covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
-        Covariance for band power parameters. If 2D array, provide corresponding ``quantities``.
+        Covariance for band power parameters. If 2D array, provide corresponding ``quantities``;
+        if ``covariance.shape[0] > covariance.shape[1]``, considered a list of observations.
         Else, chain, profiles, covariance or path to such objects.
 
     cosmo : BasePrimordialCosmology, default=None
@@ -333,7 +342,8 @@ class TurnOverCompressionObservable(BaseCompressionObservable):
         Else, chain, profiles or path to such objects.
 
     covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
-        Covariance for BAO parameters. If 2D array, provide corresponding ``quantities``.
+        Covariance for BAO parameters. If 2D array, provide corresponding ``quantities``;
+        if ``covariance.shape[0] > covariance.shape[1]``, considered a list of observations.
         Else, chain, profiles, covariance or path to such objects.
 
     cosmo : BasePrimordialCosmology, default=None

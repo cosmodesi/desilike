@@ -16,6 +16,53 @@ def test_precision():
     assert np.allclose(likelihood(), 0.)
 
 
+def test_hartlap():
+    from desilike.theories import Cosmoprimo
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    cosmo = Cosmoprimo()
+    cosmo.init.params['sigma8_m'] = {'derived': True, 'fixed': False, 'latex': r'\sigma_8'}
+    cosmo.init.params['omega_cdm'].update(derived='0.26 * {h}**2')
+    template = DirectPowerSpectrumTemplate(cosmo=cosmo)
+    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    size = 30
+    ells = (0, 2)
+    rng = np.random.RandomState(seed=42)
+    covariance = [rng.uniform(0., 1., size * len(ells)) for i in range(10 * size)]
+
+    observable = TracerPowerSpectrumMultipolesObservable(k=np.linspace(0.01, 0.3, size),
+                                                         ells=ells,
+                                                         data={},
+                                                         covariance=covariance,
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observable)
+    likelihood()
+    percival2014_factor = likelihood.percival2014_factor
+
+    cosmo = Cosmoprimo()
+    cosmo.init.params['sigma8_m'] = {'derived': True, 'fixed': False, 'latex': r'\sigma_8'}
+    template = DirectPowerSpectrumTemplate(cosmo=cosmo)
+    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    observable = TracerPowerSpectrumMultipolesObservable(k=np.linspace(0.01, 0.3, size),
+                                                         ells=ells,
+                                                         data={},
+                                                         covariance=covariance,
+                                                         theory=theory)
+
+    likelihood = ObservablesGaussianLikelihood(observable)
+    likelihood.all_params['omega_cdm'].update(derived='0.26 * {h}**2')
+    likelihood()
+    assert np.allclose(likelihood.percival2014_factor, percival2014_factor)
+
+    likelihood = ObservablesGaussianLikelihood(observable)
+    likelihood = likelihood + likelihood
+    likelihood.all_params['omega_cdm'].update(derived='0.26 * {h}**2')
+    likelihood()
+    for like in likelihood.likelihoods:
+        assert np.allclose(like.percival2014_factor, percival2014_factor)
+
+
 def test_fisher():
 
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
@@ -37,5 +84,6 @@ def test_fisher():
 if __name__ == '__main__':
 
     setup_logging()
-    test_precision()
-    test_fisher()
+    #test_precision()
+    test_hartlap()
+    #test_fisher()

@@ -40,7 +40,18 @@ class BaseLikelihood(BaseCalculator):
             catch_errors = tuple(catch_errors)
         self._catch_errors = catch_errors
         #self.fisher = None
-        self._more_initialize = self._marginalize_precision
+
+    def more_initialize(self):
+        pipeline = self.runtime_info.pipeline
+        likelihoods = getattr(self, 'likelihoods', [self])
+
+        # Reset precision and flatdata
+        for likelihood in likelihoods:
+            pipeline_initialize = getattr(likelihood, '_pipeline_initialize', None)
+            if pipeline_initialize is not None:
+                pipeline_initialize(pipeline)
+
+        self._marginalize_precision()
 
     def get(self):
         pipeline = self.runtime_info.pipeline
@@ -488,27 +499,33 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
                 self.precision = utils.blockinv([[self.covariance[sl1, sl2] for sl2 in slices] for sl1 in slices])
         else:
             self.precision /= scale_covariance
-        nbins = self.precision.shape[0]
-        if self.nobs is not None:
-            if 'hartlap' in correct_covariance:
-                self.hartlap2007_factor = (self.nobs - nbins - 2.) / (self.nobs - 1.)
-                if self.mpicomm.rank == 0:
-                    self.log_info('Covariance matrix with {:d} points built from {:d} observations.'.format(nbins, self.nobs))
-                    self.log_info('...resulting in a Hartlap 2007 factor of {:.4f}.'.format(self.hartlap2007_factor))
-                self.precision *= self.hartlap2007_factor
-            if 'percival' in correct_covariance:
-                # eq. 8 and 18 of https://arxiv.org/pdf/1312.4841.pdf
-                A = 2. / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
-                B = (self.nobs - nbins - 2.) / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
-                params = set()
-                for obs in self.observables: params |= set(obs.all_params.names(varied=True))
-                nparams = len(params)
-                self.percival2014_factor = (1 + B * (nbins - nparams)) / (1 + A + B * (nparams + 1))
-                if self.mpicomm.rank == 0:
-                    self.log_info('Covariance matrix with {:d} points built from {:d} observations, varying {:d} parameters.'.format(nbins, self.nobs, nparams))
-                    self.log_info('...resulting in a Percival 2014 factor of {:.4f}.'.format(self.percival2014_factor))
-                self.precision /= self.percival2014_factor
+        self.correct_covariance = correct_covariance
+        if self.nobs is not None and 'hartlap' in self.correct_covariance:
+            nbins = self.precision.shape[0]
+            self.hartlap2007_factor = (self.nobs - nbins - 2.) / (self.nobs - 1.)
+            if self.mpicomm.rank == 0:
+                self.log_info('Covariance matrix with {:d} points built from {:d} observations.'.format(nbins, self.nobs))
+                self.log_info('...resulting in a Hartlap 2007 factor of {:.4f}.'.format(self.hartlap2007_factor))
+            self.precision *= self.hartlap2007_factor
         super(ObservablesGaussianLikelihood, self).initialize(self.flatdata, covariance=self.covariance, precision=self.precision, **kwargs)
+        self.precision_hartlap2007 = self.precision.copy()
+
+    def _pipeline_initialize(self, pipeline):
+        varied_params = pipeline._params.select(varied=True, input=True)
+        if self.nobs is not None and 'percival' in self.correct_covariance:
+            nbins = self.precision_hartlap2007.shape[0]
+            # eq. 8 and 18 of https://arxiv.org/pdf/1312.4841.pdf
+            A = 2. / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
+            B = (self.nobs - nbins - 2.) / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
+            params = set()
+            for obs in self.observables: params |= set(obs.all_params.names())
+            params = [param for param in params if param in varied_params]
+            nparams = len(params)
+            self.percival2014_factor = (1 + B * (nbins - nparams)) / (1 + A + B * (nparams + 1))
+            if self.mpicomm.rank == 0:
+                self.log_info('Covariance matrix with {:d} points built from {:d} observations, varying {:d} parameters.'.format(nbins, self.nobs, nparams))
+                self.log_info('...resulting in a Percival 2014 factor of {:.4f}.'.format(self.percival2014_factor))
+            self.precision = self.precision_hartlap2007 / self.percival2014_factor
 
     def calculate(self):
         self.flatdiff = self.flattheory - self.flatdata

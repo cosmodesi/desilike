@@ -388,7 +388,7 @@ class BasePipeline(BaseClass):
         self.mpicomm = calculator._mpicomm
         for calculator in self.calculators:
             calculator.runtime_info.tocalculate = True
-            more_initialize = getattr(calculator, '_more_initialize', None)
+            more_initialize = getattr(calculator, 'more_initialize', None)
             if more_initialize is not None: self.more_initialize = more_initialize
         #self._params = ParameterCollection()
         self._set_params()
@@ -979,9 +979,10 @@ class BaseCalculator(BaseClass):
 
     @property
     def mpicomm(self):
-        if not self.runtime_info.initialized:
-            return self._mpicomm
-        return self.runtime_info.pipeline.mpicomm
+        return self._mpicomm
+        #if not self.runtime_info.initialized:
+        #    return self._mpicomm
+        #return self.runtime_info.pipeline.mpicomm
 
     @mpicomm.setter
     def mpicomm(self, mpicomm):

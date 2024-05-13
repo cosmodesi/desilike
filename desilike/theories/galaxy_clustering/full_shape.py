@@ -980,6 +980,23 @@ def lptvel_combine_bias_terms_poles(pktable, pars, nd=1e-4):
     return jnp.sum(pktable * bias_monomials, axis=-1)
 
 
+def get_stochastic_settings(tracer=None):
+    if tracer is not None:
+        tracer = str(tracer).upper()
+        # Mark Maus, Ruiyang Zhao
+        settings = {'BGS': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.2)**(1/2)/70.},
+                    'LRG': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
+                    'ELG': {'fsat': 0.10, 'sigv': 150*2.1**(1/2)/70.},
+                    'QSO': {'fsat': 0.03, 'sigv': 150*(10)**(0.7/3)*(2.4)**(1/2)/70.}}
+        try:
+            settings = settings[tracer]
+        except KeyError:
+            raise ValueError('unknown tracer: {}, please use any of {}'.format(tracer, list(settings.keys())))
+    else:
+        settings = {'fsat': 0.1, 'sigv': 5.}
+    return settings
+
+
 class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMultipoles):
 
     _default_options = dict(use_Pzel=False, kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=None, jn=5)
@@ -1041,8 +1058,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     prior_basis : str, default='physical'
         If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
         :math:`b_{1}^\prime = (1 + b_{1}) \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
-        :math:`\alpha_{0} = (1 + b_{1})^{2} \alpha_{0}^\prime, \alpha_{2} = (1 + b_{1}) f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + (1 + b_{1}) \alpha_{4}^\prime,
-        , \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`
+        :math:`\alpha_{0} = (1 + b_{1})^{2} \alpha_{0}^\prime, \alpha_{2} = (1 + b_{1}) f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + (1 + b_{1}) \alpha_{4}^\prime, \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`.
         :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{i} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{4} s_{n, 4}^\prime`
         In this case, ``use_Pzel = False``.
 
@@ -1120,23 +1136,9 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
         if self.is_physical_prior:
             for name in list(self.required_bias_params):
                 self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
-            tracer = self.options['tracer']
-            if tracer is not None:
-                tracer = str(tracer).upper()
-                # Mark Maus, Ruiyang Zhao
-                settings = {'BGS': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.2)**(1/2)/70.},
-                            'LRG': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
-                            'ELG': {'fsat': 0.10, 'sigv': 150*2.1**(1/2)/70.},
-                            'QSO': {'fsat': 0.03, 'sigv': 150*(10)**(0.7/3)*(2.4)**(1/2)/70.}}
-                try:
-                    settings = settings[tracer]
-                except KeyError:
-                    raise ValueError('unknown tracer: {}, please use any of {}'.format(tracer, list(settings.keys())))
-            else:
-                settings = {'fsat': 0.1, 'sigv': 5.}
+            settings = get_stochastic_settings(tracer=self.options['tracer'])
             for name, value in settings.items():
-                if self.options[name] is None:
-                    self.options[name] = value
+                if self.options[name] is None: self.options[name] = value
             if self.mpicomm.rank == 0:
                 self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
         super().set_params(pt_params=[])
@@ -1173,7 +1175,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
 
 
 class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
-    """
+    r"""
     Velocileptors LPT tracer correlation function multipoles.
     Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn*.
     For the matter (unbiased) correlation function, set all bias parameters to 0.
@@ -1192,8 +1194,7 @@ class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationF
     prior_basis : str, default='physical'
         If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
         :math:`b_{1}^\prime = (1 + b_{1}) \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
-        :math:`\alpha_{0} = (1 + b_{1})^{2} \alpha_{0}^\prime, \alpha_{2} = (1 + b_{1}) f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + (1 + b_{1}) \alpha_{4}^\prime,
-        , \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`
+        :math:`\alpha_{0} = (1 + b_{1})^{2} \alpha_{0}^\prime, \alpha_{2} = (1 + b_{1}) f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + (1 + b_{1}) \alpha_{4}^\prime, \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`.
 
     **kwargs : dict
         Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=None, jn=5, mu=8``.
@@ -1922,6 +1923,8 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         sigma2t = FOLPS.Sigma2Total(k, muap, table_now)
         table_now = FOLPS.Table_interp(kap, k, table_now)
         self.pt = Namespace(kap=kap, muap=muap, table=table, table_now=table_now, sigma2t=sigma2t, f0=f0, jac=jac)
+        self.sigma8 = self.template.sigma8
+        self.fsigma8 = self.template.f * self.sigma8
 
     def combine_bias_terms_poles(self, pars, nd=1e-4):
         return self.to_poles(folps_combine_bias_terms_pkmu(self.pt.kap, self.pt.muap, self.pt.jac, self.pt.f0,
@@ -1929,7 +1932,7 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'z', 'ells', 'wmu']:
+        for name in ['k', 'z', 'ells', 'wmu', 'sigma8', 'fsigma8']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         for name in self._pt_attrs:
@@ -1938,7 +1941,7 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         return state
 
     def __setstate__(self, state):
-        for name in ['k', 'z', 'ells', 'wmu']:
+        for name in ['k', 'z', 'ells', 'wmu', 'sigma8', 'fsigma8']:
             if name in state: setattr(self, name, state.pop(name))
         self.pt = Namespace(**state)
 
@@ -1948,7 +1951,7 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
 
 
 class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
-    """
+    r"""
     FOLPS tracer power spectrum multipoles.
     Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
     By default, bs and b3 are fixed to 0, following co-evolution.
@@ -1968,15 +1971,30 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     shotnoise : float, default=1e4
         Shot noise (which is usually marginalized over).
 
+    prior_basis : str, default='physical'
+        If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
+        :math:`b_{1}^\prime = b_{1} \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
+        :math:`\alpha_{0} = b_{1}^{2} \alpha_{0}^\prime, \alpha_{2} = b_{1} f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + b_{1} \alpha_{4}^\prime, \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`.
+        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{i} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{4} s_{n, 4}^\prime`.
+
+    tracer : str, default=None
+        If ``prior_basis = 'physical'``, tracer to load preset ``fsat`` and ``sigv``. One of ['LRG', 'ELG', 'QSO'].
+
+    fsat : float, default=None
+        If ``prior_basis = 'physical'``, satellite fraction to assume.
+
+    sigv : float, default=None
+        If ``prior_basis = 'physical'``, velocity dispersion to assume.
+
     Reference
     ---------
     - https://arxiv.org/abs/2208.02791
     - https://github.com/henoriega/FOLPS-nu
     """
-    _default_options = dict(freedom=None)
+    _default_options = dict(freedom=None, prior_basis='standard', tracer=None, fsat=None, sigv=None, shotnoise=1e4)
 
     @staticmethod
-    def _params(params, freedom=None):
+    def _params(params, freedom=None, prior_basis='physical'):
         fix = []
         if freedom in ['min', 'max']:
             for param in params.select(basename=['b1']):
@@ -1993,28 +2011,66 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             fix += ['b3', 'bs', 'ct']
         for param in params.select(basename=fix):
             param.update(value=0., fixed=True)
+        if prior_basis == 'physical':
+            for param in list(params):
+                basename = param.basename
+                param.update(basename=basename + 'p')
+                #params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
+            for param in params.select(basename='b1p'):
+                param.update(prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=1.))
+            #for param in params.select(basename=['b2p', 'bsp', 'b3p']):
+            #    param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
+            for param in params.select(basename='alpha*p'):
+                param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
+            for param in params.select(basename='sn*p'):
+                param.update(prior=dict(dist='norm', loc=0., scale=2. if 'sn0' in param.basename else 5.), ref=dict(dist='norm', loc=0., scale=1.))
         return params
 
     def set_params(self):
         self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'ct', 'sn0', 'sn2']
-        default_values = {'b1': 1.6}
+        default_values = {'b1': 2.}
         self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
+        self.is_physical_prior = self.options['prior_basis'] == 'physical'
+        if self.is_physical_prior:
+            for name in list(self.required_bias_params):
+                self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
+            settings = get_stochastic_settings(tracer=self.options['tracer'])
+            for name, value in settings.items():
+                if self.options[name] is None: self.options[name] = value
+            if self.mpicomm.rank == 0:
+                self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
         super().set_params(pt_params=[])
         fix = []
         if 4 not in self.ells: fix += ['alpha4']
         if 2 not in self.ells: fix += ['alpha2', 'sn2']
         for param in self.init.params.select(basename=fix):
             param.update(value=0., fixed=True)
+        self.nd = 1e-4
+        self.fsat = self.snd = 1.
+        if self.is_physical_prior:
+            self.fsat, self.snd = self.options['fsat'], self.options['shotnoise'] * self.nd  # normalized by 1e-4
 
     def calculate(self, **params):
         super(FOLPSTracerPowerSpectrumMultipoles, self).calculate()
-        pars = [params.get(name, value) for name, value in self.required_bias_params.items()]
+        params = {**self.required_bias_params, **params}
+        if self.is_physical_prior:
+            sigma8 = self.pt.sigma8
+            f = self.pt.fsigma8 / sigma8
+            pars = [params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p'] / sigma8**3]
+            b1 = pars[0]
+            pars += [b1**2 * params['alpha0p'], f * b1 * (params['alpha0p'] + params['alpha2p']),
+                     f * (f * params['alpha2p'] + b1 * params['alpha4p']), f**2 * params['alpha4p']]
+            sigv = self.options['sigv']
+            pars += [params['sn{:d}p'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
+        else:
+            pars = [params[name] for name in self.required_bias_params]
+        #self.__dict__.update(dict(zip(['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2'], pars)))  # for derived parameters
         opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
         self.power = self.pt.combine_bias_terms_poles(pars, **opts, nd=self.nd)
 
 
 class FOLPSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
-    """
+    r"""
     FOLPS tracer correlation function multipoles.
     Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
     By default, bs and b3 are fixed to 0, following co-evolution.
@@ -2030,6 +2086,11 @@ class FOLPSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFrom
 
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    prior_basis : str, default='physical'
+        If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
+        :math:`b_{1}^\prime = b_{1} \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
+        :math:`\alpha_{0} = b_{1}^{2} \alpha_{0}^\prime, \alpha_{2} = b_{1} f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + b_{1} \alpha_{4}^\prime, \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`.
 
     Reference
     ---------
@@ -2123,7 +2184,7 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
 
 
 class FOLPSAXTracerPowerSpectrumMultipoles(FOLPSTracerPowerSpectrumMultipoles):
-    """
+    r"""
     FOLPS tracer power spectrum multipoles.
     Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
     By default, bs and b3 are fixed to 0, following co-evolution.
@@ -2143,6 +2204,22 @@ class FOLPSAXTracerPowerSpectrumMultipoles(FOLPSTracerPowerSpectrumMultipoles):
     shotnoise : float, default=1e4
         Shot noise (which is usually marginalized over).
 
+    prior_basis : str, default='physical'
+        If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
+        :math:`b_{1}^\prime = b_{1} \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
+        :math:`\alpha_{0} = b_{1}^{2} \alpha_{0}^\prime, \alpha_{2} = b_{1} f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + b_{1} \alpha_{4}^\prime, \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`.
+        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{i} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{4} s_{n, 4}^\prime`.
+
+    tracer : str, default=None
+        If ``prior_basis = 'physical'``, tracer to load preset ``fsat`` and ``sigv``. One of ['LRG', 'ELG', 'QSO'].
+
+    fsat : float, default=None
+        If ``prior_basis = 'physical'``, satellite fraction to assume.
+
+    sigv : float, default=None
+        If ``prior_basis = 'physical'``, velocity dispersion to assume.
+
+
     Reference
     ---------
     - https://arxiv.org/abs/2208.02791
@@ -2151,7 +2228,7 @@ class FOLPSAXTracerPowerSpectrumMultipoles(FOLPSTracerPowerSpectrumMultipoles):
 
 
 class FOLPSAXTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
-    """
+    r"""
     FOLPS tracer correlation function multipoles.
     Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
     By default, bs and b3 are fixed to 0, following co-evolution.
@@ -2167,6 +2244,12 @@ class FOLPSAXTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFr
 
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    prior_basis : str, default='physical'
+        If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
+        :math:`b_{1}^\prime = b_{1} \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
+        :math:`\alpha_{0} = b_{1}^{2} \alpha_{0}^\prime, \alpha_{2} = b_{1} f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + b_{1} \alpha_{4}^\prime, \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`.
+
 
     Reference
     ---------

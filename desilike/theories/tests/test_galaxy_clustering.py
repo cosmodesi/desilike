@@ -682,13 +682,22 @@ def test_freedom():
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles
     from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles
 
+    for TheoryPower in [LPTVelocileptorsTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles]:
+        shotnoise = 3e-6
+        theory = TheoryPower(ells=(0, 2), freedom='max', prior_basis='physical', shotnoise=shotnoise)
+        theory()
+        assert theory.snd == shotnoise * 1e-4
+        for name in ['b1p']:
+            assert theory.all_params[name].prior.dist == 'uniform'
+        for name in ['b2p', 'bsp', 'b3p']:
+            assert name in theory.all_params
+
     ntemplate = 4
     for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles],
                                        [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles]):
-        for freedom in [None, 'min', 'max'][1:]:
+        for freedom in [None, 'min', 'max']:
             for ells in [(0, 2), (0, 2, 4)]:
                 kwargs = {}
-                if 'velocileptors' in TheoryPower.__name__.lower() and freedom in ['min', 'max']: kwargs['prior_basis'] = None
                 power = TheoryPower(ells=ells, freedom=freedom, **kwargs)
                 print('#' * 60)
                 print(TheoryPower.__name__, ells, freedom, power.varied_params)
@@ -713,11 +722,6 @@ def test_freedom():
                     for param in theory.all_params:
                         if param.basename in basenames:
                             assert param.namespace == 'LRG'
-                if 'velocileptors' in TheoryPower.__name__.lower() and freedom == 'max' and kwargs.get('prior_basis', None) == 'physical':
-                    for name in ['LRG.b1p']:
-                        assert theory.all_params[name].prior.dist == 'uniform'
-                    for name in ['LRG.b2p', 'LRG.bsp', 'LRG.b3p']:
-                        assert theory.all_params[name].prior.dist == 'norm'
 
 
 def test_velocileptors():
@@ -1590,7 +1594,7 @@ if __name__ == '__main__':
     #test_velocileptors()
     #test_pybird()
     #test_folps()
-    test_folpsax()
+    #test_folpsax()
     #test_velocileptors_omegak()
     #test_params()
     #test_integ()
@@ -1610,5 +1614,5 @@ if __name__ == '__main__':
     #test_pk_to_xi()
     #test_ap_diff()
     #test_ptt()
-    #test_freedom()
+    test_freedom()
     #test_bao_phaseshift()

@@ -1121,7 +1121,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
                 param.update(basename=basename + 'p')
                 #params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
             for param in params.select(basename='b1p'):
-                param.update(prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=1.))
+                param.update(prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1))
             for param in params.select(basename=['b2p', 'bsp', 'b3p']):
                 param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
             for param in params.select(basename='alpha*p'):
@@ -1994,7 +1994,7 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     _default_options = dict(freedom=None, prior_basis='standard', tracer=None, fsat=None, sigv=None, shotnoise=1e4)
 
     @staticmethod
-    def _params(params, freedom=None, prior_basis='physical'):
+    def _params(params, freedom=None, prior_basis='standard'):
         fix = []
         if freedom in ['min', 'max']:
             for param in params.select(basename=['b1']):
@@ -2017,7 +2017,7 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                 param.update(basename=basename + 'p')
                 #params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
             for param in params.select(basename='b1p'):
-                param.update(prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=1.))
+                param.update(prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1))
             #for param in params.select(basename=['b2p', 'bsp', 'b3p']):
             #    param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
             for param in params.select(basename='alpha*p'):
@@ -2056,7 +2056,7 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         if self.is_physical_prior:
             sigma8 = self.pt.sigma8
             f = self.pt.fsigma8 / sigma8
-            pars = [params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p'] / sigma8**3]
+            pars = [params['b1p'] / sigma8, params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p'] / sigma8**3]
             b1 = pars[0]
             pars += [b1**2 * params['alpha0p'], f * b1 * (params['alpha0p'] + params['alpha2p']),
                      f * (f * params['alpha2p'] + b1 * params['alpha4p']), f**2 * params['alpha4p']]

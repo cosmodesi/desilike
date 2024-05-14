@@ -2018,8 +2018,10 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                 #params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
             for param in params.select(basename='b1p'):
                 param.update(prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1))
-            #for param in params.select(basename=['b2p', 'bsp', 'b3p']):
-            #    param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
+            for param in params.select(basename=['b2p', 'bsp']):
+                param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
+            for param in params.select(basename=['b3p']):
+                param.update(prior=dict(dist='norm', loc=0., scale=3.), ref=dict(dist='norm', loc=0., scale=1.))
             for param in params.select(basename='alpha*p'):
                 param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
             for param in params.select(basename='sn*p'):
@@ -2056,7 +2058,11 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         if self.is_physical_prior:
             sigma8 = self.pt.sigma8
             f = self.pt.fsigma8 / sigma8
-            pars = [params['b1p'] / sigma8, params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p'] / sigma8**3]
+            # b1E = b1L + 1
+            # b2E = 4/21 b1L + 1/2 b2L
+            # bs2 = -4/7 b1L + bs2L
+            b1L, b2L, bsL, b3 = params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p']
+            pars = [b1L + 1, 4. / 21. * b1L + 1. / 2. * b2L, bsL, b3]  # compensate bs2 by 4. / 7. * b1L as it is removed by combine_bias_terms_poles below
             b1 = pars[0]
             pars += [b1**2 * params['alpha0p'], f * b1 * (params['alpha0p'] + params['alpha2p']),
                      f * (f * params['alpha2p'] + b1 * params['alpha4p']), f**2 * params['alpha4p']]

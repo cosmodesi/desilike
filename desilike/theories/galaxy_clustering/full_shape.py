@@ -1124,8 +1124,10 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
                 param.update(prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1))
             for param in params.select(basename=['b2p', 'bsp', 'b3p']):
                 param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
+            for param in params.select(basename='b3p'):
+                param.update(value=0., fixed=True)
             for param in params.select(basename='alpha*p'):
-                param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
+                param.update(prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.))  # 50% at k = 0.2 h/Mpc
             for param in params.select(basename='sn*p'):
                 param.update(prior=dict(dist='norm', loc=0., scale=2. if 'sn0' in param.basename else 5.), ref=dict(dist='norm', loc=0., scale=1.))
         return params
@@ -2018,12 +2020,12 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                 #params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
             for param in params.select(basename='b1p'):
                 param.update(prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1))
-            for param in params.select(basename=['b2p', 'bsp']):
+            for param in params.select(basename=['b2p', 'bsp', 'b3p']):
                 param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
-            for param in params.select(basename=['b3p']):
-                param.update(prior=dict(dist='norm', loc=0., scale=3.), ref=dict(dist='norm', loc=0., scale=1.))
+            for param in params.select(basename='b3p'):
+                param.update(value=0., fixed=True)
             for param in params.select(basename='alpha*p'):
-                param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
+                param.update(prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.))  # 50% at k = 0.2 h/Mpc
             for param in params.select(basename='sn*p'):
                 param.update(prior=dict(dist='norm', loc=0., scale=2. if 'sn0' in param.basename else 5.), ref=dict(dist='norm', loc=0., scale=1.))
         return params

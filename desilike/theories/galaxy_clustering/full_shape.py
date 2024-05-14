@@ -2056,7 +2056,7 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         if self.is_physical_prior:
             sigma8 = self.pt.sigma8
             f = self.pt.fsigma8 / sigma8
-            pars = [params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p'] / sigma8**3]
+            pars = [params['b1p'] / sigma8, params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p'] / sigma8**3]
             b1 = pars[0]
             pars += [b1**2 * params['alpha0p'], f * b1 * (params['alpha0p'] + params['alpha2p']),
                      f * (f * params['alpha2p'] + b1 * params['alpha4p']), f**2 * params['alpha4p']]

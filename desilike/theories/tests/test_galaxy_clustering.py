@@ -698,6 +698,8 @@ def test_freedom():
         for freedom in [None, 'min', 'max']:
             for ells in [(0, 2), (0, 2, 4)]:
                 kwargs = {}
+                if 'velocileptors' in TheoryPower.__name__.lower():
+                    kwargs.update(prior_basis='standard')
                 power = TheoryPower(ells=ells, freedom=freedom, **kwargs)
                 print('#' * 60)
                 print(TheoryPower.__name__, ells, freedom, power.varied_params)

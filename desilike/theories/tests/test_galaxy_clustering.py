@@ -706,7 +706,7 @@ def test_freedom():
                 fell = 1
                 if 'velocileptors' in TheoryPower.__name__.lower(): fell = 2  # alpha4 and sn4
                 if freedom is not None:
-                    assert len(power.varied_params) == ntemplate + 6 + (4 in ells) * fell + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 (+ 1) EFT, 2 sn
+                    assert len(power.varied_params) == ntemplate + 6 + (4 in ells) * fell + 2 * (freedom == 'max'), (TheoryPower, freedom, ells, power.varied_params)  # 2 (+ 2) bias, 2 (+ 1) EFT, 2 sn
                 corr = TheoryCorr(ells=ells, freedom=freedom, **kwargs)
                 print('#' * 60)
                 print(TheoryCorr.__name__, ells, freedom, corr.varied_params)

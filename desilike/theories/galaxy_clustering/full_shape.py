@@ -1058,8 +1058,8 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     prior_basis : str, default='physical'
         If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
         :math:`b_{1}^\prime = (1 + b_{1}) \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
-        :math:`\alpha_{0} = (1 + b_{1})^{2} \alpha_{0}^\prime, \alpha_{2} = (1 + b_{1}) f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + (1 + b_{1}) \alpha_{4}^\prime, \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`.
-        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{i} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{4} s_{n, 4}^\prime`
+        :math:`\alpha_{0} = (1 + b_{1})^{2} \alpha_{0}^\prime, \alpha_{2} = f (1 + b_{1}) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f (f \alpha_{2}^\prime + (1 + b_{1}) \alpha_{4}^\prime), \alpha_{6} = f^{2} \alpha_{4}^\prime`.
+        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{4} s_{n, 4}^\prime`.
         In this case, ``use_Pzel = False``.
 
     tracer : str, default=None
@@ -1196,7 +1196,7 @@ class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationF
     prior_basis : str, default='physical'
         If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
         :math:`b_{1}^\prime = (1 + b_{1}) \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
-        :math:`\alpha_{0} = (1 + b_{1})^{2} \alpha_{0}^\prime, \alpha_{2} = (1 + b_{1}) f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + (1 + b_{1}) \alpha_{4}^\prime, \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`.
+        :math:`\alpha_{0} = (1 + b_{1})^{2} \alpha_{0}^\prime, \alpha_{2} = f (1 + b_{1}) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f (f \alpha_{2}^\prime + (1 + b_{1}) \alpha_{4}^\prime), \alpha_{6} = f^{2} \alpha_{4}^\prime`.
 
     **kwargs : dict
         Velocileptors options, defaults to: ``kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=None, jn=5, mu=8``.
@@ -1975,9 +1975,10 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
     prior_basis : str, default='physical'
         If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
-        :math:`b_{1}^\prime = b_{1} \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
-        :math:`\alpha_{0} = b_{1}^{2} \alpha_{0}^\prime, \alpha_{2} = b_{1} f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + b_{1} \alpha_{4}^\prime, \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`.
-        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{i} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{4} s_{n, 4}^\prime`.
+        :math:`b_{1}^\prime = (1 + b_{1}^{L}) \sigma_{8}(z), b_{2}^\prime = b_{2}^{L} \sigma_{8}(z)^2, b_{s}^\prime = b_{s}^{L} \sigma_{8}(z)^2, b_{3}^\prime = 0`
+        with: :math:`b_{1} = 1 + b_{1}^{L}, b_{2} = 4 / 21 b_{1}^{L} + 1/2 b_{2}^{L}, b_{s} = -4/7 b_{1}^{L} + b_{s}^{L}`.
+        :math:`\alpha_{0} = (1 + b_{1}^{L})^{2} \alpha_{0}^\prime, \alpha_{2} = f (1 + b_{1}^{L}) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f (f \alpha_{2}^\prime + (1 + b_{1}^{L}) \alpha_{4}^\prime)`.
+        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{4} s_{n, 4}^\prime`.
 
     tracer : str, default=None
         If ``prior_basis = 'physical'``, tracer to load preset ``fsat`` and ``sigv``. One of ['LRG', 'ELG', 'QSO'].
@@ -2065,9 +2066,8 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             # bs2 = -4/7 b1L + bs2L
             b1L, b2L, bsL, b3 = params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p']
             pars = [b1L + 1, 4. / 21. * b1L + 1. / 2. * b2L, bsL, b3]  # compensate bs2 by 4. / 7. * b1L as it is removed by combine_bias_terms_poles below
-            b1 = pars[0]
-            pars += [b1**2 * params['alpha0p'], f * b1 * (params['alpha0p'] + params['alpha2p']),
-                     f * (f * params['alpha2p'] + b1 * params['alpha4p']), f**2 * params['alpha4p']]
+            pars += [(1 + b1L)**2 * params['alpha0p'], f * (1 + b1L) * (params['alpha0p'] + params['alpha2p']),
+                     f * (f * params['alpha2p'] + (1 + b1L) * params['alpha4p']), 0.]
             sigv = self.options['sigv']
             pars += [params['sn{:d}p'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
         else:
@@ -2096,9 +2096,9 @@ class FOLPSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFrom
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
 
     prior_basis : str, default='physical'
-        If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
-        :math:`b_{1}^\prime = b_{1} \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
-        :math:`\alpha_{0} = b_{1}^{2} \alpha_{0}^\prime, \alpha_{2} = b_{1} f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + b_{1} \alpha_{4}^\prime, \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`.
+        :math:`b_{1}^\prime = (1 + b_{1}^{L}) \sigma_{8}(z), b_{2}^\prime = b_{2}^{L} \sigma_{8}(z)^2, b_{s}^\prime = b_{s}^{L} \sigma_{8}(z)^2, b_{3}^\prime = 0`
+        with: :math:`b_{1} = 1 + b_{1}^{L}, b_{2} = 4 / 21 b_{1}^{L} + 1/2 b_{2}^{L}, b_{s} = -4/7 b_{1}^{L} + b_{s}^{L}`.
+        :math:`\alpha_{0} = (1 + b_{1}^{L})^{2} \alpha_{0}^\prime, \alpha_{2} = f (1 + b_{1}^{L}) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f (f \alpha_{2}^\prime + (1 + b_{1}^{L}) \alpha_{4}^\prime)`.
 
     Reference
     ---------
@@ -2147,6 +2147,8 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
 
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         self.pt = Namespace(jac=jac, kap=kap, muap=muap, kt=table[0], table=table[1:26], table_now=table_now[1:26], scalars=table[26:], scalars_now=table_now[26:])
+        self.sigma8 = self.template.sigma8
+        self.fsigma8 = self.template.f * self.sigma8
 
     def combine_bias_terms_poles(self, pars, nd=1e-4):
         table = (self.pt.kt,) + tuple(self.pt.table) + tuple(self.pt.scalars)
@@ -2173,7 +2175,7 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'z', 'ells', 'wmu']:
+        for name in ['k', 'z', 'ells', 'wmu', 'sigma8', 'fsigma8']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         for name in self._pt_attrs:
@@ -2182,7 +2184,7 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         return state
 
     def __setstate__(self, state):
-        for name in ['k', 'z', 'ells', 'wmu']:
+        for name in ['k', 'z', 'ells', 'wmu', 'sigma8', 'fsigma8']:
             if name in state: setattr(self, name, state.pop(name))
         self.pt = Namespace(**state)
 
@@ -2214,9 +2216,10 @@ class FOLPSAXTracerPowerSpectrumMultipoles(FOLPSTracerPowerSpectrumMultipoles):
 
     prior_basis : str, default='physical'
         If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
-        :math:`b_{1}^\prime = b_{1} \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
-        :math:`\alpha_{0} = b_{1}^{2} \alpha_{0}^\prime, \alpha_{2} = b_{1} f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + b_{1} \alpha_{4}^\prime, \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`.
-        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{i} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{4} s_{n, 4}^\prime`.
+        :math:`b_{1}^\prime = (1 + b_{1}^{L}) \sigma_{8}(z), b_{2}^\prime = b_{2}^{L} \sigma_{8}(z)^2, b_{s}^\prime = b_{s}^{L} \sigma_{8}(z)^2, b_{3}^\prime = 0`
+        with: :math:`b_{1} = 1 + b_{1}^{L}, b_{2} = 4 / 21 b_{1}^{L} + 1/2 b_{2}^{L}, b_{s} = -4/7 b_{1}^{L} + b_{s}^{L}`.
+        :math:`\alpha_{0} = (1 + b_{1}^{L})^{2} \alpha_{0}^\prime, \alpha_{2} = f (1 + b_{1}^{L}) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f (f \alpha_{2}^\prime + (1 + b_{1}^{L}) \alpha_{4}^\prime)`.
+        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{4} s_{n, 4}^\prime`.
 
     tracer : str, default=None
         If ``prior_basis = 'physical'``, tracer to load preset ``fsat`` and ``sigv``. One of ['LRG', 'ELG', 'QSO'].
@@ -2255,8 +2258,9 @@ class FOLPSAXTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFr
 
     prior_basis : str, default='physical'
         If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
-        :math:`b_{1}^\prime = b_{1} \sigma_{8}(z), b_{2}^\prime = b_{2} \sigma_{8}(z)^2, b_{s}^\prime = b_{s} \sigma_{8}(z)^2, b_{3}^\prime = b_{3} \sigma_{8}(z)^3`
-        :math:`\alpha_{0} = b_{1}^{2} \alpha_{0}^\prime, \alpha_{2} = b_{1} f(z) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f(z)^{2} (\alpha_{2}^\prime + b_{1} \alpha_{4}^\prime, \alpha_{6} = f(z)^{3} \alpha_{4}^\prime`.
+        :math:`b_{1}^\prime = (1 + b_{1}^{L}) \sigma_{8}(z), b_{2}^\prime = b_{2}^{L} \sigma_{8}(z)^2, b_{s}^\prime = b_{s}^{L} \sigma_{8}(z)^2, b_{3}^\prime = 0`
+        with: :math:`b_{1} = 1 + b_{1}^{L}, b_{2} = 4 / 21 b_{1}^{L} + 1/2 b_{2}^{L}, b_{s} = -4/7 b_{1}^{L} + b_{s}^{L}`.
+        :math:`\alpha_{0} = (1 + b_{1}^{L})^{2} \alpha_{0}^\prime, \alpha_{2} = f (1 + b_{1}^{L}) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f (f \alpha_{2}^\prime + (1 + b_{1}^{L}) \alpha_{4}^\prime)`.
 
 
     Reference

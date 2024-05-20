@@ -273,8 +273,8 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             self.kin, matrix_full = window_matrix_bininteg(self.kedges, **wmatrix)
             self.matrix_full = matrix_full.T
         elif isinstance(wmatrix, np.ndarray):
-            self.ellsin = tuple(self.ells or self.ells)
-            matrix_full = np.array(wmatrix).T
+            self.ellsin = tuple(ellsin or self.ells)
+            matrix_full = np.array(wmatrix, dtype='f8')
             ksize = sum(len(k) for k in self.k)
             if matrix_full.shape[0] != ksize:
                 raise ValueError('output "wmatrix" size is {:d}, but got {:d} output "k"'.format(matrix_full.shape[0], ksize))

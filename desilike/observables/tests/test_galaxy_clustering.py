@@ -157,7 +157,7 @@ def test_power_spectrum():
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data='../../tests/_pk/data.npy',
                                                          covariance='../../tests/_pk/mock_*.npy',
-                                                         wmatrix=np.zeros((kin.size * 2, 15 * 2)),
+                                                         wmatrix=np.zeros((15 * 2, kin.size * 3)),
                                                          shotnoise=2e4,
                                                          theory=theory,
                                                          kin=kin)
@@ -963,12 +963,12 @@ if __name__ == '__main__':
 
     #test_systematic_templates()
     # test_bao()
-    #test_power_spectrum()
+    test_power_spectrum()
     #test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    test_compression()
+    # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

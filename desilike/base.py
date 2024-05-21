@@ -384,6 +384,7 @@ class BasePipeline(BaseClass):
         # To avoid loops created by one calculator, which when updated, requests reinitialization of the calculators which depend on it
         for calculator in self.calculators:
             calculator.runtime_info.initialized = True
+            #print(calculator, id(self), calculator.runtime_info._initialized_for_pipeline)
         self.calculators = self.calculators[::-1]
         self.mpicomm = calculator._mpicomm
         for calculator in self.calculators:
@@ -779,7 +780,8 @@ class RuntimeInfo(BaseClass):
             self._pipeline = BasePipeline(self.calculator)
         else:
             for calculator in self._pipeline.calculators[:-1]:
-                if not calculator.runtime_info.initialized or id(self._pipeline) not in calculator.runtime_info._initialized_for_pipeline:
+                if (not calculator.runtime_info.initialized) or (id(self._pipeline) not in calculator.runtime_info._initialized_for_pipeline):
+                    #print(calculator.runtime_info.initialized, calculator, id(self._pipeline), calculator.runtime_info._initialized_for_pipeline)
                     self._pipeline = BasePipeline(self.calculator)
                     break
         return self._pipeline
@@ -883,10 +885,12 @@ class RuntimeInfo(BaseClass):
                 else:
                     if type(invalue) != type(self.input_values[basename]) or invalue != self.input_values[basename]:
                         self._tocalculate = True
+                        #print(self.calculator, invalue, self.input_values[basename], type(invalue), type(self.input_values[basename]), invalue == self.input_values[basename])
                 if invalue is not None:
                     value = invalue
                 self.input_values[basename] = value
         if self.tocalculate:
+            #print(self.calculator, self.input_values)
             self._calculation = True
             self.monitor.start()
             self.calculator.calculate(**self.input_values)

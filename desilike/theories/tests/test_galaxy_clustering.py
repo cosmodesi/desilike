@@ -1588,6 +1588,52 @@ def test_bao_phaseshift():
     theory.plot(fig=fig, show=True)
 
 
+def comparison_folps_velocileptors():
+    import numpy as np
+    from matplotlib import pyplot as plt
+
+    from desilike import plotting
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, LPTVelocileptorsTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles
+
+    template = DirectPowerSpectrumTemplate(z=0.8)
+    k = np.linspace(0.01, 0.2, 100)
+    theory1 = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, k=k, freedom='max', prior_basis='physical', kIR=0.)
+    theory2 = FOLPSAXTracerPowerSpectrumMultipoles(template=template.deepcopy(), k=k, freedom='max', prior_basis='physical', sbao=0.)  # deepcopy, otherwise constant reinitialization
+    theory1()
+    theory2()
+    k, ells = theory2.k, theory2.ells
+    s8 = template.sigma8
+
+    #print(theory1.varied_params)  # parameters that can be provided
+    list_params = []
+    nuisance_params = {'alpha0p': 0., 'alpha2p': 0., 'alpha4p': 0., 'sn0p': 0., 'sn2p': 0.}
+    list_params.append({'b1p': 2. * s8, 'b2p': 0., 'bsp': 0., 'b3p': 0., **nuisance_params})
+    list_params.append({'b1p': 3. * s8, 'b2p': -0.5 * s8**2, 'bsp': 0., 'b3p': 0., **nuisance_params})
+    list_params.append({'b1p': 3. * s8, 'b2p': -0.5 * s8**2, 'bsp': 1. * s8**2, 'b3p': 0., **nuisance_params})
+    list_params.append({'b1p': 2. * s8, 'b2p': 0., 'bsp': 0., 'b3p': 0., **nuisance_params, 'sn0p': 0.1, 'sn2p': 2.5 / (0.1 * 5.**2)})
+    list_params.append({'b1p': 2. * s8, 'b2p': 0., 'bsp': 0., 'b3p': 0., **nuisance_params, 'alpha0p': 1., 'alpha2p': 1., 'alpha4p': 1.})
+
+    ax = plt.gca()
+    for iparam, params in enumerate(list_params):
+        pk1 = theory1(**params)
+        pk2 = theory2(**params)
+
+        fig, lax = plt.subplots(nrows=1, ncols=2, figsize=(8, 4), squeeze=True)
+        fig.subplots_adjust(wspace=0.3)
+        lax[0].plot([], [], color='k', linestyle='-', label='velocileptors')
+        lax[0].plot([], [], color='k', linestyle='--', label='folps')
+        for ill, ell in enumerate(ells):
+            color = 'C{:d}'.format(ill)
+            lax[0].plot(k, k * pk1[ill], color=color, linestyle='-')
+            lax[0].plot(k, k * pk2[ill], color=color, linestyle='--')
+            lax[1].plot(k, pk1[ill] / pk2[ill], color=color)
+        for ax in lax: ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        lax[0].set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        lax[1].set_ylabel('velocileptors / folps')
+        lax[0].legend()
+        plotting.savefig('comparison_folps_velocileptors_{:d}.png'.format(iparam + 1), fig=fig)
+        plt.close(fig)
+
 
 if __name__ == '__main__':
 
@@ -1616,5 +1662,6 @@ if __name__ == '__main__':
     #test_pk_to_xi()
     #test_ap_diff()
     #test_ptt()
-    test_freedom()
+    #test_freedom()
     #test_bao_phaseshift()
+    comparison_folps_velocileptors()

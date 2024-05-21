@@ -1878,6 +1878,7 @@ class Namespace(object):
 def folps_combine_bias_terms_pkmu(k, mu, jac, f0, table, table_now, sigma2t, pars, nd=1e-4):
     import FOLPSnu as FOLPS
     pars = list(pars) + [1. / nd]  # add shot noise
+    print(pars)
     b1 = pars[0]
     # add co-evolution part
     pars[2] = pars[2] - 4. / 7. * (b1 - 1.)  # bs
@@ -2063,9 +2064,9 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             f = self.pt.fsigma8 / sigma8
             # b1E = b1L + 1
             # b2E = 8/21 * b1L + b2L
-            # bs2 = -4/7 b1L + bs2L
+            # bsE = -4/7 b1L + bsL
             b1L, b2L, bsL, b3 = params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p']
-            pars = [1. + b1L, 8. / 21. * b1L + b2L, bsL, b3]  # compensate bs2 by 4. / 7. * b1L as it is removed by combine_bias_terms_poles below
+            pars = [1. + b1L, 8. / 21. * b1L + b2L, bsL, b3]  # compensate bs by 4. / 7. * b1L as it is removed by combine_bias_terms_poles below
             pars += [(1 + b1L)**2 * params['alpha0p'], f * (1 + b1L) * (params['alpha0p'] + params['alpha2p']),
                      f * (f * params['alpha2p'] + (1 + b1L) * params['alpha4p']), 0.]
             sigv = self.options['sigv']
@@ -2110,7 +2111,7 @@ class FOLPSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFrom
 
 class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
 
-    _default_options = dict(kernels='fk')
+    _default_options = dict(kernels='fk', sbao=104.)
     _pt_attrs = ['jac', 'kap', 'muap', 'kt', 'table', 'table_now', 'scalars', 'scalars_now']
 
     def initialize(self, *args, mu=6, **kwargs):
@@ -2139,7 +2140,7 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             def _get_non_linear(pk_dd, pknow_dd, **cosmo_params):
                 return get_non_linear(self.template.k, pk_dd, self.matrices, pknow=pknow_dd,
                                       kminout=self.k[0] * 0.8, kmaxout=self.k[-1] * 1.2, nk=max(len(self.k), 120),
-                                      kernels=self.options['kernels'], **cosmo_params)
+                                      kernels=self.options['kernels'], sbao=self.options['sbao'], **cosmo_params)
 
             self._get_non_linear = jit(_get_non_linear)
 

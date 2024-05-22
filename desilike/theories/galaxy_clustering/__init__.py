@@ -8,8 +8,7 @@ from .full_shape import (SimpleTracerPowerSpectrumMultipoles, KaiserTracerPowerS
                          TNSTracerPowerSpectrumMultipoles, TNSTracerCorrelationFunctionMultipoles,
                          EFTLikeTNSTracerPowerSpectrumMultipoles, EFTLikeTNSTracerCorrelationFunctionMultipoles,
                          LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles,
-                         EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles,
-                         LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles,
+                         REPTVelocileptorsTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerCorrelationFunctionMultipoles,
                          PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles,
                          FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles,
                          FOLPSAXTracerPowerSpectrumMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles)

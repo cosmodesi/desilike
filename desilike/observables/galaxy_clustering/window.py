@@ -1174,7 +1174,7 @@ def get_templates(templates, ells=(0, 2, 4), x=None):
             sizes = [xx.size for xx in x]
             size = sum(sizes)
             if template.size != size:
-                raise ValueError('provided template is size {:d}, but expected {:d} = sum({:d})'.format(template.size, size, sizes))
+                raise ValueError('provided template is size {:d}, but expected {:d} = sum({})'.format(template.size, size, sizes))
         toret[name] = template
     return toret
 

@@ -975,6 +975,14 @@ def test_observable_covariance():
     covariance2 = covariance.select(observables='PowerSpectrumMultipoles', xlim=(0., 0.15))
     assert covariance2.shape[0] < covariance.shape[0]
 
+    nobs = 500
+    covariance = ObservableCovariance.from_observations({'power': [{'x': [np.linspace(0.01, 0.2, 10)] * 3, 'value': [np.random.uniform(0., 1., 10) for i in range(3)], 'projs': [0, 2, 4]} for i in range(nobs)],
+                                                         'correlation': [{'x': [np.linspace(0.01, 0.2, 10)] * 3, 'value': [np.random.uniform(0., 1., 10) for i in range(3)], 'projs': [0, 2, 4]} for i in range(nobs)]})
+    assert covariance.hartlap2017_factor() < 1.
+    covariance.percival2014_factor(nparams=10)
+    print(covariance.shape)
+    covariance.plot(show=True)
+
     observable = ObservableArray(x=[np.linspace(0.01, 0.2, 10), np.linspace(0.01, 0.2, 10)], projs=[0, 2])
     assert observable.view(projs=[0]).size == 10
     observable = observable.select(projs=2, xlim=(0., 0.15))

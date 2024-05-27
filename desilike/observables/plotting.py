@@ -106,7 +106,7 @@ def plot_covariance_matrix(covariance, x1=None, x2=None, xlabel1=None, xlabel2=N
             if x2[j] is None: xx2 = 1 + np.arange(mat[i][j].shape[1])
             xx1 = np.append(xx1, xx1[-1] + (1. if xx1.size == 1 else xx1[-1] - xx1[-2]))
             xx2 = np.append(xx2, xx2[-1] + (1. if xx2.size == 1 else xx2[-1] - xx2[-2]))
-            mesh = ax.pcolor(xx1, xx2, mat[i][j].T, norm=norm, cmap=cmap)
+            mesh = ax.pcolormesh(xx1, xx2, mat[i][j].T, norm=norm, cmap=cmap)
             if i > 0 or x1[i] is None: ax.yaxis.set_visible(False)
             if j == 0 and xlabel1[i]: ax.set_xlabel(xlabel1[i], fontsize=labelsize)
             if j > 0 or x2[j] is None: ax.xaxis.set_visible(False)

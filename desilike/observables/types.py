@@ -405,7 +405,7 @@ class ObservableCovariance(BaseClass):
         Other attributes.
     """
 
-    def __init__(self, value, observables, attrs=None):
+    def __init__(self, value, observables, nobs=None, attrs=None):
         """
         Initialize :class:`ObservableCovariance`.
 
@@ -433,7 +433,67 @@ class ObservableCovariance(BaseClass):
         size = sum(sizes)
         if size != self._value.shape[0]:
             raise ValueError('size = {:d} = sum({}) of input observables must match input matrix shape = {}'.format(size, sizes, self._value.shape[0]))
+        self.nobs = int(nobs) if nobs is not None else None
         self.attrs = dict(attrs or {})
+
+    @classmethod
+    def from_observations(cls, observations):
+        """
+        Construct covariance matrix from list of observations.
+
+        Parameters
+        ----------
+        observations : dict, list
+            Either a dictionary, with keys corresponding to the observable names, e.g.
+            ``{'name1': [{'x': x, 'value': value}, ...], 'name2': [{'x': x, 'value': value}, ...]}``
+            or a list of observations, optionally with several observables: ``[{'name': 'name1', 'x': x, 'value': value}, ...]``
+            or ``[[{'name': 'name1', 'x': x, 'value': value}, {'name': 'name2', 'x': x, 'value': value}], ...]``.
+
+        Returns
+        -------
+        new : ObservableCovariance
+        """
+        if hasattr(observations, 'items'):
+            nobs = 0
+            for name, observation in observations.items():
+                nobs = len(observation)
+                break
+            observations = [[{'name': name, **observation[iobs]} for name, observation in observations.items()] for iobs in range(nobs)]
+        values, x, weights, projs, nobservables = [], [], [], [], 0
+        nobs = len(observations)
+        if not nobs: raise ValueError('no observations found, cannot compute covariance matrix')
+        for observation in observations:
+            if not isinstance(observation, list): observation = [observation]
+            observation = [observable if isinstance(observable, ObservableArray) else ObservableArray(**observable) for observable in observation]
+            nobservables = len(observation)
+            values.append([observable.value for observable in observation])
+            x.append([observable.x for observable in observation])
+            weights.append([observable.weights for observable in observation])
+            projs = [observable.projs for observable in observation]
+            name = [observable.name for observable in observation]
+        observables = []
+        for iobs in range(nobservables):
+            vv = [np.mean([vv[iobs][iproj] for vv in values], axis=0) for iproj in range(len(projs[iobs]))]
+            xx = [np.mean([xx[iobs][iproj] for xx in x], axis=0) for iproj in range(len(projs[iobs]))]
+            ww = [np.mean([ww[iobs][iproj] for ww in weights], axis=0) for iproj in range(len(projs[iobs]))]
+            observables.append(ObservableArray(x=xx, value=vv, weights=ww, projs=projs[iobs], name=name[iobs]))
+        values = [np.concatenate([np.concatenate(vv, axis=0) for vv in value]) for value in values]
+        cov = np.cov(values, rowvar=False, ddof=1)
+        return cls(cov, observables=observables, nobs=nobs)
+
+    def hartlap2017_factor(self):
+        """Return Hartlap factor (:math:`< 1`), to apply to the precision matrix."""
+        if self.nobs is None: return 1.
+        nbins = self.shape[0]
+        return (self.nobs - nbins - 2.) / (self.nobs - 1.)
+
+    def percival2014_factor(self, nparams):
+        """Return Percival 2014 factor, to apply to the parameter covariance matrix."""
+        if self.nobs is None: return 1.
+        nbins = self.shape[0]
+        A = 2. / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
+        B = (self.nobs - nbins - 2.) / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
+        return (1 + B * (nbins - nparams)) / (1 + A + B * (nparams + 1))
 
     def _observable_index(self, observables=None):
         # Return the indices corresponding to the given observables (:class:`ObservableArray`, :attr:`ObservableArray.name` or index integer).
@@ -689,16 +749,16 @@ class ObservableCovariance(BaseClass):
 
     def __getstate__(self):
         """Return this class' state dictionary."""
-        state = {}
+        state = {'nobs': self.nobs, 'attrs': self.attrs}
         state['value'] = self._value
         state['observables'] = [obs.__getstate__() for obs in self._observables]
-        state['attrs'] = self.attrs
         return state
 
     def __setstate__(self, state):
         """Set this class' state dictionary."""
         self._observables = [ObservableArray.from_state(obs) for obs in state['observables']]
         self._value = state['value']
+        self.nobs = state.get('nobs', None)
         self.attrs = state.get('attrs', {})
 
     def __repr__(self):

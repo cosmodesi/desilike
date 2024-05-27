@@ -382,3 +382,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         # TODO: remove this dependency
         #config.pip('git+https://github.com/cosmodesi/pycorr')
         pass
+
+    def to_array(self):
+        from desilike.observables import ObservableArray
+        return ObservableArray(x=self.s, value=self.data, projs=self.ells, name=self.__class__.__name__)

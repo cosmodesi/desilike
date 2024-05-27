@@ -537,6 +537,10 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
     def flattheory(self):
         return jnp.concatenate([obs.flattheory for obs in self.observables], axis=0)
 
+    def to_covariance(self):
+        from desilike.observables import ObservableCovariance
+        return ObservableCovariance(value=self.covariance, observables=[o.to_array() for o in self.observables])
+
     @plotting.plotter
     def plot_covariance_matrix(self, corrcoef=True, **kwargs):
         """

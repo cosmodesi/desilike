@@ -404,3 +404,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         # TODO: remove this dependency
         #config.pip('git+https://github.com/cosmodesi/pypower')
         pass
+
+    def to_array(self):
+        from desilike.observables import ObservableArray
+        return ObservableArray(x=self.k, value=self.data, projs=self.ells, attrs={'shotnoise': self.shotnoise}, name=self.__class__.__name__)

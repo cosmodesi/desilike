@@ -2657,6 +2657,9 @@ class BaseParameterMatrix(BaseClass):
             return new
         return new
 
+    def __array__(self, *args, **kwargs):
+        return np.asarray(self._value, *args, **kwargs)
+
     def _index(self, params):
         # Internal method to return indices in matrix array corresponding to input params.""""
         cumsizes = np.cumsum([0] + self._sizes)

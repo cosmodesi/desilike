@@ -97,6 +97,48 @@ def evaluate(value, type=None, locals=None):
     return value
 
 
+def rebin(array, new_shape, statistic=np.sum):
+    """
+    Bin an array in all axes based on the target shape, by summing or
+    averaging. Number of output dimensions must match number of input dimensions and
+    new axes must divide old ones.
+
+    Taken from https://stackoverflow.com/questions/8090229/resize-with-averaging-or-rebin-a-numpy-2d-array
+    and https://nbodykit.readthedocs.io/en/latest/_modules/nbodykit/binned_statistic.html#BinnedStatistic.reindex.
+
+    Example
+    -------
+    >>> m = np.arange(0, 100, 1).reshape((10, 10))
+    >>> n = rebin(m, new_shape=(5, 5), statistic=np.sum)
+    >>> print(n)
+
+    [[ 22  30  38  46  54]
+     [102 110 118 126 134]
+     [182 190 198 206 214]
+     [262 270 278 286 294]
+     [342 350 358 366 374]]
+
+    """
+    if array.ndim == 1 and np.ndim(new_shape) == 0:
+        new_shape = [new_shape]
+    if array.ndim != len(new_shape):
+        raise ValueError('Input array dim is {}, but requested output one is {}'.format(array.ndim, len(new_shape)))
+
+    pairs = []
+    for d, c in zip(new_shape, array.shape):
+        if c % d != 0:
+            raise ValueError('New shape should divide current shape, but {:d} % {:d} = {:d}'.format(c, d, c % d))
+        pairs.append((d, c // d))
+
+    flattened = [ll for p in pairs for ll in p]
+    array = array.reshape(flattened)
+
+    for i in range(len(new_shape)):
+        array = statistic(array, axis=-1 * (i + 1))
+
+    return array
+
+
 def setup_logging(level=logging.INFO, stream=sys.stdout, filename=None, filemode='w', **kwargs):
     """
     Set up logging.

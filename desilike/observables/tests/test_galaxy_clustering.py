@@ -957,14 +957,68 @@ def test_shapefit(run=True, plot=True):
         plotting.plot_triangle([chain, chain_ref, chain_ref_new], params=['h', 'omega_cdm', 'omega_b', 'logA'], labels=['desilike', 'Mark old code', 'Mark new code'], fn='_tests/comparison.png')
 
 
+def test_observable_covariance():
+    from desilike.observables import ObservableArray, ObservableCovariance
+
+    observable = ObservableArray(value=[1., 1.], projs=['qpar', 'qper'])
+    assert observable.view(projs='qpar').size == 1
+    assert observable.size == 2
+    observable_bao = observable
+
+    observable = ObservableArray(x=np.linspace(0.01, 0.2, 10), value=np.linspace(0.01, 0.2, 10))
+    assert observable.size == 10
+    observable = observable.select(xlim=(0., 0.15))
+    assert observable.view(xlim=(0., 0.011)).size == 1
+    observable_1d = observable
+
+    covariance = ObservableCovariance(np.eye(32), observables=[{'name': 'PowerSpectrumMultipoles', 'x': [np.linspace(0.01, 0.2, 10)] * 3, 'projs': [0, 2, 4]}, {'name': 'BAO', 'projs': ['qpar', 'qper']}])
+    covariance2 = covariance.select(observables='PowerSpectrumMultipoles', xlim=(0., 0.15))
+    assert covariance2.shape[0] < covariance.shape[0]
+
+    observable = ObservableArray(x=[np.linspace(0.01, 0.2, 10), np.linspace(0.01, 0.2, 10)], projs=[0, 2])
+    assert observable.view(projs=[0]).size == 10
+    observable = observable.select(projs=2, xlim=(0., 0.15))
+    assert observable.size < 20
+    assert np.array(observable).shape == (observable.size,)
+    assert observable == observable
+    value = np.eye(observable.size)
+    covariance = ObservableCovariance(value, observables=observable)
+    covariance = covariance.select(projs=0, xlim=(0., 0.12), rebin=2)
+    assert covariance.shape[0] < observable.size
+    assert observable.view(projs=0).size == observable.view(projs=0).size
+    assert np.array(covariance).shape == covariance.shape
+    assert covariance.inv().shape == covariance.shape
+    covariance = covariance.marginalize(np.ones(observable.view(projs=0).size))
+    assert covariance == covariance
+
+    covariance = ObservableCovariance(np.eye(observable.size + observable_1d.size), observables=[observable, observable_1d])
+    covariance2 = covariance.select(observables=observable_1d, xlim=(0., 0.1))
+    assert covariance2.shape[0] < covariance.shape[0]
+
+    covariance = ObservableCovariance(np.eye(observable.size + observable_bao.size), observables=[observable, observable_bao])
+    covariance2 = covariance.select(observables=observable, xlim=(0., 0.1))
+    assert covariance2.shape[0] < covariance.shape[0]
+
+    x = [np.linspace(0.01, 0.2, 10), np.linspace(0.01, 0.2, 10)]
+    observable = ObservableArray(x=x, value=x, projs=[0, 2])
+    fn = '_tests/obs.npy'
+    observable.save(fn)
+    observable = ObservableArray.load(fn)
+    covariance.save(fn)
+    covariance = ObservableCovariance.load(fn)
+    observable.plot(show=True)
+    covariance.plot(show=True)
+    covariance.view(observables=1, return_type=None).plot(show=True)
+
+
 if __name__ == '__main__':
 
     setup_logging()
 
     #test_systematic_templates()
     # test_bao()
-    test_power_spectrum()
-    #test_correlation_function()
+    # test_power_spectrum()
+    # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
@@ -973,3 +1027,4 @@ if __name__ == '__main__':
     # test_fiber_collisions()
     # test_compression_window()
     # test_shapefit(run=False)
+    test_observable_covariance()

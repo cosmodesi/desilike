@@ -73,6 +73,10 @@ class BaseCompressionObservable(BaseCalculator):
             state[name] = getattr(self, name)
         return state
 
+    def to_array(self):
+        from desilike.observables import ObservableArray
+        return ObservableArray(value=self.flatdata, projs=self.quantities, name=self.__class__.__name__)
+
 
 class BAOCompressionObservable(BaseCompressionObservable):
     """

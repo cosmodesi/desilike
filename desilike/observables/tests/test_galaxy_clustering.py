@@ -960,6 +960,14 @@ def test_shapefit(run=True, plot=True):
 def test_observable_covariance():
     from desilike.observables import ObservableArray, ObservableCovariance
 
+
+    observable = ObservableArray(x=[np.arange(10)] * 2, projs=[0, 2])
+    covariance = ObservableCovariance(np.diag(observable.flatx**2), observables=observable)
+    assert np.allclose(covariance.std(), observable.flatx)
+    covariance2 = covariance.select(xlim=(0, 5))
+    for proj in observable.projs:
+        assert np.allclose(covariance.std(projs=proj), observable.x(projs=proj))
+
     observable = ObservableArray(value=[1., 1.], projs=['qpar', 'qper'])
     assert observable.view(projs='qpar').size == 1
     assert observable.size == 2
@@ -980,13 +988,15 @@ def test_observable_covariance():
                                                          'correlation': [{'x': [np.linspace(0.01, 0.2, 10)] * 3, 'value': [np.random.uniform(0., 1., 10) for i in range(3)], 'projs': [0, 2, 4]} for i in range(nobs)]})
     assert covariance.hartlap2017_factor() < 1.
     covariance.percival2014_factor(nparams=10)
-    print(covariance.shape)
+    print(covariance.shape, [observable.name for observable in covariance.observables])
     covariance.plot(show=True)
 
     observable = ObservableArray(x=[np.linspace(0.01, 0.2, 10), np.linspace(0.01, 0.2, 10)], projs=[0, 2])
     assert observable.view(projs=[0]).size == 10
     observable = observable.select(projs=2, xlim=(0., 0.15))
     assert observable.size < 20
+    observable.x()
+    observable.weights()
     assert np.array(observable).shape == (observable.size,)
     assert observable == observable
     value = np.eye(observable.size)

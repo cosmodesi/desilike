@@ -101,26 +101,9 @@ class ObservableArray(BaseClass):
                 raise ValueError('value should be of same length as x = {}, found = {}'.format(shape, vshape))
 
     @property
-    def x(self):
-        """x-coordinates."""
-        return self._x
-
-    @property
-    def weights(self):
-        """Weights."""
-        return self._weights
-
-    @property
     def projs(self):
         """Projections."""
         return self._projs
-
-    @property
-    def value(self):
-        """Value."""
-        #if self._value is None:
-        #    raise AttributeError('no value provided for observable {}'.format(self.name))
-        return self._value
 
     @property
     def flatx(self):
@@ -223,7 +206,7 @@ class ObservableArray(BaseClass):
         if sl is None: sl = slice(None)
         for proj in projs:
             iproj = self.projs.index(proj)
-            start, stop, step = sl.indices(len(self.x[iproj]))
+            start, stop, step = sl.indices(len(self._x[iproj]))
             if step < 0:
                 raise IndexError('positive slicing step only supported')
             oneslice = slice(start, stop, 1)
@@ -313,6 +296,15 @@ class ObservableArray(BaseClass):
         if not isscalar:
             value = np.concatenate(value, axis=0)
         return value
+
+
+    def x(self, **kwargs):
+        """x-coordinates (optionally restricted to input xlim and projs)."""
+        return self.view(**kwargs, return_type=None)._x
+
+    def weights(self, **kwargs):
+        """Weights (optionally restricted to input xlim and projs)."""
+        return self.view(**kwargs, return_type=None)._weights
 
     def __repr__(self):
         """Return string representation of observable data."""
@@ -466,9 +458,9 @@ class ObservableCovariance(BaseClass):
             if not isinstance(observation, list): observation = [observation]
             observation = [observable if isinstance(observable, ObservableArray) else ObservableArray(**observable) for observable in observation]
             nobservables = len(observation)
-            values.append([observable.value for observable in observation])
-            x.append([observable.x for observable in observation])
-            weights.append([observable.weights for observable in observation])
+            values.append([observable._value for observable in observation])
+            x.append([observable._x for observable in observation])
+            weights.append([observable._weights for observable in observation])
             projs = [observable.projs for observable in observation]
             name = [observable.name for observable in observation]
         observables = []
@@ -625,10 +617,10 @@ class ObservableCovariance(BaseClass):
         for iobs, observable in enumerate(self.observables):
             observable = self.observables[iobs]
             if iobs in observable_indices:
-                observable = observable.select(xlim=xlim, projs=projs)
                 all_projs = observable.projs# or [None]
                 proj_indices = [all_projs.index(p) for p in projs] if projs is not Ellipsis else list(range(len(all_projs)))
                 index = np.concatenate([observable._index(xlim=xlim if iproj in proj_indices else None, projs=proj, concatenate=True) for iproj, proj in enumerate(all_projs)])
+                observable = observable.select(xlim=xlim, projs=projs)
             else:
                 index = np.arange(observable.size)
             index += sum(observable.size for observable in self.observables[:iobs])
@@ -684,7 +676,7 @@ class ObservableCovariance(BaseClass):
         return np.diag(cov)
 
     def std(self, **kwargs):
-        """Return standard deviation (optionally restricted to iinput observables, xlim and projs)."""
+        """Return standard deviation (optionally restricted to input observables, xlim and projs)."""
         return self.var(**kwargs)**0.5
 
     def inv(self):

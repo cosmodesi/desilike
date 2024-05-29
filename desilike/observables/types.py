@@ -308,7 +308,7 @@ class ObservableArray(BaseClass):
 
     def __repr__(self):
         """Return string representation of observable data."""
-        return '{}(projs={}, size={:d})'.format(self.__class__.__name__, self._projs, self.size)
+        return '{}(name={}, projs={}, size={:d})'.format(self.__class__.__name__, self.name, self._projs, self.size)
 
     def __getstate__(self):
         """Return this class' state dictionary."""
@@ -421,7 +421,7 @@ class ObservableCovariance(BaseClass):
         if shape[1] != shape[0]:
             raise ValueError('Input matrix must be square')
         self._observables = [observable if isinstance(observable, ObservableArray) else ObservableArray(**observable) for observable in observables]
-        sizes = [observable.size for observable in self.observables]
+        sizes = [observable.size for observable in self._observables]
         size = sum(sizes)
         if size != self._value.shape[0]:
             raise ValueError('size = {:d} = sum({}) of input observables must match input matrix shape = {}'.format(size, sizes, self._value.shape[0]))
@@ -489,17 +489,27 @@ class ObservableCovariance(BaseClass):
 
     def _observable_index(self, observables=None):
         # Return the indices corresponding to the given observables (:class:`ObservableArray`, :attr:`ObservableArray.name` or index integer).
-        if observables is None: observables = list(range(len(self.observables)))
+        if observables is None: observables = list(range(len(self._observables)))
         isscalar = not isinstance(observables, list)
         if isscalar: observables = [observables]
+        from desilike.parameter import find_names
+        names = [obs.name for obs in self._observables]
         observable_indices = []
         for iobs in observables:
-            if isinstance(iobs, ObservableArray): iobs = self.observables.index(iobs)
-            elif isinstance(iobs, str): iobs = [obs.name for obs in self.observables].index(iobs)
-            else: iobs = int(iobs)
-            assert 0 <= iobs < len(self.observables)
-            observable_indices.append(iobs)
-        if isscalar:
+            if isinstance(iobs, ObservableArray):
+                iobs = self._observables.index(iobs)
+                observable_indices.append(iobs)
+            elif isinstance(iobs, str):
+                tmp = find_names(names, iobs, quiet=True)
+                if tmp == [iobs]:
+                    observable_indices.append(names.index(iobs))
+                else:
+                    tmp = [names.index(iobs) for iobs in tmp]
+                    observable_indices += [iobs for iobs in tmp if iobs not in observable_indices]
+            else:
+                iobs = int(iobs)
+                observable_indices.append(iobs)
+        if isscalar and len(observable_indices) == 1:
             observable_indices = observable_indices[0]
         return observable_indices
 
@@ -510,7 +520,7 @@ class ObservableCovariance(BaseClass):
         if not isinstance(observable_indices, list): observable_indices = [observable_indices]
         if projs is not Ellipsis and not isinstance(projs, list): projs = [projs]
         matrix = []
-        for iobs, observable in enumerate(self.observables):
+        for iobs, observable in enumerate(self._observables):
             sl = slice if iobs in observable_indices else None
             all_projs = observable.projs# or [None]
             proj_indices = [all_projs.index(p) for p in projs] if projs is not Ellipsis else list(range(len(all_projs)))
@@ -541,7 +551,7 @@ class ObservableCovariance(BaseClass):
         observable_indices = self._observable_index(observables=observables)
         if not isinstance(observable_indices, list): observable_indices = [observable_indices]
         observables = []
-        for iobs, observable in enumerate(self.observables):
+        for iobs, observable in enumerate(self._observables):
             sl = slice if iobs in observable_indices else None
             observable = observable.slice(sl, projs=projs)
             observables.append(observable)
@@ -576,11 +586,11 @@ class ObservableCovariance(BaseClass):
         if not isinstance(observable_indices, list): observable_indices = [observable_indices]
         indices = []
         for iobs in observable_indices:
-            observable = self.observables[iobs]
+            observable = self._observables[iobs]
             #print(observable.projs, observables, iobs, projs)
             index = observable._index(xlim=xlim, projs=projs, concatenate=concatenate)
             if concatenate:
-                index += sum(observable.size for observable in self.observables[:iobs])
+                index += sum(observable.size for observable in self._observables[:iobs])
             indices.append(index)
         if concatenate:
             indices = np.concatenate(indices, axis=0)
@@ -614,8 +624,8 @@ class ObservableCovariance(BaseClass):
         if not isinstance(observable_indices, list): observable_indices = [observable_indices]
         if projs is not Ellipsis and not isinstance(projs, list): projs = [projs]
         observables, indices = [], []
-        for iobs, observable in enumerate(self.observables):
-            observable = self.observables[iobs]
+        for iobs, observable in enumerate(self._observables):
+            observable = self._observables[iobs]
             if iobs in observable_indices:
                 all_projs = observable.projs# or [None]
                 proj_indices = [all_projs.index(p) for p in projs] if projs is not Ellipsis else list(range(len(all_projs)))
@@ -623,7 +633,7 @@ class ObservableCovariance(BaseClass):
                 observable = observable.select(xlim=xlim, projs=projs)
             else:
                 index = np.arange(observable.size)
-            index += sum(observable.size for observable in self.observables[:iobs])
+            index += sum(observable.size for observable in self._observables[:iobs])
             observables.append(observable)
             indices.append(index)
         index = np.concatenate(indices, axis=0)
@@ -658,7 +668,7 @@ class ObservableCovariance(BaseClass):
         if not isinstance(observable_indices, list): observable_indices = [observable_indices]
         observables = []
         for iobs in observable_indices:
-            observables.append(self.observables[iobs].view(xlim=xlim, projs=projs, return_type=None))
+            observables.append(self._observables[iobs].view(xlim=xlim, projs=projs, return_type=None))
         index = self._index(observables=observable_indices, xlim=xlim, projs=projs, concatenate=True)
         value = self._value[np.ix_(index, index)]
         if return_type is None:
@@ -681,7 +691,7 @@ class ObservableCovariance(BaseClass):
 
     def inv(self):
         """Return the inverse of the covariance."""
-        indices = [self._index(observables=observable, concatenate=True) for observable in self.observables]
+        indices = [self._index(observables=observable, concatenate=True) for observable in self._observables]
         # blockinv to help with numerical errors
         return utils.blockinv([[self._value[np.ix_(index1, index2)] for index2 in indices] for index1 in indices])
 
@@ -721,7 +731,7 @@ class ObservableCovariance(BaseClass):
             iprior = np.diag(1. / iprior)
         fisher += iprior
         invcov = invcov - derivp.T.dot(np.linalg.solve(fisher, derivp))
-        indices = [self._index(observables=observable, concatenate=True) for observable in self.observables]
+        indices = [self._index(observables=observable, concatenate=True) for observable in self._observables]
         value = utils.blockinv([[invcov[np.ix_(index1, index2)] for index2 in indices] for index1 in indices])
         return self.clone(value=value)
 
@@ -734,10 +744,12 @@ class ObservableCovariance(BaseClass):
             new.attrs = dict(attrs)
         return new
 
-    @property
-    def observables(self):
-        """List of observables"""
-        return self._observables
+    def observables(self, *args, **kwargs):
+        """List of observables."""
+        index = self._observable_index(*args, **kwargs)
+        if isinstance(index, list):
+            return [self._observables[i] for i in index]
+        return self._observables[index]
 
     def __getstate__(self):
         """Return this class' state dictionary."""
@@ -800,7 +812,7 @@ class ObservableCovariance(BaseClass):
             Optionally, size for labels.
 
         fig : matplotlib.figure.Figure, default=None
-            Optionally, a figure with at least ``len(self.observables) * len(self.observables)`` axes.
+            Optionally, a figure with at least ``len(self._observables) * len(self._observables)`` axes.
 
         Returns
         -------
@@ -808,7 +820,7 @@ class ObservableCovariance(BaseClass):
         """
         from desilike.observables.plotting import plot_covariance_matrix
         indices = []
-        for observable in self.observables:
+        for observable in self._observables:
             if split_projs:
                 all_projs = observable.projs# or [None]
                 for proj in all_projs:

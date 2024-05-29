@@ -988,7 +988,10 @@ def test_observable_covariance():
                                                          'correlation': [{'x': [np.linspace(0.01, 0.2, 10)] * 3, 'value': [np.random.uniform(0., 1., 10) for i in range(3)], 'projs': [0, 2, 4]} for i in range(nobs)]})
     assert covariance.hartlap2017_factor() < 1.
     covariance.percival2014_factor(nparams=10)
-    print(covariance.shape, [observable.name for observable in covariance.observables])
+    print(covariance.shape, [observable.name for observable in covariance.observables()])
+    assert covariance.observables('power') == covariance.observables()[0]
+    assert covariance.observables('pow*') == covariance.observables()[0]
+    assert covariance.observables('*o*') == covariance.observables()
     covariance.plot(show=True)
 
     observable = ObservableArray(x=[np.linspace(0.01, 0.2, 10), np.linspace(0.01, 0.2, 10)], projs=[0, 2])

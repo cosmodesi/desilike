@@ -3,6 +3,7 @@ import warnings
 import numpy as np
 
 from desilike.base import BaseCalculator, Parameter, ParameterCollection, ParameterArray
+from desilike.observables import ObservableCovariance
 from desilike.jax import numpy as jnp
 from desilike.jax import jit
 from desilike import plotting, utils
@@ -442,7 +443,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
             observables = [observables]
         self.nobs = None
         if isinstance(correct_covariance, dict):
-            self.nobs = correct_covariance.get('nobs', None)
+            self.nobs = correct_covariance.get('nobs', getattr(covariance, 'nobs', None))
             correct_covariance = correct_covariance['correction']
         self.observables = list(observables)
         for obs in observables: obs.all_params  # to set observable's pipelines, and initialize once (percival factor below requires all_params)
@@ -473,7 +474,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
 
         def check_matrix(matrix, name):
             if matrix is None:
-                return matrix
+                return None
             matrix = np.atleast_2d(matrix).copy()
             if matrix.shape != (matrix.shape[0],) * 2:
                 raise ValueError('{} must be a square matrix, but found shape {}'.format(name, matrix.shape))
@@ -481,8 +482,17 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
             shape = '({0}, {0})'.format(self.flatdata.size)
             shape_obs = '({0}, {0})'.format(' + '.join(['{:d}'.format(obs.flatdata.size) for obs in self.observables]))
             if matrix.shape[0] != self.flatdata.size:
-                raise ValueError('Based on provided observables, {} expected to be a matrix of shape {} = {}, but found {}'.format(name, shape, shape_obs, mshape))
+                raise ValueError('based on provided observables, {} expected to be a matrix of shape {} = {}, but found {}'.format(name, shape, shape_obs, mshape))
             return matrix
+
+        if isinstance(covariance, ObservableCovariance):
+            cov_nobservables = len(covariance.observables())
+            if len(self.observables) != cov_nobservables:
+                raise ValueError('provided {:d} observables, but the covariance contains {:d}'.format(len(self.observables), cov_nobservables))
+            for iobs, obs in enumerate(self.observables):
+                array = obs.to_array()
+                covariance = covariance.xmatch(observables=iobs, x=array._x, projs=array._projs, select_projs=True, method='mean')
+            covariance = covariance.view()
 
         self.precision = check_matrix(precision, 'precision')
         self.covariance = check_matrix(covariance, 'covariance')

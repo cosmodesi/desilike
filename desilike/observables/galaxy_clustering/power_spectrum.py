@@ -5,6 +5,7 @@ import numpy as np
 from desilike import plotting, jax, utils
 from desilike.base import BaseCalculator
 from .window import WindowedPowerSpectrumMultipoles
+from desilike.observables.types import ObservableArray, ObservableCovariance
 
 
 def _is_array(data):
@@ -60,7 +61,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         self.flatdata, self.mocks, self.covariance = None, None, None
         if not isinstance(data, dict):
             self.flatdata = self.load_data(data=data, klim=klim)[0]
-        if self.mpicomm.bcast(_is_array(covariance), root=0):
+        if self.mpicomm.bcast(_is_array(covariance) or isinstance(covariance, ObservableCovariance), root=0):
             self.covariance = self.mpicomm.bcast(covariance, root=0)
         else:
             self.mocks = self.load_data(data=covariance, klim=klim)[-1]
@@ -93,9 +94,10 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         if kmasklim is not None:  # cut has been applied to input k
             cumsize = np.insert(np.cumsum([len(kk) for kk in kmasklim.values()]), 0, 0)
             data = [self.flatdata[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
-            ells = list(kmasklim.keys())
+            ells = list(kmasklim)
             self.flatdata = np.concatenate([data[ells.index(ell)][kmasklim[ell]] for ell in self.ells])
-
+        if isinstance(self.covariance, ObservableCovariance):
+            self.covariance = self.covariance.xmatch(x=list(self.k), projs=list(self.ells), method='mean').view(projs=list(self.ells))
         self.transform = transform
         allowed_transform = [None, 'cubic']
         if self.transform not in allowed_transform:
@@ -105,27 +107,43 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
         def load_data(fn):
             from pypower import MeshFFTPower, PowerSpectrumMultipoles
-            with utils.LoggingContext(level='warning'):
-                toret = MeshFFTPower.load(fn)
+            #with utils.LoggingContext(level='warning'):
+            state = np.load(fn, allow_pickle=True)[()]
+            if '_projs' in state:
+                toret = ObservableArray.from_state(state)
+            else:
+                toret = MeshFFTPower.from_state(state)
                 if hasattr(toret, 'poles'):
                     toret = toret.poles
                 else:
-                    toret = PowerSpectrumMultipoles.load(fn)
+                    toret = PowerSpectrumMultipoles.from_state(state)
             return toret
 
         def lim_data(power, klim=klim):
-            if hasattr(power, 'poles'):
-                power = power.poles
-            shotnoise = power.shotnoise
-            if klim is None:
-                klim = {ell: (0, np.inf) for ell in power.ells}
             ells, list_k, list_kedges, list_data = [], [], [], []
-            for ell, lim in klim.items():
-                power_slice = power.copy().select(lim)
-                ells.append(ell)
-                list_k.append(power_slice.modeavg())
-                list_kedges.append(power_slice.edges[0])
-                list_data.append(power_slice(ell=ell, complex=False))
+            if isinstance(power, ObservableArray):
+                shotnoise = power.attrs.get('shotnoise', None)
+                for ell, lim in klim.items():
+                    start, stop, *step = lim
+                    rebin = 1
+                    if step and step[0] != 1: rebin = np.rint(step[0] / np.diff(power.edges(projs=ell)).mean()).astype(int)
+                    power_slice = power.copy().select(xlim=(start, stop), rebin=rebin, projs=ell)
+                    ells.append(ell)
+                    list_k.append(power_slice.x(projs=ell))
+                    list_kedges.append(power_slice.edges(projs=ell))
+                    list_data.append(power_slice.view(projs=ell))
+            else:
+                if hasattr(power, 'poles'):
+                    power = power.poles
+                shotnoise = power.shotnoise
+                if klim is None:
+                    klim = {ell: (0, np.inf) for ell in power.ells}
+                for ell, lim in klim.items():
+                    power_slice = power.copy().select(lim)
+                    ells.append(ell)
+                    list_k.append(power_slice.modeavg())
+                    list_kedges.append(power_slice.edges[0])
+                    list_data.append(power_slice(ell=ell, complex=False))
             return list_k, list_kedges, tuple(ells), list_data, shotnoise
 
         def load_all(lmocks):
@@ -154,21 +172,22 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
                 if utils.is_path(mock):
                     mock = load_data(mock)
                 mock_k, mock_kedges, mock_ells, mock_y, mock_shotnoise = lim_data(mock)
-                if self.k is None:
+                if self.k is None or self.kedges is None:
                     self.k, self.kedges, self.ells = mock_k, mock_kedges, mock_ells
-                if not all(np.allclose(sk, mk, atol=0., rtol=1e-3) for sk, mk in zip(self.kedges, mock_kedges)):
+                if self.kedges is not None and mock_kedges is not None and not all(np.allclose(sk, mk, atol=0., rtol=1e-3) for sk, mk in zip(self.kedges, mock_kedges)):
                     raise ValueError('{} does not have expected k-edges (based on previous data)'.format(mock))
                 if mock_ells != self.ells:
                     raise ValueError('{} does not have expected poles (based on previous data)'.format(mock))
                 list_y.append(np.concatenate(mock_y))
-                list_shotnoise.append(mock_shotnoise)
+                if mock_shotnoise is not None:
+                    list_shotnoise.append(mock_shotnoise)
             return list_y, list_shotnoise
 
         flatdata, shotnoise, list_shotnoise, list_y = None, None, None, None
         if self.mpicomm.rank == 0 and data is not None:
             if not utils.is_sequence(data):
                 data = [data]
-            if any(_is_from_pypower(dd) for dd in data):
+            if any(_is_from_pypower(dd) or isinstance(dd, ObservableArray) for dd in data):
                 list_y, list_shotnoise = load_all(data)
                 if not list_y: raise ValueError('no data/mocks could be obtained from {}'.format(data))
             else:

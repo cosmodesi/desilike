@@ -13,9 +13,25 @@ def test_power_spectrum():
     from cosmoprimo.fiducial import DESI
     from desilike.theories.galaxy_clustering import ResummedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TopHatFiberCollisionsPowerSpectrumMultipoles, BoxFootprint, ObservablesCovarianceMatrix
+    from desilike.observables import ObservableArray, ObservableCovariance
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5, fiducial=DESI())
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+
+    edges = np.linspace(0., 0.4, 81)
+    data = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
+                                                         data=data,
+                                                         covariance=ObservableCovariance(np.eye(data.flatx.size), observables=[data]),
+                                                         #data=PowerSpectrumMultipoles.load('../../tests/_pk/data.npy'),
+                                                         #covariance=[PowerSpectrumMultipoles.load(fn) for fn in glob.glob('../../tests/_pk/mock_*.npy')],
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
+    print(likelihood())
+
+    assert np.allclose(likelihood.covariance, observable.covariance)
+    #print(len(observable.flatdata))
+    observable.plot(show=True)
 
     from pypower import PowerSpectrumMultipoles
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.02], 2: [0.05, 0.2, 0.01]},
@@ -154,13 +170,16 @@ def test_power_spectrum():
     assert np.allclose(observable.wmatrix.theory.k, kin)
     observable.__getstate__()
 
+    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    kin = np.linspace(0.01, 0.3, 90)
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data='../../tests/_pk/data.npy',
                                                          covariance='../../tests/_pk/mock_*.npy',
                                                          wmatrix=np.zeros((15 * 2, kin.size * 3)),
                                                          shotnoise=2e4,
                                                          theory=theory,
-                                                         kin=kin)
+                                                         kin=kin,
+                                                         ellsin=(0, 2, 4))
     observable()
     assert np.allclose(observable.wmatrix.theory.k, kin)
 
@@ -212,9 +231,21 @@ def test_correlation_function():
 
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelationFunctionMultipoles, KaiserTracerCorrelationFunctionMultipoles, ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import TracerCorrelationFunctionMultipolesObservable, TopHatFiberCollisionsCorrelationFunctionMultipoles, BoxFootprint, ObservablesCovarianceMatrix
+    from desilike.observables import ObservableArray, ObservableCovariance
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
+
+    edges = np.linspace(0., 200, 201)
+    data = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20, 150, 4], 2: [30, 150, 5]},
+                                                               data=data,
+                                                               covariance=ObservableCovariance(np.eye(data.flatx.size), observables=[data]),
+                                                               #data=PowerSpectrumMultipoles.load('../../tests/_pk/data.npy'),
+                                                               #covariance=[PowerSpectrumMultipoles.load(fn) for fn in glob.glob('../../tests/_pk/mock_*.npy')],
+                                                               theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
+    print(likelihood())
 
     #theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template, ells=(0, 2))
     size = 5
@@ -960,6 +991,18 @@ def test_shapefit(run=True, plot=True):
 def test_observable_covariance():
     from desilike.observables import ObservableArray, ObservableCovariance
 
+    observable = ObservableArray(x=[np.linspace(0., 9., 10), np.linspace(0., 9., 10)], projs=[0, 2])
+    observable2 = observable.select(projs=2, rebin=2, xlim=(3., 7.))
+    observable3 = observable.xmatch(observable2.x(), projs=observable2.projs)
+    #print(observable2.x())
+    #print(observable3.x())
+    assert np.all(observable3.flatx == observable2.flatx)
+    assert observable.edges(projs=0).size == 11
+
+    covariance = ObservableCovariance(np.diag(observable.flatx**2), observables=observable)
+    observable3 = observable2.select(projs=2, select_projs=True)
+    covariance3 = covariance.xmatch(observable3.x(), projs=observable3.projs, select_projs=True)
+    assert np.all(covariance3.observables()[0].flatx == observable3.flatx)
 
     observable = ObservableArray(x=[np.arange(10)] * 2, projs=[0, 2])
     covariance = ObservableCovariance(np.diag(observable.flatx**2), observables=observable)
@@ -1038,8 +1081,8 @@ if __name__ == '__main__':
 
     #test_systematic_templates()
     # test_bao()
-    # test_power_spectrum()
-    # test_correlation_function()
+    test_power_spectrum()
+    test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()

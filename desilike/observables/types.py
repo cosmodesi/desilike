@@ -8,6 +8,19 @@ from desilike.utils import BaseClass
 from desilike import utils
 
 
+def _format_slice(sl, size):
+    if sl is None: sl = slice(None)
+    start, stop, step = sl.start, sl.stop, sl.step
+    # To handle slice(0, None, 1)
+    if start is None: start = 0
+    if step is None: step = 1
+    if stop is None: stop = (size - start) // step * step
+    #start, stop, step = sl.indices(len(self._x[iproj]))
+    if step < 0:
+        raise IndexError('positive slicing step only supported')
+    return slice(start, stop, step)
+
+
 class ObservableArray(BaseClass):
     """
     Class representing observable data.
@@ -38,9 +51,10 @@ class ObservableArray(BaseClass):
         Other attributes.
     """
 
-    def __init__(self, x=None, projs=None, value=None, weights=None, name=None, attrs=None):
+    def __init__(self, x=None, edges=None, projs=None, value=None, weights=None, name=None, attrs=None):
         """
         Initialize observable array.
+        'x' is an axis along which it may makes sense to rebin.
 
         Example
         -------
@@ -51,6 +65,9 @@ class ObservableArray(BaseClass):
         ----------
         x : list, array, ObservableArray
             Coordinates.
+
+        edges : list, array, default=None
+            Edges.
 
         projs : list, default=None
             Projections.
@@ -79,11 +96,28 @@ class ObservableArray(BaseClass):
             if value is not None: value = [value]
         nprojs = len(self._projs)
         if x is None:
-            self._x = [np.full(1, np.nan) for xx in range(nprojs)]
+            if edges is not None:
+                edges = [np.atleast_1d(xx) for xx in edges]
+                self._x = [(edges[:-1] + edges[1:]) / 2. for edges in edges]
+            else:
+                self._x = [np.full(1, np.nan) for xx in range(nprojs)]
         else:
             self._x = [np.atleast_1d(xx) for xx in x]
         if len(self._x) != nprojs:
             raise ValueError('x should be of same length as the number of projs = {:d}, found {:d}'.format(nprojs, len(self._x)))
+        if edges is None:
+            self._edges = []
+            for xx in self._x:
+                if len(xx) >= 2 and not np.isnan(xx).all():
+                    tmp = (xx[:-1] + xx[1:]) / 2.
+                    tmp = np.concatenate([[tmp[0] - (xx[1] - xx[0])], tmp, [tmp[-1] + (xx[-1] - xx[-2])]])
+                else:
+                    tmp = np.full(len(xx) + 1, np.nan)
+                self._edges.append(tmp)
+        else:
+            self._edges = [np.atleast_1d(xx) for xx in edges]
+        if len(self._edges) != nprojs:
+            raise ValueError('edges should be of same length as the number of projs = {:d}, found {:d}'.format(nprojs, len(self._x)))
         if weights is None:
             weights = [None] * len(self._x)
         self._weights = [np.atleast_1d(ww) if ww is not None else np.ones(len(xx), dtype='f8') for xx, ww in zip(self._x, weights)]
@@ -121,7 +155,67 @@ class ObservableArray(BaseClass):
         """Size of the data vector."""
         return sum(len(v) for v in self._value)
 
-    def _index(self, xlim, projs=Ellipsis, concatenate=True):
+    def _slice_xmatch(self, x, projs=Ellipsis, method='mid'):
+        """Return list of (proj, slice1, slice2) to apply to obtain the same x-coordinates."""
+        if projs is Ellipsis: projs = self.projs
+        if not isinstance(x, list):
+            x = [x] * len(projs)
+        toret = []
+        for xx, proj in zip(x, projs):
+            xx = np.asarray(xx)
+            iproj = self._index_projs(proj)
+            if method == 'mid': sx = (self._edges[iproj][:-1] + self._edges[iproj][1:]) / 2.
+            else: sx = self._x[iproj]
+            found = False
+            for step in range(1, len(sx) // len(xx) + 1):
+                sl1 = slice(0, len(sx) // step * step, step)
+                if method == 'mid':
+                    edges = self._edges[iproj][::sl1.step]
+                    x1 = (edges[:-1] + edges[1:]) / 2.
+                else:
+                    nmatrix1 = self._slice_matrix(sl1, projs=proj, normalize=True)
+                    x1 = nmatrix1.dot(sx)
+                index = np.flatnonzero(np.isclose(xx[0], x1))
+                if index.size:
+                    if len(xx) > 1:
+                        if np.allclose(xx, x1[index[0]:index[0] + len(xx)]):
+                            found = True
+                            break
+                    else:
+                        found = True
+                        break
+            if not found:
+                raise ValueError('could not find slice to match {} to {} (proj {})'.format(xx, sx, proj))
+            sl2 = slice(index[0], index[0] + len(xx), 1)
+            toret.append((proj, sl1, sl2))
+        return toret
+
+    def xmatch(self, x, projs=Ellipsis, select_projs=False, method='mid'):
+        """
+        Apply selection to match input x-coordinates.
+
+        Parameters
+        ----------
+        x : array, list
+            Coordinates. Can be a list of ``x`` for the list of ``projs``.
+
+        projs : list, default=None
+            List of projections.
+            Defaults to :attr:`projs`.
+
+        Returns
+        -------
+        new : ObservableArray
+        """
+        new = self.slice()
+        for proj, sl1, sl2 in self._slice_xmatch(x=x, projs=projs, method=method):
+            new = new.slice(sl1, projs=proj)
+            new = new.slice(sl2, projs=proj)
+        if select_projs:
+            new = new.slice(projs=projs, select_projs=True)
+        return new
+
+    def _index(self, xlim, projs=Ellipsis, method='mid', concatenate=True):
         """
         Return indices for given input x-limits and projs.
 
@@ -142,21 +236,19 @@ class ObservableArray(BaseClass):
         -------
         indices : array, list
         """
-        if projs is Ellipsis:
-            projs = self.projs
-        isscalar = not isinstance(projs, list)
-        if isscalar: projs = [projs]
+        iprojs = self._index_projs(projs)
+        if not isinstance(iprojs, list): iprojs = [iprojs]
         toret = []
-        for proj in projs:
-            selfii = self.projs.index(proj)  # if self.projs is not Ellipsis else 0
-            x = self._x
+        for iproj in iprojs:
+            if method == 'mid': xx = (self._edges[iproj][:-1] + self._edges[iproj][1:]) / 2.
+            else: xx = self._x[iproj]
             if xlim is not None:
-                tmp = (x[selfii] >= xlim[0]) & (x[selfii] <= xlim[1])
+                tmp = (xx >= xlim[0]) & (xx <= xlim[1])
                 tmp = np.all(tmp, axis=tuple(range(1, tmp.ndim)))
             else:
-                tmp = np.ones(x[selfii].shape[0], dtype='?')
+                tmp = np.ones(xx.shape[0], dtype='?')
             tmp = np.flatnonzero(tmp)
-            if concatenate: tmp += sum(len(xx) for xx in x[:selfii])
+            if concatenate: tmp += sum(len(xx) for xx in self._x[:iproj])
             toret.append(tmp)
         if concatenate:
             return np.concatenate(toret, axis=0)
@@ -164,7 +256,21 @@ class ObservableArray(BaseClass):
         #    return toret[0]
         return toret
 
-    def select(self, xlim=None, rebin=1, projs=Ellipsis):
+    def _index_projs(self, projs=Ellipsis):
+        """Return projs indices."""
+        if projs is Ellipsis:
+            return list(range(len(self._projs)))
+        isscalar = not isinstance(projs, list)
+        if isscalar: projs = [projs]
+        toret = []
+        for proj in projs:
+            iproj = self.projs.index(proj)
+            toret.append(iproj)
+        if isscalar:
+            return toret[0]
+        return toret
+
+    def select(self, xlim=None, rebin=1, projs=Ellipsis, select_projs=False, method='mid'):
         """
         Apply x-cuts for given projections.
 
@@ -185,32 +291,35 @@ class ObservableArray(BaseClass):
         -------
         new : ObservableArray
         """
-        if projs is Ellipsis: projs = self.projs
-        isscalar = not isinstance(projs, list)
-        if isscalar: projs = [projs]
-        x, weights, value = list(self._x), list(self._weights), list(self._value)
-        for proj in projs:
-            iproj = self.projs.index(proj)
-            index = self._index(xlim=xlim, projs=[proj], concatenate=False)[0]
+        iprojs = self._index_projs(projs)
+        if not isinstance(iprojs, list): iprojs = [iprojs]
+        self = self.slice(slice(0, None, rebin), projs=projs)
+        x, edges, weights, value = list(self._x), list(self._edges), list(self._weights), list(self._value)
+        for iproj in iprojs:
+            index = self._index(xlim=xlim, projs=[self._projs[iproj]], method=method, concatenate=False)[0]
             x[iproj] = self._x[iproj][index]
+            edges[iproj] = self._edges[iproj][np.append(index, index[-1] + 1)]
             weights[iproj] = self._weights[iproj][index]
             value[iproj] = self._value[iproj][index]
-        return self.__class__(x=x, projs=self.projs, value=value, weights=weights, name=self.name, attrs=self.attrs).slice(slice(0, None, rebin), projs=projs)
+        projs = self.projs
+        if select_projs:
+            x, edges, projs, value, weights = ([v[iproj] for iproj in iprojs] for v in [x, edges, projs, value, weights])
+        return self.__class__(x=x, edges=edges, projs=projs, value=value, weights=weights, name=self.name, attrs=self.attrs)
 
-    def _slice_matrix(self, sl=None, projs=Ellipsis, normalize=True):
+    def _slice_matrix(self, sl=None, projs=Ellipsis, weighted=True, normalize=True):
         # Return, for a given slice, the corresponding matrix to apply to the data arrays.
         toret = []
-        if projs is Ellipsis: projs = self.projs
-        isscalar = not isinstance(projs, list)
-        if isscalar: projs = [projs]
+        iprojs = self._index_projs(projs)
+        isscalar = not isinstance(iprojs, list)
+        if isscalar: iprojs = [iprojs]
         if sl is None: sl = slice(None)
-        for proj in projs:
-            iproj = self.projs.index(proj)
-            start, stop, step = sl.indices(len(self._x[iproj]))
-            if step < 0:
-                raise IndexError('positive slicing step only supported')
+        for iproj in iprojs:
+            sl = _format_slice(sl, len(self._x[iproj]))
+            start, stop, step = sl.start, sl.stop, sl.step
             oneslice = slice(start, stop, 1)
             ww = self._weights[iproj][oneslice]
+            if not weighted:
+                ww = np.ones_like(ww)
             if len(ww) % step != 0:
                 raise IndexError('slicing step = {:d} does not divide length {:d}'.format(step, len(ww)))
             tmp_lim = np.zeros((len(ww), len(self._weights[iproj])), dtype='f8')
@@ -218,13 +327,14 @@ class ObservableArray(BaseClass):
             tmp_bin = np.zeros((len(ww) // step, len(ww)), dtype='f8')
             #print(np.repeat(np.arange(tmp_bin.shape[0]), step).shape, np.arange(tmp_bin.shape[-1]).shape, ww.shape)
             tmp_bin[np.repeat(np.arange(tmp_bin.shape[0]), step), np.arange(tmp_bin.shape[-1])] = ww
+            #print(step, self._projs[iproj], ww, np.sum(tmp_bin, axis=-1))
             if normalize: tmp_bin /= np.sum(tmp_bin, axis=-1)[:, None]
             toret.append(tmp_bin.dot(tmp_lim))
         if isscalar:
             return toret[0]
         return toret
 
-    def slice(self, slice, projs=Ellipsis):
+    def slice(self, slice=None, projs=Ellipsis, select_projs=False):
         """
         Apply selections to the data, slicing for given projections.
 
@@ -241,23 +351,30 @@ class ObservableArray(BaseClass):
         -------
         new : ObservableArray
         """
-        if projs is Ellipsis: projs = self.projs
-        isscalar = not isinstance(projs, list)
-        if isscalar: projs = [projs]
-        x, weights, value = list(self._x), list(self._weights), list(self._value)
-        for proj in projs:
-            iproj = self.projs.index(proj)
+        iprojs = self._index_projs(projs)
+        isscalar = not isinstance(iprojs, list)
+        if isscalar: iprojs = [iprojs]
+        x, edges, weights, value = list(self._x), list(self._edges), list(self._weights), list(self._value)
+        for iproj in iprojs:
+            proj = self._projs[iproj]
             xx, ww, vv = self._x[iproj], self._weights[iproj], self._value[iproj]
-            matrix = self._slice_matrix(slice, projs=proj, normalize=False)
-            nmatrix = self._slice_matrix(slice, projs=proj, normalize=True)
-            x[iproj] = nmatrix.dot(xx)
+            sl = _format_slice(slice, len(self._x[iproj]))
+            start, stop, step = sl.start, sl.stop, sl.step
+            matrix = self._slice_matrix(slice, projs=proj, weighted=False, normalize=False)
+            nwmatrix = self._slice_matrix(slice, projs=proj, weighted=True, normalize=True)
+            x[iproj] = nwmatrix.dot(xx)
+            edges[iproj] = self._edges[iproj][start::step][:len(x[iproj]) + 1]
             weights[iproj] = matrix.dot(ww)
-            value[iproj] = nmatrix.dot(vv)
-        if isscalar:
-            x, projs, weights, value = x[0], None, weights[0], value[0]
-        return self.__class__(x=x, projs=self.projs, value=value, weights=weights, name=self.name, attrs=self.attrs)
+            #print(proj, weights[iproj], slice, ww)
+            value[iproj] = nwmatrix.dot(vv)
+        #if isscalar:
+        #    x, projs, weights, value = x[0], None, weights[0], value[0]
+        projs = self.projs
+        if select_projs:
+            x, edges, projs, value, weights = ([v[iproj] for iproj in iprojs] for v in [x, edges, projs, value, weights])
+        return self.__class__(x=x, edges=edges, projs=projs, value=value, weights=weights, name=self.name, attrs=self.attrs)
 
-    def view(self, xlim=None, projs=Ellipsis, return_type='nparray'):
+    def view(self, xlim=None, projs=Ellipsis, method='mid', return_type='nparray'):
         """
         Return observable array for input x-limits and projections.
 
@@ -279,32 +396,42 @@ class ObservableArray(BaseClass):
         -------
         new : array, ObservableArray
         """
-        if projs is Ellipsis: projs = self.projs
-        isscalar = not isinstance(projs, list)
-        if isscalar: projs = [projs]
-        x, weights, value = [], [], []
-        for proj in projs:
-            iproj = self.projs.index(proj)
-            index = self._index(xlim=xlim, projs=[proj], concatenate=False)[0]
-            x.append(self._x[iproj][index])
-            weights.append(self._weights[iproj][index])
-            value.append(self._value[iproj][index])
-        if isscalar:
-            x, projs, weights, value = x[0], None, weights[0], value[0]
+        toret = self.select(xlim=xlim, projs=projs, select_projs=True, method=method)
         if return_type is None:
-            return self.__class__(x=x, projs=projs, value=value, weights=weights, name=self.name, attrs=self.attrs)
-        if not isscalar:
-            value = np.concatenate(value, axis=0)
-        return value
+            return toret
+        return toret.flatvalue
 
+    def x(self, projs=Ellipsis):
+        """x-coordinates (optionally restricted to input projs)."""
+        iprojs = self._index_projs(projs)
+        isscalar = not isinstance(iprojs, list)
+        if isscalar: return self._x[iprojs]
+        return [self._x[iproj] for iproj in iprojs]
 
-    def x(self, **kwargs):
-        """x-coordinates (optionally restricted to input xlim and projs)."""
-        return self.view(**kwargs, return_type=None)._x
+    def xavg(self, projs=Ellipsis, method='mid'):
+        """x-coordinates (optionally restricted to input projs)."""
+        def get_x(iproj):
+            if method == 'mid':
+                return (self._edges[iproj][:-1] + self._edges[iproj][1:]) / 2.
+            return self._x[iproj]
+        iprojs = self._index_projs(projs)
+        isscalar = not isinstance(iprojs, list)
+        if isscalar: return get_x(iprojs)
+        return [get_x(iproj) for iproj in iprojs]
 
-    def weights(self, **kwargs):
-        """Weights (optionally restricted to input xlim and projs)."""
-        return self.view(**kwargs, return_type=None)._weights
+    def edges(self, projs=Ellipsis):
+        """edges (optionally restricted to input projs)."""
+        iprojs = self._index_projs(projs)
+        isscalar = not isinstance(iprojs, list)
+        if isscalar: return self._edges[iprojs]
+        return [self._edges[iproj] for iproj in iprojs]
+
+    def weights(self, projs=Ellipsis):
+        """Weights (optionally restricted to input projs)."""
+        iprojs = self._index_projs(projs)
+        isscalar = not isinstance(iprojs, list)
+        if isscalar: return self._weights[iprojs]
+        return [self._weights[iproj] for iproj in iprojs]
 
     def __repr__(self):
         """Return string representation of observable data."""
@@ -313,7 +440,7 @@ class ObservableArray(BaseClass):
     def __getstate__(self):
         """Return this class' state dictionary."""
         state = {}
-        for name in ['x', 'projs', 'value', 'weights']:
+        for name in ['x', 'edges', 'projs', 'value', 'weights']:
             state[name] = getattr(self, '_' + name)
         for name in ['name', 'attrs']:
             state[name] = getattr(self, name)
@@ -321,7 +448,7 @@ class ObservableArray(BaseClass):
 
     def __setstate__(self, state):
         """Set this class' state dictionary."""
-        for name in ['x', 'projs', 'value', 'weights']:
+        for name in ['x', 'edges', 'projs', 'value', 'weights']:
             setattr(self, '_' + name, state[name])
         for name in ['name', 'attrs']:
             setattr(self, name, state[name])
@@ -451,7 +578,7 @@ class ObservableCovariance(BaseClass):
                 nobs = len(observation)
                 break
             observations = [[{'name': name, **observation[iobs]} for name, observation in observations.items()] for iobs in range(nobs)]
-        values, x, weights, projs, nobservables = [], [], [], [], 0
+        values, x, edges, weights, projs, nobservables = [], [], [], [], [], 0
         nobs = len(observations)
         if not nobs: raise ValueError('no observations found, cannot compute covariance matrix')
         for observation in observations:
@@ -460,6 +587,7 @@ class ObservableCovariance(BaseClass):
             nobservables = len(observation)
             values.append([observable._value for observable in observation])
             x.append([observable._x for observable in observation])
+            edges.append([observable._x for observable in observation])
             weights.append([observable._weights for observable in observation])
             projs = [observable.projs for observable in observation]
             name = [observable.name for observable in observation]
@@ -467,8 +595,9 @@ class ObservableCovariance(BaseClass):
         for iobs in range(nobservables):
             vv = [np.mean([vv[iobs][iproj] for vv in values], axis=0) for iproj in range(len(projs[iobs]))]
             xx = [np.mean([xx[iobs][iproj] for xx in x], axis=0) for iproj in range(len(projs[iobs]))]
+            ee = [np.mean([ee[iobs][iproj] for ee in edges], axis=0) for iproj in range(len(projs[iobs]))]
             ww = [np.mean([ww[iobs][iproj] for ww in weights], axis=0) for iproj in range(len(projs[iobs]))]
-            observables.append(ObservableArray(x=xx, value=vv, weights=ww, projs=projs[iobs], name=name[iobs]))
+            observables.append(ObservableArray(x=xx, edges=ee, value=vv, weights=ww, projs=projs[iobs], name=name[iobs]))
         values = [np.concatenate([np.concatenate(vv, axis=0) for vv in value]) for value in values]
         cov = np.cov(values, rowvar=False, ddof=1)
         return cls(cov, observables=observables, nobs=nobs)
@@ -522,13 +651,13 @@ class ObservableCovariance(BaseClass):
         matrix = []
         for iobs, observable in enumerate(self._observables):
             sl = slice if iobs in observable_indices else None
-            all_projs = observable.projs# or [None]
-            proj_indices = [all_projs.index(p) for p in projs] if projs is not Ellipsis else list(range(len(all_projs)))
-            for iproj, proj in enumerate(all_projs):
+            #all_projs = observable.projs# or [None]
+            proj_indices = observable._index_projs(projs) #if projs is not Ellipsis else list(range(len(observable.projs)))
+            for iproj, proj in enumerate(observable.projs):
                 matrix.append(observable._slice_matrix(sl if iproj in proj_indices else None, projs=proj))
         return scipy.linalg.block_diag(*matrix)
 
-    def slice(self, slice, observables=None, projs=Ellipsis):
+    def slice(self, slice=None, observables=None, projs=Ellipsis, select_observables=False, select_projs=False):
         """
         Apply selections to the covariance, slicing for given observables and projections.
 
@@ -556,9 +685,48 @@ class ObservableCovariance(BaseClass):
             observable = observable.slice(sl, projs=projs)
             observables.append(observable)
         matrix = self._slice_matrix(slice, observables=observable_indices, projs=projs)
-        return self.__class__(value=matrix.dot(self._value).dot(matrix.T), observables=observables, attrs=self.attrs)
+        value = matrix.dot(self._value).dot(matrix.T)
+        self = self.__class__(value=value, observables=observables, attrs=self.attrs)
+        if select_observables or select_projs:
+            observables = [self._observables[iobs] for iobs in observable_indices] if select_observables else self._observables
+            index = self._index(observables=observables, projs=projs if select_projs else Ellipsis, concatenate=True)
+            value = self._value[np.ix_(index, index)]
+            if select_projs: observables = [observable.select(projs=projs, select_projs=True) for observable in observables]
+            self = self.__class__(value=value, observables=observables, attrs=self.attrs)
+        return self
 
-    def _index(self, observables=None, xlim=None, projs=Ellipsis, concatenate=True):
+    def xmatch(self, x, observables=None, projs=Ellipsis, select_observables=False, select_projs=False, method='mid'):
+        """
+        Apply selection to match input x-coordinates.
+
+        Parameters
+        ----------
+        x : array, list
+            Coordinates. Can be a list of ``x`` for the list of ``projs``.
+
+        observables : list
+            List of observables (:class:`ObservableArray`, :attr:`ObservableArray.name` or index integer) to match.
+
+        projs : list, default=None
+            List of projections.
+            Defaults to :attr:`projs`.
+
+        Returns
+        -------
+        new : ObservableCovariance
+        """
+        new = self.slice()
+        observable_indices = self._observable_index(observables=observables)
+        if not isinstance(observable_indices, list): observable_indices = [observable_indices]
+        for iobs in observable_indices:
+            for proj, sl1, sl2 in self._observables[iobs]._slice_xmatch(x=x, projs=projs, method=method):
+                new = new.slice(sl1, observables=iobs, projs=proj)
+                new = new.slice(sl2, observables=iobs, projs=proj)
+        if select_observables or select_projs:
+            new = new.slice(projs=projs, select_observables=select_observables, select_projs=select_projs)
+        return new
+
+    def _index(self, observables=None, xlim=None, projs=Ellipsis, method='mid', concatenate=True):
         """
         Return indices for given input observables, x-limits and projs.
 
@@ -588,7 +756,7 @@ class ObservableCovariance(BaseClass):
         for iobs in observable_indices:
             observable = self._observables[iobs]
             #print(observable.projs, observables, iobs, projs)
-            index = observable._index(xlim=xlim, projs=projs, concatenate=concatenate)
+            index = observable._index(xlim=xlim, projs=projs, method=method, concatenate=concatenate)
             if concatenate:
                 index += sum(observable.size for observable in self._observables[:iobs])
             indices.append(index)
@@ -596,7 +764,7 @@ class ObservableCovariance(BaseClass):
             indices = np.concatenate(indices, axis=0)
         return indices
 
-    def select(self, xlim=None, rebin=1, observables=None, projs=Ellipsis):
+    def select(self, xlim=None, rebin=1, observables=None, projs=Ellipsis, select_observables=False, select_projs=False, method='mid'):
         """
         Apply selections for given observables and projections.
 
@@ -623,23 +791,31 @@ class ObservableCovariance(BaseClass):
         observable_indices = self._observable_index(observables=observables)
         if not isinstance(observable_indices, list): observable_indices = [observable_indices]
         if projs is not Ellipsis and not isinstance(projs, list): projs = [projs]
+        self = self.slice(slice(0, None, rebin), observables=observable_indices, projs=projs)
         observables, indices = [], []
         for iobs, observable in enumerate(self._observables):
             observable = self._observables[iobs]
             if iobs in observable_indices:
-                all_projs = observable.projs# or [None]
-                proj_indices = [all_projs.index(p) for p in projs] if projs is not Ellipsis else list(range(len(all_projs)))
-                index = np.concatenate([observable._index(xlim=xlim if iproj in proj_indices else None, projs=proj, concatenate=True) for iproj, proj in enumerate(all_projs)])
-                observable = observable.select(xlim=xlim, projs=projs)
+                #all_projs = observable.projs# or [None]
+                proj_indices = observable._index_projs(projs)
+                index = np.concatenate([observable._index(xlim=xlim if iproj in proj_indices else None, projs=proj, method=method, concatenate=True) for iproj, proj in enumerate(observable.projs)])
+                observable = observable.select(xlim=xlim, projs=projs, method=method)
             else:
                 index = np.arange(observable.size)
             index += sum(observable.size for observable in self._observables[:iobs])
             observables.append(observable)
             indices.append(index)
         index = np.concatenate(indices, axis=0)
-        return self.__class__(value=self._value[np.ix_(index, index)], observables=observables, attrs=self.attrs).slice(slice(0, None, rebin), observables=observable_indices, projs=projs)
+        self = self.__class__(value=self._value[np.ix_(index, index)], observables=observables, attrs=self.attrs)
+        if select_observables or select_projs:
+            observables = [self._observables[iobs] for iobs in observable_indices] if select_observables else self._observables
+            index = self._index(observables=observables, projs=projs if select_projs else Ellipsis, concatenate=True)
+            value = self._value[np.ix_(index, index)]
+            if select_projs: observables = [observable.select(projs=projs, select_projs=True) for observable in observables]
+            self = self.__class__(value=value, observables=observables, attrs=self.attrs)
+        return self
 
-    def view(self, observables=None, xlim=None, projs=Ellipsis, return_type='nparray'):
+    def view(self, observables=None, xlim=None, projs=Ellipsis, method='mid', return_type='nparray'):
         """
         Return observable covariance for input x-limits and projections.
 
@@ -664,16 +840,10 @@ class ObservableCovariance(BaseClass):
         -------
         new : array, ObservableCovariance
         """
-        observable_indices = self._observable_index(observables=observables)
-        if not isinstance(observable_indices, list): observable_indices = [observable_indices]
-        observables = []
-        for iobs in observable_indices:
-            observables.append(self._observables[iobs].view(xlim=xlim, projs=projs, return_type=None))
-        index = self._index(observables=observable_indices, xlim=xlim, projs=projs, concatenate=True)
-        value = self._value[np.ix_(index, index)]
+        toret = self.select(observables=observables, xlim=xlim, projs=projs, select_observables=True, select_projs=True, method=method)
         if return_type is None:
-            return self.__class__(value=value, observables=observables, attrs=self.attrs)
-        return value
+            return toret
+        return toret._value
 
     def corrcoef(self, **kwargs):
         """Return correlation matrix array (optionally restricted to input observables, xlim and projs)."""

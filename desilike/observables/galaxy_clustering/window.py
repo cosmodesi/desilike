@@ -232,8 +232,8 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                         k.append(kk)
                         ells.append(ell)
                 self.k, self.ells = k, tuple(ells)
-            elif list(self.ells) != list(klim.keys()):
-                raise ValueError('incompatible ells = {} and klim = {}; just remove ells?', self.ells, klim.keys())
+            elif list(self.ells) != list(klim):
+                raise ValueError('incompatible ells = {} and klim = {}; just remove ells?', self.ells, list(klim))
             for ill, ell in enumerate(self.ells):
                 if klim[ell] is None:
                     self.kedges = None

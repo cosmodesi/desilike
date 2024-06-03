@@ -1051,7 +1051,7 @@ def tablevel_combine_bias_terms_poles(pktable, pars, nd=1e-4):
 
 class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMultipoles):
 
-    _default_options = dict(use_Pzel=False, kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=1, jn=5)
+    _default_options = dict(use_Pzel=False, kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, nthreads=None, jn=5)
     # Speed is linear with the number of output k
 
     def initialize(self, *args, mu=4, **kwargs):

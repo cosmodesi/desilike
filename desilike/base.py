@@ -685,6 +685,128 @@ class BasePipeline(BaseClass):
         if self.mpicomm.rank == 0:
             self.log_info('- total speed: {:.2f} iterations / second - {:.4f} s / iteration'.format(1. / total, total))
 
+    def block_params(self, params=None, nblocks=None, oversample_power=0, **kwargs):
+        """
+        Group parameters together, and compute their ``oversample_factor``, indicative of the frequency
+        at which they should be updated altogether.
+        FIXME: REMOVE (ADDED BACK FOR URGENCY)
+
+        Note
+        ----
+        Algorithm taken from Cobaya.
+
+        Parameters
+        ----------
+        params : list, ParameterCollection, default=None
+            Parameters to sort into blocks. Defaults to :attr:`varied_params`.
+
+        nblocks : int, default=None
+            Number of blocks. If ``None``, parameters are grouped by "footprint",
+            i.e. the set of calculators that depend on them (either directly, or indirectly, through calculators' requirements).
+
+        oversample_power : int, default=0
+            ``oversample_factor`` is proportional to ``speed ** oversample_power``.
+
+        **kwargs : dict
+            Optional arguments for :meth:`_set_speed`, which is called if any :attr:`BaseCalculator.runtime_info.speed`
+            of :attr:`calculators` is not set.
+
+        Returns
+        -------
+        sorted_blocks : list
+            List of list of parameter names.
+
+        oversample_factors : list
+            List of corresponding oversample factor (for each block).
+        """
+        from itertools import permutations, chain
+        if params is None: params = self.varied_params
+        else: params = [self.params[param] for param in params]
+        # Using same algorithm as Cobaya
+        speeds = [calculator.runtime_info.speed for calculator in self.calculators]
+        if any(speed is None for speed in speeds) or kwargs:
+            self._set_speed(**kwargs)
+            speeds = [calculator.runtime_info.speed for calculator in self.calculators]
+
+        footprints = []
+        for param in params:
+            calculators_to_calculate = []
+
+            def callback(calculator):
+                calculators_to_calculate.append(calculator)
+                for calc in self.calculators:
+                    if calculator in calc.runtime_info.requires:
+                        calculators_to_calculate.append(calc)
+                        callback(calc)
+
+            for calculator in self.calculators:
+                if param in calculator.runtime_info.params:
+                    callback(calculator)
+
+            footprints.append(tuple(calculator in calculators_to_calculate for calculator in self.calculators))
+
+        unique_footprints = sorted(set(row for row in footprints))
+        param_blocks = [[p for ip, p in enumerate(params) if footprints[ip] == uf] for uf in unique_footprints]
+        param_block_sizes = [len(b) for b in param_blocks]
+
+        def sort_parameter_blocks(footprints, block_sizes, speeds, oversample_power=oversample_power):
+            footprints = np.array(footprints, dtype='i4')
+            block_sizes = np.array(block_sizes, dtype='i4')
+            costs = 1. / np.array(speeds, dtype='f8')
+            tri_lower = np.tri(len(block_sizes))
+            assert footprints.shape[0] == block_sizes.size
+
+            def get_cost_per_param_per_block(ordering):
+                return np.minimum(1, tri_lower.T.dot(footprints[ordering])).dot(costs)
+
+            if oversample_power >= 1:
+                # Choose best ordering
+                orderings = [sort_parameter_blocks(footprints, block_sizes, speeds, oversample_power=1 - 1e-3)[0]]
+                # Then we will recompute costs and oversample_factors
+            else:
+                orderings = list(permutations(np.arange(len(block_sizes))))
+
+            permuted_costs_per_param_per_block = np.array([get_cost_per_param_per_block(list(o)) for o in orderings])
+            permuted_oversample_factors = (permuted_costs_per_param_per_block[..., [0]] / permuted_costs_per_param_per_block) ** oversample_power
+            total_costs = np.array([(block_sizes[list(o)] * permuted_oversample_factors[i]).dot(permuted_costs_per_param_per_block[i]) for i, o in enumerate(orderings)])
+            argmin = np.argmin(total_costs)
+            optimal_ordering = orderings[argmin]
+            costs = permuted_costs_per_param_per_block[argmin]
+            return optimal_ordering, costs, permuted_oversample_factors[argmin].astype('i4')
+
+        # a) Multiple blocks
+        if nblocks is None:
+            i_optimal_ordering, costs, oversample_factors = sort_parameter_blocks(unique_footprints, param_block_sizes, speeds, oversample_power=oversample_power)
+            sorted_blocks = [param_blocks[i] for i in i_optimal_ordering]
+        # b) 2-block slow-fast separation
+        else:
+            if len(param_blocks) < nblocks:
+                raise ValueError('Cannot build up {:d} parameter blocks, as we only have {:d}'.format(nblocks, len(param_blocks)))
+            # First sort them optimally (w/o oversampling)
+            i_optimal_ordering, costs, oversample_factors = sort_parameter_blocks(unique_footprints, param_block_sizes, speeds, oversample_power=0)
+            sorted_blocks = [param_blocks[i] for i in i_optimal_ordering]
+            sorted_footprints = np.array(unique_footprints)[list(i_optimal_ordering)]
+            # Then, find the split that maxes cost LOG-differences.
+            # Since costs are already "accumulated down",
+            # we need to subtract those below each one
+            costs_per_block = costs - np.append(costs[1:], 0)
+            # Split them so that "adding the next block to the slow ones" has max cost
+            log_differences = np.zeros(len(costs_per_block) - 1, dtype='f8')  # some blocks are costless (no more parameters)
+            nonzero = (costs_per_block[:-1] != 0.) & (costs_per_block[1:] != 0.)
+            log_differences[nonzero] = np.log(costs_per_block[:-1][nonzero]) - np.log(costs_per_block[1:][nonzero])
+            split_block_indices = np.pad(np.sort(np.argsort(log_differences)[-(nblocks - 1):]) + 1, (1, 1), mode='constant', constant_values=(0, len(param_block_sizes)))
+            split_block_slices = list(zip(split_block_indices[:-1], split_block_indices[1:]))
+            split_blocks = [list(chain(*sorted_blocks[low:up])) for low, up in split_block_slices]
+            split_footprints = np.clip(np.array([np.array(sorted_footprints[low:up]).sum(axis=0) for low, up in split_block_slices]), 0, 1)  # type: ignore
+            # Recalculate oversampling factor with 2 blocks
+            oversample_factors = sort_parameter_blocks(split_footprints, [len(block) for block in split_blocks], speeds,
+                                                       oversample_power=oversample_power)[2]
+            # Finally, unfold `oversampling_factors` to have the right number of elements,
+            # taking into account that that of the fast blocks should be interpreted as a
+            # global one for all of them.
+            oversample_factors = np.concatenate([np.full(size, factor, dtype='f8') for factor, size in zip(oversample_factors, np.diff(split_block_slices, axis=-1))])
+        return sorted_blocks, oversample_factors
+
 
 class RuntimeInfo(BaseClass):
     """

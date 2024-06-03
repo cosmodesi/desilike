@@ -9,3 +9,5 @@ from .nautilus import NautilusSampler
 from .nuts import NUTSSampler
 from .mclmc import MCLMCSampler
 from .importance import ImportanceSampler
+try: from .mcmc import MCMCSampler
+except ImportError: pass

@@ -652,11 +652,10 @@ class ObservableCovariance(BaseClass):
         if projs is not Ellipsis and not isinstance(projs, list): projs = [projs]
         matrix = []
         for iobs, observable in enumerate(self._observables):
-            sl = slice if iobs in observable_indices else None
             #all_projs = observable.projs# or [None]
-            proj_indices = observable._index_projs(projs) #if projs is not Ellipsis else list(range(len(observable.projs)))
+            proj_indices = observable._index_projs(projs) if iobs in observable_indices else []  #if projs is not Ellipsis else list(range(len(observable.projs)))
             for iproj, proj in enumerate(observable.projs):
-                matrix.append(observable._slice_matrix(sl if iproj in proj_indices else None, projs=proj))
+                matrix.append(observable._slice_matrix(slice if iproj in proj_indices else None, projs=proj))
         return scipy.linalg.block_diag(*matrix)
 
     def slice(self, slice=None, observables=None, projs=Ellipsis, select_observables=False, select_projs=False):
@@ -683,17 +682,21 @@ class ObservableCovariance(BaseClass):
         if not isinstance(observable_indices, list): observable_indices = [observable_indices]
         observables = []
         for iobs, observable in enumerate(self._observables):
-            sl = slice if iobs in observable_indices else None
-            observable = observable.slice(sl, projs=projs)
+            observable = observable.slice(slice if iobs in observable_indices else None, projs=projs if iobs in observable_indices else Ellipsis)
             observables.append(observable)
         matrix = self._slice_matrix(slice, observables=observable_indices, projs=projs)
         value = matrix.dot(self._value).dot(matrix.T)
         self = self.__class__(value=value, observables=observables, attrs=self.attrs)
         if select_observables or select_projs:
-            observables = [self._observables[iobs] for iobs in observable_indices] if select_observables else self._observables
-            index = self._index(observables=observables, projs=projs if select_projs else Ellipsis, concatenate=True)
+            index, observables = [], []
+            for iobs, observable in enumerate(self._observables):
+                if select_observables and iobs not in observable_indices: continue
+                sprojs = select_projs and iobs in observable_indices
+                index.append(self._index(observables=iobs, projs=projs if sprojs else Ellipsis, concatenate=True))
+                observable = observable.select(projs=projs if sprojs else Ellipsis, select_projs=sprojs)
+                observables.append(observable)
+            index = np.concatenate(index, axis=0)
             value = self._value[np.ix_(index, index)]
-            if select_projs: observables = [observable.select(projs=projs, select_projs=True) for observable in observables]
             self = self.__class__(value=value, observables=observables, attrs=self.attrs)
         return self
 
@@ -793,6 +796,7 @@ class ObservableCovariance(BaseClass):
         observable_indices = self._observable_index(observables=observables)
         if not isinstance(observable_indices, list): observable_indices = [observable_indices]
         if projs is not Ellipsis and not isinstance(projs, list): projs = [projs]
+        #print(observable_indices, projs)
         self = self.slice(slice(0, None, rebin), observables=observable_indices, projs=projs)
         observables, indices = [], []
         for iobs, observable in enumerate(self._observables):
@@ -810,10 +814,15 @@ class ObservableCovariance(BaseClass):
         index = np.concatenate(indices, axis=0)
         self = self.__class__(value=self._value[np.ix_(index, index)], observables=observables, attrs=self.attrs)
         if select_observables or select_projs:
-            observables = [self._observables[iobs] for iobs in observable_indices] if select_observables else self._observables
-            index = self._index(observables=observables, projs=projs if select_projs else Ellipsis, concatenate=True)
+            index, observables = [], []
+            for iobs, observable in enumerate(self._observables):
+                if select_observables and iobs not in observable_indices: continue
+                sprojs = select_projs and iobs in observable_indices
+                index.append(self._index(observables=iobs, projs=projs if sprojs else Ellipsis, concatenate=True))
+                observable = observable.select(projs=projs if sprojs else Ellipsis, select_projs=sprojs)
+                observables.append(observable)
+            index = np.concatenate(index, axis=0)
             value = self._value[np.ix_(index, index)]
-            if select_projs: observables = [observable.select(projs=projs, select_projs=True) for observable in observables]
             self = self.__class__(value=value, observables=observables, attrs=self.attrs)
         return self
 

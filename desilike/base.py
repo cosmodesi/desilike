@@ -268,10 +268,12 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
 
     if backend == 'mpi':
 
-        has_input_mpicomm = mpicomm is not None
+        mpicomm_main = mpicomm
 
         @functools.wraps(calculate)
-        def wrapper(params, **kw):
+        def wrapper(params, mpicomm=None, **kw):
+            if mpicomm is None: mpicomm = mpicomm_main
+            has_input_mpicomm = mpicomm is not None
             kw = {**kwargs, **kw}
             if not has_input_mpicomm:
                 if __wrapped__vmap__ is None: mpicomm = calculate._mpicomm

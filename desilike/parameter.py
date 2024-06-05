@@ -2246,7 +2246,7 @@ class Samples(BaseParameterCollection):
         new = others[0].copy()
         new.data = []
         new_params = others[0].params()
-        others = list(others[:1]) + [other for other in others[1:] if other.params()]
+        others = list(others[:1]) + [other for other in others[1:] if other.params() and other.size]
         if intersection:
             for other in others:
                 new_params &= other.params()

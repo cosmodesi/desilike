@@ -1,7 +1,6 @@
-import itertools
-
 import numpy as np
 
+from desilike import mpi
 from desilike.base import vmap
 from desilike.parameter import ParameterPriorError, Samples
 from desilike.utils import BaseClass, expand_dict
@@ -41,21 +40,22 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
             A dictionary mapping parameter name (including wildcard) to values.
             If provided, ``size`` and ``ref_scale`` are ignored.
         """
-        self.pipeline = calculator.runtime_info.pipeline
+        #self.pipeline = calculator.runtime_info.pipeline
+        self.calculator = calculator
         if mpicomm is None:
             mpicomm = calculator.mpicomm
         self.mpicomm = mpicomm
-        self.varied_params = self.pipeline.varied_params
+        self.varied_params = self.calculator.varied_params
         self.save_fn = save_fn
         self.set_grid(**kwargs)
 
     @property
     def mpicomm(self):
-        return self.pipeline.mpicomm
+        return self._mpicomm
 
     @mpicomm.setter
     def mpicomm(self, mpicomm):
-        self.pipeline.mpicomm = mpicomm
+        self._mpicomm = mpicomm
 
     def set_grid(self, size=1, ref_scale=1., grid=None):
         self.ref_scale = float(ref_scale)
@@ -106,11 +106,12 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
         """
         if kwargs: self.set_grid(**kwargs)
 
-        vcalculate = vmap(self.pipeline.calculators[-1], backend='mpi', return_derived=True)
-        derived = vcalculate(self.samples.to_dict() if self.mpicomm.rank == 0 else {})[1]
+        #self.calculator.mpicomm = mpi.COMM_SELF
+        vcalculate = vmap(self.calculator, backend='mpi', return_derived=True)
+        derived = vcalculate(self.samples.to_dict() if self.mpicomm.rank == 0 else {}, mpicomm=self.mpicomm)[1]
 
         if self.mpicomm.rank == 0:
-            for param in self.pipeline.params.select(fixed=True, derived=False):
+            for param in self.calculator.all_params.select(fixed=True, derived=False):
                 self.samples[param] = np.full(self.samples.shape, param.value, dtype='f8')
             self.samples.update(derived)
             if self.save_fn is not None:

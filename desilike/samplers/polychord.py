@@ -228,7 +228,6 @@ class PolychordSampler(BasePosteriorSampler):
             my_dumper()
             return (max(self.logposterior(values) - self.logprior(values), self.settings.logzero), [])
 
-        self.pipeline.mpicomm = mpi.COMM_SELF
         loglikelihood_rank = 0 if self.mpicomm.size == 1 else 1
         _tag, _req = 1000, {}
         self._it_send, self._it_rec = 0, 0

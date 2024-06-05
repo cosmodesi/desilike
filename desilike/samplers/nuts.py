@@ -138,7 +138,7 @@ class NUTSSampler(BaseBatchPosteriorSampler):
             import warnings
             warnings.warn('NUTSSampler does not benefit from several processes per chain, please ask for {:d} processes'.format(len(self.chains)))
 
-        mpicomm = self.likelihood.mpicomm
+        #mpicomm = self.likelihood.mpicomm
         #self.likelihood.mpicomm = mpi.COMM_SELF
 
         if self.algorithm is None:
@@ -201,7 +201,7 @@ class NUTSSampler(BaseBatchPosteriorSampler):
         #self.derived[1][self.likelihood._param_loglikelihood] = chain['logposterior'] - logprior
         samples = chain.select(name=self.varied_params.names())
         results = self._vlikelihood(samples.to_dict())
-        if mpicomm.rank == 0:
+        if self.mpicomm.rank == 0:
             results, errors = results
             if results:
                 self.derived = [samples, results[1]]

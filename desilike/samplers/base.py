@@ -231,7 +231,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                 toret[param.name] = value
             return toret
 
-        self.likelihood.mpicomm = mpi.COMM_SELF
+        #self.likelihood.mpicomm = mpi.COMM_SELF
         self.likelihood()  # initialize before jit
         vlikelihood = self.likelihood
         from desilike import vmap

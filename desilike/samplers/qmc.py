@@ -78,11 +78,12 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
         **kwargs : dict
             Optional engine-specific arguments.
         """
-        self.pipeline = calculator.runtime_info.pipeline
+        #self.pipeline = calculator.runtime_info.pipeline
+        self.calculator = calculator
         if mpicomm is None:
             mpicomm = calculator.mpicomm
         self.mpicomm = mpicomm
-        self.varied_params = self.pipeline.varied_params
+        self.varied_params = self.calculator.varied_params
         self.engine = get_qmc_engine(engine)(d=len(self.varied_params), **kwargs)
         self.samples = None
         if self.mpicomm.rank == 0 and samples is not None:
@@ -91,11 +92,11 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
 
     @property
     def mpicomm(self):
-        return self.pipeline.mpicomm
+        return self._mpicomm
 
     @mpicomm.setter
     def mpicomm(self, mpicomm):
-        self.pipeline.mpicomm = mpicomm
+        self._mpicomm = mpicomm
 
     def run(self, niterations=300):
         """
@@ -121,11 +122,11 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
             samples = qmc.scale(self.engine.random(n=niterations), lower, upper)
             samples = Samples(samples.T, params=self.varied_params)
 
-        vcalculate = vmap(self.pipeline.calculators[-1], backend='mpi', return_derived=True)
-        derived = vcalculate(samples.to_dict() if self.mpicomm.rank == 0 else {})[1]
+        vcalculate = vmap(self.calculator, backend='mpi', return_derived=True)
+        derived = vcalculate(samples.to_dict() if self.mpicomm.rank == 0 else {}, mpicomm=self.mpicomm)[1]
 
         if self.mpicomm.rank == 0:
-            for param in self.pipeline.params.select(fixed=True, derived=False):
+            for param in self.calculator.all_params.select(fixed=True, derived=False):
                 samples[param] = np.full(samples.shape, param.value, dtype='f8')
             samples.update(derived)
             if self.samples is None:

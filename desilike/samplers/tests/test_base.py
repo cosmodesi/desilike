@@ -29,7 +29,7 @@ def test_samplers():
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov, name='LRG')
 
-    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][:1]:
+    for Sampler in [EmceeSampler, NUTSSampler, ZeusSampler, PocoMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][:3]:
         kwargs = {'seed': 42}
         if Sampler in [EmceeSampler, ZeusSampler]:
             kwargs.update(nwalkers=20)
@@ -603,7 +603,7 @@ def test_cobaya_mcmc():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_samplers()
+    test_samplers()
     #test_nautilus()
     #test_fixed()
     #test_importance()
@@ -613,4 +613,4 @@ if __name__ == '__main__':
     #test_nested()
     #test_marg()
     #test_bao_hmc()
-    test_cobaya_mcmc()
+    #test_cobaya_mcmc()

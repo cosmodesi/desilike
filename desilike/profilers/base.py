@@ -252,7 +252,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
     def _get_vchi2(self, chi2=None, aux=None):
         """Vectorize the :math:`\chi^{2}`."""
-        self.likelihood.mpicomm = mpi.COMM_SELF
+        #self.likelihood.mpicomm = mpi.COMM_SELF
         start = self._get_start(niterations=3, max_tries=None)
         aux = aux or {}
 

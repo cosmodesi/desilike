@@ -116,12 +116,13 @@ class ObservableArray(BaseClass):
                 self._edges.append(tmp)
         else:
             self._edges = [np.atleast_1d(xx) for xx in edges]
-        if len(self._edges) != nprojs:
-            raise ValueError('edges should be of same length as the number of projs = {:d}, found {:d}'.format(nprojs, len(self._x)))
+        shape = tuple(len(xx) for xx in self._x)
+        eshape = tuple(len(edges) - 1 for edges in self._edges)
+        if eshape != shape:
+            raise ValueError('edges should be of length(x) - 1, found = {}'.format(shape, eshape))
         if weights is None:
             weights = [None] * len(self._x)
         self._weights = [np.atleast_1d(ww) if ww is not None else np.ones(len(xx), dtype='f8') for xx, ww in zip(self._x, weights)]
-        shape = tuple(len(xx) for xx in self._x)
         wshape = tuple(len(ww) for ww in self._weights)
         if wshape != shape:
             raise ValueError('weights should be of same length as x = {}, found = {}'.format(shape, wshape))
@@ -247,6 +248,7 @@ class ObservableArray(BaseClass):
                 tmp = np.all(tmp, axis=tuple(range(1, tmp.ndim)))
             else:
                 tmp = np.ones(xx.shape[0], dtype='?')
+                #print(xlim, self._x[iproj].shape, self._edges[iproj].shape)
             tmp = np.flatnonzero(tmp)
             if concatenate: tmp += sum(len(xx) for xx in self._x[:iproj])
             toret.append(tmp)
@@ -587,7 +589,7 @@ class ObservableCovariance(BaseClass):
             nobservables = len(observation)
             values.append([observable._value for observable in observation])
             x.append([observable._x for observable in observation])
-            edges.append([observable._x for observable in observation])
+            edges.append([observable._edges for observable in observation])
             weights.append([observable._weights for observable in observation])
             projs = [observable.projs for observable in observation]
             name = [observable.name for observable in observation]

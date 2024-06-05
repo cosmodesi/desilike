@@ -157,7 +157,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         if mpicomm is None:
             mpicomm = likelihood.mpicomm
         self.likelihood = likelihood
-        self.pipeline = self.likelihood.runtime_info.pipeline
+        #self.pipeline = self.likelihood.runtime_info.pipeline
         self.mpicomm = mpicomm
         self.likelihood.solved_default = '.best'
         self.varied_params = self.likelihood.varied_params.deepcopy()
@@ -252,6 +252,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
     def _get_vchi2(self, chi2=None, aux=None):
         """Vectorize the :math:`\chi^{2}`."""
+        self.likelihood.mpicomm = mpi.COMM_SELF
         start = self._get_start(niterations=3, max_tries=None)
         aux = aux or {}
 
@@ -356,7 +357,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
     @mpicomm.setter
     def mpicomm(self, mpicomm):
-        self._mpicomm = self.pipeline.mpicomm = mpicomm
+        self._mpicomm = mpicomm
 
     def maximize(self, niterations=None, start=None, **kwargs):
         """

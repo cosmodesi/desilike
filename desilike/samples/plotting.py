@@ -49,6 +49,7 @@ def _get_default_chain_params(chains, params=None, **kwargs):
                 list_params += chain.params(name=[str(param)])
         return list_params
     list_params = [chain.params(**kwargs) for chain in chains]
+    #print(list_params)
     return ParameterCollection([params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])])
 
 
@@ -728,6 +729,7 @@ def plot_triangle(samples, params=None, labels=None, g=None, **kwargs):
     """
     from getdist import plots
     if g is None: g = plots.get_subplot_plotter()
+
     samples = _make_list(samples)
     labels = _make_list(labels, length=len(samples), default=None)
     params = _get_default_chain_params(samples, params=params, varied=True, input=True)
@@ -838,6 +840,7 @@ def plot_triangle(samples, params=None, labels=None, g=None, contour_colors=None
                       no_extra_legend_space=True, **args)
     elif profiles:
         add_legend(labels=labels, colors=contour_colors, linestyles=contour_ls, fig=fig)
+
     return g
 
 

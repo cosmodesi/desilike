@@ -56,8 +56,8 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
           and optionally ``shotnoise``.
 
     """
-    def initialize(self, data=None, covariance=None, klim=None, wmatrix=None, transform=None, **kwargs):
-        self.k, self.kedges, self.ells, self.shotnoise = None, None, None, None
+    def initialize(self, data=None, covariance=None, klim=None, wmatrix=None, transform=None, kedges=None, **kwargs):
+        self.k, self.kedges, self.ells, self.shotnoise = None, kedges, None, None
         self.flatdata, self.mocks, self.covariance = None, None, None
         if not isinstance(data, dict):
             self.flatdata = self.load_data(data=data, klim=klim)[0]
@@ -76,8 +76,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             if wmatrix is not None:
                 self.wmatrix.init.update(wmatrix=wmatrix)
         if self.kedges is not None:  # set by data
-            klim = {ell: (edges[0], edges[-1], np.mean(np.diff(edges))) for ell, edges in zip(self.ells, self.kedges)}
-            #self.wmatrix.init.update(k=self.k)
+            self.wmatrix.init.update(kedges=self.kedges)
         if klim is not None:
             self.wmatrix.init.update(klim=klim)
         self.wmatrix.init.update(kwargs)
@@ -88,6 +87,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             self.flatdata = self.wmatrix.flatpower.copy()
         else:
             self.wmatrix.runtime_info.initialize()
+        input_kedges = self.kedges is not None
         for name in ['k', 'ells', 'kedges', 'shotnoise']:
             setattr(self, name, getattr(self.wmatrix, name))
         kmasklim = self.wmatrix.kmasklim
@@ -97,7 +97,9 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             ells = list(kmasklim)
             self.flatdata = np.concatenate([data[ells.index(ell)][kmasklim[ell]] for ell in self.ells])
         if isinstance(self.covariance, ObservableCovariance):
-            self.covariance = self.covariance.xmatch(x=list(self.k), projs=list(self.ells), method='mean').view(projs=list(self.ells))
+            if input_kedges: x, method = [(edges[:-1] + edges[1:]) / 2. for edges in self.kedges], 'mid'
+            else: x, method = list(self.k),'mean'
+            self.covariance = self.covariance.xmatch(x=x, projs=list(self.ells), method=method).view(projs=list(self.ells))
         self.transform = transform
         allowed_transform = [None, 'cubic']
         if self.transform not in allowed_transform:

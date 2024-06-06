@@ -195,15 +195,16 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory power spectrum multipoles, defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
     """
-    def initialize(self, klim=None, k=None, ells=None, wmatrix=None, kin=None, kinrebin=1, kinlim=None, ellsin=None, shotnoise=None, fiber_collisions=None, systematic_templates=None, theory=None):
+    def initialize(self, klim=None, k=None, kedges=None, ells=None, wmatrix=None, kin=None, kinrebin=1, kinlim=None, ellsin=None, shotnoise=None, fiber_collisions=None, systematic_templates=None, theory=None):
         from scipy import linalg
 
         _default_step = 0.01
 
         if ells is None:
-            if klim is not None: ells = klim.keys()
+            if klim is not None: ells = list(klim)
             else: ells = (0, 2, 4)
         self.ells = tuple(ells)
+
         self.k = self.kmasklim = self.kedges = None
         if k is not None:
             if np.ndim(k[0]) == 0:
@@ -211,10 +212,17 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             self.k = [np.array(kk, dtype='f8') for kk in k]
             if len(self.k) != len(self.ells):
                 raise ValueError("provide as many k's as ells")
+        if kedges is not None:
+            if np.ndim(kedges[0]) == 0:
+                kedges = [kedges] * len(self.ells)
+            self.kedges = [np.array(kk, dtype='f8') for kk in kedges]
+            if len(self.kedges) != len(self.ells):
+                raise ValueError("provide as many kedges as ells")
+            if klim is None:
+                klim = {ell: (edges[0], edges[-1], np.mean(np.diff(edges))) for ell, edges in zip(self.ells, self.kedges)}
 
         if klim is not None:
             klim = dict(klim)
-            self.kedges = []
             if self.k is not None:
                 k, ells, self.kmasklim = [], [], {}
                 for ill, ell in enumerate(self.ells):
@@ -234,20 +242,29 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 self.k, self.ells = k, tuple(ells)
             elif list(self.ells) != list(klim):
                 raise ValueError('incompatible ells = {} and klim = {}; just remove ells?', self.ells, list(klim))
+            kedges = []
             for ill, ell in enumerate(self.ells):
                 if klim[ell] is None:
-                    self.kedges = None
+                    kedges = None
                     break
                 (lo, hi, *step) = klim[ell]
                 if not step:
                     if self.k is not None: step = ((hi - lo) / self.k[ill].size,)
                     else: step = (_default_step,)
-                self.kedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
+                kedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
+            if self.kedges is None: self.kedges = kedges
         else:
             klim = {ell: None for ell in self.ells}
 
         if self.kedges is None:
-            self.kedges = [np.arange(0.01 - _default_step / 2., 0.2 + _default_step, _default_step)] * len(self.ells)  # gives k = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
+            if self.k is not None:
+                self.kedges = []
+                for xx in self.k:
+                    tmp = (xx[:-1] + xx[1:]) / 2.
+                    tmp = np.concatenate([[tmp[0] - (xx[1] - xx[0])], tmp, [tmp[-1] + (xx[-1] - xx[-2])]])
+                    self.kedges.append(tmp)
+            else:
+                self.kedges = [np.arange(0.01 - _default_step / 2., 0.2 + _default_step, _default_step)] * len(self.ells)  # gives k = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
 
         if self.k is None:
             self.k = [(edges[:-1] + edges[1:]) / 2. for edges in self.kedges]
@@ -269,7 +286,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 self.kmask = np.concatenate(self.kmask, axis=0)
         elif isinstance(wmatrix, dict):
             self.ellsin = tuple(self.ells)
-            if self.kedges is None: raise ValueError('provide klim to compute the binning matrix')
+            if kedges is None: raise ValueError('provide kedges or klim to compute the binning matrix')
             self.kin, matrix_full = window_matrix_bininteg(self.kedges, **wmatrix)
             self.matrix_full = matrix_full.T
         elif isinstance(wmatrix, np.ndarray):
@@ -409,7 +426,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
 
     def __getstate__(self):
         state = {}
-        for name in ['kin', 'ellsin', 'k', 'ells', 'kedges', 'fiducial', 'matrix_full', 'kmask', 'offset', 'flatpower', 'shotnoise', 'flatshotnoise']:
+        for name in ['kin', 'ellsin', 'k', 'kedges', 'ells', 'fiducial', 'matrix_full', 'kmask', 'offset', 'flatpower', 'shotnoise', 'flatshotnoise']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
@@ -496,12 +513,12 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
     theory : BaseTheoryCorrelationFunctionMultipoles
         Theory correlation function multipoles, defaults to :class:`KaiserTracerCorrelationFunctionMultipoles`.
     """
-    def initialize(self, slim=None, s=None, ells=None, wmatrix=None, sin=None, sinrebin=1, sinlim=None, ellsin=None, fiber_collisions=None, systematic_templates=None, theory=None):
+    def initialize(self, slim=None, s=None, sedges=None, ells=None, wmatrix=None, sin=None, sinrebin=1, sinlim=None, ellsin=None, fiber_collisions=None, systematic_templates=None, theory=None):
         from scipy import linalg
         _default_step = 5.
 
         if ells is None:
-            if slim is not None: ells = slim.keys()
+            if slim is not None: ells = list(slim)
             else: ells = (0, 2, 4)
         self.ells = tuple(ells)
         self.s = self.smasklim = self.sedges = None
@@ -511,10 +528,17 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
             self.s = [np.array(ss, dtype='f8') for ss in s]
             if len(self.s) != len(self.ells):
                 raise ValueError("provide as many s's as ells")
+        if sedges is not None:
+            if np.ndim(sedges[0]) == 0:
+                sedges = [sedges] * len(self.ells)
+            self.sedges = [np.array(ss, dtype='f8') for ss in sedges]
+            if len(self.sedges) != len(self.ells):
+                raise ValueError("provide as many sedges as ells")
+            if slim is None:
+                slim = {ell: (edges[0], edges[-1], np.mean(np.diff(edges))) for ell, edges in zip(self.ells, self.sedges)}
 
         if slim is not None:
             slim = dict(slim)
-            self.sedges = []
             if self.s is not None:
                 s, ells, self.smasklim = [], [], {}
                 for ill, ell in enumerate(self.ells):
@@ -533,7 +557,8 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
                         ells.append(ell)
                 self.s, self.ells = s, tuple(ells)
             elif list(self.ells) != list(slim.keys()):
-                raise ValueError('incompatible ells = {} and klim = {}; just remove ells?', self.ells, slim.keys())
+                raise ValueError('incompatible ells = {} and klim = {}; just remove ells?', self.ells, list(slim))
+            sedges = []
             for ill, ell in enumerate(self.ells):
                 if slim[ell] is None:
                     self.sedges = None
@@ -542,13 +567,20 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
                 if not step:
                     if self.s is not None: step = ((hi - lo) / self.s[ill].size,)
                     else: step = (_default_step,)
-                self.sedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
+                sedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
+            if self.sedges is None: self.sedges = sedges
         else:
             slim = {ell: None for ell in self.ells}
 
         if self.sedges is None:
-            self.sedges = np.arange(20. - _default_step / 2., 150 + _default_step, _default_step)  # gives s = np.arange(20, 150 + _default_step / 2., _default_step)
-
+            if self.s is not None:
+                self.sedges = []
+                for xx in self.s:
+                    tmp = (xx[:-1] + xx[1:]) / 2.
+                    tmp = np.concatenate([[tmp[0] - (xx[1] - xx[0])], tmp, [tmp[-1] + (xx[-1] - xx[-2])]])
+                    self.sedges.append(tmp)
+            else:
+                self.sedges = [np.arange(20. - _default_step / 2., 150 + _default_step, _default_step)] * len(self.ells)  # gives k = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
         if self.s is None:
             self.s = [(edges[:-1] + edges[1:]) / 2. for edges in self.sedges]
         self.s = [np.array(ss) for ss in self.s]

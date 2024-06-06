@@ -46,8 +46,8 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
           one can provide the list of multipoles ``ells`` and the corresponding (list of) :math:`s` separations as a (list of) array ``s``.
 
     """
-    def initialize(self, data=None, covariance=None, slim=None, wmatrix=None, ignore_nan=False, **kwargs):
-        self.s, self.sedges, self.RR, self.ells = None, None, None, None
+    def initialize(self, data=None, covariance=None, slim=None, wmatrix=None, ignore_nan=False, sedges=None, **kwargs):
+        self.s, self.sedges, self.RR, self.ells = None, sedges, None, None
         self.flatdata, self.mocks, self.covariance = None, None, None
         if not isinstance(data, dict):
             self.flatdata = self.load_data(data=data, slim=slim, ignore_nan=ignore_nan)[0]
@@ -67,9 +67,8 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             if self.RR and isinstance(wmatrix, dict):
                 wmatrix = {**self.RR, **wmatrix}
             self.wmatrix.init.update(wmatrix=wmatrix)
-        if self.sedges:  # set by data
-            slim = {ell: (edges[0], edges[-1], np.mean(np.diff(edges))) for ell, edges in zip(self.ells, self.sedges)}
-            self.wmatrix.init.update(s=self.s)
+        if self.sedges is not None:  # set by data
+            self.wmatrix.init.update(sedges=self.sedges)
         if slim is not None:
             self.wmatrix.init.update(slim=slim)
         self.wmatrix.init.update(kwargs)
@@ -78,6 +77,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             self.flatdata = self.wmatrix.flatcorr.copy()
         else:
             self.wmatrix.runtime_info.initialize()
+        input_sedges = self.sedges is not None
         for name in ['s', 'ells', 'sedges']:
             setattr(self, name, getattr(self.wmatrix, name))
         smasklim = self.wmatrix.smasklim
@@ -87,7 +87,9 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             ells = list(smasklim)
             self.flatdata = np.concatenate([data[ells.index(ell)][smasklim[ell]] for ell in self.ells])
         if isinstance(self.covariance, ObservableCovariance):
-            self.covariance = self.covariance.xmatch(x=list(self.s), projs=list(self.ells), method='mean').view(projs=list(self.ells))
+            if input_sedges: x, method = [(edges[:-1] + edges[1:]) / 2. for edges in self.sedges], 'mid'
+            else: x, method = list(self.s),'mean'
+            self.covariance = self.covariance.xmatch(x=x, projs=list(self.ells), method=method).view(projs=list(self.ells))
 
     def load_data(self, data=None, slim=None, ignore_nan=False):
 

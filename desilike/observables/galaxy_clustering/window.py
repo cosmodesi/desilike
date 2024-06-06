@@ -216,6 +216,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             if np.ndim(kedges[0]) == 0:
                 kedges = [kedges] * len(self.ells)
             self.kedges = [np.array(kk, dtype='f8') for kk in kedges]
+            #print(self.kedges, self.ells)
             if len(self.kedges) != len(self.ells):
                 raise ValueError("provide as many kedges as ells")
             if klim is None:

@@ -1081,8 +1081,8 @@ if __name__ == '__main__':
 
     # test_systematic_templates()
     # test_bao()
-    # test_power_spectrum()
-    # test_correlation_function()
+    test_power_spectrum()
+    test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
@@ -1091,4 +1091,4 @@ if __name__ == '__main__':
     # test_fiber_collisions()
     # test_compression_window()
     # test_shapefit(run=False)
-    test_observable_covariance()
+    # test_observable_covariance()

@@ -671,20 +671,20 @@ params:
 
 ---
 
-class: EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles
+class: REPTVelocileptorsTracerPowerSpectrumMultipoles
 
 params:
   b1:
     prior:
-      limits: [-1., 4.]
+      limits: [0., 4.]
     ref:
-      limits: [0.4, 0.6]
+      limits: [1.4, 1.6]
     latex: b_{1}
   b2:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
@@ -694,7 +694,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 3.
+      scale: 5.
     ref:
       dist: norm
       loc: 0.
@@ -705,220 +705,100 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 5.
     ref:
       dist: norm
       loc: 0.
       scale: 0.5
     latex: b_{3}
-  alpha[0:7:2]:
+  alpha0:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 30.
     ref:
       dist: norm
       loc: 0.
       scale: 1.
-    latex: \alpha_{[]}
-  sn[:5:2]:
+    latex: \alpha_{0}
+  alpha2:
     prior:
       dist: norm
       loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.1
-    latex: s_{n, []}
-  alpha:
-    value: 0.
-    latex: '\alpha'
-  alpha_v:
-    value: 0.
-    latex: '\alpha_{v}'
-  alpha_s0:
-    value: 0.
-    latex: '\alpha_{s,0}'
-  alpha_s2:
-    value: 0.
-    latex: '\alpha_{s,2}'
-  alpha_g1:
-    value: 0.
-    latex: '\alpha_{g,1}'
-  alpha_g3:
-    value: 0.
-    latex: '\alpha_{g,3}'
-  alpha_k2:
-    value: 0.
-    latex: '\alpha_{k,2}'
-  sv:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0
-      scale: 1.
-    latex: s_{v}
-  sigma0:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0
-      scale: 1.
-    latex: \sigma_{0}
-  stoch_k0:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0
-      scale: 1.
-    latex: s_{k, 0}
-  counterterm_c3:
-    value: 0.
-    latex: c_{3}
-
----
-
-class: EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
-
-params:
-  b1:
-    prior:
-      limits: [-1., 4.]
-    ref:
-      limits: [0.4, 0.6]
-    latex: b_{1}
-  b2:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{2}
-  bs:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 3.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{s}
-  b3:
-    fixed: True
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{3}
-  alpha[0:7:2]:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 100.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 1.
-    latex: \alpha_{[]}
-  sn[:5:2]:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.1
-    latex: s_{n, []}
-  alpha:
-    value: 0.
-    latex: '\alpha'
-  alpha_v:
-    value: 0.
-    latex: '\alpha_{v}'
-  alpha_s0:
-    value: 0.
-    latex: '\alpha_{s,0}'
-  alpha_s2:
-    value: 0.
-    latex: '\alpha_{s,2}'
-  alpha_g1:
-    value: 0.
-    latex: '\alpha_{g,1}'
-  alpha_g3:
-    value: 0.
-    latex: '\alpha_{g,3}'
-  alpha_k2:
-    value: 0.
-    latex: '\alpha_{k,2}'
-  sv:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0
-      scale: 100.
-    latex: s_{v}
-  sigma0:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0
       scale: 50.
-    latex: \sigma_{0}
-  stoch_k0:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{2}
+  alpha4:
     prior:
       dist: norm
       loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0
       scale: 50.
-    latex: s_{k, 0}
-  counterterm_c3:
-    value: 0.
-    latex: c_{3}
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{4}
+  alpha6:
+    fixed: True
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{6}
+  sn0:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 4.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 0}
+  sn2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 100.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 2}
+  sn4:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 500.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 4}
 
 ---
 
-class: LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles
+class: REPTVelocileptorsTracerCorrelationFunctionMultipoles
 
 params:
   b1:
     prior:
-      limits: [-1., 4.]
+      limits: [0., 4.]
     ref:
-      limits: [0.4, 0.6]
+      limits: [1.4, 1.6]
     latex: b_{1}
   b2:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
@@ -928,7 +808,7 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 3.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
@@ -939,205 +819,53 @@ params:
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
+      scale: 10.
     ref:
       dist: norm
       loc: 0.
       scale: 0.5
     latex: b_{3}
-  alpha[0:7:2]:
+  alpha0:
     prior:
       dist: norm
       loc: 0.
-      scale: 100.
+      scale: 30.
     ref:
       dist: norm
       loc: 0.
       scale: 1.
-    latex: \alpha_{[]}
-  sn[:5:2]:
+    latex: \alpha_{0}
+  alpha2:
     prior:
       dist: norm
       loc: 0.
-      scale: 1000.
+      scale: 50.
     ref:
       dist: norm
       loc: 0.
-      scale: 0.1
-    latex: s_{n, []}
-  alpha:
-    value: 0.
-    latex: '\alpha'
-  alpha_v:
-    value: 0.
-    latex: '\alpha_{v}'
-  alpha_s0:
-    value: 0.
-    latex: '\alpha_{s,0}'
-  alpha_s2:
-    value: 0.
-    latex: '\alpha_{s,2}'
-  alpha_g1:
-    value: 0.
-    latex: '\alpha_{g,1}'
-  alpha_g3:
-    value: 0.
-    latex: '\alpha_{g,3}'
-  alpha_k2:
-    value: 0.
-    latex: '\alpha_{k,2}'
-  sv:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0
       scale: 1.
-    latex: s_{v}
-  sigma0:
+    latex: \alpha_{2}
+  alpha4:
     prior:
       dist: norm
       loc: 0.
-      scale: 1000.
+      scale: 50.
     ref:
       dist: norm
-      loc: 0
+      loc: 0.
       scale: 1.
-    latex: \sigma_{0}
-  sigma0_stoch:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0
-      scale: 1.
-    latex: s_{k, 0}
-  counterterm_c3:
-    value: 0.
-    latex: c_{3}
-
-
----
-
-class: LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
-
-params:
-  b1:
-    prior:
-      limits: [-1., 4.]
-    ref:
-      limits: [0.4, 0.6]
-    latex: b_{1}
-  b2:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{2}
-  bs:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 3.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{s}
-  b3:
+    latex: \alpha_{4}
+  alpha6:
     fixed: True
     prior:
       dist: norm
       loc: 0.
-      scale: 15.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
-    latex: b_{3}
-  alpha[0:7:2]:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 100.
+      scale: 50.
     ref:
       dist: norm
       loc: 0.
       scale: 1.
-    latex: \alpha_{[]}
-  sn[:5:2]:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.1
-    latex: s_{n, []}
-  alpha:
-    value: 0.
-    latex: '\alpha'
-  alpha_v:
-    value: 0.
-    latex: '\alpha_{v}'
-  alpha_s0:
-    value: 0.
-    latex: '\alpha_{s,0}'
-  alpha_s2:
-    value: 0.
-    latex: '\alpha_{s,2}'
-  alpha_g1:
-    value: 0.
-    latex: '\alpha_{g,1}'
-  alpha_g3:
-    value: 0.
-    latex: '\alpha_{g,3}'
-  alpha_k2:
-    value: 0.
-    latex: '\alpha_{k,2}'
-  sv:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0
-      scale: 1.
-    latex: s_{v}
-  sigma0:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0
-      scale: 1.
-    latex: \sigma_{0}
-  sigma0_stoch:
-    prior:
-      dist: norm
-      loc: 0.
-      scale: 1000.
-    ref:
-      dist: norm
-      loc: 0
-      scale: 1.
-    latex: s_{k, 0}
-  counterterm_c3:
-    value: 0.
-    latex: c_{3}
-
+    latex: \alpha_{6}
 
 ---
 

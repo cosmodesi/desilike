@@ -3,6 +3,7 @@ import warnings
 import numpy as np
 
 from desilike.base import BaseCalculator, Parameter, ParameterCollection, ParameterArray
+from desilike.observables import ObservableCovariance
 from desilike.jax import numpy as jnp
 from desilike.jax import jit
 from desilike import plotting, utils
@@ -40,7 +41,18 @@ class BaseLikelihood(BaseCalculator):
             catch_errors = tuple(catch_errors)
         self._catch_errors = catch_errors
         #self.fisher = None
-        self._more_initialize = self._marginalize_precision
+
+    def more_initialize(self):
+        pipeline = self.runtime_info.pipeline
+        likelihoods = getattr(self, 'likelihoods', [self])
+
+        # Reset precision and flatdata
+        for likelihood in likelihoods:
+            pipeline_initialize = getattr(likelihood, '_pipeline_initialize', None)
+            if pipeline_initialize is not None:
+                pipeline_initialize(pipeline)
+
+        self._marginalize_precision()
 
     def get(self):
         pipeline = self.runtime_info.pipeline
@@ -81,8 +93,6 @@ class BaseLikelihood(BaseCalculator):
 
         if solved_params:
             solved_params = ParameterCollection(solved_params)
-            values = dict(pipeline.input_values)
-            for param in solved_params: values[param.name] = 0.
 
             from desilike.fisher import Fisher
             solve_likelihoods = [likelihood for likelihood in likelihoods if any(param in solved_params for param in likelihood.all_params)]
@@ -100,6 +110,12 @@ class BaseLikelihood(BaseCalculator):
                         param = param.clone(derived=False if param in solved_params or param.depends else param.derived, fixed=param not in solved_params)
                         all_params.set(param)
                 solve_likelihood.all_params = all_params
+
+            # Just to reject from ``values`` parameters from which base ones are derived, and are not kept in solve_likelihood.all_params
+            input_params = [param for param in solve_likelihood.all_params if param.name in pipeline.input_values]
+            values = {param.name: pipeline.input_values[param.name] for param in input_params}
+            #print(values)
+            for param in solved_params: values[param.name] = 0.
 
             fisher = Fisher(solve_likelihood, method='auto')
             for likelihood in solve_likelihood.likelihoods:
@@ -142,14 +158,10 @@ class BaseLikelihood(BaseCalculator):
         x, dx, solve_likelihoods, derivs = [], [], [], None
         if solved_params:
             solved_params = ParameterCollection(solved_params)
-            solve_likelihoods, values = [], {}
+            solve_likelihoods = []
             for likelihood in likelihoods:
                 if any(param in solved_params for param in likelihood.all_params):
                     solve_likelihoods.append(likelihood)
-                    values.update({param.name: pipeline.input_values[param.name] for param in likelihood.all_params if param.name in pipeline.input_values})
-            #for param in solved_params:
-                #if not jnp.isfinite(values[param.name]):
-            #    values[param.name] = param.value
 
             derived = pipeline.derived
             #pipeline.more_calculate = lambda: None
@@ -171,6 +183,8 @@ class BaseLikelihood(BaseCalculator):
                     solve_likelihood.all_params = all_params
                     # Such that when initializing, Fisher calls the pipeline (on all ranks of likelihood.mpicomm) at its current parameters
                     # and does not use default ones (call to self.fisher(**values) below only updates the calculator states on the last rank)
+                    input_params = [param for param in solve_likelihood.all_params if param.name in pipeline.input_values]
+                    values = {param.name: pipeline.input_values[param.name] for param in input_params}
                     solve_likelihood.runtime_info.pipeline.input_values = values
 
                 def fisher(params):
@@ -233,6 +247,7 @@ class BaseLikelihood(BaseCalculator):
                         #print(np.diag(posterior_hessian), p._gradient)
                         return x, dx, posterior_hessian, prior_hessian, likelihoods_hessian, likelihoods_gradient
                 """
+                fisher.input_params = input_params
                 fisher.mpicomm = self.mpicomm
                 self.fisher = fisher
                 #self.fisher.varied_params = solved_params  # just to get same _derived attribute for solved_params != self.fisher.varied_params not to fail
@@ -246,6 +261,7 @@ class BaseLikelihood(BaseCalculator):
             #self.fisher.likelihood.runtime_info.pipeline.input_values = values
             #self.fisher.mpicomm = self.mpicomm
             #print('start fisher')
+            values = {param.name: pipeline.input_values[param.name] for param in self.fisher.input_params}
             x, dx, posterior_hessian, prior_hessian, likelihoods_hessian, likelihoods_gradient = self.fisher(values)
             #print('stop fisher')
             #pipeline.derived = derived
@@ -269,7 +285,7 @@ class BaseLikelihood(BaseCalculator):
             sum_logprior += param.prior(xx)
             # hack to run faster than calling param.prior --- saving ~ 0.0005 s
             #sum_logprior += -0.5 * (xx - param.prior.attrs['loc'])**2 / param.prior.attrs['scale']**2 if param.prior.dist == 'norm' else 0.
-            pipeline.input_values[param.name] = xx
+            #pipeline.input_values[param.name] = xx  # may lead to instabilities
             if derived is not None:
                 derived.set(ParameterArray(xx, param=param))
 
@@ -417,6 +433,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
         Only applies if mocks are provided to input observables.
         'hartlap' to apply Hartlap 2007 factor (https://arxiv.org/abs/astro-ph/0608064).
         'percival2014' to apply Percival 2014 factor (https://arxiv.org/abs/1312.4841).
+        Can be a dictionary to specify the number of observations, ``{'nobs': nobs, 'correction': 'hartlap-percival2014'}``.
 
     precision : array, default=None
         Precision matrix to be used instead of the inverse covariance.
@@ -425,13 +442,16 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
         if not utils.is_sequence(observables):
             observables = [observables]
         self.nobs = None
+        if isinstance(correct_covariance, dict):
+            self.nobs = correct_covariance.get('nobs', getattr(covariance, 'nobs', None))
+            correct_covariance = correct_covariance['correction']
         self.observables = list(observables)
         for obs in observables: obs.all_params  # to set observable's pipelines, and initialize once (percival factor below requires all_params)
         covariance, scale_covariance, precision = (self.mpicomm.bcast(obj if self.mpicomm.rank == 0 else None, root=0) for obj in (covariance, scale_covariance, precision))
         if covariance is None:
             nmocks = [self.mpicomm.bcast(len(obs.mocks) if self.mpicomm.rank == 0 and getattr(obs, 'mocks', None) is not None else 0) for obs in self.observables]
             if any(nmocks):
-                self.nobs = nmocks[0]
+                if self.nobs is None: self.nobs = nmocks[0]
                 if not all(nmock == nmocks[0] for nmock in nmocks):
                     raise ValueError('Provide the same number of mocks for each observable, found {}'.format(nmocks))
                 if self.mpicomm.rank == 0:
@@ -454,14 +474,26 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
 
         def check_matrix(matrix, name):
             if matrix is None:
-                return matrix
+                return None
             matrix = np.atleast_2d(matrix).copy()
             if matrix.shape != (matrix.shape[0],) * 2:
                 raise ValueError('{} must be a square matrix, but found shape {}'.format(name, matrix.shape))
-            shape = (self.flatdata.size,) * 2
-            if matrix.shape != shape:
-                raise ValueError('Based on provided observables, {} expected to be a matrix of shape {}, but found {}'.format(name, shape, matrix.shape))
+            mshape = '({0}, {0})'.format(matrix.shape[0])
+            shape = '({0}, {0})'.format(self.flatdata.size)
+            shape_obs = '({0}, {0})'.format(' + '.join(['{:d}'.format(obs.flatdata.size) for obs in self.observables]))
+            if matrix.shape[0] != self.flatdata.size:
+                raise ValueError('based on provided observables, {} expected to be a matrix of shape {} = {}, but found {}'.format(name, shape, shape_obs, mshape))
             return matrix
+
+        if isinstance(covariance, ObservableCovariance):
+            cov_nobservables = len(covariance.observables())
+            if len(self.observables) != cov_nobservables:
+                raise ValueError('provided {:d} observables, but the covariance contains {:d}'.format(len(self.observables), cov_nobservables))
+            for iobs, obs in enumerate(self.observables):
+                array = obs.to_array()
+                x = [(edges[:-1] + edges[1:]) / 2. for edges in array.edges()]
+                covariance = covariance.xmatch(observables=iobs, x=x, projs=array.projs, select_projs=True, method='mid')
+            covariance = covariance.view()
 
         self.precision = check_matrix(precision, 'precision')
         self.covariance = check_matrix(covariance, 'covariance')
@@ -484,27 +516,33 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
         else:
             self.log_info('Rescaling precision with a factor {:.4e}'.format(1/scale_covariance))
             self.precision /= scale_covariance
-        nbins = self.precision.shape[0]
-        if self.nobs is not None:
-            if 'hartlap' in correct_covariance:
-                self.hartlap2007_factor = (self.nobs - nbins - 2.) / (self.nobs - 1.)
-                if self.mpicomm.rank == 0:
-                    self.log_info('Covariance matrix with {:d} points built from {:d} observations.'.format(nbins, self.nobs))
-                    self.log_info('...resulting in a Hartlap 2007 factor of {:.4f}.'.format(self.hartlap2007_factor))
-                self.precision *= self.hartlap2007_factor
-            if 'percival' in correct_covariance:
-                # eq. 8 and 18 of https://arxiv.org/pdf/1312.4841.pdf
-                A = 2. / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
-                B = (self.nobs - nbins - 2.) / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
-                params = set()
-                for obs in self.observables: params |= set(obs.all_params.names(varied=True))
-                nparams = len(params)
-                self.percival2014_factor = (1 + B * (nbins - nparams)) / (1 + A + B * (nparams + 1))
-                if self.mpicomm.rank == 0:
-                    self.log_info('Covariance matrix with {:d} points built from {:d} observations, varying {:d} parameters.'.format(nbins, self.nobs, nparams))
-                    self.log_info('...resulting in a Percival 2014 factor of {:.4f}.'.format(self.percival2014_factor))
-                self.precision /= self.percival2014_factor
+        self.correct_covariance = correct_covariance
+        if self.nobs is not None and 'hartlap' in self.correct_covariance:
+            nbins = self.precision.shape[0]
+            self.hartlap2007_factor = (self.nobs - nbins - 2.) / (self.nobs - 1.)
+            if self.mpicomm.rank == 0:
+                self.log_info('Covariance matrix with {:d} points built from {:d} observations.'.format(nbins, self.nobs))
+                self.log_info('...resulting in a Hartlap 2007 factor of {:.4f}.'.format(self.hartlap2007_factor))
+            self.precision *= self.hartlap2007_factor
         super(ObservablesGaussianLikelihood, self).initialize(self.flatdata, covariance=self.covariance, precision=self.precision, **kwargs)
+        self.precision_hartlap2007 = self.precision.copy()
+
+    def _pipeline_initialize(self, pipeline):
+        varied_params = pipeline._params.select(varied=True, input=True)
+        if self.nobs is not None and 'percival' in self.correct_covariance:
+            nbins = self.precision_hartlap2007.shape[0]
+            # eq. 8 and 18 of https://arxiv.org/pdf/1312.4841.pdf
+            A = 2. / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
+            B = (self.nobs - nbins - 2.) / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
+            params = set()
+            for obs in self.observables: params |= set(obs.all_params.names())
+            params = [param for param in params if param in varied_params]
+            nparams = len(params)
+            self.percival2014_factor = (1 + B * (nbins - nparams)) / (1 + A + B * (nparams + 1))
+            if self.mpicomm.rank == 0:
+                self.log_info('Covariance matrix with {:d} points built from {:d} observations, varying {:d} parameters.'.format(nbins, self.nobs, nparams))
+                self.log_info('...resulting in a Percival 2014 factor of {:.4f}.'.format(self.percival2014_factor))
+            self.precision = self.precision_hartlap2007 / self.percival2014_factor
 
     def calculate(self):
         self.flatdiff = self.flattheory - self.flatdata
@@ -513,6 +551,10 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
     @property
     def flattheory(self):
         return jnp.concatenate([obs.flattheory for obs in self.observables], axis=0)
+
+    def to_covariance(self):
+        from desilike.observables import ObservableCovariance
+        return ObservableCovariance(value=self.covariance, observables=[o.to_array() for o in self.observables])
 
     @plotting.plotter
     def plot_covariance_matrix(self, corrcoef=True, **kwargs):

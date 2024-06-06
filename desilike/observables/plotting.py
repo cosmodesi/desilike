@@ -80,7 +80,8 @@ def plot_covariance_matrix(covariance, x1=None, x2=None, xlabel1=None, xlabel2=N
         cumsize1, cumsize2 = [np.insert(np.cumsum(size), 0, 0) for size in [size1, size2]]
         mat = [[mat[start1:stop1, start2:stop2] for start2, stop2 in zip(cumsize2[:-1], cumsize2[1:])] for start1, stop1 in zip(cumsize1[:-1], cumsize1[1:])]
 
-    norm = norm or Normalize(vmin=min(item.min() for row in mat for item in row), vmax=max(item.max() for row in mat for item in row))
+    vmin, vmax = min(item.min() for row in mat for item in row), max(item.max() for row in mat for item in row)
+    norm = norm or Normalize(vmin=vmin, vmax=vmax)
     nrows, ncols = [len(x) for x in [size2, size1]]
     if fig is None:
         figsize = figsize or tuple(max(n * 3, 6) for n in [ncols, nrows])
@@ -96,13 +97,16 @@ def plot_covariance_matrix(covariance, x1=None, x2=None, xlabel1=None, xlabel2=N
     else:
         lax = fig.axes
     lax = np.array(lax).reshape((nrows, ncols))
+    cmap = plt.get_cmap('jet_r')
     for i in range(ncols):
         for j in range(nrows):
             ax = lax[nrows - j - 1][i]
             xx1, xx2 = x1[i], x2[j]
             if x1[i] is None: xx1 = 1 + np.arange(mat[i][j].shape[0])
             if x2[j] is None: xx2 = 1 + np.arange(mat[i][j].shape[1])
-            mesh = ax.pcolor(xx1, xx2, mat[i][j].T, norm=norm, cmap=plt.get_cmap('jet_r'))
+            xx1 = np.append(xx1, xx1[-1] + (1. if xx1.size == 1 else xx1[-1] - xx1[-2]))
+            xx2 = np.append(xx2, xx2[-1] + (1. if xx2.size == 1 else xx2[-1] - xx2[-2]))
+            mesh = ax.pcolormesh(xx1, xx2, mat[i][j].T, norm=norm, cmap=cmap)
             if i > 0 or x1[i] is None: ax.yaxis.set_visible(False)
             if j == 0 and xlabel1[i]: ax.set_xlabel(xlabel1[i], fontsize=labelsize)
             if j > 0 or x2[j] is None: ax.xaxis.set_visible(False)

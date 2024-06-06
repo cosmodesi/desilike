@@ -8,6 +8,7 @@ import traceback
 import numpy as np
 
 from . import mpi, jax
+from .jax import numpy as jnp
 from .utils import BaseClass, UserDict, Monitor, deep_eq, is_sequence
 from .io import BaseConfig
 from .parameter import Parameter, ParameterCollection, ParameterConfig, ParameterCollectionConfig, ParameterArray, Samples
@@ -46,6 +47,13 @@ class InitConfig(BaseConfig):
         self._updated_args = self._updated_params = True
         self._func_params, self._args_func_params = None, tuple()
         super(InitConfig, self).__init__(*arg, **kwargs)
+
+    def setdefault(self, name, value, if_none=False):
+        if if_none:
+            if self.get(name, None) is None:
+                self[name] = value
+        else:
+            super().setdefault(name, value)
 
     @property
     def updated(self):
@@ -120,20 +128,25 @@ def _params_args_or_kwargs(args, kwargs):
     return params
 
 
-def _check_params(params):
+def _check_params(params, with_jax=False):
     cshapes = []
     params = dict(params)
     names = list(params.keys())
     for name in names:
         array = params[name]
         if array is not None:
-            array = jax.to_nparray(array)
-            if array is None:
-                raise ValueError('is input array {}: {} a JAX array? if so, use jax.vmap instead'.format(name, array))
-            if not array.shape:
-                raise ValueError('input array {}: {} must be of rank >= 1 for lmap'.format(name, array))
-            cshapes.append(array.shape)
-            params[name] = array.ravel()
+            if with_jax:
+                arr = jnp.asarray(array)
+                cshapes.append(arr.shape)
+                params[name] = arr
+            else:
+                arr = jax.to_nparray(array)
+                if arr is None:
+                    raise ValueError('is input array {}: {} a JAX array? if so, use jax.vmap instead'.format(name, array))
+                if not arr.shape:
+                    raise ValueError('input array {}: {} must be of rank >= 1 for lmap'.format(name, array))
+                cshapes.append(arr.shape)
+                params[name] = arr.ravel()
 
     def _all_eq(cshapes):
         if cshapes:
@@ -190,6 +203,8 @@ def _check_states(states):
             errors[istate] = state[1]
             if ref is not None:
                 results.append(ref[0])
+            else:
+                results.append(None)
 
     return results, errors
 
@@ -245,6 +260,7 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
         def wrapper(params, **kw):
             _jwrapper = jwrapper
             if kw: _jwrapper = jax.vmap(functools.partial(calculate, **{**kwargs, **kw}))
+            params, shape = _check_params(params, with_jax=True)
             toret = _jwrapper(params)
             if errors == 'return':
                 return toret, {}
@@ -252,10 +268,12 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
 
     if backend == 'mpi':
 
-        has_input_mpicomm = mpicomm is not None
+        mpicomm_main = mpicomm
 
         @functools.wraps(calculate)
-        def wrapper(params, **kw):
+        def wrapper(params, mpicomm=None, **kw):
+            if mpicomm is None: mpicomm = mpicomm_main
+            has_input_mpicomm = mpicomm is not None
             kw = {**kwargs, **kw}
             if not has_input_mpicomm:
                 if __wrapped__vmap__ is None: mpicomm = calculate._mpicomm
@@ -282,12 +300,16 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
                     states = _calculate_map(chunk_params, **kw)
                 else:  # calculate already vmap
                     states = calculate(chunk_params, **kw)
-                    if __wrapped__errors__ != 'return':
-                        states = (states, {})  # adding empty error
-                    states = (states[0], {chunk_offset + ierror: error for ierror, error in states[1].items()})
-                    for error in states[1].values():
-                        break
-                    states = [states]
+                    local_chunk_size = len(chunk_params[name])
+                    if local_chunk_size:
+                        if __wrapped__errors__ != 'return':
+                            states = (states, {})  # adding empty error
+                        states = (states[0], {chunk_offset + ierror: error for ierror, error in states[1].items()}, local_chunk_size)
+                        for error in states[1].values():
+                            break
+                        states = [states]
+                    else:
+                        states = []
                 tmp_states = mpicomm.reduce(states, root=0)
                 if mpicomm.rank == 0:
                     all_states += tmp_states
@@ -300,10 +322,22 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
                 results, errs = _check_states(all_states)
                 results = _concatenate_results(results, shape, add_dims=True)
             else:
-                results = _concatenate_results([states[0] for states in all_states], shape, add_dims=False)
                 errs = {}
                 for states in all_states:
                     errs.update(states[1])
+                if errs:  # fill in with results with placeholder
+                    ref = None
+                    for istates, states in enumerate(all_states):
+                        if len(states[1]) != states[2]:
+                            if isinstance(states[0], (tuple, list)):
+                                ref = type(states[0])(s[:1] if s is not None else None for s in states[0])
+                            else:
+                                ref = states[0][:1] if states[0] is not None else None
+                            break
+                    for istates, states in enumerate(all_states):
+                        if len(states[1]) == states[2]:  # all errors
+                            all_states[istates] = (_concatenate_results([ref] * states[2], (states[2],), add_dims=False),)
+                results = _concatenate_results([states[0] for states in all_states], shape, add_dims=False)
             # For MPI ranks != 0, let's put the correct structure for unpacking
             none_result = None
             if mpicomm.rank == 0:
@@ -352,11 +386,12 @@ class BasePipeline(BaseClass):
         # To avoid loops created by one calculator, which when updated, requests reinitialization of the calculators which depend on it
         for calculator in self.calculators:
             calculator.runtime_info.initialized = True
+            #print(calculator, id(self), calculator.runtime_info._initialized_for_pipeline)
         self.calculators = self.calculators[::-1]
         self.mpicomm = calculator._mpicomm
         for calculator in self.calculators:
             calculator.runtime_info.tocalculate = True
-            more_initialize = getattr(calculator, '_more_initialize', None)
+            more_initialize = getattr(calculator, 'more_initialize', None)
             if more_initialize is not None: self.more_initialize = more_initialize
         #self._params = ParameterCollection()
         self._set_params()
@@ -374,8 +409,11 @@ class BasePipeline(BaseClass):
                     if param.derived and param.fixed:
                         msg = 'Derived parameter {} of {} is already derived in {}.'.format(param, calculator, params_from_calculator[param.name])
                         if self.mpicomm.rank == 0: warnings.warn(msg)
-                    elif param != new_params[param]:
-                        raise PipelineError('Parameter {} of {} is different from that of {}: {}.'.format(param, calculator, params_from_calculator[param.name], param.__diff__(new_params[param])))
+                    else:
+                        diff = param.__diff__(new_params[param])
+                        if diff: # and list(diff) != ['value']:
+                            msg = 'Parameter {} of {} is different from that of {}: {}.'.format(param, calculator, params_from_calculator[param.name], diff)
+                            if self.mpicomm.rank == 0: warnings.warn(msg)
                 params_from_calculator[param.name] = calculator
                 #new_calculator_params.set(param)
                 new_params.set(param)
@@ -653,6 +691,7 @@ class BasePipeline(BaseClass):
         """
         Group parameters together, and compute their ``oversample_factor``, indicative of the frequency
         at which they should be updated altogether.
+        FIXME: REMOVE (ADDED BACK FOR URGENCY)
 
         Note
         ----
@@ -865,7 +904,8 @@ class RuntimeInfo(BaseClass):
             self._pipeline = BasePipeline(self.calculator)
         else:
             for calculator in self._pipeline.calculators[:-1]:
-                if not calculator.runtime_info.initialized or id(self._pipeline) not in calculator.runtime_info._initialized_for_pipeline:
+                if (not calculator.runtime_info.initialized) or (id(self._pipeline) not in calculator.runtime_info._initialized_for_pipeline):
+                    #print(calculator.runtime_info.initialized, calculator, id(self._pipeline), calculator.runtime_info._initialized_for_pipeline)
                     self._pipeline = BasePipeline(self.calculator)
                     break
         return self._pipeline
@@ -969,10 +1009,12 @@ class RuntimeInfo(BaseClass):
                 else:
                     if type(invalue) != type(self.input_values[basename]) or invalue != self.input_values[basename]:
                         self._tocalculate = True
+                        #print(self.calculator, invalue, self.input_values[basename], type(invalue), type(self.input_values[basename]), invalue == self.input_values[basename])
                 if invalue is not None:
                     value = invalue
                 self.input_values[basename] = value
         if self.tocalculate:
+            #print(self.calculator, self.input_values)
             self._calculation = True
             self.monitor.start()
             self.calculator.calculate(**self.input_values)
@@ -1065,9 +1107,10 @@ class BaseCalculator(BaseClass):
 
     @property
     def mpicomm(self):
-        if not self.runtime_info.initialized:
-            return self._mpicomm
-        return self.runtime_info.pipeline.mpicomm
+        return self._mpicomm
+        #if not self.runtime_info.initialized:
+        #    return self._mpicomm
+        #return self.runtime_info.pipeline.mpicomm
 
     @mpicomm.setter
     def mpicomm(self, mpicomm):

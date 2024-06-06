@@ -441,6 +441,7 @@ class Differentiation(BaseClass):
                         raise exc
                     finally:
                         tmp_samples.append([__calculate(*chunk_values)] + tmp_i_samples)
+                        #print(ivalue, chunk_values, tmp_samples[-1][0])
                 except Exception as exc:
                     errors.append((exc, traceback.format_exc()))
 

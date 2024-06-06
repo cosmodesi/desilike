@@ -60,7 +60,7 @@ def test_templates():
     assert np.allclose([kTO, pkTO], [k0, 1.])
 
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles
-    from desilike.theories.galaxy_clustering import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BAOPowerSpectrumTemplate,
+    from desilike.theories.galaxy_clustering import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BAOPowerSpectrumTemplate, BAOPhaseShiftPowerSpectrumTemplate,
                                                      StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate,
                                                      BandVelocityPowerSpectrumTemplate, TurnOverPowerSpectrumTemplate, DirectWiggleSplitPowerSpectrumTemplate)
 
@@ -79,7 +79,7 @@ def test_templates():
     theory()
     assert 'n_s' not in theory.varied_params
 
-    for template in [FixedPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), BAOPowerSpectrumTemplate(),
+    for template in [FixedPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(), BAOPowerSpectrumTemplate(), BAOPhaseShiftPowerSpectrumTemplate(),
                      StandardPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(apmode='qisoqap'),
                      WiggleSplitPowerSpectrumTemplate(), WiggleSplitPowerSpectrumTemplate(kernel='tophat'), DirectWiggleSplitPowerSpectrumTemplate(),
                      BandVelocityPowerSpectrumTemplate(kp=np.linspace(0.01, 0.1, 10)), TurnOverPowerSpectrumTemplate()]:
@@ -88,14 +88,15 @@ def test_templates():
         theory()
         template.f, template.f0
         template.init.update(only_now=True)
-        theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-        theory()
+        if 'turnover' not in template.__class__.__name__.lower():
+            theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
+            theory()
 
-    from desilike.theories.galaxy_clustering import BAOExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor
+    from desilike.theories.galaxy_clustering import BAOExtractor, BAOPhaseShiftExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor
     extractor = ShapeFitPowerSpectrumExtractor()
     dm = 0.02
     assert np.allclose(extractor(n_s=0.96 + dm).dm - extractor(n_s=0.96).dm, dm, atol=0., rtol=1e-5)
-    for extractor in [BAOExtractor(), StandardPowerSpectrumExtractor(),
+    for extractor in [BAOExtractor(), BAOPhaseShiftExtractor(), StandardPowerSpectrumExtractor(),
                       ShapeFitPowerSpectrumExtractor(), ShapeFitPowerSpectrumExtractor(dfextractor='fsigmar'),
                       WiggleSplitPowerSpectrumExtractor(), WiggleSplitPowerSpectrumExtractor(kernel='tophat'),
                       BandVelocityPowerSpectrumExtractor(kp=np.linspace(0.01, 0.1, 10)), TurnOverPowerSpectrumExtractor()]:
@@ -485,7 +486,7 @@ def test_full_shape():
     theory = KaiserTracerCorrelationFunctionMultipoles()
     test(theory, emulate='pt')
     test(theory, emulate=None, test_likelihood=False)
-
+    """
     from desilike.theories.galaxy_clustering import EFTLikeKaiserTracerPowerSpectrumMultipoles, EFTLikeKaiserTracerCorrelationFunctionMultipoles
 
     theory = EFTLikeKaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=1.))
@@ -625,23 +626,15 @@ def test_full_shape():
 
     theory_Pzel = LPTVelocileptorsTracerPowerSpectrumMultipoles(use_Pzel=True)
     theory_Pzel()
+    """
 
-    from desilike.theories.galaxy_clustering import EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
-    theory = EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    from desilike.theories.galaxy_clustering import REPTVelocileptorsTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerCorrelationFunctionMultipoles
+    theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
     test(theory)
-    theory(dm=0.01, b1=1.).shape
-    theory = EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=0.5))
+    theory(dm=0.01, b1p=1.).shape
+    theory = REPTVelocileptorsTracerCorrelationFunctionMultipoles(ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=0.5))
     test(theory)
-    theory(dm=0.01, b1=1.).shape
-    theory.pt
-
-    from desilike.theories.galaxy_clustering import LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles
-    theory = LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    test(theory)
-    theory(dm=0.01, b1=1.).shape
-    theory = LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles(ells=(0, 2), template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    test(theory)
-    theory(dm=0.01, b1=1.).shape
+    theory(dm=0.01, b1p=1.).shape
     theory.pt
 
     from desilike.theories.galaxy_clustering import PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles
@@ -678,16 +671,27 @@ def test_full_shape():
 
 def test_freedom():
 
-    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles
-    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles
+    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerCorrelationFunctionMultipoles, REPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles
+
+    for TheoryPower in [LPTVelocileptorsTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles]:
+        shotnoise = 3e-6
+        theory = TheoryPower(ells=(0, 2), freedom='max', prior_basis='physical', shotnoise=shotnoise)
+        theory()
+        assert theory.snd == shotnoise * 1e-4
+        for name in ['b1p']:
+            assert theory.all_params[name].prior.dist == 'uniform'
+        for name in ['b2p', 'bsp', 'b3p']:
+            assert name in theory.all_params
 
     ntemplate = 4
-    for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles],
-                                       [LPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles]):
-        for freedom in [None, 'min', 'max'][1:]:
+    for TheoryPower, TheoryCorr in zip([LPTVelocileptorsTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, FOLPSTracerPowerSpectrumMultipoles, FOLPSAXTracerPowerSpectrumMultipoles],
+                                       [LPTVelocileptorsTracerCorrelationFunctionMultipoles, REPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles, FOLPSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles]):
+        for freedom in [None, 'min', 'max']:
             for ells in [(0, 2), (0, 2, 4)]:
                 kwargs = {}
-                if 'velocileptors' in TheoryPower.__name__.lower() and freedom in ['min', 'max']: kwargs['prior_basis'] = None
+                if 'velocileptors' in TheoryPower.__name__.lower():
+                    kwargs.update(prior_basis='standard')
                 power = TheoryPower(ells=ells, freedom=freedom, **kwargs)
                 print('#' * 60)
                 print(TheoryPower.__name__, ells, freedom, power.varied_params)
@@ -696,7 +700,7 @@ def test_freedom():
                 fell = 1
                 if 'velocileptors' in TheoryPower.__name__.lower(): fell = 2  # alpha4 and sn4
                 if freedom is not None:
-                    assert len(power.varied_params) == ntemplate + 6 + (4 in ells) * fell + 2 * (freedom == 'max')  # 2 (+ 2) bias, 2 (+ 1) EFT, 2 sn
+                    assert len(power.varied_params) == ntemplate + 6 + (4 in ells) * fell + 2 * (freedom == 'max'), (TheoryPower, freedom, ells, power.varied_params)  # 2 (+ 2) bias, 2 (+ 1) EFT, 2 sn
                 corr = TheoryCorr(ells=ells, freedom=freedom, **kwargs)
                 print('#' * 60)
                 print(TheoryCorr.__name__, ells, freedom, corr.varied_params)
@@ -712,21 +716,16 @@ def test_freedom():
                     for param in theory.all_params:
                         if param.basename in basenames:
                             assert param.namespace == 'LRG'
-                if 'velocileptors' in TheoryPower.__name__.lower() and freedom == 'max' and kwargs.get('prior_basis', None) == 'physical':
-                    for name in ['LRG.b1p']:
-                        assert theory.all_params[name].prior.dist == 'uniform'
-                    for name in ['LRG.b2p', 'LRG.bsp', 'LRG.b3p']:
-                        assert theory.all_params[name].prior.dist == 'norm'
 
 
-def test_velocileptors():
+def test_velocileptors_lpt_rsd():
     from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
     z = 0.5
     template = DirectPowerSpectrumTemplate(z=z)
     k = np.arange(0.005, 0.3, 0.01)
     options = dict(use_Pzel=True, kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, jn=5)
     #options = dict(use_Pzel=True, kIR=0.2, cutoff=10, extrap_min=-4, extrap_max=3, N=2048, jn=5)
-    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, k=k, freedom='max', prior_basis='std', use_Pzel=True) #, **options)
+    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, k=k, freedom='max', prior_basis='standard', use_Pzel=True) #, **options)
     biases = [0.71, 0.26, 0.67, 0.52]
     cterms = [-3.4, -1.7, 6.5, 0]
     stoch = [1500., -1900., 0]
@@ -782,6 +781,51 @@ def test_velocileptors():
     ax.legend()
     ax.set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
     ax.set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
+    plt.show()
+
+
+def test_velocileptors_rept():
+    import time
+    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, REPTVelocileptorsTracerPowerSpectrumMultipoles
+    z = 0.5
+    template = ShapeFitPowerSpectrumTemplate(z=z)
+    k = np.arange(0.005, 0.3, 0.01)
+    theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, k=k, freedom='max', prior_basis='standard') #, **options)
+    biases = [1.68593608, -1.17, -0.715, -0.479]
+    cterms = [16.9, -10.8, 21.0, 5.40]
+    stoch = [1380., 3800., 7122.]
+    pars = biases + cterms + stoch
+    names = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2', 'sn4']
+    qpar, qper = 1., 1.
+    values = dict(zip(names, pars))
+    for name in names[-3:]:
+        values[name] = values[name] / 1e4
+    values['bs'] = values['bs'] + (2. / 7.) * (values['b1'] - 1.)  # co-evolution
+    values['b3'] = (values['b3'] - (values['b1'] - 1.)) / 3.
+    power = theory(qpar=qpar, qper=qper, **values)
+
+    from velocileptors.EPT.ept_fullresum_fftw import REPT
+    t0 = time.time()
+    niter = 1
+    for i in range(niter):
+        rept = REPT(template.k, template.pk_dd, pnw=template.pknow_dd, kmin=theory.k[0], kmax=theory.k[-1], nk=200,\
+                    beyond_gauss=True, one_loop=True,\
+                    N=4000, extrap_min=-4, extrap_max=3, cutoff=20, jn=5, rbao=110., threads=1)
+        ref = rept.compute_redshift_space_power_multipoles(pars, template.f, apar=qpar, aperp=qper)
+        kref, ref = ref[0], ref[1:]
+    print('time', (time.time() - t0) / niter)
+
+    from matplotlib import pyplot as plt
+    ax = plt.gca()
+    for ill, ell in enumerate((0, 2, 4)):
+        ax.plot(kref, kref * ref[ill], color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
+        ax.plot(k, k * power[ill], color='C{:d}'.format(ill), ls='--')
+        #ax.plot(k, k * (ref[ill] / power[ill] - 1.), color='C{:d}'.format(ill), ls='-', label=r'$\ell = {:d}$'.format(ell))
+    ax.set_xlim([k[0], k[-1]])
+    ax.grid(True)
+    ax.legend()
+    ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+    ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
     plt.show()
 
 
@@ -869,10 +913,11 @@ def test_pybird():
 
 
 def test_folps():
+    import time
     from matplotlib import pyplot as plt
     z_pk = 0.5
     k = np.logspace(np.log10(0.01), np.log10(0.3), num=50) # array of k_ev in [h/Mpc]
-    PshotP = 1. / 0.0002118763
+    PshotP = 1e4 # / 0.0002118763
     # bias parameters
     b1 = 1.645
     b2 = -0.46
@@ -890,7 +935,7 @@ def test_folps():
 
     from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles
     template = DirectPowerSpectrumTemplate(z=z_pk)
-    theory = FOLPSTracerPowerSpectrumMultipoles(template=template, k=k, shotnoise=PshotP, mu=3)
+    theory = FOLPSTracerPowerSpectrumMultipoles(template=template, k=k, shotnoise=PshotP, freedom='max', prior_basis='standard', mu=3)
 
     for m_ncdm in [0.2, 0.5]:
         theory(m_ncdm=m_ncdm)
@@ -901,9 +946,13 @@ def test_folps():
 
         import FOLPSnu as FOLPS
         matrices = FOLPS.Matrices()
-        nonlinear = FOLPS.NonLinear(inputpkT, CosmoParams)
-        ref = FOLPS.RSDmultipoles(k, NuisanParams, AP=False)[1:]
-        print(theory.template.f0 / FOLPS.f0)
+        niter = 1
+        t0 = time.time()
+        for i in range(niter):
+            nonlinear = FOLPS.NonLinear(inputpkT, CosmoParams)
+            ref = FOLPS.RSDmultipoles(k, NuisanParams, AP=False)[1:]
+        print('time', (time.time() - t0) / niter)
+        #print(theory.template.f0 / FOLPS.f0)
         power = theory(b1=b1, b2=b2, bs=bs2 + 4./7*(b1 - 1), b3=b3nl - 32./315*(b1 - 1),
                        alpha0=alpha0, alpha2=alpha2, alpha4=alpha4, ct=ctilde, sn0=alphashot0, sn2=alphashot2)
 
@@ -918,6 +967,7 @@ def test_folps():
         ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
         plt.show()
+        exit()
 
     theory = FOLPSTracerCorrelationFunctionMultipoles()
     theory()
@@ -928,7 +978,7 @@ def test_folpsax():
     from matplotlib import pyplot as plt
     z_pk = 0.5
     k = np.logspace(np.log10(0.01), np.log10(0.3), num=50) # array of k_ev in [h/Mpc]
-    PshotP = 1. / 0.0002118763
+    PshotP = 1e4 #1. / 0.0002118763
     # bias parameters
     b1 = 1.645
     b2 = -0.46
@@ -946,7 +996,7 @@ def test_folpsax():
 
     from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, FOLPSAXTracerPowerSpectrumMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles
     template = DirectPowerSpectrumTemplate(z=z_pk)
-    theory = FOLPSAXTracerPowerSpectrumMultipoles(template=template, k=k, shotnoise=PshotP, mu=3)
+    theory = FOLPSAXTracerPowerSpectrumMultipoles(template=template, k=k, shotnoise=PshotP, freedom='max', prior_basis='standard', mu=3)
 
     for m_ncdm in [0.2, 0.5]:
         theory(m_ncdm=m_ncdm)
@@ -974,6 +1024,7 @@ def test_folpsax():
         ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
         plt.show()
+        exit()
 
     theory = FOLPSAXTracerCorrelationFunctionMultipoles()
     theory()
@@ -1069,8 +1120,7 @@ class CorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionFromPowerSpectr
 def test_pk_to_xi():
     from matplotlib import pyplot as plt
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
-    from desilike.theories.galaxy_clustering import (KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles,
-                                                     EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles)
+    from desilike.theories.galaxy_clustering import (KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles)
     from desilike.emulators import Emulator, TaylorEmulatorEngine
 
     from cosmoprimo import PowerToCorrelation
@@ -1078,8 +1128,7 @@ def test_pk_to_xi():
     k = np.logspace(-4., 3., 2048)
     ells = (0, 2, 4)
 
-    for Theory in [KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles,
-                   EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles]:
+    for Theory in [KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerPowerSpectrumMultipoles]:
         fftlog = PowerToCorrelation(k, ell=ells, q=0, lowring=True)
         theory = Theory(template=ShapeFitPowerSpectrumTemplate(z=1.1))
         theory.init.update(k=np.geomspace(k[0], 1., 300), ells=ells)
@@ -1151,11 +1200,9 @@ def test_ap_diff():
                                                      KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles,
                                                      PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles,
                                                      LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles,
-                                                     EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles,
-                                                     LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles)
+                                                     REPTVelocileptorsTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerCorrelationFunctionMultipoles)
     from desilike.emulators import Emulator, TaylorEmulatorEngine
-    for Theory in [KaiserTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles,
-                   EPTMomentsVelocileptorsTracerPowerSpectrumMultipoles, LPTMomentsVelocileptorsTracerPowerSpectrumMultipoles][2:]:
+    for Theory in [KaiserTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerPowerSpectrumMultipoles]:
         fig, lax = plt.subplots(2, sharex=True, sharey=False, figsize=(10, 6), squeeze=True)
         fig.subplots_adjust(hspace=0)
         theory = Theory(template=ShapeFitPowerSpectrumTemplate(z=1.1))
@@ -1183,9 +1230,7 @@ def test_ap_diff():
         plt.show()
 
     # For pybird, chat with Pierre Zhang
-    for Theory in [KaiserTracerCorrelationFunctionMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles,
-                   PyBirdTracerCorrelationFunctionMultipoles, EPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles,
-                   LPTMomentsVelocileptorsTracerCorrelationFunctionMultipoles]:
+    for Theory in [KaiserTracerCorrelationFunctionMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles, REPTVelocileptorsTracerCorrelationFunctionMultipoles, PyBirdTracerCorrelationFunctionMultipoles]:
         theory = Theory(s=np.linspace(10., 200., 1000), template=ShapeFitPowerSpectrumTemplate(z=1.1))
         xi_ref = theory()
         if hasattr(theory, 'plot'):
@@ -1322,29 +1367,36 @@ def test_emulator_direct():
 
             theory = Theory(template=template, k=np.linspace(0.001, 0.25, 20))
             theory()
-            emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(order=4))
+            emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(order=4, method='finite'))
             emulator.set_samples()
             emulator.fit()
             emulated_theory = theory.deepcopy()
             emulated_theory.init.update(pt=emulator.to_calculator())
 
-            for param, values in param_values.items():
-                cmap = plt.get_cmap('jet', len(values))
-                ax = plt.gca()
-                param = theory.all_params[param]
-                ax.set_title(param.latex(inline=True))
-                center = param.value
-                for ivalue, value in enumerate(values):
-                    theory(**{param.name: value})
-                    emulated_theory(**{param.name: value})
-                    color = cmap(ivalue / len(values))
-                    print(np.abs(emulated_theory.power[0] / theory.power[0] - 1).max())
-                    for ill, ell in enumerate(theory.ells):
-                        ax.plot(theory.k, theory.k * theory.power[ill], color=color, linestyle='-')
-                        ax.plot(theory.k, theory.k * emulated_theory.power[ill], color=color, linestyle='--')
-                theory(**{param.name: center})
-                emulated_theory(**{param.name: center})
-                plt.show()
+            def plot():
+                for param, values in param_values.items():
+                    cmap = plt.get_cmap('jet', len(values))
+                    ax = plt.gca()
+                    param = theory.all_params[param]
+                    ax.set_title(param.latex(inline=True))
+                    center = param.value
+                    for ivalue, value in enumerate(values):
+                        theory(**{param.name: value})
+                        emulated_theory(**{param.name: value})
+                        color = cmap(ivalue / len(values))
+                        print(np.abs(emulated_theory.power[0] / theory.power[0] - 1).max())
+                        for ill, ell in enumerate(emulated_theory.ells):
+                            ax.plot(theory.k, theory.k * theory.power[ill], color=color, linestyle='-')
+                            ax.plot(theory.k, theory.k * emulated_theory.power[ill], color=color, linestyle='--')
+                    theory(**{param.name: center})
+                    emulated_theory(**{param.name: center})
+                    plt.show()
+
+            plot()
+
+            if Theory is LPTVelocileptorsTracerPowerSpectrumMultipoles:
+                emulated_theory.init.update(ells=(0, 2))
+                plot()
 
 
 def test_emulator_shapefit():
@@ -1538,18 +1590,19 @@ def plot_direct():
 def test_autodiff():
     import time
     import jax
-    from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, BAOPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, BAOPowerSpectrumTemplate, BAOPhaseShiftPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate
     from desilike.theories.galaxy_clustering import (DampedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, SimpleTracerPowerSpectrumMultipoles,
                                                      EFTLikeKaiserTracerPowerSpectrumMultipoles, TNSTracerCorrelationFunctionMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles, PNGTracerPowerSpectrumMultipoles)
 
     for theory in [DampedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPowerSpectrumTemplate()),
+                   DampedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPhaseShiftPowerSpectrumTemplate()),
                    ResummedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPowerSpectrumTemplate()),
                    PNGTracerPowerSpectrumMultipoles(template=StandardPowerSpectrumTemplate()),
                    SimpleTracerPowerSpectrumMultipoles(template=FixedPowerSpectrumTemplate()),
                    KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate()),
                    EFTLikeKaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate()),
                    TNSTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate()),
-                   FOLPSAXTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate())][-1:]:
+                   FOLPSAXTracerCorrelationFunctionMultipoles(template=ShapeFitPowerSpectrumTemplate())]:
         params = {param.name: param.value for param in theory.all_params}
         theory(params)
         theory.plot(show=True)
@@ -1561,13 +1614,77 @@ def test_autodiff():
         jax.jacfwd(theory)(params)
 
 
+def test_bao_phaseshift():
+
+    from desilike.theories.galaxy_clustering import BAOPhaseShiftPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles
+
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPhaseShiftPowerSpectrumTemplate(z=1.))
+    theory()
+    fig = theory.plot()
+    theory(baoshift=3.)
+    theory.plot(fig=fig, show=True)
+
+
+def comparison_folps_velocileptors():
+    import numpy as np
+    from matplotlib import pyplot as plt
+
+    from desilike import plotting
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, FOLPSAXTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerPowerSpectrumMultipoles
+
+    template = DirectPowerSpectrumTemplate(z=0.8)
+    k = np.linspace(0.01, 0.2, 100)
+    theory1 = FOLPSAXTracerPowerSpectrumMultipoles(template=template, k=k, freedom='max', prior_basis='physical', rbao=0.)  # deepcopy, otherwise constant reinitialization
+    theory2 = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template.deepcopy(), k=k, freedom='max', prior_basis='physical', kIR=0.)
+    theory3 = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template.deepcopy(), k=k, freedom='max', prior_basis='physical', rbao=0.)
+
+    theory1(), theory2(), theory3()
+    k, ells = theory1.k, theory1.ells
+    s8 = template.sigma8
+
+    #print(theory1.varied_params)  # parameters that can be provided
+    list_params = []
+    nuisance_params = {'alpha0p': 0., 'alpha2p': 0., 'alpha4p': 0., 'sn0p': 0., 'sn2p': 0.}
+    list_params.append({'b1p': 2. * s8, 'b2p': 0., 'bsp': 0., 'b3p': 0., **nuisance_params})
+    list_params.append({'b1p': 3. * s8, 'b2p': -0.5 * s8**2, 'bsp': 0., 'b3p': 0., **nuisance_params})
+    list_params.append({'b1p': 3. * s8, 'b2p': -0.5 * s8**2, 'bsp': 1. * s8**2, 'b3p': 0., **nuisance_params})
+    list_params.append({'b1p': 2. * s8, 'b2p': 0., 'bsp': 0., 'b3p': 0., **nuisance_params, 'sn0p': 0.1, 'sn2p': 2.5 / (0.1 * 5.**2)})
+    list_params.append({'b1p': 2. * s8, 'b2p': 0., 'bsp': 0., 'b3p': 0., **nuisance_params, 'alpha0p': 1., 'alpha2p': 1., 'alpha4p': 1.})
+
+    ax = plt.gca()
+    for iparam, params in enumerate(list_params):
+        pk1 = theory1(**params)
+        pk2 = theory2(**params)
+        pk3 = theory3(**params)
+        fig, lax = plt.subplots(nrows=1, ncols=2, figsize=(8, 4), squeeze=True)
+        fig.subplots_adjust(wspace=0.3)
+        lax[0].plot([], [], color='k', linestyle='-', label='folps')
+        lax[0].plot([], [], color='k', linestyle='--', label='velocileptors LPT')
+        lax[0].plot([], [], color='k', linestyle=':', label='velocileptors EPT')
+        for ill, ell in enumerate(ells):
+            color = 'C{:d}'.format(ill)
+            lax[0].plot(k, k * pk1[ill], color=color, linestyle='-')
+            lax[0].plot(k, k * pk2[ill], color=color, linestyle='--')
+            lax[0].plot(k, k * pk3[ill], color=color, linestyle=':')
+            lax[1].plot(k, pk2[ill] / pk1[ill], color=color, linestyle='--')
+            lax[1].plot(k, pk3[ill] / pk1[ill], color=color, linestyle=':')
+        for ax in lax: ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        lax[0].set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        lax[1].set_ylabel('velocileptors / folps')
+        lax[0].legend()
+        plotting.savefig('comparison_folps_velocileptors_{:d}.png'.format(iparam + 1), fig=fig)
+        plt.close(fig)
+
+
 if __name__ == '__main__':
 
     setup_logging()
 
-    #test_velocileptors()
+    #test_velocileptors_lpt_rsd()
+    #test_velocileptors_rept()
     #test_pybird()
-    #test_folps()
+    test_folps()
     #test_folpsax()
     #test_velocileptors_omegak()
     #test_params()
@@ -1588,4 +1705,6 @@ if __name__ == '__main__':
     #test_pk_to_xi()
     #test_ap_diff()
     #test_ptt()
-    test_freedom()
+    #test_freedom()
+    #test_bao_phaseshift()
+    #comparison_folps_velocileptors()

@@ -515,6 +515,9 @@ class ParameterArray(numpy.lib.mixins.NDArrayOperatorsMixin):
     def __array__(self, *args, **kwargs):
         return np.asarray(self._value, *args, **kwargs)
 
+    def __jax_array__(self, *args, **kwargs):
+        return jnp.asarray(self._value, *args, **kwargs)
+
     def __format__(self, *args, **kwargs):
         return self._value.__format__(*args, **kwargs)
 
@@ -1071,12 +1074,12 @@ class BaseParameterCollection(BaseClass):
 
         if utils.is_sequence(data):
             dd = data
-            data = {}
             for item in dd:
-                data[self._get_name(item)] = item  # only name is provided
+                self[self._get_name(item)] = item  # only name is provided
 
-        for name, item in data.items():
-            self[name] = item
+        else:
+            for name, item in data.items():
+                self[name] = item
 
     def __setitem__(self, name, item):
         """
@@ -1176,7 +1179,7 @@ class BaseParameterCollection(BaseClass):
             has_default = True
             default = kwargs['default']
         try:
-            return self.data[self.index(name)]
+            return self[name]
         except KeyError:
             if has_default:
                 return default
@@ -2243,7 +2246,7 @@ class Samples(BaseParameterCollection):
         new = others[0].copy()
         new.data = []
         new_params = others[0].params()
-        others = list(others[:1]) + [other for other in others[1:] if other.params()]
+        others = list(others[:1]) + [other for other in others[1:] if other.params() and other.size]
         if intersection:
             for other in others:
                 new_params &= other.params()
@@ -2337,7 +2340,7 @@ class Samples(BaseParameterCollection):
         else return copy with local slice of samples.
         """
         if isinstance(name, (Parameter, str)):
-            return self.get(name)
+            return super().__getitem__(name)
         new = self.copy()
         try:
             index = [name] if not isinstance(name, slice) and np.ndim(name) == 0 else name
@@ -2653,6 +2656,9 @@ class BaseParameterMatrix(BaseClass):
                 new.shape = params[0].shape
             return new
         return new
+
+    def __array__(self, *args, **kwargs):
+        return np.asarray(self._value, *args, **kwargs)
 
     def _index(self, params):
         # Internal method to return indices in matrix array corresponding to input params.""""

@@ -81,8 +81,7 @@ desilike_name = 'desi'
 
 
 def cosmoprimo_to_cosmosis_params(params):
-    convert = {'H0': 'hubble', 'h': 'h0', 'A_s': 'A_s', 'ln10^{10}A_s': 'log1e10As', 'sigma8': 'sigma_8', 'n_s': 'n_s', 'omega_b': 'ombh2', 'Omega_b': 'omega_b',
-               'omega_cdm': 'omch2', 'Omega_cdm': 'omega_c', 'Omega_ncdm': 'omega_nu', 'omega_ncdm': 'omnuh2', 'm_ncdm': 'mnu', 'Omega_k': 'omega_k'}
+    convert = {'H0': 'hubble', 'h': 'h0', 'A_s': 'A_s', 'ln10^{10}A_s': 'log1e10As', 'sigma8': 'sigma_8', 'n_s': 'n_s', 'omega_b': 'ombh2', 'Omega_b': 'omega_b', 'omega_cdm': 'omch2', 'Omega_cdm': 'omega_c', 'Omega_ncdm': 'omega_nu', 'omega_ncdm': 'omnuh2', 'm_ncdm': 'mnu', 'Omega_k': 'omega_k'}
     toret = ParameterCollection()
     for param in params:
         if param.varied:
@@ -138,7 +137,7 @@ def CosmoSISLikelihoodFactory(cls, name_like=None, kw_like=None, module=None):
         if self._requires:
             cosmo = cosmosis_to_cosmoprimo(self._fiducial, self._requires.get('params', {}), block)
             self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
-        loglikelihood = self.like(**{param.name: block[desilike_name, param.name] for param in self._nuisance_params})
+        loglikelihood = self.like({param.name: block[desilike_name, param.name] for param in self._nuisance_params})
         block['likelihoods', '{}_like'.format(name_like)] = float(loglikelihood)
 
     @classmethod
@@ -196,6 +195,8 @@ class CosmoSISLikelihoodGenerator(BaseLikelihoodGenerator):
         def decode_prior(prior, param):
             limits = list(prior.limits)
             nsigmas = 5
+            if not prior.is_proper():
+                raise ValueError('Provide proper prior distribution for parameter {}'.format(param))
             for ilim, (lim, cdf) in enumerate(zip(limits, stats.norm().cdf([-nsigmas, nsigmas]))):  # 5-sigma limits
                 if not np.isfinite(lim):
                     lim = prior.ppf(cdf)
@@ -219,11 +220,14 @@ class CosmoSISLikelihoodGenerator(BaseLikelihoodGenerator):
         for param in nuisance_params:
             if param.depends:
                 raise ValueError('Cannot cope with parameter dependencies')
-            prior, limits = decode_prior(param.prior, param.name)
             values[param.name] = [param.value]
             if param.varied:
+                prior, limits = decode_prior(param.prior, param.name)
                 values[param.name] = [limits[0], param.value, limits[1]]
-            priors[param.name] = prior
+            try:
+                priors[param.name] = decode_prior(param.prior, param.name)[0]
+            except ValueError:
+                pass
 
         def tostr(li):
             return ' '.join(map(str, li))

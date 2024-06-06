@@ -2,7 +2,6 @@ import re
 
 import numpy as np
 from cosmoprimo import PowerSpectrumBAOFilter, PowerSpectrumInterpolator1D
-from scipy import interpolate
 
 from desilike.jax import numpy as jnp
 from desilike.base import BaseCalculator
@@ -103,6 +102,10 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
                 setattr(self, 'pk_' + name, getattr(self, 'pknow_' + name + '_fid'))
 
     @property
+    def eta(self):
+        return self.apeffect.eta
+
+    @property
     def qpar(self):
         return self.apeffect.qpar
 
@@ -115,7 +118,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'z', 'fiducial', 'only_now', 'with_now', 'qpar', 'qper']:
+        for name in ['k', 'z', 'fiducial', 'only_now', 'with_now', 'qpar', 'qper', 'eta']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         for suffix in ['', '_fid']:
@@ -146,8 +149,8 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
                 state[name[:-2]] = PowerSpectrumInterpolator1D(k, pk)
         class TmpAPEffect(object): pass
         TmpAPEffect.ap_k_mu = APEffect.ap_k_mu
-        state['apeffect'] = TmpAPEffect()
-        state['apeffect'].qpar, state['apeffect'].qper = state.pop('qpar'), state.pop('qper')
+        state['apeffect'] = tmpap = TmpAPEffect()
+        tmpap.qpar, tmpap.qper, tmpap.eta = state.pop('qpar'), state.pop('qper'), state.pop('eta')
         super(BasePowerSpectrumTemplate, self).__setstate__(state)
 
 
@@ -337,12 +340,10 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     def initialize(self, *args, with_now='peakaverage', **kwargs):
         super(BAOPowerSpectrumTemplate, self).initialize(*args, with_now=with_now, **kwargs)
         # Set DM_over_rd, etc.
-        self.eta = self.apeffect.eta
         BAOExtractor.calculate(self)
         for name in ['DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd']:
             setattr(self, name + '_fid', getattr(self, name))
             delattr(self, name)
-        # No self.k defined
 
     def calculate(self, df=1.):
         super(BAOPowerSpectrumTemplate, self).calculate()
@@ -352,9 +353,129 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     def get(self):
         self.DH_over_rd = self.qpar * self.DH_over_rd_fid
         self.DM_over_rd = self.qper * self.DM_over_rd_fid
-        self.DV_over_rd = self.apeffect.qiso * self.DV_over_rd_fid
-        self.DH_over_DM = self.apeffect.qap * self.DH_over_DM_fid
+        self.DV_over_rd = self.qpar**self.eta * self.qper**(1. - self.eta) * self.DV_over_rd_fid
+        self.DH_over_DM = self.qpar / self.qper * self.DH_over_DM_fid
         return self
+
+    def __getstate__(self):
+        state = super().__getstate__()
+        for name in ['DH_over_rd_fid', 'DM_over_rd_fid', 'DH_over_DM_fid', 'DV_over_rd_fid']:
+            state[name] = getattr(self, name)
+        return state
+
+
+class BAOPhaseShiftExtractor(BAOExtractor):
+    """
+    Extract BAO + phase shift parameters from base cosmological parameters.
+
+    Reference
+    ---------
+    https://arxiv.org/pdf/1803.10741
+
+    Parameters
+    ----------
+    z : float, default=1.
+        Effective redshift.
+
+    eta : float, default=1./3.
+        Relation between 'qpar', 'qper' and 'qiso', 'qap' parameters:
+        ``qiso = qpar ** eta * qper ** (1 - eta)``.
+
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
+
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+
+    """
+    conflicts = BAOExtractor.conflicts + [('baoshift',)]
+
+    def initialize(self, *args, **kwargs):
+        super(BAOPhaseShiftExtractor, self).initialize(*args, **kwargs)
+        if self.fiducial is not None:
+            for name in ['N_eff']:
+                setattr(self, name + '_fid', getattr(self, name))
+                delattr(self, name)
+
+    def calculate(self):
+        super(BAOPhaseShiftExtractor, self).calculate()
+        self.N_eff = self.cosmo.N_eff
+
+    def get(self):
+        super(BAOPhaseShiftExtractor, self).get()
+        if self.fiducial is not None:
+            a_nu = 8.0 / 7.0 * ((11.0 / 4.0)**(4.0 / 3.0))
+            self.baoshift = (self.N_eff * (self.N_eff_fid + a_nu)) / (self.N_eff_fid * (self.N_eff + a_nu))
+        return self
+
+
+
+def _interp(k, k1, pk1):
+    from desilike.jax import numpy as jnp
+    from desilike.jax import interp1d
+    return interp1d(jnp.log10(k), jnp.log10(k1), pk1, method='cubic')
+
+
+class BAOPhaseShiftPowerSpectrumTemplate(BAOPowerSpectrumTemplate):
+    r"""
+    BAO power spectrum template, including :math:`N_\mathrm{eff}`-induced phase shift, following Baumann et al 2018.
+
+    parameterization of the BAO phase shift due to the effective number of neutrino species.
+    From the Baumann et al 2018, best fit values for parameters in this function for a range of cosmologies are:
+
+    phi_inf = 0.227
+    kstar = 0.0324 h/Mpc
+    epsilon = 0.872
+
+    Reference
+    ---------
+    https://arxiv.org/pdf/1803.10741
+
+    Parameters
+    ----------
+    z : float, default=1.
+        Effective redshift.
+
+    with_now : str, default='peakaverage'
+        Compute smoothed, BAO-filtered, linear power spectrum with this engine (e.g. 'wallish2018', 'peakaverage').
+
+    apmode : str, default='qparqper'
+        Alcock-Paczynski parameterization:
+
+        - 'qiso': single istropic parameter 'qiso'
+        - 'qap': single, Alcock-Paczynski parameter 'qap'
+        - 'qisoqap': two parameters 'qiso', 'qap'
+        - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
+
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology, used to compute the linear power spectrum. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+    """
+    def initialize(self, *args, phiinf=0.227, kstar=0.0324, epsilon=0.872, **kwargs):
+        super(BAOPhaseShiftPowerSpectrumTemplate, self).initialize(*args, **kwargs)
+        self.phiinf = float(phiinf)
+        self.kstar = float(kstar)
+        self.epsilon = float(epsilon)
+
+    def calculate(self, df=1., baoshift=1.):
+        super(BAOPhaseShiftPowerSpectrumTemplate, self).calculate(df=df)
+        kshift = self.phiinf / (1.0 + (self.kstar / self.k)**self.epsilon) / self.fiducial.rs_drag  # eq. 3.3 of https://arxiv.org/pdf/1803.10741
+        wiggles = _interp(self.k + (baoshift - 1.) * kshift, self.pk_dd_interpolator_fid.k, self.pk_dd_interpolator_fid.pk)
+        wiggles -= _interp(self.k + (baoshift - 1.) * kshift, self.pknow_dd_interpolator_fid.k, self.pknow_dd_interpolator_fid.pk)
+        # creating a new interpolator in case we need it (actually never used anywhere)
+        self.pk_dd = self.pknow_dd_fid + wiggles
+        if self.only_now:  # only used if we want to take wiggles out of our model (e.g. for BAO)
+            for name in ['dd']:
+                setattr(self, 'pk_' + name, getattr(self, 'pknow_' + name))
 
 
 class StandardPowerSpectrumExtractor(BasePowerSpectrumExtractor):
@@ -449,7 +570,6 @@ class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate, StandardPowerSpec
         self.r = float(r)
         super(StandardPowerSpectrumTemplate, self).initialize(*args, **kwargs)
         self.DV = self.DV_fid = 1.
-        self.eta = self.apeffect.eta
         StandardPowerSpectrumExtractor.calculate(self)
         for name in ['DH', 'DM', 'DV', 'DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd', 'sigmar', 'fsigmar', 'f']:
             setattr(self, name + '_fid', getattr(self, name))
@@ -607,7 +727,6 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate, ShapeFitPowerSpec
         self.n_varied = self.params['dn'].varied
         self.r = float(r)
         super(ShapeFitPowerSpectrumTemplate, self).initialize(*args, with_now=with_now, **kwargs)
-        self.eta = self.apeffect.eta
         ShapeFitPowerSpectrumExtractor.calculate(self)
         for name in ['DH', 'DM', 'DV', 'DH_over_rd', 'DM_over_rd', 'DH_over_DM', 'DV_over_rd', 'Ap', 'f_sqrt_Ap', 'f_sigmar', 'n', 'm']:
             setattr(self, name + '_fid', getattr(self, name))
@@ -1042,7 +1161,6 @@ class WiggleSplitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.r = float(r)
         WiggleSplitPowerSpectrumExtractor.set_kernel(self, kernel=kernel)
         super(WiggleSplitPowerSpectrumTemplate, self).initialize(*args, apmode='qap', with_now=with_now, **kwargs)
-        self.eta = self.apeffect.eta
         WiggleSplitPowerSpectrumExtractor.calculate(self)
         for name in ['pk_tt_interpolator', 'sigmar', 'fsigmar', 'm']:
             setattr(self, name + '_fid', getattr(self, name))
@@ -1183,7 +1301,6 @@ class TurnOverPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     """
     def initialize(self, *args, **kwargs):
         super(TurnOverPowerSpectrumTemplate, self).initialize(*args, with_now=False, apmode='qap', **kwargs)
-        self.eta = self.apeffect.eta
         TurnOverPowerSpectrumExtractor.calculate(self)
         for name in ['DH_over_DM', 'DV_times_kTO', 'kTO', 'pkTO_dd']:
             setattr(self, name + '_fid', getattr(self, name))
@@ -1202,10 +1319,10 @@ class TurnOverPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.pknow_dd = self.pk_dd
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
-
-    def get(self):
         self.DV_times_kTO = self.apeffect.qiso * self.DV_times_kTO_fid
         self.DH_over_DM = self.apeffect.qap * self.DH_over_DM_fid
+
+    def get(self):
         return self
 
 

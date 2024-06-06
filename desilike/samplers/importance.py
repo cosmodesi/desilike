@@ -21,7 +21,7 @@ class ImportanceSampler(BaseClass):
         likelihood : BaseLikelihood
             Input likelihood.
 
-        input_chains : str, Path, Chain
+        chains : str, Path, Chain
             Path to or chains to importance sample.
 
         save_fn : str, Path, default=None
@@ -33,7 +33,7 @@ class ImportanceSampler(BaseClass):
         if mpicomm is None:
             mpicomm = likelihood.mpicomm
         self.likelihood = likelihood
-        self.pipeline = self.likelihood.runtime_info.pipeline
+        #self.pipeline = self.likelihood.runtime_info.pipeline
         self.mpicomm = mpicomm
         self.likelihood.solved_default = '.marg'
         self.varied_params = self.likelihood.varied_params.deepcopy()
@@ -56,11 +56,11 @@ class ImportanceSampler(BaseClass):
 
     @property
     def mpicomm(self):
-        return self.pipeline.mpicomm
+        return self._mpicomm
 
     @mpicomm.setter
     def mpicomm(self, mpicomm):
-        self.pipeline.mpicomm = mpicomm
+        self._mpicomm = mpicomm
 
     @property
     def nchains(self):
@@ -81,6 +81,7 @@ class ImportanceSampler(BaseClass):
                 for ichain in range(self.nchains):
                     chain = Chain.sendrecv(self.input_chains[ichain], source=0, dest=dest, mpicomm=self.mpicomm)
                     if chain is not None: self.input_chains[ichain] = chain
+
             self.mpicomm = tm.mpicomm
             for ichain in tm.iterate(range(self.nchains)):
                 if self.mpicomm.rank == 0:
@@ -92,7 +93,7 @@ class ImportanceSampler(BaseClass):
                 raise_error = None
                 if self.mpicomm.rank == 0:
                     (logposterior, derived), errors = results
-                    for param in self.pipeline.params.select(fixed=True, derived=False):
+                    for param in self.likelihood.all_params.select(fixed=True, derived=False):
                         chain[param] = np.full(chain.shape, param.value, dtype='f8')
                     chain.update(derived)
                     if errors:

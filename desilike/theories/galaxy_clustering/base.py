@@ -325,9 +325,15 @@ class APEffect(BaseCalculator):
                 self.DH_over_rd = self.DH / rs_drag
                 self.DM_over_rd = self.DM / rs_drag
                 self.DV_over_rd = self.DV / rs_drag
-                qpar, qper = self.DH_over_rd / self.DH_over_rd_fid, self.DM_over_rd / self.DM_over_rd_fid
+                if self.z == 0.:
+                    qpar = qper = self.DH_over_rd / self.DH_over_rd_fid
+                else:
+                    qpar, qper = self.DH_over_rd / self.DH_over_rd_fid, self.DM_over_rd / self.DM_over_rd_fid
             else:  # geometry
-                qpar, qper = self.DH / self.DH_fid, self.DM / self.DM_fid
+                if self.z == 0.:
+                    qpar = qper = 1.
+                else:
+                    qpar, qper = self.DH / self.DH_fid, self.DM / self.DM_fid
         elif self.mode == 'qiso':
             qpar = qper = params['qiso']
         elif self.mode == 'qap':

@@ -47,6 +47,8 @@ Several options are possible, with the most notable one being:
   or :class:`~desilike.theories.galaxy_clustering.full_shape.LPTVelocileptorsTracerCorrelationFunctionMultipoles`
 - `pybird <https://github.com/pierrexyz/pybird>`_ model, with :class:`~desilike.theories.galaxy_clustering.full_shape.PyBirdTracerPowerSpectrumMultipoles`,
   or :class:`~desilike.theories.galaxy_clustering.full_shape.PyBirdTracerCorrelationFunctionMultipoles`
+- `folps-nu <https://github.com/henoriega/FOLPS-nu>`_ model, with :class:`~desilike.theories.galaxy_clustering.full_shape.FOLPSTracerPowerSpectrumMultipoles`,
+  or :class:`~desilike.theories.galaxy_clustering.full_shape.FOLPSTracerCorrelationFunctionMultipoles`
 - empirical BAO model, with :class:`~desilike.theories.galaxy_clustering.bao.DampedBAOWigglesPowerSpectrumMultipoles`,
   or :class:`~desilike.theories.galaxy_clustering.bao.ResummedBAOWigglesPowerSpectrumMultipoles`
 - power spectrum with scale-dependent bias (primordial non-gaussianity), with :class:`~desilike.theories.galaxy_clustering.primordial_non_gaussianity.PNGTracerPowerSpectrumMultipoles`
@@ -183,7 +185,8 @@ Or at the pipeline level:
   e.g. if above ``cosmo`` is used by multiple templates ``template1``, ``template2``, etc.,
   ``template1.all_params`` and ``template2.all_params`` would share the same Omega_m, h, sigma8 parameters.
   However, updating parameters at the pipeline level, e.g. ``template1.all_params['n_s']`` leaves ``template2.all_params['n_s']`` untouched.
-  Also, if ``template1`` needs to be reinitialized, e.g. if passed to a theory, then changes to ``template1.all_params['n_s']`` will be lost.
+  Also, if ``template1`` needs to be reinitialized, e.g. because it is passed to a theory or ``template1.init.params`` is updated,
+  then changes to ``template1.all_params['n_s']`` will be lost.
   Therefore, updates to ``calculator.all_params`` are only useful for the final calculator of the pipeline, typically the likelihood as illustrated above.
 
 

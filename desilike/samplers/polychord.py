@@ -29,7 +29,7 @@ class PolychordSampler(BasePosteriorSampler):
     """
     check = None
 
-    def __init__(self, *args, blocks=None, oversample_power=0.4, nlive='25*ndim', nprior='10*nlive', nfail='1*nlive',
+    def __init__(self, *args, nlive='25*ndim', nprior='10*nlive', nfail='1*nlive',
                  nrepeats='2*ndim', nlives=None, do_clustering=True, boost_posterior=0, compression_factor=np.exp(-1),
                  synchronous=True, seed=None, **kwargs):
         """
@@ -39,21 +39,6 @@ class PolychordSampler(BasePosteriorSampler):
         ----------
         likelihood : BaseLikelihood
             Input likelihood.
-
-        blocks : list, default=None
-            Parameter blocks are groups of parameters which are updated alltogether
-            with a frequency proportional to oversample_factor.
-            Typically, parameter blocks are chosen such that parameters in a given block
-            require the same evaluation time of the likelihood when updated.
-            If ``None`` these blocks are defined at runtime, based on (measured) speeds and oversample_power (below),
-            but can be specified there in the format:
-
-                - [oversample_factor1, [param1, param2]]
-                - [oversample_factor2, [param3, param4]]
-
-        oversample_power : float, default=0.4
-            If ``blocks`` is ``None``, i.e. parameter blocks are defined at runtime,
-            oversample factors are ``speed**oversample_power``.
 
         nlive : int, str, default='25 * ndim'
             Number of live points. Increasing nlive increases the accuracy of posteriors and evidences,
@@ -125,20 +110,6 @@ class PolychordSampler(BasePosteriorSampler):
         nfail = utils.evaluate(nfail, type=int, locals=di)
         feedback = {logging.CRITICAL: 0, logging.ERROR: 0, logging.WARNING: 0,
                     logging.INFO: 1, logging.DEBUG: 2}[logging.root.level]
-        from .mcmc import _format_blocks
-        if blocks is None:
-            blocks, oversample_factors = self.pipeline.block_params(params=self.varied_params, oversample_power=oversample_power)
-        else:
-            blocks, oversample_factors = _format_blocks(blocks, self.varied_params)
-        if np.any(oversample_factors > 1):
-            if self.mpicomm.rank == 0:
-                self.log_info('Oversampling with factors:')
-                for s, b in zip(oversample_factors, blocks):
-                    self.log_info('{:d}: {}'.format(s, b))
-        self.varied_params.sort(itertools.chain(*blocks))
-        grade_dims = [len(block) for block in blocks]
-        grade_frac = [int(o * utils.evaluate(nrepeats, type=int, locals={'ndim': block_size}))
-                      for o, block_size in zip(oversample_factors, grade_dims)]
 
         if self.save_fn is None:
             raise ValueError('save_fn must be provided to save samples in polychord format\
@@ -153,7 +124,7 @@ class PolychordSampler(BasePosteriorSampler):
                   'write_resume': True, 'read_resume': False, 'write_stats': True,
                   'write_live': True, 'write_dead': True, 'write_prior': True,
                   'maximise': False, 'compression_factor': compression_factor, 'synchronous': synchronous,
-                  'grade_dims': grade_dims, 'grade_frac': grade_frac, 'nlives': nlives or {}}
+                  'nlives': nlives or {}}
 
         from pypolychord import settings
         self.settings = settings.PolyChordSettings(di['ndim'], 0, seed=(seed if seed is not None else -1), **kwargs)
@@ -257,7 +228,6 @@ class PolychordSampler(BasePosteriorSampler):
             my_dumper()
             return (max(self.logposterior(values) - self.logprior(values), self.settings.logzero), [])
 
-        self.pipeline.mpicomm = mpi.COMM_SELF
         loglikelihood_rank = 0 if self.mpicomm.size == 1 else 1
         _tag, _req = 1000, {}
         self._it_send, self._it_rec = 0, 0

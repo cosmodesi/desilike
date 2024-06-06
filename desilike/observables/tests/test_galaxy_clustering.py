@@ -13,9 +13,25 @@ def test_power_spectrum():
     from cosmoprimo.fiducial import DESI
     from desilike.theories.galaxy_clustering import ResummedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TopHatFiberCollisionsPowerSpectrumMultipoles, BoxFootprint, ObservablesCovarianceMatrix
+    from desilike.observables import ObservableArray, ObservableCovariance
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5, fiducial=DESI())
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+
+    edges = np.linspace(0., 0.4, 81)
+    data = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
+                                                         data=data,
+                                                         covariance=ObservableCovariance(np.eye(data.flatx.size), observables=[data]),
+                                                         #data=PowerSpectrumMultipoles.load('../../tests/_pk/data.npy'),
+                                                         #covariance=[PowerSpectrumMultipoles.load(fn) for fn in glob.glob('../../tests/_pk/mock_*.npy')],
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
+    print(likelihood())
+
+    assert np.allclose(likelihood.covariance, observable.covariance)
+    #print(len(observable.flatdata))
+    observable.plot(show=True)
 
     from pypower import PowerSpectrumMultipoles
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.02], 2: [0.05, 0.2, 0.01]},
@@ -154,13 +170,16 @@ def test_power_spectrum():
     assert np.allclose(observable.wmatrix.theory.k, kin)
     observable.__getstate__()
 
+    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    kin = np.linspace(0.01, 0.3, 90)
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data='../../tests/_pk/data.npy',
                                                          covariance='../../tests/_pk/mock_*.npy',
-                                                         wmatrix=np.zeros((kin.size * 2, 15 * 2)),
+                                                         wmatrix=np.zeros((15 * 2, kin.size * 3)),
                                                          shotnoise=2e4,
                                                          theory=theory,
-                                                         kin=kin)
+                                                         kin=kin,
+                                                         ellsin=(0, 2, 4))
     observable()
     assert np.allclose(observable.wmatrix.theory.k, kin)
 
@@ -212,9 +231,21 @@ def test_correlation_function():
 
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelationFunctionMultipoles, KaiserTracerCorrelationFunctionMultipoles, ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import TracerCorrelationFunctionMultipolesObservable, TopHatFiberCollisionsCorrelationFunctionMultipoles, BoxFootprint, ObservablesCovarianceMatrix
+    from desilike.observables import ObservableArray, ObservableCovariance
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
+
+    edges = np.linspace(0., 200, 201)
+    data = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20, 150, 4], 2: [30, 150, 5]},
+                                                               data=data,
+                                                               covariance=ObservableCovariance(np.eye(data.flatx.size), observables=[data]),
+                                                               #data=PowerSpectrumMultipoles.load('../../tests/_pk/data.npy'),
+                                                               #covariance=[PowerSpectrumMultipoles.load(fn) for fn in glob.glob('../../tests/_pk/mock_*.npy')],
+                                                               theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
+    print(likelihood())
 
     #theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template, ells=(0, 2))
     size = 5
@@ -514,7 +545,7 @@ def test_compression():
 
     from desilike import LikelihoodFisher
 
-    from desilike.observables.galaxy_clustering import BAOCompressionObservable, StandardCompressionObservable, ShapeFitCompressionObservable, WiggleSplitCompressionObservable, BandVelocityCompressionObservable, TurnOverCompressionObservable
+    from desilike.observables.galaxy_clustering import BAOCompressionObservable, BAOPhaseShiftCompressionObservable, StandardCompressionObservable, ShapeFitCompressionObservable, WiggleSplitCompressionObservable, BandVelocityCompressionObservable, TurnOverCompressionObservable
     from desilike.emulators import Emulator, TaylorEmulatorEngine
 
     def test(likelihood, emulate=True, test_zero=False):
@@ -552,6 +583,10 @@ def test_compression():
     likelihood = ObservablesGaussianLikelihood(observables=observable)
     test(likelihood)
 
+    observable = BAOPhaseShiftCompressionObservable(data=np.array([1., 0.]), covariance=np.diag([0.01, 0.01]), quantities=['qiso', 'baoshift'], z=2.)
+    likelihood = ObservablesGaussianLikelihood(observables=observable)
+    test(likelihood)
+
     observable = StandardCompressionObservable(data=[1., 1., 1.], covariance=np.diag([0.01, 0.01, 0.01]), quantities=['qpar', 'qper', 'df'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     test(likelihood)
@@ -562,6 +597,13 @@ def test_compression():
 
     observable = ShapeFitCompressionObservable(data=[1., 1., 0., 1.], covariance=np.diag([0.01, 0.01, 0.0001, 0.01]), quantities=['qiso', 'qap', 'dm', 'df'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    test(likelihood)
+
+    rng = np.random.RandomState(seed=42)
+    observable = ShapeFitCompressionObservable(data=[1., 1., 0., 1.], covariance=rng.uniform(0., 1., (100, 4)), quantities=['qiso', 'qap', 'dm', 'df'], z=2.)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    assert likelihood.covariance.shape == (4,) * 2
+    assert not np.allclose(likelihood.hartlap2007_factor, 1.)
     test(likelihood)
 
     observable = WiggleSplitCompressionObservable(data=[1., 1., 1., 0.], covariance=np.diag([0.01, 0.01, 0.01, 0.01]), quantities=['qap', 'qbao', 'df', 'dm'], z=2.)
@@ -946,14 +988,101 @@ def test_shapefit(run=True, plot=True):
         plotting.plot_triangle([chain, chain_ref, chain_ref_new], params=['h', 'omega_cdm', 'omega_b', 'logA'], labels=['desilike', 'Mark old code', 'Mark new code'], fn='_tests/comparison.png')
 
 
+def test_observable_covariance():
+    from desilike.observables import ObservableArray, ObservableCovariance
+
+    observable = ObservableArray(x=[np.linspace(0., 9., 10), np.linspace(0., 9., 10)], projs=[0, 2])
+    observable2 = observable.select(projs=2, rebin=2, xlim=(3., 7.))
+    observable3 = observable.xmatch(observable2.x(), projs=observable2.projs)
+    #print(observable2.x())
+    #print(observable3.x())
+    assert np.all(observable3.flatx == observable2.flatx)
+    assert observable.edges(projs=0).size == 11
+
+    covariance = ObservableCovariance(np.diag(observable.flatx**2), observables=observable)
+    observable3 = observable2.select(projs=2, select_projs=True)
+    covariance3 = covariance.xmatch(observable3.x(), projs=observable3.projs, select_projs=True)
+    assert np.all(covariance3.observables()[0].flatx == observable3.flatx)
+
+    observable = ObservableArray(x=[np.arange(10)] * 2, projs=[0, 2])
+    covariance = ObservableCovariance(np.diag(observable.flatx**2), observables=observable)
+    assert np.allclose(covariance.std(), observable.flatx)
+    covariance2 = covariance.select(xlim=(0, 5))
+    for proj in observable.projs:
+        assert np.allclose(covariance.std(projs=proj), observable.x(projs=proj))
+
+    observable = ObservableArray(value=[1., 1.], projs=['qpar', 'qper'])
+    assert observable.view(projs='qpar').size == 1
+    assert observable.size == 2
+    observable_bao = observable
+
+    observable = ObservableArray(x=np.linspace(0.01, 0.2, 10), value=np.linspace(0.01, 0.2, 10))
+    assert observable.size == 10
+    observable = observable.select(xlim=(0., 0.15))
+    assert observable.view(xlim=(0., 0.011)).size == 1
+    observable_1d = observable
+
+    covariance = ObservableCovariance(np.eye(32), observables=[{'name': 'PowerSpectrumMultipoles', 'x': [np.linspace(0.01, 0.2, 10)] * 3, 'projs': [0, 2, 4]}, {'name': 'BAO', 'projs': ['qpar', 'qper']}])
+    covariance2 = covariance.select(observables='PowerSpectrumMultipoles', xlim=(0., 0.15))
+    assert covariance2.shape[0] < covariance.shape[0]
+
+    nobs = 500
+    covariance = ObservableCovariance.from_observations({'power': [{'x': [np.linspace(0.01, 0.2, 10)] * 3, 'value': [np.random.uniform(0., 1., 10) for i in range(3)], 'projs': [0, 2, 4]} for i in range(nobs)],
+                                                         'correlation': [{'x': [np.linspace(0.01, 0.2, 10)] * 3, 'value': [np.random.uniform(0., 1., 10) for i in range(3)], 'projs': [0, 2, 4]} for i in range(nobs)]})
+    assert covariance.hartlap2017_factor() < 1.
+    covariance.percival2014_factor(nparams=10)
+    print(covariance.shape, [observable.name for observable in covariance.observables()])
+    assert covariance.observables('power') == covariance.observables()[0]
+    assert covariance.observables('pow*') == covariance.observables()[0]
+    assert covariance.observables('*o*') == covariance.observables()
+    covariance.plot(show=True)
+
+    observable = ObservableArray(x=[np.linspace(0.01, 0.2, 10), np.linspace(0.01, 0.2, 10)], projs=[0, 2])
+    assert observable.view(projs=[0]).size == 10
+    observable = observable.select(projs=2, xlim=(0., 0.15))
+    assert observable.size < 20
+    observable.x()
+    observable.weights()
+    assert np.array(observable).shape == (observable.size,)
+    assert observable == observable
+    value = np.eye(observable.size)
+    covariance = ObservableCovariance(value, observables=observable)
+    covariance = covariance.select(projs=0, xlim=(0., 0.12), rebin=2)
+    assert covariance.shape[0] < observable.size
+    assert observable.view(projs=0).size == observable.view(projs=0).size
+    assert np.array(covariance).shape == covariance.shape
+    assert covariance.inv().shape == covariance.shape
+    covariance = covariance.marginalize(np.ones(observable.view(projs=0).size))
+    assert covariance == covariance
+
+    covariance = ObservableCovariance(np.eye(observable.size + observable_1d.size), observables=[observable, observable_1d])
+    covariance2 = covariance.select(observables=observable_1d, xlim=(0., 0.1))
+    assert covariance2.shape[0] < covariance.shape[0]
+
+    covariance = ObservableCovariance(np.eye(observable.size + observable_bao.size), observables=[observable, observable_bao])
+    covariance2 = covariance.select(observables=observable, xlim=(0., 0.1))
+    assert covariance2.shape[0] < covariance.shape[0]
+
+    x = [np.linspace(0.01, 0.2, 10), np.linspace(0.01, 0.2, 10)]
+    observable = ObservableArray(x=x, value=x, projs=[0, 2])
+    fn = '_tests/obs.npy'
+    observable.save(fn)
+    observable = ObservableArray.load(fn)
+    covariance.save(fn)
+    covariance = ObservableCovariance.load(fn)
+    observable.plot(show=True)
+    covariance.plot(show=True)
+    covariance.view(observables=1, return_type=None).plot(show=True)
+
+
 if __name__ == '__main__':
 
     setup_logging()
 
-    #test_systematic_templates()
+    # test_systematic_templates()
     # test_bao()
     test_power_spectrum()
-    #test_correlation_function()
+    test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
@@ -962,3 +1091,4 @@ if __name__ == '__main__':
     # test_fiber_collisions()
     # test_compression_window()
     # test_shapefit(run=False)
+    # test_observable_covariance()

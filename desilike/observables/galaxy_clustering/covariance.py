@@ -304,14 +304,14 @@ class ObservablesCovarianceMatrix(BaseClass):
         if self.resolution <= 0:
             raise ValueError('resolution must be a strictly positive integer')
 
-    def __call__(self, **params):
+    def __call__(self, *args, **kwargs):
         """Return covariance matrix for input parameters."""
-        self.run(**params)
+        self.run(*args, **kwargs)
         return self.covariance
 
-    def run(self, **params):
+    def run(self, *args, **kwargs):
         if any(theory is None for theory in self.theories):
-            self.observables(**params)
+            self.observables(*args, **kwargs)
         for io, (observable, theory) in enumerate(zip(self.observables, self.theories)):
             if theory is None:
                 for calculator in observable.runtime_info.pipeline.calculators[::-1]:
@@ -322,7 +322,7 @@ class ObservablesCovarianceMatrix(BaseClass):
                 raise ValueError('Theory must be provided for observable {}'.format(observable))
             self.theories[io] = theory
         self.theories = CollectionCalculator(self.theories)
-        self.theories(**params)
+        self.theories(*args, **kwargs)
         self.cosmo = None
         if any(isinstance(footprint, CutskyFootprint) for footprint in self.footprints):
             for footprint in self.footprints:
@@ -344,7 +344,9 @@ class ObservablesCovarianceMatrix(BaseClass):
                     covariance[io2][io1] = (c + c.T) / 2.  # just for numerical accuracy
                 else:
                     covariance[io2][io1] = c.T
-        self.covariance = np.bmat(covariance).A
+        value = np.bmat(covariance).A
+        from desilike.observables import ObservableCovariance
+        self.covariance = ObservableCovariance(value=value, observables=[o.to_array() for o in self.observables])
 
     def _run(self, io1, io2):
         auto = io2 == io1

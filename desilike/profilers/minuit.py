@@ -25,10 +25,52 @@ class MinuitProfiler(BaseProfiler):
     """
     name = 'minuit'
 
-    def __init__(self, *args, **kwargs):
-        super(MinuitProfiler, self).__init__(*args, **kwargs)
+    def __init__(self, *args, gradient=False, **kwargs):
+        """
+        Initialize profiler.
 
-    def _get_minuit(self, start, chi2, varied_params):
+        Parameters
+        ----------
+        likelihood : BaseLikelihood
+            Input likelihood.
+
+        rng : np.random.RandomState, default=None
+            Random state. If ``None``, ``seed`` is used to set random state.
+
+        seed : int, default=None
+            Random seed.
+
+        max_tries : int, default=1000
+            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
+
+        profiles : str, Path, Profiles
+            Path to or profiles, to which new profiling results will be added.
+
+        ref_scale : float, default=1.
+            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor
+
+        rescale : bool, default=False
+            If ``True``, internally rescale parameters such their variation range is ~ unity.
+            Provide ``covariance`` to take parameter variations from;
+            else parameters' :attr:`Parameter.proposal` will be used.
+
+        covariance : str, Path, ParameterCovariance, Chain, default=None
+            If ``rescale``, path to or covariance or chain, which is used for rescaling parameters.
+            If ``None``, parameters' :attr:`Parameter.proposal` will be used instead.
+
+        gradient : bool, default=False
+            If ``True``, try to take the likelihood gradient (requires jax).
+
+        save_fn : str, Path, default=None
+            If not ``None``, save profiles to this location.
+
+        mpicomm : mpi.COMM_WORLD, default=None
+            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`
+        """
+        super(MinuitProfiler, self).__init__(*args, **kwargs)
+        self.with_gradient = bool(gradient)
+
+    def _get_minuit(self, start, chi2, varied_params, gradient=None):
 
         def chi2m(*values):
             return chi2(values)
@@ -36,6 +78,13 @@ class MinuitProfiler(BaseProfiler):
         import iminuit
         minuit_params = {}
         minuit_params['name'] = parameter_names = [str(param) for param in varied_params]
+
+        if gradient is not None:
+
+            def gradientm(*values):
+                return gradient(values)
+
+            minuit_params['grad'] = gradientm
 
         minuit = iminuit.Minuit(chi2m, **dict(zip(parameter_names, [param.value for param in varied_params])), **minuit_params)
         minuit.errordef = 1.0
@@ -71,8 +120,8 @@ class MinuitProfiler(BaseProfiler):
         """
         return super(MinuitProfiler, self).maximize(*args, **kwargs)
 
-    def _maximize_one(self, start, chi2, varied_params, max_iterations=int(1e5)):
-        minuit = self._get_minuit(start, chi2, varied_params)
+    def _maximize_one(self, start, chi2, varied_params, max_iterations=int(1e5), gradient=None):
+        minuit = self._get_minuit(start, chi2, varied_params, gradient=gradient)
         profiles = Profiles()
         try:
             minuit.migrad(ncall=max_iterations)
@@ -113,8 +162,8 @@ class MinuitProfiler(BaseProfiler):
         """
         return super(MinuitProfiler, self).interval(*args, **kwargs)
 
-    def _interval_one(self, start, chi2, varied_params, param, max_iterations=int(1e5), cl=None):
-        minuit = self._get_minuit(start, chi2, varied_params)
+    def _interval_one(self, start, chi2, varied_params, param, max_iterations=int(1e5), cl=None, gradient=None):
+        minuit = self._get_minuit(start, chi2, varied_params, gradient=gradient)
         profiles = Profiles()
         name = str(param)
         try:
@@ -143,7 +192,7 @@ class MinuitProfiler(BaseProfiler):
             List of tuples of parameters for which to compute 2D contours.
             If a list of parameters is provided instead, contours are computed for unique tuples of parameters.
 
-        cl : float, int, default=None
+        cl : float, int, default=1
             Confidence level for the confidence contour.
             If not set or None, a standard 68.3 % confidence contour is produced.
             If 0 < cl < 1, the value is interpreted as the confidence level (a probability).
@@ -159,16 +208,18 @@ class MinuitProfiler(BaseProfiler):
         """
         return super(MinuitProfiler, self).contour(*args, **kwargs)
 
-    def _contour_one(self, start, chi2, varied_params, param1, param2, cl=None, size=100, interpolated=0):
-        minuit = self._get_minuit(start, chi2, varied_params)
+    def _contour_one(self, start, chi2, varied_params, params, cl=None, size=100, interpolated=0, gradient=None):
+        param1, param2 = params
+        minuit = self._get_minuit(start, chi2, varied_params, gradient=gradient)
         profiles = Profiles()
         try:
-            x1, x2 = minuit.mncontour(str(param1), str(param2), cl=cl, size=size, interpolated=interpolated)
+            x1x2 = minuit.mncontour(str(param1), str(param2), cl=cl, size=size, interpolated=interpolated)
         except RuntimeError as exc:
             if self.mpicomm.rank == 0:
                 self.log_warning('contour failed: {}'.format(exc))
             return profiles
-        profiles.set(profile=ParameterContours([(ParameterArray(x1, param1, copy=True), ParameterArray(x2, param2, copy=True))]))
+        x1, x2 = x1x2.T
+        profiles.set(contour=ParameterContours({cl: [(ParameterArray(x1, param1, copy=True), ParameterArray(x2, param2, copy=True))]}))
         return profiles
 
     def profile(self, *args, **kwargs):

@@ -1,8 +1,9 @@
+import numpy as np
 from desilike.jax import numpy as jnp
 from desilike.parameter import Parameter
 from desilike.base import BaseCalculator
 from desilike.samples import load_source
-from desilike.theories.galaxy_clustering.power_template import BAOExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor
+from desilike.theories.galaxy_clustering.power_template import BAOExtractor, BAOPhaseShiftExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor
 
 
 def get_quantities(conflict_names):
@@ -49,7 +50,7 @@ class BaseCompressionObservable(BaseCalculator):
             source = load_source(data, params=quantities or None, choice=True, return_type='dict')
             quantities = [Parameter(quantity) for quantity in source.keys()]
             self.quantities = [quantity.basename for quantity in quantities]
-            self.flatdata = [source[quantity.name] for quantity in quantities]
+            self.flatdata = np.array([source[quantity.name] for quantity in quantities])
         if self.mpicomm.rank == 0:
             self.log_info('Found quantities {}.'.format(self.quantities))
         for conflicts in self.conflict_names:
@@ -57,7 +58,11 @@ class BaseCompressionObservable(BaseCalculator):
                 raise ValueError('Found conflicting quantities: {}'.format(conflicts))
         self.covariance = None
         if covariance is not None:
-            self.covariance = load_source(covariance, params=quantities or None, cov=True, return_type='nparray')
+            # List of observations
+            if isinstance(covariance, np.ndarray) and covariance.ndim == 2 and covariance.shape[0] > covariance.shape[1]:
+                self.mocks = covariance  # ObservablesGaussianLikelihood takes care of the computation of the covariance
+            else:
+                self.covariance = load_source(covariance, params=quantities or None, cov=True, return_type='nparray')
 
     def calculate(self):
         self.flattheory = jnp.array([getattr(self.extractor, quantity) for quantity in self.quantities])
@@ -67,6 +72,10 @@ class BaseCompressionObservable(BaseCalculator):
         for name in ['flatdata', 'covariance', 'flattheory', 'quantities']:
             state[name] = getattr(self, name)
         return state
+
+    def to_array(self):
+        from desilike.observables import ObservableArray
+        return ObservableArray(value=self.flatdata, projs=self.quantities, name=self.__class__.__name__)
 
 
 class BAOCompressionObservable(BaseCompressionObservable):
@@ -81,7 +90,8 @@ class BAOCompressionObservable(BaseCompressionObservable):
         Else, chain, profiles or path to such objects.
 
     covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
-        Covariance for BAO parameters. If 2D array, provide corresponding ``quantities``.
+        Covariance for BAO parameters. If 2D array, provide corresponding ``quantities``;
+        if ``covariance.shape[0] > covariance.shape[1]``, considered a list of observations.
         Else, chain, profiles, covariance or path to such objects.
 
     cosmo : BasePrimordialCosmology, default=None
@@ -109,6 +119,50 @@ class BAOCompressionObservable(BaseCompressionObservable):
         super(BAOCompressionObservable, self).initialize(*args, extractor=BAOExtractor(), **kwargs)
 
 
+class BAOPhaseShiftCompressionObservable(BaseCompressionObservable):
+    """
+    BAO observable with phase shift: compare (compressed) BAO measurements
+    (in terms of ratios of distances to the sound horizon scale at the drag epoch, and shift) to theory predictions.
+
+    Reference
+    ---------
+    https://arxiv.org/pdf/1803.10741
+
+    Parameters
+    ----------
+    data : str, Path, array, Profiles, Chain
+        BAO parameters. If array, provide corresponding ``quantities``.
+        Else, chain, profiles or path to such objects.
+
+    covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
+        Covariance for BAO parameters. If 2D array, provide corresponding ``quantities``.
+        Else, chain, profiles, covariance or path to such objects.
+
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
+
+    quantities : list, tuple
+        Quantities to take from ``data`` and ``covariance``:
+        chose from ``['DM_over_rd', 'DH_over_rd', 'DV_over_rd', 'DM_over_DH', 'DV_over_rd', 'qpar', 'qper', 'qiso', 'qap', 'baoshift']``.
+
+    z : float, default=None
+        Effective redshift.
+
+    fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
+        Specifications for fiducial cosmology. Either:
+
+        - str: name of fiducial cosmology in :class:`cosmoprimo.fiducial`
+        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
+        - dict: dictionary of parameters
+        - :class:`cosmoprimo.Cosmology`: Cosmology instance
+
+    **kwargs: dict
+        Optional arguments for :class:`BAOExtractor`.
+    """
+    def initialize(self, *args, **kwargs):
+        super(BAOPhaseShiftCompressionObservable, self).initialize(*args, extractor=BAOPhaseShiftExtractor(), **kwargs)
+
+
 class StandardCompressionObservable(BaseCompressionObservable):
     """
     Standard RSD compression observable: compare compressed RSD measurements to theory predictions.
@@ -120,7 +174,8 @@ class StandardCompressionObservable(BaseCompressionObservable):
         Else, chain, profiles or path to such objects.
 
     covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
-        Covariance for compressed parameters. If 2D array, provide corresponding ``quantities``.
+        Covariance for compressed parameters. If 2D array, provide corresponding ``quantities``;
+        if ``covariance.shape[0] > covariance.shape[1]``, considered a list of observations.
         Else, chain, profiles, covariance or path to such objects.
 
     cosmo : BasePrimordialCosmology, default=None
@@ -159,7 +214,8 @@ class ShapeFitCompressionObservable(BaseCompressionObservable):
         Else, chain, profiles or path to such objects.
 
     covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
-        Covariance for ShapeFit parameters. If 2D array, provide corresponding ``quantities``.
+        Covariance for ShapeFit parameters. If 2D array, provide corresponding ``quantities``;
+        if ``covariance.shape[0] > covariance.shape[1]``, considered a list of observations.
         Else, chain, profiles, covariance or path to such objects.
 
     cosmo : BasePrimordialCosmology, default=None
@@ -206,7 +262,8 @@ class WiggleSplitCompressionObservable(BaseCompressionObservable):
         Else, chain, profiles or path to such objects.
 
     covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
-        Covariance for band power parameters. If 2D array, provide corresponding ``quantities``.
+        Covariance for band power parameters. If 2D array, provide corresponding ``quantities``;
+        if ``covariance.shape[0] > covariance.shape[1]``, considered a list of observations.
         Else, chain, profiles, covariance or path to such objects.
 
     cosmo : BasePrimordialCosmology, default=None
@@ -289,7 +346,8 @@ class TurnOverCompressionObservable(BaseCompressionObservable):
         Else, chain, profiles or path to such objects.
 
     covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
-        Covariance for BAO parameters. If 2D array, provide corresponding ``quantities``.
+        Covariance for BAO parameters. If 2D array, provide corresponding ``quantities``;
+        if ``covariance.shape[0] > covariance.shape[1]``, considered a list of observations.
         Else, chain, profiles, covariance or path to such objects.
 
     cosmo : BasePrimordialCosmology, default=None

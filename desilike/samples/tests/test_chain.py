@@ -107,6 +107,7 @@ def test_bcast():
 
 
 def test_plot():
+    from matplotlib import pyplot as plt
 
     chain_dir = '_chains'
     params = ['like.a', 'like.b', 'like.c', 'like.d']
@@ -120,6 +121,49 @@ def test_plot():
     plotting.plot_gelman_rubin(chains, fn=os.path.join(chain_dir, 'gelman_rubin.png'))
     plotting.plot_gelman_rubin(chains[0], nsplits=8, fn=os.path.join(chain_dir, 'gelman_rubin.png'))
     plotting.plot_geweke(chains, fn=os.path.join(chain_dir, 'geweke.png'))
+    plt.close('all')
+
+    from desilike.samples import Profiles, ParameterBestFit, ParameterContours, ParameterCovariance, Samples, utils
+    chain = chains[0]
+    params = chain.params(name=params)
+    profiles1 = Profiles()
+    profiles1.set(start=Samples([[chain.mean(param)] for param in params], params=params))
+    profiles1.set(bestfit=ParameterBestFit([[chain.mean(param)] for param in params], params=params))
+    profiles1.set(covariance=ParameterCovariance(chain.covariance(params=params), params=params))
+    #plotting.plot_triangle([chain, profiles1], labels=['chain', 'profiles'], show=True)
+
+    profile, contours = [], []
+    for param in params:
+        x = np.linspace(np.min(chain[param]), np.max(chain[param]), 100)
+        profile.append(np.column_stack([x, -0.5 * (x - chain.mean(param))**2 / chain.std(param)**2]))
+    profiles2 = Profiles()
+    profiles2.set(profile=Samples(profile, params=params))
+    cls = [1, 2]
+    radii = np.sqrt([utils.nsigmas_to_deltachi2(cl, ddof=2) for cl in cls])
+    t = np.linspace(0., 2. * np.pi, 1000, endpoint=False)
+    ct, st = np.cos(t), np.sin(t)
+    contours = ParameterContours()
+    for i1, param1 in enumerate(params):
+        for param2 in params[:i1]:
+            mean = chain.mean([param1, param2])
+            cov = chain.covariance(params=[param1, param2])
+            sigx2, sigy2, sigxy = cov[0, 0], cov[1, 1], cov[0, 1]
+            for cl, radius in zip(cls, radii):
+                a = radius * np.sqrt(0.5 * (sigx2 + sigy2) + np.sqrt(0.25 * (sigx2 - sigy2)**2. + sigxy**2.))
+                b = radius * np.sqrt(0.5 * (sigx2 + sigy2) - np.sqrt(0.25 * (sigx2 - sigy2)**2. + sigxy**2.))
+                th = 0.5 * np.arctan2(2. * sigxy, sigx2 - sigy2)
+                x1 = mean[0] + a * ct * np.cos(th) - b * st * np.sin(th)
+                x2 = mean[1] + a * ct * np.sin(th) + b * st * np.cos(th)
+                x1, x2 = (np.concatenate([xx, xx[:1]], axis=0) for xx in (x1, x2))
+                contours.update({cl: [(ParameterArray(x1, param1), ParameterArray(x2, param2))]})
+    profiles2.set(contour=contours)
+
+    #g = plotting.plot_triangle([chain], contour_colors=['C0'], filled=True, show=False)
+    #plotting.plot_triangle_contours([profiles1, profiles2], figsize=(5, 5), filled=False, colors=['C1', 'C2'], fig=g.subplots)
+    #plotting.add_legend(labels=['chain', 'profiles1', 'profiles2'], colors=['C0', 'C1', 'C2'], loc='upper right')
+
+    plotting.plot_triangle([chain, profiles1, profiles2], labels=['chain', 'profiles1', 'profiles2'],
+                           contour_colors=['C0', 'C1', 'C2'], filled=[True, False, False], show=True)
 
 
 def test_solved():
@@ -155,14 +199,11 @@ def test_cholesky():
 if __name__ == '__main__':
 
     setup_logging()
-    test_solved()
-    exit()
 
     test_misc()
     test_plot()
     test_bcast()
     test_misc()
     test_stats()
-    test_plot()
     test_solved()
     # test_cholesky()

@@ -92,6 +92,8 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
         stddev = np.sqrt(np.diag(V).real)
         V = V / stddev[:, None] / stddev[None, :]
         invWn1 = utils.inv(Wn1 / stddev[:, None] / stddev[None, :], check_valid=check_valid)
+        if invWn1 is None:
+            raise ValueError('cannot compute inverse')
         try:
             toret = np.linalg.eigvalsh(invWn1.dot(V))
         except np.linalg.LinAlgError as exc:

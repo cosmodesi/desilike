@@ -5,7 +5,7 @@ import pytest
 import numpy as np
 
 from desilike import PipelineError, setup_logging
-from desilike.samplers import (EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler,
+from desilike.samplers import (EmceeSampler, ZeusSampler, PocoMCSampler,
                                StaticDynestySampler, DynamicDynestySampler, PolychordSampler, NautilusSampler,
                                NUTSSampler, MCLMCSampler, GridSampler, QMCSampler, ImportanceSampler)
 
@@ -29,7 +29,7 @@ def test_samplers():
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
     likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov, name='LRG')
 
-    for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][2:3]:
+    for Sampler in [EmceeSampler, NUTSSampler, ZeusSampler, PocoMCSampler, StaticDynestySampler, DynamicDynestySampler, NautilusSampler, PolychordSampler][:3]:
         kwargs = {'seed': 42}
         if Sampler in [EmceeSampler, ZeusSampler]:
             kwargs.update(nwalkers=20)
@@ -37,7 +37,7 @@ def test_samplers():
             kwargs.update(n_active=20)
         elif Sampler in [StaticDynestySampler, DynamicDynestySampler, PolychordSampler, NautilusSampler]:
             kwargs.update(nlive=100)
-        save_fn = ['./_tests/chain_{:d}.npz'.format(i) for i in range(min(likelihood.mpicomm.size, 1))]
+        save_fn = ['./_tests/chain_{:d}.npz'.format(i) for i in range(min(likelihood.mpicomm.size, 2))]
         sampler = Sampler(likelihood, save_fn=save_fn, **kwargs)
         kwargs = {}
         if Sampler in [EmceeSampler, ZeusSampler]:
@@ -304,7 +304,7 @@ def test_mcmc():
     #    param.update(prior=None)
 
     chains, timing = {}, {}
-    for Sampler in [EmceeSampler, NUTSSampler, MCLMCSampler, MCMCSampler][:3]:
+    for Sampler in [EmceeSampler, NUTSSampler, MCLMCSampler][:3]:
         kwargs, check = {}, True
         ensemble = Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]
         if ensemble:
@@ -338,7 +338,7 @@ def test_nested():
     likelihood.varied_params['b'].update(fixed=True)
 
     chains = {}
-    #for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, MCMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler]:
+    #for Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler, StaticDynestySampler, DynamicDynestySampler, PolychordSampler]:
     for Sampler in [EmceeSampler, StaticDynestySampler, DynamicDynestySampler]:
         kwargs, check = {}, True
         ensemble = Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]
@@ -603,11 +603,11 @@ def test_cobaya_mcmc():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_samplers()
+    test_samplers()
     #test_nautilus()
     #test_fixed()
     #test_importance()
-    test_error()
+    #test_error()
     #test_mcmc()
     #test_hmc()
     #test_nested()

@@ -303,11 +303,14 @@ def camb_or_classy_to_cosmoprimo(fiducial, provider, params, ignore_unknown_para
 
 def desilike_to_cobaya_params(params, engine=None):
 
-    def decode_prior(prior):
+    def decode_prior(prior, param):
         di = {}
         di['dist'] = prior.dist
         if prior.is_limited():
             di['min'], di['max'] = prior.limits
+        elif prior.dist == 'uniform':
+            raise ValueError('Provide bounded prior distribution for parameter {}'.format(param))
+            di['min'], di['max'] = -np.inf, np.inf
         for name in ['loc', 'scale']:
             if hasattr(prior, name):
                 di[name] = getattr(prior, name)
@@ -340,9 +343,9 @@ def desilike_to_cobaya_params(params, engine=None):
             elif param.derived:
                 di['derived'] = True
             elif param.varied:
-                di['prior'] = decode_prior(param.prior)
+                di['prior'] = decode_prior(param.prior, param.name)
                 if param.ref.is_proper():
-                    di['ref'] = decode_prior(param.ref)
+                    di['ref'] = decode_prior(param.ref, param.name)
                 if param.proposal is not None:
                     di['proposal'] = param.proposal
             # if param.drop: di['drop'] = True

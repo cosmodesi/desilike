@@ -428,4 +428,4 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
     def to_array(self):
         from desilike.observables import ObservableArray
-        return ObservableArray(x=self.k, value=self.data, projs=self.ells, attrs={'shotnoise': self.shotnoise}, name=self.__class__.__name__)
+        return ObservableArray(x=self.k, edges=self.kedges, value=self.data, projs=self.ells, attrs={'shotnoise': self.shotnoise}, name=self.__class__.__name__)

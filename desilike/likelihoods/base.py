@@ -491,7 +491,8 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
                 raise ValueError('provided {:d} observables, but the covariance contains {:d}'.format(len(self.observables), cov_nobservables))
             for iobs, obs in enumerate(self.observables):
                 array = obs.to_array()
-                covariance = covariance.xmatch(observables=iobs, x=array._x, projs=array._projs, select_projs=True, method='mean')
+                x = [(edges[:-1] + edges[1:]) / 2. for edges in array.edges()]
+                covariance = covariance.xmatch(observables=iobs, x=x, projs=array._projs, select_projs=True, method='mid')
             covariance = covariance.view()
 
         self.precision = check_matrix(precision, 'precision')

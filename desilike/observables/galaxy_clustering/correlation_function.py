@@ -404,4 +404,4 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
 
     def to_array(self):
         from desilike.observables import ObservableArray
-        return ObservableArray(x=self.s, value=self.data, projs=self.ells, name=self.__class__.__name__)
+        return ObservableArray(x=self.s, edges=self.sedges, value=self.data, projs=self.ells, name=self.__class__.__name__)

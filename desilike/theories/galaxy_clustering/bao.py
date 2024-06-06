@@ -1213,6 +1213,103 @@ class DampedBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCo
     """
 
 
+class DampedBAOWigglesTracerCrossCorrelationFunctionMultipoles(BaseBAOWigglesTracerCorrelationFunctionMultipoles):
+    r"""
+    Theory BAO correlation function multipoles, with broadband terms.
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
+
+    Parameters
+    ----------
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mode : str, default=''
+        Reconstruction mode:
+
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+    model : str, default='standard'
+        'fog-damping' to apply Finger-of-God to the wiggle part (in addition to the no-wiggle part).
+        'move-all' to move the no-wiggle part (in addition to the wiggle part) with scaling parameters.
+        'fog-damping_move-all' to use the model of https://arxiv.org/abs/1607.03149.
+
+    broadband : str, default='power'
+        Broadband parameterization: 'power' for powers of :math:`s`,
+        'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels in Fourier space.
+
+    sp : float, default=None
+        The pivot :math:`s`. Defaults to :math:`2 \pi / 0.02`.
+
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1607.03149
+    """
+
+
+
+class DampedBAOWigglesTracerDTVoidCorrelationFunctionMultipoles(BaseBAOWigglesTracerCorrelationFunctionMultipoles):
+    r"""
+    Theory BAO correlation function multipoles, with broadband terms.
+    Supports pre-, reciso, recsym, real (f = 0) and redshift-space reconstruction.
+
+    Parameters
+    ----------
+    s : array, default=None
+        Theory separations where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2)
+        Multipoles to compute.
+
+    mu : int, default=20
+        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+
+    mode : str, default=''
+        Reconstruction mode:
+
+        - '': no reconstruction
+        - 'recsym': recsym reconstruction (both data and randoms are shifted with RSD displacements)
+        - 'reciso': reciso reconstruction (data only is shifted with RSD displacements)
+
+    smoothing_radius : float, default=15
+        Smoothing radius used in reconstruction.
+
+    template : BasePowerSpectrumTemplate, default=None
+        Power spectrum template. If ``None``, defaults to :class:`BAOPowerSpectrumTemplate`.
+
+    model : str, default='standard'
+        'fog-damping' to apply Finger-of-God to the wiggle part (in addition to the no-wiggle part).
+        'move-all' to move the no-wiggle part (in addition to the wiggle part) with scaling parameters.
+        'fog-damping_move-all' to use the model of https://arxiv.org/abs/1607.03149.
+
+    broadband : str, default='power'
+        Broadband parameterization: 'power' for powers of :math:`s`,
+        'ngp', 'cic', 'tsc' or 'pcs' for the sum of corresponding kernels in Fourier space.
+
+    sp : float, default=None
+        The pivot :math:`s`. Defaults to :math:`2 \pi / 0.02`.
+
+
+    Reference
+    ---------
+    https://arxiv.org/abs/1607.03149
+    """
+
+
 class SimpleBAOWigglesTracerCorrelationFunctionMultipoles(BaseBAOWigglesTracerCorrelationFunctionMultipoles):
     r"""
     As :class:`DampedBAOWigglesTracerCorrelationFunctionMultipoles`, but moving only BAO wiggles (and not damping or RSD terms)

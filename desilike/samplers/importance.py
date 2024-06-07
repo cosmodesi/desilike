@@ -66,8 +66,17 @@ class ImportanceSampler(BaseClass):
     def nchains(self):
         return len(self.input_chains)
 
-    def run(self):
-        """Run importance sampling."""
+    def run(self, subtract_input=False):
+        r"""
+        Run importance sampling.
+
+        Parameters
+        ----------
+        subtract_input : bool, default=False
+            If ``True``, :attr:`Chain.aweight` is divided by :math:`e^{\mathcal{L} - \mathcal{L}_\mathrm{max}}`,
+            with :math:`\mathcal{L}` the log-posterior.
+
+        """
         if getattr(self, '_vlikelihood', None) is None:
             self._set_vlikelihood()
 
@@ -86,6 +95,12 @@ class ImportanceSampler(BaseClass):
             for ichain in tm.iterate(range(self.nchains)):
                 if self.mpicomm.rank == 0:
                     chain = self.input_chains[ichain].deepcopy()
+                    if subtract_input:
+                        logposterior = chain.logposterior
+                        max_logposterior = 0.
+                        mask = np.isfinite(logposterior)
+                        if mask.any(): max_logposterior = logposterior[mask].max()
+                        chain.aweight[...] /= np.exp(logposterior - max_logposterior)
                     points = chain.to_dict(params=self.varied_params)
 
                 results = self._vlikelihood(points if self.mpicomm.rank == 0 else {})
@@ -130,6 +145,7 @@ class ImportanceSampler(BaseClass):
                     mask = np.isfinite(logposterior)
                     if mask.any(): max_logposterior = logposterior[mask].max()
                     chain.aweight[...] *= np.exp(logposterior - max_logposterior)
+                    self.log_info('Importance weight range {} - {}.'.format(chain.aweight.min(), chain.aweight.max()))
                     for name in ['size', 'nvaried', 'ndof']:
                         try:
                             value = getattr(self.likelihood, name)

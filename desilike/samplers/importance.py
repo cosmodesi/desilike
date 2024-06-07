@@ -118,25 +118,25 @@ class ImportanceSampler(BaseClass):
             if self.mpicomm.bcast(chain is not None, root=mpiroot_worker):
                 chains[ichain] = Chain.sendrecv(chain, source=mpiroot_worker, dest=0, mpicomm=self.mpicomm)
 
-            if self.mpicomm.rank == 0:
-                for ichain, chain in enumerate(chains):
-                    self.chains[ichain] = chain
-                    if chain is not None:
-                        for param in [self.likelihood._param_loglikelihood, self.likelihood._param_logprior]:
-                            mask = np.isnan(chain[param])
-                            chain[param][mask] = -np.inf
-                        logposterior = chain[self.likelihood._param_loglikelihood][()] + chain[self.likelihood._param_logprior][()]
-                        max_logposterior = 0.
-                        mask = np.isfinite(logposterior)
-                        if mask.any(): max_logposterior = logposterior[mask].max()
-                        chain.aweight[...] *= np.exp(logposterior - max_logposterior)
+        if self.mpicomm.rank == 0:
+            for ichain, chain in enumerate(chains):
+                self.chains[ichain] = chain
+                if chain is not None:
+                    for param in [self.likelihood._param_loglikelihood, self.likelihood._param_logprior]:
+                        mask = np.isnan(chain[param])
+                        chain[param][mask] = -np.inf
+                    logposterior = chain[self.likelihood._param_loglikelihood][()] + chain[self.likelihood._param_logprior][()]
+                    max_logposterior = 0.
+                    mask = np.isfinite(logposterior)
+                    if mask.any(): max_logposterior = logposterior[mask].max()
+                    chain.aweight[...] *= np.exp(logposterior - max_logposterior)
                     for name in ['size', 'nvaried', 'ndof']:
                         try:
                             value = getattr(self.likelihood, name)
                         except AttributeError:
                             pass
                         else:
-                            self.chains[ichain].attrs[name] = value
+                            chain.attrs[name] = value
             if self.save_fn is not None:
                 for ichain, chain in enumerate(self.chains):
                     if chain is not None: chain.save(self.save_fn[ichain])

@@ -402,7 +402,7 @@ class MCMCSampler(BaseBatchPosteriorSampler):
         """
         super(MCMCSampler, self).__init__(*args, **kwargs)
         if blocks is None:
-            blocks, oversample_factors = self.pipeline.block_params(params=self.varied_params, nblocks=2 if drag else None, oversample_power=oversample_power)
+            blocks, oversample_factors = self.likelihood.runtime_info.pipeline.block_params(params=self.varied_params, nblocks=2 if drag else None, oversample_power=oversample_power)
         else:
             blocks, oversample_factors = _format_blocks(blocks, self.varied_params)
         last_slow_block_index = nsteps_drag = None

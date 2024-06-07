@@ -1076,10 +1076,15 @@ class TaskManager(BaseClass):
             raise ValueError('cannot attribute {:d} processes per task given {:d} total processes'.format(nprocs_per_task, self.basecomm.size))
         if use_all_nprocs:
             for isplit, split in enumerate(np.array_split(np.arange(self.basecomm.size), max(self.basecomm.size // nprocs_per_task, 1))):
-                if split[0] <= self.basecomm.rank <= split[-1]: self.worker = isplit
+                if split[0] <= self.basecomm.rank <= split[-1]:
+                    self.worker = isplit
+                    self.self_worker_ranks = list(split)
         else:
             for isplit in range(max(self.basecomm.size // nprocs_per_task, 1)):
-                if isplit * nprocs_per_task <= self.basecomm.rank < (isplit + 1) * nprocs_per_task: self.worker = isplit
+                low, up = isplit * nprocs_per_task, (isplit + 1) * nprocs_per_task
+                if low <= self.basecomm.rank < up:
+                    self.worker = isplit
+                    self.self_worker_ranks = list(range(low, up))
         self.nworkers = isplit + 1
         # split the comm between the workers
         self.mpicomm = self.basecomm.Split(self.worker, 0)

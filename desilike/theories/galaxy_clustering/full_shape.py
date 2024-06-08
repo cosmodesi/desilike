@@ -745,7 +745,7 @@ class TNSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerS
         else:
             damping = jnp.exp(-(sigmav * kap * muap)**2)
 
-        k11 = np.linspace(self.k[0] * 0.8, self.k[-1] * 1.2, int(len(self.k) * 1.4 + 0.5))
+        k11 = np.linspace(self.k[0] * 0.7, self.k[-1] * 1.3, int(len(self.k) * 1.6 + 0.5))
         q = self.template.k
         wq = utils.weights_trapz(q)
         jq = q**2 * wq / (4. * np.pi**2)
@@ -1397,11 +1397,11 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         if self.k[0] * 0.8 < 1e-3:
             import warnings
             warnings.warn('pybird does not predict P(k) for k < 0.001 h/Mpc; nan will be replaced by 0')
-        self.co = Common(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.2, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
+        self.co = Common(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.3, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
                          eft_basis=eft_basis, halohalo=True, with_cf=False,
                          with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti', with_uvmatch=False,
                          exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
-        #print(dict(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.2, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
+        #print(dict(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.3, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
         #                 eft_basis=eft_basis, halohalo=True, with_cf=False,
         #                 with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti',
         #                 exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False))
@@ -1742,7 +1742,7 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         cosmo = getattr(self.template, 'cosmo', None)
         if cosmo is not None:
             cosmo_params = [self.z, cosmo['omega_b'], cosmo['omega_cdm'], cosmo['omega_ncdm_tot'], cosmo['h']]
-        FOLPS.NonLinear([self.template.k, self.template.pk_dd], cosmo_params, kminout=self.k[0] * 0.8, kmaxout=self.k[-1] * 1.2, nk=max(len(self.k), 120),
+        FOLPS.NonLinear([self.template.k, self.template.pk_dd], cosmo_params, kminout=self.k[0] * 0.7, kmaxout=self.k[-1] * 1.3, nk=max(len(self.k), 120),
                         EdSkernels=self.options['kernels'] == 'eds')
         #FOLPS.NonLinear([self.template.k, self.template.pk_dd], cosmo_params, kminout=0.001, kmaxout=0.5, nk=120,
         #                EdSkernels=self.options['kernels'] == 'eds')
@@ -1967,7 +1967,7 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
 
             def _get_non_linear(pk_dd, pknow_dd, **cosmo_params):
                 return get_non_linear(self.template.k, pk_dd, self.matrices, pknow=pknow_dd,
-                                      kminout=self.k[0] * 0.8, kmaxout=self.k[-1] * 1.2, nk=max(len(self.k), 120),
+                                      kminout=self.k[0] * 0.7, kmaxout=self.k[-1] * 1.3, nk=max(len(self.k), 150),
                                       kernels=self.options['kernels'], rbao=self.options['rbao'], **cosmo_params)
 
             self._get_non_linear = jit(_get_non_linear)
@@ -1998,7 +1998,6 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
 
             self._get_poles = jit(_get_poles)
         return self._get_poles(self.pt.jac, self.pt.kap, self.pt.muap, jnp.array(pars), *table, *table_now)
-
         #pkmu = self.pt.jac * get_rsd_pkmu(self.pt.kap, self.pt.muap, pars, table, table_now)
         #return self.to_poles(pkmu)
 

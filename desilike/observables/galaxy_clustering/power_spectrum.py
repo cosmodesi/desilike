@@ -75,6 +75,8 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             self.wmatrix = WindowedPowerSpectrumMultipoles()
             if wmatrix is not None:
                 self.wmatrix.init.update(wmatrix=wmatrix)
+        if self.ells is not None:  # set by data
+            self.wmatrix.init.update(ells=self.ells)
         if self.kedges is not None:  # set by data
             self.wmatrix.init.update(kedges=self.kedges)
         if klim is not None:
@@ -125,6 +127,8 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             ells, list_k, list_kedges, list_data = [], [], [], []
             if isinstance(power, ObservableArray):
                 shotnoise = power.attrs.get('shotnoise', None)
+                if klim is None:
+                    klim = {ell: (0, np.inf) for ell in power.projs}
                 for ell, lim in klim.items():
                     start, stop, *step = lim
                     rebin = 1

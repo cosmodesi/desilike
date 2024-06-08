@@ -176,10 +176,10 @@ class ObservableArray(BaseClass):
                 else:
                     nmatrix1 = self._slice_matrix(sl1, projs=proj, normalize=True)
                     x1 = nmatrix1.dot(sx)
-                index = np.flatnonzero(np.isclose(xx[0], x1))
+                index = np.flatnonzero(np.isclose(xx[0], x1, equal_nan=True))
                 if index.size:
                     if len(xx) > 1:
-                        if np.allclose(xx, x1[index[0]:index[0] + len(xx)]):
+                        if np.allclose(xx, x1[index[0]:index[0] + len(xx)], equal_nan=True):
                             found = True
                             break
                     else:
@@ -266,7 +266,9 @@ class ObservableArray(BaseClass):
         if isscalar: projs = [projs]
         toret = []
         for proj in projs:
-            iproj = self.projs.index(proj)
+            try: iproj = self.projs.index(proj)
+            except (ValueError, IndexError):
+                raise ValueError('{} could not be found in {}'.format(proj, self.projs))
             toret.append(iproj)
         if isscalar:
             return toret[0]
@@ -728,7 +730,7 @@ class ObservableCovariance(BaseClass):
                 new = new.slice(sl1, observables=iobs, projs=proj)
                 new = new.slice(sl2, observables=iobs, projs=proj)
         if select_observables or select_projs:
-            new = new.slice(projs=projs, select_observables=select_observables, select_projs=select_projs)
+            new = new.slice(observables=observable_indices, projs=projs, select_observables=select_observables, select_projs=select_projs)
         return new
 
     def _index(self, observables=None, xlim=None, projs=Ellipsis, method='mid', concatenate=True):

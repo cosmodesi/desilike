@@ -67,6 +67,8 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             if self.RR and isinstance(wmatrix, dict):
                 wmatrix = {**self.RR, **wmatrix}
             self.wmatrix.init.update(wmatrix=wmatrix)
+        if self.ells is not None:  # set by data
+            self.wmatrix.init.update(ells=self.ells)
         if self.sedges is not None:  # set by data
             self.wmatrix.init.update(sedges=self.sedges)
         if slim is not None:
@@ -111,10 +113,10 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             return toret
 
         def lim_data(corr, slim=slim):
-            if slim is None:
-                slim = {ell: (0, np.inf) for ell in (0, 2, 4)}
             ells, list_s, list_sedges, RR, list_data = [], [], [], None, []
             if isinstance(corr, ObservableArray):
+                if slim is None:
+                    slim = {ell: (0, np.inf) for ell in corr.projs}
                 RR = corr.attrs.get('R1R2', None)
                 for ell, lim in slim.items():
                     start, stop, *step = lim
@@ -126,6 +128,8 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
                     list_sedges.append(corr_slice.edges(projs=ell))
                     list_data.append(corr_slice.view(projs=ell))
             else:
+                if slim is None:
+                    slim = {ell: (0, np.inf) for ell in (0, 2, 4)}
                 try:
                     RR = {'sedges': corr.R1R2.edges[0], 'muedges': corr.R1R2.edges[1], 'wcounts': corr.R1R2.wcounts}
                 except AttributeError:

@@ -492,7 +492,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
             for iobs, obs in enumerate(self.observables):
                 array = obs.to_array()
                 x = [(edges[:-1] + edges[1:]) / 2. for edges in array.edges()]
-                covariance = covariance.xmatch(observables=iobs, x=x, projs=array._projs, select_projs=True, method='mid')
+                covariance = covariance.xmatch(observables=iobs, x=x, projs=array.projs, select_projs=True, method='mid')
             covariance = covariance.view()
 
         self.precision = check_matrix(precision, 'precision')

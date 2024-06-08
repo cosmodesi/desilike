@@ -190,7 +190,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                 values[mask] = -np.inf
                 logposterior[mask_finite_prior] += values
                 if mask.any() and self.mpicomm.rank == 0:
-                    warnings.warn('{} is NaN for {}'.format(name, {k: v[mask] for k, v in points.items()}))
+                    warnings.warn('{} is NaN for {}'.format(name, {k: v[mask].tolist() for k, v in points.items()}))
         else:
             self.derived = None
         raise_error = self.mpicomm.bcast(raise_error, root=0)

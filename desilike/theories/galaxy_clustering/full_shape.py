@@ -1061,7 +1061,7 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
         super(LPTVelocileptorsPowerSpectrumMultipoles, self).calculate()
 
         def interp1d(x, y):
-            return interpolate.interp1d(x, y, kind='cubic')  # for AP
+            return interpolate.interp1d(x, y, kind='cubic', assume_sorted=True)  # for AP
 
         from velocileptors.LPT import lpt_rsd_fftw
         lpt_rsd_fftw.interp1d = interp1d
@@ -1228,7 +1228,7 @@ class REPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMul
         # print(self.template.f, self.k.shape, self.template.qpar, self.template.qper, self.template.k.shape, self.template.pk_dd.shape)
         self.pt.compute_redshift_space_power_multipoles_tables(self.template.f, apar=self.template.qpar, aperp=self.template.qper, ngauss=len(self.mu))
         pktable = {0: self.pt.p0ktable, 2: self.pt.p2ktable, 4: self.pt.p4ktable}
-        self.pktable = interpolate.interp1d(self.pt.kv, np.array([pktable[ell] for ell in self.ells]), kind='cubic', fill_value='extrapolate', axis=1)(self.k)
+        self.pktable = interpolate.interp1d(self.pt.kv, np.array([pktable[ell] for ell in self.ells]), kind='cubic', fill_value='extrapolate', axis=1, assume_sorted=True)(self.k)
         self.sigma8 = self.template.sigma8
         self.fsigma8 = self.template.f * self.sigma8
 
@@ -1238,7 +1238,7 @@ class REPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMul
         b1 = pars[0]
         pars[2] = pars[2] - (2 / 7) * (b1 - 1.)  # bs
         pars[3] = 3 * pars[3] + (b1 - 1.)  # b3
-        #return interpolate.interp1d(self.pt.kv, np.array(self.pt.compute_redshift_space_power_multipoles(pars, self.template.f)[1:]), kind='cubic', fill_value='extrapolate', axis=1)(self.k)
+        #return interpolate.interp1d(self.pt.kv, np.array(self.pt.compute_redshift_space_power_multipoles(pars, self.template.f)[1:]), kind='cubic', fill_value='extrapolate', axis=1, assume_sorted=True)(self.k)
         return tablevel_combine_bias_terms_poles(self.pktable, pars, nd=nd)
 
     def __getstate__(self):
@@ -1422,7 +1422,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
         if self.nnlo_counterterm is not None:  # we use smooth power spectrum since we don't want spurious BAO signals
             from scipy import interpolate
-            self.nnlo_counterterm.Ps(self.pt, interpolate.interp1d(np.log(self.template.k), np.log(self.template.pknow_dd), fill_value='extrapolate'))
+            self.nnlo_counterterm.Ps(self.pt, interpolate.interp1d(np.log(self.template.k), np.log(self.template.pknow_dd), fill_value='extrapolate', assume_sorted=True))
 
         self.nonlinear.PsCf(self.pt)
         self.pt.setPsCfl()
@@ -1623,7 +1623,7 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
         #print(dict(with_bias=False, eft_basis=self.co.eft_basis, with_stoch=self.options['with_stoch'], with_nnlo_counterterm=self.nnlo_counterterm is not None, co=self.co))
         if self.nnlo_counterterm is not None:  # we use smooth power spectrum since we don't want spurious BAO signals
             from scipy import interpolate
-            self.nnlo_counterterm.Cf(self.pt, interpolate.interp1d(np.log(self.template.k), np.log(self.template.pknow_dd), fill_value='extrapolate'))
+            self.nnlo_counterterm.Cf(self.pt, interpolate.interp1d(np.log(self.template.k), np.log(self.template.pknow_dd), fill_value='extrapolate', assume_sorted=True))
 
         self.nonlinear.PsCf(self.pt)
         self.pt.setPsCfl()

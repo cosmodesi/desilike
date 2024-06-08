@@ -88,7 +88,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         else:
             self.wmatrix.runtime_info.initialize()
         input_kedges = self.kedges is not None
-        for name in ['k', 'ells', 'kedges', 'shotnoise']:
+        for name in ['k', 'ells', 'kedges']:
             setattr(self, name, getattr(self.wmatrix, name))
         kmasklim = self.wmatrix.kmasklim
         if kmasklim is not None:  # cut has been applied to input k

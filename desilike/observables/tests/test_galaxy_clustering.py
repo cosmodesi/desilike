@@ -78,6 +78,30 @@ def test_power_spectrum():
     assert np.allclose(likelihood.flatdiff, observable.wmatrix.flatpower - observable.flatdata)
     theory()
 
+
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data='../../tests/_pk/data.npy',
+                                                         covariance=glob.glob('../../tests/_pk/mock_*.npy'),
+                                                         wmatrix='../../tests/_pk/window.npy',
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
+    print(observable.wmatrix.shotnoiseout)
+    assert not np.allclose(observable.wmatrix.shotnoiseout, 0.)
+
+    from pypower import BaseMatrix
+    wmatrix = BaseMatrix.load('../../tests/_pk/window.npy')
+    wmatrix.vectorout = [np.ones_like(xx) for xx in wmatrix.xout]
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data='../../tests/_pk/data.npy',
+                                                         covariance=glob.glob('../../tests/_pk/mock_*.npy'),
+                                                         wmatrix=wmatrix,
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    likelihood()
+    print(observable.wmatrix.shotnoiseout)
+    assert np.allclose(observable.wmatrix.shotnoiseout, 0.)
+
     observable = TracerPowerSpectrumMultipolesObservable(klim={2: [0.05, 0.2, 0.01]}, #klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data='../../tests/_pk/data.npy',
                                                          covariance=glob.glob('../../tests/_pk/mock_*.npy'),
@@ -1081,7 +1105,7 @@ if __name__ == '__main__':
 
     # test_systematic_templates()
     # test_bao()
-    # test_power_spectrum()
+    test_power_spectrum()
     # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
@@ -1091,4 +1115,4 @@ if __name__ == '__main__':
     # test_fiber_collisions()
     # test_compression_window()
     # test_shapefit(run=False)
-    test_observable_covariance()
+    # test_observable_covariance()

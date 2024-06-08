@@ -186,6 +186,9 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
     shotnoise : float, default=0.
         Shot noise (window matrix must be applied to power spectrum with shot noise).
 
+    wshotnoise : float, default=None
+        Optionally, response of the window to a shot noise.
+
     fiber_collisions : BaseFiberCollisionsPowerSpectrumMultipoles, default=None
         Optionally, fiber collisions.
 
@@ -195,7 +198,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
     theory : BaseTheoryPowerSpectrumMultipoles
         Theory power spectrum multipoles, defaults to :class:`KaiserTracerPowerSpectrumMultipoles`.
     """
-    def initialize(self, klim=None, k=None, kedges=None, ells=None, wmatrix=None, kin=None, kinrebin=1, kinlim=None, ellsin=None, shotnoise=None, fiber_collisions=None, systematic_templates=None, theory=None):
+    def initialize(self, klim=None, k=None, kedges=None, ells=None, wmatrix=None, kin=None, kinrebin=1, kinlim=None, ellsin=None, shotnoise=None, wshotnoise=None, fiber_collisions=None, systematic_templates=None, theory=None):
         from scipy import linalg
 
         _default_step = 0.01
@@ -369,6 +372,9 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 wmatrix.select_x(xinlim=kinlim)
             self.kin = wmatrix.xin[0]
             self.matrix_full = wmatrix.value.T
+            if wshotnoise is None:
+                wshotnoise = getattr(wmatrix, 'vectorout', None)
+                if wshotnoise is not None: wshotnoise = np.concatenate(wshotnoise, axis=0)
             if kin is not None:
                 self.kin = np.asarray(kin).flatten()
                 wmatrix_rebin = linalg.block_diag(*[utils.matrix_lininterp(self.kin, xin) for xin in wmatrix.xin])
@@ -398,8 +404,11 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             shotnoise = float(shotnoise)
             if 'shotnoise' in getattr(self.theory, '_default_options', {}):
                 self.theory.init.update(shotnoise=shotnoise)
-        self.shotnoise = np.array([shotnoise * (ell == 0) for ell in self.ellsin])
-        self.flatshotnoise = np.concatenate([np.full_like(k, shotnoise * (ell == 0), dtype='f8') for ell, k in zip(self.ells, self.k)])
+        self.shotnoisein = np.array([shotnoise * (ell == 0) for ell in self.ellsin])
+        self.shotnoiseout = np.concatenate([np.full_like(k, shotnoise * (ell == 0), dtype='f8') for ell, k in zip(self.ells, self.k)])
+        if wshotnoise is not None:
+            self.shotnoisein[...] = 0.
+            self.shotnoiseout[...] = shotnoise * (wshotnoise - 1.)
 
     @jit(static_argnums=[0])
     def _apply(self, theory):
@@ -413,7 +422,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
         return theory
 
     def calculate(self):
-        self.flatpower = self._apply(self.theory.power + self.shotnoise[:, None]) - self.flatshotnoise
+        self.flatpower = self._apply(self.theory.power + self.shotnoisein[:, None]) - self.shotnoiseout
         if self.systematic_templates is not None:
             self.flatpower += self.systematic_templates.flatpower
 
@@ -426,7 +435,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
 
     def __getstate__(self):
         state = {}
-        for name in ['kin', 'ellsin', 'k', 'kedges', 'ells', 'fiducial', 'matrix_full', 'kmask', 'offset', 'flatpower', 'shotnoise', 'flatshotnoise']:
+        for name in ['kin', 'ellsin', 'k', 'kedges', 'ells', 'fiducial', 'matrix_full', 'kmask', 'offset', 'flatpower', 'shotnoisein', 'shotnoiseout']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state

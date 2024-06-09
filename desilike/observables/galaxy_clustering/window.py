@@ -406,10 +406,12 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             if 'shotnoise' in getattr(self.theory, '_default_options', {}):
                 self.theory.init.update(shotnoise=shotnoise)
         self.shotnoisein = np.array([shotnoise * (ell == 0) for ell in self.ellsin])
-        self.shotnoiseout = np.concatenate([np.full_like(k, shotnoise * (ell == 0), dtype='f8') for ell, k in zip(self.ells, self.k)])
+        wshotnoisebase = np.concatenate([np.full_like(k, (ell == 0), dtype='f8') for ell, k in zip(self.ells, self.k)])
+        self.shotnoiseout = shotnoise * wshotnoisebase
         if wshotnoise is not None:
             self.shotnoisein[...] = 0.
-            self.shotnoiseout[...] = shotnoise * (wshotnoise - 1.)
+            self.shotnoiseout[...] = shotnoise * (wshotnoisebase - wshotnoise)
+        self.wshotnoise = wshotnoise
 
     @jit(static_argnums=[0])
     def _apply(self, theory):

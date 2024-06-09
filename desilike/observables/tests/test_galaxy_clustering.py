@@ -91,7 +91,7 @@ def test_power_spectrum():
 
     from pypower import BaseMatrix
     wmatrix = BaseMatrix.load('../../tests/_pk/window.npy')
-    wmatrix.vectorout = [np.ones_like(xx) for xx in wmatrix.xout]
+    wmatrix.vectorout = [(proj.ell == 0) * np.ones_like(xx) for proj, xx in zip(wmatrix.projsout, wmatrix.xout)]
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data='../../tests/_pk/data.npy',
                                                          covariance=glob.glob('../../tests/_pk/mock_*.npy'),

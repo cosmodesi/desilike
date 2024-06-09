@@ -1,1 +1,1 @@
-from .omega_b import BBNOmegaBLikelihood
+from .bbn import Schoneberg2024BBNLikelihood

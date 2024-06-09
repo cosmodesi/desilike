@@ -1,0 +1,7 @@
+class: Schoneberg2024BBNLikelihood
+
+init:
+  mean: [0.02196, 3.034]
+  covariance: [[4.03112260e-07, 7.30390042e-05],
+               [7.30390042e-05, 4.52831584e-02]]
+  quantities: ['omega_b', 'N_eff']

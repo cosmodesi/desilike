@@ -23,6 +23,22 @@ def test_external_likelihood():
 def test_generated_likelihood():
 
     setup_logging('warning')
+
+    # Test caching
+    cls = TestDirectKaiserLikelihood
+    info = {}
+    info['theory'] = {'camb': {'stop_at_error': True, 'extra_args': {'num_massive_neutrinos': 1, 'halofit_version': 'mead'}}}
+    info['params'] = {'H0': {'prior': {'min': 50., 'max': 100.}, 'ref': 70., 'proposal': 1.},
+                      'As': {'prior': {'min': 5.0e-10, 'max': 8.0e-09}, 'ref': 2.0e-09, 'proposal': 1.0e-10},
+                      'ombh2': 0.02242,
+                      'omch2': {'prior': {'min': 0.05, 'max': 0.2}, 'ref': 0.11933, 'proposal': 0.01}}
+    info['likelihood'] = {'desilike.bindings.tests.cobaya_bindings.' + cls.__name__: None}
+    from cobaya.model import get_model
+    model = get_model(info)
+    print(model.loglike({'LRG.b1': 2., 'LRG.sn0': 0., 'H0': 69., 'As': 2e-9, 'omch2': 0.12}))
+    print(model.loglike({'LRG.b1': 2., 'LRG.sn0': 0.2, 'H0': 69., 'As': 2e-9, 'omch2': 0.12}))
+    print(model.loglike({'LRG.b1': 2., 'LRG.sn0': 0., 'H0': 69., 'As': 3e-9, 'omch2': 0.12}))
+
     for cls in [TestSimpleLikelihood, TestShapeFitKaiserLikelihood]:
         info = {}
         if 'Direct' in cls.__name__:

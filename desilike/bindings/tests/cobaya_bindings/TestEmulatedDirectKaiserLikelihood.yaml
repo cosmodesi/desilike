@@ -1,33 +1,84 @@
+stop_at_error: true
 ignore_unknown_cosmoprimo_params: true
 params:
+  h:
+    latex: h
+    prior:
+      dist: uniform
+      min: 0.1
+      max: 1.0
+    ref:
+      dist: norm
+      loc: 0.6736
+      scale: 0.005
+    proposal: 0.005
+  omega_cdm:
+    latex: \omega_{cdm}
+    prior:
+      dist: uniform
+      min: 0.01
+      max: 0.99
+    ref:
+      dist: norm
+      loc: 0.12
+      scale: 0.0012
+    proposal: 0.0012
+  omega_b:
+    latex: \omega_{b}
+    prior:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00037
+    ref:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00015
+    proposal: 0.00015
+  logA:
+    latex: \ln(10^{10} A_{s})
+    prior:
+      dist: uniform
+      min: 2.0
+      max: 4.0
+    ref:
+      dist: norm
+      loc: 3.036394
+      scale: 0.014
+    proposal: 0.014
+  n_s: 0.9649
+  tau_reio: 0.0544
+  m_ncdm: 0.05999991930682943
+  N_eff: 3.045998221453431
+  w0_fld: -1.0
+  wa_fld: 0.0
+  Omega_k: 0.0
+  sigmapar: 0.0
+  sigmaper: 0.0
   ELG.b1:
     latex: b_{1, \mathrm{ELG}}
     prior:
       dist: uniform
-      max: 4.0
       min: 0.0
-    proposal: 0.28867513459481287
+      max: 4.0
     ref:
       dist: uniform
-      max: 2.0
       min: 1.0
+      max: 2.0
+    proposal: 0.28867513459481287
   ELG.sn0:
     latex: s_{n, 0, \mathrm{ELG}}
     prior:
       dist: norm
       loc: 0.0
       scale: 1000.0
-    proposal: 0.1
     ref:
       dist: norm
       loc: 0.0
       scale: 0.1
+    proposal: 0.1
   loglikelihood:
-    derived: true
     latex: L
-  logprior:
     derived: true
+  logprior:
     latex: p
-  sigmapar: 0.0
-  sigmaper: 0.0
-stop_at_error: true
+    derived: true

@@ -2,14 +2,14 @@
 from desilike.bindings.cobaya.factory import CobayaLikelihoodFactory
 
 from desilike.bindings.tests.test_generator import TestSimpleLikelihood
-TestSimpleLikelihood = CobayaLikelihoodFactory(TestSimpleLikelihood, 'TestSimpleLikelihood', kw_like={}, module=__name__)
+TestSimpleLikelihood = CobayaLikelihoodFactory(TestSimpleLikelihood, 'TestSimpleLikelihood', kw_like={}, module=__name__, kw_cobaya={})
 
 from desilike.bindings.tests.test_generator import TestShapeFitKaiserLikelihood
-TestShapeFitKaiserLikelihood = CobayaLikelihoodFactory(TestShapeFitKaiserLikelihood, 'TestShapeFitKaiserLikelihood', kw_like={}, module=__name__)
+TestShapeFitKaiserLikelihood = CobayaLikelihoodFactory(TestShapeFitKaiserLikelihood, 'TestShapeFitKaiserLikelihood', kw_like={}, module=__name__, kw_cobaya={})
 
 from desilike.bindings.tests.test_generator import TestDirectKaiserLikelihood
-TestDirectKaiserLikelihood = CobayaLikelihoodFactory(TestDirectKaiserLikelihood, 'TestDirectKaiserLikelihood', kw_like={}, module=__name__)
+TestDirectKaiserLikelihood = CobayaLikelihoodFactory(TestDirectKaiserLikelihood, 'TestDirectKaiserLikelihood', kw_like={}, module=__name__, kw_cobaya={})
 
 from desilike.bindings.tests.test_generator import TestEmulatedDirectKaiserLikelihood
-TestEmulatedDirectKaiserLikelihood = CobayaLikelihoodFactory(TestEmulatedDirectKaiserLikelihood, 'TestEmulatedDirectKaiserLikelihood', kw_like={}, module=__name__)
+TestEmulatedDirectKaiserLikelihood = CobayaLikelihoodFactory(TestEmulatedDirectKaiserLikelihood, 'TestEmulatedDirectKaiserLikelihood', kw_like={}, module=__name__, kw_cobaya={})
 

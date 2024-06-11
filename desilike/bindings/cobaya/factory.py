@@ -266,12 +266,13 @@ def cosmoprimo_to_classy_params(params):
     return toret
 
 
-def camb_or_classy_to_cosmoprimo(fiducial, provider, params, ignore_unknown_params=True):
+def camb_or_classy_to_cosmoprimo(fiducial, provider, params, ignore_unknown_params=True, return_input_params=False):
     if fiducial: cosmo = Cosmology.from_state(fiducial)
     else: cosmo = Cosmology()
     convert = dict(_convert_camb_or_classy_to_cosmoprimo_params)
     params = {**provider.params, **params}
     state = {convert[param]: value for param, value in params.items() if param in convert}
+    input_params = state.copy()
     A_s = None
     for p in provider.requirement_providers.values():
         if p.__class__.__name__ in ['classy', 'camb']:
@@ -298,6 +299,8 @@ def camb_or_classy_to_cosmoprimo(fiducial, provider, params, ignore_unknown_para
     cosmo = cosmo.clone(**state, engine=CobayaEngine)
     cosmo._engine.provider = provider
     cosmo._engine._derived['A_s'] = A_s
+    if return_input_params:
+        return cosmo, input_params
     return cosmo
 
 
@@ -405,8 +408,13 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
         and return a log-likelihood.
         """
         if self._requires:
-            cosmo = camb_or_classy_to_cosmoprimo(self._fiducial, self.provider, params_values, ignore_unknown_params=self.ignore_unknown_cosmoprimo_params)
-            self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
+            from desilike.utils import deep_eq
+            cosmo, input_params = camb_or_classy_to_cosmoprimo(self._fiducial, self.provider, params_values, ignore_unknown_params=self.ignore_unknown_cosmoprimo_params, return_input_params=True)
+            # manual caching
+            _input_params = getattr(self, '_input_params', {})
+            if not deep_eq(input_params, _input_params):
+                self.like.runtime_info.pipeline.set_cosmo_requires(cosmo)
+                self._input_params = input_params
         loglikelihood, derived = self.like({name: value for name, value in params_values.items() if name in self._nuisance_params}, return_derived=True)
         if _derived is not None:
             for value in derived:

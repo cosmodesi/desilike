@@ -1,87 +1,87 @@
+stop_at_error: true
 ignore_unknown_cosmoprimo_params: true
 params:
-  b1:
-    latex: b_{1}
-    prior:
-      dist: uniform
-      max: 4.0
-      min: 0.0
-    proposal: 0.28867513459481287
-    ref:
-      dist: uniform
-      max: 2.0
-      min: 1.0
-  df:
-    latex: df
-    prior:
-      dist: uniform
-      max: 2.0
-      min: 0.0
-    proposal: 0.028867513459481315
-    ref:
-      dist: uniform
-      max: 1.05
-      min: 0.95
-  dm:
-    latex: dm
-    prior:
-      dist: uniform
-      max: 3.0
-      min: -3.0
-    proposal: 0.005773502691896258
-    ref:
-      dist: uniform
-      max: 0.01
-      min: -0.01
-  dn: 0.0
-  f_sqrt_Ap:
-    derived: true
-    latex: f A_{p}^{1/2}
-  loglikelihood:
-    derived: true
-    latex: L
-  logprior:
-    derived: true
-    latex: p
-  m:
-    derived: true
-    latex: m
-  n:
-    derived: true
-    latex: n
   qpar:
     latex: q_{\parallel}
     prior:
       dist: uniform
-      max: 1.2
       min: 0.8
-    proposal: 0.005773502691896262
+      max: 1.2
     ref:
       dist: uniform
-      max: 1.01
       min: 0.99
+      max: 1.01
+    proposal: 0.005773502691896262
   qper:
     latex: q_{\perp}
     prior:
       dist: uniform
-      max: 1.2
       min: 0.8
-    proposal: 0.005773502691896262
+      max: 1.2
     ref:
       dist: uniform
-      max: 1.01
       min: 0.99
+      max: 1.01
+    proposal: 0.005773502691896262
+  dm:
+    latex: dm
+    prior:
+      dist: uniform
+      min: -3.0
+      max: 3.0
+    ref:
+      dist: uniform
+      min: -0.01
+      max: 0.01
+    proposal: 0.005773502691896258
+  dn: 0.0
+  df:
+    latex: df
+    prior:
+      dist: uniform
+      min: 0.0
+      max: 2.0
+    ref:
+      dist: uniform
+      min: 0.95
+      max: 1.05
+    proposal: 0.028867513459481315
+  f_sqrt_Ap:
+    latex: f A_{p}^{1/2}
+    derived: true
+  m:
+    latex: m
+    derived: true
+  n:
+    latex: n
+    derived: true
   sigmapar: 0.0
   sigmaper: 0.0
+  b1:
+    latex: b_{1}
+    prior:
+      dist: uniform
+      min: 0.0
+      max: 4.0
+    ref:
+      dist: uniform
+      min: 1.0
+      max: 2.0
+    proposal: 0.28867513459481287
   sn0:
     latex: s_{n, 0}
     prior:
       dist: norm
       loc: 0.0
       scale: 1000.0
-    proposal: 0.1
     ref:
       dist: norm
       loc: 0.0
       scale: 0.1
-stop_at_error: true
+    proposal: 0.1
+  loglikelihood:
+    latex: L
+    derived: true
+  logprior:
+    latex: p
+    derived: true

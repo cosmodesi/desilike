@@ -97,6 +97,60 @@ def test_observable_covariance():
     likelihood()
 
 
+def test_observable_covariance2():
+
+    from cosmoprimo.fiducial import DESI
+    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, DampedBAOWigglesTracerPowerSpectrumMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+    from desilike.observables import ObservableArray, ObservableCovariance
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+
+    template = BAOPowerSpectrumTemplate(z=0.5, fiducial=DESI(), apmode='qiso', with_now='wallish2018')
+    theory1 = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
+    theory2 = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
+
+    edges = np.linspace(0., 0.4, 81)
+    data1 = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    data2 = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    observable1 = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
+                                                         data=data1,
+                                                         theory=theory1)
+    observable2 = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
+                                                         data=data1,
+                                                         theory=theory2)
+    covariance = ObservableCovariance(np.eye(data1.flatx.size + data2.flatx.size), observables=[data1, data2])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable1, observable2], covariance=covariance)
+    print(likelihood())
+    print(template.apeffect.qpar)
+
+
+def test_observable_covariance3():
+
+    from cosmoprimo.fiducial import DESI
+    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, DampedBAOWigglesTracerCorrelationFunctionMultipoles
+    from desilike.observables.galaxy_clustering import TracerCorrelationFunctionMultipolesObservable
+    from desilike.observables import ObservableArray, ObservableCovariance
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+
+    template = BAOPowerSpectrumTemplate(z=0.5, fiducial=DESI(), apmode='qiso', with_now='wallish2018')
+    theory1 = DampedBAOWigglesTracerCorrelationFunctionMultipoles(template=template)
+    theory2 = DampedBAOWigglesTracerCorrelationFunctionMultipoles(template=template)
+
+    edges = np.linspace(0., 200., 81)
+    data1 = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    data2 = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    observable1 = TracerCorrelationFunctionMultipolesObservable(slim={0: [50., 150., 5.], 2: [50., 150., 5.]},
+                                                                data=data1,
+                                                                theory=theory1)
+    observable2 = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
+                                                                data=data1,
+                                                                theory=theory2)
+    covariance = ObservableCovariance(np.eye(data1.flatx.size + data2.flatx.size), observables=[data1, data2])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable1, observable2], covariance=covariance)
+    print(likelihood())
+    print(template.apeffect.qpar)
+
+
 def test_fisher():
 
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
@@ -121,4 +175,6 @@ if __name__ == '__main__':
     #test_precision()
     #test_hartlap()
     #test_fisher()
-    test_observable_covariance()
+    #test_observable_covariance()
+    #test_observable_covariance2()
+    test_observable_covariance3()

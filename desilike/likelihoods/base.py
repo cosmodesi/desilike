@@ -441,9 +441,9 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
     def initialize(self, observables, covariance=None, scale_covariance=1., correct_covariance='hartlap-percival2014', precision=None, **kwargs):
         if not utils.is_sequence(observables):
             observables = [observables]
-        self.nobs = None
+        self.nobs = getattr(covariance, 'nobs', None)
         if isinstance(correct_covariance, dict):
-            self.nobs = correct_covariance.get('nobs', getattr(covariance, 'nobs', None))
+            self.nobs = correct_covariance.get('nobs', self.nobs)
             correct_covariance = correct_covariance['correction']
         self.observables = list(observables)
         for obs in observables: obs.all_params  # to set observable's pipelines, and initialize once (percival factor below requires all_params)
@@ -460,6 +460,10 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
                 covariance = self.mpicomm.bcast(covariance if self.mpicomm.rank == 0 else None, root=0)
             elif all(getattr(obs, 'covariance', None) is not None for obs in self.observables):
                 covariances = [obs.covariance for obs in self.observables]
+                if self.nobs is None:
+                    nobs = [getattr(obs, 'nobs', None) for obs in self.observables]
+                    if all(nobs):
+                        self.nobs = np.mean(nobs).astype('i4')
                 size = sum(cov.shape[0] for cov in covariances)
                 covariance = np.zeros((size, size), dtype='f8')
                 start = 0

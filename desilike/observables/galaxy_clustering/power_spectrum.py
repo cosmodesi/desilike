@@ -101,6 +101,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         if isinstance(self.covariance, ObservableCovariance):
             if input_kedges: x, method = [(edges[:-1] + edges[1:]) / 2. for edges in self.kedges], 'mid'
             else: x, method = list(self.k),'mean'
+            self.nobs = self.covariance.nobs
             self.covariance = self.covariance.xmatch(x=x, projs=list(self.ells), method=method).view(projs=list(self.ells))
         self.transform = transform
         allowed_transform = [None, 'cubic']

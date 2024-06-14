@@ -154,7 +154,34 @@ def test_observable_covariance3():
 def test_observable_covariance4():
 
     from cosmoprimo.fiducial import DESI
-    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, DampedBAOWigglesTracerCorrelationFunctionMultipoles, DampedBAOWigglesTracerDTVoidCorrelationFunctionMultipoles
+    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, DampedBAOWigglesTracerDTVoidPowerSpectrumMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+    from desilike.observables import ObservableArray, ObservableCovariance
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+
+    template = BAOPowerSpectrumTemplate(z=0.5, fiducial=DESI(), apmode='qiso', with_now='wallish2018')
+    theory1 = DampedBAOWigglesTracerDTVoidPowerSpectrumMultipoles(template=template)
+    theory2 = DampedBAOWigglesTracerDTVoidPowerSpectrumMultipoles(template=template)
+
+    edges = np.linspace(0., 0.4, 81)
+    data1 = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    data2 = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    observable1 = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
+                                                         data=data1,
+                                                         theory=theory1)
+    observable2 = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
+                                                         data=data1,
+                                                         theory=theory2)
+    covariance = ObservableCovariance(np.eye(data1.flatx.size + data2.flatx.size), observables=[data1, data2])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable1, observable2], covariance=covariance)
+    print(likelihood())
+    print(template.apeffect.qpar)
+
+
+def test_observable_covariance5():
+
+    from cosmoprimo.fiducial import DESI
+    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, DampedBAOWigglesTracerDTVoidPowerSpectrumMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles, DampedBAOWigglesTracerDTVoidCorrelationFunctionMultipoles
     from desilike.observables.galaxy_clustering import TracerCorrelationFunctionMultipolesObservable
     from desilike.observables import ObservableArray, ObservableCovariance
     from desilike.likelihoods import ObservablesGaussianLikelihood
@@ -204,4 +231,5 @@ if __name__ == '__main__':
     #test_fisher()
     #test_observable_covariance()
     #test_observable_covariance2()
-    test_observable_covariance3()
+    #test_observable_covariance4()
+    test_observable_covariance5()

@@ -299,7 +299,7 @@ params:
       limits: [0.1, 10]
     latex: \Sigma_{\perp}
     fixed: True
-  
+
 ---
 
 class: DampedBAOWigglesTracerDTVoidPowerSpectrumMultipoles
@@ -351,7 +351,7 @@ params:
     latex: c_{ex}
     fixed: False
 
-
+---
 
 class: DampedBAOWigglesTracerCrossCorrelationFunctionMultipoles
 
@@ -395,7 +395,7 @@ params:
       limits: [0.1, 10]
     latex: \Sigma_{\perp}
     fixed: True
-  
+
 ---
 
 class: DampedBAOWigglesTracerDTVoidCorrelationFunctionMultipoles
@@ -446,4 +446,3 @@ params:
       limits: [0., 1000]
     latex: c_{ex}
     fixed: False
-

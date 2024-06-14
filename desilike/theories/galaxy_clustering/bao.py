@@ -149,8 +149,8 @@ class DampedBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipo
             else:  # Howlett 2023
                 pkmu = pksmooth * (fog + damped_wiggles)
         self.power = self.to_poles(pkmu)
-        
-        
+
+
 class DampedBAOWigglesDTVoidPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
     """
     Theory BAO power spectrum multipoles, without broadband terms,
@@ -206,8 +206,8 @@ class DampedBAOWigglesDTVoidPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumM
             else:  # Howlett 2023
                 pkmu = (pksmooth * (fog + damped_wiggles)) * exclusion_factor
         self.power = self.to_poles(pkmu)
-        
-        
+
+
 class DampedBAOWigglesCrossPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
     """
     Theory BAO power spectrum multipoles, without broadband terms,
@@ -242,7 +242,7 @@ class DampedBAOWigglesCrossPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMu
             fog = 1. / (1. + (sigmas * k * mu)**2 / 2.)**2.
             B = (b1a + f * mu**2 * (1 - sk)) * (b1b + f * mu**2 * (1 - sk)) * fog
             pknow = _interp(self.template, 'pknow_dd', k)
-            pkmu = (B * pknow + Cap * pkwap) 
+            pkmu = (B * pknow + Cap * pkwap)
             self.power = self.to_poles(pkmu)
         else:
             if 'fix-damping' in self.model: k, mu = self.k[:, None], self.mu
@@ -257,7 +257,7 @@ class DampedBAOWigglesCrossPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMu
             if self.mode == 'reciso': sk = jnp.exp(-1. / 2. * (k * self.smoothing_radius)**2)
             pksmooth = (b1a + f * mu**2 * (1 - sk)) * (b1b + f * mu**2 * (1 - sk)) * pknow
             if 'fog-damping' in self.model:  # Beutler2016
-                pkmu = (pksmooth * fog * (1. + damped_wiggles)) 
+                pkmu = (pksmooth * fog * (1. + damped_wiggles))
             else:  # Howlett 2023
                 pkmu = (pksmooth * (fog + damped_wiggles))
         self.power = self.to_poles(pkmu)
@@ -736,8 +736,8 @@ class DampedBAOWigglesTracerPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpe
     ---------
     https://arxiv.org/abs/1607.03149
     """
-    
-    
+
+
 class DampedBAOWigglesTracerDTVoidPowerSpectrumMultipoles(BaseBAOWigglesTracerPowerSpectrumMultipoles):
     r"""
     Theory BAO power spectrum multipoles, with broadband terms, used in the BOSS DR12 BAO analysis by Beutler et al. 2017.
@@ -1076,7 +1076,7 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFun
         else: self.sp = float(sp)
         if 'power' in self.broadband:
             if pt is None:
-                pt = globals()[self.__class__.__name__.replace('TracerCorrelationFunction', 'PowerSpectrum')](**kwargs)
+                pt = globals()[self.__class__.__name__.replace('Tracer', '').replace('CorrelationFunction', 'PowerSpectrum')](**kwargs)
             power = pt
             self.broadband = 'power'
         else:

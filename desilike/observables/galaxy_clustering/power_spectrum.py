@@ -125,6 +125,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
         def lim_data(power, klim=klim):
             ells, list_k, list_kedges, list_data = [], [], [], []
+
             if isinstance(power, ObservableArray):
                 shotnoise = power.attrs.get('shotnoise', None)
                 if klim is None:

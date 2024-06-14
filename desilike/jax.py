@@ -34,6 +34,7 @@ except ImportError:
         return cls
 
 
+
 def jit(*args, **kwargs):
     """Return :mod:`jax` just-in-time compiler."""
 

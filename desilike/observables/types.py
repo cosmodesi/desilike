@@ -688,7 +688,7 @@ class ObservableCovariance(BaseClass):
             observables.append(observable)
         matrix = self._slice_matrix(slice, observables=observable_indices, projs=projs)
         value = matrix.dot(self._value).dot(matrix.T)
-        self = self.__class__(value=value, observables=observables, attrs=self.attrs)
+        self = self.__class__(value=value, observables=observables, nobs=self.nobs, attrs=self.attrs)
         if select_observables or select_projs:
             index, observables = [], []
             for iobs, observable in enumerate(self._observables):
@@ -699,7 +699,7 @@ class ObservableCovariance(BaseClass):
                 observables.append(observable)
             index = np.concatenate(index, axis=0)
             value = self._value[np.ix_(index, index)]
-            self = self.__class__(value=value, observables=observables, attrs=self.attrs)
+            self = self.__class__(value=value, observables=observables, nobs=self.nobs, attrs=self.attrs)
         return self
 
     def xmatch(self, x, observables=None, projs=Ellipsis, select_observables=False, select_projs=False, method='mid'):
@@ -814,7 +814,7 @@ class ObservableCovariance(BaseClass):
             observables.append(observable)
             indices.append(index)
         index = np.concatenate(indices, axis=0)
-        self = self.__class__(value=self._value[np.ix_(index, index)], observables=observables, attrs=self.attrs)
+        self = self.__class__(value=self._value[np.ix_(index, index)], observables=observables, nobs=self.nobs, attrs=self.attrs)
         if select_observables or select_projs:
             index, observables = [], []
             for iobs, observable in enumerate(self._observables):
@@ -825,7 +825,7 @@ class ObservableCovariance(BaseClass):
                 observables.append(observable)
             index = np.concatenate(index, axis=0)
             value = self._value[np.ix_(index, index)]
-            self = self.__class__(value=value, observables=observables, attrs=self.attrs)
+            self = self.__class__(value=value, observables=observables, nobs=self.nobs, attrs=self.attrs)
         return self
 
     def view(self, observables=None, xlim=None, projs=Ellipsis, method='mid', return_type='nparray'):

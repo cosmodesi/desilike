@@ -151,6 +151,33 @@ def test_observable_covariance3():
     print(template.apeffect.qpar)
 
 
+def test_observable_covariance4():
+
+    from cosmoprimo.fiducial import DESI
+    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, DampedBAOWigglesTracerCorrelationFunctionMultipoles, DampedBAOWigglesTracerDTVoidCorrelationFunctionMultipoles
+    from desilike.observables.galaxy_clustering import TracerCorrelationFunctionMultipolesObservable
+    from desilike.observables import ObservableArray, ObservableCovariance
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+
+    template = BAOPowerSpectrumTemplate(z=0.5, fiducial=DESI(), apmode='qiso', with_now='wallish2018')
+    theory1 = DampedBAOWigglesTracerDTVoidCorrelationFunctionMultipoles(template=template)
+    theory2 = DampedBAOWigglesTracerDTVoidCorrelationFunctionMultipoles(template=template)
+
+    edges = np.linspace(0., 200., 81)
+    data1 = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    data2 = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    observable1 = TracerCorrelationFunctionMultipolesObservable(slim={0: [50., 150., 5.], 2: [50., 150., 5.]},
+                                                                data=data1,
+                                                                theory=theory1)
+    observable2 = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
+                                                                data=data1,
+                                                                theory=theory2)
+    covariance = ObservableCovariance(np.eye(data1.flatx.size + data2.flatx.size), observables=[data1, data2])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable1, observable2], covariance=covariance)
+    print(likelihood())
+    print(template.apeffect.qpar)
+
+
 def test_fisher():
 
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate

@@ -193,14 +193,15 @@ def test_observable_covariance5():
     edges = np.linspace(0., 200., 81)
     data1 = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
     data2 = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
-    observable1 = TracerCorrelationFunctionMultipolesObservable(slim={0: [50., 150., 5.], 2: [50., 150., 5.]},
+    observable1 = TracerCorrelationFunctionMultipolesObservable(slim={0: [50., 150., 5.]},
                                                                 data=data1,
-                                                                theory=theory1)
-    observable2 = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
+                                                                theory=theory1,
+                                                                covariance=ObservableCovariance(np.eye(data1.flatx.size), observables=[data1]))
+    observable2 = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.]},
                                                                 data=data1,
-                                                                theory=theory2)
-    covariance = ObservableCovariance(np.eye(data1.flatx.size + data2.flatx.size), observables=[data1, data2])
-    likelihood = ObservablesGaussianLikelihood(observables=[observable1, observable2], covariance=covariance)
+                                                                theory=theory2,
+                                                                covariance=ObservableCovariance(np.eye(data2.flatx.size), observables=[data2]))
+    likelihood = ObservablesGaussianLikelihood(observables=[observable1, observable2])
     print(likelihood())
     print(template.apeffect.qpar)
 

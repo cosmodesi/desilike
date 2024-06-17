@@ -2474,17 +2474,17 @@ class Samples(BaseParameterCollection):
             toret = cls.recv(source=source, tag=tag, mpicomm=mpicomm)
         return toret
 
-    def tree_flatten(self):
-        data = [array.value for array in self.data]
-        param_derivs = [(array.param, array.derivs) for array in self.data]
-        return tuple(data), (param_derivs, {name: getattr(self, name) for name in self._attrs})
+    #def tree_flatten(self):
+    #    data = [array.value for array in self.data]
+    #    param_derivs = [(array.param, array.derivs) for array in self.data]
+    #    return tuple(data), (param_derivs, {name: getattr(self, name) for name in self._attrs})
 
-    @classmethod
-    def tree_unflatten(cls, aux_data, children):
-        new = cls([ParameterArray(value, *param_derivs) for value, param_derivs in zip(children, aux_data[0])])
-        for name, value in aux_data[1].items():
-            setattr(new, name, value)
-        return new
+    #@classmethod
+    #def tree_unflatten(cls, aux_data, children):
+    #    new = cls([ParameterArray(value, *param_derivs) for value, param_derivs in zip(children, aux_data[0])])
+    #    for name, value in aux_data[1].items():
+    #        setattr(new, name, value)
+    #    return new
 
     def tree_flatten(self):
         return self.data, {name: getattr(self, name) for name in self._attrs}

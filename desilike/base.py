@@ -1156,6 +1156,13 @@ class BaseCalculator(BaseClass):
         """
         return {}
 
+    def tree_flatten(self):
+        return self.__getstate__(), {}
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls.from_state(children)
+
     #def __repr__(self):
     #    """Return string representation, i.e. calculator's name."""
     #    return self.runtime_info.name
@@ -1319,3 +1326,22 @@ class CollectionCalculator(BaseCalculator):
             for key, value in calculator.__getstate__().items():
                 state['{}_{}'.format(calcname, key)] = value
         return state
+
+
+
+class JointCalculator(BaseCalculator):
+
+    def initialize(self, calculators):
+        if not is_sequence(calculators): calculators = [calculators]
+        self.calculators = calculators
+        self.requires = []
+        for calculator in self.calculators:
+            for require in calculator.runtime_info.requires:
+                if require not in self.calculators and require not in self.requires:
+                    self.requires.append(require)
+
+    def _calc(self, params, requires):
+        pass
+
+    def calculate(self, **params):
+        return self.calculator(params, inputs=self.inputs)

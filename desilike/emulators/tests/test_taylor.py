@@ -139,9 +139,26 @@ def test_likelihood():
             print(param, (likelihood(**params), likelihood2(**params)))
 
 
+def test_pt():
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, LPTVelocileptorsTracerPowerSpectrumMultipoles
+    from desilike.theories import Cosmoprimo
+    cosmo = Cosmoprimo(fiducial='DESI', h=0.7)
+    #cosmo.init.params['h'].update(delta=(0.7,) + cosmo.init.params['h'].delta[1:])
+    temp = DirectPowerSpectrumTemplate(cosmo=cosmo, z=0.8)
+    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=temp)
+    theory()
+
+    emulator = Emulator(theory, engine=TaylorEmulatorEngine(method='finite', order=1))
+    emulator.set_samples()
+    emulator.fit()
+    theory = emulator.to_calculator()
+
+
+
 if __name__ == '__main__':
 
     setup_logging()
-    test_taylor_power(plot=True)
+    #test_taylor_power(plot=True)
     #test_taylor(plot=True)
     #test_likelihood()
+    test_pt()

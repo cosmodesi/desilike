@@ -1342,8 +1342,26 @@ class JittedCalculator(BaseCalculator):
         params = {param.name: param.ref.sample() for param in self.pipeline.varied_params}
         self.pipeline.calculate(params)
         if index is None:
-            index = list(range(len(self.pipeline.calculators)))
-        self.calculators = [pipeline.calculators[idx] for idx in index]
+            #index = list(range(len(self.pipeline.calculators)))
+            self.calculators = list(self.pipeline.calculators)
+        else:
+            calculator = self.pipeline.calculators[-1]
+            required_by = {calculator: []}
+
+            def callback(calculator, required_by):
+                for require in calculator.runtime_info.requires:
+                    required_by.setdefault(require, [])
+                    required_by[require] += [calculator] + required_by.get(calculator, [])
+                    callback(require, required_by)
+
+            callback(calculator, required_by)
+            if not is_sequence(index): index = [index]
+            self.calculators = []
+            for idx in index:
+                for calculator in [idx] + required_by[idx]:
+                    if calculator not in self.calculators:
+                        self.calculators.append(calculator)
+            self.calculators = sorted(self.calculators, key=lambda calc: self.pipeline.calculators.index(calc))
         self.requires = []
         self.init.params = ParameterCollection()
         for calculator in self.calculators:
@@ -1394,7 +1412,6 @@ class JittedCalculator(BaseCalculator):
         self.result, self.derived = self._calculate(params, requires=requires)
         for require, fixed, inrequire in zip(self.requires, self.fixed, requires):
             require.__setstate__({**fixed, **inrequire})
-
 
     def get(self):
         self.runtime_info._derived = self.derived

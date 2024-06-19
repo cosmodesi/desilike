@@ -580,7 +580,7 @@ def test_jit2():
     from desilike.base import jit
 
     z = np.linspace(0.5, 1., 6)
-    likelihoods = []
+    theories, likelihoods = [], []
     cosmo = Cosmoprimo()
     for iz, zz in enumerate(z):
         template = DirectPowerSpectrumTemplate(cosmo=cosmo, z=zz)
@@ -596,6 +596,7 @@ def test_jit2():
         covariance = ObservableCovariance(np.eye(data.flatx.size), observables=[data])
         likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=covariance)
         likelihoods.append(likelihood)
+        theories.append(theory)
     likelihood = sum(likelihoods)
     for param in likelihood.all_params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
     '''
@@ -616,8 +617,8 @@ def test_jit2():
     #print(likelihood.runtime_info.pipeline.calculators)
     #print(likelihood.all_params)
     #index = [1 + iz * 6 + i for iz in range(len(z)) for i in range(3, 6)] + [-1]
-    index = [1 + iz * 7 + i for iz in range(len(z)) for i in range(3, 7)] + [-1]
-    likelihood2 = jit(likelihood, index=index)
+    #index = [1 + iz * 7 + i for iz in range(len(z)) for i in range(3, 7)] + [-1]
+    likelihood2 = jit(likelihood, index=theories)
     likelihood2()
     rng = np.random.RandomState(seed=42)
     likelihood2.runtime_info.pipeline._set_speed()

@@ -548,7 +548,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
 
             for obs in self.observables: callback(obs, params)
             """
-            for obs in self.observables: params |= set(obs.all_params)
+            for obs in self.observables: params |= set(obs.all_params.names())
 
             params = [param for param in params if param in varied_params]
             nparams = len(params)

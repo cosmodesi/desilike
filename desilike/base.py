@@ -483,11 +483,14 @@ class BasePipeline(BaseClass):
         if not self._initialized:
             if self.more_initialize is not None: self.more_initialize()
             self._initialized = True
-            for calculator in self.calculators:
-                #if isinstance(calculator, JittedCalculator):
-                #    calculator.init.update(pipeline=self)
-                #    calculator.runtime_info.initialize()
-                calculator.runtime_info.tocalculate = True
+            for calculator in self.calculators: calculator.runtime_info.tocalculate = True
+            jitted = getattr(self, '_jitted', None)
+            if jitted is not None:
+                jitted.init.update(pipeline=self)
+                jitted.runtime_info.initialize()
+                self.calculators = [calculator for calculator in self.calculators if calculator not in jitted.calculators] + [jitted]
+                if jitted.more_calculate is not None: self.more_calculate = None
+
         names = list(params.keys())
         self_params = self.params
         for name in names:
@@ -1421,10 +1424,6 @@ class JittedCalculator(BaseCalculator):
 def jit(calculator, index=None):
     # FIXME: make clean, turn BaseCalculator into pytrees?
     calculator = calculator.copy()
-    pipeline = calculator.runtime_info.pipeline
-    jitted = JittedCalculator(pipeline, index=index)
-    jitted.runtime_info.initialize()
-    pipeline.calculators = [calculator for calculator in pipeline.calculators if calculator not in jitted.calculators] + [jitted]
-    if jitted.more_calculate is not None:
-        pipeline.more_calculate = None
+    calculator.runtime_info.pipeline._jitted = JittedCalculator(pipeline=calculator.runtime_info.pipeline, index=index)
+    calculator.runtime_info.pipeline._initialized = False
     return calculator

@@ -592,7 +592,6 @@ def test_jit2():
         observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2, 0.005], 2: [0.02, 0.2, 0.005]},
                                                              data=data,
                                                              theory=theory)
-
         covariance = ObservableCovariance(np.eye(data.flatx.size), observables=[data])
         likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=covariance)
         likelihoods.append(likelihood)
@@ -619,8 +618,6 @@ def test_jit2():
     #index = [1 + iz * 6 + i for iz in range(len(z)) for i in range(3, 6)] + [-1]
     #index = [1 + iz * 7 + i for iz in range(len(z)) for i in range(3, 7)] + [-1]
     likelihood2 = jit(likelihood, index=theories)
-    likelihood2()
-    rng = np.random.RandomState(seed=42)
     likelihood2.runtime_info.pipeline._set_speed()
     likelihood2()
 
@@ -631,13 +628,13 @@ def test_jit2():
     for i in range(niterations):
         likelihood2({param.name: param.ref.sample() for param in likelihood.varied_params if param.namespace})
     print('time jit', (time.time() - t0) / niterations)
-    return
 
+    likelihood()
     t0 = time.time()
     for i in range(niterations):
         likelihood({param.name: param.ref.sample() for param in likelihood.varied_params if param.namespace})
     print('time nojit', (time.time() - t0) / niterations)
-
+    return
     #print('TEST')
     t0 = time.time()
     for i in range(niterations):

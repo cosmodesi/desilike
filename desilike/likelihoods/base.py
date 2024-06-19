@@ -450,7 +450,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
             self.nobs = correct_covariance.get('nobs', self.nobs)
             correct_covariance = correct_covariance['correction']
         self.observables = list(observables)
-        #for obs in observables: obs.all_params  # to set observable's pipelines, and initialize once (percival factor below requires all_params)
+        for obs in observables: obs.all_params  # to set observable's pipelines, and initialize once (percival factor below requires all_params)
         covariance, scale_covariance, precision = (self.mpicomm.bcast(obj if self.mpicomm.rank == 0 else None, root=0) for obj in (covariance, scale_covariance, precision))
         if covariance is None:
             nmocks = [self.mpicomm.bcast(len(obs.mocks) if self.mpicomm.rank == 0 and getattr(obs, 'mocks', None) is not None else 0) for obs in self.observables]
@@ -538,6 +538,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
             # eq. 8 and 18 of https://arxiv.org/pdf/1312.4841.pdf
             A = 2. / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
             B = (self.nobs - nbins - 2.) / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
+            """
             params = set()
 
             def callback(calculator, params):
@@ -546,6 +547,8 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
                     callback(require, params)
 
             for obs in self.observables: callback(obs, params)
+            """
+            for obs in self.observables: params |= set(obs.all_params)
 
             params = [param for param in params if param in varied_params]
             nparams = len(params)

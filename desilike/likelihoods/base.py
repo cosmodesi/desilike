@@ -53,12 +53,11 @@ class BaseLikelihood(BaseCalculator):
                 pipeline_initialize(pipeline)
 
         self._marginalize_precision()
+        pipeline.more_calculate = self._solve
 
     def get(self):
         pipeline = self.runtime_info.pipeline
         self.logprior = pipeline.params.prior(**pipeline.input_values)  # does not include solved params
-        if pipeline.more_calculate is None:
-            pipeline.more_calculate = self._solve
         return self.loglikelihood + self.logprior
 
     @property
@@ -170,6 +169,7 @@ class BaseLikelihood(BaseCalculator):
             if self.fisher is None or self.fisher.mpicomm is not self.mpicomm:
                 #if self.fisher is not None: print(self.fisher.mpicomm is not self.mpicomm, self.fisher.varied_params != solved_params)
                 with warnings.catch_warnings():
+                    #print('REDEFINE FISHER')
                     warnings.filterwarnings('ignore', message='.*Derived parameter.*')
                     solve_likelihood = SumLikelihood(solve_likelihoods)
                     solve_likelihood.runtime_info.pipeline.more_initialize = None
@@ -199,10 +199,12 @@ class BaseLikelihood(BaseCalculator):
 
                     #flatdiffs = [likelihood.flatdiff for likelihood in solve_likelihood.likelihoods]
                     #print('deriv')
+                    #print('VALUES', values)
+                    #print('DERIVS')
                     flatderivs = jax.jacfwd(getter, argnums=0, has_aux=False, holomorphic=False)(values)
                     #print('diff')
+                    #print('DIFF')
                     flatdiffs = getter(values)
-                    #print(values)
                     likelihoods_gradient, likelihoods_hessian = [], []
                     for ilike, likelihood in enumerate(solve_likelihood.likelihoods):
                         flatdiff, flatderiv = flatdiffs[ilike], flatderivs[ilike].T
@@ -296,6 +298,7 @@ class BaseLikelihood(BaseCalculator):
 
         for likelihood in likelihoods:
             loglikelihood = jnp.array(likelihood.loglikelihood)
+
             if likelihood in solve_likelihoods:
                 likelihood_index = solve_likelihoods.index(likelihood)
                 likelihood_hessian = likelihoods_hessian[likelihood_index]
@@ -306,6 +309,7 @@ class BaseLikelihood(BaseCalculator):
                 if derived is not None:
                     loglikelihood = jnp.insert(likelihood_hessian[indices_derivs], 0, loglikelihood)
                     derived.set(ParameterArray(loglikelihood, param=likelihood._param_loglikelihood, derivs=derivs))
+
             sum_loglikelihood += loglikelihood
 
         if indices_marg.size:

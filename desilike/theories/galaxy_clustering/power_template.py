@@ -147,9 +147,12 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
                 k = state.pop(name)
                 pk = state.pop(name[:-1] + 'pk')
                 state[name[:-2]] = PowerSpectrumInterpolator1D(k, pk)
-        class TmpAPEffect(object): pass
-        TmpAPEffect.ap_k_mu = APEffect.ap_k_mu
-        state['apeffect'] = tmpap = TmpAPEffect()
+        if hasattr(self, 'apeffect'):
+            tmpap = self.apeffect
+        else:
+            class TmpAPEffect(object): pass
+            TmpAPEffect.ap_k_mu = APEffect.ap_k_mu
+            state['apeffect'] = tmpap = TmpAPEffect()
         tmpap.qpar, tmpap.qper, tmpap.eta = state.pop('qpar'), state.pop('qper'), state.pop('eta')
         super(BasePowerSpectrumTemplate, self).__setstate__(state)
 
@@ -308,7 +311,9 @@ class BAOExtractor(BasePowerSpectrumExtractor):
             self.qap = self.DH_over_DM / self.DH_over_DM_fid
         return self
 
+#from desilike.jax import register_pytree_node_class
 
+#@register_pytree_node_class
 class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     """
     BAO power spectrum template.

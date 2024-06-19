@@ -388,6 +388,7 @@ class BasePipeline(BaseClass):
             calculator.runtime_info.initialized = True
             #print(calculator, id(self), calculator.runtime_info._initialized_for_pipeline)
         self.calculators = self.calculators[::-1]
+        self._calculators = list(self.calculators)
         self.mpicomm = calculator._mpicomm
         for calculator in self.calculators:
             calculator.runtime_info.tocalculate = True
@@ -439,6 +440,7 @@ class BasePipeline(BaseClass):
         self.input_values = {param.name: param.value for param in self._params if param.input or param.depends or param.drop}  # param.drop for depends
         self.derived = Samples()
         self._initialized = False
+        self.calculators = list(self._calculators)  # in case of jit
 
     @property
     def params(self):
@@ -481,7 +483,11 @@ class BasePipeline(BaseClass):
         if not self._initialized:
             if self.more_initialize is not None: self.more_initialize()
             self._initialized = True
-            for calculator in self.calculators: calculator.runtime_info.tocalculate = True
+            for calculator in self.calculators:
+                #if isinstance(calculator, JittedCalculator):
+                #    calculator.init.update(pipeline=self)
+                #    calculator.runtime_info.initialize()
+                calculator.runtime_info.tocalculate = True
         names = list(params.keys())
         self_params = self.params
         for name in names:
@@ -552,7 +558,7 @@ class BasePipeline(BaseClass):
                 calculator.cosmo = cosmo
                 calculator.runtime_info.tocalculate = True
 
-    def _classify_derived(self, calculators=None, niterations=3, seed=42):
+    def _classify_derived(self, calculators=None, with_state=True, with_derived=True, niterations=3, seed=42):
         """
         Internal method to classify calculators' derived parameters as
         "fixed" (they do not vary when parameters are changed) or "varied" (they vary when parameters are changed)
@@ -594,12 +600,14 @@ class BasePipeline(BaseClass):
                 self.calculate(params)
                 for calculator, state in zip(calculators, states):
                     calcstate = calculator.__getstate__()
-                    for name, value in calcstate.items():
-                        state[name] = state.get(name, []) + [value]
-                    for param in calculator.runtime_info.derived_params:
-                        name = param.basename
-                        if name not in calcstate:
-                            state[name] = state.get(name, []) + [getattr(calculator, name)]
+                    if with_state:
+                        for name, value in calcstate.items():
+                            state[name] = state.get(name, []) + [value]
+                    if with_derived:
+                        for param in calculator.runtime_info.derived_params:
+                            name = param.basename
+                            if name not in calcstate:
+                                state[name] = state.get(name, []) + [getattr(calculator, name)]
 
         fixed, varied = [], []
         for calculator, state in zip(calculators, states):
@@ -994,6 +1002,7 @@ class RuntimeInfo(BaseClass):
         If calculator's :class:`BaseCalculator.calculate` has not be called with input parameter values, call it,
         keeping track of running time with :attr:`monitor`.
         """
+        #bak = {name: id(value) for name, value in self.input_values.items()}
         self.params
         #print('calculate', force, type(self.calculator), self.tocalculate, self._tocalculate, any(require.runtime_info.calculated for require in self.requires))
         for name, value in params.items():
@@ -1013,6 +1022,7 @@ class RuntimeInfo(BaseClass):
                 if invalue is not None:
                     value = invalue
                 self.input_values[basename] = value
+        #print(self.calculator, self.tocalculate, bak, {name: id(params[name]) for name, value in self.input_values.items() if name in params})
         if self.tocalculate:
             #print(self.calculator, self.input_values)
             self._calculation = True
@@ -1319,3 +1329,85 @@ class CollectionCalculator(BaseCalculator):
             for key, value in calculator.__getstate__().items():
                 state['{}_{}'.format(calcname, key)] = value
         return state
+
+
+class JittedCalculator(BaseCalculator):
+
+    _calculate_with_namespace = True
+
+    def initialize(self, pipeline, index=None):
+        self.pipeline = pipeline
+        self.pipeline.calculate()
+        params_bak = {param.name: self.pipeline.input_values[param.name] for param in self.pipeline.varied_params}
+        params = {param.name: param.ref.sample() for param in self.pipeline.varied_params}
+        self.pipeline.calculate(params)
+        if index is None:
+            index = list(range(len(self.pipeline.calculators)))
+        self.calculators = [pipeline.calculators[idx] for idx in index]
+        self.requires = []
+        self.init.params = ParameterCollection()
+        for calculator in self.calculators:
+            self.init.params.update(calculator.runtime_info.params)
+            for require in calculator.runtime_info.requires:
+                if require not in self.calculators and require not in self.requires:
+                    self.requires.append(require)
+        self.more_calculate = None
+        if self.calculators[-1] is pipeline.calculators[-1]:
+            self.more_calculate = pipeline.more_calculate
+        self.more_derived = pipeline.more_derived
+        self.runtime_info.requires = self.requires
+        self.fixed, self.varied = {}, []
+        if self.requires:
+            self.fixed, self.varied = self.pipeline._classify_derived(calculators=self.requires, niterations=3, seed=42, with_derived=False)[-2:]
+
+        def _calculate(params, requires, force=True):
+            #print(requires)
+            for require, fixed, inrequire in zip(self.requires, self.fixed, requires):
+                require.__setstate__({**fixed, **inrequire})
+            self.pipeline.input_values.update(params)  # for more_calculate, e.g. BaseLikelihood._solve
+            derived = Samples()
+            for calculator in self.calculators:
+                runtime_info = calculator.runtime_info
+                result = runtime_info.calculate(params, force=force)
+                derived.update(runtime_info.derived)
+            if self.more_calculate:
+                toret = self.more_calculate()
+                if toret is not None: result = toret
+            if self.more_derived:
+                tmp = self.more_derived()
+                if tmp is not None: derived.update(tmp)
+            return result, derived
+
+        self._calculate = jax.jit(_calculate)
+        #self._calculate = _calculate
+        self.pipeline.calculate(params_bak)  # to set requires
+        #print('JITTING')
+        self.calculate(**{name: value for name, value in params_bak.items() if name in self.init.params})
+        #print('DONE')
+        self.pipeline.calculate(params_bak, force=True)
+
+    def calculate(self, **params):
+        requires = []
+        for require, varied in zip(self.requires, self.varied):
+            tmp = require.__getstate__()
+            requires.append({name: tmp[name] for name in varied})
+        self.result, self.derived = self._calculate(params, requires=requires)
+        for require, fixed, inrequire in zip(self.requires, self.fixed, requires):
+            require.__setstate__({**fixed, **inrequire})
+
+
+    def get(self):
+        self.runtime_info._derived = self.derived
+        return self.result
+
+
+def jit(calculator, index=None):
+    # FIXME: make clean, turn BaseCalculator into pytrees?
+    calculator = calculator.copy()
+    pipeline = calculator.runtime_info.pipeline
+    jitted = JittedCalculator(pipeline, index=index)
+    jitted.runtime_info.initialize()
+    pipeline.calculators = [calculator for calculator in pipeline.calculators if calculator not in jitted.calculators] + [jitted]
+    if jitted.more_calculate is not None:
+        pipeline.more_calculate = None
+    return calculator

@@ -515,15 +515,160 @@ def test_parameter():
     print(fun(jnp.array(10.)))
 
 
+def test_jit():
+    from cosmoprimo.fiducial import DESI
+    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, DampedBAOWigglesTracerPowerSpectrumMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+    from desilike.observables import ObservableArray, ObservableCovariance
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike.base import jit
+
+    template = BAOPowerSpectrumTemplate(z=0.5)
+    theory1 = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
+    theory2 = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
+
+    edges = np.linspace(0., 0.4, 81)
+    data1 = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    data2 = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    observable1 = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
+                                                         data=data1,
+                                                         theory=theory1)
+    covariance = ObservableCovariance(np.eye(data1.flatx.size), observables=[data1])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable1], covariance=covariance)
+    for param in likelihood.all_params.select(basename='al2_*'): param.update(derived='.best')
+    '''
+    observable2 = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
+                                                         data=data1,
+                                                         theory=theory2)
+    covariance = ObservableCovariance(np.eye(data1.flatx.size + data2.flatx.size), observables=[data1, data2])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable1, observable2], covariance=covariance)
+    likelihood()
+    '''
+    import jax
+    rng = np.random.RandomState(seed=42)
+
+    params = {param.name: param.ref.sample(random_state=rng) for param in likelihood.varied_params}
+    likelihood()
+    print(likelihood.runtime_info.pipeline.calculators)
+    likelihood2 = jit(likelihood, start=3)
+    #likelihood2 = jit(likelihood, start=0, stop=2)
+    likelihood2()
+    rng = np.random.RandomState(seed=42)
+
+    import time
+    niterations = 20
+
+    t0 = time.time()
+    for i in range(niterations): likelihood({param.name: param.ref.sample() for param in likelihood.varied_params})
+    print((time.time() - t0) / niterations)
+
+    t0 = time.time()
+    for i in range(niterations): likelihood2({param.name: param.ref.sample() for param in likelihood.varied_params})
+    print((time.time() - t0) / niterations)
+
+    params = {param.name: param.ref.sample() for param in likelihood.varied_params}
+    print(likelihood2(params), likelihood(params))
+    assert np.allclose(likelihood2(params), likelihood(params), atol=0.)
+
+
+def test_jit2():
+    from desilike.theories import Cosmoprimo
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, FOLPSAXTracerPowerSpectrumMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+    from desilike.observables import ObservableArray, ObservableCovariance
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike.base import jit
+
+    z = np.linspace(0.5, 1., 6)
+    likelihoods = []
+    cosmo = Cosmoprimo()
+    for iz, zz in enumerate(z):
+        template = DirectPowerSpectrumTemplate(cosmo=cosmo, z=zz)
+        theory = FOLPSAXTracerPowerSpectrumMultipoles(template=template)
+        for param in theory.init.params:
+            param.update(namespace='z{:d}'.format(iz))
+        edges = np.linspace(0., 0.4, 81)
+        data = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+        observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2, 0.005], 2: [0.02, 0.2, 0.005]},
+                                                             data=data,
+                                                             theory=theory)
+
+        covariance = ObservableCovariance(np.eye(data.flatx.size), observables=[data])
+        likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=covariance)
+        likelihoods.append(likelihood)
+    likelihood = sum(likelihoods)
+    for param in likelihood.all_params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
+    '''
+    observable2 = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
+                                                         data=data1,
+                                                         theory=theory2)
+    covariance = ObservableCovariance(np.eye(data1.flatx.size + data2.flatx.size), observables=[data1, data2])
+    likelihood = ObservablesGaussianLikelihood(observables=[observable1, observable2], covariance=covariance)
+    likelihood()
+    '''
+    import jax
+    rng = np.random.RandomState(seed=42)
+
+    likelihood()
+    params = {param.name: param.ref.sample() for param in likelihood.varied_params if param.namespace}
+    #likelihood.runtime_info.pipeline._set_speed()
+    #exit()
+    #print(likelihood.runtime_info.pipeline.calculators)
+    #print(likelihood.all_params)
+    #index = [1 + iz * 6 + i for iz in range(len(z)) for i in range(3, 6)] + [-1]
+    index = [1 + iz * 7 + i for iz in range(len(z)) for i in range(3, 7)] + [-1]
+    likelihood2 = jit(likelihood, index=index)
+    likelihood2()
+    rng = np.random.RandomState(seed=42)
+    likelihood2.runtime_info.pipeline._set_speed()
+    likelihood2()
+
+    import time
+    niterations = 5
+
+    t0 = time.time()
+    for i in range(niterations):
+        likelihood2({param.name: param.ref.sample() for param in likelihood.varied_params if param.namespace})
+    print('time jit', (time.time() - t0) / niterations)
+    return
+
+    t0 = time.time()
+    for i in range(niterations):
+        likelihood({param.name: param.ref.sample() for param in likelihood.varied_params if param.namespace})
+    print('time nojit', (time.time() - t0) / niterations)
+
+    #print('TEST')
+    t0 = time.time()
+    for i in range(niterations):
+        likelihood2({param.name: param.ref.sample() for param in likelihood.varied_params if param.namespace})
+    print('time jit', (time.time() - t0) / niterations)
+
+    t0 = time.time()
+    for i in range(niterations):
+        likelihood({param.name: param.ref.sample() for param in likelihood.varied_params})
+    print('time nojit', (time.time() - t0) / niterations)
+
+    #print('TEST')
+    t0 = time.time()
+    for i in range(niterations):
+        likelihood2({param.name: param.ref.sample() for param in likelihood.varied_params})
+    print('time jit', (time.time() - t0) / niterations)
+
+    params = {param.name: param.ref.sample() for param in likelihood.varied_params}
+    print(likelihood2(params), likelihood(params))
+    assert np.allclose(likelihood2(params), likelihood(params), atol=0.)
+
+
 if __name__ == '__main__':
 
     setup_logging()
     #test_misc()
     #test_differentiation()
     #test_solve()
-    test_fisher_galaxy()
+    #test_fisher_galaxy()
     #test_fisher_cmb()
     #test_speed()
     #test_jax()
     #test_autodiff()
     #test_parameter()
+    test_jit2()

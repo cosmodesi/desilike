@@ -538,9 +538,9 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
             # eq. 8 and 18 of https://arxiv.org/pdf/1312.4841.pdf
             A = 2. / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
             B = (self.nobs - nbins - 2.) / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
-            """
-            params = set()
 
+            params = set()
+            """
             def callback(calculator, params):
                 params |= set(calculator.init.params)
                 for require in calculator.runtime_info.requires:

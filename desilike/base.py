@@ -402,7 +402,7 @@ class BasePipeline(BaseClass):
         params_from_calculator = {}
         params = ParameterCollectionConfig(params, identifier='name')
         new_params = ParameterCollection()
-        for calculator in self.calculators:
+        for calculator in self._calculators:
             calculator_params = ParameterCollection(ParameterCollectionConfig(calculator.runtime_info.params, identifier='name').clone(params))
             for iparam, param in enumerate(calculator.runtime_info.params):
                 param = calculator_params[param]
@@ -440,7 +440,6 @@ class BasePipeline(BaseClass):
         self.input_values = {param.name: param.value for param in self._params if param.input or param.depends or param.drop}  # param.drop for depends
         self.derived = Samples()
         self._initialized = False
-        self.calculators = list(self._calculators)  # in case of jit
 
     @property
     def params(self):
@@ -481,6 +480,8 @@ class BasePipeline(BaseClass):
         """
         params = _params_args_or_kwargs(args, kwargs)
         if not self._initialized:
+            self.params
+            self.calculators = list(self._calculators)  # in case of jit
             if self.more_initialize is not None: self.more_initialize()
             self._initialized = True
             for calculator in self.calculators: calculator.runtime_info.tocalculate = True
@@ -518,6 +519,7 @@ class BasePipeline(BaseClass):
             except Exception:  # we want to keep track of the Exception class, so do not raise PipelineError
                 self.log_debug('error in method calculate of {} with calculator parameters {} and pipeline parameters {}'.format(calculator, runtime_info.input_values, self.input_values))
                 raise
+            #print(calculator, derived)
             if self.derived is not None:
                 self.derived.update(derived)
         if self.more_calculate:
@@ -1167,6 +1169,7 @@ class BaseCalculator(BaseClass):
         Return this class' state dictionary.
         To be able to emulate this calculator, it should return all the quantities that can then be used by any other calculator.
         """
+        #raise NotImplementedError
         return {}
 
     #def __repr__(self):
@@ -1192,7 +1195,7 @@ class BaseCalculator(BaseClass):
                                    _initialized=True)
             if getattr(self.runtime_info, '_pipeline', None) is not None:
                 new.runtime_info.pipeline._set_params(self.runtime_info.pipeline.params.deepcopy())  # to preserve depends
-                new(**self.runtime_info.pipeline.input_values)
+                new.runtime_info.pipeline.input_values = dict(self.runtime_info.pipeline.input_values)
         else:
             new.runtime_info.clear()
         return new
@@ -1372,6 +1375,7 @@ class JittedCalculator(BaseCalculator):
             for require in calculator.runtime_info.requires:
                 if require not in self.calculators and require not in self.requires:
                     self.requires.append(require)
+        #print('INIT', self.calculators, self.requires)
         self.more_calculate = None
         if self.calculators[-1] is pipeline.calculators[-1]:
             self.more_calculate = pipeline.more_calculate
@@ -1386,7 +1390,8 @@ class JittedCalculator(BaseCalculator):
             for require, fixed, inrequire in zip(self.requires, self.fixed, requires):
                 require.__setstate__({**fixed, **inrequire})
             self.pipeline.input_values.update(params)  # for more_calculate, e.g. BaseLikelihood._solve
-            derived = Samples()
+            bak = self.pipeline.derived
+            self.pipeline.derived = derived = Samples()
             for calculator in self.calculators:
                 runtime_info = calculator.runtime_info
                 result = runtime_info.calculate(params, force=force)
@@ -1397,6 +1402,7 @@ class JittedCalculator(BaseCalculator):
             if self.more_derived:
                 tmp = self.more_derived()
                 if tmp is not None: derived.update(tmp)
+            self.pipeline.derived = bak
             return result, derived
 
         self._calculate = jax.jit(_calculate)

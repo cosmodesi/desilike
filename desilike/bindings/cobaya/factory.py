@@ -390,9 +390,9 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
         self._input_params = [{} for i in range(self.cache_size)]
         from desilike import mpi
         for like in self.likes:
-            like.mpicomm = mpi.COMM_SELF  # no likelihood-level MPI-parallelization
+            #like.mpicomm = mpi.COMM_SELF  # no likelihood-level MPI-parallelization
             self._cosmo_params, self._nuisance_params = get_likelihood_params(like)
-            for param in like.varied_params: param.update(prior=None)  # remove prior on varied parameters (already taken care of by cobaya)
+            #for param in like.varied_params: param.update(prior=None)  # remove prior on varied parameters (already taken care of by cobaya)
         """
         import inspect
         kwargs = {name: getattr(self, name) for name in inspect.getargspec(cls).args}
@@ -425,13 +425,10 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
                 ilike = (getattr(self, '_ilike', -1) + 1) % self.cache_size  # set at a new position
                 self.likes[ilike].runtime_info.pipeline.set_cosmo_requires(cosmo)
                 self._input_params[ilike] = input_params
-            #    print('COMPUTE COSMO!') #, input_params, _input_params)
+                #print('COMPUTE COSMO!') #, input_params, _input_params)
             #else:
                 #print('SKIP COSMO!')
-        #import time
-        #t0 = time.time()
         loglikelihood, derived = self.likes[ilike]({name: value for name, value in params_values.items() if name in self._nuisance_params}, return_derived=True)
-        #print(time.time() - t0)
         self._ilike = ilike
         if _derived is not None:
             for value in derived:

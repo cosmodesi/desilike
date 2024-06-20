@@ -376,6 +376,12 @@ class BaseLikelihood(BaseCalculator):
     def ndof(self):
         return self.size - self.nvaried
 
+    def __getstate__(self):
+        state = {}
+        for name in ['loglikelihood']:
+            if hasattr(self, name): state[name] = getattr(self, name)
+        return state
+
 
 class BaseGaussianLikelihood(BaseLikelihood):
     """

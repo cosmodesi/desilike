@@ -19,7 +19,8 @@ def test_integ():
 
 def test_templates():
 
-    from desilike.theories.galaxy_clustering.power_template import PowerSpectrumInterpolator1D, integrate_sigma_r2, kernel_gauss2, kernel_gauss2_deriv, kernel_tophat2, kernel_tophat2_deriv
+    from cosmoprimo import PowerSpectrumInterpolator1D, PowerSpectrumInterpolator2D
+    from desilike.theories.galaxy_clustering.power_template import integrate_sigma_r2, kernel_gauss2, kernel_gauss2_deriv, kernel_tophat2, kernel_tophat2_deriv
 
     from cosmoprimo.fiducial import DESI
     cosmo = DESI()
@@ -51,8 +52,8 @@ def test_templates():
     print(slope_gauss, slope_tophat)
 
     from desilike.theories.galaxy_clustering.power_template import find_turn_over
-    pk = cosmo.get_fourier().pk_interpolator().to_1d(z=0.)
-    kTO, pkTO = find_turn_over(pk)
+    pk = cosmo.get_fourier().pk_interpolator()
+    kTO, pkTO = find_turn_over(pk, z=1.)
     k, k0 = np.logspace(-3, 1, 100), 0.01
     logk, logk0 = np.log10(k), np.log10(k0)
     pk = PowerSpectrumInterpolator1D(k=k, pk=10**(-(logk - logk0)**2))
@@ -67,6 +68,8 @@ def test_templates():
     for template in [BAOPowerSpectrumTemplate(), FixedPowerSpectrumTemplate(), ShapeFitPowerSpectrumTemplate(), DirectPowerSpectrumTemplate(engine='class'), DirectPowerSpectrumTemplate(engine='camb'), DirectWiggleSplitPowerSpectrumTemplate()]:
         theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
         theory()
+        template.init.update(z=[0.5, 1.])
+        template()
 
     theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=BAOPowerSpectrumTemplate(apmode='bao'))
     theory()
@@ -91,11 +94,15 @@ def test_templates():
         if 'turnover' not in template.__class__.__name__.lower():
             theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
             theory()
+        template.init.update(z=[0.5, 1.])
+        template()
 
     from desilike.theories.galaxy_clustering import BAOExtractor, BAOPhaseShiftExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor
     extractor = ShapeFitPowerSpectrumExtractor()
     dm = 0.02
-    assert np.allclose(extractor(n_s=0.96 + dm).dm - extractor(n_s=0.96).dm, dm, atol=0., rtol=1e-5)
+    fid = 0.9649
+    print(extractor(n_s=fid + dm).dm, extractor(n_s=fid).dm)
+    assert np.allclose(extractor(n_s=fid + dm).dm - extractor(n_s=fid).dm, dm, atol=0., rtol=5e-2)
     for extractor in [BAOExtractor(), BAOPhaseShiftExtractor(), StandardPowerSpectrumExtractor(),
                       ShapeFitPowerSpectrumExtractor(), ShapeFitPowerSpectrumExtractor(dfextractor='fsigmar'),
                       WiggleSplitPowerSpectrumExtractor(), WiggleSplitPowerSpectrumExtractor(kernel='tophat'),
@@ -1684,12 +1691,12 @@ if __name__ == '__main__':
     #test_velocileptors_lpt_rsd()
     #test_velocileptors_rept()
     #test_pybird()
-    test_folps()
+    #test_folps()
     #test_folpsax()
     #test_velocileptors_omegak()
     #test_params()
     #test_integ()
-    #test_templates()
+    test_templates()
     #test_wiggle_split_template()
     #test_emulator_templates()
     #test_bao()

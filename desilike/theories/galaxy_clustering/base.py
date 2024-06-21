@@ -210,11 +210,14 @@ class BaseTheoryPowerSpectrumMultipolesFromWedges(BaseTheoryPowerSpectrumMultipo
 
 @jit
 def ap_k_mu(k, mu, qpar=1., qper=1.):
+    qpar, qper = map(jnp.asarray, (qpar, qper))
+    mu = mu[(Ellipsis,) + (None,) * qpar.ndim]
+    k = k[(Ellipsis,) + (None,) * mu.ndim]
     qap = qpar / qper
     jac = 1. / (qpar * qper**2)
     factorap = jnp.sqrt(1 + mu**2 * (1. / qap**2 - 1))
     # Beutler 2016 (arXiv: 1607.03150v1) eq 44
-    kap = k[..., None] / qper * factorap
+    kap = k / qper * factorap
     # Beutler 2016 (arXiv: 1607.03150v1) eq 45
     muap = mu / qap / factorap
     return jac, kap, muap
@@ -222,10 +225,13 @@ def ap_k_mu(k, mu, qpar=1., qper=1.):
 
 @jit
 def ap_s_mu(s, mu, qpar=1., qper=1.):
+    qpar, qper = map(jnp.asarray, (qpar, qper))
+    mu = mu[(Ellipsis,) + (None,) * qpar.ndim]
+    s = s[(Ellipsis,) + (None,) * mu.ndim]
     qap = qpar / qper
     # Compared to Fourier space, qpar -> 1/qpar, qper -> 1/qper
     factorap = jnp.sqrt(1 + mu**2 * (qap**2 - 1))
-    sap = s[..., None] * qper * factorap
+    sap = s * qper * factorap
     muap = mu * qap / factorap
     return 1., sap, muap
 
@@ -273,7 +279,7 @@ class APEffect(BaseCalculator):
     config_fn = 'base.yaml'
 
     def initialize(self, z=1., cosmo=None, fiducial='DESI', mode='geometry', eta=1. / 3.):
-        self.z = float(z)
+        self.z = np.asarray(z)
         if fiducial is None:
             raise ValueError('Provide fiducial cosmology')
         self.fiducial = get_cosmo(fiducial)
@@ -283,15 +289,15 @@ class APEffect(BaseCalculator):
         self.mode = mode
         self.cosmo_requires = {}
         if self.mode == 'qiso':
-            self.params = self.params.select(basename=['qiso'])
+            self.init.params = self.init.params.select(basename=['qiso'])
         elif self.mode == 'qap':
-            self.params = self.params.select(basename=['qap'])
+            self.init.params = self.init.params.select(basename=['qap'])
         elif self.mode == 'qisoqap':
-            self.params = self.params.select(basename=['qiso', 'qap'])
+            self.init.params = self.init.params.select(basename=['qiso', 'qap'])
         elif self.mode == 'qparqper':
-            self.params = self.params.select(basename=['qpar', 'qper'])
+            self.init.params = self.init.params.select(basename=['qpar', 'qper'])
         elif self.mode in ['geometry', 'bao']:
-            self.params = self.params.clear()
+            self.init.params = self.init.params.clear()
             if is_external_cosmo(cosmo):
                 self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
                 if self.mode == 'bao': self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
@@ -325,15 +331,11 @@ class APEffect(BaseCalculator):
                 self.DH_over_rd = self.DH / rs_drag
                 self.DM_over_rd = self.DM / rs_drag
                 self.DV_over_rd = self.DV / rs_drag
-                if self.z == 0.:
-                    qpar = qper = self.DH_over_rd / self.DH_over_rd_fid
-                else:
-                    qpar, qper = self.DH_over_rd / self.DH_over_rd_fid, self.DM_over_rd / self.DM_over_rd_fid
+                qpar = self.DH_over_rd / self.DH_over_rd_fid
+                qper = jnp.where(self.z == 0, qpar, self.DM_over_rd / self.DM_over_rd_fid)
             else:  # geometry
-                if self.z == 0.:
-                    qpar = qper = 1.
-                else:
-                    qpar, qper = self.DH / self.DH_fid, self.DM / self.DM_fid
+                qpar = self.DH / self.DH_fid
+                qper = jnp.where(self.z == 0, qpar, self.DM / self.DM_fid)
         elif self.mode == 'qiso':
             qpar = qper = params['qiso']
         elif self.mode == 'qap':

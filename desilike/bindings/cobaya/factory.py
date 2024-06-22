@@ -434,6 +434,7 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
             for value in derived:
                 if value.param.ndim == 0:
                     _derived[value.param.name] = float(value[()])
+        if np.isnan(loglikelihood): loglikelihood = -np.inf
         return float(loglikelihood)
 
     '''

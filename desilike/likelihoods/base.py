@@ -456,10 +456,10 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
             self.nobs = correct_covariance.get('nobs', self.nobs)
             correct_covariance = correct_covariance['correction']
         self.observables = list(observables)
-        for obs in observables: obs.all_params  # to set observable's pipelines, and initialize once (percival factor below requires all_params)
+        #for obs in observables: obs.all_params  # to set observable's pipelines, and initialize once (percival factor below requires all_params)
         covariance, scale_covariance, precision = (self.mpicomm.bcast(obj if self.mpicomm.rank == 0 else None, root=0) for obj in (covariance, scale_covariance, precision))
         if covariance is None:
-            nmocks = [self.mpicomm.bcast(len(obs.mocks) if self.mpicomm.rank == 0 and getattr(obs, 'mocks', None) is not None else 0) for obs in self.observables]
+            nmocks = [self.mpicomm.bcast(len(obs.mocks) if getattr(obs, 'mocks', None) is not None else 0) for obs in self.observables]
             if any(nmocks):
                 if self.nobs is None: self.nobs = nmocks[0]
                 if not all(nmock == nmocks[0] for nmock in nmocks):
@@ -546,15 +546,14 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
             B = (self.nobs - nbins - 2.) / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
 
             params = set()
-            """
+
             def callback(calculator, params):
                 params |= set(calculator.init.params)
                 for require in calculator.runtime_info.requires:
                     callback(require, params)
 
             for obs in self.observables: callback(obs, params)
-            """
-            for obs in self.observables: params |= set(obs.all_params.names())
+            #for obs in self.observables: params |= set(obs.all_params.names())
 
             params = [param for param in params if param in varied_params]
             nparams = len(params)

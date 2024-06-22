@@ -15,9 +15,9 @@ class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
 
     """Base class for perturbation theory matter power spectrum multipoles."""
     _default_options = dict()
-    _klim = (1e-3, 10., 3000)  # klim < 1e-3 h/Mpc causes problems in velocileptors and folps when Omega_k ~ 0.1
+    _klim = (1e-3, 1., 500)  # klim < 1e-3 h/Mpc causes problems in velocileptors and folps when Omega_k ~ 0.1
 
-    def initialize(self, *args, template=None, **kwargs):
+    def initialize(self, *args, template=None, z=None, **kwargs):
         self.options = self._default_options.copy()
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
@@ -27,6 +27,7 @@ class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         self.template = template
         kin = np.geomspace(min(self._klim[0], self.k[0] / 2, self.template.init.get('k', [1.])[0]), max(self._klim[1], self.k[-1] * 2, self.template.init.get('k', [0.])[0]), self._klim[2])  # margin for AP effect
         self.template.init.update(k=kin)
+        if z is not None: self.template.init.update(z=z)
         self.z = self.template.z
 
     def calculate(self):
@@ -36,7 +37,7 @@ class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
 class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipoles):
 
     _default_options = dict()
-    _klim = (1e-3, 10., 3000)
+    _klim = (1e-3, 1., 500)
 
     def initialize(self, *args, template=None, **kwargs):
         self.options = self._default_options.copy()
@@ -1019,7 +1020,6 @@ class BaseVelocileptorsTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMult
             self.fsat, self.snd = self.options['fsat'], self.options['shotnoise'] * self.nd  # normalized by 1e-4
 
 
-
 class BaseVelocileptorsCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
 
     """Base class for velocileptors-based matter correlation function multipoles."""
@@ -1209,6 +1209,51 @@ class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationF
     _params = LPTVelocileptorsTracerPowerSpectrumMultipoles._params
 
 
+def f_over_f0_EH(z, k, Omega0_m, h, fnu):
+    r"""
+    Computes f(k)/f0, adapted from https://github.com/henoriega/FOLPS-nu, following H&E (1998).
+
+    Reference
+    ---------
+    https://arxiv.org/pdf/astro-ph/9710216
+
+    Parameters
+    ----------
+    z : float
+        Redshift.
+    k : array
+        Wavenumber.
+    Omega0_m : float
+        :math:`\Omega_\mathrm{b} + \Omega_\mathrm{c} + \Omega_\nu` (dimensionless matter density parameter).
+    h : float
+        :math:`H_0 / 100`.
+    fnu : float
+        :math:`\Omega_\nu / \Omega_\mathrm{m}`.
+
+    Returns
+    -------
+    fk : array
+        :math:`f(k) / f0`
+    """
+    eta = jnp.log(1 / (1 + z))  # log of scale factor
+    N_eff = 3.046  # effective number of neutrinos
+    Omega0_r = 2.469*10**(-5)/(h**2 * (1 + 7/8*(4/11)**(4/3) * N_eff))  # rad: including neutrinos
+    aeq = Omega0_r / Omega0_m  # matter-radiation equality
+
+    pcb = 5./4 - jnp.sqrt(1 + 24*(1 - fnu)) / 4  # neutrino supression
+    c = 0.7
+    N_nu = 3  # number of neutrinos
+    theta272 = (1.00)**2  # T_{CMB} = 2.7*(theta272)
+    pf = (k * theta272) / (Omega0_m * h**2)
+    DEdS = jnp.exp(eta) / aeq  # growth function: EdS cosmology
+
+    fnunonzero = jnp.where(fnu != 0., fnu, 1.)
+    yFS = 17.2*fnu*(1 + 0.488*fnunonzero**(-7/6)) * (pf*N_nu / fnunonzero)**2  #yFreeStreaming
+    # pcb = 0. and yFS = 0. when fnu = 0.
+    rf = DEdS/(1 + yFS)
+    return 1 - pcb/(1 + (rf)**c)  # f(k)/f0
+
+
 class REPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMultipoles):
 
     _default_options = dict(rbao=110, sbao=None, beyond_gauss=True,
@@ -1222,24 +1267,44 @@ class REPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMul
 
     def calculate(self):
         super(REPTVelocileptorsPowerSpectrumMultipoles, self).calculate()
-
-        from velocileptors.EPT.ept_fullresum_fftw import REPT
-        self.pt = REPT(self.template.k, self.template.pk_dd, pnw=self.template.pknow_dd, kmin=self.k[0], kmax=self.k[-1], nk=200, **self.options)
+        from velocileptors.EPT.ept_fullresum_varyDz_nu_fftw import REPT
+        #from velocileptors.EPT.ept_fullresum_fftw import REPT
+        pk_dd, pknow_dd = self.template.pk_dd, self.template.pknow_dd
+        if self.z.ndim: pk_dd, pknow_dd = pk_dd[..., 0], pknow_dd[..., 0]
+        self.pt = REPT(self.template.k, pk_dd, pnw=pknow_dd, kmin=self.k[0], kmax=self.k[-1], nk=200, **self.options)
         # print(self.template.f, self.k.shape, self.template.qpar, self.template.qper, self.template.k.shape, self.template.pk_dd.shape)
-        self.pt.compute_redshift_space_power_multipoles_tables(self.template.f, apar=self.template.qpar, aperp=self.template.qper, ngauss=len(self.mu))
-        pktable = {0: self.pt.p0ktable, 2: self.pt.p2ktable, 4: self.pt.p4ktable}
-        self.pktable = interpolate.interp1d(self.pt.kv, np.array([pktable[ell] for ell in self.ells]), kind='cubic', fill_value='extrapolate', axis=1, assume_sorted=True)(self.k)
+        pktable = {ell: [] for ell in [0, 2, 4]}
         self.sigma8 = self.template.sigma8
         self.fsigma8 = self.template.f * self.sigma8
+        Omega_m, h, fnu = 0.3, 0.7, 0.
+        cosmo = getattr(self.template, 'cosmo', None)
+        if cosmo is not None:
+            Omega_m, h, fnu = cosmo['Omega_m'], cosmo['h'], cosmo['Omega_ncdm_tot'] / cosmo['Omega_m']
 
-    def combine_bias_terms_poles(self, pars, nd=1e-4):
+        if self.z.ndim:
+            pcb, pcb_nw = [10**interpolate.interp1d(np.log10(self.template.k), np.log10(pk), kind='cubic', fill_value='extrapolate', axis=0, assume_sorted=True)(np.log10(self.pt.kv)) for pk in [self.template.pk_dd, self.template.pknow_dd]]
+            for iz, z in enumerate(self.z):
+                Dz = self.sigma8[iz] / self.sigma8[0]
+                fk = self.template.f0[iz] * f_over_f0_EH(z, self.pt.kv, Omega_m, h, fnu)
+                pks = self.pt.compute_redshift_space_power_multipoles_tables(fk, apar=self.template.qpar[iz], aperp=self.template.qper[iz], ngauss=len(self.mu), pcb=pcb[..., iz], pcb_nw=pcb_nw[..., iz], Dz=Dz)[1:]
+                for ill, ell in enumerate(pktable): pktable[ell].append(pks[ill])
+            pktable = {ell: np.concatenate([v[..., None] for v in value], axis=-1) for ell, value in pktable.items()}
+        else:
+            fk = self.template.f0 * f_over_f0_EH(self.z, self.pt.kv, Omega_m, h, fnu)
+            pks = self.pt.compute_redshift_space_power_multipoles_tables(fk, apar=self.template.qpar, aperp=self.template.qper, ngauss=len(self.mu))[1:]
+            for ill, ell in enumerate(pktable): pktable[ell] = pks[ill]
+        self.pktable = interpolate.interp1d(self.pt.kv, np.array([pktable[ell] for ell in self.ells]), kind='cubic', fill_value='extrapolate', axis=1, assume_sorted=True)(self.k)
+
+    def combine_bias_terms_poles(self, pars, z=None, nd=1e-4):
         # Add co-evolution part
         pars = list(pars)
         b1 = pars[0]
         pars[2] = pars[2] - (2 / 7) * (b1 - 1.)  # bs
         pars[3] = 3 * pars[3] + (b1 - 1.)  # b3
         #return interpolate.interp1d(self.pt.kv, np.array(self.pt.compute_redshift_space_power_multipoles(pars, self.template.f)[1:]), kind='cubic', fill_value='extrapolate', axis=1, assume_sorted=True)(self.k)
-        return tablevel_combine_bias_terms_poles(self.pktable, pars, nd=nd)
+        pktable = self.pktable
+        if z is not None: pktable = pktable[..., list(self.z).index(z)]
+        return tablevel_combine_bias_terms_poles(pktable, pars, nd=nd)
 
     def __getstate__(self):
         state = {}
@@ -1301,7 +1366,7 @@ class REPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPowe
     """
     _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4)
 
-    def initialize(self, *args, k=None, **kwargs):
+    def initialize(self, *args, k=None, z=None, **kwargs):
         super(REPTVelocileptorsTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         if k is not None:
             self.k = np.array(k, dtype='f8')
@@ -1311,18 +1376,25 @@ class REPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPowe
         ells = kwargs.get('ells', None)
         if ells is not None: self.ells = tuple(ells)
         self.pt.init.update(k=kvec, ells=self.ells)
+        if z is not None:
+            self.z = float(z)
+            z = self.pt.init.get('z', [])
+            if self.z not in z: z.append(self.z)
+            self.pt.init.update(z=sorted(z))
 
     def set_params(self):
         self.required_bias_params = dict(b1=1., b2=0., bs=0., b3=0., alpha0=0., alpha2=0., alpha4=0., alpha6=0., sn0=0., sn2=0., sn4=0.)
         super().set_params()
 
     def calculate(self, **params):
-        for name in ['z']:
-            setattr(self, name, getattr(self.pt, name))
+        if self.pt.z.ndim == 0: self.z = self.pt.z
         params = {**self.required_bias_params, **params}
         if self.is_physical_prior:
             sigma8 = self.pt.sigma8
             f = self.pt.fsigma8 / sigma8
+            if self.pt.z.ndim:
+                iz = list(self.pt.z).index(self.z)
+                sigma8, f = sigma8[iz], f[iz]
             pars = b1L, b2L, bsL, b3L = [params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p'] / sigma8**3]
             pars = [1. + b1L, 8. / 21. * b1L + b2L, bsL, b3L]  # compensate bs by 2. / 7. * b1L and b3 by b1L as it is removed by combine_bias_terms_poles below
             pars += [(1 + b1L)**2 * params['alpha0p'], f * (1 + b1L) * (params['alpha0p'] + params['alpha2p']),
@@ -1334,6 +1406,7 @@ class REPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPowe
         #self.__dict__.update(dict(zip(['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2', 'sn4'], pars)))  # for derived parameters
         opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
         index = np.array([self.pt.ells.index(ell) for ell in self.ells])
+        if self.pt.z.ndim: opts['z'] = self.z
         self.power = interp1d(self.k, self.pt.k, self.pt.combine_bias_terms_poles(pars, **opts, nd=self.nd)[index].T).T
         #self.power = self.pt.combine_bias_terms_poles(pars, **opts, nd=self.nd)
 

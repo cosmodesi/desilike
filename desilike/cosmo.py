@@ -27,7 +27,7 @@ def get_default(name='z'):
 
 def merge(arrays):
     arrays = _make_list(arrays)
-    return np.unique(np.concatenate([np.atleast_1d(a) for a in arrays], axis=0))
+    return np.unique(np.concatenate([np.ravel(a) for a in arrays], axis=0))
 
 
 def is_external_cosmo(cosmo):

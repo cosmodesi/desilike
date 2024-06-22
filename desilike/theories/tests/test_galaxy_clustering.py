@@ -95,6 +95,8 @@ def test_templates():
     from desilike.theories.galaxy_clustering import BAOExtractor, BAOPhaseShiftExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor
     extractor = ShapeFitPowerSpectrumExtractor()
     dm = 0.02
+    fid = 0.9649
+    print(extractor(n_s=fid + dm).dm, extractor(n_s=fid).dm)
     assert np.allclose(extractor(n_s=0.96 + dm).dm - extractor(n_s=0.96).dm, dm, atol=0., rtol=1e-5)
     for extractor in [BAOExtractor(), BAOPhaseShiftExtractor(), StandardPowerSpectrumExtractor(),
                       ShapeFitPowerSpectrumExtractor(), ShapeFitPowerSpectrumExtractor(dfextractor='fsigmar'),
@@ -1684,12 +1686,12 @@ if __name__ == '__main__':
     #test_velocileptors_lpt_rsd()
     #test_velocileptors_rept()
     #test_pybird()
-    test_folps()
+    #test_folps()
     #test_folpsax()
     #test_velocileptors_omegak()
     #test_params()
     #test_integ()
-    #test_templates()
+    test_templates()
     #test_wiggle_split_template()
     #test_emulator_templates()
     #test_bao()

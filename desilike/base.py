@@ -374,10 +374,11 @@ class BasePipeline(BaseClass):
         def callback(calculator):
             self.calculators.append(calculator)
             for require in calculator.runtime_info.requires:
-                require.runtime_info.initialize()
-                require.runtime_info._initialized_for_pipeline.append(id(self))
                 if require in self.calculators:
                     del self.calculators[self.calculators.index(require)]  # we want first dependencies at the end
+                else:
+                    require.runtime_info.initialize()
+                    require.runtime_info._initialized_for_pipeline.append(id(self))
                 callback(require)
 
         if not getattr(calculator.runtime_info, '_calculation', False):

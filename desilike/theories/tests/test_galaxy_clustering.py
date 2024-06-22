@@ -102,6 +102,7 @@ def test_templates():
     dm = 0.02
     fid = 0.9649
     print(extractor(n_s=fid + dm).dm, extractor(n_s=fid).dm)
+
     assert np.allclose(extractor(n_s=fid + dm).dm - extractor(n_s=fid).dm, dm, atol=0., rtol=5e-2)
     for extractor in [BAOExtractor(), BAOPhaseShiftExtractor(), StandardPowerSpectrumExtractor(),
                       ShapeFitPowerSpectrumExtractor(), ShapeFitPowerSpectrumExtractor(dfextractor='fsigmar'),
@@ -792,6 +793,40 @@ def test_velocileptors_lpt_rsd():
 
 
 def test_velocileptors_rept():
+
+    import time
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, REPTVelocileptorsTracerPowerSpectrumMultipoles
+
+    template = DirectPowerSpectrumTemplate()
+    k = np.arange(0.005, 0.3, 0.01)
+    z = np.linspace(0.5, 1., 2)
+    pt = None
+    theories = []
+    for zz in z:
+        theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, pt=pt, k=k, z=zz)
+        pt = theory.pt
+        theory.init.update(pt=pt)
+        theories.append(theory)
+
+    params = {'m_ncdm': 1.}
+    from matplotlib import pyplot as plt
+    ax = plt.gca()
+    for ith, theory in enumerate(theories):
+        power = theory(**params)
+        assert np.allclose(theory.z, z[ith])
+        template = DirectPowerSpectrumTemplate(z=z[ith])
+        ref = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, k=k)(**params)
+        for ill, ell in enumerate(theory.ells):
+            color = 'C{:d}'.format(ith)
+            ax.plot(k, k * power[ill], color=color, label='$z = {:.2f}$'.format(theory.z) if ill == 0 else None)
+            ax.plot(k, k * ref[ill], color=color, ls=':')
+    ax.set_xlim([k[0], k[-1]])
+    ax.grid(True)
+    ax.legend()
+    ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
+    ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+    plt.show()
+
     import time
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, REPTVelocileptorsTracerPowerSpectrumMultipoles
     z = 0.5
@@ -812,6 +847,7 @@ def test_velocileptors_rept():
     power = theory(qpar=qpar, qper=qper, **values)
 
     from velocileptors.EPT.ept_fullresum_fftw import REPT
+    #from velocileptors.EPT.ept_fullresum_varyDz_nu_fftw import REPT
     t0 = time.time()
     niter = 1
     for i in range(niter):
@@ -834,6 +870,35 @@ def test_velocileptors_rept():
     ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
     ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
     plt.show()
+
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+    from desilike.observables import ObservableArray, ObservableCovariance
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+
+    z = np.linspace(0.5, 1., 2)
+    theories, likelihoods = [], []
+    template = DirectPowerSpectrumTemplate()
+    pt = None
+
+    for iz, zz in enumerate(z):
+        theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(pt=pt)
+        pt = theory.pt
+        pt.init.update(template=template)
+        theory.init.update(pt=pt)
+        for param in theory.init.params:
+            param.update(namespace='z{:d}'.format(iz))
+        edges = np.linspace(0., 0.4, 81)
+        data = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+        observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.02, 0.2, 0.005], 2: [0.02, 0.2, 0.005]},
+                                                             data=data,
+                                                             theory=theory)
+        covariance = ObservableCovariance(np.eye(data.flatx.size), observables=[data])
+        likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=covariance)
+        likelihoods.append(likelihood)
+        theories.append(theory)
+    likelihood = sum(likelihoods)
+    likelihood()
+    likelihood.runtime_info.pipeline._set_speed()
 
 
 def test_pybird():

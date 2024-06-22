@@ -25,7 +25,7 @@ class BasePowerSpectrumExtractor(BaseCalculator):
     config_fn = 'power_template.yaml'
 
     def initialize(self, z=1., with_now=False, cosmo=None, fiducial='DESI'):
-        self.z = np.asarray(z)
+        self.z = np.asarray(z, dtype='f8')
         self.fiducial = get_cosmo(fiducial)
         self.cosmo_requires = {}
         self.cosmo = cosmo
@@ -55,7 +55,7 @@ class BasePowerSpectrumExtractor(BaseCalculator):
         state['f0'] = (fo.pk_interpolator(of='theta_cb')(k=k0, z=self.z) / state['pk_dd_interpolator'](k0, z=self.z))**0.5
         #if self.z.ndim == 0: state['pk_dd_interpolator'] = state['pk_dd_interpolator'].to_1d(z=self.z)
         if with_now:
-            self.filter(state['pk_dd_interpolator'])
+            self.filter(state['pk_dd_interpolator'], cosmo=cosmo)
             state['pknow_dd_interpolator'] = self.filter.smooth_pk_interpolator()
         for name, value in state.items(): setattr(self, name + ('_fid' if fiducial else ''), value)
 
@@ -67,7 +67,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
     _interpolator_k = np.logspace(-5., 2., 1000)  # more than classy
 
     def initialize(self, k=None, z=1., with_now=False, apmode='qparqper', fiducial='DESI', only_now=False, eta=1. / 3., cosmo=None):
-        self.z = np.asarray(z)
+        self.z = np.asarray(z, dtype='f8')
         self.cosmo = self.fiducial = get_cosmo(fiducial)
         if k is None: k = np.logspace(-3., 1., 400)
         self.k = np.array(k, dtype='f8')
@@ -274,7 +274,7 @@ class BAOExtractor(BasePowerSpectrumExtractor):
     conflicts = [('DM_over_rd', 'qper'), ('DH_over_rd', 'qper'), ('DM_over_DH', 'qap'), ('DV_over_rd', 'qiso')]
 
     def initialize(self, z=1., eta=1. / 3., cosmo=None, fiducial='DESI'):
-        self.z = np.asarray(z)
+        self.z = np.asarray(z, dtype='f8')
         self.eta = float(eta)
         self.fiducial = get_cosmo(fiducial)
         self.cosmo_requires = {}
@@ -772,7 +772,7 @@ class BandVelocityPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         self.apeffect = APEffect(z=self.z, cosmo=self.cosmo, fiducial=self.fiducial, eta=eta, mode='geometry')
         self.kp = kp
         if kp is None: raise ValueError('Please provide kp')
-        else: self.kp = np.asarray(kp)
+        else: self.kp = np.asarray(kp, dtype='f8')
         self._set_base(fiducial=True)
 
     def calculate(self):
@@ -964,7 +964,7 @@ def _kernel_tophat_highx(x):
 
 def kernel_tophat2(x):
     """Non-vectorized tophat function."""
-    x = np.asarray(x)
+    x = np.asarray(x, dtype='f8')
     toret = np.empty_like(x)
     mask = x < 0.1
     toret[mask] = _kernel_tophat_lowx(x[mask]**2)**2
@@ -992,7 +992,7 @@ def _kernel_tophat_deriv_highx(x):
 
 def kernel_tophat2_deriv(x):
     """Derivative of tophat function."""
-    x = np.asarray(x)
+    x = np.asarray(x, dtype='f8')
     toret = np.empty_like(x)
     mask = x < 0.1
     toret[mask] = 2. * _kernel_tophat_lowx(x[mask]**2) * _kernel_tophat_deriv_lowx(x[mask])

@@ -389,7 +389,7 @@ class BasePipeline(BaseClass):
         if not getattr(calculator.runtime_info, '_calculation', False):
             calculator.runtime_info.initialized = False  # may depend on the whole pipeline
         callback(calculator.runtime_info.initialize())
-        print(self.calculators)
+
         # To avoid loops created by one calculator, which when updated, requests reinitialization of the calculators which depend on it
         for calculator in self.calculators:
             calculator.runtime_info.initialized = True

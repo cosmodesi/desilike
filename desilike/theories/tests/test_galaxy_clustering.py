@@ -849,7 +849,7 @@ def test_velocileptors_rept():
     from velocileptors.EPT.ept_fullresum_fftw import REPT
     #from velocileptors.EPT.ept_fullresum_varyDz_nu_fftw import REPT
     t0 = time.time()
-    niter = 1
+    niter = 2
     for i in range(niter):
         rept = REPT(template.k, template.pk_dd, pnw=template.pknow_dd, kmin=theory.k[0], kmax=theory.k[-1], nk=200,\
                     beyond_gauss=True, one_loop=True,\
@@ -875,15 +875,15 @@ def test_velocileptors_rept():
     from desilike.observables import ObservableArray, ObservableCovariance
     from desilike.likelihoods import ObservablesGaussianLikelihood
 
-    z = np.linspace(0.5, 1., 2)
+    z = np.linspace(0.5, 1., 3)
     theories, likelihoods = [], []
     template = DirectPowerSpectrumTemplate()
     pt = None
 
     for iz, zz in enumerate(z):
-        theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(pt=pt)
+        theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
+        theory.init.update(pt=pt)
         pt = theory.pt
-        pt.init.update(template=template)
         theory.init.update(pt=pt)
         for param in theory.init.params:
             param.update(namespace='z{:d}'.format(iz))
@@ -1754,14 +1754,14 @@ if __name__ == '__main__':
     setup_logging()
 
     #test_velocileptors_lpt_rsd()
-    #test_velocileptors_rept()
+    test_velocileptors_rept()
     #test_pybird()
     #test_folps()
     #test_folpsax()
     #test_velocileptors_omegak()
     #test_params()
     #test_integ()
-    test_templates()
+    #test_templates()
     #test_wiggle_split_template()
     #test_emulator_templates()
     #test_bao()

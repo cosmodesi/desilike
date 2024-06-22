@@ -373,17 +373,23 @@ class BasePipeline(BaseClass):
 
         def callback(calculator):
             self.calculators.append(calculator)
+
+            def callback2(calculator):
+                if calculator in self.calculators:
+                    del self.calculators[self.calculators.index(calculator)]
+                for require in calculator.runtime_info.requires:
+                    callback2(require)
+
             for require in calculator.runtime_info.requires:
-                if require in self.calculators:
-                    del self.calculators[self.calculators.index(require)]  # we want first dependencies at the end
-                else:
-                    require.runtime_info.initialize()
-                    require.runtime_info._initialized_for_pipeline.append(id(self))
+                callback2(require)
+                require.runtime_info.initialize()  # can create new calculators, so remove the previous ones above
+                require.runtime_info._initialized_for_pipeline.append(id(self))
                 callback(require)
 
         if not getattr(calculator.runtime_info, '_calculation', False):
             calculator.runtime_info.initialized = False  # may depend on the whole pipeline
         callback(calculator.runtime_info.initialize())
+        print(self.calculators)
         # To avoid loops created by one calculator, which when updated, requests reinitialization of the calculators which depend on it
         for calculator in self.calculators:
             calculator.runtime_info.initialized = True

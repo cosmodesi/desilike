@@ -186,6 +186,7 @@ class BaseLikelihood(BaseCalculator):
                     input_params = [param for param in solve_likelihood.all_params if param.name in pipeline.input_values]
                     values = {param.name: pipeline.input_values[param.name] for param in input_params}
                     solve_likelihood.runtime_info.pipeline.input_values = values
+                    #input_params = [param for param in input_params if param in solved_params]
 
                 def fisher(params):
 
@@ -194,6 +195,10 @@ class BaseLikelihood(BaseCalculator):
                     values = jnp.array([params[name] for name in names])
 
                     def getter(values):
+                        #input_values = {}
+                        #for calculator in solve_likelihood.runtime_info.pipeline.calculators:
+                        #    input_values.update(calculator.runtime_info.input_values)
+                        #solve_likelihood.runtime_info.pipeline.input_values = {name: value for name, value in input_values.items() if name not in names}
                         solve_likelihood({**params, **dict(zip(names, values))})
                         return [likelihood.flatdiff for likelihood in solve_likelihood.likelihoods]
 

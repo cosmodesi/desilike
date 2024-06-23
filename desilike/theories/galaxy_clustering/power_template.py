@@ -140,10 +140,11 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
 
     def __setstate__(self, state):
         state = dict(state)
-        if 'fiducial' in state:
-            fiducial = state.pop('fiducial')
-            if not hasattr(self, 'fiducial'):
-                self.fiducial = Cosmology.from_state(fiducial)
+        for name in ['fiducial']:
+            if name in state:
+                cosmo = state.pop(name)
+                if not hasattr(self, name):
+                    setattr(self, name, Cosmology.from_state(cosmo))
         #for name in list(state):
         #    if ('interpolator' in name) and name.endswith('_k'):
         #        k = state.pop(name)

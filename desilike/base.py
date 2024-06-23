@@ -1376,9 +1376,10 @@ class JittedCalculator(BaseCalculator):
                         self.calculators.append(calculator)
             self.calculators = sorted(self.calculators, key=lambda calc: self.pipeline.calculators.index(calc))
         self.requires = []
-        self.init.params = ParameterCollection()
+        self.init.params = self.pipeline.varied_params.deepcopy()
+        self.this_params = ParameterCollection()
         for calculator in self.calculators:
-            self.init.params.update(calculator.runtime_info.params)
+            self.this_params.update(calculator.runtime_info.params)
             for require in calculator.runtime_info.requires:
                 if require not in self.calculators and require not in self.requires:
                     self.requires.append(require)
@@ -1396,20 +1397,23 @@ class JittedCalculator(BaseCalculator):
             #print(requires)
             for require, fixed, inrequire in zip(self.requires, self.fixed, requires):
                 require.__setstate__({**fixed, **inrequire})
-            self.pipeline.input_values.update(params)  # for more_calculate, e.g. BaseLikelihood._solve
-            bak = self.pipeline.derived
+            derived_bak, values_bak = self.pipeline.derived, self.pipeline.input_values.copy()
+            self.pipeline.input_values.update(params)  # for more_calculate, e.g. BaseLikelihood.logprior
             self.pipeline.derived = derived = Samples()
             for calculator in self.calculators:
                 runtime_info = calculator.runtime_info
                 result = runtime_info.calculate(params, force=force)
                 derived.update(runtime_info.derived)
+            self.pipeline.input_values = values_bak
+            self.pipeline.input_values.update({name: value for name, value in params.items() if name in self.this_params})  # for more_calculate, e.g. BaseLikelihood._solve
             if self.more_calculate:
                 toret = self.more_calculate()
                 if toret is not None: result = toret
             if self.more_derived:
                 tmp = self.more_derived()
                 if tmp is not None: derived.update(tmp)
-            self.pipeline.derived = bak
+            self.pipeline.derived = derived_bak
+            self.pipeline.input_values = values_bak
             return result, derived
 
         self._calculate = jax.jit(_calculate)

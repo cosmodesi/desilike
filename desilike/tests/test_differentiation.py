@@ -582,6 +582,13 @@ def test_jit2():
     z = np.linspace(0.5, 1., 6)
     theories, likelihoods = [], []
     cosmo = Cosmoprimo()
+    #cosmo = DirectPowerSpectrumTemplate().cosmo
+    #cosmo.init.params['sigma8_m'] = {'derived': True, 'latex': '\sigma_8'}  # derive sigma_8
+    #cosmo.init.params['tau_reio'].update(fixed=True)
+    cosmo.init.params['omega_b'].update(fixed=False, prior={'dist': 'norm', 'loc': 0.02218, 'scale': (3.025e-7)**0.5})
+    #cosmo.init.params['omega_b'].update(fixed=False, prior=None)
+    #cosmo.init.update(engine='camb')
+
     for iz, zz in enumerate(z):
         template = DirectPowerSpectrumTemplate(cosmo=cosmo, z=zz)
         theory = FOLPSAXTracerPowerSpectrumMultipoles(template=template)
@@ -609,8 +616,8 @@ def test_jit2():
     import jax
     rng = np.random.RandomState(seed=42)
 
-    likelihood()
-    params = {param.name: param.ref.sample() for param in likelihood.varied_params if param.namespace}
+    #likelihood()
+    #params = {param.name: param.ref.sample() for param in likelihood.varied_params if param.namespace}
     #likelihood.runtime_info.pipeline._set_speed()
     #exit()
     #print(likelihood.runtime_info.pipeline.calculators)
@@ -618,12 +625,14 @@ def test_jit2():
     #index = [1 + iz * 6 + i for iz in range(len(z)) for i in range(3, 6)] + [-1]
     #index = [1 + iz * 7 + i for iz in range(len(z)) for i in range(3, 7)] + [-1]
     likelihood2 = jit(likelihood, index=theories)
-    likelihood2.runtime_info.pipeline._set_speed()
-    likelihood2()
+    #likelihood2 = jit(likelihood, index=[calculator for calculator in likelihood.runtime_info.pipeline.calculators if calculator.__class__.__name__.startswith('FOLPSAXPowerSpectrum')])
+
+    #likelihood2.runtime_info.pipeline._set_speed()
+    #likelihood2()
 
     import time
     niterations = 5
-
+    """
     t0 = time.time()
     for i in range(niterations):
         likelihood2({param.name: param.ref.sample() for param in likelihood.varied_params if param.namespace})
@@ -634,7 +643,15 @@ def test_jit2():
     for i in range(niterations):
         likelihood({param.name: param.ref.sample() for param in likelihood.varied_params if param.namespace})
     print('time nojit', (time.time() - t0) / niterations)
-    return
+    """
+    rng = np.random.RandomState(seed=42)
+    for i in range(niterations):
+        params = {param.name: param.ref.sample(random_state=rng) for param in likelihood.varied_params}
+        like1 = likelihood(params)
+        like2 = likelihood2(params)
+        print(like2, like1, like2 - like1)
+    exit()
+
     #print('TEST')
     t0 = time.time()
     for i in range(niterations):

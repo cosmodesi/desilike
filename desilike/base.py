@@ -1391,7 +1391,14 @@ class JittedCalculator(BaseCalculator):
         self.runtime_info.requires = self.requires
         self.fixed, self.varied = {}, []
         if self.requires:
+            # FIXME: classify varied / fixed in __getstate__
             self.fixed, self.varied = self.pipeline._classify_derived(calculators=self.requires, niterations=3, seed=42, with_derived=False)[-2:]
+            for irequire, require in enumerate(self.requires):
+                try:
+                    self.fixed[irequire] = require.__getstate__(varied=False, fixed=True)
+                    self.varied[irequire] = list(require.__getstate__(varied=True, fixed=False))
+                except TypeError:
+                    pass
 
         def _calculate(params, requires, force=True):
             #print(requires)

@@ -67,9 +67,9 @@ class BaseCompressionObservable(BaseCalculator):
     def calculate(self):
         self.flattheory = jnp.array([getattr(self.extractor, quantity) for quantity in self.quantities])
 
-    def __getstate__(self):
+    def __getstate__(self, varied=True, fixed=True):
         state = {}
-        for name in ['flatdata', 'covariance', 'flattheory', 'quantities']:
+        for name in (['flatdata', 'covariance', 'quantities'] if fixed else []) + (['flattheory'] if varied else []):
             state[name] = getattr(self, name)
         return state
 

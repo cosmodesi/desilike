@@ -1774,6 +1774,9 @@ class PyBirdTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMul
 class Namespace(object):
 
     def __init__(self, **kwargs):
+        self.update(**kwargs)
+
+    def update(self, **kwargs):
         self.__dict__.update(**kwargs)
 
 @jit
@@ -2013,7 +2016,7 @@ class FOLPSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFrom
 class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
 
     _default_options = dict(kernels='fk', rbao=104.)
-    _pt_attrs = ['jac', 'kap', 'muap', 'kt', 'table', 'table_now', 'scalars', 'scalars_now']
+    _pt_attrs = ['jac', 'kap', 'muap', 'table', 'table_now', 'scalars', 'scalars_now']
 
     def initialize(self, *args, mu=6, **kwargs):
         super(FOLPSAXPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
@@ -2048,13 +2051,14 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         table, table_now = self._get_non_linear(self.template.pk_dd, self.template.pknow_dd, **cosmo_params)
 
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        self.pt = Namespace(jac=jac, kap=kap, muap=muap, kt=table[0], table=table[1:26], table_now=table_now[1:26], scalars=table[26:], scalars_now=table_now[26:])
+        self.pt = Namespace(jac=jac, kap=kap, muap=muap, table=table[1:26], table_now=table_now[1:26], scalars=table[26:], scalars_now=table_now[26:])
+        self.kt = table[0]
         self.sigma8 = self.template.sigma8
         self.fsigma8 = self.template.f * self.sigma8
 
     def combine_bias_terms_poles(self, pars, nd=1e-4):
-        table = (self.pt.kt,) + tuple(self.pt.table) + tuple(self.pt.scalars)
-        table_now = (self.pt.kt,) + tuple(self.pt.table_now) + tuple(self.pt.scalars_now)
+        table = (self.kt,) + tuple(self.pt.table) + tuple(self.pt.scalars)
+        table_now = (self.kt,) + tuple(self.pt.table_now) + tuple(self.pt.scalars_now)
         pars = list(pars) + [1. / nd]  # add shot noise
         b1 = pars[0]
         # add co-evolution part
@@ -2074,20 +2078,22 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         #pkmu = self.pt.jac * get_rsd_pkmu(self.pt.kap, self.pt.muap, pars, table, table_now)
         #return self.to_poles(pkmu)
 
-    def __getstate__(self):
+    def __getstate__(self, varied=True, fixed=True):
         state = {}
-        for name in ['k', 'z', 'ells', 'wmu', 'sigma8', 'fsigma8']:
+        for name in (['k', 'z', 'ells', 'wmu', 'kt'] if fixed else []) + (['sigma8', 'fsigma8'] if varied else []):
             if hasattr(self, name):
                 state[name] = getattr(self, name)
-        for name in self._pt_attrs:
-            if hasattr(self.pt, name):
-                state[name] = getattr(self.pt, name)
+        if varied:
+            for name in self._pt_attrs:
+                if hasattr(self.pt, name):
+                    state[name] = getattr(self.pt, name)
         return state
 
     def __setstate__(self, state):
-        for name in ['k', 'z', 'ells', 'wmu', 'sigma8', 'fsigma8']:
+        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8']:
             if name in state: setattr(self, name, state.pop(name))
-        self.pt = Namespace(**state)
+        if not hasattr(self, 'pt'): self.pt = Namespace()
+        self.pt.update(**state)
 
     @classmethod
     def install(cls, installer):

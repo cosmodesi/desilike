@@ -381,9 +381,9 @@ class BaseLikelihood(BaseCalculator):
     def ndof(self):
         return self.size - self.nvaried
 
-    def __getstate__(self):
+    def __getstate__(self, varied=True, fixed=True):
         state = {}
-        for name in ['loglikelihood']:
+        for name in (['loglikelihood'] if varied else []):
             if hasattr(self, name): state[name] = getattr(self, name)
         return state
 
@@ -419,9 +419,9 @@ class BaseGaussianLikelihood(BaseLikelihood):
         self.flatdiff = self.flattheory - self.flatdata
         self.loglikelihood = -0.5 * chi2(self.flatdiff, self.precision)
 
-    def __getstate__(self):
+    def __getstate__(self, varied=True, fixed=True):
         state = {}
-        for name in ['flatdiff', 'flatdata', 'covariance', 'precision', 'transform', 'loglikelihood']:
+        for name in (['flatdata', 'covariance', 'precision', 'transform'] if fixed else []) + (['flatdiff', 'loglikelihood'] if varied else []):
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state

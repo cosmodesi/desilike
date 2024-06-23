@@ -1067,9 +1067,8 @@ class LPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMult
         lpt_rsd_fftw.interp1d = interp1d
 
         from velocileptors.LPT.lpt_rsd_fftw import LPT_RSD
-        self.pt = LPT_RSD(self.template.k, self.template.pk_dd, **self.options)
-        # print(self.template.f, self.k.shape, self.template.qpar, self.template.qper, self.template.k.shape, self.template.pk_dd.shape)
-        self.pt.make_pltable(self.template.f, kv=self.k, apar=self.template.qpar, aperp=self.template.qper, ngauss=len(self.mu))
+        self.pt = LPT_RSD(np.asarray(self.template.k), np.asarray(self.template.pk_dd), **self.options)
+        self.pt.make_pltable(np.asarray(self.template.f), kv=np.asarray(self.k), apar=np.asarray(self.template.qpar), aperp=np.asarray(self.template.qper), ngauss=len(self.mu))
         pktable = {0: self.pt.p0ktable, 2: self.pt.p2ktable, 4: self.pt.p4ktable}
         self.pktable = np.array([pktable[ell] for ell in self.ells])
         self.sigma8 = self.template.sigma8
@@ -1271,7 +1270,7 @@ class REPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMul
         #from velocileptors.EPT.ept_fullresum_fftw import REPT
         pk_dd, pknow_dd = self.template.pk_dd, self.template.pknow_dd
         if self.z.ndim: pk_dd, pknow_dd = pk_dd[..., 0], pknow_dd[..., 0]
-        self.pt = REPT(self.template.k, pk_dd, pnw=pknow_dd, kmin=self.k[0], kmax=self.k[-1], nk=200, **self.options)
+        self.pt = REPT(np.asarray(self.template.k), np.asarray(pk_dd), pnw=np.asarray(pknow_dd), kmin=self.k[0], kmax=self.k[-1], nk=200, **self.options)
         # print(self.template.f, self.k.shape, self.template.qpar, self.template.qper, self.template.k.shape, self.template.pk_dd.shape)
         pktable = {ell: [] for ell in [0, 2, 4]}
         self.sigma8 = self.template.sigma8
@@ -1281,17 +1280,18 @@ class REPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMul
         if cosmo is not None:
             Omega_m, h, fnu = cosmo['Omega_m'], cosmo['h'], cosmo['Omega_ncdm_tot'] / cosmo['Omega_m']
 
+        f0, qpar, qper = map(np.asarray, [self.template.f0, self.template.qpar, self.template.qper])
         if self.z.ndim:
             pcb, pcb_nw = [10**interpolate.interp1d(np.log10(self.template.k), np.log10(pk), kind='cubic', fill_value='extrapolate', axis=0, assume_sorted=True)(np.log10(self.pt.kv)) for pk in [self.template.pk_dd, self.template.pknow_dd]]
             for iz, z in enumerate(self.z):
                 Dz = self.sigma8[iz] / self.sigma8[0]
-                fk = self.template.f0[iz] * f_over_f0_EH(z, self.pt.kv, Omega_m, h, fnu)
-                pks = self.pt.compute_redshift_space_power_multipoles_tables(fk, apar=self.template.qpar[iz], aperp=self.template.qper[iz], ngauss=len(self.mu), pcb=pcb[..., iz], pcb_nw=pcb_nw[..., iz], Dz=Dz)[1:]
+                fk = f0[iz] * f_over_f0_EH(z, self.pt.kv, Omega_m, h, fnu)
+                pks = self.pt.compute_redshift_space_power_multipoles_tables(fk, apar=qpar[iz], aperp=qper[iz], ngauss=len(self.mu), pcb=pcb[..., iz], pcb_nw=pcb_nw[..., iz], Dz=Dz)[1:]
                 for ill, ell in enumerate(pktable): pktable[ell].append(pks[ill])
             pktable = {ell: np.concatenate([v[..., None] for v in value], axis=-1) for ell, value in pktable.items()}
         else:
-            fk = self.template.f0 * f_over_f0_EH(self.z, self.pt.kv, Omega_m, h, fnu)
-            pks = self.pt.compute_redshift_space_power_multipoles_tables(fk, apar=self.template.qpar, aperp=self.template.qper, ngauss=len(self.mu))[1:]
+            fk = f0 * f_over_f0_EH(self.z, self.pt.kv, Omega_m, h, fnu)
+            pks = self.pt.compute_redshift_space_power_multipoles_tables(fk, apar=qpar, aperp=qper, ngauss=len(self.mu))[1:]
             for ill, ell in enumerate(pktable): pktable[ell] = pks[ill]
         self.pktable = interpolate.interp1d(self.pt.kv, np.array([pktable[ell] for ell in self.ells]), kind='cubic', fill_value='extrapolate', axis=1, assume_sorted=True)(self.k)
 
@@ -1306,9 +1306,9 @@ class REPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMul
         if z is not None: pktable = pktable[..., list(self.z).index(z)]
         return tablevel_combine_bias_terms_poles(pktable, pars, nd=nd)
 
-    def __getstate__(self):
+    def __getstate__(self, varied=True, fixed=True):
         state = {}
-        for name in ['k', 'z', 'ells', 'pktable', 'sigma8', 'fsigma8']:
+        for name in (['k', 'z', 'ells'] if fixed else []) + (['pktable', 'sigma8', 'fsigma8'] if varied else []):
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state

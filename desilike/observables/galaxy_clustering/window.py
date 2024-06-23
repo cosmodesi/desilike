@@ -346,6 +346,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 # wmatrix.slice_x(sliceout=slice(0, len(xwout) // factorout * factorout), projsout=projout)
                 # wmatrix.rebin_x(factorout=factorout, projsout=projout)
                 xwout = wmatrix.xout[iout]
+                #print(ellout, factorout, xwout, kk, lim)
                 if lim is not None:
                     istart = np.flatnonzero(xwout >= lo)[0]
                     ksize = np.flatnonzero(xwout <= hi)[-1] - istart + 1

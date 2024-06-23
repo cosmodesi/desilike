@@ -17,7 +17,7 @@ def test_power_spectrum():
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5, fiducial=DESI())
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-
+    """
     edges = np.linspace(0., 0.4, 81)
     data = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
@@ -32,16 +32,18 @@ def test_power_spectrum():
     assert np.allclose(likelihood.covariance, observable.covariance)
     #print(len(observable.flatdata))
     observable.plot(show=True)
-
+    """
     from pypower import PowerSpectrumMultipoles
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.02], 2: [0.05, 0.2, 0.01]},
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
                                                          data='../../tests/_pk/data.npy',
                                                          covariance='../../tests/_pk/mock_*.npy',
                                                          #data=PowerSpectrumMultipoles.load('../../tests/_pk/data.npy'),
                                                          #covariance=[PowerSpectrumMultipoles.load(fn) for fn in glob.glob('../../tests/_pk/mock_*.npy')],
+                                                         wmatrix='../../tests/_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
     print(likelihood())
+    #exit()
     assert np.allclose(likelihood.covariance, observable.covariance)
     #print(len(observable.flatdata))
     observable.plot(show=True)
@@ -1105,12 +1107,12 @@ if __name__ == '__main__':
 
     # test_systematic_templates()
     # test_bao()
-    # test_power_spectrum()
+    test_power_spectrum()
     # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    test_compression()
+    # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

@@ -79,6 +79,8 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             self.wmatrix.init.update(ells=self.ells)
         if self.kedges is not None:  # set by data
             self.wmatrix.init.update(kedges=self.kedges)
+        #if self.k is not None:  # set by data
+        #    self.wmatrix.init.update(k=self.k)
         if klim is not None:
             self.wmatrix.init.update(klim=klim)
         self.wmatrix.init.update(kwargs)
@@ -100,7 +102,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             self.flatdata = np.concatenate([data[ells.index(ell)][kmasklim[ell]] for ell in self.ells])
         if isinstance(self.covariance, ObservableCovariance):
             if input_kedges: x, method = [(edges[:-1] + edges[1:]) / 2. for edges in self.kedges], 'mid'
-            else: x, method = list(self.k),'mean'
+            else: x, method = list(self.k), 'mean'
             self.nobs = self.covariance.nobs
             self.covariance = self.covariance.xmatch(x=x, projs=list(self.ells), method=method).view(projs=list(self.ells))
         self.transform = transform

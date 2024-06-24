@@ -71,8 +71,8 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             self.wmatrix.init.update(ells=self.ells)
         if self.sedges is not None:  # set by data
             self.wmatrix.init.update(sedges=self.sedges)
-        #if self.s is not None:  # set by data
-        #    self.wmatrix.init.update(s=self.s)
+        if self.s is not None:  # set by data
+            self.wmatrix.init.update(s=self.s)
         if slim is not None:
             self.wmatrix.init.update(slim=slim)
         self.wmatrix.init.update(kwargs)

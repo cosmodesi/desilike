@@ -79,8 +79,8 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             self.wmatrix.init.update(ells=self.ells)
         if self.kedges is not None:  # set by data
             self.wmatrix.init.update(kedges=self.kedges)
-        #if self.k is not None:  # set by data
-        #    self.wmatrix.init.update(k=self.k)
+        if self.k is not None:  # set by data
+            self.wmatrix.init.update(k=self.k)
         if klim is not None:
             self.wmatrix.init.update(klim=klim)
         self.wmatrix.init.update(kwargs)

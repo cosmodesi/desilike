@@ -73,7 +73,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             self.wmatrix.init.update(sedges=self.sedges)
         if self.s is not None:  # set by data
             self.wmatrix.init.update(s=self.s)
-        if slim is not None:
+        elif slim is not None:  # FIXME: we do not want limits to apply to s (but mid-s)
             self.wmatrix.init.update(slim=slim)
         self.wmatrix.init.update(kwargs)
         if self.flatdata is None:

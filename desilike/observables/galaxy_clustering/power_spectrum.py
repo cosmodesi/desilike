@@ -81,7 +81,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             self.wmatrix.init.update(kedges=self.kedges)
         if self.k is not None:  # set by data
             self.wmatrix.init.update(k=self.k)
-        if klim is not None:
+        elif klim is not None:  # FIXME: we do not want limits to apply to k (but mid-k)
             self.wmatrix.init.update(klim=klim)
         self.wmatrix.init.update(kwargs)
         self.wmatrix.init.setdefault('shotnoise', self.shotnoise)

@@ -606,14 +606,26 @@ class ObservableCovariance(BaseClass):
         cov = np.cov(values, rowvar=False, ddof=1)
         return cls(cov, observables=observables, nobs=nobs)
 
-    def hartlap2017_factor(self):
-        """Return Hartlap factor (:math:`< 1`), to apply to the precision matrix."""
+    def hartlap2007_factor(self):
+        """
+        Return Hartlap factor (:math:`< 1`), to apply to the precision matrix.
+
+        Reference
+        ---------
+        https://arxiv.org/abs/astro-ph/0608064
+        """
         if self.nobs is None: return 1.
         nbins = self.shape[0]
         return (self.nobs - nbins - 2.) / (self.nobs - 1.)
 
     def percival2014_factor(self, nparams):
-        """Return Percival 2014 factor, to apply to the parameter covariance matrix."""
+        """
+        Return Percival 2014 factor, to apply to the parameter covariance matrix.
+
+        Reference
+        ---------
+        https://arxiv.org/abs/1312.4841
+        """
         if self.nobs is None: return 1.
         nbins = self.shape[0]
         A = 2. / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)

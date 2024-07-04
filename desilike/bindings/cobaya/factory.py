@@ -428,6 +428,8 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
                 #print('COMPUTE COSMO!') #, input_params, _input_params)
             #else:
                 #print('SKIP COSMO!')
+        else:
+            ilike = (getattr(self, '_ilike', -1) + 1) % self.cache_size  # set at a new position
         loglikelihood, derived = self.likes[ilike]({name: value for name, value in params_values.items() if name in self._nuisance_params}, return_derived=True)
         self._ilike = ilike
         if _derived is not None:

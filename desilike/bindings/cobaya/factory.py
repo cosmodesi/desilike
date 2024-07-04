@@ -334,7 +334,7 @@ def desilike_to_cobaya_params(params, engine=None):
     for param in params:
         if param.solved: continue
         if param.derived and (not param.depends) and (param.ndim > 0): continue
-        if param.fixed and not param.derived:
+        if param.fixed and ((not param.derived) or (param.derived in param._allowed_solved)):
             toret[param.name] = param.value
         else:
             di = {'latex': param.latex()}
@@ -357,25 +357,27 @@ def desilike_to_cobaya_params(params, engine=None):
     return toret
 
 
-def cobaya_params(like):
+def cobaya_params(like, with_cosmo=False):
     cosmo_params, nuisance_params = get_likelihood_params(like, derived=0)
-    return desilike_to_cobaya_params(nuisance_params)
+    return desilike_to_cobaya_params((cosmo_params if with_cosmo else []) + nuisance_params)
 
 
-def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_cobaya=None, params=None):
-    """
+def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_cobaya=None, cosmo='cobaya', params=None):
+    r"""
     Pass ``params=True`` for dynamic bindings (when no likelihood *.yaml parameter file is written):
 
     >>> CobayaBAOLikelihood = CobayaLikelihoodFactory(BAOLikelihood, params=True)
 
+    Pass ``'cosmo == 'desilike'`` to *not* use cobaya's cosmo theory.
     """
     if name_like is None:
         name_like = cls.__name__
     if kw_like is None:
         kw_like = {}
+    with_cosmo = cosmo != 'cobaya'
     if params is not None:
         if params is True:
-            params = cobaya_params(cls(**kw_like))
+            params = cobaya_params(cls(**kw_like), with_cosmo=with_cosmo)
         else:
             params = desilike_to_cobaya_params(ParameterCollection(params))
     kw_cobaya = dict(kw_cobaya or {})
@@ -392,6 +394,9 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
         for like in self.likes:
             #like.mpicomm = mpi.COMM_SELF  # no likelihood-level MPI-parallelization
             self._cosmo_params, self._nuisance_params = get_likelihood_params(like)
+            if with_cosmo:  # cosmo as nuisance parameters
+                self._nuisance_params = self._cosmo_params + self._nuisance_params
+                self._cosmo_params = ParameterCollection()
             #for param in like.varied_params: param.update(prior=None)  # remove prior on varied parameters (already taken care of by cobaya)
         """
         import inspect
@@ -405,6 +410,7 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
             requires = like.runtime_info.pipeline.get_cosmo_requires()
         self._fiducial = requires.get('fiducial', {})
         self._requires = CobayaEngine.get_requires(requires)
+        if with_cosmo: self._requires = {}
         return self._requires
 
     def logp(self, _derived=None, **params_values):
@@ -431,6 +437,7 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
         else:
             ilike = (getattr(self, '_ilike', -1) + 1) % self.cache_size  # set at a new position
         loglikelihood, derived = self.likes[ilike]({name: value for name, value in params_values.items() if name in self._nuisance_params}, return_derived=True)
+
         self._ilike = ilike
         if _derived is not None:
             for value in derived:

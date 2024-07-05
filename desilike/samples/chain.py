@@ -185,6 +185,22 @@ class Chain(Samples):
         """Return total weight, as the product of :attr:`aweight` and :attr:`fweight`."""
         return ParameterArray(self.aweight * self.fweight, Parameter(self._weight, derived=True, latex=utils.outputs_to_latex(self._weight)))
 
+    def set_derived(self, basename, array, **kwargs):
+        """
+        Set derived parameter.
+
+        Parameters
+        ----------
+        array : np.array
+            Numpy array.
+
+        kwargs : dict
+            Arguments for :class:`Parameter`.
+        """
+        kwargs['basename'] = basename
+        kwargs.setdefault('derived', True)
+        self.set(ParameterArray(array, Parameter(kwargs)))
+
     def remove_burnin(self, burnin=0):
         """
         Return new samples with burn-in removed.

@@ -32,6 +32,7 @@ def test_misc():
     pb.update(prior=ParameterPrior(dist='norm', loc=1.))
     pb = Parameter.from_state(pb.__getstate__())
     chain['logposterior'] = np.zeros(chain.shape, dtype='f8')
+    chain.set_derived('derived.a', chain['like.a'] * 2.)
     for ff in ['chain.npy', 'chain.npz']:
         fn = os.path.join(chain_dir, ff)
         chain.save(fn)
@@ -203,7 +204,6 @@ if __name__ == '__main__':
     test_misc()
     test_plot()
     test_bcast()
-    test_misc()
     test_stats()
     test_solved()
     # test_cholesky()

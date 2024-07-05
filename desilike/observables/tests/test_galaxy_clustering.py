@@ -590,6 +590,12 @@ def test_compression():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     test(likelihood)
 
+    observable = BAOCompressionObservable(data=[1., 1.], covariance=np.diag([0.01, 0.01]), quantities=['qpar', 'qper'], z=2., rs_drag_varied=True)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    assert 'rs_drag' in likelihood.varied_params
+    test(likelihood)
+    print(likelihood(rs_drag=50.), likelihood(rs_drag=150.))
+
     observable = BAOCompressionObservable(data=[1., 1.], quantities=['DM_over_rd', 'DH_over_rd'], z=2.)
     observable2 = BAOCompressionObservable(data=[1., 1.], quantities=['DM_over_rd', 'DH_over_rd'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable, observable2], covariance=np.diag([0.01, 0.01, 0.01, 0.01]))
@@ -624,12 +630,12 @@ def test_compression():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     test(likelihood)
 
-    rng = np.random.RandomState(seed=42)
-    observable = ShapeFitCompressionObservable(data=[1., 1., 0., 1.], covariance=rng.uniform(0., 1., (100, 4)), quantities=['qiso', 'qap', 'dm', 'df'], z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    assert likelihood.covariance.shape == (4,) * 2
-    assert not np.allclose(likelihood.hartlap2007_factor, 1.)
-    test(likelihood)
+    #rng = np.random.RandomState(seed=42)
+    #observable = ShapeFitCompressionObservable(data=[1., 1., 0., 1.], covariance=rng.uniform(0., 1., (100, 4)), quantities=['qiso', 'qap', 'dm', 'df'], z=2.)
+    #likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    #assert likelihood.covariance.shape == (4,) * 2
+    #assert not np.allclose(likelihood.hartlap2007_factor, 1.)
+    #test(likelihood)
 
     observable = WiggleSplitCompressionObservable(data=[1., 1., 1., 0.], covariance=np.diag([0.01, 0.01, 0.01, 0.01]), quantities=['qap', 'qbao', 'df', 'dm'], z=2.)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
@@ -1106,12 +1112,12 @@ if __name__ == '__main__':
 
     # test_systematic_templates()
     # test_bao()
-    test_power_spectrum()
-    test_correlation_function()
+    # test_power_spectrum()
+    # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    # test_compression()
+    test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()

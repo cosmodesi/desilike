@@ -274,13 +274,19 @@ class BAOExtractor(BasePowerSpectrumExtractor):
     config_fn = 'power_template.yaml'
     conflicts = [('DM_over_rd', 'qper'), ('DH_over_rd', 'qper'), ('DM_over_DH', 'qap'), ('DV_over_rd', 'qiso')]
 
-    def initialize(self, z=1., eta=1. / 3., cosmo=None, fiducial='DESI'):
+    @staticmethod
+    def _params(params, rs_drag_varied=False):
+        if rs_drag_varied:
+            params['rs_drag'] = dict(value=100., prior=dict(limits=[10., 1000.]), ref=dict(dist='norm', loc=100., scale=10.))
+        return params
+
+    def initialize(self, z=1., eta=1. / 3., cosmo=None, fiducial='DESI', rs_drag_varied=False):
         self.z = np.asarray(z, dtype='f8')
         self.eta = float(eta)
         self.fiducial = get_cosmo(fiducial)
         self.cosmo_requires = {}
         self.cosmo = cosmo
-        params = self.init.params.select(derived=True)
+        params = self.init.params.select(derived=True) + self.init.params.select(basename=['rs_drag'])
         if is_external_cosmo(self.cosmo):
             self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
             self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
@@ -291,13 +297,13 @@ class BAOExtractor(BasePowerSpectrumExtractor):
         if self.fiducial is not None:
             self._set_base(fiducial=True)
 
-    def calculate(self):
-        self._set_base()
+    def calculate(self, rs_drag=None):
+        self._set_base(rs_drag=rs_drag)
 
-    def _set_base(self, fiducial=False):
+    def _set_base(self, fiducial=False, rs_drag=None):
         cosmo = self.fiducial if fiducial else self.cosmo
         state = {}
-        state['rd'] = cosmo.rs_drag
+        state['rd'] = cosmo.rs_drag if rs_drag is None else rs_drag
         state['DH'] = (constants.c / 1e3) / (100. * cosmo.efunc(self.z))
         state['DM'] = cosmo.comoving_angular_distance(self.z)
         state['DV'] = state['DH']**self.eta * state['DM']**(1. - self.eta) * self.z**(1. / 3.)
@@ -401,9 +407,9 @@ class BAOPhaseShiftExtractor(BAOExtractor):
     """
     conflicts = BAOExtractor.conflicts + [('baoshift',)]
 
-    def _set_base(self, fiducial=False):
+    def _set_base(self, fiducial=False, **kwargs):
         cosmo = self.fiducial if fiducial else self.cosmo
-        super(BAOPhaseShiftExtractor, self)._set_base(fiducial=fiducial)
+        super(BAOPhaseShiftExtractor, self)._set_base(fiducial=fiducial, **kwargs)
         setattr(self, 'N_eff' + ('_fid' if fiducial else ''), cosmo.N_eff)
 
     def get(self):

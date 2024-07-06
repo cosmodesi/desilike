@@ -137,6 +137,7 @@ class BaseLikelihood(BaseCalculator):
     def _solve(self):
         # Analytic marginalization, to be called, if desired, in get()
         pipeline = self.runtime_info.pipeline
+        self.logprior = pipeline.params.prior(**pipeline.input_values)  # does not include solved params
         all_params = pipeline.params
         likelihoods = getattr(self, 'likelihoods', [self])
 

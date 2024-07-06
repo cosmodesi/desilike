@@ -150,7 +150,6 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         points = Samples(values[mask_finite_prior].T, params=self.varied_params)
         results = self._vlikelihood(points.to_dict())
         #print(self.mpicomm.size, self.mpicomm.rank)
-        #exit()
 
         logposterior, raise_error = None, None
         if self.mpicomm.rank == 0:
@@ -176,6 +175,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                         update_derived = False
                     if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
                         warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0])))
+
             if update_derived:
                 if self.derived is None:
                     self.derived = [points, derived]

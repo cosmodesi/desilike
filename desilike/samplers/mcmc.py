@@ -323,7 +323,7 @@ def _format_blocks(blocks, params):
     if params_in_blocks != set(params):
         raise ValueError('Missing sampled parameters in provided blocks: {}'.format(set(params) - params_in_blocks))
     argsort = np.argsort(oversample_factors)
-    return [blocks[i] for i in argsort], [oversample_factors[i] for i in argsort]
+    return [blocks[i] for i in argsort], np.array([oversample_factors[i] for i in argsort])
 
 
 class MCMCSampler(BaseBatchPosteriorSampler):

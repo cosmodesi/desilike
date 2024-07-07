@@ -277,7 +277,7 @@ class BAOExtractor(BasePowerSpectrumExtractor):
     @staticmethod
     def _params(params, rs_drag_varied=False):
         if rs_drag_varied:
-            params['rs_drag'] = dict(value=100., prior=dict(limits=[10., 1000.]), ref=dict(dist='norm', loc=100., scale=10.))
+            params['rs_drag'] = dict(value=100., prior=dict(limits=[10., 1000.]), ref=dict(dist='norm', loc=100., scale=10.), latex=r'r_\mathrm{d}')
         return params
 
     def initialize(self, z=1., eta=1. / 3., cosmo=None, fiducial='DESI', rs_drag_varied=False):

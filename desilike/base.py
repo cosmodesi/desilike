@@ -498,7 +498,6 @@ class BasePipeline(BaseClass):
                 jitted.runtime_info.initialize()
                 self.calculators = [calculator for calculator in self.calculators if calculator not in jitted.calculators] + [jitted]
                 if jitted.more_calculate is not None: self.more_calculate = None
-
         names = list(params.keys())
         self_params = self.params
         for name in names:

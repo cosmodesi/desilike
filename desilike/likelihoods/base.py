@@ -92,9 +92,19 @@ class BaseLikelihood(BaseCalculator):
 
         if solved_params:
             solved_params = ParameterCollection(solved_params)
-
             from desilike.fisher import Fisher
-            solve_likelihoods = [likelihood for likelihood in likelihoods if any(param in solved_params for param in likelihood.all_params)]
+
+            solve_likelihoods = []
+            for likelihood in likelihoods:
+
+                def callback(calculator):
+                    if any(param in solved_params for param in calculator.init.params):
+                        return True
+                    for require in calculator.runtime_info.requires:
+                        if callback(require): return True
+                    return False
+
+                if callback(likelihood): solve_likelihoods.append(likelihood)
 
             with warnings.catch_warnings():
                 warnings.filterwarnings('ignore', message='.*Derived parameter.*')
@@ -156,6 +166,7 @@ class BaseLikelihood(BaseCalculator):
 
         indices_marg = np.array(indices_marg)
         x, dx, solve_likelihoods, derivs = [], [], [], None
+
         if solved_params:
             solved_params = ParameterCollection(solved_params)
             solve_likelihoods = []

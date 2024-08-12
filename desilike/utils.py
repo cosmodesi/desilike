@@ -630,7 +630,7 @@ def weights_leggauss(nx, sym=False):
     return x, wx
 
 
-def weights_mu(mu, method='leggauss', sym=True):
+def weights_mu(mu, method='leggauss'):
     if method == 'trapz':
         if np.ndim(mu) == 0:
             mu = np.linspace(0., 1., mu)
@@ -639,7 +639,7 @@ def weights_mu(mu, method='leggauss', sym=True):
         return mu, weights_trapz(mu) / (mu[-1] - mu[0])
     if method == 'leggauss':
         if np.ndim(mu) == 0:
-            return weights_leggauss(mu, sym=sym)
+            return weights_leggauss(mu, sym=True)
         raise ValueError('gauss integration does not array of mus')
 
 

@@ -1378,7 +1378,7 @@ class DirectWiggleSplitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         BasePowerSpectrumExtractor._set_base(self, with_now=True)
         k = self.pk_dd_interpolator.k
         wiggles = _interp(self.k / qbao, k, self.pk_dd_interpolator(k, z=self.z) - self.pknow_dd_interpolator(k, z=self.z))
-        wiggles = _bcast_shape(jnp.exp(- (self.k * sigmabao)**2), wiggles.shape, axis=0)
+        wiggles *= _bcast_shape(jnp.exp(- (self.k * sigmabao)**2), wiggles.shape, axis=0)
         self.pknow_dd = self.pknow_dd_interpolator(self.k, z=self.z)
         self.pk_dd = self.pknow_dd + wiggles
         if self.only_now:  # only used if we want to take wiggles out of our model (e.g. for BAO)

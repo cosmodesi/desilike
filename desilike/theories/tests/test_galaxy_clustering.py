@@ -19,19 +19,22 @@ def test_integ():
 
 def test_templates():
 
+    from desilike.theories import Cosmoprimo
     from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate
 
-    template = ShapeFitPowerSpectrumTemplate(apmode='qisoqap')
+    cosmo = Cosmoprimo()
+    cosmo.init.params['rs_drag'] = {'derived': True}
+    template = ShapeFitPowerSpectrumTemplate(cosmo=cosmo, apmode='qisoqap')
     template.init.params['qpar'] = template.init.params['qper'] = {'derived': True}
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
     poles, derived = theory(qiso=1.1, return_derived=True)
     derived['qpar'], derived['qper']
 
-    template = DirectPowerSpectrumTemplate()
+    template = DirectPowerSpectrumTemplate(cosmo=cosmo)
     template.init.params['qpar'] = template.init.params['qper'] = {'derived': True}
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
     poles, derived = theory(h=0.7, return_derived=True)
-    derived['qpar'], derived['qper']
+    derived['qpar'], derived['qper'], derived['rs_drag']
 
     from cosmoprimo import PowerSpectrumInterpolator1D, PowerSpectrumInterpolator2D
     from desilike.theories.galaxy_clustering.power_template import integrate_sigma_r2, kernel_gauss2, kernel_gauss2_deriv, kernel_tophat2, kernel_tophat2_deriv

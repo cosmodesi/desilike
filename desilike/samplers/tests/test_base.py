@@ -603,7 +603,7 @@ def test_cobaya_mcmc():
 if __name__ == '__main__':
 
     setup_logging()
-    test_samplers()
+    #test_samplers()
     #test_nautilus()
     #test_fixed()
     #test_importance()
@@ -612,5 +612,5 @@ if __name__ == '__main__':
     #test_hmc()
     #test_nested()
     #test_marg()
-    #test_bao_hmc()
+    test_bao_hmc()
     #test_cobaya_mcmc()

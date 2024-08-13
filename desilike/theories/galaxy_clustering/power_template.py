@@ -75,7 +75,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
         self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=apmode, eta=eta, cosmo=cosmo)
         ap_params = ParameterCollection()
         for param in list(self.init.params):
-            if param.basename in ['qpar', 'qper', 'qap', 'qiso', 'DM', 'DH', 'DM_over_rd', 'DH_over_rd', 'DH_over_DM', 'DV_over_rd']:
+            if param.basename in ['qpar', 'qper', 'qap', 'qiso'] + (['DM', 'DH', 'DH_over_DM', 'DV'] if apmode == 'geometry' else []):
                 ap_params.set(param)
                 del self.init.params[param]
         self.apeffect.init.params = ap_params

@@ -266,6 +266,7 @@ class APEffect(BaseCalculator):
         - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
         - 'geometry': scaling parameters computed from the ratio of ``cosmo`` to ``fiducial`` cosmology distances
         - 'bao': scaling parameters computed from the ratio of ``cosmo`` to ``fiducial`` cosmology distances, normalized by the :math:`r_{\mathrm{drag}}` coordinates.
+        TODO: 'bao' not used anywhere? best to remove it.
 
     eta : float, default=1. / 3.
         Relation between 'qpar', 'qper' and 'qiso', 'qap' parameters:

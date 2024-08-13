@@ -75,7 +75,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
         self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode=apmode, eta=eta, cosmo=cosmo)
         ap_params = ParameterCollection()
         for param in list(self.init.params):
-            if param in self.apeffect.init.params:
+            if param.basename in ['qpar', 'qper', 'qap', 'qiso', 'DM', 'DH', 'DM_over_rd', 'DH_over_rd', 'DH_over_DM', 'DV_over_rd']:
                 ap_params.set(param)
                 del self.init.params[param]
         self.apeffect.init.params = ap_params
@@ -215,7 +215,7 @@ class DirectPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     """
     def initialize(self, *args, cosmo=None, **kwargs):
         engine = kwargs.pop('engine', 'class')
-        super(DirectPowerSpectrumTemplate, self).initialize(*args, **kwargs)
+        super(DirectPowerSpectrumTemplate, self).initialize(*args, apmode='geometry', **kwargs)
         self.cosmo_requires = {}
         self.cosmo = cosmo
         # keep only derived parameters, others are transferred to Cosmoprimo
@@ -230,7 +230,7 @@ class DirectPowerSpectrumTemplate(BasePowerSpectrumTemplate):
             self.cosmo.init.params = [param for param in self.params if param not in params]
         self.init.params = params
         # Alcock-Paczynski effect, that is known given the cosmo and fiducial
-        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, cosmo=self.cosmo, mode='geometry').runtime_info.initialize()
+        self.apeffect.init.update(cosmo=self.cosmo)
         if is_external_cosmo(self.cosmo):
             # update cosmo_requires with background quantities
             self.cosmo_requires.update(self.apeffect.cosmo_requires)

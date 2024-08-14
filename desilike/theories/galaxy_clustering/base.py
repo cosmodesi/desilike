@@ -279,22 +279,6 @@ class APEffect(BaseCalculator):
     """
     config_fn = 'base.yaml'
 
-    @staticmethod
-    def _params(params, mode='geometry'):
-        if mode == 'qiso':
-            varied = ['qiso']
-        elif mode == 'qap':
-            varied = ['qap']
-        elif mode == 'qisoqap':
-            varied = ['qiso', 'qap']
-        elif mode == 'qparqper':
-            varied = ['qpar', 'qper']
-        elif mode in ['geometry', 'bao']:
-            varied = []
-        else:
-            raise ValueError('unknown mode {}; it must be one of ["qiso", "qap", "qisoqap", "qparqper", "geometry", "bao"]'.format(mode))
-        return params.select(basename=varied)
-
     def initialize(self, z=1., cosmo=None, fiducial='DESI', mode='geometry', eta=1. / 3.):
         self.z = np.asarray(z)
         if fiducial is None:
@@ -306,6 +290,19 @@ class APEffect(BaseCalculator):
         self.mode = mode
         self.cosmo = cosmo
         self.cosmo_requires = {}
+        if self.mode == 'qiso':
+            varied = ['qiso']
+        elif self.mode == 'qap':
+            varied = ['qap']
+        elif self.mode == 'qisoqap':
+            varied = ['qiso', 'qap']
+        elif self.mode == 'qparqper':
+            varied = ['qpar', 'qper']
+        elif self.mode in ['geometry', 'bao']:
+            varied = []
+        else:
+            raise ValueError('unknown mode {}; it must be one of ["qiso", "qap", "qisoqap", "qparqper", "geometry", "bao"]'.format(self.mode))
+        self.init.params = self.init.params.select(basename=varied) + self.init.params.select(derived=True)
         if self.mode in ['geometry', 'bao']:
             if is_external_cosmo(cosmo):
                 self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}

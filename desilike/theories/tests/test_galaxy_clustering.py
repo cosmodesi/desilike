@@ -19,8 +19,6 @@ def test_integ():
 
 def test_templates():
 
-    from matplotlib import pyplot as plt
-
     from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerCorrelationFunctionMultipoles, BAOPhaseShiftPowerSpectrumTemplate
     template = BAOPhaseShiftPowerSpectrumTemplate()
     theory = DampedBAOWigglesTracerCorrelationFunctionMultipoles(template=template)

@@ -384,7 +384,6 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
 
     def initialize(self):
         """Prepare any computation, importing any necessary code, files, etc."""
-
         _kw_cobaya = {name: getattr(self, name, value) for name, value in kw_cobaya.items()}
         self.cache_size = 2
         self.likes = [cls(**{**kw_like, **_kw_cobaya}) for i in range(self.cache_size)]

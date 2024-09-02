@@ -565,13 +565,12 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
             params = set()
 
             def callback(calculator, params):
-                params |= set(calculator.init.params)
+                params |= set(calculator.runtime_info.params.names())
                 for require in calculator.runtime_info.requires:
                     callback(require, params)
 
+            #for obs in self.observables: params |= set(obs.all_params.names())  # wrong, this will reinitialize calculators once more, which will result in unreferenced calculators if created at initialize() step in the current pipeline
             for obs in self.observables: callback(obs, params)
-            #for obs in self.observables: params |= set(obs.all_params.names())
-
             params = [param for param in params if param in varied_params]
             nparams = len(params)
             self.percival2014_factor = (1 + B * (nbins - nparams)) / (1 + A + B * (nparams + 1))

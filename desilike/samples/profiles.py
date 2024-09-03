@@ -611,7 +611,7 @@ class Profiles(BaseClass):
         attrs = [name for name in new._attrs if name in new and name in concatenable_attrs]
         for other in others:
             if [name for name in other._attrs if name in other and name in concatenable_attrs] != attrs:
-                raise ValueError('Cannot concatenate two profiles if both do not have same attributes.')
+                raise ValueError('Cannot concatenate two profiles if they do not have same attributes.')
         for name in attrs:
             setattr(new, name, new._attrs[name].concatenate(*[other.get(name) for other in others], **kwargs))
         notconcatenable_attrs = [attr for attr in new._attrs.keys() if attr not in concatenable_attrs]

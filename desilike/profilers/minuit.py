@@ -93,7 +93,6 @@ class MinuitProfiler(BaseProfiler):
             minuit.limits[str(param)] = tuple(None if np.isinf(lim) else lim for lim in param.prior.limits)
             if param.ref.is_proper():
                 minuit.errors[str(param)] = param.proposal
-
         return minuit
 
     def maximize(self, *args, **kwargs):

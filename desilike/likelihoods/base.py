@@ -299,7 +299,6 @@ class BaseLikelihood(BaseCalculator):
         derived = pipeline.derived
         sum_loglikelihood = jnp.zeros(len(derivs) if solved_params and derived is not None else (), dtype='f8')
         sum_logprior = jnp.zeros((), dtype='f8')
-
         for param, xx in zip(solved_params, x):
             sum_logprior += param.prior(xx)
             # hack to run faster than calling param.prior --- saving ~ 0.0005 s
@@ -367,7 +366,7 @@ class BaseLikelihood(BaseCalculator):
         return SumLikelihood(likelihoods=likelihoods)
 
     def __add__(self, other):
-        """Sum likelihoods- ``self`` and ``other``: return :class:`SumLikelihood` instance."""
+        """Sum likelihoods ``self`` and ``other``: return :class:`SumLikelihood` instance."""
         return self.sum(self, other)
 
     def __radd__(self, other):

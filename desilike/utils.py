@@ -199,7 +199,7 @@ class LoggingContext(object):
     """
     Class to locally update logging level:
 
-    >>> with LoggingContext('warning') as mem:
+    >>> with LoggingContext('warning') as log:
             ...
             # Logging level is warning
             logger = logging.getLogger('Logger')

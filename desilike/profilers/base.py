@@ -10,7 +10,7 @@ from desilike.utils import BaseClass, expand_dict, TaskManager
 from desilike.samples import load_source
 from desilike.samples.profiles import Profiles, ParameterBestFit, ParameterGrid, ParameterProfiles
 from desilike.parameter import ParameterPriorError, Samples, ParameterCollection, is_parameter_sequence
-from desilike.jax import jit
+from desilike.jax import jit, cond, numpy_jax
 from desilike.jax import numpy as jnp
 
 
@@ -82,7 +82,7 @@ def _iterate_over_params(self, params, method, chi2=None, **kwargs):
         start = self._get_start()
     else:
         argmax = self.profiles.bestfit.logposterior.argmax()
-        start = self._params_backward_transform([self.profiles.bestfit[param][argmax] for param in self.varied_params])
+        start = self._params_backward_transform(np.array([self.profiles.bestfit[param][argmax] for param in self.varied_params]))
     list_profiles = [None] * nparams
     mpicomm_bak = self.mpicomm
     with TaskManager(nprocs_per_task=nprocs_per_param, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
@@ -183,7 +183,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             self._params_transform_scale = np.diag(covariance)**0.5
 
             def _params_forward_transform(values):
-                return jnp.asarray(values) * self._params_transform_scale + self._params_transform_loc
+                return values * self._params_transform_scale + self._params_transform_loc
 
             def _params_backward_transform(values):
                 return (values - self._params_transform_loc) / self._params_transform_scale
@@ -202,10 +202,10 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             self._params_transform_scale = np.ones(len(self.transformed_params), dtype='f8')
 
             def _params_forward_transform(values):
-                return jnp.asarray(values)
+                return values
 
             def _params_backward_transform(values):
-                return jnp.asarray(values)
+                return values
 
             self.transformed_params = self.transformed_params.deepcopy()
 
@@ -215,25 +215,37 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         self.save_fn = save_fn
 
     def chi2(self, values):
+        jnp = numpy_jax(values[0])
+        values = jnp.asarray(values)
         values = self._params_forward_transform(values)
-        points = {param.name: value for param, value in zip(self.varied_params, values)}
-        raise_error = None
-        logposterior = -np.inf
-        try:
-            logposterior = self.likelihood(points)
-        except Exception as exc:
-            import traceback
-            error = (exc, traceback.format_exc())
-            if isinstance(error[0], self.likelihood.catch_errors):
-                self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(repr(error[0]),
-                                points, error[1]))
-            else:
-                raise_error = error
-            if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
-                warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0])))
-            if raise_error:
-                raise PipelineError('Error "{}" occured with stack trace:\n{}'.format(*raise_error))
-        return -2. * logposterior
+
+        def compute_logprior(values):
+            toret = 0.
+            for param, value in zip(self.varied_params, values):
+                toret += param.prior(value)
+            return toret
+
+        def compute_logposterior(values):
+            points = {param.name: value for param, value in zip(self.varied_params, values)}
+            raise_error = None
+            logposterior = -np.inf
+            try:
+                logposterior = self.likelihood(points)
+            except Exception as exc:
+                import traceback
+                error = (exc, traceback.format_exc())
+                if isinstance(error[0], self.likelihood.catch_errors):
+                    self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(repr(error[0]),
+                                    points, error[1]))
+                else:
+                    raise_error = error
+                if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
+                    warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0])))
+                if raise_error:
+                    raise PipelineError('Error "{}" occured with stack trace:\n{}'.format(*raise_error))
+            return -2. * logposterior
+
+        return cond(compute_logprior(values) > -np.inf, compute_logposterior, lambda values: -np.inf, values)
 
     def __getstate__(self):
         state = {}
@@ -402,10 +414,12 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             for ii in tm.iterate(range(niterations)):
                 logposterior = -0.5 * self.chi2(start[ii])
                 p = self._maximize_one(start[ii], chi2, self.transformed_params, **kwargs)
+                profiles = None
                 if self.mpicomm.rank == 0:
                     profiles = Profiles(start=Samples(start[ii][..., None], params=self.varied_params),
                                         bestfit=ParameterBestFit(start[ii][..., None], params=self.varied_params,
-                                                                 loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior))
+                                                                 loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior),
+                                        error=Samples(np.full_like(start[ii][..., None], np.nan), params=self.varied_params))
                     profiles.bestfit.logposterior[...] = logposterior
                     profiles.update(p)
                     profiles = _profiles_transform(self, profiles)
@@ -586,6 +600,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             return (point - self._params_transform_loc[grid_indices]) / self._params_transform_scale[grid_indices]
 
         def chi2(values, point):
+            jnp = numpy_jax(values[0])
             values = jnp.asarray(values)
             values = jnp.insert(values, insert_indices, point, axis=-1)
             return self.chi2(values)

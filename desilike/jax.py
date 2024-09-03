@@ -10,6 +10,7 @@ logging.getLogger('jax._src.lib.xla_bridge').addFilter(logging.Filter('No GPU/TP
 array_types = ()
 interpax = None
 
+import numpy as _np
 try:
     # raise ImportError
     import jax, jaxlib
@@ -58,11 +59,19 @@ def use_jax(array):
 
 def to_nparray(array):
     """Convert to numpy array if possible."""
-    import numpy as _np
     try:
         return _np.asarray(array)
     except jax.errors.TracerArrayConversionError:
         return
+
+
+def numpy_jax(*args, return_use_jax=False):
+    """Return numpy or jax.numpy depending on whether array is jax's object."""
+    uj = use_jax(*args)
+    toret = numpy if uj else _np
+    if return_use_jax:
+        return toret, uj
+    return toret
 
 
 def dist_name(dist):
@@ -228,3 +237,15 @@ def interp1d(xq, x, f, method='cubic'):
 
     from scipy import interpolate
     return interpolate.interp1d(x, f, kind=method, fill_value='extrapolate', axis=0)(xq)
+
+
+def cond_numpy(pred, true_fun, false_fun, *operands):
+    if pred:
+        return true_fun(*operands)
+    return false_fun(*operands)
+
+
+def cond(pred, true_fun, false_fun, *operands):
+    if use_jax(pred):
+        return jax.lax.cond(pred, true_fun, false_fun, *operands)
+    return cond_numpy(pred, true_fun, false_fun, *operands)

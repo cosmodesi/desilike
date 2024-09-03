@@ -1,6 +1,7 @@
 import numpy as np
 
 from desilike import utils
+from desilike.utils import LoggingContext
 from desilike.samples.profiles import Profiles, Samples, ParameterBestFit, ParameterCovariance
 
 from .base import BaseProfiler
@@ -65,7 +66,8 @@ class BOBYQAProfiler(BaseProfiler):
         import pybobyqa
         infs = [- 1e20, 1e20]  # pybobyqa defaults
         bounds = np.array([[inf if np.isinf(lim) else lim for lim, inf in zip(param.prior.limits, infs)] for param in varied_params]).T
-        result = pybobyqa.solve(objfun=chi2, x0=start, bounds=bounds, maxfun=max_iterations, **kwargs)
+        with LoggingContext('warning') as log:
+            result = pybobyqa.solve(objfun=chi2, x0=start, bounds=bounds, maxfun=max_iterations, **kwargs)
         success = result.flag == result.EXIT_SUCCESS
         profiles = Profiles()
         if not success and self.mpicomm.rank == 0:

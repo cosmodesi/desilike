@@ -914,20 +914,14 @@ class ObservableCovariance(BaseClass):
         templates = np.atleast_2d(np.asarray(templates, dtype='f8'))  # adds first dimension
         deriv = np.zeros(templates.shape[:1] + self.shape[:1], dtype='f8')
         deriv[..., index] = templates
-        invcov = self.inv()
-        fisher = deriv.dot(invcov).dot(deriv.T)
-        derivp = deriv.dot(invcov)
+
         prior = np.array(prior)
-        if prior.ndim == 2:
-            iprior = utils.inv(prior)
-        else:
-            iprior = np.ones(templates.shape[:1], dtype='f8')
-            iprior[...] = prior
-            iprior = np.diag(1. / iprior)
-        fisher += iprior
-        invcov = invcov - derivp.T.dot(np.linalg.solve(fisher, derivp))
-        indices = [self._index(observables=observable, concatenate=True) for observable in self._observables]
-        value = utils.blockinv([[invcov[np.ix_(index1, index2)] for index2 in indices] for index1 in indices])
+        if prior.ndim != 2:
+            prior = np.ones(templates.shape[:1], dtype='f8')
+            prior[...] = prior
+            prior = np.diag(prior)
+
+        value = self._value + deriv.T.dot(prior).dot(deriv)
         return self.clone(value=value)
 
     def clone(self, value=None, observables=None, attrs=None):

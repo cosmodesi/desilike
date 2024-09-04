@@ -167,7 +167,7 @@ class CutskyFootprint(BaseFootprint):
     def volume(self):
         r"""Volume, in :math:`(\mathrm{Mpc} / h)^{3}`."""
         volume = self.cosmo.comoving_radial_distance(self._zrange)**3
-        return self.area / (180. / np.pi)**2 / 3. * np.diff(volume).sum()
+        return self.area / (180. / np.pi)**2 / 3. * np.diff(volume, axis=-1).sum()
 
     @property
     def area(self):

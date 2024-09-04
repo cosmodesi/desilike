@@ -1060,9 +1060,10 @@ def test_observable_covariance():
     nobs = 500
     covariance = ObservableCovariance.from_observations({'power': [{'x': [np.linspace(0.01, 0.2, 10)] * 3, 'value': [np.random.uniform(0., 1., 10) for i in range(3)], 'projs': [0, 2, 4]} for i in range(nobs)],
                                                          'correlation': [{'x': [np.linspace(0.01, 0.2, 10)] * 3, 'value': [np.random.uniform(0., 1., 10) for i in range(3)], 'projs': [0, 2, 4]} for i in range(nobs)]})
-    assert covariance.hartlap2017_factor() < 1.
+    assert covariance.hartlap2007_factor() < 1.
     covariance.percival2014_factor(nparams=10)
     print(covariance.shape, [observable.name for observable in covariance.observables()])
+
     assert covariance.observables('power') == covariance.observables()[0]
     assert covariance.observables('pow*') == covariance.observables()[0]
     assert covariance.observables('*o*') == covariance.observables()
@@ -1083,7 +1084,35 @@ def test_observable_covariance():
     assert observable.view(projs=0).size == observable.view(projs=0).size
     assert np.array(covariance).shape == covariance.shape
     assert covariance.inv().shape == covariance.shape
-    covariance = covariance.marginalize(np.ones(observable.view(projs=0).size))
+    templates = np.array([np.ones(observable.view(projs=0).size), np.arange(observable.view(projs=0).size)])
+    prior = np.array([[2., 1.], [1., 2.]])
+
+    def marginalize_inv(self, templates, prior=1., **kwargs):
+        # https://en.wikipedia.org/wiki/Woodbury_matrix_identity
+        from desilike import utils
+        index = self._index(**kwargs, concatenate=True)
+        templates = np.atleast_2d(np.asarray(templates, dtype='f8'))  # adds first dimension
+        deriv = np.zeros(templates.shape[:1] + self.shape[:1], dtype='f8')
+        deriv[..., index] = templates
+        invcov = self.inv()
+        fisher = deriv.dot(invcov).dot(deriv.T)
+        derivp = deriv.dot(invcov)
+        prior = np.array(prior)
+        if prior.ndim == 2:
+            iprior = utils.inv(prior)
+        else:
+            iprior = np.ones(templates.shape[:1], dtype='f8')
+            iprior[...] = prior
+            iprior = np.diag(1. / iprior)
+        fisher += iprior
+        invcov = invcov - derivp.T.dot(np.linalg.solve(fisher, derivp))
+        indices = [self._index(observables=observable, concatenate=True) for observable in self._observables]
+        value = utils.blockinv([[invcov[np.ix_(index1, index2)] for index2 in indices] for index1 in indices])
+        return self.clone(value=value)
+
+    cov = covariance.marginalize(templates, prior=prior).view()
+    cov2 = marginalize_inv(covariance, templates, prior=prior)
+    assert np.allclose(cov, cov2)
     assert covariance == covariance
 
     covariance = ObservableCovariance(np.eye(observable.size + observable_1d.size), observables=[observable, observable_1d])
@@ -1106,6 +1135,46 @@ def test_observable_covariance():
     covariance.view(observables=1, return_type=None).plot(show=True)
 
 
+def test_hartlap():
+    rng = np.random.RandomState(seed=42)
+    shape = (10, 10)
+    A = rng.uniform(0., 1., shape)
+    X = A.T.dot(A)
+    A = rng.uniform(0., 1., shape)
+    Ce = A.T.dot(A)
+    C = X + Ce
+    Cinv = np.linalg.inv(C)
+    nobs = 100.
+    I = np.eye(*X.shape)
+    D = 1. / (nobs - 1.) * Cinv.dot(X).dot(np.sum(Cinv.dot(X)) * I + Cinv.dot(X))
+    Psi = (I - D).dot(Cinv)
+
+    nbins = I.shape[0]
+    D2 = (nbins + 1) / (nobs - 1.)
+    Psi2 = np.linalg.inv(1. / (1 - D2) * X + Ce)
+    print(Psi, Psi2 - Psi)
+
+
+def test_hartlap2():
+    rng = np.random.RandomState(seed=42)
+    shape = (10, 10)
+    A = rng.uniform(0., 1., shape)
+    X = A.T.dot(A)
+    A = rng.uniform(0., 1., shape)
+    Ce = A.T.dot(A)
+    C = X + Ce
+    Cinv = np.linalg.inv(C)
+    nobs = 100.
+    I = np.eye(*X.shape)
+    D = 1. / (nobs - 1.) * Cinv.dot(X).dot(np.sum(Cinv.dot(X)) * I + Cinv.dot(X))
+    Psi = np.linalg.inv(I + D).dot(Cinv)
+
+    nbins = I.shape[0]
+    D2 = (nbins + 1) / (nobs - 1.)
+    Psi2 = np.linalg.inv((1 + D2) * X + Ce)
+    print(Cinv, Psi, Psi2)
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -1117,9 +1186,10 @@ if __name__ == '__main__':
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
-    test_compression()
+    # test_compression()
     # test_integral_cosn()
     # test_fiber_collisions()
     # test_compression_window()
     # test_shapefit(run=False)
     # test_observable_covariance()
+    test_hartlap()

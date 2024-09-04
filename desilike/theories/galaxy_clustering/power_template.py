@@ -1314,7 +1314,7 @@ class TurnOverPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         pkTO = self.pkTO_dd_fid * dpto
         x = _bcast_shape(jnp.log10(self.k), self.pk_dd.shape, axis=0) / jnp.log10(kTO) - 1
         self.pk_dd = jnp.empty_like(x)
-        mask_m = x < 0
+        mask_m = x > 0
         self.pk_dd = jnp.where(mask_m, pkTO ** (1. - m * x ** 2), pkTO ** (1. - n * x ** 2))
         self.pknow_dd = self.pk_dd
         self.f = self.f_fid * df

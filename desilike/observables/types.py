@@ -917,12 +917,13 @@ class ObservableCovariance(BaseClass):
 
         prior = np.array(prior)
         if prior.ndim != 2:
-            prior = np.ones(templates.shape[:1], dtype='f8')
-            prior[...] = prior
-            prior = np.diag(prior)
+            prior1d = np.ones(templates.shape[:1], dtype='f8')
+            prior1d[...] = prior
+            prior = np.diag(prior1d)
 
         value = self._value + deriv.T.dot(prior).dot(deriv)
         return self.clone(value=value)
+
 
     def clone(self, value=None, observables=None, attrs=None):
         """Clone observable covariance, with input ``value``."""

@@ -924,7 +924,6 @@ class ObservableCovariance(BaseClass):
         value = self._value + deriv.T.dot(prior).dot(deriv)
         return self.clone(value=value)
 
-
     def clone(self, value=None, observables=None, attrs=None):
         """Clone observable covariance, with input ``value``."""
         new = self.view(observables=observables, return_type=None)

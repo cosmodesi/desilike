@@ -58,6 +58,7 @@ class CobayaEngine(BaseExternalEngine):
                             tmp['k_max'] = max(tmp['k_max'], Pk_grid['k_max'])
                             tmp['vars_pairs'] = list(set(Pk_grid['vars_pairs'] + tmp['vars_pairs']))
                         toret['Pk_grid'] = tmp
+                        toret['Pk_grid']['z'] = merge([np.linspace(0., 2., 3), toret['Pk_grid']['z']])  # enough z points for PowerSpectrumInterpolator2D
         if require_f:
             require_f = merge(require_f)
             # oversampling, to interpolate at z of Pk_grid with classy wrapper
@@ -396,7 +397,7 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
             if with_cosmo:  # cosmo as nuisance parameters
                 self._nuisance_params = self._cosmo_params + self._nuisance_params
                 self._cosmo_params = ParameterCollection()
-            #for param in like.varied_params: param.update(prior=None)  # remove prior on varied parameters (already taken care of by cobaya)
+            for param in like.varied_params: param.update(prior=None)  # remove prior on varied parameters (already taken care of by cobaya)
         """
         import inspect
         kwargs = {name: getattr(self, name) for name in inspect.getargspec(cls).args}
@@ -442,6 +443,7 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
             for value in derived:
                 if value.param.ndim == 0:
                     _derived[value.param.name] = float(value[()])
+
         if np.isnan(loglikelihood): loglikelihood = -np.inf
         return float(loglikelihood)
 

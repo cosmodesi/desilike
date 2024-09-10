@@ -54,8 +54,10 @@ class BasePowerSpectrumExtractor(BaseCalculator):
         state['fsigma8'] = fo.sigma8_z(self.z, of='theta_cb')
         state['f'] = state['fsigma8'] / state['sigma8']
         state['pk_dd_interpolator'] = fo.pk_interpolator(of='delta_cb', **_kw_interp)
+        state['pk_tt_interpolator'] = fo.pk_interpolator(of='theta_cb', **_kw_interp)
         k0 = 1e-3
-        state['f0'] = (fo.pk_interpolator(of='theta_cb', **_kw_interp)(k=k0, z=self.z) / state['pk_dd_interpolator'](k0, z=self.z))**0.5
+        state['f0'] = np.sqrt(state['pk_tt_interpolator'](k0, z=self.z) / state['pk_dd_interpolator'](k0, z=self.z))
+        state['fk'] = np.sqrt(state['pk_tt_interpolator'](self.k, z=self.z) / state['pk_dd_interpolator'](self.k, z=self.z))
         #if self.z.ndim == 0: state['pk_dd_interpolator'] = state['pk_dd_interpolator'].to_1d(z=self.z)
         if with_now:
             self.filter(state['pk_dd_interpolator'], cosmo=cosmo)
@@ -96,7 +98,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
             self.pknow_dd_fid = self.pknow_dd_interpolator_fid(self.k, z=self.z)
 
     def calculate(self):
-        for name in ['sigma8', 'fsigma8', 'f', 'f0', 'pk_dd_interpolator', 'pk_dd']:
+        for name in ['sigma8', 'fsigma8', 'f', 'f0', 'fk', 'pk_dd_interpolator', 'pk_dd']:
             setattr(self, name, getattr(self, name + '_fid'))
         if self.with_now:
             for name in ['pknow_dd_interpolator', 'pknow_dd']:
@@ -127,7 +129,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
                 state[name] = getattr(self, name)
         for suffix in ['', '_fid']:
             #for name in ['sigma8', 'fsigma8', 'f', 'f0', 'pk_dd_interpolator', 'pk_dd'] + ['pknow_dd_interpolator', 'pknow_dd']:
-            for name in ['sigma8', 'fsigma8', 'f', 'f0', 'pk_dd', 'pknow_dd']:
+            for name in ['sigma8', 'fsigma8', 'f', 'f0', 'fk', 'pk_dd', 'pknow_dd']:
                 name = name + suffix
                 if hasattr(self, name):
                     state[name] = getattr(self, name)
@@ -364,6 +366,7 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         super(BAOPowerSpectrumTemplate, self).calculate()
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
+        self.fk = self.fk_fid * df
 
     def get(self):
         self.DH_over_rd = self.qpar * self.DH_over_rd_fid
@@ -583,6 +586,7 @@ class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         super(StandardPowerSpectrumTemplate, self).calculate()
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
+        self.fk = self.fk_fid * df
 
     def get(self):
         return self
@@ -746,6 +750,7 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.m = self.m_fid + dm
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
+        self.fk = self.fk_fid * df
         self.f_sqrt_Ap = self.f * self.Ap_fid**0.5
 
     def get(self):
@@ -940,6 +945,7 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate):
     def calculate(self, df=1., **params):
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
+        self.fk = self.fk_fid * df
         dptt = jnp.array([params['{}{:d}'.format(self._base_param_name, ii)] - 1. for ii in range(len(self.templates))])
         factor = _bcast_shape(1. + jnp.dot(dptt, self.templates), self.pk_tt_fid.shape, axis=0)
         self.pk_tt = self.pk_tt_fid * factor
@@ -1173,6 +1179,7 @@ class WiggleSplitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         super(WiggleSplitPowerSpectrumTemplate, self).calculate()
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
+        self.fk = self.fk_fid * df
         kp = 0.05
         k = k = np.geomspace(self.pk_dd_interpolator_fid.extrap_kmin, self.pk_dd_interpolator_fid.extrap_kmax, 2000)
         k = k[(k > k[0] * 2.) & (k < k[-1] / 2.)]  # to avoid hitting boundaries with qbao
@@ -1319,6 +1326,7 @@ class TurnOverPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.pknow_dd = self.pk_dd
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
+        self.fk = self.fk_fid * df
         self.DV_times_kTO = self.apeffect.qiso * self.DV_times_kTO_fid
         self.DH_over_DM = self.apeffect.qap * self.DH_over_DM_fid
 

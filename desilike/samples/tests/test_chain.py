@@ -197,6 +197,17 @@ def test_cholesky():
     print(np.cov(values))
 
 
+def test_pickle():
+    chain_dir = '_chains'
+    mean, cov, chain = get_chain(['like.a', 'like.b', 'like.c', 'like.d'], nwalkers=10)
+    fn = os.path.join(chain_dir, 'chain.npy')
+    chain.save(fn)
+
+    import sys
+    sys.modules['desilike'] = None
+    np.load(fn, allow_pickle=True)
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -207,3 +218,4 @@ if __name__ == '__main__':
     test_stats()
     test_solved()
     # test_cholesky()
+    test_pickle()

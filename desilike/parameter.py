@@ -598,10 +598,13 @@ class ParameterArray(numpy.lib.mixins.NDArrayOperatorsMixin):
         self.param = state['param']
         if self.param is not None: self.param = Parameter.from_state(self.param)  # Set the info attribute
         self._derivs = state['derivs']
+        if self._derivs is not None:
+            self._derivs = tuple(Deriv(deriv) for deriv in self._derivs)
 
     def __getstate__(self):
         state = {name: getattr(self, name) for name in ['value', 'param', 'derivs']}
         if self.param is not None: state['param'] = self.param.__getstate__()
+        if self.derivs is not None: state['derivs'] = [dict(deriv) for deriv in self.derivs]
         return state
 
     def __getattr__(self, name):

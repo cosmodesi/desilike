@@ -83,6 +83,18 @@ def test_mpi():
         print(profiles.bestfit.attrs)
 
 
+def test_pickle():
+    profiles_dir = '_profiles'
+    profiles = get_profiles(['like.a', 'like.b', 'like.c', 'like.d'])
+    fn = os.path.join(profiles_dir, 'profile.npy')
+    profiles.save(fn)
+
+    import sys
+    sys.modules['desilike'] = None
+    np.load(fn, allow_pickle=True)
+
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -91,3 +103,4 @@ if __name__ == '__main__':
     test_stats()
     test_plot()
     test_mpi()
+    test_pickle()

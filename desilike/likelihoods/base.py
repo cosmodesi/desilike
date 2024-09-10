@@ -334,7 +334,7 @@ class BaseLikelihood(BaseCalculator):
             # Convention: in the limit of no likelihood constraint on dx, no change to the loglikelihood
             # This allows to ~ keep the interpretation in terms of -1. / 2. * chi2
             ip = jnp.diag(prior_hessian)[indices_marg]
-            marg_likelihood += 1. / 2. * jnp.sum(jnp.log(jnp.where(ip > 0, ip, 1.)))  # logdet
+            #marg_likelihood += 1. / 2. * jnp.sum(jnp.log(jnp.where(ip < 0, -ip, 1.)))  # logdet
             # sum_loglikelihood -= 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
             if derived is not None:
                 marg_likelihood = marg_likelihood * np.array([1.] + [0.] * (len(derivs) - 1), dtype='f8')

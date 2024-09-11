@@ -501,6 +501,8 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
         Take a dictionary of (sampled) nuisance parameter values params_values
         and return a log-likelihood.
         """
+        #for namespace in ['pre_BGS_z0', 'pre_LRG_z0', 'pre_LRG_z1', 'pre_LRG_z2', 'pre_ELG_z1', 'pre_QSO_z0']:
+            #params_values |= {f'{namespace}.alpha0p': 10., f'{namespace}.alpha2p': 5., f'{namespace}.sn0p': 5., f'{namespace}.sn2p': 8.}
         if self._requires:
             from desilike.utils import deep_eq
             cosmo, input_params = camb_or_classy_to_cosmoprimo(self._fiducial, self.provider, params_values, ignore_unknown_params=self.ignore_unknown_cosmoprimo_params, return_input_params=True)
@@ -523,6 +525,10 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
 
         self._ilike = ilike
         if _derived is not None:
+            #for namespace in ['BGS_z0', 'LRG_z0', 'LRG_z1', 'LRG_z2', 'ELG_z1', 'QSO_z0', 'Lya_z0']:
+            #    _derived[f'{namespace}.loglikelihood'] = 0.
+            #    _derived[f'{namespace}.logprior'] = 0.
+            #_derived['loglikelihood'] = _derived['logprior'] = 0
             for value in derived:
                 if value.param.ndim == 0:
                     _derived[value.param.name] = float(value[()])

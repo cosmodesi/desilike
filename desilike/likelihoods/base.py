@@ -311,7 +311,6 @@ class BaseLikelihood(BaseCalculator):
             sum_logprior = jnp.insert(prior_hessian[indices_derivs], 0, sum_logprior + self.logprior)
         else:
             sum_logprior += self.logprior
-
         for likelihood in likelihoods:
             loglikelihood = jnp.array(likelihood.loglikelihood)
 

@@ -674,6 +674,31 @@ def test_jit2():
     assert np.allclose(likelihood2(params), likelihood(params), atol=0.)
 
 
+
+def test_solve_multiple_likelihoods():
+
+    from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, REPTVelocileptorsTracerPowerSpectrumMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, ObservablesCovarianceMatrix, BoxFootprint
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+
+    likelihoods = []
+    for tracer, zeff in [('LRG', 1.), ('ELG', 1.3)]:
+        template = FixedPowerSpectrumTemplate(z=zeff)
+        theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, tracer=tracer, prior_basis='physical')
+        for param in theory.params.select(basename=['alpha*p', 'sn*p']): param.update(namespace=tracer, derived='.marg')
+        observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                            data={},
+                                                            theory=theory)
+        covariance = ObservablesCovarianceMatrix(observables=observable, footprints=BoxFootprint(volume=1e10, nbar=1e-2))
+        observable.init.update(covariance=covariance())
+
+        likelihood = ObservablesGaussianLikelihood(observables=[observable])
+        likelihoods.append(likelihood)
+    likelihood = sum(likelihoods)
+    print(likelihood())
+
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -686,4 +711,5 @@ if __name__ == '__main__':
     #test_jax()
     #test_autodiff()
     #test_parameter()
-    test_jit2()
+    #test_jit2()
+    test_solve_multiple_likelihoods()

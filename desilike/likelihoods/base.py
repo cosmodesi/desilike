@@ -40,7 +40,7 @@ class BaseLikelihood(BaseCalculator):
         if catch_errors is not None:
             catch_errors = tuple(catch_errors)
         self._catch_errors = catch_errors
-        #self.fisher = None
+        #self.__fisher = None
 
     def more_initialize(self):
         pipeline = self.runtime_info.pipeline
@@ -75,36 +75,47 @@ class BaseLikelihood(BaseCalculator):
         all_params = pipeline._params
         likelihoods = getattr(self, 'likelihoods', [self])
 
-        solved_params = []
+        prec_params, solved_params, marg_indices = [], [], []
         for param in all_params:
             solved = param.derived
-            if param.solved and solved.startswith('.prec'):
-                solved_params.append(param)
+            if param.solved:
+                if solved.startswith('.prec'):
+                    prec_params.append(param)
+                else:
+                    iparam = len(solved_params)
+                    solved_params.append(param)
+                    if solved.startswith('.auto'):
+                        solved = solved.replace('.auto', self.solved_default)
+                    if solved.startswith('.marg'):  # marg
+                        marg_indices.append(iparam)
+                    elif not solved.startswith('.best'):
+                        raise ValueError('unknown option for solved = {}'.format(solved))
 
         # Reset precision and flatdata
         for likelihood in likelihoods:
             for name in ['precision', 'flatdata']:
-                original_name = '_{}_original'.format(name)
-                if hasattr(likelihood, original_name):
-                    setattr(likelihood, name, getattr(likelihood, original_name))
+                input_name = '__{}_input'.format(name)
+                if hasattr(likelihood, input_name):
+                    setattr(likelihood, name, getattr(likelihood, input_name))
 
-        self.fisher = None
-
-        if solved_params:
-            solved_params = ParameterCollection(solved_params)
-            from desilike.fisher import Fisher
-
+        def get_likelihoods_with_params(params):
             solve_likelihoods = []
             for likelihood in likelihoods:
 
                 def callback(calculator):
-                    if any(param in solved_params for param in calculator.init.params):
+                    if any(param in params for param in calculator.init.params):
                         return True
                     for require in calculator.runtime_info.requires:
                         if callback(require): return True
                     return False
 
                 if callback(likelihood): solve_likelihoods.append(likelihood)
+            return solve_likelihoods
+
+        if prec_params:
+            prec_params = ParameterCollection(prec_params)
+            from desilike.fisher import Fisher
+            solve_likelihoods = get_likelihoods_with_params(prec_params)
 
             with warnings.catch_warnings():
                 warnings.filterwarnings('ignore', message='.*Derived parameter.*')
@@ -113,10 +124,9 @@ class BaseLikelihood(BaseCalculator):
                 solve_likelihood.runtime_info.pipeline.more_initialize = None
                 solve_likelihood.runtime_info.pipeline.more_calculate = lambda: None
                 all_params = solve_likelihood.all_params
-                #solved_params = ParameterCollection(solved_params)
                 for param in pipeline.params:
                     if param in solve_likelihood.all_params:
-                        param = param.clone(derived=False if param in solved_params or param.depends else param.derived, fixed=param not in solved_params)
+                        param = param.clone(derived=False if param in prec_params or param.depends else param.derived, fixed=param not in prec_params)
                         all_params.set(param)
                 solve_likelihood.all_params = all_params
 
@@ -124,73 +134,58 @@ class BaseLikelihood(BaseCalculator):
             input_params = [param for param in solve_likelihood.all_params if param.name in pipeline.input_values]
             values = {param.name: pipeline.input_values[param.name] for param in input_params}
             #print(values)
-            for param in solved_params: values[param.name] = 0.
+            for param in prec_params: values[param.name] = 0.
 
             fisher = Fisher(solve_likelihood, method='auto')
             for likelihood in solve_likelihood.likelihoods:
-                likelihood.precision = likelihood._precision_original = getattr(likelihood, '_precision_original', likelihood.precision)
-                likelihood.flatdata = likelihood._flatdata_original = getattr(likelihood, '_flatdata_original', likelihood.flatdata)
+                likelihood.precision = likelihood._precision_input = getattr(likelihood, '__precision_input', likelihood.precision)
+                likelihood.flatdata = likelihood._flatdata_input = getattr(likelihood, '__flatdata_input', likelihood.flatdata)
             posterior_fisher = fisher(**values)
             derivs = fisher.mpicomm.bcast(fisher.likelihood_differentiation.samples, root=0)
-            for param in solved_params: values[param.name] = getattr(param.prior, 'loc', 0.)
+            for param in prec_params: values[param.name] = getattr(param.prior, 'loc', 0.)
             solve_likelihood(**values)
             for likelihood, derivs in zip(solve_likelihoods, derivs):
-                precision = likelihood._precision_original
+                precision = likelihood._precision_input
                 flatderiv = np.asarray(derivs)[1:]  # (len(solved_params), len(flatdata)) first is zero-lag
                 if precision.ndim == 1:
                     derivp = flatderiv * precision
                 else:
                     derivp = flatderiv.dot(precision)
                 likelihood.precision = np.asarray(precision - derivp.T.dot(np.linalg.solve(- posterior_fisher._hessian, derivp)))
-                likelihood.flatdata = np.asarray(likelihood._flatdata_original - (likelihood.flatdiff - derivs[()]))  # flatdiff = flattheory - flatdata
+                likelihood.flatdata = np.asarray(likelihood._flatdata_input - (likelihood.flatdiff - derivs[()]))  # flatdiff = flattheory - flatdata
+
+        self.__solved_params = ParameterCollection(solved_params)
+        self.__marg_indices = np.array(marg_indices)
+        self.__solve_likelihoods = get_likelihoods_with_params(self.__solved_params)
+        self.__fisher = None
+
 
     def _solve(self):
         # Analytic marginalization, to be called, if desired, in get()
         pipeline = self.runtime_info.pipeline
         self.logprior = pipeline.params.prior(**pipeline.input_values)  # does not include solved params
-        all_params = pipeline.params
-        likelihoods = getattr(self, 'likelihoods', [self])
 
-        solved_params, indices_marg = [], []
-        for param in all_params:
-            solved = param.derived
-            if param.solved and not solved.startswith('.prec'):
-                iparam = len(solved_params)
-                solved_params.append(param)
-                if solved.startswith('.auto'):
-                    solved = solved.replace('.auto', self.solved_default)
-                if solved.startswith('.marg'):  # marg
-                    indices_marg.append(iparam)
-                elif not solved.startswith('.best'):
-                    raise ValueError('unknown option for solved = {}'.format(solved))
+        x, dx, derivs = [], [], None
 
-        indices_marg = np.array(indices_marg)
-        x, dx, solve_likelihoods, derivs = [], [], [], None
-
-        if solved_params:
-            solved_params = ParameterCollection(solved_params)
-            solve_likelihoods = []
-            for likelihood in likelihoods:
-                if any(param in solved_params for param in likelihood.all_params):
-                    solve_likelihoods.append(likelihood)
+        if self.__solved_params:
 
             derived = pipeline.derived
             #pipeline.more_calculate = lambda: None
-            self.fisher = getattr(self, 'fisher', None)
+            self.__fisher = getattr(self, '__fisher', None)
 
-            if self.fisher is None or self.fisher.mpicomm is not self.mpicomm:
+            if self.__fisher is None or self.__fisher.mpicomm is not self.mpicomm:
                 #if self.fisher is not None: print(self.fisher.mpicomm is not self.mpicomm, self.fisher.varied_params != solved_params)
                 with warnings.catch_warnings():
                     #print('REDEFINE FISHER')
                     warnings.filterwarnings('ignore', message='.*Derived parameter.*')
-                    solve_likelihood = SumLikelihood(solve_likelihoods)
+                    solve_likelihood = SumLikelihood(self.__solve_likelihoods)
                     solve_likelihood.runtime_info.pipeline.more_initialize = None
                     solve_likelihood.runtime_info.pipeline.more_calculate = lambda: None
                     all_params = solve_likelihood.all_params
                     #solved_params = ParameterCollection(solved_params)
                     for param in pipeline.params:
                         if param in solve_likelihood.all_params:
-                            param = param.clone(derived=False if param in solved_params or param.depends else param.derived, fixed=param not in solved_params)
+                            param = param.clone(derived=False if param in self.__solved_params or param.depends else param.derived, fixed=param not in self.__solved_params)
                             all_params.set(param)
                     solve_likelihood.all_params = all_params
                     # Such that when initializing, Fisher calls the pipeline (on all ranks of likelihood.mpicomm) at its current parameters
@@ -203,7 +198,7 @@ class BaseLikelihood(BaseCalculator):
                 def fisher(params):
 
                     import jax
-                    names = solved_params.names()
+                    names = self.__solved_params.names()
                     values = jnp.array([params[name] for name in names])
 
                     def getter(values):
@@ -234,7 +229,7 @@ class BaseLikelihood(BaseCalculator):
                         likelihoods_hessian.append(- derivp.dot(flatderiv.T))
 
                     prior_gradient, prior_hessian = [], []
-                    for param, value in zip(solved_params, values):
+                    for param, value in zip(self.__solved_params, values):
                         loc, scale = getattr(param.prior, 'loc', 0.), getattr(param.prior, 'scale', np.inf)
                         prec = scale**(-2)
                         prior_gradient.append(- (value - loc) * prec)
@@ -248,58 +243,30 @@ class BaseLikelihood(BaseCalculator):
                     x = values + dx
                     return x, dx, posterior_hessian, prior_hessian, likelihoods_hessian, likelihoods_gradient
 
-                """
-                    from desilike.fisher import Fisher
-                    _fisher = Fisher(solve_likelihood, method='auto')
-
-                    def fisher(params):
-                        #print([params[name] for name in solved_params.names()])
-                        p = _fisher(params)
-                        x = p.mean()
-                        dx = x - p._center
-                        solved_indices = p._index(solved_params)
-                        x, dx = x[solved_indices], dx[solved_indices]
-                        posterior_hessian = p._hessian[np.ix_(solved_indices, solved_indices)]
-                        prior_hessian = _fisher.prior_fisher._hessian[np.ix_(solved_indices, solved_indices)]
-                        likelihoods_hessian = [fisher._hessian[np.ix_(solved_indices, solved_indices)] for fisher in _fisher.likelihood_fishers]
-                        likelihoods_gradient = [fisher._gradient[solved_indices] for fisher in _fisher.likelihood_fishers]
-                        #print(np.diag(posterior_hessian), p._gradient)
-                        return x, dx, posterior_hessian, prior_hessian, likelihoods_hessian, likelihoods_gradient
-                """
                 fisher.input_params = input_params
                 fisher.mpicomm = self.mpicomm
-                self.fisher = fisher
-                #self.fisher.varied_params = solved_params  # just to get same _derived attribute for solved_params != self.fisher.varied_params not to fail
-                #assert self.fisher.varied_params == solved_params
-                #params_bak, varied_params_bak = pipeline.params, pipeline.varied_params
-                #pipeline._varied_params = solved_params  # to set varied_params
-                #pipeline._params = ParameterCollection([param.clone(derived=False) if param in pipeline._varied_params else param.clone(fixed=True) for param in params_bak])
-                #pipeline._varied_params.updated, pipeline._params.updated = False, False
-                #self.fisher = Fisher(self, method='auto')
-                #pipeline._params, pipeline._varied_params = params_bak, varied_params_bak
-            #self.fisher.likelihood.runtime_info.pipeline.input_values = values
-            #self.fisher.mpicomm = self.mpicomm
-            #print('start fisher')
-            values = {param.name: pipeline.input_values[param.name] for param in self.fisher.input_params}
-            x, dx, posterior_hessian, prior_hessian, likelihoods_hessian, likelihoods_gradient = self.fisher(values)
+                self.__fisher = fisher
+
+            values = {param.name: pipeline.input_values[param.name] for param in self.__fisher.input_params}
+            x, dx, posterior_hessian, prior_hessian, likelihoods_hessian, likelihoods_gradient = self.__fisher(values)
             #print('stop fisher')
             #pipeline.derived = derived
             #pipeline.more_calculate = self._solve
             # flatdiff is theory - data
             derivs = [()]
             indices_derivs = [], []
-            for iparam1, param1 in enumerate(solved_params):
+            for iparam1, param1 in enumerate(self.__solved_params):
                 if param1.derived.endswith('not_derived'): continue  # do not export to .derived
-                for iparam2, param2 in enumerate(solved_params[iparam1:]):
+                for iparam2, param2 in enumerate(self.__solved_params[iparam1:]):
                     if param2.derived.endswith('not_derived'): continue
                     derivs.append((param1.name, param2.name))
                     indices_derivs[0].append(iparam1)
                     indices_derivs[1].append(iparam1 + iparam2)
 
         derived = pipeline.derived
-        sum_loglikelihood = jnp.zeros(len(derivs) if solved_params and derived is not None else (), dtype='f8')
+        sum_loglikelihood = jnp.zeros(len(derivs) if self.__solved_params and derived is not None else (), dtype='f8')
         sum_logprior = jnp.zeros((), dtype='f8')
-        for param, xx in zip(solved_params, x):
+        for param, xx in zip(self.__solved_params, x):
             sum_logprior += param.prior(xx)
             # hack to run faster than calling param.prior --- saving ~ 0.0005 s
             #sum_logprior += -0.5 * (xx - param.prior.attrs['loc'])**2 / param.prior.attrs['scale']**2 if param.prior.dist == 'norm' else 0.
@@ -307,16 +274,16 @@ class BaseLikelihood(BaseCalculator):
             if derived is not None:
                 derived.set(ParameterArray(xx, param=param))
 
-        if solved_params and derived is not None:
+        if self.__solved_params and derived is not None:
             sum_logprior = jnp.insert(prior_hessian[indices_derivs], 0, sum_logprior + self.logprior)
         else:
             sum_logprior += self.logprior
 
-        for likelihood in likelihoods:
+        for likelihood in getattr(self, 'likelihoods', [self]):
             loglikelihood = jnp.array(likelihood.loglikelihood)
 
-            if likelihood in solve_likelihoods:
-                likelihood_index = solve_likelihoods.index(likelihood)
+            if likelihood in self.__solve_likelihoods:
+                likelihood_index = self.__solve_likelihoods.index(likelihood)
                 likelihood_hessian = likelihoods_hessian[likelihood_index]
                 # Note: priors of solved params have already been added
                 loglikelihood += 1. / 2. * dx.dot(likelihood_hessian).dot(dx)
@@ -328,14 +295,14 @@ class BaseLikelihood(BaseCalculator):
 
             sum_loglikelihood += loglikelihood
 
-        if indices_marg.size:
-            marg_likelihood = -1. / 2. * jnp.linalg.slogdet(- posterior_hessian[np.ix_(indices_marg, indices_marg)])[1]
-            # sum_loglikelihood += 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
+        if self.__marg_indices.size:
+            marg_likelihood = -1. / 2. * jnp.linalg.slogdet(- posterior_hessian[np.ix_(self.__marg_indices, self.__marg_indices)])[1]
+            # sum_loglikelihood += 1. / 2. * len(marg_indices) * np.log(2. * np.pi)
             # Convention: in the limit of no likelihood constraint on dx, no change to the loglikelihood
             # This allows to ~ keep the interpretation in terms of -1. / 2. * chi2
-            ip = jnp.diag(prior_hessian)[indices_marg]
+            ip = jnp.diag(prior_hessian)[self.__marg_indices]
             #marg_likelihood += 1. / 2. * jnp.sum(jnp.log(jnp.where(ip < 0, -ip, 1.)))  # logdet
-            # sum_loglikelihood -= 1. / 2. * len(indices_marg) * np.log(2. * np.pi)
+            # sum_loglikelihood -= 1. / 2. * len(marg_indices) * np.log(2. * np.pi)
             if derived is not None:
                 marg_likelihood = marg_likelihood * np.array([1.] + [0.] * (len(derivs) - 1), dtype='f8')
             sum_loglikelihood += marg_likelihood
@@ -522,6 +489,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
             for iobs, obs in enumerate(self.observables):
                 array = obs.to_array()
                 x = [(edges[:-1] + edges[1:]) / 2. for edges in array.edges()]
+                # Cut covariance matrix to input scales
                 covariance = covariance.xmatch(observables=iobs, x=x, projs=array.projs, select_projs=True, method='mid')
             covariance = covariance.view()
 

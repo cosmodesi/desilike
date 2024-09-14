@@ -685,9 +685,11 @@ def test_solve_multiple_likelihoods():
     for tracer, zeff in [('LRG', 1.), ('ELG', 1.3)]:
         template = FixedPowerSpectrumTemplate(z=zeff)
         theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, tracer=tracer, prior_basis='physical')
-        for param in theory.params.select(basename=['alpha*p', 'sn*p']): param.update(namespace=tracer, derived='.marg')
+        for param in theory.params.select(basename=['b1p', 'alpha0p', 'sn2p']): param.update(namespace=tracer)
+        for param in theory.params.select(basename=['alpha*p']): param.update(derived='.marg')
+        for param in theory.params.select(basename=['sn*p']): param.update(derived='.prec')
         observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                            data={},
+                                                            data={f'{tracer}.b1p': 1.2, f'{tracer}.alpha0p': 0.2, 'alpha2p': -1.2, 'sn0p': 1.2, f'{tracer}.sn2p': -0.3},
                                                             theory=theory)
         covariance = ObservablesCovarianceMatrix(observables=observable, footprints=BoxFootprint(volume=1e10, nbar=1e-2))
         observable.init.update(covariance=covariance())
@@ -696,7 +698,7 @@ def test_solve_multiple_likelihoods():
         likelihoods.append(likelihood)
     likelihood = sum(likelihoods)
     print(likelihood())
-
+    print(likelihood({'LRG.b1p': 1., 'b2p': 3.}))
 
 
 if __name__ == '__main__':

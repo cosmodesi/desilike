@@ -23,11 +23,12 @@ def test_install():
 
 
 def test_clik():
-    likelihood = TTTEEEHighlPlanck2018PlikLiteLikelihood()
+    likelihood = TTTEEEHighlPlanck2018PlikLikelihood()
     likelihood()
     for param in likelihood.all_params.select(basename=['loglikelihood', 'logprior']):
         assert param.namespace
-    TTTEEEHighlPlanck2018PlikLiteLikelihood()()
+    likelihood = TTTEEEHighlPlanck2018PlikLikelihood()
+    #print(likelihood(xi_sz_cib=0.), likelihood(xi_sz_cib=0.5))
 
 
 def test_sum():
@@ -212,7 +213,7 @@ if __name__ == '__main__':
 
     setup_logging()
     #test_install()
-    #test_clik()
+    test_clik()
     #test_sum()
     #test_gaussian_likelihood()
     #test_params()
@@ -221,4 +222,4 @@ if __name__ == '__main__':
     #test_error()
     #test_emulator_direct()
     #test_cmb()
-    test_profile()
+    #test_profile()

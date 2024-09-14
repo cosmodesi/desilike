@@ -81,7 +81,7 @@ def test_solve():
     likelihood = ObservablesGaussianLikelihood(observables=[observable], name='LRG')
     #likelihood.params['LRG.loglikelihood'] = likelihood.params['LRG.logprior'] = {}
     likelihood()
-    for param in likelihood.all_params.select(basename=['qpar', 'qper', 'dm']):
+    for param in likelihood.all_params.select(basename=['qpar']):
         param.update(fixed=True)
     profiler = MinuitProfiler(likelihood, rescale=False, seed=42)
     #profiler = ScipyProfiler(likelihood, method='lsq')

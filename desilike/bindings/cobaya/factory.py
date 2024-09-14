@@ -17,11 +17,8 @@ class CobayaEngine(BaseExternalEngine):
     @classmethod
     def get_requires(cls, requires):
 
-        convert = {'delta_m': 'delta_tot', 'delta_cb': 'delta_nonu',
-                   'theta_m': 'delta_tot', 'theta_cb': 'delta_nonu'}
-
         toret = {}
-        require_f = []
+        #require_f = []
         for section, names in super(CobayaEngine, cls).get_requires(requires).items():
             for name, attrs in names.items():
                 if section == 'background':
@@ -48,9 +45,33 @@ class CobayaEngine(BaseExternalEngine):
                         tmp['k_max'] = attrs['k'].max()  # 1/Mpc unit
                         tmp['vars_pairs'] = []
                         for pair in attrs['of']:
-                            if any('theta' in p for p in pair):
-                                require_f.append(tmp['z'])
-                            tmp['vars_pairs'].append(tuple(convert[p] for p in pair))
+                            convert = {'delta_m': 'delta_tot', 'delta_cb': 'delta_nonu', 'theta_cdm': 'v_newtonian_cdm', 'theta_b': 'v_newtonian_baryon'}
+
+                            def convert_vars_pairs(pair):
+                                vars_pairs = []
+                                for pp in pair:
+                                    if pp in convert:
+                                        vars_pairs.append(convert[pp])
+                                    else:
+                                        raise ValueError('cannot get {}'.format(pp))
+                                return tuple(vars_pairs)
+
+                            def get_vars_pairs(pair):
+                                for ip, pp in enumerate(pair):
+                                    if pp == 'theta_cb':
+                                        tmp = list(pair)
+                                        toret = []
+                                        for pp in ['theta_cdm', 'theta_b']:
+                                            tmp[ip] = pp
+                                            toret += get_vars_pairs(tmp)
+                                        return toret
+                                return [convert_vars_pairs(pair)]
+
+
+                            #if any('theta' in p for p in pair):
+                            #    require_f.append(tmp['z'])
+
+                            tmp['vars_pairs'] += get_vars_pairs(pair)
                         Pk_grid = toret.get('Pk_grid', {})
                         if Pk_grid:
                             tmp['nonlinear'] |= Pk_grid['nonlinear']
@@ -59,12 +80,14 @@ class CobayaEngine(BaseExternalEngine):
                             tmp['vars_pairs'] = list(set(Pk_grid['vars_pairs'] + tmp['vars_pairs']))
                         toret['Pk_grid'] = tmp
                         toret['Pk_grid']['z'] = merge([np.linspace(0., 2., 3), toret['Pk_grid']['z']])  # enough z points for PowerSpectrumInterpolator2D
+        """
         if require_f:
             require_f = merge(require_f)
             # oversampling, to interpolate at z of Pk_grid with classy wrapper
             require_f = merge([require_f, [0., require_f[-1] + 1.]])
             toret['fsigma8'] = {'z': require_f}
             toret['sigma8_z'] = {'z': require_f}
+        """
         if toret or requires.get('params', {}):  # to get /h units
             if 'Hubble' in toret:
                 toret['Hubble']['z'] = np.unique(np.insert(toret['Hubble']['z'], 0, 0.))
@@ -179,31 +202,91 @@ class Primordial(Section):
         return PowerSpectrumInterpolator1D.from_callable(pk_callable=lambda k: self.pk_k(k, mode=mode))
 
 
+def _make_tuple(of, size=2):
+    if isinstance(of, str): of = (of,)
+    of = list(of)
+    of = of + [of[0]] * (size - len(of))
+    return tuple(of)
+
+
 class Fourier(Section):
 
+    @staticmethod
+    def _index_pk_of(of='delta_m'):
+        """Convert to CAMB naming conventions."""
+        return {'delta_m': 'delta_tot', 'delta_cb': 'delta_nonu', 'theta_cdm': 'v_newtonian_cdm', 'theta_b': 'v_newtonian_baryon', 'phi_plus_psi': 'Weyl'}[of]
+
+    def table(self, non_linear=False, of='delta_m'):
+        r"""
+        Return power spectrum table, in :math:`(\mathrm{Mpc}/h)^{3}`.
+
+        Parameters
+        ----------
+        non_linear : bool, default=False
+            Whether to return the non_linear power spectrum (if requested in parameters, with 'non_linear': 'halofit' or 'mead').
+            Computed only for of == 'delta_m' or 'delta_cb'.
+
+        of : string, tuple, default='delta_m'
+            Perturbed quantities.
+            'delta_m' for matter perturbations, 'delta_cb' for cold dark matter + baryons, 'phi', 'psi' for Bardeen potentials, or 'phi_plus_psi' for Weyl potential.
+            Provide a tuple, e.g. ('delta_m', 'theta_cb') for the cross matter density - cold dark matter + baryons velocity power spectra.
+
+        Returns
+        -------
+        k : numpy.ndarray
+            Wavenumbers.
+
+        z : numpy.ndarray
+            Redshifts.
+
+        pk : numpy.ndarray
+            Power spectrum array of shape (len(k), len(z)).
+        """
+        of = list(_make_tuple(of))  # list for mutability below
+
+        kpow, factor = 0, 1.
+
+        for iof, of_ in enumerate(of):
+            if of_ == 'theta_cb':
+                Omegas = self._engine['Omega_cdm'], self._engine['Omega_b']
+                Omega_tot = sum(Omegas)
+                Omega_cdm, Omega_b = (Omega / Omega_tot for Omega in Omegas)
+                tmpof = of.copy()
+                tmpof[iof] = 'theta_cdm'
+                pka_cdm = self.table(non_linear=non_linear, of=tmpof)[-1]
+                tmpof[iof] = 'theta_b'
+                ka, za, pka_b = self.table(non_linear=non_linear, of=tmpof)
+                pka = Omega_cdm * pka_cdm + Omega_b * pka_b
+                return ka, za, pka
+            if of_ == 'phi_plus_psi':  # we use Weyl ~ k^2 * (phi + psi) / 2
+                factor *= 2
+                kpow -= 2
+
+        var_pair = tuple(self._index_pk_of(of_) for of_ in of)
+        # Do the hubble_units, k_hunits conversion manually as it is incorrect for Weyl ~ k^2 (phi + psi) / 2
+        ka, za, pka = self._provider.get_Pk_grid(var_pair=var_pair, nonlinear=non_linear)
+        pka = pka.T * ka[:, None]**kpow
+        h = self._h
+        return ka / h, za, pka * h**3
+
     def pk_interpolator(self, non_linear=False, of='delta_m', **kwargs):
-        convert = {'delta_m': 'delta_tot', 'delta_cb': 'delta_nonu',
-                   'theta_m': 'delta_tot', 'theta_cb': 'delta_nonu'}
-        of = _make_list(of, length=2)
-        var_pair = [convert[of_] for of_ in of]
-        k, z, pk = self._provider.get_Pk_grid(var_pair=var_pair, nonlinear=non_linear)
-        k = k / self._h
-        pk = pk.T * self._h**3
-        ntheta = sum('theta' in of_ for of_ in of)
-        if ntheta:
-            from scipy import interpolate
-            collector = {}
-            for name in ['sigma8_z', 'fsigma8']:
-                provider = self._provider.requirement_providers[name]  # hacky way to get to classy
-                z_pool = provider.collectors[name].z_pool
-                if z_pool is None:
-                    z_pool = provider.z_pool_for_perturbations
-                collector[name] = interpolate.interp1d(z_pool.values, provider.current_state[name], kind=min(3, len(z_pool.values) - 1), axis=-1, copy=True, fill_value='extrapolate', assume_sorted=False)(z)
-            f = collector['fsigma8'] / collector['sigma8_z']
-            # Below does not work for classy wrapper, because z does not match requested z...
-            # f = self._provider.get_fsigma8(z=z) / self._provider.get_sigma8_z(z=z)
-            pk = pk * f**ntheta
-        return PowerSpectrumInterpolator2D(k, z, pk, **kwargs)
+        r"""
+        Return :class:`PowerSpectrumInterpolator2D` instance.
+
+        Parameters
+        ----------
+        non_linear : bool, default=False
+            Whether to return the non_linear power spectrum (if requested in parameters, with 'non_linear': 'halofit' or 'mead').
+            Computed only for of == 'delta_m'.
+
+        of : string, tuple, default='delta_m'
+            Perturbed quantities.
+
+        kwargs : dict
+            Arguments for :class:`PowerSpectrumInterpolator2D`.
+        """
+        ka, za, pka = self.table(non_linear=non_linear, of=of)
+        return PowerSpectrumInterpolator2D(ka, za, np.abs(pka), **kwargs)  # abs for delta_m, phi_plus_psi
 
     def sigma_rz(self, r, z, of='delta_m', **kwargs):
         r"""Return the r.m.s. of `of` perturbations in sphere of :math:`r \mathrm{Mpc}/h`."""
@@ -418,6 +501,8 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
         Take a dictionary of (sampled) nuisance parameter values params_values
         and return a log-likelihood.
         """
+        #for namespace in ['pre_BGS_z0', 'pre_LRG_z0', 'pre_LRG_z1', 'pre_LRG_z2', 'pre_ELG_z1', 'pre_QSO_z0']:
+            #params_values |= {f'{namespace}.alpha0p': 10., f'{namespace}.alpha2p': 5., f'{namespace}.sn0p': 5., f'{namespace}.sn2p': 8.}
         if self._requires:
             from desilike.utils import deep_eq
             cosmo, input_params = camb_or_classy_to_cosmoprimo(self._fiducial, self.provider, params_values, ignore_unknown_params=self.ignore_unknown_cosmoprimo_params, return_input_params=True)
@@ -440,6 +525,10 @@ def CobayaLikelihoodFactory(cls, name_like=None, kw_like=None, module=None, kw_c
 
         self._ilike = ilike
         if _derived is not None:
+            #for namespace in ['BGS_z0', 'LRG_z0', 'LRG_z1', 'LRG_z2', 'ELG_z1', 'QSO_z0', 'Lya_z0']:
+            #    _derived[f'{namespace}.loglikelihood'] = 0.
+            #    _derived[f'{namespace}.logprior'] = 0.
+            #_derived['loglikelihood'] = _derived['logprior'] = 0
             for value in derived:
                 if value.param.ndim == 0:
                     _derived[value.param.name] = float(value[()])

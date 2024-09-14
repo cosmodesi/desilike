@@ -1208,7 +1208,7 @@ class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationF
     _params = LPTVelocileptorsTracerPowerSpectrumMultipoles._params
 
 
-def f_over_f0_EH(z, k, Omega0_m, h, fnu):
+def f_over_f0_EH(z, k, Omega0_m, h, fnu, Nnu=3, Neff=3.044):
     r"""
     Computes f(k)/f0, adapted from https://github.com/henoriega/FOLPS-nu, following H&E (1998).
 
@@ -1228,6 +1228,10 @@ def f_over_f0_EH(z, k, Omega0_m, h, fnu):
         :math:`H_0 / 100`.
     fnu : float
         :math:`\Omega_\nu / \Omega_\mathrm{m}`.
+    Nnu : int, default=3
+        Number of massive neutrinos.
+    Neff : int, default=3.044
+        Effective number of relativistic species.
 
     Returns
     -------
@@ -1235,19 +1239,17 @@ def f_over_f0_EH(z, k, Omega0_m, h, fnu):
         :math:`f(k) / f0`
     """
     eta = jnp.log(1 / (1 + z))  # log of scale factor
-    N_eff = 3.046  # effective number of neutrinos
-    Omega0_r = 2.469*10**(-5)/(h**2 * (1 + 7/8*(4/11)**(4/3) * N_eff))  # rad: including neutrinos
+    Omega0_r = 2.469*10**(-5)/(h**2 * (1 + 7/8*(4/11)**(4/3) * Neff))  # rad: including neutrinos
     aeq = Omega0_r / Omega0_m  # matter-radiation equality
 
     pcb = 5./4 - jnp.sqrt(1 + 24*(1 - fnu)) / 4  # neutrino supression
     c = 0.7
-    N_nu = 3  # number of neutrinos
     theta272 = (1.00)**2  # T_{CMB} = 2.7*(theta272)
     pf = (k * theta272) / (Omega0_m * h**2)
     DEdS = jnp.exp(eta) / aeq  # growth function: EdS cosmology
 
     fnunonzero = jnp.where(fnu != 0., fnu, 1.)
-    yFS = 17.2*fnu*(1 + 0.488*fnunonzero**(-7/6)) * (pf*N_nu / fnunonzero)**2  #yFreeStreaming
+    yFS = 17.2*fnu*(1 + 0.488*fnunonzero**(-7/6)) * (pf*Nnu / fnunonzero)**2  #yFreeStreaming
     # pcb = 0. and yFS = 0. when fnu = 0.
     rf = DEdS/(1 + yFS)
     return 1 - pcb/(1 + (rf)**c)  # f(k)/f0
@@ -1269,29 +1271,30 @@ class REPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMul
         from velocileptors.EPT.ept_fullresum_varyDz_nu_fftw import REPT
         #from velocileptors.EPT.ept_fullresum_fftw import REPT
         pk_dd, pknow_dd = self.template.pk_dd, self.template.pknow_dd
-        #print(self.options, len(self.mu), self.template.k[0], self.template.k[-1], pk_dd.sum(), pknow_dd.sum(), pk_dd.shape, pk_dd.max(), self.template.k[100], pk_dd[100], self.z, self.template.f0)
         if self.z.ndim: pk_dd, pknow_dd = pk_dd[..., 0], pknow_dd[..., 0]
         self.pt = REPT(np.asarray(self.template.k), np.asarray(pk_dd), pnw=np.asarray(pknow_dd), kmin=self.k[0], kmax=self.k[-1], nk=200, **self.options)
         # print(self.template.f, self.k.shape, self.template.qpar, self.template.qper, self.template.k.shape, self.template.pk_dd.shape)
         pktable = {ell: [] for ell in [0, 2, 4]}
         self.sigma8 = self.template.sigma8
         self.fsigma8 = self.template.f * self.sigma8
-        Omega_m, h, fnu = 0.3, 0.7, 0.
-        cosmo = getattr(self.template, 'cosmo', None)
-        if cosmo is not None:
-            Omega_m, h, fnu = cosmo['Omega_m'], cosmo['h'], cosmo['Omega_ncdm_tot'] / cosmo['Omega_m']
+        Omega_m, h, fnu, Neff, Nnu = 0.3, 0.7, 0., 3.046, 3
+        #cosmo = getattr(self.template, 'cosmo', None)
+        #if cosmo is not None:
+        #    Omega_m, h, fnu, Nnu, Neff = cosmo['Omega_m'], cosmo['h'], cosmo['Omega_ncdm_tot'] / cosmo['Omega_m'], cosmo['N_ncdm'], cosmo['N_eff']
 
         f0, qpar, qper = map(np.asarray, [self.template.f0, self.template.qpar, self.template.qper])
+        pcb, pcb_nw, pttcb = [10**interpolate.interp1d(np.log10(self.template.k), np.log10(pk), kind='cubic', fill_value='extrapolate', axis=0, assume_sorted=True)(np.log10(np.append(self.pt.kv, 1.))) for pk in [self.template.pk_dd, self.template.pknow_dd, self.template.pk_dd * self.template.fk**2]]
+        fk = np.sqrt(pttcb / pcb)[:-1]
         if self.z.ndim:
-            pcb, pcb_nw = [10**interpolate.interp1d(np.log10(self.template.k), np.log10(pk), kind='cubic', fill_value='extrapolate', axis=0, assume_sorted=True)(np.log10(self.pt.kv)) for pk in [self.template.pk_dd, self.template.pknow_dd]]
             for iz, z in enumerate(self.z):
-                Dz = self.sigma8[iz] / self.sigma8[0]
-                fk = f0[iz] * f_over_f0_EH(z, self.pt.kv, Omega_m, h, fnu)
-                pks = self.pt.compute_redshift_space_power_multipoles_tables(fk, apar=qpar[iz], aperp=qper[iz], ngauss=len(self.mu), pcb=pcb[..., iz], pcb_nw=pcb_nw[..., iz], Dz=Dz)[1:]
+                Dz = np.sqrt(pcb[-1, iz] / pcb[-1, 0])
+                #fk = f0[iz] * f_over_f0_EH(z, self.pt.kv, Omega_m, h, fnu, Nnu=Nnu, Neff=Neff)
+                #print(Dz, pcb[:-1, iz].sum(), pcb_nw[:-1, iz].sum(), fk[..., iz].sum())
+                pks = self.pt.compute_redshift_space_power_multipoles_tables(fk[..., iz], apar=qpar[iz], aperp=qper[iz], ngauss=len(self.mu), pcb=pcb[:-1, iz], pcb_nw=pcb_nw[:-1, iz], Dz=Dz)[1:]
                 for ill, ell in enumerate(pktable): pktable[ell].append(pks[ill])
             pktable = {ell: np.concatenate([v[..., None] for v in value], axis=-1) for ell, value in pktable.items()}
         else:
-            fk = f0 * f_over_f0_EH(self.z, self.pt.kv, Omega_m, h, fnu)
+            #fk = f0 * f_over_f0_EH(self.z, self.pt.kv, Omega_m, h, fnu, Nnu=Nnu, Neff=Neff)
             pks = self.pt.compute_redshift_space_power_multipoles_tables(fk, apar=qpar, aperp=qper, ngauss=len(self.mu))[1:]
             for ill, ell in enumerate(pktable): pktable[ell] = pks[ill]
         self.pktable = interpolate.interp1d(self.pt.kv, np.array([pktable[ell] for ell in self.ells]), kind='cubic', fill_value='extrapolate', axis=1, assume_sorted=True)(self.k)
@@ -2030,13 +2033,16 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         # [z, omega_b, omega_cdm, omega_ncdm, h]
         # only used for neutrinos
         # sensitive to omega_b + omega_cdm, not omega_b, omega_cdm separately
-        cosmo_params = {'z': self.z, 'fnu': 0., 'Omega_m': 0.3, 'h': 0.7}
-        cosmo = getattr(self.template, 'cosmo', None)
-        if cosmo is not None:
-            cosmo_params['fnu'] = cosmo['Omega_ncdm_tot'] / cosmo['Omega_m']
-            cosmo_params['Omega_m'] = cosmo['Omega_m']
-            cosmo_params['h'] = cosmo['h']
-        cosmo_params['f0'] = self.template.f0
+        #cosmo_params = {'z': self.z, 'fnu': 0., 'Omega_m': 0.3, 'h': 0.7}
+        #cosmo = getattr(self.template, 'cosmo', None)
+        #if cosmo is not None:
+        #    cosmo_params['fnu'] = cosmo['Omega_ncdm_tot'] / cosmo['Omega_m']
+        #    cosmo_params['Omega_m'] = cosmo['Omega_m']
+        #    cosmo_params['h'] = cosmo['h']
+        #    cosmo_params['Nnu'] = cosmo['N_ncdm']
+        #    cosmo_params['Neff'] = cosmo['N_eff']
+        #cosmo_params['f0'] = self.template.f0
+        cosmo_params['pkttlin'] = self.template.pk_dd * self.template.fk**2
 
         if getattr(self, '_get_non_linear', None) is None:
 

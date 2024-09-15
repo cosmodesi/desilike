@@ -279,6 +279,10 @@ class BaseLikelihood(BaseCalculator):
         if prec_params:
 
             fisher = FastFisher(self, prec_params)
+            if len(fisher.ilikelihood_solved_indices) > 1:
+                intersection = set.intersection(*[set(indices) for indices in fisher.ilikelihood_solved_indices])
+                if intersection:
+                    raise ValueError('cannot use .prec for parameters that are shared between likelihoods (we would need to create a joint covariance matrix!); common block is {}'.format([fisher.solved_params[i] for i in intersection]))
 
             # Just to reject from ``values`` parameters from which base ones are derived, and are not kept in solve_likelihood.all_params
             values = {param.name: pipeline.input_values[param.name] for param in fisher.input_params}

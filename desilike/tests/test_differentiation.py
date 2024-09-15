@@ -677,19 +677,19 @@ def test_jit2():
 
 def test_solve_multiple_likelihoods():
 
-    from desilike.theories.galaxy_clustering import FixedPowerSpectrumTemplate, REPTVelocileptorsTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, REPTVelocileptorsTracerPowerSpectrumMultipoles
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, ObservablesCovarianceMatrix, BoxFootprint
     from desilike.likelihoods import ObservablesGaussianLikelihood
 
     likelihoods = []
     for tracer, zeff in [('LRG', 1.), ('ELG', 1.3)]:
-        template = FixedPowerSpectrumTemplate(z=zeff)
+        template = ShapeFitPowerSpectrumTemplate(z=zeff)
         theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, tracer=tracer, prior_basis='physical')
         for param in theory.params.select(basename=['b1p', 'alpha0p', 'sn2p']): param.update(namespace=tracer)
         for param in theory.params.select(basename=['alpha*p']): param.update(derived='.marg')
-        for param in theory.params.select(basename=['sn*p']): param.update(derived='.prec')
+        for param in theory.params.select(basename=['sn*p']): param.update(derived='.marg')
         observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                            data={f'{tracer}.b1p': 1.2, f'{tracer}.alpha0p': 0.2, 'alpha2p': -1.2, 'sn0p': 1.2, f'{tracer}.sn2p': -0.3},
+                                                            data={f'{tracer}.b1p': 1.2, f'{tracer}.alpha0p': 0.2, 'alpha2p': -1.2, f'sn0p': 1.2, f'{tracer}.sn2p': -0.3},
                                                             theory=theory)
         covariance = ObservablesCovarianceMatrix(observables=observable, footprints=BoxFootprint(volume=1e10, nbar=1e-2))
         observable.init.update(covariance=covariance())
@@ -697,8 +697,8 @@ def test_solve_multiple_likelihoods():
         likelihood = ObservablesGaussianLikelihood(observables=[observable])
         likelihoods.append(likelihood)
     likelihood = sum(likelihoods)
-    print(likelihood())
-    print(likelihood({'LRG.b1p': 1., 'b2p': 3.}))
+    print(likelihood(), likelihood.loglikelihood)
+    print(likelihood({'LRG.b1p': 1., 'b2p': 3., 'dm': 0.4}), likelihood.loglikelihood)
 
 
 if __name__ == '__main__':

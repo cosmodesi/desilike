@@ -2042,6 +2042,7 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         #    cosmo_params['Nnu'] = cosmo['N_ncdm']
         #    cosmo_params['Neff'] = cosmo['N_eff']
         #cosmo_params['f0'] = self.template.f0
+        cosmo_params = {}
         cosmo_params['pkttlin'] = self.template.pk_dd * self.template.fk**2
 
         if getattr(self, '_get_non_linear', None) is None:

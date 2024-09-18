@@ -77,6 +77,7 @@ params:
     ref:
       dist: norm
       loc: 0.06
+      limits: [0., 10.]
       scale: 0.12
     delta: [0.31, 0.15, 0.15]
     latex: m_{ncdm}

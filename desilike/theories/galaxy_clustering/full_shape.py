@@ -1831,7 +1831,7 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         FOLPS.f0 = f0 = self.template.f0  # for Sigma2Total
         table = FOLPS.Table_interp(kap, k, FOLPS.TableOut_interp(k))
         table_now = FOLPS.TableOut_NW_interp(k)
-        sigma2t = FOLPS.Sigma2Total(k, muap, table_now)
+        sigma2t = FOLPS.Sigma2Total(k, muap,f0, table_now)
         table_now = FOLPS.Table_interp(kap, k, table_now)
         self.pt = Namespace(kap=kap, muap=muap, table=table, table_now=table_now, sigma2t=sigma2t, f0=f0, jac=jac)
         self.sigma8 = self.template.sigma8

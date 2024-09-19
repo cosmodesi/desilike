@@ -1795,8 +1795,8 @@ def folps_combine_bias_terms_pkmu(k, mu, jac, f0, table, table_now, sigma2t, par
     fk = table[1] * f0
     pkl, pkl_now, sigma2t = table[0], table_now[0], sigma2t
     pkmu = jac * ((b1 + fk * mu**2)**2 * (pkl_now + jnp.exp(-k**2 * sigma2t)*(pkl - pkl_now)*(1 + k**2 * sigma2t))
-                   + jnp.exp(-k**2 * sigma2t) * FOLPS.PEFTs(k, mu, pars, table)
-                   + (1 - jnp.exp(-k**2 * sigma2t)) * FOLPS.PEFTs(k, mu, pars, table_now))
+                   + jnp.exp(-k**2 * sigma2t) * FOLPS.PEFTs(k, mu,f0, pars, table)
+                   + (1 - jnp.exp(-k**2 * sigma2t)) * FOLPS.PEFTs(k, mu,f0, pars, table_now))
     return pkmu
 
 

@@ -1818,10 +1818,10 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         # [z, omega_b, omega_cdm, omega_ncdm, h]
         # only used for neutrinos
         # sensitive to omega_b + omega_cdm, not omega_b, omega_cdm separately
-        cosmo_params = [self.z, 0.022, 0.12, 0., 0.7, self.template.fR0]
+        cosmo_params = [self.z, 0.022, 0.12, 0., 0.7, 1e-15]
         cosmo = getattr(self.template, 'cosmo', None)
         if cosmo is not None:
-            cosmo_params = [self.z, cosmo['omega_b'], cosmo['omega_cdm'], cosmo['omega_ncdm_tot'], cosmo['h'], 1e-20]
+            cosmo_params = [self.z, cosmo['omega_b'], cosmo['omega_cdm'], cosmo['omega_ncdm_tot'], cosmo['h'], 1e-15]
         FOLPS.NonLinear([self.template.k, self.template.pk_dd], cosmo_params, kminout=self.k[0] * 0.7, kmaxout=self.k[-1] * 1.3, nk=max(len(self.k), 120),
                         EdSkernels=self.options['kernels'] == 'eds')
         #FOLPS.NonLinear([self.template.k, self.template.pk_dd], cosmo_params, kminout=0.001, kmaxout=0.5, nk=120,

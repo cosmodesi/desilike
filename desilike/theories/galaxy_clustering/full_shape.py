@@ -1785,7 +1785,7 @@ class Namespace(object):
 
 @jit
 def folps_combine_bias_terms_pkmu(k, mu, jac, f0, table, table_now, sigma2t, pars, nd=1e-4):
-    import FOLPSnu as FOLPS
+    import FMG as FOLPS
     pars = list(pars) + [1. / nd]  # add shot noise
     b1 = pars[0]
     # Add co-evolution part
@@ -1807,21 +1807,21 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
 
     def initialize(self, *args, mu=6, **kwargs):
         super(FOLPSPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
-        import FOLPSnu as FOLPS
+        import FMG as FOLPS
         FOLPS.Matrices()
         self.matrices = Namespace(**{name: getattr(FOLPS, name) for name in ['M22matrices', 'M13vectors', 'bnu_b', 'N']})
 
     def calculate(self):
         super(FOLPSPowerSpectrumMultipoles, self).calculate()
-        import FOLPSnu as FOLPS
+        import FMG as FOLPS
         FOLPS.__dict__.update(self.matrices.__dict__)
         # [z, omega_b, omega_cdm, omega_ncdm, h]
         # only used for neutrinos
         # sensitive to omega_b + omega_cdm, not omega_b, omega_cdm separately
-        cosmo_params = [self.z, 0.022, 0.12, 0., 0.7]
+        cosmo_params = [self.z, 0.022, 0.12, 0., 0.7, self.fR0]
         cosmo = getattr(self.template, 'cosmo', None)
         if cosmo is not None:
-            cosmo_params = [self.z, cosmo['omega_b'], cosmo['omega_cdm'], cosmo['omega_ncdm_tot'], cosmo['h']]
+            cosmo_params = [self.z, cosmo['omega_b'], cosmo['omega_cdm'], cosmo['omega_ncdm_tot'], cosmo['h'], 1e-20]
         FOLPS.NonLinear([self.template.k, self.template.pk_dd], cosmo_params, kminout=self.k[0] * 0.7, kmaxout=self.k[-1] * 1.3, nk=max(len(self.k), 120),
                         EdSkernels=self.options['kernels'] == 'eds')
         #FOLPS.NonLinear([self.template.k, self.template.pk_dd], cosmo_params, kminout=0.001, kmaxout=0.5, nk=120,

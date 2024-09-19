@@ -119,14 +119,13 @@ params:
     fixed: True
   fR0:
     prior:
-      limits: [1e-15, 1e-1]
+      limits: [1e-15, 1e-5]
     ref:
       dist: norm
-      loc: 1e-15
-      scale: 0.001
-    delta: 0.05
-    latex: fR0
-    fixed: True    
+      loc: 5.0005e-6
+      scale: 2.5e-6
+    delta: 1e-7
+    latex: fR0  
 
 ---
 

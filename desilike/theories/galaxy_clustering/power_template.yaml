@@ -121,8 +121,8 @@ params:
     prior:
       limits: [-1e-5, 1e-5]
     ref:
-      dist: uniform
-    delta: 0.00001
+      limits: [1e-15, 1e-6]
+    delta: 0.0001
     latex: fR0  
 
 ---

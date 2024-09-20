@@ -122,7 +122,7 @@ params:
       limits: [0, 5e-4]
     ref:
       limits: [0, 5e-4]
-    delta: 0.000001
+    delta: 0.00001
     latex: fR0  
 
 ---

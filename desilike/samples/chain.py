@@ -270,7 +270,7 @@ class Chain(Samples):
                 raise
 
     @classmethod
-    def from_getdist(cls, samples):
+    def from_getdist(cls, samples, concatenate=None):
         """
         Turn getdist.MCSamples into a :class:`Chain` instance.
 
@@ -281,28 +281,44 @@ class Chain(Samples):
         params = ParameterCollection()
         for param in samples.paramNames.names:
             params.set(Parameter(param.name, latex=param.label, derived=param.isDerived, fixed=False))
+        param_indices = samples._getParamIndices()
         for param in params:
             limits = [samples.ranges.lower.get(param.name, -np.inf), samples.ranges.upper.get(param.name, np.inf)]
             param.update(prior=ParameterPrior(limits=limits))
-        new = cls()
-        fweight, new.logposterior = samples.weights, -samples.loglikes
-        iweight = np.rint(fweight)
-        if np.allclose(fweight, iweight, atol=0., rtol=1e-9):
-            new.fweight = iweight.astype('i4')
-        else:
-            new.aweight = fweight
-        for param in params:
-            new.set(ParameterArray(samples[param.name], param=param))
-        for param in new.params(basename='chi2_*'):
-            namespace = re.match('chi2_[_]*(.*)$', param.name).groups()[0]
-            if namespace == 'prior':
-                new_param = param.clone(basename=new._logprior, derived=True)
+        isscalar = True
+        try:
+            chains = samples.getSeparateChains()
+            isscalar = False
+        except:
+            chains = [samples]
+        toret = []
+        for chain in chains:
+            new = cls()
+            fweight, new.logposterior = chain.weights, -chain.loglikes
+            iweight = np.rint(fweight)
+            if np.allclose(fweight, iweight, atol=0., rtol=1e-9):
+                new.fweight = iweight.astype('i4')
             else:
-                new_param = param.clone(basename=new._loglikelihood, namespace=namespace, derived=True)
-            new[new_param] = -0.5 * new[param]
-        return new
+                new.aweight = fweight
+            for param in params:
+                new.set(ParameterArray(chain[param_indices[param.name]], param=param))
+            for param in new.params(basename='chi2_*'):
+                namespace = re.match('chi2_[_]*(.*)$', param.name).groups()[0]
+                if namespace == 'prior':
+                    new_param = param.clone(basename=new._logprior, derived=True)
+                else:
+                    new_param = param.clone(basename=new._loglikelihood, namespace=namespace, derived=True)
+                new[new_param] = -0.5 * new[param]
+            toret.append(new)
+        if isscalar:
+            if concatenate or concatenate is None:
+                toret = toret[0]
+        elif concatenate:
+            toret = cls.concatenate(toret)
+        return toret
 
-    def to_getdist(self, params=None, label=None, **kwargs):
+    @utils.hybridmethod
+    def to_getdist(cls, chain, params=None, label=None, **kwargs):
         """
         Return GetDist hook to samples.
 
@@ -326,18 +342,33 @@ class Chain(Samples):
         samples : getdist.MCSamples
         """
         from getdist import MCSamples
+        isscalar = not utils.is_sequence(chain)
+        if isscalar: chain = [chain]
+        chains = list(chain)
         toret = None
-        if params is None: params = self.params(varied=True)
-        else: params = [self[param].param for param in params]
+        if params is None: params = chains[0].params(varied=True)
+        else: params = [chains[0][param].param for param in params]
         if any(param.solved for param in params):
-            self = self.sample_solved()
-        params = [param for param in params if param.name not in [self._weight, self._logposterior]]
-        samples = self.to_array(params=params, struct=False, derivs=()).reshape(-1, self.size)
+            for ichain, chain in enumerate(chains):
+                chains[ichain] = chain.sample_solved()
+        chain = chains[0]
+        params = [param for param in params if param.name not in [chain._weight, chain._logposterior]]
         labels = [param.latex() for param in params]
         names = [str(param) for param in params]
         ranges = {str(param): tuple('N' if limit is None or not np.isfinite(limit) else limit for limit in param.prior.limits) for param in params}
-        toret = MCSamples(samples=samples.T, weights=np.asarray(self.weight.ravel()), loglikes=-np.asarray(self.logposterior.ravel()), names=names, labels=labels, label=label, ranges=ranges, **kwargs)
+        samples, weights, loglikes = [], [], []
+        for chain in chains:
+            samples.append(chain.to_array(params=params, struct=False, derivs=()).reshape(-1, chain.size).T)
+            weights.append(chain.weight.ravel())
+            loglikes.append(-np.asarray(chain.logposterior.ravel()))
+        if isscalar:
+            samples, weights, loglikes = samples[0], weights[0], loglikes[0]
+        toret = MCSamples(samples=samples, weights=weights, loglikes=loglikes, names=names, labels=labels, label=label, ranges=ranges, **kwargs)
         return toret
+
+    @to_getdist.instancemethod
+    def to_getdist(self, *args, **kwargs):
+        return self.__class__.to_getdist(self, *args, **kwargs)
 
     @classmethod
     def read_getdist(cls, base_fn, ichains=None, concatenate=False):
@@ -440,7 +471,8 @@ class Chain(Samples):
             return cls.concatenate(toret)
         return toret
 
-    def write_getdist(self, base_fn, params=None, ichain=None, fmt='%.18e', delimiter=' ', **kwargs):
+    @utils.hybridmethod
+    def write_getdist(cls, chain, base_fn, params=None, ichain=None, fmt='%.18e', delimiter=' ', **kwargs):
         """
         Save samples to disk in *CosmoMC* format.
 
@@ -470,31 +502,41 @@ class Chain(Samples):
         kwargs : dict
             Optional arguments for :func:`numpy.savetxt`.
         """
-        if params is None: params = self.params()
-        else: params = [self[param].param for param in params]
+        isscalar = not utils.is_sequence(chain)
+        if isscalar: chain = [chain]
+        chains = list(chain)
+        if params is None: params = chains[0].params()
+        else: params = [chains[0][param].param for param in params]
         if any(param.solved for param in params):
-            self = self.sample_solved()
+            for ichain, chain in enumerate(chains):
+                chains[ichain] = chain.sample_solved()
+
+        chain = chains[0]
         columns = [str(param) for param in params]
-        outputs_columns = [self._weight, self._logposterior]
-        shape = self.shape
-        outputs = [array.param.name for array in self if array.shape != shape]
+        outputs_columns = [chain._weight, chain._logposterior]
+        shape = chain.shape
+        outputs = [array.param.name for array in chain if array.shape != shape]
         for column in outputs:
             if column in columns: del columns[columns.index(column)]
-        data = self.to_array(params=outputs_columns + columns, struct=False, derivs=()).reshape(-1, self.size)
-        data[1] *= -1
-        data = data.T
+
+        if ichain is None:
+            if isscalar:
+                ichain = [None] * len(chains)
+            else:
+                ichain = list(range(len(chains)))
+        if not utils.is_sequence(ichain):
+            ichain = [ichain]
+        assert len(ichain) == len(chains)
+
         utils.mkdir(os.path.dirname(base_fn))
-        chain_fn = '{}.txt'.format(base_fn) if ichain is None else '{}_{:d}.txt'.format(base_fn, ichain)
-        self.log_info('Saving chain to {}.'.format(chain_fn))
-        np.savetxt(chain_fn, data, header='', fmt=fmt, delimiter=delimiter, **kwargs)
 
         output = ''
-        params = self.params(name=columns)
+        params = chain.params(name=columns)
         for param in params:
             tmp = '{}* {}\n' if getattr(param, 'derived', getattr(param, 'fixed')) else '{} {}\n'
             output += tmp.format(param.name, param.latex())
         params_fn = '{}.paramnames'.format(base_fn)
-        self.log_info('Saving parameter names to {}.'.format(params_fn))
+        cls.log_info('Saving parameter names to {}.'.format(params_fn))
         with open(params_fn, 'w') as file:
             file.write(output)
 
@@ -504,9 +546,21 @@ class Chain(Samples):
             limits = tuple('N' if limit is None or np.abs(limit) == np.inf else limit for limit in limits)
             output += '{} {} {}\n'.format(param.name, limits[0], limits[1])
         ranges_fn = '{}.ranges'.format(base_fn)
-        self.log_info('Saving parameter ranges to {}.'.format(ranges_fn))
+        cls.log_info('Saving parameter ranges to {}.'.format(ranges_fn))
         with open(ranges_fn, 'w') as file:
             file.write(output)
+
+        for chain, ichain in zip(chains, ichain):
+            data = chain.to_array(params=outputs_columns + columns, struct=False, derivs=()).reshape(-1, chain.size)
+            data[1] *= -1
+            data = data.T
+            chain_fn = '{}.txt'.format(base_fn) if ichain is None else '{}_{:d}.txt'.format(base_fn, ichain)
+            cls.log_info('Saving chain to {}.'.format(chain_fn))
+            np.savetxt(chain_fn, data, header='', fmt=fmt, delimiter=delimiter, **kwargs)
+
+    @write_getdist.instancemethod
+    def write_getdist(self, *args, **kwargs):
+        return self.__class__.write_getdist(self, *args, **kwargs)
 
     def to_anesthetic(self, params=None, label=None, **kwargs):
         """

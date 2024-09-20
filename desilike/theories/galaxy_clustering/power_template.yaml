@@ -119,9 +119,9 @@ params:
     fixed: True
   fR0:
     prior:
-      limits: [-5e-4, 5e-4]
+      limits: [0, 5e-4]
     ref:
-      limits: [0, 1e-6]
+      limits: [0, 5e-4]
     delta: 0.000001
     latex: fR0  
 

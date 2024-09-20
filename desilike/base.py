@@ -9,9 +9,9 @@ import numpy as np
 
 from . import mpi, jax
 from .jax import numpy as jnp
-from .utils import BaseClass, UserDict, Monitor, deep_eq, is_sequence
+from .utils import BaseClass, Monitor, deep_eq, is_sequence
 from .io import BaseConfig
-from .parameter import Parameter, ParameterCollection, ParameterConfig, ParameterCollectionConfig, ParameterArray, Samples
+from .parameter import Parameter, ParameterCollection, ParameterCollectionConfig, ParameterArray, Samples
 
 
 namespace_delimiter = '.'

@@ -47,6 +47,18 @@ def test_misc():
     for chain2 in [chain2, chain3]:
         for param in chain2.params():
             assert np.allclose(chain2[param], chain[param].ravel())
+    base_fn = os.path.join(chain_dir, 'chain_multiple')
+    Chain.write_getdist([chain, chain], base_fn)
+    chain2 = Chain.read_getdist(base_fn)
+    assert len(chain2) == 2
+    for chain2 in chain2:
+        for param in chain2.params():
+            assert np.allclose(chain2[param], chain[param].ravel())
+    chain2 = Chain.from_getdist(Chain.to_getdist([chain, chain]))
+    assert len(chain2) == 2
+    for chain2 in chain2:
+        for param in chain2.params():
+            assert np.allclose(chain2[param], chain[param].ravel())
     chain.interval('like.a')
     chain2 = chain.deepcopy()
     chain['like.a'] += 1

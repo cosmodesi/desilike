@@ -170,8 +170,8 @@ class SOSampler(IndexCycler):
 
     def sample_r(self):
         """
-        Radial proposal. A mixture of an exponential and 2D Gaussian radial
-        proposal (to make wider tails and more mass near zero, so more robust to scale misestimation).
+        Radial proposal. A mixture of an exponential and 2D Gaussian radial proposal
+        (to make wider tails and more mass near zero, so more robust to scale misestimation).
         """
         if self.rng.uniform() < 0.33:
             return self.rng.standard_exponential()
@@ -405,6 +405,7 @@ class MCMCSampler(BaseBatchPosteriorSampler):
             blocks, oversample_factors = self.likelihood.runtime_info.pipeline.block_params(params=self.varied_params, nblocks=2 if drag else None, oversample_power=oversample_power)
         else:
             blocks, oversample_factors = _format_blocks(blocks, self.varied_params)
+        blocks = [[str(bb) for bb in block] for block in blocks]
         last_slow_block_index = nsteps_drag = None
         if drag:
             if len(blocks) == 1:
@@ -447,6 +448,7 @@ class MCMCSampler(BaseBatchPosteriorSampler):
             covariance = {'source': covariance, 'burnin': burnin}
         if self.mpicomm.rank == 0:
             covariance = load_source(**covariance, cov=True, params=self.varied_params, return_type='nparray')
+            self.log_info('Using provided covariance matrix.')
         covariance = self.mpicomm.bcast(covariance, root=0)
         self.proposer.set_covariance(covariance)
         self.learn_diagnostics = {}
@@ -466,7 +468,7 @@ class MCMCSampler(BaseBatchPosteriorSampler):
             burnin = 0.5
             if not learn:
                 burnin = self.learn_check['burnin']
-                learn = self.check(**self.learn_check, diagnostics=self.learn_diagnostics, quiet=True)
+                learn = self.check(**self.learn_check, diagnostics=self.learn_diagnostics, quiet=True)[0]
             if learn and self.mpicomm.rank == 0:
                 chain = Chain.concatenate([chain.remove_burnin(burnin) for chain in self.chains])
                 if chain.size > 1:
@@ -475,12 +477,15 @@ class MCMCSampler(BaseBatchPosteriorSampler):
         if covariance is not None:
             try:
                 self.proposer.set_covariance(covariance)
+                # print({param.name: cov**0.5 for param, cov in zip(self.varied_params, np.diag(covariance))})
             except LinAlgError:
                 if self.mpicomm.rank == 0:
                     self.log_info('New proposal covariance is ill-conditioned, skipping update.')
             else:
                 if self.mpicomm.rank == 0:
                     self.log_info('Updating proposal covariance.')
+        elif self.mpicomm.rank == 0:
+            self.log_info('Skipping update of proposal covariance, as criteria are not met.')
 
     def run(self, *args, **kwargs):
         """
@@ -518,8 +523,13 @@ class MCMCSampler(BaseBatchPosteriorSampler):
         self.sampler.mpicomm = self.mpicomm
         if thin_by == 'auto':
             thin_by = int(sum(b * s for b, s in zip(self.proposer.blocks, self.proposer.oversample_factors)) / len(self.varied_params))
+        log_every = max(niterations // 10, 20)
+        nsteps = 0
         for _ in self.sampler.sample(start=np.ravel(start), iterations=niterations, thin_by=thin_by):
-            pass
+            total = int(self.sampler.get_weight().sum())
+            if self.mpicomm.rank == 0 and total - nsteps >= log_every:
+                self.log_info('{:d} steps, acceptance rate {:.3f}.'.format(total, self.sampler.get_acceptance_rate()))
+                nsteps += log_every
         chain = self.sampler.get_chain()
         if chain.size:
             data = [chain[..., iparam] for iparam, param in enumerate(self.varied_params)] + [self.sampler.get_weight(), self.sampler.get_log_prob()]

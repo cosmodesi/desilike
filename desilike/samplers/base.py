@@ -196,15 +196,13 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
         raise_error = self.mpicomm.bcast(raise_error, root=0)
         if raise_error:
             raise PipelineError('Error "{}" occured with stack trace:\n{}'.format(*raise_error))
+
         return self.mpicomm.bcast(logposterior, root=0)
 
     @bcast_values
     @jit(static_argnums=[0])
     def logprior(self, values):
-        toret = 0.
-        for param, value in zip(self.varied_params, values.T):
-            toret += param.prior(value)
-        return toret
+        return self.likelihood.all_params.prior(**dict(zip(self.varied_params.names(), values.T)))
 
     def __getstate__(self):
         state = {}
@@ -561,14 +559,17 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
         has_input_diagnostics = diagnostics is not None
         diagnostics_bak = diagnostics if has_input_diagnostics else self.diagnostics
         diagnostics = Diagnostics(diagnostics_bak)
-        if self.mpicomm.bcast(any(chain is None for chain in self.chains), root=0):
-            return False
+        assert nsplits > 1
 
-        if self.mpicomm.rank == 0:
+        if self.mpicomm.bcast(any(chain is None for chain in self.chains), root=0):
+            toret = False
+
+        elif self.mpicomm.rank == 0:
 
             if 0 < burnin < 1:
                 burnin = int(burnin * self.chains[0].shape[0] + 0.5)
 
+            nsplits = int((nsplits + len(self.chains) - 1) / len(self.chains))
             lensplits = (self.chains[0].shape[0] - burnin) // nsplits
 
             split_samples = [chain[burnin + islab * lensplits:burnin + (islab + 1) * lensplits] for islab in range(nsplits) for chain in self.chains]

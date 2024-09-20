@@ -1864,9 +1864,9 @@ class ParameterCollection(BaseParameterCollection):
         See :meth:`Parameter.eval`.
         """
         toret = {}
-        for param in params:
+        for param in self:
             try:
-                toret[param] = self[param].eval(**params)
+                toret[param.name] = param.eval(**params)
             except KeyError:
                 pass
         return toret
@@ -1877,6 +1877,7 @@ class ParameterCollection(BaseParameterCollection):
         toret = 0.
         for param in self.data:
             if param.varied and (param.depends or (not param.derived)) and param.name in eval_params:
+
                 toret += param.prior(eval_params[param.name])
         return toret
 

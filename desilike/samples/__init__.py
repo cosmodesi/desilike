@@ -104,12 +104,20 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
         toret.append(tmp)
 
     if cov is not None:
+
+        def get_params_in_source(source, params):
+            if source:
+                if params is not None:
+                    return source.params(name=[str(param) for param in params])
+                return source.params()
+            return []
+
         if hasattr(source, 'to_fisher'):  # Chain, Profiles
-            source = source.to_fisher(params=params)
+            source = source.to_fisher(params=get_params_in_source(source, params))
         if hasattr(source, 'covariance'):  # LikelihoodFisher
-            source = source.covariance(params=params, return_type=None)
+            source = source.covariance(params=get_params_in_source(source, params), return_type=None)
         if hasattr(source, 'to_covariance'):  # ParameterPrecision
-            source = source.to_covariance(params=params, return_type=None)
+            source = source.to_covariance(params=get_params_in_source(source, params), return_type=None)
         tmp = None
         if params is not None:
             if isinstance(source, np.ndarray):
@@ -119,7 +127,7 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
                 if tmp.shape != shape:
                     raise ValueError('Provide a 2D array of shape {} for params = {} (found {})'.format(shape, params, tmp.shape))
             else:
-                params_in_source = source.params(name=[str(param) for param in params]) if source else []
+                params_in_source = get_params_in_source(source, params)
                 if params_in_source:
                     cov = source.view(params=params_in_source, return_type=None)
                     params = [cov._params[param] if param in params_in_source else param for param in params]

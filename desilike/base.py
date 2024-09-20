@@ -431,7 +431,7 @@ class BasePipeline(BaseClass):
             #        calculator.runtime_info.init._params[param.basename] = param.clone(namespace=None)
             #    calculator.runtime_info.init.updated = False
         for param in ParameterCollection(params):
-            if any(param.name in p.depends.values() for p in new_params):
+            if any(param.name in p.depends.values() for p in new_params) or param.drop:
                 new_params.set(param)
             if param not in new_params:
                 raise PipelineError('Cannot attribute parameter {} to any calculator'.format(param))
@@ -687,7 +687,7 @@ class BasePipeline(BaseClass):
         for calculator in self.calculators:
             calculator.runtime_info.monitor.reset()
         for ii in range(niterations):
-            params = {str(param): param.ref.sample(random_state=rng) for param in self.params.select(varied=True, solved=False)}
+            params = {str(param): param.ref.sample(random_state=rng) for param in self.params.select(varied=True, derived=False)}
             self.calculate(**params)
         if self.mpicomm.rank == 0:
             self.log_info('Found speeds:')

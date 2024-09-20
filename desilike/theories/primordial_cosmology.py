@@ -74,7 +74,6 @@ def _clone(self, params, base='input'):
         # The computation of the thermodynamics is the most time consuming
         # The 'theta_cosmomc' call takes ~0.1 s and is accurate within 3e-6 (rel.), ~1% of Planck errors
         self.cosmo = self.cosmo.solve('h', 'theta_MC_100', theta_MC_100, xtol=1e-6, rtol=1e-6)
-
     return self.cosmo
 
 

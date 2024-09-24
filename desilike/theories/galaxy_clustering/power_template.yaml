@@ -119,10 +119,10 @@ params:
     fixed: True
   fR0:
     prior:
-      limits: [0, 5e-4]
+      limits: [0, 1e-3]
     ref:
-      limits: [0, 5e-4]
-    delta: 0.0001
+      limits: [0, 1e-3]
+    delta: 0.01
     latex: fR0  
 
 ---

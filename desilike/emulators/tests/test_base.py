@@ -3,7 +3,7 @@ import numpy as np
 
 from desilike.theories.galaxy_clustering import (KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles,
                                                  DirectPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate)
-from desilike.emulators.base import Emulator, EmulatedCalculator
+from desilike.emulators import Emulator, EmulatedCalculator, CollectionCalculator
 from desilike import setup_logging
 
 
@@ -37,10 +37,11 @@ def test_base():
 
         template = Template()
         calculator = KaiserTracerPowerSpectrumMultipoles(template=template)
-        template.params['fsigma8'] = {'derived': True}
+        template.init.params['fsigma8'] = {'derived': True}
+        calculator = CollectionCalculator([calculator, calculator.deepcopy()])
         calculator.all_params['b1'].update(derived='{b}**2', prior=None)
         calculator.all_params['b'] = {'prior': {'limits': [0., 2.]}}
-        emulator = Emulator([calculator, calculator.deepcopy()], engine='point')
+        emulator = Emulator(calculator, engine='point')
         emulator.set_samples()
         emulator.fit()
         emulator.save(fn)
@@ -68,7 +69,15 @@ def test_base():
     print(calculator.varied_params)
 
 
+def test_backward():
+    emulator_dir = '_tests'
+    fn = os.path.join(emulator_dir, 'emulator_rept.npy')
+    pt = EmulatedCalculator.load(fn)
+    pt()
+
+
 if __name__ == '__main__':
 
     setup_logging()
     test_base()
+    test_backward()

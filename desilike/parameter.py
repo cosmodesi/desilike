@@ -430,8 +430,7 @@ class ParameterArray(numpy.lib.mixins.NDArrayOperatorsMixin):
         """
         if isinstance(value, ParameterArray):
             value = value.value
-        from desilike import jax
-        if value is not None and (copy or dtype or (not jax.use_jax(value) and not isinstance(value, np.ndarray))):
+        if value is not None and (copy or dtype or (not use_jax(value) and not isinstance(value, np.ndarray))):
             value = np.array(value, copy=copy, dtype=dtype, **kwargs)
         self._value = value
         self.param = None if param is None else Parameter(param)
@@ -529,6 +528,9 @@ class ParameterArray(numpy.lib.mixins.NDArrayOperatorsMixin):
             new = self.__class__(getattr(ufunc, method)(*input_values, out=out, **kwargs))
             new.__array_finalize__(self)
             return new
+        #if use_jax(self._value, *inputs):
+        #    ufunc = getattr(jnp, ufunc.__name__, ufunc)
+
         new = getattr(ufunc, method)(*input_values, **kwargs)
         if input_param_derivs:
             param, derivs = input_param_derivs[0]
@@ -543,7 +545,7 @@ class ParameterArray(numpy.lib.mixins.NDArrayOperatorsMixin):
                     derivs = tuple(Deriv(deriv) for deriv in derivs)
                 else:
                     derivs = None
-            return self.__class__(new, param=param, derivs=derivs)
+            new = self.__class__(new, param=param, derivs=derivs)
         return new
 
     def _isderiv(self, deriv):

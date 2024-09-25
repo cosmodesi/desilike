@@ -1,6 +1,6 @@
 import numpy as np
 
-from desilike.emulators import Emulator, MLPEmulatorEngine
+from desilike.emulators import Emulator, MLPEmulatorEngine, PCAOperation
 from desilike.base import BaseCalculator
 from desilike import setup_logging
 
@@ -23,9 +23,9 @@ class LinearModel(BaseCalculator):
 
 def test_mlp_linear(plot=False):
     calculator = LinearModel()
-    emulator = Emulator(calculator, engine=MLPEmulatorEngine(nhidden=(), npcs=3))
-    emulator.set_samples(niterations=int(1e5))
-    emulator.fit(batch_sizes=(10000,), epochs=1000, learning_rates=None)
+    emulator = Emulator(calculator, engine=MLPEmulatorEngine(nhidden=(), yoperation=PCAOperation(npcs=3)))
+    emulator.set_samples(niterations=int(1e3))
+    emulator.fit(batch_frac=(0.1,), epochs=1000)
     emulator.check(frac=0.5)
     emulated_calculator = emulator.to_calculator()
 

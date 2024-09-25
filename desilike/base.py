@@ -1282,15 +1282,7 @@ class CollectionCalculator(BaseCalculator):
             calculators = dict(calculators.items())
         else:
             calculators = {str(i): calc for i, calc in enumerate(calculators)}
-        self.names = list(calculators.keys())
-        self.calculators = list(calculators.values())
-        for calculator in self.calculators:
-            if calculator.runtime_info.initialized:
-                for param in calculator.all_params:
-                    for depname in param.depends.values():
-                        param = calculator.all_params[depname]
-                        if not any(param in calc.runtime_info.params for calc in calculator.runtime_info.pipeline.calculators):
-                            self.init.params[param] = param.clone(drop=True)  # add parameter to this calculator
+        self.names, self.calculators = list(zip(*calculators.items()))
         self.all_calculators = {name: list(calculator.runtime_info.pipeline.calculators) for name, calculator in zip(self.names, self.calculators)}
         self.all_derived = {}
         for name, calculators in self.all_calculators.items():
@@ -1298,7 +1290,7 @@ class CollectionCalculator(BaseCalculator):
             for calculator in calculators:
                 for param in calculator.runtime_info.derived_params:
                     self.all_derived[name][param.name] = calculator
-                    self.params.set(param.clone(name='{}_{}'.format(name, param.name)))
+                    self.init.params.set(param.clone(name='{}_{}'.format(name, param.name)))
         self.runtime_info.requires = self.calculators
 
     def __getitem__(self, name):

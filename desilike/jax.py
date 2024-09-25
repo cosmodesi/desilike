@@ -52,9 +52,9 @@ def jit(*args, **kwargs):
     return get_wrapper(args[0])
 
 
-def use_jax(array):
+def use_jax(*arrays):
     """Whether to use jax.numpy depending on whether array is jax's object."""
-    return isinstance(array, tuple(array_types))
+    return any(isinstance(array, array_types) for array in arrays)
 
 
 def to_nparray(array):

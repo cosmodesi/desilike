@@ -158,7 +158,7 @@ def test_pt():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_taylor_power(plot=True)
-    #test_taylor(plot=True)
-    #test_likelihood()
+    test_taylor_power(plot=True)
+    test_taylor(plot=True)
+    test_likelihood()
     test_pt()

@@ -133,7 +133,7 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
                     assert all(shape[1] == nwalkers for shape in shapes)
                 except (IndexError, AssertionError) as exc:
                     nwalkers = 250  # default
-            n_active = nwalkers
+                n_active = nwalkers
         self.nwalkers = utils.evaluate(n_active, type=int, locals={'ndim': ndim})
         bounds = np.array([tuple(None if np.isinf(lim) else lim for lim in param.prior.limits) for param in self.varied_params], dtype='f8')
         import pocomc

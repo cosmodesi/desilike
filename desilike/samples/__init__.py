@@ -58,7 +58,7 @@ def load_source(source, choice=None, cov=None, burnin=None, params=None, default
     sources = []
     for fn in fns:
         if is_path(fn):
-            sources += [BaseClass.load(ff) for ff in glob.glob(fn)]
+            sources += [BaseClass.load(ff) for ff in glob.glob(str(fn))]
         else:
             sources.append(fn)
 

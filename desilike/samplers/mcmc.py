@@ -1,3 +1,4 @@
+import time
 import itertools
 import functools
 
@@ -6,6 +7,7 @@ from numpy import linalg
 from numpy.linalg import LinAlgError
 from scipy.stats import special_ortho_group
 
+from desilike import utils
 from desilike.samples import Chain, load_source
 from .base import BaseBatchPosteriorSampler
 
@@ -374,7 +376,7 @@ class MCMCSampler(BaseBatchPosteriorSampler):
         learn : bool, default=True
             If ``True``, learn proposal covariance matrix.
             Can be a dictionary, specifying when to update covariance matrix, with same options as ``check``,
-            e.g. to update proposal when Gelman-Rubin is between 0.03 and 0.1: ``{'max_eigen_gr': 0.1, 'min_eigen_gr': 0.03}``.
+            e.g. to check every 40 * dimension steps, and update proposal when Gelman-Rubin is between 0.03 and 0.1: ``{'every': '40 * ndim', 'max_eigen_gr': 0.1, 'min_eigen_gr': 0.03}``.
 
         drag : bool, default=False
             Use dragging ("integrating out" fast parameters).
@@ -454,6 +456,7 @@ class MCMCSampler(BaseBatchPosteriorSampler):
         self.learn_diagnostics = {}
         propose = [self.proposer.slow, self.proposer.fast] if drag else self.proposer
         self.sampler = MHSampler(len(self.varied_params), self.logposterior, propose=propose, nsteps_drag=nsteps_drag, max_tries=self.max_tries, rng=self.rng)
+        self._size_every = self.mpicomm.bcast(sum(getattr(chain, 'size', 0) for chain in self.chains) if self.mpicomm.rank == 0 else None, root=0)
 
     def _set_rng(self, *args, **kwargs):
         super(MCMCSampler, self)._set_rng(*args, **kwargs)
@@ -464,6 +467,13 @@ class MCMCSampler(BaseBatchPosteriorSampler):
     def _prepare(self):
         covariance = None
         if self.learn and self.mpicomm.bcast(all(chain is not None for chain in self.chains), root=0):
+            every = self.learn_check.get('every', None)
+            if every is not None:
+                every = utils.evaluate(every, type=int, locals={'ndim': len(self.varied_params)})
+                size = self.mpicomm.bcast(sum(chain.size for chain in self.chains) if self.mpicomm.rank == 0 else None, root=0)
+                if size - self._size_every < every: return
+                self._size_every = size
+
             learn = self.learn_check is None
             burnin = 0.5
             if not learn:
@@ -473,19 +483,19 @@ class MCMCSampler(BaseBatchPosteriorSampler):
                 chain = Chain.concatenate([chain.remove_burnin(burnin) for chain in self.chains])
                 if chain.size > 1:
                     covariance = chain.covariance(params=self.varied_params)
-        covariance = self.mpicomm.bcast(covariance, root=0)
-        if covariance is not None:
-            try:
-                self.proposer.set_covariance(covariance)
-                # print({param.name: cov**0.5 for param, cov in zip(self.varied_params, np.diag(covariance))})
-            except LinAlgError:
-                if self.mpicomm.rank == 0:
-                    self.log_info('New proposal covariance is ill-conditioned, skipping update.')
-            else:
-                if self.mpicomm.rank == 0:
-                    self.log_info('Updating proposal covariance.')
-        elif self.mpicomm.rank == 0:
-            self.log_info('Skipping update of proposal covariance, as criteria are not met.')
+            covariance = self.mpicomm.bcast(covariance, root=0)
+            if covariance is not None:
+                try:
+                    self.proposer.set_covariance(covariance)
+                    # print({param.name: cov**0.5 for param, cov in zip(self.varied_params, np.diag(covariance))})
+                except LinAlgError:
+                    if self.mpicomm.rank == 0:
+                        self.log_info('New proposal covariance is ill-conditioned, skipping update.')
+                else:
+                    if self.mpicomm.rank == 0:
+                        self.log_info('Updating proposal covariance.')
+            elif self.mpicomm.rank == 0:
+                self.log_info('Skipping update of proposal covariance, as criteria are not met.')
 
     def run(self, *args, **kwargs):
         """
@@ -523,13 +533,15 @@ class MCMCSampler(BaseBatchPosteriorSampler):
         self.sampler.mpicomm = self.mpicomm
         if thin_by == 'auto':
             thin_by = int(sum(b * s for b, s in zip(self.proposer.blocks, self.proposer.oversample_factors)) / len(self.varied_params))
-        log_every = max(niterations // 10, 20)
+        #log_every = max(niterations // 5, 50)
+        log_every = 30  # 30 seconds
+        t0 = time.time()
         nsteps = 0
         for _ in self.sampler.sample(start=np.ravel(start), iterations=niterations, thin_by=thin_by):
-            total = int(self.sampler.get_weight().sum())
-            if self.mpicomm.rank == 0 and total - nsteps >= log_every:
+            #total = int(self.sampler.get_weight().sum())
+            if self.mpicomm.rank == 0 and time.time() - t0 >= log_every:
                 self.log_info('{:d} steps, acceptance rate {:.3f}.'.format(total, self.sampler.get_acceptance_rate()))
-                nsteps += log_every
+                t0 = time.time()
         chain = self.sampler.get_chain()
         if chain.size:
             data = [chain[..., iparam] for iparam, param in enumerate(self.varied_params)] + [self.sampler.get_weight(), self.sampler.get_log_prob()]

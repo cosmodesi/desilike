@@ -1,0 +1,11 @@
+class: TTLowlPlanck2018Likelihood
+
+params:
+  .import: planck2018_clik_params.yaml::calib
+
+---
+
+class: EELowlPlanck2018Likelihood
+
+params:
+  .import: planck2018_clik_params.yaml::calib

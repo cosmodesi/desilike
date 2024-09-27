@@ -4,7 +4,7 @@ from desilike import setup_logging
 from desilike.install import Installer
 from desilike.likelihoods.cmb import (BasePlanck2018GaussianLikelihood, FullGridPlanck2018GaussianLikelihood, TTHighlPlanck2018PlikLikelihood, TTHighlPlanck2018PlikLiteLikelihood, TTHighlPlanck2018PlikUnbinnedLikelihood,
                                       TTTEEEHighlPlanck2018PlikLikelihood, TTTEEEHighlPlanck2018PlikLiteLikelihood, TTTEEEHighlPlanck2018PlikUnbinnedLikelihood,
-                                      LensingPlanck2018ClikLikelihood, TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood, read_planck2018_chain)
+                                      LensingPlanck2018ClikLikelihood, TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood, TTLowlPlanck2018Likelihood, EELowlPlanck2018Likelihood, read_planck2018_chain)
 
 
 def test_install():
@@ -15,8 +15,8 @@ def test_install():
         if 'Lite' in Likelihood.__name__: continue
         print(Likelihood.__name__)
         likelihood = Likelihood()
-        likelihood.params['planck.loglikelihood'] = {}
-        likelihood.params['planck.logprior'] = {}
+        likelihood.init.params['planck.loglikelihood'] = {}
+        likelihood.init.params['planck.logprior'] = {}
         installer = Installer(user=True)
         installer(likelihood)
         assert np.allclose((likelihood + likelihood)(), 2. * likelihood() - likelihood.logprior)
@@ -209,11 +209,54 @@ def test_profile():
     print(profiles.bestfit)
 
 
+def test_act_lensing():
+    from desilike.likelihoods.cmb import ACTDR6LensingLikelihood
+    from desilike.theories import Cosmoprimo
+
+    installer = Installer(user=True)
+    installer(ACTDR6LensingLikelihood)
+
+    cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
+    likelihood = ACTDR6LensingLikelihood(cosmo=cosmo)
+    likelihood()
+
+
+def test_planck_python():
+    from desilike.theories import Cosmoprimo
+    """
+    installer = Installer(user=True)
+    for Likelihood in [TTLowlPlanck2018Likelihood, EELowlPlanck2018Likelihood]:
+        installer(Likelihood)
+        cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
+        likelihood = Likelihood(cosmo=cosmo)
+        likelihood()
+    """
+    for cl in ['TT', 'EE']:
+        theory = {'camb': {'extra_args': {'bbn_predictor': 'PArthENoPE_880.2_standard.dat', 'dark_energy_model': 'ppf', 'num_massive_neutrinos': 1}}}
+        #theory = {'cosmoprimo.bindings.cobaya.cosmoprimo': {'engine': 'camb', 'stop_at_error': True, 'extra_args': {'N_ncdm': 1}}}
+        params = {'logA': {'prior': {'min': 1.61, 'max': 3.91}, 'ref': {'dist': 'norm', 'loc': 3.036, 'scale': 0.001}, 'proposal': 0.001, 'latex': '\\ln(10^{10} A_\\mathrm{s})', 'drop': True}, 'As': {'value': 'lambda logA: 1e-10*np.exp(logA)', 'latex': 'A_\\mathrm{s}'}, 'ns': {'prior': {'min': 0.8, 'max': 1.2}, 'ref': {'dist': 'norm', 'loc': 0.9649, 'scale': 0.004}, 'proposal': 0.002, 'latex': 'n_\\mathrm{s}'}, 'H0': {'prior': {'min': 20, 'max': 100}, 'ref': {'dist': 'norm', 'loc': 67.36, 'scale': 0.01}, 'latex': 'H_0'}, 'ombh2': {'prior': {'min': 0.005, 'max': 0.1}, 'ref': {'dist': 'norm', 'loc': 0.02237, 'scale': 0.0001}, 'proposal': 0.0001, 'latex': '\\Omega_\\mathrm{b} h^2'}, 'omch2': {'prior': {'min': 0.001, 'max': 0.99}, 'ref': {'dist': 'norm', 'loc': 0.12, 'scale': 0.001}, 'proposal': 0.0005, 'latex': '\\Omega_\\mathrm{c} h^2'}, 'tau': {'latex': '\\tau_\\mathrm{reio}', 'value': 0.0544}, 'mnu': {'latex': '\\sum m_\\nu', 'value': 0.06}, 'nnu': {'latex': 'N_\\mathrm{eff}', 'value': 3.044}}
+        info = {'theory': theory, 'likelihood': {'planck_2018_lowl.{}'.format(cl): None}, 'params': params}
+        from cobaya.model import get_model
+        model = get_model(info)
+        logpost = model.logposterior({'logA': 3.057147, 'ns': 0.9657119, 'H0': 70., 'ombh2': 0.02246306, 'omch2': 0.1184775, 'nnu': 3.044})
+        print(logpost.loglike)
+
+        cosmo = Cosmoprimo(engine='camb')
+        likelihood = globals()[cl + 'LowlPlanck2018Likelihood'](cosmo=cosmo)
+        params = {'logA': 3.057147, 'n_s': 0.9657119, 'h': 0.7, 'omega_b': 0.02246306, 'omega_cdm': 0.1184775, 'N_eff': 3.044}
+        likelihood(params)
+        print(likelihood.loglikelihood)
+
+        likelihood2 = globals()[cl + 'LowlPlanck2018ClikLikelihood'](cosmo=cosmo)
+        likelihood2(params)
+        assert np.allclose(likelihood2.loglikelihood, likelihood.loglikelihood)
+
+
 if __name__ == '__main__':
 
     setup_logging()
     #test_install()
-    test_clik()
+    #test_clik()
     #test_sum()
     #test_gaussian_likelihood()
     #test_params()
@@ -223,3 +266,5 @@ if __name__ == '__main__':
     #test_emulator_direct()
     #test_cmb()
     #test_profile()
+    #test_act_lensing()
+    test_planck_python()

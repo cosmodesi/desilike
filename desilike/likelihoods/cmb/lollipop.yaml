@@ -1,0 +1,20 @@
+class: LowlEEPlanck2020LollipopLikelihood
+
+params:
+  .import: lollipop_params.yaml::calib
+
+---
+
+class: LowlEBPlanck2020LollipopLikelihood
+
+params:
+  .import: lollipop_params.yaml::calib
+
+---
+
+class: LowlBBPlanck2020LollipopLikelihood
+
+params:
+  .import: lollipop_params.yaml::calib
+
+---

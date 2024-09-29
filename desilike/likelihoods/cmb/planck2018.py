@@ -3,6 +3,8 @@ import os
 import numpy as np
 
 from desilike.likelihoods.base import BaseLikelihood
+from desilike.jax import numpy as jnp
+from desilike.jax import Interpolator1D, vmap
 from desilike import utils
 from .base import ClTheory
 
@@ -106,9 +108,9 @@ class TTLowlPlanck2018Likelihood(BasePlanck2018Likelihood):
         self.precision = utils.inv(self.covariance)
 
         self._spline = []
-        self._spline_derivative = []
+        #self._spline_derivative = []
+        #from scipy.interpolate import InterpolatedUnivariateSpline
 
-        from scipy.interpolate import InterpolatedUnivariateSpline
         ellsize = self.elllim[1] - self.elllim[0] + 1
         self._prior = np.zeros((ellsize, 2), dtype='f8')
         for i in range(ellsize):
@@ -120,25 +122,31 @@ class TTLowlPlanck2018Likelihood(BasePlanck2018Likelihood):
             while abs(cl2x[1, i, j] - 5) < 1e-4:
                 j -= 1
             self._prior[i, 1] = cl2x[0, i, j - 2]
-            self._spline.append(InterpolatedUnivariateSpline(cl2x[0, i, :], cl2x[1, i, :]))
-            self._spline_derivative.append(self._spline[-1].derivative())
+            self._spline.append(Interpolator1D(cl2x[0, i, :], jnp.array(cl2x[1, i, :])))
+            #self._spline.append(InterpolatedUnivariateSpline(cl2x[0, i, :], cl2x[1, i, :]))
+            #self._spline_derivative.append(self._spline[-1].derivative())
 
         self._offset = self.get_loglikelihood(self.mu_sigma)
         ells = np.arange(self.elllim[0], self.elllim[1] + 1)
         self.factor = ells * (ells + 1) / 2 / np.pi
 
     def get_loglikelihood(self, theory):  # theory starts at ell = 2
-        if any(theory < self._prior[:, 0]) or any(theory > self._prior[:, 1]):
-            return -np.inf
+        toret = jnp.where(jnp.any(theory < self._prior[:, 0]) or jnp.any(theory > self._prior[:, 1]), -jnp.inf, 0)
 
-        toret = 0.
-        x = np.zeros_like(theory)
-        for i, (spline, diff_spline, cl) in enumerate(zip(self._spline, self._spline_derivative, theory)):
-            dxdCl = diff_spline(cl)
-            if dxdCl < 0:
-                return -np.inf
-            toret += np.log(dxdCl)
-            x[i] = spline(cl)
+        dxdCl = jnp.maximum(jnp.array([spline(cl, dx=1) for spline, cl in zip(self._spline, theory)]), 0.)
+        toret += jnp.sum(jnp.log(dxdCl))
+
+        x = jnp.array([spline(cl) for spline, cl in zip(self._spline, theory)])
+        self.flatdiff = x - self.mu
+
+
+        #x = np.zeros_like(theory)
+        #for i, (spline, diff_spline, cl) in enumerate(zip(self._spline, self._spline_derivative, theory)):
+        #    dxdCl = diff_spline(cl)
+        #    if dxdCl < 0:
+        #        return -np.inf
+        #    toret += np.log(dxdCl)
+        #    x[i] = spline(cl)
 
         self.flatdiff = x - self.mu
         toret += -0.5 * self.flatdiff.dot(self.precision).dot(self.flatdiff)
@@ -189,14 +197,79 @@ class EELowlPlanck2018Likelihood(BasePlanck2018Likelihood):
         self._prob = self._prob.reshape(-1, self._ncl).T[:, sl]
         ells = np.arange(self.elllim[0], self.elllim[1] + 1)
         self.factor = ells * (ells + 1) / 2 / np.pi
+        bins = self._dcl * (0.5 + np.arange(self._ncl))
+        self._interp = vmap(lambda cl, prob: jnp.interp(cl, bins, prob, left=-jnp.inf, right=-np.inf))
 
     def get_loglikelihood(self, theory):  # theory starts at ell = 2
-        idx = (theory / self._dcl).astype(int)
-        try:
-            return np.take_along_axis(self._prob, idx[None, :], 0).sum()
-        except IndexError:
-            return -np.inf
+        return self._interp(theory, self._prob.T).sum()
+        # jax-incompatible below
+        # idx = (theory / self._dcl).astype(int)
+        # try:
+        #     return np.take_along_axis(self._prob, idx[None, :], 0).sum()
+        #except IndexError:
+        #     return -np.inf
 
     def calculate(self, A_planck=1.):
         theory = self.theory.cls['ee'][self.elllim[0]:] * self.factor / A_planck**2
         self.loglikelihood = self.get_loglikelihood(theory)
+
+
+
+class TTTEEEHighlPlanck2018LiteLikelihood(BasePlanck2018Likelihood):
+
+    data_basename = 'baseline/plc_3.0/hi_l/plik_lite/plik_lite_v22_TTTEEE.clik'
+    cls = ['tt', 'te', 'ee']
+    name = 'TTTEEEHighlPlanck2018'
+
+    def initialize(self, *args, elllim=(30, 2508), **kwargs):
+        super().initialize(*args, elllim=elllim, **kwargs)
+        cls = ['tt', 'te', 'ee']
+        nbins = [215, 199, 199]
+        offset = 30
+        dirname = os.path.join(self.data_fn, 'clik', 'lkl_0', '_external')
+        self._ellmin = np.loadtxt(os.path.join(dirname, 'blmin.dat')).astype(int) + offset
+        self._ellmax = np.loadtxt(os.path.join(dirname, 'blmax.dat')).astype(int) + offset
+        weights = np.concatenate([np.zeros(offset), np.loadtxt(os.path.join(dirname, 'bweight.dat'))])
+        #ells = np.arange(len(weights))
+        #weights *= 2 * np.pi / ells / (ells + 1)
+        from scipy.io import FortranFile
+        file = FortranFile(os.path.join(dirname, 'c_matrix_plik_v22.dat'), 'r')
+        cov = file.read_reals(dtype=float).reshape((sum(nbins),) * 2)
+        cov = np.tril(cov) + np.tril(cov, -1).T
+
+        data = np.loadtxt(os.path.join(dirname, 'cl_cmb_plik_v22.dat'))
+        mask, self.binning, requested_cls = [], [], {}
+        for cl, nbin in zip(cls, nbins):
+            ellmin, ellmax = self._ellmin[:nbin], self._ellmax[:nbin]
+            tmp = (ellmin >= self.elllim[0]) & (ellmax <= self.elllim[1])
+            if cl in self.cls:
+                ellmin, ellmax = ellmin[tmp], ellmax[tmp]
+                requested_cls[cl] = ellmax.max()
+                binning = np.zeros((len(ellmax), 1 + ellmax.max()), dtype='f8')
+                for ill, ellbin in enumerate(zip(ellmin, ellmax)):
+                    sl = slice(ellbin[0], ellbin[1] + 1)
+                    binning[ill, sl] = weights[sl]
+                self.binning.append(jnp.asarray(binning))
+            else:
+                tmp[...] = False
+            mask.append(tmp)
+
+        mask = np.concatenate(mask)
+        self.flatdata = data[mask, 1]
+        self.covariance = cov[np.ix_(mask, mask)]
+        self.precision = utils.inv(self.covariance)
+        self.theory.init.update(cls=requested_cls)
+
+    def calculate(self, A_planck=1.):
+        theory = [self.theory.cls[cl] / A_planck**2 for cl in self.cls]
+        binned_theory = jnp.concatenate([binning.dot(th) for binning, th in zip(self.binning, theory)])
+        flatdiff = self.flatdata - binned_theory
+        self.loglikelihood = -0.5 * flatdiff.dot(self.precision).dot(flatdiff)
+
+
+
+class TTHighlPlanck2018LiteLikelihood(TTTEEEHighlPlanck2018LiteLikelihood):
+
+    data_basename = 'baseline/plc_3.0/hi_l/plik_lite/plik_lite_v22_TT.clik'
+    cls = ['tt']
+    name = 'TTHighlPlanck2018'

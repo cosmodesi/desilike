@@ -9,3 +9,19 @@ class: EELowlPlanck2018Likelihood
 
 params:
   .import: planck2018_clik_params.yaml::calib
+
+
+---
+
+class: TTTEEEHighlPlanck2018LiteLikelihood
+
+params:
+  .import: planck2018_clik_params.yaml::calib
+
+
+---
+
+class: TTHighlPlanck2018LiteLikelihood
+
+params:
+  .import: planck2018_clik_params.yaml::calib

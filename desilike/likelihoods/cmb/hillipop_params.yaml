@@ -1,0 +1,250 @@
+TT:
+  #Point Sources models
+  Aradio:
+    prior:
+      limits: [0., 150.]
+    ref:
+      dist: norm
+      loc: 60
+      scale: 1.
+    latex: A_\mathrm{radio}^\mathrm{PS}
+  beta_radio:
+    value: -0.8
+    latex: \beta_\mathrm{radio}^\mathrm{PS}
+  Adusty:
+    prior:
+      limits: [0., 100.]
+    ref:
+      dist: norm
+      loc: 6.
+      scale: 1.
+    latex: A_\mathrm{IR}^\mathrm{PS}
+
+  #Dust model
+  AdustT:
+    prior:
+      dist: norm
+      loc: 1.0
+      scale: 0.1
+    ref:
+      dist: norm
+      loc: 1.
+      scale: 0.02
+    latex: A_\mathrm{dustT}
+  beta_dustT:
+    prior:
+      dist: norm
+      loc: 1.51
+      scale: 0.01
+    ref:
+      dist: norm
+      loc: 1.51
+      scale: 0.01
+    latex: \beta_\mathrm{dustT}
+
+  #Sync
+  AsyncT:
+    value: 0.
+    latex: A_\mathrm{syncT}
+
+  #Cosmic Infrared Background
+  Acib:
+    prior:
+      limits: [0., 20.]
+    ref:
+      dist: norm
+      loc: 4.
+      scale: 1.
+    latex: A_\mathrm{CIB}
+  beta_cib:
+    prior:
+      dist: norm
+      loc: 1.75
+      scale: 0.06
+    ref:
+      dist: norm
+      loc: 1.75
+      scale: 0.05
+    latex: \beta_\mathrm{CIB}
+
+  #Sunyaev-Zeldovich
+  Atsz:
+    prior:
+      limits: [0., 50.]
+    ref:
+      dist: norm
+      loc: 3.
+      scale: 1.
+    latex: A_\mathrm{tSZ}
+  Aksz:
+    prior:
+      limits: [0., 50.]
+    ref:
+      dist: norm
+      loc: 1.
+      scale: 1.
+    latex: A_\mathrm{kSZ}
+
+  #tSZxCIB
+  xi:
+    prior:
+      limits: [-1., 1.]
+    ref:
+      dist: norm
+      loc: 0.1
+      scale: 0.1
+    latex: \xi_\mathrm{SZxCIB}
+  beta_dusty:
+    derived: '{beta_cib}'
+    prior:
+      limits: [-1000, 1000]
+    latex: \beta_\mathrm{IR}^\mathrm{PS}
+
+TE:
+  #Dust model
+  AdustT:
+    prior:
+      dist: norm
+      loc: 1.0
+      scale: 0.1
+    ref:
+      dist: norm
+      loc: 1.
+      scale: 0.02
+    latex: A_\mathrm{dustT}
+  beta_dustT:
+    prior:
+      dist: norm
+      loc: 1.51
+      scale: 0.01
+    ref:
+      dist: norm
+      loc: 1.51
+      scale: 0.01
+    latex: \beta_\mathrm{dustT}
+  AdustP:
+    prior:
+      dist: norm
+      loc: 1.0
+      scale: 0.1
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.02
+    latex: A_\mathrm{dustP}
+  beta_dustP:
+    prior:
+      dist: norm
+      loc: 1.59
+      scale: 0.02
+    ref:
+      dist: norm
+      loc: 1.59
+      scale: 0.01
+    latex: \beta_\mathrm{dustP}
+
+
+EE:
+  #Dust model
+  AdustP:
+    prior:
+      dist: norm
+      loc: 1.0
+      scale: 0.1
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.02
+    latex: A_\mathrm{dustP}
+  beta_dustP:
+    prior:
+      dist: norm
+      loc: 1.59
+      scale: 0.02
+    ref:
+      dist: norm
+      loc: 1.59
+      scale: 0.01
+    latex: \beta_\mathrm{dustP}
+
+  #Sync
+  AsyncP:
+    value: 0.
+    latex: A_\mathrm{syncP}
+
+
+calib:
+  A_planck:
+    prior:
+      dist: norm
+      loc: 1
+      scale: 0.0025
+    ref:
+      dist: norm
+      loc: 1
+      scale: 0.002
+    proposal: 0.0005
+    latex: y_\mathrm{cal}
+  cal100A:
+    prior:
+      limits: [0.9, 1.1]
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.005
+    latex: c_\mathrm{100A}
+  cal100B:
+    prior:
+      limits: [0.9, 1.1]
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.005
+    latex: c_\mathrm{100B}
+  cal143A:
+    value: 1.0
+    latex: c_\mathrm{143A}
+  cal143B:
+    prior:
+      limits: [0.9, 1.1]
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.005
+    latex: c_\mathrm{143B}
+  cal217A:
+    prior:
+      limits: [0.9, 1.1]
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.005
+    latex: c_\mathrm{217A}
+  cal217B:
+    prior:
+      limits: [0.9, 1.1]
+    ref:
+      dist: norm
+      loc: 1.0
+      scale: 0.005
+    latex: c_\mathrm{217B}
+
+  #Polar efficiency
+  pe100A:
+    value: 1.
+    latex: \eta_\mathrm{100A}
+  pe100B:
+    value: 1.
+    latex: \eta_\mathrm{100B}
+  pe143A:
+    value: 1.
+    latex: \eta_\mathrm{143A}
+  pe143B:
+    value: 1.
+    latex: \eta_\mathrm{143B}
+  pe217A:
+    value: 0.975
+    latex: \eta_\mathrm{217A}
+  pe217B:
+    value: 0.975
+    latex: \eta_\mathrm{217B}

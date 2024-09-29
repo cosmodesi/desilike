@@ -1,4 +1,4 @@
-"""Jax-adaptation of https://github.com/ACTCollaboration/act_dr6_lenslike/blob/main/act_dr6_lenslike/act_dr6_lenslike.py    """
+"""JAX-adaptation of https://github.com/ACTCollaboration/act_dr6_lenslike/blob/main/act_dr6_lenslike/act_dr6_lenslike.py"""
 
 import os
 
@@ -85,7 +85,7 @@ class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
 
             tar_base = 'ACT_dr6_likelihood_{}.tgz'.format(cls.version)
             url = 'https://lambda.gsfc.nasa.gov/data/suborbital/ACT/ACT_dr6/likelihood/data/{}'.format(tar_base)
-            tar_fn = os.path.join(data_dir, tar_base)
+            tar_fn = os.path.join(data_dir, cls.version, tar_base)
             download(url, tar_fn)
             extract(tar_fn, data_dir)
 

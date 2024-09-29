@@ -17,7 +17,6 @@ try:
     from jax import config
     config.update('jax_enable_x64', True)
     from jax import numpy, scipy
-    from jax.tree_util import register_pytree_node_class
     array_types = []
     for line in ['jaxlib.xla_extension.DeviceArrayBase', 'type(numpy.array(0))', 'jax.core.Tracer']:
         try:
@@ -31,8 +30,34 @@ except ImportError:
     jax = None
     import numpy
     import scipy
+
+
+def exception_numpy(fun, *args):
+    return fun(*args)
+
+
+def exception_jax(fun, *args):
+    return jax.debug.callback(fun, *args)
+
+
+def map_numpy(func, array):
+    return numpy.array(map(func, array))
+
+
+if jax:
+    exception = exception_jax
+    from jax import vmap
+    map = jax.lax.map
+    from jax.tree_util import register_pytree_node_class
+else:
+    exception = exception_numpy
+    vmap = numpy.vectorize
+    map = map_numpy
     def register_pytree_node_class(cls):
         return cls
+
+
+from cosmoprimo.jax import Interpolator1D, Interpolator2D
 
 
 def jit(*args, **kwargs):
@@ -230,11 +255,12 @@ def interp1d(xq, x, f, method='cubic'):
     fq : ndarray, shape(Nq,...)
         function value at query points
     """
-    method = {1: 'linear', 3: 'cubic'}.get(method, method)
     if interpax is not None:
+        method = {1: 'linear', 3: 'cubic2'}.get(method, method)
         shape = xq.shape
         return interpax.interp1d(xq.reshape(-1), x, f, method=method).reshape(shape + f.shape[1:])
 
+    method = {1: 'linear', 3: 'cubic'}.get(method, method)
     from scipy import interpolate
     return interpolate.interp1d(x, f, kind=method, fill_value='extrapolate', axis=0)(xq)
 
@@ -249,3 +275,18 @@ def cond(pred, true_fun, false_fun, *operands):
     if use_jax(pred):
         return jax.lax.cond(pred, true_fun, false_fun, *operands)
     return cond_numpy(pred, true_fun, false_fun, *operands)
+
+
+def opmask(array, mask, value, op='set'):
+    if use_jax(array):
+        if op == 'set':
+            return array.at[mask].set(value)
+        if op == 'add':
+            return array.at[mask].add(value)
+    else:
+        if op == 'set':
+            array[mask] = value
+            return array
+        if op == 'add':
+            array[mask] += value
+            return array

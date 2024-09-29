@@ -1,0 +1,13 @@
+class: HighlTTTEEEPlanck2020HillipopLikelihood
+
+params:
+  .import: hillipop_params.yaml::TT,TE,EE,calib
+
+---
+
+class: HighlTTPlanck2020HillipopLikelihood
+
+params:
+  .import: hillipop_params.yaml::TT,calib
+
+---

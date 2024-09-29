@@ -895,8 +895,10 @@ class RuntimeInfo(BaseClass):
         self._params = ParameterCollection(params)
         self._params.updated = False
         self.base_names = {(param.name if self._calculate_with_namespace else param.basename): param.name for param in self.params}
-        self.input_names = {param.name: (param.name if self._calculate_with_namespace else param.basename) for param in self.params.select(input=True)}
-        self.input_values = {(param.name if self._calculate_with_namespace else param.basename): param.value for param in self.params.select(input=True)}
+        def is_input(self):
+            return ((self._derived is False) or isinstance(self._derived, str)) and not self.drop
+        self.input_names = {param.name: (param.name if self._calculate_with_namespace else param.basename) for param in self.params if is_input(param)}
+        self.input_values = {(param.name if self._calculate_with_namespace else param.basename): param.value for param in self.params if is_input(param)}
         self.derived_params = self.params.select(derived=True)
         self._tocalculate = True
 

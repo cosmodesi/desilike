@@ -289,6 +289,7 @@ class BaseLikelihood(BaseCalculator):
             #print(values)
             for param in prec_params: values[param.name] = 0.
 
+            fisher(values, gradient=False)  # to set flatdata
             for likelihood in fisher.solve_likelihoods:
                 likelihood._precision_input = getattr(likelihood, '_precision_input', likelihood.precision)
                 likelihood._flatdata_input = getattr(likelihood, '_flatdata_input', likelihood.flatdata)

@@ -52,11 +52,12 @@ def download(url, target, size=None):
             for data in r.iter_content(chunk_size=2048):
                 dl += len(data)
                 file.write(data)
-                frac = min(dl / size, 1.)
-                done = int(width * frac)
-                if done > current:  # it seems, when content-length is not set iter_content does not care about chunk_size
-                    print('\r[{}{}] [{:3.0%}]'.format('#' * done, ' ' * (width - done), frac), end='', flush=True)
-                    current = done
+                if size:
+                    frac = min(dl / size, 1.)
+                    done = int(width * frac)
+                    if done > current:  # it seems, when content-length is not set iter_content does not care about chunk_size
+                        print('\r[{}{}] [{:3.0%}]'.format('#' * done, ' ' * (width - done), frac), end='', flush=True)
+                        current = done
             print('')
 
 

@@ -5,7 +5,7 @@ from desilike.install import Installer
 from desilike.likelihoods.cmb import (BasePlanck2018GaussianLikelihood, FullGridPlanck2018GaussianLikelihood, TTHighlPlanck2018PlikLikelihood, TTHighlPlanck2018PlikLiteLikelihood, TTHighlPlanck2018PlikUnbinnedLikelihood,
                                       TTTEEEHighlPlanck2018PlikLikelihood, TTTEEEHighlPlanck2018PlikLiteLikelihood, TTTEEEHighlPlanck2018PlikUnbinnedLikelihood,
                                       LensingPlanck2018ClikLikelihood, TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood, TTLowlPlanck2018Likelihood, EELowlPlanck2018Likelihood, TTTEEEHighlPlanck2018LiteLikelihood, TTHighlPlanck2018LiteLikelihood,
-                                      HighlTTTEEEPlanck2020HillipopLikelihood, HighlTTPlanck2020HillipopLikelihood,
+                                      HighlTTTEEEPlanckNPIPECamspecLikelihood, HighlTTPlanckNPIPECamspecLikelihood, HighlTTTEEEPlanck2020HillipopLikelihood, HighlTTPlanck2020HillipopLikelihood,
                                       LowlEEPlanck2020LollipopLikelihood, LowlEBPlanck2020LollipopLikelihood, LowlBBPlanck2020LollipopLikelihood, ACTDR6LensingLikelihood, read_planck2018_chain)
 from desilike.theories import Cosmoprimo
 
@@ -220,14 +220,13 @@ def test_act_lensing():
 def test_planck_python():
 
     installer = Installer(user=True)
-
     for Likelihood in [TTLowlPlanck2018Likelihood, EELowlPlanck2018Likelihood, TTTEEEHighlPlanck2018LiteLikelihood]:
         installer(Likelihood)
         cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
         likelihood = Likelihood(cosmo=cosmo)
         likelihood()
 
-    for cl in ['TT', 'EE'][1:]:
+    for cl in ['TT', 'EE']:
         theory = {'camb': {'extra_args': {'bbn_predictor': 'PArthENoPE_880.2_standard.dat', 'dark_energy_model': 'ppf', 'num_massive_neutrinos': 1}}}
         #theory = {'cosmoprimo.bindings.cobaya.cosmoprimo': {'engine': 'camb', 'stop_at_error': True, 'extra_args': {'N_ncdm': 1}}}
         params = {'logA': {'prior': {'min': 1.61, 'max': 3.91}, 'ref': {'dist': 'norm', 'loc': 3.036, 'scale': 0.001}, 'proposal': 0.001, 'latex': '\\ln(10^{10} A_\\mathrm{s})', 'drop': True}, 'As': {'value': 'lambda logA: 1e-10*np.exp(logA)', 'latex': 'A_\\mathrm{s}'}, 'ns': {'prior': {'min': 0.8, 'max': 1.2}, 'ref': {'dist': 'norm', 'loc': 0.9649, 'scale': 0.004}, 'proposal': 0.002, 'latex': 'n_\\mathrm{s}'}, 'H0': {'prior': {'min': 20, 'max': 100}, 'ref': {'dist': 'norm', 'loc': 67.36, 'scale': 0.01}, 'latex': 'H_0'}, 'ombh2': {'prior': {'min': 0.005, 'max': 0.1}, 'ref': {'dist': 'norm', 'loc': 0.02237, 'scale': 0.0001}, 'proposal': 0.0001, 'latex': '\\Omega_\\mathrm{b} h^2'}, 'omch2': {'prior': {'min': 0.001, 'max': 0.99}, 'ref': {'dist': 'norm', 'loc': 0.12, 'scale': 0.001}, 'proposal': 0.0005, 'latex': '\\Omega_\\mathrm{c} h^2'}, 'tau': {'latex': '\\tau_\\mathrm{reio}', 'value': 0.0544}, 'mnu': {'latex': '\\sum m_\\nu', 'value': 0.06}, 'nnu': {'latex': 'N_\\mathrm{eff}', 'value': 3.044}}
@@ -255,7 +254,7 @@ def test_planck_python():
     logpost = model.logposterior({'logA': 3.057147, 'ns': 0.9657119, 'H0': 70., 'ombh2': 0.02246306, 'omch2': 0.1184775, 'nnu': 3.044, 'A_planck': 1.})
     print(logpost.loglike)
 
-    for cl in ['TTTEEE', 'TT'][:1]:
+    for cl in ['TTTEEE', 'TT']:
         cosmo = Cosmoprimo(engine='camb')
         likelihood = globals()[cl + 'HighlPlanck2018LiteLikelihood'](cosmo=cosmo)
         params = {'logA': 3.057147, 'n_s': 0.9657119, 'h': 0.7, 'omega_b': 0.02246306, 'omega_cdm': 0.1184775, 'N_eff': 3.044}
@@ -311,10 +310,36 @@ def test_lollipop():
     print(likelihood())
 
 
+def test_camspec():
+
+    installer = Installer(user=True)
+    installer(HighlTTTEEEPlanckNPIPECamspecLikelihood)
+
+    for cl in ['TTTEEE', 'TT']:
+        nuisance = {'calTE': 1.2, 'calEE': 1.2, 'amp_143': 10., 'amp_217': 10., 'amp_143x217': 10., 'n_217': 2., 'n_143': 2., 'n_143x217': 2., 'A_planck': 1.}
+        if cl == 'TT':
+            for name in ['calTE', 'calEE']: nuisance.pop(name)
+
+        #theory = {'camb': {'extra_args': {'bbn_predictor': 'PArthENoPE_880.2_standard.dat', 'dark_energy_model': 'ppf', 'num_massive_neutrinos': 1}}}
+        theory = {'cosmoprimo.bindings.cobaya.cosmoprimo': {'engine': 'camb', 'extra_args': {'bbn_predictor': 'PArthENoPE_880.2_standard.dat', 'dark_energy_model': 'ppf', 'N_ncdm': 1}}}
+        params = {'logA': {'prior': {'min': 1.61, 'max': 3.91}, 'ref': {'dist': 'norm', 'loc': 3.036, 'scale': 0.001}, 'proposal': 0.001, 'latex': '\\ln(10^{10} A_\\mathrm{s})', 'drop': True}, 'As': {'value': 'lambda logA: 1e-10*np.exp(logA)', 'latex': 'A_\\mathrm{s}'}, 'ns': {'prior': {'min': 0.8, 'max': 1.2}, 'ref': {'dist': 'norm', 'loc': 0.9649, 'scale': 0.004}, 'proposal': 0.002, 'latex': 'n_\\mathrm{s}'}, 'H0': {'prior': {'min': 20, 'max': 100}, 'ref': {'dist': 'norm', 'loc': 67.36, 'scale': 0.01}, 'latex': 'H_0'}, 'ombh2': {'prior': {'min': 0.005, 'max': 0.1}, 'ref': {'dist': 'norm', 'loc': 0.02237, 'scale': 0.0001}, 'proposal': 0.0001, 'latex': '\\Omega_\\mathrm{b} h^2'}, 'omch2': {'prior': {'min': 0.001, 'max': 0.99}, 'ref': {'dist': 'norm', 'loc': 0.12, 'scale': 0.001}, 'proposal': 0.0005, 'latex': '\\Omega_\\mathrm{c} h^2'}, 'tau': {'latex': '\\tau_\\mathrm{reio}', 'value': 0.0544}, 'mnu': {'latex': '\\sum m_\\nu', 'value': 0.06}, 'nnu': {'latex': 'N_\\mathrm{eff}', 'value': 3.044}}
+        info = {'theory': theory, 'likelihood': {'planck_NPIPE_highl_CamSpec.{}'.format(cl): None}, 'params': params}
+        from cobaya.model import get_model
+        model = get_model(info)
+        params = {'logA': 3.057147, 'ns': 0.9657119, 'H0': 70., 'ombh2': 0.02246306, 'omch2': 0.1184775, 'nnu': 3.044} | nuisance
+        logpost = model.logposterior(params)
+        print(logpost.loglike)
+
+        cosmo = Cosmoprimo(fiducial='DESI', engine='camb', non_linear='hmcode')
+        likelihood = globals()['Highl{}PlanckNPIPECamspecLikelihood'.format(cl)](cosmo=cosmo)
+        params = {'logA': 3.057147, 'n_s': 0.9657119, 'h': 0.7, 'omega_b': 0.02246306, 'omega_cdm': 0.1184775, 'N_eff': 3.044} | nuisance
+        likelihood(params)
+        print(likelihood.loglikelihood)
+
 
 def test_jax():
     import jax
-    for Likelihood in [ACTDR6LensingLikelihood, TTLowlPlanck2018Likelihood, EELowlPlanck2018Likelihood, TTTEEEHighlPlanck2018LiteLikelihood, HighlTTTEEEPlanck2020HillipopLikelihood, LowlEEPlanck2020LollipopLikelihood][-1:]:
+    for Likelihood in [ACTDR6LensingLikelihood, TTLowlPlanck2018Likelihood, EELowlPlanck2018Likelihood, TTTEEEHighlPlanck2018LiteLikelihood, HighlTTTEEEPlanck2020HillipopLikelihood, LowlEEPlanck2020LollipopLikelihood, HighlTTTEEEPlanckNPIPECamspecLikelihood][-1:]:
         cosmo = Cosmoprimo(engine='capse')
         likelihood = Likelihood(cosmo=cosmo)
         params = {'logA': 3.057147, 'n_s': 0.9657119, 'h': 0.7, 'omega_b': 0.02246306, 'omega_cdm': 0.1184775, 'N_eff': 3.044}
@@ -341,5 +366,6 @@ if __name__ == '__main__':
     #test_act_lensing()
     #test_planck_python()
     #test_hillipop()
-    test_lollipop()
-    #test_jax()
+    #test_lollipop()
+    #test_camspec()
+    test_jax()

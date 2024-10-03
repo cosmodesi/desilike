@@ -348,6 +348,15 @@ def test_jax():
         print(grad(params))
 
 
+def test_inference():
+    from desilike.samplers import NUTSSampler
+
+    cosmo = Cosmoprimo(engine='capse')
+    likelihood = HighlTTTEEEPlanckNPIPECamspecLikelihood(cosmo=cosmo)
+    sampler = NUTSSampler(likelihood, chains=4, seed=42)
+    sampler.run(max_iterations=10000, check={'max_eigen_gr': 0.03, 'min_ess': 50}, check_every=200)
+
+
 
 if __name__ == '__main__':
 
@@ -368,4 +377,5 @@ if __name__ == '__main__':
     #test_hillipop()
     #test_lollipop()
     #test_camspec()
-    test_jax()
+    #test_jax()
+    test_inference()

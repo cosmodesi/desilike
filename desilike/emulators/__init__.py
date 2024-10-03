@@ -394,6 +394,10 @@ class EmulatedCalculator(BaseCalculator):
     def initialize(self, emulator=None, **kwargs):
         self.emulator = emulator
         self.calculate(**{param.basename: param.value for param in self.init.params})
+        # Hack to enforce parameters that are dropped in the non-emulated pipeline to be passed here
+        for param in self.init.params:
+            if param.name in self.emulator.varied_params:
+                param.update(drop=False)
 
     def calculate(self, **params):
         _setstate(self, self.emulator.predict(params))

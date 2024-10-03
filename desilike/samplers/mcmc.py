@@ -538,8 +538,8 @@ class MCMCSampler(BaseBatchPosteriorSampler):
         t0 = time.time()
         nsteps = 0
         for _ in self.sampler.sample(start=np.ravel(start), iterations=niterations, thin_by=thin_by):
-            #total = int(self.sampler.get_weight().sum())
             if self.mpicomm.rank == 0 and time.time() - t0 >= log_every:
+                total = int(self.sampler.get_weight().sum())
                 self.log_info('{:d} steps, acceptance rate {:.3f}.'.format(total, self.sampler.get_acceptance_rate()))
                 t0 = time.time()
         chain = self.sampler.get_chain()

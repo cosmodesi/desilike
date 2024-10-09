@@ -1399,8 +1399,12 @@ class REPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPowe
             if self.pt.z.ndim:
                 iz = list(self.pt.z).index(self.z)
                 sigma8, f = sigma8[iz], f[iz]
+            # b1_E = 1+b1_L
+            # b2_E = b2_L + (8/21)*b1_L
+            # bs_E = bs_L - (2/7)*b1_L
+            # b3_E = 3*b3_L + b1_L
             pars = b1L, b2L, bsL, b3L = [params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p'] / sigma8**3]
-            pars = [1. + b1L, 8. / 21. * b1L + b2L, bsL, b3L]  # compensate bs by 2. / 7. * b1L and b3 by b1L as it is removed by combine_bias_terms_poles below
+            pars = [1. + b1L, 8. / 21. * b1L + b2L, bsL, b3L]
             pars += [(1 + b1L)**2 * params['alpha0p'], f * (1 + b1L) * (params['alpha0p'] + params['alpha2p']),
                      f * (f * params['alpha2p'] + (1 + b1L) * params['alpha4p']), f**2 * params['alpha4p']]
             sigv = self.options['sigv']

@@ -282,7 +282,7 @@ def test_hillipop():
 
     cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
     likelihood = HighlTTTEEEPlanck2020HillipopLikelihood(cosmo=cosmo)
-    print(likelihood())
+    print(likelihood(), likelihood.varied_params)
     likelihood = HighlTTPlanck2020HillipopLikelihood(cosmo=cosmo)
     print(likelihood())
 
@@ -374,8 +374,8 @@ if __name__ == '__main__':
     #test_profile()
     #test_act_lensing()
     #test_planck_python()
-    #test_hillipop()
+    test_hillipop()
     #test_lollipop()
     #test_camspec()
     #test_jax()
-    test_inference()
+    #test_inference()

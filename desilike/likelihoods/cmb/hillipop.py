@@ -928,7 +928,7 @@ class HighlTTTEEEPlanck2020HillipopLikelihood(BaseGaussianLikelihood):
         installer.write({cls.installer_section: {'data_dir': data_dir}})
 
 
-class HighlTTPlanck2020HillipopLikelihood(BaseGaussianLikelihood):
+class HighlTTPlanck2020HillipopLikelihood(HighlTTTEEEPlanck2020HillipopLikelihood):
 
     version = 'v4.2'
     config_fn = 'hillipop.yaml'

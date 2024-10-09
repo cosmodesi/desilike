@@ -220,7 +220,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         values = self._params_forward_transform(values)
 
         def compute_logprior(values):
-            return self.likelihood.all_params.prior(**dict(zip(self.varied_params.names(), values)))
+            return jnp.asarray(self.likelihood.all_params.prior(**dict(zip(self.varied_params.names(), values))))
 
         def compute_logposterior(values):
             points = {param.name: value for param, value in zip(self.varied_params, values)}

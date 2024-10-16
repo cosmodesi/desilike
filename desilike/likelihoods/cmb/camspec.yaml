@@ -1,11 +1,11 @@
-class: HighlTTTEEEPlanckNPIPECamspecLikelihood
+class: TTTEEEHighlPlanckNPIPECamspecLikelihood
 
 params:
   .import: camspec_params.yaml::TT,TE,EE,calib
 
 ---
 
-class: HighlTTPlanckNPIPECamspecLikelihood
+class: TTHighlPlanckNPIPECamspecLikelihood
 
 params:
   .import: camspec_params.yaml::TT,calib

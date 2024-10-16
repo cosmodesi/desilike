@@ -7,7 +7,7 @@ import numpy as np
 from desilike.likelihoods.base import BaseGaussianLikelihood
 from desilike.jax import numpy as jnp
 from desilike import utils
-from .base import ClTheory
+from .base import ClTheory, projection
 
 
 class BasePlanckNPIPECamspecLikelihood(BaseGaussianLikelihood):
@@ -28,8 +28,9 @@ class BasePlanckNPIPECamspecLikelihood(BaseGaussianLikelihood):
         self.theory = theory
         self.theory.init.update(cls=requested_cls, lensing=True, unit='muK', T0=2.7255)
         if cosmo is not None: self.theory.init.update(cosmo=cosmo)
+        super().initialize(data=self.flatdata, precision=self.precision, **kwargs)
 
-    def load_data(self, data_dir, select_cls=None, select_ells=None):
+    def load_data(self, data_dir, select_cls=None, select_ells=None, proj_order=None):
         select_cls = list(select_cls if select_cls is not None else self.all_cls[1:])  # list of spectra, among all_cls
         # select_ells may be a dictionary of cl: ell indices / masks
         input_data = np.loadtxt(os.path.join(data_dir, 'like_NPIPE_12.6_unified_spectra.txt'))
@@ -72,17 +73,34 @@ class BasePlanckNPIPECamspecLikelihood(BaseGaussianLikelihood):
         except:
             self.precision = utils.inv(self.covariance)
             np.save(fn, np.array([self.precision, self.covariance]))
+        #self.precision = np.diag(self.precision)
         self.index_ells = index_ells
         self.ellmax = max([max(ell) for ell in self.index_ells.values()])
         self.has_foregrounds = any(cl in self.all_cls[:4] for cl in self.index_ells)
+        pivot = 1500
+        ells = jnp.arange(self.ellmax + 1)
+        self._template_foreground = jnp.log(ells / pivot)
+        self.proj_order = proj_order
+        if self.proj_order:
+            from scipy import linalg
+            proj, poly = [], []
+            for icl, cl in enumerate(self.all_cls):
+                if cl in self.index_ells:
+                    size = self.index_ells[cl].size
+                    tmp = projection(size, order=min(size, self.proj_order))
+                    proj.append(tmp[0])
+                    poly.append(tmp[1])
+            self._proj, poly = (jnp.asarray(linalg.block_diag(*tmp)) for tmp in [proj, poly])
+            self._chi2_dd = self.flatdata.dot(self.precision).dot(self.flatdata)
+            chi2_dt = self.flatdata.dot(self.precision).dot(poly.T)
+            self._chi2_dt = jnp.asarray(- (chi2_dt + chi2_dt.T))
+            self._chi2_tt = jnp.asarray(poly.dot(self.precision).dot(poly.T))
 
     def get_foregrounds(self, params):
         names = ['100', '143', '217', '143x217']
         amp = jnp.array([params['amp_{}'.format(name)] for name in names])
         tilt = jnp.array([params['n_{}'.format(name)] for name in names])
-        pivot = 1500
-        ells = jnp.arange(self.ellmax + 1)
-        toret = amp[:, None] * (ells / pivot)**tilt[:, None]
+        toret = amp[:, None] * jnp.exp(self._template_foreground * tilt[:, None])
         return toret
 
     def get_cals(self, params):
@@ -108,10 +126,17 @@ class BasePlanckNPIPECamspecLikelihood(BaseGaussianLikelihood):
                     tmp = cl_te[index]
                 if icl == 5:
                     tmp = cl_ee[index]
-                flattheory.append(tmp / cals[icl])
+                tmp = tmp / cals[icl]
+                flattheory.append(tmp)
         self.flattheory = jnp.concatenate(flattheory)
-        self.flatdiff = self.flatdata  - self.flattheory
-        return self.flatdiff.dot(self.precision).dot(self.flatdiff)
+        self.flatdiff = self.flatdata - self.flattheory
+        if self.proj_order:
+            flattheory = self._proj.dot(self.flattheory)
+            chi2 = self._chi2_dd + self._chi2_dt.dot(flattheory) + flattheory.dot(self._chi2_tt).dot(flattheory)
+        else:
+            #chi2 = jnp.sum(self.flatdiff * self.precision * self.flatdiff, axis=0)
+            chi2 = self.flatdiff.dot(self.precision).dot(self.flatdiff)
+        return chi2
 
     def calculate(self, **params):
         cl_tt, cl_te, cl_ee = [self.factor * self.theory.cls[name] for name in ['tt', 'te', 'ee']]
@@ -126,7 +151,7 @@ class BasePlanckNPIPECamspecLikelihood(BaseGaussianLikelihood):
 
         from desilike.install import exists_path, download, extract
 
-        if installer.reinstall or not exists_path(os.path.join(data_dir)):
+        if installer.reinstall or not exists_path(data_dir):
             tar_base = 'CamSpec_NPIPE.zip'
             url = 'https://github.com/CobayaSampler/planck_native_data/releases/download/v1/{}'.format(tar_base)
             tar_fn = os.path.join(data_dir, tar_base)
@@ -137,14 +162,18 @@ class BasePlanckNPIPECamspecLikelihood(BaseGaussianLikelihood):
 
 
 
-class HighlTTTEEEPlanckNPIPECamspecLikelihood(BasePlanckNPIPECamspecLikelihood):
+class TTTEEEHighlPlanckNPIPECamspecLikelihood(BasePlanckNPIPECamspecLikelihood):
+
+    name = 'TTTEEEHighlPlanck2018NPIPECamspec'
 
     def initialize(self, theory=None, cosmo=None, data_dir=None, **kwargs):
         super().initialize(theory=theory, cosmo=cosmo, data_dir=data_dir, select_cls=['143x143', '217x217', '143x217', 'TE', 'EE'], **kwargs)
 
 
 
-class HighlTTPlanckNPIPECamspecLikelihood(BasePlanckNPIPECamspecLikelihood):
+class TTHighlPlanckNPIPECamspecLikelihood(BasePlanckNPIPECamspecLikelihood):
+
+    name = 'TTHighlPlanck2018NPIPECamspec'
 
     def initialize(self, theory=None, cosmo=None, data_dir=None, **kwargs):
         super().initialize(theory=theory, cosmo=cosmo, data_dir=data_dir, select_cls=['143x143', '217x217', '143x217'], **kwargs)

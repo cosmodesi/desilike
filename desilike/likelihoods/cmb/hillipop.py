@@ -12,9 +12,9 @@ import itertools
 import numpy as np
 import fitsio
 
-from desilike.likelihoods.base import BaseGaussianLikelihood
+from desilike.likelihoods.base import BaseLikelihood
 from desilike.jax import numpy as jnp
-from .base import ClTheory
+from .base import ClTheory, projection
 
 
 t_cmb = 2.72548
@@ -457,6 +457,7 @@ fg_list = {
     "szxcib": szxcib_model,
 }
 
+
 class HillipopLikelihood(object):
 
     logger = logging.getLogger('hillipop')
@@ -477,7 +478,7 @@ class HillipopLikelihood(object):
     'TE': {'dust_model': 'foregrounds/DUST_Planck_PR4_model_v4.2'},
     }
 
-    def __init__(self, data_folder=None, likelihood_name=None):
+    def __init__(self, data_folder=None, likelihood_name=None, proj_order=None):
         # Set path to data
         # If no path specified, use the modules path
         if data_folder is not None:
@@ -512,7 +513,7 @@ class HillipopLikelihood(object):
 
         # Weights
         dlsig = self._read_dl_xspectra(basename, hdu=2)
-        for m,w8 in dlsig.items(): w8[w8==0] = np.inf
+        for m, w8 in dlsig.items(): w8[w8 == 0] = np.inf
         self._dlweight = {k: 1. / v**2 for k, v in dlsig.items()}
 #        self._dlweight = np.ones(np.shape(self._dldata))
 
@@ -523,8 +524,9 @@ class HillipopLikelihood(object):
         if not m or likelihood_name != m.group(1):
             raise IOError("The covariance matrix mode differs from the likelihood mode. "
                 f"Check the given path [{self.covariance_matrix_file}]")
-        self._invkll = self._read_invcovmatrix(filename)
-        self._invkll = self._invkll.astype('float32')
+        self.precision = self._read_invcovmatrix(filename)
+        self.precision = self.precision.astype('float32')
+        #self.precision = np.diag(self.precision)
 
         # Foregrounds
         self.fgs = {}  # list of foregrounds per mode [TT,EE,TE,ET]
@@ -576,6 +578,41 @@ class HillipopLikelihood(object):
 
         self.logger.debug("Initialized!")
 
+        flatdata = []
+        for mode in ['TT', 'EE']:
+            if self._is_mode[mode]:
+                R = self._xspectra_to_xfreq(self._dldata[mode], self._dlweight[mode])
+                flatdata += self._select_spectra(R, mode)
+        if self._is_mode["TE"] or self._is_mode["ET"]:
+            Rl = 0
+            Wl = 0
+            # compute theory Dlth
+            if self._is_mode["TE"]:
+                RlTE, WlTE = self._xspectra_to_xfreq(self._dldata["TE"], self._dlweight["TE"], normed=False)
+                Rl = Rl + RlTE
+                Wl = Wl + WlTE
+            if self._is_mode["ET"]:
+                RlET, WlET = self._xspectra_to_xfreq(self._dldata["ET"], self._dlweight["ET"], normed=False)
+                Rl = Rl + RlET
+                Wl = Wl + WlET
+            # select multipole range
+            flatdata += self._select_spectra(Rl / Wl, "TE")
+        self.flatdata = np.concatenate(flatdata)
+        self.proj_order = proj_order
+        if self.proj_order:
+            from scipy import linalg
+            proj, poly = [], []
+            for i, data in enumerate(flatdata):
+                size = data.size
+                tmp = projection(size, order=min(size, self.proj_order))
+                proj.append(tmp[0])
+                poly.append(tmp[1])
+            self._proj, poly = (jnp.asarray(linalg.block_diag(*tmp)) for tmp in [proj, poly])
+            self._chi2_dd = self.flatdata.dot(self.precision).dot(self.flatdata)
+            chi2_dt = self.flatdata.dot(self.precision).dot(poly.T)
+            self._chi2_dt = jnp.asarray(- (chi2_dt + chi2_dt.T))
+            self._chi2_tt = jnp.asarray(poly.dot(self.precision).dot(poly.T))
+
     def _xspec2xfreq(self):
         list_fqs = []
         for f1 in range(self._nfreq):
@@ -598,8 +635,8 @@ class HillipopLikelihood(object):
 
     def _set_multipole_ranges(self, filename):
         """
-        Return the (lmin,lmax) for each cross-spectra for each mode (TT, EE, TE, ET)
-        array(nmode,nxspec)
+        Return the (lmin, lmax) for each cross-spectra for each mode (TT, EE, TE, ET)
+        array (nmode, nxspec)
         """
         self.logger.debug("Define multipole ranges")
         if not os.path.exists(filename):
@@ -624,7 +661,7 @@ class HillipopLikelihood(object):
     def _read_dl_xspectra(self, basename, hdu=1):
         """
         Read xspectra from Xpol [Dl in K^2]
-        Output: Dl (TT,EE,TE,ET) in muK^2
+        Output: Dl (TT, EE, TE, ET) in muK^2
         """
         self.logger.debug("Reading cross-spectra")
 
@@ -645,7 +682,7 @@ class HillipopLikelihood(object):
                 dldata.append( tmpcl)
 
         dldata = np.transpose(np.array(dldata), (1, 0, 2))
-        return dict(zip(['TT','EE','TE','ET'],dldata))
+        return dict(zip(['TT', 'EE', 'TE', 'ET'],dldata))
 
     def _read_invcovmatrix(self, filename):
         """
@@ -683,7 +720,7 @@ class HillipopLikelihood(object):
 
     def _select_spectra(self, acl, mode):
         """
-        Cut spectra given Multipole Ranges and flatten
+        Cut spectra given multipole ranges and flatten
         Return: list
         """
         xl = []
@@ -713,7 +750,7 @@ class HillipopLikelihood(object):
         else:
             return xcl, xw8
 
-    def _compute_residuals(self, pars, dlth, mode):
+    def _compute_theory(self, pars, dlth, mode):
         # Nuisances
         cal = []
         for m1, m2 in itertools.combinations(self._mapnames, 2):
@@ -727,40 +764,18 @@ class HillipopLikelihood(object):
                 cal1, cal2 = pars[f"cal{m1}"]*pars[f"pe{m1}"], pars[f"cal{m2}"]
             cal.append(cal1 * cal2 / pars["A_planck"] ** 2)
 
-        # Data
-        dldata = self._dldata[mode]
-
         # Model
         dlmodel = jnp.repeat(dlth[mode][None, ...], self._nxspec, axis=0)
         for fg in self.fgs[mode]:
             dlmodel += fg.compute_dl(pars)
 
         # Compute Rl = Dl - Dlth
-        Rspec = jnp.array([dldata[xs] - cal[xs] * dlmodel[xs] for xs in range(self._nxspec)])
+        Rspec = jnp.array([cal[xs] * dlmodel[xs] for xs in range(self._nxspec)])
 
         return Rspec
 
     def dof(self):
-        return len(self._invkll)
-
-    def reduction_matrix(self, mode):
-        """
-        Reduction matrix
-
-        each column is equal to 1 in the 15 elements corresponding to a cross-power spectrum
-        measurement in that multipole and zero elsewhere
-
-        """
-        X = np.zeros((len(self.delta_cl),self.lmax+1))
-        x0 = 0
-        for xf in range(self._nxfreq):
-            lmin = self._lmins[mode][self._xspec2xfreq.index(xf)]
-            lmax = self._lmaxs[mode][self._xspec2xfreq.index(xf)]
-            for il,l in enumerate(range(lmin,lmax+1)):
-                X[x0+il,l] = 1
-            x0 += (lmax-lmin+1)
-
-        return X
+        return len(self.precision)
 
     def compute_chi2(self, dlth, **params_values):
         """
@@ -787,16 +802,16 @@ class HillipopLikelihood(object):
         # Create Data Vector
         Xl = []
         if self._is_mode["TT"]:
-            # compute residuals Rl = Dl - Dlth
-            Rspec = self._compute_residuals(params_values, dlth, "TT")
+            # compute theory Dlth
+            Rspec = self._compute_theory(params_values, dlth, "TT")
             # average to cross-spectra
             Rl = self._xspectra_to_xfreq(Rspec, self._dlweight["TT"])
             # select multipole range
             Xl += self._select_spectra(Rl, 'TT')
 
         if self._is_mode["EE"]:
-            # compute residuals Rl = Dl - Dlth
-            Rspec = self._compute_residuals(params_values, dlth, "EE")
+            # compute theory Dlth
+            Rspec = self._compute_theory(params_values, dlth, "EE")
             # average to cross-spectra
             Rl = self._xspectra_to_xfreq(Rspec, self._dlweight["EE"])
             # select multipole range
@@ -805,26 +820,31 @@ class HillipopLikelihood(object):
         if self._is_mode["TE"] or self._is_mode["ET"]:
             Rl = 0
             Wl = 0
-            # compute residuals Rl = Dl - Dlth
+            # compute theory Dlth
             if self._is_mode["TE"]:
-                Rspec = self._compute_residuals(params_values, dlth, "TE")
+                Rspec = self._compute_theory(params_values, dlth, "TE")
                 RlTE, WlTE = self._xspectra_to_xfreq(Rspec, self._dlweight["TE"], normed=False)
                 Rl = Rl + RlTE
                 Wl = Wl + WlTE
             if self._is_mode["ET"]:
-                Rspec = self._compute_residuals(params_values, dlth, "ET")
+                Rspec = self._compute_theory(params_values, dlth, "ET")
                 RlET, WlET = self._xspectra_to_xfreq(Rspec, self._dlweight["ET"], normed=False)
                 Rl = Rl + RlET
                 Wl = Wl + WlET
             # select multipole range
             Xl += self._select_spectra(Rl / Wl, 'TE')
 
-        self.delta_cl = jnp.concatenate(Xl, axis=0)#.astype('float32')  # changes at 0.01 level
-#        chi2 = self.delta_cl @ self._invkll @ self.delta_cl
-        # chi2 = self._invkll.dot(self.delta_cl).dot(self.delta_cl)
-        chi2 = self.delta_cl.dot(self._invkll).dot(self.delta_cl)
+        self.flattheory = jnp.concatenate(Xl, axis=0)#.astype('float32')  # changes at 0.01 level
+        self.flatdiff = self.flatdata - self.flattheory
 
-        self.logger.debug(f"chi2/ndof = {chi2}/{len(self.delta_cl)}")
+        if self.proj_order:
+            flattheory = self._proj.dot(self.flattheory)
+            chi2 = self._chi2_dd + self._chi2_dt.dot(flattheory) + flattheory.dot(self._chi2_tt).dot(flattheory)
+        else:
+            #chi2 = jnp.sum(self.flatdiff * self.precision * self.flatdiff, axis=0)
+            chi2 = self.flatdiff.dot(self.precision).dot(self.flatdiff)
+
+        self.logger.debug(f"chi2/ndof = {chi2}/{len(self.flattheory)}")
         return chi2
 
     def loglike(self, dl, **params_values):
@@ -844,30 +864,26 @@ class HillipopLikelihood(object):
         lnL: float
             Log likelihood for the given parameters -2ln(L)
         """
-        # cl_boltz from Boltzmann (Cl in muK^2)
-#        lth = np.arange(self.lmax + 1)
-#        dlth = np.zeros((4, self.lmax + 1))
-#        dlth["TT"] = dl["tt"][lth]
-#        dlth["EE"] = dl["ee"][lth]
-#        dlth["TE"] = dl["te"][lth]
         dlth = {k.upper(): dl[k][:self.lmax+1] for k in dl.keys()}
         dlth['ET'] = dlth['TE']
         chi2 = self.compute_chi2(dlth, **params_values)
         return -0.5 * chi2
 
 
-class HighlTTTEEEPlanck2020HillipopLikelihood(BaseGaussianLikelihood):
+
+class TTTEEEHighlPlanck2020HillipopLikelihood(BaseLikelihood):
 
     version = 'v4.2'
     config_fn = 'hillipop.yaml'
-    installer_section = 'HighlTTTEEEPlanck2020HillipopLikelihood'
+    installer_section = 'TTTEEEHighlPlanck2020HillipopLikelihood'
+    name = 'TTTEEEHighlPlanck2020Hillipop'
     cls = ['tt', 'te', 'ee']
 
-    def initialize(self, theory=None, cosmo=None, data_dir=None):
+    def initialize(self, theory=None, cosmo=None, data_dir=None, proj_order=None, **kwargs):
         if data_dir is None:
             from desilike.install import Installer
             data_dir = os.path.join(Installer()[self.installer_section]['data_dir'], self.version, 'planck_2020', 'hillipop')
-        self._like = HillipopLikelihood(data_dir, self.__class__.__name__.replace('Highl', '').replace('Planck2020HillipopLikelihood', ''))
+        self._like = HillipopLikelihood(data_dir, self.__class__.__name__.replace('Highl', '').replace('Planck2020HillipopLikelihood', ''), proj_order=proj_order)
         requested_cls = {cl: self._like.lmax for cl in self.cls}
         ells = np.arange(self._like.lmax + 1)
         self.factor = ells * (ells + 1) / 2 / np.pi
@@ -875,6 +891,8 @@ class HighlTTTEEEPlanck2020HillipopLikelihood(BaseGaussianLikelihood):
         self.theory = theory
         self.theory.init.update(cls=requested_cls, lensing=True, unit='muK', T0=2.7255)
         if cosmo is not None: self.theory.init.update(cosmo=cosmo)
+        super().initialize(**kwargs)
+        self.flatdata = self._like.flatdata  # to get size
 
     """
     def initialize(self, theory=None, cosmo=None, data_dir=None):
@@ -923,13 +941,14 @@ class HighlTTTEEEPlanck2020HillipopLikelihood(BaseGaussianLikelihood):
             url = 'https://portal.nersc.gov/cfs/cmb/planck2020/likelihoods/{}'.format(tar_base)
             tar_fn = os.path.join(data_dir, cls.version, tar_base)
             download(url, tar_fn)
-            extract(tar_fn, data_dir)
+            extract(tar_fn, os.path.dirname(tar_fn))
 
         installer.write({cls.installer_section: {'data_dir': data_dir}})
 
 
-class HighlTTPlanck2020HillipopLikelihood(HighlTTTEEEPlanck2020HillipopLikelihood):
+class TTHighlPlanck2020HillipopLikelihood(TTTEEEHighlPlanck2020HillipopLikelihood):
 
     version = 'v4.2'
     config_fn = 'hillipop.yaml'
-    installer_section = 'HighlTTPlanck2020HillipopLikelihood'
+    installer_section = 'TTHighlPlanck2020HillipopLikelihood'
+    name = 'TTHighlPlanck2020Hillipop'

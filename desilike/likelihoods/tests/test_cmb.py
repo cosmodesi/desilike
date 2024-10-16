@@ -5,8 +5,8 @@ from desilike.install import Installer
 from desilike.likelihoods.cmb import (BasePlanck2018GaussianLikelihood, FullGridPlanck2018GaussianLikelihood, TTHighlPlanck2018PlikLikelihood, TTHighlPlanck2018PlikLiteLikelihood, TTHighlPlanck2018PlikUnbinnedLikelihood,
                                       TTTEEEHighlPlanck2018PlikLikelihood, TTTEEEHighlPlanck2018PlikLiteLikelihood, TTTEEEHighlPlanck2018PlikUnbinnedLikelihood,
                                       LensingPlanck2018ClikLikelihood, TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood, TTLowlPlanck2018Likelihood, EELowlPlanck2018Likelihood, TTTEEEHighlPlanck2018LiteLikelihood, TTHighlPlanck2018LiteLikelihood,
-                                      HighlTTTEEEPlanckNPIPECamspecLikelihood, HighlTTPlanckNPIPECamspecLikelihood, HighlTTTEEEPlanck2020HillipopLikelihood, HighlTTPlanck2020HillipopLikelihood,
-                                      LowlEEPlanck2020LollipopLikelihood, LowlEBPlanck2020LollipopLikelihood, LowlBBPlanck2020LollipopLikelihood, ACTDR6LensingLikelihood, read_planck2018_chain)
+                                      TTTEEEHighlPlanckNPIPECamspecLikelihood, TTHighlPlanckNPIPECamspecLikelihood, TTTEEEHighlPlanck2020HillipopLikelihood, TTHighlPlanck2020HillipopLikelihood,
+                                      EELowlPlanck2020LollipopLikelihood, EBLowlPlanck2020LollipopLikelihood, BBLowlPlanck2020LollipopLikelihood, ACTDR6LensingLikelihood, read_planck2018_chain)
 from desilike.theories import Cosmoprimo
 
 
@@ -269,7 +269,7 @@ def test_planck_python():
 def test_hillipop():
 
     #installer = Installer(user=True)
-    #installer(HighlTTTEEEPlanck2020HillipopLikelihood)
+    #installer(TTTEEEHighlPlanck2020HillipopLikelihood)
     """
     theory = {'camb': {'extra_args': {'bbn_predictor': 'PArthENoPE_880.2_standard.dat', 'dark_energy_model': 'ppf', 'num_massive_neutrinos': 1}}}
     params = {'logA': {'prior': {'min': 1.61, 'max': 3.91}, 'ref': {'dist': 'norm', 'loc': 3.036, 'scale': 0.001}, 'proposal': 0.001, 'latex': '\\ln(10^{10} A_\\mathrm{s})', 'drop': True}, 'As': {'value': 'lambda logA: 1e-10*np.exp(logA)', 'latex': 'A_\\mathrm{s}'}, 'ns': {'prior': {'min': 0.8, 'max': 1.2}, 'ref': {'dist': 'norm', 'loc': 0.9649, 'scale': 0.004}, 'proposal': 0.002, 'latex': 'n_\\mathrm{s}'}, 'H0': {'prior': {'min': 20, 'max': 100}, 'ref': {'dist': 'norm', 'loc': 67.36, 'scale': 0.01}, 'latex': 'H_0'}, 'ombh2': {'prior': {'min': 0.005, 'max': 0.1}, 'ref': {'dist': 'norm', 'loc': 0.02237, 'scale': 0.0001}, 'proposal': 0.0001, 'latex': '\\Omega_\\mathrm{b} h^2'}, 'omch2': {'prior': {'min': 0.001, 'max': 0.99}, 'ref': {'dist': 'norm', 'loc': 0.12, 'scale': 0.001}, 'proposal': 0.0005, 'latex': '\\Omega_\\mathrm{c} h^2'}, 'tau': {'latex': '\\tau_\\mathrm{reio}', 'value': 0.0544}, 'mnu': {'latex': '\\sum m_\\nu', 'value': 0.06}, 'nnu': {'latex': 'N_\\mathrm{eff}', 'value': 3.044}}
@@ -281,16 +281,16 @@ def test_hillipop():
     """
 
     cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
-    likelihood = HighlTTTEEEPlanck2020HillipopLikelihood(cosmo=cosmo)
+    likelihood = TTTEEEHighlPlanck2020HillipopLikelihood(cosmo=cosmo)
     print(likelihood(), likelihood.varied_params)
-    likelihood = HighlTTPlanck2020HillipopLikelihood(cosmo=cosmo)
+    likelihood = TTHighlPlanck2020HillipopLikelihood(cosmo=cosmo)
     print(likelihood())
 
 
 def test_lollipop():
 
     #installer = Installer(user=True)
-    #installer(LowlEEPlanck2020LollipopLikelihood)
+    #installer(EELowlPlanck2020LollipopLikelihood)
     """
     theory = {'camb': {'extra_args': {'bbn_predictor': 'PArthENoPE_880.2_standard.dat', 'dark_energy_model': 'ppf', 'num_massive_neutrinos': 1}}}
     params = {'logA': {'prior': {'min': 1.61, 'max': 3.91}, 'ref': {'dist': 'norm', 'loc': 3.036, 'scale': 0.001}, 'proposal': 0.001, 'latex': '\\ln(10^{10} A_\\mathrm{s})', 'drop': True}, 'As': {'value': 'lambda logA: 1e-10*np.exp(logA)', 'latex': 'A_\\mathrm{s}'}, 'ns': {'prior': {'min': 0.8, 'max': 1.2}, 'ref': {'dist': 'norm', 'loc': 0.9649, 'scale': 0.004}, 'proposal': 0.002, 'latex': 'n_\\mathrm{s}'}, 'H0': {'prior': {'min': 20, 'max': 100}, 'ref': {'dist': 'norm', 'loc': 67.36, 'scale': 0.01}, 'latex': 'H_0'}, 'ombh2': {'prior': {'min': 0.005, 'max': 0.1}, 'ref': {'dist': 'norm', 'loc': 0.02237, 'scale': 0.0001}, 'proposal': 0.0001, 'latex': '\\Omega_\\mathrm{b} h^2'}, 'omch2': {'prior': {'min': 0.001, 'max': 0.99}, 'ref': {'dist': 'norm', 'loc': 0.12, 'scale': 0.001}, 'proposal': 0.0005, 'latex': '\\Omega_\\mathrm{c} h^2'}, 'tau': {'latex': '\\tau_\\mathrm{reio}', 'value': 0.0544}, 'mnu': {'latex': '\\sum m_\\nu', 'value': 0.06}, 'nnu': {'latex': 'N_\\mathrm{eff}', 'value': 3.044}}
@@ -302,18 +302,18 @@ def test_lollipop():
     """
 
     cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
-    likelihood = LowlEEPlanck2020LollipopLikelihood(cosmo=cosmo)
+    likelihood = EELowlPlanck2020LollipopLikelihood(cosmo=cosmo)
     print(likelihood())
-    likelihood = LowlEBPlanck2020LollipopLikelihood(cosmo=cosmo)
+    likelihood = EBLowlPlanck2020LollipopLikelihood(cosmo=cosmo)
     print(likelihood())
-    likelihood = LowlBBPlanck2020LollipopLikelihood(cosmo=cosmo)
+    likelihood = BBLowlPlanck2020LollipopLikelihood(cosmo=cosmo)
     print(likelihood())
 
 
 def test_camspec():
 
     installer = Installer(user=True)
-    installer(HighlTTTEEEPlanckNPIPECamspecLikelihood)
+    installer(TTTEEEHighlPlanckNPIPECamspecLikelihood)
 
     for cl in ['TTTEEE', 'TT']:
         nuisance = {'calTE': 1.2, 'calEE': 1.2, 'amp_143': 10., 'amp_217': 10., 'amp_143x217': 10., 'n_217': 2., 'n_143': 2., 'n_143x217': 2., 'A_planck': 1.}
@@ -339,7 +339,7 @@ def test_camspec():
 
 def test_jax():
     import jax
-    for Likelihood in [ACTDR6LensingLikelihood, TTLowlPlanck2018Likelihood, EELowlPlanck2018Likelihood, TTTEEEHighlPlanck2018LiteLikelihood, HighlTTTEEEPlanck2020HillipopLikelihood, LowlEEPlanck2020LollipopLikelihood, HighlTTTEEEPlanckNPIPECamspecLikelihood][-1:]:
+    for Likelihood in [ACTDR6LensingLikelihood, TTLowlPlanck2018Likelihood, EELowlPlanck2018Likelihood, TTTEEEHighlPlanck2018LiteLikelihood, TTTEEEHighlPlanck2020HillipopLikelihood, EELowlPlanck2020LollipopLikelihood, TTTEEEHighlPlanckNPIPECamspecLikelihood][-1:]:
         cosmo = Cosmoprimo(engine='capse')
         likelihood = Likelihood(cosmo=cosmo)
         params = {'logA': 3.057147, 'n_s': 0.9657119, 'h': 0.7, 'omega_b': 0.02246306, 'omega_cdm': 0.1184775, 'N_eff': 3.044}
@@ -352,7 +352,7 @@ def test_inference():
     from desilike.samplers import NUTSSampler
 
     cosmo = Cosmoprimo(engine='capse')
-    likelihood = HighlTTTEEEPlanckNPIPECamspecLikelihood(cosmo=cosmo)
+    likelihood = TTTEEEHighlPlanckNPIPECamspecLikelihood(cosmo=cosmo)
     sampler = NUTSSampler(likelihood, chains=4, seed=42)
     sampler.run(max_iterations=10000, check={'max_eigen_gr': 0.03, 'min_ess': 50}, check_every=200)
 

@@ -10,7 +10,7 @@ from desilike.utils import BaseClass, expand_dict, TaskManager
 from desilike.samples import load_source
 from desilike.samples.profiles import Profiles, ParameterBestFit, ParameterGrid, ParameterProfiles
 from desilike.parameter import ParameterPriorError, Samples, ParameterCollection, is_parameter_sequence
-from desilike.jax import jit, cond, numpy_jax
+from desilike.jax import jit, cond, numpy_jax, exception
 from desilike.jax import numpy as jnp
 
 
@@ -222,6 +222,10 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         def compute_logprior(values):
             return jnp.asarray(self.likelihood.all_params.prior(**dict(zip(self.varied_params.names(), values))))
 
+        def warning_nan(logposterior, points):
+            if jnp.isnan(logposterior):
+                warnings.warn('logposterior is NaN for {}'.format(points))
+
         def compute_logposterior(values):
             points = {param.name: value for param, value in zip(self.varied_params, values)}
             raise_error = None
@@ -232,14 +236,15 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                 import traceback
                 error = (exc, traceback.format_exc())
                 if isinstance(error[0], self.likelihood.catch_errors):
-                    self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(repr(error[0]),
-                                    points, error[1]))
+                    self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(repr(error[0]), points, error[1]))
                 else:
                     raise_error = error
                 if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
-                    warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0])))
+                    warnings.warn('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0]), points))
                 if raise_error:
-                    raise PipelineError('Error "{}" occured with stack trace:\n{}'.format(*raise_error))
+                    raise PipelineError('Error "{}" occured at {} with stack trace:\n{}'.format(repr(error[0]), points, error[1]))
+
+            exception(warning_nan, logposterior, points)
             return -2. * logposterior
 
         return cond(compute_logprior(values) > -np.inf, compute_logposterior, lambda values: -np.inf, values)

@@ -772,17 +772,11 @@ class Profiles(BaseClass):
         headers = []
         chi2min = -2. * self.bestfit.logposterior[argmax]
         chi2min_str = '{:.2f}'.format(chi2min)
-        try:
-            ndof = self.bestfit.attrs['ndof']
-        except KeyError:
-            ndof = None
-        else:
+        ndof = self.bestfit.attrs.get('ndof', None)
+        if ndof is not None:
             ndof_str = '{:d}'.format(ndof)
-        try:
-            size, nvaried = self.bestfit.attrs['size'], self.bestfit.attrs['nvaried']
-        except KeyError:
-            size, nvaried = None, None
-        else:
+        size, nvaried = [self.bestfit.attrs.get(name, None) for name in ['size', 'nvaried']]
+        if size is not None and nvaried is not None:
             if ndof is None: ndof = size - nvaried
             ndof_str = '({:d} - {:d})'.format(size, nvaried)
 

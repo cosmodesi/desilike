@@ -131,7 +131,7 @@ class TTLowlPlanck2018Likelihood(BasePlanck2018Likelihood):
         self.factor = ells * (ells + 1) / 2 / np.pi
 
     def get_loglikelihood(self, theory):  # theory starts at ell = 2
-        toret = jnp.where(jnp.any(theory < self._prior[:, 0]) or jnp.any(theory > self._prior[:, 1]), -jnp.inf, 0)
+        toret = jnp.where(jnp.any((theory < self._prior[:, 0]) | (theory > self._prior[:, 1])), -jnp.inf, 0)
 
         dxdCl = jnp.maximum(jnp.array([spline(cl, dx=1) for spline, cl in zip(self._spline, theory)]), 0.)
         toret += jnp.sum(jnp.log(dxdCl))

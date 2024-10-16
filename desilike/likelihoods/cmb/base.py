@@ -4,6 +4,15 @@ from desilike.cosmo import is_external_cosmo
 from desilike.likelihoods.base import BaseCalculator
 
 
+def projection(size, order=None):
+    from scipy import special
+    if order is None: order = size // 2
+    x = np.linspace(-1., 1., size)
+    poly = np.array([special.chebyt(n)(x) for n in range(order + 1)])
+    proj = np.linalg.solve(poly.dot(poly.T), poly)
+    return proj, poly
+
+
 class ClTheory(BaseCalculator):
     r"""
     Theory CMB :math:`C_{\ell}^{xy}`.

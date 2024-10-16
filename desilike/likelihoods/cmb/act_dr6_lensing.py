@@ -18,6 +18,7 @@ class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
 
     config_fn = 'act_dr6_lensing.yaml'
     installer_section = 'ACTDR6LensingLikelihood'
+    name = 'ACTDR6Lensing'
     version = 'v1.2'
     nsims_act = 792. # Number of sims used for covmat; used in Hartlap correction
     nsims_planck = 400. # Number of sims used for covmat; used in Hartlap correction
@@ -87,6 +88,6 @@ class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
             url = 'https://lambda.gsfc.nasa.gov/data/suborbital/ACT/ACT_dr6/likelihood/data/{}'.format(tar_base)
             tar_fn = os.path.join(data_dir, cls.version, tar_base)
             download(url, tar_fn)
-            extract(tar_fn, data_dir)
+            extract(tar_fn, os.path.dirname(tar_fn))
 
         installer.write({cls.installer_section: {'data_dir': data_dir}})

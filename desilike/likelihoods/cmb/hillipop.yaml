@@ -1,11 +1,11 @@
-class: HighlTTTEEEPlanck2020HillipopLikelihood
+class: TTTEEEHighlPlanck2020HillipopLikelihood
 
 params:
   .import: hillipop_params.yaml::TT,TE,EE,calib
 
 ---
 
-class: HighlTTPlanck2020HillipopLikelihood
+class: TTHighlPlanck2020HillipopLikelihood
 
 params:
   .import: hillipop_params.yaml::TT,calib

@@ -1,7 +1,8 @@
-import os
 import numpy as np
+
 from desilike import utils
 from desilike.cosmo import is_external_cosmo
+from desilike.jax import numpy as jnp
 from .base import BaseSNLikelihood
 from .pantheonplus import PantheonPlusSNLikelihood
 
@@ -45,7 +46,7 @@ class PantheonPlusSHOESSNLikelihood(PantheonPlusSNLikelihood):
         # Compute predictions at those redshifts that are not used as calibrators
         zcmb = self.light_curve_params['zcmb'][~is_calibrator]
         zhel = self.light_curve_params['zhel'][~is_calibrator]
-        self.flattheory[~is_calibrator] = 5 * np.log10(self.cosmo.luminosity_distance(zcmb) / self.cosmo['h']) + 25 + 5 * np.log10((1 + zhel) / (1 + zcmb))
+        self.flattheory[~is_calibrator] = 5 * jnp.log10(self.cosmo.luminosity_distance(zcmb) / self.cosmo['h']) + 25 + 5 * np.log10((1 + zhel) / (1 + zcmb))
 
         self.flatdata = self.light_curve_params['mb'] - Mb
         BaseSNLikelihood.calculate(self)

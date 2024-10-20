@@ -467,16 +467,15 @@ class MCMCSampler(BaseBatchPosteriorSampler):
     def _prepare(self):
         covariance = None
         if self.learn and self.mpicomm.bcast(all(chain is not None for chain in self.chains), root=0):
-            every = self.learn_check.get('every', None)
-            if every is not None:
-                every = utils.evaluate(every, type=int, locals={'ndim': len(self.varied_params)})
-                size = self.mpicomm.bcast(sum(chain.size for chain in self.chains) if self.mpicomm.rank == 0 else None, root=0)
-                if size - self._size_every < every: return
-                self._size_every = size
-
             learn = self.learn_check is None
             burnin = 0.5
             if not learn:
+                every = self.learn_check.get('every', None)
+                if every is not None:
+                    every = utils.evaluate(every, type=int, locals={'ndim': len(self.varied_params)})
+                    size = self.mpicomm.bcast(sum(chain.size for chain in self.chains) if self.mpicomm.rank == 0 else None, root=0)
+                    if size - self._size_every < every: return
+                    self._size_every = size
                 burnin = self.learn_check['burnin']
                 learn = self.check(**self.learn_check, diagnostics=self.learn_diagnostics, quiet=True)[0]
             if learn and self.mpicomm.rank == 0:
@@ -536,7 +535,6 @@ class MCMCSampler(BaseBatchPosteriorSampler):
         #log_every = max(niterations // 5, 50)
         log_every = 30  # 30 seconds
         t0 = time.time()
-        nsteps = 0
         for _ in self.sampler.sample(start=np.ravel(start), iterations=niterations, thin_by=thin_by):
             if self.mpicomm.rank == 0 and time.time() - t0 >= log_every:
                 total = int(self.sampler.get_weight().sum())

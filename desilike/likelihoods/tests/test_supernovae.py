@@ -44,8 +44,45 @@ def test_profile():
     print(profiles.to_stats(tablefmt='pretty'))
 
 
+def test_union3(plot=False):
+    cosmo = Cosmoprimo(fiducial='DESI', engine='eisenstein_hu')
+    if True:
+        cosmo.init.params = {'Omega_m': {'prior': {'limits': [0.01, 0.9]}, 'ref': {'dist': 'norm', 'loc': 0.3, 'scale': 0.002}, 'latex': '\Omega_m'},
+                            'w0_fld': {'prior': {'limits': [-3, 1.]}, 'ref': {'dist': 'norm', 'loc': -1, 'scale': 0.05}, 'latex': 'w_0'},
+                            'wa_fld': {'prior': {'limits': [-20., 2.]}, 'ref': {'dist': 'norm', 'loc': 0., 'scale': 0.05}, 'latex': 'w_a'}}
+    likelihood = Union3SNLikelihood(cosmo=cosmo)
+
+    from desilike.samplers import NUTSSampler, MCMCSampler
+    resume = False
+    nchains = 4
+
+    def samples_fn(correct_prior=False, i=0):
+        return '_tests/chain{}_{:d}.npy'.format('_corrected' if correct_prior else '', i)
+
+    if plot:
+
+        from desilike.samples import Chain, plotting
+        chains = []
+        for correct_prior in [False, True]:
+            chains.append(Chain.concatenate([Chain.load(samples_fn(correct_prior=correct_prior, i=i)).remove_burnin(0.4) for i in range(nchains)]))
+        plotting.plot_triangle(chains, labels=['standard', 'corrected'], params=['Omega_m', 'w0_fld', 'wa_fld'], show=True)
+
+    else:
+
+        for correct_prior in [False, True][1:]:
+            likelihood.init.update(correct_prior=correct_prior)
+            print(likelihood({param.name: param.ref.sample() for param in likelihood.varied_params}))
+            exit()
+            save_fn = [samples_fn(correct_prior=correct_prior, i=i) for i in range(nchains)]
+            chains = save_fn if resume else nchains
+            #sampler = NUTSSampler(likelihood, chains=chains, adaptation=False, save_fn=save_fn, seed=42)
+            sampler = MCMCSampler(likelihood, chains=chains, save_fn=save_fn, seed=42)
+            sampler.run(max_iterations=100000, check={'max_eigen_gr': 0.01, 'min_ess': 50}, check_every=200)
+
+
 if __name__ == '__main__':
 
     setup_logging()
-    test_install()
+    #test_install()
     #test_profile()
+    test_union3(plot=False)

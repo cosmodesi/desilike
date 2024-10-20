@@ -1,7 +1,10 @@
 import os
+
 import numpy as np
+
 from desilike import plotting, utils
 from desilike.cosmo import is_external_cosmo
+from desilike.jax import numpy as jnp
 from .base import BaseSNLikelihood
 
 
@@ -35,7 +38,7 @@ class PantheonPlusSNLikelihood(BaseSNLikelihood):
 
     def calculate(self, Mb=0):
         z = self.light_curve_params['zHD']
-        self.flattheory = 5 * np.log10(self.cosmo.luminosity_distance(z) / self.cosmo['h']) + 25
+        self.flattheory = 5 * jnp.log10(self.cosmo.luminosity_distance(z) / self.cosmo['h']) + 25
         self.flatdata = self.light_curve_params['m_b_corr'] - Mb - 5 * np.log10((1 + self.light_curve_params['zHEL']) / (1 + z))
         BaseSNLikelihood.calculate(self)
 

@@ -79,7 +79,8 @@ class BasePlanckNPIPECamspecLikelihood(BaseGaussianLikelihood):
         self.has_foregrounds = any(cl in self.all_cls[:4] for cl in self.index_ells)
         pivot = 1500
         ells = jnp.arange(self.ellmax + 1)
-        self._template_foreground = jnp.log(ells / pivot)
+        self._template_foreground_tilt = jnp.log(jnp.maximum(ells, 1) / pivot)
+        self._template_foreground_amp = jnp.where(ells >= 1, jnp.ones_like(self._template_foreground_tilt), 0.)
         self.proj_order = proj_order
         if self.proj_order:
             from scipy import linalg
@@ -100,7 +101,7 @@ class BasePlanckNPIPECamspecLikelihood(BaseGaussianLikelihood):
         names = ['100', '143', '217', '143x217']
         amp = jnp.array([params['amp_{}'.format(name)] for name in names])
         tilt = jnp.array([params['n_{}'.format(name)] for name in names])
-        toret = amp[:, None] * jnp.exp(self._template_foreground * tilt[:, None])
+        toret = amp[:, None] * self._template_foreground_amp * jnp.exp(self._template_foreground_tilt * tilt[:, None])
         return toret
 
     def get_cals(self, params):

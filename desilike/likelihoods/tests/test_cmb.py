@@ -195,18 +195,6 @@ def test_cmb():
     likelihood()
 
 
-def test_profile():
-    from desilike.likelihoods.cmb import (TTTEEEHighlPlanck2018PlikLiteLikelihood,
-                                          TTLowlPlanck2018ClikLikelihood, EELowlPlanck2018ClikLikelihood)
-
-    cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
-    likelihood = TTTEEEHighlPlanck2018PlikLiteLikelihood(cosmo=cosmo) + TTLowlPlanck2018ClikLikelihood(cosmo=cosmo) + EELowlPlanck2018ClikLikelihood(cosmo=cosmo)
-    likelihood()
-    from desilike.profilers import MinuitProfiler
-    profiler = MinuitProfiler(likelihood, seed=42)
-    profiles = profiler.maximize(niterations=5)
-    print(profiles.bestfit)
-
 
 def test_act_lensing():
     installer = Installer(user=True)
@@ -339,7 +327,7 @@ def test_camspec():
 
 def test_jax():
     import jax
-    for Likelihood in [ACTDR6LensingLikelihood, TTLowlPlanck2018Likelihood, EELowlPlanck2018Likelihood, TTTEEEHighlPlanck2018LiteLikelihood, TTTEEEHighlPlanck2020HillipopLikelihood, EELowlPlanck2020LollipopLikelihood, TTTEEEHighlPlanckNPIPECamspecLikelihood][-2:-1]:
+    for Likelihood in [ACTDR6LensingLikelihood, TTLowlPlanck2018Likelihood, EELowlPlanck2018Likelihood, TTTEEEHighlPlanck2018LiteLikelihood, TTTEEEHighlPlanck2020HillipopLikelihood, EELowlPlanck2020LollipopLikelihood, TTTEEEHighlPlanckNPIPECamspecLikelihood][3:4]:
         cosmo = Cosmoprimo(engine='capse')
         likelihood = Likelihood(cosmo=cosmo)
         params = {'logA': 3.057147, 'n_s': 0.9657119, 'h': 0.7, 'omega_b': 0.02246306, 'omega_cdm': 0.1184775, 'N_eff': 3.044}
@@ -348,13 +336,31 @@ def test_jax():
         print(grad(params))
 
 
-def test_inference():
+def test_sampling():
     from desilike.samplers import NUTSSampler
 
     cosmo = Cosmoprimo(engine='capse')
-    likelihood = TTTEEEHighlPlanckNPIPECamspecLikelihood(cosmo=cosmo)
-    sampler = NUTSSampler(likelihood, chains=4, seed=42)
+    likelihood = TTTEEEHighlPlanck2018LiteLikelihood(cosmo=cosmo)
+    sampler = NUTSSampler(likelihood, adaptation=False, chains=4, seed=42)
     sampler.run(max_iterations=10000, check={'max_eigen_gr': 0.03, 'min_ess': 50}, check_every=200)
+
+
+def test_profiling():
+
+    cosmo = Cosmoprimo(engine='capse')
+    likelihood = TTTEEEHighlPlanckNPIPECamspecLikelihood(cosmo=cosmo, proj_order=60)
+    likelihood += TTLowlPlanck2018Likelihood(cosmo=cosmo) + EELowlPlanck2018Likelihood(cosmo=cosmo)
+    likelihood()
+
+    import jax
+    params = {param.name: param.ref.sample() for param in likelihood.varied_params}
+    grad = jax.grad(likelihood)
+    print(grad(params))
+
+    from desilike.profilers import MinuitProfiler
+    profiler = MinuitProfiler(likelihood, gradient=False, seed=42)
+    profiles = profiler.maximize(niterations=1)
+    print(profiles.to_stats(tablefmt='pretty'))
 
 
 
@@ -378,4 +384,5 @@ if __name__ == '__main__':
     #test_lollipop()
     #test_camspec()
     #test_jax()
-    #test_inference()
+    #test_sampling()
+    #test_profiling()

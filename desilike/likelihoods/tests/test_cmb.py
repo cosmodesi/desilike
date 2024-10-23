@@ -348,7 +348,8 @@ def test_sampling():
 def test_profiling():
 
     cosmo = Cosmoprimo(engine='capse')
-    likelihood = TTTEEEHighlPlanckNPIPECamspecLikelihood(cosmo=cosmo, proj_order=60)
+    #likelihood = TTTEEEHighlPlanckNPIPECamspecLikelihood(cosmo=cosmo, proj_order=60)
+    likelihood = TTTEEEHighlPlanck2020HillipopLikelihood(cosmo=cosmo, proj_order=60)
     likelihood += TTLowlPlanck2018Likelihood(cosmo=cosmo) + EELowlPlanck2018Likelihood(cosmo=cosmo)
     likelihood()
 
@@ -358,10 +359,9 @@ def test_profiling():
     print(grad(params))
 
     from desilike.profilers import MinuitProfiler
-    profiler = MinuitProfiler(likelihood, gradient=False, seed=42)
+    profiler = MinuitProfiler(likelihood, gradient=True, seed=42)
     profiles = profiler.maximize(niterations=1)
     print(profiles.to_stats(tablefmt='pretty'))
-
 
 
 if __name__ == '__main__':
@@ -380,9 +380,9 @@ if __name__ == '__main__':
     #test_profile()
     #test_act_lensing()
     #test_planck_python()
-    test_hillipop()
+    #test_hillipop()
     #test_lollipop()
     #test_camspec()
     #test_jax()
     #test_sampling()
-    #test_profiling()
+    test_profiling()

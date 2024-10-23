@@ -323,10 +323,12 @@ class BaseLikelihood(BaseCalculator):
             #pipeline.more_calculate = lambda: None
             fisher = self.__fisher
 
-            if fisher is None or fisher.mpicomm is not self.mpicomm:
+            if fisher is None or fisher.mpicomm is not self.mpicomm or fisher.solved_default is not self.solved_default:
                 #if self.fisher is not None: print(self.fisher.mpicomm is not self.mpicomm, self.fisher.varied_params != solved_params)
                 fisher = FastFisher(self, self.__solved_params)
                 fisher.mpicomm = self.mpicomm
+                fisher.solved_default = self.solved_default
+                print(self.solved_default)
 
                 marg_indices = []
                 for iparam, param in enumerate(fisher.solved_params):

@@ -46,7 +46,6 @@ class Union3SNLikelihood(BaseSNLikelihood):
         BaseSNLikelihood.calculate(self)
 
         if self.correct_prior:
-            raise NotImplementedError
             from desilike.jax import jax
             varied_names = self.cosmo.runtime_info.params.names(varied=True)
 
@@ -54,17 +53,20 @@ class Union3SNLikelihood(BaseSNLikelihood):
                 cosmo = self.cosmo.clone(**dict(zip(varied_names, values)), engine='eisenstein_hu')
                 return 5 * jnp.log10(cosmo.luminosity_distance(z) / self.fid)
 
-            values = jnp.array([self.cosmo.runtime_info.input_values[name] for name in varied_names])
+            values = jnp.array([self.cosmo[name] for name in varied_names])
             jac = jax.jacfwd(func)(values)
             jj = jac.T.dot(jac)
             # fill with ones to compute det below
-            ivar = jnp.diag(1. / jnp.array([self.cosmo.runtime_info.params[name].proposal for name in varied_names])**2)
-            eigenvalues, eigenvectors = jnp.linalg.eigh(jj)
-            tmp = np.diag(eigenvectors.T.dot(ivar).dot(eigenvectors))
-            eigenvalues = jnp.where(eigenvalues < tmp * 1e-14, jnp.ones_like(eigenvalues), eigenvalues)
+            #ivar = jnp.diag(1. / jnp.array([self.cosmo.runtime_info.params[name].proposal for name in varied_names])**2)
+            #eigenvalues, eigenvectors = jnp.linalg.eigh(jj)
+            #print(eigenvalues)
+            #tmp = np.diag(eigenvectors.T.dot(ivar).dot(eigenvectors))
+            #eigenvalues = jnp.where(eigenvalues < tmp * 1e-14, jnp.ones_like(eigenvalues), eigenvalues)
             diff = func(values)
             # loglikelihood - original priors - the priors we set
-            self.loglikelihood += - 0.5 * jnp.sum(diff**2) - 0.5 * jnp.sum(jnp.log(eigenvalues))
+            #self.loglikelihood += - 0.5 * jnp.sum(diff**2) - 0.5 * jnp.sum(jnp.log(eigenvalues))
+            #self.loglikelihood += 0.5 * jnp.sum(diff**2) #- 0.5 * jnp.linalg.slogdet(jj)[1]
+            self.loglikelihood = - 0.5 * jnp.sum(diff**2) + 0.5 * jnp.linalg.slogdet(jj)[1]
 
     @plotting.plotter
     def plot(self, fig=None):

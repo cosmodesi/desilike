@@ -599,6 +599,33 @@ def test_cobaya_mcmc():
     plotting.plot_triangle([fisher, chain_desilike, chain_cobaya], labels=['fisher', 'desilike', 'cobaya'], show=True)
 
 
+def test_sample_solved():
+
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, BAOPowerSpectrumTemplate
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+
+    template = BAOPowerSpectrumTemplate(z=0.5)
+    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
+    #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
+    for param in theory.init.params.select(basename=['al*']): param.update(derived='.marg', prior=dict(dist='norm', loc=0., scale=0.3))
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data={},
+                                                         theory=theory)
+    footprint = BoxFootprint(volume=1e10, nbar=1e-5)
+    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov, name='LRG')
+
+    sampler = EmceeSampler(likelihood, seed=42)
+    samples = sampler.run(max_iterations=1)[0].ravel()
+
+    samples_solved = samples.sample_solved()
+    for param in theory.init.params.select(basename=['al*']): param.update(derived=False)
+    for i in range(samples_solved.size):
+        params = {param.name: samples_solved[param][i] for param in samples_solved.params(input=True)}
+        print(likelihood(params) - samples_solved.logposterior[i])
+
+
 
 if __name__ == '__main__':
 
@@ -612,5 +639,6 @@ if __name__ == '__main__':
     #test_hmc()
     #test_nested()
     #test_marg()
-    test_bao_hmc()
+    #test_bao_hmc()
     #test_cobaya_mcmc()
+    test_sample_solved()

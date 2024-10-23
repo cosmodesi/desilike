@@ -818,11 +818,15 @@ def test_velocileptors_lpt_rsd():
 def test_velocileptors_rept():
 
     import time
+    from desilike.theories import Cosmoprimo
     from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, REPTVelocileptorsTracerPowerSpectrumMultipoles
 
-    template = DirectPowerSpectrumTemplate()
+    cosmo = Cosmoprimo(fiducial='DESI', engine='isitgr', parameterization='muSigma')
+    cosmo.init.params['mu0'] = {'value': 0.}
+    cosmo.init.params['Sigma0'] = {'value': 0.}
+    template = DirectPowerSpectrumTemplate(cosmo=cosmo)
     k = np.arange(0.005, 0.3, 0.01)
-    z = np.linspace(0.5, 1., 2)
+    z = np.linspace(0.3, 1.5, 4)
     pt = None
     theories = []
     for zz in z:
@@ -831,13 +835,15 @@ def test_velocileptors_rept():
         theory.init.update(pt=pt)
         theories.append(theory)
 
-    params = {'m_ncdm': 1.}
+    #params = {'w0_fld': -0.5, 'wa_fld': -2.}
+    #params = {'m_ncdm': 0.5}
+    params = {'mu0': -1., 'Sigma0': 1.}
     from matplotlib import pyplot as plt
     ax = plt.gca()
     for ith, theory in enumerate(theories):
         power = theory(**params)
         assert np.allclose(theory.z, z[ith])
-        template = DirectPowerSpectrumTemplate(z=z[ith])
+        template = DirectPowerSpectrumTemplate(z=z[ith], cosmo=cosmo)
         ref = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template, k=k)(**params)
         for ill, ell in enumerate(theory.ells):
             color = 'C{:d}'.format(ith)
@@ -849,6 +855,7 @@ def test_velocileptors_rept():
     ax.set_ylabel(r'$k \Delta P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
     ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
     plt.show()
+    exit()
 
     import time
     from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, REPTVelocileptorsTracerPowerSpectrumMultipoles
@@ -1777,10 +1784,10 @@ if __name__ == '__main__':
     setup_logging()
 
     #test_velocileptors_lpt_rsd()
-    #test_velocileptors_rept()
+    test_velocileptors_rept()
     #test_pybird()
     #test_folps()
-    test_folpsax()
+    #test_folpsax()
     #test_velocileptors_omegak()
     #test_params()
     #test_integ()

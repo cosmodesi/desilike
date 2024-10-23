@@ -43,8 +43,8 @@ def vectorize(func):
     return wrapper
 
 
-def _get_solved_covariance(chain, params=None):
-    logposterior = -(chain[chain._loglikelihood] + chain[chain._logprior])
+def _get_solved_covariance(chain, params=None, return_hessian=False):
+    logposterior = chain[chain._loglikelihood] + chain[chain._logprior]
     if params is None:
         params = chain.params(solved=True)
     params = [str(param) for param in params]
@@ -56,18 +56,22 @@ def _get_solved_covariance(chain, params=None):
         import warnings
         warnings.warn('You need the covariance of analytically marginalized ("solved") parameters, but it has not been computed / saved for {}. Assuming zero covariance.'.format([param for param in params if param not in solved_params]))
     all_solved_params = [str(param) for param in chain.params(solved=True) if logposterior.isin((param, param))]
-    logposterior = np.array([[logposterior[param1, param2].ravel() for param2 in all_solved_params] for param1 in all_solved_params])
-    logposterior = np.moveaxis(logposterior, -1, 0).reshape(chain.shape + (len(all_solved_params),) * 2)
-    logposterior = np.linalg.inv(logposterior)
-    toret = np.zeros(chain.shape + (len(params), ) * 2, dtype='f8')
+    hessian = np.array([[logposterior[param1, param2].ravel() for param2 in all_solved_params] for param1 in all_solved_params])
+    hessian = np.moveaxis(hessian, -1, 0).reshape(chain.shape + (len(all_solved_params),) * 2)
+    covariance = np.linalg.inv(-hessian)
+    toret_covariance = np.zeros(chain.shape + (len(params),) * 2, dtype='f8')
+    toret_hessian = toret_covariance.copy()
     for iparam1, param1 in enumerate(all_solved_params):
         if param1 not in params: continue
         index1 = params.index(param1)
         for iparam2, param2 in enumerate(all_solved_params):
             if param2 not in params: continue
             index2 = params.index(param2)
-            toret[..., index1, index2] = logposterior[..., iparam1, iparam2]
-    return toret
+            toret_covariance[..., index1, index2] = covariance[..., iparam1, iparam2]
+            toret_hessian[..., index1, index2] = hessian[..., iparam1, iparam2]
+    if return_hessian:
+        return toret_covariance, toret_hessian
+    return toret_covariance
 
 
 class Chain(Samples):
@@ -232,7 +236,8 @@ class Chain(Samples):
             import warnings
             warnings.warn('sample over parameters {}, derivatives for {} are not saved'.format(solved_params, [param for param in all_solved_params if param not in solved_params]))
         if not solved_params: return new
-        covariance = _get_solved_covariance(self, params=solved_params)
+        covariance, hessian = _get_solved_covariance(self, params=solved_params, return_hessian=True)
+        print(hessian.shape)
         L = np.moveaxis(np.linalg.cholesky(covariance), (-2, -1), (0, 1))
         new.data = []
         for array in self:
@@ -244,9 +249,14 @@ class Chain(Samples):
             new[param] = new[param].clone(value=new[param] + value.reshape(new.shape), param=param.clone(derived=False))
         dlogposterior = 0.
         for param in [self._loglikelihood, self._logprior]:
-            icov = - np.array([[self[param][param1, param2] for param2 in solved_params] for param1 in solved_params])
-            log = -0.5 * np.sum(values[None, ...] * icov[..., None] * values[:, None, ...], axis=(0, 1)).reshape(new.shape)
+            hess = np.array([[self[param][param1, param2] for param2 in solved_params] for param1 in solved_params])
+            log = 1. / 2. * np.sum(values[None, ...] * hess[..., None] * values[:, None, ...], axis=(0, 1)).reshape(new.shape)
             new[param] = self[param].clone(value=new[param][()] + log, derivs=None)
+            dlogposterior += log
+        marg_indices = np.array([iparam for iparam, param in enumerate(solved_params) if 'auto' in param.derived or 'marg' in param.derived])
+        if marg_indices.size:
+            log = 1. / 2. * np.linalg.slogdet(- hessian[(Ellipsis,) + np.ix_(marg_indices, marg_indices)])[1]
+            new[self._loglikelihood] += log
             dlogposterior += log
         new.logposterior[...] += dlogposterior
         return new

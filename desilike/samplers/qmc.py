@@ -110,11 +110,11 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
         """
         lower, upper = [], []
         for param in self.varied_params:
-            if param.ref.is_proper():
+            try:
                 lower.append(param.value - param.proposal)
                 upper.append(param.value + param.proposal)
-            else:
-                raise ParameterPriorError('Provide parameter limits or proposal')
+            except AttributeError as exc:
+                raise ParameterPriorError('Provide parameter limits or proposal for {}'.format(param)) from exc
         if self.mpicomm.rank == 0:
             self.engine.reset()
             nsamples = len(self.samples) if self.samples is not None else 0
@@ -122,7 +122,7 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
             samples = qmc.scale(self.engine.random(n=niterations), lower, upper)
             samples = Samples(samples.T, params=self.varied_params)
 
-        vcalculate = vmap(self.calculator, backend='mpi', return_derived=True)
+        vcalculate = vmap(self.calculator, backend='mpi', errors='nan', return_derived=True)
         derived = vcalculate(samples.to_dict() if self.mpicomm.rank == 0 else {}, mpicomm=self.mpicomm)[1]
 
         if self.mpicomm.rank == 0:

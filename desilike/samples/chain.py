@@ -237,7 +237,6 @@ class Chain(Samples):
             warnings.warn('sample over parameters {}, derivatives for {} are not saved'.format(solved_params, [param for param in all_solved_params if param not in solved_params]))
         if not solved_params: return new
         covariance, hessian = _get_solved_covariance(self, params=solved_params, return_hessian=True)
-        print(hessian.shape)
         L = np.moveaxis(np.linalg.cholesky(covariance), (-2, -1), (0, 1))
         new.data = []
         for array in self:

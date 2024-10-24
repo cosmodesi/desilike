@@ -157,7 +157,6 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         if mpicomm is None:
             mpicomm = likelihood.mpicomm
         self.likelihood = likelihood
-        #self.pipeline = self.likelihood.runtime_info.pipeline
         self.mpicomm = mpicomm
         self.likelihood.solved_default = '.best'
         self.varied_params = self.likelihood.varied_params.deepcopy()
@@ -447,6 +446,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                     profiles = None
                 list_profiles[ii] = profiles
         self.mpicomm = mpicomm_bak
+
         for iprofile, profile in enumerate(list_profiles):
             mpiroot_worker = self.mpicomm.rank if profile is not None else None
             for mpiroot_worker in self.mpicomm.allgather(mpiroot_worker):

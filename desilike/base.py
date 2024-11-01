@@ -190,23 +190,40 @@ def _concatenate_results(results, shape, add_dims=True):
     return results
 
 
-def _check_states(states):
-    ref, results, errors = None, [], {}
+def _check_states(states, errors=None):
+
+    def __mask_nan(state):
+        if state is None: return None
+        if errors == 'nan':
+            if isinstance(state, Samples):
+                state = state.deepcopy()
+                for name, value in state.items():
+                    state[str(name)] = np.nan * value
+            else:
+                state = np.nan * state
+        return state
+
+    def _mask_nan(state):
+        if isinstance(state, (tuple, list)):
+            return type(state)(__mask_nan(s) for s in state)
+        return __mask_nan(state)
+
+    ref, results, errs = None, [], {}
     for state in states:
         if state[1] is None:  # no error
-            ref = state
+            ref = _mask_nan(state[0]), state[1]
             break
     for istate, state in enumerate(states):
         if state[1] is None:  # no error
             results.append(state[0])
         else:
-            errors[istate] = state[1]
+            errs[istate] = state[1]
             if ref is not None:
                 results.append(ref[0])
             else:
                 results.append(None)
 
-    return results, errors
+    return results, errs
 
 
 import functools
@@ -231,7 +248,11 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
             except Exception as exc:
                 if errors == 'raise':
                     raise exc
-                state[1] = (exc, traceback.format_exc())
+                if errors == 'nan':
+                    tb = ''  # no need to store
+                else:
+                    tb = traceback.format_exc()
+                state[1] = (exc, tb)
             finally:
                 states.append(state)
         return states
@@ -245,7 +266,7 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
             kw = {**kwargs, **kw}
             params, shape = _check_params(params)
             states = _calculate_map(params, **kw)
-            results, errs = _check_states(states)
+            results, errs = _check_states(states, errors=errors)
             results = _concatenate_results(results, shape, add_dims=True)
             if errors == 'return':
                 return results, errs
@@ -320,7 +341,7 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
                     raise PipelineError('found error: {}'.format(error))
 
             if __wrapped__vmap__ is None:
-                results, errs = _check_states(all_states)
+                results, errs = _check_states(all_states, errors=errors)
                 results = _concatenate_results(results, shape, add_dims=True)
             else:
                 errs = {}
@@ -330,6 +351,7 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
                     ref = None
                     for istates, states in enumerate(all_states):
                         if len(states[1]) != states[2]:
+
                             if isinstance(states[0], (tuple, list)):
                                 ref = type(states[0])(s[:1] if s is not None else None for s in states[0])
                             else:
@@ -490,8 +512,8 @@ class BasePipeline(BaseClass):
         Derived parameter values are stored in :attr:`derived`.
         """
         params = _params_args_or_kwargs(args, kwargs)
+        self.params
         if not self._initialized:
-            self.params
             self.calculators = list(self._calculators)  # in case of jit
             if self.more_initialize is not None: self.more_initialize()
             self._initialized = True

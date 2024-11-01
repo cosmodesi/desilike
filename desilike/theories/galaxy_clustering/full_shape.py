@@ -1271,6 +1271,7 @@ class REPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMul
         from velocileptors.EPT.ept_fullresum_varyDz_nu_fftw import REPT
         #from velocileptors.EPT.ept_fullresum_fftw import REPT
         pk_dd, pknow_dd = self.template.pk_dd, self.template.pknow_dd
+        #print('desilike', self.template.k.min(), self.template.k.max(), self.template.k.size, self.template.pk_dd.sum())
         if self.z.ndim: pk_dd, pknow_dd = pk_dd[..., 0], pknow_dd[..., 0]
         self.pt = REPT(np.asarray(self.template.k), np.asarray(pk_dd), pnw=np.asarray(pknow_dd), kmin=self.k[0], kmax=self.k[-1], nk=200, **self.options)
         # print(self.template.f, self.k.shape, self.template.qpar, self.template.qper, self.template.k.shape, self.template.pk_dd.shape)

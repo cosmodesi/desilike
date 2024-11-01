@@ -214,6 +214,7 @@ import functools
 
 def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_size=100, **kwargs):
 
+    # errors can be 'raise', 'return', 'nan'
     __wrapped__vmap__ = getattr(calculate, '__wrapped__vmap__', None)
     __wrapped__errors__ = getattr(calculate, '__wrapped__errors__', None)
     errors = str(errors)
@@ -333,6 +334,9 @@ def vmap(calculate, backend=None, errors='raise', mpicomm=None, mpi_max_chunk_si
                                 ref = type(states[0])(s[:1] if s is not None else None for s in states[0])
                             else:
                                 ref = states[0][:1] if states[0] is not None else None
+                            if errors == 'nan':
+                                for name, value in ref.items():
+                                    ref[str(name)] = np.nan * value
                             break
                     for istates, states in enumerate(all_states):
                         if len(states[1]) == states[2]:  # all errors

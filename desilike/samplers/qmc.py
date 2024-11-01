@@ -110,11 +110,11 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
         """
         lower, upper = [], []
         for param in self.varied_params:
-            if param.ref.is_proper():
+            try:
                 lower.append(param.value - param.proposal)
                 upper.append(param.value + param.proposal)
-            else:
-                raise ParameterPriorError('Provide parameter limits or proposal')
+            except AttributeError as exc:
+                raise ParameterPriorError('Provide parameter limits or proposal for {}'.format(param)) from exc
         if self.mpicomm.rank == 0:
             self.engine.reset()
             nsamples = len(self.samples) if self.samples is not None else 0

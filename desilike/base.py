@@ -509,8 +509,8 @@ class BasePipeline(BaseClass):
         Derived parameter values are stored in :attr:`derived`.
         """
         params = _params_args_or_kwargs(args, kwargs)
+        self.params
         if not self._initialized:
-            self.params
             self.calculators = list(self._calculators)  # in case of jit
             if self.more_initialize is not None: self.more_initialize()
             self._initialized = True

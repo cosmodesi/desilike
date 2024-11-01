@@ -2336,6 +2336,8 @@ class Samples(BaseParameterCollection):
                 if isinstance(name, Parameter):
                     item.param = name
                 else:
+                    if item.param is None:
+                        item.param = Parameter(name)
                     item.param = item.param.clone(name=name)
                 #raise KeyError('Parameter {} must be indexed by name (incorrect {})'.format(item_name, name))
             self.set(item)

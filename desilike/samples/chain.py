@@ -59,6 +59,8 @@ def _get_solved_covariance(chain, params=None, return_hessian=False):
     hessian = np.array([[logposterior[param1, param2].ravel() for param2 in all_solved_params] for param1 in all_solved_params])
     hessian = np.moveaxis(hessian, -1, 0).reshape(chain.shape + (len(all_solved_params),) * 2)
     covariance = np.linalg.inv(-hessian)
+    # symmetrizing helps for numerical errors
+    covariance = (np.moveaxis(covariance, chain.ndim + 1, chain.ndim) + covariance) / 2.
     toret_covariance = np.zeros(chain.shape + (len(params),) * 2, dtype='f8')
     toret_hessian = toret_covariance.copy()
     for iparam1, param1 in enumerate(all_solved_params):

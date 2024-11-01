@@ -98,7 +98,7 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
     def mpicomm(self, mpicomm):
         self._mpicomm = mpicomm
 
-    def run(self, niterations=300):
+    def run(self, niterations=300, offset=None):
         """
         Run sampling. Sampling can be interrupted anytime, and resumed by providing
         the path to the saved samples in ``samples`` argument of :meth:`__init__`.
@@ -117,8 +117,9 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
                 raise ParameterPriorError('Provide parameter limits or proposal for {}'.format(param)) from exc
         if self.mpicomm.rank == 0:
             self.engine.reset()
-            nsamples = len(self.samples) if self.samples is not None else 0
-            self.engine.fast_forward(nsamples)
+            if offset is None:
+                offset = len(self.samples) if self.samples is not None else 0
+            self.engine.fast_forward(offset)
             samples = qmc.scale(self.engine.random(n=niterations), lower, upper)
             samples = Samples(samples.T, params=self.varied_params)
 

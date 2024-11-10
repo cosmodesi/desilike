@@ -84,6 +84,6 @@ def test_union3(plot=False):
 if __name__ == '__main__':
 
     setup_logging()
-    #test_install()
+    test_install()
     #test_profile()
-    test_union3(plot=True)
+    #test_union3(plot=True)

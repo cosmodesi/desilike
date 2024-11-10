@@ -934,13 +934,15 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         #self.sigma8_fid = fo.sigma8_z(self.z, of='delta_cb')
         #self.fsigma8_fid = fo.sigma8_z(self.z, of='theta_cb')
         #self.f_fid = self.fsigma8_fid / self.sigma8_fid
-        self.pk_tt_interpolator_fid = fo.pk_interpolator(of='theta_cb', **_kw_interp)
+        self.pk_tt_interpolator_fid = fo.pk_interpolator(of='theta_cb', **_kw_interp).to_1d(z=self.z)
         self.pk_tt_fid = self.pk_tt_interpolator_fid(self.k)
         self.pk_dd_fid = self.pk_tt_fid / self.f_fid**2
         if self.with_now:
             self.filter = PowerSpectrumBAOFilter(self.pk_tt_interpolator_fid, engine=self.with_now, cosmo=self.cosmo, cosmo_fid=self.fiducial)
             self.pknow_tt_fid = self.filter.smooth_pk_interpolator()(self.k)
             self.pknow_dd_fid = self.pknow_tt_fid / self.f_fid**2
+        self.sigma8 = fo.sigma8_z(self.z, of='delta_cb')
+        self.fsigma8 = fo.sigma8_z(self.z, of='theta_cb')
 
     def calculate(self, df=1., **params):
         self.f = self.f_fid * df

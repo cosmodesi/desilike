@@ -319,7 +319,7 @@ def test_camspec():
         print(logpost.loglike)
 
         cosmo = Cosmoprimo(fiducial='DESI', engine='camb', non_linear='hmcode')
-        likelihood = globals()['Highl{}PlanckNPIPECamspecLikelihood'.format(cl)](cosmo=cosmo)
+        likelihood = globals()['{}HighlPlanckNPIPECamspecLikelihood'.format(cl)](cosmo=cosmo)
         params = {'logA': 3.057147, 'n_s': 0.9657119, 'h': 0.7, 'omega_b': 0.02246306, 'omega_cdm': 0.1184775, 'N_eff': 3.044} | nuisance
         likelihood(params)
         print(likelihood.loglikelihood)
@@ -346,7 +346,6 @@ def test_sampling():
 
 
 def test_profiling():
-
     cosmo = Cosmoprimo(engine='capse')
     #likelihood = TTTEEEHighlPlanckNPIPECamspecLikelihood(cosmo=cosmo, proj_order=60)
     likelihood = TTTEEEHighlPlanck2020HillipopLikelihood(cosmo=cosmo, proj_order=60)
@@ -382,7 +381,7 @@ if __name__ == '__main__':
     #test_planck_python()
     #test_hillipop()
     #test_lollipop()
-    #test_camspec()
+    test_camspec()
     #test_jax()
     #test_sampling()
-    test_profiling()
+    #test_profiling()

@@ -862,7 +862,7 @@ class Parameter(BaseClass):
     @property
     def input(self):
         """Whether parameter should be fed as input to calculator."""
-        return ((self._derived is False) or isinstance(self._derived, str)) and not self.drop and not self.depends
+        return ((self._derived is False) or isinstance(self._derived, str)) and not self.depends
 
     @property
     def name(self):

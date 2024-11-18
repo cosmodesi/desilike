@@ -28,4 +28,4 @@ setup(name=package_basename,
       install_requires=['numpy', 'scipy', 'pyyaml', 'mpi4py', 'cosmoprimo @ git+https://github.com/cosmodesi/cosmoprimo'],
       extras_require={'plotting': ['matplotlib', 'tabulate', 'getdist', 'anesthetic @ git+https://github.com/handley-lab/anesthetic'], 'jax': ['jax', 'interpax @ git+https://github.com/adematti/interpax']},
       packages=find_packages(),
-      package_data={package_basename: list(get_yaml_files())})
+      package_data={package_basename: list(get_yaml_files()) + ['emulators/train/*/emulator.*']})

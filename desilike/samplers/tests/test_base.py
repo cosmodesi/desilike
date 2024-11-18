@@ -7,7 +7,7 @@ import numpy as np
 from desilike import PipelineError, setup_logging
 from desilike.samplers import (EmceeSampler, ZeusSampler, PocoMCSampler,
                                StaticDynestySampler, DynamicDynestySampler, PolychordSampler, NautilusSampler,
-                               NUTSSampler, MCLMCSampler, GridSampler, QMCSampler, ImportanceSampler)
+                               NUTSSampler, HMCSampler, MCLMCSampler, GridSampler, QMCSampler, ImportanceSampler)
 
 
 def test_samplers():
@@ -282,7 +282,7 @@ class MyGaussianLikelihood(BaseGaussianLikelihood):
         super(MyGaussianLikelihood, self).calculate()
 
 
-def test_mcmc():
+def test_ensemble():
 
     from desilike.samples import plotting
 
@@ -302,20 +302,21 @@ def test_mcmc():
     #likelihood.varied_params['b'].update(fixed=True)
     #for param in likelihood.varied_params:
     #    param.update(prior=None)
+    from desilike.samplers import MCMCSampler
 
     chains, timing = {}, {}
-    for Sampler in [EmceeSampler, NUTSSampler, MCLMCSampler][:3]:
+    for Sampler in [MCMCSampler, EmceeSampler][:1]:
         kwargs, check = {}, True
         ensemble = Sampler in [EmceeSampler, ZeusSampler, PocoMCSampler]
+        check = {'max_eigen_gr': 0.01, 'stable_over': 3}
         if ensemble:
             kwargs.update(nwalkers=10)
             check = {'max_eigen_gr': 0.01, 'stable_over': 3}
-        if Sampler is NUTSSampler:
-            likelihood.varied_params['a'].update(derived='.best')
-            check = {'max_eigen_gr': 0.01, 'stable_over': 3}
+        if Sampler is MCMCSampler:
+            kwargs['blocks'] = [[1, ['a']], [2, ['b', 'c']]]
         save_fn = './_tests/chain_{}_0.npy'
         nchains = save_fn if os.path.isfile(save_fn) else 1
-        nchains = 1
+        nchains = 4
         #os.remove(save_fn)
         sampler = Sampler(likelihood, chains=nchains, save_fn=save_fn, **kwargs)
         t0 = time.time()
@@ -351,7 +352,6 @@ def test_nested():
             chain = chain.remove_burnin(0.5)[::10]
         chains[Sampler.__name__] = chain
 
-    print(chains)
     plotting.plot_triangle(list(chains.values()), labels=list(chains.keys()), show=True)
 
 
@@ -363,10 +363,16 @@ def test_hmc():
     likelihood()
 
     from desilike.samples import plotting
-    for Sampler in [NUTSSampler, MCLMCSampler][1:]:
-        sampler = Sampler(likelihood, save_fn='./_tests/chain_*.npy')
-        chain = sampler.run(min_iterations=100, max_iterations=2000, check_every=200)[0]
-        plotting.plot_triangle(chain.remove_burnin(0.2), show=True)
+    chains = {}
+    for Sampler in [NUTSSampler, HMCSampler, MCLMCSampler][-1:]:
+        sampler = Sampler(likelihood, adaptation=False, save_fn='./_tests/chain_*.npy')
+        chain = sampler.run(check={'max_eigen_gr': 0.01}, min_iterations=100, check_every=200)[0]
+        chains[Sampler.__name__] = chain.remove_burnin(0.2)
+
+    from desilike import Fisher
+    fisher = Fisher(likelihood, method='auto')
+    fisher = fisher()
+    plotting.plot_triangle(list(chains.values()) + [fisher], labels=list(chains.keys()) + ['fisher'], show=True)
 
 
 def test_marg():
@@ -626,6 +632,39 @@ def test_sample_solved():
         print(likelihood(params) - samples_solved.logposterior[i])
 
 
+def test_hard_prior():
+
+    class MyGaussianLikelihood(BaseGaussianLikelihood):
+
+        def initialize(self, mean=None, covariance=None):
+            self.mean = np.array(mean)
+            self.covariance = np.array(covariance)
+            y = np.zeros(len(self.params))
+            super(MyGaussianLikelihood, self).initialize(y, covariance=self.covariance)
+
+        def calculate(self, **kwargs):
+            from jax import numpy as jnp
+            self.flattheory = jnp.array([kwargs[name] for name in self.params.names()])
+            super(MyGaussianLikelihood, self).calculate()
+
+    likelihood = MyGaussianLikelihood(mean=[0.], covariance=[[0.05]])
+    likelihood.init.params = {'a': {'prior': {'limits': [0., 3]}, 'proposal': 0.2}}
+    #likelihood.init.params = {'a': {'prior': {}, 'ref':  {'dist': 'norm', 'loc': 0., 'scale': 0.1}, 'proposal': 0.2}}
+    #likelihood.init.params = {'a': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}, 'proposal': 0.5}, 'b': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}, 'proposal': 0.5}}
+    from desilike.samplers import MCMCSampler
+    from desilike.samples import plotting
+
+    sampler = MCMCSampler(likelihood, proposal_scale=2.4)
+    gr = 0.01
+    learn_every = 1000
+    chain = sampler.run(check_every=learn_every, min_iterations=50000, check={'max_eigen_gr': gr, 'stable_over': 2})[0].remove_burnin(0.3)
+
+    from matplotlib import pyplot as plt
+    ax = plt.gca()
+    ax.hist(chain['a'], bins=50)
+    plt.show()
+
+
 
 if __name__ == '__main__':
 
@@ -635,10 +674,11 @@ if __name__ == '__main__':
     #test_fixed()
     #test_importance()
     #test_error()
-    #test_mcmc()
-    #test_hmc()
+    #test_ensemble()
+    test_hmc()
     #test_nested()
     #test_marg()
     #test_bao_hmc()
     #test_cobaya_mcmc()
-    test_sample_solved()
+    #test_sample_solved()
+    #test_hard_prior()

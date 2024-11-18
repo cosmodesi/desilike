@@ -34,6 +34,24 @@ def _get_subsamples(samples, frac=1., nmax=np.inf, seed=42, mpicomm=None):
     return toret
 
 
+def _get_calculator_info(calc, collection_calculator=None):
+    if collection_calculator is None: collection_calculator = calc
+    calculator__class__ = serialize_class(calc.__class__)
+    yaml_data = BaseConfig()
+    yaml_data['class'] = calc.__class__.__name__
+    yaml_data['info'] = dict(calc.info)
+    #self.yaml_data['init'] = dict(calculator.runtime_info.init)
+    params = {}
+    for param in collection_calculator.all_params:
+        if param in calc.all_params or not any(param in cc.all_params for cc in collection_calculator.calculators if cc is not calc):  # last one is fore parameters defined as calculator.all_params = ...
+            basename = param.basename
+            params[basename] = dict(ParameterConfig(param))
+            params[basename].pop('basename')
+            params[basename].pop('namespace', None)
+    yaml_data['params'] = params
+    return calculator__class__, yaml_data
+
+
 class Emulator(tools.Emulator):
 
     """Subclass :class:`tools.Emulator` to be able to provide a desilike calculator as calculator."""
@@ -88,31 +106,15 @@ class Emulator(tools.Emulator):
         if not varied:
             raise ValueError('Found no varying quantity in provided calculator')
 
-        def get_calculator_info(calc):
-            calculator__class__ = serialize_class(calc.__class__)
-            yaml_data = BaseConfig()
-            yaml_data['class'] = calc.__class__.__name__
-            yaml_data['info'] = dict(calc.info)
-            #self.yaml_data['init'] = dict(calculator.runtime_info.init)
-            params = {}
-            for param in calculator.all_params:
-                if param in calc.all_params or not any(param in cc.all_params for cc in calculator.calculators if cc is not calc):  # last one is fore parameters defined as calculator.all_params = ...
-                    basename = param.basename
-                    params[basename] = dict(ParameterConfig(param))
-                    params[basename].pop('basename')
-                    params[basename].pop('namespace', None)
-            yaml_data['params'] = params
-            return calculator__class__, yaml_data
-
         if is_calculator_sequence:
             calculator__class__, yaml_data = [], []
             for name, calc in calculator.items():
-                _calculator__class__, _yaml_data = get_calculator_info(calc)
+                _calculator__class__, _yaml_data = _get_calculator_info(calc, calculator)
                 calculator__class__.append(_calculator__class__)
                 yaml_data.append(_yaml_data)
                 fixed[name + '_cosmo_requires'] = calc.runtime_info.pipeline.get_cosmo_requires()
         else:
-            calculator__class__, yaml_data = get_calculator_info(calculator)
+            calculator__class__, yaml_data = _get_calculator_info(calculator)
             # Add in cosmo_requires
             fixed['cosmo_requires'] = calculator.runtime_info.pipeline.get_cosmo_requires()
 
@@ -393,6 +395,11 @@ class EmulatedCalculator(BaseCalculator):
 
     def initialize(self, emulator=None, **kwargs):
         self.emulator = emulator
+        super()._emulator_initialize()
+        try:
+            super()._emulator_initialize()
+        except AttributeError:
+            pass
         self.calculate(**{param.basename: param.value for param in self.init.params})
         # Hack to enforce parameters that are dropped in the non-emulated pipeline to be passed here
         for param in self.init.params:
@@ -404,6 +411,8 @@ class EmulatedCalculator(BaseCalculator):
 
     @classmethod
     def load(cls, filename):
+        if not os.path.exists(filename):  # pre-saved emulators
+            filename = os.path.join(os.path.dirname(__file__), 'train', filename, 'emulator.npy')
         return Emulator.load(filename).to_calculator()
 
     def save(self, fn):

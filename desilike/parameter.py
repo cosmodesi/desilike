@@ -1236,19 +1236,7 @@ class BaseParameterCollection(BaseClass):
         """Whether collection contains parameter ``name``."""
         return self._get_name(name) in (self._get_name(item) for item in self.data)
 
-    def select(self, **kwargs):
-        """
-        Return new collection, after selection of parameters whose attribute match input values::
-
-            collection.select(fixed=True)
-
-        returns collection of fixed parameters.
-        If 'name' is provided, consider all matching parameters, e.g.::
-
-            collection.select(varied=True, name='a_[0:2]')
-
-        returns a collection of varied parameters, with name in ``['a_0', 'a_1']``.
-        """
+    def _select(self, **kwargs):
         toret = self.copy()
         if not kwargs:
             return toret
@@ -1273,9 +1261,24 @@ class BaseParameterCollection(BaseClass):
                 toret.data.append(item)
         return toret
 
+    def select(self, **kwargs):
+        """
+        Return new collection, after selection of parameters whose attribute match input values::
+
+            collection.select(fixed=True)
+
+        returns collection of fixed parameters.
+        If 'name' is provided, consider all matching parameters, e.g.::
+
+            collection.select(varied=True, name='a_[0:2]')
+
+        returns a collection of varied parameters, with name in ``['a_0', 'a_1']``.
+        """
+        return self._select(**kwargs)
+
     def params(self, **kwargs):
         """Return :class:`ParameterCollection`, collection of parameters corresponding to items stored in this collection."""
-        return ParameterCollection([self._get_param(item) for item in self.select(**kwargs)])
+        return ParameterCollection([self._get_param(item) for item in self._select(**kwargs)])
 
     def names(self, **kwargs):
         """Return parameter names in collection."""
@@ -1367,15 +1370,15 @@ class BaseParameterCollection(BaseClass):
 
     def keys(self, **kwargs):
         """Return parameter names."""
-        return [self._get_name(item) for item in self.select(**kwargs)]
+        return [self._get_name(item) for item in self._select(**kwargs)]
 
     def values(self, **kwargs):
         """Return items."""
-        return [item for item in self.select(**kwargs)]
+        return [item for item in self._select(**kwargs)]
 
     def items(self, **kwargs):
         """Return list of tuples (parameter name, item)."""
-        return [(self._get_name(item), item) for item in self.select(**kwargs)]
+        return [(self._get_name(item), item) for item in self._select(**kwargs)]
 
     def deepcopy(self):
         """Deep copy."""

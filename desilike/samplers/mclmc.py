@@ -15,11 +15,11 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
     - https://blackjax-devs.github.io/sampling-book/algorithms/mclmc.html
     - https://arxiv.org/abs/2212.08549
     """
-    name = 'nuts'
+    name = 'mclmc'
 
-    def __init__(self, *args, adaptation=True, L=None, step_size=1e-4, integrator='isokinetic_mclachlan', **kwargs):
+    def __init__(self, *args, adaptation=True, L=1., step_size=0.1, integrator='isokinetic_mclachlan', **kwargs):
         """
-        Initialize NUTS HMC sampler.
+        Initialize MCLMC sampler.
 
         Parameters
         ----------
@@ -27,24 +27,18 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
             Input likelihood.
 
         adaptation : bool, dict, default=True
-            Adapt momentum decoherence scale ``L`` and ``step_size``.*
+            Adapt momentum decoherence scale ``L`` and ``step_size``.
             Can be ``{'niterations': 1000, 'frac_tune1': 0.1, 'frac_tune1': 0.1, 'frac_tune2': 0.1, 'frac_tune3': 0.1,
-            'desired_energy_var': 5e-4,, 'trust_in_estimate': 1.5, 'num_effective_samples': 150}``
+            'desired_energy_var': 5e-4,, 'trust_in_estimate': 1.5, 'num_effective_samples': 150, 'diagonal_preconditioning': True}``
 
-        L : float, default=None
+        L : float, default=1.
             Momentum decoherence scale.
 
-        step_size : float, default=1e-4
+        step_size : float, default=0.1
             The value to use for the step size in the integrator.
 
-        max_num_doublings : int, default=10
-            The maximum number of times we double the length of the trajectory before
-            returning if no U-turn has been obserbed or no divergence has occured.
-
-        divergence_threshold : int, default=1000
-            The absolute value of the difference in energy between two states above
-            which we say that the transition is divergent. The default value is
-            commonly found in other libraries, and yet is arbitrary.
+        integrator : str, default='isokinetic_mclachlan'
+            Integrator, from :mod:`blackjax.mcmc.integrators`.
 
         rng : np.random.RandomState, default=None
             Random state. If ``None``, ``seed`` is used to set random state.
@@ -123,13 +117,21 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
             import warnings
             warnings.warn('MCLMCSampler does not benefit from several processes per chain, please ask for {:d} processes'.format(len(self.chains)))
 
-        mpicomm = self.likelihood.mpicomm
         self.likelihood.mpicomm = mpi.COMM_SELF
+
+        def _params_forward_transform(values):
+            return values * self._params_transform_scale + self._params_transform_loc
+
+        def _params_backward_transform(values):
+            return (values - self._params_transform_loc) / self._params_transform_scale
 
         if self.algorithm is None:
 
+            self._params_transform_loc = np.array([param.value for param in self.varied_params], dtype='f8')
+            self._params_transform_scale = np.array([param.proposal for param in self.varied_params], dtype='f8')
+
             def logdensity_fn(values):
-                return self.likelihood(dict(zip(self.varied_params.names(), values)))
+                return self.likelihood(dict(zip(self.varied_params.names(), _params_forward_transform(values))))
 
             adaptation = self.attrs['adaptation']
             if isinstance(adaptation, dict):
@@ -137,16 +139,16 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
                 niterations_adaptation = adaptation.pop('niterations', 1000)
                 initial_state = blackjax.mcmc.mclmc.init(position=start, logdensity_fn=logdensity_fn, rng_key=key)
                 # build the kernel
-                kernel = blackjax.mcmc.mclmc.build_kernel(logdensity_fn=logdensity_fn, integrator=self.attrs['integrator'])
-                (initial_state, warmup_params) = blackjax.mclmc_find_L_and_step_size(mclmc_kernel=kernel, num_steps=niterations_adaptation, state=initial_state, rng_key=warmup_key)
+                kernel = lambda sqrt_diag_cov : blackjax.mcmc.mclmc.build_kernel(logdensity_fn=logdensity_fn, sqrt_diag_cov=sqrt_diag_cov, integrator=self.attrs['integrator'])
+                (initial_state, warmup_params) = blackjax.mclmc_find_L_and_step_size(mclmc_kernel=kernel, num_steps=niterations_adaptation, state=initial_state, rng_key=warmup_key, **adaptation)
                 start = initial_state.position
-                self.hyp = dict(step_size=warmup_params.step_size, L=warmup_params.L)
+                self.hyp = dict(step_size=warmup_params.step_size, L=warmup_params.L, sqrt_diag_cov=warmup_params.sqrt_diag_cov)
             elif self.hyp is None:
                 self.hyp = {name: self.attrs[name] for name in ['step_size', 'L']}
             # use the quick wrapper to build a new kernel with the tuned parameters
             self.log_info('Using hyperparameters: {}.'.format(self.hyp))
-            attrs = {name: self.attrs[name] for name in ['integrator']}
-            self.algorithm = blackjax.mclmc(logdensity_fn, **attrs, **self.hyp)
+            attrs = {name: self.attrs[name] for name in ['integrator']} | self.hyp
+            self.algorithm = blackjax.mclmc(logdensity_fn, **attrs)
 
         initial_state = self.algorithm.init(start, warmup_key)
         keys = jax.random.split(run_key, niterations)
@@ -154,13 +156,17 @@ class MCLMCSampler(BaseBatchPosteriorSampler):
         # run the sampler, following https://github.com/blackjax-devs/blackjax/blob/54023350cac935af79fc309006bf37d1603bb945/blackjax/util.py#L143
         final_state, (chain, info_history) = jax.lax.scan(self._one_step, initial_state, xs)
 
-        data = [chain.position[::thin_by, iparam] for iparam, param in enumerate(self.varied_params)] + [chain.logdensity[::thin_by]]
+        position = _params_forward_transform(chain.position)
+        data = [position[::thin_by, iparam] for iparam, param in enumerate(self.varied_params)] + [chain.logdensity[::thin_by]]
         chain = Chain(data=data, params=self.varied_params + ['logposterior'], attrs={'hyp': self.hyp})
-        self.likelihood.mpicomm = mpicomm
-        #self.derived = [chain.select(name=self.varied_params.names()), Samples()]
-        #logprior = sum(param.prior(chain[param]) for param in self.varied_params)
-        #self.derived[1][self.likelihood._param_logprior] = logprior
-        #self.derived[1][self.likelihood._param_loglikelihood] = chain['logposterior'] - logprior
+        #self.likelihood.mpicomm = mpicomm
+        self.derived = None
+        samples = chain.select(name=self.varied_params.names())
+        results = self._vlikelihood(samples.to_dict())
+        if self.mpicomm.rank == 0:
+            results, errors = results
+            if results:
+                self.derived = [samples, results[1]]
         return chain
 
     @classmethod

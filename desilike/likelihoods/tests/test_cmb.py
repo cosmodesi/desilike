@@ -337,11 +337,17 @@ def test_jax():
 
 
 def test_sampling():
-    from desilike.samplers import NUTSSampler
+    from desilike.jax import jit
+    from desilike.samplers import HMCSampler, NUTSSampler, MCLMCSampler
 
     cosmo = Cosmoprimo(engine='capse')
     likelihood = TTTEEEHighlPlanck2018LiteLikelihood(cosmo=cosmo)
-    sampler = NUTSSampler(likelihood, adaptation=False, chains=4, seed=42)
+
+    """
+    sampler = HMCSampler(likelihood, adaptation=True, num_integration_steps=10, step_size=0.03, chains=4, seed=42)
+    sampler.run(max_iterations=10000, check={'max_eigen_gr': 0.03, 'min_ess': 50}, check_every=200)
+    """
+    sampler = MCLMCSampler(likelihood, adaptation=True, chains=4, seed=42)
     sampler.run(max_iterations=10000, check={'max_eigen_gr': 0.03, 'min_ess': 50}, check_every=200)
 
 
@@ -381,7 +387,7 @@ if __name__ == '__main__':
     #test_planck_python()
     #test_hillipop()
     #test_lollipop()
-    test_camspec()
+    #test_camspec()
     #test_jax()
-    #test_sampling()
+    test_sampling()
     #test_profiling()

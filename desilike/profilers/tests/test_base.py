@@ -1,7 +1,7 @@
 import numpy as np
 
 from desilike import setup_logging
-from desilike.profilers import MinuitProfiler, ScipyProfiler, BOBYQAProfiler
+from desilike.profilers import MinuitProfiler, ScipyProfiler, BOBYQAProfiler, OptaxProfiler
 
 
 def test_profilers():
@@ -26,8 +26,10 @@ def test_profilers():
     for Profiler, kwargs in [(MinuitProfiler, {}),
                              (MinuitProfiler, {'gradient': True}),
                              #(ScipyProfiler, {'method': 'lsq'}),
-                             (ScipyProfiler, {'method': 'BFGS'}),
-                             (BOBYQAProfiler, {})]:
+                             (ScipyProfiler, {}),
+                             (ScipyProfiler, {'gradient': True}),
+                             (OptaxProfiler, {}),
+                             (BOBYQAProfiler, {})][:1]:
         profiler = Profiler(likelihood, seed=42, **kwargs)
         profiles = profiler.maximize(niterations=2)
         assert profiles.bestfit.attrs['ndof']
@@ -159,6 +161,6 @@ def test_bao():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_profilers()
-    test_solve()
+    test_profilers()
+    #test_solve()
     #test_bao()

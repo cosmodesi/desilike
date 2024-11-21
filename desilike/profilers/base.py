@@ -597,7 +597,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         varied_indices = [self.varied_params.index(param) for param in varied_params]  # varied_params ordered as self.varied_params
         grid_indices = [self.varied_params.index(param) for param in grid_params]
         insert_indices = grid_indices - np.arange(len(grid_indices))
-        start = [start[varied_indices] for start in start]
+        start = start[..., varied_indices]
 
         states = {}
         mpicomm_bak = self.mpicomm
@@ -616,15 +616,21 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
         with TaskManager(nprocs_per_task=nprocs_per_param, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
             self.mpicomm = tm.mpicomm
+            last_profile = None
             for ipoint in tm.iterate(range(nsamples)):
                 self.derived = None
                 point = get_point(ipoint)
                 if gradient is not None:
                     kwargs['gradient'] = lambda x: gradient(x, point)
+                _start = start
+                if last_profile is not None:
+                    best = last_profile.bestfit.choice(index='argmax', params=varied_params, return_type='nparray')
+                    _start = (start - np.mean(start, axis=0)) / 10. + best  # center around the previous best fit, with reduced dispersion
                 if varied_params:
-                    profile = Profiles.concatenate([self._maximize_one(start, lambda x: chi2(x, point), varied_params, **kwargs) for start in start])
+                    profile = Profiles.concatenate([self._maximize_one(ss, lambda x: chi2(x, point), varied_params, **kwargs) for ss in _start])
                     try:
                         logposterior = profile.bestfit.logposterior.max()
+                        last_profile = profile
                     except AttributeError:
                         logposterior = -np.inf
                 else:

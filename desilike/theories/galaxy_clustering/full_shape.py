@@ -1266,6 +1266,33 @@ class REPTVelocileptorsPowerSpectrumMultipoles(BaseVelocileptorsPowerSpectrumMul
         super(REPTVelocileptorsPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
         self.template.init.update(with_now='peakaverage')
 
+    def _emulator_initialize(self):
+        self._emulator_bak = getattr(self, '_emulator_bak', self.emulator)
+        self.emulator = self._emulator_bak.deepcopy()
+        if 'z' not in self.init: return
+        z = np.asarray(self.init['z'])
+        allz = self.emulator.fixed['z']
+        if np.allclose(z, allz): return
+        if np.any((z < allz[0]) | (z > allz[-1])):
+            raise ValueError('input z = {} is outside of the range of emub1 lated z: {} - {}'.format(z, *allz[[0, -1]]))
+        iz = np.searchsorted(allz, z, side='right') - 1
+        izp1 = np.minimum(iz + 1, len(allz) - 1)
+        keepiz = np.unique(np.concatenate([iz, izp1], axis=0))
+        allz = allz[keepiz]
+        self.emulator.fixed['z'] = z
+        iz = np.searchsorted(keepiz, iz, side='right') - 1
+        izp1 = np.minimum(iz + 1, len(allz) - 1)
+        wz = z - allz[iz]
+
+        from desilike.emulators import Operation
+
+        # Keep only the iz predictions we are interested in (for jaxeffort, maybe we should fix this later)
+        for name, engine in self.emulator.engines.items():
+            for operation in engine.model_operations + engine.yoperations:
+                operation.update(locals={name: value[keepiz] for name, value in operation._locals.items()})
+            engine.yshape = keepiz.shape + engine.yshape[1:]
+        self.emulator.yoperations.insert(0, Operation("", "{name: v[name][..., iz] * (1 - wz) + v[name][..., iz + 1] * wz if name in ['pktable', 'fsigma8', 'sigma8'] else v[name] for name in v}", locals={'wz': wz, 'iz': iz}))
+
     def calculate(self):
         super(REPTVelocileptorsPowerSpectrumMultipoles, self).calculate()
         from velocileptors.EPT.ept_fullresum_varyDz_nu_fftw import REPT

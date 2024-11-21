@@ -267,7 +267,7 @@ class ParameterContour(BaseParameterCollection):
 
     def params(self, **kwargs):
         """Return tuple of parameters."""
-        self = self.select(**kwargs)
+        self = self._select(**kwargs)
         return tuple(ParameterCollection([self._get_param(item)[i] for item in self]) for i in range(2))
 
     def names(self, **kwargs):

@@ -262,6 +262,12 @@ class Chain(Samples):
         new.logposterior[...] += dlogposterior
         return new
 
+    def select(self, **kwargs):
+        # Keep weight columns
+        toret = self._select(name=[self._aweight, self._fweight])
+        toret.update(self._select(**kwargs))
+        return toret
+
     def __getitem__(self, name):
         """
         Return item corresponding to parameter ``name``.

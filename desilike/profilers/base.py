@@ -280,7 +280,6 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             import jax
             _vchi2 = jax.jit(chi2)
             _vchi2(start[1], **aux)
-            #raise ValueError
         except:
             if self.mpicomm.rank == 0:
                 self.log_info('Could *not* jit input likelihood.')
@@ -426,7 +425,13 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                     profiles = _profiles_transform(self, profiles)
                     for param in self.likelihood.all_params.select(fixed=True, derived=False):
                         profiles.bestfit[param] = np.array([param.value], dtype='f8')
-                    derived = vlikelihood(profiles.bestfit.to_dict(params=profiles.bestfit.params(input=True)))[0][1]
+
+                    ret, exc = vlikelihood(profiles.bestfit.to_dict(params=profiles.bestfit.params(input=True)))
+                    for ipoint, error in exc.items():
+                        self.log_warning('Could not get derived parameters, error {}. Full stack trace\n{}:'.format(repr(error[0]), error[1]))
+                    derived = []
+                    if ret is not None:
+                        derived = ret[1]
                     #index_in_profile, index = self.derived[0].match(profiles.bestfit, params=profiles.start.params())
                     #assert index_in_profile[0].size == 1
                     #logposterior = -(self.derived[1][self.likelihood._param_loglikelihood][index] + self.derived[1][self.likelihood._param_logprior][index])

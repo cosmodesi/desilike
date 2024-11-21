@@ -1869,7 +1869,7 @@ class ParameterCollection(BaseParameterCollection):
         for param in self:
             try:
                 toret[param.name] = param.eval(**params)
-            except KeyError:
+            except (ParameterError, KeyError):
                 pass
         return toret
 

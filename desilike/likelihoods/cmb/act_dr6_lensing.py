@@ -14,6 +14,50 @@ def pp_to_kk(clpp, ell):
     return clpp * (ell * (ell + 1.))**2. / 4.
 
 
+def get_corrected_clkk(data_dict,clkk,cltt,clte,clee,clbb,suff='',
+                       do_norm_corr=True, do_N1kk_corr=True, do_N1cmb_corr=True,
+                       act_calib=False, no_like_cmb_corrections=False):
+    if no_like_cmb_corrections:
+        do_norm_corr = False
+        do_N1cmb_corr = False
+    clkk_fid = data_dict['fiducial_cl_kk']
+    cl_dict = {'tt':cltt,'te':clte,'ee':clee,'bb':clbb}
+    if do_N1kk_corr:
+        N1_kk_corr = data_dict[f'dN1_kk{suff}'] @ (clkk-clkk_fid)
+    else:
+        N1_kk_corr = 0
+    dNorm = data_dict[f'dAL_dC{suff}']
+    fid_norm = data_dict[f'fAL{suff}']
+    N1_cmb_corr = 0.
+    norm_corr = 0.
+
+    if act_calib and not('planck' in suff):
+        ocl = cl_dict['tt']
+        fcl = data_dict[f'fiducial_cl_tt']
+        ols = np.arange(ocl.size)
+        cal_ell_min = 1000
+        cal_ell_max = 2000
+        sel = np.s_[np.logical_and(ols>cal_ell_min,ols<cal_ell_max)]
+        cal_fact = (ocl[sel]/fcl[sel]).mean()
+    else:
+        cal_fact = 1.0
+
+    for i,s in enumerate(['tt','ee','bb','te']):
+        icl = cl_dict[s]
+        cldiff = ((icl/cal_fact)-data_dict[f'fiducial_cl_{s}'])
+        if do_N1cmb_corr:
+            N1_cmb_corr = N1_cmb_corr + (data_dict[f'dN1_{s}{suff}']@cldiff)
+        if do_norm_corr:
+            c = - 2. * (dNorm[i] @ cldiff)
+            if i==0:
+                ls = np.arange(c.size)
+            # CHANGE: for jax-compatibility
+            c = jnp.where(ls>=2, c, fid_norm)
+            norm_corr = norm_corr + c
+    nclkk = clkk + norm_corr*clkk_fid + N1_kk_corr + N1_cmb_corr
+    return nclkk
+
+
 class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
 
     config_fn = 'act_dr6_lensing.yaml'
@@ -61,12 +105,12 @@ class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
         cl_pp = cl_pp / Alens
         cl_kk = pp_to_kk(cl_pp, self.ells)
         # jax-friendly
-        clkk_act = alike.get_corrected_clkk(self.data, cl_kk, cl_tt, cl_te, cl_ee, cl_bb,
-                                            do_norm_corr=not(self.act_cmb_rescale), act_calib=self.act_calib,
+        clkk_act = get_corrected_clkk(self.data, cl_kk, cl_tt, cl_te, cl_ee, cl_bb,
+                                      do_norm_corr=not(self.act_cmb_rescale), act_calib=self.act_calib,
                                             no_like_cmb_corrections=self.no_actlike_cmb_corrections) if self.data['likelihood_corrections'] else cl_kk
         bclkk = self.data['binmat_act'] @ clkk_act
         if self.data['include_planck']:
-            clkk_planck = alike.get_corrected_clkk(self.data, cl_kk, cl_tt, cl_te, cl_ee, cl_bb, '_planck') if self.data['likelihood_corrections'] else cl_kk
+            clkk_planck = get_corrected_clkk(self.data, cl_kk, cl_tt, cl_te, cl_ee, cl_bb, '_planck') if self.data['likelihood_corrections'] else cl_kk
             bclkk = jnp.append(bclkk, self.data['binmat_planck'] @ clkk_planck)
         self.flattheory = bclkk
         super().calculate()
@@ -88,6 +132,6 @@ class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
             url = 'https://lambda.gsfc.nasa.gov/data/suborbital/ACT/ACT_dr6/likelihood/data/{}'.format(tar_base)
             tar_fn = os.path.join(data_dir, cls.version, tar_base)
             download(url, tar_fn)
-            extract(tar_fn, os.path.dirname(tar_fn))
+            extract(tar_fn, data_dir)
 
         installer.write({cls.installer_section: {'data_dir': data_dir}})

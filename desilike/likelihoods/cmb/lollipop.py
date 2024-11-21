@@ -96,7 +96,7 @@ class Bins(object):
         weighted by `l(l+1)/2pi`.
         Return Cb
         """
-        spectra = np.asarray(spectra)
+        spectra = jnp.asarray(spectra)
         minlmax = np.min([spectra.shape[-1] - 1, self.lmax])
 
         _p, _q = self._bin_operators()
@@ -370,7 +370,7 @@ class LollipopLikelihood(object):
         x = (self.cldata[m]*cal + self.cloff[m]) / (clth + self.cloff[m])
         g = jnp.sign(x) * ghl(jnp.abs(x))
 
-        X = (np.sqrt(self.clfid[m] + self.cloff[m])) * g * (np.sqrt(self.clfid[m] + self.cloff[m]))
+        X = (jnp.sqrt(self.clfid[m] + self.cloff[m])) * g * (jnp.sqrt(self.clfid[m] + self.cloff[m]))
 
         if self.marginalised_over_covariance:
             # marginalised over S = Ceff

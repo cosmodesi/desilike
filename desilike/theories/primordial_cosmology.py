@@ -52,8 +52,6 @@ def get_from_cosmo(cosmo, name):
             toret = cosmo[name]  # parameter
         except (CosmologyError, KeyError) as exc:
             raise AttributeError from exc
-    if not toret:
-        return 0.
     if scale is not None:
         return scale * toret
     return toret
@@ -107,6 +105,7 @@ class Cosmoprimo(BasePrimordialCosmology):
             self.fiducial = Cosmology()
         else:
             self.fiducial = get_cosmo(fiducial)
+
         self.fiducial = _clone(self, kwargs)
         if any(name in self.params.basenames(input=True) for name in ['h', 'H0']):
             for param in self.params.select(basename='theta_MC_100'):

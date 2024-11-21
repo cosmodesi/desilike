@@ -151,7 +151,7 @@ class NUTSSampler(BaseBatchPosteriorSampler):
                 adaptation = dict(adaptation)
                 niterations_adaptation = adaptation.pop('niterations', 1000)  # better spend time on good adaptation
                 adaptation.setdefault('initial_step_size', self.attrs['step_size'])
-                for name in ['max_num_doublings', 'integrator']:
+                for name in ['max_num_doublings', 'integrator'][:1]:  # FIXME, new blackjax version
                     adaptation.setdefault(name, self.attrs[name])
                 #def integrator(logdensity_fn, kinetic_energy_fn):
                 #    return jax.jit(self.attrs['integrator'](logdensity_fn, kinetic_energy_fn))
@@ -190,7 +190,8 @@ class NUTSSampler(BaseBatchPosteriorSampler):
 
         final_state, (chain, info_history) = jax.lax.scan(self.one_step, initial_state, xs)
         #final_state, (chain, info_history) = my_scan(self.one_step, initial_state, xs)
-        position, logdensity = chain.position[::thin_by], chain.logdensity[::thin_by]
+        mask = np.isfinite(chain.logdensity)  # NaN are errors
+        position, logdensity = chain.position[mask][::thin_by], chain.logdensity[mask][::thin_by]
 
         data = [position[:, iparam] for iparam, param in enumerate(self.varied_params)] + [logdensity]
         chain = Chain(data=data, params=self.varied_params + ['logposterior'], attrs={'hyp': self.hyp})

@@ -127,11 +127,11 @@ class Emulator(tools.Emulator):
         samples = samples if isinstance(samples, Samples) else Samples.load(samples)
         return samples.ravel()
 
-    def _get_engine_X_Y(self, samples, **kwargs):
+    def _get_X_Y_from_samples(self, samples, **kwargs):
         from cosmoprimo.emulators import Samples
         varied_names = samples.names(varied=True, derived=False)
         samples = Samples({'X.' + name: samples[name] for name in varied_names} | {'Y.' + name: samples[name] for name in samples.names() if name not in varied_names})
-        return super()._get_engine_X_Y(samples, **kwargs)
+        return super()._get_X_Y_from_samples(samples, **kwargs)
 
     def _sort_varied_fixed(self, samples, subsample=None):
         varied, fixed = super()._sort_varied_fixed(samples, subsample)
@@ -395,7 +395,6 @@ class EmulatedCalculator(BaseCalculator):
 
     def initialize(self, emulator=None, **kwargs):
         self.emulator = emulator
-        super()._emulator_initialize()
         try:
             super()._emulator_initialize()
         except AttributeError:

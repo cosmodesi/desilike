@@ -438,8 +438,7 @@ def add_1d_profile(profile, param, ax=None, **kwargs):
     pro = profile.get('profile', {})
     if param in pro:
         x = pro[param][:, 0]
-        pdf = np.exp(pro[param][:, 1])
-        pdf /= pdf.max()
+        pdf = np.exp(pro[param][:, 1] - pro[param][:, 1].max())
     else:
         mean = profile.get('bestfit', None)
         std = profile.get('error', None)
@@ -519,7 +518,7 @@ def add_2d_contour(profile, param1, param2, ax=None, cl=(1, 2), color='C0', fill
     cl = _make_list(cl)
     ccolors = dict(zip(cl, pale_colors(color, len(cl), pale_factor=pale_factor)))
     for nsigma in cl[::-1]:
-        contour = profile.get('contour', {nsigma: {}})[nsigma]
+        contour = profile.get('contour', {}).get(nsigma, [])
         if (param1, param2) in contour:
             x1, x2 = contour[param1, param2]
         else:
@@ -789,8 +788,10 @@ def plot_triangle(samples, params=None, labels=None, g=None, contour_colors=None
     filled = _make_list(filled, length=nsamples, default=False)
     contour_ls = _make_list(contour_ls, length=nsamples, default=None)
 
-    params = _get_default_chain_params([sample for sample in samples if not isinstance(sample, Profiles)], params=params, varied=True, input=True)
-    params += _get_default_profiles_params([sample for sample in samples if isinstance(sample, Profiles)], of=['bestfit', 'profile'], params=params, varied=True, input=True)
+    input_params = params
+    params = _get_default_chain_params([sample for sample in samples if not isinstance(sample, Profiles)], params=input_params, varied=True, input=True)
+    params += _get_default_profiles_params([sample for sample in samples if isinstance(sample, Profiles)], of=['bestfit', 'profile'], params=input_params, varied=True, input=True)
+
     for_getdist, getdist_contour_colors, getdist_contour_ls, getdist_filled = [], [], [], []
     profiles, profiles_colors, profiles_linestyles, profiles_filled = [], [], [], []
     # Sort between what GetDist can handle (chains) and profiles
@@ -809,15 +810,11 @@ def plot_triangle(samples, params=None, labels=None, g=None, contour_colors=None
     if for_getdist:
         g.triangle_plot(for_getdist, [str(param) for param in params], contour_colors=getdist_contour_colors, contour_ls=getdist_contour_ls, filled=filled,
                         legend_ncol=legend_ncol, legend_loc=legend_loc, **kwargs)
-        pale_factor = g.settings.solid_contour_palefactor
-        cl = g.settings.num_plot_contours
-        alpha = g.settings.alpha_factor_contour_lines
+        kwargs = {'pale_factor': g.settings.solid_contour_palefactor, 'cl': g.settings.num_plot_contours, 'alpha': g.settings.alpha_factor_contour_lines}
         fig = g.subplots
-        kwargs = {}
     else:
         fig = None
-    fig = plot_triangle_contours(profiles, params=params, colors=profiles_colors, linestyles=profiles_linestyles, filled=profiles_filled,
-                                 pale_factor=pale_factor, cl=cl, alpha=alpha, fig=fig, **kwargs)
+    fig = plot_triangle_contours(profiles, params=params, colors=profiles_colors, linestyles=profiles_linestyles, filled=profiles_filled, fig=fig, **kwargs)
     if for_getdist and profiles:
         # From GetDist
         if not legend_loc and g.settings.figure_legend_loc == 'upper center' and len(params) < 4:

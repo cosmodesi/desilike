@@ -207,12 +207,14 @@ class MinuitProfiler(BaseProfiler):
         """
         return super(MinuitProfiler, self).contour(*args, **kwargs)
 
-    def _contour_one(self, start, chi2, varied_params, params, cl=None, size=100, interpolated=0, gradient=None):
+    def _contour_one(self, start, chi2, varied_params, params, cl=None, size=40, interpolated=0, gradient=None, **kwargs):
         param1, param2 = params
         minuit = self._get_minuit(start, chi2, varied_params, gradient=gradient)
         profiles = Profiles()
         try:
-            x1x2 = minuit.mncontour(str(param1), str(param2), cl=cl, size=size, interpolated=interpolated)
+            x1x2 = minuit.mncontour(str(param1), str(param2), cl=cl, size=size, interpolated=interpolated, **kwargs)
+            if not len(x1x2):
+                raise RuntimeError('mncontour is empty')
         except RuntimeError as exc:
             if self.mpicomm.rank == 0:
                 self.log_warning('contour failed: {}'.format(exc))

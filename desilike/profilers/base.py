@@ -89,7 +89,7 @@ def _iterate_over_params(self, params, method, chi2=None, **kwargs):
         self.mpicomm = tm.mpicomm
         for iparam, param in tm.iterate(list(enumerate(params))):
             self.derived = None
-            profiles = method(start, self.chi2, self.transformed_params, param, **kwargs)
+            profiles = method(start, chi2, self.transformed_params, param, **kwargs)
             list_profiles[iparam] = _profiles_transform(self, profiles) if self.mpicomm.rank == 0 else None
     self.mpicomm = mpicomm_bak
     profiles = Profiles()
@@ -244,9 +244,9 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                     raise PipelineError('Error "{}" occured at {} with stack trace:\n{}'.format(repr(error[0]), points, error[1]))
 
             exception(warning_nan, logposterior, points)
-            return -2. * logposterior
+            return jnp.where(jnp.isnan(logposterior), -np.inf, logposterior)
 
-        return cond(compute_logprior(values) > -np.inf, compute_logposterior, lambda values: -np.inf, values)
+        return -2. * cond(compute_logprior(values) > -np.inf, compute_logposterior, lambda values: -np.inf, values)
 
     def __getstate__(self):
         state = {}
@@ -529,6 +529,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             params = [(param1, param2) for iparam1, param1 in enumerate(params) for param2 in params[iparam1 + 1:]]
         params = [(self.varied_params[param1], self.varied_params[param2]) for param1, param2 in params]
         chi2, gradient = self._get_vchi2()
+
         if gradient is not None: kwargs['gradient'] = gradient
         return _iterate_over_params(self, params, self._contour_one, chi2=chi2, cl=cl, **kwargs)
 

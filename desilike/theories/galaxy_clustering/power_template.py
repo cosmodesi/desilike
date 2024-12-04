@@ -68,6 +68,8 @@ class BasePowerSpectrumExtractor(BaseCalculator):
 class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
 
     """Base class for linear power spectrum template."""
+    # See calculate(self) for the list of attributes that must be set by calculate
+
     config_fn = 'power_template.yaml'
     _interpolator_k = np.logspace(-5., 2., 1000)  # more than classy
 
@@ -98,6 +100,10 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
             self.pknow_dd_fid = self.pknow_dd_interpolator_fid(self.k)
 
     def calculate(self):
+        # These are the quantities that should be set by a BasePowerSpectrumTemplate-inherited class.
+        # See BasePowerSpectrumExtrator._set_base for how to get these quantities from self.cosmo
+        # fk is sqrt(pk_tt / pk_dd)
+        # f0 is the limit of fk for k -> 0
         for name in ['sigma8', 'fsigma8', 'f', 'f0', 'fk', 'pk_dd_interpolator', 'pk_dd']:
             setattr(self, name, getattr(self, name + '_fid'))
         if self.with_now:

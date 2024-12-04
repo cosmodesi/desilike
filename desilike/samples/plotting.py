@@ -55,6 +55,8 @@ def _get_default_chain_params(chains, params=None, **kwargs):
 def _get_default_profiles_params(profiles, params=None, of='bestfit', **kwargs):
     from desilike.parameter import ParameterCollection
     profiles = _make_list(profiles)
+    if not profiles:
+        return ParameterCollection()
     of = _make_list(of)
     if params is not None:
         params = _make_list(params)
@@ -536,8 +538,8 @@ def add_2d_contour(profile, param1, param2, ax=None, cl=(1, 2), color='C0', fill
 
 
 @plotting.plotter
-def plot_triangle_contours(profiles, params=None, labels=None, colors=None, linestyles=None, filled=False, pale_factor=0.6, cl=2, alpha=1.,
-                           kw_contour=None, labelsize=None, kw_legend=None, figsize=None, fig=None):
+def plot_triangle_contours(profiles, params=None, labels=None, colors=None, linestyles=None, filled=False, pale_factor=0.6, cl=2, alpha=1., truths=None,
+                           kw_contour=None, kw_truth=None, labelsize=None, kw_legend=None, figsize=None, fig=None):
     r"""
     Triangle plot for likelihood profiling.
     Requires :attr:`Profiles.profile` (or :attr:`Profiles.bestfit` and :attr:`Profiles.error` or :attr:`Profiles.covariance` for Gaussian approximation)
@@ -573,8 +575,16 @@ def plot_triangle_contours(profiles, params=None, labels=None, colors=None, line
     alpha : list, float, default=1.
         Opacity(ies). Can be provided for each :class:`Profiles` instance.
 
+    truths : list, dict, default=None
+        Plot these truth / reference value for each parameter.
+
     kw_contour : dict, default=None
         Other options for plots.
+
+    kw_truth : dict, default=None
+        If ``None``, and ``truth`` not provided, no truth is plotted.
+        Else, optional arguments for :meth:`matplotlib.axes.Axes.axhline`.
+        Defaults to ``{'color': 'k', 'linestyle': ':', 'linewidth': 2}``.
 
     labelsize : int, default=None
         Label sizes.
@@ -599,6 +609,8 @@ def plot_triangle_contours(profiles, params=None, labels=None, colors=None, line
     profiles = _make_list(profiles)
     params = _get_default_profiles_params(profiles, params=params, of=['bestfit', 'profile'], varied=True, derived=False)
     nprofiles = len(profiles)
+    if isinstance(truths, dict): truths = [truths.get(param.name, None) for param in params]
+    truths = _make_list(truths, length=len(params), default=None)
     labels = _make_list(labels, length=nprofiles, default=None)
     colors = _make_list(colors, length=nprofiles, default=None)
     for i, color in enumerate(colors):
@@ -609,6 +621,7 @@ def plot_triangle_contours(profiles, params=None, labels=None, colors=None, line
     _add_legend = any(label is not None for label in labels)
     kw_contour = dict(kw_contour or {})
     kw_legend = dict(kw_legend or {})
+    kw_truth = dict(kw_truth or {'color': 'gray', 'linestyle': '--', 'linewidth': 0.5})
 
     ncols = nrows = len(params)
     if fig is None:
@@ -674,9 +687,15 @@ def plot_triangle_contours(profiles, params=None, labels=None, colors=None, line
                 color = colors[ipro]
                 add_2d_contour(pro, param1, param2, ax=lax[i], cl=nsigmas, color=colors[ipro], pale_factor=pale_factor,
                                filled=filled[ipro], alpha=alpha[ipro], linestyle=linestyles[ipro], **kw_contour)
+            if truths[i1] is not None:
+                lax[i].axvline(x=truths[i1], ymin=0., ymax=1., **kw_truth)
+            if truths[i2] is not None:
+                lax[i].axhline(y=truths[i2], xmin=0., xmax=1., **kw_truth)
         i = i1 * (nrows + 1)
         for ipro, pro in enumerate(profiles):
             add_1d_profile(pro, param1, ax=lax[i], color=colors[ipro], linestyle=linestyles[ipro], **kw_contour)
+        if truths[i1] is not None:
+            lax[i].axvline(x=truths[i1], ymin=0., ymax=1., **kw_truth)
 
     if _add_legend:
         add_legend(colors=colors, labels=labels, kw_handle=kw_contour, fig=fig)
@@ -737,7 +756,7 @@ def plot_triangle(samples, params=None, labels=None, g=None, **kwargs):
 
 
 @plotting.plotter
-def plot_triangle(samples, params=None, labels=None, g=None, contour_colors=None, contour_ls=None, filled=False, legend_ncol=None, legend_loc=None, **kwargs):
+def plot_triangle(samples, params=None, labels=None, g=None, contour_colors=None, contour_ls=None, filled=False, legend_ncol=None, legend_loc=None, markers=None, **kwargs):
     """
     Triangle plot.
     *GetDist* package is used to plot chains.
@@ -809,11 +828,12 @@ def plot_triangle(samples, params=None, labels=None, g=None, contour_colors=None
 
     if for_getdist:
         g.triangle_plot(for_getdist, [str(param) for param in params], contour_colors=getdist_contour_colors, contour_ls=getdist_contour_ls, filled=filled,
-                        legend_ncol=legend_ncol, legend_loc=legend_loc, **kwargs)
-        kwargs = {'pale_factor': g.settings.solid_contour_palefactor, 'cl': g.settings.num_plot_contours, 'alpha': g.settings.alpha_factor_contour_lines}
+                        legend_ncol=legend_ncol, legend_loc=legend_loc, markers=markers, **kwargs)
+        kwargs = {'pale_factor': g.settings.solid_contour_palefactor, 'cl': g.settings.num_plot_contours, 'alpha': g.settings.alpha_factor_contour_lines, 'truths': None}
         fig = g.subplots
     else:
         fig = None
+        kwargs['truths'] = markers
     fig = plot_triangle_contours(profiles, params=params, colors=profiles_colors, linestyles=profiles_linestyles, filled=profiles_filled, fig=fig, **kwargs)
     if for_getdist and profiles:
         # From GetDist
@@ -924,7 +944,7 @@ def plot_aligned(profiles, param, ids=None, labels=None, colors=None, truth=None
     profiles = _make_list(profiles)
     if truth is True or (truth is None and kw_truth is not None):
         truth = profiles[0].bestfit[param].param.value
-    kw_truth = dict(kw_truth if kw_truth is not None else {'color': 'k', 'linestyle': ':', 'linewidth': 2})
+    kw_truth = dict(kw_truth or {'color': 'k', 'linestyle': ':', 'linewidth': 2})
     maxpoints = max(map(lambda prof: len(prof.bestfit), profiles))
     ids = _make_list(ids, length=len(profiles), default=None)
     labels = _make_list(labels, length=maxpoints, default=None)
@@ -1004,9 +1024,8 @@ def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=No
     labels : list, str
         Label(s) for best fits within each :class:`Profiles` instance.
 
-    truths : list, default=None
+    truths : list, dict, default=None
         Plot these truth / reference value for each parameter.
-        If ``True``, take :attr:`Parameter.value`.
 
     ybands : list, default=None
         If not ``None``, plot horizontal bands.
@@ -1037,6 +1056,7 @@ def plot_aligned_stacked(profiles, params=None, ids=None, labels=None, truths=No
     """
     profiles = _make_list(profiles)
     params = _get_default_profiles_params(profiles, params=params, varied=True, derived=False)
+    if isinstance(truths, dict): truths = [truths.get(param.name, None) for param in params]
     truths = _make_list(truths, length=len(params), default=None)
     ybands = _make_list(ybands, length=len(params), default=None)
     ylimits = _make_list(ybands, length=len(params), default=None)

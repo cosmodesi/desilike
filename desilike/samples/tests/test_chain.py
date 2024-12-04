@@ -176,7 +176,9 @@ def test_plot():
     #plotting.add_legend(labels=['chain', 'profiles1', 'profiles2'], colors=['C0', 'C1', 'C2'], loc='upper right')
 
     plotting.plot_triangle([chain, profiles1, profiles2], labels=['chain', 'profiles1', 'profiles2'],
-                           contour_colors=['C0', 'C1', 'C2'], filled=[True, False, False], show=True)
+                           contour_colors=['C0', 'C1', 'C2'], filled=[True, False, False], markers={'like.a': 0., 'like.d': 0.}, show=True)
+    plotting.plot_triangle_contours([profiles1, profiles2], labels=['profiles1', 'profiles2'],
+                                    colors=['C1', 'C2'], filled=[True, False], truths={'like.a': 0., 'like.d': 0.}, show=True)
 
 
 def test_solved():

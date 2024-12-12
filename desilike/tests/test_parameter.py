@@ -91,7 +91,7 @@ def test_matrix():
 
 if __name__ == '__main__':
 
-    #test_param_array()
+    test_param_array()
     test_prior()
     test_deriv()
     test_param_array()

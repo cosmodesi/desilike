@@ -62,22 +62,22 @@ class BOBYQAProfiler(BaseProfiler):
         """
         return super(BOBYQAProfiler, self).maximize(*args, **kwargs)
 
-    def _maximize_one(self, start, chi2, varied_params, max_iterations=int(1e5), **kwargs):
+    def _maximize_one(self, state, max_iterations=int(1e5), **kwargs):
         import pybobyqa
         infs = [- 1e20, 1e20]  # pybobyqa defaults
-        bounds = np.array([[inf if np.isinf(lim) else lim for lim, inf in zip(param.prior.limits, infs)] for param in varied_params]).T
+        bounds = np.array([[inf if np.isinf(lim) else lim for lim, inf in zip(param.prior.limits, infs)] for param in state.varied_params]).T
         with LoggingContext('warning') as log:
-            result = pybobyqa.solve(objfun=chi2, x0=start, bounds=bounds, maxfun=max_iterations, **kwargs)
+            result = pybobyqa.solve(objfun=state.chi2, x0=state.start, bounds=bounds, maxfun=max_iterations, **kwargs)
         success = result.flag == result.EXIT_SUCCESS
         profiles = Profiles()
         if not success and self.mpicomm.rank == 0:
             self.log_error('Finished unsuccessfully.')
             return profiles
         attrs = {name: getattr(result, name) for name in ['nf', 'nx', 'nruns', 'flag', 'msg']}
-        profiles.set(bestfit=ParameterBestFit([np.atleast_1d(xx) for xx in result.x] + [- 0.5 * np.atleast_1d(result.f)], params=varied_params + ['logposterior'], attrs=attrs))
+        profiles.set(bestfit=ParameterBestFit([np.atleast_1d(xx) for xx in result.x] + [- 0.5 * np.atleast_1d(result.f)], params=state.varied_params + ['logposterior'], attrs=attrs))
         cov = utils.inv(result.hessian)
-        profiles.set(error=Samples(np.diag(cov)**0.5, params=varied_params, attrs=attrs))
-        profiles.set(covariance=ParameterCovariance(cov, params=varied_params, attrs=attrs))
+        profiles.set(error=Samples(np.diag(cov)**0.5, params=state.varied_params, attrs=attrs))
+        profiles.set(covariance=ParameterCovariance(cov, params=state.varied_params, attrs=attrs))
         return profiles
 
     def profile(self, *args, **kwargs):

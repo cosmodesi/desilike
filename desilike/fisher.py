@@ -691,6 +691,7 @@ class Fisher(BaseClass):
             self.likelihood = self.likelihood.deepcopy()
             for param in solved_params:
                 self.likelihood.all_params[param].update(derived=False)
+
         self.varied_params = self.likelihood.varied_params
 
         prior_calculator = PriorCalculator()

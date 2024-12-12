@@ -8,10 +8,11 @@ import numpy as np
 from desilike import utils, mpi, PipelineError
 from desilike.utils import BaseClass, expand_dict, TaskManager
 from desilike.samples import load_source
-from desilike.samples.profiles import Profiles, ParameterBestFit, ParameterGrid, ParameterProfiles
+from desilike.samples.profiles import Profiles, ParameterBestFit, ParameterCovariance, ParameterGrid, ParameterProfiles, ParameterArray, ParameterContours
 from desilike.parameter import ParameterPriorError, Samples, ParameterCollection, is_parameter_sequence
 from desilike.jax import jit, cond, numpy_jax, exception
 from desilike.jax import numpy as jnp
+
 
 
 class RegisteredProfiler(type(BaseClass)):
@@ -73,41 +74,30 @@ def _profiles_transform(self, profiles):
     return toret
 
 
-def _iterate_over_params(self, params, method, chi2=None, **kwargs):
-    nparams = len(params)
-    if chi2 is None:
-        chi2 = self.chi2
-    nprocs_per_param = max(self.mpicomm.size // nparams, 1)
-    if self.profiles is None:
-        start = self._get_start()
-    else:
-        argmax = self.profiles.bestfit.logposterior.argmax()
-        start = self._params_backward_transform(np.array([self.profiles.bestfit[param][argmax] for param in self.varied_params]))
-    list_profiles = [None] * nparams
-    mpicomm_bak = self.mpicomm
-    with TaskManager(nprocs_per_task=nprocs_per_param, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
-        self.mpicomm = tm.mpicomm
-        for iparam, param in tm.iterate(list(enumerate(params))):
-            self.derived = None
-            profiles = method(start, chi2, self.transformed_params, param, **kwargs)
-            list_profiles[iparam] = _profiles_transform(self, profiles) if self.mpicomm.rank == 0 else None
-    self.mpicomm = mpicomm_bak
-    profiles = Profiles()
-    for iprofile, profile in enumerate(list_profiles):
-        mpiroot_worker = self.mpicomm.rank if profile is not None else None
-        for mpiroot_worker in self.mpicomm.allgather(mpiroot_worker):
-            if mpiroot_worker is not None: break
-        assert mpiroot_worker is not None
-        profiles.update(Profiles.bcast(profile, mpicomm=self.mpicomm, mpiroot=mpiroot_worker))
+class ProfilerState(object):
 
-    if self.profiles is None:
-        self.profiles = profiles
-    else:
-        self.profiles.update(profiles)
+    def __init__(self, chi2, varied_params, start, gradient=None, **kwargs):
+        self.chi2 = chi2
+        self.varied_params = varied_params
+        self.start = start
+        self.gradient = gradient
+        self.__dict__.update(kwargs)
 
-    if self.mpicomm.rank == 0 and self.save_fn is not None:
-        self.profiles.save(self.save_fn)
-    return self.profiles
+    def __copy__(self, *args, **kwargs):
+        new = self.__class__.__new__(self.__class__)
+        new.__dict__.update(self.__dict__)
+        return new
+
+    def copy(self, *args, **kwargs):
+        return self.__copy__(*args, **kwargs)
+
+    def update(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+    def clone(self, **kwargs):
+        new = self.copy()
+        new.update(**kwargs)
+        return new
 
 
 class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
@@ -210,7 +200,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
         self._params_forward_transform = _params_forward_transform
         self._params_backward_transform = _params_backward_transform
-        self.derived = None
+
         self.save_fn = save_fn
 
     def chi2(self, values):
@@ -402,62 +392,40 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         niterations = int(niterations)
         start = self._get_start(start=start, niterations=niterations)
         chi2, gradient = self._get_vchi2()
-        if gradient is not None:
-            kwargs['gradient'] = gradient
-        nprocs_per_iteration = max(self.mpicomm.size // niterations, 1)
-        list_profiles = [None] * niterations
-        mpicomm_bak = self.mpicomm
+
         from desilike import vmap
         vlikelihood = vmap(self.likelihood, backend=None, errors='return', return_derived=True)
-        with TaskManager(nprocs_per_task=nprocs_per_iteration, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
+
+        with TaskManager(nprocs_per_task=(self.mpicomm.size + niterations - 1) // niterations, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
             self.mpicomm = tm.mpicomm
+            list_profiles = []
             for ii in tm.iterate(range(niterations)):
                 logposterior = -0.5 * self.chi2(start[ii])
-                p = self._maximize_one(start[ii], chi2, self.transformed_params, **kwargs)
-                profiles = None
-                if self.mpicomm.rank == 0:
-                    profiles = Profiles(start=Samples(start[ii][..., None], params=self.varied_params),
-                                        bestfit=ParameterBestFit(start[ii][..., None], params=self.varied_params,
-                                                                 loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior),
-                                        error=Samples(np.full_like(start[ii][..., None], np.nan), params=self.varied_params))
-                    profiles.bestfit.logposterior[...] = logposterior
-                    profiles.update(p)
-                    profiles = _profiles_transform(self, profiles)
-                    for param in self.likelihood.all_params.select(fixed=True, derived=False):
-                        profiles.bestfit[param] = np.array([param.value], dtype='f8')
+                profiles = Profiles(start=Samples(start[ii][..., None], params=self.varied_params),
+                                    bestfit=ParameterBestFit(start[ii][..., None], params=self.varied_params,
+                                                                loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior),
+                                    error=Samples(np.full_like(start[ii][..., None], np.nan), params=self.varied_params))
+                profiles.bestfit.logposterior[...] = logposterior
+                state = ProfilerState(chi2=chi2, start=start[ii], varied_params=self.transformed_params, gradient=gradient, fast=False)
+                profiles.update(self._maximize_one(state, **kwargs))
+                profiles = _profiles_transform(self, profiles)
+                for param in self.likelihood.all_params.select(fixed=True, derived=False):
+                    profiles.bestfit[param] = np.array([param.value], dtype='f8')
 
-                    ret, exc = vlikelihood(profiles.bestfit.to_dict(params=profiles.bestfit.params(input=True)))
-                    for ipoint, error in exc.items():
-                        self.log_warning('Could not get derived parameters, error {}. Full stack trace\n{}:'.format(repr(error[0]), error[1]))
-                    derived = []
-                    if ret is not None:
-                        derived = ret[1]
-                    #index_in_profile, index = self.derived[0].match(profiles.bestfit, params=profiles.start.params())
-                    #assert index_in_profile[0].size == 1
-                    #logposterior = -(self.derived[1][self.likelihood._param_loglikelihood][index] + self.derived[1][self.likelihood._param_logprior][index])
-                    #covariance = []
-                    #if logposterior.derivs:
-                    #    from desilike.parameter import ParameterPrecision
-                    #    solved_params = ParameterCollection([self.likelihood.all_params[param] for deriv in logposterior.derivs for param in deriv.keys()])
-                    #    covariance = ParameterPrecision(logposterior[0], params=solved_params).to_covariance()
-                    for array in derived:
-                        profiles.bestfit.set(array)
-                        #if array.param in covariance:
-                        #    profiles.error[array.param] = covariance.std([array.param])
-                    if profiles.bestfit._logposterior not in profiles.bestfit:
-                        profiles.bestfit.logposterior = profiles.bestfit[profiles.bestfit._loglikelihood] + profiles.bestfit[profiles.bestfit._logprior]
-                    profiles.bestfit.logposterior.param.update(derived=True, latex=utils.outputs_to_latex(profiles.bestfit._logposterior))
-                else:
-                    profiles = None
-                list_profiles[ii] = profiles
-        self.mpicomm = mpicomm_bak
-
-        for iprofile, profile in enumerate(list_profiles):
-            mpiroot_worker = self.mpicomm.rank if profile is not None else None
-            for mpiroot_worker in self.mpicomm.allgather(mpiroot_worker):
-                if mpiroot_worker is not None: break
-            assert mpiroot_worker is not None
-            list_profiles[iprofile] = Profiles.bcast(profile, mpicomm=self.mpicomm, mpiroot=mpiroot_worker)
+                ret, exc = vlikelihood(profiles.bestfit.to_dict(params=profiles.bestfit.params(input=True)))
+                for ipoint, error in exc.items():
+                    self.log_warning('Could not get derived parameters, error {}. Full stack trace\n{}:'.format(repr(error[0]), error[1]))
+                derived = []
+                if ret is not None:
+                    derived = ret[1]
+                for array in derived:
+                    profiles.bestfit.set(array)
+                if profiles.bestfit._logposterior not in profiles.bestfit:
+                    profiles.bestfit.logposterior = profiles.bestfit[profiles.bestfit._loglikelihood] + profiles.bestfit[profiles.bestfit._logprior]
+                profiles.bestfit.logposterior.param.update(derived=True, latex=utils.outputs_to_latex(profiles.bestfit._logposterior))
+                list_profiles.append(profiles)
+            list_profiles = tm.allreduce(list_profiles)
+            self.mpicomm = tm.basecomm
 
         profiles = Profiles.concatenate(list_profiles)
 
@@ -473,7 +441,36 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             self.profiles.save(self.save_fn)
         return self.profiles
 
-    def interval(self, params=None, **kwargs):
+    def covariance(self, **kwargs):
+        """
+        Maximize :attr:`likelihood`.
+        The following attributes are added to :attr:`profiles`:
+
+        - :attr:`Profiles.error`  # parabolic errors at best fit (if made available by the profiler)
+        - :attr:`Profiles.covariance`  # parameter covariance at best fit (if made available by the profiler).
+
+        """
+        if self.profiles is None or 'bestfit' not in self.profiles:
+            self.maximize()
+
+        from desilike import Fisher
+        fisher = Fisher(self.likelihood, mpicomm=self.mpicomm, **kwargs)
+        fisher = fisher(self.profiles.bestfit.choice(index='argmax', input=True, return_type='dict'))
+
+        covariance = ParameterCovariance(fisher.covariance(params=self.varied_params), params=self.varied_params)
+        error = Samples([np.atleast_1d(covariance.std(param)) for param in self.varied_params], params=self.varied_params)
+        profiles = Profiles(error=error, covariance=covariance)
+
+        if self.profiles is None:
+            self.profiles = profiles
+        else:
+            self.profiles.set(covariance=covariance)
+
+        if self.mpicomm.rank == 0 and self.save_fn is not None:
+            self.profiles.save(self.save_fn)
+        return self.profiles
+
+    def interval(self, params=None, cl=1, niterations=1, **kwargs):
         """
         Compute confidence intervals for :attr:`likelihood`.
         The following attributes are added to :attr:`profiles`:
@@ -489,15 +486,138 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             Optional arguments for specific profiler.
         """
         if params is None:
-            params = self.varied_params
+            all_params = self.varied_params
         else:
             if not is_parameter_sequence(params): params = [params]
-            params = ParameterCollection([self.varied_params[param] for param in params])
-        chi2, gradient = self._get_vchi2()
-        if gradient is not None: kwargs['gradient'] = gradient
-        return _iterate_over_params(self, params, self._interval_one, chi2=chi2, **kwargs)
+            all_params = ParameterCollection([self.varied_params[param] for param in params])
 
-    def contour(self, params=None, cl=1, **kwargs):
+        if self.profiles is None or 'bestfit' not in self.profiles:
+            self.maximize(niterations=niterations)
+        if 'covariance' not in self.profiles:
+            self.covariance()
+
+        chi2, gradient = self._get_vchi2()
+        start = self._get_start(niterations=niterations)
+
+        with TaskManager(nprocs_per_task=(self.mpicomm.size + len(all_params) - 1) // len(all_params), use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
+            self.mpicomm = tm.mpicomm
+            list_profiles = []
+            for param in tm.iterate(all_params):
+                index = self.profiles.bestfit.logposterior.argmax()
+                center = self.profiles.bestfit.choice(index=index, params=param, return_type='nparray')
+                covariance = self.profiles.covariance.view(params=param)
+                state = ProfilerState(chi2=chi2, start=start, varied_params=self.transformed_params, gradient=gradient, fast=True,
+                                      center=center, covariance=covariance, max_logposterior=self.profiles.bestfit.logposterior[index])
+                list_profiles.append(self._interval_one(param, state, cl=cl, **kwargs))
+            profiles = Profiles()
+            for profile in tm.allreduce(list_profiles): profiles.update(profile)
+            profiles = _profiles_transform(self, profiles)
+            self.mpicomm = tm.basecomm
+
+        if self.profiles is None:
+            self.profiles = profiles
+        else:
+            self.profiles.update(profiles)
+
+        if self.mpicomm.rank == 0 and self.save_fn is not None:
+            self.profiles.save(self.save_fn)
+        return self.profiles
+
+    def _interval_one(self, param, state, cl=1, xtol=1e-3, **kwargs):
+        from scipy.optimize import root_scalar
+
+        grid_params = ParameterCollection([self.varied_params[param]])
+
+        start, max_logposterior, center, covariance = state.start, state.max_logposterior, state.center, state.covariance
+        s = covariance**0.5
+
+        varied_params = self.transformed_params - grid_params
+        varied_indices = [self.varied_params.index(param) for param in varied_params]  # varied_params ordered as self.varied_params
+        grid_indices = [self.varied_params.index(param) for param in grid_params]
+        insert_indices = grid_indices - np.arange(len(grid_indices))
+        start = start[..., varied_indices]
+
+        def get_point(z):
+            x = z * s + center
+            x = np.clip(x, *grid_params[0].prior.limits)
+            return ((x,) - self._params_transform_loc[grid_indices]) / self._params_transform_scale[grid_indices]
+
+        def chi2(values, point):
+            jnp = numpy_jax(values[0])
+            values = jnp.asarray(values)
+            values = jnp.insert(values, insert_indices, point, axis=-1)
+            return self.chi2(values)
+
+        chi2, gradient = self._get_vchi2(chi2=chi2, aux=dict(point=get_point(0)))
+
+        with TaskManager(nprocs_per_task=(self.mpicomm.size + 2 - 1) // 2, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
+            self.mpicomm = tm.mpicomm
+            interval = []
+
+            def scan(z):
+                point = get_point(z)
+                ipoint_start = start
+                if self._last_profile is not None:
+                    transformed_best = (self._last_profile.bestfit.choice(index='argmax', params=varied_params, return_type='nparray') - self._params_transform_loc[varied_indices]) / self._params_transform_scale[varied_indices]
+                    ipoint_start = (start - np.mean(start, axis=0)) / 10. + transformed_best  # center around the previous best fit, with reduced dispersion
+                state = ProfilerState(chi2=lambda x: chi2(x, point), start=None, varied_params=varied_params, fast=True)
+                if gradient is not None:
+                    state.update(gradient=lambda x: gradient(x, point))
+
+                if varied_params:
+                    # run with multiple starting points
+                    with TaskManager(nprocs_per_task=(self.mpicomm.size + len(ipoint_start) - 1) // len(ipoint_start), use_all_nprocs=True, mpicomm=self.mpicomm) as tm_iter:
+                        self.mpicomm = tm_iter.mpicomm
+                        list_profiles = []
+                        for ss in tm_iter.iterate(ipoint_start):
+                            list_profiles.append(self._maximize_one(state.clone(start=ss), **kwargs))
+                        profile = Profiles.concatenate(tm_iter.allreduce(list_profiles))
+                        self.mpicomm = tm_iter.basecomm
+                    try:
+                        logposterior = profile.bestfit.logposterior.max()
+                        self._last_profile = profile
+                    except AttributeError:
+                        logposterior = -np.inf
+                else:
+                    logposterior = -0.5 * chi2(np.array([], dtype='f8'), point)
+
+                return -0.5 * (logposterior - max_logposterior) - cl
+
+            for sign in tm.iterate([-1, 1]):
+
+                self._last_profile = None
+
+                # find bracket
+                a = 0.5
+                while scan(sign * a) > 0 and a > 1e-7:
+                    a *= 0.5
+
+                if a < 1e-7:
+                    interval.append(np.nan)
+                    continue
+
+                b = 1.2
+                while scan(sign * b) < 0 and b < 8:
+                    b *= 1.1
+
+                if b > 8:
+                    interval.append(get_point(sign * b))
+                    continue
+
+                # low xtol was found to be sufficient in experimental trials
+                r = root_scalar(scan, bracket=(sign * a, sign * b), xtol=xtol)
+                if r.converged:
+                    interval.append(get_point(r.root))
+
+                del self._last_profile
+
+            interval = np.array(interval) - (center - self._params_transform_loc[grid_indices]) / self._params_transform_scale[grid_indices]
+            interval = Samples([ParameterArray(interval, param=param)])
+            profiles = Profiles(interval=interval)
+            self.mpicomm = tm.basecomm
+        return profiles
+
+    def contour(self, params=None, cl=1, niterations=1, **kwargs):
         """
         Compute 2D contours for :attr:`likelihood`.
         The following attributes are added to :attr:`profiles`:
@@ -527,11 +647,136 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             cl = - stats.norm.ppf(cl / 2.)
         if not is_parameter_sequence(params[0]):
             params = [(param1, param2) for iparam1, param1 in enumerate(params) for param2 in params[iparam1 + 1:]]
-        params = [(self.varied_params[param1], self.varied_params[param2]) for param1, param2 in params]
-        chi2, gradient = self._get_vchi2()
+        all_params = [(self.varied_params[param1], self.varied_params[param2]) for param1, param2 in params]
 
-        if gradient is not None: kwargs['gradient'] = gradient
-        return _iterate_over_params(self, params, self._contour_one, chi2=chi2, cl=cl, **kwargs)
+        if self.profiles is None or 'bestfit' not in self.profiles:
+            self.maximize(niterations=niterations)
+        if 'covariance' not in self.profiles:
+            self.covariance()
+
+        chi2, gradient = self._get_vchi2()
+        start = self._get_start(niterations=niterations)
+
+        with TaskManager(nprocs_per_task=(self.mpicomm.size + len(all_params) - 1) // len(all_params), use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
+            self.mpicomm = tm.mpicomm
+            list_profiles = []
+            for params in tm.iterate(all_params):
+                index = self.profiles.bestfit.logposterior.argmax()
+                center = self.profiles.bestfit.choice(index=index, params=params, return_type='nparray')
+                covariance = self.profiles.covariance.view(params=params)
+                state = ProfilerState(chi2=chi2, start=start, varied_params=self.transformed_params, gradient=gradient, fast=True,
+                                      center=center, covariance=covariance, max_logposterior=self.profiles.bestfit.logposterior[index])
+                list_profiles.append(self._contour_one(params, state, cl=cl, **kwargs))
+            profiles = Profiles()
+            for profile in tm.allreduce(list_profiles): profiles.update(profile)
+            profiles = _profiles_transform(self, profiles)
+            self.mpicomm = tm.basecomm
+
+        if self.profiles is None:
+            self.profiles = profiles
+        else:
+            self.profiles.update(profiles)
+
+        if self.mpicomm.rank == 0 and self.save_fn is not None:
+            self.profiles.save(self.save_fn)
+        return self.profiles
+
+    def _contour_one(self, params, state, size=50, cl=1, xtol=1e-3, **kwargs):
+        from scipy.optimize import root_scalar
+
+        grid_params = ParameterCollection([self.varied_params[str(param)] for param in params])
+        start, max_logposterior, center, covariance = state.start, state.max_logposterior, state.center, state.covariance
+
+        t, u = np.linalg.eig(covariance)
+        s = (t * cl) ** 0.5
+
+        varied_params = self.transformed_params - grid_params
+        varied_indices = [self.varied_params.index(param) for param in varied_params]  # varied_params ordered as self.varied_params
+        grid_indices = [self.varied_params.index(param) for param in grid_params]
+        insert_indices = grid_indices - np.arange(len(grid_indices))
+        start = start[..., varied_indices]
+
+        def get_point(phi, z):
+            r = u @ (z * s[0] * np.cos(phi), z * s[1] * np.sin(phi))
+            x1, x2 = r + center
+            x1 = np.clip(x1, *grid_params[0].prior.limits)
+            x2 = np.clip(x2, *grid_params[1].prior.limits)
+            return ((x1, x2) - self._params_transform_loc[grid_indices]) / self._params_transform_scale[grid_indices]
+
+        def chi2(values, point):
+            jnp = numpy_jax(values[0])
+            values = jnp.asarray(values)
+            values = jnp.insert(values, insert_indices, point, axis=-1)
+            return self.chi2(values)
+
+        chi2, gradient = self._get_vchi2(chi2=chi2, aux=dict(point=get_point(0, 1.)))
+
+        with TaskManager(nprocs_per_task=(self.mpicomm.size + size - 1) // size, use_all_nprocs=True, mpicomm=self.mpicomm) as tm_grid:
+            self.mpicomm = tm_grid.mpicomm
+            ce = []
+            self._last_profile = None
+
+            for phi in tm_grid.iterate(np.linspace(-np.pi, np.pi, size, endpoint=False)):
+
+                def scan(z):
+                    point = get_point(phi, z)
+                    ipoint_start = start
+                    if self._last_profile is not None:
+                        transformed_best = (self._last_profile.bestfit.choice(index='argmax', params=varied_params, return_type='nparray') - self._params_transform_loc[varied_indices]) / self._params_transform_scale[varied_indices]
+                        ipoint_start = (start - np.mean(start, axis=0)) / 10. + transformed_best  # center around the previous best fit, with reduced dispersion
+
+                    state = ProfilerState(chi2=lambda x: chi2(x, point), start=None, varied_params=varied_params, fast=True)
+                    if gradient is not None:
+                        state.update(gradient=lambda x: gradient(x, point))
+                    if varied_params:
+                        # run with multiple starting points
+                        with TaskManager(nprocs_per_task=(self.mpicomm.size + len(ipoint_start) - 1) // len(ipoint_start), use_all_nprocs=True, mpicomm=self.mpicomm) as tm_iter:
+                            self.mpicomm = tm_iter.mpicomm
+                            list_profiles = []
+                            for ss in tm_iter.iterate(ipoint_start):
+                                list_profiles.append(self._maximize_one(state.clone(start=ss), **kwargs))
+                            profile = Profiles.concatenate(tm_iter.allreduce(list_profiles))
+                            self.mpicomm = tm_iter.basecomm
+                        try:
+                            logposterior = profile.bestfit.logposterior.max()
+                            self._last_profile = profile
+                        except AttributeError:
+                            logposterior = -np.inf
+                    else:
+                        logposterior = -0.5 * chi2(np.array([], dtype='f8'), point)
+
+                    return -0.5 * (logposterior - max_logposterior) - cl
+
+                # find bracket
+                a = 0.5
+                while scan(a) > 0 and a > 1e-7:
+                    a *= 0.5
+
+                if a < 1e-7:
+                    ce.append((np.nan, np.nan))
+                    continue
+
+                b = 1.2
+                while scan(b) < 0 and b < 8:
+                    b *= 1.1
+
+                if b > 8:
+                    ce.append(get_point(phi, b))
+                    continue
+
+                # low xtol was found to be sufficient in experimental trials
+                r = root_scalar(scan, bracket=(a, b), xtol=xtol)
+                ce.append(get_point(phi, r.root) if r.converged else (np.nan, np.nan))
+
+            ce = tm_grid.allreduce(ce)
+            ce = np.append(ce, ce[:1], axis=0).T
+            self.mpicomm = tm_grid.basecomm
+
+            del self._last_profile
+
+        contour = ParameterContours({cl: [tuple(ParameterArray(xx, param, copy=True) for param, xx in zip(grid_params, ce))]})
+        profiles = Profiles(contour=contour)
+        return profiles
 
     def grid(self, params=None, grid=None, size=1, cl=2, niterations=1, **kwargs):
         """
@@ -587,21 +832,31 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             grid = Samples(np.meshgrid(*grid, indexing='ij'), params=params)
 
         grid = ParameterGrid(grid)
+        chi2, gradient = self._get_vchi2()
+        start = self._get_start(niterations=niterations)
+        profiles = self._grid(grid, ProfilerState(chi2=chi2, start=start, varied_params=self.transformed_params, gradient=gradient, fast=True), **kwargs)
+
+        if self.profiles is None:
+            self.profiles = Profiles()
+        self.profiles.update(profiles)
+
+        if self.mpicomm.rank == 0 and self.save_fn is not None:
+            self.profiles.save(self.save_fn)
+        return self.profiles
+
+    def _grid(self, grid, state, **kwargs):
+        # Internal routine
         grid_params = grid.params()
         nsamples = grid.size
         if nsamples <= 0: raise ValueError('> 0 grid size requested')
-        nprocs_per_param = max(self.mpicomm.size // nsamples, 1)
-        start = self._get_start(niterations=niterations)
 
+        start = state.start
         flat_grid = grid.ravel()
         varied_params = self.transformed_params - grid_params
         varied_indices = [self.varied_params.index(param) for param in varied_params]  # varied_params ordered as self.varied_params
         grid_indices = [self.varied_params.index(param) for param in grid_params]
         insert_indices = grid_indices - np.arange(len(grid_indices))
         start = start[..., varied_indices]
-
-        states = {}
-        mpicomm_bak = self.mpicomm
 
         def get_point(ipoint):
             point = flat_grid.choice(index=ipoint, params=grid_params, return_type='nparray')
@@ -615,46 +870,43 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
 
         chi2, gradient = self._get_vchi2(chi2=chi2, aux=dict(point=get_point(0)))
 
-        with TaskManager(nprocs_per_task=nprocs_per_param, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
+        logposteriors = []
+        with TaskManager(nprocs_per_task=(self.mpicomm.size + nsamples - 1) // nsamples, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
             self.mpicomm = tm.mpicomm
             last_profile = None
             for ipoint in tm.iterate(range(nsamples)):
-                self.derived = None
                 point = get_point(ipoint)
+                state = ProfilerState(chi2=lambda x: chi2(x, point), start=None, varied_params=varied_params, fast=True)
                 if gradient is not None:
-                    kwargs['gradient'] = lambda x: gradient(x, point)
-                _start = start
+                    state.update(gradient=lambda x: gradient(x, point))
+                ipoint_start = start
                 if last_profile is not None:
-                    best = last_profile.bestfit.choice(index='argmax', params=varied_params, return_type='nparray')
-                    _start = (start - np.mean(start, axis=0)) / 10. + best  # center around the previous best fit, with reduced dispersion
+                    transformed_best = (last_profile.bestfit.choice(index='argmax', params=varied_params, return_type='nparray') - self._params_transform_loc[varied_indices]) / self._params_transform_scale[varied_indices]
+                    ipoint_start = (start - np.mean(start, axis=0)) / 10. + transformed_best  # center around the previous best fit, with reduced dispersion
                 if varied_params:
-                    profile = Profiles.concatenate([self._maximize_one(ss, lambda x: chi2(x, point), varied_params, **kwargs) for ss in _start])
+                     # run with multiple starting points
+                    with TaskManager(nprocs_per_task=(self.mpicomm.size + len(ipoint_start) - 1) // len(ipoint_start), use_all_nprocs=True, mpicomm=self.mpicomm) as tm_iter:
+                        self.mpicomm = tm_iter.mpicomm
+                        list_profiles = []
+                        for ss in tm_iter.iterate(ipoint_start):
+                            list_profiles.append(self._maximize_one(state.clone(start=ss), **kwargs))
+                        profile = Profiles.concatenate(tm_iter.allreduce(list_profiles))
+                        self.mpicomm = tm_iter.basecomm
                     try:
                         logposterior = profile.bestfit.logposterior.max()
                         last_profile = profile
                     except AttributeError:
                         logposterior = -np.inf
                 else:
-                    logposterior = -0.5 * chi2(jnp.array([], dtype='f8'), point)
-                states[ipoint] = logposterior
+                    logposterior = -0.5 * chi2(np.array([], dtype='f8'), point)
+                logposteriors.append(logposterior)
+            grid.logposterior = np.array(tm.allreduce(logposteriors))
+            self.mpicomm = tm.basecomm
 
-        self.mpicomm = mpicomm_bak
-        states = self.mpicomm.gather(states, root=0)
-        logposterior = None
-        if self.mpicomm.rank == 0:
-            logposterior = {}
-            for state in states: logposterior.update(state)
-            logposterior = np.array([logposterior[i] for i in range(nsamples)])
-        grid.logposterior = self.mpicomm.bcast(logposterior, root=0)
-        if self.profiles is None:
-            self.profiles = Profiles()
-        self.profiles.set(grid=grid)
+        profiles = Profiles(grid=grid)
+        return profiles
 
-        if self.mpicomm.rank == 0 and self.save_fn is not None:
-            self.profiles.save(self.save_fn)
-        return self.profiles
-
-    def profile(self, params=None, grid=None, size=30, cl=2, **kwargs):
+    def profile(self, params=None, grid=None, size=30, cl=2, niterations=1, **kwargs):
         """
         Compute 1D profiles for :attr:`likelihood`.
         The following attributes are added to :attr:`profiles`:
@@ -697,27 +949,30 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             raise ValueError('Provide a list of grids, one for each of {}'.format(params))
 
         nparams = len(params)
-        nprocs_per_param = max(self.mpicomm.size // nparams, 1)
-        list_profiles = [None] * nparams
-        profiles_bak, save_fn_bak, mpicomm_bak = self.profiles, self.save_fn, self.mpicomm
-        self.save_fn = None
-        with TaskManager(nprocs_per_task=nprocs_per_param, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
+        if nparams <= 0: raise ValueError('> 0 params requested')
+
+        grids = []
+        for iparam, param in enumerate(params):
+            if grid[iparam] is None and np.ndim(cl[iparam]) == 0:
+                if self.profiles is None or 'bestfit' not in self.profiles:
+                    self.maximize(niterations=niterations)
+                if 'covariance' not in self.profiles:
+                    self.covariance()
+            grids.append(ParameterGrid([_get_grid(self, param, grid=grid[iparam], size=size[iparam], cl=cl[iparam])], params=[param]))
+
+        chi2, gradient = self._get_vchi2()
+        start = self._get_start(niterations=niterations)
+
+        with TaskManager(nprocs_per_task=(self.mpicomm.size + nparams - 1) // nparams, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
             self.mpicomm = tm.mpicomm
+            list_profiles = []
             for iparam, param in tm.iterate(list(enumerate(params))):
-                self.profiles, self.derived = profiles_bak.copy() if profiles_bak is not None else None, None
-                profiles = self.grid(params=param, grid=grid[iparam], size=size[iparam], cl=cl[iparam], **kwargs)
-                list_profiles[iparam] = profiles
-        self.profiles, self.save_fn, self.mpicomm = profiles_bak, save_fn_bak, mpicomm_bak
-        profiles = Profiles()
-        for iprofile, profile in enumerate(list_profiles):
-            mpiroot_worker = self.mpicomm.rank if profile is not None else None
-            for mpiroot_worker in self.mpicomm.allgather(mpiroot_worker):
-                if mpiroot_worker is not None: break
-            assert mpiroot_worker is not None
-            profiles.update(Profiles.bcast(profile, mpicomm=self.mpicomm, mpiroot=mpiroot_worker))
-        profile = ParameterProfiles([np.column_stack([profiles.grid[param], profiles.grid['logposterior']]) for param in params], params=params)
-        profiles.set(profile=profile)
-        del profiles.grid
+                list_profiles.append(self._grid(grids[iparam], ProfilerState(chi2=chi2, start=start, varied_params=self.transformed_params, gradient=gradient, fast=True)))
+            list_profiles = tm.allreduce(list_profiles)
+            self.mpicomm = tm.basecomm
+
+        profile = ParameterProfiles([np.column_stack([profiles.grid[param], profiles.grid.logposterior]) for profiles, param in zip(list_profiles, params)], params=params)
+        profiles = Profiles(profile=profile)
 
         if self.profiles is None:
             self.profiles = profiles

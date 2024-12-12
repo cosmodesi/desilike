@@ -454,6 +454,9 @@ class ParameterArray(numpy.lib.mixins.NDArrayOperatorsMixin):
     def __len__(self):
         return len(self.value)
 
+    def __bool__(self):
+        return self.value.__bool__()
+
     def __iter__(self):
         values = self.value.__iter__()  # to raise TypeError in case of 0d array
         # yield would not raise an error in case of 0d array
@@ -1234,7 +1237,11 @@ class BaseParameterCollection(BaseClass):
 
     def __contains__(self, name):
         """Whether collection contains parameter ``name``."""
-        return self._get_name(name) in (self._get_name(item) for item in self.data)
+        try:
+            self._index_name(self._get_name(name))
+            return True
+        except KeyError:
+            return False
 
     def _select(self, **kwargs):
         toret = self.copy()

@@ -133,9 +133,11 @@ class OptaxProfiler(BaseProfiler):
         """
         return super(OptaxProfiler, self).maximize(*args, **kwargs)
 
-    def _maximize_one(self, start, chi2, varied_params, max_iterations=10000, learning_rate=1e-2, learning_rate_scheduling=True, patience=100, gradient=None, **kwargs):
+    def _maximize_one(self, state, max_iterations=10000, learning_rate=1e-2, learning_rate_scheduling=True, patience=100, **kwargs):
         import jax
         import optax
+
+        start, chi2, varied_params = state.start, state.chi2, state.varied_params
 
         # Create the optimizer
         learning_rate_fn = learning_rate

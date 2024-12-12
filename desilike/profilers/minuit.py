@@ -70,7 +70,9 @@ class MinuitProfiler(BaseProfiler):
         super(MinuitProfiler, self).__init__(*args, **kwargs)
         self.with_gradient = bool(gradient)
 
-    def _get_minuit(self, start, chi2, varied_params, gradient=None):
+    def _get_minuit(self, state):
+
+        start, chi2, varied_params = state.start, state.chi2, state.varied_params
 
         def chi2m(*values):
             return chi2(values)
@@ -79,17 +81,19 @@ class MinuitProfiler(BaseProfiler):
         minuit_params = {}
         minuit_params['name'] = parameter_names = [str(param) for param in varied_params]
 
-        if gradient is not None:
+        if state.gradient is not None:
 
             def gradientm(*values):
-                return gradient(values)
+                return state.gradient(values)
 
             minuit_params['grad'] = gradientm
 
         minuit = iminuit.Minuit(chi2m, **dict(zip(parameter_names, [param.value for param in varied_params])), **minuit_params)
         minuit.errordef = 1.0
-        for param, value in zip(varied_params, start):
-            minuit.values[str(param)] = value
+        if state.fast is not None:
+            minuit.strategy = 0 if state.fast else 1
+        for param, value in zip(varied_params, start.T):
+            minuit.values[str(param)] = value.flat[0]
             minuit.limits[str(param)] = tuple(None if np.isinf(lim) else lim for lim in param.prior.limits)
             if param.ref.is_proper():
                 minuit.errors[str(param)] = param.proposal
@@ -119,8 +123,8 @@ class MinuitProfiler(BaseProfiler):
         """
         return super(MinuitProfiler, self).maximize(*args, **kwargs)
 
-    def _maximize_one(self, start, chi2, varied_params, max_iterations=int(1e5), gradient=None):
-        minuit = self._get_minuit(start, chi2, varied_params, gradient=gradient)
+    def _maximize_one(self, state, max_iterations=int(1e5)):
+        minuit = self._get_minuit(state)
         profiles = Profiles()
         try:
             minuit.migrad(ncall=max_iterations)
@@ -128,17 +132,18 @@ class MinuitProfiler(BaseProfiler):
             if self.mpicomm.rank == 0:
                 self.log_warning('maximize failed: {}'.format(exc))
             return profiles
-        try:
-            minuit.hesse()
-        except RuntimeError as exc:
-            if self.mpicomm.rank == 0:
-                self.log_warning('hesse failed: {}'.format(exc))
+        if not state.fast:
+            try:
+                minuit.hesse()
+            except RuntimeError as exc:
+                if self.mpicomm.rank == 0:
+                    self.log_warning('hesse failed: {}'.format(exc))
         bestfit_attrs = {name: getattr(minuit.fmin, name) for name in ['nfcn', 'ngrad', 'is_valid', 'is_above_max_edm', 'has_reached_call_limit', 'time']}
         covariance_attrs = {name: getattr(minuit.fmin, name) for name in ['has_accurate_covar', 'has_posdef_covar', 'has_made_posdef_covar']}
-        profiles.set(bestfit=ParameterBestFit([np.atleast_1d(minuit.values[str(param)]) for param in varied_params] + [- 0.5 * np.atleast_1d(minuit.fval)], params=varied_params + ['logposterior'], attrs=bestfit_attrs))
-        profiles.set(error=Samples([np.atleast_1d(minuit.errors[str(param)]) for param in varied_params], params=varied_params, attrs=covariance_attrs))
+        profiles.set(bestfit=ParameterBestFit([np.atleast_1d(minuit.values[str(param)]) for param in state.varied_params] + [- 0.5 * np.atleast_1d(minuit.fval)], params=state.varied_params + ['logposterior'], attrs=bestfit_attrs))
+        profiles.set(error=Samples([np.atleast_1d(minuit.errors[str(param)]) for param in state.varied_params], params=state.varied_params, attrs=covariance_attrs))
         if minuit.covariance is not None:
-            profiles.set(covariance=ParameterCovariance(np.array(minuit.covariance), params=varied_params, attrs=covariance_attrs))
+            profiles.set(covariance=ParameterCovariance(np.array(minuit.covariance), params=state.varied_params, attrs=covariance_attrs))
         return profiles
 
     def interval(self, *args, **kwargs):
@@ -161,8 +166,9 @@ class MinuitProfiler(BaseProfiler):
         """
         return super(MinuitProfiler, self).interval(*args, **kwargs)
 
-    def _interval_one(self, start, chi2, varied_params, param, max_iterations=int(1e5), cl=None, gradient=None):
-        minuit = self._get_minuit(start, chi2, varied_params, gradient=gradient)
+    def _interval_one(self, param, state, cl=1, max_iterations=int(1e5)):
+        # TODO: switch to default interval
+        minuit = self._get_minuit(state)
         profiles = Profiles()
         name = str(param)
         try:
@@ -207,12 +213,13 @@ class MinuitProfiler(BaseProfiler):
         """
         return super(MinuitProfiler, self).contour(*args, **kwargs)
 
-    def _contour_one(self, start, chi2, varied_params, params, cl=None, size=40, interpolated=0, gradient=None, **kwargs):
+    def _contour_one_minuit(self, params, state, cl=1, size=40, **kwargs):
+        # Not used
         param1, param2 = params
-        minuit = self._get_minuit(start, chi2, varied_params, gradient=gradient)
+        minuit = self._get_minuit(state)
         profiles = Profiles()
         try:
-            x1x2 = minuit.mncontour(str(param1), str(param2), cl=cl, size=size, interpolated=interpolated, **kwargs)
+            x1x2 = minuit.mncontour(str(param1), str(param2), cl=cl, size=size, **kwargs)
             if not len(x1x2):
                 raise RuntimeError('mncontour is empty')
         except RuntimeError as exc:

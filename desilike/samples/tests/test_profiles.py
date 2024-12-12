@@ -17,7 +17,7 @@ def get_profiles(params):
     profiles.set(interval=Samples([(-0.5, 0.5) for param in params], params=params))
     x = np.linspace(-1., 1., 101)
     profiles.set(profile=Samples([[x, 1. + x**2] for param in params], params=params))
-    t = np.linspace(0., 2. * np.pi, 101)
+    t = np.linspace(0., 2. * np.pi, 21)
     params2 = [(param1, param2) for i1, param1 in enumerate(params) for param2 in params[:i1 + 1]]
     profiles.set(contour=ParameterContours({1: [(np.cos(t), np.sin(t)) for param in params2]}, params=params2))
     grid = np.meshgrid(*(np.linspace(0., 0.1, 3),) * (len(params) + 1), indexing='ij')
@@ -33,6 +33,8 @@ def test_misc():
     assert profiles.bestfit._loglikelihood == 'LRG.loglikelihood'
     assert profiles.bestfit.shape == profiles.bestfit['logposterior'].shape == (5,)
     assert profiles.contour[1]['params.b', 'params.a'][::-1] == profiles.contour[1]['params.a', 'params.b']
+    profiles.set(contour=profiles.contour.interpolate(size=42))
+    assert profiles.contour[1]['params.b', 'params.a'][0].size == 42
     fn = os.path.join(profiles_dir, 'profile.npy')
     profiles.save(fn)
     profiles2 = profiles.load(fn)

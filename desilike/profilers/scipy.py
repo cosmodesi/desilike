@@ -98,14 +98,14 @@ class ScipyProfiler(BaseProfiler):
         """
         return super(ScipyProfiler, self).maximize(*args, **kwargs)
 
-    def _maximize_one(self, start, chi2, varied_params, max_iterations=int(1e5), tol=None, gradient=None, **kwargs):
+    def _maximize_one(self, state, max_iterations=int(1e5), tol=None, **kwargs):
         from scipy import optimize
-        bounds = [tuple(None if np.isinf(lim) else lim for lim in param.prior.limits) for param in varied_params]
+        bounds = [tuple(None if np.isinf(lim) else lim for lim in param.prior.limits) for param in state.varied_params]
         kw = {}
-        if gradient is not None:
-            kw['jac'] = gradient
+        if state.gradient is not None:
+            kw['jac'] = state.gradient
         try:
-            result = optimize.minimize(fun=chi2, x0=start, method=self.method, bounds=bounds, tol=tol, options={'maxiter': max_iterations, **kwargs}, **kw)
+            result = optimize.minimize(fun=state.chi2, x0=state.start, method=self.method, bounds=bounds, tol=tol, options={'maxiter': max_iterations, **kwargs}, **kw)
         except RuntimeError:
             if self.mpicomm.rank == 0:
                 self.log_warning('Finished unsuccessfully.')
@@ -114,11 +114,11 @@ class ScipyProfiler(BaseProfiler):
             self.log_error('Finished unsuccessfully.')
         profiles = Profiles()
         attrs = {name: getattr(result, name) for name in ['success', 'status', 'message', 'nit']}
-        profiles.set(bestfit=ParameterBestFit([np.atleast_1d(xx) for xx in result.x] + [- 0.5 * np.atleast_1d(result.fun)], params=varied_params + ['logposterior']), attrs=attrs)
+        profiles.set(bestfit=ParameterBestFit([np.atleast_1d(xx) for xx in result.x] + [- 0.5 * np.atleast_1d(result.fun)], params=state.varied_params + ['logposterior']), attrs=attrs)
         if getattr(result, 'hess_inv', None) is not None:
             cov = np.asarray(getattr(result.hess_inv, 'todense', lambda: result.hess_inv)())
-            profiles.set(error=Samples(np.diag(cov)**0.5, params=varied_params, attrs=attrs))
-            profiles.set(covariance=ParameterCovariance(cov, params=varied_params, attrs=attrs))
+            profiles.set(error=Samples(np.diag(cov)**0.5, params=state.varied_params, attrs=attrs))
+            profiles.set(covariance=ParameterCovariance(cov, params=state.varied_params, attrs=attrs))
         return profiles
 
     def profile(self, *args, **kwargs):

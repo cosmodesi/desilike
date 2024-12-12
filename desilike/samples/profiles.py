@@ -121,11 +121,18 @@ class ParameterBestFit(Samples):
             index = np.unravel_index(self.logposterior.argmax(), self.shape)
         if not isinstance(index, tuple):
             index = (index,)
+        isscalar = not is_parameter_sequence(params)
+        if isscalar:
+            params = [params]
         di = {str(param): self[param][index] for param in params}
         if return_type == 'dict':
             return di
+            #return {str(param): np.asarray(value) for param, value in di.items()}
         if return_type == 'nparray':
-            return np.array(list(di.values()))
+            toret = np.array(list(di.values()))
+            if isscalar:
+                return toret[0]
+            return toret
         toret = self.copy()
         isscalar = all(np.ndim(ii) == 0 for ii in index)
         toret.data = []
@@ -154,7 +161,7 @@ class ParameterContour(BaseParameterCollection):
             else:
                 param = item.param
             toret.append(param.name)
-        return dict.fromkeys(toret)  # rather than tuple, as (a, b) <-> (b, a)
+        return tuple(toret)
 
     @staticmethod
     def _get_param(items):
@@ -189,6 +196,23 @@ class ParameterContour(BaseParameterCollection):
         else:
             super(ParameterContour, self).__init__(data=data, attrs=attrs)
 
+    def interpolate(self, size=100):
+        """
+        Cubic spline interpolation.
+
+        Parameters
+        ----------
+        size : int, default=100
+            Number of points.
+        """
+        from scipy.interpolate import CubicSpline
+        new = self.copy()
+        for value in self:
+            xg = np.linspace(0, 1, value[0].size)
+            spl = CubicSpline(xg, value, axis=-1, bc_type='periodic')
+            new[tuple(item.param for item in value)] = tuple(spl(np.linspace(0, 1, size)))
+        return new
+
     def __getitem__(self, name):
         """
         Return contour corresponding to parameters ``name``.
@@ -221,7 +245,7 @@ class ParameterContour(BaseParameterCollection):
             Parameter array (with two columns).
         """
         if not is_parameter_sequence(item):
-            raise TypeError('{} is not a tuple')
+            raise TypeError('{} is not a tuple'.format(item))
         items, params = list(item), []
         for ii, item in enumerate(items):
             if not isinstance(item, ParameterArray):
@@ -243,6 +267,14 @@ class ParameterContour(BaseParameterCollection):
             if self._get_name(name) != item_name:
                 raise KeyError('Parameter {} must be indexed by name (incorrect {})'.format(item_name, name))
             self.set(item)
+
+    def _index_name(self, name):
+        # get index of parameter name ``name``
+        name = dict.fromkeys(name)
+        for ii, item in enumerate(self.data):
+            if dict.fromkeys(self._get_name(item)) == name:
+                return ii
+        raise KeyError('Parameter {} not found'.format(name))
 
     def setdefault(self, item):
         """Set parameter contour in collection if not already in it."""
@@ -339,6 +371,20 @@ class ParameterContours(BaseClass, UserDict, metaclass=MetaClass):
         self.data = dict(data or {})
         for name, value in self.items():
             self[name] = ParameterContour(value, **kwargs)
+
+    def interpolate(self, size=100):
+        """
+        Cubic spline interpolation.
+
+        Parameters
+        ----------
+        size : int, default=100
+            Number of points.
+        """
+        new = self.copy()
+        for cl, contour in self.items():
+            new[cl] = contour.interpolate(size=size)
+        return new
 
     @property
     def levels(self):

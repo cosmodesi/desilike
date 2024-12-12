@@ -40,7 +40,7 @@ def test_profilers():
         assert profiles.bestfit.logposterior.param.derived
         profiler.profile(params=['df'], size=4)
         profiler.grid(params=['df', 'dm'], size=(2, 2))
-        if Profiler is MinuitProfiler:
+        if True: #Profiler is MinuitProfiler:
             profiler.interval(params=['df'])
             profiler.contour(params=['df', 'dm'], cl=1, size=10)
             profiler.contour(params=['df', 'dm'], cl=2, size=10)
@@ -61,6 +61,31 @@ def test_profilers():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     profiler = MinuitProfiler(likelihood)
     profiler.maximize(niterations=2)
+
+
+def test_grid():
+
+    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+
+    template = ShapeFitPowerSpectrumTemplate(z=0.5)
+    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    #theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
+    for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
+                                                         data='../../tests/_pk/data.npy', covariance='../../tests/_pk/mock_*.npy', wmatrix='../../tests/_pk/window.npy',
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1., name='LRG')
+    for param in likelihood.all_params.select(basename=['qpar', 'qper']):
+        param.update(fixed=True)
+
+    # for param in likelihood.varied_params:
+    #     print(param, [likelihood(**{param.name: param.value + param.proposal * scale}) for scale in [-1., 1.]])
+    for Profiler, kwargs in [(MinuitProfiler, {})]:
+        profiler = Profiler(likelihood, seed=42, **kwargs)
+        profiles = profiler.maximize(niterations=2)
+        profiler.profile(params=['df'], size=2, niterations=2)
 
 
 def test_solve():
@@ -161,6 +186,7 @@ def test_bao():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_profilers()
-    test_solve()
+    #test_grid()
+    test_profilers()
+    #test_solve()
     #test_bao()

@@ -29,7 +29,7 @@ def test_profilers():
                              (ScipyProfiler, {}),
                              (ScipyProfiler, {'gradient': True}),
                              (OptaxProfiler, {}),
-                             (BOBYQAProfiler, {})][:1]:
+                             (BOBYQAProfiler, {})][:4]:
         profiler = Profiler(likelihood, seed=42, **kwargs)
         profiles = profiler.maximize(niterations=2)
         assert profiles.bestfit.attrs['ndof']
@@ -45,7 +45,7 @@ def test_profilers():
             profiler.contour(params=['df', 'dm'], cl=1, size=10)
             profiler.contour(params=['df', 'dm'], cl=2, size=10)
             profiler.contour(params=['df', 'b1'], cl=2, size=10)
-            print(profiles.contour)
+            #print(profiles.contour)
         print(profiler.profiles.to_stats())
         #likelihood()
         #observable.plot(show=True)
@@ -61,6 +61,95 @@ def test_profilers():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     profiler = MinuitProfiler(likelihood)
     profiler.maximize(niterations=2)
+
+
+def test_rescale():
+
+    from desilike.base import BaseCalculator
+    from desilike.likelihoods import BaseGaussianLikelihood
+
+    class AffineModel(BaseCalculator):  # all calculators should inherit from BaseCalculator
+
+        # Model parameters; those can also be declared in a yaml file
+        _params = {'a': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}},
+                'b': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}}}
+
+        def initialize(self, x=None):
+            # Actual, non-trivial initialization must happen in initialize(); this is to be able to do AffineModel(x=...)
+            # without doing any actual work
+            self.x = x
+
+        def calculate(self, a=0., b=0.):
+            self.y = a * self.x + b  # simple, affine model
+
+        # Not mandatory, this is to return something in particular after calculate (else this will just be the instance)
+        def get(self):
+            return self.y
+
+        # This is only needed for emulation
+        def __getstate__(self):
+            return {'x': self.x, 'y': self.y}  # dictionary of Python base types and numpy arrays
+
+    class Likelihood(BaseGaussianLikelihood):
+
+        def initialize(self, theory=None):
+            # Let us generate some fake data
+            self.xdata = np.linspace(0., 1., 10)
+            mean = np.zeros_like(self.xdata)
+            self.covariance = np.eye(len(self.xdata))
+            rng = np.random.RandomState(seed=42)
+            y = rng.multivariate_normal(mean, self.covariance)
+            super(Likelihood, self).initialize(y, covariance=self.covariance)
+            # Requirements
+            # AffineModel will be instantied with AffineModel(x=self.xdata)
+            if theory is None:
+                theory = AffineModel()
+            self.theory = theory
+            self.theory.init.update(x=self.xdata)  # we set x-coordinates, they will be passed to AffineModel's initialize
+
+        @property
+        def flattheory(self):
+            # Requirements (theory, requested in __init__) are accessed through .name
+            # The pipeline will make sure theory.run(a=..., b=...) has been called
+            return self.theory.y  # data - model
+
+
+    from desilike import setup_logging
+
+    setup_logging()  # set up logging
+
+    likelihood = Likelihood()
+
+    for Profiler, kwargs in [(MinuitProfiler, {}),
+                             (MinuitProfiler, {'gradient': True}),
+                             #(ScipyProfiler, {'method': 'lsq'}),
+                             (ScipyProfiler, {}),
+                             (ScipyProfiler, {'gradient': True})]:
+
+        for rescale in [False, True]:
+            profiler = Profiler(likelihood, seed=42, rescale=rescale, **kwargs)
+            profiles = profiler.maximize(niterations=2)
+            profiler.profile(params=['a'], size=4)
+            profiler.grid(params=['a', 'b'], size=(2, 2))
+            if True: #Profiler is MinuitProfiler:
+                profiler.interval(params=['b'])
+                for cl in [1, 2]: profiler.contour(params=['a', 'b'], cl=cl, size=10)
+            if not rescale:
+                ref = profiles
+        tol = {'atol': 1e-2, 'rtol': 1e-1} if Profiler is ScipyProfiler else {'atol': 1e-4, 'rtol': 1e-4}
+        for param in ['a', 'b']:
+            assert np.allclose(profiles.bestfit[param], ref.bestfit[param], **tol)
+            print(profiles.error[param], ref.error[param])
+            assert np.allclose(profiles.error[param], ref.error[param], **tol)
+        for param in ['b']:
+            assert np.allclose(profiles.interval[param], ref.interval[param], **tol)
+        assert np.allclose(profiles.grid.logposterior, ref.grid.logposterior, **tol)
+        for param in ['a']:
+            assert np.allclose(profiles.profile[param], ref.profile[param], **tol)
+        if Profiler is MinuitProfiler:  # for ScipyProfiler cov is quite different, leading to different contours
+            for param in [('a', 'b')]:
+                for cl in [1, 2]:
+                    assert np.allclose(profiles.contour[cl][param], ref.contour[cl][param], **tol)
 
 
 def test_grid():
@@ -186,7 +275,9 @@ def test_bao():
 if __name__ == '__main__':
 
     setup_logging()
-    #test_grid()
+
+    test_rescale()
+    test_grid()
     test_profilers()
-    #test_solve()
-    #test_bao()
+    test_solve()
+    test_bao()

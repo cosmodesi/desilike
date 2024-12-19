@@ -133,7 +133,7 @@ class OptaxProfiler(BaseProfiler):
         """
         return super(OptaxProfiler, self).maximize(*args, **kwargs)
 
-    def _maximize_one(self, state, max_iterations=10000, learning_rate=1e-2, learning_rate_scheduling=True, patience=100, **kwargs):
+    def _maximize_one(self, state, max_iterations=10000, learning_rate=1e-2, learning_rate_scheduling=True, patience=20, xtol=1e-3, **kwargs):
         import jax
         import optax
 
@@ -159,7 +159,7 @@ class OptaxProfiler(BaseProfiler):
         params = start
         state = tx.init(params)
         loss = np.infty
-        best_params, best_loss = params, loss
+        best_params, best_loss, test_loss = params, loss, loss
         early_stopping_counter = 0
 
         # loop over epochs
@@ -168,11 +168,13 @@ class OptaxProfiler(BaseProfiler):
             #train_batch_metrics = []
             state, params, loss = train_step(state, params)
             # early stopping condition
-            if loss < best_loss:
-                best_state, best_params, best_loss = state, params, loss
+            if loss < best_loss and abs(loss - test_loss) > xtol:
                 early_stopping_counter = 0
+                test_loss = best_loss
             else:
                 early_stopping_counter += 1
+            if loss < best_loss:
+                best_state, best_params, best_loss = state, params, loss
             if early_stopping_counter >= patience:
                 break
 

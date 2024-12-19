@@ -1088,6 +1088,7 @@ class TaskManager(BaseClass):
         self.nworkers = isplit + 1
         # split the comm between the workers
         self.mpicomm = self.basecomm.Split(self.worker, 0)
+        self.rootcomm = self.basecomm.Split(int(self.basecomm.rank == self.self_worker_ranks[0]), 0)
         if self.mpicomm.rank == 0:
             self.log_debug('Entering {} with {:d} workers.'.format(self.__class__.__name__, self.nworkers))
 
@@ -1140,11 +1141,11 @@ class TaskManager(BaseClass):
 
     def reduce(self, li, root=0):
         """Reduce to root."""
-        return self.mpicomm.reduce(li, root=root)
+        return self.rootcomm.reduce(li, root=root)
 
     def allreduce(self, li):
         """Reduce to all ranks."""
-        return self.mpicomm.allreduce(li)
+        return self.basecomm.bcast(self.reduce(li), root=0)
 
     def map(self, func, tasks):
         """

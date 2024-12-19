@@ -168,6 +168,7 @@ class MinuitProfiler(BaseProfiler):
 
     def _interval_one(self, param, state, cl=1, max_iterations=int(1e5)):
         # TODO: switch to default interval
+        state.start = state.center
         minuit = self._get_minuit(state)
         profiles = Profiles()
         name = str(param)
@@ -215,6 +216,7 @@ class MinuitProfiler(BaseProfiler):
 
     def _contour_one_minuit(self, params, state, cl=1, size=40, **kwargs):
         # Not used
+        state.start = state.center
         param1, param2 = params
         minuit = self._get_minuit(state)
         profiles = Profiles()

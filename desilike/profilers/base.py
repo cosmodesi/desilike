@@ -234,7 +234,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             return jnp.asarray(self.likelihood.all_params.prior(**dict(zip(self.varied_params.names(), values))))
 
         def warning_nan(logposterior, points):
-            if jnp.isnan(logposterior):
+            if np.isnan(logposterior):
                 warnings.warn('logposterior is NaN for {}'.format(points))
 
         def compute_logposterior(values):

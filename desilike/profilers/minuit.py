@@ -142,11 +142,14 @@ class MinuitProfiler(BaseProfiler):
         covariance_attrs = {name: getattr(minuit.fmin, name) for name in ['has_accurate_covar', 'has_posdef_covar', 'has_made_posdef_covar']}
         profiles.set(bestfit=ParameterBestFit([np.atleast_1d(minuit.values[str(param)]) for param in state.varied_params] + [- 0.5 * np.atleast_1d(minuit.fval)], params=state.varied_params + ['logposterior'], attrs=bestfit_attrs))
         profiles.set(error=Samples([np.atleast_1d(minuit.errors[str(param)]) for param in state.varied_params], params=state.varied_params, attrs=covariance_attrs))
-        if minuit.covariance is not None:
-            covariance = np.array(minuit.covariance)
-        else:
-            covariance = np.full((len(state.varied_params),) * 2, np.nan)
-        profiles.set(covariance=ParameterCovariance(covariance, params=state.varied_params, attrs=covariance_attrs))
+        if not state.fast:
+            if minuit.covariance is not None:
+                covariance = np.array(minuit.covariance)
+            else:
+                if self.mpicomm.rank == 0:
+                    self.log_warning('covariance failed')
+                covariance = np.full((len(state.varied_params),) * 2, np.nan)
+            profiles.set(covariance=ParameterCovariance(covariance, params=state.varied_params, attrs=covariance_attrs))
         return profiles
 
     def interval(self, *args, **kwargs):

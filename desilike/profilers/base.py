@@ -483,10 +483,11 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
             covariance = fisher.covariance(params=self.varied_params)
         except np.linalg.LinAlgError:
             covariance = np.full((len(self.varied_params),) * 2, np.nan)
+            if self.mpicomm.rank == 0:
+                self.log_warning('covariance failed')
         finally:
             covariance = ParameterCovariance(covariance, params=self.varied_params)
             error = Samples([np.full(self.profiles.bestfit.shape, covariance.std(param)) for param in self.varied_params], params=self.varied_params)
-            profiles = Profiles(error=error, covariance=covariance)
 
             if 'error' not in self.profiles:
                 self.profiles.set(error=error)

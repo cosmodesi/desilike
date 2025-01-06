@@ -286,7 +286,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             self.kin = np.unique(np.concatenate(self.k, axis=0))
             if not all(kk.shape == self.kin.shape and np.allclose(kk, self.kin) for kk in self.k):
                 self.kmask = [np.searchsorted(self.kin, kk, side='left') for kk in self.k]
-                assert all(np.allclose(self.kin[kmask], kk) for kk, kmask in zip(self.k, self.kmask))
+                assert all(np.allclose(self.kin[kmask], kk) for kk, kmask in zip(self.k, self.kmask)), self.k
                 self.kmask = [self.kin.size * i + kmask for i, kmask in enumerate(self.kmask)]
                 self.kmask = np.concatenate(self.kmask, axis=0)
         elif isinstance(wmatrix, dict):

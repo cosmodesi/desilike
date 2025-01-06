@@ -68,7 +68,7 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
         elif self.mode == 'bfnl':
             keep_params += ['bfnl_loc']
         else:
-            raise ValueError('Unknown mode {}; it must be one of ["bphi", "b-p", "bfnl_loc"]'.format(self.mode))
+            raise ValueError('Unknown mode {}; it must be one of ["bphi", "b-p", "bfnl"]'.format(self.mode))
         self.z = self.template.z
         self.params = self.params.select(basename=keep_params)
 

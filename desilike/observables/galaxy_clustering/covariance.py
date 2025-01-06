@@ -71,9 +71,13 @@ class BaseFootprint(BaseClass):
         """
         if nbar is None and size is None:
             raise ValueError('provide either "size" (number of objects) or "nbar" (mean comoving density in (Mpc/h)^(-3))')
+        if volume is None:
+            raise ValueError('provide volume')
         for name in ['nbar', 'size', 'volume']:
             value = locals()[name]
             setattr(self, '_' + name, None if value is None else np.asarray(value))
+        if self._nbar is None:
+            self._nbar = self._size / self._volume
         self.attrs = dict(attrs or {})
 
     @property
@@ -312,16 +316,17 @@ class ObservablesCovarianceMatrix(BaseClass):
     def run(self, *args, **kwargs):
         if any(theory is None for theory in self.theories):
             self.observables(*args, **kwargs)
-        for io, (observable, theory) in enumerate(zip(self.observables, self.theories)):
-            if theory is None:
-                for calculator in observable.runtime_info.pipeline.calculators[::-1]:
-                    if hasattr(calculator, 'k') and hasattr(calculator, 'power') and not isinstance(calculator.power, BaseCalculator) and np.ndim(calculator.k[0]) == 0:
-                        theory = calculator
-                        break
-            if theory is None:
-                raise ValueError('Theory must be provided for observable {}'.format(observable))
-            self.theories[io] = theory
-        self.theories = CollectionCalculator(self.theories)
+        if not isinstance(self.theories, CollectionCalculator):
+            for io, (observable, theory) in enumerate(zip(self.observables, self.theories)):
+                if theory is None:
+                    for calculator in observable.runtime_info.pipeline.calculators[::-1]:
+                        if hasattr(calculator, 'k') and hasattr(calculator, 'power') and not isinstance(calculator.power, BaseCalculator) and np.ndim(calculator.k[0]) == 0:
+                            theory = calculator
+                            break
+                if theory is None:
+                    raise ValueError('Theory must be provided for observable {}'.format(observable))
+                self.theories[io] = theory
+            self.theories = CollectionCalculator(self.theories)
         self.theories(*args, **kwargs)
         self.cosmo = None
         if any(isinstance(footprint, CutskyFootprint) for footprint in self.footprints):

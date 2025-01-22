@@ -99,6 +99,7 @@ class ScipyProfiler(BaseProfiler):
         return super(ScipyProfiler, self).maximize(*args, **kwargs)
 
     def _maximize_one(self, state, max_iterations=int(1e5), tol=None, **kwargs):
+        profiles = Profiles()
         from scipy import optimize
         bounds = [tuple(None if np.isinf(lim) else lim for lim in param.prior.limits) for param in state.varied_params]
         kw = {}
@@ -112,7 +113,6 @@ class ScipyProfiler(BaseProfiler):
             return profiles
         if not result.success and self.mpicomm.rank == 0:
             self.log_error('Finished unsuccessfully.')
-        profiles = Profiles()
         attrs = {name: getattr(result, name) for name in ['success', 'status', 'message', 'nit']}
         profiles.set(bestfit=ParameterBestFit([np.atleast_1d(xx) for xx in result.x] + [- 0.5 * np.atleast_1d(result.fun)], params=state.varied_params + ['logposterior']), attrs=attrs)
         if getattr(result, 'hess_inv', None) is not None:

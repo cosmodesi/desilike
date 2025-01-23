@@ -37,7 +37,7 @@ jobs:
     - name: Test with pytest
       run: |
         if [ "$RUNNER_OS" == "Linux" ]; then
-          apt install libopenmpi-dev
+          sudo apt install libopenmpi-dev
         else
           brew install openmpi
         fi

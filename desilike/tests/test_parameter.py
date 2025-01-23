@@ -89,6 +89,13 @@ def test_matrix():
     assert np.ndim(covariance.fom()) == 0
 
 
+def test_jax():
+    from jax import numpy as jnp
+    param = Parameter('a', shape=4)
+    array = ParameterArray(jnp.ones((1, 4)), param=param)
+    jnp.exp(array)  # calls __jax_array__
+
+
 if __name__ == '__main__':
 
     test_param_array()
@@ -97,3 +104,4 @@ if __name__ == '__main__':
     test_param_array()
     test_collection()
     test_matrix()
+    test_jax()

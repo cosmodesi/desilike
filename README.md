@@ -1,5 +1,12 @@
 # desilike
 
+# desilike
+
+[![Unit Testing Status](https://img.shields.io/github/actions/workflow/status/cosmodesi/desilike/tests.yml?branch=main&label=tests)](https://github.com/cosmodesi/desilike/actions)
+[![Documentation Status](https://img.shields.io/readthedocs/desilike)](https://desilike.readthedocs.io)
+[![Code Coverage](https://img.shields.io/coverallsCoverage/github/cosmodesi/desilike)](https://coveralls.io/github/cosmodesi/desilike?branch=main)
+[![License: MIT](https://img.shields.io/github/license/cosmodesi/desilike)](https://raw.githubusercontent.com/cosmodesi/desilike/main/LICENSE)
+
 **desilike** is an attempt to provide a common framework for writing DESI likelihoods,
 that can be imported in common cosmological inference codes (Cobaya, CosmoSIS, MontePython).
 

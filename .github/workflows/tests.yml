@@ -1,0 +1,54 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+
+name: tests
+
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  test:
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
+        exclude:
+          - os: macos-latest
+            python-version: "3.8"
+          - os: macos-latest
+            python-version: "3.9"
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v3
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install ruff pytest pytest-cov
+    - name: Lint with ruff
+      run: |
+        # TODO: Ultimately, all checks should work.
+        ruff check desilike --ignore E701,E721,F401,E711,F811,E402,F841,E714,E731,F541,F405,F403,E722,F523,E741,F601,E401,E713,F524
+    - name: Test with pytest
+      run: |
+        if [ "$RUNNER_OS" == "Linux" ]; then
+          sudo apt install libopenmpi-dev
+        else
+          brew install openmpi
+        fi
+        python -m pip install .
+        # TODO: Create pyproject.toml with test requirements and remove this line.
+        python -m pip install emcee
+        # TODO: Currently, we need to specify the directory. This should not be necessary in the future once all tests are compatible with pytest.
+        python -m pytest tests --cov=desilike --durations=0 --cov-report lcov
+    - name: Coverage with Coveralls
+      if: ${{ success() && ( matrix.python-version == '3.13' ) && ( matrix.os == 'ubuntu-latest' ) }}
+      uses: coverallsapp/github-action@v2
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        path-to-lcov: coverage.lcov

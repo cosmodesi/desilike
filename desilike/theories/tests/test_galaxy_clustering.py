@@ -1450,7 +1450,7 @@ def test_emulator_direct():
         cosmo = Cosmoprimo()
         for param in cosmo.init.params.select(fixed=False):
             param.update(fixed=True)
-        for param in values:
+        for param in param_values:
             cosmo.init.params[param].update(fixed=False)
         template = DirectPowerSpectrumTemplate(cosmo=cosmo, k=np.linspace(0.001, 0.3, 100))
         #t0 = time.time()

@@ -1,7 +1,5 @@
 # desilike
 
-# desilike
-
 [![Unit Testing Status](https://img.shields.io/github/actions/workflow/status/cosmodesi/desilike/tests.yml?branch=main&label=tests)](https://github.com/cosmodesi/desilike/actions)
 [![Documentation Status](https://img.shields.io/readthedocs/desilike)](https://desilike.readthedocs.io)
 [![Code Coverage](https://img.shields.io/coverallsCoverage/github/cosmodesi/desilike)](https://coveralls.io/github/cosmodesi/desilike?branch=main)

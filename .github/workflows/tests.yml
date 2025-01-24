@@ -46,3 +46,9 @@ jobs:
         python -m pip install emcee
         # TODO: Currently, we need to specify the directory. This should not be necessary in the future once all tests are compatible with pytest.
         python -m pytest tests --cov=desilike --durations=0 --cov-report lcov
+    - name: Coverage with Coveralls
+      if: ${{ success() && ( matrix.python-version == '3.13' ) && ( matrix.os == 'ubuntu-latest' ) }}
+      uses: coverallsapp/github-action@v2
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        path-to-lcov: coverage.lcov

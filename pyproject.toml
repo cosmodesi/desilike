@@ -1,0 +1,40 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "desilike"
+authors = [
+    {name = "cosmodesi"},
+    {name = "Arnaud De Mattia"},
+    {name = "Johannes U. Lange", email = "jlange@american.edu"}]
+readme = "README.md"
+license = {file = "LICENSE"}
+classifiers = ["License :: OSI Approved :: BSD License"]
+dynamic = ["version", "description"]
+requires-python = ">= 3.8"
+dependencies = [
+    "numpy>=1.18.0,<2.0",
+    "scipy",
+    "pyyaml",
+    "mpi4py",
+    "cosmoprimo @ git+https://github.com/cosmodesi/cosmoprimo"]
+
+[project.optional-dependencies]
+full = [
+    "emcee"]
+plotting = [
+    "matplotlib",
+    "tabulate",
+    "getdist",
+    "anesthetic"]
+jax = [
+    "jax",
+    "interpax"]
+
+[project.urls]
+Home = "https://desilike.readthedocs.io/en/latest/"
+
+[tool.flit]
+sdist.exclude = ["doc", ".gitignore", ".github", ".readthedocs.yaml"]
+module.name = "desilike"

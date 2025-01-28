@@ -41,9 +41,7 @@ jobs:
         else
           brew install openmpi
         fi
-        python -m pip install .
-        # TODO: Create pyproject.toml with test requirements and remove this line.
-        python -m pip install emcee
+        python -m pip install .[all]
         # TODO: Currently, we need to specify the directory. This should not be necessary in the future once all tests are compatible with pytest.
         python -m pytest tests --cov=desilike --durations=0 --cov-report lcov
     - name: Coverage with Coveralls

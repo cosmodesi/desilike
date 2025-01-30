@@ -41,6 +41,8 @@ jobs:
         else
           brew install openmpi
           brew install libomp
+          export LDFLAGS="-L/opt/homebrew/opt/libomp/lib"
+          export CPPFLAGS="-I/opt/homebrew/opt/libomp/include"
         fi
         python -m pip install .[tests]
         # TODO: Currently, we need to specify the directory. This should not be necessary in the future once all tests are compatible with pytest.

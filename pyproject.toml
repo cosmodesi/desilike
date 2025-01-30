@@ -21,8 +21,9 @@ dependencies = [
     "cosmoprimo @ git+https://github.com/cosmodesi/cosmoprimo"]
 
 [project.optional-dependencies]
-full = [
-    "emcee"]
+tests = [
+    "emcee",
+    "pyclass @ git+https://github.com/adematti/pyclass"]
 plotting = [
     "matplotlib",
     "tabulate",

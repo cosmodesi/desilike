@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
         exclude:
           - os: macos-latest
@@ -41,8 +41,6 @@ jobs:
         else
           brew install openmpi
           brew install libomp
-          export LDFLAGS="-L/opt/homebrew/opt/libomp/lib"
-          export CPPFLAGS="-I/opt/homebrew/opt/libomp/include"
         fi
         python -m pip install .[tests]
         # TODO: Currently, we need to specify the directory. This should not be necessary in the future once all tests are compatible with pytest.

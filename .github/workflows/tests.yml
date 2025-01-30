@@ -40,6 +40,7 @@ jobs:
           sudo apt install libopenmpi-dev
         else
           brew install openmpi
+          brew install libomp
         fi
         python -m pip install .[tests]
         # TODO: Currently, we need to specify the directory. This should not be necessary in the future once all tests are compatible with pytest.

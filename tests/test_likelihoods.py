@@ -1,6 +1,7 @@
 import numpy as np
 
 from desilike.likelihoods.bbn import Schoneberg2024BBNLikelihood
+from desilike.likelihoods.hubble import Riess2020H0Likelihood
 
 
 def test_bbn():
@@ -29,3 +30,15 @@ def test_bbn():
                           error[i], atol=0, rtol=0.1)
         assert np.isclose(np.average(samples[:, i], weights=w), mean[i],
                           atol=5 * mean[i] / np.sqrt(n_eff), rtol=0)
+
+
+def test_hubble():
+    # Test that the Hubble likelihoods behaves correctly, i.e., give results
+    # consistent with the published papers.
+
+    mean = 0.732
+    error = 0.013
+
+    likelihood = Riess2020H0Likelihood()
+    assert np.isclose(likelihood(h=mean), 0)
+    assert np.isclose(likelihood(h=mean + error), -1/2)

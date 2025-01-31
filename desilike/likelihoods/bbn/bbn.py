@@ -50,4 +50,10 @@ class BaseBBNLikelihood(BaseGaussianLikelihood):
 
 
 class Schoneberg2024BBNLikelihood(BaseBBNLikelihood):
-    r"""BBN measurement from https://arxiv.org/abs/2401.15054."""
+    r"""BBN measurement from Schoneberg (2024).
+
+    Reference
+    ---------
+    https://arxiv.org/abs/2401.15054
+
+    """

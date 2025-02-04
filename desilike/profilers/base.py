@@ -276,7 +276,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         raise NotImplementedError
 
     def _get_vchi2(self, chi2=None, start=None, aux=None):
-        """Vectorize the :math:`\chi^{2}`."""
+        r"""Vectorize the :math:`\chi^{2}`."""
         #self.likelihood.mpicomm = mpi.COMM_SELF
         if start is None:
             start = self._get_start(niterations=3, max_tries=None)
@@ -512,6 +512,10 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         **kwargs : dict
             Optional arguments for specific profiler.
         """
+        if cl < 1.:  # probability, else sigma-level
+            from scipy import stats
+            cl = stats.chi2(df=1).ppf(cl)
+
         if params is None:
             all_params = self.varied_params
         else:
@@ -553,6 +557,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
     def _interval_one(self, param, state, cl=1, xtol=1e-3, **kwargs):
         from scipy.optimize import root_scalar
 
+        factor = cl**2
         grid_params = ParameterCollection([state.varied_params[param]])
 
         start, center_logposterior, center, covariance = state.start, state.center_logposterior, state.center, state.covariance
@@ -612,7 +617,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                 else:
                     logposterior = -0.5 * chi2(np.array([], dtype='f8'), point)
 
-                return -2. * (logposterior - center_logposterior) - cl
+                return -2. * (logposterior - center_logposterior) - factor
 
             for sign in tm.iterate([-1, 1]):
 
@@ -670,12 +675,13 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         **kwargs : dict
             Optional arguments for specific profiler.
         """
+        if cl < 1.:  # probability
+            from scipy import stats
+            cl = stats.chi2(df=2).ppf(cl)
+
         if params is None:
             params = self.varied_params
         params = list(params)
-        if cl < 1.:
-            from scipy import stats
-            cl = - stats.norm.ppf(cl / 2.)
         if not is_parameter_sequence(params[0]):
             params = [(param1, param2) for iparam1, param1 in enumerate(params) for param2 in params[iparam1 + 1:]]
         all_params = [(self.varied_params[param1], self.varied_params[param2]) for param1, param2 in params]
@@ -713,7 +719,10 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         return self.profiles
 
     def _contour_one(self, params, state, size=50, cl=1, xtol=1e-3, **kwargs):
+        from scipy import stats
         from scipy.optimize import root_scalar
+
+        factor = stats.chi2(df=2).ppf(stats.chi2(df=1).cdf(cl**2))
 
         grid_params = ParameterCollection([state.varied_params[str(param)] for param in params])
         start, center_logposterior, center, covariance = state.start, state.center_logposterior, state.center, state.covariance
@@ -726,7 +735,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         limits = np.array([param.prior.limits for param in grid_params]).T
 
         t, u = np.linalg.eig(covariance)
-        s = (t * cl) ** 0.5
+        s = (t * factor) ** 0.5
 
         def get_point(phi, z):
             r = u @ (z * s[0] * np.cos(phi), z * s[1] * np.sin(phi))
@@ -778,7 +787,7 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
                     else:
                         logposterior = -0.5 * chi2(np.array([], dtype='f8'), point)
 
-                    return -2. * (logposterior - center_logposterior) - cl
+                    return -2. * (logposterior - center_logposterior) - factor
 
                 # find bracket
                 a = 0.5

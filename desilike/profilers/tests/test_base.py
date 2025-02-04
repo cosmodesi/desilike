@@ -34,9 +34,9 @@ def test_profilers():
         profiles = profiler.maximize(niterations=2)
         assert profiles.bestfit.attrs['ndof']
         assert profiles.bestfit.attrs['hartlap2007_factor'] is not None
-        assert profiles.bestfit['LRG.loglikelihood'].param.latex() == 'L_{\mathrm{LRG}}'
+        assert profiles.bestfit['LRG.loglikelihood'].param.latex() == r'L_{\mathrm{LRG}}'
         assert profiles.bestfit['LRG.loglikelihood'].param.derived
-        assert profiles.bestfit.logposterior.param.latex() == '\mathcal{L}'
+        assert profiles.bestfit.logposterior.param.latex() == r'\mathcal{L}'
         assert profiles.bestfit.logposterior.param.derived
         profiler.profile(params=['df'], size=4)
         profiler.grid(params=['df', 'dm'], size=(2, 2))
@@ -61,6 +61,74 @@ def test_profilers():
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
     profiler = MinuitProfiler(likelihood)
     profiler.maximize(niterations=2)
+
+
+def test_contours():
+
+    from desilike.base import BaseCalculator
+    from desilike.likelihoods import BaseGaussianLikelihood
+
+    class AffineModel(BaseCalculator):  # all calculators should inherit from BaseCalculator
+
+        # Model parameters; those can also be declared in a yaml file
+        _params = {'a': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}},
+                'b': {'value': 0., 'prior': {'dist': 'norm', 'loc': 0., 'scale': 10.}}}
+
+        def initialize(self, x=None):
+            # Actual, non-trivial initialization must happen in initialize(); this is to be able to do AffineModel(x=...)
+            # without doing any actual work
+            self.x = x
+
+        def calculate(self, a=0., b=0.):
+            self.y = a * self.x + b  # simple, affine model
+
+        # Not mandatory, this is to return something in particular after calculate (else this will just be the instance)
+        def get(self):
+            return self.y
+
+        # This is only needed for emulation
+        def __getstate__(self):
+            return {'x': self.x, 'y': self.y}  # dictionary of Python base types and numpy arrays
+
+    class Likelihood(BaseGaussianLikelihood):
+
+        def initialize(self, theory=None):
+            # Let us generate some fake data
+            self.xdata = np.linspace(0., 1., 10)
+            mean = np.zeros_like(self.xdata)
+            self.covariance = np.eye(len(self.xdata))
+            rng = np.random.RandomState(seed=42)
+            y = rng.multivariate_normal(mean, self.covariance)
+            super(Likelihood, self).initialize(y, covariance=self.covariance)
+            # Requirements
+            # AffineModel will be instantied with AffineModel(x=self.xdata)
+            if theory is None:
+                theory = AffineModel()
+            self.theory = theory
+            self.theory.init.update(x=self.xdata)  # we set x-coordinates, they will be passed to AffineModel's initialize
+
+        @property
+        def flattheory(self):
+            # Requirements (theory, requested in __init__) are accessed through .name
+            # The pipeline will make sure theory.run(a=..., b=...) has been called
+            return self.theory.y  # data - model
+
+
+    from desilike import setup_logging
+    from desilike import Fisher
+    from desilike.samples import plotting
+
+    setup_logging()  # set up logging
+
+    likelihood = Likelihood()
+    fisher = Fisher(likelihood)()
+    profiler = MinuitProfiler(likelihood)
+    profiler.maximize()
+    profiler.profile(cl=1.)
+    for cl in [1, 2]:
+        profiles = profiler.contour(cl=cl)
+    plotting.plot_triangle([fisher, profiles], show=True)
+
 
 
 def test_rescale():
@@ -281,3 +349,4 @@ if __name__ == '__main__':
     test_profilers()
     test_solve()
     test_bao()
+    test_contours()

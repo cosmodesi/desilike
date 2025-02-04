@@ -802,7 +802,7 @@ class ResummedBAOWigglesCorrelationFunctionMultipoles(BaseBAOWigglesCorrelationF
 
 
 class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):
-    """
+    r"""
     Base class that implements theory BAO correlation function multipoles, with broadband terms.
 
     Parameters

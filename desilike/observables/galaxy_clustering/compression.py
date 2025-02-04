@@ -335,7 +335,7 @@ class BandVelocityCompressionObservable(BaseCompressionObservable):
 
 
 class TurnOverCompressionObservable(BaseCompressionObservable):
-    """
+    r"""
     Turn over observable: compare (compressed) turn over measurement
     (in terms of product of distance with the turn over scale :math:`k_{\mathrm{TO}}`) to theory predictions.
 

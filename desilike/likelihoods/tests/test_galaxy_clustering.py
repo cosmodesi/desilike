@@ -169,6 +169,36 @@ def test_fisher():
     fisher()
 
 
+def test_custom_likelihood():
+    from desilike.theories import Cosmoprimo
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles
+    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+
+    cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
+
+    from desilike.likelihoods.base import BaseLikelihood
+
+    class MyLikelihood(BaseLikelihood):
+
+        def initialize(self, cosmo=None):
+            self.cosmo = cosmo
+            self.data = 1.04092
+            self.covariance = 0.00031**2
+            super().initialize(name='theta_MC_100')
+
+        def calculate(self):
+            self.loglikelihood = -0.5 * (self.cosmo['theta_MC_100'] - self.data)**2 / self.covariance
+
+    theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(cosmo=cosmo))
+    observable = TracerPowerSpectrumMultipolesObservable(k=np.linspace(0.01, 0.3, 30),
+                                                         ells=(0, 2),
+                                                         data={},
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observable, precision=np.eye(60)) + MyLikelihood(cosmo=cosmo)
+    print(likelihood(return_derived=True))
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -177,4 +207,5 @@ if __name__ == '__main__':
     #test_fisher()
     #test_observable_covariance()
     #test_observable_covariance2()
-    test_observable_covariance3()
+    #test_observable_covariance3()
+    test_custom_likelihood()

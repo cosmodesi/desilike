@@ -46,7 +46,7 @@ def test_likelihood():
     likelihood()
     if likelihood.mpicomm.rank == 0:
         likelihood(b1=2.)
-    exit()
+
     #observable.plot(show=True)
     print(theory.pt.params)
     print(likelihood.varied_params)
@@ -262,7 +262,7 @@ def test_vmap():
 
     size = (3,)
     params = {param.name: param.ref.sample(size=size, random_state=42) if param.ref.is_proper() else np.full(param.value, size) for param in likelihood.varied_params}
-    if False:
+    if True:
         vlikelihood = vmap(likelihood, errors='return')
         toret = vlikelihood(params, return_derived=True)
         if likelihood.mpicomm.rank == 0:
@@ -276,7 +276,7 @@ def test_vmap():
         toret = jax.jit(vlikelihood, static_argnames=['return_derived'])(params, return_derived=True)
         if likelihood.mpicomm.rank == 0:
             print(toret)
-        exit()
+
     if True:
         vlikelihood = vmap(likelihood, backend='mpi', errors='return', return_derived=True)
         toret = vlikelihood(params)
@@ -292,7 +292,6 @@ def test_vmap():
         toret = vlikelihood(params, return_derived=True)
         if likelihood.mpicomm.rank == 0:
             print(toret)
-
 
 if __name__ == '__main__':
 

@@ -522,7 +522,7 @@ class ObservableCovariance(BaseClass):
         Covariance 2D array.
 
     observables : list
-        List of observables correspondonding to the covariance.
+        List of observables corresponding to the covariance.
 
     attrs : dict
         Other attributes.

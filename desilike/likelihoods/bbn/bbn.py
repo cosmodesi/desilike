@@ -6,15 +6,15 @@ from desilike.likelihoods.base import BaseGaussianLikelihood
 
 class BaseBBNLikelihood(BaseGaussianLikelihood):
     r"""
-    BBN :math:`omega_{b}` likelihood.
+    BBN :math:`\omega_{b}` likelihood.
 
     Parameters
     ----------
     mean : float
-        :math:`omega_{b}` value.
+        :math:`\omega_{b}` value.
 
     covariance : float
-        :math:`omega_{b}` covariance.
+        :math:`\omega_{b}` covariance.
 
     cosmo : BasePrimordialCosmology, default=None
         Cosmology calculator. Defaults to ``Cosmoprimo()``.

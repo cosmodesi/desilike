@@ -18,7 +18,7 @@ def test_omegak():
         cosmo = fiducial.clone(Omega_k=Omega_k)
         pk = cosmo.get_fourier().pk_interpolator(of='delta_cb').to_1d(z=1.)
         print(pk.k.min(), pk.k.max(), pk.pk.shape)
-        ax.loglog(pk.k, pk.pk, color=cmap(i), label='$\Omega_k = {:.2f}$'.format(Omega_k))
+        ax.loglog(pk.k, pk.pk, color=cmap(i), label=r'$\Omega_k = {:.2f}$'.format(Omega_k))
     ax.legend()
     plt.savefig('pklin_omegak.png')
     plt.show()
@@ -61,12 +61,13 @@ def test_parameterization():
     assert np.allclose(cosmo['Omega_k'], 0.1)
 
     cosmo.init.params['sigma8_m'] = {'derived': True}
-    cosmo()
-    print(cosmo.runtime_info.pipeline.derived['sigma8_m'])
+    _, derived = cosmo(return_derived=True)
+    print(derived)
+    print(derived['sigma8_m'])
 
 
 if __name__ == '__main__':
 
     setup_logging()
     test_omegak()
-    #test_parameterization()
+    test_parameterization()

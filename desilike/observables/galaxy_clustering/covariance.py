@@ -94,7 +94,7 @@ class BaseFootprint(BaseClass):
 
     @property
     def shotnoise(self):
-        """Shot noise, in :math:`(h / \mathrm{Mpc})^{3}`."""
+        r"""Shot noise, in :math:`(h / \mathrm{Mpc})^{3}`."""
         return self.volume / self.size
 
     def __and__(self, other):

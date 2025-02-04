@@ -237,7 +237,7 @@ def ap_s_mu(s, mu, qpar=1., qper=1.):
 
 
 class APEffect(BaseCalculator):
-    """
+    r"""
     Alcock-Paczynski effect.
 
     Parameters

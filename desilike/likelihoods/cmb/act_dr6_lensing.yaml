@@ -1,3 +1,15 @@
 class: ACTDR6LensingLikelihood
 
 params:
+  Alens:
+    prior:
+      dist: norm
+      loc: 1
+      scale: 0.005
+    ref:
+      dist: norm
+      loc: 1.013
+      scale: 0.023
+    proposal: 0.0005
+    delta: 0.0005
+    latex: A_\mathrm{lens}

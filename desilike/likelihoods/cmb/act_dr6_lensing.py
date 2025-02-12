@@ -3,11 +3,10 @@
 import os
 
 import numpy as np
-from desilike.likelihoods.base import BaseGaussianLikelihood
+from desilike.likelihoods.base import BaseLikelihood
 from desilike.jax import numpy as jnp
 
 from .base import ClTheory
-
 
 
 def pp_to_kk(clpp, ell):
@@ -58,7 +57,36 @@ def get_corrected_clkk(data_dict,clkk,cltt,clte,clee,clbb,suff='',
     return nclkk
 
 
-class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
+class ACTDR6LensingLikelihood(BaseLikelihood):
+    r""" 
+    Python Likelihood for ACT DR6 lensing (2024).
+    
+    Reference
+    ---------
+    https://arxiv.org/pdf/2304.05203
+
+    https://github.com/ACTCollaboration/act_dr6_lenslike/blob/main/act_dr6_lenslike/act_dr6_lenslike.py
+
+    Parameters
+    ----------
+    theory : ClTheory, default=None
+        Theory calculator for CMB :math:`C_{\ell}^{xy}`.
+        If ``None``, instantiated using ``cosmo``.
+
+    cosmo : BasePrimordialCosmology, default=None
+        Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
+
+    lens_only : bool, default=False
+        TODO
+
+    variant : str, default='actplanck_baseline'
+        Select the version of the likelihood in: act_baseline, act_extended, actplanck_baseline, actplanck_extended, act_polonly, act_cibdeproj, act_cinpaint
+
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+
+    """
 
     config_fn = 'act_dr6_lensing.yaml'
     installer_section = 'ACTDR6LensingLikelihood'
@@ -72,11 +100,11 @@ class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
     trim_ellmax = 2998
     apply_hartlap = True
     scale_cov = None
-    varying_cmb_alens = False  # Whether to divide the theory spectrum by Alens
     act_cmb_rescale = False
     act_calib = False
 
     def initialize(self, theory=None, cosmo=None, lens_only=False, variant='actplanck_baseline', data_dir=None):
+        super().initialize()
         if lens_only: self.no_like_corrections = True
         if data_dir is None:
             from desilike.install import Installer
@@ -113,7 +141,8 @@ class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
             clkk_planck = get_corrected_clkk(self.data, cl_kk, cl_tt, cl_te, cl_ee, cl_bb, '_planck') if self.data['likelihood_corrections'] else cl_kk
             bclkk = jnp.append(bclkk, self.data['binmat_planck'] @ clkk_planck)
         self.flattheory = bclkk
-        super().calculate()
+        self.flatdiff = self.flattheory - self.flatdata
+        self.loglikelihood = -0.5 * self.flatdiff.dot(self.precision).dot(self.flatdiff)
 
     @classmethod
     def install(cls, installer):

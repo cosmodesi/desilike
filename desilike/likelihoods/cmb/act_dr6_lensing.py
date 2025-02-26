@@ -109,6 +109,8 @@ class ACTDR6LensingLikelihood(BaseLikelihood):
         if data_dir is None:
             from desilike.install import Installer
             data_dir = os.path.join(Installer()[self.installer_section]['data_dir'], self.version)
+            # need to use dvs_ro with MPI 
+            data_dir = data_dir.replace('global', 'dvs_ro')
         import act_dr6_lenslike as alike
         self.data = alike.load_data(variant, ddir=data_dir, lens_only=lens_only, like_corrections=not(self.no_like_corrections),
                                     apply_hartlap=self.apply_hartlap, nsims_act=self.nsims_act, nsims_planck=self.nsims_planck,

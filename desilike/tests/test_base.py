@@ -293,6 +293,61 @@ def test_vmap():
         if likelihood.mpicomm.rank == 0:
             print(toret)
 
+
+def test_cosmo():
+
+    from desilike.theories import Cosmoprimo
+
+    # Provides primordial cosmology computation. You can also give default, fixed, parameters here... (like m_ncdm, or class precision parameters)
+    cosmo = Cosmoprimo(engine='class', m_ncdm=[0.10])
+    cosmo.init.params['w0_fld'].update(derived='({w1} + {w2}) / 2.')  # w0_fld expressed as derived parameter
+    cosmo.init.params['wa_fld'].update(derived='({w1} - {w2}) / 2.')  # wa_fld expressed as derived parameter
+    # w1, w2 as sampled "varied" parameters
+    cosmo.init.params['w1'] = dict(value=-1., prior=dict(dist='uniform', limits=[-5., 0.]))
+    cosmo.init.params['w2'] = dict(value=0., prior=dict(dist='norm', loc=0., scale=1.))
+    print(cosmo.varied_params)  # varied parameters (also cosmo.all_params(varied=True)): ['h', 'omega_cdm', 'omega_b', 'logA', 'n_s', 'tau_reio', 'w1', 'w2']
+
+    # Example: interaction cosmology / theory
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles
+    cosmo.init.params['tau_reio'].update(fixed=True)  # tau is useless
+    template = DirectPowerSpectrumTemplate(cosmo=cosmo, z=1.4)
+    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+    print(theory.varied_params)  # varied parameters (including that of Kaiser): ['h', 'omega_cdm', 'omega_b', 'logA', 'n_s', 'tau_reio', 'w1', 'w2', 'b1', 'sn0']
+    poles = theory(w2=0.5, b1=2.)  # theory prediction
+
+    if False:
+        # For a galaxy power spectrum likelihood with the previous theory model
+        from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+        from desilike.likelihoods import ObservablesGaussianLikelihood
+        observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
+                                                            data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
+                                                            theory=theory)
+        likelihood = ObservablesGaussianLikelihood(observables=[observable])
+    if True:
+        # With Planck likelihood
+        from desilike.likelihoods.cmb import TTTEEEHighlPlanck2018LiteLikelihood
+        # to install the likelihood
+        #from desilike import Installer
+        #Installer(user=True)(TTTEEEHighlPlanck2018LiteLikelihood)
+        cosmo.init.params['tau_reio'].update(fixed=False)
+        # Planck likelihood has its own data / covariance
+        likelihood = TTTEEEHighlPlanck2018LiteLikelihood(cosmo=cosmo)  # ['h', 'omega_cdm', 'omega_b', 'logA', 'n_s', 'tau_reio', 'w1', 'w2', 'A_planck']
+        print(likelihood.varied_params)
+
+
+    # Posterior profiling
+    from desilike.profilers import MinuitProfiler
+    profiler = MinuitProfiler(likelihood, seed=7)
+    #profiles = profiler.maximize(niterations=2)  # profiles is an object which contains the result of the fit
+
+    # Posterior sampling
+    from desilike.samplers import MCMCSampler
+    sampler = MCMCSampler(likelihood, chains=8, seed=7)
+    samples = sampler.run(check={'max_eigen_gr': 0.01, 'stable_over': 3}, check_every=10, max_iterations=100)  # profiles is an object which contains samples
+
+
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -304,4 +359,5 @@ if __name__ == '__main__':
     #test_copy()
     #test_cosmo()
     #test_install()
-    test_vmap()
+    #test_vmap()
+    test_cosmo()

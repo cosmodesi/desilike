@@ -9,7 +9,6 @@ from desilike.jax import numpy as jnp
 from .base import ClTheory
 
 
-
 def pp_to_kk(clpp, ell):
     return clpp * (ell * (ell + 1.))**2. / 4.
 
@@ -59,6 +58,35 @@ def get_corrected_clkk(data_dict,clkk,cltt,clte,clee,clbb,suff='',
 
 
 class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
+    r"""
+    Python Likelihood for ACT DR6 lensing (2024).
+
+    Reference
+    ---------
+    https://arxiv.org/pdf/2304.05203
+
+    https://github.com/ACTCollaboration/act_dr6_lenslike/blob/main/act_dr6_lenslike/act_dr6_lenslike.py
+
+    Parameters
+    ----------
+    theory : ClTheory, default=None
+        Theory calculator for CMB :math:`C_{\ell}^{xy}`.
+        If ``None``, instantiated using ``cosmo``.
+
+    cosmo : BasePrimordialCosmology, default=None
+        Optionally, cosmology calculator. Defaults to ``Cosmoprimo()``.
+
+    lens_only : bool, default=False
+        TODO
+
+    variant : str, default='actplanck_baseline'
+        Select the version of the likelihood in: act_baseline, act_extended, actplanck_baseline, actplanck_extended, act_polonly, act_cibdeproj, act_cinpaint
+
+    data_dir : str, Path, default=None
+        Data directory. Defaults to path saved in desilike's configuration,
+        as provided by :class:`Installer` if likelihood has been installed.
+
+    """
 
     config_fn = 'act_dr6_lensing.yaml'
     installer_section = 'ACTDR6LensingLikelihood'
@@ -72,7 +100,6 @@ class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
     trim_ellmax = 2998
     apply_hartlap = True
     scale_cov = None
-    varying_cmb_alens = False  # Whether to divide the theory spectrum by Alens
     act_cmb_rescale = False
     act_calib = False
 
@@ -80,7 +107,8 @@ class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
         if lens_only: self.no_like_corrections = True
         if data_dir is None:
             from desilike.install import Installer
-            data_dir = os.path.join(Installer()[self.installer_section]['data_dir'], self.version)
+            data_dir = os.path.join(Installer().data_dir(self.installer_section, ro=True), self.version)
+            # need to use dvs_ro with MPI
         import act_dr6_lenslike as alike
         self.data = alike.load_data(variant, ddir=data_dir, lens_only=lens_only, like_corrections=not(self.no_like_corrections),
                                     apply_hartlap=self.apply_hartlap, nsims_act=self.nsims_act, nsims_planck=self.nsims_planck,
@@ -98,6 +126,7 @@ class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
         self.theory = theory
         self.theory.init.update(cls=requested_cls, lensing=True, unit='muK', T0=2.7255)
         if cosmo is not None: self.theory.init.update(cosmo=cosmo)
+        super().initialize(data=self.flatdata, precision=self.precision)
 
     def calculate(self, Alens=1.):
         import act_dr6_lenslike as alike
@@ -118,11 +147,7 @@ class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
     @classmethod
     def install(cls, installer):
         installer.pip('git+https://github.com/ACTCollaboration/act_dr6_lenslike')
-
-        try:
-            data_dir = installer[cls.installer_section]['data_dir']
-        except KeyError:
-            data_dir = installer.data_dir(cls.installer_section)
+        data_dir = installer.data_dir(cls.installer_section)
 
         from desilike.install import exists_path, download, extract
 

@@ -3,7 +3,7 @@
 import os
 
 import numpy as np
-from desilike.likelihoods.base import BaseLikelihood
+from desilike.likelihoods.base import BaseGaussianLikelihood
 from desilike.jax import numpy as jnp
 
 from .base import ClTheory
@@ -57,10 +57,10 @@ def get_corrected_clkk(data_dict,clkk,cltt,clte,clee,clbb,suff='',
     return nclkk
 
 
-class ACTDR6LensingLikelihood(BaseLikelihood):
-    r""" 
+class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
+    r"""
     Python Likelihood for ACT DR6 lensing (2024).
-    
+
     Reference
     ---------
     https://arxiv.org/pdf/2304.05203
@@ -104,13 +104,11 @@ class ACTDR6LensingLikelihood(BaseLikelihood):
     act_calib = False
 
     def initialize(self, theory=None, cosmo=None, lens_only=False, variant='actplanck_baseline', data_dir=None):
-        super().initialize()
         if lens_only: self.no_like_corrections = True
         if data_dir is None:
             from desilike.install import Installer
-            data_dir = os.path.join(Installer()[self.installer_section]['data_dir'], self.version)
-            # need to use dvs_ro with MPI 
-            data_dir = data_dir.replace('global', 'dvs_ro')
+            data_dir = os.path.join(Installer().data_dir(self.installer_section, ro=True), self.version)
+            # need to use dvs_ro with MPI
         import act_dr6_lenslike as alike
         self.data = alike.load_data(variant, ddir=data_dir, lens_only=lens_only, like_corrections=not(self.no_like_corrections),
                                     apply_hartlap=self.apply_hartlap, nsims_act=self.nsims_act, nsims_planck=self.nsims_planck,
@@ -128,6 +126,7 @@ class ACTDR6LensingLikelihood(BaseLikelihood):
         self.theory = theory
         self.theory.init.update(cls=requested_cls, lensing=True, unit='muK', T0=2.7255)
         if cosmo is not None: self.theory.init.update(cosmo=cosmo)
+        super().initialize(data=self.flatdata, precision=self.precision)
 
     def calculate(self, Alens=1.):
         import act_dr6_lenslike as alike
@@ -143,17 +142,12 @@ class ACTDR6LensingLikelihood(BaseLikelihood):
             clkk_planck = get_corrected_clkk(self.data, cl_kk, cl_tt, cl_te, cl_ee, cl_bb, '_planck') if self.data['likelihood_corrections'] else cl_kk
             bclkk = jnp.append(bclkk, self.data['binmat_planck'] @ clkk_planck)
         self.flattheory = bclkk
-        self.flatdiff = self.flattheory - self.flatdata
-        self.loglikelihood = -0.5 * self.flatdiff.dot(self.precision).dot(self.flatdiff)
+        super().calculate()
 
     @classmethod
     def install(cls, installer):
         installer.pip('git+https://github.com/ACTCollaboration/act_dr6_lenslike')
-
-        try:
-            data_dir = installer[cls.installer_section]['data_dir']
-        except KeyError:
-            data_dir = installer.data_dir(cls.installer_section)
+        data_dir = installer.data_dir(cls.installer_section)
 
         from desilike.install import exists_path, download, extract
 

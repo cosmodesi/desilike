@@ -13,3 +13,4 @@ params:
     proposal: 0.0005
     delta: 0.0005
     latex: A_\mathrm{lens}
+    fixed: True

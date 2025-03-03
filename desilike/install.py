@@ -364,7 +364,7 @@ class Installer(BaseClass):
         pip(pkgindex, install_dir=self.install_dir, **kwargs)
         self.write({name: getattr(self, name) for name in ['pylib_dir', 'bin_dir']})
 
-    def data_dir(self, section=None):
+    def data_dir(self, section=None, ro=False):
         """
         Return path to data directory, where one will typically save / install
         specific calculator data or code.
@@ -374,6 +374,9 @@ class Installer(BaseClass):
         section : str, default=None
             Section; typically this will be calculator's name.
 
+        ro : bool, default=None
+            Read-only?
+
         Returns
         -------
         data_dir : str
@@ -381,8 +384,16 @@ class Installer(BaseClass):
         """
         base_dir = os.path.join(self.install_dir, 'data')
         if section is None:
-            return base_dir
-        return os.path.join(base_dir, section)
+            toret = base_dir
+        try:
+            toret = self[section]['data_dir']
+        except KeyError:
+            toret = os.path.join(base_dir, section)
+        if ro:
+            ro = self.get('ro', None)
+            if ro is not None:
+                toret = toret.replace(*ro)
+        return toret
 
     def write(self, config, update=True):
         """

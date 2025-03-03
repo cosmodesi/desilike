@@ -197,12 +197,16 @@ def test_cmb():
 
 
 def test_act_lensing():
-    installer = Installer(user=True)
-    installer(ACTDR6LensingLikelihood)
+    #installer = Installer(user=True)
+    #installer(ACTDR6LensingLikelihood)
 
     cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
     likelihood = ACTDR6LensingLikelihood(cosmo=cosmo)
     likelihood()
+    likelihood._param_loglikelihood
+    from desilike.samplers import MCMCSampler
+    sampler = MCMCSampler(likelihood, chains=1, seed=42)
+    sampler.run(max_iterations=3, check={'max_eigen_gr': 0.03, 'min_ess': 50}, check_every=10)
 
 
 def test_planck_python():
@@ -383,11 +387,11 @@ if __name__ == '__main__':
     #test_emulator_direct()
     #test_cmb()
     #test_profile()
-    #test_act_lensing()
+    test_act_lensing()
     #test_planck_python()
     #test_hillipop()
     #test_lollipop()
     #test_camspec()
     #test_jax()
-    test_sampling()
+    #test_sampling()
     #test_profiling()

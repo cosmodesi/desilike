@@ -81,9 +81,56 @@ def test_union3(plot=False):
             sampler.run(max_iterations=100000, check={'max_eigen_gr': 0.01, 'min_ess': 50}, check_every=200)
 
 
+def test_desy5():
+    import os
+    from desilike.theories import Cosmoprimo
+    from desilike.likelihoods.supernovae import DESY5SNLikelihood
+
+    cosmo = Cosmoprimo(engine='class', fiducial='DESI')
+    cosmo.init.params['Omega_m'] = dict(prior=dict(limits=[0., 1.]))
+    cosmo.init.params.pop('omega_cdm')
+    for name in ['w0_fld', 'wa_fld']: cosmo.init.params[name].update(fixed=False)
+    likelihood = DESY5SNLikelihood(cosmo=cosmo)
+
+    def cov_log_likelihood(mu_model, mu, inv_cov):
+        # From https://github.com/des-science/DES-SN5YR/blob/main/5_COSMOLOGY/SN_only_cosmosis_likelihood.py
+        """
+        Computes modified likelihood computation to marginalize offset M
+        from https://arxiv.org/abs/astro-ph/0104009v1, see Equation A9-12
+        """
+        delta = np.array([mu_model - mu])
+        deltaT = np.transpose(delta)
+        chit2 = np.sum(delta @ inv_cov @ deltaT)
+        B = np.sum(delta @ inv_cov)
+        C = np.sum(inv_cov)
+        chi2 = chit2 - (B**2 / C) + np.log(C / (2 * np.pi))
+        return -0.5*chi2
+
+    likelihood.init.params['Mb'].update(prior=None, derived='.best')
+    chi2 = -2. * likelihood()
+    chi2_ref = -2. * cov_log_likelihood(likelihood.flattheory, likelihood.flatdata, likelihood.precision)
+    print(chi2 - chi2_ref)
+    fn = '../../../../DES-SN5YR/5_COSMOLOGY/chains/fw0wacdm/fw0wacdm_SN_emcee.txt'
+    #fn = '../../../../DES-SN5YR/5_COSMOLOGY/chains/flcdm/flcdm_SN_emcee.txt'
+    if os.path.exists(fn):
+        samples = np.loadtxt(fn, unpack=True)
+        #logprior = - np.log(0.9 - 0.1)
+        #samples = {name: samples[idx] for name, idx in zip(['Omega_m', 'logprior', 'logposterior'], [0, 1, 2])}
+        samples = {name: samples[idx] for name, idx in zip(['Omega_m', 'w0_fld', 'wa_fld', 'logprior', 'logposterior'], [0, 1, 2, 3, 4])}
+        samples['logposterior'] -= samples['logprior']  # logprior is for Omega_m, w0_fld, wa_fld
+        print('min chi2', -2. * samples['logposterior'].max())
+        for isample in range(10):
+            values = {name: samples[name][isample] for name in samples if name not in ['logposterior', 'logprior']}
+            chi2 = -2. * likelihood(values)
+            chi2_ref = -2. * samples['logposterior'][isample]
+            print(chi2, chi2_ref, chi2 - chi2_ref)
+
+
+
 if __name__ == '__main__':
 
     setup_logging()
-    test_install()
+    #test_install()
     #test_profile()
     #test_union3(plot=True)
+    test_desy5()

@@ -195,20 +195,6 @@ def test_cmb():
     likelihood()
 
 
-
-def test_act_lensing():
-    #installer = Installer(user=True)
-    #installer(ACTDR6LensingLikelihood)
-
-    cosmo = Cosmoprimo(fiducial='DESI', engine='camb')
-    likelihood = ACTDR6LensingLikelihood(cosmo=cosmo)
-    likelihood()
-    likelihood._param_loglikelihood
-    from desilike.samplers import MCMCSampler
-    sampler = MCMCSampler(likelihood, chains=1, seed=42)
-    sampler.run(max_iterations=3, check={'max_eigen_gr': 0.03, 'min_ess': 50}, check_every=10)
-
-
 def test_planck_python():
 
     installer = Installer(user=True)
@@ -219,41 +205,45 @@ def test_planck_python():
         likelihood()
 
     for cl in ['TT', 'EE']:
-        theory = {'camb': {'extra_args': {'bbn_predictor': 'PArthENoPE_880.2_standard.dat', 'dark_energy_model': 'ppf', 'num_massive_neutrinos': 1}}}
-        #theory = {'cosmoprimo.bindings.cobaya.cosmoprimo': {'engine': 'camb', 'stop_at_error': True, 'extra_args': {'N_ncdm': 1}}}
-        params = {'logA': {'prior': {'min': 1.61, 'max': 3.91}, 'ref': {'dist': 'norm', 'loc': 3.036, 'scale': 0.001}, 'proposal': 0.001, 'latex': '\\ln(10^{10} A_\\mathrm{s})', 'drop': True}, 'As': {'value': 'lambda logA: 1e-10*np.exp(logA)', 'latex': 'A_\\mathrm{s}'}, 'ns': {'prior': {'min': 0.8, 'max': 1.2}, 'ref': {'dist': 'norm', 'loc': 0.9649, 'scale': 0.004}, 'proposal': 0.002, 'latex': 'n_\\mathrm{s}'}, 'H0': {'prior': {'min': 20, 'max': 100}, 'ref': {'dist': 'norm', 'loc': 67.36, 'scale': 0.01}, 'latex': 'H_0'}, 'ombh2': {'prior': {'min': 0.005, 'max': 0.1}, 'ref': {'dist': 'norm', 'loc': 0.02237, 'scale': 0.0001}, 'proposal': 0.0001, 'latex': '\\Omega_\\mathrm{b} h^2'}, 'omch2': {'prior': {'min': 0.001, 'max': 0.99}, 'ref': {'dist': 'norm', 'loc': 0.12, 'scale': 0.001}, 'proposal': 0.0005, 'latex': '\\Omega_\\mathrm{c} h^2'}, 'tau': {'latex': '\\tau_\\mathrm{reio}', 'value': 0.0544}, 'mnu': {'latex': '\\sum m_\\nu', 'value': 0.06}, 'nnu': {'latex': 'N_\\mathrm{eff}', 'value': 3.044}}
+        extra_params = dict(lens_margin=1250, lens_potential_accuracy=4, AccuracyBoost=1, lSampleBoost=1, lAccuracyBoost=1)
+        #theory = {'camb': {'extra_args': {'dark_energy_model': 'ppf', 'num_massive_neutrinos': 1, **extra_params}}}
+        theory = {'cosmoprimo.bindings.cobaya.cosmoprimo': {'engine': 'camb', 'extra_args': {'ellmax_cl': 4000, 'non_linear': 'mead2016', 'lensing': True, 'extra_params': extra_params}}}
+        params = {'logA': {'prior': {'min': 1.61, 'max': 3.91}, 'ref': {'dist': 'norm', 'loc': 3.036, 'scale': 0.001}, 'proposal': 0.001, 'latex': '\\ln(10^{10} A_\\mathrm{s})', 'drop': True}, 'As': {'value': 'lambda logA: 1e-10*np.exp(logA)', 'latex': 'A_\\mathrm{s}'}, 'ns': {'prior': {'min': 0.8, 'max': 1.2}, 'ref': {'dist': 'norm', 'loc': 0.9649, 'scale': 0.004}, 'proposal': 0.002, 'latex': 'n_\\mathrm{s}'}, 'H0': {'prior': {'min': 20, 'max': 100}, 'ref': {'dist': 'norm', 'loc': 67.36, 'scale': 0.01}, 'latex': 'H_0'}, 'ombh2': {'prior': {'min': 0.005, 'max': 0.1}, 'ref': {'dist': 'norm', 'loc': 0.02237, 'scale': 0.0001}, 'proposal': 0.0001, 'latex': '\\Omega_\\mathrm{b} h^2'}, 'omch2': {'prior': {'min': 0.001, 'max': 0.99}, 'ref': {'dist': 'norm', 'loc': 0.12, 'scale': 0.001}, 'proposal': 0.0005, 'latex': '\\Omega_\\mathrm{c} h^2'}, 'tau': {'latex': '\\tau_\\mathrm{reio}', 'prior': {'min': 0.01, 'max': 0.8}}, 'mnu': {'latex': '\\sum m_\\nu', 'value': 0.06}, 'nnu': {'latex': 'N_\\mathrm{eff}', 'value': 3.044}}
         info = {'theory': theory, 'likelihood': {'planck_2018_lowl.{}'.format(cl): None}, 'params': params}
         from cobaya.model import get_model
         model = get_model(info)
-        logpost = model.logposterior({'logA': 3.057147, 'ns': 0.9657119, 'H0': 70., 'ombh2': 0.02246306, 'omch2': 0.1184775, 'nnu': 3.044})
+        cosmo_params = {'logA': 3.057147, 'ns': 0.9657119, 'H0': 70., 'ombh2': 0.02246306, 'omch2': 0.1184775, 'tau': 0.063861135, 'mnu': 0.06, 'nnu': 3.044}
+        logpost = model.logposterior(cosmo_params)
         print(logpost.loglike)
 
-        cosmo = Cosmoprimo(engine='camb')
-        likelihood = globals()[cl + 'LowlPlanck2018Likelihood'](cosmo=cosmo)
-        params = {'logA': 3.057147, 'n_s': 0.9657119, 'h': 0.7, 'omega_b': 0.02246306, 'omega_cdm': 0.1184775, 'N_eff': 3.044}
-        likelihood(params)
-        print(likelihood.loglikelihood)
-
+        cosmo = Cosmoprimo(engine='camb', ellmax_cl=4000, non_linear='mead2016', m_ncdm=[0.06], extra_params=extra_params)
+        cosmo.init.params = {name: {'value': value} for name, value in cosmo_params.items()}
         likelihood_ref = globals()[cl + 'LowlPlanck2018ClikLikelihood'](cosmo=cosmo)
-        likelihood_ref(params)
+        likelihood_ref(cosmo_params)
+        print(likelihood_ref.loglikelihood)
+        assert np.allclose(likelihood_ref.loglikelihood, logpost.loglike, rtol=1e-6)
+
+        likelihood = globals()[cl + 'LowlPlanck2018Likelihood'](cosmo=cosmo)
+        likelihood(cosmo_params)
+        print(likelihood.loglikelihood)
         assert np.allclose(likelihood.loglikelihood, likelihood_ref.loglikelihood, rtol=4e-5 if cl == 'EE' else 1e-6, atol=0.)
 
-    theory = {'camb': {'extra_args': {'bbn_predictor': 'PArthENoPE_880.2_standard.dat', 'dark_energy_model': 'ppf', 'num_massive_neutrinos': 1}}}
-    params = {'logA': {'prior': {'min': 1.61, 'max': 3.91}, 'ref': {'dist': 'norm', 'loc': 3.036, 'scale': 0.001}, 'proposal': 0.001, 'latex': '\\ln(10^{10} A_\\mathrm{s})', 'drop': True}, 'As': {'value': 'lambda logA: 1e-10*np.exp(logA)', 'latex': 'A_\\mathrm{s}'}, 'ns': {'prior': {'min': 0.8, 'max': 1.2}, 'ref': {'dist': 'norm', 'loc': 0.9649, 'scale': 0.004}, 'proposal': 0.002, 'latex': 'n_\\mathrm{s}'}, 'H0': {'prior': {'min': 20, 'max': 100}, 'ref': {'dist': 'norm', 'loc': 67.36, 'scale': 0.01}, 'latex': 'H_0'}, 'ombh2': {'prior': {'min': 0.005, 'max': 0.1}, 'ref': {'dist': 'norm', 'loc': 0.02237, 'scale': 0.0001}, 'proposal': 0.0001, 'latex': '\\Omega_\\mathrm{b} h^2'}, 'omch2': {'prior': {'min': 0.001, 'max': 0.99}, 'ref': {'dist': 'norm', 'loc': 0.12, 'scale': 0.001}, 'proposal': 0.0005, 'latex': '\\Omega_\\mathrm{c} h^2'}, 'tau': {'latex': '\\tau_\\mathrm{reio}', 'value': 0.0544}, 'mnu': {'latex': '\\sum m_\\nu', 'value': 0.06}, 'nnu': {'latex': 'N_\\mathrm{eff}', 'value': 3.044}}
-    info = {'theory': theory, 'likelihood': {'planck_2018_highl_plik.TTTEEE_lite_native': None}, 'params': params}
-    from cobaya.model import get_model
-    model = get_model(info)
-    logpost = model.logposterior({'logA': 3.057147, 'ns': 0.9657119, 'H0': 70., 'ombh2': 0.02246306, 'omch2': 0.1184775, 'nnu': 3.044, 'A_planck': 1.})
-    print(logpost.loglike)
+    for cl in ['TTTEEE', 'TT'][:1]:
 
-    for cl in ['TTTEEE', 'TT']:
-        cosmo = Cosmoprimo(engine='camb')
+        info = {'theory': theory, 'likelihood': {'planck_2018_highl_plik.{}_lite_native'.format(cl): None}, 'params': params}
+        nuisance_params = {'A_planck': 1.001}
+        from cobaya.model import get_model
+        model = get_model(info)
+        logpost = model.logposterior(cosmo_params | nuisance_params)
+        print(logpost.loglike)
+
         likelihood = globals()[cl + 'HighlPlanck2018LiteLikelihood'](cosmo=cosmo)
-        params = {'logA': 3.057147, 'n_s': 0.9657119, 'h': 0.7, 'omega_b': 0.02246306, 'omega_cdm': 0.1184775, 'N_eff': 3.044}
-        likelihood(params)
+        likelihood(cosmo_params | nuisance_params)
         print(likelihood.loglikelihood)
+        if cl == 'TTTEEE': assert np.allclose(likelihood.loglikelihood, logpost.loglike, rtol=1e-6)
+
         likelihood_ref = globals()[cl + 'HighlPlanck2018PlikLiteLikelihood'](cosmo=cosmo)
-        likelihood_ref(params)
+        likelihood_ref(cosmo_params | nuisance_params)
         print(likelihood_ref.loglikelihood)
         assert np.allclose(likelihood.loglikelihood, likelihood_ref.loglikelihood)
 
@@ -308,25 +298,52 @@ def test_camspec():
     installer(TTTEEEHighlPlanckNPIPECamspecLikelihood)
 
     for cl in ['TTTEEE', 'TT']:
-        nuisance = {'calTE': 1.2, 'calEE': 1.2, 'amp_143': 10., 'amp_217': 10., 'amp_143x217': 10., 'n_217': 2., 'n_143': 2., 'n_143x217': 2., 'A_planck': 1.}
+        nuisance_params = {'calTE': 1.2, 'calEE': 1.2, 'amp_143': 10., 'amp_217': 10., 'amp_143x217': 10., 'n_217': 2., 'n_143': 2., 'n_143x217': 2., 'A_planck': 1.001}
         if cl == 'TT':
-            for name in ['calTE', 'calEE']: nuisance.pop(name)
+            for name in ['calTE', 'calEE']: nuisance_params.pop(name)
 
-        #theory = {'camb': {'extra_args': {'bbn_predictor': 'PArthENoPE_880.2_standard.dat', 'dark_energy_model': 'ppf', 'num_massive_neutrinos': 1}}}
-        theory = {'cosmoprimo.bindings.cobaya.cosmoprimo': {'engine': 'camb', 'extra_args': {'bbn_predictor': 'PArthENoPE_880.2_standard.dat', 'dark_energy_model': 'ppf', 'N_ncdm': 1}}}
-        params = {'logA': {'prior': {'min': 1.61, 'max': 3.91}, 'ref': {'dist': 'norm', 'loc': 3.036, 'scale': 0.001}, 'proposal': 0.001, 'latex': '\\ln(10^{10} A_\\mathrm{s})', 'drop': True}, 'As': {'value': 'lambda logA: 1e-10*np.exp(logA)', 'latex': 'A_\\mathrm{s}'}, 'ns': {'prior': {'min': 0.8, 'max': 1.2}, 'ref': {'dist': 'norm', 'loc': 0.9649, 'scale': 0.004}, 'proposal': 0.002, 'latex': 'n_\\mathrm{s}'}, 'H0': {'prior': {'min': 20, 'max': 100}, 'ref': {'dist': 'norm', 'loc': 67.36, 'scale': 0.01}, 'latex': 'H_0'}, 'ombh2': {'prior': {'min': 0.005, 'max': 0.1}, 'ref': {'dist': 'norm', 'loc': 0.02237, 'scale': 0.0001}, 'proposal': 0.0001, 'latex': '\\Omega_\\mathrm{b} h^2'}, 'omch2': {'prior': {'min': 0.001, 'max': 0.99}, 'ref': {'dist': 'norm', 'loc': 0.12, 'scale': 0.001}, 'proposal': 0.0005, 'latex': '\\Omega_\\mathrm{c} h^2'}, 'tau': {'latex': '\\tau_\\mathrm{reio}', 'value': 0.0544}, 'mnu': {'latex': '\\sum m_\\nu', 'value': 0.06}, 'nnu': {'latex': 'N_\\mathrm{eff}', 'value': 3.044}}
+        extra_params = dict(lens_margin=1250, lens_potential_accuracy=4, AccuracyBoost=1, lSampleBoost=1, lAccuracyBoost=1)
+        #theory = {'camb': {'extra_args': {'dark_energy_model': 'ppf', 'num_massive_neutrinos': 1, **extra_params}}}
+        theory = {'cosmoprimo.bindings.cobaya.cosmoprimo': {'engine': 'camb', 'extra_args': {'ellmax_cl': 4000, 'non_linear': 'mead2016', 'lensing': True, 'extra_params': extra_params}}}
+        params = {'logA': {'prior': {'min': 1.61, 'max': 3.91}, 'ref': {'dist': 'norm', 'loc': 3.036, 'scale': 0.001}, 'proposal': 0.001, 'latex': '\\ln(10^{10} A_\\mathrm{s})', 'drop': True}, 'As': {'value': 'lambda logA: 1e-10*np.exp(logA)', 'latex': 'A_\\mathrm{s}'}, 'ns': {'prior': {'min': 0.8, 'max': 1.2}, 'ref': {'dist': 'norm', 'loc': 0.9649, 'scale': 0.004}, 'proposal': 0.002, 'latex': 'n_\\mathrm{s}'}, 'H0': {'prior': {'min': 20, 'max': 100}, 'ref': {'dist': 'norm', 'loc': 67.36, 'scale': 0.01}, 'latex': 'H_0'}, 'ombh2': {'prior': {'min': 0.005, 'max': 0.1}, 'ref': {'dist': 'norm', 'loc': 0.02237, 'scale': 0.0001}, 'proposal': 0.0001, 'latex': '\\Omega_\\mathrm{b} h^2'}, 'omch2': {'prior': {'min': 0.001, 'max': 0.99}, 'ref': {'dist': 'norm', 'loc': 0.12, 'scale': 0.001}, 'proposal': 0.0005, 'latex': '\\Omega_\\mathrm{c} h^2'}, 'tau': {'latex': '\\tau_\\mathrm{reio}', 'prior': {'min': 0.01, 'max': 0.8}}, 'mnu': {'latex': '\\sum m_\\nu', 'value': 0.06}, 'nnu': {'latex': 'N_\\mathrm{eff}', 'value': 3.044}}
         info = {'theory': theory, 'likelihood': {'planck_NPIPE_highl_CamSpec.{}'.format(cl): None}, 'params': params}
         from cobaya.model import get_model
         model = get_model(info)
-        params = {'logA': 3.057147, 'ns': 0.9657119, 'H0': 70., 'ombh2': 0.02246306, 'omch2': 0.1184775, 'nnu': 3.044} | nuisance
+        cosmo_params = {'logA': 3.0594756, 'ns': 0.96922184, 'H0': 68.183285, 'ombh2': 0.022335709, 'omch2': 0.11762149, 'tau': 0.063861135, 'mnu': 0.06, 'nnu': 3.044}
+        params = cosmo_params | nuisance_params
         logpost = model.logposterior(params)
-        print(logpost.loglike)
+        print(cl, logpost.loglike)
 
-        cosmo = Cosmoprimo(fiducial='DESI', engine='camb', non_linear='hmcode')
+        cosmo = Cosmoprimo(engine='camb', ellmax_cl=4000, non_linear='mead2016', m_ncdm=[0.06], extra_params=extra_params)
+        cosmo.init.params = {name: {'value': value} for name, value in cosmo_params.items()}
         likelihood = globals()['{}HighlPlanckNPIPECamspecLikelihood'.format(cl)](cosmo=cosmo)
-        params = {'logA': 3.057147, 'n_s': 0.9657119, 'h': 0.7, 'omega_b': 0.02246306, 'omega_cdm': 0.1184775, 'N_eff': 3.044} | nuisance
         likelihood(params)
-        print(likelihood.loglikelihood)
+        print(cl, likelihood.loglikelihood)
+        assert np.allclose(likelihood.loglikelihood, logpost.loglike, rtol=1e-5)
+
+
+def test_act_lensing():
+    #installer = Installer(user=True)
+    #installer(ACTDR6LensingLikelihood)
+
+    extra_params = dict(lens_margin=1250, lens_potential_accuracy=4, AccuracyBoost=1, lSampleBoost=1, lAccuracyBoost=1)
+    theory = {'cosmoprimo.bindings.cobaya.cosmoprimo': {'engine': 'camb', 'extra_args': {'ellmax_cl': 4000, 'non_linear': 'mead2016', 'lensing': True, 'extra_params': extra_params}}}
+    params = {'logA': {'prior': {'min': 1.61, 'max': 3.91}, 'ref': {'dist': 'norm', 'loc': 3.036, 'scale': 0.001}, 'proposal': 0.001, 'latex': '\\ln(10^{10} A_\\mathrm{s})', 'drop': True}, 'As': {'value': 'lambda logA: 1e-10*np.exp(logA)', 'latex': 'A_\\mathrm{s}'}, 'ns': {'prior': {'min': 0.8, 'max': 1.2}, 'ref': {'dist': 'norm', 'loc': 0.9649, 'scale': 0.004}, 'proposal': 0.002, 'latex': 'n_\\mathrm{s}'}, 'H0': {'prior': {'min': 20, 'max': 100}, 'ref': {'dist': 'norm', 'loc': 67.36, 'scale': 0.01}, 'latex': 'H_0'}, 'ombh2': {'prior': {'min': 0.005, 'max': 0.1}, 'ref': {'dist': 'norm', 'loc': 0.02237, 'scale': 0.0001}, 'proposal': 0.0001, 'latex': '\\Omega_\\mathrm{b} h^2'}, 'omch2': {'prior': {'min': 0.001, 'max': 0.99}, 'ref': {'dist': 'norm', 'loc': 0.12, 'scale': 0.001}, 'proposal': 0.0005, 'latex': '\\Omega_\\mathrm{c} h^2'}, 'tau': {'latex': '\\tau_\\mathrm{reio}', 'prior': {'min': 0.01, 'max': 0.8}}, 'mnu': {'latex': '\\sum m_\\nu', 'value': 0.06}, 'nnu': {'latex': 'N_\\mathrm{eff}', 'value': 3.044}}
+    info = {'theory': theory, 'likelihood': {'act_dr6_lenslike.ACTDR6LensLike': {'lens_only': False, 'variant': 'actplanck_baseline', 'lmax': 4000, 'version': 'v1.2'}}, 'params': params}
+    from cobaya.model import get_model
+    model = get_model(info)
+    cosmo_params = {'logA': 3.0594756, 'ns': 0.96922184, 'H0': 68.183285, 'ombh2': 0.022335709, 'omch2': 0.11762149, 'tau': 0.063861135, 'mnu': 0.06, 'nnu': 3.044}
+    logpost = model.logposterior(cosmo_params)
+    chi2_ref = -2 * logpost.loglike
+    print(chi2_ref)
+
+    cosmo = Cosmoprimo(engine='camb', ellmax_cl=4000, non_linear='mead2016', m_ncdm=[0.06], extra_params=extra_params)
+    cosmo.init.params = {name: {'value': value} for name, value in cosmo_params.items()}
+    likelihood = ACTDR6LensingLikelihood(cosmo=cosmo)
+    print(cosmo_params)
+    likelihood(cosmo_params)
+    assert np.allclose(-2 * likelihood.loglikelihood, chi2_ref, rtol=1e-3)
+
 
 
 def test_jax():
@@ -387,11 +404,11 @@ if __name__ == '__main__':
     #test_emulator_direct()
     #test_cmb()
     #test_profile()
+    test_planck_python()
+    test_camspec()
     test_act_lensing()
-    #test_planck_python()
     #test_hillipop()
     #test_lollipop()
-    #test_camspec()
     #test_jax()
     #test_sampling()
     #test_profiling()

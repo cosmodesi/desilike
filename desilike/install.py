@@ -420,7 +420,7 @@ class Installer(BaseClass):
         if update and os.path.isfile(self.config_fn):
             base_config = BaseConfig(self.config_fn)
             config = base_config.clone(config)
-            for keynew in dirs + ['source']:
+            for key in dirs + ['source']:
                 paths = _make_list(config.get(key, []))
                 config[key] = paths + [path for path in _make_list(base_config.get(key, [])) if path not in paths]
         config.write(self.config_fn)

@@ -13,7 +13,7 @@ def pp_to_kk(clpp, ell):
     return clpp * (ell * (ell + 1.))**2. / 4.
 
 
-def get_corrected_clkk(data_dict,clkk,cltt,clte,clee,clbb,suff='',
+def get_corrected_clkk(data_dict, clkk, cltt, clte, clee, clbb, suff='',
                        do_norm_corr=True, do_N1kk_corr=True, do_N1cmb_corr=True,
                        act_calib=False, no_like_cmb_corrections=False):
     if no_like_cmb_corrections:
@@ -51,7 +51,7 @@ def get_corrected_clkk(data_dict,clkk,cltt,clte,clee,clbb,suff='',
             if i==0:
                 ls = np.arange(c.size)
             # CHANGE: for jax-compatibility
-            c = jnp.where(ls>=2, c, fid_norm)
+            c = c / jnp.where(ls>=2, fid_norm, 1.)
             norm_corr = norm_corr + c
     nclkk = clkk + norm_corr*clkk_fid + N1_kk_corr + N1_cmb_corr
     return nclkk
@@ -108,7 +108,6 @@ class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
         if data_dir is None:
             from desilike.install import Installer
             data_dir = os.path.join(Installer().data_dir(self.installer_section, ro=True), self.version)
-            # need to use dvs_ro with MPI
         import act_dr6_lenslike as alike
         self.data = alike.load_data(variant, ddir=data_dir, lens_only=lens_only, like_corrections=not(self.no_like_corrections),
                                     apply_hartlap=self.apply_hartlap, nsims_act=self.nsims_act, nsims_planck=self.nsims_planck,
@@ -129,17 +128,16 @@ class ACTDR6LensingLikelihood(BaseGaussianLikelihood):
         super().initialize(data=self.flatdata, precision=self.precision)
 
     def calculate(self, Alens=1.):
-        import act_dr6_lenslike as alike
         cl_pp, cl_tt, cl_te, cl_ee, cl_bb = [self.theory.cls[name] for name in ['pp', 'tt', 'te', 'ee', 'bb']]
         cl_pp = cl_pp / Alens
         cl_kk = pp_to_kk(cl_pp, self.ells)
         # jax-friendly
         clkk_act = get_corrected_clkk(self.data, cl_kk, cl_tt, cl_te, cl_ee, cl_bb,
                                       do_norm_corr=not(self.act_cmb_rescale), act_calib=self.act_calib,
-                                            no_like_cmb_corrections=self.no_actlike_cmb_corrections) if self.data['likelihood_corrections'] else cl_kk
+                                      no_like_cmb_corrections=self.no_actlike_cmb_corrections) if self.data['likelihood_corrections'] else cl_kk
         bclkk = self.data['binmat_act'] @ clkk_act
         if self.data['include_planck']:
-            clkk_planck = get_corrected_clkk(self.data, cl_kk, cl_tt, cl_te, cl_ee, cl_bb, '_planck') if self.data['likelihood_corrections'] else cl_kk
+            clkk_planck = get_corrected_clkk(self.data, cl_kk, cl_tt, cl_te, cl_ee, cl_bb, suff='_planck') if self.data['likelihood_corrections'] else cl_kk
             bclkk = jnp.append(bclkk, self.data['binmat_planck'] @ clkk_planck)
         self.flattheory = bclkk
         super().calculate()

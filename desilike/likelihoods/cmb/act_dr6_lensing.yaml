@@ -2,6 +2,7 @@ class: ACTDR6LensingLikelihood
 
 params:
   Alens:
+    value: 1.
     prior:
       dist: norm
       loc: 1

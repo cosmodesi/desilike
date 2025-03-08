@@ -154,6 +154,27 @@ def test_pt():
     pt = emulator.to_calculator()
 
 
+def test_pt2():
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles
+    from desilike.theories import Cosmoprimo
+    cosmo = Cosmoprimo(fiducial='DESI', h=0.7)
+    for param in cosmo.init.params:
+        param.update(fixed=True)
+    cosmo.init.params['m_ncdm'] = {'prior': {'limits': [0.06, 0.8]},
+                                'ref': {'dist': 'norm', 'loc': 0.06, 'scale': 0.03},
+                                #'proposal': 0.01,
+                                'delta': [0.31, 0.15, 0.15]}
+    #cosmo.init.params['h'].update(delta=(0.7,) + cosmo.init.params['h'].delta[1:])
+    temp = DirectPowerSpectrumTemplate(cosmo=cosmo, z=0.8)
+    theory = KaiserTracerPowerSpectrumMultipoles(template=temp)
+    theory()
+
+    emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(method='finite', order=4))
+    emulator.set_samples()
+    emulator.fit()
+    pt = emulator.to_calculator()
+
+
 
 if __name__ == '__main__':
 
@@ -163,3 +184,4 @@ if __name__ == '__main__':
     test_taylor(plot=True)
     test_likelihood()
     test_pt()
+    test_pt2()

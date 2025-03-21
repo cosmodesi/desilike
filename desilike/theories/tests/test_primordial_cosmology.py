@@ -44,6 +44,10 @@ def test_parameterization():
     cosmo.init.params['Q0'] = dict()
     cosmo(Q0=0.1)
 
+    cosmo = Cosmoprimo(fiducial='DESI', engine='mgcamb', MG_flag=1)
+    cosmo.init.params['sigma0'] = dict()
+    cosmo(sigma0=0.1)
+
     cosmo = Cosmoprimo()
     cosmo()
     del cosmo.params['N_eff']

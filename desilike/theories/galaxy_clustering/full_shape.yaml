@@ -1413,3 +1413,48 @@ params:
       loc: 0.
       scale: 1.
     latex: c_{t}
+
+
+---
+
+class: GeoFPTAXTracerBispectrumMultipoles
+
+params:
+  b1:
+    prior:
+      limits: [0., 4.]
+    ref:
+      limits: [1., 2.]
+    latex: b_{1}
+  b2:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 15.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{2}
+  sn0:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 2.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 0}
+  sigmav:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 20.
+      limits: [0., 10.]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    delta: 2.
+    latex: \sigma_{v}

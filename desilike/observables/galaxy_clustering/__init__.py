@@ -6,3 +6,4 @@ from .window import (WindowedPowerSpectrumMultipoles, WindowedCorrelationFunctio
                      FiberCollisionsPowerSpectrumMultipoles, FiberCollisionsCorrelationFunctionMultipoles,
                      TopHatFiberCollisionsPowerSpectrumMultipoles, TopHatFiberCollisionsCorrelationFunctionMultipoles,
                      SystematicTemplatePowerSpectrumMultipoles, SystematicTemplateCorrelationFunctionMultipoles)
+from .bispectrum import TracerBispectrumMultipolesObservable

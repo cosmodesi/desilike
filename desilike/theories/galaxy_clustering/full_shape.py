@@ -5,6 +5,7 @@ from scipy import interpolate
 
 from desilike.jax import numpy as jnp
 from desilike.jax import jit, interp1d
+from desilike import jax
 from desilike import plotting, utils, BaseCalculator
 from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
 from .base import BaseTheoryPowerSpectrumMultipoles, BaseTheoryCorrelationFunctionMultipoles, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
@@ -632,17 +633,16 @@ def tns_pt(k, q, wq, pk_q, kernel13_d, kernel13_t, kernel_a):
     jq = q**2 * wq / (4. * np.pi**2)
     x = q / k
 
-    mus, wmus = utils.weights_mu(10, method='leggauss', sym=False)
+    mus, wmus = utils.weights_mu(10, method='leggauss')
 
     # Compute P22
     pk22_dd, pk22_dt, pk22_tt = (0.,) * 3
     pk_b2d, pk_bs2d, pk_b2t, pk_bs2t, sig3sq, pk_b22, pk_b2s2, pk_bs22 = (0.,) * 8
     A = jnp.zeros((5,) + k11.shape, dtype='f8')
     B = [jnp.zeros(k11.shape, dtype='f8') for i in range(12)]
-    kernel_A, kernel_tA = ([jnp.zeros(x.shape, dtype='f8') for i in range(5)] for j in range(2))
     pk_k = jnp.interp(k11, q, pk_q)
 
-    for mu, wmu in zip(mus, wmus):
+    def get_terms(mu, wmu):
         kdq = k * q * mu  # k \cdot q
         kq2 = k**2 - 2. * kdq + q**2  # |k - q|^2
         qdkq = kdq - q**2   # k \cdot (k - q)
@@ -653,19 +653,21 @@ def tns_pt(k, q, wq, pk_q, kernel13_d, kernel13_t, kernel_a):
         D = 2. / 7. * (mu**2 - 1.)
         pk_kq = jnp.interp(kq2**0.5, q, pk_q, left=0., right=0.)
         jq_pk_q_pk_kq = jq * pk_q * pk_kq
-        pk_b2d += wmu * jnp.sum(jq_pk_q_pk_kq * F2_d, axis=-1)
-        pk_bs2d += wmu * jnp.sum(jq_pk_q_pk_kq * F2_d * S, axis=-1)
-        pk_b2t += wmu * jnp.sum(jq_pk_q_pk_kq * F2_t, axis=-1)
-        pk_bs2t += wmu * jnp.sum(jq_pk_q_pk_kq * F2_t * S, axis=-1)
-        sig3sq += wmu * jnp.sum(105. / 16. * jq * pk_q * (D * S + 8. / 63.), axis=-1)
-        pk_b22 += wmu / 2. * jnp.sum(jq * pk_q * (pk_kq - pk_q), axis=-1)
-        pk_b2s2 += wmu / 2. * jnp.sum(jq * pk_q * (pk_kq * S - 2. / 3. * pk_q), axis=-1)
-        pk_bs22 += wmu / 2. * jnp.sum(jq * pk_q * (pk_kq * S**2 - 4. / 9. * pk_q), axis=-1)
-        pk22_dd += 2 * wmu * jnp.sum(F2_d**2 * jq_pk_q_pk_kq, axis=-1)
-        pk22_dt += 2 * wmu * jnp.sum(F2_d * F2_t * jq_pk_q_pk_kq, axis=-1)
-        pk22_tt += 2 * wmu * jnp.sum(F2_t * F2_t * jq_pk_q_pk_kq, axis=-1)
+
+        pk_b2d = wmu * jnp.sum(jq_pk_q_pk_kq * F2_d, axis=-1)
+        pk_bs2d = wmu * jnp.sum(jq_pk_q_pk_kq * F2_d * S, axis=-1)
+        pk_b2t = wmu * jnp.sum(jq_pk_q_pk_kq * F2_t, axis=-1)
+        pk_bs2t = wmu * jnp.sum(jq_pk_q_pk_kq * F2_t * S, axis=-1)
+        sig3sq = wmu * jnp.sum(105. / 16. * jq * pk_q * (D * S + 8. / 63.), axis=-1)
+        pk_b22 = wmu / 2. * jnp.sum(jq * pk_q * (pk_kq - pk_q), axis=-1)
+        pk_b2s2 = wmu / 2. * jnp.sum(jq * pk_q * (pk_kq * S - 2. / 3. * pk_q), axis=-1)
+        pk_bs22 = wmu / 2. * jnp.sum(jq * pk_q * (pk_kq * S**2 - 4. / 9. * pk_q), axis=-1)
+        pk22_dd = 2 * wmu * jnp.sum(F2_d**2 * jq_pk_q_pk_kq, axis=-1)
+        pk22_dt = 2 * wmu * jnp.sum(F2_d * F2_t * jq_pk_q_pk_kq, axis=-1)
+        pk22_tt = 2 * wmu * jnp.sum(F2_t * F2_t * jq_pk_q_pk_kq, axis=-1)
 
         xmu = kq2 / k**2
+        kernel_A, kernel_tA = [0] * 5, [0] * 5
         kernel_A[0] = - x**3 / 7. * (mu + 6 * mu**3 + x**2 * mu * (-3 + 10 * mu**2) + x * (-3 + mu**2 - 12 * mu**4))
         kernel_A[1] = x**4 / 14. * (mu**2 - 1) * (-1 + 7 * x * mu - 6 * mu**2)
         kernel_A[2] = x**3 / 14. * (x**2 * mu * (13 - 41 * mu**2) - 4 * (mu + 6 * mu**3) + x * (5 + 9 * mu**2 + 42 * mu**4))
@@ -677,24 +679,28 @@ def tns_pt(k, q, wq, pk_q, kernel13_d, kernel13_t, kernel_a):
         kernel_tA[3] = x / 14. * (1 - mu**2) * (x - 7 * mu + 6 * x * mu**2)
         kernel_tA[4] = 1. / 14. * (x - 7 * mu + 6 * x * mu**2) * (-2 * mu - x + 3 * x * mu**2)
         # Taruya 2010 (arXiv 1006.0699v1) eq A3
-        A += wmu * jnp.sum(jq / x**2 * (jnp.array(kernel_A) * pk_k[:, None] + jnp.array(kernel_tA) * pk_q) * pk_kq / xmu**2, axis=-1)
+        A = wmu * jnp.sum(jq / x**2 * (jnp.array(kernel_A) * pk_k[:, None] + jnp.array(kernel_tA) * pk_q) * pk_kq / xmu**2, axis=-1)
 
         jq_pk_q_pk_kq /= x**2 * xmu
-        B[0] += wmu * jnp.sum(x**2 * (mu**2 - 1.) / 2. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 1,1,1
-        B[1] += wmu * jnp.sum(3. * x**2 * (mu**2 - 1.)**2 / 8. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 1,1,2
-        B[2] += wmu * jnp.sum(3. * x**4 * (mu**2 - 1.)**2 / xmu / 8. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 1,2,1
-        B[3] += wmu * jnp.sum(5. * x**4 * (mu**2 - 1.)**3 / xmu / 16. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 1,2,2
-        B[4] += wmu * jnp.sum(x * (x + 2. * mu - 3. * x * mu**2) / 2. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 2,1,1
-        B[5] += wmu * jnp.sum(- 3. * x * (mu**2 - 1.) * (-x - 2. * mu + 5. * x * mu**2) / 4. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 2,1,2
-        B[6] += wmu * jnp.sum(3. * x**2 * (mu**2 - 1.) * (-2. + x**2 + 6. * x * mu - 5. * x**2 * mu**2) / xmu / 4. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 2,2,1
-        B[7] += wmu * jnp.sum(- 3. * x**2 * (mu**2 - 1.)**2 * (6. - 5. * x**2 - 30. * x * mu + 35. * x**2 * mu**2) / xmu / 16. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 2,2,2
-        B[8] += wmu * jnp.sum(x * (4. * mu * (3. - 5. * mu**2) + x * (3. - 30. * mu**2 + 35. * mu**4)) / 8. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 3,1,2
-        B[9] += wmu * jnp.sum(x * (-8. * mu + x * (-12. + 36. * mu**2 + 12. * x * mu * (3. - 5. * mu**2) + x**2 * (3. - 30. * mu**2 + 35. * mu**4))) / xmu / 8. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 3,2,1
-        B[10] += wmu * jnp.sum(3. * x * (mu**2 - 1.) * (-8. * mu + x * (-12. + 60. * mu**2 + 20. * x * mu * (3. - 7. * mu**2) + 5. * x**2 * (1. - 14. * mu**2 + 21. * mu**4))) / xmu / 16. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 3,2,2
-        B[11] += wmu * jnp.sum(x * (8. * mu * (-3. + 5. * mu**2) - 6. * x * (3. - 30. * mu**2 + 35. * mu**4) + 6. * x**2 * mu * (15. - 70. * mu**2 + 63 * mu**4) + x**3 * (5. - 21. * mu**2 * (5. - 15. * mu**2 + 11. * mu**4))) / xmu / 16. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 4,2,2
+        B = [0.] * 12
+        B[0] = wmu * jnp.sum(x**2 * (mu**2 - 1.) / 2. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 1,1,1
+        B[1] = wmu * jnp.sum(3. * x**2 * (mu**2 - 1.)**2 / 8. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 1,1,2
+        B[2] = wmu * jnp.sum(3. * x**4 * (mu**2 - 1.)**2 / xmu / 8. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 1,2,1
+        B[3] = wmu * jnp.sum(5. * x**4 * (mu**2 - 1.)**3 / xmu / 16. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 1,2,2
+        B[4] = wmu * jnp.sum(x * (x + 2. * mu - 3. * x * mu**2) / 2. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 2,1,1
+        B[5] = wmu * jnp.sum(- 3. * x * (mu**2 - 1.) * (-x - 2. * mu + 5. * x * mu**2) / 4. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 2,1,2
+        B[6] = wmu * jnp.sum(3. * x**2 * (mu**2 - 1.) * (-2. + x**2 + 6. * x * mu - 5. * x**2 * mu**2) / xmu / 4. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 2,2,1
+        B[7] = wmu * jnp.sum(- 3. * x**2 * (mu**2 - 1.)**2 * (6. - 5. * x**2 - 30. * x * mu + 35. * x**2 * mu**2) / xmu / 16. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 2,2,2
+        B[8] = wmu * jnp.sum(x * (4. * mu * (3. - 5. * mu**2) + x * (3. - 30. * mu**2 + 35. * mu**4)) / 8. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 3,1,2
+        B[9] = wmu * jnp.sum(x * (-8. * mu + x * (-12. + 36. * mu**2 + 12. * x * mu * (3. - 5. * mu**2) + x**2 * (3. - 30. * mu**2 + 35. * mu**4))) / xmu / 8. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 3,2,1
+        B[10] = wmu * jnp.sum(3. * x * (mu**2 - 1.) * (-8. * mu + x * (-12. + 60. * mu**2 + 20. * x * mu * (3. - 7. * mu**2) + 5. * x**2 * (1. - 14. * mu**2 + 21. * mu**4))) / xmu / 16. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 3,2,2
+        B[11] = wmu * jnp.sum(x * (8. * mu * (-3. + 5. * mu**2) - 6. * x * (3. - 30. * mu**2 + 35. * mu**4) + 6. * x**2 * mu * (15. - 70. * mu**2 + 63 * mu**4) + x**3 * (5. - 21. * mu**2 * (5. - 15. * mu**2 + 11. * mu**4))) / xmu / 16. * jq_pk_q_pk_kq, axis=-1)  # n,a,b = 4,2,2
+        return jnp.stack([pk_b2d, pk_bs2d, pk_b2t, pk_bs2t, sig3sq, pk_b22, pk_b2s2, pk_bs22, pk22_dd, pk22_dt, pk22_tt] + list(A) + B)
 
+    res = jnp.sum(jax.vmap(get_terms)(mus, wmus), axis=0)
+    pk_b2d, pk_bs2d, pk_b2t, pk_bs2t, sig3sq, pk_b22, pk_b2s2, pk_bs22, pk22_dd, pk22_dt, pk22_tt = res[:11]
+    A, B = res[11:16], res[16:]
     A += pk_k * jnp.sum(kernel_a * pk_q, axis=-1)
-    B = jnp.vstack(B)
     pk11 = pk_k
     pk13_dd = 2. * jnp.sum(kernel13_d * pk_q, axis=-1) * pk_k
     pk13_tt = 2. * jnp.sum(kernel13_t * pk_q, axis=-1) * pk_k
@@ -749,7 +755,6 @@ class TNSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerS
         k11 = np.linspace(self.k[0] * 0.7, self.k[-1] * 1.3, int(len(self.k) * 1.6 + 0.5))
         q = self.template.k
         wq = utils.weights_trapz(q)
-        jq = q**2 * wq / (4. * np.pi**2)
         if getattr(self, 'kernels', None) is None:
             self.kernels = tns_kernels(k11, q, wq)
 
@@ -1935,10 +1940,10 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     - https://arxiv.org/abs/2208.02791
     - https://github.com/henoriega/FOLPS-nu
     """
-    _default_options = dict(freedom=None, prior_basis='standard', tracer=None, fsat=None, sigv=None, shotnoise=1e4)
+    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4)
 
     @staticmethod
-    def _params(params, freedom=None, prior_basis='standard'):
+    def _params(params, freedom=None, prior_basis='physical'):
         fix = []
         if freedom in ['min', 'max']:
             for param in params.select(basename=['b1']):
@@ -2216,3 +2221,201 @@ class FOLPSAXTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFr
     - https://github.com/cosmodesi/folpsax
     """
     _params = FOLPSAXTracerPowerSpectrumMultipoles._params
+
+
+
+def pt_kernel(k, q, wq):
+    jq = q**2 * wq / (4. * np.pi**2)
+    k = k[:, None]
+    x = q / k
+    # Integral of F3(q, -q, k) over mu cosine angle between k and q
+    def kernel_ff(x):
+        x = np.array(x)
+        toret = (6. / x**2 - 79. + 50. * x**2 - 21. * x**4 + 0.75 * (1. / x - x)**3 * (2. + 7. * x**2) * 2 * np.log(np.abs((x - 1.) / (x + 1.)))) / 504.
+        mask = x > 10.
+        toret[mask] = - 61. / 630. + 2. / 105. / x[mask]**2 - 10. / 1323. / x[mask]**4
+        dx = x - 1.
+        mask = np.abs(dx) < 0.01
+        toret[mask] = - 11. / 126. + dx[mask] / 126. - 29. / 252. * dx[mask]**2
+        return toret / x**2
+
+    return 2 * jq * kernel_ff(x)
+
+
+@jit
+def pt_pk_1loop(k, q, wq, pk_q, kernel13_d):
+    # We could have a speed-up with FFTlog, see https://arxiv.org/pdf/1603.04405.pdf
+    k11 = k
+    k = k[:, None]
+    jq = q**2 * wq / (4. * np.pi**2)
+
+    mus, wmus = utils.weights_mu(10, method='leggauss')
+
+    # Compute P22
+    pk_k = jnp.interp(k11, q, pk_q)
+
+    def get_pk22_dd(mu, wmu):
+        kdq = k * q * mu  # k \cdot q
+        kq2 = k**2 - 2. * kdq + q**2  # |k - q|^2
+        qdkq = kdq - q**2   # k \cdot (k - q)
+        F2_d = 5. / 7. + 1. / 2. * qdkq * (1. / q**2 + 1. / kq2) + 2. / 7. * qdkq**2 / (q**2 * kq2)
+        pk_kq = jnp.interp(kq2**0.5, q, pk_q, left=0., right=0.)
+        jq_pk_q_pk_kq = jq * pk_q * pk_kq
+        return 2 * wmu * jnp.sum(F2_d**2 * jq_pk_q_pk_kq, axis=-1)
+
+    pk22_dd = jnp.sum(jax.vmap(get_pk22_dd)(mus, wmus), axis=0)
+    pk11 = pk_k
+    pk13_dd = 2. * jnp.sum(kernel13_d * pk_q, axis=-1) * pk_k
+    pk_dd = pk11 + pk22_dd + pk13_dd
+    return pk_dd
+
+
+
+class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
+    r"""
+    GeoFPTAX bispectrum multipoles.
+    Can be exactly marginalized over stochastic parameters sn*.
+    For the matter (unbiased) power spectrum, set b1=1 and all other bias parameters to 0.
+
+    Parameters
+    ----------
+    k : tuple of arrays, default=None
+        Triangles of wavenumbers of shape (nk, 3) where to evaluate multipoles.
+
+    ells : tuple, default=((0, 0, 0), (2, 0, 0), (0, 2, 0), (0, 0, 2))
+        Multipoles to compute.
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    pt : str, default=None
+        Order of :math:`P(k)` fed into the bispectrum calculation.
+        If ``None``, linear :math:`P(k)`.
+        If '1loop', use 1-loop standard PT.
+
+    shotnoise : array, default=1e4
+        Shot noise for each of the multipoles. Same length as ``k``.
+
+    prior_basis : str, default='physical'
+        If 'physical', use physically-motivated prior basis for bias parameters:
+        :math:`b_{1}^\prime = (b_{1}^{E}) \sigma_{8}(z), b_{2}^\prime = b_{2}^{E} \sigma_{8}(z)^2
+
+    Reference
+    ---------
+    - https://arxiv.org/pdf/2303.15510v1
+    - https://github.com/dforero0896/geofptax
+    """
+    config_fn = 'full_shape.yaml'
+    _klim = (1e-3, 2., 500)
+    _default_options = dict(prior_basis='physical', mu=50)
+
+    def initialize(self, k=None, z=None, template=None, ells=((0, 0, 0), (2, 0, 0), (0, 2, 0), (0, 0, 2)), shotnoise=None, pt=None, **kwargs):
+        self.options = self._default_options | dict(kwargs)
+        self.ells = ells
+        if utils.is_sequence(ells[0]):
+            self.ells = (ells,)
+        self.ells = tuple(ells)
+        if k is None:
+            k = np.linspace(0.01, 0.1, 11)
+            k = np.meshgrid(k, k, k, indexing='ij')
+            k = np.column_stack([kk.ravel() for kk in k])
+            mask = (k[:, 0] <= k[:, 1] + k[:, 2]) | (k[:, 1] <= k[:, 0] + k[:, 2]) | (k[:, 2] <= k[:, 0] + k[:, 1])
+            k = k[mask]
+        if not utils.is_sequence(k):
+            k = (k,) * len(self.ells)
+        self.k = tuple(np.array(kk, dtype='f8') for kk in k)
+        if shotnoise is None:
+            shotnoise = 0.
+        if not utils.is_sequence(shotnoise):
+            shotnoise = (shotnoise,) * len(self.ells)
+        self.shotnoise = tuple(np.atleast_1d(sn) for sn in shotnoise)
+        if template is None:
+            template = DirectPowerSpectrumTemplate()
+        self.template = template
+        kin = np.geomspace(min(self._klim[0], min(kk.min() for kk in self.k) / 2, self.template.init.get('k', [1.])[0]), max(self._klim[1], max(kk.max() for kk in self.k) * 2, self.template.init.get('k', [0.])[0]), self._klim[2])  # margin for AP effect
+        self.template.init.update(k=kin)
+        if z is not None: self.template.init.update(z=z)
+        self.z = self.template.z
+        self.set_params()
+        self.pt = pt
+        assert self.pt in [None, '1loop']
+
+    @staticmethod
+    def _params(params, prior_basis='physical'):
+        if prior_basis == 'physical':
+            for param in list(params):
+                basename = param.basename
+                param.update(basename=basename + 'p')
+                #params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
+            for param in params.select(basename='b1p'):
+                param.update(prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1))
+            for param in params.select(basename=['b2p']):
+                param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
+            for param in params.select(basename='sn*p'):
+                param.update(prior=dict(dist='norm', loc=0., scale=2. if 'sn0' in param.basename else 5.), ref=dict(dist='norm', loc=0., scale=1.))
+        return params
+
+    def set_params(self):
+        self.required_bias_params = ['b1', 'b2', 'sigmav', 'sn0']
+        default_values = {'b1': 2.}
+        self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
+        self.is_physical_prior = self.options['prior_basis'] == 'physical'
+        if self.is_physical_prior:
+            for name in list(self.required_bias_params):
+                self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
+        fix = []
+        if 2 not in self.ells: fix += ['sn2']
+        for param in self.init.params.select(basename=fix):
+            param.update(value=0., fixed=True)
+
+    def calculate(self, **params):
+        self.z = self.template.z
+        self.sigma8 = self.template.sigma8
+        self.fsigma8 = self.template.f * self.sigma8
+        params = {**self.required_bias_params, **params}
+        pars = []
+        if self.is_physical_prior:
+            sigma8 = self.template.sigma8
+            f = self.template.fsigma8 / sigma8
+            b1E, b2E = params['b1p'] / sigma8, params['b2p'] / sigma8**2
+            pars += [b1E, b2E, params['sigmavp'], params['sn0p']]
+        else:
+            pars = [params[name] for name in self.required_bias_params]
+        # b1, b2, A_P, sigma_P, A_B, sigma_B, *_P are unused
+        pars = pars[:2] + [1., 4.] + [pars[3], pars[2]]
+        all_pars = jnp.array([self.sigma8, self.fsigma8 / self.sigma8, self.template.qpar, self.template.qper] + pars)
+        from geofptax.kernels import bk_multip
+
+        kt = self.template.k
+        pkt = self.template.pk_dd
+        if self.pt:
+            q = kt
+            ktmin, ktmax = min(kk.min() for kk in self.k) * 0.7, max(kk.max() for kk in self.k) * 1.3
+            kt = jnp.linspace(ktmin, ktmax, self._klim[2])
+            wq = utils.weights_trapz(q)
+            if getattr(self, 'kernel', None) is None:
+                self.kernel = pt_kernel(kt, q, wq)
+            pkt = pt_pk_1loop(kt, q, wq, pkt, self.kernel)
+
+        # bk0, bk200, bk020, bk002
+        kk = list(self.k) + [self.k[-1]] * (4 - len(self.k))
+        res = bk_multip(*kk, kt, pkt, all_pars, redshift=self.z, num_points=self.options['mu'])
+        tells = [(0, 0, 0), (2, 0, 0), (0, 2, 0), (0, 0, 2)]
+        res = [res[tells.index(ell)] for ell in self.ells]
+        A_B = all_pars[8] / (all_pars[2] * all_pars[3]**2)**2
+        res = [rr + A_B * sn for rr, sn in zip(res, self.shotnoise)]
+        self.power = res
+
+    def get(self):
+        return self.power
+
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/dforero0896/geofptax')
+
+    def __getstate__(self):
+        state = {}
+        for name in ['k', 'z', 'ells', 'power']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        return state

@@ -1454,7 +1454,7 @@ params:
       limits: [0., 10.]
     ref:
       dist: norm
-      loc: 0.
+      loc: 5.
       scale: 0.5
     delta: 2.
     latex: \sigma_{v}

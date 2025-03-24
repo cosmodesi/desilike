@@ -110,15 +110,16 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
             show_legend = False
 
         data, theory, std = self.data, self.theory, self.std
+        ik = [np.arange(len(kk)) for kk in self.k]
 
         for ill, ell in enumerate(self.ells):
-            lax[0].errorbar(data[ill], yerr=std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o', label=r'$\ell = {}$'.format(ell))
-            lax[0].plot(theory[ill], **kw_theory[ill])
+            lax[0].errorbar(ik[ill], data[ill], yerr=std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o', label=r'$\ell = {}$'.format(ell))
+            lax[0].plot(ik[ill], theory[ill], **kw_theory[ill])
         for ill, ell in enumerate(self.ells):
-            lax[ill + 1].plot((data[ill] - theory[ill]) / std[ill], **kw_theory[ill])
+            lax[ill + 1].plot(ik[ill], (data[ill] - theory[ill]) / std[ill], **kw_theory[ill])
             lax[ill + 1].set_ylim(-4, 4)
             for offset in [-2., 2.]: lax[ill + 1].axhline(offset, color='k', linestyle='--')
-            lax[ill + 1].set_ylabel(r'$\Delta P_{{{0:d}}} / \sigma_{{ P_{{{0:d}}} }}$'.format(ell))
+            lax[ill + 1].set_ylabel(r'$\Delta B_{{{0}}} / \sigma_{{ B_{{{0}}} }}$'.format(ell))
         for ax in lax: ax.grid(True)
         if show_legend: lax[0].legend()
         lax[0].set_ylabel(r'$B_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{6}$]')
@@ -163,10 +164,11 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
             lax = fig.axes
         data, theory, std = self.data, self.theory, self.std
         nobao = self.theory_nobao
+        ik = [np.arange(len(kk)) for kk in self.k]
 
         for ill, ell in enumerate(self.ells):
-            lax[ill].errorbar(data[ill] - nobao[ill], yerr=std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o')
-            lax[ill].plot(theory[ill] - nobao[ill], color='C{:d}'.format(ill))
+            lax[ill].errorbar(ik[ill], data[ill] - nobao[ill], yerr=std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o')
+            lax[ill].plot(ik[ill], theory[ill] - nobao[ill], color='C{:d}'.format(ill))
             lax[ill].set_ylabel(r'$k \Delta B_{{{:d}}}(k)$ [$(\mathrm{{Mpc}}/h)^{{6}}$]'.format(ell))
         for ax in lax: ax.grid(True)
         lax[-1].set_xlabel(r'$k$ triangle index')
@@ -205,7 +207,8 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
         from desilike.observables.plotting import plot_covariance_matrix
         cumsize = np.insert(np.cumsum([len(k) for k in self.k]), 0, 0)
         mat = [[self.covariance[start1:stop1, start2:stop2] for start2, stop2 in zip(cumsize[:-1], cumsize[1:])] for start1, stop1 in zip(cumsize[:-1], cumsize[1:])]
-        return plot_covariance_matrix(mat, x1=self.k, xlabel1=r'$k$ [$h/\mathrm{Mpc}$]', label1=[r'$\ell = {:d}$'.format(ell) for ell in self.ells], corrcoef=corrcoef, **kwargs)
+        ik = [np.arange(len(kk)) for kk in self.k]
+        return plot_covariance_matrix(mat, x1=ik, xlabel1=r'$k$ [$h/\mathrm{Mpc}$]', label1=[r'$\ell = {}$'.format(ell) for ell in self.ells], corrcoef=corrcoef, **kwargs)
 
     def calculate(self):
         self.flattheory = jnp.concatenate(self.wmatrix.power)

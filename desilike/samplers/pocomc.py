@@ -138,7 +138,7 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         bounds = np.array([tuple(None if np.isinf(lim) else lim for lim in param.prior.limits) for param in self.varied_params], dtype='f8')
         import pocomc
         self.prior = Prior(self.varied_params)
-        self.sampler = pocomc.Sampler(self.prior, self.loglikelihood, ndim, n_ess=n_ess, n_active=self.nwalkers, flow=flow, train_config=train_config, precondition=precondition, n_prior=n_prior, sample=sample, max_steps=max_steps, patience=patience, ess_threshold=ess_threshold, vectorize=True, output_dir=None, output_label=None, random_state=self.rng.randint(0, high=0xffffffff))
+        self.sampler = pocomc.Sampler(self.prior, self.loglikelihood, ndim, n_ess=n_ess, n_active=self.nwalkers, flow=flow, train_config=train_config, precondition=precondition, n_prior=n_prior, sample=sample, n_max_steps=max_steps, vectorize=True, output_dir=os.path.dirname(self.save_fn[0]), output_label=None, random_state=self.rng.randint(0, high=0xffffffff))
         if self.save_fn is None:
             raise ValueError('save_fn must be provided, in order to save pocomc state')
         self.state_fn = [os.path.splitext(fn)[0] + '.pocomc.state' for fn in self.save_fn]

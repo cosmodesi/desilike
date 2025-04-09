@@ -1,6 +1,7 @@
 import re
 
 import numpy as np
+import jax
 from cosmoprimo import PowerSpectrumBAOFilter, PowerSpectrumInterpolator1D
 
 from desilike.jax import numpy as jnp
@@ -687,9 +688,11 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         self.dn = self.n - self.n_fid
         self.dm = self.m - self.m_fid
         if self.dfextractor == 'Ap':
-            self.df = self.f_sqrt_Ap / self.f_sqrt_Ap_fid
+            self.dA = self.Ap / self.Ap_fid #Will be 1 when fixed
+            self.df = self.f_sqrt_Ap / self.f_sqrt_Ap_fid / self.dA**0.5
         else:
             self.df = self.f_sigmar / self.f_sigmar_fid
+
         return self
 
 
@@ -743,7 +746,8 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         super(ShapeFitPowerSpectrumTemplate, self).initialize(*args, with_now=with_now, **kwargs)
         ShapeFitPowerSpectrumExtractor._set_base(self, fiducial=True)
 
-    def calculate(self, df=1., dm=0., dn=0.):
+    def calculate(self, df=1., dm=0., dn=0., dA = 1.):
+        
         super(ShapeFitPowerSpectrumTemplate, self).calculate()
         factor = _bcast_shape(jnp.exp(dm / self.a * jnp.tanh(self.a * jnp.log(self.k / self.kp)) + dn * jnp.log(self.k / self.kp)), self.pk_dd_fid.shape, axis=0)
         #factor = np.exp(dm * np.log(self.k / self.kp))
@@ -757,7 +761,9 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
         self.fk = self.fk_fid * df
-        self.f_sqrt_Ap = self.f * self.Ap_fid**0.5
+        #self.f_sqrt_Ap = self.f * self.Ap_fid**0.5
+        self.Ap = self.Ap_fid * dA
+        self.f_sqrt_Ap = self.f * self.Ap**0.5
 
     def get(self):
         return self

@@ -751,7 +751,7 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         super(ShapeFitPowerSpectrumTemplate, self).calculate()
         factor = _bcast_shape(jnp.exp(dm / self.a * jnp.tanh(self.a * jnp.log(self.k / self.kp)) + dn * jnp.log(self.k / self.kp)), self.pk_dd_fid.shape, axis=0)
         #factor = np.exp(dm * np.log(self.k / self.kp))
-        self.pk_dd = self.pk_dd_fid * factor
+        self.pk_dd = dA * self.pk_dd_fid * factor
         if self.with_now:
             self.pknow_dd = dA * self.pknow_dd_fid * factor
         if self.only_now:

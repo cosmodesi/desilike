@@ -753,9 +753,9 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         #factor = np.exp(dm * np.log(self.k / self.kp))
         self.pk_dd = self.pk_dd_fid * factor
         if self.with_now:
-            self.pknow_dd = self.pknow_dd_fid * factor
+            self.pknow_dd = dA * self.pknow_dd_fid * factor
         if self.only_now:
-            self.pk_dd = self.pknow_dd
+            self.pk_dd = dA * self.pknow_dd
         self.n = self.n_fid + dn
         self.m = self.m_fid + dm
         self.f = self.f_fid * df

@@ -49,6 +49,7 @@ def _get_default_chain_params(chains, params=None, **kwargs):
                 list_params += chain.params(name=[str(param)])
         return list_params
     list_params = [chain.params(**kwargs) for chain in chains]
+    #print(list_params)
     return ParameterCollection([params for params in list_params[0] if all(params in lparams for lparams in list_params[1:])])
 
 

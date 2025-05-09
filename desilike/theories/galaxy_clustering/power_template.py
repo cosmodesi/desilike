@@ -288,7 +288,8 @@ class BAOExtractor(BasePowerSpectrumExtractor):
     @staticmethod
     def _params(params, rs_drag_varied=False):
         if rs_drag_varied:
-            params['rs_drag'] = dict(value=100., prior=dict(limits=[10., 1000.]), ref=dict(dist='norm', loc=100., scale=10.), latex=r'r_\mathrm{d}')
+            # params['rs_drag'] = dict(value=100., prior=dict(limits=[10., 1000.]), ref=dict(dist='norm', loc=100., scale=10.), latex=r'r_\mathrm{d}')
+            params['qbao'] = dict(value=1.0, prior=dict(limits=[0.8, 1.2]), ref=dict(limits=[0.99, 1.01]), delta=0.008, latex=r'q_{\mathrm{BAO}}')
         return params
 
     def initialize(self, z=1., eta=1. / 3., cosmo=None, fiducial='DESI', rs_drag_varied=False):
@@ -297,7 +298,8 @@ class BAOExtractor(BasePowerSpectrumExtractor):
         self.fiducial = get_cosmo(fiducial)
         self.cosmo_requires = {}
         self.cosmo = cosmo
-        params = self.init.params.select(derived=True) + self.init.params.select(basename=['rs_drag'])
+        # params = self.init.params.select(derived=True) + self.init.params.select(basename=['rs_drag'])
+        params = self.init.params.select(derived=True) + self.init.params.select(basename=['rs_drag']) + self.init.params.select(basename=['qbao'])
         if is_external_cosmo(self.cosmo):
             self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
             self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
@@ -308,18 +310,24 @@ class BAOExtractor(BasePowerSpectrumExtractor):
         if self.fiducial is not None:
             self._set_base(fiducial=True)
 
-    def calculate(self, rs_drag=None):
-        self._set_base(rs_drag=rs_drag)
+    # def calculate(self, rs_drag=None):
+    def calculate(self, qbao=None):
+        # self._set_base(rs_drag=rs_drag)
+        self._set_base(qbao=qbao)
 
-    def _set_base(self, fiducial=False, rs_drag=None):
+    # def _set_base(self, fiducial=False, rs_drag=None):
+    def _set_base(self, fiducial=False, qbao=None):
         cosmo = self.fiducial if fiducial else self.cosmo
         state = {}
-        state['rd'] = cosmo.rs_drag if rs_drag is None else rs_drag
+        # state['rd'] = cosmo.rs_drag if rs_drag is None else rs_drag
+        state['rd'] = cosmo.rs_drag if qbao is None else cosmo.rs_drag/qbao
+        state['theta_star'] = cosmo.theta_star if qbao is None else cosmo.theta_star/qbao
         state['DH'] = (constants.c / 1e3) / (100. * cosmo.efunc(self.z))
         state['DM'] = cosmo.comoving_angular_distance(self.z)
         state['DV'] = state['DH']**self.eta * state['DM']**(1. - self.eta) * self.z**(1. / 3.)
         state['DH_over_rd'] = state['DH'] / state['rd']
         state['DM_over_rd'] = state['DM'] / state['rd']
+        # state['rd_over_DM'] = state['rd'] / state['DM']  # EZ: Added for theta_star but wrong (rs not rd)
         state['DH_over_DM'] = state['DH'] / state['DM']
         state['DV_over_rd'] = state['DV'] / state['rd']
         for name, value in state.items(): setattr(self, name + ('_fid' if fiducial else ''), value)

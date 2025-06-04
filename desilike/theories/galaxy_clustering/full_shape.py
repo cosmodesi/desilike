@@ -5,6 +5,7 @@ from scipy import interpolate
 
 from desilike.jax import numpy as jnp
 from desilike.jax import jit, interp1d
+import jax as ojax
 from desilike import jax
 from desilike import plotting, utils, BaseCalculator
 from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
@@ -2371,6 +2372,7 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
     def calculate(self, **params):
         self.z = self.template.z
         self.sigma8 = self.template.sigma8
+        self.f = self.template.f
         self.fsigma8 = self.template.f * self.sigma8
         params = {**self.required_bias_params, **params}
         pars = []
@@ -2383,7 +2385,7 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
             pars = [params[name] for name in self.required_bias_params]
         # b1, b2, A_P, sigma_P, A_B, sigma_B, *_P are unused
         pars = pars[:2] + [1., 4.] + [pars[3], pars[2]]
-        all_pars = jnp.array([self.sigma8, self.fsigma8 / self.sigma8, self.template.qpar, self.template.qper] + pars)
+        all_pars = jnp.array([self.sigma8, self.f, self.template.qpar, self.template.qper] + pars)
         from geofptax.kernels import bk_multip
 
         kt = self.template.k

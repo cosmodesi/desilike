@@ -1422,19 +1422,15 @@ class: GeoFPTAXTracerBispectrumMultipoles
 params:
   b1:
     prior:
-      limits: [0., 4.]
+      limits: [0., 10.]
     ref:
-      limits: [1., 2.]
+      limits: [1.4, 1.6]
     latex: b_{1}
   b2:
     prior:
-      dist: norm
-      loc: 0.
-      scale: 15.
+      limits: [-50., 50.]
     ref:
-      dist: norm
-      loc: 0.
-      scale: 0.5
+      limits: [-1., 1.]
     latex: b_{2}
   sn0:
     prior:

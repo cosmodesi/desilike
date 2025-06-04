@@ -677,7 +677,7 @@ def test_tns():
     test(theory)
     theory(df=1.01, b1=1., b2=1.).shape
     from desilike.theories.galaxy_clustering import EFTLikeTNSTracerPowerSpectrumMultipoles, EFTLikeTNSTracerCorrelationFunctionMultipoles
-
+    """
     if False:
         #k = np.logspace(-3, 1.5, 1000)
         k = np.linspace(0.01, 0.3, 60)
@@ -750,7 +750,7 @@ def test_tns():
             ax.plot(theory.k[mask], theory.k[mask] * theory.power[ill][mask], color='C{:d}'.format(ill))
             ax.plot(theory_tns.k[mask], theory_tns.k[mask] * theory_tns.power[ill][mask], color='C{:d}'.format(ill), linestyle='--')
         plt.show()
-
+    """
     theory = EFTLikeTNSTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
 
     test(theory, emulate='pt')

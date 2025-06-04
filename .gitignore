@@ -23,6 +23,9 @@ doc/_build/
 **/*.npz
 **/*.npy
 **/*.png
+**/env
+**/.spyproject
+**/coverage.lcov
 
 # Unit test / coverage reports
 **/.coverage

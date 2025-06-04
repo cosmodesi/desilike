@@ -1,9 +1,16 @@
 # This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+# For more information see: https://docs.github.com/actions/language-and-framework-guides/using-python-with-github-actions
 
 name: tests
 
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    paths: ['.github/**', 'desilike/**', 'tests/**', 'pyproject.toml']
+  pull_request:
+    paths: ['.github/**', 'desilike/**', 'tests/**', 'pyproject.toml']
+  schedule:
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
 
 jobs:
   test:
@@ -11,21 +18,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
+        os: [ubuntu-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
         exclude:
-          - os: macos-latest
-            python-version: "3.8"
           - os: macos-latest
             python-version: "3.9"
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+    - name: Cache pip wheels
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.os == 'Linux' && '~/.cache/pip' || '~/Library/Caches/pip' }}
+        key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/pyproject.toml') }}
+        restore-keys: ${{ runner.os }}-pip-${{ matrix.python-version }}-
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
@@ -40,10 +51,9 @@ jobs:
           sudo apt install libopenmpi-dev
         else
           brew install openmpi
+          brew install libomp
         fi
-        python -m pip install .
-        # TODO: Create pyproject.toml with test requirements and remove this line.
-        python -m pip install emcee
+        python -m pip install .[tests]
         # TODO: Currently, we need to specify the directory. This should not be necessary in the future once all tests are compatible with pytest.
         python -m pytest tests --cov=desilike --durations=0 --cov-report lcov
     - name: Coverage with Coveralls

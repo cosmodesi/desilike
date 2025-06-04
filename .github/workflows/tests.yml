@@ -1,9 +1,16 @@
 # This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+# For more information see: https://docs.github.com/actions/language-and-framework-guides/using-python-with-github-actions
 
 name: tests
 
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    paths: ['.github/**', 'desilike/**', 'tests/**', 'pyproject.toml']
+  pull_request:
+    paths: ['.github/**', 'desilike/**', 'tests/**', 'pyproject.toml']
+  schedule:
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
 
 jobs:
   test:

@@ -1,4 +1,5 @@
-from ._version import __version__
+"""A Common Framework for Writing DESI Likelihoods."""
+
 from .utils import setup_logging
 from .base import BaseCalculator, PipelineError, vmap
 from .parameter import Parameter, ParameterPrior, ParameterCollection, ParameterArray, Samples, ParameterCovariance, ParameterPrecision
@@ -8,3 +9,5 @@ from .fisher import Fisher, LikelihoodFisher, FisherGaussianLikelihood
 
 from .install import Installer
 Installer().setenv()
+
+__version__ = "0.0.1"

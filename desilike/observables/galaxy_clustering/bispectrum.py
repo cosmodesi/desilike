@@ -24,13 +24,14 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
         Additionally provide list of multipoles ``ells`` and wavenumbers ``k`` and optionally ``shotnoise``.
 
     covariance : array, list, default=None
-        2D array.
+        2D array, of shape ``(len(data), len(data))``.
 
     k : tuple of arrays, default=None
-        Triangles of wavenumbers of shape (nk, 3) where to evaluate multipoles.
+        Triangles of wavenumbers of shape (nk, 3) (scoccimarro basis) where to evaluate multipoles.
+        ``sum(len(kk) for kk in k)`` should match ``len(data)``.
 
     ells : tuple, default=((0, 0, 0), (2, 0, 0), (0, 2, 0), (0, 0, 2))
-        Multipoles to compute.
+        Bispectrum multipoles to compute.
 
     shotnoise : array, default=1e4
         Shot noise for each of the multipoles. Same length as ``k``.
@@ -62,7 +63,7 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
     @plotting.plotter(interactive={'kw_theory': {'color': 'black', 'label': 'reference'}})
     def plot(self, kw_theory=None, fig=None):
         """
-        Plot data and theory power spectrum multipoles.
+        Plot data and theory bispectrum multipoles.
 
         Parameters
         ----------
@@ -132,7 +133,7 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
     @plotting.plotter
     def plot_bao(self, fig=None):
         """
-        Plot data and theory BAO power spectrum wiggles.
+        Plot data and theory BAO bispectrum wiggles.
 
         Parameters
         ----------
@@ -211,6 +212,7 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
         return plot_covariance_matrix(mat, x1=ik, xlabel1=r'$k$ [$h/\mathrm{Mpc}$]', label1=[r'$\ell = {}$'.format(ell) for ell in self.ells], corrcoef=corrcoef, **kwargs)
 
     def calculate(self):
+        # Set flattheory with bispectrum prediction
         self.flattheory = jnp.concatenate(self.wmatrix.power)
 
     @property
@@ -219,6 +221,7 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
 
     @property
     def theory_nobao(self):
+        # Remove BAO wiggles, a bit hacky
         template = self.wmatrix.template
         only_now = template.only_now
         template.only_now = True
@@ -249,16 +252,19 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
 
     @property
     def data(self):
+        # data, split by multipoles
         cumsize = np.insert(np.cumsum([len(k) for k in self.k]), 0, 0)
         return [self.flatdata[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
 
     @property
     def std(self):
+        # Standard deviation, split by multipoles
         cumsize = np.insert(np.cumsum([len(k) for k in self.k]), 0, 0)
         diag = np.diag(self.covariance)**0.5
         return [diag[start:stop] for start, stop in zip(cumsize[:-1], cumsize[1:])]
 
     def __getstate__(self):
+        # Optional
         state = {}
         for name in ['k', 'ells', 'flatdata', 'flattheory', 'shotnoise']:
             if hasattr(self, name):

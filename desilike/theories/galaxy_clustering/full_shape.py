@@ -2316,32 +2316,41 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
             self.ells = (ells,)
         self.ells = tuple(ells)
         if k is None:
+            # Default k-bins (k1, k2, k3) in Soccimarro basis
             k = np.linspace(0.01, 0.1, 11)
             k = np.meshgrid(k, k, k, indexing='ij')
             k = np.column_stack([kk.ravel() for kk in k])
+            # Impose triangular condition
             mask = (k[:, 0] <= k[:, 1] + k[:, 2]) | (k[:, 1] <= k[:, 0] + k[:, 2]) | (k[:, 2] <= k[:, 0] + k[:, 1])
             k = k[mask]
         if not utils.is_sequence(k):
+            # Tuple of k1k2k3's, one for each multipole
             k = (k,) * len(self.ells)
         self.k = tuple(np.array(kk, dtype='f8') for kk in k)
         if shotnoise is None:
             shotnoise = 0.
         if not utils.is_sequence(shotnoise):
+            # (k-dependent) bispectrum shot-noise
             shotnoise = (shotnoise,) * len(self.ells)
         self.shotnoise = tuple(np.atleast_1d(sn) for sn in shotnoise)
+        # The input linear power spectrum (template)
         if template is None:
             template = DirectPowerSpectrumTemplate()
         self.template = template
+        # k for input linear power spectrum
         kin = np.geomspace(min(self._klim[0], min(kk.min() for kk in self.k) / 2, self.template.init.get('k', [1.])[0]), max(self._klim[1], max(kk.max() for kk in self.k) * 2, self.template.init.get('k', [0.])[0]), self._klim[2])  # margin for AP effect
+        # Ask for input k, z
         self.template.init.update(k=kin)
         if z is not None: self.template.init.update(z=z)
         self.z = self.template.z
+        # Set parameters
         self.set_params()
         self.pt = pt
         assert self.pt in [None, '1loop']
 
     @staticmethod
     def _params(params, prior_basis='physical'):
+        # Prior basis is 'physical' = sampled bias bp is b * sigma8^n
         if prior_basis == 'physical':
             for param in list(params):
                 basename = param.basename
@@ -2356,6 +2365,7 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
         return params
 
     def set_params(self):
+        # Set parameters (self.init.params)
         self.required_bias_params = ['b1', 'b2', 'sigmav', 'sn0']
         default_values = {'b1': 2.}
         self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
@@ -2369,11 +2379,13 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
             param.update(value=0., fixed=True)
 
     def calculate(self, **params):
+        # Calculte the bispectrum (set attribute self.power, see at the end)
         self.z = self.template.z
         self.sigma8 = self.template.sigma8
         self.fsigma8 = self.template.f * self.sigma8
         params = {**self.required_bias_params, **params}
         pars = []
+        # Conversion from "physical" bias parameters to standard basis
         if self.is_physical_prior:
             sigma8 = self.template.sigma8
             f = self.template.fsigma8 / sigma8
@@ -2381,39 +2393,46 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
             pars += [b1E, b2E, params['sigmavp'], params['sn0p']]
         else:
             pars = [params[name] for name in self.required_bias_params]
-        # b1, b2, A_P, sigma_P, A_B, sigma_B, *_P are unused
+        # b1, b2, A_P, sigma_P, A_B, sigma_B, *_P
         pars = pars[:2] + [1., 4.] + [pars[3], pars[2]]
+        # Alock-Paczynski parameters are self.template.qpar, self.template.qper
         all_pars = jnp.array([self.sigma8, self.fsigma8 / self.sigma8, self.template.qpar, self.template.qper] + pars)
         from geofptax.kernels import bk_multip
 
         kt = self.template.k
-        pkt = self.template.pk_dd
-        if self.pt:
+        pkt = self.template.pk_dd  # theory linear pk
+        if self.pt:  # loop correction: update pkt with 1-loop calculation
             q = kt
             ktmin, ktmax = min(kk.min() for kk in self.k) * 0.7, max(kk.max() for kk in self.k) * 1.3
             kt = jnp.linspace(ktmin, ktmax, self._klim[2])
             wq = utils.weights_trapz(q)
             if getattr(self, 'kernel', None) is None:
+                # Compute pt kernel the first time only
                 self.kernel = pt_kernel(kt, q, wq)
             pkt = pt_pk_1loop(kt, q, wq, pkt, self.kernel)
 
-        # bk0, bk200, bk020, bk002
+        # k for bk0, bk200, bk020, bk002
         kk = list(self.k) + [self.k[-1]] * (4 - len(self.k))
+        # Compute bk multipoles
         res = bk_multip(*kk, kt, pkt, all_pars, redshift=self.z, num_points=self.options['mu'])
         tells = [(0, 0, 0), (2, 0, 0), (0, 2, 0), (0, 0, 2)]
         res = [res[tells.index(ell)] for ell in self.ells]
+        # Include shot noise term, rescaling by AP (alpha_par * alpha_per**2)**2
         A_B = all_pars[8] / (all_pars[2] * all_pars[3]**2)**2
         res = [rr + A_B * sn for rr, sn in zip(res, self.shotnoise)]
         self.power = res
 
     def get(self):
+        # Returned value when calling the calculator
         return self.power
 
     @classmethod
     def install(cls, installer):
+        # Dependency
         installer.pip('git+https://github.com/dforero0896/geofptax')
 
     def __getstate__(self):
+        # Required only for quick emulation (Taylor expansion)
         state = {}
         for name in ['k', 'z', 'ells', 'power']:
             if hasattr(self, name):

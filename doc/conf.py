@@ -14,6 +14,7 @@ import os
 import sys
 sys.path.insert(0, os.path.abspath('..'))
 sys.path.insert(0, os.path.abspath(os.path.join('..', 'desilike')))
+from _version import __version__
 
 # -- General configuration ------------------------------------------------
 
@@ -37,13 +38,12 @@ project = 'desilike'
 copyright = '2022, cosmodesi'
 author = 'cosmodesi'
 
+# The full version, including alpha/beta/rc tags
+release = __version__
+
 html_theme = 'sphinx_rtd_theme'
 
 autodoc_mock_imports = ['cosmoprimo', 'mpi4py']
-
-# The full version, including alpha/beta/rc tags
-from desilike import __version__
-release = __version__
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -113,3 +113,4 @@ def setup(app):
 
 
 autoclass_content = 'both'
+

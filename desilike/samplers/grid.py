@@ -4,10 +4,9 @@ from desilike import mpi
 from desilike.base import vmap
 from desilike.parameter import ParameterPriorError, Samples
 from desilike.utils import BaseClass, expand_dict
-from .base import RegisteredSampler
 
 
-class GridSampler(BaseClass, metaclass=RegisteredSampler):
+class GridSampler(BaseClass):
 
     """Evalue calculator on a grid."""
     name = 'grid'
@@ -40,7 +39,7 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
             A dictionary mapping parameter name (including wildcard) to values.
             If provided, ``size`` and ``ref_scale`` are ignored.
         """
-        #self.pipeline = calculator.runtime_info.pipeline
+        # self.pipeline = calculator.runtime_info.pipeline
         self.calculator = calculator
         if mpicomm is None:
             mpicomm = calculator.mpicomm
@@ -65,24 +64,31 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
             grid, size = self.grid[param.name], self.size[param.name]
             if grid is None:
                 if size is None:
-                    raise ValueError('size (and grid) not specified for parameter {}'.format(param))
+                    raise ValueError(
+                        'size (and grid) not specified for parameter {}'.format(param))
                 size = int(size)
                 if size < 1:
-                    raise ValueError('size is {} < 1 for parameter {}'.format(size, param))
+                    raise ValueError(
+                        'size is {} < 1 for parameter {}'.format(size, param))
                 center = param.value
                 limits = np.array(param.ref.limits)
                 if not limits[0] <= param.value <= limits[1]:
-                    raise ParameterPriorError('Parameter {} value {} is not in reference limits {}'.format(param, param.value, param.ref.limits))
+                    raise ParameterPriorError('Parameter {} value {} is not in reference limits {}'.format(
+                        param, param.value, param.ref.limits))
                 if size == 1:
                     grid = [center]
                 else:
                     if param.ref.is_limited() and not hasattr(param.ref, 'scale'):
                         edges = self.ref_scale * (limits - center) + center
                     elif param.proposal:
-                        edges = self.ref_scale * np.array([-param.proposal, param.proposal]) + center
+                        edges = self.ref_scale * \
+                            np.array(
+                                [-param.proposal, param.proposal]) + center
                     else:
-                        raise ParameterPriorError('Provide proper parameter reference distribution or proposal for {}'.format(param))
-                    low, high = np.linspace(edges[0], center, size // 2 + 1), np.linspace(center, edges[1], size // 2 + 1)
+                        raise ParameterPriorError(
+                            'Provide proper parameter reference distribution or proposal for {}'.format(param))
+                    low, high = np.linspace(
+                        edges[0], center, size // 2 + 1), np.linspace(center, edges[1], size // 2 + 1)
                     if size % 2:
                         grid = np.concatenate([low, high[1:]])
                     else:
@@ -104,15 +110,18 @@ class GridSampler(BaseClass, metaclass=RegisteredSampler):
         Run calculator evaluation on the grid.
         A new grid can be set by providing arguments 'size', 'ref_scale', 'grid' or 'sphere', see :meth:`__init__`.
         """
-        if kwargs: self.set_grid(**kwargs)
+        if kwargs:
+            self.set_grid(**kwargs)
 
-        #self.calculator.mpicomm = mpi.COMM_SELF
+        # self.calculator.mpicomm = mpi.COMM_SELF
         vcalculate = vmap(self.calculator, backend='mpi', return_derived=True)
-        derived = vcalculate(self.samples.to_dict() if self.mpicomm.rank == 0 else {}, mpicomm=self.mpicomm)[1]
+        derived = vcalculate(self.samples.to_dict(
+        ) if self.mpicomm.rank == 0 else {}, mpicomm=self.mpicomm)[1]
 
         if self.mpicomm.rank == 0:
             for param in self.calculator.all_params.select(fixed=True, derived=False):
-                self.samples[param] = np.full(self.samples.shape, param.value, dtype='f8')
+                self.samples[param] = np.full(
+                    self.samples.shape, param.value, dtype='f8')
             self.samples.update(derived)
             if self.save_fn is not None:
                 self.samples.save(self.save_fn)

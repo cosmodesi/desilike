@@ -62,52 +62,6 @@ def batch_iterate(func, min_iterations=0, max_iterations=sys.maxsize,
             break
 
 
-def bcast_values(func):
-    """
-    Broadcast values across MPI processes and only evaluate valid inputs.
-
-    Parameters
-    ----------
-    func : callable
-        Function to evaluate.
-
-    Raises
-    ------
-    ValueError
-        If input values differ between MPI processes and self._check_same_input
-        is set.
-
-    Returns
-    -------
-    callable
-        Wrapped function.
-
-    """
-    @functools.wraps(func)
-    def wrapper(self, values):
-        values = np.asarray(values)
-        if self._check_same_input:
-            all_values = self.mpicomm.allgather(values)
-            if not all(np.allclose(
-                    values, all_values[0], atol=0., rtol=1e-7, equal_nan=True)
-                    for values in all_values if values is not None):
-                raise ValueError(
-                    f'Input values different on all ranks: {all_values}')
-        values = self.mpicomm.bcast(values, root=0)
-        isscalar = values.ndim == 1
-        values = np.atleast_2d(values)
-        mask = ~np.isnan(values).any(axis=1)
-        toret = np.full(values.shape[0], -np.inf)
-        values = values[mask]
-        if values.size:
-            toret[mask] = func(self, values)
-        if isscalar and toret.size:
-            toret = toret[0]
-        return toret
-
-    return wrapper
-
-
 class BasePosteriorSampler(BaseClass):
 
     nwalkers = 1
@@ -187,7 +141,6 @@ class BasePosteriorSampler(BaseClass):
         self.diagnostics = {}
         self.derived = None
 
-    @bcast_values
     def logposterior(self, values):
         """
         Compute the logarithm of the posterior.
@@ -272,7 +225,6 @@ class BasePosteriorSampler(BaseClass):
 
         return self.mpicomm.bcast(log_posterior, root=0)
 
-    @bcast_values
     @jit(static_argnums=[0])
     def logprior(self, values):
         return self.likelihood.all_params.prior(**dict(zip(self.varied_params.names(), values.T)))

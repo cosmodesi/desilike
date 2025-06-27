@@ -6,7 +6,6 @@ specialized classes implementing specific samplers such as `emcee` or
 `dynesty`.
 """
 
-import functools
 import logging
 import numbers
 import sys
@@ -30,22 +29,22 @@ def batch_iterate(func, min_iterations=0, max_iterations=sys.maxsize,
     Parameters
     ----------
     func : callable
-        Function to be called. Must take `niterations` as a keyword argument.
+        Function to be called. Must take ``niterations`` as a keyword argument.
     min_iterations : int, optional
         Minimum number of iterations. The default is 0.
     max_iterations : int, optional
-        Maximum number of iterations. The default is `sys.maxsize`.
+        Maximum number of iterations. The default is ``sys.maxsize``.
     check_every : int, optional
         How often to check for convergence. If the number of iterations is
-        at least `min_iterations` but below `max_iterations`, the process will
-        stop if convergence is achieved. The default is 200.
+        at least ``min_iterations`` but below ``max_iterations``, the process
+        will stop if convergence is achieved. The default is 200.
     **kwargs
-        Additional keyword arguments passed to `func`.
+        Additional keyword arguments passed to ``func``.
 
     Raises
     ------
     ValueError
-        If `max_iterations` is negative or `check_every` is smaller than 1.
+        If ``max_iterations`` is negative or ``check_every`` is smaller than 1.
 
     """
     if max_iterations < 0:
@@ -63,27 +62,29 @@ def batch_iterate(func, min_iterations=0, max_iterations=sys.maxsize,
 
 
 class BasePosteriorSampler(BaseClass):
+    """Base class defining common functions used by all samplers."""
 
     nwalkers = 1
-    _check_same_input = False
 
-    def __init__(self, likelihood, rng=None, seed=None, max_tries=1000, chains=None, ref_scale=1., save_fn=None, mpicomm=None):
+    def __init__(self, likelihood, rng=None, seed=None, max_tries=1000,
+                 chains=None, ref_scale=1., save_fn=None, mpicomm=None):
         """
-        Initialize posterior sampler.
+        Initialize the posterior sampler.
 
         Parameters
         ----------
         likelihood : BaseLikelihood
             Input likelihood.
 
-        rng : np.random.RandomState, default=None
+        rng : numpy.random.RandomState, optional
             Random state. If ``None``, ``seed`` is used to set random state.
 
-        seed : int, default=None
+        seed : int, optional
             Random seed.
 
         max_tries : int, default=1000
-            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
+            A :class:`ValueError` is raised after this number of likelihood
+            (+ prior) calls without finite posterior.
 
         chains : str, Path, Chain, default=None
             Path to or chains to resume from.

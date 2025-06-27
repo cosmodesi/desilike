@@ -1,3 +1,11 @@
+"""
+Base classes for posterior samplers.
+
+This module defines common functions and classes that are inherited by
+specialized classes implementing specific samplers such as `emcee` or
+`dynesty`.
+"""
+
 import functools
 import logging
 import numbers
@@ -14,33 +22,44 @@ from desilike.samples import diagnostics as sample_diagnostics
 from desilike.utils import TaskManager, is_path, UserDict, BaseClass
 
 
-class RegisteredSampler(type(BaseClass)):
-
-    _registry = {}
-
-    def __new__(meta, name, bases, class_dict):
-        cls = super().__new__(meta, name, bases, class_dict)
-        meta._registry[cls.name] = cls
-        return cls
-
-
 def batch_iterate(func, min_iterations=0, max_iterations=sys.maxsize,
                   check_every=200, **kwargs):
-    count_iterations = 0
-    is_converged = False
+    """
+    Iterate over a function until convergence.
+
+    Parameters
+    ----------
+    func : callable
+        Function to be called. Must take `niterations` as a keyword argument.
+    min_iterations : int, optional
+        Minimum number of iterations. The default is 0.
+    max_iterations : int, optional
+        Maximum number of iterations. The default is `sys.maxsize`.
+    check_every : int, optional
+        How often to check for convergence. If the number of iterations is
+        at least `min_iterations` but below `max_iterations`, the process will
+        stop if convergence is achieved. The default is 200.
+    **kwargs
+        Additional keyword arguments passed to `func`.
+
+    Raises
+    ------
+    ValueError
+        If `max_iterations` is negative or `check_every` is smaller than 1.
+
+    """
     if max_iterations < 0:
         raise ValueError('max_iterations must be positive')
     if check_every < 1:
-        raise ValueError(
-            'check_every must be >= 1, found {:d}'.format(check_every))
-    while not is_converged:
+        raise ValueError(f'check_every must be >= 1, found {check_every:d}.')
+
+    count_iterations = 0
+    while count_iterations < max_iterations:
         niter = min(max_iterations - count_iterations, check_every)
         count_iterations += niter
         is_converged = func(niterations=niter, **kwargs)
-        if count_iterations < min_iterations:
-            is_converged = False
-        if count_iterations >= max_iterations:
-            is_converged = True
+        if is_converged and count_iterations >= min_iterations:
+            break
 
 
 def bcast_values(func):
@@ -89,9 +108,8 @@ def bcast_values(func):
     return wrapper
 
 
-class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
+class BasePosteriorSampler(BaseClass):
 
-    name = 'base'
     nwalkers = 1
     _check_same_input = False
 

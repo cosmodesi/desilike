@@ -1,19 +1,17 @@
-from desilike.utils import UserDict, BaseClass
-import sys
-import numbers
 import functools
 import logging
-import warnings
+import numbers
+import sys
 import traceback
+import warnings
 
 import numpy as np
 
 from desilike import utils, mpi, PipelineError
-from desilike.utils import BaseClass, TaskManager, is_path
+from desilike.jax import jit
 from desilike.samples import Chain, Samples, load_source
 from desilike.samples import diagnostics as sample_diagnostics
-from desilike.parameter import ParameterPriorError
-from desilike.jax import jit
+from desilike.utils import TaskManager, is_path, UserDict, BaseClass
 
 
 class RegisteredSampler(type(BaseClass)):
@@ -26,7 +24,8 @@ class RegisteredSampler(type(BaseClass)):
         return cls
 
 
-def batch_iterate(func, min_iterations=0, max_iterations=sys.maxsize, check_every=200, **kwargs):
+def batch_iterate(func, min_iterations=0, max_iterations=sys.maxsize,
+                  check_every=200, **kwargs):
     count_iterations = 0
     is_converged = False
     if max_iterations < 0:
@@ -45,15 +44,36 @@ def batch_iterate(func, min_iterations=0, max_iterations=sys.maxsize, check_ever
 
 
 def bcast_values(func):
+    """
+    Broadcast values across MPI processes and only evaluate valid inputs.
 
+    Parameters
+    ----------
+    func : callable
+        Function to evaluate.
+
+    Raises
+    ------
+    ValueError
+        If input values differ between MPI processes and self._check_same_input
+        is set.
+
+    Returns
+    -------
+    callable
+        Wrapped function.
+
+    """
     @functools.wraps(func)
     def wrapper(self, values):
         values = np.asarray(values)
         if self._check_same_input:
             all_values = self.mpicomm.allgather(values)
-            if not all(np.allclose(values, all_values[0], atol=0., rtol=1e-7, equal_nan=True) for values in all_values if values is not None):
+            if not all(np.allclose(
+                    values, all_values[0], atol=0., rtol=1e-7, equal_nan=True)
+                    for values in all_values if values is not None):
                 raise ValueError(
-                    'Input values different on all ranks: {}'.format(all_values))
+                    f'Input values different on all ranks: {all_values}')
         values = self.mpicomm.bcast(values, root=0)
         isscalar = values.ndim == 1
         values = np.atleast_2d(values)
@@ -156,9 +176,8 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
 
         Parameters
         ----------
-        values : numpy.ndarray
-            Array of shape (n_points, n_dim) giving the values for which to
-            compute the posterior.
+        values : numpy.ndarray of shape (n_points, n_dim)
+            Points for which to compute the posterior.
 
         Raises
         ------
@@ -167,8 +186,8 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
 
         Returns
         -------
-        log_posterior : numpy.ndarray
-            Array of length n_points storing the posterior.
+        log_posterior : numpy.ndarray of shape (n_points, )
+            Natural logarithm of the posterior.
 
         """
         log_prior = self.logprior(values)

@@ -6,7 +6,6 @@ from scipy.stats.qmc import Sobol, Halton, LatinHypercube
 from desilike.base import vmap
 from desilike.parameter import ParameterPriorError, Samples
 from desilike.utils import BaseClass
-from .base import RegisteredSampler
 
 
 class RQuasiRandomSequence(qmc.QMCEngine):
@@ -18,12 +17,14 @@ class RQuasiRandomSequence(qmc.QMCEngine):
         # This is the Newton's method, solving phi**(d+1) - phi - 1 = 0
         eq_check = phi**(self.d + 1) - phi - 1
         while np.abs(eq_check) > 1e-12:
-            phi -= (phi**(self.d + 1) - phi - 1) / ((self.d + 1) * phi**self.d - 1)
+            phi -= (phi**(self.d + 1) - phi - 1) / \
+                ((self.d + 1) * phi**self.d - 1)
             eq_check = phi**(self.d + 1) - phi - 1
         self.inv_phi = [phi**(-(1 + d)) for d in range(self.d)]
 
     def _random(self, n=1, *, workers=1):
-        toret = (self.seed + np.arange(self.num_generated + 1, self.num_generated + n + 1)[:, None] * self.inv_phi) % 1.
+        toret = (self.seed + np.arange(self.num_generated + 1,
+                 self.num_generated + n + 1)[:, None] * self.inv_phi) % 1.
         self.num_generated += n
         return toret
 
@@ -46,7 +47,7 @@ def get_qmc_engine(engine):
     return {'sobol': Sobol, 'halton': Halton, 'lhs': LatinHypercube, 'rqrs': RQuasiRandomSequence}.get(engine, engine)
 
 
-class QMCSampler(BaseClass, metaclass=RegisteredSampler):
+class QMCSampler(BaseClass):
 
     """Quasi Monte-Carlo sequences, using :mod:`scipy.qmc` (+ RQuasiRandomSequence)."""
     name = 'qmc'
@@ -78,16 +79,18 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
         **kwargs : dict
             Optional engine-specific arguments.
         """
-        #self.pipeline = calculator.runtime_info.pipeline
+        # self.pipeline = calculator.runtime_info.pipeline
         self.calculator = calculator
         if mpicomm is None:
             mpicomm = calculator.mpicomm
         self.mpicomm = mpicomm
         self.varied_params = self.calculator.varied_params
-        self.engine = get_qmc_engine(engine)(d=len(self.varied_params), **kwargs)
+        self.engine = get_qmc_engine(engine)(
+            d=len(self.varied_params), **kwargs)
         self.samples = None
         if self.mpicomm.rank == 0 and samples is not None:
-            self.samples = samples if isinstance(samples, Samples) else Samples.load(samples)
+            self.samples = samples if isinstance(
+                samples, Samples) else Samples.load(samples)
         self.save_fn = save_fn
 
     @property
@@ -114,21 +117,26 @@ class QMCSampler(BaseClass, metaclass=RegisteredSampler):
                 lower.append(param.value - param.proposal)
                 upper.append(param.value + param.proposal)
             except AttributeError as exc:
-                raise ParameterPriorError('Provide parameter limits or proposal for {}'.format(param)) from exc
+                raise ParameterPriorError(
+                    'Provide parameter limits or proposal for {}'.format(param)) from exc
         if self.mpicomm.rank == 0:
             self.engine.reset()
             if offset is None:
                 offset = len(self.samples) if self.samples is not None else 0
             self.engine.fast_forward(offset)
-            samples = qmc.scale(self.engine.random(n=niterations), lower, upper)
+            samples = qmc.scale(self.engine.random(
+                n=niterations), lower, upper)
             samples = Samples(samples.T, params=self.varied_params)
 
-        vcalculate = vmap(self.calculator, backend='mpi', errors='nan', return_derived=True)
-        derived = vcalculate(samples.to_dict() if self.mpicomm.rank == 0 else {}, mpicomm=self.mpicomm)[1]
+        vcalculate = vmap(self.calculator, backend='mpi',
+                          errors='nan', return_derived=True)
+        derived = vcalculate(
+            samples.to_dict() if self.mpicomm.rank == 0 else {}, mpicomm=self.mpicomm)[1]
 
         if self.mpicomm.rank == 0:
             for param in self.calculator.all_params.select(fixed=True, derived=False):
-                samples[param] = np.full(samples.shape, param.value, dtype='f8')
+                samples[param] = np.full(
+                    samples.shape, param.value, dtype='f8')
             samples.update(derived)
             if self.samples is None:
                 self.samples = samples

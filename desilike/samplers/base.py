@@ -151,33 +151,40 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
 
     @bcast_values
     def logposterior(self, values):
+        """
+        Compute the logarithm of the posterior.
 
-        logprior = self.logprior(values)
-        finite_prior = np.isfinite(logprior)
+        Parameters
+        ----------
+        values : numpy.ndarray
+            Array of shape (n_points, n_dim) giving the values for which to
+            compute the posterior.
+
+        Raises
+        ------
+        PipelineError
+            If the likelihood raised an error.
+
+        Returns
+        -------
+        log_posterior : numpy.ndarray
+            Array of length n_points storing the posterior.
+
+        """
+        log_prior = self.logprior(values)
+        finite_prior = np.isfinite(log_prior)
 
         if not np.any(finite_prior):
-            return logprior
+            return log_prior
 
         points = Samples(values[finite_prior].T, params=self.varied_params)
 
-        results, errors = self._vlikelihood(points.to_dict())
+        (log_posterior, derived), errors = self._vlikelihood(points.to_dict())
 
         if self.mpicomm.rank == 0:
-            # TODO: Understand why logposterior is extracted here but later
-            # recomputed. Just as for the logprior, there should only be one
-            # source. This needs to be removed entirely at some point.
-            logposterior_dummy, derived = results if results else (None, {})
-            try:
-                loglikelihood = derived[self.likelihood._param_loglikelihood]
-                # TODO: This shouldn't be needed, in principle. There should
-                # only be one source for the prior.
-                assert np.allclose(logprior[finite_prior],
-                                   derived[self.likelihood._param_logprior],
-                                   atol=1e-6)
-                update_derived = True
-            except KeyError:
-                loglikelihood = np.full(points.shape, -np.inf)
-                update_derived = False
+
+            raise_error = None
+            update_derived = True
 
             if errors:
                 for i, error in errors.items():
@@ -192,12 +199,10 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                                 f"Error \"{error[0]}\" raised. Set logging "
                                 "level to debug (setup_logging (\"debug\")) "
                                 "to get full stack trace.")
-                        loglikelihood[i] = -np.inf
+                        log_posterior[i] = -np.inf
                     else:
                         raise_error = error
                         update_derived = False
-            else:
-                raise_error = None
 
             if update_derived:
                 if self.derived is None:
@@ -209,18 +214,18 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                         Samples.concatenate([self.derived[1], derived],
                                             intersection=True)]
 
-            logposterior = logprior.copy()
-            logposterior[finite_prior] += loglikelihood
-            mask = np.isnan(logposterior)
+            mask = np.isnan(log_posterior)
             if np.any(mask):
-                logposterior[mask] = -np.inf
+                log_posterior[mask] = -np.inf
                 warnings.warn('Posterior is NaN for {}'.format(
                     {k: v[mask].tolist() for k, v in points.items()}))
-            # TODO: Once the code is fully understood, this should be removed.
-            assert np.allclose(logposterior_dummy, logposterior[finite_prior],
-                               atol=1e-6)
+
+            log_posterior_finite_prior = log_posterior
+            log_posterior = log_prior
+            log_posterior[finite_prior] = log_posterior_finite_prior
+
         else:
-            logposterior, raise_error = None, None
+            log_posterior, raise_error = None, None
 
         raise_error = self.mpicomm.bcast(raise_error, root=0)
         if raise_error:
@@ -228,7 +233,7 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                 f"Error \"{raise_error[0]}\" occured with stack trace:\n"
                 f"{raise_error[1]}")
 
-        return self.mpicomm.bcast(logposterior, root=0)
+        return self.mpicomm.bcast(log_posterior, root=0)
 
     @bcast_values
     @jit(static_argnums=[0])

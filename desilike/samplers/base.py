@@ -78,42 +78,48 @@ class BasePosteriorSampler(BaseClass):
 
         rng : numpy.random.RandomState, optional
             Random state. If ``None``, ``seed`` is used to set random state.
+            Default is ``None``.
 
         seed : int, optional
-            Random seed.
+            Random seed. Default is ``None``.
 
         max_tries : int, default=1000
             A :class:`ValueError` is raised after this number of likelihood
             (+ prior) calls without finite posterior.
 
-        chains : str, Path, Chain, default=None
-            Path to or chains to resume from.
+        chains : str, Path, Chain, or None
+            Path to or chains to resume from. Default is ``None``.
 
-        ref_scale : float, default=1.
-            If no chains to resume from are provided, initial points are sampled from parameters' :attr:`Parameter.ref` reference distributions.
-            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor.
+        ref_scale : float, default=1.0
+            If no chains to resume from are provided, initial points are
+            sampled from parameters' :attr:`Parameter.ref` reference
+            distributions. Rescale parameters' :attr:`Parameter.ref` reference
+            distribution by this factor.
 
-        save_fn : str, Path, default=None
-            If not ``None``, save samples to this location.
+        save_fn : str, Path, optional
+            If not ``None``, save samples to this location. Default is
+            ``None``.
 
-        mpicomm : mpi.COMM_WORLD, default=None
-            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
+        mpicomm : mpi.COMM_WORLD, optional
+            MPI communicator. If ``None``, defaults to ``likelihood``'s
+            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
+
         """
-        if mpicomm is None:
-            mpicomm = likelihood.mpicomm
         self.likelihood = likelihood
-        # self.pipeline = self.likelihood.runtime_info.pipeline
-        self.mpicomm = mpicomm
+        if mpicomm is None:
+            self.mpicomm = likelihood.mpicomm
+        else:
+            self.mpicomm = mpicomm
+        # TODO: Find out what this does.
         self.likelihood.solved_default = '.marg'
         self.varied_params = self.likelihood.varied_params.deepcopy()
         for param in self.varied_params:
             param.update(ref=param.ref.affine_transform(scale=ref_scale))
-        if self.mpicomm.rank == 0:
-            self.log_info('Varied parameters: {}.'.format(
-                self.varied_params.names()))
         if not self.varied_params:
-            raise ValueError('no parameters to be varied!')
+            raise ValueError(
+                'No parameters to be varied! Cannot run sampling.')
         if self.mpicomm.rank == 0:
+            self.log_info(f'Varied parameters: {self.varied_params.names()}.')
             if chains is None:
                 if save_fn is not None and not is_path(save_fn):
                     chains = len(save_fn)
@@ -126,17 +132,19 @@ class BasePosteriorSampler(BaseClass):
 
         nchains = self.mpicomm.bcast(
             len(self.chains) if self.mpicomm.rank == 0 else None, root=0)
+        # TODO: Find out why root has the loaded chains and all other are
+        # iniated empty. Are they ever used?
         if self.mpicomm.rank != 0:
             self.chains = [None] * nchains
         self.save_fn = save_fn
         if save_fn is not None:
             if is_path(save_fn):
-                self.save_fn = [str(save_fn).replace('*', '{}').format(i)
+                self.save_fn = [str(save_fn).replace('*', str(i))
                                 for i in range(self.nchains)]
             else:
                 if len(save_fn) != self.nchains:
-                    raise ValueError(
-                        'Provide {:d} chain file names'.format(self.nchains))
+                    raise ValueError(f'Need {self.nchains} chain file names. '
+                                     f'Received {len(save_fn)}.')
         self.max_tries = int(max_tries)
         self._set_rng(rng=rng, seed=seed)
         self.diagnostics = {}
@@ -158,7 +166,7 @@ class BasePosteriorSampler(BaseClass):
 
         Returns
         -------
-        log_posterior : numpy.ndarray of shape (n_points, )
+        numpy.ndarray of shape (n_points, )
             Natural logarithm of the posterior.
 
         """
@@ -228,19 +236,34 @@ class BasePosteriorSampler(BaseClass):
 
     @jit(static_argnums=[0])
     def logprior(self, values):
-        return self.likelihood.all_params.prior(**dict(zip(self.varied_params.names(), values.T)))
+        """
+        Compute the logarithm of the prior.
+
+        Parameters
+        ----------
+        values : numpy.ndarray of shape (n_points, n_dim)
+            Points for which to compute the prior.
+
+        Returns
+        -------
+        numpy.ndarray of shape (n_points, )
+            Natural logarithm of the prior.
+
+        """
+        return self.likelihood.all_params.prior(
+            **dict(zip(self.varied_params.names(), values.T)))
 
     def __getstate__(self):
-        state = {}
-        for name in ['max_tries', 'diagnostics']:
-            state[name] = getattr(self, name)
-        return state
+        """Return a pickleable represenation of the sampler."""
+        return {name: getattr(self, name) for name in
+                ['max_tries', 'diagnostics']}
 
     def _set_rng(self, rng=None, seed=None):
+        """Set and synchronize the random number generator."""
+        if rng is None:
+            rng = np.random.RandomState(seed=mpi.bcast_seed(
+                seed=seed, mpicomm=self.mpicomm, size=None))
         self.rng = self.mpicomm.bcast(rng, root=0)
-        if self.rng is None:
-            seed = mpi.bcast_seed(seed=seed, mpicomm=self.mpicomm, size=None)
-            self.rng = np.random.RandomState(seed=seed)
 
     def _set_vlikelihood(self):
         """Vectorize the likelihood."""
@@ -251,11 +274,11 @@ class BasePosteriorSampler(BaseClass):
                 if param.ref.is_proper():
                     value = param.ref.sample(size=size, random_state=self.rng)
                 else:
+                    # TODO: This may create a problem for emcee. Investigate.
                     value = np.full(size, param.value)
                 toret[param.name] = value
             return toret
 
-        # self.likelihood.mpicomm = mpi.COMM_SELF
         self.likelihood()  # initialize before jit
         vlikelihood = self.likelihood
         from desilike import vmap
@@ -264,12 +287,13 @@ class BasePosteriorSampler(BaseClass):
             _vlikelihood = vmap(vlikelihood, backend='jax',
                                 errors='return', return_derived=True)
             _vlikelihood(get_start())
-            # raise ValueError
         except:
             if self.mpicomm.rank == 0:
                 self.log_info(
-                    'Could *not* vmap input likelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.')
-                self.log_debug('Error was {}.'.format(traceback.format_exc()))
+                    'Could *not* vmap input likelihood. Set logging level to '
+                    'debug (setup_logging("debug")) to get full stack trace.')
+                self.log_debug(f'Error was {traceback.format_exc()}.')
+            # TODO: This seems suspicious since vmap is applied later, anyway.
             vlikelihood = vmap(vlikelihood, backend=None,
                                errors='return', return_derived=True)
         else:
@@ -277,10 +301,10 @@ class BasePosteriorSampler(BaseClass):
                 self.log_info('Successfully vmap input likelihood.')
             vlikelihood = _vlikelihood
         try:
+            # TODO: Move import to top.
             import jax
             _vlikelihood = jax.jit(vlikelihood)
             _vlikelihood(get_start())
-            # raise ValueError
         except:
             if self.mpicomm.rank == 0:
                 self.log_info('Could *not* jit input likelihood.')
@@ -295,17 +319,46 @@ class BasePosteriorSampler(BaseClass):
         self._vlikelihood = _vlikelihood
 
     def _prepare(self):
+        """Prepare the sampler for the first iteration."""
         pass
 
     @property
     def nchains(self):
+        """
+        Return the number of chains.
+
+        Returns
+        -------
+        int
+            Number of chains.
+
+        """
         return len(self.chains)
 
     def _get_start(self, start=None, max_tries=None):
-        if max_tries is None:
-            max_tries = self.max_tries
+        """
+        Get starting values for the chains.
 
-        # to make sure all processes have the same rng
+        Parameters
+        ----------
+        start : numpy.ndarray or None, optional
+            Starting values of shape (n_chains, n_walkers, n_dim). If provided,
+            this function simply checks they have the right shape. Default is
+            ``None``.
+
+        Raises
+        ------
+        ValueError
+            If ``start`` is provided and does not have the correct shape or
+            if no finite posterior can be found.
+
+        Returns
+        -------
+        numpy.ndarray
+            Starting values of shape (n_chains, n_walkers, n_dim).
+
+        """
+        # Make sure all processes have the same RNG.
         self._set_rng(rng=self.rng)
 
         def get_start(size=1):
@@ -314,6 +367,7 @@ class BasePosteriorSampler(BaseClass):
                 if param.ref.is_proper():
                     value = param.ref.sample(size=size, random_state=self.rng)
                 else:
+                    # TODO: This may create a problem for emcee. Investigate.
                     value = np.full(size, param.value)
                 toret.append(value)
             return np.column_stack(toret)
@@ -325,7 +379,7 @@ class BasePosteriorSampler(BaseClass):
         if start is not None:
             start = np.asarray(start)
             if start.shape != shape:
-                raise ValueError('Provide start with shape {}'.format(shape))
+                raise ValueError(f'Provide start with shape {shape}.')
             return start
 
         start = np.full(shape, np.nan)
@@ -333,43 +387,29 @@ class BasePosteriorSampler(BaseClass):
         for ichain, chain in enumerate(self.chains):
             if self.mpicomm.bcast(chain is not None and chain.size, root=0):
                 start[ichain] = self.mpicomm.bcast(np.array(
-                    [chain[param][-1] for param in self.varied_params]).T if self.mpicomm.rank == 0 else None, root=0)
+                    [chain[param][-1] for param in self.varied_params]).T if
+                    self.mpicomm.rank == 0 else None, root=0)
                 logposterior[ichain] = self.logposterior(start[ichain])
 
-        start.shape = (shape[0] * shape[1], -1)
-        logposterior.shape = -1
+        start = start.reshape(shape[0] * shape[1], -1)
+        logposterior = logposterior.flatten()
 
-        for itry in range(max_tries):
-            mask = np.isfinite(logposterior)
-            if mask.all():
+        for itry in range(self.max_tries):
+            is_finite = np.isfinite(logposterior)
+            if is_finite.all():
                 break
-            mask = ~mask
-            values = get_start(size=mask.sum())
-            start[mask] = values
-            logposterior[mask] = self.logposterior(values)
+            values = get_start(size=(~is_finite).sum())
+            start[~is_finite] = values
+            logposterior[~is_finite] = self.logposterior(values)
+        else:
+            raise ValueError('Could not find finite log posterior after '
+                             f'{self.max_tries} tries.')
 
-        if not np.isfinite(logposterior).all():
-            raise ValueError(
-                'Could not find finite log posterior after {:d} tries'.format(max_tries))
+        start = start.reshape(shape)
 
-        start.shape = shape
-
+        # TODO: Investigate why the log of the posterior is not returned. This
+        # may lead to double computation.
         return start
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, exc_traceback):
-        pass
-
-    @property
-    def mpicomm(self):
-        return self._mpicomm
-
-    @mpicomm.setter
-    def mpicomm(self, mpicomm):
-        # self._mpicomm = self.likelihood.mpicomm = mpicomm
-        self._mpicomm = mpicomm
 
     def _set_derived(self, chain):
         chain = Chain(chain, loglikelihood=self.likelihood._param_loglikelihood,

@@ -408,7 +408,7 @@ class BasePosteriorSampler(BaseClass):
         start = start.reshape(shape)
 
         # TODO: Investigate why the log of the posterior is not returned. This
-        # may lead to double computation.
+        # probably leads to double computation.
         return start
 
     def _set_derived(self, chain):
@@ -440,56 +440,69 @@ class BasePosteriorSampler(BaseClass):
         with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max(mpicomm.size // nchains, 1)``
         the number of processes per chain.
         """
-        # self.derived = None
+
         nprocs_per_chain = max(self.mpicomm.size // self.nchains, 1)
-        chains, ncalls = [[None] * self.nchains for i in range(2)]
+        chains = [None] * self.nchains
+        ncalls = [None] * self.nchains
         start = self._get_start(start=start)
 
         mpicomm_bak = self.mpicomm
         self._prepare()
 
-        with TaskManager(nprocs_per_task=nprocs_per_chain, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
+        # Compute results.
+        with TaskManager(nprocs_per_task=nprocs_per_chain, use_all_nprocs=True,
+                         mpicomm=self.mpicomm) as tm:
             self.mpicomm = tm.mpicomm
             for ichain in tm.iterate(range(self.nchains)):
                 self._set_rng(rng=self.rng)
+                # Set _ichain so that individual ranks know where to write
+                # results.
                 self._ichain = ichain
                 chain = self._run_one(start[ichain], **kwargs)
                 if self.mpicomm.rank == 0:
-                    ncalls[ichain] = self.derived[1].size if self.derived is not None else 0
+                    # TODO: Find out under what conditions self.derived can
+                    # be None. This should be an edge case.
+                    ncalls[ichain] = (self.derived[1].size if self.derived is
+                                      not None else 0)
                     if chain is not None:
                         chains[ichain] = self._set_derived(chain)
                 self.derived = None
         self.mpicomm = mpicomm_bak
-        for ichain, chain in enumerate(chains):
-            mpiroot_worker = self.mpicomm.rank if ncalls[ichain] is not None else None
-            for mpiroot_worker in self.mpicomm.allgather(mpiroot_worker):
-                if mpiroot_worker is not None:
-                    break
-            assert mpiroot_worker is not None
-            ncalls[ichain] = self.mpicomm.bcast(
-                ncalls[ichain], root=mpiroot_worker)
-            if self.mpicomm.bcast(chain is not None, root=mpiroot_worker):
-                chains[ichain] = Chain.sendrecv(
-                    chain, source=mpiroot_worker, dest=0, mpicomm=self.mpicomm)
+
+        # Distribute results accross MPI ranks.
+        for i in range(len(chains)):
+            computed_chain = ncalls[i] is not None
+            computed_chain = np.array(self.mpicomm.allgather(computed_chain))
+            if np.sum(computed_chain) != 1:
+                raise RuntimeError('Internal error in running the chains. '
+                                   'Please report this bug.')
+            root = np.argmax(computed_chain)
+            ncalls[i] = self.mpicomm.bcast(ncalls[i], root=root)
+            if self.mpicomm.bcast(chains[i] is not None, root=root):
+                chains[i] = Chain.sendrecv(
+                    chain, source=root, dest=0, mpicomm=self.mpicomm)
 
         self.diagnostics['ncall'] = ncalls
         self.diagnostics['naccepted'] = [
             chain.size if chain is not None else 0 for chain in chains]
+
+        # Concatenate chains and write results, if applicable.
         if self.mpicomm.rank == 0:
-            for ichain, (chain, new_chain) in enumerate(zip(self.chains, chains)):
+            for i, (chain, new_chain) in enumerate(zip(self.chains, chains)):
                 if new_chain is not None:
                     if chain is None:
-                        self.chains[ichain] = new_chain.deepcopy()
+                        self.chains[i] = new_chain.deepcopy()
                     else:
-                        self.chains[ichain] = Chain.concatenate(
-                            chain, new_chain)
-                    attrs = {name: getattr(self.likelihood, name, None) for name in [
-                        'size', 'nvaried', 'ndof', 'hartlap2007_factor', 'percival2014_factor']}
-                    self.chains[ichain].attrs.update(attrs)
+                        self.chains[i] = Chain.concatenate(chain, new_chain)
+                    attrs = {name: getattr(self.likelihood, name, None) for
+                             name in ['size', 'nvaried', 'ndof',
+                                      'hartlap2007_factor',
+                                      'percival2014_factor']}
+                    self.chains[i].attrs.update(attrs)
             if self.save_fn is not None:
-                for ichain, chain in enumerate(self.chains):
+                for save_fn, chain in zip(self.save_fn, self.chains):
                     if chain is not None:
-                        chain.save(self.save_fn[ichain])
+                        chain.save(save_fn)
         return self.chains
 
 

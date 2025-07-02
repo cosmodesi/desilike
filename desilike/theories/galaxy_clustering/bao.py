@@ -519,8 +519,6 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipo
                 self.broadband_matrix[ell] = jnp.array(tmp)
         else:
             raise ValueError('Unknown kernel: {}'.format(self.broadband))
-        bb_params = []
-        for params in self.broadband_orders.values(): bb_params += list(params)
         self.init.params = self.init.params.select(basename=bb_params)
 
     @jit(static_argnums=[0])

@@ -37,7 +37,7 @@ def simple_likelihood():
 @pytest.mark.parametrize("Sampler, kwargs", [
     (DynestySampler, dict(dynamic=True)),
     (DynestySampler, dict(dynamic=False)),
-    (DynestySampler, dict(dynamic=False, save_fn='checkpoint.pkl')),
+    (DynestySampler, dict(save_fn='checkpoint.pkl')),
     (NautilusSampler, dict(save_fn='checkpoint.h5'))])
 def test_basic(simple_likelihood, Sampler, kwargs):
     # Test that all samplers work with a simple two-dimensional likelihood and

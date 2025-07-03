@@ -24,6 +24,7 @@ dependencies = [
 tests = [
     "dynesty",
     "nautilus-sampler",
+    "h5py",
     "pyclass @ git+https://github.com/adematti/pyclass"]
 plotting = [
     "matplotlib",

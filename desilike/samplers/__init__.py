@@ -4,7 +4,6 @@ from .emcee import EmceeSampler
 from .zeus import ZeusSampler
 from .pocomc import PocoMCSampler
 from .dynesty import DynestySampler
-from .polychord import PolychordSampler
 from .nautilus import NautilusSampler
 from .hmc import HMCSampler
 from .nuts import NUTSSampler

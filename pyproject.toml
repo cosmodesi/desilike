@@ -22,7 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 tests = [
-    "emcee",
+    "dynesty",
     "pyclass @ git+https://github.com/adematti/pyclass"]
 plotting = [
     "matplotlib",

@@ -19,6 +19,7 @@ from desilike.jax import jit
 from desilike.samples import Chain, Samples, load_source
 from desilike.samples import diagnostics as sample_diagnostics
 from desilike.utils import TaskManager, is_path, UserDict, BaseClass
+from .mpi_pool import MPIPool
 
 
 def batch_iterate(func, min_iterations=0, max_iterations=sys.maxsize,
@@ -850,3 +851,205 @@ class Diagnostics(UserDict, BaseClass, metaclass=MetaClass):
         if not quiet:
             self.log_info('{}.'.format(msg))
         return True
+
+
+PRIOR_TRANSFORM = None
+COMPUTE_LIKELIHOOD = None
+
+
+def set_prior_transform(prior_transform):
+    """Set the prior transformation."""
+    global PRIOR_TRANSFORM
+    PRIOR_TRANSFORM = prior_transform
+
+
+def prior_transform(x):
+    """Set the prior transformation."""
+    return PRIOR_TRANSFORM(x)
+
+
+def set_compute_likelihood(compute_likelihood):
+    """Set the likelihood function."""
+    global COMPUTE_LIKELIHOOD
+    COMPUTE_LIKELIHOOD = compute_likelihood
+
+
+def compute_likelihood(x):
+    """Compute the natural logarithm of the likelihood."""
+    return COMPUTE_LIKELIHOOD(x)
+
+
+def update_kwargs(user_kwargs, sampler, **desilike_kwargs):
+    """
+    Update the keyword arguments passed to a sampler.
+
+    desilike homogenizes the interface to several samplers. In some cases, this
+    requires overwriting keyword arguments the user tries to pass to the
+    sampler explicitly.
+
+    Parameters
+    ----------
+    user_kwargs : dict
+        Keyword arguments received from the user.
+    sampler : str
+        Name of the sampler. This is used to make warnings informative.
+    desilike_kwargs : dict
+        Keyword arguments enforced by desilike.
+
+    Returns
+    -------
+    dict
+        Updated keyword arguments.
+
+    """
+    kwargs = user_kwargs.copy()
+    for key, value in desilike_kwargs.items():
+        if key in user_kwargs:
+            warnings.warn(
+                f"The keyword argument '{key}' passed to {sampler} is "
+                "overwritten.")
+        kwargs[key] = value
+    return kwargs
+
+
+class NestedSampler(BaseClass):
+    """Class defining common functions used by nested samplers."""
+
+    def __init__(self, likelihood, rng=None, save_fn=None, mpicomm=None):
+        """
+        Initialize the sampler.
+
+        Parameters
+        ----------
+        likelihood : BaseLikelihood
+            Likelihood to sample.
+
+        rng : numpy.random.RandomState or int, optional
+            Random number generator. Default is ``None``.
+
+        save_fn : str, Path, optional
+            Save samples to this location. Default is ``None``.
+
+        mpicomm : mpi.COMM_WORLD, optional
+            MPI communicator. If ``None``, defaults to ``likelihood``'s
+            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
+
+        Raises
+        ------
+        AttributeError
+            If the prior does not support prior transforms.
+
+        """
+        self.likelihood = likelihood
+        for param in likelihood.varied_params:
+            if not hasattr(param.prior, 'ppf'):
+                raise AttributeError(
+                    f"Cannot perform prior transform for parameter '{param}'. "
+                    "The prior must be proper and have a 'ppf' argument.")
+        self.n_dim = len(self.likelihood.varied_params)
+
+        if isinstance(rng, int):
+            rng = np.random.default_rng(seed=rng)
+
+        self.rng = rng
+        self.save_fn = save_fn
+        self.mpicomm = mpicomm if mpicomm is not None else likelihood.mpicomm
+        self.pool = MPIPool(comm=self.mpicomm)
+        self.blobs = False
+        # Some samplers already make likelihood calls during initialization.
+        set_prior_transform(self.prior_transform)
+        set_compute_likelihood(self.compute_likelihood)
+
+    def prior_transform(self, x):
+        """
+        Transform from the unit cube to parameter space using the prior.
+
+        Parameters
+        ----------
+        x : numpy.ndarray
+            Point for which to perform the prior transform.
+
+        Returns
+        -------
+        numpy.ndarray
+            Prior transformation of the input point.
+
+        """
+        return np.array([self.likelihood.varied_params[i].prior.ppf(x_i) for
+                         i, x_i in enumerate(x)])
+
+    def compute_likelihood(self, x):
+        """
+        Compute the natural logarithm of the likelihood.
+
+        Parameters
+        ----------
+        x : numpy.ndarray
+            Point for which to compute the likelihood.
+
+        Returns
+        -------
+        log_l : float
+            Natural logarithm of the likelihood.
+        blob : dict, optional
+            Derived results. Only returned if ``self.blobs`` is set to True.
+
+        """
+        result = self.likelihood(
+            Samples(x, params=self.likelihood.varied_params).to_dict(),
+            return_derived=True)[1]
+        log_l = result['loglikelihood'].value
+
+        if not self.blobs:
+            return log_l
+
+        blob = dict()
+        for param in result:
+            if param.param.name != 'loglikelihood':
+                blob[param.param.name] = param.value
+
+        return log_l, blob
+
+    def run_sampler(self, pool):
+        """
+        Abstract method to run the sampler from the main MPI process.
+
+        This needs to be implemented by the subclass.
+
+        Parameters
+        ----------
+        pool : MPIPool
+            Pool used to distribute computations.
+
+        Returns
+        -------
+        Chain
+            Sampler results.
+        """
+        pass
+
+    def run(self, **kwargs):
+        """
+        Run the sampler.
+
+        Parameters
+        ----------
+        kwargs : dict, optional
+            Keyword arguments passed to the run function of the sampler.
+
+        Returns
+        -------
+        Chain
+            Sampler results.
+        """
+        set_prior_transform(self.prior_transform)
+        set_compute_likelihood(self.compute_likelihood)
+
+        chain = None
+        if self.mpicomm.rank == 0:
+            chain = self.run_sampler(**kwargs)
+        else:
+            self.pool.wait()
+        self.pool.stop_wait()
+
+        return self.mpicomm.bcast(chain, root=0)

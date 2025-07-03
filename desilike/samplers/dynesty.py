@@ -1,4 +1,4 @@
-"""Module implementing the dynesty sampler."""
+"""Module implementing the dynesty samplers."""
 
 try:
     import dynesty
@@ -72,8 +72,7 @@ class DynestySampler(NestedSampler):
         Parameters
         ----------
         kwargs: dict, optional
-            Extra keyword arguments passed to dynesty's ``run_nested``
-            function.
+            Extra keyword arguments passed to dynesty's ``run_nested`` method.
 
         Returns
         -------
@@ -91,3 +90,8 @@ class DynestySampler(NestedSampler):
         chain.append(np.exp(results.logwt - results.logz[-1]))
         return Chain(chain, params=self.likelihood.varied_params +
                      ['logweight', 'aweight'])
+
+    @classmethod
+    def install(cls, config):
+        """Install dynesty."""
+        config.pip('dynesty')

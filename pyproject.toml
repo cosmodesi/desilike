@@ -23,6 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 tests = [
     "dynesty",
+    "nautilus-sampler",
     "pyclass @ git+https://github.com/adematti/pyclass"]
 plotting = [
     "matplotlib",

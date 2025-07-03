@@ -3,7 +3,7 @@ import pytest
 
 from desilike.base import BaseCalculator
 from desilike.likelihoods import BaseGaussianLikelihood
-from desilike.samplers import EmceeSampler
+from desilike.samplers import DynestySampler
 
 
 @pytest.fixture
@@ -34,19 +34,21 @@ def simple_likelihood():
     return Likelihood()
 
 
-@pytest.mark.parametrize("Sampler", [EmceeSampler])
-def test_basic(simple_likelihood, Sampler):
-    # Test that all samplers work with a simple two-dimensional likelihood.
+@pytest.mark.parametrize("Sampler, kwargs", [
+    (DynestySampler, dict(dynamic=True)),
+    (DynestySampler, dict(dynamic=False)),
+    (DynestySampler, dict(save_fn='checkpoint.pkl'))])
+def test_basic(simple_likelihood, Sampler, kwargs):
+    # Test that all samplers work with a simple two-dimensional likelihood and
+    # produce acceptable results.
 
-    sampler = Sampler(simple_likelihood, seed=42)
-    chain = sampler.run(check=True)[0].remove_burnin(0.5)
+    sampler = Sampler(simple_likelihood, rng=42, **kwargs)
+    chain = sampler.run()
 
     assert np.allclose(
-        chain.mean(sampler.varied_params), simple_likelihood.flatdata,
+        chain.mean(simple_likelihood.varied_params),
+        simple_likelihood.flatdata,
         atol=0.03, rtol=0)
     assert np.allclose(
-        chain.std(sampler.varied_params), np.sqrt(np.diag(np.linalg.inv(
-            simple_likelihood.precision))), atol=0.01, rtol=0.1)
-    assert np.allclose(
-        chain.covariance(sampler.varied_params), np.linalg.inv(
-            simple_likelihood.precision), atol=0.01, rtol=0.1)
+        chain.covariance(simple_likelihood.varied_params),
+        np.linalg.inv(simple_likelihood.precision), atol=0.01, rtol=0.1)

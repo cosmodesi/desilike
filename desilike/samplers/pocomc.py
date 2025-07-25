@@ -147,7 +147,9 @@ class PocoMCSampler(PopulationSampler):
         random_state = rng if isinstance(rng, int) else self.rng.randint(
             sys.maxsize)
 
-        kwargs = update_kwargs(kwargs, 'pocoMC', random_state=random_state)
+        kwargs = update_kwargs(
+            kwargs, 'pocoMC', pool=self.pool, output_dir=self.save_fn,
+            random_state=random_state)
 
         if self.mpicomm.rank == 0:
             prior = Prior(self.likelihood.varied_params)

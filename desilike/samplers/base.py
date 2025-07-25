@@ -152,8 +152,7 @@ class BasePosteriorSampler(BaseClass):
         self.derived = None
 
     def logposterior(self, values):
-        """
-        Compute the logarithm of the posterior.
+        """Compute the logarithm of the posterior.
 
         Parameters
         ----------
@@ -912,12 +911,11 @@ def update_kwargs(user_kwargs, sampler, **desilike_kwargs):
     return kwargs
 
 
-class NestedSampler(BaseClass):
-    """Class defining common functions used by nested samplers."""
+class PopulationSampler(BaseClass):
+    """Class defining common functions used by population samplers."""
 
     def __init__(self, likelihood, rng=None, save_fn=None, mpicomm=None):
-        """
-        Initialize the sampler.
+        """Initialize the sampler.
 
         Parameters
         ----------
@@ -961,8 +959,7 @@ class NestedSampler(BaseClass):
         set_compute_likelihood(self.compute_likelihood)
 
     def prior_transform(self, x):
-        """
-        Transform from the unit cube to parameter space using the prior.
+        """Transform from the unit cube to parameter space using the prior.
 
         Parameters
         ----------
@@ -979,8 +976,7 @@ class NestedSampler(BaseClass):
                          i, x_i in enumerate(x)])
 
     def compute_likelihood(self, x):
-        """
-        Compute the natural logarithm of the likelihood.
+        """Compute the natural logarithm of the likelihood.
 
         Parameters
         ----------
@@ -1011,8 +1007,7 @@ class NestedSampler(BaseClass):
         return log_l, blob
 
     def run_sampler(self, pool):
-        """
-        Abstract method to run the sampler from the main MPI process.
+        """Abstract method to run the sampler from the main MPI process.
 
         This needs to be implemented by the subclass.
 
@@ -1029,8 +1024,7 @@ class NestedSampler(BaseClass):
         pass
 
     def run(self, **kwargs):
-        """
-        Run the sampler.
+        """Run the sampler.
 
         Parameters
         ----------

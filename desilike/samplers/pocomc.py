@@ -1,14 +1,18 @@
-import os
+"""Module implementing the pocoMC samplers."""
 
 import numpy as np
+try:
+    import pocomc
+    POCOMC_INSTALLED = True
+except ModuleNotFoundError:
+    POCOMC_INSTALLED = False
+import sys
 
+from .base import compute_likelihood, update_kwargs, PopulationSampler
 from desilike.samples import Chain
-from desilike import utils
-from .base import BaseBatchPosteriorSampler
 
 
 class Prior(object):
-
     """Prior distribution for PocoMC."""
 
     def __init__(self, params, random_state=None):
@@ -16,40 +20,42 @@ class Prior(object):
         self.random_state = random_state
 
     def logpdf(self, x):
+        """Logarithm of the prior distribution."""
         logp = np.zeros(len(x))
         for i, dist in enumerate(self.dists):
-            logp += dist(x[:,i])
+            logp += dist(x[:, i])
         return logp
 
     def rvs(self, size=1):
+        """Sample from the pior."""
         samples = []
         for dist in self.dists:
-            samples.append(dist.sample(size=size, random_state=self.random_state))
+            samples.append(dist.sample(
+                size=size, random_state=self.random_state))
         return np.transpose(samples)
 
     @property
     def bounds(self):
+        """Bounds of the prior distribution."""
         bounds = []
         for dist in self.dists:
             bounds.append(dist.limits)
-        return np.array(bounds)
+        return np.array(bounds).astype(float)
 
     @property
     def dim(self):
+        """Dimensionality of the prior."""
         return len(self.dists)
 
 
-class PocoMCSampler(BaseBatchPosteriorSampler):
-    """
-    Wrapper for PocoMC sampler (preconditioned Monte Carlo method).
+class PocoMCSampler(PopulationSampler):
+    """Class for the pocoMC sampler.
 
     Reference
     ---------
     - https://github.com/minaskar/pocomc
     - https://arxiv.org/abs/2207.05652
     - https://arxiv.org/abs/2207.05660
-    """
-    name = 'pocomc'
 
     def __init__(self, *args, n_active=250, n_ess=1000, flow='maf6', train_config=None,
                  precondition=True, n_prior=None, sample='tpcn', max_steps=None, patience=None, ess_threshold=None, **kwargs):
@@ -59,27 +65,20 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         Parameters
         ----------
         likelihood : BaseLikelihood
-            Input likelihood.
+            Likelihood to sample.
 
-        n_active : int, str, default=250
-            The number of active particles (default is ``n_active=250``). It must be smaller than ``n_ess``.
-            Defaults to :attr:`Chain.shape[1]` of input chains, if any,
-            else ``2 * max((int(2.5 * ndim) + 1) // 2, 2)``.
-            Can be given in dimension units, e.g. '3 * ndim'.
+        rng : numpy.random.RandomState or int, optional
+            Random number generator. Default is ``None``.
 
-        n_ess : int, default=1000
-            The effective sample size maintained during the run (default is ``n_ess=1000``).
+        save_fn : str, Path, optional
+            Save samples to this location. Default is ``None``.
 
         flow : ``torch.nn.Module``
             Normalizing flow (default is ``maf6``). The default is a Masked Autoregressive Flow
             (MAF) with 6 blocks of 3x64 layers and residual connections.
 
-        train_config : dict, default=None
-            Configuration for training the normalizing flow
-            (default is ``train_config=None``). Options include a dictionary with the following
-            keys: ``"validation_split"``, ``"epochs"``, ``"batch_size"``, ``"patience"``,
-            ``"learning_rate"``, ``"annealing"``, ``"gaussian_scale"``, ``"laplace_scale"``,
-            ``"noise"``, ``"shuffle"``, ``"clip_grad_norm"``, ``"verbose"``.
+        kwargs: dict, optional
+            Extra keyword arguments passed to pocoMC during initialization.
 
         precondition : bool, default=True
             If True, use preconditioned MCMC (default is ``precondition=True``). If False,
@@ -143,42 +142,34 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
             raise ValueError('save_fn must be provided, in order to save pocomc state')
         self.state_fn = [os.path.splitext(fn)[0] + '.pocomc.state' for fn in self.save_fn]
 
-    def loglikelihood(self, values):
-        return self.logposterior(values) - self.prior.logpdf(values)
+        super().__init__(likelihood, rng=rng, save_fn=save_fn, mpicomm=mpicomm)
 
-    def _prepare(self):
-        self.resume = self.mpicomm.bcast(any(chain is not None for chain in self.chains), root=0)
-        #self.chains = [None] * len(self.chains)
+        random_state = rng if isinstance(rng, int) else self.rng.randint(
+            sys.maxsize)
 
-    def run(self, *args, **kwargs):
-        """
-        Run chains. Sampling can be interrupted anytime, and resumed by providing the path to the saved chains in ``chains`` argument of :meth:`__init__`.
+        kwargs = update_kwargs(kwargs, 'pocoMC', random_state=random_state)
 
-        One will typically run sampling on ``nchains * nprocs_per_chain`` processes,
-        with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max(mpicomm.size // nchains, 1)``
-        the number of processes per chain.
+        if self.mpicomm.rank == 0:
+            prior = Prior(self.likelihood.varied_params)
+            self.sampler = pocomc.Sampler(prior, compute_likelihood, **kwargs)
+        else:
+            self.sampler = None
+
+    def run_sampler(self, **kwargs):
+        """Run the pocoMC sampler.
 
         Parameters
         ----------
-        min_iterations : int, default=100
-            Minimum number of iterations (MCMC steps) to run (to avoid early stopping
-            if convergence criteria below are satisfied by chance at the beginning of the run).
+        kwargs: dict, optional
+            Extra keyword arguments passed to pocoMC's ``run`` method.
 
-        max_iterations : int, default=sys.maxsize
-            Maximum number of iterations (MCMC steps) to run.
+        Returns
+        -------
+        Chain
+            Sampler results.
 
-        check_every : int, default=300
-            Samples are saved and convergence checks are run every ``check_every`` iterations.
-
-        check : bool, dict, default=None
-            If ``False``, no convergence checks are run.
-            If ``True`` or ``None``, convergence checks are run.
-            A dictionary of convergence criteria can be provided, see :meth:`check`.
-
-        thin_by : int, default=1
-            Thin samples by this factor.
         """
-        return super(PocoMCSampler, self).run(*args, **kwargs)
+        self.sampler.run(**kwargs)
 
     def _run_one(self, start, niterations=300, progress=False, **kwargs):
         load_state_bak = type(self.sampler).load_state

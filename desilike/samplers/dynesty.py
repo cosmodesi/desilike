@@ -8,17 +8,23 @@ except ModuleNotFoundError:
 import numpy as np
 
 from .base import (prior_transform, compute_likelihood, update_kwargs,
-                   NestedSampler)
+                   PopulationSampler)
 from desilike.samples import Chain
 
 
-class DynestySampler(NestedSampler):
-    """Class for the dynesty samplers."""
+class DynestySampler(PopulationSampler):
+    """Class for the dynesty samplers.
+
+    Reference
+    ---------
+    - https://github.com/joshspeagle/dynesty
+    - https://doi.org/10.1093/mnras/staa278
+
+    """
 
     def __init__(self, likelihood, rng=None, save_fn=None, mpicomm=None,
                  dynamic=True, **kwargs):
-        """
-        Initialize the dynesty sampler.
+        """Initialize the dynesty sampler.
 
         Parameters
         ----------
@@ -36,8 +42,8 @@ class DynestySampler(NestedSampler):
             :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
 
         dynamic : boolean, optional
-            If True, use ``dynesty.DynamicNestedSampler`` instead of
-            ``dynesty.NestedSampler``. Default is True.
+            If True, use ``dynesty.DynamicPopulationSampler`` instead of
+            ``dynesty.PopulationSampler``. Default is True.
 
         kwargs: dict, optional
             Extra keyword arguments passed to dynesty during initialization.
@@ -59,15 +65,15 @@ class DynestySampler(NestedSampler):
         if self.mpicomm.rank == 0:
             args = (compute_likelihood, prior_transform, self.n_dim)
             if dynamic:
-                self.sampler = dynesty.DynamicNestedSampler(*args, **kwargs)
+                self.sampler = dynesty.DynamicNestedSampler(
+                    *args, **kwargs)
             else:
                 self.sampler = dynesty.NestedSampler(*args, **kwargs)
         else:
             self.sampler = None
 
     def run_sampler(self, **kwargs):
-        """
-        Run the dynesty sampler.
+        """Run the dynesty sampler.
 
         Parameters
         ----------

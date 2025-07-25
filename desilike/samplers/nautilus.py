@@ -9,17 +9,23 @@ except ModuleNotFoundError:
 import numpy as np
 
 from .base import (prior_transform, compute_likelihood, update_kwargs,
-                   NestedSampler)
+                   PopulationSampler)
 from desilike.samples import Chain
 
 
-class NautilusSampler(NestedSampler):
-    """Class for the nautilus sampler."""
+class NautilusSampler(PopulationSampler):
+    """Class for the nautilus sampler.
+
+    Reference
+    ---------
+    - https://github.com/johannesulf/nautilus
+    - https://doi.org/10.1093/mnras/stad2441
+
+    """
 
     def __init__(self, likelihood, rng=None, save_fn=None, mpicomm=None,
                  **kwargs):
-        """
-        Initialize the nautilus sampler.
+        """Initialize the nautilus sampler.
 
         Parameters
         ----------
@@ -53,14 +59,13 @@ class NautilusSampler(NestedSampler):
             pool=self.pool, seed=seed)
 
         if self.mpicomm.rank == 0:
-            args = (prior_transform, compute_likelihood, self.n_dim)
-            self.sampler = nautilus.Sampler(*args, **kwargs)
+            self.sampler = nautilus.Sampler(
+                prior_transform, compute_likelihood, self.n_dim, **kwargs)
         else:
             self.sampler = None
 
     def run_sampler(self, **kwargs):
-        """
-        Run the nautilus sampler.
+        """Run the nautilus sampler.
 
         Parameters
         ----------

@@ -3,7 +3,7 @@ import pytest
 
 from desilike.base import BaseCalculator
 from desilike.likelihoods import BaseGaussianLikelihood
-from desilike.samplers import DynestySampler, NautilusSampler
+from desilike.samplers import DynestySampler, NautilusSampler, PocoMCSampler
 
 
 @pytest.fixture
@@ -38,10 +38,14 @@ def simple_likelihood():
     (DynestySampler, dict(dynamic=True)),
     (DynestySampler, dict(dynamic=False)),
     (DynestySampler, dict(save_fn='checkpoint.pkl')),
-    (NautilusSampler, dict(save_fn='checkpoint.h5'))])
-def test_basic(simple_likelihood, Sampler, kwargs):
+    (NautilusSampler, dict(save_fn='checkpoint.h5')),
+    (PocoMCSampler, dict())])
+def test_basic(simple_likelihood, tmp_path, Sampler, kwargs):
     # Test that all samplers work with a simple two-dimensional likelihood and
     # produce acceptable results.
+
+    if 'save_fn' in kwargs:
+        kwargs['save_fn'] = str(tmp_path / kwargs['save_fn'])
 
     sampler = Sampler(simple_likelihood, rng=42, **kwargs)
     chain = sampler.run()

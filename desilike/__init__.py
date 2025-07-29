@@ -10,4 +10,4 @@ from .fisher import Fisher, LikelihoodFisher, FisherGaussianLikelihood
 from .install import Installer
 Installer().setenv()
 
-__version__ = "0.0.1"
+from ._version import __version__

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from desilike import samplers
+from desilike.samplers import samplers
 from desilike.base import BaseCalculator
 from desilike.likelihoods import BaseGaussianLikelihood
 
@@ -40,7 +40,7 @@ def simple_likelihood():
     (samplers.DynestySampler, dict(save_fn='checkpoint.pkl')),
     (samplers.NautilusSampler, dict(save_fn='checkpoint.h5')),
     (samplers.PocoMCSampler, dict()),
-    (samplers.EmceeSampler, dict(nchains=5))])
+    (samplers.EmceeSampler, dict())])
 def test_basic(simple_likelihood, tmp_path, Sampler, kwargs):
     # Test that all samplers work with a simple two-dimensional likelihood and
     # produce acceptable results.
@@ -48,7 +48,10 @@ def test_basic(simple_likelihood, tmp_path, Sampler, kwargs):
     if 'save_fn' in kwargs:
         kwargs['save_fn'] = str(tmp_path / kwargs['save_fn'])
 
-    sampler = Sampler(simple_likelihood, rng=42, **kwargs)
+    if issubclass(Sampler, samplers.base.MarkovChainSampler):
+        sampler = Sampler(simple_likelihood, 4, rng=42, **kwargs)
+    else:
+        sampler = Sampler(simple_likelihood, rng=42, **kwargs)
     chain = sampler.run()
 
     assert np.allclose(

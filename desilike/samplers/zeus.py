@@ -1,132 +1,93 @@
-import logging
-import random
+"""Module implementing the zeus sampler."""
 
-import numpy as np
+try:
+    import zeus
+    ZEUS_INSTALLED = True
+except ModuleNotFoundError:
+    ZEUS_INSTALLED = False
 
+from .base import compute_posterior, update_kwargs, MarkovChainSampler
 from desilike.samples import Chain
-from desilike import utils
-from .base import BaseBatchPosteriorSampler
-from .utils import numpy_to_python_random_state
 
 
-class ZeusSampler(BaseBatchPosteriorSampler):
-
-    """
-    Wrapper for the zeus sampler (Ensemble Slice Sampling method).
+class ZeusSampler(MarkovChainSampler):
+    """Wrapper for the ensemble slice sampler zeus.
 
     Reference
     ---------
     - https://github.com/minaskar/zeus
     - https://arxiv.org/abs/2002.06212
     - https://arxiv.org/abs/2105.03468
+
     """
 
-    name = 'zeus'
-
-    def __init__(self, *args, nwalkers=None, light_mode=False, **kwargs):
-        """
-        Initialize zeus sampler.
+    def __init__(self, likelihood, n_chains, rng=None, save_fn=None,
+                 mpicomm=None, **kwargs):
+        """Initialize the zeus sampler.
 
         Parameters
         ----------
         likelihood : BaseLikelihood
-            Input likelihood.
+            Likelihood to sample.
 
-        nwalkers : int, str, default=None
-            Number of walkers, defaults to :attr:`Chain.shape[1]` of input chains, if any,
-            else ``2 * max((int(2.5 * ndim) + 1) // 2, 2)``.
-            Can be given in dimension units, e.g. ``'3 * ndim'``.
+        rng : numpy.random.RandomState or int, optional
+            Random number generator. Default is ``None``.
 
-        light_mode : bool, default=False
-            If ``True`` then no expansions are performed after the tuning phase.
-            This can significantly reduce the number of likelihood evaluations but works best in target distributions that are approximately Gaussian.
+        save_fn : str, Path, optional
+            Save samples to this location. Default is ``None``.
 
-        rng : np.random.RandomState, default=None
-            Random state. If ``None``, ``seed`` is used to set random state.
+        mpicomm : mpi.COMM_WORLD, optional
+            MPI communicator. If ``None``, defaults to ``likelihood``'s
+            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
 
-        seed : int, default=None
-            Random seed.
+        kwargs: dict, optional
+            Extra keyword arguments passed to dynesty during initialization.
 
-        max_tries : int, default=1000
-            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
-
-        chains : str, Path, Chain
-            Path to or chains to resume from.
-
-        ref_scale : float, default=1.
-            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor.
-
-        save_fn : str, Path, default=None
-            If not ``None``, save samples to this location.
-
-        mpicomm : mpi.COMM_WORLD, default=None
-            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
         """
-        super(ZeusSampler, self).__init__(*args, **kwargs)
-        ndim = len(self.varied_params)
-        if nwalkers is None:
-            shapes = self.mpicomm.bcast([chain.shape if chain is not None else None for chain in self.chains], root=0)
-            if any(shape is not None for shape in shapes):
-                try:
-                    nwalkers = shapes[0][1]
-                    assert all(shape[1] == nwalkers for shape in shapes)
-                except (IndexError, AssertionError) as exc:
-                    raise ValueError('Impossible to find number of walkers from input chains of shapes {}'.format(shapes)) from exc
-            else:
-                nwalkers = 2 * max((int(2.5 * ndim) + 1) // 2, 2)
-        self.nwalkers = utils.evaluate(nwalkers, type=int, locals={'ndim': ndim})
-        import zeus
-        handlers = logging.root.handlers.copy()
-        level = logging.root.level
-        self.sampler = zeus.EnsembleSampler(self.nwalkers, ndim, self.logposterior, verbose=False, light_mode=bool(light_mode), vectorize=True)
-        logging.root.handlers = handlers
-        logging.root.level = level
+        if not ZEUS_INSTALLED:
+            raise ImportError("The 'zeus-mcmc' package is required but not "
+                              "installed.")
 
-    def run(self, *args, **kwargs):
-        """
-        Run chains. Sampling can be interrupted anytime, and resumed by providing the path to the saved chains in ``chains`` argument of :meth:`__init__`.
+        super().__init__(likelihood, n_chains, rng=rng, save_fn=save_fn,
+                         mpicomm=mpicomm)
 
-        One will typically run sampling on ``nchains * nprocs_per_chain`` processes,
-        with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max(mpicomm.size // nchains, 1)``
-        the number of processes per chain.
+        kwargs = update_kwargs(kwargs, 'zeus', pool=self.pool, args=None,
+                               kwargs=None, vectorize=False)
+
+        if self.mpicomm.rank == 0:
+            self.sampler = zeus.EnsembleSampler(
+                self.n_chains, self.n_dim, compute_posterior, **kwargs)
+        else:
+            self.sampler = None
+
+    def run_sampler(self, n_steps, **kwargs):
+        """Run the zeus sampler.
 
         Parameters
         ----------
-        min_iterations : int, default=100
-            Minimum number of iterations (MCMC steps) to run (to avoid early stopping
-            if convergence criteria below are satisfied by chance at the beginning of the run).
+        kwargs: dict, optional
+            Extra keyword arguments passed to zeus's ``run_mcmc`` method.
 
-        max_iterations : int, default=sys.maxsize
-            Maximum number of iterations (MCMC steps) to run.
+        Returns
+        -------
+        Chain
+            Sampler results.
 
-        check_every : int, default=300
-            Samples are saved and convergence checks are run every ``check_every`` iterations.
-
-        check : bool, dict, default=None
-            If ``False``, no convergence checks are run.
-            If ``True`` or ``None``, convergence checks are run.
-            A dictionary of convergence criteria can be provided, see :meth:`check`.
-
-        thin_by : int, default=1
-            Thin samples by this factor.
         """
-        return super(ZeusSampler, self).run(*args, **kwargs)
+        kwargs = update_kwargs(kwargs, 'zeus', nsteps=n_steps, log_prob0=None)
 
-    def _run_one(self, start, niterations=300, thin_by=1, progress=False):
-        py_random_state_bak, np_random_state_bak = random.getstate(), np.random.get_state()
-        random.setstate(numpy_to_python_random_state(self.rng.get_state()))  # self.rng is same for all ranks
-        np.random.set_state(self.rng.get_state())
-        #self.sampler.__dict__.update(getattr(self, '_state', {}))
-        for _ in self.sampler.sample(start=start, iterations=niterations, progress=progress, thin_by=thin_by):
-            pass
-        chain = self.sampler.get_chain()
-        data = [chain[..., iparam] for iparam, param in enumerate(self.varied_params)] + [self.sampler.get_log_prob()]
-        #self._state = self.sampler.__dict__.copy()
-        self.sampler.reset()
-        random.setstate(py_random_state_bak)
-        np.random.set_state(np_random_state_bak)
-        return Chain(data=data, params=self.varied_params + ['logposterior'])
+        if self.chains is None:
+            start = self.start
+            kwargs['log_prob0'] = self.log_p_start
+        else:
+            start = None
 
-    @classmethod
-    def install(cls, config):
-        config.pip('zeus-mcmc')
+        self.sampler.run_mcmc(start, **kwargs)
+
+        chains_data = self.sampler.get_chain()
+        log_p = self.sampler.get_log_prob()
+        self.chains = []
+        for i in range(self.n_chains):
+            self.chains.append(Chain(
+                [p for p in chains_data[:, i, :].T] + [log_p[:, i]],
+                params=self.likelihood.varied_params + ['logposterior']))

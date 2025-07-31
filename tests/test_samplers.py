@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from desilike.samplers import samplers
+from desilike import samplers
 from desilike.base import BaseCalculator
 from desilike.likelihoods import BaseGaussianLikelihood
 

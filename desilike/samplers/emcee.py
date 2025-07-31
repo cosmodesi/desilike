@@ -59,7 +59,7 @@ class EmceeSampler(MarkovChainSampler):
         else:
             self.sampler = None
 
-    def run_sampler(self, start, n_steps, **kwargs):
+    def run_sampler(self, n_steps, **kwargs):
         """Run the emcee sampler.
 
         Parameters
@@ -73,9 +73,13 @@ class EmceeSampler(MarkovChainSampler):
             Sampler results.
 
         """
-        kwargs = update_kwargs(kwargs, 'emcee', rstate0=self.rng)
+        if self.chains is None:
+            initial_state = emcee.State(self.start, log_prob=self.log_p_start,
+                                        random_state=self.rng)
+        else:
+            initial_state = None
 
-        self.sampler.run_mcmc(start, n_steps, **kwargs)
+        self.sampler.run_mcmc(initial_state, n_steps, **kwargs)
 
         chains_data = self.sampler.get_chain()
         log_p = self.sampler.get_log_prob()

@@ -10,7 +10,7 @@ import warnings
 
 import numpy as np
 
-from desilike.samples import Samples, diagnostics
+from desilike.samples import Chain, Samples, diagnostics
 from desilike.utils import BaseClass
 from .mpi_pool import MPIPool
 
@@ -92,7 +92,7 @@ def update_kwargs(user_kwargs, sampler, **desilike_kwargs):
 
 
 class BaseSampler(BaseClass):
-    """Class defining common functions used by all samplers."""
+    """Abstract class defining common functions used by all samplers."""
 
     def __init__(self, likelihood, rng=None, save_fn=None, mpicomm=None):
         """Initialize the sampler.
@@ -111,11 +111,6 @@ class BaseSampler(BaseClass):
 
         """
         self.likelihood = likelihood
-        for param in likelihood.varied_params:
-            if not hasattr(param.prior, 'ppf'):
-                raise AttributeError(
-                    f"Cannot perform prior transform for parameter '{param}'. "
-                    "The prior must be proper and have a 'ppf' argument.")
         self.n_dim = len(self.likelihood.varied_params)
 
         if isinstance(rng, int):
@@ -295,22 +290,59 @@ class MarkovChainSampler(BaseSampler):
         set_compute_prior(self.compute_prior)
         set_compute_likelihood(self.compute_likelihood)
 
-    def run_sampler(self, iterations, start=None, **kwargs):
+    def run_sampler(self, n_steps, **kwargs):
         """Abstract method to run the sampler from the main MPI process.
 
         This needs to be implemented by the subclass.
 
         Parameters
         ----------
-        iterations : int
-            How many iterations to run.
+        n_steps : int
+            How many steps to run.
         kwargs: dict, optional
             Extra keyword arguments passed to sampler's run method.
 
         """
         pass
 
-    def check(self, criteria, burnin=0.5, quiet=False):
+    def initialize_chains(self, max_tries=100, start=None):
+        """Initialize the chains.
+
+        Parameters
+        ----------
+        max_tries : int or None, optional
+            Maximum number of attempts for each chain. If None, there is
+            no limit. Default is None.
+
+        """
+        if start is None:
+            start = np.zeros((self.n_chains, self.n_dim))
+            log_p = np.repeat(-np.inf, self.n_chains)
+            n_try = 0
+
+            while n_try < max_tries and not np.all(np.isfinite(log_p)):
+                use = ~np.isfinite(log_p)
+                for i, param in enumerate(self.likelihood.varied_params):
+                    if param.ref.is_proper():
+                        start[use, i] = param.ref.sample(
+                            size=np.sum(use), random_state=self.rng)
+                    else:
+                        start[use, i] = np.full(np.sum(use), param.value)
+
+                log_p[use] = self.pool.map(compute_posterior, start[use])
+                n_try += 1
+
+            if not np.all(np.isfinite(log_p)):
+                raise ValueError('Could not find finite posterior '
+                                 f'after {max_tries:d} tries.')
+        else:
+            log_p = self.pool.map(compute_posterior, start)
+
+        self.start = start
+        self.log_p_start = log_p
+        self.chains = None
+
+    def check(self, criteria, burn_in=0.2, quiet=False):
         """Check the status of the sampling, including convergence.
 
         This function will also output the status of the analysis to the log.
@@ -319,17 +351,17 @@ class MarkovChainSampler(BaseSampler):
         ----------
         criteria : dict
             Criteria for the chains to be considered converged.
-        burnin : float or int, optional
+        burn_in : float or int, optional
             Fraction of samples to remove from each chain for convergence
             tests. If an integer, number of iterations (steps) to remove.
-            Default is 0.
+            Default is 0.2.
         quiet : bool, optional
             If True, do not log results. Default is False.
 
         Raises
         ------
         ValueError
-            If a convergence criterion is not recognized or ``burnin`` is a
+            If a convergence criterion is not recognized or ``burn_in`` is a
             float and bigger than unity.
 
         Returns
@@ -344,17 +376,13 @@ class MarkovChainSampler(BaseSampler):
                     f"Unknown convergence criterion '{key}'. Known criteria "
                     f"are {type(self).criteria}.")
 
-        if isinstance(burnin, float):
-            if burnin > 1:
-                raise ValueError(
-                    f"'burnin' cannot be a float and bigger than 1. Received "
-                    f"{burnin}.")
-            burnin = int(burnin * len(self.chains[0]) + 0.5)
+        if isinstance(burn_in, float):
+            burn_in = int(burn_in * len(self.chains[0]) + 0.5)
 
         if not quiet:
             self.log_info('Diagnostics:')
 
-        chains = [chain[burnin:] for chain in self.chains]
+        chains = [chain[burn_in:] for chain in self.chains]
 
         gelman_rubin_diag = np.amax(diagnostics.gelman_rubin(
             chains, method='diag'))
@@ -369,14 +397,6 @@ class MarkovChainSampler(BaseSampler):
                 [gelman_rubin_diag, gelman_rubin_eigen]):
             if not quiet:
                 self.log_info(f"{name}: {value:.3g}")
-            if f'{key}_max' in criteria:
-                threshold = criteria[f'{key}_max']
-                passed = value < threshold
-                converged = converged and passed
-                if not quiet:
-                    self.log_info(
-                        f"{name}: {value:.3g} {'<' if passed else '>'} "
-                        f"{threshold:.3g} ({'' if passed else 'not '}passed)")
             if f'{key}_min' in criteria:
                 threshold = criteria[f'{key}_max']
                 passed = value > threshold
@@ -385,15 +405,27 @@ class MarkovChainSampler(BaseSampler):
                     self.log_info(
                         f"{name}: {value:.3g} {'>' if passed else '<'} "
                         f"{threshold:.3g} ({'' if passed else 'not '}passed)")
+            if f'{key}_max' in criteria:
+                threshold = criteria[f'{key}_max']
+                passed = value < threshold
+                converged = converged and passed
+                if not quiet:
+                    self.log_info(
+                        f"{name}: {value:.3g} {'<' if passed else '>'} "
+                        f"{threshold:.3g} ({'' if passed else 'not '}passed)")
 
         return converged
 
-    def run(self, start=None, start_tries=100, check_every=10, checks_passed=1,
-            criteria=dict(gelman_rubin_diag_max=1.1), **kwargs):
+    def run(self, start=None, start_tries=100, burn_in=0.2,
+            check_every=10, checks_passed=10,
+            criteria=dict(gelman_rubin_diag_max=1.1), flat=True, **kwargs):
         """Run the sampler.
 
         Parameters
         ----------
+        chains_resume : Chain or None, optional
+            If not None, resume sampling from these chains. Otherwise, start
+            from scratch. Default is None.
         max_tries : int or None, optional
             Maximum number of attempts for each chain. If None, there is
             no limit. Default is None.
@@ -406,44 +438,31 @@ class MarkovChainSampler(BaseSampler):
             Sampler results.
 
         """
+        if isinstance(burn_in, float):
+            if burn_in > 1:
+                raise ValueError(
+                    f"'burn_in' cannot be a float and bigger than 1. Received "
+                    f"{burn_in}.")
+
         if self.mpicomm.rank == 0:
 
-            # Determine a starting position if not provided.
-            if self.chains is None and start is None:
-                if start_tries is None:
-                    start_tries = float('inf')
+            # Initialize the chains.
+            self.initialize_chains(max_tries=start_tries, start=start)
 
-                start = np.zeros((self.n_chains, self.n_dim))
-                log_p = np.repeat(-np.inf, self.n_chains)
-                tries = 0
-
-                while tries < start_tries and not np.all(np.isfinite(log_p)):
-                    use = ~np.isfinite(log_p)
-                    for i, param in enumerate(self.likelihood.varied_params):
-                        if param.ref.is_proper():
-                            start[use, i] = param.ref.sample(
-                                size=np.sum(use), random_state=self.rng)
-                        else:
-                            start[use, i] = np.full(np.sum(use), param.value)
-                    if self.mpicomm.rank == 0:
-                        log_p[use] = list(map(compute_posterior, start[use]))
-                    tries += 1
-
-                if not np.all(np.isfinite(log_p)):
-                    raise ValueError('Could not find finite posterior '
-                                     f'after {start_tries:d} tries.')
-
-            chains = self.run_sampler(start, check_every, **kwargs)
-            n_passed = int(self.check(criteria))
-
-            while n_passed < checks_passed:
-                chains = self.run_sampler(None, check_every, **kwargs)
+            n_checks = 0
+            while n_checks < checks_passed:
+                self.run_sampler(check_every, **kwargs)
                 if self.check(criteria):
-                    n_passed += 1
+                    n_checks += 1
                 else:
-                    n_passed = 0
+                    n_checks = 0
         else:
             self.pool.wait()
         self.pool.stop_wait()
 
-        return self.mpicomm.bcast(chains, root=0)
+        burn_in = int(burn_in * len(self.chains[0]) + 0.5)
+        chains = [chain[burn_in:] for chain in self.chains]
+        if flat:
+            chains = Chain.concatenate(chains)
+
+        return chains

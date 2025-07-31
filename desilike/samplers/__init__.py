@@ -1,15 +1,17 @@
-# from .grid import GridSampler
-# from .qmc import QMCSampler
-from .emcee import EmceeSampler
-# from .zeus import ZeusSampler
-from .pocomc import PocoMCSampler
+"""Module providing wrappers for commonly used samplers."""
+
 from .dynesty import DynestySampler
-from .nautilus import NautilusSampler
+from .emcee import EmceeSampler
+# from .grid import GridSampler
 # from .hmc import HMCSampler
-# from .nuts import NUTSSampler
-# from .mclmc import MCLMCSampler
 # from .importance import ImportanceSampler
-try:
-    from .mcmc import MCMCSampler
-except ImportError:
-    pass
+# from .mclmc import MCLMCSampler
+# from .mcmc import MCMCSampler
+from .nautilus import NautilusSampler
+# from .nuts import NUTSSampler
+from .pocomc import PocoMCSampler
+# from .qmc import QMCSampler
+from .zeus import ZeusSampler
+
+__all__ = ['DynestySampler', 'EmceeSampler', 'NautilusSampler',
+           'PocoMCSampler', 'ZeusSampler']

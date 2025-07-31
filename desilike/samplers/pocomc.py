@@ -121,8 +121,3 @@ class PocoMCSampler(PopulationSampler):
         chain = [samples[..., i] for i in range(self.n_dim)]
         chain.append(weights)
         return Chain(chain, params=self.likelihood.varied_params + ['aweight'])
-
-    @classmethod
-    def install(cls, config):
-        """Install pocoMC."""
-        config.pip('pocomc')

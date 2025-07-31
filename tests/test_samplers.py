@@ -1,9 +1,9 @@
 import numpy as np
 import pytest
 
+from desilike import samplers
 from desilike.base import BaseCalculator
 from desilike.likelihoods import BaseGaussianLikelihood
-from desilike.samplers import DynestySampler, NautilusSampler, PocoMCSampler
 
 
 @pytest.fixture
@@ -35,11 +35,12 @@ def simple_likelihood():
 
 
 @pytest.mark.parametrize("Sampler, kwargs", [
-    (DynestySampler, dict(dynamic=True)),
-    (DynestySampler, dict(dynamic=False)),
-    (DynestySampler, dict(save_fn='checkpoint.pkl')),
-    (NautilusSampler, dict(save_fn='checkpoint.h5')),
-    (PocoMCSampler, dict())])
+    (samplers.DynestySampler, dict(dynamic=True)),
+    (samplers.DynestySampler, dict(dynamic=False)),
+    (samplers.DynestySampler, dict(save_fn='checkpoint.pkl')),
+    (samplers.NautilusSampler, dict(save_fn='checkpoint.h5')),
+    (samplers.PocoMCSampler, dict()),
+    (samplers.EmceeSampler, dict(nchains=5))])
 def test_basic(simple_likelihood, tmp_path, Sampler, kwargs):
     # Test that all samplers work with a simple two-dimensional likelihood and
     # produce acceptable results.

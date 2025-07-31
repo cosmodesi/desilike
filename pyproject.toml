@@ -26,6 +26,7 @@ tests = [
     "dynesty",
     "nautilus-sampler",
     "pocomc",
+    "zeus-mcmc",
     "h5py",
     "pyclass @ git+https://github.com/adematti/pyclass"]
 plotting = [

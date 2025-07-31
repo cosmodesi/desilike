@@ -96,8 +96,3 @@ class DynestySampler(PopulationSampler):
         chain.append(np.exp(results.logwt - results.logz[-1]))
         return Chain(chain, params=self.likelihood.varied_params +
                      ['logweight', 'aweight'])
-
-    @classmethod
-    def install(cls, config):
-        """Install dynesty."""
-        config.pip('dynesty')

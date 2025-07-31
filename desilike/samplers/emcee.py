@@ -84,8 +84,3 @@ class EmceeSampler(MarkovChainSampler):
             self.chains.append(Chain(
                 [p for p in chains_data[:, i, :].T] + [log_p[:, i]],
                 params=self.likelihood.varied_params + ['logposterior']))
-
-    @classmethod
-    def install(cls, config):
-        """Install emcee."""
-        config.pip('emcee')

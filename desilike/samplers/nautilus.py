@@ -47,8 +47,8 @@ class NautilusSampler(PopulationSampler):
 
         """
         if not NAUTILUS_INSTALLED:
-            raise ImportError("The 'nautilus' package is required but not "
-                              "installed.")
+            raise ImportError("The 'nautilus-sampler' package is required but "
+                              "not installed.")
 
         super().__init__(likelihood, rng=rng, save_fn=save_fn, mpicomm=mpicomm)
 
@@ -86,8 +86,3 @@ class NautilusSampler(PopulationSampler):
         chain.append(np.exp(log_w - self.sampler.log_z))
         return Chain(chain, params=self.likelihood.varied_params +
                      ['logweight', 'aweight'])
-
-    @classmethod
-    def install(cls, config):
-        """Install nautilus."""
-        config.pip('nautilus-sampler')

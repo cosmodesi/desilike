@@ -9,7 +9,7 @@ from desilike import LikelihoodFisher
 
 from . import utils
 
-#testsj
+#testsj jim was here too!
 
 def vectorize(func):
     """Vectorize input function ``func`` for input parameters."""

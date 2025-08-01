@@ -1,136 +1,71 @@
+"""Module implementing a generic grid sampler for low-dimensional problems."""
+
 import numpy as np
 
-from desilike import mpi
-from desilike.base import vmap
-from desilike.parameter import ParameterPriorError, Samples
-from desilike.utils import BaseClass, expand_dict
+from .base import StaticSampler
+from desilike.parameter import ParameterPriorError
+from desilike.utils import expand_dict
 
 
-class GridSampler(BaseClass):
+class GridSampler(StaticSampler):
+    """A simple grid sampler."""
 
-    """Evalue calculator on a grid."""
-    name = 'grid'
-
-    def __init__(self, calculator, mpicomm=None, save_fn=None, **kwargs):
-        r"""
-        Initialize grid.
+    def get_points(self, size=10, include_value=False, grid=None):
+        """Get points on the grid.
 
         Parameters
         ----------
-        calculator : BaseCalculator
-            Input calculator.
+        size : dict or int, optional
+            A dictionary giving the grid size along each dimension. Wildcards
+            are supported. It can also be a single integer in which case
+            it will be applied along all dimenions. Default is 10.
 
-        mpicomm : mpi.COMM_WORLD, default=None
-            MPI communicator. If ``None``, defaults to ``calculator``'s :attr:`BaseCalculator.mpicomm`.
+        include_value : bool, optional
+            If True, force the default value of each parameter to be included
+            in the grid. Default is False.
 
-        save_fn : str, Path, default=None
-            If not ``None``, save samples to this location.
+        grid : dict or None, optional
+            A dictionary giving the values to sample for each parameter. If
+            given for a parameter, ``size`` and ``include_default`` are
+            ignored for that parameter. Default is None.
 
-        size : int, dict, default=1
-            A dictionary mapping parameter name to grid size for this parameter.
-            Can be a single value, used for all parameters.
-
-        ref_scale : float, default=1.
-            Parameter grid ranges are inferred from limits of reference distribution if bounded (and has no scale),
-            else :attr:`Parameter.proposal`.
-            These values are then scaled by ``ref_scale`` (< 1. means smaller ranges).
-
-        grid : array, dict, default=None
-            A dictionary mapping parameter name (including wildcard) to values.
-            If provided, ``size`` and ``ref_scale`` are ignored.
+        Returns
+        -------
+        numpy.ndarray of shape (n_points, n_dim)
+            Grid to be evaluated.
         """
-        # self.pipeline = calculator.runtime_info.pipeline
-        self.calculator = calculator
-        if mpicomm is None:
-            mpicomm = calculator.mpicomm
-        self.mpicomm = mpicomm
-        self.varied_params = self.calculator.varied_params
-        self.save_fn = save_fn
-        self.set_grid(**kwargs)
-
-    @property
-    def mpicomm(self):
-        return self._mpicomm
-
-    @mpicomm.setter
-    def mpicomm(self, mpicomm):
-        self._mpicomm = mpicomm
-
-    def set_grid(self, size=1, ref_scale=1., grid=None):
-        self.ref_scale = float(ref_scale)
-        self.grid = expand_dict(grid, self.varied_params.names())
-        self.size = expand_dict(size, self.varied_params.names())
-        for param in self.varied_params:
-            grid, size = self.grid[param.name], self.size[param.name]
-            if grid is None:
-                if size is None:
+        size = expand_dict(size, self.likelihood.varied_params.names())
+        grid = expand_dict(grid, self.likelihood.varied_params.names())
+        for param in self.likelihood.varied_params:
+            if grid[param.name] is None:
+                if size[param.name] is None:
+                    raise ValueError("Neither size nor grid specified for "
+                                     f"parameter {param.name}")
+                if int(size[param.name]) < 1:
                     raise ValueError(
-                        'size (and grid) not specified for parameter {}'.format(param))
-                size = int(size)
-                if size < 1:
-                    raise ValueError(
-                        'size is {} < 1 for parameter {}'.format(size, param))
-                center = param.value
-                limits = np.array(param.ref.limits)
-                if not limits[0] <= param.value <= limits[1]:
-                    raise ParameterPriorError('Parameter {} value {} is not in reference limits {}'.format(
-                        param, param.value, param.ref.limits))
-                if size == 1:
-                    grid = [center]
+                        f"Size {int(size)} for parameter {param.name} is not "
+                        f"positive.")
+                value = param.value
+                if param.ref.is_limited():
+                    start, stop = param.ref.limits
+                elif param.proposal is not None:
+                    start = value - param.proposal
+                    stop = value + param.proposal
                 else:
-                    if param.ref.is_limited() and not hasattr(param.ref, 'scale'):
-                        edges = self.ref_scale * (limits - center) + center
-                    elif param.proposal:
-                        edges = self.ref_scale * \
-                            np.array(
-                                [-param.proposal, param.proposal]) + center
-                    else:
-                        raise ParameterPriorError(
-                            'Provide proper parameter reference distribution or proposal for {}'.format(param))
-                    low, high = np.linspace(
-                        edges[0], center, size // 2 + 1), np.linspace(center, edges[1], size // 2 + 1)
-                    if size % 2:
-                        grid = np.concatenate([low, high[1:]])
-                    else:
-                        grid = np.concatenate([low[:-1], high[1:]])
-                if self.mpicomm.rank == 0:
-                    self.log_info('{} grid is {}.'.format(param, grid))
-            else:
-                grid = np.sort(np.ravel(grid))
-            self.grid[param.name] = grid
-        self.grid = [self.grid[param] for param in self.varied_params.names()]
-        del self.size
-        self.samples = None
-        if self.mpicomm.rank == 0:
-            samples = np.meshgrid(*self.grid, indexing='ij')
-            self.samples = Samples(samples, params=self.varied_params)
+                    raise ParameterPriorError(
+                        f"Provide proper parameter reference distribution or"
+                        f"proposal for {param.name}.")
+                n_grid = size[param.name]
+                if include_value:
+                    n_grid -= 1
+                grid[param.name] = np.linspace(start, stop, n_grid)
+                if include_value:
+                    grid[param.name] = np.sort(np.append(
+                        grid[param.name], param.value))
+                self.log_info(f"Grid for {param.name} is {grid[param.name]}.")
 
-    def run(self, **kwargs):
-        """
-        Run calculator evaluation on the grid.
-        A new grid can be set by providing arguments 'size', 'ref_scale', 'grid' or 'sphere', see :meth:`__init__`.
-        """
-        if kwargs:
-            self.set_grid(**kwargs)
+        grid = [grid[param] for param in self.likelihood.varied_params.names()]
+        grid = np.meshgrid(*grid, indexing='ij')
+        grid = np.column_stack([arr.ravel() for arr in grid])
 
-        # self.calculator.mpicomm = mpi.COMM_SELF
-        vcalculate = vmap(self.calculator, backend='mpi', return_derived=True)
-        derived = vcalculate(self.samples.to_dict(
-        ) if self.mpicomm.rank == 0 else {}, mpicomm=self.mpicomm)[1]
-
-        if self.mpicomm.rank == 0:
-            for param in self.calculator.all_params.select(fixed=True, derived=False):
-                self.samples[param] = np.full(
-                    self.samples.shape, param.value, dtype='f8')
-            self.samples.update(derived)
-            if self.save_fn is not None:
-                self.samples.save(self.save_fn)
-        else:
-            self.samples = None
-        return self.samples
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, exc_traceback):
-        pass
+        return grid

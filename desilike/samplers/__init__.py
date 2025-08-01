@@ -2,7 +2,7 @@
 
 from .dynesty import DynestySampler
 from .emcee import EmceeSampler
-# from .grid import GridSampler
+from .grid import GridSampler
 # from .hmc import HMCSampler
 # from .importance import ImportanceSampler
 # from .mclmc import MCLMCSampler
@@ -13,5 +13,5 @@ from .pocomc import PocoMCSampler
 # from .qmc import QMCSampler
 from .zeus import ZeusSampler
 
-__all__ = ['DynestySampler', 'EmceeSampler', 'NautilusSampler',
+__all__ = ['DynestySampler', 'GridSampler', 'EmceeSampler', 'NautilusSampler',
            'PocoMCSampler', 'ZeusSampler']

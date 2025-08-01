@@ -6,6 +6,8 @@ specialized classes implementing specific samplers such as `emcee` or
 `dynesty`.
 """
 
+# TODO: Properly implement abstract classes and methods.
+
 import warnings
 
 import numpy as np
@@ -122,30 +124,34 @@ class BaseSampler(BaseClass):
         self.pool = MPIPool(comm=self.mpicomm)
         self.blobs = False
 
-    def prior_transform(self, x):
+        set_prior_transform(self.prior_transform)
+        set_compute_prior(self.compute_prior)
+        set_compute_likelihood(self.compute_likelihood)
+
+    def prior_transform(self, point):
         """Transform from the unit cube to parameter space using the prior.
 
         Parameters
         ----------
-        x : numpy.ndarray
+        point : numpy.ndarray of shape (n_dim, )
             Point for which to perform the prior transform.
 
         Returns
         -------
-        numpy.ndarray
+        numpy.ndarray of shape (n_dim, )
             Prior transformation of the input point.
 
         """
-        return np.array([self.likelihood.varied_params[i].prior.ppf(x_i) for
-                         i, x_i in enumerate(x)])
+        return np.array([self.likelihood.varied_params[i].prior.ppf(x) for
+                         i, x in enumerate(point)])
 
-    def compute_prior(self, values):
+    def compute_prior(self, points):
         """
         Compute the natural logarithm of the prior.
 
         Parameters
         ----------
-        values : numpy.ndarray of shape (n_points, n_dim)
+        points : numpy.ndarray of shape (n_points, n_dim)
             Points for which to compute the prior.
 
         Returns
@@ -155,14 +161,14 @@ class BaseSampler(BaseClass):
 
         """
         return self.likelihood.all_params.prior(
-            **dict(zip(self.likelihood.varied_params.names(), values.T)))
+            **dict(zip(self.likelihood.varied_params.names(), points.T)))
 
-    def compute_likelihood(self, x):
+    def compute_likelihood(self, point):
         """Compute the natural logarithm of the likelihood.
 
         Parameters
         ----------
-        x : numpy.ndarray
+        point : numpy.ndarray of shape (n_dim, )
             Point for which to compute the likelihood.
 
         Returns
@@ -174,7 +180,7 @@ class BaseSampler(BaseClass):
 
         """
         result = self.likelihood(
-            Samples(x, params=self.likelihood.varied_params).to_dict(),
+            Samples(point, params=self.likelihood.varied_params).to_dict(),
             return_derived=True)[1]
         log_l = result['loglikelihood'].value
 
@@ -189,33 +195,47 @@ class BaseSampler(BaseClass):
         return log_l, blob
 
 
-class PopulationSampler(BaseSampler):
-    """Class defining common functions used by population samplers."""
+class StaticSampler(BaseSampler):
+    """Class defining common functions used by static samplers."""
 
-    def __init__(self, likelihood, rng=None, save_fn=None, mpicomm=None):
-        """Initialize the sampler.
+    def get_points(self, **kwargs):
+        """Abstract method to get the points to be evaluated.
+
+        This needs to be implemented by the subclass.
+        """
+        pass
+
+    def run(self, **kwargs):
+        """Run the sampler.
 
         Parameters
         ----------
-        likelihood : BaseLikelihood
-            Likelihood to sample.
-        rng : numpy.random.RandomState or int, optional
-            Random number generator. Default is ``None``.
-        save_fn : str, Path, optional
-            Save samples to this location. Default is ``None``.
-        mpicomm : mpi.COMM_WORLD, optional
-            MPI communicator. If ``None``, defaults to ``likelihood``'s
-            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
+        kwargs : dict, optional
+            Keyword arguments passed to the ```get_samples` method.
 
-        Raises
-        ------
-        AttributeError
-            If the prior does not support prior transforms.
+        Returns
+        -------
+        Chain
+            Sampler results.
 
         """
-        super().__init__(likelihood, rng=rng, save_fn=save_fn, mpicomm=mpicomm)
-        set_prior_transform(self.prior_transform)
-        set_compute_likelihood(self.compute_likelihood)
+        points = self.get_points(**kwargs)
+        if self.mpicomm.rank == 0:
+            log_p = np.array(self.pool.map(compute_posterior, points))
+            chain = [points[..., i] for i in range(self.n_dim)]
+            chain.append(log_p)
+            chain = Chain(
+                chain, params=self.likelihood.varied_params + ['logposterior'])
+        else:
+            self.pool.wait()
+            chain = None
+        self.pool.stop_wait()
+
+        return self.mpicomm.bcast(chain, root=0)
+
+
+class PopulationSampler(BaseSampler):
+    """Class defining common functions used by population samplers."""
 
     def run_sampler(self, **kwargs):
         """Abstract method to run the sampler from the main MPI process.
@@ -249,11 +269,11 @@ class PopulationSampler(BaseSampler):
             Sampler results.
 
         """
-        chain = None
         if self.mpicomm.rank == 0:
             chain = self.run_sampler(**kwargs)
         else:
             self.pool.wait()
+            chain = None
         self.pool.stop_wait()
 
         return self.mpicomm.bcast(chain, root=0)
@@ -287,8 +307,6 @@ class MarkovChainSampler(BaseSampler):
         super().__init__(likelihood, rng=rng, save_fn=save_fn, mpicomm=mpicomm)
         self.n_chains = n_chains
         self.chains = None
-        set_compute_prior(self.compute_prior)
-        set_compute_likelihood(self.compute_likelihood)
 
     def run_sampler(self, n_steps, **kwargs):
         """Abstract method to run the sampler from the main MPI process.

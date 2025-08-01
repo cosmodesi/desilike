@@ -38,9 +38,10 @@ def simple_likelihood():
     (samplers.DynestySampler, dict(dynamic=True)),
     (samplers.DynestySampler, dict(dynamic=False)),
     (samplers.DynestySampler, dict(save_fn='checkpoint.pkl')),
+    (samplers.EmceeSampler, dict()),
+    (samplers.GridSampler, dict()),
     (samplers.NautilusSampler, dict(save_fn='checkpoint.h5')),
     (samplers.PocoMCSampler, dict()),
-    (samplers.EmceeSampler, dict()),
     (samplers.ZeusSampler, dict())])
 def test_basic(simple_likelihood, tmp_path, Sampler, kwargs):
     # Test that all samplers work with a simple two-dimensional likelihood and

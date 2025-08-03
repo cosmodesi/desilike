@@ -11,6 +11,7 @@ from . import utils
 
 #testsj jim was here too!
 #second test from notebook
+#push from nersc Sunday afternoon
 
 def vectorize(func):
     """Vectorize input function ``func`` for input parameters."""

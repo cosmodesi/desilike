@@ -11,8 +11,10 @@ def simple_likelihood():
 
     class Model(BaseCalculator):
 
-        _params = dict(a=dict(prior=dict(dist='uniform', limits=[0, 1])),
-                       b=dict(prior=dict(dist='uniform', limits=[0, 1])))
+        _params = dict(a=dict(prior=dict(dist='uniform', limits=[0, 1]),
+                              value=0.5, proposal=0.5),
+                       b=dict(prior=dict(dist='uniform', limits=[0, 1]),
+                              value=0.5, proposal=0.5))
 
         def initialize(self, x=None):
             pass
@@ -34,27 +36,31 @@ def simple_likelihood():
     return Likelihood()
 
 
-@pytest.mark.parametrize("Sampler, kwargs", [
-    (samplers.DynestySampler, dict(dynamic=True)),
-    (samplers.DynestySampler, dict(dynamic=False)),
-    (samplers.DynestySampler, dict(save_fn='checkpoint.pkl')),
-    (samplers.EmceeSampler, dict()),
-    (samplers.GridSampler, dict()),
-    (samplers.NautilusSampler, dict(save_fn='checkpoint.h5')),
-    (samplers.PocoMCSampler, dict()),
-    (samplers.ZeusSampler, dict())])
-def test_basic(simple_likelihood, tmp_path, Sampler, kwargs):
+@pytest.mark.parametrize("Sampler, kwargs_init, kwargs_run", [
+    (samplers.DynestySampler, dict(dynamic=False, nlive=100), dict()),
+    (samplers.DynestySampler, dict(dynamic=True, nlive=100),
+     dict(n_effective=0)),
+    (samplers.EmceeSampler, dict(), dict()),
+    (samplers.GridSampler, dict(), dict(size=100)),
+    (samplers.NautilusSampler, dict(n_networks=1, n_live=500), dict(n_eff=0)),
+    (samplers.PocoMCSampler, dict(n_effective=200, n_active=100),
+     dict(n_total=100, n_evidence=100)),
+    (samplers.ZeusSampler, dict(), dict())])
+def test_basic(simple_likelihood, tmp_path, Sampler, kwargs_init, kwargs_run):
     # Test that all samplers work with a simple two-dimensional likelihood and
     # produce acceptable results.
 
-    if 'save_fn' in kwargs:
-        kwargs['save_fn'] = str(tmp_path / kwargs['save_fn'])
+    if 'save_fn' in kwargs_init:
+        kwargs_init['save_fn'] = str(tmp_path / kwargs_init['save_fn'])
 
     if issubclass(Sampler, samplers.base.MarkovChainSampler):
-        sampler = Sampler(simple_likelihood, 4, rng=42, **kwargs)
+        sampler = Sampler(simple_likelihood, 4, rng=42, **kwargs_init)
     else:
-        sampler = Sampler(simple_likelihood, rng=42, **kwargs)
-    chain = sampler.run()
+        sampler = Sampler(simple_likelihood, rng=42, **kwargs_init)
+    chain = sampler.run(**kwargs_run)
+
+    if isinstance(sampler, samplers.GridSampler):
+        chain.aweight = np.exp(chain.logposterior)
 
     assert np.allclose(
         chain.mean(simple_likelihood.varied_params),

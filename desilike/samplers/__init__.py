@@ -10,8 +10,8 @@ from .grid import GridSampler
 from .nautilus import NautilusSampler
 # from .nuts import NUTSSampler
 from .pocomc import PocoMCSampler
-# from .qmc import QMCSampler
+from .qmc import QMCSampler
 from .zeus import ZeusSampler
 
 __all__ = ['DynestySampler', 'GridSampler', 'EmceeSampler', 'NautilusSampler',
-           'PocoMCSampler', 'ZeusSampler']
+           'PocoMCSampler', 'QMCSampler', 'ZeusSampler']

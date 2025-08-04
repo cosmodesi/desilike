@@ -10,7 +10,7 @@ from desilike.utils import expand_dict
 class GridSampler(StaticSampler):
     """A simple grid sampler."""
 
-    def get_points(self, size=10, include_value=False, grid=None):
+    def get_points(self, size=11, grid=None):
         """Get points on the grid.
 
         Parameters
@@ -18,11 +18,7 @@ class GridSampler(StaticSampler):
         size : dict or int, optional
             A dictionary giving the grid size along each dimension. Wildcards
             are supported. It can also be a single integer in which case
-            it will be applied along all dimenions. Default is 10.
-
-        include_value : bool, optional
-            If True, force the default value of each parameter to be included
-            in the grid. Default is False.
+            it will be applied along all dimenions. Default is 11.
 
         grid : dict or None, optional
             A dictionary giving the values to sample for each parameter. If
@@ -45,23 +41,15 @@ class GridSampler(StaticSampler):
                     raise ValueError(
                         f"Size {int(size)} for parameter {param.name} is not "
                         f"positive.")
-                value = param.value
-                if param.ref.is_limited():
-                    start, stop = param.ref.limits
-                elif param.proposal is not None:
-                    start = value - param.proposal
-                    stop = value + param.proposal
-                else:
+                if param.proposal is None:
                     raise ParameterPriorError(
-                        f"Provide proper parameter reference distribution or"
-                        f"proposal for {param.name}.")
+                        f"Provide a proposal for {param.name}.")
                 n_grid = size[param.name]
-                if include_value:
-                    n_grid -= 1
-                grid[param.name] = np.linspace(start, stop, n_grid)
-                if include_value:
-                    grid[param.name] = np.sort(np.append(
-                        grid[param.name], param.value))
+                grid[param.name] = np.linspace(
+                    param.value - param.proposal, param.value + param.proposal,
+                    n_grid)
+                if size == 1:
+                    grid[param.name] = param.value
                 self.log_info(f"Grid for {param.name} is {grid[param.name]}.")
 
         grid = [grid[param] for param in self.likelihood.varied_params.names()]

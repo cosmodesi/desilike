@@ -5,6 +5,7 @@ try:
     EMCEE_INSTALLED = True
 except ModuleNotFoundError:
     EMCEE_INSTALLED = False
+import numpy as np
 
 from .base import compute_posterior, update_kwargs, MarkovChainSampler
 from desilike.samples import Chain
@@ -64,27 +65,43 @@ class EmceeSampler(MarkovChainSampler):
 
         Parameters
         ----------
+        n_steps: int
+            Number of steps to take.
         kwargs: dict, optional
             Extra keyword arguments passed to emcee's ``run_mcmc`` method.
 
-        Returns
-        -------
-        Chain
-            Sampler results.
-
         """
-        if self.chains is None:
-            initial_state = emcee.State(self.start, log_prob=self.log_p_start,
+        kwargs = update_kwargs(kwargs, 'emcee', store=True)
+
+        try:
+            self.sampler.get_last_sample()
+            initialized = True
+        except AttributeError:
+            initialized = False
+
+        if not initialized:
+            coords = np.zeros([self.n_chains, self.n_dim])
+            log_post = np.zeros(self.n_chains)
+            for i in range(self.n_chains):
+                coords[i] = [self.chains[i][param].value[-1] for param in
+                             self.likelihood.varied_params.names()]
+                log_post[i] = self.chains[i]['logposterior'].value[-1]
+            initial_state = emcee.State(coords, log_prob=log_post,
                                         random_state=self.rng)
         else:
             initial_state = None
 
         self.sampler.run_mcmc(initial_state, n_steps, **kwargs)
 
-        chains_data = self.sampler.get_chain()
-        log_p = self.sampler.get_log_prob()
-        self.chains = []
+        chains = np.transpose(self.sampler.get_chain(), (1, 0, 2))
+        log_post = self.sampler.get_log_prob().T
         for i in range(self.n_chains):
-            self.chains.append(Chain(
-                [p for p in chains_data[:, i, :].T] + [log_p[:, i]],
-                params=self.likelihood.varied_params + ['logposterior']))
+            chain = Chain(
+                np.column_stack([chains[i], log_post[i]]).T,
+                params=self.likelihood.varied_params + ['logposterior'])
+            self.chains[i] = Chain.concatenate(
+                self.chains[i][:-(len(chain) - n_steps + 1)], chain)
+
+    def reset_sampler(self):
+        """Reset the emcee sampler."""
+        self.sampler.reset()

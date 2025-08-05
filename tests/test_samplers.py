@@ -62,10 +62,12 @@ def test_basic(simple_likelihood, tmp_path, Sampler, kwargs_init, kwargs_run):
     if isinstance(sampler, samplers.GridSampler):
         chain.aweight = np.exp(chain.logposterior)
 
+    # The mean should match.
     assert np.allclose(
         chain.mean(simple_likelihood.varied_params),
         simple_likelihood.flatdata,
         atol=0.03, rtol=0)
+    # The covariance should match.
     assert np.allclose(
         chain.covariance(simple_likelihood.varied_params),
         np.linalg.inv(simple_likelihood.precision), atol=0.01, rtol=0.1)

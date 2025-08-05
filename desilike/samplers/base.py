@@ -8,6 +8,7 @@ specialized classes implementing specific samplers such as `emcee` or
 
 # TODO: Properly implement abstract classes and methods.
 
+import sys
 import warnings
 
 import numpy as np
@@ -202,6 +203,16 @@ class StaticSampler(BaseSampler):
         """Abstract method to get the points to be evaluated.
 
         This needs to be implemented by the subclass.
+
+        Parameters
+        ----------
+        kwargs: dict, optional
+            Extra keyword arguments.
+
+        Returns
+        -------
+        numpy.ndarray of shape (n_points, n_dim)
+            Points in parameter space to evaluate.
         """
         pass
 
@@ -211,7 +222,7 @@ class StaticSampler(BaseSampler):
         Parameters
         ----------
         kwargs : dict, optional
-            Keyword arguments passed to the ```get_samples` method.
+            Keyword arguments passed to the ``get_samples`` method.
 
         Returns
         -------
@@ -226,10 +237,10 @@ class StaticSampler(BaseSampler):
             chain.append(log_p)
             chain = Chain(
                 chain, params=self.likelihood.varied_params + ['logposterior'])
+            self.pool.stop_wait()
         else:
             self.pool.wait()
             chain = None
-        self.pool.stop_wait()
 
         return self.mpicomm.bcast(chain, root=0)
 
@@ -271,10 +282,10 @@ class PopulationSampler(BaseSampler):
         """
         if self.mpicomm.rank == 0:
             chain = self.run_sampler(**kwargs)
+            self.pool.stop_wait()
         else:
             self.pool.wait()
             chain = None
-        self.pool.stop_wait()
 
         return self.mpicomm.bcast(chain, root=0)
 
@@ -283,7 +294,8 @@ class MarkovChainSampler(BaseSampler):
     """Class defining common functions used by Markov chain samplers."""
 
     # Convergence criteria.
-    criteria = {'gelman_rubin_diag_max', 'gelman_rubin_eigen_max'}
+    criteria = {'gelman_rubin_diag_max', 'gelman_rubin_eigen_max',
+                'geweke_max'}
 
     def __init__(self, likelihood, n_chains, rng=None, save_fn=None,
                  mpicomm=None):
@@ -323,42 +335,49 @@ class MarkovChainSampler(BaseSampler):
         """
         pass
 
-    def initialize_chains(self, max_tries=100, start=None):
+    def reset_sampler(self):
+        """Abstract method to reset the sampler."""
+        pass
+
+    def initialize_chains(self, attempts=100):
         """Initialize the chains.
 
         Parameters
         ----------
-        max_tries : int or None, optional
+        attempts : int, optional
             Maximum number of attempts for each chain. If None, there is
             no limit. Default is None.
 
+        Raises
+        ------
+        ValueError
+            If no finite posterior has been found after ``attempts`` attempts.
+
         """
-        if start is None:
-            start = np.zeros((self.n_chains, self.n_dim))
-            log_p = np.repeat(-np.inf, self.n_chains)
-            n_try = 0
+        points = np.zeros((self.n_chains, self.n_dim))
+        log_post = np.repeat(-np.inf, self.n_chains)
+        n_try = 0
 
-            while n_try < max_tries and not np.all(np.isfinite(log_p)):
-                use = ~np.isfinite(log_p)
-                for i, param in enumerate(self.likelihood.varied_params):
-                    if param.ref.is_proper():
-                        start[use, i] = param.ref.sample(
-                            size=np.sum(use), random_state=self.rng)
-                    else:
-                        start[use, i] = np.full(np.sum(use), param.value)
+        while n_try < attempts and not np.all(np.isfinite(log_post)):
+            use = ~np.isfinite(log_post)
+            for i, param in enumerate(self.likelihood.varied_params):
+                if param.ref.is_proper():
+                    points[use, i] = param.ref.sample(
+                        size=np.sum(use), random_state=self.rng)
+                else:
+                    points[use, i] = np.full(np.sum(use), param.value)
 
-                log_p[use] = self.pool.map(compute_posterior, start[use])
-                n_try += 1
+            log_post[use] = self.pool.map(compute_posterior, points[use])
+            n_try += 1
 
-            if not np.all(np.isfinite(log_p)):
-                raise ValueError('Could not find finite posterior '
-                                 f'after {max_tries:d} tries.')
-        else:
-            log_p = self.pool.map(compute_posterior, start)
+        if not np.all(np.isfinite(log_post)):
+            raise ValueError('Could not find finite posterior '
+                             f'after {attempts:d} attempts.')
 
-        self.start = start
-        self.log_p_start = log_p
-        self.chains = None
+        self.chains = [Chain(
+            np.append(p, l)[:, np.newaxis],
+            params=self.likelihood.varied_params + ['logposterior']) for p, l
+            in zip(points, log_post)]
 
     def check(self, criteria, burn_in=0.2, quiet=False):
         """Check the status of the sampling, including convergence.
@@ -395,24 +414,27 @@ class MarkovChainSampler(BaseSampler):
                     f"are {type(self).criteria}.")
 
         if isinstance(burn_in, float):
-            burn_in = int(burn_in * len(self.chains[0]) + 0.5)
+            burn_in = round(burn_in * len(self.chains[0]))
+        chains = [chain[burn_in:] for chain in self.chains]
 
         if not quiet:
             self.log_info('Diagnostics:')
-
-        chains = [chain[burn_in:] for chain in self.chains]
 
         gelman_rubin_diag = np.amax(diagnostics.gelman_rubin(
             chains, method='diag'))
         gelman_rubin_eigen = np.amax(diagnostics.gelman_rubin(
             chains, method='eigen'))
+        try:
+            geweke = np.amax(diagnostics.geweke(chains, first=0.1, last=0.5))
+        except ValueError:
+            geweke = float('inf')
 
         converged = True
 
         for name, key, value in zip(
-                ["Gelman-Rubin (diagonal)", "Gelman-Rubin (eigen)"],
-                ['gelman_rubin_diag', 'gelman_rubin_eigen'],
-                [gelman_rubin_diag, gelman_rubin_eigen]):
+                ["Gelman-Rubin (diagonal)", "Gelman-Rubin (eigen)", "Geweke"],
+                ['gelman_rubin_diag', 'gelman_rubin_eigen', 'geweke'],
+                [gelman_rubin_diag, gelman_rubin_eigen, geweke]):
             if not quiet:
                 self.log_info(f"{name}: {value:.3g}")
             if f'{key}_min' in criteria:
@@ -434,25 +456,48 @@ class MarkovChainSampler(BaseSampler):
 
         return converged
 
-    def run(self, start=None, start_tries=100, burn_in=0.2,
-            check_every=10, checks_passed=10,
-            criteria=dict(gelman_rubin_diag_max=1.1), flat=True, **kwargs):
+    def run(self, resume=True, initialization_attempts=100, burn_in=0.2,
+            min_iterations=0, max_iterations=sys.maxsize,
+            convergence_checks_interval=10, convergence_checks_passed=10,
+            convergence_criteria=dict(gelman_rubin_diag_max=1.1),
+            flatten_chains=True, **kwargs):
         """Run the sampler.
 
         Parameters
         ----------
-        chains_resume : Chain or None, optional
-            If not None, resume sampling from these chains. Otherwise, start
-            from scratch. Default is None.
-        max_tries : int or None, optional
-            Maximum number of attempts for each chain. If None, there is
-            no limit. Default is None.
+        resume : bool, optional
+            Whether to resume from an existing chain, if present. Default is
+            True.
+        initialization_attempts : int, optional
+            Maximum number of attempts to initialize each chain. Default is
+            100.
+        burn_in : float or int, optional
+            Fraction of samples to remove from each chain. If an integer,
+            number of iterations (steps) to remove. Default is 0.2.
+        min_iterations : int, optional
+            Minimum number of steps to run. Default is 0.
+        max_iterations : int, optional
+            Maximum number of steps to run. Default is infinity.
+        convergence_checks_interval : int, optional
+            After how many steps convergence is checked. Default is 10.
+        convergence_checks_passed : int, optional
+            Threshold for the number of successive succesful convergence
+            checks. If fulfilled, the sampling will stop. Default is 10.
+        convergence_criteria : dict, optional
+            Criteria to define convergence.
+        flatten_chains : bool, optional
+            Whether to concatenate individual chains into one chain.
         kwargs : dict, optional
             Keyword arguments passed to the run function of the sampler.
 
+        Raises
+        ------
+        ValueError
+            If ``burn_in`` is a float and larger than unity.
+
         Returns
         -------
-        Chain
+        desilike.samples.Chain or list of desilike.samples.Chain
             Sampler results.
 
         """
@@ -464,23 +509,36 @@ class MarkovChainSampler(BaseSampler):
 
         if self.mpicomm.rank == 0:
 
-            # Initialize the chains.
-            self.initialize_chains(max_tries=start_tries, start=start)
+            # Initialize the chains, if necessary.
+            if not resume or self.chains is None:
+                self.initialize_chains(attempts=initialization_attempts)
 
             n_checks = 0
-            while n_checks < checks_passed:
-                self.run_sampler(check_every, **kwargs)
-                if self.check(criteria):
+            n_steps_tot = len(self.chains[0])
+            while n_steps_tot < max_iterations:
+                n_steps = min(convergence_checks_interval,
+                              max_iterations - n_steps_tot)
+                self.run_sampler(n_steps, **kwargs)
+                n_steps_tot += n_steps
+                if self.check(convergence_criteria):
                     n_checks += 1
                 else:
                     n_checks = 0
+                if (n_steps_tot >= min_iterations and n_checks >=
+                        convergence_checks_passed):
+                    break
+
+            self.pool.stop_wait()
         else:
             self.pool.wait()
-        self.pool.stop_wait()
 
-        burn_in = int(burn_in * len(self.chains[0]) + 0.5)
+        self.reset_sampler()
+
+        if isinstance(burn_in, float):
+            burn_in = round(burn_in * len(self.chains[0]))
         chains = [chain[burn_in:] for chain in self.chains]
-        if flat:
-            chains = Chain.concatenate(chains)
 
-        return chains
+        if flatten_chains:
+            return Chain.concatenate(chains)
+        else:
+            return chains

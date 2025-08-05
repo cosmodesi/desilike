@@ -1,5 +1,6 @@
 """Module implementing the zeus sampler."""
 
+import numpy as np
 try:
     import zeus
     ZEUS_INSTALLED = True
@@ -76,18 +77,35 @@ class ZeusSampler(MarkovChainSampler):
         """
         kwargs = update_kwargs(kwargs, 'zeus', nsteps=n_steps, log_prob0=None)
 
-        if self.chains is None:
-            start = self.start
-            kwargs['log_prob0'] = self.log_p_start
+        try:
+            self.sampler.get_last_sample()
+            initialized = True
+        except AttributeError:
+            initialized = False
+
+        if not initialized:
+            start = np.zeros([self.n_chains, self.n_dim])
+            log_post = np.zeros(self.n_chains)
+            for i in range(self.n_chains):
+                start[i] = [self.chains[i][param].value[-1] for param in
+                            self.likelihood.varied_params.names()]
+                log_post[i] = self.chains[i]['logposterior'].value[-1]
+            kwargs['log_prob0'] = log_post
+
         else:
             start = None
 
         self.sampler.run_mcmc(start, **kwargs)
 
-        chains_data = self.sampler.get_chain()
-        log_p = self.sampler.get_log_prob()
-        self.chains = []
+        chains = np.transpose(self.sampler.get_chain(), (1, 0, 2))
+        log_post = self.sampler.get_log_prob().T
         for i in range(self.n_chains):
-            self.chains.append(Chain(
-                [p for p in chains_data[:, i, :].T] + [log_p[:, i]],
-                params=self.likelihood.varied_params + ['logposterior']))
+            chain = Chain(
+                np.column_stack([chains[i], log_post[i]]).T,
+                params=self.likelihood.varied_params + ['logposterior'])
+            self.chains[i] = Chain.concatenate(
+                self.chains[i][:-(len(chain) - n_steps + 1)], chain)
+
+    def reset_sampler(self):
+        """Reset the emcee sampler."""
+        self.sampler.reset()

@@ -100,7 +100,7 @@ class EmceeSampler(MarkovChainSampler):
                 np.column_stack([chains[i], log_post[i]]).T,
                 params=self.likelihood.varied_params + ['logposterior'])
             self.chains[i] = Chain.concatenate(
-                self.chains[i][:-(len(chain) - n_steps + 1)], chain)
+                self.chains[i], chain[-n_steps:])
 
     def reset_sampler(self):
         """Reset the emcee sampler."""

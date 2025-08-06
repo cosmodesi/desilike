@@ -8,6 +8,7 @@ specialized classes implementing specific samplers such as `emcee` or
 
 # TODO: Properly implement abstract classes and methods.
 
+from pathlib import Path
 import sys
 import warnings
 
@@ -120,6 +121,11 @@ class BaseSampler(BaseClass):
             rng = np.random.default_rng(seed=rng)
 
         self.rng = rng
+        if save_fn is not None:
+            save_fn = Path(save_fn)
+            if save_fn.stem.count('*') != 1 or save_fn.suffix != '.npz':
+                raise ValueError("The filename must contain one '*' and have "
+                                 "a '.npz' suffix.")
         self.save_fn = save_fn
         self.mpicomm = mpicomm if mpicomm is not None else likelihood.mpicomm
         self.pool = MPIPool(comm=self.mpicomm)
@@ -128,6 +134,32 @@ class BaseSampler(BaseClass):
         set_prior_transform(self.prior_transform)
         set_compute_prior(self.compute_prior)
         set_compute_likelihood(self.compute_likelihood)
+
+    def save_path(self, name, suffix=None):
+        """Define the filepath for saving results.
+
+        Parameters
+        ----------
+        name : str
+            Name to be added to the base filename.
+        suffix : str, optional
+            If given, overwrite the default file extension. Default is None.
+
+        Returns
+        -------
+        Path
+            Filepath.
+        """
+        if self.save_fn is None:
+            return None
+        else:
+            if suffix is None:
+                suffix = self.save_fn.suffix
+            else:
+                if not suffix.startswith('.'):
+                    suffix = '.' + suffix
+            return self.save_fn.with_name(
+                self.save_fn.stem.replace('*', name) + suffix)
 
     def prior_transform(self, point):
         """Transform from the unit cube to parameter space using the prior.
@@ -320,6 +352,13 @@ class MarkovChainSampler(BaseSampler):
         self.n_chains = n_chains
         self.chains = None
 
+        if self.save_fn is not None:
+            if all(self.save_path(f'chain_{i + 1}').is_file() for i in
+                   range(self.n_chains)):
+                self.chains = [Chain.load(
+                    self.save_path(f'chain_{i + 1}')) for i in
+                    range(self.n_chains)]
+
     def run_sampler(self, n_steps, **kwargs):
         """Abstract method to run the sampler from the main MPI process.
 
@@ -378,6 +417,10 @@ class MarkovChainSampler(BaseSampler):
             np.append(p, l)[:, np.newaxis],
             params=self.likelihood.varied_params + ['logposterior']) for p, l
             in zip(points, log_post)]
+
+        if self.save_fn is not None:
+            for i, chain in enumerate(self.chains):
+                chain.save(self.save_path(f'chain_{i + 1}'))
 
     def check(self, criteria, burn_in=0.2, quiet=False):
         """Check the status of the sampling, including convergence.
@@ -456,18 +499,15 @@ class MarkovChainSampler(BaseSampler):
 
         return converged
 
-    def run(self, resume=True, initialization_attempts=100, burn_in=0.2,
-            min_iterations=0, max_iterations=sys.maxsize,
-            convergence_checks_interval=10, convergence_checks_passed=10,
+    def run(self, initialization_attempts=100, burn_in=0.2, min_iterations=0,
+            max_iterations=sys.maxsize, convergence_checks_interval=10,
+            convergence_checks_passed=10,
             convergence_criteria=dict(gelman_rubin_diag_max=1.1),
             flatten_chains=True, **kwargs):
         """Run the sampler.
 
         Parameters
         ----------
-        resume : bool, optional
-            Whether to resume from an existing chain, if present. Default is
-            True.
         initialization_attempts : int, optional
             Maximum number of attempts to initialize each chain. Default is
             100.
@@ -510,7 +550,7 @@ class MarkovChainSampler(BaseSampler):
         if self.mpicomm.rank == 0:
 
             # Initialize the chains, if necessary.
-            if not resume or self.chains is None:
+            if self.chains is None:
                 self.initialize_chains(attempts=initialization_attempts)
 
             n_checks = 0
@@ -519,6 +559,9 @@ class MarkovChainSampler(BaseSampler):
                 n_steps = min(convergence_checks_interval,
                               max_iterations - n_steps_tot)
                 self.run_sampler(n_steps, **kwargs)
+                if self.save_fn is not None:
+                    for i, chain in enumerate(self.chains):
+                        chain.save(self.save_path(f'chain_{i + 1}'))
                 n_steps_tot += n_steps
                 if self.check(convergence_criteria):
                     n_checks += 1

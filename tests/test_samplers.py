@@ -7,7 +7,7 @@ from desilike.likelihoods import BaseGaussianLikelihood
 
 
 @pytest.fixture
-def simple_likelihood():
+def likelihood():
 
     class Model(BaseCalculator):
 
@@ -46,28 +46,58 @@ def simple_likelihood():
     (samplers.PocoMCSampler, dict(n_effective=200, n_active=100),
      dict(n_total=100, n_evidence=100)),
     (samplers.ZeusSampler, dict(), dict())])
-def test_basic(simple_likelihood, tmp_path, Sampler, kwargs_init, kwargs_run):
+def test_accuracy(likelihood, tmp_path, Sampler, kwargs_init, kwargs_run):
     # Test that all samplers work with a simple two-dimensional likelihood and
     # produce acceptable results.
 
-    if 'save_fn' in kwargs_init:
-        kwargs_init['save_fn'] = str(tmp_path / kwargs_init['save_fn'])
-
     if issubclass(Sampler, samplers.base.MarkovChainSampler):
-        sampler = Sampler(simple_likelihood, 4, rng=42, **kwargs_init)
+        sampler = Sampler(likelihood, 4, rng=42, **kwargs_init)
     else:
-        sampler = Sampler(simple_likelihood, rng=42, **kwargs_init)
+        sampler = Sampler(likelihood, rng=42, **kwargs_init)
     chain = sampler.run(**kwargs_run)
 
     if isinstance(sampler, samplers.GridSampler):
         chain.aweight = np.exp(chain.logposterior)
 
     # The mean should match.
-    assert np.allclose(
-        chain.mean(simple_likelihood.varied_params),
-        simple_likelihood.flatdata,
-        atol=0.03, rtol=0)
+    assert np.allclose(chain.mean(likelihood.varied_params),
+                       likelihood.flatdata, atol=0.03, rtol=0)
     # The covariance should match.
-    assert np.allclose(
-        chain.covariance(simple_likelihood.varied_params),
-        np.linalg.inv(simple_likelihood.precision), atol=0.01, rtol=0.1)
+    assert np.allclose(chain.covariance(likelihood.varied_params),
+                       np.linalg.inv(likelihood.precision), atol=0.01,
+                       rtol=0.1)
+
+
+@pytest.mark.parametrize("Sampler, kwargs_init, kwargs_run", [
+    (samplers.EmceeSampler, dict(), dict(burn_in=0))])
+def test_save_fn(likelihood, tmp_path, Sampler, kwargs_init, kwargs_run):
+
+    kwargs_init['save_fn'] = str(tmp_path / 'checkpoint_*.npz')
+    kwargs_run['max_iterations'] = 100
+
+    if issubclass(Sampler, samplers.base.MarkovChainSampler):
+        args_init = (likelihood, 4)
+    else:
+        args_init = (likelihood, )
+
+    sampler_1 = Sampler(*args_init, rng=42, **kwargs_init)
+    chain_1 = sampler_1.run(**kwargs_run)
+    # The second sampler should not create any new samples if old chains
+    # are read correctly.
+    sampler_2 = Sampler(*args_init, rng=43, **kwargs_init)
+    chain_2 = sampler_2.run(**kwargs_run)
+
+    chain_1.save('chain_1.npz')
+    chain_2.save('chain_2.npz')
+
+    assert len(chain_1) == len(chain_2)
+    for i in range(len(chain_1)):
+        if np.abs(chain_1.logposterior.value[i] - chain_2.logposterior.value[i]) > 1e-6:
+            print(chain_1.logposterior.value[i],
+                  chain_2.logposterior.value[i])
+    print(np.mean(np.isclose(chain_1.logposterior.value,
+                             chain_2.logposterior.value, atol=1e-6)))
+    print(np.amax(np.abs(chain_1.logposterior.value - chain_2.logposterior.value)))
+    print(len(sampler_1.chains[0]))
+    assert np.allclose(chain_1.logposterior.value,
+                       chain_2.logposterior.value, atol=1e-6)

@@ -1,5 +1,7 @@
 """Module implementing the zeus sampler."""
 
+import warnings
+
 import numpy as np
 try:
     import zeus
@@ -61,6 +63,10 @@ class ZeusSampler(MarkovChainSampler):
         else:
             self.sampler = None
 
+        if rng is not None:
+            warnings.warn("Zeus does not support random seeds. Results are "
+                          "not reproducible.")
+
     def run_sampler(self, n_steps, **kwargs):
         """Run the zeus sampler.
 
@@ -104,7 +110,7 @@ class ZeusSampler(MarkovChainSampler):
                 np.column_stack([chains[i], log_post[i]]).T,
                 params=self.likelihood.varied_params + ['logposterior'])
             self.chains[i] = Chain.concatenate(
-                self.chains[i][:-(len(chain) - n_steps + 1)], chain)
+                self.chains[i], chain[-n_steps:])
 
     def reset_sampler(self):
         """Reset the emcee sampler."""

@@ -52,11 +52,9 @@ class NautilusSampler(PopulationSampler):
 
         super().__init__(likelihood, rng=rng, save_fn=save_fn, mpicomm=mpicomm)
 
-        seed = rng if isinstance(rng, int) else self.rng.randint(sys.maxsize)
-
         kwargs = update_kwargs(
             kwargs, 'nautilus', pass_dict=False, filepath=self.save_fn,
-            pool=self.pool, seed=seed)
+            pool=self.pool, seed=self.rng.integers(2**32 - 1))
 
         if self.mpicomm.rank == 0:
             self.sampler = nautilus.Sampler(

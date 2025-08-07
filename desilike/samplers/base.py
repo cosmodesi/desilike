@@ -117,7 +117,7 @@ class BaseSampler(BaseClass):
         self.likelihood = likelihood
         self.n_dim = len(self.likelihood.varied_params)
 
-        if isinstance(rng, int):
+        if isinstance(rng, int) or rng is None:
             rng = np.random.default_rng(seed=rng)
 
         self.rng = rng
@@ -351,6 +351,7 @@ class MarkovChainSampler(BaseSampler):
         super().__init__(likelihood, rng=rng, save_fn=save_fn, mpicomm=mpicomm)
         self.n_chains = n_chains
         self.chains = None
+        self.checks = None
 
         if self.save_fn is not None:
             if all(self.save_path(f'chain_{i + 1}').is_file() for i in
@@ -358,6 +359,8 @@ class MarkovChainSampler(BaseSampler):
                 self.chains = [Chain.load(
                     self.save_path(f'chain_{i + 1}')) for i in
                     range(self.n_chains)]
+                self.checks = list(np.load(self.save_path('checks', 'npy'),
+                                           allow_pickle=False))
 
     def run_sampler(self, n_steps, **kwargs):
         """Abstract method to run the sampler from the main MPI process.
@@ -552,24 +555,21 @@ class MarkovChainSampler(BaseSampler):
             # Initialize the chains, if necessary.
             if self.chains is None:
                 self.initialize_chains(attempts=initialization_attempts)
+                self.checks = []
 
-            n_checks = 0
-            n_steps_tot = len(self.chains[0])
-            while n_steps_tot < max_iterations:
+            while (len(self.chains[0]) < max_iterations) and not (
+                    len(self.chains[0]) >= min_iterations and
+                    len(self.checks) >= convergence_checks_passed and
+                    all(self.checks[-convergence_checks_passed:])):
                 n_steps = min(convergence_checks_interval,
-                              max_iterations - n_steps_tot)
+                              max_iterations - len(self.chains[0]))
                 self.run_sampler(n_steps, **kwargs)
+                self.checks.append(self.check(convergence_criteria))
                 if self.save_fn is not None:
                     for i, chain in enumerate(self.chains):
                         chain.save(self.save_path(f'chain_{i + 1}'))
-                n_steps_tot += n_steps
-                if self.check(convergence_criteria):
-                    n_checks += 1
-                else:
-                    n_checks = 0
-                if (n_steps_tot >= min_iterations and n_checks >=
-                        convergence_checks_passed):
-                    break
+                    np.save(self.save_path('checks', 'npy'), self.checks,
+                            allow_pickle=False)
 
             self.pool.stop_wait()
         else:

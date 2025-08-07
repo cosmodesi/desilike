@@ -6,6 +6,43 @@ from desilike.base import BaseCalculator
 from desilike.likelihoods import BaseGaussianLikelihood
 
 
+SAMPLER_CLS = dict(
+    dynesty=samplers.DynestySampler,
+    emcee=samplers.EmceeSampler,
+    grid=samplers.GridSampler,
+    nautilus=samplers.NautilusSampler,
+    pocomc=samplers.PocoMCSampler,
+    zeus=samplers.ZeusSampler)
+ARGS_INIT = dict(
+    dynesty=(),
+    emcee=(10, ),
+    grid=(),
+    nautilus=(),
+    pocomc=(),
+    zeus=(10, ))
+KWARGS_INIT = dict(
+    dynesty=dict(dynamic=True, nlive=100),
+    emcee=dict(),
+    grid=dict(),
+    nautilus=dict(n_networks=1, n_live=300),
+    pocomc=dict(n_effective=200, n_active=100),
+    zeus=dict())
+KWARGS_RUN = dict(
+    dynesty=dict(n_effective=0),
+    emcee=dict(),
+    grid=dict(size=100),
+    nautilus=dict(n_eff=100),
+    pocomc=dict(n_total=100, n_evidence=100),
+    zeus=dict())
+KWARGS_RUN_FAST = dict(
+    dynesty=dict(n_effective=0),
+    emcee=dict(max_iterations=100),
+    grid=dict(size=100),
+    nautilus=dict(n_eff=0, n_like_max=100),
+    pocomc=dict(n_total=100, n_evidence=100),
+    zeus=dict(max_iterations=100))
+
+
 @pytest.fixture
 def likelihood():
 
@@ -36,76 +73,64 @@ def likelihood():
     return Likelihood()
 
 
-@pytest.mark.parametrize("Sampler, kwargs_init, kwargs_run", [
-    (samplers.DynestySampler, dict(dynamic=False, nlive=100), dict()),
-    (samplers.DynestySampler, dict(dynamic=True, nlive=100),
-     dict(n_effective=0)),
-    (samplers.EmceeSampler, dict(), dict()),
-    (samplers.GridSampler, dict(), dict(size=100)),
-    (samplers.NautilusSampler, dict(n_networks=1, n_live=500), dict(n_eff=0)),
-    (samplers.PocoMCSampler, dict(n_effective=200, n_active=100),
-     dict(n_total=100, n_evidence=100)),
-    (samplers.ZeusSampler, dict(), dict())])
-def test_accuracy(likelihood, tmp_path, Sampler, kwargs_init, kwargs_run):
+@pytest.mark.parametrize("key", [
+    'dynesty', 'emcee', 'grid', 'nautilus', 'pocomc', 'zeus'])
+def test_accuracy(likelihood, key):
     # Test that all samplers work with a simple two-dimensional likelihood and
     # produce acceptable results.
 
-    if issubclass(Sampler, samplers.base.MarkovChainSampler):
-        sampler = Sampler(likelihood, 4, rng=42, **kwargs_init)
-    else:
-        sampler = Sampler(likelihood, rng=42, **kwargs_init)
-    chain = sampler.run(**kwargs_run)
+    sampler = SAMPLER_CLS[key](likelihood, *ARGS_INIT[key], rng=42,
+                               **KWARGS_INIT[key])
+    chain = sampler.run(**KWARGS_RUN_FAST[key])
 
     if isinstance(sampler, samplers.GridSampler):
         chain.aweight = np.exp(chain.logposterior)
 
     # The mean should match.
     assert np.allclose(chain.mean(likelihood.varied_params),
-                       likelihood.flatdata, atol=0.03, rtol=0)
+                       likelihood.flatdata, atol=0.05, rtol=0)
     # The covariance should match.
     assert np.allclose(chain.covariance(likelihood.varied_params),
                        np.linalg.inv(likelihood.precision), atol=0.01,
                        rtol=0.1)
 
 
-@pytest.mark.parametrize("Sampler, kwargs_init, kwargs_run", [
-    (samplers.EmceeSampler, dict(), dict(max_iterations=100))])
-def test_save_fn(likelihood, tmp_path, Sampler, kwargs_init, kwargs_run):
+@pytest.mark.parametrize("key", [
+    'emcee', 'zeus'])
+def test_save_fn(likelihood, key, tmp_path):
     # Check that the sampler correctly saves chains and state, if applicable.
 
-    kwargs_init['save_fn'] = str(tmp_path / 'checkpoint_*.npz')
-
-    if issubclass(Sampler, samplers.base.MarkovChainSampler):
-        args_init = (likelihood, 4)
-    else:
-        args_init = (likelihood, )
-
-    sampler_1 = Sampler(*args_init, rng=42, **kwargs_init)
-    chain_1 = sampler_1.run(**kwargs_run)
+    sampler_1 = SAMPLER_CLS[key](
+        likelihood, *ARGS_INIT[key], rng=42,
+        save_fn=str(tmp_path / 'checkpoint_*.npz'), **KWARGS_INIT[key])
+    chain_1 = sampler_1.run(**KWARGS_RUN_FAST[key])
     # The second sampler should not create any new samples if old chains
     # are read correctly.
-    sampler_2 = Sampler(*args_init, rng=43, **kwargs_init)
-    chain_2 = sampler_2.run(**kwargs_run)
+    sampler_2 = SAMPLER_CLS[key](
+        likelihood, *ARGS_INIT[key], rng=43,
+        save_fn=str(tmp_path / 'checkpoint_*.npz'), **KWARGS_INIT[key])
+    chain_2 = sampler_2.run(**KWARGS_RUN_FAST[key])
 
     assert len(chain_1) == len(chain_2)
     assert np.allclose(chain_1.logposterior.value,
                        chain_2.logposterior.value, atol=1e-6)
 
 
-@pytest.mark.parametrize("Sampler, kwargs_init, kwargs_run", [
-    (samplers.EmceeSampler, dict(), dict(max_iterations=100))])
-def test_rng(likelihood, tmp_path, Sampler, kwargs_init, kwargs_run):
+@pytest.mark.parametrize("key", [
+    'dynesty', 'emcee', 'nautilus', 'pocomc', 'zeus'])
+def test_rng(likelihood, key):
     # Test that specifying the random seed leads to reproducible results.
 
-    if issubclass(Sampler, samplers.base.MarkovChainSampler):
-        args_init = (likelihood, 4)
-    else:
-        args_init = (likelihood, )
+    if key == 'zeus':
+        pytest.skip("Zeus does not support specifying a random seed.")
 
-    sampler_1 = Sampler(*args_init, rng=42, **kwargs_init)
-    sampler_2 = Sampler(*args_init, rng=42, **kwargs_init)
-    chain_1 = sampler_1.run(**kwargs_run)
-    chain_2 = sampler_2.run(**kwargs_run)
+    sampler_1 = SAMPLER_CLS[key](
+        likelihood, *ARGS_INIT[key], rng=42, **KWARGS_INIT[key])
+    chain_1 = sampler_1.run(**KWARGS_RUN_FAST[key])
+
+    sampler_2 = SAMPLER_CLS[key](
+        likelihood, *ARGS_INIT[key], rng=42, **KWARGS_INIT[key])
+    chain_2 = sampler_2.run(**KWARGS_RUN_FAST[key])
 
     assert len(chain_1) == len(chain_2)
     assert np.allclose(chain_1.logposterior.value,

@@ -69,11 +69,11 @@ def test_accuracy(likelihood, tmp_path, Sampler, kwargs_init, kwargs_run):
 
 
 @pytest.mark.parametrize("Sampler, kwargs_init, kwargs_run", [
-    (samplers.EmceeSampler, dict(), dict(burn_in=0))])
+    (samplers.EmceeSampler, dict(), dict(max_iterations=100))])
 def test_save_fn(likelihood, tmp_path, Sampler, kwargs_init, kwargs_run):
+    # Check that the sampler correctly saves chains and state, if applicable.
 
     kwargs_init['save_fn'] = str(tmp_path / 'checkpoint_*.npz')
-    kwargs_run['max_iterations'] = 100
 
     if issubclass(Sampler, samplers.base.MarkovChainSampler):
         args_init = (likelihood, 4)
@@ -87,17 +87,26 @@ def test_save_fn(likelihood, tmp_path, Sampler, kwargs_init, kwargs_run):
     sampler_2 = Sampler(*args_init, rng=43, **kwargs_init)
     chain_2 = sampler_2.run(**kwargs_run)
 
-    chain_1.save('chain_1.npz')
-    chain_2.save('chain_2.npz')
+    assert len(chain_1) == len(chain_2)
+    assert np.allclose(chain_1.logposterior.value,
+                       chain_2.logposterior.value, atol=1e-6)
+
+
+@pytest.mark.parametrize("Sampler, kwargs_init, kwargs_run", [
+    (samplers.EmceeSampler, dict(), dict(max_iterations=100))])
+def test_rng(likelihood, tmp_path, Sampler, kwargs_init, kwargs_run):
+    # Test that specifying the random seed leads to reproducible results.
+
+    if issubclass(Sampler, samplers.base.MarkovChainSampler):
+        args_init = (likelihood, 4)
+    else:
+        args_init = (likelihood, )
+
+    sampler_1 = Sampler(*args_init, rng=42, **kwargs_init)
+    sampler_2 = Sampler(*args_init, rng=42, **kwargs_init)
+    chain_1 = sampler_1.run(**kwargs_run)
+    chain_2 = sampler_2.run(**kwargs_run)
 
     assert len(chain_1) == len(chain_2)
-    for i in range(len(chain_1)):
-        if np.abs(chain_1.logposterior.value[i] - chain_2.logposterior.value[i]) > 1e-6:
-            print(chain_1.logposterior.value[i],
-                  chain_2.logposterior.value[i])
-    print(np.mean(np.isclose(chain_1.logposterior.value,
-                             chain_2.logposterior.value, atol=1e-6)))
-    print(np.amax(np.abs(chain_1.logposterior.value - chain_2.logposterior.value)))
-    print(len(sampler_1.chains[0]))
     assert np.allclose(chain_1.logposterior.value,
                        chain_2.logposterior.value, atol=1e-6)

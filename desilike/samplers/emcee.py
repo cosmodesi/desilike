@@ -86,8 +86,10 @@ class EmceeSampler(MarkovChainSampler):
                 coords[i] = [self.chains[i][param].value[-1] for param in
                              self.likelihood.varied_params.names()]
                 log_post[i] = self.chains[i]['logposterior'].value[-1]
-            initial_state = emcee.State(coords, log_prob=log_post,
-                                        random_state=self.rng)
+            initial_state = emcee.State(
+                coords, log_prob=log_post,
+                random_state=np.random.RandomState(self.rng.integers(
+                    2**32 - 1)).get_state())
         else:
             initial_state = None
 

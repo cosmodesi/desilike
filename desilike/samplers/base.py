@@ -254,21 +254,25 @@ class StaticSampler(BaseSampler):
         Parameters
         ----------
         kwargs : dict, optional
-            Keyword arguments passed to the ``get_samples`` method.
+            Keyword arguments passed to the ``get_points`` method.
 
         Returns
         -------
-        Chain
+        desilike.samples. Chain
             Sampler results.
 
         """
         points = self.get_points(**kwargs)
         if self.mpicomm.rank == 0:
-            log_p = np.array(self.pool.map(compute_posterior, points))
+            log_l = np.array(self.pool.map(compute_likelihood, points))
+            log_prior = np.array(self.pool.map(compute_prior, points))
             chain = [points[..., i] for i in range(self.n_dim)]
-            chain.append(log_p)
+            chain.append(log_l)
+            chain.append(log_prior)
+            chain.append(log_l + log_prior)
             chain = Chain(
-                chain, params=self.likelihood.varied_params + ['logposterior'])
+                chain, params=self.likelihood.varied_params +
+                ['loglikelihood', 'logprior', 'logposterior'])
             self.pool.stop_wait()
         else:
             self.pool.wait()
@@ -292,7 +296,7 @@ class PopulationSampler(BaseSampler):
 
         Returns
         -------
-        Chain
+        desilike.samples. Chain
             Sampler results.
 
         """
@@ -308,7 +312,7 @@ class PopulationSampler(BaseSampler):
 
         Returns
         -------
-        Chain
+        desilike.samples. Chain
             Sampler results.
 
         """

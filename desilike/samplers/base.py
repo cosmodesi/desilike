@@ -135,7 +135,7 @@ class BaseSampler(BaseClass):
         set_compute_prior(self.compute_prior)
         set_compute_likelihood(self.compute_likelihood)
 
-    def save_path(self, name, suffix=None):
+    def path(self, name, suffix=None):
         """Define the filepath for saving results.
 
         Parameters
@@ -354,12 +354,12 @@ class MarkovChainSampler(BaseSampler):
         self.checks = None
 
         if self.save_fn is not None:
-            if all(self.save_path(f'chain_{i + 1}').is_file() for i in
+            if all(self.path(f'chain_{i + 1}').is_file() for i in
                    range(self.n_chains)):
                 self.chains = [Chain.load(
-                    self.save_path(f'chain_{i + 1}')) for i in
+                    self.path(f'chain_{i + 1}')) for i in
                     range(self.n_chains)]
-                self.checks = list(np.load(self.save_path('checks', 'npy'),
+                self.checks = list(np.load(self.path('checks', 'npy'),
                                            allow_pickle=False))
 
     def run_sampler(self, n_steps, **kwargs):
@@ -423,7 +423,7 @@ class MarkovChainSampler(BaseSampler):
 
         if self.save_fn is not None:
             for i, chain in enumerate(self.chains):
-                chain.save(self.save_path(f'chain_{i + 1}'))
+                chain.save(self.path(f'chain_{i + 1}'))
 
     def check(self, criteria, burn_in=0.2, quiet=False):
         """Check the status of the sampling, including convergence.
@@ -567,8 +567,8 @@ class MarkovChainSampler(BaseSampler):
                 self.checks.append(self.check(convergence_criteria))
                 if self.save_fn is not None:
                     for i, chain in enumerate(self.chains):
-                        chain.save(self.save_path(f'chain_{i + 1}'))
-                    np.save(self.save_path('checks', 'npy'), self.checks,
+                        chain.save(self.path(f'chain_{i + 1}'))
+                    np.save(self.path('checks', 'npy'), self.checks,
                             allow_pickle=False)
 
             self.pool.stop_wait()

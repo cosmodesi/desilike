@@ -51,7 +51,7 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
     """
     name = 'pocomc'
 
-    def __init__(self, *args, n_active=None, n_ess=1000, flow='maf6', train_config=None,
+    def __init__(self, *args, n_active=250, n_ess=1000, flow='maf6', train_config=None,
                  precondition=True, n_prior=None, sample='tpcn', max_steps=None, patience=None, ess_threshold=None, **kwargs):
         """
         Initialize PocoMC sampler.
@@ -138,7 +138,6 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         bounds = np.array([tuple(None if np.isinf(lim) else lim for lim in param.prior.limits) for param in self.varied_params], dtype='f8')
         import pocomc
         self.prior = Prior(self.varied_params)
-        print(self.prior.bounds)
         self.sampler = pocomc.Sampler(self.prior, self.loglikelihood, n_dim=ndim, n_effective=n_ess, n_active=self.nwalkers, flow=flow, train_config=train_config, precondition=precondition, n_prior=n_prior, sample=sample, n_max_steps=max_steps, n_steps=patience, vectorize=True, output_dir=None, output_label=None, random_state=self.rng.randint(0, high=0xffffffff))
         if self.save_fn is None:
             raise ValueError('save_fn must be provided, in order to save pocomc state')
@@ -235,7 +234,7 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         except ValueError:
             return None
         # This is not picklable
-        particles.__init__(n_particles=particles.n_particles, n_dim=particles.n_dim, ess_threshold=particles.ess_threshold)  # clear particles
+        particles.__init__(n_particles=particles.n_particles, n_dim=particles.n_dim)  # clear particles
         particles.update(self.sampler.current_particles)  # for next iteration, only last particles are needed
         try:
             del self.sampler.log_likelihood, self.sampler.log_prior, self.sampler._not_termination, self.sampler.load_state

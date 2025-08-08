@@ -83,5 +83,6 @@ class NautilusSampler(PopulationSampler):
         chain = [points[..., i] for i in range(self.n_dim)]
         chain.append(log_w)
         chain.append(np.exp(log_w - self.sampler.log_z))
+        chain.append(log_l)
         return Chain(chain, params=self.likelihood.varied_params +
-                     ['logweight', 'aweight'])
+                     ['logweight', 'aweight', 'loglikelihood'])

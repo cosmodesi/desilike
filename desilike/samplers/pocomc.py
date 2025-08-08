@@ -51,8 +51,8 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
     """
     name = 'pocomc'
 
-    def __init__(self, *args, n_active=None, n_ess=1000, flow=None, train_config=None,
-                 precondition=True, n_prior=None, sample=None, max_steps=None, patience=None, ess_threshold=None, **kwargs):
+    def __init__(self, *args, n_active=250, n_ess=1000, flow='maf6', train_config=None,
+                 precondition=True, n_prior=None, sample='tpcn', max_steps=None, patience=None, ess_threshold=None, **kwargs):
         """
         Initialize PocoMC sampler.
 
@@ -70,8 +70,8 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         n_ess : int, default=1000
             The effective sample size maintained during the run (default is ``n_ess=1000``).
 
-        flow : ``torch.nn.Module`` or ``None``
-            Normalizing flow (default is ``None``). The default is a Masked Autoregressive Flow
+        flow : ``torch.nn.Module``
+            Normalizing flow (default is ``maf6``). The default is a Masked Autoregressive Flow
             (MAF) with 6 blocks of 3x64 layers and residual connections.
 
         train_config : dict, default=None
@@ -88,9 +88,9 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         n_prior : int, default=None
             Number of prior samples to draw (default is ``n_prior=2*(n_ess//n_active)*n_active``).
 
-        sample : str, default='pcn'
-            Type of MCMC sampler to use (default is ``sample='pcn'``). Options are
-            ``'pcn'`` (Preconditioned Crank-Nicolson) or ``'rwm'`` (Random-Walk Metropolis).
+        sample : str, default='tpcn'
+            Type of MCMC sampler to use (default is ``sample='tpcn'``). Options are
+            ``'tpcn'`` (t-Preconditioned Crank-Nicolson) or ``'rwm'`` (Random-Walk Metropolis).
 
         max_steps : int, default=None
             Maximum number of MCMC steps (default is ``max_steps=5*n_dim``).
@@ -138,7 +138,7 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         bounds = np.array([tuple(None if np.isinf(lim) else lim for lim in param.prior.limits) for param in self.varied_params], dtype='f8')
         import pocomc
         self.prior = Prior(self.varied_params)
-        self.sampler = pocomc.Sampler(self.prior, self.loglikelihood, ndim, n_ess=n_ess, n_active=self.nwalkers, flow=flow, train_config=train_config, precondition=precondition, n_prior=n_prior, sample=sample, max_steps=max_steps, patience=patience, ess_threshold=ess_threshold, vectorize=True, output_dir=None, output_label=None, random_state=self.rng.randint(0, high=0xffffffff))
+        self.sampler = pocomc.Sampler(self.prior, self.loglikelihood, n_dim=ndim, n_effective=n_ess, n_active=self.nwalkers, flow=flow, train_config=train_config, precondition=precondition, n_prior=n_prior, sample=sample, n_max_steps=max_steps, n_steps=patience, vectorize=True, output_dir=None, output_label=None, random_state=self.rng.randint(0, high=0xffffffff))
         if self.save_fn is None:
             raise ValueError('save_fn must be provided, in order to save pocomc state')
         self.state_fn = [os.path.splitext(fn)[0] + '.pocomc.state' for fn in self.save_fn]
@@ -234,7 +234,7 @@ class PocoMCSampler(BaseBatchPosteriorSampler):
         except ValueError:
             return None
         # This is not picklable
-        particles.__init__(n_particles=particles.n_particles, n_dim=particles.n_dim, ess_threshold=particles.ess_threshold)  # clear particles
+        particles.__init__(n_particles=particles.n_particles, n_dim=particles.n_dim)  # clear particles
         particles.update(self.sampler.current_particles)  # for next iteration, only last particles are needed
         try:
             del self.sampler.log_likelihood, self.sampler.log_prior, self.sampler._not_termination, self.sampler.load_state

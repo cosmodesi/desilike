@@ -39,6 +39,7 @@ def test_samplers():
             kwargs.update(nlive=100)
         save_fn = ['./_tests/chain_{:d}.npz'.format(i) for i in range(min(likelihood.mpicomm.size, 2))]
         sampler = Sampler(likelihood, save_fn=save_fn, **kwargs)
+        _kwargs = kwargs.copy()
         kwargs = {}
         if Sampler in [EmceeSampler, ZeusSampler]:
             kwargs.update(thin_by=2)
@@ -66,7 +67,8 @@ def test_samplers():
             assert chains[0]['LRG.loglikelihood'].derivs is not None
             assert chains[0].sample_solved()['LRG.loglikelihood'].derivs is None
         chains = sampler.run(max_iterations=20, check=True, check_every=20)
-        sampler = Sampler(likelihood, chains=save_fn, save_fn=save_fn)
+        kwargs = _kwargs
+        sampler = Sampler(likelihood, chains=save_fn, save_fn=save_fn, **kwargs)
         chains = sampler.run(max_iterations=20, check=True, check_every=10)
 
 
@@ -444,7 +446,6 @@ def test_bao_hmc():
 
     if likelihood.mpicomm.rank == 0:
         plotting.plot_triangle(list(chains.values()), labels=list(chains.keys()), show=True)
-
 
 def test_folpsax_hmc():
 

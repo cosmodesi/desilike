@@ -144,8 +144,12 @@ class PocoMCSampler(PopulationSampler):
 
         super().__init__(likelihood, rng=rng, save_fn=save_fn, mpicomm=mpicomm)
 
+        path = self.path('sampler')
+        output_dir = str(path.parent) if path is not None else None
+        output_label = path.stem if path is not None else None
         kwargs = update_kwargs(
-            kwargs, 'pocoMC', pool=self.pool, output_dir=self.save_fn,
+            kwargs, 'pocoMC', pool=self.pool, output_dir=output_dir,
+            output_label=output_label,
             random_state=self.rng.integers(2**32 - 1))
 
         if self.mpicomm.rank == 0:

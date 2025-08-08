@@ -63,12 +63,14 @@ class DynestySampler(PopulationSampler):
                              "static sampler.")
 
         if self.mpicomm.rank == 0:
-            args = (compute_likelihood, prior_transform, self.n_dim)
-            if dynamic:
-                self.sampler = dynesty.DynamicNestedSampler(
-                    *args, **kwargs)
-            else:
-                self.sampler = dynesty.NestedSampler(*args, **kwargs)
+            sampler_cls = (dynesty.DynamicNestedSampler if dynamic else
+                           dynesty.NestedSampler)
+            try:
+                self.sampler = sampler_cls.restore(str(self.path(
+                    'sampler', 'pkl')))
+            except (FileNotFoundError, ValueError):
+                args = (compute_likelihood, prior_transform, self.n_dim)
+                self.sampler = sampler_cls(*args, **kwargs)
         else:
             self.sampler = None
 
@@ -86,7 +88,8 @@ class DynestySampler(PopulationSampler):
             Sampler results.
 
         """
-        kwargs = update_kwargs(kwargs, 'dynesty', checkpoint_file=self.save_fn)
+        kwargs = update_kwargs(kwargs, 'dynesty', checkpoint_file=str(
+            self.path('sampler', 'pkl')))
 
         self.sampler.run_nested(**kwargs)
 

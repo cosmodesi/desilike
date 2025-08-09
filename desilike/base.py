@@ -392,7 +392,7 @@ class BasePipeline(BaseClass):
     def __init__(self, calculator):
         """
         Initialize pipeline for input ``calculator``.
-        Calculators ``calculator`` depends upon are initialized.
+        Calculators that ``calculator`` depends upon are initialized.
         """
         self.calculators = []
         self.more_derived, self.more_calculate, self.more_initialize = None, None, None
@@ -404,9 +404,11 @@ class BasePipeline(BaseClass):
                 if calculator in self.calculators:
                     del self.calculators[self.calculators.index(calculator)]
                 for require in calculator.runtime_info.requires:
+                    require._mpicomm = calculator.mpicomm
                     callback2(require)
 
             for require in calculator.runtime_info.requires:
+                require._mpicomm = calculator.mpicomm
                 callback2(require)
                 require.runtime_info.initialize()  # can create new calculators, so remove the previous ones above
                 require.runtime_info._initialized_for_pipeline.append(id(self))
@@ -1180,9 +1182,9 @@ class BaseCalculator(BaseClass):
 
     @mpicomm.setter
     def mpicomm(self, mpicomm):
-        if not self.runtime_info.initialized:
-            self._mpicomm = mpicomm
-        self.runtime_info.pipeline.mpicomm = mpicomm
+        self._mpicomm = mpicomm
+        if self.runtime_info.initialized:
+            self.runtime_info.pipeline.mpicomm = mpicomm
 
     @property
     def init(self):

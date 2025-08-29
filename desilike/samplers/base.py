@@ -129,7 +129,7 @@ class BaseSampler(BaseClass):
         self.save_fn = save_fn
         self.mpicomm = mpicomm if mpicomm is not None else likelihood.mpicomm
         self.pool = MPIPool(comm=self.mpicomm)
-        self.blobs = False
+        self.derived = None
 
         set_prior_transform(self.prior_transform)
         set_compute_prior(self.compute_prior)
@@ -199,6 +199,8 @@ class BaseSampler(BaseClass):
     def compute_likelihood(self, point):
         """Compute the natural logarithm of the likelihood.
 
+        Note that this function also saves all derived parameters internally.
+
         Parameters
         ----------
         point : numpy.ndarray of shape (n_dim, )
@@ -208,24 +210,55 @@ class BaseSampler(BaseClass):
         -------
         log_l : float
             Natural logarithm of the likelihood.
-        blob : dict, optional
-            Derived results. Only returned if ``self.blobs`` is set to True.
 
         """
-        result = self.likelihood(
-            Samples(point, params=self.likelihood.varied_params).to_dict(),
-            return_derived=True)[1]
-        log_l = result['loglikelihood'].value
+        parameters = Samples(point, params=self.likelihood.varied_params)
+        derived = self.likelihood(parameters.to_dict(), return_derived=True)[1]
+        derived.update(parameters)
 
-        if not self.blobs:
-            return log_l
+        if self.derived is None:
+            self.derived = derived
+        else:
+            self.derived = Samples.concatenate([self.derived, derived])
 
-        blob = dict()
-        for param in result:
-            if param.param.name != 'loglikelihood':
-                blob[param.param.name] = param.value
+        return derived['loglikelihood'].value
 
-        return log_l, blob
+    def gather_derived(self, chain=None):
+        """Gather the derived parameters from all subprocesses.
+
+        Parameters
+        ----------
+        desilike.samples.Chain or None, optional
+            Chain to which derived results should be matched and added.
+
+        Raises
+        ------
+        ValueError
+            If not all elements in the chain could be associated with derived
+            parameters.
+
+        Returns
+        -------
+        desilike.samples.Chain or None
+            Chain with added derived results. Only returned if `chain` is
+            provided.
+
+        """
+        derived = self.mpicomm.gather(self.derived)
+        if self.mpicomm.rank == 0:
+            self.derived = Samples.concatenate(derived)
+        else:
+            self.derived = None
+
+        if chain is not None:
+            idx_c, idx_d = self.derived.match(
+                chain, params=self.likelihood.varied_params)
+            # TODO: Find out why the first index from match is needed.
+            if len(idx_c[0]) != len(chain):
+                raise ValueError("Not all derived results could be found.")
+            chain = chain[idx_c[0]]
+            chain.update(self.derived[idx_d[0]])
+            return chain
 
 
 class StaticSampler(BaseSampler):
@@ -258,7 +291,7 @@ class StaticSampler(BaseSampler):
 
         Returns
         -------
-        desilike.samples. Chain
+        desilike.samples.Chain
             Sampler results.
 
         """
@@ -296,7 +329,7 @@ class PopulationSampler(BaseSampler):
 
         Returns
         -------
-        desilike.samples. Chain
+        desilike.samples.Chain
             Sampler results.
 
         """
@@ -312,7 +345,7 @@ class PopulationSampler(BaseSampler):
 
         Returns
         -------
-        desilike.samples. Chain
+        desilike.samples.Chain
             Sampler results.
 
         """

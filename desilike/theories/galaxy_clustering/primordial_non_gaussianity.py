@@ -212,13 +212,11 @@ class PNGTracerCrossPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFro
         
         keep_params = ['b1','b2','sigmas_1','sigmas_2','sn0']
         if self.mode == 'bphi':
-            keep_params += ['fnl_loc', 'bphi']
+            keep_params += ['fnl_loc', 'bphi1', 'bphi2']
         elif self.mode == 'b-p':
             keep_params += ['fnl_loc', 'p1', 'p2']
-        elif self.mode == 'bfnl':
-            keep_params += ['bfnl_loc']
         else:
-            raise ValueError('Unknown mode {}; it must be one of ["bphi", "b-p", "bfnl"]'.format(self.mode))
+            raise ValueError('Unknown mode {}; it must be one of ["bphi", "b-p"]'.format(self.mode))
         self.z = self.template.z
         self.params = self.params.select(basename=keep_params)
 
@@ -244,16 +242,16 @@ class PNGTracerCrossPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFro
         kin, pk_dd, alpha = kin[1:], pk_dd[1:], alpha[1:]
         if self.mode == 'bphi':
             fnl_loc = params['fnl_loc']
-            bphi = params['bphi']
-            bfnl_loc = bphi * fnl_loc
+            bphi1 = params['bphi1']
+            bphi2 = params['bphi2']
+            bfnl_loc1 = bphi1 * fnl_loc
+            bfnl_loc2 = bphi2 * fnl_loc
         elif self.mode == 'b-p':
             fnl_loc = params['fnl_loc']
             p1 = params.get('p1', 1.)
-            p2 = params.get('p2', 1.) # by default set p1=p2
+            p2 = params.get('p2', 1.)
             bfnl_loc1 = 2. * 1.686 * (b1 - p1) * fnl_loc
             bfnl_loc2 = 2. * 1.686 * (b2 - p2) * fnl_loc
-        else:
-            bfnl_loc = params['bfnl_loc']
         # bfnl_loc is typically 2 * delta_c * (b1 - p)
         bias1 = b1 + bfnl_loc1 * interp1d(jnp.log10(kap), np.log10(kin), alpha)
         bias2 = b2 + bfnl_loc2 * interp1d(jnp.log10(kap), np.log10(kin), alpha)

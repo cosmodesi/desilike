@@ -1,6 +1,25 @@
+"""
+Bindings utilities for exporting desilike likelihoods to external inference codes
+(e.g., Cobaya, CosmoSIS, MontePython).
+
+This module provides:
+- A utility to infer a module name from a file path (:func:`find_module_from_file`).
+- A safe helper to load an object from a Python file (:func:`load_from_file`).
+- A base generator class that writes thin wrapper files so external codes can import
+  desilike likelihoods (:class:`BaseLikelihoodGenerator`).
+- A helper to split a likelihood's parameters into cosmological and nuisance groups
+  (:func:`get_likelihood_params`).
+
+Public API
+----------
+find_module_from_file
+load_from_file
+BaseLikelihoodGenerator
+get_likelihood_params
+"""
+
 import os
 import sys
-
 from desilike.parameter import ParameterCollection, Parameter
 from desilike.utils import BaseClass, import_class, is_sequence
 

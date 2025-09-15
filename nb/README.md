@@ -4,7 +4,7 @@ Before running any of the notebooks, make sure to set up the environment by foll
 
 1. **Create the conda environment** using the provided `environment.yml`:
    ```bash
-   mamba env create -f environment.yml
+   conda env create -f environment.yml
    conda activate desilike_env
 2. **Run the installation script to install the required Python packages from git:**
    ```bash

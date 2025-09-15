@@ -1,3 +1,17 @@
+# Installation Instructions
+
+Before running any of the notebooks, make sure to set up the environment by following these steps:
+
+1. **Create the conda environment** using the provided `environment.yml`:
+   ```bash
+   mamba env create -f environment.yml
+   conda activate desilike_env
+2. **Run the installation script to install the required Python packages from git:**
+   ```bash
+   bash install_desilike.sh
+  
+Once these steps are complete, all the notebooks below should run correctly as mentioned below.   
+
 # Notebooks
 
 - basic_examples.ipynb: desilike basics, how to create a calculator (theory or likelihood), define parameters, fit and sample likelihood

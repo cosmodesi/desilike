@@ -17,9 +17,9 @@ dependencies:
   - fftw
   - openmpi
   - mpi4py
-  - gcc_linux-64        # compilador C/C++
+  - gcc_linux-64
   - gxx_linux-64
-  - gfortran_linux-64   # necesario para compilar CLASS (pyclass)
+  - gfortran_linux-64
   - libblas
   - liblapack
   - pkg-config
@@ -29,9 +29,8 @@ dependencies:
   - anesthetic
   - tabulate
   - emcee
-  - emcee  # conda-forge
+  - emcee
   - iminuit
   - zeus-mcmc
   - pip:
-      # instalamos los repositorios git con pip en el paso post-create
       - pip>=23.0

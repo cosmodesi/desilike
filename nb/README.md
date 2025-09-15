@@ -6,11 +6,11 @@ Before running any of the notebooks, make sure to set up the environment by foll
    ```bash
    conda env create -f environment.yml
    conda activate desilike_env
-2. **Run the installation script to install the required Python packages from git:**
+2. **Run the installation script to install the required Python packages from git** using the provided `install_desilike.sh`:
    ```bash
    bash install_desilike.sh
   
-Once these steps are complete, all the notebooks below should run correctly as mentioned below.   
+Once these steps are complete, all the notebooks below should run correctly.   
 
 # Notebooks
 

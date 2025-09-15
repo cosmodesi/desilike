@@ -1,10 +1,7 @@
 #Note: First run the 'environment.yaml' file
 
 #!/usr/bin/env bash
-set -euo pipefail
-
-#activate environment (assumes conda)
-conda activate desilike_env
+set -eo pipefail
 
 #upgrade pip and wheel
 python -m pip install --upgrade pip setuptools wheel

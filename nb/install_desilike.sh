@@ -16,7 +16,7 @@ python -m pip install git+https://github.com/cosmodesi/cosmoprimo#egg=cosmoprimo
 python -m pip install git+https://github.com/cosmodesi/pypower
 
 #4) pyclass (compiles CLASS during installation)
-python -m pip install git+https://github.com/adematti/pyclass
+#python -m pip install git+https://github.com/adematti/pyclass
 
 #5) useful packages that sometimes are not included in extras
 python -m pip install getdist anesthetic tabulate

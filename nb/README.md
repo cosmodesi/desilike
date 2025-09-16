@@ -9,6 +9,15 @@ Before running any of the notebooks, make sure to set up the environment by foll
 2. **Run the installation script to install the required Python packages from git** using the provided `install_desilike.sh`:
    ```bash
    bash install_desilike.sh
+
+3. **(Optional) Run the pyclass installation, ensuring compatible compilers are installed:**
+   ```bash
+   #Install the compilers
+   conda install -c conda-forge gfortran compilers make
+
+   #Then install pyclass
+   python -m pip install git+https://github.com/adematti/pyclass
+   
   
 Once these steps are complete, all the notebooks below should run correctly.   
 

@@ -159,7 +159,7 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
 
 class PNGTracerCrossPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedges):
     r"""
-    Kaiser tracer power spectrum multipoles, with scale dependent bias sourced by local primordial non-Gaussianities.
+    Kaiser tracer power spectrum multipoles, with scale dependent bias sourced by local primordial non-Gaussianities (for cross tracers).
 
     Parameters
     ----------
@@ -182,9 +182,8 @@ class PNGTracerCrossPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFro
     mode : str, default='b-p'
         fnl_loc is degenerate with PNG bias bphi.
 
-        - "b-p": ``bphi = 2 * 1.686 * (b1 - p)``, p as a parameter
-        - "bphi": ``bphi`` as a parameter
-        - "bfnl_loc": ``bfnl_loc = bphi * fnl_loc`` as a parameter
+        - "b-p": ``bphi1 = 2 * 1.686 * (b1 - p1)`` and ``bphi2 = 2 * 1.686 * (b2 - p2)``, with b1, b2, p1, and p2 as parameters.
+        - "bphi": ``bphi1`` and ``bphi2`` as parameters.
 
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`FixedPowerSpectrumTemplate`.

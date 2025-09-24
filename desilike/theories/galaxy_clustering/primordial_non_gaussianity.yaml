@@ -7,7 +7,7 @@ params:
     ref:
       limits: [-10., 10.]
     delta: 1.
-    latex: f_{NL}^{\mathrm{loc}}
+    latex: f_{\mathrm{NL}}^{\mathrm{loc}}
   bphi:
     prior:
       limits: [-10, 10]
@@ -58,3 +58,90 @@ params:
       limits: [1., 4.]
     delta: 0.2
     latex: \Sigma_{s}
+
+--- 
+
+class: PNGTracerCrossPowerSpectrumMultipoles
+
+params:
+  fnl_loc:
+    prior:
+      limits: [-300., 300.]
+    ref:
+      limits: [-10., 10.]
+    delta: 1.
+    latex: f_{\mathrm{NL}}^{\mathrm{loc}}
+  bphi:
+    prior:
+      limits: [-10, 10]
+    ref:
+      limits: [3., 4.]
+    delta: 0.1
+    latex: b_{\phi}
+  p1:
+    value: 1.
+    prior:
+      limits: [0, 3]
+    ref:
+      limits: [0.5, 1.5]
+    delta: 0.1
+    latex: p_{1}
+  p2:
+    value: 1.
+    prior:
+      limits: [0, 3]
+    ref:
+      limits: [0.5, 1.5]
+    delta: 0.1
+    latex: p_{2}
+  bfnl_loc:
+    value: 0.
+    prior:
+      limits: [-1e3, 1e3]
+    ref:
+      limits: [-50., 50.]
+    delta: 1.
+    latex: b_{\phi}f_{NL}^{\mathrm{loc}}
+  b1:
+    value: 2.
+    prior:
+      limits: [0.1, 10]
+    ref:
+      limits: [1.5, 2.5]
+    delta: 0.1
+    latex: b_{1}
+  b2:
+    value: 2.
+    prior:
+      limits: [0.1, 10]
+    ref:
+      limits: [1.5, 2.5]
+    delta: 0.1
+    latex: b_{2}
+  sn0:
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 1000.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    delta: 0.05
+    latex: s_{n, 0}
+  sigmas_1:
+    value: 0.
+    prior:
+      limits: [0., 10]
+    ref:
+      limits: [1., 4.]
+    delta: 0.2
+    latex: \Sigma_{s, 1}
+  sigmas_2:
+    value: 0.
+    prior:
+      limits: [0., 10]
+    ref:
+      limits: [1., 4.]
+    delta: 0.2
+    latex: \Sigma_{s, 2}

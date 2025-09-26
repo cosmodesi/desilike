@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
+from jax import numpy as jnp
 
 import desilike.samplers as samplers
-from desilike.base import BaseCalculator
 from desilike.likelihoods import BaseGaussianLikelihood
 
 
@@ -53,31 +53,19 @@ KWARGS_RUN_FAST = dict(
 @pytest.fixture
 def likelihood():
 
-    class Model(BaseCalculator):
-
-        _params = dict(a=dict(prior=dict(dist='uniform', limits=[0, 1]),
-                              value=0.5, proposal=0.5),
-                       b=dict(prior=dict(dist='uniform', limits=[0, 1]),
-                              value=0.5, proposal=0.5))
-
-        def initialize(self, x=None):
-            pass
-
-        def calculate(self, a=0., b=0.):
-            self.y = np.array([a, b])
-
     class Likelihood(BaseGaussianLikelihood):
 
-        def initialize(self):
-            super(Likelihood, self).initialize(
-                np.array([0.4, 0.6]), covariance=np.eye(2) * 0.01)
-            self.theory = Model()
+        def calculate(self, **kwargs):
+            self.flattheory = jnp.array([kwargs[name] for name in
+                                         self.params.names()])
+            super().calculate()
 
-        @property
-        def flattheory(self):
-            return self.theory.y
+    likelihood = Likelihood(np.array([0.4, 0.6]), covariance=np.eye(2) * 0.01)
+    likelihood.init.params = dict(
+        a=dict(prior=dict(dist='uniform', limits=[0, 1])),
+        b=dict(prior=dict(dist='uniform', limits=[0, 1])))
 
-    return Likelihood()
+    return likelihood
 
 
 @pytest.mark.parametrize("key", [

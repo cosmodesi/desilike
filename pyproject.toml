@@ -28,7 +28,9 @@ tests = [
     "pocomc",
     "zeus-mcmc",
     "h5py",
-    "pyclass @ git+https://github.com/adematti/pyclass"]
+    "pyclass @ git+https://github.com/adematti/pyclass",
+    "jax",
+    "interpax"]
 plotting = [
     "matplotlib",
     "tabulate",

@@ -8,9 +8,9 @@ specialized classes implementing specific samplers such as `emcee` or
 
 # TODO: Properly implement abstract classes and methods.
 
-from pathlib import Path
 import sys
 import warnings
+from pathlib import Path
 
 import numpy as np
 

@@ -617,9 +617,11 @@ class MarkovChainSampler(BaseSampler):
 
         self.reset_sampler()
 
+        chains = self.mpicomm.bcast(self.chains, root=0)
+
         if isinstance(burn_in, float):
-            burn_in = round(burn_in * len(self.chains[0]))
-        chains = [chain[burn_in:] for chain in self.chains]
+            burn_in = round(burn_in * len(chains[0]))
+        chains = [chain[burn_in:] for chain in chains]
 
         if flatten_chains:
             return Chain.concatenate(chains)

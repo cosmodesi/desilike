@@ -30,7 +30,8 @@ tests = [
     "h5py",
     "pyclass @ git+https://github.com/adematti/pyclass",
     "jax",
-    "interpax"]
+    "interpax",
+    "blackjax"]
 plotting = [
     "matplotlib",
     "tabulate",

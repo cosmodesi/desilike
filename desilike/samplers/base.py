@@ -184,17 +184,18 @@ class BaseSampler(BaseClass):
 
         Parameters
         ----------
-        points : numpy.ndarray of shape (n_points, n_dim)
-            Points for which to compute the prior.
+        points : numpy.ndarray of shape (n_points, n_dim) or (n_dim, )
+            Point(s) for which to compute the prior.
 
         Returns
         -------
-        numpy.ndarray of shape (n_points, )
+        log_prior : numpy.ndarray of shape (n_points, ) or float
             Natural logarithm of the prior.
 
         """
-        return self.likelihood.all_params.prior(
-            **dict(zip(self.likelihood.varied_params.names(), points.T)))
+        if not isinstance(points, dict):
+            points = dict(zip(self.likelihood.varied_params.names(), points.T))
+        return self.likelihood.all_params.prior(**points)
 
     def compute_likelihood(self, point):
         """Compute the natural logarithm of the likelihood.
@@ -212,14 +213,16 @@ class BaseSampler(BaseClass):
             Natural logarithm of the likelihood.
 
         """
-        parameters = Samples(point, params=self.likelihood.varied_params)
-        derived = self.likelihood(parameters.to_dict(), return_derived=True)[1]
-        derived.update(parameters)
+        if not isinstance(point, dict):
+            point = dict(zip(self.likelihood.varied_params.names(), point.T))
+        derived = self.likelihood(point, return_derived=True)[1]
+        derived.update(Samples(point))
 
-        if self.derived is None:
-            self.derived = derived
-        else:
-            self.derived = Samples.concatenate([self.derived, derived])
+        if getattr(self, 'save_derived', True):
+            if self.derived is None:
+                self.derived = derived
+            else:
+                self.derived = Samples.concatenate([self.derived, derived])
 
         return derived['loglikelihood'].value
 

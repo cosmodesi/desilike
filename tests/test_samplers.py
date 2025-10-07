@@ -10,37 +10,27 @@ SAMPLER_CLS = dict(
     dynesty=samplers.DynestySampler,
     emcee=samplers.EmceeSampler,
     grid=samplers.GridSampler,
+    hmc=samplers.HMCSampler,
     nautilus=samplers.NautilusSampler,
     pocomc=samplers.PocoMCSampler,
     zeus=samplers.ZeusSampler)
 ARGS_INIT = dict(
-    dynesty=(),
     emcee=(10, ),
-    grid=(),
-    nautilus=(),
-    pocomc=(),
+    hmc=(10, ),
     zeus=(10, ))
 KWARGS_INIT = dict(
     dynesty=dict(dynamic=True, nlive=100),
-    emcee=dict(),
-    grid=dict(),
     nautilus=dict(n_networks=1, n_live=300),
-    pocomc=dict(n_effective=200, n_active=100),
-    zeus=dict())
+    pocomc=dict(n_effective=200, n_active=100))
 KWARGS_INIT_FAST = dict(
     dynesty=dict(dynamic=True, nlive=30),
-    emcee=dict(),
-    grid=dict(),
     nautilus=dict(n_networks=1, n_live=100),
-    pocomc=dict(n_effective=100, n_active=50),
-    zeus=dict())
+    pocomc=dict(n_effective=100, n_active=50))
 KWARGS_RUN = dict(
     dynesty=dict(n_effective=0),
-    emcee=dict(),
     grid=dict(size=100),
     nautilus=dict(n_eff=100),
-    pocomc=dict(n_total=100, n_evidence=100),
-    zeus=dict())
+    pocomc=dict(n_total=100, n_evidence=100))
 KWARGS_RUN_FAST = dict(
     dynesty=dict(n_effective=0),
     emcee=dict(max_iterations=100),
@@ -69,14 +59,14 @@ def likelihood():
 
 
 @pytest.mark.parametrize("key", [
-    'dynesty', 'emcee', 'grid', 'nautilus', 'pocomc', 'zeus'])
+    'dynesty', 'emcee', 'grid', 'hmc', 'nautilus', 'pocomc', 'zeus'])
 def test_accuracy(likelihood, key):
     # Test that all samplers work with a simple two-dimensional likelihood and
     # produce acceptable results.
 
-    sampler = SAMPLER_CLS[key](likelihood, *ARGS_INIT[key], rng=42,
-                               **KWARGS_INIT[key])
-    chain = sampler.run(**KWARGS_RUN_FAST[key])
+    sampler = SAMPLER_CLS[key](likelihood, *ARGS_INIT.get(key, ()), rng=42,
+                               **KWARGS_INIT.get(key, {}))
+    chain = sampler.run(**KWARGS_RUN_FAST.get(key, {}))
 
     if isinstance(sampler, samplers.GridSampler):
         chain.aweight = np.exp(chain.logposterior)
@@ -96,23 +86,25 @@ def test_save_fn(likelihood, key, tmp_path):
     # Check that the sampler correctly saves chains and state, if applicable.
 
     sampler_1 = SAMPLER_CLS[key](
-        likelihood, *ARGS_INIT[key], rng=42,
-        save_fn=str(tmp_path / 'checkpoint_*.npz'), **KWARGS_INIT_FAST[key])
+        likelihood, *ARGS_INIT.get(key, ()), rng=42,
+        save_fn=str(tmp_path / 'checkpoint_*.npz'),
+        **KWARGS_INIT_FAST.get(key, {}))
     if key != 'pocomc':
-        chain_1 = sampler_1.run(**KWARGS_RUN_FAST[key])
+        chain_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
     else:
-        chain_1 = sampler_1.run(save_every=1, **KWARGS_RUN_FAST[key])
+        chain_1 = sampler_1.run(save_every=1, **KWARGS_RUN_FAST.get(key, {}))
     # The second sampler should not create any new samples if old chains
     # are read correctly.
     sampler_2 = SAMPLER_CLS[key](
-        likelihood, *ARGS_INIT[key], rng=43,
-        save_fn=str(tmp_path / 'checkpoint_*.npz'), **KWARGS_INIT_FAST[key])
+        likelihood, *ARGS_INIT.get(key, ()), rng=43,
+        save_fn=str(tmp_path / 'checkpoint_*.npz'),
+        **KWARGS_INIT_FAST.get(key, {}))
     if key != 'pocomc':
-        chain_2 = sampler_2.run(**KWARGS_RUN_FAST[key])
+        chain_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
     else:
         chain_2 = sampler_2.run(
             resume_state_path=str(sampler_2.path('sampler_final', 'state')),
-            **KWARGS_RUN_FAST[key])
+            **KWARGS_RUN_FAST.get(key, {}))
 
     assert len(chain_1) == len(chain_2)
     assert np.allclose(chain_1.logposterior.value,
@@ -128,12 +120,14 @@ def test_rng(likelihood, key):
         pytest.skip("Zeus does not support specifying a random seed.")
 
     sampler_1 = SAMPLER_CLS[key](
-        likelihood, *ARGS_INIT[key], rng=42, **KWARGS_INIT_FAST[key])
-    chain_1 = sampler_1.run(**KWARGS_RUN_FAST[key])
+        likelihood, *ARGS_INIT.get(key, ()), rng=42,
+        **KWARGS_INIT_FAST.get(key, {}))
+    chain_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
 
     sampler_2 = SAMPLER_CLS[key](
-        likelihood, *ARGS_INIT[key], rng=42, **KWARGS_INIT_FAST[key])
-    chain_2 = sampler_2.run(**KWARGS_RUN_FAST[key])
+        likelihood, *ARGS_INIT.get(key, ()), rng=42,
+        **KWARGS_INIT_FAST.get(key, {}))
+    chain_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
 
     assert len(chain_1) == len(chain_2)
     assert np.allclose(chain_1.logposterior.value,

@@ -30,6 +30,9 @@ class EmceeSampler(MarkovChainSampler):
         likelihood : BaseLikelihood
             Likelihood to sample.
 
+        n_chains : int
+            Number of chains.
+
         rng : numpy.random.RandomState or int, optional
             Random number generator. Default is ``None``.
 

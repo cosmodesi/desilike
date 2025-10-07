@@ -12,6 +12,52 @@ from .base import compute_posterior, MarkovChainSampler
 from desilike.samples import Chain
 
 
+SAMPLER = None
+
+
+def make_one_step(state, rng_key):
+    """Advance the sampler by one step.
+
+    Parameters
+    ----------
+    state : NamedTuple
+        State of the sampler.
+    rng_key : jax.Array
+        Random state.
+
+    Returns
+    -------
+    state : NamedTuple
+        New state of the sampler.
+    state : NamedTuple
+        Returned again for use in `jax.lax.scan`.
+
+    """
+    state, _ = SAMPLER.step(rng_key, state)
+    return state, state
+
+
+def make_n_steps(args):
+    """Advance the state by several steps.
+
+    Parameters
+    ----------
+    args : tuple
+        Blackjax state, random key, and number of steps.
+
+    Returns
+    -------
+    final_state : NamedTuple
+        Final state after all steps.
+    states : NamedTuple
+        All sampled states.
+
+    """
+    state, rng_key, n_steps = args
+    return jax.lax.scan(make_one_step, state, jax.random.split(
+        rng_key, n_steps))
+
+
 class HMCSampler(MarkovChainSampler):
     """Wrapper for Hamiltonian Monte-Carlo (HMC).
 
@@ -85,7 +131,8 @@ class HMCSampler(MarkovChainSampler):
         if inv_mass_matrix is None:
             inv_mass_matrix = np.ones(self.n_dim)
 
-        self.sampler = blackjax.hmc(
+        global SAMPLER
+        SAMPLER = blackjax.hmc(
             compute_posterior, step_size, inv_mass_matrix,
             num_integration_steps, **kwargs)
 
@@ -98,30 +145,25 @@ class HMCSampler(MarkovChainSampler):
 
         Parameters
         ----------
-        n_steps: int
+        n_steps : int
             Number of steps to take.
 
         """
         if self.states is None:
             self.states = []
             for i in range(self.n_chains):
-                self.states.append(self.sampler.init(
+                self.states.append(SAMPLER.init(
                     {param: self.chains[i][param].value[-1] for param in
                      self.likelihood.varied_params.names()}))
 
         rng_keys = jax.random.split(jax.random.PRNGKey(
             self.rng.integers(2**32)), self.n_chains)
 
-        def one_step(state, rng_key):
-            state, _ = self.sampler.step(rng_key, state)
-            return state, state
-
+        inputs = [(self.states[i], rng_keys[i], n_steps) for i in
+                  range(self.n_chains)]
+        results = self.pool.map(make_n_steps, inputs)
         for i in range(self.n_chains):
-            final_state, states = jax.lax.scan(
-                one_step, self.states[i], jax.random.split(
-                    rng_keys[i], n_steps))
-
-            chain = states.position
-            chain['logposterior'] = states.logdensity
+            self.states[i] = results[i][0]
+            chain = results[i][1].position
+            chain['logposterior'] = results[i][1].logdensity
             self.chains[i] = Chain.concatenate(self.chains[i], Chain(chain))
-            self.states[i] = final_state

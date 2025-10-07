@@ -55,7 +55,7 @@ class NautilusSampler(PopulationSampler):
         kwargs = update_kwargs(
             kwargs, 'nautilus', pass_dict=False,
             filepath=self.path('sampler', 'hdf5'), pool=self.pool,
-            seed=self.rng.integers(2**32 - 1))
+            seed=self.rng.integers(2**32))
 
         if self.mpicomm.rank == 0:
             self.sampler = nautilus.Sampler(

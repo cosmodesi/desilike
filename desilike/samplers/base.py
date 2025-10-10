@@ -619,7 +619,7 @@ class MarkovChainSampler(BaseSampler):
 
         if isinstance(burn_in, float):
             burn_in = round(burn_in * len(chains[0]))
-        chains = [self.add_derived(chain[burn_in:]) for chain in chains]
+        chains = [chain[burn_in:] for chain in chains]
 
         if flatten_chains:
             return Chain.concatenate(chains)

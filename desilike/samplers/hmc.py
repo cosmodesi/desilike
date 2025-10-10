@@ -168,6 +168,7 @@ class HMCSampler(MarkovChainSampler):
             chain = Samples(positions)
             # Recompute the derived parameters since they couldn't be saved
             # during the sampling.
+            # TODO: Understand why the list() command is necessary.
             derived = jax.vmap(lambda point: self.likelihood(
                 point, return_derived=True)[1])(positions)
             derived.data = list(derived.data)

@@ -9,7 +9,7 @@ except ModuleNotFoundError:
 import numpy as np
 
 from .base import compute_posterior, MarkovChainSampler
-from desilike.samples import Chain
+from desilike.samples import Chain, Samples
 
 
 SAMPLER = None
@@ -66,8 +66,6 @@ class HMCSampler(MarkovChainSampler):
     - https://github.com/blackjax-devs/blackjax
 
     """
-
-    save_derived = False
 
     def __init__(self, likelihood, n_chains, adaptation=True,
                  adaptation_kwargs=dict(n_iters=1000), step_size=1e-3,
@@ -149,6 +147,8 @@ class HMCSampler(MarkovChainSampler):
             Number of steps to take.
 
         """
+        self.save_derived = False
+
         if self.states is None:
             self.states = []
             for i in range(self.n_chains):
@@ -164,6 +164,14 @@ class HMCSampler(MarkovChainSampler):
         results = self.pool.map(make_n_steps, inputs)
         for i in range(self.n_chains):
             self.states[i] = results[i][0]
-            chain = results[i][1].position
+            positions = results[i][1].position
+            chain = Samples(positions)
+            # Recompute the derived parameters since they couldn't be saved
+            # during the sampling.
+            derived = jax.vmap(lambda point: self.likelihood(
+                point, return_derived=True)[1])(positions)
+            derived.data = list(derived.data)
+            derived.update(chain)
             chain['logposterior'] = results[i][1].logdensity
-            self.chains[i] = Chain.concatenate(self.chains[i], Chain(chain))
+            self.chains[i] = Chain.concatenate(self.chains[i], chain)
+            self.derived = Chain.concatenate([self.derived, derived])

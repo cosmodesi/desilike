@@ -226,12 +226,12 @@ class BaseSampler(BaseClass):
 
         return derived['loglikelihood'].value
 
-    def gather_derived(self, chain=None):
-        """Gather the derived parameters from all subprocesses.
+    def add_derived(self, chain):
+        """Add the derived parameters to a chain.
 
         Parameters
         ----------
-        desilike.samples.Chain or None, optional
+        desilike.samples.Chain
             Chain to which derived results should be matched and added.
 
         Raises
@@ -242,9 +242,8 @@ class BaseSampler(BaseClass):
 
         Returns
         -------
-        desilike.samples.Chain or None
-            Chain with added derived results. Only returned if `chain` is
-            provided.
+        desilike.samples.Chain
+            Chain with added derived parameters.
 
         """
         derived = self.mpicomm.gather(self.derived)
@@ -253,15 +252,14 @@ class BaseSampler(BaseClass):
         else:
             self.derived = None
 
-        if chain is not None:
-            idx_c, idx_d = self.derived.match(
-                chain, params=self.likelihood.varied_params)
-            # TODO: Find out why the first index from match is needed.
-            if len(idx_c[0]) != len(chain):
-                raise ValueError("Not all derived results could be found.")
-            chain = chain[idx_c[0]]
-            chain.update(self.derived[idx_d[0]])
-            return chain
+        idx_c, idx_d = self.derived.match(
+            chain, params=self.likelihood.varied_params)
+        # TODO: Find out why the first index from match is needed.
+        if len(idx_c[0]) != len(chain):
+            raise ValueError("Not all derived results could be found.")
+        chain = chain[idx_c[0]]
+        chain.update(self.derived[idx_d[0]])
+        return chain
 
 
 class StaticSampler(BaseSampler):
@@ -621,7 +619,7 @@ class MarkovChainSampler(BaseSampler):
 
         if isinstance(burn_in, float):
             burn_in = round(burn_in * len(chains[0]))
-        chains = [chain[burn_in:] for chain in chains]
+        chains = [self.add_derived(chain[burn_in:]) for chain in chains]
 
         if flatten_chains:
             return Chain.concatenate(chains)

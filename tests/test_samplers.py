@@ -12,6 +12,7 @@ SAMPLER_CLS = dict(
     grid=samplers.GridSampler,
     hmc=samplers.HMCSampler,
     nautilus=samplers.NautilusSampler,
+    nuts=samplers.NUTSSampler,
     pocomc=samplers.PocoMCSampler,
     zeus=samplers.ZeusSampler)
 ARGS_INIT = dict(

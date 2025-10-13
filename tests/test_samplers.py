@@ -17,6 +17,7 @@ SAMPLER_CLS = dict(
 ARGS_INIT = dict(
     emcee=(10, ),
     hmc=(10, ),
+    nuts=(10, ),
     zeus=(10, ))
 KWARGS_INIT = dict(
     dynesty=dict(dynamic=True, nlive=100),
@@ -59,7 +60,7 @@ def likelihood():
 
 
 @pytest.mark.parametrize("key", [
-    'dynesty', 'emcee', 'grid', 'hmc', 'nautilus', 'pocomc', 'zeus'])
+    'dynesty', 'emcee', 'grid', 'hmc', 'nautilus', 'nuts', 'pocomc', 'zeus'])
 def test_accuracy(likelihood, key):
     # Test that all samplers work with a simple two-dimensional likelihood and
     # produce acceptable results.

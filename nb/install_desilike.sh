@@ -22,7 +22,7 @@ python -m pip install git+https://github.com/cosmodesi/pypower
 python -m pip install getdist anesthetic tabulate
 
 #6) fallback for zeus-mcmc (if conda install fails, pip will be used)
-python -m pip install zeus-mcmc
+#python -m pip install zeus-mcmc
 
 #If everything worked you should see:
 echo "Installation completed (if no errors above)."

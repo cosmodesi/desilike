@@ -68,7 +68,7 @@ def likelihood():
 def test_accuracy(likelihood, key):
     # Test that all samplers work with a simple two-dimensional likelihood and
     # produce acceptable results.
-
+    samplers.blackjax.SAMPLER = None
     sampler = SAMPLER_CLS[key](likelihood, *ARGS_INIT.get(key, ()), rng=42,
                                **KWARGS_INIT.get(key, {}))
     chain = sampler.run(**KWARGS_RUN_FAST.get(key, {}))

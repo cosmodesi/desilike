@@ -124,9 +124,13 @@ class BlackJAXSampler(MarkovChainSampler):
         if self.states is None:
             self.states = []
             for i in range(self.n_chains):
-                self.states.append(SAMPLER.init(
-                    {param: self.chains[i][param].value[-1] for param in
-                     self.likelihood.varied_params.names()}))
+                args = ({param: self.chains[i][param].value[-1] for param in
+                         self.likelihood.varied_params.names()}, )
+                try:
+                    self.states.append(SAMPLER.init(*args))
+                except TypeError:
+                    rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
+                    self.states.append(SAMPLER.init(*(args + (rng_key, ))))
 
         rng_keys = jax.random.split(jax.random.PRNGKey(
             self.rng.integers(2**32)), self.n_chains)
@@ -288,3 +292,63 @@ class NUTSSampler(BlackJAXSampler):
 
         self.adaptation = adaptation
         self.adaptation_kwargs = adaptation_kwargs
+
+
+class MCLMCSampler(BlackJAXSampler):
+    """Wrapper for the Microcanonical Langevin Monte Carlo (MCLMC) sampler.
+
+    Reference
+    ---------
+    - https://blackjax-devs.github.io/sampling-book/algorithms/mclmc.html
+    - https://arxiv.org/abs/2212.08549
+    """
+
+    def __init__(self, likelihood, n_chains, adaptation=True, L=1.,
+                 step_size=0.1, integrator='isokinetic_mclachlan', rng=None,
+                 save_fn=None, mpicomm=None, **kwargs):
+        """Initialize the Microcanonical Langevin Monte Carlo (MCLMC) sampler.
+
+        Parameters
+        ----------
+        likelihood : BaseLikelihood
+            Likelihood to sample.
+
+        n_chains : int
+            Number of chains.
+
+        adaptation : bool, dict, default=True
+            Adapt momentum decoherence scale ``L`` and ``step_size``.
+            Can be ``{'niterations': 1000, 'frac_tune1': 0.1, 'frac_tune1': 0.1, 'frac_tune2': 0.1, 'frac_tune3': 0.1,
+            'desired_energy_var': 5e-4,, 'trust_in_estimate': 1.5, 'num_effective_samples': 150, 'diagonal_preconditioning': True}``
+
+        L : float, default=1.
+            Momentum decoherence scale.
+
+        step_size : float, default=0.1
+            The value to use for the step size in the integrator.
+
+        integrator : str, default='isokinetic_mclachlan'
+            Integrator, from :mod:`blackjax.mcmc.integrators`.
+
+        rng : numpy.random.RandomState or int, optional
+            Random number generator. Default is ``None``.
+
+        save_fn : str, Path, optional
+            Save samples to this location. Default is ``None``.
+
+        mpicomm : mpi.COMM_WORLD, optional
+            MPI communicator. If ``None``, defaults to ``likelihood``'s
+            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
+
+        kwargs: dict, optional
+            Extra keyword arguments passed to ``blackjax.hmc`` during
+            initialization.
+
+        """
+        super().__init__(likelihood, n_chains, rng=rng, save_fn=save_fn,
+                         mpicomm=mpicomm)
+
+        global SAMPLER
+        SAMPLER = blackjax.mclmc(compute_posterior, L, step_size)
+
+        self.adaptation = adaptation

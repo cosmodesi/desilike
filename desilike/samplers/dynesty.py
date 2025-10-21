@@ -22,29 +22,21 @@ class DynestySampler(PopulationSampler):
 
     """
 
-    def __init__(self, likelihood, rng=None, save_fn=None, mpicomm=None,
-                 dynamic=True, **kwargs):
+    def __init__(self, likelihood, dynamic=True, rng=None, filepath=None,
+                 **kwargs):
         """Initialize the dynesty sampler.
 
         Parameters
         ----------
         likelihood : BaseLikelihood
             Likelihood to sample.
-
-        rng : numpy.random.RandomState or int, optional
-            Random number generator. Default is ``None``.
-
-        save_fn : str, Path, optional
-            Save samples to this location. Default is ``None``.
-
-        mpicomm : mpi.COMM_WORLD, optional
-            MPI communicator. If ``None``, defaults to ``likelihood``'s
-            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
-
         dynamic : boolean, optional
             If True, use ``dynesty.DynamicPopulationSampler`` instead of
             ``dynesty.PopulationSampler``. Default is True.
-
+        rng : numpy.random.RandomState or int, optional
+            Random number generator. Default is ``None``.
+        filepath : str, Path, optional
+            Save samples to this location. Default is ``None``.
         kwargs: dict, optional
             Extra keyword arguments passed to dynesty during initialization.
 
@@ -53,12 +45,12 @@ class DynestySampler(PopulationSampler):
             raise ImportError("The 'dynesty' package is required but not "
                               "installed.")
 
-        super().__init__(likelihood, rng=rng, save_fn=save_fn, mpicomm=mpicomm)
+        super().__init__(likelihood, rng=rng, filepath=filepath)
 
         kwargs = update_kwargs(kwargs, 'dynesty', pool=self.pool,
                                rstate=self.rng)
 
-        if not dynamic and self.save_fn is not None:
+        if not dynamic and self.filepath is not None:
             raise ValueError("dynesty does not support checkpointing for the "
                              "static sampler.")
 

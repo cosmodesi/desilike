@@ -23,25 +23,17 @@ class NautilusSampler(PopulationSampler):
 
     """
 
-    def __init__(self, likelihood, rng=None, save_fn=None, mpicomm=None,
-                 **kwargs):
+    def __init__(self, likelihood, rng=None, filepath=None, **kwargs):
         """Initialize the nautilus sampler.
 
         Parameters
         ----------
         likelihood : BaseLikelihood
             Likelihood to sample.
-
         rng : numpy.random.RandomState or int, optional
             Random number generator. Default is ``None``.
-
-        save_fn : str, Path, optional
+        filepath : str, Path, optional
             Save samples to this location. Default is ``None``.
-
-        mpicomm : mpi.COMM_WORLD, optional
-            MPI communicator. If ``None``, defaults to ``likelihood``'s
-            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
-
         kwargs: dict, optional
             Extra keyword arguments passed to nautilus during initialization.
 
@@ -50,7 +42,7 @@ class NautilusSampler(PopulationSampler):
             raise ImportError("The 'nautilus-sampler' package is required but "
                               "not installed.")
 
-        super().__init__(likelihood, rng=rng, save_fn=save_fn, mpicomm=mpicomm)
+        super().__init__(likelihood, rng=rng, filepath=filepath)
 
         kwargs = update_kwargs(
             kwargs, 'nautilus', pass_dict=False,

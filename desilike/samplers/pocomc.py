@@ -6,7 +6,6 @@ try:
     POCOMC_INSTALLED = True
 except ModuleNotFoundError:
     POCOMC_INSTALLED = False
-import sys
 
 from .base import compute_likelihood, update_kwargs, PopulationSampler
 from desilike.samples import Chain
@@ -66,11 +65,9 @@ class PocoMCSampler(PopulationSampler):
         ----------
         likelihood : BaseLikelihood
             Likelihood to sample.
-
         rng : numpy.random.RandomState or int, optional
             Random number generator. Default is ``None``.
-
-        save_fn : str, Path, optional
+        filepath : str, Path, optional
             Save samples to this location. Default is ``None``.
 
         flow : ``torch.nn.Module``
@@ -142,7 +139,7 @@ class PocoMCSampler(PopulationSampler):
             raise ValueError('save_fn must be provided, in order to save pocomc state')
         self.state_fn = [os.path.splitext(fn)[0] + '.pocomc.state' for fn in self.save_fn]
 
-        super().__init__(likelihood, rng=rng, save_fn=save_fn, mpicomm=mpicomm)
+        super().__init__(likelihood, rng=rng, filepath=filepath)
 
         path = self.path('sampler')
         output_dir = str(path.parent) if path is not None else None

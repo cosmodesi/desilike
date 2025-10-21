@@ -87,12 +87,12 @@ def test_accuracy(likelihood, key):
 
 @pytest.mark.parametrize("key", [
     'dynesty', 'emcee', 'nautilus', 'pocomc', 'zeus'])
-def test_save_fn(likelihood, key, tmp_path):
+def test_filepath(likelihood, key, tmp_path):
     # Check that the sampler correctly saves chains and state, if applicable.
 
     sampler_1 = SAMPLER_CLS[key](
         likelihood, *ARGS_INIT.get(key, ()), rng=42,
-        save_fn=str(tmp_path / 'checkpoint_*.npz'),
+        filepath=str(tmp_path / 'checkpoint_*.npz'),
         **KWARGS_INIT_FAST.get(key, {}))
     if key != 'pocomc':
         chain_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
@@ -102,7 +102,7 @@ def test_save_fn(likelihood, key, tmp_path):
     # are read correctly.
     sampler_2 = SAMPLER_CLS[key](
         likelihood, *ARGS_INIT.get(key, ()), rng=43,
-        save_fn=str(tmp_path / 'checkpoint_*.npz'),
+        filepath=str(tmp_path / 'checkpoint_*.npz'),
         **KWARGS_INIT_FAST.get(key, {}))
     if key != 'pocomc':
         chain_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))

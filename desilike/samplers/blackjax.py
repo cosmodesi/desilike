@@ -70,28 +70,21 @@ class BlackJAXSampler(MarkovChainSampler):
 
     """
 
-    def __init__(self, likelihood, n_chains, rng=None, save_fn=None,
-                 mpicomm=None, **kwargs):
-        """Initialize the HMC sampler.
+    def __init__(self, likelihood, n_chains, rng=None, filepath=None,
+                 **kwargs):
+        """Initialize the BlackJAX sampler.
 
         Parameters
         ----------
         likelihood : BaseLikelihood
             Likelihood to sample.
-
-        n_chains : int
-            Number of chains.
-
-        rng : numpy.random.RandomState or int, optional
-            Random number generator. Default is ``None``.
-
-        save_fn : str, Path, optional
+        n_chains : int, optional
+            Number of chains. Default is 10.
+        rng : numpy.random.RandomState, int, or None, optional
+            Random number generator for seeding. If ``None``, no seed is used.
+            Default is ``None``.
+        filepath : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-
-        mpicomm : mpi.COMM_WORLD, optional
-            MPI communicator. If ``None``, defaults to ``likelihood``'s
-            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
-
         kwargs: dict, optional
             Extra keyword arguments passed to ``blackjax.hmc`` during
             initialization.
@@ -106,8 +99,7 @@ class BlackJAXSampler(MarkovChainSampler):
             raise RuntimeError("Cannot create multiple instances of BlackJAX "
                                "samplers simultaneously.")
 
-        super().__init__(likelihood, n_chains, rng=rng, save_fn=save_fn,
-                         mpicomm=mpicomm)
+        super().__init__(likelihood, n_chains, rng=rng, filepath=filepath)
         self.states = None
 
     def run_sampler(self, n_steps):
@@ -162,60 +154,48 @@ class BlackJAXSampler(MarkovChainSampler):
 class HMCSampler(BlackJAXSampler):
     """Wrapper for Hamiltonian Monte-Carlo (HMC)."""
 
-    def __init__(self, likelihood, n_chains, adaptation=True,
+    def __init__(self, likelihood, n_chains=10, adaptation=True,
                  adaptation_kwargs=dict(n_iters=1000), step_size=1e-3,
                  inv_mass_matrix=None, num_integration_steps=60, rng=None,
-                 save_fn=None, mpicomm=None, **kwargs):
+                 filepath=None, **kwargs):
         """Initialize the HMC sampler.
 
         Parameters
         ----------
         likelihood : BaseLikelihood
             Likelihood to sample.
-
-        n_chains : int
-            Number of chains.
-
+        n_chains : int, optional
+            Number of chains. Default is 10.
         adaptation : bool, optional
             Determine the best inverse mass matrix and step size during an
             initial warm-up phase. Default is True.
-
         adaptation_kwargs : dict or None, optional
             Additional keyword arguments passed to
             ``blackjax.window_adaptation``. The key 'n_iters' is not passed to
             ``blackjax.window_adaptation`` and instead determines the length
             of the warm-up phase. Default is ``dict(n_iters=1000)``.
-
         step_size : float, optional
             Size of the integration step. Default is 1e-3.
-
         inv_mass_matrix : numpy.ndarray, optional
             The value to use for the inverse mass matrix when drawing a value
             for the momentum and computing the kinetic energy. If
             one-dimensional, a diagonal mass matrix is assumed. If None,
             a unity matrix is used. Default is None.
-
         num_integration_steps : int, optional
             Number of times we run the symplectic integrator to build the
             trajectory. Default is 60.
-
-        rng : numpy.random.RandomState or int, optional
-            Random number generator. Default is ``None``.
-
-        save_fn : str, Path, optional
+        rng : numpy.random.RandomState, int, or None, optional
+            Random number generator for seeding. If ``None``, no seed is used.
+            Default is ``None``.
+        filepath : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-
-        mpicomm : mpi.COMM_WORLD, optional
-            MPI communicator. If ``None``, defaults to ``likelihood``'s
-            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
-
         kwargs: dict, optional
             Extra keyword arguments passed to ``blackjax.hmc`` during
             initialization.
 
         """
-        super().__init__(likelihood, n_chains, rng=rng, save_fn=save_fn,
-                         mpicomm=mpicomm)
+        super().__init__(likelihood, n_chains=n_chains, rng=rng,
+                         filepath=filepath)
 
         if inv_mass_matrix is None:
             inv_mass_matrix = np.ones(self.n_dim)
@@ -232,56 +212,44 @@ class HMCSampler(BlackJAXSampler):
 class NUTSSampler(BlackJAXSampler):
     """Wrapper for No-U-Turn Sampler (NUTS)."""
 
-    def __init__(self, likelihood, n_chains, adaptation=True,
+    def __init__(self, likelihood, n_chains=10, adaptation=True,
                  adaptation_kwargs=dict(n_iters=1000), step_size=1e-3,
-                 inv_mass_matrix=None, num_integration_steps=60, rng=None,
-                 save_fn=None, mpicomm=None, **kwargs):
+                 inv_mass_matrix=None, rng=None, filepath=None, **kwargs):
         """Initialize the No-U-Turn Sampler (NUTS).
 
         Parameters
         ----------
         likelihood : BaseLikelihood
             Likelihood to sample.
-
-        n_chains : int
-            Number of chains.
-
+        n_chains : int, optional
+            Number of chains. Default is 10.
         adaptation : bool, optional
             Determine the best inverse mass matrix and step size during an
             initial warm-up phase. Default is True.
-
         adaptation_kwargs : dict or None, optional
             Additional keyword arguments passed to
             ``blackjax.window_adaptation``. The key 'n_iters' is not passed to
             ``blackjax.window_adaptation`` and instead determines the length
             of the warm-up phase. Default is ``dict(n_iters=1000)``.
-
         step_size : float, optional
             Size of the integration step. Default is 1e-3.
-
         inv_mass_matrix : numpy.ndarray, optional
             The value to use for the inverse mass matrix when drawing a value
             for the momentum and computing the kinetic energy. If
             one-dimensional, a diagonal mass matrix is assumed. If None,
             a unity matrix is used. Default is None.
-
-        rng : numpy.random.RandomState or int, optional
-            Random number generator. Default is ``None``.
-
-        save_fn : str, Path, optional
+        rng : numpy.random.RandomState, int, or None, optional
+            Random number generator for seeding. If ``None``, no seed is used.
+            Default is ``None``.
+        filepath : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-
-        mpicomm : mpi.COMM_WORLD, optional
-            MPI communicator. If ``None``, defaults to ``likelihood``'s
-            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
-
         kwargs: dict, optional
             Extra keyword arguments passed to ``blackjax.hmc`` during
             initialization.
 
         """
-        super().__init__(likelihood, n_chains, rng=rng, save_fn=save_fn,
-                         mpicomm=mpicomm)
+        super().__init__(likelihood, n_chains=n_chains, rng=rng,
+                         filepath=filepath)
 
         if inv_mass_matrix is None:
             inv_mass_matrix = np.ones(self.n_dim)
@@ -303,50 +271,38 @@ class MCLMCSampler(BlackJAXSampler):
     - https://arxiv.org/abs/2212.08549
     """
 
-    def __init__(self, likelihood, n_chains, adaptation=True, L=1.,
+    def __init__(self, likelihood, n_chains=10, adaptation=True, L=1.,
                  step_size=0.1, integrator='isokinetic_mclachlan', rng=None,
-                 save_fn=None, mpicomm=None, **kwargs):
+                 filepath=None, **kwargs):
         """Initialize the Microcanonical Langevin Monte Carlo (MCLMC) sampler.
 
         Parameters
         ----------
         likelihood : BaseLikelihood
             Likelihood to sample.
-
-        n_chains : int
-            Number of chains.
-
+        n_chains : int, optional
+            Number of chains. Default is 10.
         adaptation : bool, dict, default=True
             Adapt momentum decoherence scale ``L`` and ``step_size``.
             Can be ``{'niterations': 1000, 'frac_tune1': 0.1, 'frac_tune1': 0.1, 'frac_tune2': 0.1, 'frac_tune3': 0.1,
             'desired_energy_var': 5e-4,, 'trust_in_estimate': 1.5, 'num_effective_samples': 150, 'diagonal_preconditioning': True}``
-
         L : float, default=1.
             Momentum decoherence scale.
-
         step_size : float, default=0.1
             The value to use for the step size in the integrator.
-
         integrator : str, default='isokinetic_mclachlan'
             Integrator, from :mod:`blackjax.mcmc.integrators`.
-
         rng : numpy.random.RandomState or int, optional
             Random number generator. Default is ``None``.
-
-        save_fn : str, Path, optional
+        filepath : str, Path, optional
             Save samples to this location. Default is ``None``.
-
-        mpicomm : mpi.COMM_WORLD, optional
-            MPI communicator. If ``None``, defaults to ``likelihood``'s
-            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
-
         kwargs: dict, optional
             Extra keyword arguments passed to ``blackjax.hmc`` during
             initialization.
 
         """
-        super().__init__(likelihood, n_chains, rng=rng, save_fn=save_fn,
-                         mpicomm=mpicomm)
+        super().__init__(likelihood, n_chains=n_chains, rng=rng,
+                         filepath=filepath)
 
         global SAMPLER
         SAMPLER = blackjax.mclmc(compute_posterior, L, step_size)

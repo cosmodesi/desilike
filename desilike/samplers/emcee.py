@@ -1,4 +1,4 @@
-"""Module implementing the emcee sampler."""
+"""Module implementing the ``emcee`` sampler."""
 
 try:
     import emcee
@@ -12,7 +12,7 @@ from desilike.samples import Chain
 
 
 class EmceeSampler(MarkovChainSampler):
-    """Wrapper for the affine-invariant ensemble sampler emcee.
+    """Wrapper for the affine-invariant ensemble sampler ``emcee``.
 
     Reference
     ---------
@@ -21,38 +21,31 @@ class EmceeSampler(MarkovChainSampler):
 
     """
 
-    def __init__(self, likelihood, n_chains, rng=None, save_fn=None,
-                 mpicomm=None, **kwargs):
+    def __init__(self, likelihood, n_chains=10, rng=None, filepath=None,
+                 **kwargs):
         """Initialize the emcee sampler.
 
         Parameters
         ----------
         likelihood : BaseLikelihood
             Likelihood to sample.
-
-        n_chains : int
-            Number of chains.
-
-        rng : numpy.random.RandomState or int, optional
-            Random number generator. Default is ``None``.
-
-        save_fn : str, Path, optional
+        n_chains : int, optional
+            Number of chains. Default is 10.
+        rng : numpy.random.RandomState, int, or None, optional
+            Random number generator for seeding. If ``None``, no seed is used.
+            Default is ``None``.
+        filepath : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-
-        mpicomm : mpi.COMM_WORLD, optional
-            MPI communicator. If ``None``, defaults to ``likelihood``'s
-            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
-
         kwargs: dict, optional
-            Extra keyword arguments passed to dynesty during initialization.
+            Extra keyword arguments passed to ``emcee`` during initialization.
 
         """
         if not EMCEE_INSTALLED:
             raise ImportError("The 'emcee' package is required but not "
                               "installed.")
 
-        super().__init__(likelihood, n_chains, rng=rng, save_fn=save_fn,
-                         mpicomm=mpicomm)
+        super().__init__(likelihood, n_chains=n_chains, rng=rng,
+                         filepath=filepath)
 
         kwargs = update_kwargs(kwargs, 'emcee', pool=self.pool, args=None,
                                kwargs=None, vectorize=False)

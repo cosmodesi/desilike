@@ -14,7 +14,7 @@ from desilike.samples import Chain
 
 
 class ZeusSampler(MarkovChainSampler):
-    """Wrapper for the ensemble slice sampler zeus.
+    """Wrapper for the ensemble slice sampler ``zeus``.
 
     Reference
     ---------
@@ -24,35 +24,31 @@ class ZeusSampler(MarkovChainSampler):
 
     """
 
-    def __init__(self, likelihood, n_chains, rng=None, save_fn=None,
-                 mpicomm=None, **kwargs):
-        """Initialize the zeus sampler.
+    def __init__(self, likelihood, n_chains, rng=None, filepath=None,
+                 **kwargs):
+        """Initialize the ``zeus`` sampler.
 
         Parameters
         ----------
         likelihood : BaseLikelihood
             Likelihood to sample.
-
-        rng : numpy.random.RandomState or int, optional
-            Random number generator. Default is ``None``.
-
-        save_fn : str, Path, optional
+        n_chains : int, optional
+            Number of chains. Default is 10.
+        rng : numpy.random.RandomState, int, or None, optional
+            Random number generator for seeding. If ``None``, no seed is used.
+            Default is ``None``.
+        filepath : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-
-        mpicomm : mpi.COMM_WORLD, optional
-            MPI communicator. If ``None``, defaults to ``likelihood``'s
-            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
-
         kwargs: dict, optional
-            Extra keyword arguments passed to dynesty during initialization.
+            Extra keyword arguments passed to ``zeus`` during initialization.
 
         """
         if not ZEUS_INSTALLED:
             raise ImportError("The 'zeus-mcmc' package is required but not "
                               "installed.")
 
-        super().__init__(likelihood, n_chains, rng=rng, save_fn=save_fn,
-                         mpicomm=mpicomm)
+        super().__init__(likelihood, n_chains=n_chains, rng=rng,
+                         filepath=filepath)
 
         kwargs = update_kwargs(kwargs, 'zeus', pool=self.pool, args=None,
                                kwargs=None, vectorize=False)

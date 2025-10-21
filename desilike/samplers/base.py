@@ -16,7 +16,7 @@ import numpy as np
 
 from desilike.samples import Chain, Samples, diagnostics
 from desilike.utils import BaseClass
-from .mpi_pool import MPIPool
+from .pool import MPIPool
 
 
 PRIOR_TRANSFORM = None
@@ -98,20 +98,18 @@ def update_kwargs(user_kwargs, sampler, **desilike_kwargs):
 class BaseSampler(BaseClass):
     """Abstract class defining common functions used by all samplers."""
 
-    def __init__(self, likelihood, rng=None, save_fn=None, mpicomm=None):
+    def __init__(self, likelihood, rng=None, filepath=None):
         """Initialize the sampler.
 
         Parameters
         ----------
         likelihood : BaseLikelihood
             Likelihood to sample.
-        rng : numpy.random.RandomState or int, optional
-            Random number generator. Default is ``None``.
-        save_fn : str, Path, optional
+        rng : numpy.random.RandomState, int, or None, optional
+            Random number generator for seeding. If ``None``, no seed is used.
+            Default is ``None``.
+        filepath : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-        mpicomm : mpi.COMM_WORLD, optional
-            MPI communicator. If ``None``, defaults to ``likelihood``'s
-            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
 
         """
         self.likelihood = likelihood
@@ -121,13 +119,10 @@ class BaseSampler(BaseClass):
             rng = np.random.default_rng(seed=rng)
 
         self.rng = rng
-        if save_fn is not None:
-            save_fn = Path(save_fn)
-            if save_fn.stem.count('*') != 1 or save_fn.suffix != '.npz':
-                raise ValueError("The filename must contain one '*' and have "
-                                 "a '.npz' suffix.")
-        self.save_fn = save_fn
-        self.mpicomm = mpicomm if mpicomm is not None else likelihood.mpicomm
+        if filepath is not None:
+            filepath = Path(filepath)
+        self.filepath = filepath
+        self.mpicomm = likelihood.mpicomm
         self.pool = MPIPool(comm=self.mpicomm)
         self.derived = None
 
@@ -150,16 +145,16 @@ class BaseSampler(BaseClass):
         Path
             Filepath.
         """
-        if self.save_fn is None:
+        if self.filepath is None:
             return None
         else:
             if suffix is None:
-                suffix = self.save_fn.suffix
+                suffix = self.filepath.suffix
             else:
                 if not suffix.startswith('.'):
                     suffix = '.' + suffix
-            return self.save_fn.with_name(
-                self.save_fn.stem.replace('*', name) + suffix)
+            return self.filepath.with_name(
+                self.filepath.stem.replace('*', name) + suffix)
 
     def prior_transform(self, point):
         """Transform from the unit cube to parameter space using the prior.
@@ -367,31 +362,28 @@ class MarkovChainSampler(BaseSampler):
     criteria = {'gelman_rubin_diag_max', 'gelman_rubin_eigen_max',
                 'geweke_max'}
 
-    def __init__(self, likelihood, n_chains, rng=None, save_fn=None,
-                 mpicomm=None):
+    def __init__(self, likelihood, n_chains=10, rng=None, filepath=None):
         """Initialize the sampler.
 
         Parameters
         ----------
         likelihood : BaseLikelihood
             Likelihood to sample.
-        n_chains : int
-            Number of chains.
-        rng : numpy.random.RandomState or int, optional
-            Random number generator. Default is ``None``.
-        save_fn : str, Path, optional
+        n_chains : int, optional
+            Number of chains. Default is 10.
+        rng : numpy.random.RandomState, int, or None, optional
+            Random number generator for seeding. If ``None``, no seed is used.
+            Default is ``None``.
+        filepath : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-        mpicomm : mpi.COMM_WORLD, optional
-            MPI communicator. If ``None``, defaults to ``likelihood``'s
-            :attr:`BaseLikelihood.mpicomm`. Default is ``None``.
 
         """
-        super().__init__(likelihood, rng=rng, save_fn=save_fn, mpicomm=mpicomm)
+        super().__init__(likelihood, rng=rng, filepath=filepath)
         self.n_chains = n_chains
         self.chains = None
         self.checks = None
 
-        if self.save_fn is not None:
+        if self.filepath is not None:
             if all(self.path(f'chain_{i + 1}').is_file() for i in
                    range(self.n_chains)):
                 self.chains = [Chain.load(
@@ -459,7 +451,7 @@ class MarkovChainSampler(BaseSampler):
             params=self.likelihood.varied_params + ['logposterior']) for p, l
             in zip(points, log_post)]
 
-        if self.save_fn is not None:
+        if self.filepath is not None:
             for i, chain in enumerate(self.chains):
                 chain.save(self.path(f'chain_{i + 1}'))
 
@@ -603,7 +595,7 @@ class MarkovChainSampler(BaseSampler):
                               max_iterations - len(self.chains[0]))
                 self.run_sampler(n_steps, **kwargs)
                 self.checks.append(self.check(convergence_criteria))
-                if self.save_fn is not None:
+                if self.filepath is not None:
                     for i, chain in enumerate(self.chains):
                         chain.save(self.path(f'chain_{i + 1}'))
                     np.save(self.path('checks', 'npy'), self.checks,

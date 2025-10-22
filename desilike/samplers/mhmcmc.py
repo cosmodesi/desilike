@@ -120,7 +120,8 @@ class SimpleMetropolisHastingsSampler():
 
         """
         self.posterior = posterior
-        self.prop = FastSlowProposal(cov, fast=fast, rng=rng)
+        self.prop = FastSlowProposal(cov * 2.38 / np.sqrt(len(cov)), fast=fast,
+                                     rng=rng)
         self.rng = rng
         self.pos = pos
         self.log_p = self.posterior(pos)

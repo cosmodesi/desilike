@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 from emcee.autocorr import integrated_time
 
-from desilike.samplers.mcmc import FastSlowProposal
-from desilike.samplers.mcmc import SimpleMetropolisHastingsSampler
+from desilike.samplers.mhmcmc import FastSlowProposal
+from desilike.samplers.mhmcmc import SimpleMetropolisHastingsSampler
 
 
 @pytest.mark.parametrize("n_fast", [0, 1, 2, 3, 4, 5])

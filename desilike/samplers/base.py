@@ -210,7 +210,7 @@ class BaseSampler(BaseClass):
         """
         if not isinstance(point, dict):
             point = dict(zip(self.likelihood.varied_params.names(), point.T))
-        derived = self.likelihood(point, return_derived=True)[1]
+        log_l, derived = self.likelihood(point, return_derived=True)
         derived.update(Samples(point))
 
         if getattr(self, 'save_derived', True):
@@ -219,7 +219,7 @@ class BaseSampler(BaseClass):
             else:
                 self.derived = Samples.concatenate([self.derived, derived])
 
-        return derived['loglikelihood'].value
+        return log_l
 
     def add_derived(self, chain):
         """Add the derived parameters to a chain.

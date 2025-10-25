@@ -146,17 +146,43 @@ class SimpleMetropolisHastingsSampler():
         for step, slow in zip(steps_cycle, slow_cycle):
 
             pos = self.pos + step
+            log_p = self.posterior(pos)
+            p = None
 
-            if True:  # not slow or self.f_drag == 0:
-                log_p = self.posterior(pos)
-            else:
+            if slow and self.f_drag != 0:
                 steps_drag = np.vstack(
-                    [self.prop.propose_fast()] * self.f_drag)
+                    [self.prop.propose_fast() for _ in range(self.f_drag)])
+                n = len(steps_drag) + 1
 
-            self.propose(pos, log_p)
+                pos_new = pos
+                pos_old = self.pos.copy()
+                log_p_new = [log_p]
+                log_p_old = [self.log_p]
 
-    def propose(self, pos, log_p):
-        if self.rng.random() < np.exp(log_p - self.log_p):
+                for i, step in enumerate(steps_drag, start=1):
+                    pos_new += step
+                    pos_old += step
+                    log_p_new.append(self.posterior(pos_new))
+                    log_p_old.append(self.posterior(pos_old))
+                    p = np.exp(
+                        ((n - i) * log_p_old[-1] + i * log_p_new[-1] -
+                         (n - i) * log_p_old[-2] - i * log_p_new[-2]) / n)
+                    if self.rng.random() > p:
+                        pos_new -= step
+                        pos_old -= step
+                        log_p_new[-1] = log_p_new[-2]
+                        log_p_old[-1] = log_p_old[-2]
+
+                pos = pos_new
+                p = np.exp(np.mean(log_p_new) - np.mean(log_p_old))
+                log_p = log_p_new[-1]
+
+            self.propose(pos, log_p, p=p)
+
+    def propose(self, pos, log_p, p=None):
+        if p is None:
+            p = np.exp(log_p - self.log_p)
+        if self.rng.random() < p:
             self.log_p = log_p
             self.pos = pos
         self.count += 1

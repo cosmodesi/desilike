@@ -21,7 +21,7 @@ from .pool import MPIPool
 
 PRIOR_TRANSFORM = None
 COMPUTE_PRIOR = None
-COMPUTE_LIKELIHOOD = None
+COMPUTE_POSTERIOR = None
 
 
 def set_prior_transform(prior_transform):
@@ -46,20 +46,20 @@ def compute_prior(x):
     return COMPUTE_PRIOR(x)
 
 
-def set_compute_likelihood(compute_likelihood):
+def set_compute_posterior(compute_posterior):
     """Set the likelihood function."""
-    global COMPUTE_LIKELIHOOD
-    COMPUTE_LIKELIHOOD = compute_likelihood
-
-
-def compute_likelihood(x):
-    """Compute the natural logarithm of the likelihood."""
-    return COMPUTE_LIKELIHOOD(x)
+    global COMPUTE_POSTERIOR
+    COMPUTE_POSTERIOR = compute_posterior
 
 
 def compute_posterior(x):
     """Compute the natural logarithm of the posterior."""
-    return compute_prior(x) + compute_likelihood(x)
+    return COMPUTE_POSTERIOR(x)
+
+
+def compute_likelihood(x):
+    """Compute the natural logarithm of the likelihood."""
+    return compute_posterior(x) - compute_prior(x)
 
 
 def update_kwargs(user_kwargs, sampler, **desilike_kwargs):
@@ -128,7 +128,7 @@ class BaseSampler(BaseClass):
 
         set_prior_transform(self.prior_transform)
         set_compute_prior(self.compute_prior)
-        set_compute_likelihood(self.compute_likelihood)
+        set_compute_posterior(self.compute_posterior)
 
     def path(self, name, suffix=None):
         """Define the filepath for saving results.
@@ -192,8 +192,8 @@ class BaseSampler(BaseClass):
             points = dict(zip(self.likelihood.varied_params.names(), points.T))
         return self.likelihood.all_params.prior(**points)
 
-    def compute_likelihood(self, point):
-        """Compute the natural logarithm of the likelihood.
+    def compute_posterior(self, point):
+        """Compute the natural logarithm of the posterior.
 
         Note that this function also saves all derived parameters internally.
 
@@ -204,13 +204,13 @@ class BaseSampler(BaseClass):
 
         Returns
         -------
-        log_l : float
-            Natural logarithm of the likelihood.
+        log_post : float
+            Natural logarithm of the posterior.
 
         """
         if not isinstance(point, dict):
             point = dict(zip(self.likelihood.varied_params.names(), point.T))
-        log_l, derived = self.likelihood(point, return_derived=True)
+        log_post, derived = self.likelihood(point, return_derived=True)
         derived.update(Samples(point))
 
         if getattr(self, 'save_derived', True):
@@ -219,7 +219,7 @@ class BaseSampler(BaseClass):
             else:
                 self.derived = Samples.concatenate([self.derived, derived])
 
-        return log_l
+        return log_post
 
     def add_derived(self, chain):
         """Add the derived parameters to a chain.

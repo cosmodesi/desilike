@@ -129,8 +129,9 @@ if __name__ == '__main__':
     corr_fn, mock_corr_fn, mock_shotnoise_corr_fn = os.path.join(corr_dir, 'data.npy'), os.path.join(corr_dir, 'mock_{:d}.npy'), os.path.join(corr_shotnoise_dir, 'mock_{:d}.npy')
     corr_fft_fn, mock_corr_fft_fn, mock_shotnoise_corr_fft_fn = os.path.join(corr_fft_dir, 'data.npy'), os.path.join(corr_fft_dir, 'mock_{:d}.npy'), os.path.join(corr_fft_shotnoise_dir, 'mock_{:d}.npy')
     window_fn = os.path.join(power_dir, 'window.npy')
-    #todo = ['mock', 'window']
-    todo = ['mock']
+    todo = ['mock', 'window']
+    #todo = ['mock']
+    #todo = ['window']
 
     if 'mock' in todo:
         run_box_mock(power_fn=power_fn, corr_fn=corr_fn, corr_fft_fn=corr_fft_fn, unitary_amplitude=True, seed=0)

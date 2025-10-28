@@ -24,7 +24,6 @@ ARGS_INIT = dict(
     zeus=(10, ))
 KWARGS_INIT = dict(
     dynesty=dict(dynamic=True, nlive=100),
-    grid=dict(size=101),
     nautilus=dict(n_networks=1, n_live=300),
     pocomc=dict(n_effective=200, n_active=100))
 KWARGS_INIT_FAST = dict(
@@ -33,13 +32,13 @@ KWARGS_INIT_FAST = dict(
     pocomc=dict(n_effective=100, n_active=50))
 KWARGS_RUN = dict(
     dynesty=dict(n_effective=0),
-    grid=dict(size=100),
+    grid=dict(grid=np.linspace(0, 1, 101)),
     nautilus=dict(n_eff=100),
     pocomc=dict(n_total=100, n_evidence=100))
 KWARGS_RUN_FAST = dict(
     dynesty=dict(n_effective=0),
     emcee=dict(max_iterations=100),
-    grid=dict(size=100),
+    grid=dict(grid=np.linspace(0, 1, 101)),
     nautilus=dict(n_eff=0, n_like_max=100),
     pocomc=dict(n_total=10, n_evidence=10),
     zeus=dict(max_iterations=100))

@@ -31,12 +31,13 @@ def test_profilers():
         param.update(fixed=True)
 
     # Test multiple profilers with and without gradients
-    # Reduced to 3 profilers for speed (removed ScipyProfiler with gradient)
     for Profiler, kwargs in [(MinuitProfiler, {}),
                              (MinuitProfiler, {'gradient': True}),
-                             (ScipyProfiler, {})]:
+                             (ScipyProfiler, {}),
+                             (BOBYQAProfiler, {}),
+                             (OptaxProfiler, {})]:
         profiler = Profiler(likelihood, seed=42, **kwargs)
-        profiles = profiler.maximize(niterations=1)  # Reduced from 2 for speed
+        profiles = profiler.maximize(niterations=1)
         
         # Verify profile attributes
         assert profiles.bestfit.attrs['ndof']
@@ -47,7 +48,7 @@ def test_profilers():
         assert profiles.bestfit.logposterior.param.derived
         
         # Test profile, grid, interval, and contour methods
-        profiler.profile(params=['df'], size=3)  # Reduced from 4
+        profiler.profile(params=['df'], size=3)
         profiler.grid(params=['df', 'dm'], size=(2, 2))
         profiler.interval(params=['df'])
         # Only test contours for MinuitProfiler to save time
@@ -182,7 +183,7 @@ def test_rescale():
     likelihood = Likelihood()
 
     # Test that rescaling gives consistent results across profilers
-    # Reduced to 2 profilers for speed (MinuitProfiler and ScipyProfiler)
+    # Note: BOBYQA and OptaxProfiler excluded here due to convergence/scaling sensitivity with this simple model
     for Profiler, kwargs in [(MinuitProfiler, {}),
                              (ScipyProfiler, {})]:
 

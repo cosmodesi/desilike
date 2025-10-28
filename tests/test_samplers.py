@@ -24,6 +24,7 @@ ARGS_INIT = dict(
     zeus=(10, ))
 KWARGS_INIT = dict(
     dynesty=dict(dynamic=True, nlive=100),
+    grid=dict(size=101),
     nautilus=dict(n_networks=1, n_live=300),
     pocomc=dict(n_effective=200, n_active=100))
 KWARGS_INIT_FAST = dict(
@@ -56,7 +57,7 @@ def likelihood():
 
     likelihood = Likelihood(np.array([0.4, 0.6]), covariance=np.eye(2) * 0.01)
     likelihood.init.params = dict(
-        a=dict(prior=dict(dist='uniform', limits=[0, 1])),
+        a=dict(prior=dict(dist='norm', limits=[0, 1], loc=0.4, scale=0.1)),
         b=dict(prior=dict(dist='uniform', limits=[0, 1])))
 
     return likelihood
@@ -80,9 +81,11 @@ def test_accuracy(likelihood, key):
     assert np.allclose(chain.mean(likelihood.varied_params),
                        likelihood.flatdata, atol=0.05, rtol=0)
     # The covariance should match.
-    assert np.allclose(chain.covariance(likelihood.varied_params),
-                       np.linalg.inv(likelihood.precision), atol=0.01,
-                       rtol=0.1)
+    cov = np.linalg.inv(likelihood.precision + np.array([[100, 0], [0, 0]]))
+    cov_err = np.sqrt(
+        (cov**2 + np.outer(np.diag(cov), np.diag(cov))) / 100)
+    assert np.allclose(chain.covariance(likelihood.varied_params), cov,
+                       atol=3 * cov_err)
 
 
 @pytest.mark.parametrize("key", [

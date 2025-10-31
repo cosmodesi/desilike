@@ -19,49 +19,6 @@ from desilike.utils import BaseClass
 from .pool import MPIPool
 
 
-PRIOR_TRANSFORM = None
-COMPUTE_PRIOR = None
-COMPUTE_POSTERIOR = None
-
-
-def set_prior_transform(prior_transform):
-    """Set the prior transformation."""
-    global PRIOR_TRANSFORM
-    PRIOR_TRANSFORM = prior_transform
-
-
-def prior_transform(x):
-    """Set the prior transformation."""
-    return PRIOR_TRANSFORM(x)
-
-
-def set_compute_prior(compute_prior):
-    """Set the prior function."""
-    global COMPUTE_PRIOR
-    COMPUTE_PRIOR = compute_prior
-
-
-def compute_prior(x):
-    """Compute the natural logarithm of the prior."""
-    return COMPUTE_PRIOR(x)
-
-
-def set_compute_posterior(compute_posterior):
-    """Set the likelihood function."""
-    global COMPUTE_POSTERIOR
-    COMPUTE_POSTERIOR = compute_posterior
-
-
-def compute_posterior(x):
-    """Compute the natural logarithm of the posterior."""
-    return COMPUTE_POSTERIOR(x)
-
-
-def compute_likelihood(x):
-    """Compute the natural logarithm of the likelihood."""
-    return compute_posterior(x) - compute_prior(x)
-
-
 def update_kwargs(user_kwargs, sampler, **desilike_kwargs):
     """
     Update the keyword arguments passed to a sampler.
@@ -124,11 +81,15 @@ class BaseSampler(BaseClass):
         self.filepath = filepath
         self.mpicomm = likelihood.mpicomm
         self.pool = MPIPool(comm=self.mpicomm)
+        self.prior_transform = self.pool.cache_function(
+            self.prior_transform, "prior_transform")
+        self.compute_prior = self.pool.cache_function(
+            self.compute_prior, "compute_prior")
+        self.compute_posterior = self.pool.cache_function(
+            self.compute_posterior, "compute_posterior")
+        self.compute_likelihood = self.pool.cache_function(
+            self.compute_likelihood, "compute_likelihood")
         self.derived = None
-
-        set_prior_transform(self.prior_transform)
-        set_compute_prior(self.compute_prior)
-        set_compute_posterior(self.compute_posterior)
 
     def path(self, name, suffix=None):
         """Define the filepath for saving results.
@@ -221,6 +182,24 @@ class BaseSampler(BaseClass):
 
         return log_post
 
+    def compute_likelihood(self, point):
+        """Compute the natural logarithm of the likelihood.
+
+        Note that this function also saves all derived parameters internally.
+
+        Parameters
+        ----------
+        point : numpy.ndarray of shape (n_dim, )
+            Point for which to compute the likelihood.
+
+        Returns
+        -------
+        log_l : float
+            Natural logarithm of the likelihood.
+
+        """
+        return self.compute_posterior(point) - self.compute_prior(point)
+
     def add_derived(self, chain):
         """Add the derived parameters to a chain.
 
@@ -293,12 +272,13 @@ class StaticSampler(BaseSampler):
         """
         points = self.get_points(**kwargs)
         if self.mpicomm.rank == 0:
-            log_l = np.array(self.pool.map(compute_likelihood, points))
-            log_prior = np.array(self.pool.map(compute_prior, points))
+            log_post = np.array(self.pool.map("compute_posterior", points))
+            log_prior = np.array(self.pool.map("compute_prior", points))
+            log_l = log_post - log_prior
             chain = [points[..., i] for i in range(self.n_dim)]
             chain.append(log_l)
             chain.append(log_prior)
-            chain.append(log_l + log_prior)
+            chain.append(log_post)
             chain = Chain(
                 chain, params=self.likelihood.varied_params +
                 ['loglikelihood', 'logprior', 'logposterior'])
@@ -439,7 +419,7 @@ class MarkovChainSampler(BaseSampler):
                 else:
                     points[use, i] = np.full(np.sum(use), param.value)
 
-            log_post[use] = self.pool.map(compute_posterior, points[use])
+            log_post[use] = self.pool.map("compute_posterior", points[use])
             n_try += 1
 
         if not np.all(np.isfinite(log_post)):

@@ -7,7 +7,7 @@ try:
 except ModuleNotFoundError:
     POCOMC_INSTALLED = False
 
-from .base import compute_likelihood, update_kwargs, PopulationSampler
+from .base import update_kwargs, PopulationSampler
 from desilike.samples import Chain
 
 
@@ -151,7 +151,8 @@ class PocoMCSampler(PopulationSampler):
 
         if self.mpicomm.rank == 0:
             prior = Prior(self.likelihood.varied_params)
-            self.sampler = pocomc.Sampler(prior, compute_likelihood, **kwargs)
+            self.sampler = pocomc.Sampler(
+                prior, self.compute_likelihood, **kwargs)
         else:
             self.sampler = None
 

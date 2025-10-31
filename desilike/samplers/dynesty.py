@@ -7,8 +7,7 @@ except ModuleNotFoundError:
     DYNESTY_INSTALLED = False
 import numpy as np
 
-from .base import (prior_transform, compute_likelihood, update_kwargs,
-                   PopulationSampler)
+from .base import update_kwargs, PopulationSampler
 from desilike.samples import Chain
 
 
@@ -57,11 +56,18 @@ class DynestySampler(PopulationSampler):
         if self.mpicomm.rank == 0:
             sampler_cls = (dynesty.DynamicNestedSampler if dynamic else
                            dynesty.NestedSampler)
-            try:
-                self.sampler = sampler_cls.restore(str(self.path(
-                    'sampler', 'pkl')))
-            except (FileNotFoundError, ValueError):
-                args = (compute_likelihood, prior_transform, self.n_dim)
+            if self.filepath is not None:
+                try:
+                    self.sampler = sampler_cls.restore(str(self.path(
+                        'sampler', 'pkl')))
+                    self.sampler.loglikelihood.loglikelihood =\
+                        self.compute_likelihood
+                    self.sampler.prior_transform = self.prior_transform
+                except (FileNotFoundError, ValueError):
+                    pass
+            if not hasattr(self, 'sampler'):
+                args = (self.compute_likelihood, self.prior_transform,
+                        self.n_dim)
                 self.sampler = sampler_cls(*args, **kwargs)
         else:
             self.sampler = None
@@ -81,7 +87,8 @@ class DynestySampler(PopulationSampler):
 
         """
         kwargs = update_kwargs(kwargs, 'dynesty', checkpoint_file=str(
-            self.path('sampler', 'pkl')))
+            self.path('sampler', 'pkl')) if self.filepath is not None else
+            None)
 
         self.sampler.run_nested(**kwargs)
 

@@ -1,6 +1,4 @@
 """Module implementing the nautilus sampler."""
-import sys
-
 try:
     import nautilus
     NAUTILUS_INSTALLED = True
@@ -8,8 +6,7 @@ except ModuleNotFoundError:
     NAUTILUS_INSTALLED = False
 import numpy as np
 
-from .base import (prior_transform, compute_likelihood, update_kwargs,
-                   PopulationSampler)
+from .base import update_kwargs, PopulationSampler
 from desilike.samples import Chain
 
 
@@ -51,7 +48,8 @@ class NautilusSampler(PopulationSampler):
 
         if self.mpicomm.rank == 0:
             self.sampler = nautilus.Sampler(
-                prior_transform, compute_likelihood, self.n_dim, **kwargs)
+                self.prior_transform, self.compute_likelihood, self.n_dim,
+                **kwargs)
         else:
             self.sampler = None
 

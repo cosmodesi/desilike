@@ -58,8 +58,8 @@ class DynestySampler(PopulationSampler):
                            dynesty.NestedSampler)
             if self.filepath is not None:
                 try:
-                    self.sampler = sampler_cls.restore(str(self.path(
-                        'sampler', 'pkl')))
+                    self.sampler = sampler_cls.restore(str(
+                        self.filepath / "sampler.pkl"))
                     self.sampler.loglikelihood.loglikelihood =\
                         self.compute_likelihood
                     self.sampler.prior_transform = self.prior_transform
@@ -86,9 +86,10 @@ class DynestySampler(PopulationSampler):
             Sampler results.
 
         """
-        kwargs = update_kwargs(kwargs, 'dynesty', checkpoint_file=str(
-            self.path('sampler', 'pkl')) if self.filepath is not None else
-            None)
+        checkpoint_file = None if self.filepath is None else str(
+            self.filepath / 'sampler.pkl')
+        kwargs = update_kwargs(kwargs, 'dynesty',
+                               checkpoint_file=checkpoint_file)
 
         self.sampler.run_nested(**kwargs)
 

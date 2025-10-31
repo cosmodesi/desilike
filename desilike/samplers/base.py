@@ -66,7 +66,7 @@ class BaseSampler(BaseClass):
             Random number generator for seeding. If ``None``, no seed is used.
             Default is ``None``.
         filepath : str, Path, or None, optional
-            Save samples to this location. Default is ``None``.
+            Save samples to this folder. Default is ``None``.
 
         """
         self.likelihood = likelihood
@@ -78,6 +78,9 @@ class BaseSampler(BaseClass):
         self.rng = rng
         if filepath is not None:
             filepath = Path(filepath)
+            if filepath.suffix:
+                raise ValueError("The filepath cannot have a suffix.")
+            filepath.mkdir(parents=True, exist_ok=True)
         self.filepath = filepath
         self.mpicomm = likelihood.mpicomm
         self.pool = MPIPool(comm=self.mpicomm)
@@ -90,32 +93,6 @@ class BaseSampler(BaseClass):
         self.compute_likelihood = self.pool.cache_function(
             self.compute_likelihood, "compute_likelihood")
         self.derived = None
-
-    def path(self, name, suffix=None):
-        """Define the filepath for saving results.
-
-        Parameters
-        ----------
-        name : str
-            Name to be added to the base filename.
-        suffix : str, optional
-            If given, overwrite the default file extension. Default is None.
-
-        Returns
-        -------
-        Path
-            Filepath.
-        """
-        if self.filepath is None:
-            return None
-        else:
-            if suffix is None:
-                suffix = self.filepath.suffix
-            else:
-                if not suffix.startswith('.'):
-                    suffix = '.' + suffix
-            return self.filepath.with_name(
-                self.filepath.stem.replace('*', name) + suffix)
 
     def prior_transform(self, point):
         """Transform from the unit cube to parameter space using the prior.
@@ -364,12 +341,12 @@ class MarkovChainSampler(BaseSampler):
         self.checks = None
 
         if self.filepath is not None:
-            if all(self.path(f'chain_{i + 1}').is_file() for i in
+            if all((self.filepath / f'chain_{i + 1}.npy').is_file() for i in
                    range(self.n_chains)):
                 self.chains = [Chain.load(
-                    self.path(f'chain_{i + 1}')) for i in
+                    self.filepath / f'chain_{i + 1}.npy') for i in
                     range(self.n_chains)]
-                self.checks = list(np.load(self.path('checks', 'npy'),
+                self.checks = list(np.load(self.filepath / 'checks.npy',
                                            allow_pickle=False))
 
     def run_sampler(self, n_steps, **kwargs):
@@ -433,7 +410,7 @@ class MarkovChainSampler(BaseSampler):
 
         if self.filepath is not None:
             for i, chain in enumerate(self.chains):
-                chain.save(self.path(f'chain_{i + 1}'))
+                chain.save(self.filepath / f'chain_{i + 1}.npy')
 
     def check(self, criteria, burn_in=0.2, quiet=False):
         """Check the status of the sampling, including convergence.
@@ -577,8 +554,8 @@ class MarkovChainSampler(BaseSampler):
                 self.checks.append(self.check(convergence_criteria))
                 if self.filepath is not None:
                     for i, chain in enumerate(self.chains):
-                        chain.save(self.path(f'chain_{i + 1}'))
-                    np.save(self.path('checks', 'npy'), self.checks,
+                        chain.save(self.filepath / f'chain_{i + 1}.npy')
+                    np.save(self.filepath / 'checks.npy', self.checks,
                             allow_pickle=False)
 
             self.pool.stop_wait()

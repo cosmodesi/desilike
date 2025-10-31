@@ -9,7 +9,7 @@ try:
 except ModuleNotFoundError:
     ZEUS_INSTALLED = False
 
-from .base import compute_posterior, update_kwargs, MarkovChainSampler
+from .base import update_kwargs, MarkovChainSampler
 from desilike.samples import Chain
 
 
@@ -55,7 +55,7 @@ class ZeusSampler(MarkovChainSampler):
 
         if self.mpicomm.rank == 0:
             self.sampler = zeus.EnsembleSampler(
-                self.n_chains, self.n_dim, compute_posterior, **kwargs)
+                self.n_chains, self.n_dim, self.compute_posterior, **kwargs)
         else:
             self.sampler = None
 

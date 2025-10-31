@@ -8,7 +8,7 @@ except ModuleNotFoundError:
     BLACKJAX_INSTALLED = False
 import numpy as np
 
-from .base import compute_posterior, MarkovChainSampler
+from .base import MarkovChainSampler
 from desilike.samples import Chain, Samples
 
 
@@ -202,7 +202,7 @@ class HMCSampler(BlackJAXSampler):
 
         global SAMPLER
         SAMPLER = blackjax.hmc(
-            compute_posterior, step_size, inv_mass_matrix,
+            self.compute_posterior, step_size, inv_mass_matrix,
             num_integration_steps, **kwargs)
 
         self.adaptation = adaptation
@@ -256,7 +256,7 @@ class NUTSSampler(BlackJAXSampler):
 
         global SAMPLER
         SAMPLER = blackjax.nuts(
-            compute_posterior, step_size, inv_mass_matrix, **kwargs)
+            self.compute_posterior, step_size, inv_mass_matrix, **kwargs)
 
         self.adaptation = adaptation
         self.adaptation_kwargs = adaptation_kwargs
@@ -305,6 +305,6 @@ class MCLMCSampler(BlackJAXSampler):
                          filepath=filepath)
 
         global SAMPLER
-        SAMPLER = blackjax.mclmc(compute_posterior, L, step_size)
+        SAMPLER = blackjax.mclmc(self.compute_posterior, L, step_size)
 
         self.adaptation = adaptation

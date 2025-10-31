@@ -7,7 +7,7 @@ except ModuleNotFoundError:
     EMCEE_INSTALLED = False
 import numpy as np
 
-from .base import compute_posterior, update_kwargs, MarkovChainSampler
+from .base import update_kwargs, MarkovChainSampler
 from desilike.samples import Chain
 
 
@@ -52,7 +52,7 @@ class EmceeSampler(MarkovChainSampler):
 
         if self.mpicomm.rank == 0:
             self.sampler = emcee.EnsembleSampler(
-                self.n_chains, self.n_dim, compute_posterior, **kwargs)
+                self.n_chains, self.n_dim, self.compute_posterior, **kwargs)
         else:
             self.sampler = None
 

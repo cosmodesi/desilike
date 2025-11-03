@@ -17,10 +17,10 @@ class GridSampler(StaticSampler):
         ----------
         grid : dict, int, or numpy.ndarray, optional
             A dictionary giving either the grid size or the grid itself.
-            If providing a number n, the parameter is sampled in the range
-            [value - proposal, value + proposal] with n points. Wildcards are
-            supported. If only a single value is provided instead of a
-            dictionary, it is applied to all parameters. Default is 11.
+            If providing a number, the parameter is evenly within the prior
+            limits. Wildcards are supported. If only a single value is provided
+            instead of a dictionary, it is applied to all parameters. Default
+            is 11.
 
         Returns
         -------
@@ -30,12 +30,11 @@ class GridSampler(StaticSampler):
         grid = expand_dict(grid, self.likelihood.varied_params.names())
         for param in self.likelihood.varied_params:
             if not hasattr(grid[param.name], "__len__"):
-                if param.proposal is None:
+                if param.limits is None:
                     raise ParameterPriorError(
-                        f"Provide a proposal for {param.name}.")
+                        f"Provide a limit for {param.name}.")
                 grid[param.name] = np.linspace(
-                    param.value - param.proposal, param.value + param.proposal,
-                    grid[param.name])
+                    param.limits[0], param.limits[1], grid[param.name])
                 self.log_info(f"Grid for {param.name} is {grid[param.name]}.")
 
         grid = [grid[param] for param in self.likelihood.varied_params.names()]

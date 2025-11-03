@@ -13,6 +13,7 @@ import warnings
 from pathlib import Path
 
 import numpy as np
+from scipy.special import logsumexp
 
 from desilike.samples import Chain, Samples, diagnostics
 from desilike.utils import BaseClass
@@ -249,8 +250,8 @@ class StaticSampler(BaseSampler):
         """
         points = self.get_points(**kwargs)
         if self.mpicomm.rank == 0:
-            log_post = np.array(self.pool.map("compute_posterior", points))
-            log_prior = np.array(self.pool.map("compute_prior", points))
+            log_post = np.array(self.pool.map(self.compute_posterior, points))
+            log_prior = np.array(self.pool.map(self.compute_prior, points))
             log_l = log_post - log_prior
             chain = [points[..., i] for i in range(self.n_dim)]
             chain.append(log_l)
@@ -259,6 +260,8 @@ class StaticSampler(BaseSampler):
             chain = Chain(
                 chain, params=self.likelihood.varied_params +
                 ['loglikelihood', 'logprior', 'logposterior'])
+            chain.aweight = np.exp(
+                chain.logposterior - logsumexp(chain.logposterior))
             self.pool.stop_wait()
         else:
             self.pool.wait()
@@ -319,7 +322,7 @@ class MarkovChainSampler(BaseSampler):
     criteria = {'gelman_rubin_diag_max', 'gelman_rubin_eigen_max',
                 'geweke_max'}
 
-    def __init__(self, likelihood, n_chains=10, rng=None, filepath=None):
+    def __init__(self, likelihood, n_chains=4, rng=None, filepath=None):
         """Initialize the sampler.
 
         Parameters
@@ -327,7 +330,7 @@ class MarkovChainSampler(BaseSampler):
         likelihood : BaseLikelihood
             Likelihood to sample.
         n_chains : int, optional
-            Number of chains. Default is 10.
+            Number of chains. Default is 4.
         rng : numpy.random.RandomState, int, or None, optional
             Random number generator for seeding. If ``None``, no seed is used.
             Default is ``None``.

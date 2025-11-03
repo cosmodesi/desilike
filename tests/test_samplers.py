@@ -3,6 +3,7 @@ import pytest
 from jax import numpy as jnp
 
 import desilike.samplers as samplers
+from desilike.samples import Chain
 from desilike.likelihoods import BaseGaussianLikelihood
 
 
@@ -11,17 +12,13 @@ SAMPLER_CLS = dict(
     emcee=samplers.EmceeSampler,
     grid=samplers.GridSampler,
     hmc=samplers.HMCSampler,
+    importance=samplers.ImportanceSampler,
     mclmc=samplers.MCLMCSampler,
     nautilus=samplers.NautilusSampler,
     nuts=samplers.NUTSSampler,
     pocomc=samplers.PocoMCSampler,
+    qmc=samplers.QMCSampler,
     zeus=samplers.ZeusSampler)
-ARGS_INIT = dict(
-    emcee=(10, ),
-    hmc=(10, ),
-    mclmc=(10, ),
-    nuts=(10, ),
-    zeus=(10, ))
 KWARGS_INIT = dict(
     dynesty=dict(dynamic=True, nlive=100),
     nautilus=dict(n_networks=1, n_live=300),
@@ -33,8 +30,12 @@ KWARGS_INIT_FAST = dict(
 KWARGS_RUN = dict(
     dynesty=dict(n_effective=0),
     grid=dict(grid=np.linspace(0, 1, 101)),
+    importance=dict(chain=Chain(dict(
+        a=np.repeat(np.linspace(0, 1, 101), 101),
+        b=np.tile(np.linspace(0, 1, 101), 101)))),
     nautilus=dict(n_eff=100),
-    pocomc=dict(n_total=100, n_evidence=100))
+    pocomc=dict(n_total=100, n_evidence=100),
+    qmc=dict(size=10000))
 KWARGS_RUN_FAST = dict(
     dynesty=dict(n_effective=0),
     emcee=dict(max_iterations=100),
@@ -64,13 +65,12 @@ def likelihood():
 
 @pytest.mark.parametrize("key", [
     'dynesty', 'emcee', 'grid', 'hmc', 'mclmc', 'nautilus', 'nuts', 'pocomc',
-    'zeus'])
+    'qmc', 'zeus'])
 def test_accuracy(likelihood, key):
     # Test that all samplers work with a simple two-dimensional likelihood and
     # produce acceptable results.
     samplers.blackjax.SAMPLER = None
-    sampler = SAMPLER_CLS[key](likelihood, *ARGS_INIT.get(key, ()), rng=42,
-                               **KWARGS_INIT.get(key, {}))
+    sampler = SAMPLER_CLS[key](likelihood, rng=42, **KWARGS_INIT.get(key, {}))
     chain = sampler.run(**KWARGS_RUN_FAST.get(key, {}))
 
     if isinstance(sampler, samplers.GridSampler):
@@ -93,8 +93,7 @@ def test_filepath(likelihood, key, tmp_path):
     # Check that the sampler correctly saves chains and state, if applicable.
 
     sampler_1 = SAMPLER_CLS[key](
-        likelihood, *ARGS_INIT.get(key, ()), rng=42, filepath=tmp_path,
-        **KWARGS_INIT_FAST.get(key, {}))
+        likelihood, rng=42, filepath=tmp_path, **KWARGS_INIT_FAST.get(key, {}))
     if key != 'pocomc':
         chain_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
     else:
@@ -102,8 +101,7 @@ def test_filepath(likelihood, key, tmp_path):
     # The second sampler should not create any new samples if old chains
     # are read correctly.
     sampler_2 = SAMPLER_CLS[key](
-        likelihood, *ARGS_INIT.get(key, ()), rng=43, filepath=tmp_path,
-        **KWARGS_INIT_FAST.get(key, {}))
+        likelihood, rng=43, filepath=tmp_path, **KWARGS_INIT_FAST.get(key, {}))
     if key != 'pocomc':
         chain_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
     else:
@@ -125,13 +123,11 @@ def test_rng(likelihood, key):
         pytest.skip("Zeus does not support specifying a random seed.")
 
     sampler_1 = SAMPLER_CLS[key](
-        likelihood, *ARGS_INIT.get(key, ()), rng=42,
-        **KWARGS_INIT_FAST.get(key, {}))
+        likelihood, rng=42, **KWARGS_INIT_FAST.get(key, {}))
     chain_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
 
     sampler_2 = SAMPLER_CLS[key](
-        likelihood, *ARGS_INIT.get(key, ()), rng=42,
-        **KWARGS_INIT_FAST.get(key, {}))
+        likelihood, rng=42, **KWARGS_INIT_FAST.get(key, {}))
     chain_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
 
     assert len(chain_1) == len(chain_2)

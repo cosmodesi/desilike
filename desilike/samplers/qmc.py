@@ -20,8 +20,8 @@ class KroneckerSequence(qmc.QMCEngine):
         ----------
         d : int
             Dimensionality.
-        seed : float
-            Starting point for the sequence in each dimension.
+        seed : float, optional
+            Starting point for the sequence in each dimension. Default is 0.5.
 
         """
         super().__init__(d=d)
@@ -73,13 +73,13 @@ class QMCSampler(StaticSampler):
 
     """
 
-    def get_points(self, size=10, engine='kronecker', **kwargs):
+    def get_points(self, size=1000, engine='kronecker', **kwargs):
         """Get points from a QMC sequence.
 
         Parameters
         ----------
         size : dict or int, optional
-            Size of the sequence. Default is 10.
+            Size of the sequence. Default is 1000.
 
         engine : str, optional
             Engine to use. Choices are 'sobol', 'halton', 'lhs', 'kronecker'.
@@ -92,17 +92,17 @@ class QMCSampler(StaticSampler):
         """
         lower, upper = [], []
         for param in self.likelihood.varied_params:
-            if param.proposal is None:
+            if param.limits is None:
                 raise ParameterPriorError(
-                    f"Provide a proposal for {param.name}.")
-            lower.append(param.value - param.proposal)
-            upper.append(param.value + param.proposal)
+                    f"Provide a limit for {param.name}.")
+            lower.append(param.limits[0])
+            upper.append(param.limits[1])
 
         if engine not in ENGINES:
             raise ValueError(f"'engine' must be in {list(ENGINES.keys())}. "
                              f"Received {engine}.")
 
-        engine = ENGINES[engine](
+        self.engine = ENGINES[engine](
             d=len(self.likelihood.varied_params), **kwargs)
 
         return qmc.scale(self.engine.random(n=size), lower, upper)

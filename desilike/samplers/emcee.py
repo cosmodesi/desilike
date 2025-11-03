@@ -21,7 +21,7 @@ class EmceeSampler(MarkovChainSampler):
 
     """
 
-    def __init__(self, likelihood, n_chains=10, rng=None, filepath=None,
+    def __init__(self, likelihood, n_chains=4, rng=None, filepath=None,
                  **kwargs):
         """Initialize the emcee sampler.
 
@@ -30,7 +30,7 @@ class EmceeSampler(MarkovChainSampler):
         likelihood : BaseLikelihood
             Likelihood to sample.
         n_chains : int, optional
-            Number of chains. Default is 10.
+            Number of chains. Default is 4.
         rng : numpy.random.RandomState, int, or None, optional
             Random number generator for seeding. If ``None``, no seed is used.
             Default is ``None``.

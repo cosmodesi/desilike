@@ -1,6 +1,7 @@
 """Module implementing an importance sampler."""
 
 import numpy as np
+from scipy.special import logsumexp
 
 from .base import StaticSampler
 
@@ -30,7 +31,7 @@ class ImportanceSampler(StaticSampler):
                          self.likelihood.varied_params.names()])
 
     def run(self, chain, mode='resample'):
-        """Get points on the grid.
+        """Importance sample a chain.
 
         Parameters
         ----------
@@ -59,8 +60,8 @@ class ImportanceSampler(StaticSampler):
             log_w = chain_new.logposterior - chain_old.logposterior
         else:
             chain = chain_old.copy()
-            chain.loglikelihood = (chain_old.loglikelihood +
-                                   chain_new.loglikelihood)
+            chain.loglikelihood += chain_new.loglikelihood
+            chain.logposterior += chain_new.loglikelihood
             log_w = chain_new.loglikelihood
-        chain.aweight = chain.aweight * np.exp(log_w - np.amax(log_w))
+        chain.aweight *= np.exp(log_w - logsumexp(log_w))
         return chain

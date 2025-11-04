@@ -99,7 +99,3 @@ class EmceeSampler(MarkovChainSampler):
                 params=self.likelihood.varied_params + ['logposterior'])
             self.chains[i] = Chain.concatenate(
                 self.chains[i], chain[-n_steps:])
-
-    def reset_sampler(self):
-        """Reset the emcee sampler."""
-        self.sampler.reset()

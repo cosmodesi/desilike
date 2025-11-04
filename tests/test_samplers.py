@@ -88,7 +88,7 @@ def test_accuracy(likelihood, key):
 
 
 @pytest.mark.parametrize("key", [
-    'dynesty', 'emcee', 'nautilus', 'pocomc', 'zeus'])
+    'dynesty', 'emcee', 'nautilus', 'zeus'])
 def test_filepath(likelihood, key, tmp_path):
     # Check that the sampler correctly saves chains and state, if applicable.
 

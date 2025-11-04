@@ -1,5 +1,7 @@
 """Module implementing the BlackJAX samplers."""
 
+from functools import partial
+
 try:
     import jax
     import blackjax
@@ -105,6 +107,9 @@ class BlackJAXSampler(MarkovChainSampler):
                               "installed.")
 
         super().__init__(likelihood, n_chains, rng=rng, filepath=filepath)
+        self.compute_posterior_no_derived = self.pool.cache_function(
+            partial(self.compute_posterior, save_derived=False),
+            'compute_posterior_no_derived')
         self.states = None
 
     def run_sampler(self, n_steps):
@@ -116,8 +121,6 @@ class BlackJAXSampler(MarkovChainSampler):
             Number of steps to take.
 
         """
-        self.save_derived = False
-
         if self.states is None:
             self.states = []
             for i in range(self.n_chains):
@@ -202,9 +205,10 @@ class HMCSampler(BlackJAXSampler):
             inv_mass_matrix = np.ones(self.n_dim)
 
         self.sampler = blackjax.hmc(
-            self.compute_posterior, step_size, inv_mass_matrix,
+            self.compute_posterior_no_derived, step_size, inv_mass_matrix,
             num_integration_steps, **kwargs)
-        self.make_n_steps = make_n_steps_factory(self.sampler)
+        self.make_n_steps = self.pool.cache_function(
+            make_n_steps_factory(self.sampler), "make_n_steps")
 
         self.adaptation = adaptation
         self.adaptation_kwargs = adaptation_kwargs
@@ -256,8 +260,10 @@ class NUTSSampler(BlackJAXSampler):
             inv_mass_matrix = np.ones(self.n_dim)
 
         self.sampler = blackjax.nuts(
-            self.compute_posterior, step_size, inv_mass_matrix, **kwargs)
-        self.make_n_steps = make_n_steps_factory(self.sampler)
+            self.compute_posterior_no_derived, step_size, inv_mass_matrix,
+            **kwargs)
+        self.make_n_steps = self.pool.cache_function(
+            make_n_steps_factory(self.sampler), "make_n_steps")
 
         self.adaptation = adaptation
         self.adaptation_kwargs = adaptation_kwargs
@@ -305,7 +311,9 @@ class MCLMCSampler(BlackJAXSampler):
         super().__init__(likelihood, n_chains=n_chains, rng=rng,
                          filepath=filepath)
 
-        self.sampler = blackjax.mclmc(self.compute_posterior, L, step_size)
-        self.make_n_steps = make_n_steps_factory(self.sampler)
+        self.sampler = blackjax.mclmc(
+            self.compute_posterior_no_derived, L, step_size)
+        self.make_n_steps = self.pool.cache_function(
+            make_n_steps_factory(self.sampler), "make_n_steps")
 
         self.adaptation = adaptation

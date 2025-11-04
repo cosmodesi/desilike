@@ -85,14 +85,12 @@ class BaseSampler(BaseClass):
         self.filepath = filepath
         self.mpicomm = likelihood.mpicomm
         self.pool = MPIPool(comm=self.mpicomm)
-        self.prior_transform = self.pool.cache_function(
-            self.prior_transform, "prior_transform")
-        self.compute_prior = self.pool.cache_function(
-            self.compute_prior, "compute_prior")
-        self.compute_posterior = self.pool.cache_function(
-            self.compute_posterior, "compute_posterior")
-        self.compute_likelihood = self.pool.cache_function(
-            self.compute_likelihood, "compute_likelihood")
+        for name, f in zip(
+                ['prior_transform', 'compute_prior', 'compute_posterior',
+                 'compute_likelihood'],
+                [self.prior_transform, self.compute_prior,
+                 self.compute_posterior, self.compute_likelihood]):
+            setattr(self, name, self.pool.cache_function(f, name))
         self.derived = None
 
     def prior_transform(self, point):
@@ -131,7 +129,7 @@ class BaseSampler(BaseClass):
             points = dict(zip(self.likelihood.varied_params.names(), points.T))
         return self.likelihood.all_params.prior(**points)
 
-    def compute_posterior(self, point):
+    def compute_posterior(self, point, save_derived=True):
         """Compute the natural logarithm of the posterior.
 
         Note that this function also saves all derived parameters internally.
@@ -140,6 +138,8 @@ class BaseSampler(BaseClass):
         ----------
         point : numpy.ndarray of shape (n_dim, )
             Point for which to compute the likelihood.
+        save_derived : bool, optional
+            Whether to save derived parameters.
 
         Returns
         -------
@@ -152,7 +152,7 @@ class BaseSampler(BaseClass):
         log_post, derived = self.likelihood(point, return_derived=True)
         derived.update(Samples(point))
 
-        if getattr(self, 'save_derived', True):
+        if save_derived:
             if self.derived is None:
                 self.derived = derived
             else:
@@ -399,7 +399,8 @@ class MarkovChainSampler(BaseSampler):
                 else:
                     points[use, i] = np.full(np.sum(use), param.value)
 
-            log_post[use] = self.pool.map("compute_posterior", points[use])
+            log_post[use] = self.pool.map(self.compute_posterior, points[use])
+
             n_try += 1
 
         if not np.all(np.isfinite(log_post)):

@@ -29,27 +29,43 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """
+from functools import partial
 
 
 class FunctionWrapper:
+    """A simple function wrapper to avoid sending large functions."""
 
     def __init__(self, function, name):
+        """Initialize the function wrapper.
+
+        Parameters
+        ----------
+        function : function
+            Function to wrap.
+        name : str
+            Name to be used. This is later used to identify and restore the
+            function after the function wrapper is pickled and sent across
+            MPI processes.
+
+        """
         self.function = function
         self.name = name
 
     def __call__(self, *args, **kwargs):
+        """Evaluate the function."""
         return self.function(*args, **kwargs)
 
     def __getstate__(self):
+        """Pickle the function wrapper to be sent accross MPI processes.
+
+        Notably, the function itself is not pickled. This needs to, instead, be
+        re-loaded locally in each MPI process after unpickling.
+        """
         return dict(function=None, name=self.name)
 
     def __setstate__(self, state):
+        """Restore the function wrapper."""
         self.__dict__ = state
-
-
-class _close_pool_message(object):
-    def __repr__(self):
-        return "<Close pool message>"
 
 
 class _stop_wait_message(object):
@@ -63,6 +79,8 @@ def _error_function(task):
 
 
 class MPIPool(object):
+    """An MPI pool capable of mapping functions."""
+
     def __init__(self, comm=None):
         try:
             from mpi4py import MPI
@@ -76,17 +94,70 @@ class MPIPool(object):
         self.size = self.comm.Get_size()
 
         self.function = _error_function
-        self.library = dict()
+        self.registry = dict()
 
-    def cache_function(self, function, name):
-        self.library[name] = function
+    def save_function(self, function, name):
+        """Save a function to the local registry.
+
+        Parameters
+        ----------
+        function : function
+            Function to save locally in the pool.
+        name : str
+            Name to be used. This is later used to identify and restore the
+            function after the function wrapper is pickled and send across
+            MPI processes.
+
+        Returns
+        -------
+        FunctionWrapper
+            Wrapper around the function that can be called normally. If later
+            passed to :meth:`map`, the wrapped function is not send accross
+            processes and instead loaded locally from the registry.
+
+        """
+        self.registry[name] = function
         return FunctionWrapper(function, name)
+
+    def load_function(self, obj):
+        """Load registered functions onto an object.
+
+        This function scans the object and finds all ``FunctionWrapper``
+        instances and loads the function from the local registry, avoiding
+        sending functions across processes.
+
+        Parameters
+        ----------
+        obj : object
+            Object that may contain ``FunctionWrapper`` instances.
+
+        """
+        if isinstance(obj, FunctionWrapper):
+            obj.function = self.registry[obj.name]
+            return
+
+        if isinstance(obj, partial):
+            self.load_function(obj.func)
+
+        if isinstance(obj, dict):
+            for elem in obj.values():
+                self.load_function(elem)
+
+        if hasattr(obj, '__dict__'):
+            for elem in obj.__dict__.values():
+                self.load_function(elem)
+
+        if isinstance(obj, (list, tuple, set)):
+            for elem in obj:
+                self.load_function(elem)
 
     @property
     def main(self):
+        """Check if pool is main MPI process."""
         return self.rank == 0
 
     def wait(self):
+        """Wait for instructions. Should only be used by worker processes."""
         if self.main:
             raise RuntimeError("Main node told to await jobs")
         status = self.MPI.Status()
@@ -94,22 +165,47 @@ class MPIPool(object):
             task = self.comm.recv(source=0, tag=self.MPI.ANY_TAG,
                                   status=status)
 
-            if isinstance(task, _close_pool_message):
-                break
-            elif isinstance(task, _stop_wait_message):
+            if isinstance(task, _stop_wait_message):
                 return
             elif callable(task):
+                # Load functions from the local registry.
+                self.load_function(task)
                 self.function = task
                 continue
-            elif isinstance(task, str):
-                self.function = self.library[task]
-                continue
             else:
+                # Some packages, e.g., dynesty, may package functions inside
+                # the arguments.
+                self.load_function(task)
                 results = list(map(self.function, task))
                 self.comm.send(results, dest=0, tag=status.tag)
 
+    def stop_wait(self):
+        """Signal to worker processes to stop waiting."""
+        if self.main:
+            for i in range(1, self.size):
+                self.comm.isend(_stop_wait_message(), dest=i)
+
     def map(self, function, tasks):
-        # Should be called by the main only.
+        """Apply a function to a list of tasks across MPI processes..
+
+        Parameters
+        ----------
+        function : callable
+            Function to be evaluated.
+        tasks : iterable
+            List of tasks or arguments passed to the function.
+
+        Returns
+        -------
+        results : list
+            List of results.
+
+        Notes
+        -----
+        This should only be called from the main process. Worker (non-main)
+        process should instead call :meth:`wait`.
+
+        """
         if not self.main:
             self.wait()
             return
@@ -117,21 +213,7 @@ class MPIPool(object):
         tasks = list(tasks)
         # Send function if necessary.
         if function is not self.function:
-
-            # Check if function is cached.
-            if isinstance(function, FunctionWrapper):
-                function = function.name
-            for attr in ['f', 'func']:
-                try:
-                    if isinstance(getattr(function, attr), FunctionWrapper):
-                        function = getattr(function, attr).name
-                except AttributeError:
-                    pass
-
-            if isinstance(function, str):
-                self.function = self.library[function]
-            else:
-                self.function = function
+            self.function = function
             requests = [self.comm.send(function, dest=i) for i in
                         range(1, self.size)]
 
@@ -152,19 +234,3 @@ class MPIPool(object):
                                     status=status)
             results[status.source::self.size] = result
         return results
-
-    def close(self):
-        if self.main:
-            for i in range(1, self.size):
-                self.comm.isend(_close_pool_message(), dest=i)
-
-    def stop_wait(self):
-        if self.main:
-            for i in range(1, self.size):
-                self.comm.isend(_stop_wait_message(), dest=i)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        self.close()

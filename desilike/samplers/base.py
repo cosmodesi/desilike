@@ -90,7 +90,7 @@ class BaseSampler(BaseClass):
                  'compute_likelihood'],
                 [self.prior_transform, self.compute_prior,
                  self.compute_posterior, self.compute_likelihood]):
-            setattr(self, name, self.pool.cache_function(f, name))
+            setattr(self, name, self.pool.save_function(f, name))
         self.derived = None
 
     def prior_transform(self, point):
@@ -367,10 +367,6 @@ class MarkovChainSampler(BaseSampler):
         """
         pass
 
-    def reset_sampler(self):
-        """Abstract method to reset the sampler."""
-        pass
-
     def initialize_chains(self, attempts=100):
         """Initialize the chains.
 
@@ -565,8 +561,6 @@ class MarkovChainSampler(BaseSampler):
             self.pool.stop_wait()
         else:
             self.pool.wait()
-
-        self.reset_sampler()
 
         chains = self.mpicomm.bcast(self.chains, root=0)
 

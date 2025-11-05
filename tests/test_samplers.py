@@ -64,15 +64,13 @@ def likelihood():
 
 
 @pytest.mark.mpi
-@pytest.mark.parametrize("key", [
-    'dynesty', 'emcee', 'grid', 'hmc', 'mclmc', 'nautilus', 'nuts', 'pocomc',
-    'qmc', 'zeus'])
+@pytest.mark.parametrize("key", SAMPLER_CLS.keys())
 def test_accuracy(likelihood, key):
     # Test that all samplers work with a simple two-dimensional likelihood and
     # produce acceptable results.
     samplers.blackjax.SAMPLER = None
     sampler = SAMPLER_CLS[key](likelihood, rng=42, **KWARGS_INIT.get(key, {}))
-    chain = sampler.run(**KWARGS_RUN_FAST.get(key, {}))
+    chain = sampler.run(**KWARGS_RUN.get(key, {}))
 
     if isinstance(sampler, samplers.GridSampler):
         chain.aweight = np.exp(chain.logposterior)

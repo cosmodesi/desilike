@@ -54,6 +54,7 @@ jobs:
         # TODO: Currently, we need to specify the directory. This should not be necessary in the future once all tests are compatible with pytest.
         python -m pytest tests --cov=desilike --durations=0
         mpirun -n 2 bash -c 'COVERAGE_FILE=.coverage.$OMPI_COMM_WORLD_RANK python -m pytest tests --cov=desilike --durations=0 --with-mpi'
+        ls -al
         coverage combine
         coverage lcov
     - name: Coverage with Coveralls

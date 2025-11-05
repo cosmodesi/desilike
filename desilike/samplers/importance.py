@@ -27,11 +27,11 @@ class ImportanceSampler(StaticSampler):
         numpy.ndarray of shape (n_points, n_dim)
             Grid to be evaluated.
         """
-        return np.array([chain[key].value for key in
-                         self.likelihood.varied_params.names()])
+        return np.column_stack([chain[key].value for key in
+                                self.likelihood.varied_params.names()])
 
     def run(self, chain, mode='resample'):
-        """Importance sample a chain.
+        """Reweight a chain using importance sampling.
 
         Parameters
         ----------
@@ -57,7 +57,9 @@ class ImportanceSampler(StaticSampler):
         chain_old = chain
         if mode == 'resample':
             chain = chain_new
-            log_w = chain_new.logposterior - chain_old.logposterior
+            # The new chain is already weighted by the new posterior. Now undo
+            # the weighting of the old posterior.
+            log_w = -chain_old.logposterior
         else:
             chain = chain_old.copy()
             chain.loglikelihood += chain_new.loglikelihood

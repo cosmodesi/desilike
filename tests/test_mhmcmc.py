@@ -6,6 +6,7 @@ from desilike.samplers.mhmcmc import FastSlowProposal
 from desilike.samplers.mhmcmc import SimpleMetropolisHastingsSampler
 
 
+@pytest.mark.mpi_skip
 @pytest.mark.parametrize("n_fast", [0, 1, 2, 3, 4, 5])
 def test_proposal(n_fast):
     # Test that the proposals work correctly.
@@ -37,6 +38,7 @@ def test_proposal(n_fast):
                        atol=5 * cov_err)
 
 
+@pytest.mark.mpi_skip
 @pytest.mark.parametrize("n_fast", [0, 1, 2])
 @pytest.mark.parametrize("f_fast", [1, 2, 3])
 def test_rosenbrock(n_fast, f_fast):

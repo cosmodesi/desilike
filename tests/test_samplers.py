@@ -63,6 +63,7 @@ def likelihood():
     return likelihood
 
 
+@pytest.mark.mpi
 @pytest.mark.parametrize("key", [
     'dynesty', 'emcee', 'grid', 'hmc', 'mclmc', 'nautilus', 'nuts', 'pocomc',
     'qmc', 'zeus'])
@@ -87,6 +88,7 @@ def test_accuracy(likelihood, key):
                        atol=3 * cov_err)
 
 
+@pytest.mark.mpi
 @pytest.mark.parametrize("key", [
     'dynesty', 'emcee', 'nautilus', 'zeus'])
 def test_filepath(likelihood, key, tmp_path):
@@ -114,6 +116,7 @@ def test_filepath(likelihood, key, tmp_path):
                        chain_2.logposterior.value, atol=1e-6)
 
 
+@pytest.mark.mpi
 @pytest.mark.parametrize("key", [
     'dynesty', 'emcee', 'nautilus', 'pocomc', 'zeus'])
 def test_rng(likelihood, key):

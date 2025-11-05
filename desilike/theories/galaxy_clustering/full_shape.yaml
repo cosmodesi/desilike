@@ -1458,3 +1458,93 @@ params:
       scale: 0.5
     delta: 2.
     latex: \sigma_{v}
+
+
+---
+
+class: fkptTracerPowerSpectrumMultipoles
+
+params:
+
+  # fR0:
+  #   prior:
+  #   ref:
+  #     dist: norm
+  #     loc: 0.
+  #     scale: 0.001
+  #   latex: f_{R0}
+  b1:
+    prior:
+      limits: [0., 10.]
+    ref:
+      limits: [1.4, 1.6]
+    latex: b_{1}
+  b2:
+    prior:
+      limits: [-50., 50.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{2}
+  bs2:
+    ref:
+      limits: [-1., 1.]
+    latex: b_{s}
+  b3nl:
+    fixed: True
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{3}
+  alpha0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{0}
+  alpha2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{2}
+  alpha4:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{4}
+  ctilde:
+    fixed: True
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{t}
+  alpha0shot:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 0}
+  alpha2shot:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 2}
+  alpha4shot:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 4}
+

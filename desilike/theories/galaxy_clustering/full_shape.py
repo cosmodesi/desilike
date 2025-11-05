@@ -2438,3 +2438,246 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
+
+
+
+
+
+class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+
+    # _default_options = dict(kernels='fk', rbao=104., A_full=True, remove_DeltaP=False)
+    _default_options = dict(model='HDKI')
+    
+    # 'qpar','qper','f','f0', 
+    # _pt_attrs = ['jac', 'kap', 'muap', 'table', 'table_now', 'scalars', 'scalars_now','A_full','remove_DeltaP','qpar','qper','f','f0','pklir']
+    _pt_attrs = ['jac', 'kap', 'muap','qpar','qper','f','f0','pkdd']  #Storing only these for now
+    
+    def initialize(self, *args, mu=6, **kwargs):
+        import pyfkpt.rsd as pyfkpt
+        super(fkptPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
+        self.template.init.update(with_now='peakaverage')  #Need to discuss this
+
+    def calculate(self):
+        super(fkptPowerSpectrumMultipoles, self).calculate()
+        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        self.pt = Namespace(jac=jac, kap=kap, muap=muap, qpar = self.template.qpar, qper=self.template.qper,f=self.template.f,f0=self.template.f0,pkdd=self.template.pk_dd)
+        # ,qpar = self.template.qpar, qper=self.template.qper, ,f=self.template.f,f0=self.template.f0
+        # self.kt = table[0]
+        self.sigma8 = self.template.sigma8
+        self.fsigma8 = self.template.f * self.sigma8
+
+    def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
+        import pyfkpt.rsd as pyfkpt
+        print(pyfkpt.__file__)
+        pk = self.pt.pkdd
+        # print(self.template.f,self.template.f0)
+        fk=self.template.fk
+        f0=self.template.f0
+        cosmo = getattr(self.template, 'cosmo', None)
+        Omegam = cosmo['Omega_m']
+        # Omegam = self.all_params['Omega_m'].value
+        
+        params['Om'] = Omegam
+        params['PshotP'] = 1. / nd     
+        params['model']= kwargs.get('model','HDKI')  #for now, we use these
+        params['mg_variant']=kwargs.get('mg_variant','mu_OmDE') #for now, we use these
+        params['mu0']= getattr(cosmo,'mu0',0.0)
+        params['h']=self.all_params['h'].value
+        params['kmin']=float(max(1e-3,min(self.k)))
+        params['kmax']= min(max(self.k), 0.5)
+        params['z'] = self.z
+        params['Nk'] = min(len(self.k), 240)
+        params['nquadSteps'] = 300
+        params['chatty']=0
+        params['rescale_PS']=False
+        params['use_beyond_eds_kernels']=kwargs['beyond_eds']
+        print(params)
+
+        b1 = params['b1']
+        # if kwargs['prior_basis']=='physical':
+        if kwargs['b3_coev']:
+            delta_b1 = b1 - 1.
+            pars['b3nl'] = 32. / 315. * delta_b1  # b3 correction
+            # pars[2] -= 4. / 7. * delta_b1  # bs correction
+        # print(self.k.shape,pk.shape)
+        tables = pyfkpt.compute_multipoles(k=self.template.k, pk=pk,fk=fk, f0=f0, **params)
+        # print(tables)
+        nuis = [] 
+        required_bias_params = ['b1', 'b2', 'bs2', 'b3nl', 'alpha0', 'alpha2', 'alpha4', 'ctilde', 'alpha0shot', 'alpha2shot','PshotP']
+        for param in required_bias_params:
+            nuis.append(params[param])
+        
+        poles = pyfkpt.rsd_multipoles(k=self.k, nuis=nuis, z=self.z, Om=Omegam, ap=False, tables=tables)  #Need to pass ells here 
+        return poles[1:]
+      
+        
+        
+        
+        
+        
+    
+        
+
+    def __getstate__(self, varied=True, fixed=True):
+        state = {}
+        for name in (['k', 'z', 'ells', 'wmu', 'kt'] if fixed else []) + (['sigma8', 'fsigma8'] if varied else []):
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        if varied:
+            for name in self._pt_attrs:
+                if hasattr(self.pt, name):
+                    state[name] = getattr(self.pt, name)
+        return state
+
+    def __setstate__(self, state):
+        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8']:
+            if name in state: setattr(self, name, state.pop(name))
+        if not hasattr(self, 'pt'): self.pt = Namespace()
+        self.pt.update(**state)
+
+    # @classmethod
+    # def install(cls, installer):
+    #     installer.pip('git+https://github.com/cosmodesi/folpsax')
+
+
+class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
+    r"""
+    fkpt tracer power spectrum multipoles.
+    Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
+   
+    For the matter (unbiased) power spectrum, set b1=1 and all other bias parameters to 0.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    shotnoise : float, default=1e4
+        Shot noise (which is usually marginalized over).
+
+    prior_basis : str, default='physical'
+        If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
+        :math:`b_{1}^\prime = (1 + b_{1}^{L}) \sigma_{8}(z), b_{2}^\prime = b_{2}^{L} \sigma_{8}(z)^2, b_{s}^\prime = b_{s}^{L} \sigma_{8}(z)^2, b_{3}^\prime = 0`
+        with: :math:`b_{1} = 1 + b_{1}^{L}, b_{2} = 8/21 b_{1}^{L} + b_{2}^{L}, b_{s} = -4/7 b_{1}^{L} + b_{s}^{L}`.
+        :math:`\alpha_{0} = (1 + b_{1}^{L})^{2} \alpha_{0}^\prime, \alpha_{2} = f (1 + b_{1}^{L}) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f (f \alpha_{2}^\prime + (1 + b_{1}^{L}) \alpha_{4}^\prime)`.
+        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{4} s_{n, 4}^\prime`.
+
+    tracer : str, default=None
+        If ``prior_basis = 'physical'``, tracer to load preset ``fsat`` and ``sigv``. One of ['LRG', 'ELG', 'QSO'].
+
+    fsat : float, default=None
+        If ``prior_basis = 'physical'``, satellite fraction to assume.
+
+    sigv : float, default=None
+        If ``prior_basis = 'physical'``, velocity dispersion to assume.
+
+    Reference
+    ---------
+    - https://arxiv.org/abs/2208.02791
+    - https://github.com/henoriega/FOLPS-nu
+    """
+    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, model='HDKI',mg_variant='mu_OmDE', fsat=None, sigv=None, shotnoise=1e4,b3_coev=False,beyond_eds=True) #Model can be either HS or LCDM
+
+    
+
+    @staticmethod
+    def _params(params, freedom=None, prior_basis='physical'):
+        fix = []
+        if freedom in ['min', 'max']:
+            for param in params.select(basename=['b1']):
+                param.update(prior=dict(limits=[0., 10.]))
+            for param in params.select(basename=['b2']):
+                param.update(prior=dict(limits=[-50., 50.]))
+            for param in params.select(basename=['bs2', 'b3nl', 'alpha*',  'alpha0shot', 'alpha2shot']):
+                param.update(prior=None)
+        if freedom == 'max':
+            for param in params.select(basename=['b1', 'b2', 'bs2', 'b3nl', 'alpha*',  'alpha0shot', 'alpha2shot']):
+                param.update(fixed=False)
+            fix += ['ct']
+        if freedom == 'min':
+            fix += ['b3nl', 'bs2', 'ctilde']
+        for param in params.select(basename=fix):
+            param.update(value=0., fixed=True)
+        if prior_basis == 'physical':
+            for param in list(params):
+                basename = param.basename
+                param.update(basename=basename + 'p')
+                #params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
+            for param in params.select(basename='b1p'):
+                param.update(prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1))
+            for param in params.select(basename=['b2p', 'bs2p', 'b3nlp']):
+                param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
+            for param in params.select(basename='b3p'):
+                param.update(value=0., fixed=True)
+            for param in params.select(basename='alpha*p'):
+                param.update(prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.))  # 50% at k = 0.2 h/Mpc
+            # for param in params.select(basename='sn*p'):
+            #     param.update(prior=dict(dist='norm', loc=0., scale=2. if 'sn0' in param.basename else 5.), ref=dict(dist='norm', loc=0., scale=1.))
+        return params
+
+    def set_params(self):
+        self.required_bias_params = ['b1', 'b2', 'bs2', 'b3nl', 'alpha0', 'alpha2', 'alpha4', 'ctilde', 'alpha0shot', 'alpha2shot']
+        default_values = {'b1': 1.}
+        self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
+
+        # self.MG_params = ['fR0']
+        # MG_default_values= {'fR0':1e-4}
+        # self.MG_params = {name: MG_default_values.get(name) for name in self.MG_params}
+        
+        
+        self.is_physical_prior = self.options['prior_basis'] == 'physical'
+        if self.is_physical_prior:
+            for name in list(self.required_bias_params):
+                self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
+            settings = get_physical_stochastic_settings(tracer=self.options['tracer'])
+            for name, value in settings.items():
+                if self.options[name] is None: self.options[name] = value
+            if self.mpicomm.rank == 0:
+                self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
+        super().set_params(pt_params=[])
+        fix = []
+        if 4 not in self.ells: fix += ['alpha4']
+        if 2 not in self.ells: fix += ['alpha2', 'sn2']
+        for param in self.init.params.select(basename=fix):
+            param.update(value=0., fixed=True)
+        fixed_params = self.init.params.select(fixed=True)
+        self.nd = 1e-4
+        self.fsat = self.snd = 1.
+        if self.is_physical_prior:
+            self.fsat, self.snd = self.options['fsat'], self.options['shotnoise'] * self.nd  # normalized by 1e-4
+
+    def calculate(self, **params):
+       
+        super(fkptTracerPowerSpectrumMultipoles, self).calculate()
+        params = {**self.required_bias_params, **params}
+        print(params)
+        
+        # params = {**self.required_bias_params, **self.MG_params, **params}
+        # print(params['fR0'],params['b1'])
+        if self.is_physical_prior:
+            sigma8 = self.pt.sigma8
+            f = self.pt.fsigma8 / sigma8
+            # b1E = b1L + 1
+            # b2E = 8/21 * b1L + b2L
+            # bsE = -4/7 b1L + bsL
+            b1L, b2L, bsL, b3 = params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p']
+            pars = [1. + b1L, b2L + 8. / 21. * b1L, bsL, b3]  # compensate bs by 4. / 7. * b1L as it is removed by combine_bias_terms_poles below
+            pars += [(1 + b1L)**2 * params['alpha0p'], f * (1 + b1L) * (params['alpha0p'] + params['alpha2p']),
+                     f * (f * params['alpha2p'] + (1 + b1L) * params['alpha4p']), 0.]
+            sigv = self.options['sigv']
+            pars += [params['sn{:d}p'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
+        else:
+            pars = [params[name] for name in self.required_bias_params]
+           
+        
+        #self.__dict__.update(dict(zip(['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2'], pars)))  # for derived parameters
+        # opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
+
+        # params['fR0'] = self.pt.init['fR0']
+        self.power = self.pt.combine_bias_terms_poles(params, nd=self.nd, model=self.options['model'],mg_variant=self.options['mg_variant'],prior_basis=self.options['prior_basis'],b3_coev = self.options['b3_coev'],beyond_eds=self.options['beyond_eds'])

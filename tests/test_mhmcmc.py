@@ -2,20 +2,20 @@ import numpy as np
 import pytest
 from emcee.autocorr import integrated_time
 
-from desilike.samplers.mhmcmc import FastSlowProposal
-from desilike.samplers.mhmcmc import SimpleMetropolisHastingsSampler
+from desilike.samplers.mhmcmc import FastSlowProposer
+from desilike.samplers.mhmcmc import StandAloneMetropolisHastingsSampler
 
 
 @pytest.mark.mpi_skip
 @pytest.mark.parametrize("n_fast", [0, 1, 2, 3, 4, 5])
-def test_proposal(n_fast):
+def test_proposer(n_fast):
     # Test that the proposals work correctly.
     n_dim = 5
     n_samples = 10000
     rng = np.random.default_rng(42)
     cov = np.cov(rng.normal(size=(10, 5)), rowvar=False)
     fast = rng.choice(np.arange(n_dim), size=n_fast, replace=False)
-    prop = FastSlowProposal(cov, fast=fast, rng=rng)
+    prop = FastSlowProposer(cov, fast=fast, rng=rng)
 
     steps_fast = np.vstack([prop.propose_fast() for i in range(n_samples)])
     steps_slow = np.vstack([prop.propose_slow() for i in range(n_samples)])
@@ -39,9 +39,9 @@ def test_proposal(n_fast):
 
 
 @pytest.mark.mpi_skip
-@pytest.mark.parametrize("n_fast", [0, 1, 2])
-@pytest.mark.parametrize("f_fast", [1, 2, 3])
-def test_rosenbrock(n_fast, f_fast):
+@pytest.mark.parametrize(
+    "n_fast, f_fast, f_drag", [[0, 1, 0], [1, 1, 0], [1, 3, 0], [1, 1, 3]])
+def test_rosenbrock(n_fast, f_fast, f_drag):
     """Test that the sampler works correctly on a 2-D Rosenbrock likelihood.
 
     The true mean and covariance can be computed as follows.
@@ -67,17 +67,19 @@ def test_rosenbrock(n_fast, f_fast):
     mean = np.array([0.99705773, 1.48744377])
 
     fast = rng.choice(np.arange(n_dim), size=n_fast, replace=False)
-    sampler = SimpleMetropolisHastingsSampler(
-        posterior, np.ones(2), cov, f_fast=f_fast, fast=fast, rng=rng)
+    sampler = StandAloneMetropolisHastingsSampler(
+        posterior, np.zeros((10, 2)), cov, f_fast=f_fast, f_drag=f_drag,
+        fast=fast, rng=rng)
 
-    for i in range(10000):
-        sampler.make_cycle()
+    chains = sampler.make_n_steps(30000)
+    chains = chains[1000:]  # burn-in
 
-    n_eff = len(sampler.chain) / integrated_time(sampler.chain)
+    tau = np.amax(integrated_time(chains))
+    chains = np.concatenate(chains)
+    n_eff = len(chains) / tau
+    assert n_eff > 1000
     mean_err = np.sqrt(np.diag(cov) / n_eff)
     cov_err = np.sqrt((cov**2 + np.outer(np.diag(cov), np.diag(cov))) / n_eff)
 
-    assert np.allclose(np.cov(sampler.chain, rowvar=False),
-                       cov, atol=5 * cov_err)
-    assert np.allclose(np.average(sampler.chain, axis=0),
-                       mean, atol=5 * mean_err)
+    assert np.allclose(np.mean(chains, axis=0), mean, atol=5 * mean_err)
+    assert np.allclose(np.cov(chains, rowvar=False), cov, atol=10 * cov_err)

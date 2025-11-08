@@ -2116,9 +2116,11 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             from folpsax import get_rsd_pkmu
 
             def _get_poles(jac, kap, muap, pars, *table):
+                
                 return self.to_poles(jac * get_rsd_pkmu(kap, muap, pars, table[:ncols], table[ncols:]))
 
             self._get_poles = jit(_get_poles)
+        
         return self._get_poles(self.pt.jac, self.pt.kap, self.pt.muap, jnp.array(pars), *table, *table_now)
         #pkmu = self.pt.jac * get_rsd_pkmu(self.pt.kap, self.pt.muap, pars, table, table_now)
         #return self.to_poles(pkmu)
@@ -2446,11 +2448,11 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
 class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
 
     # _default_options = dict(kernels='fk', rbao=104., A_full=True, remove_DeltaP=False)
-    _default_options = dict(model='HDKI')
+    _default_options = dict(model='HDKI',mg_variant='mu_OmDE',rescale_PS=True,beyond_eds=True)
     
     # 'qpar','qper','f','f0', 
     # _pt_attrs = ['jac', 'kap', 'muap', 'table', 'table_now', 'scalars', 'scalars_now','A_full','remove_DeltaP','qpar','qper','f','f0','pklir']
-    _pt_attrs = ['jac', 'kap', 'muap','qpar','qper','f','f0','pkdd']  #Storing only these for now
+    _pt_attrs = ['jac', 'kap', 'muap','qpar','qper','fk','f0','tables']  #Storing only these for now
     
     def initialize(self, *args, mu=6, **kwargs):
         import pyfkpt.rsd as pyfkpt
@@ -2459,20 +2461,38 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
 
     def calculate(self):
         super(fkptPowerSpectrumMultipoles, self).calculate()
+        import pyfkpt.rsd as pyfkpt
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        self.pt = Namespace(jac=jac, kap=kap, muap=muap, qpar = self.template.qpar, qper=self.template.qper,f=self.template.f,f0=self.template.f0,pkdd=self.template.pk_dd)
+        # cosmo_params = {'z': self.z, 'fnu': 0., 'Omega_m': 0.3, 'h': 0.7}
+        cosmo = getattr(self.template, 'cosmo', None)
+        fkpt_params = dict(
+        z=self.z, Om=cosmo['Omega_m'], h=cosmo['h'],
+        nquadSteps=300, chatty=0,
+        mu0=cosmo['mu0'],
+        model=self.options['model'],
+        mg_variant=self.options['mg_variant'],
+        rescale_PS=self.options['rescale_PS'],
+        use_beyond_eds_kernels=self.options['beyond_eds']
+    )
         # ,qpar = self.template.qpar, qper=self.template.qper, ,f=self.template.f,f0=self.template.f0
         # self.kt = table[0]
         self.sigma8 = self.template.sigma8
         self.fsigma8 = self.template.f * self.sigma8
+        self.tables = pyfkpt.compute_multipoles(k=self.template.k, pk=self.template.pk_dd,**fkpt_params)
+        self.pt = Namespace(jac=jac, kap=kap, muap=muap, qpar = self.template.qpar, qper=self.template.qper,fk=self.template.fk,f0=self.template.f0,tables=self.tables)
 
     def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
         import pyfkpt.rsd as pyfkpt
         print(pyfkpt.__file__)
-        pk = self.pt.pkdd
+        
         # print(self.template.f,self.template.f0)
-        fk=self.template.fk
-        f0=self.template.f0
+        # print(dir(self.pt))
+        fk=self.pt.fk
+        f0=self.pt.f0
+        jac=self.pt.jac
+        kap=self.pt.kap
+        muap=self.pt.muap
+        tables=self.pt.tables
         cosmo = getattr(self.template, 'cosmo', None)
         Omegam = cosmo['Omega_m']
         # Omegam = self.all_params['Omega_m'].value
@@ -2500,15 +2520,19 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
             pars['b3nl'] = 32. / 315. * delta_b1  # b3 correction
             # pars[2] -= 4. / 7. * delta_b1  # bs correction
         # print(self.k.shape,pk.shape)
-        tables = pyfkpt.compute_multipoles(k=self.template.k, pk=pk,fk=fk, f0=f0, **params)
+        # tables = pyfkpt.compute_multipoles(k=self.template.k, pk=pk,fk=fk, f0=f0, **params)
         # print(tables)
         nuis = [] 
         required_bias_params = ['b1', 'b2', 'bs2', 'b3nl', 'alpha0', 'alpha2', 'alpha4', 'ctilde', 'alpha0shot', 'alpha2shot','PshotP']
         for param in required_bias_params:
             nuis.append(params[param])
-        
-        poles = pyfkpt.rsd_multipoles(k=self.k, nuis=nuis, z=self.z, Om=Omegam, ap=False, tables=tables)  #Need to pass ells here 
-        return poles[1:]
+           
+        # print(kap.shape,muap.shape,jac.shape)
+        pkmu = pyfkpt.get_pkmu(kap,muap, nuis=nuis, z=self.z, Om=Omegam, tables=tables,ap=False)
+        # print(pkmu.shape)
+        return self.to_poles(jac*pkmu)      
+        # poles = pyfkpt.rsd_multipoles(k=self.k, nuis=nuis, z=self.z, Om=Omegam, ap=False, tables=tables)  #Need to pass ells here 
+        # return poles[1:]
       
         
         
@@ -2656,7 +2680,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
        
         super(fkptTracerPowerSpectrumMultipoles, self).calculate()
         params = {**self.required_bias_params, **params}
-        print(params)
+        
         
         # params = {**self.required_bias_params, **self.MG_params, **params}
         # print(params['fR0'],params['b1'])

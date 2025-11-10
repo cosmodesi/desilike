@@ -2096,6 +2096,7 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         table, table_now = self._get_non_linear(self.template.pk_dd, self.template.pknow_dd, **cosmo_params)
 
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+       
         self.pt = Namespace(jac=jac, kap=kap, muap=muap, table=table[1:26], table_now=table_now[1:26], scalars=table[26:], scalars_now=table_now[26:])
         self.kt = table[0]
         self.sigma8 = self.template.sigma8
@@ -2116,7 +2117,6 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             from folpsax import get_rsd_pkmu
 
             def _get_poles(jac, kap, muap, pars, *table):
-                
                 return self.to_poles(jac * get_rsd_pkmu(kap, muap, pars, table[:ncols], table[ncols:]))
 
             self._get_poles = jit(_get_poles)
@@ -2463,12 +2463,17 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         super(fkptPowerSpectrumMultipoles, self).calculate()
         import pyfkpt.rsd as pyfkpt
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+       
         # cosmo_params = {'z': self.z, 'fnu': 0., 'Omega_m': 0.3, 'h': 0.7}
         cosmo = getattr(self.template, 'cosmo', None)
         fkpt_params = dict(
         z=self.z, Om=cosmo['Omega_m'], h=cosmo['h'],
         nquadSteps=300, chatty=0,
-        mu0=cosmo['mu0'],
+        kmin =float(max(1e-3,min(self.k))),
+        kmax = min(max(self.k), 0.5),
+        Nk = min(len(self.k), 240),
+        # mu0=cosmo['mu0'],
+        mu0 = getattr(cosmo, 'mu0', 0.0),    
         model=self.options['model'],
         mg_variant=self.options['mg_variant'],
         rescale_PS=self.options['rescale_PS'],
@@ -2493,6 +2498,8 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         kap=self.pt.kap
         muap=self.pt.muap
         tables=self.pt.tables
+        # self.tables = pyfkpt.compute_multipoles(k=self.template.k, pk=self.template.pk_dd,**fkpt_params)
+        # pk=self.template.pk_dd
         cosmo = getattr(self.template, 'cosmo', None)
         Omegam = cosmo['Omega_m']
         # Omegam = self.all_params['Omega_m'].value
@@ -2502,11 +2509,12 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         params['model']= kwargs.get('model','HDKI')  #for now, we use these
         params['mg_variant']=kwargs.get('mg_variant','mu_OmDE') #for now, we use these
         params['mu0']= getattr(cosmo,'mu0',0.0)
-        params['h']=self.all_params['h'].value
-        params['kmin']=float(max(1e-3,min(self.k)))
-        params['kmax']= min(max(self.k), 0.5)
+        params['h'] = cosmo['h']
+        # params['h']=self.all_params['h'].value
+        # params['kmin']=float(max(1e-3,min(self.k)))
+        # params['kmax']= min(max(self.k), 0.5)
         params['z'] = self.z
-        params['Nk'] = min(len(self.k), 240)
+        # params['Nk'] = min(len(self.k), 240)
         params['nquadSteps'] = 300
         params['chatty']=0
         params['rescale_PS']=False
@@ -2519,20 +2527,20 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
             delta_b1 = b1 - 1.
             pars['b3nl'] = 32. / 315. * delta_b1  # b3 correction
             # pars[2] -= 4. / 7. * delta_b1  # bs correction
-        # print(self.k.shape,pk.shape)
-        # tables = pyfkpt.compute_multipoles(k=self.template.k, pk=pk,fk=fk, f0=f0, **params)
-        # print(tables)
+        
+        # tables = pyfkpt.compute_multipoles(k=self.template.k, pk=pk, **params)
+        # print("tables_shape",tables['k'].shape, kap.shape,muap.shape,self.k.shape)
         nuis = [] 
         required_bias_params = ['b1', 'b2', 'bs2', 'b3nl', 'alpha0', 'alpha2', 'alpha4', 'ctilde', 'alpha0shot', 'alpha2shot','PshotP']
         for param in required_bias_params:
             nuis.append(params[param])
            
-        # print(kap.shape,muap.shape,jac.shape)
-        pkmu = pyfkpt.get_pkmu(kap,muap, nuis=nuis, z=self.z, Om=Omegam, tables=tables,ap=False)
-        # print(pkmu.shape)
-        return self.to_poles(jac*pkmu)      
-        # poles = pyfkpt.rsd_multipoles(k=self.k, nuis=nuis, z=self.z, Om=Omegam, ap=False, tables=tables)  #Need to pass ells here 
-        # return poles[1:]
+        
+        # pkmu = pyfkpt.get_pkmu(kap,muap, nuis=nuis, z=self.z, Om=Omegam, tables=tables,ap=False)
+        # # # print(pkmu.shape)
+        # return self.to_poles(jac*pkmu)      
+        poles = pyfkpt.rsd_multipoles(k=self.k, nuis=nuis, z=self.z, Om=Omegam, ap=False, tables=tables)  #Need to pass ells here 
+        return poles[1:]
       
         
         

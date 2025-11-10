@@ -2473,7 +2473,8 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         kmax = min(max(self.k), 0.5),
         Nk = min(len(self.k), 240),
         # mu0=cosmo['mu0'],
-        mu0 = getattr(cosmo, 'mu0', 0.0),    
+        mu0 = getattr(cosmo, 'mu0', 0.0),
+        fR0 = getattr(cosmo, 'fR0', 0.0),
         model=self.options['model'],
         mg_variant=self.options['mg_variant'],
         rescale_PS=self.options['rescale_PS'],
@@ -2536,11 +2537,11 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
             nuis.append(params[param])
            
         
-        # pkmu = pyfkpt.get_pkmu(kap,muap, nuis=nuis, z=self.z, Om=Omegam, tables=tables,ap=False)
-        # # # print(pkmu.shape)
-        # return self.to_poles(jac*pkmu)      
-        poles = pyfkpt.rsd_multipoles(k=self.k, nuis=nuis, z=self.z, Om=Omegam, ap=False, tables=tables)  #Need to pass ells here 
-        return poles[1:]
+        pkmu = pyfkpt.get_pkmu(kap,muap, nuis=nuis, z=self.z, Om=Omegam, tables=tables,ap=False)
+        # # print(pkmu.shape)
+        return self.to_poles(jac*pkmu)      
+        # poles = pyfkpt.rsd_multipoles(k=self.k, nuis=nuis, z=self.z, Om=Omegam, ap=False, tables=tables)  #Need to pass ells here 
+        # return poles[1:]
       
         
         
@@ -2614,7 +2615,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     - https://arxiv.org/abs/2208.02791
     - https://github.com/henoriega/FOLPS-nu
     """
-    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, model='HDKI',mg_variant='mu_OmDE', fsat=None, sigv=None, shotnoise=1e4,b3_coev=False,beyond_eds=True) #Model can be either HS or LCDM
+    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, model='HDKI',mg_variant='mu_OmDE', fsat=None, sigv=None, shotnoise=1e4,b3_coev=False,beyond_eds=True,rescale_PS=True) #Model can be either HS or LCDM
 
     
 

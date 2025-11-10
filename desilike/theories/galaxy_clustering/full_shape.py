@@ -2094,7 +2094,7 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             self._get_non_linear = jit(_get_non_linear)
 
         table, table_now = self._get_non_linear(self.template.pk_dd, self.template.pknow_dd, **cosmo_params)
-
+        print(table)
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
        
         self.pt = Namespace(jac=jac, kap=kap, muap=muap, table=table[1:26], table_now=table_now[1:26], scalars=table[26:], scalars_now=table_now[26:])
@@ -2452,7 +2452,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
     
     # 'qpar','qper','f','f0', 
     # _pt_attrs = ['jac', 'kap', 'muap', 'table', 'table_now', 'scalars', 'scalars_now','A_full','remove_DeltaP','qpar','qper','f','f0','pklir']
-    _pt_attrs = ['jac', 'kap', 'muap','qpar','qper','fk','f0','tables']  #Storing only these for now
+    _pt_attrs = ['jac', 'kap', 'muap','qpar','qper','fk','f0','tables','keys']  #Storing only these for now
     
     def initialize(self, *args, mu=6, **kwargs):
         import pyfkpt.rsd as pyfkpt
@@ -2484,8 +2484,10 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         # self.kt = table[0]
         self.sigma8 = self.template.sigma8
         self.fsigma8 = self.template.f * self.sigma8
-        self.tables = pyfkpt.compute_multipoles(k=self.template.k, pk=self.template.pk_dd,**fkpt_params)
-        self.pt = Namespace(jac=jac, kap=kap, muap=muap, qpar = self.template.qpar, qper=self.template.qper,fk=self.template.fk,f0=self.template.f0,tables=self.tables)
+        tables = pyfkpt.compute_multipoles(k=self.template.k, pk=self.template.pk_dd,**fkpt_params)
+        keys = list(tables.keys())
+        self.tables = np.column_stack([tables[k] for k in keys]) #Storing only the 2d array part
+        self.pt = Namespace(jac=jac, kap=kap, muap=muap, qpar = self.template.qpar, qper=self.template.qper,fk=self.template.fk,f0=self.template.f0,tables=self.tables,keys=keys)
 
     def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
         import pyfkpt.rsd as pyfkpt
@@ -2499,6 +2501,8 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         kap=self.pt.kap
         muap=self.pt.muap
         tables=self.pt.tables
+        keys=self.pt.keys
+        tables_final = {k: tables[:, i] for i, k in enumerate(keys)}
         # self.tables = pyfkpt.compute_multipoles(k=self.template.k, pk=self.template.pk_dd,**fkpt_params)
         # pk=self.template.pk_dd
         cosmo = getattr(self.template, 'cosmo', None)
@@ -2536,7 +2540,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         for param in required_bias_params:
             nuis.append(params[param])
         
-        pkmu = pyfkpt.get_pkmu(kap, muap, nuis=nuis, z=self.z, Om=Omegam, ap=False, Omfid=Omegam, tables=tables)
+        pkmu = pyfkpt.get_pkmu(kap, muap, nuis=nuis, z=self.z, Om=Omegam, ap=False, Omfid=Omegam, tables=tables_final)
         # # print(pkmu.shape)
         return self.to_poles(jac*pkmu)      
         # poles = pyfkpt.rsd_multipoles(k=self.k, nuis=nuis, z=self.z, Om=Omegam, ap=False, tables=tables)  #Need to pass ells here 

@@ -2474,7 +2474,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         Nk = min(len(self.k), 240),
         # mu0=cosmo['mu0'],
         mu0 = getattr(cosmo, 'mu0', 0.0),
-        fR0 = getattr(cosmo, 'fR0', 0.0),
+        fR0 = getattr(cosmo, 'fR0', 1e-10),
         model=self.options['model'],
         mg_variant=self.options['mg_variant'],
         rescale_PS=self.options['rescale_PS'],
@@ -2490,7 +2490,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
     def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
         import pyfkpt.rsd as pyfkpt
         print(pyfkpt.__file__)
-        
+
         # print(self.template.f,self.template.f0)
         # print(dir(self.pt))
         fk=self.pt.fk
@@ -2535,9 +2535,8 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         required_bias_params = ['b1', 'b2', 'bs2', 'b3nl', 'alpha0', 'alpha2', 'alpha4', 'ctilde', 'alpha0shot', 'alpha2shot','PshotP']
         for param in required_bias_params:
             nuis.append(params[param])
-           
         
-        pkmu = pyfkpt.get_pkmu(kap,muap, nuis=nuis, z=self.z, Om=Omegam, tables=tables,ap=False)
+        pkmu = pyfkpt.get_pkmu(kap, muap, nuis=nuis, z=self.z, Om=Omegam, ap=False, Omfid=Omegam, tables=tables)
         # # print(pkmu.shape)
         return self.to_poles(jac*pkmu)      
         # poles = pyfkpt.rsd_multipoles(k=self.k, nuis=nuis, z=self.z, Om=Omegam, ap=False, tables=tables)  #Need to pass ells here 

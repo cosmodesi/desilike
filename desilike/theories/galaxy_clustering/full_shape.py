@@ -1655,7 +1655,9 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         if self.k[0] * 0.8 < 1e-3:
             import warnings
             warnings.warn('pybird does not predict P(k) for k < 0.001 h/Mpc; nan will be replaced by 0')
-        self.co = Common(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.3, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
+        for name in ['km', 'kr']:
+            self.options[name] = tuple(self.options[name]) if utils.is_sequence(self.options[name]) else (self.options[name],) * 2
+        self.co = Common(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.3, km=min(self.options['km']), kr=min(self.options['kr']), nd=1e-4,
                          eft_basis=eft_basis, halohalo=True, with_cf=False,
                          with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti', with_uvmatch=False,
                          exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
@@ -1698,6 +1700,50 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         self.pt.setreducePslb(params, what='full')
         bird.np = np
         return jnp.nan_to_num(self.pt.fullPs, nan=0.0, posinf=jnp.inf, neginf=-jnp.inf)
+    
+    def combine_bias_terms_poles_for_cross(self, biasX, biasY, nd=1e-4, km=(0.7, 0.7), kr=(0.25, 0.25)):
+        # Follows https://arxiv.org/abs/2308.06206 eq(13), except that stochastic terms are scaled by geometric means of nd and km
+        bird = self.pt
+
+        f = bird.f
+        b1X, b2X, b3X, b4X = (biasX[f'b{i}'] for i in [1, 2, 3, 4])
+        b1Y, b2Y, b3Y, b4Y = (biasY[f'b{i}'] for i in [1, 2, 3, 4])
+        kmX, kmY = km
+        krX, krY = kr
+        if bird.eft_basis in ["eftoflss", "westcoast"]:
+            b5X, b6X, b7X = (biasX[name]/ks**2 for name, ks in zip(["cct", "cr1", "cr2"], [kmX, krX, krX]))
+            b5Y, b6Y, b7Y = (biasY[name]/ks**2 for name, ks in zip(["cct", "cr1", "cr2"], [kmY, krY, krY]))
+        elif bird.eft_basis == 'eastcoast': # inversion of (2.23) of 2004.10607
+            ct0X = biasX["c0"] - f/3. * biasX["c2"] + 3/35. * f**2 * biasX["c4"]
+            ct2X = biasX["c2"] - 6/7. * f * biasX["c4"]
+            ct4X = biasX["c4"]
+            ct0Y = biasY["c0"] - f/3. * biasY["c2"] + 3/35. * f**2 * biasY["c4"]
+            ct2Y = biasY["c2"] - 6/7. * f
+            ct4Y = biasY["c4"]
+        b11 = jnp.array([b1X * b1Y, (b1X + b1Y) * f, f**2])
+        if bird.eft_basis in ["eftoflss", "westcoast"]:
+            bct = jnp.array([b1X * b5Y + b1Y * b5X, b1Y * b6X + b1X * b6Y, b1Y * b7X + b1X * b7Y, (b5X + b5Y) * f, (b6X + b6Y) * f, (b7X + b7Y) * f])
+        elif bird.eft_basis == 'eastcoast':
+            bct = - np.array([ct0X + ct0Y, f * (ct2X + ct2Y), f**2 * (ct4X + ct4Y)])
+        if bird.with_nnlo_counterterm:
+            raise NotImplementedError("PyBird cross-power spectrum with nnlo counterterm is not implemented yet.")
+        #     if bird.eft_basis in ["eftoflss", "westcoast"]: cnnlo = 0.25 * jnp.array([b1X**2 * biasX["cr4"], b1X * biasX["cr6"]]) / kr[0]**4
+        #     elif bird.eft_basis == "eastcoast": cnnlo = - biasX["ct"] * f**4 * jnp.array([b1X**2, 2. * b1X * f, f**2])   # these are not divided by kr^4 according to eastcoast definition; the prior is adjusted accordingly
+        bloop = jnp.array([1., 0.5*(b1X+b1Y), 0.5*(b2X+b2Y), 0.5*(b3X+b3Y), 0.5*(b4X+b4Y), b1X*b1Y, 0.5*(b1X*b2Y+b1Y*b2X), 0.5*(b1X*b3Y+b1Y*b3X), 0.5*(b1X*b4Y+b1Y*b4X), b2X*b2Y, 0.5*(b2X*b4Y+b2Y*b4X), b4X*b4Y])
+        if bird.with_stoch:
+            # ces in biasX and biasY refer to the same jnp object
+            bst = jnp.array([biasX["ce0"], biasX["ce1"] / (km[0] * km[1]), biasX["ce2"] / (km[0] * km[1])]) / nd
+
+        Ps = [None] * 3
+        Ps[0] = jnp.einsum('b,lbx->lx', b11, bird.P11l)
+        Ps[1] = jnp.einsum('b,lbx->lx', bloop, bird.Ploopl) + jnp.einsum('b,lbx->lx', bct, bird.Pctl)
+        if bird.with_stoch: Ps[1] += jnp.einsum('b,lbx->lx', bst, bird.Pstl)
+        # if bird.with_nnlo_counterterm: Ps[2] = jnp.einsum('b,lbx->lx', cnnlo, bird.Pnnlol)
+        if Ps[2] is None:
+            Ps[2] = jnp.zeros_like(Ps[0])
+        Ps = jnp.array(Ps)
+        fullPs = jnp.sum(Ps, axis=0)
+        return jnp.nan_to_num(fullPs, nan=0.0, posinf=jnp.inf, neginf=-jnp.inf)
 
     def __getstate__(self):
         state = {}
@@ -1754,6 +1800,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     _default_options = dict(with_nnlo_counterterm=False, with_stoch=True, eft_basis=None, freedom=None, shotnoise=1e4)
     _deterministic_bias_params = ['b1', 'b2', 'b3', 'b4', 'bs', 'b2p4', 'b2m4', 'b2t', 'b2g', 'b3g', 'cct', 'cr1', 'cr2', 'cr4', 'cr6', 'c0', 'c2', 'c4', 'ct']
     _stochastic_bias_params = ['ce0', 'ce1', 'ce2']
+    _with_cross = True
 
     @classmethod
     def _params(cls, params, freedom=None, tracers=None):
@@ -1841,8 +1888,18 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     def calculate(self, **params):
         super(PyBirdTracerPowerSpectrumMultipoles, self).calculate()
         params = self.pack_input_bias_params(params)
-        params = {k: v[0] if isinstance(v, tuple) else v for k, v in params.items()}
-        self.power = self.pt.combine_bias_terms_poles(self.transform_params(**params), nd=self.nd)
+        if self.is_cross_correlation():
+            paramsX, paramsY = {}, {}
+            for k, v in params.items():
+                if utils.is_sequence(v):
+                    paramsX[k], paramsY[k] = v
+                else:
+                    paramsX[k] = paramsY[k] = v  # stochastic terms
+            paramsX, paramsY = self.transform_params(**paramsX), self.transform_params(**paramsY)
+            self.power = self.pt.combine_bias_terms_poles_for_cross(paramsX, paramsY, nd=self.nd, km=self.pt.options['km'], kr=self.pt.options['kr'])
+        else:
+            params = {k: v[0] if isinstance(v, tuple) else v for k, v in params.items()}
+            self.power = self.pt.combine_bias_terms_poles(self.transform_params(**params), nd=self.nd)
 
 
 class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
@@ -1862,7 +1919,9 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
         eft_basis = self.options.get('eft_basis', None)
         if eft_basis in [None, 'velocileptors']: eft_basis = 'eftoflss'
         # nd used by combine_bias_terms_poles only
-        self.co = Common(Nl=len(self.ells), kmin=1e-3, kmax=0.25, km=self.options['km'], kr=self.options['kr'], nd=1e-4,
+        for name in ['km', 'kr']:
+            self.options[name] = self.options[name] if utils.is_sequence(self.options[name]) else (self.options[name],) * 2
+        self.co = Common(Nl=len(self.ells), kmin=1e-3, kmax=0.25, km=min(self.options['km']), kr=min(self.options['kr']), nd=1e-4,
                          eft_basis=eft_basis, halohalo=True, with_cf=True,
                          with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti', with_uvmatch=False,
                          exact_time=False, quintessence=False, with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)

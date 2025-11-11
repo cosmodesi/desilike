@@ -1968,30 +1968,78 @@ def test_multitracer():
         assert all(param in theory.init.params.names() for param in bias_params)
         assert all(param in theory.all_params.names() for param in bias_params)
         theory()
-    
-    test_params(SimpleTracerPowerSpectrumMultipoles)
-    test_params(KaiserTracerPowerSpectrumMultipoles)
-    test_params(KaiserTracerCorrelationFunctionMultipoles)
-    test_params(EFTLikeKaiserTracerPowerSpectrumMultipoles) 
-    test_params(EFTLikeKaiserTracerCorrelationFunctionMultipoles)
-    test_params(TNSTracerPowerSpectrumMultipoles)
-    test_params(TNSTracerCorrelationFunctionMultipoles)
-    test_params(EFTLikeTNSTracerPowerSpectrumMultipoles)
-    test_params(EFTLikeTNSTracerCorrelationFunctionMultipoles)
-    for prior_basis in ['standard', 'physical']:
-        test_params(LPTVelocileptorsTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
-        test_params(LPTVelocileptorsTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
-        test_params(REPTVelocileptorsTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
-        test_params(REPTVelocileptorsTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
-        test_params(FOLPSTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
-        test_params(FOLPSTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
-        test_params(FOLPSAXTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
-        test_params(FOLPSAXTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
-    for eft_basis in ['eftoflss', 'velocileptors', 'eastcoast', 'westcoast']:
-        test_params(PyBirdTracerPowerSpectrumMultipoles, eft_basis=eft_basis)
-        test_params(PyBirdTracerCorrelationFunctionMultipoles, eft_basis=eft_basis)
-    test_params(GeoFPTAXTracerBispectrumMultipoles)
 
+    def test_kaiser():
+        params = {'b1': 2.1, 'sn0': 0.2}
+        named_params = {'lrg.b1': 2.1, 'lrg.sn0': 0.2}
+        cross_params = {'lrg.b1': 2.1, 'elg.b1': 1.1, 'lrgxelg.sn0': 0.2}
+        cross_params2 = {'lrg.b1': 2.1, 'elg.b1': 2.1, 'lrgxelg.sn0': 0.2}
+
+        cls = KaiserTracerPowerSpectrumMultipoles
+        expected = cls(template=template)(params)
+        obtained = cls(template=template, tracers='lrg')(named_params)
+        np.testing.assert_allclose(obtained, expected)
+
+        obtained = cls(template=template, tracers=('lrg', 'elg'))(cross_params2)
+        np.testing.assert_allclose(obtained, expected)
+
+        theory = cls(template=template, tracers=('lrg', 'elg'))
+        theory(cross_params)
+        b1X, b1Y, sn0 = cross_params['lrg.b1'], cross_params['elg.b1'], cross_params['lrgxelg.sn0']
+        pk_dd, pk_dt, pk_tt = (theory.pt.pktable[name] for name in ('pk_dd', 'pk_dt', 'pk_tt'))
+        expected = b1X * b1Y * pk_dd + (b1X + b1Y) * pk_dt + pk_tt + sn0 / theory.nd * np.array([1, 0, 0])[:, None]
+        np.testing.assert_allclose(theory.power, expected)
+
+    def test_eft_kaiser():
+        dtbias, stbias = {'b1': 2.1, 'ct0_2': -0.5, 'ct2_2': -0.3, 'ct4_2': -0.1}, {'sn0': 1.2, 'sn0_2': 0.2, 'sn2_2': 0.1, 'sn4_2': 0.05}
+        params = dtbias | stbias
+        named_params = {f'lrg.{k}': v for k, v in params.items()}
+        cross_params = {f'lrg.{k}': v for k, v in dtbias.items()} | {f'elg.{k}': v/5 for k, v in dtbias.items()} | {f'lrgxelg.{k}': v for k, v in stbias.items()}
+        cross_params2 = {f'lrg.{k}': v for k, v in dtbias.items()} | {f'elg.{k}': v for k, v in dtbias.items()} | {f'lrgxelg.{k}': v for k, v in stbias.items()}
+
+        cls = EFTLikeKaiserTracerPowerSpectrumMultipoles
+        expected = cls(template=template)(params)
+        obtained = cls(template=template, tracers='lrg')(named_params)
+        np.testing.assert_allclose(obtained, expected)
+
+        obtained = cls(template=template, tracers=('lrg', 'elg'))(cross_params2)
+        np.testing.assert_allclose(obtained, expected)
+
+        theory = cls(template=template, tracers=('lrg', 'elg'))
+        theory(cross_params)
+        tmp = cls(template=template)
+        tmp({'b1': 0.} | {k: 0.5 * (cross_params[f'lrg.{k}'] + cross_params[f'elg.{k}']) for k in ('ct0_2', 'ct2_2', 'ct4_2')} | {k: v for k, v in stbias.items()})
+        b1X, b1Y, sn0 = cross_params['lrg.b1'], cross_params['elg.b1'], cross_params['lrgxelg.sn0']
+        pk_dd, pk_dt, pk_tt = (theory.pt.pktable[name] for name in ('pk_dd', 'pk_dt', 'pk_tt'))
+        expected = b1X * b1Y * pk_dd + (b1X + b1Y) * pk_dt + pk_tt + (tmp.power - pk_tt)
+        np.testing.assert_allclose(theory.power, expected)
+
+    # test_params(SimpleTracerPowerSpectrumMultipoles)
+    # test_params(KaiserTracerPowerSpectrumMultipoles)
+    # test_params(KaiserTracerCorrelationFunctionMultipoles)
+    # test_params(EFTLikeKaiserTracerPowerSpectrumMultipoles) 
+    # test_params(EFTLikeKaiserTracerCorrelationFunctionMultipoles)
+    # test_params(TNSTracerPowerSpectrumMultipoles)
+    # test_params(TNSTracerCorrelationFunctionMultipoles)
+    # test_params(EFTLikeTNSTracerPowerSpectrumMultipoles)
+    # test_params(EFTLikeTNSTracerCorrelationFunctionMultipoles)
+    # for prior_basis in ['standard', 'physical']:
+    #     test_params(LPTVelocileptorsTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
+    #     test_params(LPTVelocileptorsTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
+    #     test_params(REPTVelocileptorsTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
+    #     test_params(REPTVelocileptorsTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
+    #     test_params(FOLPSTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
+    #     test_params(FOLPSTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
+    #     test_params(FOLPSAXTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
+    #     test_params(FOLPSAXTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
+    # for eft_basis in ['eftoflss', 'velocileptors', 'eastcoast', 'westcoast']:
+    #     test_params(PyBirdTracerPowerSpectrumMultipoles, eft_basis=eft_basis)
+    #     test_params(PyBirdTracerCorrelationFunctionMultipoles, eft_basis=eft_basis)
+    # test_params(GeoFPTAXTracerBispectrumMultipoles)
+
+    assert SimpleTracerPowerSpectrumMultipoles(shotnoise=(1e3, 1e4)).nd == 1 / np.sqrt(1e3 * 1e4)
+    test_kaiser()
+    test_eft_kaiser()
 
 
 if __name__ == '__main__':

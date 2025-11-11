@@ -2507,7 +2507,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         # pk=self.template.pk_dd
         omega_b=self.all_params['omega_b'].value
         omega_cdm=self.all_params['omega_b'].value
-        m_ncdm = self.all_params['m_ncdm'].value
+        m_ncdm = getattr(self.all_params.get('m_ncdm', None), 'value', 0.0)
         h = omega_b=self.all_params['h'].value
         # cosmo = getattr(self.template, 'cosmo', None)
         # Omegam = cosmo['Omega_m']

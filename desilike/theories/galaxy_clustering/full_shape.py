@@ -2491,7 +2491,6 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
 
     def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
         import pyfkpt.rsd as pyfkpt
-        print(pyfkpt.__file__)
 
         # print(self.template.f,self.template.f0)
         # print(dir(self.pt))
@@ -2506,9 +2505,9 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         # self.tables = pyfkpt.compute_multipoles(k=self.template.k, pk=self.template.pk_dd,**fkpt_params)
         # pk=self.template.pk_dd
         omega_b=self.all_params['omega_b'].value
-        omega_cdm=self.all_params['omega_b'].value
+        omega_cdm=self.all_params['omega_cdm'].value
         m_ncdm = getattr(self.all_params.get('m_ncdm', None), 'value', 0.0)
-        h = omega_b=self.all_params['h'].value
+        h=self.all_params['h'].value
         # cosmo = getattr(self.template, 'cosmo', None)
         # Omegam = cosmo['Omega_m']
         # Omegam = self.all_params['Omega_m'].value
@@ -2530,13 +2529,12 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         params['chatty']=0
         params['rescale_PS']=False
         params['use_beyond_eds_kernels']=kwargs['beyond_eds']
-        print(params)
 
         b1 = params['b1']
         # if kwargs['prior_basis']=='physical':
         if kwargs['b3_coev']:
             delta_b1 = b1 - 1.
-            pars['b3nl'] = 32. / 315. * delta_b1  # b3 correction
+            params['b3nl'] = 32. / 315. * delta_b1  # b3 correction
             # pars[2] -= 4. / 7. * delta_b1  # bs correction
         
         # tables = pyfkpt.compute_multipoles(k=self.template.k, pk=pk, **params)
@@ -2545,7 +2543,6 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         required_bias_params = ['b1', 'b2', 'bs2', 'b3nl', 'alpha0', 'alpha2', 'alpha4', 'ctilde', 'alpha0shot', 'alpha2shot','PshotP']
         for param in required_bias_params:
             nuis.append(params[param])
-        
         pkmu = pyfkpt.get_pkmu(kap, muap, nuis=nuis, z=self.z, Om=Omegam, ap=False, Omfid=Omegam, tables=tables_final)
         # # print(pkmu.shape)
         return self.to_poles(jac*pkmu)      

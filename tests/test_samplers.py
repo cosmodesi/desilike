@@ -14,6 +14,7 @@ SAMPLER_CLS = dict(
     hmc=samplers.HMCSampler,
     importance=samplers.ImportanceSampler,
     mclmc=samplers.MCLMCSampler,
+    mhmcmc=samplers.MetropolisHastingsSampler,
     nautilus=samplers.NautilusSampler,
     nuts=samplers.NUTSSampler,
     pocomc=samplers.PocoMCSampler,

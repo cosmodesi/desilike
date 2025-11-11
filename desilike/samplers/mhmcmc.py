@@ -5,6 +5,9 @@ Note that the implemenation here is independent of the one in cobaya.
 
 import numpy as np
 
+from .base import MarkovChainSampler
+from desilike.samples import Chain
+
 
 class FastSlowProposer:
     """Proposer sampling fast and slow parameter spaces separately."""
@@ -88,7 +91,8 @@ class FastSlowProposer:
 class StandAloneMetropolisHastingsSampler():
     """A Metropolis-Hastings sampler with fast-slow decomposition.
 
-    Note that this is a from-scratch reimplementation of this algorithm.
+    Note that this is a from-scratch reimplementation of this algorithm. Also,
+    this class works outside of ``desilike``.
 
     Reference
     ---------
@@ -96,29 +100,22 @@ class StandAloneMetropolisHastingsSampler():
 
     """
 
-    def __init__(self, posterior, pos, cov, log_p=None, f_fast=1, f_drag=0,
-                 fast=[], pool=None, rng=np.random.default_rng()):
+    def __init__(self, posterior, fast=[], f_fast=1, f_drag=0, pool=None,
+                 rng=np.random.default_rng()):
         """Initialize the sampler.
 
         Parameters
         ----------
         posterior : callable
             Logarithm of the posterior.
-        pos : numpy.ndarray of shape (n_chains, n_dim)
-            Starting position(s).
-        cov : numpy.ndarray
-            Covariance matrix used to whiten parameter space.
-        log_post : numpy.ndarray of shape (n_chains), optional
-            Logarith of the posterior of the starting position(s). If not
-            provided, these values are computed.
+        fast : list, optional
+            List of dimensions that are considered fast.
         f_fast : int, optional
             Oversampling factor of fast parameters. The default is 1 which
             implies not oversampling.
         f_drag : int, optional
             Factor for dragging of fast parameters. The default is 0, i.e., no
             dragging.
-        fast : list, optional
-            List of dimensions that are considered fast.
         pool : object
             Pool used for distributing the posterior computation.
         rng : numpy.random.Generator, optional
@@ -131,30 +128,50 @@ class StandAloneMetropolisHastingsSampler():
 
         """
         self.posterior = posterior
-        self.pos = np.array(pos, dtype=float)
-        self.n_chains = len(pos)
-        self.proposer = FastSlowProposer(
-            cov * 2.38 / np.sqrt(len(cov)), fast=fast, rng=rng)
+        self.fast = fast
         self.f_fast = int(f_fast)
         if self.f_fast < 1:
             raise ValueError("'f_fast' cannot be smaller than 1.")
         self.f_drag = int(f_drag)
         if self.f_drag < 0:
             raise ValueError("'f_drag' cannot be smaller than 1.")
-        self.counter = 0
-
-        self.proposal_fast = []
-        self.proposal_slow = []
         if pool is None:
             self.map = map
         else:
             self.map = pool.map
         self.rng = rng
 
-        if log_p is None:
-            self.log_p = self.compute_posterior(self.pos)
-        else:
-            self.log_p = np.array(log_p)
+    def update(self, pos=None, log_p=None, cov=None):
+        """Update the sampler's starting position and/or proposal.
+
+        Parameters
+        ----------
+        pos : numpy.ndarray of shape (n_chains, n_dim) or None, optional
+            Starting position(s) of the chains.
+        log_p : numpy.ndarray of shape (n_chains) or None, optional
+            Logarith of the posterior of the starting position(s). If not
+            provided, these values are computed.
+        cov : numpy.ndarray or None, optional
+            Covariance matrix used to whiten parameter space.
+
+        """
+        if pos is not None:
+            self.pos = np.array(pos, dtype=float)
+            self.n_chains = len(pos)
+
+            if log_p is None:
+                self.log_p = self.compute_posterior(self.pos)
+            else:
+                self.log_p = np.array(log_p)
+
+            self.counter = 0
+            self.proposal_fast = []
+            self.proposal_slow = []
+
+        if cov is not None:
+            self.proposer = FastSlowProposer(
+                cov * 2.38**2 / np.sqrt(len(cov)), fast=self.fast,
+                rng=self.rng)
 
     def compute_posterior(self, points):
         """Compute the natural logarithm of the posterior.
@@ -213,7 +230,9 @@ class StandAloneMetropolisHastingsSampler():
         Returns
         -------
         pos : numpy.ndarray of shape (n_chains, n_dim)
-            New positions.
+            New positions in parameter space.
+        log_p : numpy.ndarray of shape (n_chains)
+            Logarithm of the posterior.
 
         """
         n_cycle = self.proposer.n_fast * self.f_fast + self.proposer.n_slow
@@ -267,7 +286,7 @@ class StandAloneMetropolisHastingsSampler():
         self.pos = np.where(accept[:, None], pos_prop, self.pos)
         self.log_p = np.where(accept, log_p_prop, self.log_p)
 
-        return self.pos.copy()
+        return self.pos.copy(), self.log_p.copy()
 
     def make_n_steps(self, n_steps):
         """Advance all chains by :math:`n` steps.
@@ -279,8 +298,90 @@ class StandAloneMetropolisHastingsSampler():
 
         Returns
         -------
-        chains : numpy.ndarray of shape (n_steps, n_chains, n_dim)
-            Chains.
+        pos : numpy.ndarray of shape (n_chains, n_steps, n_dim)
+            Positiions in parameter space.
+        log_p : numpy.ndarray of shape (n_chains, n_steps)
+            Logarithm of the posterior.
 
         """
-        return np.array([self.make_one_step() for _ in range(n_steps)])
+        results = [self.make_one_step() for _ in range(n_steps)]
+        pos = np.stack([r[0] for r in results], axis=1)
+        log_p = np.stack([r[1] for r in results], axis=1)
+        return pos, log_p
+
+
+class MetropolisHastingsSampler(MarkovChainSampler):
+    """A Metropolis-Hastings sampler with fast-slow decomposition.
+
+    Note that this is a from-scratch reimplementation of this algorithm.
+
+    Reference
+    ---------
+    - https://arxiv.org/abs/1304.4473
+
+    """
+
+    def __init__(self, likelihood, n_chains=4, cov=None, f_fast=1, f_drag=0,
+                 fast=[], rng=None, filepath=None):
+        """Initialize the Metropolis-Hastings sampler.
+
+        Parameters
+        ----------
+        likelihood : BaseLikelihood
+            Likelihood to sample.
+        n_chains : int, optional
+            Number of chains. Default is 4.
+        cov : numpy.ndarray or None, optional
+            Covariance matrix estimate used to whiten parameter space. If None,
+            the sampler will use each parameter's proposal scale.
+        f_fast : int, optional
+            Oversampling factor of fast parameters. The default is 1 which
+            implies not oversampling.
+        f_drag : int, optional
+            Factor for dragging of fast parameters. The default is 0, i.e., no
+            dragging.
+        fast : list, optional
+            List of dimensions that are considered fast.
+        rng : numpy.random.RandomState, int, or None, optional
+            Random number generator for seeding. If ``None``, no seed is used.
+            Default is ``None``.
+        filepath : str, Path, or None, optional
+            Save samples to this location. Default is ``None``.
+
+        """
+        super().__init__(likelihood, n_chains=n_chains, rng=rng,
+                         filepath=filepath)
+
+        self.sampler = StandAloneMetropolisHastingsSampler(
+            self.compute_posterior, pool=self.pool, rng=self.rng)
+        if cov is None:
+            n_dim = len(self.likelihood.varied_params)
+            cov = np.zeros((n_dim, n_dim))
+            for i, param in enumerate(self.likelihood.varied_params):
+                cov[i, i] = param.proposal**2
+        self.sampler.update(cov=cov)
+
+    def run_sampler(self, n_steps):
+        """Run the Metropolis-Hastings sampler.
+
+        Parameters
+        ----------
+        n_steps: int
+            Number of steps to take.
+
+        """
+        if not hasattr(self.sampler, 'pos'):
+            pos = np.zeros([self.n_chains, self.n_dim])
+            log_p = np.zeros(self.n_chains)
+            for i in range(self.n_chains):
+                pos[i] = [self.chains[i][param].value[-1] for param in
+                          self.likelihood.varied_params.names()]
+                log_p[i] = self.chains[i]['logposterior'].value[-1]
+            self.sampler.update(pos=pos, log_p=log_p)
+
+        pos, log_p = self.sampler.make_n_steps(n_steps)
+        for i in range(self.n_chains):
+            chain = Chain(
+                np.column_stack([pos[i], log_p[i]]).T,
+                params=self.likelihood.varied_params + ['logposterior'])
+            self.chains[i] = Chain.concatenate(self.chains[i], chain)

@@ -56,7 +56,83 @@ class BasePTCorrelationFunctionMultipoles(BaseTheoryCorrelationFunctionMultipole
         self.z = self.template.z
 
 
-class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
+class BaseTracerTheory(BaseCalculator):
+    _initialize_with_namespace = True
+    _calculate_with_namespace = True  # multi-tracer
+    _deterministic_bias_params = []
+    _stochastic_bias_params = []
+    _with_cross = False  # whether cross-correlation has been implemented
+
+    def initialize(self, tracers=None):
+        self.tracers = tracers
+        # runtime bias parameters
+        self.deterministic_bias_params = list(self._deterministic_bias_params)
+        self.stochastic_bias_params = list(self._stochastic_bias_params)
+
+    @classmethod
+    def _params(cls, params, tracers=None):
+        if not tracers:
+            return params
+        *tracer_namespaces, cross_namespace = cls.multitracer_namespace(tracers)
+        for name in cls._deterministic_bias_params:
+            param = params.pop(name)
+            for namespace in tracer_namespaces:
+                params[f"{namespace}.{name}"] = param.clone(namespace=namespace)
+        for name in cls._stochastic_bias_params:
+            params[name].update(namespace=cross_namespace)
+        return params
+
+    @classmethod
+    def multitracer_namespace(cls, tracers, tail=''):
+        tracers = tracers or []
+        if isinstance(tracers, str):
+            tracers = [tracers]
+        nnames, ntracers = len(tracers), cls._ntracers
+
+        if nnames in (ntracers, ntracers + 1) and not cls._with_cross:
+            raise NotImplementedError(f'{cls} has not implemented cross-correlation yet')
+
+        if nnames == 0:
+            # default auto correlation
+            *tracer_namespaces, cross_namespace = [''] * (ntracers + 1)
+        elif nnames == 1:
+            # auto correlation
+            *tracer_namespaces, cross_namespace = [tracers[0]] * (ntracers + 1)
+        elif nnames == ntracers:
+            # cross correlation
+            tracer_namespaces, cross_namespace = tracers, 'x'.join(tracers)
+        elif nnames == ntracers + 1:
+            # cross correlation, with given cross namespace
+            *tracer_namespaces, cross_namespace = tracers
+        else:
+            raise ValueError(f"`tracers` should be a string or a list of maximum {ntracers+1} names ({ntracers} auto and 1 cross)")
+        return tuple(_ + tail if _ else '' for _ in list(tracer_namespaces) + [cross_namespace])
+
+    def pack_input_bias_params(self, params, defaults=None):
+        if defaults is None:
+            defaults = self.required_bias_params | self.optional_bias_params
+        *tracer_namespaces, cross_namespace = self.multitracer_namespace(self.tracers, tail='.')
+        toret = {}
+        for param in self.deterministic_bias_params:
+            toret[param] = tuple(params.get(f'{namespace}{param}', defaults[param]) for namespace in tracer_namespaces)
+        for param in self.stochastic_bias_params:
+            toret[param] = params.get(f'{cross_namespace}{param}', defaults[param])
+        return toret
+
+    def is_cross_correlation(self):
+        if not self.tracers or isinstance(self.tracers, str):
+            return False
+        return True
+
+class BaseTracerTwoPointTheory(BaseTracerTheory):
+    _ntracers = 2
+
+
+class BaseTracerThreePointTheory(BaseTracerTheory):
+    _ntracers = 3
+
+
+class BaseTracerPowerSpectrumMultipoles(BaseTracerTwoPointTheory):
 
     """Base class for perturbation theory tracer power spectrum multipoles."""
     config_fn = 'full_shape.yaml'
@@ -64,10 +140,16 @@ class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
     _default_options = dict()
 
     def initialize(self, pt=None, template=None, **kwargs):
+        super(BaseTracerPowerSpectrumMultipoles, self).initialize(tracers=kwargs.pop('tracers', None))
         self.options = self._default_options.copy()
         shotnoise = kwargs.get('shotnoise', 1e4)
+        if utils.is_sequence(shotnoise):
+            # cross correlation: geometric mean
+            shotnoise = np.sqrt(np.prod(shotnoise))
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
+        if 'shotnoise' in self.options:
+            self.options['shotnoise'] = shotnoise
         self.nd = 1. / float(shotnoise)
         if pt is None:
             pt = globals()[getattr(self, 'pt_cls', self.__class__.__name__.replace('Tracer', ''))]()
@@ -153,7 +235,7 @@ class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
         return fig
 
 
-class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
+class BaseTracerCorrelationFunctionMultipoles(BaseTracerTwoPointTheory):
 
     """Base class for perturbation theory tracer correlation function multipoles."""
     config_fn = 'full_shape.yaml'
@@ -161,6 +243,7 @@ class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
     _default_options = dict()
 
     def initialize(self, pt=None, template=None, **kwargs):
+        super(BaseTracerCorrelationFunctionMultipoles, self).initialize(tracers=kwargs.pop('tracers', None))
         self.options = self._default_options.copy()
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
@@ -241,12 +324,13 @@ class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
         return fig
 
 
-class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles):
+class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles, BaseTracerTwoPointTheory):
 
     """Base class for perturbation theory tracer correlation function multipoles as Hankel transforms of the power spectrum multipoles."""
     config_fn = 'full_shape.yaml'
 
     def initialize(self, *args, pt=None, template=None, **kwargs):
+        BaseTracerTwoPointTheory.initialize(self, tracers=kwargs.pop('tracers', None))
         power = globals()[self.__class__.__name__.replace('CorrelationFunction', 'PowerSpectrum')]()
         if pt is not None: power.init.update(pt=pt)
         if template is not None: power.init.update(template=template)
@@ -271,7 +355,7 @@ class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
         return self.corr
 
 
-class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges, BaseTracerTwoPointTheory):
     r"""
     Kaiser tracer power spectrum multipoles, with fixed damping, essentially used for Fisher forecasts.
     For the matter (unbiased) power spectrum, set b1=1 and sn0=0.
@@ -294,21 +378,30 @@ class SimpleTracerPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseThe
         Shot noise (which is usually marginalized over).
     """
     config_fn = 'full_shape.yaml'
+    _deterministic_bias_params = ['b1']
+    _stochastic_bias_params = ['sn0']
+    _with_cross = True
 
     def initialize(self, *args, mu=8, method='leggauss', template=None, shotnoise=1e4, **kwargs):
+        BaseTracerTwoPointTheory.initialize(self, tracers=kwargs.pop('tracers', None))
+        if utils.is_sequence(shotnoise):
+            # cross correlation
+            shotnoise = np.sqrt(np.prod(shotnoise))
         self.nd = 1. / float(shotnoise)
         if template is None:
             template = StandardPowerSpectrumTemplate()
         super(SimpleTracerPowerSpectrumMultipoles, self).initialize(*args, template=template, mu=mu, method=method, **kwargs)
 
-    def calculate(self, b1=1., sn0=0., sigmapar=0., sigmaper=0.):
+    def calculate(self, sigmapar=0., sigmaper=0., **kwargs):
         super(SimpleTracerPowerSpectrumMultipoles, self).calculate()
+        bias_params = self.pack_input_bias_params(kwargs, defaults=dict(b1=1., sn0=0.))
+        (b1X, b1Y), sn0 = bias_params['b1'], bias_params['sn0']
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         f = self.template.f
         sigmanl2 = self.k[:, None]**2 * (sigmapar**2 * self.mu**2 + sigmaper**2 * (1. - self.mu**2))
         damping = jnp.exp(-sigmanl2 / 2.)
-        #pkmu = jac * damping * (b1 + f * muap**2)**2 * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0 / self.nd
-        pkmu = jac * damping * (b1 + f * muap**2)**2 * interp1d(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd, method='cubic') + sn0 / self.nd
+        #pkmu = jac * damping * (b1X + f * muap**2) * (b1Y + f * muap**2) * jnp.interp(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd) + sn0 / self.nd
+        pkmu = jac * damping * (b1X + f * muap**2) * (b1Y + f * muap**2) * interp1d(jnp.log10(kap), jnp.log10(self.template.k), self.template.pk_dd, method='cubic') + sn0 / self.nd
         self.power = self.to_poles(pkmu)
 
     def get(self):
@@ -432,14 +525,20 @@ class KaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
     """
+    _deterministic_bias_params = ['b1']
+    _stochastic_bias_params = ['sn0']
+    _with_cross = True
+
     def set_params(self):
         self.required_bias_params.update(dict(b1=1., sn0=0.))
         super().set_params(pt_params=['sigmapar', 'sigmaper'])
 
-    def calculate(self, b1=1., sn0=0.):
+    def calculate(self, **kwargs):
         super(KaiserTracerPowerSpectrumMultipoles, self).calculate()
+        bias_params = self.pack_input_bias_params(kwargs)
+        (b1X, b1Y), sn0 = bias_params["b1"], bias_params["sn0"]
         sn0 = np.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * sn0 / self.nd
-        self.power = b1**2 * self.pt.pktable['pk_dd'] + 2. * b1 * self.pt.pktable['pk_dt'] + self.pt.pktable['pk_tt'] + sn0
+        self.power = b1X * b1Y * self.pt.pktable['pk_dd'] + (b1X + b1Y) * self.pt.pktable['pk_dt'] + self.pt.pktable['pk_tt'] + sn0
 
 
 class KaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
@@ -461,6 +560,9 @@ class KaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFro
     **kwargs : dict
         Options, defaults to: ``mu=8``.
     """
+    _deterministic_bias_params = KaiserTracerPowerSpectrumMultipoles._deterministic_bias_params
+    _stochastic_bias_params = []
+    _with_cross = True
 
 
 class BaseEFTLikeTracerPowerSpectrumMultipoles(object):
@@ -511,10 +613,13 @@ class BaseEFTLikeTracerPowerSpectrumMultipoles(object):
         params = self.counterterm_params + self.stochastic_params
         self.required_bias_params = dict(**self.required_bias_params, **dict(zip(params, [0] * len(params))))
         super().set_params()
+        self.deterministic_bias_params = [param for param in self.deterministic_bias_params if param in self.required_bias_params]
+        self.stochastic_bias_params = [param for param in self.stochastic_bias_params if param in self.required_bias_params]
 
     def calculate(self, **params):
-        counterterm_values = jnp.array([params.pop(name, 0.) for name in self.counterterm_params])
-        stochastic_values = jnp.array([params.pop(name, 0.) for name in self.stochastic_params]) / self.nd
+        bias_params = self.pack_input_bias_params(params)
+        counterterm_values = 0.5 * jnp.array([sum(bias_params[name]) for name in self.counterterm_params])
+        stochastic_values = jnp.array([bias_params[name] for name in self.stochastic_params]) / self.nd
         super(BaseEFTLikeTracerPowerSpectrumMultipoles, self).calculate(**params)
         self.power += self.counterterm_matrix.dot(counterterm_values) * self.pt.pktable['pk11'][self.pt.ells.index(0)]
         self.power += self.stochastic_matrix.dot(stochastic_values)
@@ -542,6 +647,9 @@ class EFTLikeKaiserTracerPowerSpectrumMultipoles(BaseEFTLikeTracerPowerSpectrumM
     shotnoise : float, default=1e4
         Shot noise (which is usually marginalized over).
     """
+    _deterministic_bias_params = KaiserTracerPowerSpectrumMultipoles._deterministic_bias_params + ['ct0_2', 'ct2_2', 'ct4_2']
+    _stochastic_bias_params = KaiserTracerPowerSpectrumMultipoles._stochastic_bias_params + ['sn0_2', 'sn2_2', 'sn4_2']
+    _with_cross = True
 
 
 class EFTLikeKaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
@@ -563,6 +671,9 @@ class EFTLikeKaiserTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunc
     **kwargs : dict
         Options, defaults to: ``mu=8``.
     """
+    _deterministic_bias_params = EFTLikeKaiserTracerPowerSpectrumMultipoles._deterministic_bias_params
+    _stochastic_bias_params = []
+    _with_cross = True
 
 
 def tns_kernels(k, q, wq):
@@ -817,6 +928,8 @@ class TNSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         Shot noise (which is usually marginalized over).
     """
     _default_options = dict(freedom=None)
+    _deterministic_bias_params = ['b1', 'b2', 'bs', 'b3']
+    _stochastic_bias_params = ['sn0']
 
     def set_params(self):
         self.required_bias_params.update(dict(b1=1., b2=0., bs=0., b3=0., sn0=0.))
@@ -832,7 +945,9 @@ class TNSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         for param in self.init.params.select(basename=fix):
             param.update(value=0., fixed=True)
 
-    def calculate(self, b1=1., b2=0., bs=0., b3=0., sn0=0.):
+    def calculate(self, **kwargs):
+        bias_params = self.pack_input_bias_params(kwargs)
+        (b1, _), (b2, _), (bs, _), (b3, _), sn0 = [bias_params[name] for name in ['b1', 'b2', 'bs', 'b3', 'sn0']]
         super(TNSTracerPowerSpectrumMultipoles, self).calculate()
         self.power = b1**2 * self.pt.pktable['pk_dd'] + 2. * b1 * self.pt.pktable['pk_dt'] + self.pt.pktable['pk_tt'] + sn0 / self.nd
         bs2 = bs - 4. / 7. * (b1 - 1.)
@@ -866,6 +981,8 @@ class TNSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPo
     **kwargs : dict
         Options, defaults to: ``mu=8``.
     """
+    _deterministic_bias_params = TNSTracerPowerSpectrumMultipoles._deterministic_bias_params
+    _stochastic_bias_params = []
 
 
 class EFTLikeTNSTracerPowerSpectrumMultipoles(BaseEFTLikeTracerPowerSpectrumMultipoles, TNSTracerPowerSpectrumMultipoles):
@@ -891,7 +1008,8 @@ class EFTLikeTNSTracerPowerSpectrumMultipoles(BaseEFTLikeTracerPowerSpectrumMult
     shotnoise : float, default=1e4
         Shot noise (which is usually marginalized over).
     """
-
+    _deterministic_bias_params = TNSTracerPowerSpectrumMultipoles._deterministic_bias_params + ['ct0_2', 'ct2_2', 'ct4_2']
+    _stochastic_bias_params = TNSTracerPowerSpectrumMultipoles._stochastic_bias_params + ['sn0_2', 'sn2_2', 'sn4_2']
 
 class EFTLikeTNSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles):
     r"""
@@ -913,7 +1031,8 @@ class EFTLikeTNSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctio
     **kwargs : dict
         Options, defaults to: ``mu=8``.
     """
-
+    _deterministic_bias_params = EFTLikeTNSTracerPowerSpectrumMultipoles._deterministic_bias_params
+    _stochastic_bias_params = []
 
 def get_nthreads(nthreads=None):
     if nthreads is None:
@@ -967,8 +1086,8 @@ class BaseVelocileptorsTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMult
 
     """Base class for velocileptors-based tracer power spectrum multipoles."""
 
-    @staticmethod
-    def _params(params, freedom=None, prior_basis='physical'):
+    @classmethod
+    def _params(cls, params, freedom=None, prior_basis='physical', tracers=None):
         fix = []
         if freedom == 'max':
             for param in params.select(basename=['b1', 'b2', 'bs', 'b3']):
@@ -986,6 +1105,8 @@ class BaseVelocileptorsTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMult
                 param.update(prior=None)
         for param in params.select(basename=fix):
             param.update(value=0., fixed=True)
+        # call `BaseTracerTwoPointTheory._params.__func__` here as classmethod `_params` is a descriptor
+        params = BaseTracerTwoPointTheory._params.__func__(cls, params, tracers=tracers)
         if prior_basis == 'physical':
             for param in list(params):
                 basename = param.basename
@@ -1013,6 +1134,8 @@ class BaseVelocileptorsTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMult
                 if self.options[name] is None: self.options[name] = value
             if self.mpicomm.rank == 0:
                 self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
+            self.deterministic_bias_params = [name + 'p' for name in self.deterministic_bias_params]
+            self.stochastic_bias_params = [name + 'p' for name in self.stochastic_bias_params]
         super().set_params(pt_params=[])
         fix = []
         if 4 not in self.ells: fix += ['alpha4*', 'alpha6*', 'sn4*']  # * to capture p
@@ -1141,6 +1264,8 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     - https://github.com/sfschen/velocileptors
     """
     _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4)
+    _deterministic_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6']
+    _stochastic_bias_params = ['sn0', 'sn2', 'sn4']
 
     def initialize(self, *args, k=None, **kwargs):
         super(LPTVelocileptorsTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
@@ -1160,7 +1285,8 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
     def calculate(self, **params):
         for name in ['z']:
             setattr(self, name, getattr(self.pt, name))
-        params = {**self.required_bias_params, **params}
+        params = self.pack_input_bias_params(params)
+        params = {name: value[0] if isinstance(value, tuple) else value for name, value in params.items()}
         if self.is_physical_prior:
             sigma8 = self.pt.sigma8
             f = self.pt.fsigma8 / sigma8
@@ -1210,7 +1336,15 @@ class LPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelationF
     - https://arxiv.org/abs/2012.04636
     - https://github.com/sfschen/velocileptors
     """
-    _params = LPTVelocileptorsTracerPowerSpectrumMultipoles._params
+    _params = classmethod(LPTVelocileptorsTracerPowerSpectrumMultipoles._params.__func__)
+    _deterministic_bias_params = LPTVelocileptorsTracerPowerSpectrumMultipoles._deterministic_bias_params
+    _stochastic_bias_params = []
+
+    def set_params(self):
+        super().set_params()
+        if self.power.is_physical_prior:
+            self.deterministic_bias_params = [name + 'p' for name in self.deterministic_bias_params]
+            self.stochastic_bias_params = [name + 'p' for name in self.stochastic_bias_params]
 
 
 def f_over_f0_EH(z, k, Omega0_m, h, fnu, Nnu=3, Neff=3.044):
@@ -1402,6 +1536,8 @@ class REPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPowe
     - https://github.com/sfschen/velocileptors
     """
     _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4)
+    _deterministic_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6']
+    _stochastic_bias_params = ['sn0', 'sn2', 'sn4']
 
     def initialize(self, *args, k=None, z=None, **kwargs):
         super(REPTVelocileptorsTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
@@ -1425,7 +1561,8 @@ class REPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPowe
 
     def calculate(self, **params):
         if self.pt.z.ndim == 0: self.z = self.pt.z
-        params = {**self.required_bias_params, **params}
+        params = self.pack_input_bias_params(params)
+        params = {name: value[0] if isinstance(value, tuple) else value for name, value in params.items()}
         if self.is_physical_prior:
             sigma8 = self.pt.sigma8
             f = self.pt.fsigma8 / sigma8
@@ -1485,8 +1622,15 @@ class REPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelation
     - https://arxiv.org/abs/2012.04636
     - https://github.com/sfschen/velocileptors
     """
-    _params = REPTVelocileptorsTracerPowerSpectrumMultipoles._params
+    _params = classmethod(REPTVelocileptorsTracerPowerSpectrumMultipoles._params.__func__)
+    _deterministic_bias_params = REPTVelocileptorsTracerPowerSpectrumMultipoles._deterministic_bias_params
+    _stochastic_bias_params = []
 
+    def set_params(self):
+        super().set_params()
+        if self.power.is_physical_prior:
+            self.deterministic_bias_params = [name + 'p' for name in self.deterministic_bias_params]
+            self.stochastic_bias_params = [name + 'p' for name in self.stochastic_bias_params]
 
 class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
@@ -1608,9 +1752,11 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     - https://github.com/pierrexyz/pybird
     """
     _default_options = dict(with_nnlo_counterterm=False, with_stoch=True, eft_basis=None, freedom=None, shotnoise=1e4)
+    _deterministic_bias_params = ['b1', 'b2', 'b3', 'b4', 'bs', 'b2p4', 'b2m4', 'b2t', 'b2g', 'b3g', 'cct', 'cr1', 'cr2', 'cr4', 'cr6', 'c0', 'c2', 'c4', 'ct']
+    _stochastic_bias_params = ['ce0', 'ce1', 'ce2']
 
-    @staticmethod
-    def _params(params, freedom=None):
+    @classmethod
+    def _params(cls, params, freedom=None, tracers=None):
         fix = []
         if freedom in ['min', 'max']:
             for param in params.select(basename=['b1']):
@@ -1627,7 +1773,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             fix += ['b2', 'b3', 'ce1']
         for param in params.select(basename=fix):
             param.update(value=0., fixed=True)
-        return params
+        return BaseTracerTwoPointTheory._params.__func__(cls, params, tracers=tracers)
 
     def set_params(self):
         freedom = self.options.get('freedom', None)
@@ -1662,6 +1808,8 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             self.required_bias_params += ['ce0', 'ce1', 'ce2']
         default_values = {'b1': 1.6}
         self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
+        self.deterministic_bias_params = [param for param in self._deterministic_bias_params if param in self.required_bias_params]
+        self.stochastic_bias_params = [param for param in self._stochastic_bias_params if param in self.required_bias_params]
         BaseTracerPowerSpectrumMultipoles.set_params(self, pt_params=[])  # not super, for PyBirdTracerCorrelationFunctionMultipoles
         fix = []
         if 4 not in self.ells: fix += ['cr2', 'c4']
@@ -1692,6 +1840,8 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
     def calculate(self, **params):
         super(PyBirdTracerPowerSpectrumMultipoles, self).calculate()
+        params = self.pack_input_bias_params(params)
+        params = {k: v[0] if isinstance(v, tuple) else v for k, v in params.items()}
         self.power = self.pt.combine_bias_terms_poles(self.transform_params(**params), nd=self.nd)
 
 
@@ -1801,14 +1951,19 @@ class PyBirdTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMul
     """
     _default_options = dict(with_nnlo_counterterm=False, with_stoch=False, eft_basis=None, freedom=None)
 
-    _params = PyBirdTracerPowerSpectrumMultipoles._params
+    _params = classmethod(PyBirdTracerPowerSpectrumMultipoles._params.__func__)
 
     set_params = PyBirdTracerPowerSpectrumMultipoles.set_params
 
     transform_params = PyBirdTracerPowerSpectrumMultipoles.transform_params
 
+    _deterministic_bias_params = PyBirdTracerPowerSpectrumMultipoles._deterministic_bias_params
+    _stochastic_bias_params = []
+
     def calculate(self, **params):
         super(PyBirdTracerCorrelationFunctionMultipoles, self).calculate()
+        params = self.pack_input_bias_params(params)
+        params = {name: value[0] if isinstance(value, tuple) else value for name, value in params.items()}
         self.corr = self.pt.combine_bias_terms_poles(self.transform_params(**params))
 
 
@@ -1941,9 +2096,11 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     - https://github.com/henoriega/FOLPS-nu
     """
     _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4)
+    _deterministic_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'ct']
+    _stochastic_bias_params = ['sn0', 'sn2', 'sn4']
 
-    @staticmethod
-    def _params(params, freedom=None, prior_basis='physical'):
+    @classmethod
+    def _params(cls, params, freedom=None, prior_basis='physical', tracers=None):
         fix = []
         if freedom in ['min', 'max']:
             for param in params.select(basename=['b1']):
@@ -1960,6 +2117,7 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             fix += ['b3', 'bs', 'ct']
         for param in params.select(basename=fix):
             param.update(value=0., fixed=True)
+        params = BaseTracerTwoPointTheory._params.__func__(cls, params, tracers=tracers)
         if prior_basis == 'physical':
             for param in list(params):
                 basename = param.basename
@@ -1979,6 +2137,7 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
     def set_params(self):
         self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'ct', 'sn0', 'sn2']
+        self.stochastic_bias_params = [param for param in self.stochastic_bias_params if param in self.required_bias_params]
         default_values = {'b1': 2.}
         self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
         self.is_physical_prior = self.options['prior_basis'] == 'physical'
@@ -1990,6 +2149,8 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                 if self.options[name] is None: self.options[name] = value
             if self.mpicomm.rank == 0:
                 self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
+            self.deterministic_bias_params = [name + 'p' for name in self.deterministic_bias_params]
+            self.stochastic_bias_params = [name + 'p' for name in self.stochastic_bias_params]
         super().set_params(pt_params=[])
         fix = []
         if 4 not in self.ells: fix += ['alpha4']
@@ -2003,7 +2164,8 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
     def calculate(self, **params):
         super(FOLPSTracerPowerSpectrumMultipoles, self).calculate()
-        params = {**self.required_bias_params, **params}
+        params = self.pack_input_bias_params(params)
+        params = {name: value[0] if isinstance(value, tuple) else value for name, value in params.items()}
         if self.is_physical_prior:
             sigma8 = self.pt.sigma8
             f = self.pt.fsigma8 / sigma8
@@ -2051,8 +2213,15 @@ class FOLPSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFrom
     - https://arxiv.org/abs/2208.02791
     - https://github.com/cosmodesi/folpsax
     """
-    _params = FOLPSTracerPowerSpectrumMultipoles._params
+    _params = classmethod(FOLPSTracerPowerSpectrumMultipoles._params.__func__)
+    _deterministic_bias_params = FOLPSTracerPowerSpectrumMultipoles._deterministic_bias_params
+    _stochastic_bias_params = []
 
+    def set_params(self):
+        super().set_params()
+        if self.power.is_physical_prior:
+            self.deterministic_bias_params = [name + 'p' for name in self.deterministic_bias_params]
+            self.stochastic_bias_params = [name + 'p' for name in self.stochastic_bias_params]
 
 class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
 
@@ -2220,8 +2389,13 @@ class FOLPSAXTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFr
     - https://arxiv.org/abs/2208.02791
     - https://github.com/cosmodesi/folpsax
     """
-    _params = FOLPSAXTracerPowerSpectrumMultipoles._params
+    _params = classmethod(FOLPSAXTracerPowerSpectrumMultipoles._params.__func__)
 
+    def set_params(self):
+        super().set_params()
+        if self.power.is_physical_prior:
+            self.deterministic_bias_params = [name + 'p' for name in self.deterministic_bias_params]
+            self.stochastic_bias_params = [name + 'p' for name in self.stochastic_bias_params]
 
 
 def pt_kernel(k, q, wq):
@@ -2271,7 +2445,7 @@ def pt_pk_1loop(k, q, wq, pk_q, kernel13_d):
 
 
 
-class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
+class GeoFPTAXTracerBispectrumMultipoles(BaseTracerThreePointTheory):
     r"""
     GeoFPTAX bispectrum multipoles.
     Can be exactly marginalized over stochastic parameters sn*.
@@ -2308,8 +2482,11 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
     config_fn = 'full_shape.yaml'
     _klim = (1e-3, 2., 500)
     _default_options = dict(prior_basis='physical', mu=50)
+    _deterministic_bias_params = ['b1', 'b2', 'sigmav']  # let's regard sigmav as a bias parameter (counter term) for now
+    _stochastic_bias_params = ['sn0']
 
     def initialize(self, k=None, z=None, template=None, ells=((0, 0, 0), (2, 0, 0), (0, 2, 0), (0, 0, 2)), shotnoise=None, pt=None, **kwargs):
+        super(GeoFPTAXTracerBispectrumMultipoles, self).initialize(tracers=kwargs.pop('tracers', None))
         self.options = self._default_options | dict(kwargs)
         self.ells = ells
         if utils.is_sequence(ells[0]):
@@ -2348,8 +2525,9 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
         self.pt = pt
         assert self.pt in [None, '1loop']
 
-    @staticmethod
-    def _params(params, prior_basis='physical'):
+    @classmethod
+    def _params(cls, params, prior_basis='physical', tracers=None):
+        params = super()._params(params, tracers=tracers)
         # Prior basis is 'physical' = sampled bias bp is b * sigma8^n
         if prior_basis == 'physical':
             for param in list(params):
@@ -2369,10 +2547,13 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
         self.required_bias_params = ['b1', 'b2', 'sigmav', 'sn0']
         default_values = {'b1': 2.}
         self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
+        self.optional_bias_params = {}
         self.is_physical_prior = self.options['prior_basis'] == 'physical'
         if self.is_physical_prior:
             for name in list(self.required_bias_params):
                 self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
+            self.deterministic_bias_params = [name + 'p' for name in self.deterministic_bias_params]
+            self.stochastic_bias_params = [name + 'p' for name in self.stochastic_bias_params]
         fix = []
         if 2 not in self.ells: fix += ['sn2']
         for param in self.init.params.select(basename=fix):
@@ -2383,7 +2564,8 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
         self.z = self.template.z
         self.sigma8 = self.template.sigma8
         self.fsigma8 = self.template.f * self.sigma8
-        params = {**self.required_bias_params, **params}
+        params = self.pack_input_bias_params(params)
+        params = {name: value[0] if isinstance(value, tuple) else value for name, value in params.items()}
         pars = []
         # Conversion from "physical" bias parameters to standard basis
         if self.is_physical_prior:

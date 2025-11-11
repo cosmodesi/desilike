@@ -1906,6 +1906,94 @@ def test_bispectrum():
     test(bk)
 
 
+def test_multitracer():
+    from desilike.theories.galaxy_clustering import (
+        StandardPowerSpectrumTemplate,
+        SimpleTracerPowerSpectrumMultipoles,
+        KaiserTracerPowerSpectrumMultipoles,
+        KaiserTracerCorrelationFunctionMultipoles,
+        EFTLikeKaiserTracerPowerSpectrumMultipoles,
+        EFTLikeKaiserTracerCorrelationFunctionMultipoles,
+        TNSTracerPowerSpectrumMultipoles,
+        TNSTracerCorrelationFunctionMultipoles,
+        EFTLikeTNSTracerPowerSpectrumMultipoles,
+        EFTLikeTNSTracerCorrelationFunctionMultipoles,
+        LPTVelocileptorsTracerPowerSpectrumMultipoles,
+        LPTVelocileptorsTracerCorrelationFunctionMultipoles,
+        REPTVelocileptorsTracerPowerSpectrumMultipoles,
+        REPTVelocileptorsTracerCorrelationFunctionMultipoles,
+        PyBirdTracerPowerSpectrumMultipoles,
+        PyBirdTracerCorrelationFunctionMultipoles,
+        FOLPSTracerPowerSpectrumMultipoles,
+        FOLPSTracerCorrelationFunctionMultipoles,
+        FOLPSAXTracerPowerSpectrumMultipoles,
+        FOLPSAXTracerCorrelationFunctionMultipoles,
+        GeoFPTAXTracerBispectrumMultipoles,
+    )
+
+    template = StandardPowerSpectrumTemplate()
+
+    def test_params(theory_cls, **kwargs):
+        theory = theory_cls(template=template, **kwargs)
+        bias_params = theory.deterministic_bias_params + theory.stochastic_bias_params
+        assert all(param in theory.init.params.names() for param in bias_params)
+        assert all(param in theory.all_params.names() for param in bias_params)
+        theory()
+
+        theory = theory_cls(template=template, tracers='lrg', **kwargs)
+        bias_params = [f'lrg.{param}' for param in theory.deterministic_bias_params + theory.stochastic_bias_params]
+        assert all(param in theory.init.params.names() for param in bias_params)
+        assert all(param in theory.all_params.names() for param in bias_params)
+        theory()
+
+        if not theory_cls._with_cross:
+            return
+
+        theory = theory_cls(template=template, tracers=('lrg', 'elg'), **kwargs)
+        bias_params = (
+            [f'lrg.{param}' for param in theory.deterministic_bias_params]
+            + [f'elg.{param}' for param in theory.deterministic_bias_params]
+            + [f'lrgxelg.{param}' for param in theory.stochastic_bias_params]
+        )
+        assert all(param in theory.init.params.names() for param in bias_params)
+        assert all(param in theory.all_params.names() for param in bias_params)
+        theory()
+
+        theory = theory_cls(template=template, tracers=('lrg', 'elg', 'cross'), **kwargs)
+        bias_params = (
+            [f'lrg.{param}' for param in theory.deterministic_bias_params]
+            + [f'elg.{param}' for param in theory.deterministic_bias_params]
+            + [f'cross.{param}' for param in theory.stochastic_bias_params]
+        )
+        assert all(param in theory.init.params.names() for param in bias_params)
+        assert all(param in theory.all_params.names() for param in bias_params)
+        theory()
+    
+    test_params(SimpleTracerPowerSpectrumMultipoles)
+    test_params(KaiserTracerPowerSpectrumMultipoles)
+    test_params(KaiserTracerCorrelationFunctionMultipoles)
+    test_params(EFTLikeKaiserTracerPowerSpectrumMultipoles) 
+    test_params(EFTLikeKaiserTracerCorrelationFunctionMultipoles)
+    test_params(TNSTracerPowerSpectrumMultipoles)
+    test_params(TNSTracerCorrelationFunctionMultipoles)
+    test_params(EFTLikeTNSTracerPowerSpectrumMultipoles)
+    test_params(EFTLikeTNSTracerCorrelationFunctionMultipoles)
+    for prior_basis in ['standard', 'physical']:
+        test_params(LPTVelocileptorsTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
+        test_params(LPTVelocileptorsTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
+        test_params(REPTVelocileptorsTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
+        test_params(REPTVelocileptorsTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
+        test_params(FOLPSTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
+        test_params(FOLPSTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
+        test_params(FOLPSAXTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
+        test_params(FOLPSAXTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
+    for eft_basis in ['eftoflss', 'velocileptors', 'eastcoast', 'westcoast']:
+        test_params(PyBirdTracerPowerSpectrumMultipoles, eft_basis=eft_basis)
+        test_params(PyBirdTracerCorrelationFunctionMultipoles, eft_basis=eft_basis)
+    test_params(GeoFPTAXTracerBispectrumMultipoles)
+
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -1935,7 +2023,8 @@ if __name__ == '__main__':
     #test_ap_diff()
     #test_ptt()
     #test_tns()
-    test_bispectrum()
+    # test_bispectrum()
     #test_freedom()
     #test_bao_phaseshift()
     #comparison_folps_velocileptors()
+    # test_multitracer()

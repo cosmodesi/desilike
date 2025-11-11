@@ -68,13 +68,13 @@ def test_rosenbrock(n_fast, f_fast, f_drag):
 
     fast = rng.choice(np.arange(n_dim), size=n_fast, replace=False)
     sampler = StandAloneMetropolisHastingsSampler(
-        posterior, np.zeros((10, 2)), cov, f_fast=f_fast, f_drag=f_drag,
-        fast=fast, rng=rng)
+        posterior, f_fast=f_fast, f_drag=f_drag, fast=fast, rng=rng)
+    sampler.update(pos=np.zeros((10, 2)), cov=cov)
 
-    chains = sampler.make_n_steps(30000)
-    chains = chains[1000:]  # burn-in
+    chains, log_p = sampler.make_n_steps(30000)
+    chains = chains[:, 1000:]  # burn-in
 
-    tau = np.amax(integrated_time(chains))
+    tau = np.amax(integrated_time(np.transpose(chains, (1, 0, 2))))
     chains = np.concatenate(chains)
     n_eff = len(chains) / tau
     assert n_eff > 1000

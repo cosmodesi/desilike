@@ -322,7 +322,8 @@ class MarkovChainSampler(BaseSampler):
     criteria = {'gelman_rubin_diag_max', 'gelman_rubin_eigen_max',
                 'geweke_max'}
 
-    def __init__(self, likelihood, n_chains=4, rng=None, filepath=None):
+    def __init__(self, likelihood, n_chains=4, burn_in=0.2, rng=None,
+                 filepath=None):
         """Initialize the sampler.
 
         Parameters
@@ -331,17 +332,33 @@ class MarkovChainSampler(BaseSampler):
             Likelihood to sample.
         n_chains : int, optional
             Number of chains. Default is 4.
+        burn_in : float or int, optional
+            Fraction of samples to remove from each chain before doing
+            convergence checks or returning results. If an integer, number of
+            iterations (steps) to remove. Default is 0.2.
         rng : numpy.random.RandomState, int, or None, optional
             Random number generator for seeding. If ``None``, no seed is used.
             Default is ``None``.
         filepath : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
 
+        Raises
+        ------
+        ValueError
+            If ``burn_in`` is a float and larger than unity.
+
         """
         super().__init__(likelihood, rng=rng, filepath=filepath)
         self.n_chains = n_chains
         self.chains = None
         self.checks = None
+
+        if isinstance(burn_in, float):
+            if burn_in > 1:
+                raise ValueError(
+                    f"'burn_in' cannot be a float and bigger than 1. Received "
+                    f"{burn_in}.")
+        self.burn_in = burn_in
 
         if self.filepath is not None:
             if all((self.filepath / f'chain_{i + 1}.npy').is_file() for i in
@@ -412,7 +429,16 @@ class MarkovChainSampler(BaseSampler):
             for i, chain in enumerate(self.chains):
                 chain.save(self.filepath / f'chain_{i + 1}.npy')
 
-    def check(self, criteria, burn_in=0.2, quiet=False):
+    @property
+    def chains_without_burn_in(self):
+        """Return the chains without burn in."""
+        if isinstance(self.burn_in, float):
+            burn_in = round(self.burn_in * len(self.chains[0]))
+        else:
+            burn_in = self.burn_in
+        return [chain[burn_in:] for chain in self.chains]
+
+    def check(self, criteria, quiet=False):
         """Check the status of the sampling, including convergence.
 
         This function will also output the status of the analysis to the log.
@@ -421,18 +447,8 @@ class MarkovChainSampler(BaseSampler):
         ----------
         criteria : dict
             Criteria for the chains to be considered converged.
-        burn_in : float or int, optional
-            Fraction of samples to remove from each chain for convergence
-            tests. If an integer, number of iterations (steps) to remove.
-            Default is 0.2.
         quiet : bool, optional
             If True, do not log results. Default is False.
-
-        Raises
-        ------
-        ValueError
-            If a convergence criterion is not recognized or ``burn_in`` is a
-            float and bigger than unity.
 
         Returns
         -------
@@ -446,9 +462,7 @@ class MarkovChainSampler(BaseSampler):
                     f"Unknown convergence criterion '{key}'. Known criteria "
                     f"are {type(self).criteria}.")
 
-        if isinstance(burn_in, float):
-            burn_in = round(burn_in * len(self.chains[0]))
-        chains = [chain[burn_in:] for chain in self.chains]
+        chains = self.chains_without_burn_in
 
         if not quiet:
             self.log_info('Diagnostics:')
@@ -520,23 +534,12 @@ class MarkovChainSampler(BaseSampler):
         kwargs : dict, optional
             Keyword arguments passed to the run function of the sampler.
 
-        Raises
-        ------
-        ValueError
-            If ``burn_in`` is a float and larger than unity.
-
         Returns
         -------
         desilike.samples.Chain or list of desilike.samples.Chain
             Sampler results.
 
         """
-        if isinstance(burn_in, float):
-            if burn_in > 1:
-                raise ValueError(
-                    f"'burn_in' cannot be a float and bigger than 1. Received "
-                    f"{burn_in}.")
-
         if self.mpicomm.rank == 0:
 
             # Initialize the chains, if necessary.

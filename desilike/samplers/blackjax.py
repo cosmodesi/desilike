@@ -98,7 +98,7 @@ class BlackJAXSampler(MarkovChainSampler):
         filepath : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
         kwargs: dict, optional
-            Extra keyword arguments passed to ``blackjax.hmc`` during
+            Extra keyword arguments passed to ``blackjax`` during
             initialization.
 
         """

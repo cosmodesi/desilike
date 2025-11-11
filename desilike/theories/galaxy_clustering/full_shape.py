@@ -2505,16 +2505,22 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         tables_final = {k: tables[:, i] for i, k in enumerate(keys)}
         # self.tables = pyfkpt.compute_multipoles(k=self.template.k, pk=self.template.pk_dd,**fkpt_params)
         # pk=self.template.pk_dd
-        cosmo = getattr(self.template, 'cosmo', None)
-        Omegam = cosmo['Omega_m']
+        omega_b=self.all_params['omega_b'].value
+        omega_cdm=self.all_params['omega_b'].value
+        m_ncdm = self.all_params['m_ncdm'].value
+        h = omega_b=self.all_params['h'].value
+        # cosmo = getattr(self.template, 'cosmo', None)
+        # Omegam = cosmo['Omega_m']
         # Omegam = self.all_params['Omega_m'].value
-        
+        Omegam = (omega_b+omega_cdm+m_ncdm/93.14)/h**2
         params['Om'] = Omegam
         params['PshotP'] = 1. / nd     
         params['model']= kwargs.get('model','HDKI')  #for now, we use these
         params['mg_variant']=kwargs.get('mg_variant','mu_OmDE') #for now, we use these
-        params['mu0']= getattr(cosmo,'mu0',0.0)
-        params['h'] = cosmo['h']
+        # params['mu0']= getattr(cosmo,'mu0',0.0)
+        # params['h'] = cosmo['h']
+        params['mu0']= self.all_params['mu0'].value
+        params['h'] = h
         # params['h']=self.all_params['h'].value
         # params['kmin']=float(max(1e-3,min(self.k)))
         # params['kmax']= min(max(self.k), 0.5)

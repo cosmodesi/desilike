@@ -1,8 +1,7 @@
 """Big Bang Nucleosynthesis (BBN) likelihoods."""
 
-from jax import numpy as jnp
-
 from desilike.cosmo import is_external_cosmo
+from desilike.jax import numpy as jnp
 from desilike.likelihoods.base import BaseGaussianLikelihood
 
 

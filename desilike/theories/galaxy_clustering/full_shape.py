@@ -1657,6 +1657,8 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             warnings.warn('pybird does not predict P(k) for k < 0.001 h/Mpc; nan will be replaced by 0')
         for name in ['km', 'kr']:
             self.options[name] = tuple(self.options[name]) if utils.is_sequence(self.options[name]) else (self.options[name],) * 2
+        self.km = self.options['km']
+        self.kr = self.options['kr']
         self.co = Common(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.3, km=min(self.options['km']), kr=min(self.options['kr']), nd=1e-4,
                          eft_basis=eft_basis, halohalo=True, with_cf=False,
                          with_time=True, accboost=float(self.options['accboost']), optiresum=self.options['with_resum'] == 'opti', with_uvmatch=False,
@@ -1747,7 +1749,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'z', 'ells']:
+        for name in ['k', 'z', 'ells', 'km', 'kr']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         for name in self._pt_attrs:
@@ -1756,7 +1758,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         return state
 
     def __setstate__(self, state):
-        for name in ['k', 'z', 'ells']:
+        for name in ['k', 'z', 'ells', 'km', 'kr']:
             if name in state: setattr(self, name, state.pop(name))
         from pybird import bird
         self.pt = bird.Bird.__new__(bird.Bird)
@@ -1896,7 +1898,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                 else:
                     paramsX[k] = paramsY[k] = v  # stochastic terms
             paramsX, paramsY = self.transform_params(**paramsX), self.transform_params(**paramsY)
-            self.power = self.pt.combine_bias_terms_poles_for_cross(paramsX, paramsY, nd=self.nd, km=self.pt.options['km'], kr=self.pt.options['kr'])
+            self.power = self.pt.combine_bias_terms_poles_for_cross(paramsX, paramsY, nd=self.nd, km=self.pt.km, kr=self.pt.kr)
         else:
             params = {k: v[0] if isinstance(v, tuple) else v for k, v in params.items()}
             self.power = self.pt.combine_bias_terms_poles(self.transform_params(**params), nd=self.nd)

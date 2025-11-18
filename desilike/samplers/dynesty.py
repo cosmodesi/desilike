@@ -5,10 +5,8 @@ try:
     DYNESTY_INSTALLED = True
 except ModuleNotFoundError:
     DYNESTY_INSTALLED = False
-import numpy as np
 
 from .base import update_kwargs, PopulationSampler
-from desilike.samples import Chain
 
 
 class DynestySampler(PopulationSampler):
@@ -46,7 +44,7 @@ class DynestySampler(PopulationSampler):
 
         super().__init__(likelihood, rng=rng, filepath=filepath)
 
-        kwargs = update_kwargs(kwargs, 'dynesty', pool=self.pool,
+        kwargs = update_kwargs(kwargs, 'dynesty', blob=True, pool=self.pool,
                                rstate=self.rng)
 
         if not dynamic and self.filepath is not None:
@@ -66,9 +64,9 @@ class DynestySampler(PopulationSampler):
                 except (FileNotFoundError, ValueError):
                     pass
             if not hasattr(self, 'sampler'):
-                args = (self.compute_likelihood, self.prior_transform,
-                        self.n_dim)
-                self.sampler = sampler_cls(*args, **kwargs)
+                self.sampler = sampler_cls(
+                    self.compute_likelihood, self.prior_transform, self.n_dim,
+                    **kwargs)
         else:
             self.sampler = None
 
@@ -82,8 +80,10 @@ class DynestySampler(PopulationSampler):
 
         Returns
         -------
-        Chain
+        samples : numpy.ndarray of shape (n_samples, n_dim)
             Sampler results.
+        extras : dict
+            Extra parameters such as weights and derived parameters.
 
         """
         checkpoint_file = None if self.filepath is None else str(
@@ -92,10 +92,8 @@ class DynestySampler(PopulationSampler):
                                checkpoint_file=checkpoint_file)
 
         self.sampler.run_nested(**kwargs)
-
         results = self.sampler.results
-        chain = [results.samples[..., i] for i in range(self.n_dim)]
-        chain.append(results.logwt)
-        chain.append(np.exp(results.logwt - results.logz[-1]))
-        return Chain(chain, params=self.likelihood.varied_params +
-                     ['logweight', 'aweight'])
+        samples = results.samples
+        extras = dict(aweight=results.importance_weights())
+        extras.update(dict(zip(self.params[self.n_dim:], results['blob'])))
+        return samples, extras

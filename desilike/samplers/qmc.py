@@ -21,7 +21,7 @@ class KroneckerSequence(qmc.QMCEngine):
         d : int
             Dimensionality.
         seed : float, optional
-            Starting point for the sequence in each dimension. Default is 0.5.
+            Starting sample for the sequence in each dimension. Default is 0.5.
 
         """
         super().__init__(d=d)
@@ -45,7 +45,7 @@ class KroneckerSequence(qmc.QMCEngine):
 
         Returns
         -------
-        numpy.ndarray of shape (n_points, n_dim)
+        numpy.ndarray of shape (n_samples, n_dim)
             Samples.
 
         """
@@ -73,8 +73,8 @@ class QMCSampler(StaticSampler):
 
     """
 
-    def get_points(self, size=1000, engine='kronecker', **kwargs):
-        """Get points from a QMC sequence.
+    def get_samples(self, size=1000, engine='kronecker', **kwargs):
+        """Get samples from a QMC sequence.
 
         Parameters
         ----------
@@ -87,7 +87,7 @@ class QMCSampler(StaticSampler):
 
         Returns
         -------
-        numpy.ndarray of shape (n_points, n_dim)
+        numpy.ndarray of shape (n_samples, n_dim)
             Grid to be evaluated.
         """
         lower, upper = [], []

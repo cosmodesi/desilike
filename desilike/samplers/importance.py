@@ -9,26 +9,27 @@ from .base import StaticSampler
 class ImportanceSampler(StaticSampler):
     """An importance sampler.
 
-    This class can be used to transform points from one posterior to another.
+    This class can be used to transform samples from one posterior to another.
     Alternatively, it can also be used to combine likelihoods from two
     experiments.
     """
 
-    def get_points(self, chain=None):
-        """Get points on the grid.
+    def get_samples(self, chain=None):
+        """Get samples on the grid.
 
         Parameters
         ----------
         chain : desilike.samples.Chain, optional
-            Input chain that defines the points. Default is None.
+            Input chain that defines the samples. Default is None.
 
         Returns
         -------
-        numpy.ndarray of shape (n_points, n_dim)
+        numpy.ndarray of shape (n_samples, n_dim)
             Grid to be evaluated.
+
         """
         return np.column_stack([chain[key].value for key in
-                                self.likelihood.varied_params.names()])
+                                self.params[:self.n_dim]])
 
     def run(self, chain, mode='resample'):
         """Reweight a chain using importance sampling.
@@ -48,6 +49,7 @@ class ImportanceSampler(StaticSampler):
         -------
         desilike.samples. Chain
             Sampler results.
+
         """
         if mode not in ['resample', 'combine']:
             raise ValueError(

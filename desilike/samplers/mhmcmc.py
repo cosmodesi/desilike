@@ -6,7 +6,6 @@ Note that the implemenation here is independent of the one in cobaya.
 import numpy as np
 
 from .base import MarkovChainSampler
-from desilike.samples import Chain
 
 
 class FastSlowProposer:
@@ -298,16 +297,16 @@ class StandAloneMetropolisHastingsSampler():
 
         Returns
         -------
-        pos : numpy.ndarray of shape (n_chains, n_steps, n_dim)
+        chains : numpy.ndarray of shape (n_chains, n_steps, n_dim)
             Positiions in parameter space.
         log_p : numpy.ndarray of shape (n_chains, n_steps)
             Logarithm of the posterior.
 
         """
         results = [self.make_one_step() for _ in range(n_steps)]
-        pos = np.stack([r[0] for r in results], axis=1)
+        chains = np.stack([r[0] for r in results], axis=1)
         log_p = np.stack([r[1] for r in results], axis=1)
-        return pos, log_p
+        return chains, log_p
 
 
 class MetropolisHastingsSampler(MarkovChainSampler):
@@ -371,17 +370,9 @@ class MetropolisHastingsSampler(MarkovChainSampler):
 
         """
         if not hasattr(self.sampler, 'pos'):
-            pos = np.zeros([self.n_chains, self.n_dim])
-            log_p = np.zeros(self.n_chains)
-            for i in range(self.n_chains):
-                pos[i] = [self.chains[i][param].value[-1] for param in
-                          self.likelihood.varied_params.names()]
-                log_p[i] = self.chains[i]['logposterior'].value[-1]
-            self.sampler.update(pos=pos, log_p=log_p)
+            self.sampler.update(
+                pos=self.chains[:, -1, :], log_p=self.log_post[:, -1])
 
-        pos, log_p = self.sampler.make_n_steps(n_steps)
-        for i in range(self.n_chains):
-            chain = Chain(
-                np.column_stack([pos[i], log_p[i]]).T,
-                params=self.likelihood.varied_params + ['logposterior'])
-            self.chains[i] = Chain.concatenate(self.chains[i], chain)
+        chains, log_post = self.sampler.make_n_steps(n_steps)
+        self.chains = np.concatenate([self.chains, chains], axis=1)
+        self.log_post = np.concatenate([self.log_post, log_post], axis=1)

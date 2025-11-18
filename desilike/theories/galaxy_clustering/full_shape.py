@@ -2448,7 +2448,7 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
 class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
 
     # _default_options = dict(kernels='fk', rbao=104., A_full=True, remove_DeltaP=False)
-    _default_options = dict(model='HDKI',mg_variant='mu_OmDE',rescale_PS=True,beyond_eds=True)
+    _default_options = dict(model='HDKI',mg_variant='mu_OmDE',rescale_PS=False,beyond_eds=True)
     
     # 'qpar','qper','f','f0', 
     # _pt_attrs = ['jac', 'kap', 'muap', 'table', 'table_now', 'scalars', 'scalars_now','A_full','remove_DeltaP','qpar','qper','f','f0','pklir']

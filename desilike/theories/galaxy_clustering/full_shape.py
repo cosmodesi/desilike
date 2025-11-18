@@ -1634,7 +1634,7 @@ class REPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelation
 
 class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
-    _default_options = dict(km=0.7, kr=0.25, accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=True, with_resum='full', eft_basis='eftoflss')
+    _default_options = dict(km=0.7, kr=0.25, accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=True, with_resum='full', with_ap=True, eft_basis='eftoflss')
     _klim = (1e-3, 11., 3000)  # numerical instability in pybird's fftlog at 10.
     _pt_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
                  'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol']
@@ -1674,7 +1674,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         if self.options['with_nnlo_counterterm']:
             self.nnlo_counterterm = NNLO_counterterm(co=self.co)
             self.template.init.update(with_now='peakaverage')
-        self.projection = Projection(self.k, with_ap=True, H_fid=None, D_fid=None, co=self.co)  # placeholders for H_fid and D_fid, as we will provide q's
+        self.projection = Projection(self.k, with_ap=self.options['with_ap'], H_fid=None, D_fid=None, co=self.co)  # placeholders for H_fid and D_fid, as we will provide q's
 
     def calculate(self):
         super(PyBirdPowerSpectrumMultipoles, self).calculate()
@@ -1692,7 +1692,8 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         if self.options['with_resum']:
             self.resum.PsCf(self.pt, makeIR=True, makeQ=True, setIR=True, setPs=True, setCf=False)
 
-        self.projection.AP(self.pt, q=(self.template.qper, self.template.qpar))
+        if self.options['with_ap']:
+            self.projection.AP(self.pt, q=(self.template.qper, self.template.qpar))
         self.projection.xdata(self.pt)
 
     def combine_bias_terms_poles(self, params, nd=1e-4):
@@ -1906,7 +1907,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
 class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
 
-    _default_options = dict(km=0.7, kr=0.25, accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=False, with_resum='full', eft_basis='eftoflss')
+    _default_options = dict(km=0.7, kr=0.25, accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False, with_stoch=False, with_resum='full', with_ap=True, eft_basis='eftoflss')
     _klim = (1e-3, 11., 3000)  # numerical instability in pybird's fftlog at 10.
     _pt_attrs = ['co', 'f', 'eft_basis', 'with_stoch', 'with_nnlo_counterterm', 'with_tidal_alignments',
                  'P11l', 'Ploopl', 'Pctl', 'Pstl', 'Pnnlol', 'C11l', 'Cloopl', 'Cctl', 'Cstl', 'Cnnlol']
@@ -1938,7 +1939,7 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
         if self.options['with_nnlo_counterterm']:
             self.nnlo_counterterm = NNLO_counterterm(co=self.co)
             self.template.init.update(with_now='peakaverage')
-        self.projection = Projection(self.s, with_ap=True, H_fid=None, D_fid=None, co=self.co)  # placeholders for H_fid and D_fid, as we will provide q's
+        self.projection = Projection(self.s, with_ap=self.options['with_ap'], H_fid=None, D_fid=None, co=self.co)  # placeholders for H_fid and D_fid, as we will provide q's
 
     def calculate(self):
         super(PyBirdCorrelationFunctionMultipoles, self).calculate()
@@ -1956,7 +1957,8 @@ class PyBirdCorrelationFunctionMultipoles(BasePTCorrelationFunctionMultipoles):
         if self.options['with_resum']:
             self.resum.PsCf(self.pt, makeIR=True, makeQ=True, setIR=True, setPs=True, setCf=True)
 
-        self.projection.AP(self.pt, q=(self.template.qper, self.template.qpar))
+        if self.options['with_ap']:
+            self.projection.AP(self.pt, q=(self.template.qper, self.template.qpar))
         self.projection.xdata(self.pt)
 
     def combine_bias_terms_poles(self, params, nd=1e-4):

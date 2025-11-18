@@ -8,7 +8,6 @@ except ModuleNotFoundError:
 import numpy as np
 
 from .base import update_kwargs, MarkovChainSampler
-from desilike.samples import Chain
 
 
 class EmceeSampler(MarkovChainSampler):
@@ -71,31 +70,13 @@ class EmceeSampler(MarkovChainSampler):
 
         try:
             self.sampler.get_last_sample()
-            initialized = True
+            initial_state = None
         except AttributeError:
-            initialized = False
-
-        if not initialized:
-            coords = np.zeros([self.n_chains, self.n_dim])
-            log_post = np.zeros(self.n_chains)
-            for i in range(self.n_chains):
-                coords[i] = [self.chains[i][param].value[-1] for param in
-                             self.likelihood.varied_params.names()]
-                log_post[i] = self.chains[i]['logposterior'].value[-1]
             initial_state = emcee.State(
-                coords, log_prob=log_post,
+                self.chains[:, -1, :], log_prob=self.log_post[:, -1],
                 random_state=np.random.RandomState(self.rng.integers(
                     2**32 - 1)).get_state())
-        else:
-            initial_state = None
 
         self.sampler.run_mcmc(initial_state, n_steps, **kwargs)
-
-        chains = np.transpose(self.sampler.get_chain(), (1, 0, 2))
-        log_post = self.sampler.get_log_prob().T
-        for i in range(self.n_chains):
-            chain = Chain(
-                np.column_stack([chains[i], log_post[i]]).T,
-                params=self.likelihood.varied_params + ['logposterior'])
-            self.chains[i] = Chain.concatenate(
-                self.chains[i], chain[-n_steps:])
+        self.chains = np.transpose(self.sampler.get_chain(), (1, 0, 2))
+        self.log_post = self.sampler.get_log_prob().T

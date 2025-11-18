@@ -10,7 +10,6 @@ except ModuleNotFoundError:
     ZEUS_INSTALLED = False
 
 from .base import update_kwargs, MarkovChainSampler
-from desilike.samples import Chain
 
 
 class ZeusSampler(MarkovChainSampler):
@@ -68,46 +67,21 @@ class ZeusSampler(MarkovChainSampler):
 
         Parameters
         ----------
+        n_steps: int
+            Number of steps to take.
         kwargs: dict, optional
             Extra keyword arguments passed to zeus's ``run_mcmc`` method.
-
-        Returns
-        -------
-        Chain
-            Sampler results.
 
         """
         kwargs = update_kwargs(kwargs, 'zeus', nsteps=n_steps, log_prob0=None)
 
         try:
             self.sampler.get_last_sample()
-            initialized = True
-        except AttributeError:
-            initialized = False
-
-        if not initialized:
-            start = np.zeros([self.n_chains, self.n_dim])
-            log_post = np.zeros(self.n_chains)
-            for i in range(self.n_chains):
-                start[i] = [self.chains[i][param].value[-1] for param in
-                            self.likelihood.varied_params.names()]
-                log_post[i] = self.chains[i]['logposterior'].value[-1]
-            kwargs['log_prob0'] = log_post
-
-        else:
             start = None
+        except AttributeError:
+            start = self.chains[:, -1, :]
+            kwargs['log_prob0'] = self.log_post[:, -1]
 
         self.sampler.run_mcmc(start, **kwargs)
-
-        chains = np.transpose(self.sampler.get_chain(), (1, 0, 2))
-        log_post = self.sampler.get_log_prob().T
-        for i in range(self.n_chains):
-            chain = Chain(
-                np.column_stack([chains[i], log_post[i]]).T,
-                params=self.likelihood.varied_params + ['logposterior'])
-            self.chains[i] = Chain.concatenate(
-                self.chains[i], chain[-n_steps:])
-
-    def reset_sampler(self):
-        """Reset the emcee sampler."""
-        self.sampler.reset()
+        self.chains = np.transpose(self.sampler.get_chain(), (1, 0, 2))
+        self.log_post = self.sampler.get_log_prob().T

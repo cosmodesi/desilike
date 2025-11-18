@@ -7,7 +7,6 @@ except ModuleNotFoundError:
 import numpy as np
 
 from .base import update_kwargs, PopulationSampler
-from desilike.samples import Chain
 
 
 class NautilusSampler(PopulationSampler):
@@ -63,16 +62,15 @@ class NautilusSampler(PopulationSampler):
 
         Returns
         -------
-        Chain
+        samples : numpy.ndarray of shape (n_samples, n_dim)
             Sampler results.
+        extras : dict
+            Extra parameters such as weights and derived parameters.
 
         """
         self.sampler.run(**kwargs)
-
-        points, log_w, log_l = self.sampler.posterior()
-        chain = [points[..., i] for i in range(self.n_dim)]
-        chain.append(log_w)
-        chain.append(np.exp(log_w - self.sampler.log_z))
-        chain.append(log_l)
-        return Chain(chain, params=self.likelihood.varied_params +
-                     ['logweight', 'aweight', 'loglikelihood'])
+        samples, log_w, log_l, blobs = self.sampler.posterior(
+            return_blobs=True)
+        extras = dict(aweight=np.exp(log_w), loglikelihood=log_l)
+        extras.update(dict(zip(self.params[self.n_dim:], blobs)))
+        return samples, extras

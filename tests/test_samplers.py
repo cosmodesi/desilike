@@ -73,9 +73,6 @@ def test_accuracy(likelihood, key):
     sampler = SAMPLER_CLS[key](likelihood, rng=42, **KWARGS_INIT.get(key, {}))
     chain = sampler.run(**KWARGS_RUN.get(key, {}))
 
-    if isinstance(sampler, samplers.GridSampler):
-        chain.aweight = np.exp(chain.logposterior)
-
     # The mean should match.
     assert np.allclose(chain.mean(likelihood.varied_params),
                        likelihood.flatdata, atol=0.05, rtol=0)

@@ -10,8 +10,8 @@ from desilike.utils import expand_dict
 class GridSampler(StaticSampler):
     """A simple grid sampler."""
 
-    def get_points(self, grid=11):
-        """Get points on the grid.
+    def get_samples(self, grid=11):
+        """Get samples on the grid.
 
         Parameters
         ----------
@@ -24,7 +24,7 @@ class GridSampler(StaticSampler):
 
         Returns
         -------
-        numpy.ndarray of shape (n_points, n_dim)
+        numpy.ndarray of shape (n_samples, n_dim)
             Grid to be evaluated.
         """
         grid = expand_dict(grid, self.likelihood.varied_params.names())

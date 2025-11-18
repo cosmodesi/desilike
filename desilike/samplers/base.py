@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 from scipy.special import logsumexp
 
-from desilike.samples import Chain, Samples, diagnostics
+from desilike.samples import Chain, diagnostics
 from desilike.utils import BaseClass
 from .pool import MPIPool
 
@@ -91,134 +91,179 @@ class BaseSampler(BaseClass):
                 [self.prior_transform, self.compute_prior,
                  self.compute_posterior, self.compute_likelihood]):
             setattr(self, name, self.pool.save_function(f, name))
-        self.derived = None
 
-    def prior_transform(self, point):
+        self.params = (self.likelihood.varied_params +
+                       self.likelihood.params.select(derived=True))
+        self.derived = {key: [] for key in self.params.keys()}
+
+    def prior_transform(self, sample):
         """Transform from the unit cube to parameter space using the prior.
 
         Parameters
         ----------
-        point : numpy.ndarray of shape (n_dim, )
-            Point for which to perform the prior transform.
+        sample : numpy.ndarray of shape (n_dim, )
+            Sample for which to perform the prior transform.
 
         Returns
         -------
         numpy.ndarray of shape (n_dim, )
-            Prior transformation of the input point.
+            Prior transformation of the input sample.
 
         """
         return np.array([self.likelihood.varied_params[i].prior.ppf(x) for
-                         i, x in enumerate(point)])
+                         i, x in enumerate(sample)])
 
-    def compute_prior(self, points):
+    def compute_prior(self, samples):
         """
         Compute the natural logarithm of the prior.
 
         Parameters
         ----------
-        points : numpy.ndarray of shape (n_points, n_dim) or (n_dim, )
-            Point(s) for which to compute the prior.
+        samples : numpy.ndarray of shape (n_samples, n_dim) or (n_dim, )
+            Sample(s) for which to compute the prior.
 
         Returns
         -------
-        log_prior : numpy.ndarray of shape (n_points, ) or float
+        log_prior : numpy.ndarray of shape (n_samples, ) or float
             Natural logarithm of the prior.
 
         """
-        if not isinstance(points, dict):
-            points = dict(zip(self.likelihood.varied_params.names(), points.T))
-        return self.likelihood.all_params.prior(**points)
+        if not isinstance(samples, dict):
+            samples = dict(
+                zip(self.likelihood.varied_params.names(), samples.T))
+        return self.likelihood.all_params.prior(**samples)
 
-    def compute_posterior(self, point, save_derived=True):
+    def compute_posterior(self, sample, save_derived=True,
+                          return_derived=False):
         """Compute the natural logarithm of the posterior.
-
-        Note that this function also saves all derived parameters internally.
 
         Parameters
         ----------
-        point : numpy.ndarray of shape (n_dim, )
-            Point for which to compute the likelihood.
+        sample : numpy.ndarray of shape (n_dim, ) or dict
+            Sample for which to compute the likelihood.
         save_derived : bool, optional
-            Whether to save derived parameters.
+            Whether to save derived parameters internally. Default is True.
+        return_derived : bool, optional
+            Whether to return the derived parameters.
 
         Returns
         -------
         log_post : float
             Natural logarithm of the posterior.
+        derived : numpy.ndarray, optional
+            Derived parameters. Only returned if ``return_derived`` is True.
 
         """
-        if not isinstance(point, dict):
-            point = dict(zip(self.likelihood.varied_params.names(), point.T))
-        log_post, derived = self.likelihood(point, return_derived=True)
-        derived.update(Samples(point))
+        if not isinstance(sample, dict):
+            sample = dict(zip(self.likelihood.varied_params.names(), sample.T))
+        log_post, derived = self.likelihood(sample, return_derived=True)
 
         if save_derived:
-            if self.derived is None:
-                self.derived = derived
-            else:
-                self.derived = Samples.concatenate([self.derived, derived])
+            for i, key in enumerate(self.params.keys()):
+                if i < self.n_dim:
+                    self.derived[key].append(sample[key])
+                else:
+                    self.derived[key].append(derived[key])
 
-        return log_post
+        if return_derived:
+            return log_post, [derived[key] for key in self.params[self.n_dim:]]
+        else:
+            return log_post
 
-    def compute_likelihood(self, point):
+    def compute_likelihood(self, sample, save_derived=False,
+                           return_derived=True):
         """Compute the natural logarithm of the likelihood.
 
         Note that this function also saves all derived parameters internally.
 
         Parameters
         ----------
-        point : numpy.ndarray of shape (n_dim, )
-            Point for which to compute the likelihood.
+        sample : numpy.ndarray of shape (n_dim, )
+            sample for which to compute the likelihood.
+        save_derived : bool, optional
+            Whether to save derived parameters internally. Default is False.
+        return_derived : bool, optional
+            Whether to return the derived parameters. Default is True.
 
         Returns
         -------
         log_l : float
             Natural logarithm of the likelihood.
+        derived : numpy.ndarray, optional
+            Derived parameters. Only returned if ``return_derived`` is True.
 
         """
-        return self.compute_posterior(point) - self.compute_prior(point)
+        log_prior = self.compute_prior(sample)
+        log_post, derived = self.compute_posterior(
+            sample, save_derived=save_derived, return_derived=True)
+        log_l = log_post - log_prior
 
-    def add_derived(self, chain):
-        """Add the derived parameters to a chain.
+        if return_derived:
+            return log_l, [derived[key] for key in self.params[self.n_dim:]]
+        else:
+            return log_l
+
+    def gather_results(self):
+
+        results = self.mpicomm.gather(self.derived)
+        if self.mpicomm.rank == 0:
+            self.derived = {
+                key: list(np.concatenate([r[key] for r in results]))
+                for key in self.params.keys()}
+        else:
+            self.derived = {key: [] for key in self.params.keys()}
+
+    def augment_samples(self, samples, **kwargs):
+        """Convert a sample into a desilike chain and add optional parameters.
 
         Parameters
         ----------
-        desilike.samples.Chain
-            Chain to which derived results should be matched and added.
+        samples : numpy.ndaray of shape (n_samples, n_dim)
+            Samples to which internal results should be matched and added.
+        **kwargs : dict, optional
+            Additional parameters passed to the results. Each must have length
+            n_samples.
 
         Raises
         ------
         ValueError
-            If not all elements in the chain could be associated with derived
-            parameters.
+            If not all elements in the chain could be associated with internal
+            calculations.
 
         Returns
         -------
         desilike.samples.Chain
-            Chain with added derived parameters.
+            Samples with added parameters.
 
         """
-        derived = self.mpicomm.gather(self.derived)
+        self.gather_results()
         if self.mpicomm.rank == 0:
-            self.derived = Samples.concatenate(derived)
-        else:
-            self.derived = None
+            samples = Chain(
+                [*samples.T] + [*kwargs.values()],
+                params=self.params[:self.n_dim] + list(kwargs.keys()))
+            results = Chain([*self.derived.values()], params=self.params)
 
-        idx_c, idx_d = self.derived.match(
-            chain, params=self.likelihood.varied_params)
-        # TODO: Find out why the first index from match is needed.
-        if len(idx_c[0]) != len(chain):
-            raise ValueError("Not all derived results could be found.")
-        chain = chain[idx_c[0]]
-        chain.update(self.derived[idx_d[0]])
-        return chain
+            # Check if there are derived paramters not explicitly passes.
+            # Obtain them from the internal results.
+            if set(self.params[self.n_dim:]) - set(kwargs.keys()):
+                idx_s, idx_r = results.match(
+                    samples, params=self.params[:self.n_dim])
+                # TODO: Find out why the first index from match is needed.
+                if len(idx_s[0]) != len(samples):
+                    raise ValueError("Not all derived results could be found.")
+                samples = samples[idx_s[0]]
+                samples.update(results[idx_r[0]])
+        else:
+            samples = None
+
+        return self.mpicomm.bcast(samples, root=0)
 
 
 class StaticSampler(BaseSampler):
     """Class defining common functions used by static samplers."""
 
-    def get_points(self, **kwargs):
-        """Abstract method to get the points to be evaluated.
+    def get_samples(self, **kwargs):
+        """Abstract method to get the samples to be evaluated.
 
         This needs to be implemented by the subclass.
 
@@ -229,8 +274,8 @@ class StaticSampler(BaseSampler):
 
         Returns
         -------
-        numpy.ndarray of shape (n_points, n_dim)
-            Points in parameter space to evaluate.
+        numpy.ndarray of shape (n_samples, n_dim)
+            samples in parameter space to evaluate.
         """
         pass
 
@@ -240,34 +285,26 @@ class StaticSampler(BaseSampler):
         Parameters
         ----------
         kwargs : dict, optional
-            Keyword arguments passed to the ``get_points`` method.
+            Keyword arguments passed to the ``get_samples`` method.
 
         Returns
         -------
-        desilike.samples.Chain
+        results : desilike.samples.Chain
             Sampler results.
 
         """
-        points = self.get_points(**kwargs)
+        samples = self.get_samples(**kwargs)
         if self.mpicomm.rank == 0:
-            log_post = np.array(self.pool.map(self.compute_posterior, points))
-            log_prior = np.array(self.pool.map(self.compute_prior, points))
-            log_l = log_post - log_prior
-            chain = [points[..., i] for i in range(self.n_dim)]
-            chain.append(log_l)
-            chain.append(log_prior)
-            chain.append(log_post)
-            chain = Chain(
-                chain, params=self.likelihood.varied_params +
-                ['loglikelihood', 'logprior', 'logposterior'])
-            chain.aweight = np.exp(
-                chain.logposterior - logsumexp(chain.logposterior))
+            log_post = np.array(self.pool.map(self.compute_posterior, samples))
             self.pool.stop_wait()
         else:
             self.pool.wait()
-            chain = None
 
-        return self.mpicomm.bcast(chain, root=0)
+        results = self.augment_samples(
+            samples, logposterior=log_post,
+            aweight=np.exp(log_post - logsumexp(log_post)))
+
+        return results
 
 
 class PopulationSampler(BaseSampler):
@@ -285,8 +322,10 @@ class PopulationSampler(BaseSampler):
 
         Returns
         -------
-        desilike.samples.Chain
+        samples : numpy.ndarray of shape (n_samples, n_dim)
             Sampler results.
+        extras : dict
+            Extra parameters such as weights and derived parameters.
 
         """
         pass
@@ -301,18 +340,18 @@ class PopulationSampler(BaseSampler):
 
         Returns
         -------
-        desilike.samples.Chain
+        results : desilike.samples.Chain
             Sampler results.
 
         """
         if self.mpicomm.rank == 0:
-            chain = self.run_sampler(**kwargs)
+            samples, extras = self.run_sampler(**kwargs)
             self.pool.stop_wait()
         else:
             self.pool.wait()
-            chain = None
+            samples = None
 
-        return self.mpicomm.bcast(chain, root=0)
+        return self.augment_samples(samples, **extras)
 
 
 class MarkovChainSampler(BaseSampler):
@@ -351,6 +390,7 @@ class MarkovChainSampler(BaseSampler):
         super().__init__(likelihood, rng=rng, filepath=filepath)
         self.n_chains = n_chains
         self.chains = None
+        self.log_post = None
         self.checks = None
 
         if isinstance(burn_in, float):
@@ -377,57 +417,50 @@ class MarkovChainSampler(BaseSampler):
         Parameters
         ----------
         n_steps : int
-            How many steps to run.
+            How many additional steps to run.
         kwargs: dict, optional
             Extra keyword arguments passed to sampler's run method.
 
         """
         pass
 
-    def initialize_chains(self, attempts=100):
+    def initialize_chains(self, n_init=100):
         """Initialize the chains.
 
         Parameters
         ----------
-        attempts : int, optional
+        n_init : int, optional
             Maximum number of attempts for each chain. If None, there is
-            no limit. Default is None.
+            no limit. Default is 100.
 
         Raises
         ------
         ValueError
-            If no finite posterior has been found after ``attempts`` attempts.
+            If no finite posterior has been found after ``n_init`` attempts.
 
         """
-        points = np.zeros((self.n_chains, self.n_dim))
+        chains = np.zeros((self.n_chains, self.n_dim))
         log_post = np.repeat(-np.inf, self.n_chains)
         n_try = 0
 
-        while n_try < attempts and not np.all(np.isfinite(log_post)):
+        while n_try < n_init and not np.all(np.isfinite(log_post)):
             use = ~np.isfinite(log_post)
             for i, param in enumerate(self.likelihood.varied_params):
                 if param.ref.is_proper():
-                    points[use, i] = param.ref.sample(
+                    chains[use, i] = param.ref.sample(
                         size=np.sum(use), random_state=self.rng)
                 else:
-                    points[use, i] = np.full(np.sum(use), param.value)
+                    chains[use, i] = np.full(np.sum(use), param.value)
 
-            log_post[use] = self.pool.map(self.compute_posterior, points[use])
-
+            log_post[use] = self.pool.map(self.compute_posterior, chains[use])
             n_try += 1
 
         if not np.all(np.isfinite(log_post)):
             raise ValueError('Could not find finite posterior '
-                             f'after {attempts:d} attempts.')
+                             f'after {n_init:d} attempts.')
 
-        self.chains = [Chain(
-            np.append(p, l)[:, np.newaxis],
-            params=self.likelihood.varied_params + ['logposterior']) for p, l
-            in zip(points, log_post)]
-
-        if self.filepath is not None:
-            for i, chain in enumerate(self.chains):
-                chain.save(self.filepath / f'chain_{i + 1}.npy')
+        self.chains = chains[:, np.newaxis, :]
+        self.log_post = log_post[:, np.newaxis]
 
     @property
     def chains_without_burn_in(self):
@@ -462,7 +495,12 @@ class MarkovChainSampler(BaseSampler):
                     f"Unknown convergence criterion '{key}'. Known criteria "
                     f"are {type(self).criteria}.")
 
-        chains = self.chains_without_burn_in
+        if isinstance(self.burn_in, float):
+            burn_in = round(self.burn_in * len(self.chains[0]))
+        else:
+            burn_in = self.burn_in
+        chains = [Chain([*chain[burn_in:].T], params=self.params[:self.n_dim])
+                  for chain in self.chains_without_burn_in]
 
         if not quiet:
             self.log_info('Diagnostics:')
@@ -503,7 +541,7 @@ class MarkovChainSampler(BaseSampler):
 
         return converged
 
-    def run(self, initialization_attempts=100, burn_in=0.2, min_iterations=0,
+    def run(self, n_init=100, burn_in=0.2, min_iterations=0,
             max_iterations=sys.maxsize, convergence_checks_interval=10,
             convergence_checks_passed=10,
             convergence_criteria=dict(gelman_rubin_diag_max=1.1),
@@ -512,7 +550,7 @@ class MarkovChainSampler(BaseSampler):
 
         Parameters
         ----------
-        initialization_attempts : int, optional
+        n_init : int, optional
             Maximum number of attempts to initialize each chain. Default is
             100.
         burn_in : float or int, optional
@@ -544,7 +582,7 @@ class MarkovChainSampler(BaseSampler):
 
             # Initialize the chains, if necessary.
             if self.chains is None:
-                self.initialize_chains(attempts=initialization_attempts)
+                self.initialize_chains(n_init=n_init)
                 self.checks = []
 
             while (len(self.chains[0]) < max_iterations) and not (
@@ -565,11 +603,14 @@ class MarkovChainSampler(BaseSampler):
         else:
             self.pool.wait()
 
-        chains = self.mpicomm.bcast(self.chains, root=0)
+        if isinstance(self.burn_in, float):
+            burn_in = round(self.burn_in * len(self.chains[0]))
+        else:
+            burn_in = self.burn_in
 
-        if isinstance(burn_in, float):
-            burn_in = round(burn_in * len(chains[0]))
-        chains = [chain[burn_in:] for chain in chains]
+        chains = [self.augment_samples(
+            chain[burn_in:], logposterior=log_post[burn_in:]) for
+            chain, log_post in zip(self.chains, self.log_post)]
 
         if flatten_chains:
             return Chain.concatenate(chains)

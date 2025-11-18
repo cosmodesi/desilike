@@ -11,7 +11,6 @@ except ModuleNotFoundError:
 import numpy as np
 
 from .base import MarkovChainSampler
-from desilike.samples import Chain, Samples
 
 
 # TODO: Properly implement abstract classes and methods.
@@ -107,9 +106,9 @@ class BlackJAXSampler(MarkovChainSampler):
                               "installed.")
 
         super().__init__(likelihood, n_chains, rng=rng, filepath=filepath)
-        self.compute_posterior_no_derived = self.pool.save_function(
+        self.compute_posterior = self.pool.save_function(
             partial(self.compute_posterior, save_derived=False),
-            'compute_posterior_no_derived')
+            'compute_posterior')
         self.states = None
 
     def run_sampler(self, n_steps):
@@ -124,14 +123,14 @@ class BlackJAXSampler(MarkovChainSampler):
         if self.states is None:
             self.states = []
             for i in range(self.n_chains):
-                args = ({param: self.chains[i][param].value[-1] for param in
-                         self.likelihood.varied_params.names()}, )
+                initial_position = dict(zip(self.params.keys()[:self.n_dim],
+                                            self.chains[i, -1]))
                 try:
-                    self.states.append(self.sampler.init(*args))
+                    self.states.append(self.sampler.init(initial_position))
                 except TypeError:
                     rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
-                    self.states.append(
-                        self.sampler.init(*(args + (rng_key, ))))
+                    self.states.append(self.sampler.init(initial_position,
+                                                         rng_key))
 
         rng_keys = jax.random.split(jax.random.PRNGKey(
             self.rng.integers(2**32)), self.n_chains)
@@ -139,20 +138,27 @@ class BlackJAXSampler(MarkovChainSampler):
         inputs = [(self.states[i], jax.random.split(rng_keys[i], n_steps)) for
                   i in range(self.n_chains)]
         results = self.pool.map(self.make_n_steps, inputs)
+        self.states = [r[0] for r in results]
+        chains = np.stack(
+            [np.column_stack([results[i][1].position[key] for key in
+                              self.params.keys()[:self.n_dim]])
+             for i in range(self.n_chains)])
+        log_post = np.stack([results[i][1].logdensity for i in
+                             range(self.n_chains)])
+        self.chains = np.concatenate([self.chains, chains], axis=1)
+        self.log_post = np.concatenate([self.log_post, log_post], axis=1)
+
         for i in range(self.n_chains):
-            self.states[i] = results[i][0]
-            positions = results[i][1].position
-            chain = Samples(positions)
             # Recompute the derived parameters since they couldn't be saved
             # during the sampling.
-            # TODO: Understand why the list() command is necessary.
-            derived = jax.vmap(lambda point: self.likelihood(
-                point, return_derived=True)[1])(positions)
-            derived.data = list(derived.data)
-            derived.update(chain)
-            chain['logposterior'] = results[i][1].logdensity
-            self.chains[i] = Chain.concatenate(self.chains[i], chain)
-            self.derived = Chain.concatenate([self.derived, derived])
+            samples = results[i][1].position
+            derived = jax.vmap(lambda sample: self.likelihood(
+                sample, return_derived=True)[1])(samples)
+            for i, key in enumerate(self.params.keys()):
+                if i < self.n_dim:
+                    self.derived[key].append(samples[key])
+                else:
+                    self.derived[key].append(derived[key])
 
 
 class HMCSampler(BlackJAXSampler):
@@ -205,7 +211,7 @@ class HMCSampler(BlackJAXSampler):
             inv_mass_matrix = np.ones(self.n_dim)
 
         self.sampler = blackjax.hmc(
-            self.compute_posterior_no_derived, step_size, inv_mass_matrix,
+            self.compute_posterior, step_size, inv_mass_matrix,
             num_integration_steps, **kwargs)
         self.make_n_steps = self.pool.save_function(
             make_n_steps_factory(self.sampler), "make_n_steps")
@@ -260,8 +266,7 @@ class NUTSSampler(BlackJAXSampler):
             inv_mass_matrix = np.ones(self.n_dim)
 
         self.sampler = blackjax.nuts(
-            self.compute_posterior_no_derived, step_size, inv_mass_matrix,
-            **kwargs)
+            self.compute_posterior, step_size, inv_mass_matrix, **kwargs)
         self.make_n_steps = self.pool.save_function(
             make_n_steps_factory(self.sampler), "make_n_steps")
 
@@ -311,8 +316,7 @@ class MCLMCSampler(BlackJAXSampler):
         super().__init__(likelihood, n_chains=n_chains, rng=rng,
                          filepath=filepath)
 
-        self.sampler = blackjax.mclmc(
-            self.compute_posterior_no_derived, L, step_size)
+        self.sampler = blackjax.mclmc(self.compute_posterior, L, step_size)
         self.make_n_steps = self.pool.save_function(
             make_n_steps_factory(self.sampler), "make_n_steps")
 

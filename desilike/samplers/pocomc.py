@@ -8,7 +8,6 @@ except ModuleNotFoundError:
     POCOMC_INSTALLED = False
 
 from .base import update_kwargs, PopulationSampler
-from desilike.samples import Chain
 
 
 class Prior(object):
@@ -100,13 +99,15 @@ class PocoMCSampler(PopulationSampler):
 
         Returns
         -------
-        Chain
+        samples : numpy.ndarray of shape (n_samples, n_dim)
             Sampler results.
+        extras : dict
+            Extra parameters such as weights and derived parameters.
 
         """
         self.sampler.run(**kwargs)
-
-        samples, weights, logl, logp = self.sampler.posterior()
-        chain = [samples[..., i] for i in range(self.n_dim)]
-        chain.append(weights)
-        return Chain(chain, params=self.likelihood.varied_params + ['aweight'])
+        samples, weights, logl, logp, blobs = self.sampler.posterior(
+            return_blobs=True)
+        extras = dict(aweight=weights, loglikelihood=logl, logposterior=logp)
+        extras.update(dict(zip(self.params[self.n_dim:], blobs)))
+        return samples, extras

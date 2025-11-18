@@ -1465,14 +1465,6 @@ params:
 class: fkptTracerPowerSpectrumMultipoles
 
 params:
-
-  # fR0:
-  #   prior:
-  #   ref:
-  #     dist: norm
-  #     loc: 0.
-  #     scale: 0.001
-  #   latex: f_{R0}
   b1:
     prior:
       limits: [0., 10.]
@@ -1488,7 +1480,7 @@ params:
   bs2:
     ref:
       limits: [-1., 1.]
-    latex: b_{s}
+    latex: b_{s}^2
   b3nl:
     fixed: True
     prior:
@@ -1496,7 +1488,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.5
-    latex: b_{3}
+    latex: b_{3nl}
   alpha0:
     prior:
     ref:
@@ -1540,11 +1532,6 @@ params:
       loc: 0.
       scale: 0.1
     latex: s_{n, 2}
-  alpha4shot:
-    prior:
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.1
-    latex: s_{n, 4}
+  PshotP:
+    value: 10000
 

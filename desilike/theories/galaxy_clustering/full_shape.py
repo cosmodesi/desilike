@@ -2484,7 +2484,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         # self.kt = table[0]
         self.sigma8 = self.template.sigma8
         self.fsigma8 = self.template.f * self.sigma8
-        tables = pyfkpt.compute_multipoles(k=self.template.k, pk=self.template.pk_dd,**fkpt_params)
+        tables = pyfkpt.compute_tables(k=self.template.k, pk=self.template.pk_dd,**fkpt_params)
         keys = list(tables.keys())
         self.tables = np.column_stack([tables[k] for k in keys]) #Storing only the 2d array part
         self.pt = Namespace(jac=jac, kap=kap, muap=muap, qpar = self.template.qpar, qper=self.template.qper,fk=self.template.fk,f0=self.template.f0,tables=self.tables,keys=keys)
@@ -2532,15 +2532,22 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
 
         b1 = params['b1']
         # if kwargs['prior_basis']=='physical':
-        if kwargs['b3_coev']:
-            delta_b1 = b1 - 1.
-            params['b3nl'] = 32. / 315. * delta_b1  # b3 correction
-            # pars[2] -= 4. / 7. * delta_b1  # bs correction
+        #if kwargs['b3_coev']:
+        #    delta_b1 = b1 - 1.
+        #    params['b3nl'] = 32. / 315. * delta_b1  # b3 correction
+        #    # pars[2] -= 4. / 7. * delta_b1  # bs correction
+        delta_b1 = b1 - 1.
+        params['bs2'] = params['bs2'] - 4. / 7. * delta_b1
+        params['b3nl'] = params['b3nl'] + 32. / 315. * delta_b1 
         
         # tables = pyfkpt.compute_multipoles(k=self.template.k, pk=pk, **params)
         # print("tables_shape",tables['k'].shape, kap.shape,muap.shape,self.k.shape)
         nuis = [] 
-        required_bias_params = ['b1', 'b2', 'bs2', 'b3nl', 'alpha0', 'alpha2', 'alpha4', 'ctilde', 'alpha0shot', 'alpha2shot','PshotP']
+        required_bias_params = [
+            'b1','b2','bs2','b3nl',
+            'alpha0','alpha2','alpha4',
+            'ctilde','alpha0shot','alpha2shot','PshotP'
+        ]
         for param in required_bias_params:
             nuis.append(params[param])
         pkmu = pyfkpt.get_pkmu(kap, muap, nuis=nuis, z=self.z, Om=Omegam, ap=False, Omfid=Omegam, tables=tables_final)
@@ -2548,13 +2555,6 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         return self.to_poles(jac*pkmu)      
         # poles = pyfkpt.rsd_multipoles(k=self.k, nuis=nuis, z=self.z, Om=Omegam, ap=False, tables=tables)  #Need to pass ells here 
         # return poles[1:]
-      
-        
-        
-        
-        
-        
-    
         
 
     def __getstate__(self, varied=True, fixed=True):
@@ -2621,7 +2621,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     - https://arxiv.org/abs/2208.02791
     - https://github.com/henoriega/FOLPS-nu
     """
-    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, model='HDKI',mg_variant='mu_OmDE', fsat=None, sigv=None, shotnoise=1e4,b3_coev=False,beyond_eds=True,rescale_PS=True) #Model can be either HS or LCDM
+    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4, model='HDKI',mg_variant='mu_OmDE', b3_coev=False, beyond_eds=True, rescale_PS=True) #Model can be either HS or LCDM
 
     
 
@@ -2636,9 +2636,9 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             for param in params.select(basename=['bs2', 'b3nl', 'alpha*',  'alpha0shot', 'alpha2shot']):
                 param.update(prior=None)
         if freedom == 'max':
-            for param in params.select(basename=['b1', 'b2', 'bs2', 'b3nl', 'alpha*',  'alpha0shot', 'alpha2shot']):
+            for param in params.select(basename=['b1', 'b2', 'bs2', 'b3nl']):
                 param.update(fixed=False)
-            fix += ['ct']
+            fix += ['ctilde']
         if freedom == 'min':
             fix += ['b3nl', 'bs2', 'ctilde']
         for param in params.select(basename=fix):
@@ -2661,7 +2661,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         return params
 
     def set_params(self):
-        self.required_bias_params = ['b1', 'b2', 'bs2', 'b3nl', 'alpha0', 'alpha2', 'alpha4', 'ctilde', 'alpha0shot', 'alpha2shot']
+        self.required_bias_params = ['b1', 'b2', 'bs2', 'b3nl', 'alpha0', 'alpha2', 'alpha4', 'ctilde', 'alpha0shot', 'alpha2shot', 'PshotP']
         default_values = {'b1': 1.}
         self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
 
@@ -2682,10 +2682,9 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         super().set_params(pt_params=[])
         fix = []
         if 4 not in self.ells: fix += ['alpha4']
-        if 2 not in self.ells: fix += ['alpha2', 'sn2']
+        if 2 not in self.ells: fix += ['alpha2', 'alpha2shot']
         for param in self.init.params.select(basename=fix):
             param.update(value=0., fixed=True)
-        fixed_params = self.init.params.select(fixed=True)
         self.nd = 1e-4
         self.fsat = self.snd = 1.
         if self.is_physical_prior:

@@ -1,8 +1,7 @@
 """Big Bang Nucleosynthesis (BBN) likelihoods."""
 
-import numpy as np
-
 from desilike.cosmo import is_external_cosmo
+from desilike.jax import numpy as jnp
 from desilike.likelihoods.base import BaseGaussianLikelihood
 
 
@@ -46,7 +45,7 @@ class BaseBBNLikelihood(BaseGaussianLikelihood):
     @property
     def flattheory(self):
         """Theory predictions."""
-        return np.array([self.cosmo[quantity] for quantity in self.quantities])
+        return jnp.array([self.cosmo[quantity] for quantity in self.quantities])
 
 
 class Schoneberg2024BBNLikelihood(BaseBBNLikelihood):

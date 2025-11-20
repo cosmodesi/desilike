@@ -268,7 +268,6 @@ class BaseSampler(BaseClass):
             # Check if there are derived parameters not explicitly passed.
             # Obtain them from the internal results.
             success = True
-            print(set(self.derived.keys()))
             if set(self.derived.keys()) - set(kwargs.keys()) - set(
                     self.params.keys()[:self.n_dim]):
                 idx_s, idx_d = derived.match(

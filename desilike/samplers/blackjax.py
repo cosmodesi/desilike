@@ -107,7 +107,7 @@ class BlackJAXSampler(MarkovChainSampler):
 
         super().__init__(likelihood, n_chains, rng=rng, directory=directory)
         self.compute_posterior = self.pool.save_function(
-            partial(self.compute_posterior, save_calculations=False),
+            partial(self.compute_posterior, save_derived=False),
             'compute_posterior')
         self.states = None
 
@@ -139,11 +139,12 @@ class BlackJAXSampler(MarkovChainSampler):
                   i in range(self.n_chains)]
         results = self.pool.map(self.make_n_steps, inputs)
         self.states = [r[0] for r in results]
-        chains = np.stack(
-            [np.column_stack([results[i][1].position[key] for key in
-                              self.params.keys()[:self.n_dim]])
-             for i in range(self.n_chains)])
+        chains = np.stack([np.column_stack([result[1].position[key] for key in
+                                            self.params.keys()[:self.n_dim]])
+                           for result in results])
+        log_post = np.stack([result[1].logdensity for result in results])
         self.chains = np.concatenate([self.chains, chains], axis=1)
+        self.log_post = np.concatenate([self.log_post, log_post], axis=1)
 
         for i in range(self.n_chains):
             # Recompute the derived parameters since they couldn't be saved
@@ -151,13 +152,11 @@ class BlackJAXSampler(MarkovChainSampler):
             samples = results[i][1].position
             derived = jax.vmap(lambda sample: self.likelihood(
                 sample, return_derived=True)[1])(samples)
-            print(type(self.calculations['logposterior']))
-            self.calculations['logposterior'].append(results[i][1].logdensity)
             for i, key in enumerate(self.params.keys()):
                 if i < self.n_dim:
-                    self.calculations[key].append(samples[key])
+                    self.derived[key].append(samples[key])
                 else:
-                    self.calculations[key].append(derived[key])
+                    self.derived[key].append(derived[key])
 
 
 class HMCSampler(BlackJAXSampler):

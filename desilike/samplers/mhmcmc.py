@@ -321,7 +321,7 @@ class MetropolisHastingsSampler(MarkovChainSampler):
     """
 
     def __init__(self, likelihood, n_chains=4, cov=None, f_fast=1, f_drag=0,
-                 fast=[], rng=None, filepath=None):
+                 fast=[], rng=None, directory=None):
         """Initialize the Metropolis-Hastings sampler.
 
         Parameters
@@ -344,12 +344,12 @@ class MetropolisHastingsSampler(MarkovChainSampler):
         rng : numpy.random.RandomState, int, or None, optional
             Random number generator for seeding. If ``None``, no seed is used.
             Default is ``None``.
-        filepath : str, Path, or None, optional
+        directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
 
         """
         super().__init__(likelihood, n_chains=n_chains, rng=rng,
-                         filepath=filepath)
+                         directory=directory)
 
         self.sampler = StandAloneMetropolisHastingsSampler(
             self.compute_posterior, pool=self.pool, rng=self.rng)

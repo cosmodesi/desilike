@@ -19,7 +19,7 @@ class NautilusSampler(PopulationSampler):
 
     """
 
-    def __init__(self, likelihood, rng=None, filepath=None, **kwargs):
+    def __init__(self, likelihood, rng=None, directory=None, **kwargs):
         """Initialize the nautilus sampler.
 
         Parameters
@@ -28,7 +28,7 @@ class NautilusSampler(PopulationSampler):
             Likelihood to sample.
         rng : numpy.random.RandomState or int, optional
             Random number generator. Default is ``None``.
-        filepath : str, Path, optional
+        directory : str, Path, optional
             Save samples to this location. Default is ``None``.
         kwargs: dict, optional
             Extra keyword arguments passed to nautilus during initialization.
@@ -38,11 +38,11 @@ class NautilusSampler(PopulationSampler):
             raise ImportError("The 'nautilus-sampler' package is required but "
                               "not installed.")
 
-        super().__init__(likelihood, rng=rng, filepath=filepath)
+        super().__init__(likelihood, rng=rng, directory=directory)
 
         kwargs = update_kwargs(
             kwargs, 'nautilus', pass_dict=False,
-            filepath=None if self.filepath is None else self.filepath /
+            filepath=None if self.directory is None else self.directory /
             'sampler.hdf5', pool=self.pool, seed=self.rng.integers(2**32))
 
         if self.mpicomm.rank == 0:

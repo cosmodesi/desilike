@@ -8,6 +8,7 @@ specialized classes implementing specific samplers such as `emcee` or
 
 # TODO: Properly implement abstract classes and methods.
 
+import json
 import sys
 import warnings
 from pathlib import Path
@@ -56,7 +57,7 @@ def update_kwargs(user_kwargs, sampler, **desilike_kwargs):
 class BaseSampler(BaseClass):
     """Abstract class defining common functions used by all samplers."""
 
-    def __init__(self, likelihood, rng=None, filepath=None):
+    def __init__(self, likelihood, rng=None, directory=None):
         """Initialize the sampler.
 
         Parameters
@@ -66,7 +67,7 @@ class BaseSampler(BaseClass):
         rng : numpy.random.RandomState, int, or None, optional
             Random number generator for seeding. If ``None``, no seed is used.
             Default is ``None``.
-        filepath : str, Path, or None, optional
+        directory : str, Path, or None, optional
             Save samples to this folder. Default is ``None``.
 
         """
@@ -77,12 +78,12 @@ class BaseSampler(BaseClass):
             rng = np.random.default_rng(seed=rng)
 
         self.rng = rng
-        if filepath is not None:
-            filepath = Path(filepath)
-            if filepath.suffix:
-                raise ValueError("The filepath cannot have a suffix.")
-            filepath.mkdir(parents=True, exist_ok=True)
-        self.filepath = filepath
+        if directory is not None:
+            directory = Path(directory)
+            if directory.suffix:
+                raise ValueError("The directory cannot have a suffix.")
+            directory.mkdir(parents=True, exist_ok=True)
+        self.directory = directory
         self.mpicomm = likelihood.mpicomm
         self.pool = MPIPool(comm=self.mpicomm)
         for name, f in zip(
@@ -94,7 +95,16 @@ class BaseSampler(BaseClass):
 
         self.params = (self.likelihood.varied_params +
                        self.likelihood.params.select(derived=True))
-        self.derived = {key: [] for key in self.params.keys()}
+
+        self.calculations = {key: [] for key in self.params.keys() +
+                             ['logposterior']}
+
+        if self.directory is not None and not isinstance(
+                self, MarkovChainSampler):
+            try:
+                self.read()
+            except FileNotFoundError:
+                pass
 
     def prior_transform(self, sample):
         """Transform from the unit cube to parameter space using the prior.
@@ -133,7 +143,7 @@ class BaseSampler(BaseClass):
                 zip(self.likelihood.varied_params.names(), samples.T))
         return self.likelihood.all_params.prior(**samples)
 
-    def compute_posterior(self, sample, save_derived=True,
+    def compute_posterior(self, sample, save_calculations=True,
                           return_derived=False):
         """Compute the natural logarithm of the posterior.
 
@@ -141,8 +151,8 @@ class BaseSampler(BaseClass):
         ----------
         sample : numpy.ndarray of shape (n_dim, ) or dict
             Sample for which to compute the likelihood.
-        save_derived : bool, optional
-            Whether to save derived parameters internally. Default is True.
+        save_calculations : bool, optional
+            Whether to save calculations internally. Default is True.
         return_derived : bool, optional
             Whether to return the derived parameters.
 
@@ -158,19 +168,20 @@ class BaseSampler(BaseClass):
             sample = dict(zip(self.likelihood.varied_params.names(), sample.T))
         log_post, derived = self.likelihood(sample, return_derived=True)
 
-        if save_derived:
+        if save_calculations:
+            self.calculations['logposterior'].append(log_post)
             for i, key in enumerate(self.params.keys()):
                 if i < self.n_dim:
-                    self.derived[key].append(sample[key])
+                    self.calculations[key].append(sample[key])
                 else:
-                    self.derived[key].append(derived[key])
+                    self.calculations[key].append(derived[key])
 
         if return_derived:
             return log_post, [derived[key] for key in self.params[self.n_dim:]]
         else:
             return log_post
 
-    def compute_likelihood(self, sample, save_derived=False,
+    def compute_likelihood(self, sample, save_calculations=False,
                            return_derived=True):
         """Compute the natural logarithm of the likelihood.
 
@@ -180,8 +191,8 @@ class BaseSampler(BaseClass):
         ----------
         sample : numpy.ndarray of shape (n_dim, )
             sample for which to compute the likelihood.
-        save_derived : bool, optional
-            Whether to save derived parameters internally. Default is False.
+        save_calculations : bool, optional
+            Whether to save calculations internally. Default is True.
         return_derived : bool, optional
             Whether to return the derived parameters. Default is True.
 
@@ -195,31 +206,52 @@ class BaseSampler(BaseClass):
         """
         log_prior = self.compute_prior(sample)
         log_post, derived = self.compute_posterior(
-            sample, save_derived=save_derived, return_derived=True)
+            sample, save_calculations=save_calculations, return_derived=True)
         log_l = log_post - log_prior
 
         if return_derived:
-            return log_l, [derived[key] for key in self.params[self.n_dim:]]
+            return log_l, derived
         else:
             return log_l
 
-    def gather_results(self):
+    def gather_calculations(self):
+        """Gather all internal calculations in the main process."""
+        for key in self.params.keys() + ['logposterior']:
+            if len(self.calculations[key]) > 0:
+                self.calculations[key] = np.concatenate(
+                    self.calculations[key], axis=None)
 
-        results = self.mpicomm.gather(self.derived)
+        calculations = self.mpicomm.gather(self.calculations)
         if self.mpicomm.rank == 0:
-            self.derived = {
-                key: list(np.concatenate([r[key] for r in results]))
-                for key in self.params.keys()}
+            self.calculations = {
+                key: list(np.concatenate(
+                    [c[key] for c in calculations], axis=None))
+                for key in self.params.keys() + ['logposterior']}
         else:
-            self.derived = {key: [] for key in self.params.keys()}
+            self.calculations = {key: [] for key in self.params.keys() +
+                                 ['logposterior']}
 
-    def augment_samples(self, samples, **kwargs):
+    def write(self):
+        """Write internal calculations to disk."""
+        self.gather_calculations()
+        if self.mpicomm.rank == 0:
+            np.savez(self.directory / 'calculations.npz', **self.calculations)
+
+    def read(self):
+        """Read internal calculations from disk."""
+        if self.mpicomm.rank == 0:
+            self.calculations = dict(np.load(
+                self.directory / 'calculations.npz'))
+
+    def augment(self, samples, add_posterior=True, **kwargs):
         """Convert a sample into a desilike chain and add optional parameters.
 
         Parameters
         ----------
         samples : numpy.ndaray of shape (n_samples, n_dim)
             Samples to which internal results should be matched and added.
+        add_posterior : bool
+            If True, include the posterior. Default is True.
         **kwargs : dict, optional
             Additional parameters passed to the results. Each must have length
             n_samples.
@@ -227,8 +259,7 @@ class BaseSampler(BaseClass):
         Raises
         ------
         ValueError
-            If not all elements in the chain could be associated with internal
-            calculations.
+            If not all samples could be associated with internal calculations.
 
         Returns
         -------
@@ -236,25 +267,36 @@ class BaseSampler(BaseClass):
             Samples with added parameters.
 
         """
-        self.gather_results()
+        self.gather_calculations()
         if self.mpicomm.rank == 0:
             samples = Chain(
                 [*samples.T] + [*kwargs.values()],
                 params=self.params[:self.n_dim] + list(kwargs.keys()))
-            results = Chain([*self.derived.values()], params=self.params)
+            keys = self.params.keys()
+            params = self.params
+            if add_posterior:
+                keys = keys + ['logposterior']
+                params = params + ['logposterior']
+            calculations = Chain(
+                [self.calculations[key] for key in keys], params=params)
 
-            # Check if there are derived paramters not explicitly passes.
+            # Check if there are derived parameters not explicitly passed.
             # Obtain them from the internal results.
-            if set(self.params[self.n_dim:]) - set(kwargs.keys()):
-                idx_s, idx_r = results.match(
-                    samples, params=self.params[:self.n_dim])
+            success = True
+            if set(keys[self.n_dim:]) - set(kwargs.keys()):
+                idx_s, idx_c = calculations.match(
+                    samples, params=params[:self.n_dim])
                 # TODO: Find out why the first index from match is needed.
                 if len(idx_s[0]) != len(samples):
-                    raise ValueError("Not all derived results could be found.")
+                    success = False
                 samples = samples[idx_s[0]]
-                samples.update(results[idx_r[0]])
+                samples.update(calculations[idx_c[0]])
         else:
             samples = None
+            success = True
+
+        if not self.mpicomm.bcast(success, root=0):
+            raise ValueError("Not all derived results could be found.")
 
         return self.mpicomm.bcast(samples, root=0)
 
@@ -275,7 +317,7 @@ class StaticSampler(BaseSampler):
         Returns
         -------
         numpy.ndarray of shape (n_samples, n_dim)
-            samples in parameter space to evaluate.
+            Samples in parameter space to evaluate.
         """
         pass
 
@@ -294,15 +336,20 @@ class StaticSampler(BaseSampler):
 
         """
         samples = self.get_samples(**kwargs)
-        if self.mpicomm.rank == 0:
-            log_post = np.array(self.pool.map(self.compute_posterior, samples))
-            self.pool.stop_wait()
-        else:
-            self.pool.wait()
+        try:
+            # Results may already be saved internally if, e.g., read from disk.
+            results = self.augment(samples)
+        except ValueError:
+            # Do the calculations.
+            if self.mpicomm.rank == 0:
+                self.pool.map(self.compute_posterior, samples)
+                self.pool.stop_wait()
+            else:
+                self.pool.wait()
+            results = self.augment(samples)
 
-        results = self.augment_samples(
-            samples, logposterior=log_post,
-            aweight=np.exp(log_post - logsumexp(log_post)))
+        results.aweight = np.exp(
+            results.logposterior - logsumexp(results.logposterior))
 
         return results
 
@@ -350,8 +397,9 @@ class PopulationSampler(BaseSampler):
         else:
             self.pool.wait()
             samples = None
+            extras = {}
 
-        return self.augment_samples(samples, **extras)
+        return self.augment(samples, add_posterior=False, **extras)
 
 
 class MarkovChainSampler(BaseSampler):
@@ -362,7 +410,7 @@ class MarkovChainSampler(BaseSampler):
                 'geweke_max'}
 
     def __init__(self, likelihood, n_chains=4, burn_in=0.2, rng=None,
-                 filepath=None):
+                 directory=None):
         """Initialize the sampler.
 
         Parameters
@@ -378,7 +426,7 @@ class MarkovChainSampler(BaseSampler):
         rng : numpy.random.RandomState, int, or None, optional
             Random number generator for seeding. If ``None``, no seed is used.
             Default is ``None``.
-        filepath : str, Path, or None, optional
+        directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
 
         Raises
@@ -387,7 +435,7 @@ class MarkovChainSampler(BaseSampler):
             If ``burn_in`` is a float and larger than unity.
 
         """
-        super().__init__(likelihood, rng=rng, filepath=filepath)
+        super().__init__(likelihood, rng=rng, directory=directory)
         self.n_chains = n_chains
         self.chains = None
         self.log_post = None
@@ -400,14 +448,11 @@ class MarkovChainSampler(BaseSampler):
                     f"{burn_in}.")
         self.burn_in = burn_in
 
-        if self.filepath is not None:
-            if all((self.filepath / f'chain_{i + 1}.npy').is_file() for i in
-                   range(self.n_chains)):
-                self.chains = [Chain.load(
-                    self.filepath / f'chain_{i + 1}.npy') for i in
-                    range(self.n_chains)]
-                self.checks = list(np.load(self.filepath / 'checks.npy',
-                                           allow_pickle=False))
+        if self.directory is not None:
+            try:
+                self.read()
+            except FileNotFoundError:
+                pass
 
     def run_sampler(self, n_steps, **kwargs):
         """Abstract method to run the sampler from the main MPI process.
@@ -579,40 +624,72 @@ class MarkovChainSampler(BaseSampler):
 
         """
         if self.mpicomm.rank == 0:
-
             # Initialize the chains, if necessary.
             if self.chains is None:
                 self.initialize_chains(n_init=n_init)
                 self.checks = []
-
-            while (len(self.chains[0]) < max_iterations) and not (
-                    len(self.chains[0]) >= min_iterations and
-                    len(self.checks) >= convergence_checks_passed and
-                    all(self.checks[-convergence_checks_passed:])):
-                n_steps = min(convergence_checks_interval,
-                              max_iterations - len(self.chains[0]))
-                self.run_sampler(n_steps, **kwargs)
-                self.checks.append(self.check(convergence_criteria))
-                if self.filepath is not None:
-                    for i, chain in enumerate(self.chains):
-                        chain.save(self.filepath / f'chain_{i + 1}.npy')
-                    np.save(self.filepath / 'checks.npy', self.checks,
-                            allow_pickle=False)
-
             self.pool.stop_wait()
         else:
             self.pool.wait()
 
-        if isinstance(self.burn_in, float):
-            burn_in = round(self.burn_in * len(self.chains[0]))
-        else:
-            burn_in = self.burn_in
+        # Run the chain until convergence.
+        while True:
 
-        chains = [self.augment_samples(
-            chain[burn_in:], logposterior=log_post[burn_in:]) for
-            chain, log_post in zip(self.chains, self.log_post)]
+            if self.mpicomm.rank == 0:
+                if len(self.chains[0]) >= max_iterations:
+                    stop = True
+                else:
+                    stop = (len(self.chains[0]) >= min_iterations and
+                            len(self.checks) >= convergence_checks_passed and
+                            all(self.checks[-convergence_checks_passed:]))
+            else:
+                stop = False
+
+            if self.mpicomm.bcast(stop, root=0):
+                break
+
+            # Advance the sampler and do convergence checks.
+            if self.mpicomm.rank == 0:
+                n_steps = min(convergence_checks_interval,
+                              max_iterations - len(self.chains[0]))
+                self.run_sampler(n_steps, **kwargs)
+                self.checks.append(self.check(convergence_criteria))
+                self.pool.stop_wait()
+            else:
+                self.pool.wait()
+
+            # Write results.
+            if self.directory is not None:
+                self.write()
+
+        if self.mpicomm.rank == 0:
+            chains = self.chains_without_burn_in
+        else:
+            chains = [None] * self.n_chains
+
+        chains = [self.augment(chain) for chain in chains]
 
         if flatten_chains:
             return Chain.concatenate(chains)
         else:
             return chains
+
+    def write(self):
+        """Write all results to disk."""
+        super().write()
+        if self.mpicomm.rank == 0:
+            for i, chain in enumerate(self.chains):
+                np.save(self.directory / f'chain_{i + 1}.npy', chain)
+            np.save(self.directory / 'checks.npy', self.checks)
+            with open(self.directory / 'rng.json', 'w') as fstream:
+                json.dump(self.rng.bit_generator.state, fstream)
+
+    def read(self):
+        """Read internal calculations from disk."""
+        super().read()
+        if self.mpicomm.rank == 0:
+            self.chains = [np.load(self.directory / f'chain_{i + 1}.npy') for
+                           i in range(self.n_chains)]
+            self.checks = list(np.load(self.directory / 'checks.npy'))
+            with open(self.directory / 'rng.json', 'r') as fstream:
+                self.rng.bit_generator.state = json.load(fstream)

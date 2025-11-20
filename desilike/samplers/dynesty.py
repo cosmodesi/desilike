@@ -19,7 +19,7 @@ class DynestySampler(PopulationSampler):
 
     """
 
-    def __init__(self, likelihood, dynamic=True, rng=None, filepath=None,
+    def __init__(self, likelihood, dynamic=True, rng=None, directory=None,
                  **kwargs):
         """Initialize the dynesty sampler.
 
@@ -32,7 +32,7 @@ class DynestySampler(PopulationSampler):
             ``dynesty.PopulationSampler``. Default is True.
         rng : numpy.random.RandomState or int, optional
             Random number generator. Default is ``None``.
-        filepath : str, Path, optional
+        directory : str, Path, optional
             Save samples to this location. Default is ``None``.
         kwargs: dict, optional
             Extra keyword arguments passed to dynesty during initialization.
@@ -42,22 +42,22 @@ class DynestySampler(PopulationSampler):
             raise ImportError("The 'dynesty' package is required but not "
                               "installed.")
 
-        super().__init__(likelihood, rng=rng, filepath=filepath)
+        super().__init__(likelihood, rng=rng, directory=directory)
 
         kwargs = update_kwargs(kwargs, 'dynesty', blob=True, pool=self.pool,
                                rstate=self.rng)
 
-        if not dynamic and self.filepath is not None:
+        if not dynamic and self.directory is not None:
             raise ValueError("dynesty does not support checkpointing for the "
                              "static sampler.")
 
         if self.mpicomm.rank == 0:
             sampler_cls = (dynesty.DynamicNestedSampler if dynamic else
                            dynesty.NestedSampler)
-            if self.filepath is not None:
+            if self.directory is not None:
                 try:
                     self.sampler = sampler_cls.restore(str(
-                        self.filepath / "sampler.pkl"))
+                        self.directory / "sampler.pkl"))
                     self.sampler.loglikelihood.loglikelihood =\
                         self.compute_likelihood
                     self.sampler.prior_transform = self.prior_transform
@@ -86,8 +86,8 @@ class DynestySampler(PopulationSampler):
             Extra parameters such as weights and derived parameters.
 
         """
-        checkpoint_file = None if self.filepath is None else str(
-            self.filepath / 'sampler.pkl')
+        checkpoint_file = None if self.directory is None else str(
+            self.directory / 'sampler.pkl')
         kwargs = update_kwargs(kwargs, 'dynesty',
                                checkpoint_file=checkpoint_file)
 

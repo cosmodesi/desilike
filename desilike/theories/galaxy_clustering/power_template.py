@@ -687,11 +687,11 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         BAOExtractor.get(self)
         self.dn = self.n - self.n_fid
         self.dm = self.m - self.m_fid
+        self.dA = self.Ap / self.Ap_fid #Will be 1 when fixed
         if self.dfextractor == 'Ap':
-            self.dA = self.Ap / self.Ap_fid #Will be 1 when fixed
             self.df = self.f_sqrt_Ap / self.f_sqrt_Ap_fid / self.dA**0.5
         else:
-            self.df = self.f_sigmar / self.f_sigmar_fid
+            self.df = self.f_sigmar / self.f_sigmar_fid / self.dA**0.5
 
         return self
 

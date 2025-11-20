@@ -2392,7 +2392,7 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
         pkt = self.template.pk_dd
         if self.pt:
             q = kt
-            ktmin, ktmax = min(kk.min() for kk in self.k) * 0.7, max(kk.max() for kk in self.k) * 1.3
+            ktmin, ktmax = min(kk.min() for kk in self.k) * 0.7, max(kk.max() for kk in self.k) * 2.
             kt = jnp.linspace(ktmin, ktmax, self._klim[2])
             wq = utils.weights_trapz(q)
             if getattr(self, 'kernel', None) is None:

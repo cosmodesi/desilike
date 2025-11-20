@@ -95,16 +95,7 @@ class BaseSampler(BaseClass):
 
         self.params = (self.likelihood.varied_params +
                        self.likelihood.params.select(derived=True))
-
-        self.calculations = {key: [] for key in self.params.keys() +
-                             ['logposterior']}
-
-        if self.directory is not None and not isinstance(
-                self, MarkovChainSampler):
-            try:
-                self.read()
-            except FileNotFoundError:
-                pass
+        self.derived = {key: [] for key in self.params.keys()}
 
     def prior_transform(self, sample):
         """Transform from the unit cube to parameter space using the prior.
@@ -120,8 +111,8 @@ class BaseSampler(BaseClass):
             Prior transformation of the input sample.
 
         """
-        return np.array([self.likelihood.varied_params[i].prior.ppf(x) for
-                         i, x in enumerate(sample)])
+        return np.array([param.prior.ppf(x) for param, x in zip(
+            self.likelihood.varied_params, sample)])
 
     def compute_prior(self, samples):
         """
@@ -143,7 +134,7 @@ class BaseSampler(BaseClass):
                 zip(self.likelihood.varied_params.names(), samples.T))
         return self.likelihood.all_params.prior(**samples)
 
-    def compute_posterior(self, sample, save_calculations=True,
+    def compute_posterior(self, sample, save_derived=True,
                           return_derived=False):
         """Compute the natural logarithm of the posterior.
 
@@ -151,8 +142,8 @@ class BaseSampler(BaseClass):
         ----------
         sample : numpy.ndarray of shape (n_dim, ) or dict
             Sample for which to compute the likelihood.
-        save_calculations : bool, optional
-            Whether to save calculations internally. Default is True.
+        save_derived : bool, optional
+            Whether to save derived parameters internally. Default is True.
         return_derived : bool, optional
             Whether to return the derived parameters.
 
@@ -168,20 +159,19 @@ class BaseSampler(BaseClass):
             sample = dict(zip(self.likelihood.varied_params.names(), sample.T))
         log_post, derived = self.likelihood(sample, return_derived=True)
 
-        if save_calculations:
-            self.calculations['logposterior'].append(log_post)
+        if save_derived:
             for i, key in enumerate(self.params.keys()):
                 if i < self.n_dim:
-                    self.calculations[key].append(sample[key])
+                    self.derived[key].append(sample[key])
                 else:
-                    self.calculations[key].append(derived[key])
+                    self.derived[key].append(derived[key])
 
         if return_derived:
             return log_post, [derived[key] for key in self.params[self.n_dim:]]
         else:
             return log_post
 
-    def compute_likelihood(self, sample, save_calculations=False,
+    def compute_likelihood(self, sample, save_derived=False,
                            return_derived=True):
         """Compute the natural logarithm of the likelihood.
 
@@ -191,8 +181,8 @@ class BaseSampler(BaseClass):
         ----------
         sample : numpy.ndarray of shape (n_dim, )
             sample for which to compute the likelihood.
-        save_calculations : bool, optional
-            Whether to save calculations internally. Default is True.
+        save_derived : bool, optional
+            Whether to save parameters internally. Default is True.
         return_derived : bool, optional
             Whether to return the derived parameters. Default is True.
 
@@ -206,7 +196,7 @@ class BaseSampler(BaseClass):
         """
         log_prior = self.compute_prior(sample)
         log_post, derived = self.compute_posterior(
-            sample, save_calculations=save_calculations, return_derived=True)
+            sample, save_derived=save_derived, return_derived=True)
         log_l = log_post - log_prior
 
         if return_derived:
@@ -214,44 +204,41 @@ class BaseSampler(BaseClass):
         else:
             return log_l
 
-    def gather_calculations(self):
-        """Gather all internal calculations in the main process."""
-        for key in self.params.keys() + ['logposterior']:
-            if len(self.calculations[key]) > 0:
-                self.calculations[key] = np.concatenate(
-                    self.calculations[key], axis=None)
+    def gather_derived(self):
+        """Gather all derived parameters in the main process."""
+        for key in self.params.keys():
+            if len(self.derived[key]) > 0:
+                self.derived[key] = np.concatenate(
+                    self.derived[key], axis=None)
 
-        calculations = self.mpicomm.gather(self.calculations)
+        derived = self.mpicomm.gather(self.derived)
         if self.mpicomm.rank == 0:
-            self.calculations = {
+            self.derived = {
                 key: list(np.concatenate(
-                    [c[key] for c in calculations], axis=None))
-                for key in self.params.keys() + ['logposterior']}
+                    [c[key] for c in derived], axis=None))
+                for key in self.params.keys()}
         else:
-            self.calculations = {key: [] for key in self.params.keys() +
-                                 ['logposterior']}
+            self.derived = {key: [] for key in self.params.keys()}
 
     def write(self):
         """Write internal calculations to disk."""
-        self.gather_calculations()
+        self.gather_derived()
         if self.mpicomm.rank == 0:
-            np.savez(self.directory / 'calculations.npz', **self.calculations)
+            np.savez(self.directory / 'derived.npz',
+                     **self.derived)
 
     def read(self):
         """Read internal calculations from disk."""
         if self.mpicomm.rank == 0:
-            self.calculations = dict(np.load(
-                self.directory / 'calculations.npz'))
+            self.derived = dict(np.load(self.directory / 'derived.npz'))
 
-    def augment(self, samples, add_posterior=True, **kwargs):
+    def augment(self, samples, **kwargs):
         """Convert a sample into a desilike chain and add optional parameters.
 
         Parameters
         ----------
         samples : numpy.ndaray of shape (n_samples, n_dim)
             Samples to which internal results should be matched and added.
-        add_posterior : bool
-            If True, include the posterior. Default is True.
         **kwargs : dict, optional
             Additional parameters passed to the results. Each must have length
             n_samples.
@@ -267,30 +254,30 @@ class BaseSampler(BaseClass):
             Samples with added parameters.
 
         """
-        self.gather_calculations()
+        self.gather_derived()
         if self.mpicomm.rank == 0:
             samples = Chain(
                 [*samples.T] + [*kwargs.values()],
                 params=self.params[:self.n_dim] + list(kwargs.keys()))
             keys = self.params.keys()
             params = self.params
-            if add_posterior:
-                keys = keys + ['logposterior']
-                params = params + ['logposterior']
-            calculations = Chain(
-                [self.calculations[key] for key in keys], params=params)
+            derived = Chain([self.derived[key] for key in keys], params=params)
+            for key in set(self.derived.keys()) - set(self.params.keys()):
+                derived[key] = self.derived[key]
 
             # Check if there are derived parameters not explicitly passed.
             # Obtain them from the internal results.
             success = True
-            if set(keys[self.n_dim:]) - set(kwargs.keys()):
-                idx_s, idx_c = calculations.match(
+            print(set(self.derived.keys()))
+            if set(self.derived.keys()) - set(kwargs.keys()) - set(
+                    self.params.keys()[:self.n_dim]):
+                idx_s, idx_d = derived.match(
                     samples, params=params[:self.n_dim])
                 # TODO: Find out why the first index from match is needed.
                 if len(idx_s[0]) != len(samples):
                     success = False
                 samples = samples[idx_s[0]]
-                samples.update(calculations[idx_c[0]])
+                samples.update(derived[idx_d[0]])
         else:
             samples = None
             success = True
@@ -303,6 +290,28 @@ class BaseSampler(BaseClass):
 
 class StaticSampler(BaseSampler):
     """Class defining common functions used by static samplers."""
+
+    def __init__(self, likelihood, rng=None, directory=None):
+        """Initialize the static sampler.
+
+        Parameters
+        ----------
+        likelihood : BaseLikelihood
+            Likelihood to sample.
+        rng : numpy.random.RandomState, int, or None, optional
+            Random number generator for seeding. If ``None``, no seed is used.
+            Default is ``None``.
+        directory : str, Path, or None, optional
+            Save samples to this folder. Default is ``None``.
+
+        """
+        super().__init__(likelihood, rng=rng, directory=directory)
+
+        if self.directory is not None:
+            try:
+                self.read()
+            except FileNotFoundError:
+                pass
 
     def get_samples(self, **kwargs):
         """Abstract method to get the samples to be evaluated.
@@ -336,22 +345,35 @@ class StaticSampler(BaseSampler):
 
         """
         samples = self.get_samples(**kwargs)
-        try:
-            # Results may already be saved internally if, e.g., read from disk.
-            results = self.augment(samples)
-        except ValueError:
+        if not hasattr(self, 'log_p'):
             # Do the calculations.
             if self.mpicomm.rank == 0:
-                self.pool.map(self.compute_posterior, samples)
+                self.log_p = self.pool.map(self.compute_posterior, samples)
                 self.pool.stop_wait()
             else:
                 self.pool.wait()
-            results = self.augment(samples)
 
-        results.aweight = np.exp(
-            results.logposterior - logsumexp(results.logposterior))
+            if self.directory is not None:
+                self.write()
 
-        return results
+        results = self.augment(samples)
+        if self.mpicomm.rank == 0:
+            results.logposterior = self.log_p
+            results.aweight = np.exp(self.log_p - logsumexp(self.log_p))
+
+        return self.mpicomm.bcast(results)
+
+    def write(self):
+        """Write internal calculations to disk."""
+        super().write()
+        if self.mpicomm.rank == 0:
+            np.save(self.directory / 'logposterior.npy', self.log_p)
+
+    def read(self):
+        """Read internal calculations from disk."""
+        super().write()
+        if self.mpicomm.rank == 0:
+            self.log_p = np.load(self.directory / 'logposterior.npy')
 
 
 class PopulationSampler(BaseSampler):
@@ -399,7 +421,7 @@ class PopulationSampler(BaseSampler):
             samples = None
             extras = {}
 
-        return self.augment(samples, add_posterior=False, **extras)
+        return self.augment(samples, **extras)
 
 
 class MarkovChainSampler(BaseSampler):
@@ -680,6 +702,7 @@ class MarkovChainSampler(BaseSampler):
         if self.mpicomm.rank == 0:
             for i, chain in enumerate(self.chains):
                 np.save(self.directory / f'chain_{i + 1}.npy', chain)
+            np.save(self.directory / 'logposterior.npy', self.log_post)
             np.save(self.directory / 'checks.npy', self.checks)
             with open(self.directory / 'rng.json', 'w') as fstream:
                 json.dump(self.rng.bit_generator.state, fstream)
@@ -690,6 +713,7 @@ class MarkovChainSampler(BaseSampler):
         if self.mpicomm.rank == 0:
             self.chains = [np.load(self.directory / f'chain_{i + 1}.npy') for
                            i in range(self.n_chains)]
+            self.log_post = np.load(self.directory / 'logposterior.npy')
             self.checks = list(np.load(self.directory / 'checks.npy'))
             with open(self.directory / 'rng.json', 'r') as fstream:
                 self.rng.bit_generator.state = json.load(fstream)

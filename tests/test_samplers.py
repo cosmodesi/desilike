@@ -87,6 +87,25 @@ def test_accuracy(likelihood, key):
                        atol=3 * cov_err)
 
 
+@pytest.mark.mpi_skip
+def test_importance_combine(likelihood):
+    # Test that importance sampling can combine two likelihood without
+    # double counting the prior.
+
+    sampler = samplers.GridSampler(likelihood)
+    chain = sampler.run(grid=np.linspace(0, 1, 101))
+
+    sampler = samplers.ImportanceSampler(likelihood)
+    chain = sampler.run(chain=chain, mode='combine')
+
+    cov = np.linalg.inv(2 * likelihood.precision +
+                        np.array([[100, 0], [0, 0]]))
+    assert np.allclose(chain.mean(likelihood.varied_params),
+                       likelihood.flatdata, atol=1e-3, rtol=0)
+    assert np.allclose(chain.covariance(likelihood.varied_params), cov,
+                       atol=1e-3)
+
+
 @pytest.mark.mpi
 @pytest.mark.parametrize('key', SAMPLER_CLS.keys())
 def test_write(likelihood, key, tmp_path):
@@ -96,7 +115,7 @@ def test_write(likelihood, key, tmp_path):
         likelihood, rng=42, directory=tmp_path,
         **KWARGS_INIT_FAST.get(key, {}))
     chain_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
-    return
+
     # The second sampler should not create any new samples if old chains
     # are read correctly.
     sampler_2 = SAMPLER_CLS[key](

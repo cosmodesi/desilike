@@ -81,7 +81,7 @@ class BlackJAXSampler(MarkovChainSampler):
 
     """
 
-    def __init__(self, likelihood, n_chains=4, rng=None, filepath=None,
+    def __init__(self, likelihood, n_chains=4, rng=None, directory=None,
                  **kwargs):
         """Initialize the BlackJAX sampler.
 
@@ -94,7 +94,7 @@ class BlackJAXSampler(MarkovChainSampler):
         rng : numpy.random.RandomState, int, or None, optional
             Random number generator for seeding. If ``None``, no seed is used.
             Default is ``None``.
-        filepath : str, Path, or None, optional
+        directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
         kwargs: dict, optional
             Extra keyword arguments passed to ``blackjax`` during
@@ -105,9 +105,9 @@ class BlackJAXSampler(MarkovChainSampler):
             raise ImportError("The 'blackjax' package is required but not "
                               "installed.")
 
-        super().__init__(likelihood, n_chains, rng=rng, filepath=filepath)
+        super().__init__(likelihood, n_chains, rng=rng, directory=directory)
         self.compute_posterior = self.pool.save_function(
-            partial(self.compute_posterior, save_derived=False),
+            partial(self.compute_posterior, save_calculations=False),
             'compute_posterior')
         self.states = None
 
@@ -124,7 +124,7 @@ class BlackJAXSampler(MarkovChainSampler):
             self.states = []
             for i in range(self.n_chains):
                 initial_position = dict(zip(self.params.keys()[:self.n_dim],
-                                            self.chains[i, -1]))
+                                            self.chains[i][-1]))
                 try:
                     self.states.append(self.sampler.init(initial_position))
                 except TypeError:
@@ -143,10 +143,7 @@ class BlackJAXSampler(MarkovChainSampler):
             [np.column_stack([results[i][1].position[key] for key in
                               self.params.keys()[:self.n_dim]])
              for i in range(self.n_chains)])
-        log_post = np.stack([results[i][1].logdensity for i in
-                             range(self.n_chains)])
         self.chains = np.concatenate([self.chains, chains], axis=1)
-        self.log_post = np.concatenate([self.log_post, log_post], axis=1)
 
         for i in range(self.n_chains):
             # Recompute the derived parameters since they couldn't be saved
@@ -154,11 +151,13 @@ class BlackJAXSampler(MarkovChainSampler):
             samples = results[i][1].position
             derived = jax.vmap(lambda sample: self.likelihood(
                 sample, return_derived=True)[1])(samples)
+            print(type(self.calculations['logposterior']))
+            self.calculations['logposterior'].append(results[i][1].logdensity)
             for i, key in enumerate(self.params.keys()):
                 if i < self.n_dim:
-                    self.derived[key].append(samples[key])
+                    self.calculations[key].append(samples[key])
                 else:
-                    self.derived[key].append(derived[key])
+                    self.calculations[key].append(derived[key])
 
 
 class HMCSampler(BlackJAXSampler):
@@ -167,7 +166,7 @@ class HMCSampler(BlackJAXSampler):
     def __init__(self, likelihood, n_chains=4, adaptation=True,
                  adaptation_kwargs=dict(n_iters=1000), step_size=1e-3,
                  inv_mass_matrix=None, num_integration_steps=60, rng=None,
-                 filepath=None, **kwargs):
+                 directory=None, **kwargs):
         """Initialize the HMC sampler.
 
         Parameters
@@ -197,7 +196,7 @@ class HMCSampler(BlackJAXSampler):
         rng : numpy.random.RandomState, int, or None, optional
             Random number generator for seeding. If ``None``, no seed is used.
             Default is ``None``.
-        filepath : str, Path, or None, optional
+        directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
         kwargs: dict, optional
             Extra keyword arguments passed to ``blackjax.hmc`` during
@@ -205,7 +204,7 @@ class HMCSampler(BlackJAXSampler):
 
         """
         super().__init__(likelihood, n_chains=n_chains, rng=rng,
-                         filepath=filepath)
+                         directory=directory)
 
         if inv_mass_matrix is None:
             inv_mass_matrix = np.ones(self.n_dim)
@@ -225,7 +224,7 @@ class NUTSSampler(BlackJAXSampler):
 
     def __init__(self, likelihood, n_chains=4, adaptation=True,
                  adaptation_kwargs=dict(n_iters=1000), step_size=1e-3,
-                 inv_mass_matrix=None, rng=None, filepath=None, **kwargs):
+                 inv_mass_matrix=None, rng=None, directory=None, **kwargs):
         """Initialize the No-U-Turn Sampler (NUTS).
 
         Parameters
@@ -252,7 +251,7 @@ class NUTSSampler(BlackJAXSampler):
         rng : numpy.random.RandomState, int, or None, optional
             Random number generator for seeding. If ``None``, no seed is used.
             Default is ``None``.
-        filepath : str, Path, or None, optional
+        directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
         kwargs: dict, optional
             Extra keyword arguments passed to ``blackjax.hmc`` during
@@ -260,7 +259,7 @@ class NUTSSampler(BlackJAXSampler):
 
         """
         super().__init__(likelihood, n_chains=n_chains, rng=rng,
-                         filepath=filepath)
+                         directory=directory)
 
         if inv_mass_matrix is None:
             inv_mass_matrix = np.ones(self.n_dim)
@@ -285,7 +284,7 @@ class MCLMCSampler(BlackJAXSampler):
 
     def __init__(self, likelihood, n_chains=4, adaptation=True, L=1.,
                  step_size=0.1, integrator='isokinetic_mclachlan', rng=None,
-                 filepath=None, **kwargs):
+                 directory=None, **kwargs):
         """Initialize the Microcanonical Langevin Monte Carlo (MCLMC) sampler.
 
         Parameters
@@ -306,7 +305,7 @@ class MCLMCSampler(BlackJAXSampler):
             Integrator, from :mod:`blackjax.mcmc.integrators`.
         rng : numpy.random.RandomState or int, optional
             Random number generator. Default is ``None``.
-        filepath : str, Path, optional
+        directory : str, Path, optional
             Save samples to this location. Default is ``None``.
         kwargs: dict, optional
             Extra keyword arguments passed to ``blackjax.hmc`` during
@@ -314,7 +313,7 @@ class MCLMCSampler(BlackJAXSampler):
 
         """
         super().__init__(likelihood, n_chains=n_chains, rng=rng,
-                         filepath=filepath)
+                         directory=directory)
 
         self.sampler = blackjax.mclmc(self.compute_posterior, L, step_size)
         self.make_n_steps = self.pool.save_function(

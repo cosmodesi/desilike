@@ -23,7 +23,7 @@ class ZeusSampler(MarkovChainSampler):
 
     """
 
-    def __init__(self, likelihood, n_chains=4, rng=None, filepath=None,
+    def __init__(self, likelihood, n_chains=4, rng=None, directory=None,
                  **kwargs):
         """Initialize the ``zeus`` sampler.
 
@@ -36,7 +36,7 @@ class ZeusSampler(MarkovChainSampler):
         rng : numpy.random.RandomState, int, or None, optional
             Random number generator for seeding. If ``None``, no seed is used.
             Default is ``None``.
-        filepath : str, Path, or None, optional
+        directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
         kwargs: dict, optional
             Extra keyword arguments passed to ``zeus`` during initialization.
@@ -47,7 +47,7 @@ class ZeusSampler(MarkovChainSampler):
                               "installed.")
 
         super().__init__(likelihood, n_chains=n_chains, rng=rng,
-                         filepath=filepath)
+                         directory=directory)
 
         kwargs = update_kwargs(kwargs, 'zeus', pool=self.pool, args=None,
                                kwargs=None, vectorize=False)
@@ -83,5 +83,8 @@ class ZeusSampler(MarkovChainSampler):
             kwargs['log_prob0'] = self.log_post[:, -1]
 
         self.sampler.run_mcmc(start, **kwargs)
-        self.chains = np.transpose(self.sampler.get_chain(), (1, 0, 2))
-        self.log_post = self.sampler.get_log_prob().T
+        chains = np.transpose(self.sampler.get_chain()[-n_steps:],
+                              (1, 0, 2))
+        log_post = self.sampler.get_log_prob()[-n_steps:].T
+        self.chains = np.concatenate([self.chains, chains], axis=1)
+        self.log_post = np.concatenate([self.log_post, log_post], axis=1)

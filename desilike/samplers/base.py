@@ -344,10 +344,12 @@ class StaticSampler(BaseSampler):
 
         """
         samples = self.get_samples(**kwargs)
-        if not hasattr(self, 'log_p'):
+
+        if not self.mpicomm.bcast(hasattr(self, 'log_post'), root=0):
             # Do the calculations.
             if self.mpicomm.rank == 0:
-                self.log_p = self.pool.map(self.compute_posterior, samples)
+                self.log_prior = self.pool.map(self.compute_prior, samples)
+                self.log_post = self.pool.map(self.compute_posterior, samples)
                 self.pool.stop_wait()
             else:
                 self.pool.wait()
@@ -357,22 +359,27 @@ class StaticSampler(BaseSampler):
 
         results = self.augment(samples)
         if self.mpicomm.rank == 0:
-            results.logposterior = self.log_p
-            results.aweight = np.exp(self.log_p - logsumexp(self.log_p))
+            results[results._logprior] = self.log_prior
+            results.logposterior = self.log_post
+            results[results._loglikelihood] = np.array(
+                self.log_post) - np.array(self.log_prior)
+            results.aweight = np.exp(self.log_post - logsumexp(self.log_post))
 
-        return self.mpicomm.bcast(results)
+        return self.mpicomm.bcast(results, root=0)
 
     def write(self):
         """Write internal calculations to disk."""
         super().write()
         if self.mpicomm.rank == 0:
-            np.save(self.directory / 'logposterior.npy', self.log_p)
+            np.save(self.directory / 'logprior.npy', self.log_prior)
+            np.save(self.directory / 'logposterior.npy', self.log_post)
 
     def read(self):
         """Read internal calculations from disk."""
         super().write()
         if self.mpicomm.rank == 0:
-            self.log_p = np.load(self.directory / 'logposterior.npy')
+            self.log_prior = np.load(self.directory / 'logprior.npy')
+            self.log_post = np.load(self.directory / 'logposterior.npy')
 
 
 class PopulationSampler(BaseSampler):

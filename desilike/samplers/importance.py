@@ -64,8 +64,10 @@ class ImportanceSampler(StaticSampler):
             log_w = -chain_old.logposterior
         else:
             chain = chain_old.copy()
-            chain.loglikelihood += chain_new.loglikelihood
-            chain.logposterior += chain_new.loglikelihood
-            log_w = chain_new.loglikelihood
+            log_l_new = chain_new[chain_new._loglikelihood]
+            if chain._loglikelihood in chain:
+                chain[chain._loglikelihood] += log_l_new
+            chain.logposterior += log_l_new
+            log_w = log_l_new
         chain.aweight *= np.exp(log_w - logsumexp(log_w))
         return chain

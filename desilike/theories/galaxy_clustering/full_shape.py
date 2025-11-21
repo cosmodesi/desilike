@@ -2570,7 +2570,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         
         mg_params_name = ['mu0', 'beta_1', 'lambda_1', 'exp_s', 'mu1','mu2','mu3','mu4']
         mg_params_default = [0., 0., 0., 0.,0.,0.,0.,0.]
-        
+        import warnings
         for name, default in zip(mg_params_name, mg_params_default):
             if name in self.all_params:
                 params[name] = self.all_params[name].value

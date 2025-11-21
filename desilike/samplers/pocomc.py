@@ -133,5 +133,6 @@ class PocoMCSampler(PopulationSampler):
         samples, weights, logl, logp, blobs = self.sampler.posterior(
             return_blobs=True)
         extras = dict(aweight=weights, loglikelihood=logl, logposterior=logp)
-        extras.update(dict(zip(self.params[self.n_dim:], blobs)))
+        extras.update(dict(zip(self.params.keys()[self.n_dim:],
+                               np.atleast_2d(blobs.T))))
         return samples, extras

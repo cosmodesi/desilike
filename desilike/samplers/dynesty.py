@@ -57,7 +57,7 @@ class DynestySampler(PopulationSampler):
             if self.directory is not None:
                 try:
                     self.sampler = sampler_cls.restore(str(
-                        self.directory / "sampler.pkl"))
+                        self.directory / 'dynesty.pkl'))
                     self.sampler.loglikelihood.loglikelihood =\
                         self.compute_likelihood
                     self.sampler.prior_transform = self.prior_transform
@@ -87,7 +87,7 @@ class DynestySampler(PopulationSampler):
 
         """
         checkpoint_file = None if self.directory is None else str(
-            self.directory / 'sampler.pkl')
+            self.directory / 'dynesty.pkl')
         kwargs = update_kwargs(kwargs, 'dynesty',
                                checkpoint_file=checkpoint_file)
 
@@ -95,5 +95,6 @@ class DynestySampler(PopulationSampler):
         results = self.sampler.results
         samples = results.samples
         extras = dict(aweight=results.importance_weights())
-        extras.update(dict(zip(self.params[self.n_dim:], results['blob'])))
+        extras.update(dict(zip(self.params.keys()[self.n_dim:],
+                               results['blob'].T)))
         return samples, extras

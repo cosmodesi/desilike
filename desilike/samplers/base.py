@@ -376,7 +376,7 @@ class StaticSampler(BaseSampler):
 
     def read(self):
         """Read internal calculations from disk."""
-        super().write()
+        super().read()
         if self.mpicomm.rank == 0:
             self.log_prior = np.load(self.directory / 'logprior.npy')
             self.log_post = np.load(self.directory / 'logposterior.npy')

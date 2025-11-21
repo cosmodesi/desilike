@@ -2462,6 +2462,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
     def calculate(self):
         super(fkptPowerSpectrumMultipoles, self).calculate()
         import pyfkpt.rsd as pyfkpt
+        # print(pyfkpt.__file__)
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
        
         # cosmo_params = {'z': self.z, 'fnu': 0., 'Omega_m': 0.3, 'h': 0.7}
@@ -2494,7 +2495,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
             if hasattr(cosmo, p):
                 mg_params[p] = getattr(cosmo, p)
             else:
-                warnings.warn(f"MG variant '{mg_variant}' requires parameter '{p}', "
+                print(f"MG variant '{mg_variant}' requires parameter '{p}', "
                               f"but it was not provided. Using default: {default_values[p]}")
                 mg_params[p] = default_values[p]
 
@@ -2568,15 +2569,34 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         # params['h'] = cosmo['h']
         # params['mu0']= self.all_params['mu0'].value
         
-        mg_params_name = ['mu0', 'beta_1', 'lambda_1', 'exp_s', 'mu1','mu2','mu3','mu4']
-        mg_params_default = [0., 0., 0., 0.,0.,0.,0.,0.]
+        # mg_params_name = ['mu0', 'beta_1', 'lambda_1', 'exp_s', 'mu1','mu2','mu3','mu4']
+        # mg_params_default = [0., 0., 0., 0.,0.,0.,0.,0.]
+        required_params = {
+            'fR': ['fR0'],
+            'mu_OmDE': ['mu0'],
+            'BZ': ['beta_1', 'lambda_1', 'exp_s'],
+            'binning': ['mu1', 'mu2', 'mu3', 'mu4'],
+            'GR': []   # no MG parameters needed
+        }
         
-        for name, default in zip(mg_params_name, mg_params_default):
-            if name in self.all_params:
+        # Default values for all MG parameters
+        default_values = {
+            'fR0': 1e-10,
+            'mu0': 0.0,
+            'beta_1': 0.0,
+            'lambda_1': 0.0,
+            'exp_s': 0.0,
+            'mu1': 0.0, 'mu2': 0.0, 'mu3': 0.0, 'mu4': 0.0,
+        }
+        
+        
+        for name in required_params.get(params['mg_variant'], []):
+             if name in self.all_params:
                 params[name] = self.all_params[name].value
-            else:
-                warnings.warn(f"'{name}' not found. Setting {name} = {default}.")
-                params[name] = default
+             else:
+                print(f"'{name}' not found. Setting {name} = {default_values[name]}.")
+                params[name] = default_values[name]
+       
                     
 
        

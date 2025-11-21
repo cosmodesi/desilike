@@ -56,13 +56,15 @@ def likelihood():
 
         def calculate(self, **kwargs):
             self.flattheory = jnp.array([kwargs[name] for name in
-                                         self.params.names()])
+                                         self.varied_params.names()])
+            self.c = kwargs['a'] + kwargs['b']
             super().calculate()
 
     likelihood = Likelihood(np.array([0.4, 0.6]), covariance=np.eye(2) * 0.01)
     likelihood.init.params = dict(
         a=dict(prior=dict(dist='norm', limits=[0, 1], loc=0.4, scale=0.1)),
-        b=dict(prior=dict(dist='uniform', limits=[0, 1])))
+        b=dict(prior=dict(dist='uniform', limits=[0, 1])),
+        c=dict(derived=True))
 
     return likelihood
 
@@ -104,6 +106,17 @@ def test_importance_combine(likelihood):
                        likelihood.flatdata, atol=1e-3, rtol=0)
     assert np.allclose(chain.covariance(likelihood.varied_params), cov,
                        atol=1e-3)
+
+
+@pytest.mark.mpi_skip
+@pytest.mark.parametrize('key', SAMPLER_CLS.keys())
+def test_derived(likelihood, key):
+    # Test that derived parameters are correctly tracked.
+
+    sampler = SAMPLER_CLS[key](likelihood, rng=42,
+                               **KWARGS_INIT_FAST.get(key, {}))
+    chain = sampler.run(**KWARGS_RUN_FAST.get(key, {}))
+    assert np.allclose(chain['a'] + chain['b'], chain['c'])
 
 
 @pytest.mark.mpi

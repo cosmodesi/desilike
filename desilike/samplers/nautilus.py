@@ -43,7 +43,7 @@ class NautilusSampler(PopulationSampler):
         kwargs = update_kwargs(
             kwargs, 'nautilus', pass_dict=False,
             filepath=None if self.directory is None else self.directory /
-            'sampler.hdf5', pool=self.pool, seed=self.rng.integers(2**32))
+            'nautilus.hdf5', pool=self.pool, seed=self.rng.integers(2**32))
 
         if self.mpicomm.rank == 0:
             self.sampler = nautilus.Sampler(
@@ -72,5 +72,6 @@ class NautilusSampler(PopulationSampler):
         samples, log_w, log_l, blobs = self.sampler.posterior(
             return_blobs=True)
         extras = dict(aweight=np.exp(log_w), loglikelihood=log_l)
-        extras.update(dict(zip(self.params[self.n_dim:], blobs)))
+        extras.update(dict(zip(self.params.keys()[self.n_dim:],
+                               np.atleast_2d(blobs.T))))
         return samples, extras

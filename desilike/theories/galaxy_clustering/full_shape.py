@@ -2466,6 +2466,39 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
        
         # cosmo_params = {'z': self.z, 'fnu': 0., 'Omega_m': 0.3, 'h': 0.7}
         cosmo = getattr(self.template, 'cosmo', None)
+        mg_variant=self.options['mg_variant']
+        # Define which parameters are needed for each variant
+        required_params = {
+            'fR': ['fR0'],
+            'mu_OmDE': ['mu0'],
+            'BZ': ['beta_1', 'lambda_1', 'exp_s'],
+            'binning': ['mu1', 'mu2', 'mu3', 'mu4'],
+            'GR': []   # no MG parameters needed
+        }
+        
+        # Default values for all MG parameters
+        default_values = {
+            'fR0': 1e-10,
+            'mu0': 0.0,
+            'beta_1': 0.0,
+            'lambda_1': 0.0,
+            'exp_s': 0.0,
+            'mu1': 0.0, 'mu2': 0.0, 'mu3': 0.0, 'mu4': 0.0,
+        }
+        
+        # Build MG params depending on the selected variant
+        mg_params = {}
+        
+        # Loop through only the needed parameters
+        for p in required_params.get(mg_variant, []):
+            if hasattr(cosmo, p):
+                mg_params[p] = getattr(cosmo, p)
+            else:
+                warnings.warn(f"MG variant '{mg_variant}' requires parameter '{p}', "
+                              f"but it was not provided. Using default: {default_values[p]}")
+                mg_params[p] = default_values[p]
+
+
         fkpt_params = dict(
         z=self.z, Om=cosmo['Omega_m'], h=cosmo['h'],
         nquadSteps=300, chatty=0,
@@ -2473,12 +2506,27 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         kmax = min(max(self.k), 0.5),
         Nk = min(len(self.k), 240),
         # mu0=cosmo['mu0'],
-        mu0 = getattr(cosmo, 'mu0', 0.0),
-        fR0 = getattr(cosmo, 'fR0', 1e-10),
         model=self.options['model'],
         mg_variant=self.options['mg_variant'],
         rescale_PS=self.options['rescale_PS'],
-        use_beyond_eds_kernels=self.options['beyond_eds']
+        use_beyond_eds_kernels=self.options['beyond_eds'],
+        fR0 = getattr(cosmo, 'fR0', 1e-10),
+        **mg_params
+        # # for mu_OmDE     
+        # mu0 = getattr(cosmo, 'mu0', 0.0),
+            
+        # # for BZ
+        # beta_1= getattr(cosmo,'beta_1',0.0),
+        # lambda_1=getattr(cosmo,'lambda_1',0.0),
+        # exp_s=getattr(cosmo,'exp_s',0.0),
+
+        # # for binning
+        # mu1 = getattr(cosmo, 'mu1', 0.0),
+        # mu2 = getattr(cosmo, 'mu2', 0.0),
+        # mu3 = getattr(cosmo, 'mu3', 0.0),
+        # mu4 = getattr(cosmo, 'mu4', 0.0),
+            
+        
     )
         # ,qpar = self.template.qpar, qper=self.template.qper, ,f=self.template.f,f0=self.template.f0
         # self.kt = table[0]
@@ -2518,7 +2566,20 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         params['mg_variant']=kwargs.get('mg_variant','mu_OmDE') #for now, we use these
         # params['mu0']= getattr(cosmo,'mu0',0.0)
         # params['h'] = cosmo['h']
-        params['mu0']= self.all_params['mu0'].value
+        # params['mu0']= self.all_params['mu0'].value
+        
+        mg_params_name = ['mu0', 'beta_1', 'lambda_1', 'exp_s', 'mu1','mu2','mu3','mu4']
+        mg_params_default = [0., 0., 0., 0.,0.,0.,0.,0.]
+        
+        for name, default in zip(mg_params_name, mg_params_default):
+            if name in self.all_params:
+                params[name] = self.all_params[name].value
+            else:
+                warnings.warn(f"'{name}' not found. Setting {name} = {default}.")
+                params[name] = default
+                    
+
+       
         params['h'] = h
         # params['h']=self.all_params['h'].value
         # params['kmin']=float(max(1e-3,min(self.k)))

@@ -2569,6 +2569,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         # params['h'] = cosmo['h']
         # params['mu0']= self.all_params['mu0'].value
         
+
         # mg_params_name = ['mu0', 'beta_1', 'lambda_1', 'exp_s', 'mu1','mu2','mu3','mu4']
         # mg_params_default = [0., 0., 0., 0.,0.,0.,0.,0.]
         required_params = {

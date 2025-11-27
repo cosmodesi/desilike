@@ -52,6 +52,7 @@ def parse_args():
     p.add_argument("--ells", type=str, default="0,2,4", help='Multipoles to use, e.g. "0,2" or "0,2,4".')
     p.add_argument("--freedom", choices=["max", "min"], default="max",
                    help="fkpt nuisance freedom. 'min' typically omits bs/b3.")
+    p.add_argument("--priors-basis", type=str, choices=["standard", "physical"], default="standard", help="prior basis to use, default is standard")
     p.add_argument("--fid-model", type=str, default="LCDM", help='Underlying model tag for IO (e.g., LCDM or F4).')
     p.add_argument("--skip-ns-prior", action="store_true", help="Do not apply a prior on n_s.")
     p.add_argument("--skip-bbn-prior", action="store_true", help="Do not apply the BBN prior on omega_b.")
@@ -192,12 +193,12 @@ def main():
 
     # Tracers: (file tag, tracer tag, b1 prior center, z_eff)
     tracer_table = [
-        ("BGS",  "BGS",  1.5, 0.295, -0.52),
-        ("LRG1", "LRG",  2.1, 0.510, -0.99),
-        ("LRG2", "LRG",  2.1, 0.706, -1.12),
-        ("LRG3", "LRG",  2.1, 0.919, -1.07),
-        ("ELG",  "ELG",  1.2, 1.317, 0.03),
-        ("QSO",  "QSO",  2.1, 1.492, -0.71),
+        ("BGS",  "BGS",  1.5, 0.295, -0.52, 0.693770),
+        ("LRG1", "LRG",  2.1, 0.510, -0.99, 0.620894),
+        ("LRG2", "LRG",  2.1, 0.706, -1.12, 0.563789),
+        ("LRG3", "LRG",  2.1, 0.919, -1.07, 0.510742),
+        ("ELG",  "ELG",  1.2, 1.317, 0.03, 0.431973),
+        ("QSO",  "QSO",  2.1, 1.492, -0.71, 0.403964),
     ]
 
     ells = parse_ells_str(args.ells)
@@ -224,7 +225,7 @@ def main():
         prefix += "_eds"
     if args.use_emu:
         prefix += "_emu"
-    prefix += f"_{args.freedom}_{fid_model}"
+    prefix += f"_{args.freedom}_{args.priors_basis}_{fid_model}"
 
     if args.redshift_bins or args.scale_bins:
         prefix += "_binning"
@@ -260,7 +261,7 @@ def main():
         print("[Emulator] Build requested; constructing per-tracer emulators…")
 
     cosmo = None
-    for file_tag, tracer_tag, b1_val, z_tracer, b2_val in tracer_table:
+    for file_tag, tracer_tag, b1_val, z_tracer, b2_val, sigma8_fid_val in tracer_table:
         namespace = file_tag.lower()
 
         # load data
@@ -323,7 +324,7 @@ def main():
             for name, scale, delta in [
                 ("h",         0.001, 0.03),
                 ("omega_cdm", 0.001, 0.007),
-                ("logA",      0.001, 0.05),
+                ("logA",      0.001, 0.1),
             ]:
                 if name in cosmo.init.params:
                     par = cosmo.init.params[name]
@@ -427,14 +428,18 @@ def main():
         template = DirectPowerSpectrumTemplate(z=z_tracer, fiducial=DESI(), cosmo=cosmo)
         theory = fkptTracerPowerSpectrumMultipoles()
         if args.beyond_eds:
-            beyond_eds=True
+            beyond_eds = True
         else:
-            beyond_eds=False
-        theory.init.update(freedom=args.freedom, prior_basis='standard',
+            beyond_eds = False
+        if args.priors_basis=="standard":
+            sigma8_fid = None
+        elif args.priors_basis=="physical":
+            sigma8_fid = sigma8_fid_val
+        theory.init.update(freedom=args.freedom, prior_basis=args.priors_basis,
                            tracer=tracer_tag, template=template,
                            k=k_out, ells=list(ells), b3_coev=True,
                            model=args.MG_model, mg_variant=args.mg_variant,
-                           beyond_eds=beyond_eds, rescale_PS=False
+                           beyond_eds=beyond_eds, rescale_PS=False, sigma8_fid=sigma8_fid
                            )
 
         # Emulator file path (built from requested ells, as in your original script)
@@ -490,44 +495,121 @@ def main():
             if rank == 0:
                 print(f"[{file_tag}] PT backend:", type(theory.pt).__name__)
 
-        # tracer priors
-        if 'b1' in theory.params:
-            theory.params['b1'].update(
-                value=b1_val,
-                ref={'dist': 'norm', 'loc': b1_val, 'scale': 0.05},
-                prior={'dist': 'uniform', 'limits': (0.0, 10.0)}
+        # ----------------------------------------
+        # Time to add the nuisance parameters
+        # ----------------------------------------
+    
+        # detect whether we're in the physical prior basis
+        is_physical = getattr(theory, "is_physical_prior", False) or (
+            "prior_basis" in theory.options
+            and theory.options["prior_basis"] == "physical"
+        )
+    
+        suffix = "p" if is_physical else ""  # parameters become b1p, b2p, ... in physical basis
+    
+        def pname(base):
+            return f"{base}{suffix}"
+    
+        # ----------------------------------------
+        # 1) tracer priors (b1, b2, etc.)
+        # ----------------------------------------
+        b1_name = pname("b1")
+        b2_name = pname("b2")
+        bs2_name = pname("bs2")
+        b3nl_name = pname("b3nl")
+    
+        # b1 prior: center ref around your fiducial b1
+        if b1_name in theory.params:
+            # In the physical basis b1p ≈ b1 * sigma8(z); if you want to be fancy you can
+            # map Eulerian b1 -> b1p using sigma8_fid, but as a simple option you can just
+            # shift the reference and keep the physical prior.
+            theory.params[b1_name].update(
+                # leave the physical prior limits as set in fkptTracerPowerSpectrumMultipoles._params
+                ref={"dist": "norm", "loc": b1_val, "scale": 0.05},
             )
-        theory.params['PshotP'].update(fixed=True, value=10000)
-
+    
         # apply weak priors to higher-order bias parameters
-        for name in ['b2', 'bs2', 'b3nl']:
-            if name == 'b2':
-                value = b2_val
-            else:
-                value = 0.0
-            if name in theory.params:
-                theory.params[name].update(
-                    ref={'dist': 'norm', 'loc': value, 'scale': 0.1},
-                    prior={'dist': 'uniform', 'limits': (-50.0, 50.0)}
+        for base_name, value in [
+            ("b2", b2_val),
+            ("bs2", 0.0),
+            ("b3nl", 0.0),
+        ]:
+            full_name = pname(base_name)
+            if full_name in theory.params:
+                theory.params[full_name].update(
+                    ref={"dist": "norm", "loc": value, "scale": 0.1},
+                    prior={"dist": "uniform", "limits": (-50.0, 50.0)},
                 )
-
-        # mark nuisance parameters marginalized (alpha*, shot noise terms) 
-        for p in theory.params.select(basename=['alpha0', 'alpha2', 'alpha4', 'alpha0shot', 'alpha2shot']):
+    
+        # ----------------------------------------
+        # 2) shot noise / PshotP
+        # ----------------------------------------
+        pshotp_name = pname("PshotP")
+        if pshotp_name in theory.params:
+            theory.params[pshotp_name].update(fixed=True, value=10000.0)
+    
+        # ----------------------------------------
+        # 3) mark nuisance parameters (alphas) as analytically marginalized
+        # ----------------------------------------
+        alpha_basenames = ["alpha0", "alpha2", "alpha4", "alpha0shot", "alpha2shot"]
+        alpha_fullnames = [pname(b) for b in alpha_basenames]
+    
+        for p in theory.params.select(basename=alpha_fullnames):
             if p.varied:
-                p.update(derived='.marg')
-                #p.update(fixed=False, value=0.0)
-
-        #theory.params['alpha0'].update(fixed=True, value = 3.0)
-        #theory.params['alpha2'].update(fixed=True, value = -1.0)
-        #theory.params['alpha4'].update(fixed=True, value = 0.0)
-        #theory.params['alpha0shot'].update(fixed=True, value = 0.08)
-        #theory.params['alpha2shot'].update(fixed=True, value = -2.0)
-
-        # ensure *all* FKPT nuisance parameters are namespaced per tracer
-        for p in theory.params.select(basename=[
-            'b1', 'b2', 'bs2', 'b3nl', 'alpha0', 'alpha2', 'alpha4', 'alpha0shot', 'alpha2shot'
-        ]):
+                p.update(derived=".marg")
+                # if you wanted numeric marg instead, you would set fixed=False, etc.
+    
+        # ----------------------------------------
+        # 4) ensure all FKPT nuisance parameters are namespaced per tracer
+        # ----------------------------------------
+        names_to_namespace = [
+            "b1", "b2", "bs2", "b3nl",
+            "alpha0", "alpha2", "alpha4", "alpha0shot", "alpha2shot",
+        ]
+    
+        fullnames_to_namespace = [pname(b) for b in names_to_namespace]
+    
+        for p in theory.params.select(basename=fullnames_to_namespace):
             p.update(namespace=namespace)
+
+       # # tracer priors
+       # if 'b1' in theory.params:
+       #     theory.params['b1'].update(
+       #         value=b1_val,
+       #         ref={'dist': 'norm', 'loc': b1_val, 'scale': 0.05},
+       #         prior={'dist': 'uniform', 'limits': (0.0, 10.0)}
+       #     )
+       # theory.params['PshotP'].update(fixed=True, value=10000)
+#
+       # # apply weak priors to higher-order bias parameters
+       # for name in ['b2', 'bs2', 'b3nl']:
+       #     if name == 'b2':
+       #         value = b2_val
+       #     else:
+       #         value = 0.0
+       #     if name in theory.params:
+       #         theory.params[name].update(
+       #             ref={'dist': 'norm', 'loc': value, 'scale': 0.1},
+       #             prior={'dist': 'uniform', 'limits': (-50.0, 50.0)}
+       #         )
+#
+       # # mark nuisance parameters marginalized (alpha*, shot noise terms) 
+       # for p in theory.params.select(basename=['alpha0', 'alpha2', 'alpha4', 'alpha0shot', 'alpha2shot']):
+       #     if p.varied:
+       #         p.update(derived='.marg')
+       #         #p.update(fixed=False, value=0.0)
+#
+       # #theory.params['alpha0'].update(fixed=True, value = 3.0)
+       # #theory.params['alpha2'].update(fixed=True, value = -1.0)
+       # #theory.params['alpha4'].update(fixed=True, value = 0.0)
+       # #theory.params['alpha0shot'].update(fixed=True, value = 0.08)
+       # #theory.params['alpha2shot'].update(fixed=True, value = -2.0)
+#
+       # # ensure *all* FKPT nuisance parameters are namespaced per tracer
+       # for p in theory.params.select(basename=[
+       #     'b1', 'b2', 'bs2', 'b3nl', 'alpha0', 'alpha2', 'alpha4', 'alpha0shot', 'alpha2shot'
+       # ]):
+       #     p.update(namespace=namespace)
 
         # Observable & likelihood
         observable = TracerPowerSpectrumMultipolesObservable(

@@ -2598,9 +2598,6 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
                 print(f"'{name}' not found. Setting {name} = {default_values[name]}.")
                 params[name] = default_values[name]
        
-                    
-
-       
         params['h'] = h
         # params['h']=self.all_params['h'].value
         # params['kmin']=float(max(1e-3,min(self.k)))
@@ -2612,16 +2609,16 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         params['rescale_PS']=False
         params['use_beyond_eds_kernels']=kwargs['beyond_eds']
 
-        b1 = params['b1']
-        # if kwargs['prior_basis']=='physical':
-        #if kwargs['b3_coev']:
-        #    delta_b1 = b1 - 1.
-        #    params['b3nl'] = 32. / 315. * delta_b1  # b3 correction
-        #    # pars[2] -= 4. / 7. * delta_b1  # bs correction
-        delta_b1 = b1 - 1.
-        params['bs2'] = params['bs2'] - 4. / 7. * delta_b1
-        params['b3nl'] = params['b3nl'] + 32. / 315. * delta_b1 
-        
+        # --- Co-evolution correction: only for STANDARD basis ---
+        prior_basis = kwargs.get('prior_basis', 'standard')
+        b3_coev = kwargs.get('b3_coev', False)
+
+        if prior_basis != 'physical' and b3_coev and 'b1' in params:
+            b1 = params['b1']
+            delta_b1 = b1 - 1.0
+            params['bs2']  = params['bs2']  - 4.0 / 7.0 * delta_b1
+            params['b3nl'] = params['b3nl'] + 32.0 / 315.0 * delta_b1
+
         # tables = pyfkpt.compute_multipoles(k=self.template.k, pk=pk, **params)
         # print("tables_shape",tables['k'].shape, kap.shape,muap.shape,self.k.shape)
         nuis = [] 
@@ -2791,18 +2788,25 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             # b1E = b1L + 1
             # b2E = 8/21 * b1L + b2L
             # bsE = -4/7 b1L + bsL
-            b1L, b2L, bsL, b3 = params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p']
+            b1L, b2L, bsL, b3 = params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bs2p'] / sigma8**2, params['b3nlp']
             pars = [1. + b1L, b2L + 8. / 21. * b1L, bsL, b3]  # compensate bs by 4. / 7. * b1L as it is removed by combine_bias_terms_poles below
             # pars += [(1 + b1L)**2 * params['alpha0p'], f * (1 + b1L) * (params['alpha0p'] + params['alpha2p']),
             #          f * (f * params['alpha2p'] + (1 + b1L) * params['alpha4p']), 0.]
             c0, c2, c4 = params['alpha0p']/A,params['alpha2p']/A,params['alpha4p']/A
             pars+=[-2/105*(105*c0-35*c2*f+9*c4*f**2),-2/7*f*(7*c2-6*f*c4),-2*f**2*c4,0]
             sigv = self.options['sigv']
-            pars += [params['sn{:d}p'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
+            pars += [params['alpha{:d}shotp'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
         else:
             pars = [params[name] for name in self.required_bias_params]
            
-        
+        eulerian_names = [
+            'b1', 'b2', 'bs2', 'b3nl',
+            'alpha0', 'alpha2', 'alpha4', 'ctilde',
+            'alpha0shot', 'alpha2shot',
+        ]
+        for name, val in zip(eulerian_names, pars):
+            params[name] = val
+
         #self.__dict__.update(dict(zip(['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2'], pars)))  # for derived parameters
         # opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
 

@@ -75,11 +75,14 @@ class BaseTracerTheory(BaseCalculator):
             return params
         *tracer_namespaces, cross_namespace = cls.multitracer_namespace(tracers)
         for name in cls._deterministic_bias_params:
-            param = params.pop(name)
-            for namespace in tracer_namespaces:
-                params[f"{namespace}.{name}"] = param.clone(namespace=namespace)
+            param = params.pop(name, None)
+            if param is not None:  # only if parameter exists (in case of a preselection)
+                for namespace in tracer_namespaces:
+                    params.set(param.clone(namespace=namespace))
         for name in cls._stochastic_bias_params:
-            params[name].update(namespace=cross_namespace)
+            param = params.get(name, None)
+            if param is not None:
+                param.update(namespace=cross_namespace)
         return params
 
     @classmethod
@@ -123,6 +126,7 @@ class BaseTracerTheory(BaseCalculator):
         if not self.tracers or isinstance(self.tracers, str):
             return False
         return True
+
 
 class BaseTracerTwoPointTheory(BaseTracerTheory):
     _ntracers = 2
@@ -1703,7 +1707,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         self.pt.setreducePslb(params, what='full')
         bird.np = np
         return jnp.nan_to_num(self.pt.fullPs, nan=0.0, posinf=jnp.inf, neginf=-jnp.inf)
-    
+
     def combine_bias_terms_poles_for_cross(self, biasX, biasY, nd=1e-4, km=(0.7, 0.7), kr=(0.25, 0.25)):
         # Follows https://arxiv.org/abs/2308.06206 eq(13), except that stochastic terms are scaled by geometric means of nd and km
         bird = self.pt

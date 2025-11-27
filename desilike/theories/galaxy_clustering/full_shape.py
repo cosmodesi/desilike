@@ -2479,7 +2479,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         
         # Default values for all MG parameters
         default_values = {
-            'fR0': 1e-15,
+            'fR0': 1e-10,
             'mu0': 0.0,
             'beta_1': 0.0,
             'lambda_1': 0.0,
@@ -2511,7 +2511,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         mg_variant=self.options['mg_variant'],
         rescale_PS=self.options['rescale_PS'],
         use_beyond_eds_kernels=self.options['beyond_eds'],
-        fR0 = getattr(cosmo, 'fR0', 1e-15),
+        fR0 = getattr(cosmo, 'fR0', 1e-10),
         **mg_params
         # # for mu_OmDE     
         # mu0 = getattr(cosmo, 'mu0', 0.0),
@@ -2582,7 +2582,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         
         # Default values for all MG parameters
         default_values = {
-            'fR0': 1e-15,
+            'fR0': 1e-10,
             'mu0': 0.0,
             'beta_1': 0.0,
             'lambda_1': 0.0,
@@ -2703,7 +2703,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     - https://arxiv.org/abs/2208.02791
     - https://github.com/henoriega/FOLPS-nu
     """
-    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4, model='HDKI',mg_variant='mu_OmDE', b3_coev=False, beyond_eds=True, rescale_PS=True) #Model can be either HS or LCDM
+    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4, model='HDKI',mg_variant='mu_OmDE', b3_coev=False, beyond_eds=True, rescale_PS=True,sigma8_fid=None) #Model can be either HS or LCDM
 
     
 
@@ -2783,13 +2783,20 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         if self.is_physical_prior:
             sigma8 = self.pt.sigma8
             f = self.pt.fsigma8 / sigma8
+            sigma8_fid = self.options['sigma8_fid']
+            if sigma8_fid is not None:
+                A = (sigma8/sigma8_fid)**2  #Following Class-PT
+            else: 
+                A=1 
             # b1E = b1L + 1
             # b2E = 8/21 * b1L + b2L
             # bsE = -4/7 b1L + bsL
             b1L, b2L, bsL, b3 = params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p']
             pars = [1. + b1L, b2L + 8. / 21. * b1L, bsL, b3]  # compensate bs by 4. / 7. * b1L as it is removed by combine_bias_terms_poles below
-            pars += [(1 + b1L)**2 * params['alpha0p'], f * (1 + b1L) * (params['alpha0p'] + params['alpha2p']),
-                     f * (f * params['alpha2p'] + (1 + b1L) * params['alpha4p']), 0.]
+            # pars += [(1 + b1L)**2 * params['alpha0p'], f * (1 + b1L) * (params['alpha0p'] + params['alpha2p']),
+            #          f * (f * params['alpha2p'] + (1 + b1L) * params['alpha4p']), 0.]
+            c0, c2, c4 = params['alpha0p']/A,params['alpha2p']/A,params['alpha4p']/A
+            pars+=[-2/105*(105*c0-35*c2*f+9*c4*f**2),-2/7*f*(7*c2-6*f*c4),-2*f**2*c4,0]
             sigv = self.options['sigv']
             pars += [params['sn{:d}p'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
         else:

@@ -2479,7 +2479,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         
         # Default values for all MG parameters
         default_values = {
-            'fR0': 1e-10,
+            'fR0': 1e-15,
             'mu0': 0.0,
             'beta_1': 0.0,
             'lambda_1': 0.0,
@@ -2511,7 +2511,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         mg_variant=self.options['mg_variant'],
         rescale_PS=self.options['rescale_PS'],
         use_beyond_eds_kernels=self.options['beyond_eds'],
-        fR0 = getattr(cosmo, 'fR0', 1e-10),
+        fR0 = getattr(cosmo, 'fR0', 1e-15),
         **mg_params
         # # for mu_OmDE     
         # mu0 = getattr(cosmo, 'mu0', 0.0),
@@ -2582,7 +2582,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         
         # Default values for all MG parameters
         default_values = {
-            'fR0': 1e-10,
+            'fR0': 1e-15,
             'mu0': 0.0,
             'beta_1': 0.0,
             'lambda_1': 0.0,

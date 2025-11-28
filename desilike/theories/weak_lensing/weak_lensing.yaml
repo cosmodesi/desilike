@@ -1,0 +1,388 @@
+class: DESWeakLensing3x2pt
+
+params:
+  # Using Planck priors
+  h:
+    prior:
+      limits: [0.1, 1.]
+    ref:
+      dist: norm
+      loc: 0.6736
+      scale: 0.005
+    delta: 0.03
+    latex: h
+  omega_cdm:
+    prior:
+      limits: [0.01, 0.99]
+    ref:
+      dist: norm
+      loc: 0.12
+      scale: 0.0012
+    delta: 0.01
+    latex: \omega_{cdm}
+  omega_b:
+    prior:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00037
+    ref:
+      dist: norm
+      loc: 0.02237
+      scale: 0.00015
+    delta: 0.0015
+    latex: \omega_{b}
+  logA:
+    prior:
+      limits: [2., 4.]
+    ref:
+      dist: norm
+      loc: 3.036394
+      scale: 0.014
+    delta: 0.05
+    latex: \ln(10^{10} A_{s})
+  n_s:
+    prior:
+      limits: [0.8, 1.2]
+    ref:
+      dist: norm
+      loc: 0.9649
+      scale: 0.0042
+    delta: 0.005
+    latex: n_{s}
+    fixed: True
+  tau_reio:
+    value: 0.0544
+    prior:
+      limits: [0.01, 0.8]
+    ref:
+      dist: norm
+      loc: 0.0544
+      scale: 0.008
+    delta: 0.01
+    latex: \tau
+    fixed: True
+  m_ncdm:
+    prior:
+      limits: [0., 5.]
+    ref:
+      dist: norm
+      loc: 0.06
+      scale: 0.12
+    delta: [0.31, 0.15, 0.15]
+    latex: m_{ncdm}
+    fixed: True
+  N_eff:
+    prior:
+      limits: [0.01, 10.]
+    ref:
+      dist: norm
+      loc: 3.046
+      scale: 0.16
+    latex: N_{eff}
+    delta: 0.2
+    fixed: True
+  w0_fld:
+    prior:
+      limits: [-3., 1.]
+    ref:
+      dist: norm
+      loc: -1
+      scale: 0.08
+    delta: 0.1
+    latex: w_{0}
+    fixed: True
+  wa_fld:
+    prior:
+      limits: [-3., 2.]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.3
+    delta: 0.3
+    latex: w_{a}
+    fixed: True
+  Omega_k:
+    prior:
+      limits: [-0.3, 0.3]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.0065
+    delta: 0.05
+    latex: \Omega_{k}
+    fixed: True
+  # Lensing photo-z errors
+  DES_DzL1:
+    prior:
+      dist: norm
+      loc: -0.009
+      scale: 0.007
+    ref:
+      dist: norm
+      loc: -0.035
+      scale: 0.005
+    delta: 0.005
+    latex: \Delta z_\mathrm{l,DES}^1
+  DES_DzL2:
+    prior:
+      dist: norm
+      loc: -0.035
+      scale: 0.011
+    ref:
+      dist: norm
+      loc: -0.005
+      scale: 0.005
+    delta: 0.005
+    latex: \Delta z_\mathrm{l,DES}^2
+  DES_DzL3:
+    prior:
+      dist: norm
+      loc: -0.005
+      scale: 0.006
+    ref:
+      dist: norm
+      loc: -0.007
+      scale: 0.005
+    delta: 0.005
+    latex: \Delta z_\mathrm{l,DES}^3
+  DES_DzL4:
+    prior:
+      dist: norm
+      loc: -0.007
+      scale: 0.006
+    ref:
+      dist: norm
+      loc: 0
+      scale: 0.005
+    delta: 0.005
+    latex: \Delta z_\mathrm{l,DES}^4
+  DES_DzL5: 0
+  DES_DzL6: 0
+  # Lensing photo-z width
+  DES_szL1:
+    prior:
+      dist: norm
+      loc: 0.975
+      scale: 0.062
+    ref:
+      dist: norm
+      loc: 1
+      scale: 0.01
+    delta: 0.01
+    latex: \sigma_\mathrm{z,l,DES}^1
+  DES_szL2:
+    prior:
+      dist: norm
+      loc: 1.306
+      scale: 0.093
+    ref:
+      dist: norm
+      loc: 1
+      scale: 0.01
+    delta: 0.01
+    latex: \sigma_\mathrm{z,l,DES}^2
+  DES_szL3:
+    prior:
+      dist: norm
+      loc: 0.87
+      scale: 0.054
+    ref:
+      dist: norm
+      loc: 1
+      scale: 0.01
+    delta: 0.01
+    latex: \sigma_\mathrm{z,l,DES}^3
+  DES_szL4:
+    prior:
+      dist: norm
+      loc: 0.918
+      scale: 0.051
+    ref:
+      dist: norm
+      loc: 1
+      scale: 0.01
+    delta: 0.01
+    latex: \sigma_\mathrm{z,l,DES}^4
+  DES_szL5: 1
+  DES_szL6: 1
+  # Bin bias parameters
+  DES_b1:
+    prior:
+      limits: [0.8, 3.]
+    ref:
+      dist: norm
+      loc: 1.5
+      scale: 0.05
+    delta: 0.05
+    latex: b_\mathrm{DES}^1
+  DES_b2:
+    prior:
+      limits: [0.8, 3.]
+    ref:
+      dist: norm
+      loc: 1.8
+      scale: 0.05
+    delta: 0.05
+    latex: b_\mathrm{DES}^2
+  DES_b3:
+    prior:
+      limits: [0.8, 3.]
+    ref:
+      dist: norm
+      loc: 1.8
+      scale: 0.05
+    delta: 0.05
+    latex: b_\mathrm{DES}^3
+  DES_b4:
+    prior:
+      limits: [0.8, 3.]
+    ref:
+      dist: norm
+      loc: 1.9
+      scale: 0.05
+    delta: 0.05
+    latex: b_\mathrm{DES}^4
+  DES_b5: 2.3
+  DES_b6: 2.3
+  # WL photo-z errors
+  DES_DzS1:
+    prior:
+      dist: norm
+      loc: 0.0
+      scale: 0.018
+    ref:
+      dist: norm
+      loc: 0.0
+      scale: 0.018
+    delta: 0.005
+    latex: \Delta z_\mathrm{s,DES}^1
+  DES_DzS2:
+    prior:
+      dist: norm
+      loc: 0.0
+      scale: 0.015
+    ref:
+      dist: norm
+      loc: 0.0
+      scale: 0.015
+    delta: 0.005
+    latex: \Delta z_\mathrm{s,DES}^2
+  DES_DzS3:
+    prior:
+      dist: norm
+      loc: 0.0
+      scale: 0.011
+    ref:
+      dist: norm
+      loc: 0.0
+      scale: 0.011
+    delta: 0.005
+    latex: \Delta z_\mathrm{s,DES}^3
+  DES_DzS4:
+    prior:
+      dist: norm
+      loc: 0.0
+      scale: 0.017
+    ref:
+      dist: norm
+      loc: 0.0
+      scale: 0.017
+    delta: 0.005
+    latex: \Delta z_\mathrm{s,DES}^4
+  # Shear calibration parameters
+  DES_m1:
+    prior:
+      dist: norm
+      loc: -0.006
+      scale: 0.009
+    ref:
+      dist: norm
+      loc: -0.006
+      scale: 0.009
+    delta: 0.004
+    latex: m_\mathrm{DES}^1
+  DES_m2:
+    prior:
+      dist: norm
+      loc: -0.020
+      scale: 0.008
+    ref:
+      dist: norm
+      loc: -0.020
+      scale: 0.008
+    delta: 0.004
+    latex: m_\mathrm{DES}^2
+  DES_m3:
+    prior:
+      dist: norm
+      loc: -0.024
+      scale: 0.008
+    ref:
+      dist: norm
+      loc: -0.024
+      scale: 0.008
+    delta: 0.004
+    latex: m_\mathrm{DES}^3
+  DES_m4:
+    prior:
+      dist: norm
+      loc: -0.037
+      scale: 0.008
+    ref:
+      dist: norm
+      loc: -0.037
+      scale: 0.008
+    delta: 0.003
+    latex: m_\mathrm{DES}^4
+  # Intrinsic alignment
+  DES_AIA1:
+    prior:
+      limits: [-5, 5]
+    ref:
+      dist: norm
+      loc: 0.7
+      scale: 0.2
+    delta: 0.2
+    latex: A_\mathrm{IA1,DES}
+  DES_AIA2:
+    prior:
+      limits: [-5, 5]
+    ref:
+      dist: norm
+      loc: -1.36
+      scale: 0.2
+    delta: 0.2
+    latex: A_\mathrm{IA2,DES}
+  DES_bTA:
+    prior:
+      limits: [0, 2]
+    ref:
+      dist: norm
+      loc: 1
+      scale: 0.1
+    delta: 0.05
+    latex: b_\mathrm{TA,DES}
+  DES_alphaIA1:
+    prior:
+      limits: [-5, 5]
+    ref:
+      dist: norm
+      loc: -1.7
+      scale: 0.2 
+    delta: 0.2
+    latex: \alpha_\mathrm{IA1,DES}
+  DES_alphaIA2:
+    prior:
+      limits: [-5, 5]
+    ref:
+      dist: norm
+      loc: -2.5
+      scale: 0.2 
+    delta: 0.2
+    latex: \alpha_\mathrm{IA2,DES}
+  DES_z0IA:
+    value: 0.62
+    latex: z_{0\mathrm{IA,DES}}
+
+
+---

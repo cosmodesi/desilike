@@ -2479,12 +2479,12 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         
         # Default values for all MG parameters
         default_values = {
-            'fR0': 1e-10,
+            'fR0': 1e-15,
             'mu0': 0.0,
             'beta_1': 0.0,
             'lambda_1': 0.0,
             'exp_s': 0.0,
-            'mu1': 0.0, 'mu2': 0.0, 'mu3': 0.0, 'mu4': 0.0,
+            'mu1': 1.0, 'mu2': 1.0, 'mu3': 1.0, 'mu4': 1.0,
         }
         
         # Build MG params depending on the selected variant
@@ -2511,7 +2511,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         mg_variant=self.options['mg_variant'],
         rescale_PS=self.options['rescale_PS'],
         use_beyond_eds_kernels=self.options['beyond_eds'],
-        fR0 = getattr(cosmo, 'fR0', 1e-10),
+        fR0 = getattr(cosmo, 'fR0', 1e-15),
         **mg_params
         # # for mu_OmDE     
         # mu0 = getattr(cosmo, 'mu0', 0.0),
@@ -2582,7 +2582,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         
         # Default values for all MG parameters
         default_values = {
-            'fR0': 1e-10,
+            'fR0': 1e-15,
             'mu0': 0.0,
             'beta_1': 0.0,
             'lambda_1': 0.0,
@@ -2613,7 +2613,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         prior_basis = kwargs.get('prior_basis', 'standard')
         b3_coev = kwargs.get('b3_coev', False)
 
-        if prior_basis != 'physical' and b3_coev and 'b1' in params:
+        if prior_basis != 'physical' and 'b1' in params:
             b1 = params['b1']
             delta_b1 = b1 - 1.0
             params['bs2']  = params['bs2']  - 4.0 / 7.0 * delta_b1
@@ -2750,7 +2750,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         
         
         self.is_physical_prior = self.options['prior_basis'] == 'physical'
-        if self.is_physical_prior:
+        if self.is_physical_prior == 'physical':
             for name in list(self.required_bias_params):
                 self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
             settings = get_physical_stochastic_settings(tracer=self.options['tracer'])
@@ -2766,7 +2766,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             param.update(value=0., fixed=True)
         self.nd = 1e-4
         self.fsat = self.snd = 1.
-        if self.is_physical_prior:
+        if self.is_physical_prior == 'physical':
             self.fsat, self.snd = self.options['fsat'], self.options['shotnoise'] * self.nd  # normalized by 1e-4
 
     def calculate(self, **params):
@@ -2777,7 +2777,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         
         # params = {**self.required_bias_params, **self.MG_params, **params}
         # print(params['fR0'],params['b1'])
-        if self.is_physical_prior:
+        if self.is_physical_prior == 'physical':
             sigma8 = self.pt.sigma8
             f = self.pt.fsigma8 / sigma8
             sigma8_fid = self.options['sigma8_fid']

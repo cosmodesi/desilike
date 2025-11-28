@@ -29,3 +29,5 @@ doc/_build/
 
 # Unit test / coverage reports
 **/.coverage
+.DS_Store
+*/.DS_Store

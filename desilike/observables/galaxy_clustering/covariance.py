@@ -1,6 +1,8 @@
 import numpy as np
 from scipy import special
 
+import lsstypes as types
+
 from desilike.theories.primordial_cosmology import get_cosmo
 from desilike.base import BaseCalculator, CollectionCalculator
 from desilike.utils import BaseClass
@@ -349,9 +351,9 @@ class ObservablesCovarianceMatrix(BaseClass):
                     covariance[io2][io1] = (c + c.T) / 2.  # just for numerical accuracy
                 else:
                     covariance[io2][io1] = c.T
-        value = np.bmat(covariance).A
-        from desilike.observables import ObservableCovariance
-        self.covariance = ObservableCovariance(value=value, observables=[o.to_array() for o in self.observables])
+        value = np.block(covariance)
+        observable = types.ObservableTree([o.to_lsstypes('data') for o in self.observables], observables=[o.name for o in self.observables])
+        self.covariance = types.CovarianceMatrix(value=value, observable=observable)
 
     def _run(self, io1, io2):
         auto = io2 == io1
@@ -398,7 +400,7 @@ class ObservablesCovarianceMatrix(BaseClass):
 
             def get_bin_cov(obs, ells, ibins):
                 ills = [o.ells.index(ell) for o, ell in zip(obs, ells)]
-                bins = [o.kedges[ill][ibin:ibin + 2] for o, ill, ibin in zip(obs, ills, ibins)]
+                bins = [o.kedges[ill][ibin] for o, ill, ibin in zip(obs, ills, ibins)]
                 bin = _interval_intersection(*bins)
                 if _interval_empty(bin):
                     return 0.
@@ -409,7 +411,7 @@ class ObservablesCovarianceMatrix(BaseClass):
 
             def get_bin_cov(obs, ells, ibin):
                 ills = [o.ells.index(ell) for o, ell in zip(obs, ells)]
-                bins = [edges[ill][i:i + 2] for edges, ill, i in zip([obs[0].sedges, obs[1].kedges], ills, ibin)]
+                bins = [edges[ill][i] for edges, ill, i in zip([obs[0].sedges, obs[1].kedges], ills, ibin)]
                 s, k = [get_integ_points(bin) for bin in bins]
                 weights = np.sum(s[:, None]**2 * special.spherical_jn(ells[0], s[:, None] * k), axis=0) / np.sum(s**2, axis=0)
                 sigmak = get_sigma_k(*pks, *ells, k)
@@ -422,7 +424,7 @@ class ObservablesCovarianceMatrix(BaseClass):
 
             def get_bin_cov(obs, ells, ibin):
                 ills = [o.ells.index(ell) for o, ell in zip(obs, ells)]
-                bins = [o.sedges[ill][i:i + 2] for o, ill, i in zip(obs, ills, ibin)]
+                bins = [o.sedges[ill][i] for o, ill, i in zip(obs, ills, ibin)]
                 if 'k' in cache:
                     k = cache['k']
                 else:
@@ -452,4 +454,4 @@ class ObservablesCovarianceMatrix(BaseClass):
                 row.append(np.array([[get_bin_cov(obs, (ell1, ell2), (i1, i2)) for i2 in range(n2)] for i1 in range(n1)], dtype='f8'))
             covariance.append(row)
 
-        return np.bmat(covariance).A
+        return np.block(covariance)

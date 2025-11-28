@@ -13,10 +13,58 @@ def test_power_spectrum():
     from cosmoprimo.fiducial import DESI
     from desilike.theories.galaxy_clustering import ResummedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
     from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TopHatFiberCollisionsPowerSpectrumMultipoles, BoxFootprint, ObservablesCovarianceMatrix
-    from desilike.observables import ObservableArray, ObservableCovariance
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5, fiducial=DESI())
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
+
+    from lsstypes import Mesh2SpectrumPole, Mesh2SpectrumPoles, WindowMatrix, CovarianceMatrix
+
+    def get_observable(size):
+        edges = np.linspace(0., 0.2, size + 1)
+        edges = np.column_stack([edges[:-1], edges[1:]])
+        k = np.mean(edges, axis=-1)
+        value = np.zeros_like(k)
+        ells = [0, 2, 4]
+        data = [Mesh2SpectrumPole(k=k, num_raw=value, k_edges=edges, ell=ell) for ell in ells]
+        return Mesh2SpectrumPoles(data)
+
+    data = get_observable(40)
+    covariance = CovarianceMatrix(value=np.eye(data.size), observable=data)
+
+    _theory = get_observable(80)
+    window = WindowMatrix(value=np.ones((data.size, _theory.size)), observable=data, theory=_theory)
+
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
+                                                         data=data,
+                                                         covariance=covariance,
+                                                         wmatrix=window,
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
+    likelihood()
+    observable.plot_covariance_matrix(show=True)
+
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
+                                                         data=data,
+                                                         covariance=covariance,
+                                                         kin=_theory.get(ells=0).coords('k'),
+                                                         wmatrix=dict(resolution=2),
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
+    likelihood()
+
+    from desilike.observables import ObservableArray, ObservableCovariance
+
+    edges = np.linspace(0., 0.4, 81)
+    data = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
+    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
+                                                         data=data,
+                                                         covariance=ObservableCovariance(np.eye(data.flatx.size), observables=[data]),
+                                                         #data=PowerSpectrumMultipoles.load('../../tests/_pk/data.npy'),
+                                                         #covariance=[PowerSpectrumMultipoles.load(fn) for fn in glob.glob('../../tests/_pk/mock_*.npy')],
+                                                         theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
+    print(likelihood())
+
 
     edges = np.linspace(0., 0.4, 81)
     data = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
@@ -179,7 +227,7 @@ def test_power_spectrum():
     assert theory.template.z == 1.
     likelihood()
     assert np.allclose((likelihood + likelihood)(), 2. * likelihood() - likelihood.logprior)
-    assert np.allclose(likelihood.flatdiff, 3. * observable.flatdata * (np.cbrt(observable.wmatrix.flatpower / observable.flatdata) - 1.))
+    assert np.allclose(likelihood.flatdiff, 3. * observable.flatdata * (np.cbrt(observable.wmatrix.flatpower.real / observable.flatdata.real) - 1.))
 
     theory = KaiserTracerPowerSpectrumMultipoles(template=template)
     kin = np.linspace(0.01, 0.3, 90)
@@ -216,7 +264,10 @@ def test_power_spectrum():
                                                          theory=theory,
                                                          shotnoise=3e4)  # BAO theory doesn't take shot noise
     footprint = BoxFootprint(volume=1e10, nbar=1e-3)
+    observable()
+
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)(**params)
+
     likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
     print(likelihood(**params))
     observable.plot(show=True)
@@ -260,6 +311,71 @@ def test_correlation_function():
 
     template = ShapeFitPowerSpectrumTemplate(z=0.5)
     theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
+
+
+    from lsstypes import Count2, Count2Correlation, Count2CorrelationPole, Count2CorrelationPoles, WindowMatrix, CovarianceMatrix
+
+    def get_count(mode='smu', seed=42):
+        rng = np.random.RandomState(seed=seed)
+        if mode == 'smu':
+            coords = ['s', 'mu']
+            edges = [np.linspace(0., 200., 201), np.linspace(-1., 1., 101)]
+        if mode == 'rppi':
+            coords = ['rp', 'pi']
+            edges = [np.linspace(0., 200., 51), np.linspace(-20., 20., 101)]
+
+        edges = [np.column_stack([edge[:-1], edge[1:]]) for edge in edges]
+        coords_values = [np.mean(edge, axis=-1) for edge in edges]
+
+        counts = 1. + rng.uniform(size=tuple(v.size for v in coords_values))
+        return Count2(counts=counts, norm=np.ones_like(counts), **{coord: value for coord, value in zip(coords, coords_values)},
+                      **{f'{coord}_edges': value for coord, value in zip(coords, edges)}, coords=coords, attrs=dict(los='x'))
+
+    def get_count2_correlation(mode='smu', seed=42):
+        counts = {label: get_count(mode=mode, seed=seed + i) for i, label in enumerate(['DD', 'DR', 'RD', 'RR'])}
+        return Count2Correlation(**counts)
+
+    def get_observable(size):
+        edges = np.linspace(0., 200., size + 1)
+        edges = np.column_stack([edges[:-1], edges[1:]])
+        s = np.mean(edges, axis=-1)
+        value = np.zeros_like(s)
+        ells = [0, 2, 4]
+        data = [Count2CorrelationPole(s=s, value=value, s_edges=edges, ell=ell) for ell in ells]
+        return Count2CorrelationPoles(data)
+
+    data = get_observable(40)
+    covariance = CovarianceMatrix(value=np.eye(data.size), observable=data)
+
+    _theory = get_observable(80)
+    window = WindowMatrix(value=np.ones((data.size, _theory.size)), observable=data, theory=_theory)
+
+    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [0.05, 180., 4.], 2: [0.05, 180., 4.]},
+                                                            data=data,
+                                                            covariance=covariance,
+                                                            #wmatrix=window,
+                                                            theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 50.)
+    likelihood()
+    #observable.plot_covariance_matrix(show=True)
+
+    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [0.05, 180., 4.], 2: [0.05, 180., 4.]},
+                                                                data=data,
+                                                                covariance=covariance,
+                                                                sin=_theory.get(ells=0).coords('s'),
+                                                                wmatrix=dict(resolution=2),
+                                                                theory=theory)
+    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
+    likelihood()
+
+    data = get_count2_correlation()
+    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [0.05, 180., 4.], 2: [0.05, 180., 8.]},
+                                                            data=data,
+                                                            wmatrix=dict(resolution=2),
+                                                            theory=theory)
+    observable()
+    print(observable.wmatrix.matrix_full)
+
 
     edges = np.linspace(0., 200, 201)
     data = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
@@ -361,6 +477,7 @@ def test_correlation_function():
                                                                data=params, #'../../tests/_xi/data.npy',
                                                                theory=theory,
                                                                wmatrix={'resolution': 2})
+    observable()
     cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
     observable.init.update(covariance=cov)
     likelihood = ObservablesGaussianLikelihood(observables=[observable])
@@ -1181,8 +1298,8 @@ if __name__ == '__main__':
 
     # test_systematic_templates()
     # test_bao()
-    # test_power_spectrum()
-    # test_correlation_function()
+    test_power_spectrum()
+    test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()
@@ -1192,4 +1309,4 @@ if __name__ == '__main__':
     # test_compression_window()
     # test_shapefit(run=False)
     # test_observable_covariance()
-    test_hartlap()
+    # test_hartlap()

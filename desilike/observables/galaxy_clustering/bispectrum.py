@@ -1,6 +1,7 @@
 import glob
 
 import numpy as np
+import lsstypes as types
 
 from desilike import plotting, jax, utils
 from desilike.base import BaseCalculator
@@ -40,9 +41,12 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
         Theory for the bispectrum.
 
     """
-    def initialize(self, data=None, covariance=None, k=None, ells=None, shotnoise=None, theory=None):
+    name = 'spectrum3poles'
+
+    def initialize(self, data=None, covariance=None, k=None, kedges=None, ells=None, shotnoise=None, theory=None):
         assert data is not None
         assert theory is not None
+        self.kedges = kedges
         self.wmatrix = theory
         self.wmatrix.init.update(k=k, ells=ells, shotnoise=shotnoise)
         self.wmatrix.runtime_info.initialize()
@@ -205,11 +209,8 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
         -------
         fig : matplotlib.figure.Figure
         """
-        from desilike.observables.plotting import plot_covariance_matrix
-        cumsize = np.insert(np.cumsum([len(k) for k in self.k]), 0, 0)
-        mat = [[self.covariance[start1:stop1, start2:stop2] for start2, stop2 in zip(cumsize[:-1], cumsize[1:])] for start1, stop1 in zip(cumsize[:-1], cumsize[1:])]
-        ik = [np.arange(len(kk)) for kk in self.k]
-        return plot_covariance_matrix(mat, x1=ik, xlabel1=r'$k$ [$h/\mathrm{Mpc}$]', label1=[r'$\ell = {}$'.format(ell) for ell in self.ells], corrcoef=corrcoef, **kwargs)
+        covariance = self.to_lsstypes('covariance')
+        return covariance.plot(corrcoef=corrcoef, **kwargs)
 
     def calculate(self):
         # Set flattheory with bispectrum prediction
@@ -271,6 +272,17 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
                 state[name] = getattr(self, name)
         return state
 
+    def to_lsstypes(self, kind):
+        """Return data or covariance."""
+        data = [types.Mesh3PowerSpectrumPole(k=self.k[ill], k_edges=self.kedges[ill], value=self.data[ill], ell=ell) for ell in self.ells]
+        data = types.Mesh2PowerSpectrumPoles(data)
+        if kind == 'data':
+            return data
+        if kind == 'covariance':
+             return types.CovarianceMatrix(observable=data, value=self.covariance)
+        raise NotImplementedError(f'kind {kind} not recognized')
+
     def to_array(self):
+        warnings.warn('to_array is deprecated. Please use to_lsstypes')
         from desilike.observables import ObservableArray
         return ObservableArray(x=self.k, value=self.data, projs=self.ells, attrs={'shotnoise': self.shotnoise}, name=self.__class__.__name__)

@@ -1,4 +1,8 @@
+import warnings
+
 import numpy as np
+import lsstypes as types
+
 from desilike.jax import numpy as jnp
 from desilike.parameter import Parameter
 from desilike.base import BaseCalculator
@@ -73,7 +77,12 @@ class BaseCompressionObservable(BaseCalculator):
             state[name] = getattr(self, name)
         return state
 
+    def to_lsstypes(self):
+        values = [types.ObservableLeaf(value=d) for d in self.flatdata]
+        return types.ObservableTree(values, quantities=self.quantities)
+
     def to_array(self):
+        warnings.warn('to_array is deprecated. Please use to_lsstypes')
         from desilike.observables import ObservableArray
         return ObservableArray(value=self.flatdata, projs=self.quantities, name=self.__class__.__name__)
 

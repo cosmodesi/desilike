@@ -1,5 +1,9 @@
+import warnings
+
 import numpy as np
 from scipy import special
+
+import lsstypes as types
 
 from desilike.jax import numpy as jnp
 from desilike.jax import jit
@@ -13,6 +17,8 @@ def window_matrix_bininteg(list_edges, resolution=1):
 
     Parameters
     ----------
+    list_edges : list
+        Original coarse edges.
     resolution : int, default=1
         Number of evaluation points in the integral.
 
@@ -30,21 +36,21 @@ def window_matrix_bininteg(list_edges, resolution=1):
     if np.ndim(list_edges[0]) == 0:
         list_edges = [list_edges]
 
-    step = min(np.diff(edges).min() for edges in list_edges) / resolution
+    step = min((edges[..., 1] - edges[..., 0]).min() for edges in list_edges) / resolution
     start, stop = min(np.min(edges) for edges in list_edges), max(np.max(edges) for edges in list_edges)
     #xin = np.arange(start + step / 2., stop, step)
-    edges = np.arange(start, stop + step / 2., step)
-    xin = 3. / 4. * (edges[1:]**4 - edges[:-1]**4) / (edges[1:]**3 - edges[:-1]**3)
+    edgesin = np.arange(start, stop + step / 2., step)
+    xin = 3. / 4. * (edgesin[1:]**4 - edgesin[:-1]**4) / (edgesin[1:]**3 - edgesin[:-1]**3)
     #print(xin)
 
     matrices = []
     for edges in list_edges:
         x, w = [], []
-        for ibin, bin in enumerate(zip(edges[:-1], edges[1:])):
-            edge = np.linspace(*bin, resolution + 1)
+        for ibin, edge in enumerate(edges):
+            edge = np.linspace(*edge, resolution + 1)
             #x.append((edge[1:] + edge[:-1]) / 2.)
             x.append(3. / 4. * (edge[1:]**4 - edge[:-1]**4) / (edge[1:]**3 - edge[:-1]**3))
-            line = np.zeros((len(edges) - 1) * resolution, dtype='f8')
+            line = np.zeros(len(edges) * resolution, dtype='f8')
             tmp = edge[1:]**3 - edge[:-1]**3
             line[ibin * resolution:(ibin + 1) * resolution] = tmp / tmp.sum()
             w.append(line)
@@ -58,7 +64,7 @@ def window_matrix_bininteg(list_edges, resolution=1):
             else:
                 line.append(np.zeros_like(mat))
         full_matrix.append(line)
-    full_matrix = np.bmat(full_matrix).A
+    full_matrix = np.block(full_matrix)
     return xin, full_matrix
 
 
@@ -91,22 +97,22 @@ def window_matrix_RR(soutedges, sedges, muedges, wcounts, ellsin=(0, 2, 4), reso
     full_matrix : array
         Window matrix.
     """
-    sin, binmatrix = window_matrix_bininteg(sedges, resolution=resolution)  # binmatrix shape (len(sin), len(sinedges) - 1)
+    sin, binmatrix = window_matrix_bininteg([sedges], resolution=resolution)  # binmatrix shape (len(sin), len(sedges))
     full_matrix, idxin = [], []
     for ellout, soutedges in soutedges.items():
-        idx = np.flatnonzero(sedges == soutedges[0])
+        idx = np.flatnonzero(sedges[..., 0] == soutedges[0, 0])  # find index of first edge
         if not idx.size:
             raise ValueError('output edges {} not found in RR s-edges {}'.format(soutedges, sedges))
         idx = idx[0]
-        diffout = soutedges[1] - soutedges[0]
-        diffin = sedges[idx + 1] - sedges[idx]
+        diffout = soutedges[0, 1] - soutedges[0, 0]
+        diffin = sedges[idx, 1] - sedges[idx, 0]
         factor = np.rint(diffout / diffin).astype('i4')
         if factor == 0:
             raise ValueError('s-resolution {} of RR counts is larger than required output s-binning {}'.format(sedges, soutedges))
         line = []
         for ellin in ellsin:
             integ = (special.legendre(ellout) * special.legendre(ellin)).integ()
-            matrix = np.zeros((len(sedges) - 1, len(soutedges) - 1), dtype='f8')
+            matrix = np.zeros((len(sedges), len(soutedges)), dtype='f8')
             #print(idx)
             for iout in range(matrix.shape[1]):
                 iin = idx + factor * iout
@@ -116,7 +122,7 @@ def window_matrix_RR(soutedges, sedges, muedges, wcounts, ellsin=(0, 2, 4), reso
                 wcmu[~mask_nonzero] = 1.
                 tmp = wc / wcmu
                 # Integration over mu
-                tmp = (2. * ellout + 1.) * np.sum(tmp * mask_nonzero * (integ(muedges[1:]) - integ(muedges[:-1])), axis=-1) / np.sum(mask_nonzero * (muedges[1:] - muedges[:-1]))  # normalization of mu-integral over non-empty s-rebinned RR(s, mu) bins
+                tmp = (2. * ellout + 1.) * np.sum(tmp * mask_nonzero * (integ(muedges[..., 1]) - integ(muedges[..., 0])), axis=-1) / np.sum(mask_nonzero * (muedges[..., 1] - muedges[..., 0]))  # normalization of mu-integral over non-empty s-rebinned RR(s, mu) bins
                 #if ellout != ellin:
                 #    print(ellin, ellout, mask_nonzero.all(), integ(muedges[-1]) - integ(muedges[0]), np.abs(tmp).max())
                 matrix[iin:iin + factor, iout] = tmp
@@ -128,7 +134,7 @@ def window_matrix_RR(soutedges, sedges, muedges, wcounts, ellsin=(0, 2, 4), reso
     # Let's remove useless sin
     sin = sin[idxin]
     full_matrix = [[matrix[:, idxin] for matrix in line] for line in full_matrix]
-    full_matrix = np.bmat(full_matrix).A
+    full_matrix = np.block(full_matrix)
     return sin, full_matrix.T
 
 
@@ -220,11 +226,12 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             if np.ndim(kedges[0]) == 0:
                 kedges = [kedges] * len(self.ells)
             self.kedges = [np.array(kk, dtype='f8') for kk in kedges]
+            self.kedges = [np.column_stack([edges[:-1], edges[1:]]) if edges.ndim <= 1 else edges for edges in self.kedges]
             #print(self.kedges, self.ells)
             if len(self.kedges) != len(self.ells):
                 raise ValueError("provide as many kedges as ells")
             if klim is None:
-                klim = {ell: (edges[0], edges[-1], np.mean(np.diff(edges))) for ell, edges in zip(self.ells, self.kedges)}
+                klim = {ell: (edges[0, 0], edges[-1, 1], np.mean(edges[..., 1] - edges[..., 0])) for ell, edges in zip(self.ells, self.kedges)}
 
         if input_klim:
             klim = dict(klim)
@@ -256,7 +263,9 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 if not step:
                     if self.k is not None: step = ((hi - lo) / self.k[ill].size,)
                     else: step = (_default_step,)
-                kedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
+                edges = np.arange(lo, hi + step[0] / 2., step=step[0])
+                edges = np.column_stack([edges[:-1], edges[1:]])
+                kedges.append(edges)
             if self.kedges is None: self.kedges = kedges
         else:
             klim = {ell: None for ell in self.ells}
@@ -267,12 +276,15 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                 for xx in self.k:
                     tmp = (xx[:-1] + xx[1:]) / 2.
                     tmp = np.concatenate([[tmp[0] - (xx[1] - xx[0])], tmp, [tmp[-1] + (xx[-1] - xx[-2])]])
+                    tmp = np.column_stack([tmp[:-1], tmp[1:]])
                     self.kedges.append(tmp)
             else:
-                self.kedges = [np.arange(0.01 - _default_step / 2., 0.2 + _default_step, _default_step)] * len(self.ells)  # gives k = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
+                edges = np.arange(0.01 - _default_step / 2., 0.2 + _default_step, _default_step)
+                edges = np.column_stack([edges[:-1], edges[1:]])
+                self.kedges = [edges] * len(self.ells)  # gives k = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
 
         if self.k is None:
-            self.k = [(edges[:-1] + edges[1:]) / 2. for edges in self.kedges]
+            self.k = [np.mean(edges, axis=-1) for edges in self.kedges]
         self.k = [np.array(kk) for kk in self.k]
 
         if theory is None:
@@ -311,82 +323,107 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
             self.matrix_full = matrix_full.dot(wmatrix_rebin.T)
         else:
             if utils.is_path(wmatrix):
-                from pypower import MeshFFTWindow, BaseMatrix
-                fn = wmatrix
-                wmatrix = MeshFFTWindow.load(fn)
-                if hasattr(wmatrix, 'poles'):
-                    wmatrix = wmatrix.poles
-                else:
-                    wmatrix = BaseMatrix.load(fn)
-            else:
-                wmatrix = wmatrix.deepcopy()
-            # TODO: implement best match BaseMatrix method
-            for illout, (kk, ellout) in enumerate(zip(self.k, self.ells)):
-                for iout, projout in enumerate(wmatrix.projsout):
-                    if projout.ell == ellout: break
-                if projout.ell != ellout:
-                    raise ValueError('ell = {:d} not found in wmatrix.projsout = {}'.format(ellout, wmatrix.projsout))
-                lim = klim.get(projout.ell, None)
-                if lim is not None:
-                    lo, hi, *step = lim
-                else:
-                    lo, hi = 2 * kk[0] - kk[1], 2 * kk[-1] - kk[-2]
-                xwout = wmatrix.xout[iout]
-                isnan = np.isnan(xwout)
-                if isnan.any():
-                    isnan = np.isnan(xwout)
-                    kkisnan = np.interp(np.flatnonzero(isnan), np.flatnonzero(~isnan), xwout[~isnan])
-                    #if self.mpicomm.rank == 0:
-                    #    self.log_warning('NaN found in k: {}, replaced by {}.'.format(xwout, kkisnan))
-                    xwout[isnan] = kkisnan
-                wmatrix.xout[iout] = xwout
-
-                for factorout in range(1, xwout.size // kk.size + 1):
-                    wmat = wmatrix.deepcopy()
-                    wmat.slice_x(sliceout=slice(0, len(wmat.xout[iout]) // factorout * factorout, factorout), projsout=projout)
-                    # wmatrix.slice_x(sliceout=slice(0, len(xwout) // factorout * factorout), projsout=projout)
-                    # wmatrix.rebin_x(factorout=factorout, projsout=projout)
-                    xwout = wmat.xout[iout]
-                    if lim is not None:
-                        istart = np.flatnonzero(xwout >= lo)[0]
-                        ksize = np.flatnonzero(xwout <= hi)[-1] - istart + 1
+                fn = str(wmatrix)
+                if fn.endswith('.npy'):
+                    from pypower import MeshFFTWindow, BaseMatrix
+                    wmatrix = MeshFFTWindow.load(fn)
+                    if hasattr(wmatrix, 'poles'):
+                        wmatrix = wmatrix.poles
                     else:
-                        istart = np.nanargmin(np.abs(xwout - kk[0]))
-                        ksize = np.nanargmin(np.abs(xwout - kk[-1])) - istart + 1
-                    wmat.slice_x(sliceout=slice(istart, istart + ksize), projsout=projout)
-                    if ksize == kk.size:
-                        wmatrix = wmat
-                        break
-                self.k[illout] = xwout = wmatrix.xout[iout]
-                isfinite = np.isfinite(xwout) & np.isfinite(kk)
-                if ksize != xwout.size or (lim is None and not np.allclose(xwout[isfinite], kk[isfinite], rtol=1e-4)):
-                    raise ValueError('k-coordinates {} for ell = {:d} could not be found in input matrix (rebinning = {:d}, best guess = {})'.format(kk, projout.ell, factorout, xwout))
-            if ellsin is not None:
-                self.ellsin = list(ellsin)
+                        wmatrix = BaseMatrix.load(fn)
+                else:
+                    wmatrix = types.read(fn)
+            if isinstance(wmatrix, types.WindowMatrix):
+                if ellsin is not None:
+                    self.ellsin = list(ellsin)
+                else:
+                    self.ellsin = list(wmatrix.theory.ells)
+                wmatrix = wmatrix.at.theory.get(ells=list(self.ellsin))
+                observable = wmatrix.observable.get(ells=list(self.ells))
+                for ill, ell in enumerate(self.ells):
+                    observable = observable.at(ells=ell).select(k=self.kedges[ill])
+                wmatrix = wmatrix.at.observable.match(observable)
+                self.matrix_full = wmatrix.value()
+                self.kin = next(iter(wmatrix.theory)).coords('k')
+                if kin is not None:
+                    self.kin = np.asarray(kin).flatten()
+                    wmatrix_rebin = linalg.block_diag(*[utils.matrix_lininterp(self.kin, pole.coords('k')) for pole in wmatrix.theory])
+                    self.matrix_full = self.matrix_full.dot(wmatrix_rebin.T)
+                else:
+                    assert all(np.allclose(pole.coords('k'), self.kin) for pole in wmatrix.theory), 'input coordinates of "wmatrix" are not the same for all multipoles; pass a k-coordinate array to "kin"'
+
             else:
-                self.ellsin = []
-                for proj in wmatrix.projsin:
-                    assert proj.wa_order in (None, 0)
-                    self.ellsin.append(proj.ell)
-            projsin = [proj for proj in wmatrix.projsin if proj.ell in self.ellsin]
-            self.ellsin = tuple(proj.ell for proj in projsin)
-            wmatrix.select_proj(projsout=[(ell, None) for ell in self.ells], projsin=projsin)
-            if kinrebin is not None:
-                wmatrix.slice_x(slicein=slice(0, len(wmatrix.xin[0]) // kinrebin * kinrebin, kinrebin))
-            # print(wmatrix.xout[0], max(kk.max() for kk in self.k) * 1.2)
-            if kinlim is not None:
-                wmatrix.select_x(xinlim=kinlim)
-            self.kin = wmatrix.xin[0]
-            self.matrix_full = wmatrix.value.T
-            if wshotnoise is None:
-                wshotnoise = getattr(wmatrix, 'vectorout', None)
-                if wshotnoise is not None: wshotnoise = np.concatenate(wshotnoise, axis=0)
-            if kin is not None:
-                self.kin = np.asarray(kin).flatten()
-                wmatrix_rebin = linalg.block_diag(*[utils.matrix_lininterp(self.kin, xin) for xin in wmatrix.xin])
-                self.matrix_full = self.matrix_full.dot(wmatrix_rebin.T)
-            else:
-                assert all(np.allclose(xin, self.kin) for xin in wmatrix.xin), 'input coordinates of "wmatrix" are not the same for all multipoles; pass an k-coordinate array to "kin"'
+                warnings.warn('Window matrix from pypower is deprecated, please use lsstypes!')
+                wmatrix = wmatrix.deepcopy()
+
+                # TODO: implement best match BaseMatrix method
+                for illout, (kk, ellout) in enumerate(zip(self.k, self.ells)):
+                    for iout, projout in enumerate(wmatrix.projsout):
+                        if projout.ell == ellout: break
+                    if projout.ell != ellout:
+                        raise ValueError('ell = {:d} not found in wmatrix.projsout = {}'.format(ellout, wmatrix.projsout))
+                    lim = klim.get(projout.ell, None)
+                    if lim is not None:
+                        lo, hi, *step = lim
+                    else:
+                        lo, hi = 2 * kk[0] - kk[1], 2 * kk[-1] - kk[-2]
+                    xwout = wmatrix.xout[iout]
+                    isnan = np.isnan(xwout)
+                    if isnan.any():
+                        isnan = np.isnan(xwout)
+                        kkisnan = np.interp(np.flatnonzero(isnan), np.flatnonzero(~isnan), xwout[~isnan])
+                        #if self.mpicomm.rank == 0:
+                        #    self.log_warning('NaN found in k: {}, replaced by {}.'.format(xwout, kkisnan))
+                        xwout[isnan] = kkisnan
+                    wmatrix.xout[iout] = xwout
+
+                    for factorout in range(1, xwout.size // kk.size + 1):
+                        wmat = wmatrix.deepcopy()
+                        wmat.slice_x(sliceout=slice(0, len(wmat.xout[iout]) // factorout * factorout, factorout), projsout=projout)
+                        # wmatrix.slice_x(sliceout=slice(0, len(xwout) // factorout * factorout), projsout=projout)
+                        # wmatrix.rebin_x(factorout=factorout, projsout=projout)
+                        xwout = wmat.xout[iout]
+                        if lim is not None:
+                            istart = np.flatnonzero(xwout >= lo)[0]
+                            ksize = np.flatnonzero(xwout <= hi)[-1] - istart + 1
+                        else:
+                            istart = np.nanargmin(np.abs(xwout - kk[0]))
+                            ksize = np.nanargmin(np.abs(xwout - kk[-1])) - istart + 1
+                        wmat.slice_x(sliceout=slice(istart, istart + ksize), projsout=projout)
+                        if ksize == kk.size:
+                            wmatrix = wmat
+                            break
+                    self.k[illout] = xwout = wmatrix.xout[iout]
+                    isfinite = np.isfinite(xwout) & np.isfinite(kk)
+                    if ksize != xwout.size or (lim is None and not np.allclose(xwout[isfinite], kk[isfinite], rtol=1e-4)):
+                        raise ValueError('k-coordinates {} for ell = {:d} could not be found in input matrix (rebinning = {:d}, best guess = {})'.format(kk, projout.ell, factorout, xwout))
+                if ellsin is not None:
+                    self.ellsin = list(ellsin)
+                else:
+                    self.ellsin = []
+                    for proj in wmatrix.projsin:
+                        assert proj.wa_order in (None, 0)
+                        self.ellsin.append(proj.ell)
+                projsin = [proj for proj in wmatrix.projsin if proj.ell in self.ellsin]
+                self.ellsin = tuple(proj.ell for proj in projsin)
+                wmatrix.select_proj(projsout=[(ell, None) for ell in self.ells], projsin=projsin)
+                if kinrebin is not None:
+                    wmatrix.slice_x(slicein=slice(0, len(wmatrix.xin[0]) // kinrebin * kinrebin, kinrebin))
+                # print(wmatrix.xout[0], max(kk.max() for kk in self.k) * 1.2)
+                if kinlim is not None:
+                    wmatrix.select_x(xinlim=kinlim)
+                self.kin = wmatrix.xin[0]
+                self.matrix_full = wmatrix.value.T
+                if wshotnoise is None:
+                    wshotnoise = getattr(wmatrix, 'vectorout', None)
+                    if wshotnoise is not None: wshotnoise = np.concatenate(wshotnoise, axis=0)
+                if kin is not None:
+                    self.kin = np.asarray(kin).flatten()
+                    wmatrix_rebin = linalg.block_diag(*[utils.matrix_lininterp(self.kin, xin) for xin in wmatrix.xin])
+                    self.matrix_full = self.matrix_full.dot(wmatrix_rebin.T)
+                else:
+                    assert all(np.allclose(xin, self.kin) for xin in wmatrix.xin), 'input coordinates of "wmatrix" are not the same for all multipoles; pass a k-coordinate array to "kin"'
+
         if fiber_collisions is not None:
             self.theory.init.update(k=self.kin, ells=self.ellsin)  # fiber_collisions takes kin, ellsin from theory
             fiber_collisions.init.update(k=self.kin, ells=self.ellsin, theory=self.theory)
@@ -551,8 +588,9 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
             self.sedges = [np.array(ss, dtype='f8') for ss in sedges]
             if len(self.sedges) != len(self.ells):
                 raise ValueError("provide as many sedges as ells")
+            self.sedges = [np.column_stack([edges[:-1], edges[1:]]) if edges.ndim <= 1 else edges for edges in self.sedges]
             if slim is None:
-                slim = {ell: (edges[0], edges[-1], np.mean(np.diff(edges))) for ell, edges in zip(self.ells, self.sedges)}
+                slim = {ell: (edges[0, 0], edges[-1, 1], np.mean(edges[..., 1] - edges[..., 0])) for ell, edges in zip(self.ells, self.sedges)}
 
         if slim is not None:
             slim = dict(slim)
@@ -584,7 +622,8 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
                 if not step:
                     if self.s is not None: step = ((hi - lo) / self.s[ill].size,)
                     else: step = (_default_step,)
-                sedges.append(np.arange(lo, hi + step[0] / 2., step=step[0]))
+                edges = np.arange(lo, hi + step[0] / 2., step=step[0])
+                sedges.append(np.column_stack([edges[:-1], edges[1:]]))
             if self.sedges is None: self.sedges = sedges
         else:
             slim = {ell: None for ell in self.ells}
@@ -595,11 +634,14 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
                 for xx in self.s:
                     tmp = (xx[:-1] + xx[1:]) / 2.
                     tmp = np.concatenate([[tmp[0] - (xx[1] - xx[0])], tmp, [tmp[-1] + (xx[-1] - xx[-2])]])
+                    tmp = np.column_stack([tmp[:-1], tmp[1:]])
                     self.sedges.append(tmp)
             else:
-                self.sedges = [np.arange(20. - _default_step / 2., 150 + _default_step, _default_step)] * len(self.ells)  # gives k = np.arange(0.01, 0.2 + _default_step / 2., _default_step)
+                edges = np.arange(20. - _default_step / 2., 150 + _default_step, _default_step)
+                edges = np.column_stack([edges[:-1], edges[1:]])
+                self.sedges = [edges] * len(self.ells)
         if self.s is None:
-            self.s = [(edges[:-1] + edges[1:]) / 2. for edges in self.sedges]
+            self.s = [np.mean(edges, axis=-1) for edges in self.sedges]
         self.s = [np.array(ss) for ss in self.s]
 
         if theory is None:
@@ -619,6 +661,7 @@ class WindowedCorrelationFunctionMultipoles(BaseCalculator):
         elif isinstance(wmatrix, dict):
             if 'wcounts' in wmatrix:
                 self.ellsin = tuple(ellsin or self.theory.init.get('ells', None) or self.ells)
+                #print({ell: self.sedges[ill].shape for ill, ell in enumerate(self.ells)})
                 self.sin, matrix_full = window_matrix_RR({ell: self.sedges[ill] for ill, ell in enumerate(self.ells)}, ellsin=self.ellsin, **wmatrix)
             else:
                 self.ellsin = tuple(self.ells)

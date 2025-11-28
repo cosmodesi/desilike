@@ -1,6 +1,9 @@
 import glob
+import warnings
 
 import numpy as np
+import lsstypes as types
+from lsstypes.external import from_pycorr, from_pypower
 
 from desilike import plotting, jax, utils
 from desilike.base import BaseCalculator
@@ -22,14 +25,14 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
 
     Parameters
     ----------
-    data : str, Path, list, pycorr.BaseTwoPointEstimator, dict, default=None
-        Data correlation function measurement: flat array (of all multipoles), :class:`pycorr.BaseTwoPointEstimator` instance,
+    data : str, Path, list, lsstypes.Count2Correlation, lsstypes.Count2CorrelationPoles, dict, default=None
+        Data correlation function measurement: flat array (of all multipoles), :class:`lsstypes.Count2Correlation` instance,
         or path to such instances, or list of such objects (in which case the average of them is taken).
         If dict, parameters to be passed to theory to generate mock measurement.
         If a (list of) flat array, additionally provide list of multipoles ``ells`` and separations ``s`` (see ``kwargs``).
 
     covariance : list, default=None
-        2D array, list of :class:`pycorr.BaseTwoPointEstimator` instances, or paths to such instances;
+        2D array, list of :class:`lsstypes.Count2Correlation` instances, or paths to such instances;
         these are used to compute the covariance matrix.
 
     slim : dict, default=None
@@ -46,12 +49,14 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
           one can provide the list of multipoles ``ells`` and the corresponding (list of) :math:`s` separations as a (list of) array ``s``.
 
     """
+    name = 'correlation2poles'
+
     def initialize(self, data=None, covariance=None, slim=None, wmatrix=None, ignore_nan=False, sedges=None, **kwargs):
         self.s, self.sedges, self.RR, self.ells = None, sedges, None, None
         self.flatdata, self.mocks, self.covariance = None, None, None
         if not isinstance(data, dict):
             self.flatdata = self.load_data(data=data, slim=slim, ignore_nan=ignore_nan)[0]
-        if self.mpicomm.bcast(_is_array(covariance) or isinstance(covariance, ObservableCovariance), root=0):
+        if self.mpicomm.bcast(_is_array(covariance) or isinstance(covariance, (ObservableCovariance, types.CovarianceMatrix)), root=0):
             self.covariance = self.mpicomm.bcast(covariance, root=0)
         else:
             self.mocks = self.load_data(data=covariance, slim=slim, ignore_nan=ignore_nan)[-1]
@@ -91,27 +96,40 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
             ells = list(smasklim)
             self.flatdata = np.concatenate([data[ells.index(ell)][smasklim[ell]] for ell in self.ells])
         if isinstance(self.covariance, ObservableCovariance):
-            if input_sedges: x, method = [(edges[:-1] + edges[1:]) / 2. for edges in self.sedges], 'mid'
+            if input_sedges: x, method = [np.mean(edges, axis=-1) for edges in self.sedges], 'mid'
             else: x, method = list(self.s),'mean'
             self.covariance = self.covariance.xmatch(x=x, projs=list(self.ells), method=method).view(projs=list(self.ells))
+        elif isinstance(self.covariance, types.CovarianceMatrix):
+            if 'observables' in self.covariance.observable.labels(return_type='keys'):
+                self.covariance = self.covariance.at.observable.get(observables=self.name)
+            observable = self.to_lsstypes('data')
+            self.covariance = self.covariance.at.observable.match(observable).value()
+            self.nobs = getattr(self.covariance, 'nobs', None)
 
     def load_data(self, data=None, slim=None, ignore_nan=False):
 
         def load_data(fn):
-            state = np.load(fn, allow_pickle=True)[()]
-            if '_projs' in state:
-                toret = ObservableArray.from_state(state)
+            fn = str(fn)
+            if fn.endswith('.npy'):
+                warnings.warn('Handling of *.npy files is deprecated. Switch to lsstypes format.')
+                state = np.load(fn, allow_pickle=True)[()]
+                if '_projs' in state:
+                    toret = ObservableArray.from_state(state)
+                else:
+                    try:
+                        from pycorr import TwoPointCorrelationFunction
+                        toret = TwoPointCorrelationFunction.from_state(state)
+                        toret = from_pycorr(toret)
+                    except:
+                        from pypower import MeshFFTCorr, CorrelationFunctionMultipoles
+                        toret = MeshFFTCorr.from_state(state)
+                        if hasattr(toret, 'poles'):
+                            toret = toret.poles
+                        else:
+                            toret = CorrelationFunctionMultipoles.from_state(state)
+                        toret = from_pypower(toret)
             else:
-                try:
-                    from pycorr import TwoPointCorrelationFunction
-                    toret = TwoPointCorrelationFunction.from_state(state)
-                except:
-                    from pypower import MeshFFTCorr, CorrelationFunctionMultipoles
-                    toret = MeshFFTCorr.from_state(state)
-                    if hasattr(toret, 'poles'):
-                        toret = toret.poles
-                    else:
-                        toret = CorrelationFunctionMultipoles.from_state(state)
+                toret = types.read(fn)
             return toret
 
         def lim_data(corr, slim=slim):
@@ -127,25 +145,37 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
                     corr_slice = corr.copy().select(xlim=(start, stop), rebin=rebin, projs=ell)
                     ells.append(ell)
                     list_s.append(corr_slice.x(projs=ell))
-                    list_sedges.append(corr_slice.edges(projs=ell))
+                    edges = corr_slice.edges(projs=ell)
+                    edges = np.column_stack((edges[:-1], edges[1:]))
+                    list_sedges.append(edges)
                     list_data.append(corr_slice.view(projs=ell))
             else:
                 if slim is None:
                     slim = {ell: (0, np.inf) for ell in (0, 2, 4)}
                 try:
-                    RR = {'sedges': corr.R1R2.edges[0], 'muedges': corr.R1R2.edges[1], 'wcounts': corr.R1R2.wcounts}
-                except AttributeError:
+                    RR = corr.get('RR')
+                    RR = {'sedges': RR.edges('s'), 'muedges': RR.edges('mu'), 'wcounts': RR.value()}
+                except ValueError:
                     RR = None
                 for ell, lim in slim.items():
-                    corr_slice = corr.copy().select(lim)
+                    start, stop, *step = lim
+
+                    def rebin(corr):
+                        rebin = 1
+                        if step and step[0] != 1:
+                            rebin = np.rint(step[0] / np.diff(corr.edges('s'), axis=-1).mean()).astype(int)
+                        return corr.select(s=slice(0, None, rebin))
+
+                    if hasattr(corr, 'project'):  # input is ('s', 'mu')
+                        pole = rebin(corr).project(ells=ell, ignore_nan=True)
+                    else:
+                        pole = rebin(corr.get(ells=ell))
+                    pole = pole.select(s=tuple(lim[:2]))
                     ells.append(ell)
-                    list_s.append(corr_slice.sepavg())
-                    list_sedges.append(corr_slice.edges[0])
-                    try:
-                        d = corr_slice.get_corr(ell=ell, ignore_nan=ignore_nan, return_cov=False, return_sep=False)  # pycorr
-                    except TypeError:
-                        d = corr_slice(ell=ell)  # pypower
-                    list_data.append(d)
+                    list_s.append(pole.coords('s'))
+                    list_sedges.append(pole.edges('s'))
+                    list_data.append(pole.value())
+
             return list_s, list_sedges, RR, ells, list_data
 
         def load_all(lmocks):
@@ -188,7 +218,7 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         if self.mpicomm.rank == 0 and data is not None:
             if not utils.is_sequence(data):
                 data = [data]
-            if any(_is_from_pycorr(dd) or isinstance(dd, ObservableArray) for dd in data):
+            if any(_is_from_pycorr(dd) or isinstance(dd, (ObservableArray, types.ObservableTree)) for dd in data):
                 list_y = load_all(data)
                 if not list_y: raise ValueError('no data/mocks could be obtained from {}'.format(data))
             else:
@@ -342,10 +372,8 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
         -------
         fig : matplotlib.figure.Figure
         """
-        from desilike.observables.plotting import plot_covariance_matrix
-        cumsize = np.insert(np.cumsum([len(s) for s in self.s]), 0, 0)
-        mat = [[self.covariance[start1:stop1, start2:stop2] for start2, stop2 in zip(cumsize[:-1], cumsize[1:])] for start1, stop1 in zip(cumsize[:-1], cumsize[1:])]
-        return plot_covariance_matrix(mat, x1=self.s, xlabel1=r'$s$ [$\mathrm{Mpc}/h$]', label1=[r'$\ell = {:d}$'.format(ell) for ell in self.ells], corrcoef=corrcoef, **kwargs)
+        covariance = self.to_lsstypes('covariance')
+        return covariance.plot(corrcoef=corrcoef, **kwargs)
 
     def calculate(self):
         self.flattheory = self.wmatrix.flatcorr
@@ -405,9 +433,20 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
     @classmethod
     def install(cls, config):
         # TODO: remove this dependency
-        #config.pip('git+https://github.com/cosmodesi/pycorr')
-        pass
+        config.pip('git+https://github.com/adematti/lsstypes')
+
+    def to_lsstypes(self, kind):
+        """Return observable (data) and covariance."""
+        data = [types.Count2CorrelationPole(s=self.s[ill], s_edges=self.sedges[ill], value=self.data[ill], ell=ell) for ill, ell in enumerate(self.ells)]
+        data = types.Count2CorrelationPoles(data)
+        if kind == 'data':
+            return data
+        if kind == 'covariance':
+             return types.CovarianceMatrix(observable=data, value=self.covariance)
+        raise NotImplementedError(f'kind {kind} not recognized')
 
     def to_array(self):
+        warnings.warn('to_array is deprecated. Please use to_lsstypes')
         from desilike.observables import ObservableArray
-        return ObservableArray(x=self.s, edges=self.sedges, value=self.data, projs=self.ells, name=self.__class__.__name__)
+        sedges = [np.append(edges[:, 0], edges[-1, 1]) for edges in self.sedges]
+        return ObservableArray(x=self.s, edges=sedges, value=self.data, projs=self.ells, name=self.__class__.__name__)

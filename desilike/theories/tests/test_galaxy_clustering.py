@@ -2014,10 +2014,24 @@ def test_multitracer():
         expected = b1X * b1Y * pk_dd + (b1X + b1Y) * pk_dt + pk_tt + (tmp.power - pk_tt)
         np.testing.assert_allclose(theory.power, expected)
 
+
+    def test_png():
+        from desilike.theories.galaxy_clustering import PNGTracerPowerSpectrumMultipoles
+        cls = PNGTracerPowerSpectrumMultipoles
+        mode, determinstic_params, stochastic_params = 'bphi', {'b1': 1.24, 'sigmas': 1.2, 'bphi': 1.2}, {'sn0': 1.}
+        theory = cls(template=template, mode=mode)(**determinstic_params, **stochastic_params)
+        named_params = {f'lrg.{k}': v for k, v in determinstic_params.items()} | {'lrg.sn0': 1.}
+        theory2 = cls(template=template, mode=mode, tracers=('lrg',))(**named_params)
+        assert np.allclose(theory2, theory)
+        named_params = {f'lrg.{k}': v for k, v in determinstic_params.items()} | {f'elg.{k}': v for k, v in determinstic_params.items()} | {f'lrgxelg.{k}': v for k, v in stochastic_params.items()}
+        theory2 = cls(template=template, mode=mode, tracers=('lrg', 'elg'))(**named_params)
+        assert np.allclose(theory2, theory)
+
+
     # test_params(SimpleTracerPowerSpectrumMultipoles)
     # test_params(KaiserTracerPowerSpectrumMultipoles)
     # test_params(KaiserTracerCorrelationFunctionMultipoles)
-    # test_params(EFTLikeKaiserTracerPowerSpectrumMultipoles) 
+    # test_params(EFTLikeKaiserTracerPowerSpectrumMultipoles)
     # test_params(EFTLikeKaiserTracerCorrelationFunctionMultipoles)
     # test_params(TNSTracerPowerSpectrumMultipoles)
     # test_params(TNSTracerCorrelationFunctionMultipoles)
@@ -2040,6 +2054,7 @@ def test_multitracer():
     assert SimpleTracerPowerSpectrumMultipoles(shotnoise=(1e3, 1e4)).nd == 1 / np.sqrt(1e3 * 1e4)
     test_kaiser()
     test_eft_kaiser()
+    test_png()
 
 
 if __name__ == '__main__':
@@ -2075,4 +2090,4 @@ if __name__ == '__main__':
     #test_freedom()
     #test_bao_phaseshift()
     #comparison_folps_velocileptors()
-    # test_multitracer()
+    test_multitracer()

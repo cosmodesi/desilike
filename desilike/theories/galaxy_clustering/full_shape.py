@@ -112,11 +112,16 @@ class BaseTracerTheory(BaseCalculator):
         if defaults is None:
             defaults = self.required_bias_params | self.optional_bias_params
         *tracer_namespaces, cross_namespace = self.multitracer_namespace(self.tracers, tail='.')
-        toret = {}
-        for param in self.deterministic_bias_params:
-            toret[param] = tuple(params.get(f'{namespace}{param}', defaults[param]) for namespace in tracer_namespaces)
-        for param in self.stochastic_bias_params:
-            toret[param] = params.get(f'{cross_namespace}{param}', defaults[param])
+        if self.tracers:
+            toret = {}
+            for param in self.deterministic_bias_params:
+                toret[param] = tuple(params.get(f'{namespace}{param}', defaults[param]) for namespace in tracer_namespaces)
+            for param in self.stochastic_bias_params:
+                toret[param] = params.get(f'{cross_namespace}{param}', defaults[param])
+        else:  # fallback to standard, where the user may have provided a namespace
+            toret = {name.split('.')[-1]: value for name, value in params.items()}
+            for param in self.deterministic_bias_params:
+                toret[param] = (toret[param],) * len(tracer_namespaces)
         return toret
 
     def is_cross_correlation(self):
@@ -1279,7 +1284,8 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
         self.pt.init.update(k=kvec, ells=self.ells, use_Pzel=not self.is_physical_prior)
 
     def set_params(self):
-        self.required_bias_params = dict(b1=1., b2=0., bs=0., b3=0., alpha0=0., alpha2=0., alpha4=0., alpha6=0., sn0=0., sn2=0., sn4=0.)
+        self.required_bias_params = {param: 0. for param in self._deterministic_bias_params + self._stochastic_bias_params}
+        self.required_bias_params['b1'] = 1.
         super().set_params()
 
     def calculate(self, **params):
@@ -1556,7 +1562,8 @@ class REPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPowe
             self.pt.init.update(z=sorted(z))
 
     def set_params(self):
-        self.required_bias_params = dict(b1=1., b2=0., bs=0., b3=0., alpha0=0., alpha2=0., alpha4=0., alpha6=0., sn0=0., sn2=0., sn4=0.)
+        self.required_bias_params = {param: 0. for param in self._deterministic_bias_params + self._stochastic_bias_params}
+        self.required_bias_params['b1'] = 1.
         super().set_params()
 
     def calculate(self, **params):
@@ -1569,7 +1576,7 @@ class REPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPowe
             if self.pt.z.ndim:
                 iz = list(self.pt.z).index(self.z)
                 sigma8, f = sigma8[iz], f[iz]
-            # b1_E = 1+b1_L
+            # b1_E = 1 + b1_L
             # b2_E = b2_L + (8/21)*b1_L
             # bs_E = bs_L - (2/7)*b1_L
             # b3_E = 3*b3_L + b1_L
@@ -1631,6 +1638,7 @@ class REPTVelocileptorsTracerCorrelationFunctionMultipoles(BaseTracerCorrelation
         if self.power.is_physical_prior:
             self.deterministic_bias_params = [name + 'p' for name in self.deterministic_bias_params]
             self.stochastic_bias_params = [name + 'p' for name in self.stochastic_bias_params]
+
 
 class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
@@ -1703,7 +1711,7 @@ class PyBirdPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         self.pt.setreducePslb(params, what='full')
         bird.np = np
         return jnp.nan_to_num(self.pt.fullPs, nan=0.0, posinf=jnp.inf, neginf=-jnp.inf)
-    
+
     def combine_bias_terms_poles_for_cross(self, biasX, biasY, nd=1e-4, km=(0.7, 0.7), kr=(0.25, 0.25)):
         # Follows https://arxiv.org/abs/2308.06206 eq(13), except that stochastic terms are scaled by geometric means of nd and km
         bird = self.pt
@@ -2683,3 +2691,187 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseTracerThreePointTheory):
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
+
+
+from desilike.theories.primordial_cosmology import Cosmoprimo, get_cosmo
+from .base import APEffect
+
+
+_registered_legendre = [None] * 11
+_registered_legendre[0] = lambda x: jnp.ones_like(x)
+_registered_legendre[1] = lambda x: x
+_registered_legendre[2] = lambda x: 3*x**2/2 - 1/2
+_registered_legendre[3] = lambda x: 5*x**3/2 - 3*x/2
+_registered_legendre[4] = lambda x: 35*x**4/8 - 15*x**2/4 + 3/8
+_registered_legendre[5] = lambda x: 63*x**5/8 - 35*x**3/4 + 15*x/8
+_registered_legendre[6] = lambda x: 231*x**6/16 - 315*x**4/16 + 105*x**2/16 - 5/16
+_registered_legendre[7] = lambda x: 429*x**7/16 - 693*x**5/16 + 315*x**3/16 - 35*x/16
+_registered_legendre[8] = lambda x: 6435*x**8/128 - 3003*x**6/32 + 3465*x**4/64 - 315*x**2/32 + 35/128
+_registered_legendre[9] = lambda x: 12155*x**9/128 - 6435*x**7/32 + 9009*x**5/64 - 1155*x**3/32 + 315*x/128
+_registered_legendre[10] = lambda x: 46189*x**10/256 - 109395*x**8/256 + 45045*x**6/128 - 15015*x**4/128 + 3465*x**2/256 - 63/256
+
+
+def get_legendre(ell):
+    return _registered_legendre[ell]
+
+
+class JAXEffortPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
+    r"""
+    Wrapper to JAXEffort emulator.
+    Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
+    By default, bs and b3 are fixed to 0, following co-evolution.
+    For the matter (unbiased) power spectrum, set b1=1 and all other bias parameters to 0.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    shotnoise : float, default=1e4
+        Shot noise (which is usually marginalized over).
+
+    prior_basis : str, default='physical'
+        If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
+        :math:`b_{1}^\prime = (1 + b_{1}^{L}) \sigma_{8}(z), b_{2}^\prime = b_{2}^{L} \sigma_{8}(z)^2, b_{s}^\prime = b_{s}^{L} \sigma_{8}(z)^2, b_{3}^\prime = 0`
+        with: :math:`b_{1} = 1 + b_{1}^{L}, b_{2} = 8/21 b_{1}^{L} + b_{2}^{L}, b_{s} = -4/7 b_{1}^{L} + b_{s}^{L}`.
+        :math:`\alpha_{0} = (1 + b_{1}^{L})^{2} \alpha_{0}^\prime, \alpha_{2} = f (1 + b_{1}^{L}) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f (f \alpha_{2}^\prime + (1 + b_{1}^{L}) \alpha_{4}^\prime)`.
+        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{4} s_{n, 4}^\prime`.
+
+    tracer : str, default=None
+        If ``prior_basis = 'physical'``, tracer to load preset ``fsat`` and ``sigv``. One of ['LRG', 'ELG', 'QSO'].
+
+    fsat : float, default=None
+        If ``prior_basis = 'physical'``, satellite fraction to assume.
+
+    sigv : float, default=None
+        If ``prior_basis = 'physical'``, velocity dispersion to assume.
+
+
+    Reference
+    ---------
+    - https://github.com/CosmologicalEmulators/jaxeffort
+    """
+    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4)
+
+    @classmethod
+    def _params(cls, params, model='velocileptors_rept_mnuw0wacdm', freedom=None, prior_basis='physical', tracers=None):
+        from desilike.base import get_calculator_config
+        if 'velocileptors_lpt' in model:
+            params = get_calculator_config(LPTVelocileptorsTracerPowerSpectrumMultipoles)[-1]
+            return LPTVelocileptorsTracerPowerSpectrumMultipoles._params(params, freedom=freedom, prior_basis=prior_basis, tracers=tracers)
+        elif 'velocileptors_rept' in model:
+            params = get_calculator_config(REPTVelocileptorsTracerPowerSpectrumMultipoles)[-1]
+            return REPTVelocileptorsTracerPowerSpectrumMultipoles._params(params, freedom=freedom, prior_basis=prior_basis, tracers=tracers)
+        else:
+            raise NotImplementedError
+
+    def set_params(self):
+        if 'velocileptors' in self.model:
+            # FIXME (couldn't use set_params as requires pt attribute)
+            self.deterministic_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6']
+            self.stochastic_bias_params = ['sn0', 'sn2', 'sn4']
+            self.required_bias_params = {param: 0. for param in self.deterministic_bias_params + self.stochastic_bias_params}
+            self.required_bias_params['b1'] = 1.
+            self.is_physical_prior = self.options['prior_basis'] == 'physical'
+            if self.is_physical_prior:
+                for name in list(self.required_bias_params):
+                    self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
+                settings = get_physical_stochastic_settings(tracer=self.options['tracer'])
+                for name, value in settings.items():
+                    if self.options[name] is None: self.options[name] = value
+                if self.mpicomm.rank == 0:
+                    self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
+                self.deterministic_bias_params = [name + 'p' for name in self.deterministic_bias_params]
+                self.stochastic_bias_params = [name + 'p' for name in self.stochastic_bias_params]
+            fix = []
+            if 4 not in self.ells: fix += ['alpha4*', 'alpha6*', 'sn4*']  # * to capture p
+            if 2 not in self.ells: fix += ['alpha2*', 'sn2*']
+            for param in self.init.params.select(basename=fix):
+                param.update(value=0., fixed=True)
+            self.nd = 1e-4
+            self.fsat = self.snd = 1.
+            if self.is_physical_prior:
+                self.fsat, self.snd = self.options['fsat'], self.options['shotnoise'] * self.nd  # normalized by 1e-4
+        else:
+            raise NotImplementedError
+
+    def transform_params(self, cosmo, **params):
+        if 'velocileptors' in self.model:
+            # FIXME (couldn't use set_params as requires pt attribute)
+            if self.is_physical_prior:
+                raise NotImplementedError
+                sigma8 = 1.
+                f = 0.
+                pars = b1L, b2L, bsL, b3L = [params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p'] / sigma8**3]
+                pars += [(1 + b1L)**2 * params['alpha0p'], f * (1 + b1L) * (params['alpha0p'] + params['alpha2p']),
+                        f * (f * params['alpha2p'] + (1 + b1L) * params['alpha4p']), f**2 * params['alpha4p']]
+                sigv = self.options['sigv']
+                pars += [params['sn{:d}p'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2, 4]]
+            else:
+                pars = [params[name] for name in self.required_bias_params]
+            if 'rept' in self.model:
+                pars = list(pars)
+                b1 = pars[0]
+                pars[2] = pars[2] - (2 / 7) * (b1 - 1.)  # bs
+                pars[3] = 3 * pars[3] + (b1 - 1.)  # b3
+            return pars
+        else:
+            raise NotImplementedError
+        return
+
+    def initialize(self, *args, model='velocileptors_rept_mnuw0wacdm', cosmo=None, fiducial='DESI', shotnoise=1e4, z=0., **kwargs):
+        self.options = dict()
+        shotnoise = kwargs.get('shotnoise', 1e4)
+        if utils.is_sequence(shotnoise):
+            # cross correlation: geometric mean
+            shotnoise = np.sqrt(np.prod(shotnoise))
+        for name, value in self._default_options.items():
+            self.options[name] = kwargs.pop(name, value)
+        if 'shotnoise' in self.options:
+            self.options['shotnoise'] = shotnoise
+        self.nd = 1. / float(shotnoise)
+        self.z = float(z)
+        # Sets k, ells
+        super(JAXEffortPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
+        self.nd = 1. / float(shotnoise)
+        self.fiducial = get_cosmo(fiducial)
+        self.cosmo = cosmo
+        if cosmo is None:
+            self.cosmo = Cosmoprimo(fiducial=self.fiducial)
+        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode='geometry', cosmo=self.cosmo)
+        self.required_bias_params, self.optional_bias_params = {}, {}
+        self.model = model
+        self.set_params()
+        import jaxeffort
+        self.emulators = [jaxeffort.trained_emulators[model][f"{ell:d}"] for ell in self.ells]
+        self.set_k_mu(self.k, mu=8, ells=self.ells)
+
+    def set_k_mu(self, k, mu=20, method='leggauss', ells=(0, 2, 4)):
+        self.k = np.asarray(k, dtype='f8')
+        self.mu, wmu = utils.weights_mu(mu, method=method)
+        self.wmu = np.array([wmu * (2 * ell + 1) * get_legendre(ell)(self.mu) for ell in ells])
+
+    def calculate(self, **params):
+        cosmo_dict = {'ln10As': self.cosmo['logA'], 'ns': self.cosmo['n_s'], 'h': self.cosmo['H0'] / 100.,
+                      'omega_b': self.cosmo['omega_b'], 'omega_c': self.cosmo['omega_cdm'], 'm_nu': self.cosmo['m_ncdm_tot'],
+                      'w0': self.cosmo['w0_fld'], 'wa': self.cosmo['wa_fld']}
+        import jaxeffort
+        cosmo_jaxeffort = jaxeffort.W0WaCDMCosmology(**cosmo_dict)
+        theta = np.array([self.z, cosmo_dict["ln10As"], cosmo_dict["ns"], 100. * cosmo_dict["h"], cosmo_dict["omega_b"], cosmo_dict["omega_c"], cosmo_dict["m_nu"], cosmo_dict["w0"], cosmo_dict["wa"]])
+        D = cosmo_jaxeffort.D_z(self.z)
+        bias = self.transform_params(cosmo_jaxeffort, **params)
+        poles = [emulator.get_Pl(theta, bias, D) for emulator in self.emulators]
+        jac, kap, muap = self.apeffect.ap_k_mu(self.k, self.mu)
+        pkmu = sum(pole[:, None] * get_legendre(ell)(muap) for ell, pole in zip(self.ells, poles))
+        func = lambda kap, pkmu: interp1d(kap, self.emulators[0].P11.k_grid, pkmu)
+        pkmu = jac * jax.vmap(func, in_axes=1, out_axes=1)(kap, pkmu)
+        self.power = jnp.sum(pkmu * self.wmu[:, None, :], axis=-1)
+
+    def get(self):
+        return self.power

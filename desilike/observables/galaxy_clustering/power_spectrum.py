@@ -210,7 +210,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         return flatdata, list_y
 
     @plotting.plotter(interactive={'kw_theory': {'color': 'black', 'label': 'reference'}})
-    def plot(self, scaling='kpk', kw_theory=None, fig=None):
+    def plot(self, scaling='kpk', kpower=None, kw_theory=None, fig=None, figsize=None):
         """
         Plot data and theory power spectrum multipoles.
 
@@ -219,11 +219,17 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         scaling : str, default='kpk'
             Either 'kpk' or 'loglog'.
 
+        kpower : int or None, default=None
+            If not None, will overwrite power of k suggested by `scaling` and will plot k**kpower * pk. 
+
         kw_theory : list of dict, default=None
             Change the default line parametrization of the theory, one dictionary for each ell or duplicate it.
 
         fig : matplotlib.figure.Figure, default=None
             Optionally, a figure with at least ``1 + len(self.ells)`` axes.
+
+        figsize : (width, height), default=None
+            If not figure is passed, fix the size of the created figure. By default: 
 
         fn : str, Path, default=None
             Optionally, path where to save figure.
@@ -254,7 +260,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
         if fig is None:
             height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
-            figsize = (6, 1.5 * sum(height_ratios))
+            figsize = (6, 1.5 * sum(height_ratios)) if figsize is None else figsize
             fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
             fig.subplots_adjust(hspace=0.1)
             show_legend = True
@@ -264,6 +270,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
         data, theory, std = self.data, self.theory, self.std
         k_exp = 1 if scaling == 'kpk' else 0
+        if kpower is not None: k_exp = kpower
 
         for ill, ell in enumerate(self.ells):
             lax[0].errorbar(self.k[ill], self.k[ill]**k_exp * data[ill], yerr=self.k[ill]**k_exp * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o', label=r'$\ell = {:d}$'.format(ell))

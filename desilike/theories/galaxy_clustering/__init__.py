@@ -14,7 +14,7 @@ from .full_shape import (SimpleTracerPowerSpectrumMultipoles, KaiserTracerPowerS
                          FOLPSAXTracerPowerSpectrumMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles,
                          GeoFPTAXTracerBispectrumMultipoles)
 
-from .primordial_non_gaussianity import PNGTracerPowerSpectrumMultipoles, PNGTracerCrossPowerSpectrumMultipoles, PNGTracerVelocityPowerSpectrumMultipoles
+from .primordial_non_gaussianity import PNGTracerPowerSpectrumMultipoles, PNGTracerVelocityPowerSpectrumMultipoles
 
 from .power_template import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate,
                              BAOPowerSpectrumTemplate, BAOPhaseShiftPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate, TurnOverPowerSpectrumTemplate, DirectWiggleSplitPowerSpectrumTemplate,

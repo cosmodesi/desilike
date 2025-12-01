@@ -2863,7 +2863,7 @@ class JAXEffortPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
                       'w0': self.cosmo['w0_fld'], 'wa': self.cosmo['wa_fld']}
         import jaxeffort
         cosmo_jaxeffort = jaxeffort.W0WaCDMCosmology(**cosmo_dict)
-        theta = np.array([self.z, cosmo_dict["ln10As"], cosmo_dict["ns"], 100. * cosmo_dict["h"], cosmo_dict["omega_b"], cosmo_dict["omega_c"], cosmo_dict["m_nu"], cosmo_dict["w0"], cosmo_dict["wa"]])
+        theta = jnp.array([self.z, cosmo_dict["ln10As"], cosmo_dict["ns"], 100. * cosmo_dict["h"], cosmo_dict["omega_b"], cosmo_dict["omega_c"], cosmo_dict["m_nu"], cosmo_dict["w0"], cosmo_dict["wa"]])
         D = cosmo_jaxeffort.D_z(self.z)
         bias = self.transform_params(cosmo_jaxeffort, **params)
         poles = [emulator.get_Pl(theta, bias, D) for emulator in self.emulators]

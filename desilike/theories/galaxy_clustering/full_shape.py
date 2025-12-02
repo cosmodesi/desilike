@@ -119,7 +119,7 @@ class BaseTracerTheory(BaseCalculator):
             for param in self.stochastic_bias_params:
                 toret[param] = params.get(f'{cross_namespace}{param}', defaults[param])
         else:  # fallback to standard, where the user may have provided a namespace
-            toret = {name.split('.')[-1]: value for name, value in params.items()}
+            toret = defaults | {name.split('.')[-1]: value for name, value in params.items()}
             for param in self.deterministic_bias_params:
                 toret[param] = (toret[param],) * len(tracer_namespaces)
         return toret
@@ -2715,7 +2715,7 @@ def get_legendre(ell):
     return _registered_legendre[ell]
 
 
-class JAXEffortPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
+class JAXEffortTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
     r"""
     Wrapper to JAXEffort emulator.
     Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
@@ -2838,7 +2838,7 @@ class JAXEffortPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
         self.nd = 1. / float(shotnoise)
         self.z = float(z)
         # Sets k, ells
-        super(JAXEffortPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
+        super(JAXEffortTracerPowerSpectrumMultipoles, self).initialize(*args, **kwargs)
         self.nd = 1. / float(shotnoise)
         self.fiducial = get_cosmo(fiducial)
         self.cosmo = cosmo

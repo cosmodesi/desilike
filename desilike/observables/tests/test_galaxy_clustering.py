@@ -83,10 +83,10 @@ def test_power_spectrum():
 
     from pypower import PowerSpectrumMultipoles
     observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.02], 2: [0.05, 0.2, 0.01]},
-                                                         data='../../tests/_pk/data.npy',
-                                                         covariance='../../tests/_pk/mock_*.npy',
-                                                         #data=PowerSpectrumMultipoles.load('../../tests/_pk/data.npy'),
-                                                         #covariance=[PowerSpectrumMultipoles.load(fn) for fn in glob.glob('../../tests/_pk/mock_*.npy')],
+                                                         #data='../../tests/_pk/data.npy',
+                                                         #covariance='../../tests/_pk/mock_*.npy',
+                                                         data=PowerSpectrumMultipoles.load('../../tests/_pk/data.npy'),
+                                                         covariance=[PowerSpectrumMultipoles.load(fn) for fn in glob.glob('../../tests/_pk/mock_*.npy')],
                                                          wmatrix='../../tests/_pk/window.npy',
                                                          theory=theory)
     likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)

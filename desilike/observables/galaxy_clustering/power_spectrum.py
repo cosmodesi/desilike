@@ -161,6 +161,8 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
                     list_kedges.append(edges)
                     list_data.append(power_slice.view(projs=ell))
             else:
+                if not isinstance(power, types.ObservableTree):
+                    power = from_pypower(power)
                 if klim is None:
                     klim = {ell: (0, np.inf) for ell in power.ells}
                 for ell, lim in klim.items():

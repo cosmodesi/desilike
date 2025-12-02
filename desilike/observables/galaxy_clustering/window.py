@@ -351,6 +351,7 @@ class WindowedPowerSpectrumMultipoles(BaseCalculator):
                     self.matrix_full = self.matrix_full.dot(wmatrix_rebin.T)
                 else:
                     assert all(np.allclose(pole.coords('k'), self.kin) for pole in wmatrix.theory), 'input coordinates of "wmatrix" are not the same for all multipoles; pass a k-coordinate array to "kin"'
+                wshotnoise = np.concatenate([np.full_like(k, (ell == 0), dtype='f8') for ell, k in zip(self.ells, self.k)])
 
             else:
                 warnings.warn('Window matrix from pypower is deprecated, please use lsstypes!')

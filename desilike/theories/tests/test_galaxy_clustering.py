@@ -2046,7 +2046,7 @@ def test_jaxeffort():
     from matplotlib import pyplot as plt
 
     from desilike.theories import Cosmoprimo
-    from desilike.theories.galaxy_clustering import JAXEffortPowerSpectrumMultipoles, REPTVelocileptorsTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import JAXEffortTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate
 
     fiducial = 'DESI'
     cosmo = Cosmoprimo(fiducial=fiducial)
@@ -2054,7 +2054,7 @@ def test_jaxeffort():
     z = 1.
     k = np.linspace(0.001, 0.2, 100)
     params = {'logA': 3., 'h': 0.7, 'omega_b': 0.02, 'omega_cdm': 0.13, 'n_s': 0.96}
-    theory = JAXEffortPowerSpectrumMultipoles(k=k, cosmo=cosmo, model='velocileptors_rept_mnuw0wacdm', fiducial=fiducial, z=z, **kwargs)
+    theory = JAXEffortTracerPowerSpectrumMultipoles(k=k, cosmo=cosmo, model='velocileptors_rept_mnuw0wacdm', fiducial=fiducial, z=z, **kwargs)
     poles = theory(**params)
     template = DirectPowerSpectrumTemplate(cosmo=cosmo, z=z, fiducial=fiducial)
     theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(k=k, template=template, **kwargs)
@@ -2101,5 +2101,5 @@ if __name__ == '__main__':
     #test_freedom()
     #test_bao_phaseshift()
     #comparison_folps_velocileptors()
-    test_multitracer()
-    # test_jaxeffort()
+    #test_multitracer()
+    test_jaxeffort()

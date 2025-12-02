@@ -150,6 +150,8 @@ class TracerCorrelationFunctionMultipolesObservable(BaseCalculator):
                     list_sedges.append(edges)
                     list_data.append(corr_slice.view(projs=ell))
             else:
+                if not isinstance(corr, types.ObservableTree):
+                    corr = from_pycorr(corr)
                 if slim is None:
                     slim = {ell: (0, np.inf) for ell in (0, 2, 4)}
                 try:

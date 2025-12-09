@@ -792,14 +792,14 @@ def fastpt_power(k, P):
 
 def get_fourier(fourier, acc=1, l_max=40000):
     if fourier == 'legendre':
-        theta = np.loadtxt('/Users/illyasviel/Desktop/Cosmology/DES/des-y3/des3/DES_3YR_final_theta_bins.dat')
+        theta = np.loadtxt('/Users/illyasviel/Desktop/Cosmology/DES/des-y3/des-y3/des3/DES_3YR_final_theta_bins.dat')
         theta_edges = theta[:,0]
         theta_edges = np.append(theta_edges, theta[-1,1])
         theta_bins = theta[:,2]
         theta_bins_radians = theta_bins / 60 * np.pi / 180
         theta_edges_radians = theta_edges / 60 * np.pi / 180
     elif fourier == 'binned_bessels':
-        theta_bins = np.loadtxt('/Users/illyasviel/Desktop/Cosmology/DES/des-y3/des3/DES_3YR_final_theta_bins.dat')
+        theta_bins = np.loadtxt('/Users/illyasviel/Desktop/Cosmology/DES/des-y3/des-y3/des3/DES_3YR_final_theta_bins.dat')
         theta_bins_radians = theta_bins / 60 * np.pi / 180
 
     # Note hankel assumes integral starts at ell=0

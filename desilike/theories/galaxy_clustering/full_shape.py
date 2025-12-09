@@ -2441,10 +2441,6 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
                 state[name] = getattr(self, name)
         return state
 
-
-
-
-
 class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
 
     # _default_options = dict(kernels='fk', rbao=104., A_full=True, remove_DeltaP=False)
@@ -2750,7 +2746,8 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         
         
         self.is_physical_prior = self.options['prior_basis'] == 'physical'
-        if self.is_physical_prior == 'physical':
+        
+        if self.is_physical_prior:
             for name in list(self.required_bias_params):
                 self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
             settings = get_physical_stochastic_settings(tracer=self.options['tracer'])
@@ -2766,7 +2763,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             param.update(value=0., fixed=True)
         self.nd = 1e-4
         self.fsat = self.snd = 1.
-        if self.is_physical_prior == 'physical':
+        if self.is_physical_prior:
             self.fsat, self.snd = self.options['fsat'], self.options['shotnoise'] * self.nd  # normalized by 1e-4
 
     def calculate(self, **params):
@@ -2777,7 +2774,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         
         # params = {**self.required_bias_params, **self.MG_params, **params}
         # print(params['fR0'],params['b1'])
-        if self.is_physical_prior == 'physical':
+        if self.is_physical_prior:
             sigma8 = self.pt.sigma8
             f = self.pt.fsigma8 / sigma8
             sigma8_fid = self.options['sigma8_fid']
@@ -2785,13 +2782,19 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                 A = (sigma8/sigma8_fid)**2  #Following Class-PT
             else: 
                 A=1 
-            # b1E = b1L + 1
-            # b2E = 8/21 * b1L + b2L
-            # bsE = -4/7 b1L + bsL
-            b1L, b2L, bsL, b3 = params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bs2p'] / sigma8**2, params['b3nlp']
-            pars = [1. + b1L, b2L + 8. / 21. * b1L, bsL, b3]  # compensate bs by 4. / 7. * b1L as it is removed by combine_bias_terms_poles below
-            # pars += [(1 + b1L)**2 * params['alpha0p'], f * (1 + b1L) * (params['alpha0p'] + params['alpha2p']),
-            #          f * (f * params['alpha2p'] + (1 + b1L) * params['alpha4p']), 0.]
+
+            # Following notation from: https://arxiv.org/pdf/2404.07312
+            b1L  = params['b1p'] / sigma8 - 1.
+            b2L  = params['b2p'] / sigma8**2
+            bsL  = params['bs2p'] / sigma8**2
+            b3L  = params['b3nlp']
+            # --- Lagrangian → Eulerian with co-evo ---
+            b1E  = 1. + b1L
+            b2E  = b2L + 8. / 21. * b1L
+            bs2E = -4. / 7. * b1L + bsL    
+            b3E  = b3L + 32. / 315. * b1L  
+            pars = [b1E, b2E, bs2E, b3E]
+
             c0, c2, c4 = params['alpha0p']/A,params['alpha2p']/A,params['alpha4p']/A
             pars+=[-2/105*(105*c0-35*c2*f+9*c4*f**2),-2/7*f*(7*c2-6*f*c4),-2*f**2*c4,0]
             sigv = self.options['sigv']

@@ -61,7 +61,7 @@ def parse_args():
     # MG toggles
     p.add_argument("--force-GR", action="store_true", help="Force GR run.")
     p.add_argument("--MG-model", choices=["LCDM", "HS", "HDKI"], default="LCDM", help="Base model.")
-    p.add_argument("--mg-variant", choices=["mu_OmDE", "BZ", "binning"], default="mu_OmDE") 
+    p.add_argument("--mg-variant", choices=["mu_OmDE", "BZ", "BZ_fR", "binning"], default="mu_OmDE") 
     p.add_argument("--beyond-eds", action="store_true", help="Enable beyond-EdS kernels (default False).")
     #p.add_argument("--rescale-PS", action="store_true", help="Rescale input PS (default False).")
     p.add_argument("--redshift-bins", action="store_true", help="Enable redshift binning.")
@@ -121,6 +121,8 @@ def emu_filename(tag: str,
             mode = "mu0"
         elif mg_variant == "BZ":
             mode = "BZ"
+        elif mg_variant == "BZ_fR":
+            mode = "BZ_fR"
         elif mg_variant == "binning":
             # This shouldn't really happen without redshift_bins,
             # but keep a sensible label.
@@ -296,7 +298,7 @@ def main():
                                scale_bins_method=args.scale_bins_method)
 
             # GR / base priors
-            cosmo.init.params['tau_reio'].update(fixed=True)
+            cosmo.init.params['tau_reio'].update(fixed=True, value=0.0544)
             cosmo.init.params['sigma8_m'] = {'derived': True, 'latex': r'\sigma_8'}
 
             # neutrinos: keep standard Neff and (if present) lock m_ncdm (one 0.06 eV species)
@@ -383,14 +385,35 @@ def main():
                         ref={"dist": "norm", "loc": 100.0, "scale": 100.0},
                         delta=100,
                     )
-                    #cosmo.init.params["lambda_1"].update(
-                    #    fixed=True, value=100)
                     cosmo.init.params["exp_s"].update(
                         fixed=False,
                         prior={"dist": "uniform", "limits": (0.0, 5.0)},
                         ref={"dist": "norm", "loc": 2.0, "scale": 0.3},
                         delta=0.5,
                     )
+
+            elif args.mg_variant == "BZ_fR":
+                # f(R)-like subset of BZ:
+                #   beta_1 = 4/3, exp_s = 4, only lambda_1 is free
+                for nm, val in [("beta_1", 4.0/3.0), ("lambda_1", 100.0), ("exp_s", 4.0)]:
+                    cosmo.init.params.data.append(
+                        parameter.Parameter(basename=nm, value=val, fixed=True)
+                    )
+
+                if args.force_GR:
+                    # GR limit: effectively B0 -> 0, so lambda_1 -> 0 and no MG
+                    cosmo.init.params["beta_1"].update(fixed=True, value=1.0)
+                    cosmo.init.params["lambda_1"].update(fixed=True, value=0.0)
+                    cosmo.init.params["exp_s"].update(fixed=True, value=4.0)
+                else:
+                    # Only lambda_1 varies; choose prior so that your desired B0-range is covered.
+                    cosmo.init.params["lambda_1"].update(
+                        fixed=False,
+                        prior={"dist": "uniform", "limits": (0.0, 1e6)},  # tweak as you like
+                        ref={"dist": "norm", "loc": 30.0, "scale": 10.0},
+                        delta=10.0,
+                    )
+                    # beta_1 and exp_s remain fixed to 4/3 and 4 respectively
 
             elif args.mg_variant == "binning":
                 # μ(z, k) binned variant: μ1..μ4 + fixed transition knobs
@@ -435,10 +458,15 @@ def main():
             sigma8_fid = None
         elif args.priors_basis=="physical":
             sigma8_fid = sigma8_fid_val
+        
+        # Small tweak for BZ_fR
+        fkpt_mg_variant = args.mg_variant
+        if fkpt_mg_variant == "BZ_fR":
+            fkpt_mg_variant = "BZ"
         theory.init.update(freedom=args.freedom, prior_basis=args.priors_basis,
                            tracer=tracer_tag, template=template,
                            k=k_out, ells=list(ells), b3_coev=True,
-                           model=args.MG_model, mg_variant=args.mg_variant,
+                           model=args.MG_model, mg_variant=fkpt_mg_variant,
                            beyond_eds=beyond_eds, rescale_PS=False, sigma8_fid=sigma8_fid
                            )
 
@@ -551,13 +579,65 @@ def main():
         # ----------------------------------------
         # 3) mark nuisance parameters (alphas) as analytically marginalized
         # ----------------------------------------
+
+        # Base (un-suffixed) names for the alpha nuisance parameters
         alpha_basenames = ["alpha0", "alpha2", "alpha4", "alpha0shot", "alpha2shot"]
-        alpha_fullnames = [pname(b) for b in alpha_basenames]
-    
+        alpha_fullnames = [pname(b) for b in alpha_basenames]  # e.g. alpha0p, alpha2p, ...
+
+        # Fiducial (mean) values you want to center the priors on
+        alpha_fid = {
+            "alpha0":     3.0,
+            "alpha2":    -1.0,
+            "alpha4":     0.0,
+            "alpha0shot": 0.08,
+            "alpha2shot": -2.0,
+        }
+
+        # Prior widths: depend on prior basis
+        if args.priors_basis == "physical":
+            # tighter "physical" priors
+            width_EFT = 30.0
+            width_SN0 = 2.0
+            width_SN2 = 5.0
+        else:
+            # "standard" priors (your previous defaults)
+            width_EFT = 125.0
+            width_SN0 = 20.0
+            width_SN2 = 50.0
+
+        # EFT counterterms: alpha0, alpha2, alpha4
+        for base in ["alpha0", "alpha2", "alpha4"]:
+            full = pname(base)  # e.g. "alpha0" or "alpha0p"
+            if full in theory.params:
+                p = theory.params[full]
+                if p.varied:
+                    p.update(
+                        prior={
+                            "dist": "norm",
+                            "loc": alpha_fid[base],   # center on your fiducial value
+                            "scale": width_EFT,
+                        }
+                    )
+
+        # Shot-noise-like alphas: alpha0shot, alpha2shot
+        for base, width in [("alpha0shot", width_SN0), ("alpha2shot", width_SN2)]:
+            full = pname(base)
+            if full in theory.params:
+                p = theory.params[full]
+                if p.varied:
+                    p.update(
+                        prior={
+                            "dist": "norm",
+                            "loc": alpha_fid[base],   # center on fiducial
+                            "scale": width,
+                        }
+                    )
+
+        # Finally: mark all these alpha-parameters as analytically marginalized
         for p in theory.params.select(basename=alpha_fullnames):
             if p.varied:
                 p.update(derived=".marg")
-                # if you wanted numeric marg instead, you would set fixed=False, etc.
+                # If you wanted numeric marg instead, you'd keep them "normal" varied params.
     
         # ----------------------------------------
         # 4) ensure all FKPT nuisance parameters are namespaced per tracer
@@ -635,34 +715,32 @@ def main():
     # ---------- Run mode ----------
     if args.mode == "mcmc":
         if args.resume:
-            existing = sorted(glob(str(outdir / f"{prefix}_*.npy")))
-            if not existing:
-                print(f"[resume/mcmc] No existing files found for {prefix}; starting fresh 4 chains.")
-                chains_arg = 4
-            else:
-                print(f"[resume/mcmc] Resuming {len(existing)} chains:")
-                for f in existing:
-                    print("  -", f)
-                chains_arg = existing  # pass list to resume
-            sampler = MCMCSampler(
-                likelihood,
-                chains=chains_arg,
-                seed=42,
-                save_fn=save_pattern,
-                mpicomm=MPI.COMM_WORLD,
-                ref_scale=args.ref_scale,
-            )
-        else:
-            sampler = MCMCSampler(
-                likelihood,
-                chains=4,
-                seed=42,
-                save_fn=save_pattern,
-                mpicomm=MPI.COMM_WORLD,
-                ref_scale=args.ref_scale,
-            )
-        sampler.run(check={'max_eigen_gr': 0.1}, check_every=1000, max_iterations=50000)
+            all_files = sorted(glob(save_pattern))
+            # Ignore MAP profile files like "<prefix>_profiles.npy"
+            existing = [f for f in all_files if "profiles" not in Path(f).stem]
 
+            if MPI.COMM_WORLD.Get_rank() == 0:
+                if not existing:
+                    print(f"[resume/mcmc] No existing chain files found for {prefix}; starting fresh 4 chains.")
+                else:
+                    print(f"[resume/mcmc] Resuming {len(existing)} chains:")
+                    for f in existing:
+                        print("  -", f)
+
+            chains_arg = existing if existing else 4
+        else:
+            chains_arg = 4
+
+        sampler = MCMCSampler(
+            likelihood,
+            chains=chains_arg,
+            seed=42,
+            save_fn=save_pattern,
+            mpicomm=MPI.COMM_WORLD,
+            ref_scale=args.ref_scale,
+        )
+        sampler.run(check={'max_eigen_gr': 0.01}, check_every=3000, max_iterations=50000)
+        
     elif args.mode == "nautilus":
         # For nested sampling, usually a single run per MPI-world is enough.
         if args.resume:

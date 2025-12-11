@@ -2529,6 +2529,8 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         # self.kt = table[0]
         self.sigma8 = self.template.sigma8
         self.fsigma8 = self.template.f * self.sigma8
+        self.qpar = self.template.qpar
+        self.qper = self.template.qper
         tables = pyfkpt.compute_tables(k=self.template.k, pk=self.template.pk_dd,**fkpt_params)
         keys = list(tables.keys())
         self.tables = np.column_stack([tables[k] for k in keys]) #Storing only the 2d array part
@@ -2634,7 +2636,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
 
     def __getstate__(self, varied=True, fixed=True):
         state = {}
-        for name in (['k', 'z', 'ells', 'wmu', 'kt'] if fixed else []) + (['sigma8', 'fsigma8'] if varied else []):
+        for name in (['k', 'z', 'ells', 'wmu', 'kt'] if fixed else []) + (['sigma8', 'fsigma8','qpar','qper'] if varied else []):
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         if varied:
@@ -2644,7 +2646,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         return state
 
     def __setstate__(self, state):
-        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8']:
+        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8','qpar','qper']:
             if name in state: setattr(self, name, state.pop(name))
         if not hasattr(self, 'pt'): self.pt = Namespace()
         self.pt.update(**state)
@@ -2696,7 +2698,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     - https://arxiv.org/abs/2208.02791
     - https://github.com/henoriega/FOLPS-nu
     """
-    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4, model='HDKI',mg_variant='mu_OmDE', b3_coev=False, beyond_eds=True, rescale_PS=True,sigma8_fid=None) #Model can be either HS or LCDM
+    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4, model='HDKI',mg_variant='mu_OmDE', b3_coev=False, beyond_eds=True, rescale_PS=True,sigma8_fid=None,h_fid=None,use_TCM_priors=False) #Model can be either HS or LCDM
 
     
 
@@ -2799,6 +2801,37 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             pars+=[-2/105*(105*c0-35*c2*f+9*c4*f**2),-2/7*f*(7*c2-6*f*c4),-2*f**2*c4,0]
             sigv = self.options['sigv']
             pars += [params['alpha{:d}shotp'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
+
+        if self.options['use_TCM_priors']:
+            sigma8 = self.pt.sigma8
+            f = self.pt.fsigma8 / sigma8
+            # print(vars(self.pt))
+            sigma8_fid = self.options['sigma8_fid']
+            qpar = self.pt.qpar
+            qper = self.pt.qper
+            h_fid = self.options['h_fid']
+            h=self.all_params['h'].value
+            A_AP = ((h_fid)/h)**3/(qper*qpar**2)
+            if sigma8_fid is not None:
+                A = (sigma8/sigma8_fid)**2  #Following Class-PT
+            else: 
+                A=1 
+            
+            b1L  = params['b1p'] / sigma8 - 1.
+            b2L  = params['b2p'] / sigma8**2
+            bsL  = params['bs2p'] / sigma8**2
+            b3L  = params['b3nlp']
+            # --- Lagrangian → Eulerian with co-evo ---
+            b1E  = 1. + b1L
+            b2E  = b2L + 8. / 21. * b1L
+            bs2E = -4. / 7. * b1L + bsL    
+            b3E  = b3L + 32. / 315. * b1L  
+            pars = [b1E, b2E, bs2E, b3E]
+            c0, c2, c4 = params['alpha0p']/(A*A_AP),params['alpha2p']/(A*A_AP),params['alpha4p']/(A*A_AP)
+            pars+=[-2/105*(105*c0-35*c2*f+9*c4*f**2),-2/7*f*(7*c2-6*f*c4),-2*f**2*c4,0]
+            # pars+= [2*params['alpha0p']/(1+f/3/b1E)/A,2*f/A*(params['alpha0p']/(b1E+f/3)+params['alpha2p']/(1+6*f/7/b1E)),params['alpha4p'],0]
+            sigv = self.options['sigv']
+            pars += [params['alpha{:d}shotp'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
         else:
             pars = [params[name] for name in self.required_bias_params]
            
@@ -2809,6 +2842,8 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         ]
         for name, val in zip(eulerian_names, pars):
             params[name] = val
+
+
 
         #self.__dict__.update(dict(zip(['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'alpha6', 'sn0', 'sn2'], pars)))  # for derived parameters
         # opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}

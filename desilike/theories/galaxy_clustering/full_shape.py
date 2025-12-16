@@ -2607,11 +2607,14 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         params['rescale_PS']=False
         params['use_beyond_eds_kernels']=kwargs['beyond_eds']
 
-        # --- Co-evolution correction: only for STANDARD basis ---
+        # --- Co-evolution correction (optional): STANDARD basis only ---
         prior_basis = kwargs.get('prior_basis', 'standard')
-        b3_coev = kwargs.get('b3_coev', False)
-
-        if prior_basis != 'physical' and 'b1' in params:
+        b3_coev = bool(kwargs.get('b3_coev', False))
+        
+        if b3_coev and prior_basis == 'standard' and 'b1' in params:
+            for name in ['b1', 'bs2', 'b3nl']:
+                if name not in params:
+                    raise ValueError(f"b3_coev=True requires '{name}' in params.")
             b1 = params['b1']
             delta_b1 = b1 - 1.0
             params['bs2']  = params['bs2']  - 4.0 / 7.0 * delta_b1
@@ -2659,189 +2662,317 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
 class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     r"""
     fkpt tracer power spectrum multipoles.
-    Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
-   
-    For the matter (unbiased) power spectrum, set b1=1 and all other bias parameters to 0.
 
-    Parameters
-    ----------
-    k : array, default=None
-        Theory wavenumbers where to evaluate multipoles.
+    prior_basis strings:
 
-    ells : tuple, default=(0, 2, 4)
-        Multipoles to compute.
+    # Standard --- standard basis as used in folps paper (ArXiv: 2404.07269)
+    # Physical --- physical basis as used in velocileptors paper (ArXiv: 2404.07312) but with the basis from folps
+    # Physical_velocileptors --- physical basis as used in velocileptors paper (ArXiv: 2404.07312)
+    # APscaling --- physical basis as used in velocileptors paper (ArXiv: 2404.07312) with mapping to folps basis,
+    #               but including AP-scaling as done in Tsedrik et al. (ArXiv: 2509.09562)
 
-    template : BasePowerSpectrumTemplate
-        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
-
-    shotnoise : float, default=1e4
-        Shot noise (which is usually marginalized over).
-
-    prior_basis : str, default='physical'
-        If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
-        :math:`b_{1}^\prime = (1 + b_{1}^{L}) \sigma_{8}(z), b_{2}^\prime = b_{2}^{L} \sigma_{8}(z)^2, b_{s}^\prime = b_{s}^{L} \sigma_{8}(z)^2, b_{3}^\prime = 0`
-        with: :math:`b_{1} = 1 + b_{1}^{L}, b_{2} = 8/21 b_{1}^{L} + b_{2}^{L}, b_{s} = -4/7 b_{1}^{L} + b_{s}^{L}`.
-        :math:`\alpha_{0} = (1 + b_{1}^{L})^{2} \alpha_{0}^\prime, \alpha_{2} = f (1 + b_{1}^{L}) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f (f \alpha_{2}^\prime + (1 + b_{1}^{L}) \alpha_{4}^\prime)`.
-        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{4} s_{n, 4}^\prime`.
-
-    tracer : str, default=None
-        If ``prior_basis = 'physical'``, tracer to load preset ``fsat`` and ``sigv``. One of ['LRG', 'ELG', 'QSO'].
-
-    fsat : float, default=None
-        If ``prior_basis = 'physical'``, satellite fraction to assume.
-
-    sigv : float, default=None
-        If ``prior_basis = 'physical'``, velocity dispersion to assume.
-
-    Reference
-    ---------
-    - https://arxiv.org/abs/2208.02791
-    - https://github.com/henoriega/FOLPS-nu
+    Aliases:
+      - prior_basis='standard' -> 'standard_folps'
+      - prior_basis='physical' -> 'physical_folps'
     """
-    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4, model='HDKI',mg_variant='mu_OmDE', b3_coev=False, beyond_eds=True, rescale_PS=True,sigma8_fid=None,h_fid=None,use_TCM_priors=False) #Model can be either HS or LCDM
 
-    
+    _default_options = dict(
+        freedom=None,
+        prior_basis='physical',   # alias -> physical_folps
+        tracer=None, fsat=None, sigv=None,
+        shotnoise=1e4,
+        model='HDKI', mg_variant='mu_OmDE',
+        b3_coev=False,
+        beyond_eds=True,
+        rescale_PS=True,
+        sigma8_fid=None,
+        h_fid=None,   # only needed for prior_basis='APscaling'
+    )
+
+    # -------------------------
+    # helpers
+    # -------------------------
+    @staticmethod
+    def _rename_prior_basis(prior_basis: str) -> str:
+        pb = str(prior_basis).strip()
+        aliases = {
+            'standard': 'standard_folps',
+            'physical': 'physical_folps',
+            'physical_folps': 'physical_folps',
+            'standard_folps': 'standard_folps',
+            'physical_velocileptors': 'physical_velocileptors',
+            'APscaling': 'APscaling',
+        }
+        if pb not in aliases:
+            raise ValueError(f"Unknown prior_basis='{prior_basis}'. "
+                             "Valid: ['standard','physical','standard_folps','physical_folps',"
+                             "'physical_velocileptors','APscaling'].")
+        return aliases[pb]
 
     @staticmethod
+    def _is_physical_mode(pb: str) -> bool:
+        return pb in ['physical_folps', 'physical_velocileptors', 'APscaling']
+
+    # -------------------------
+    # parameter priors
+    # -------------------------
+    @staticmethod
     def _params(params, freedom=None, prior_basis='physical'):
+        pb = fkptTracerPowerSpectrumMultipoles._rename_prior_basis(prior_basis)
+    
+        # -------------------------
+        # freedom logic (pre-rename)
+        # -------------------------
         fix = []
         if freedom in ['min', 'max']:
             for param in params.select(basename=['b1']):
                 param.update(prior=dict(limits=[0., 10.]))
             for param in params.select(basename=['b2']):
                 param.update(prior=dict(limits=[-50., 50.]))
-            for param in params.select(basename=['bs2', 'b3nl', 'alpha*',  'alpha0shot', 'alpha2shot']):
+    
+            # remove priors for the nuisances (let later blocks define them)
+            for param in params.select(basename=['bs2', 'b3nl', 'alpha*', 'alpha0shot', 'alpha2shot', 'ctilde']):
                 param.update(prior=None)
+    
         if freedom == 'max':
             for param in params.select(basename=['b1', 'b2', 'bs2', 'b3nl']):
                 param.update(fixed=False)
             fix += ['ctilde']
+    
         if freedom == 'min':
             fix += ['b3nl', 'bs2', 'ctilde']
+    
         for param in params.select(basename=fix):
             param.update(value=0., fixed=True)
-        if prior_basis == 'physical':
+    
+        # -------------------------
+        # physical modes: rename -> add suffix 'p'
+        # -------------------------
+        if fkptTracerPowerSpectrumMultipoles._is_physical_mode(pb):
             for param in list(params):
-                basename = param.basename
-                param.update(basename=basename + 'p')
-                #params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
+                param.update(basename=param.basename + 'p')
+    
+            # b1p prior
             for param in params.select(basename='b1p'):
-                param.update(prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1))
-            for param in params.select(basename=['b2p', 'bs2p', 'b3nlp']):
-                param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
-            for param in params.select(basename='b3p'):
-                param.update(value=0., fixed=True)
+                param.update(prior=dict(dist='uniform', limits=[0., 3.]),
+                             ref=dict(dist='norm', loc=1., scale=0.1))
+    
+            # ---- IMPORTANT: APscaling special handling ----
+            if pb == 'APscaling':
+                # These are NOT sampled in APscaling (they are overwritten in calculate())
+                for param in params.select(basename=['bs2p', 'b3nlp']):
+                    param.update(value=0.0, fixed=True, prior=None)
+    
+                # Make sure bK2p/btdp are the free knobs (unless freedom='min')
+                for name in ['bK2p', 'btdp']:
+                    if name in params:
+                        params[name].update(
+                            fixed=(freedom == 'min'),
+                            prior=None if (freedom == 'min') else dict(dist='norm', loc=0., scale=5.),
+                            ref=dict(dist='norm', loc=0., scale=1.),
+                        )
+    
+            else:
+                # other physical modes keep bs2p/b3nlp sampled
+                for param in params.select(basename=['b2p', 'bs2p', 'b3nlp']):
+                    param.update(prior=dict(dist='norm', loc=0., scale=5.),
+                                 ref=dict(dist='norm', loc=0., scale=1.))
+    
+            # counterterms (same block for all physical modes)
             for param in params.select(basename='alpha*p'):
-                param.update(prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.))  # 50% at k = 0.2 h/Mpc
-            # for param in params.select(basename='sn*p'):
-            #     param.update(prior=dict(dist='norm', loc=0., scale=2. if 'sn0' in param.basename else 5.), ref=dict(dist='norm', loc=0., scale=1.))
+                param.update(prior=dict(dist='norm', loc=0., scale=12.5),
+                             ref=dict(dist='norm', loc=0., scale=1.))
+    
         return params
 
+    # -------------------------
+    # required params
+    # -------------------------
     def set_params(self):
-        self.required_bias_params = ['b1', 'b2', 'bs2', 'b3nl', 'alpha0', 'alpha2', 'alpha4', 'ctilde', 'alpha0shot', 'alpha2shot', 'PshotP']
+        self.required_bias_params = [
+            'b1', 'b2', 'bs2', 'b3nl',
+            'alpha0', 'alpha2', 'alpha4',
+            'ctilde',
+            'alpha0shot', 'alpha2shot',
+            'PshotP',
+        ]
         default_values = {'b1': 1.}
         self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
 
-        # self.MG_params = ['fR0']
-        # MG_default_values= {'fR0':1e-4}
-        # self.MG_params = {name: MG_default_values.get(name) for name in self.MG_params}
-        
-        
-        self.is_physical_prior = self.options['prior_basis'] == 'physical'
-        
+        pb = self._rename_prior_basis(self.options['prior_basis'])
+        self._prior_basis_norm = pb
+        self.is_physical_prior = self._is_physical_mode(pb)
+
+        if pb == 'APscaling':
+            # You will sample bK2p and btdp and then overwrite bs2E/b3E inside calculate()
+            self.required_bias_params['bK2'] = 0.0
+            self.required_bias_params['btd'] = 0.0
+
         if self.is_physical_prior:
+            # rename required nuisances to primed sampling names
             for name in list(self.required_bias_params):
                 self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
+
             settings = get_physical_stochastic_settings(tracer=self.options['tracer'])
             for name, value in settings.items():
-                if self.options[name] is None: self.options[name] = value
+                if self.options[name] is None:
+                    self.options[name] = value
+
             if self.mpicomm.rank == 0:
                 self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
+
         super().set_params(pt_params=[])
+
+        # fix unused multipole-related params
         fix = []
-        if 4 not in self.ells: fix += ['alpha4']
-        if 2 not in self.ells: fix += ['alpha2', 'alpha2shot']
+        if 4 not in self.ells:
+            fix += ['alpha4'] if not self.is_physical_prior else ['alpha4p']
+        if 2 not in self.ells:
+            fix += (['alpha2', 'alpha2shot'] if not self.is_physical_prior else ['alpha2p', 'alpha2shotp'])
+
         for param in self.init.params.select(basename=fix):
             param.update(value=0., fixed=True)
+
         self.nd = 1e-4
         self.fsat = self.snd = 1.
         if self.is_physical_prior:
-            self.fsat, self.snd = self.options['fsat'], self.options['shotnoise'] * self.nd  # normalized by 1e-4
+            self.fsat = self.options['fsat']
+            self.snd = self.options['shotnoise'] * self.nd  # normalized by 1e-4
 
+    # -------------------------
+    # main mapping
+    # -------------------------
     def calculate(self, **params):
-       
         super(fkptTracerPowerSpectrumMultipoles, self).calculate()
         params = {**self.required_bias_params, **params}
+
+        pb = self._prior_basis_norm  # already normalized in set_params
+
+        # ============================================================
+        # Case A: STANDARD_FOLPS -> forward directly (Eulerian nuisances)
+        # ============================================================
+        if pb == 'standard_folps':
+            self.power = self.pt.combine_bias_terms_poles(
+                params, nd=self.nd,
+                model=self.options['model'], mg_variant=self.options['mg_variant'],
+                prior_basis='standard',
+                b3_coev=self.options['b3_coev'],
+                beyond_eds=self.options['beyond_eds'],
+            )
+            return
+
+        # ============================================================
+        # From here on: PHYSICAL modes
+        # ============================================================
+        sigma8 = self.pt.sigma8
+        f = self.pt.fsigma8 / sigma8
+
+        sigma8_fid = self.options.get('sigma8_fid', None)
+        # amplitude rescaling convention (Class-PT style)
+        A = (sigma8 / sigma8_fid)**2 if sigma8_fid is not None else 1.0
+        sqrtA = A**0.5
+
+        # --- Lagrangian -> Eulerian ---
+        b1L  = params['b1p'] / sigma8 - 1.0
+        b2L  = params['b2p'] / sigma8**2
         
-        if self.is_physical_prior:
-            if self.options['use_TCM_priors']:
-                sigma8 = self.pt.sigma8
-                f = self.pt.fsigma8 / sigma8
-                # print(vars(self.pt))
-                sigma8_fid = self.options['sigma8_fid']
-                qpar = self.pt.qpar
-                qper = self.pt.qper
-                h_fid = self.options['h_fid']
-                h = self.all_params['h'].value
-                A_AP = ((h_fid)/h)**3/(qper*qpar**2)
-                if sigma8_fid is not None:
-                    A = (sigma8/sigma8_fid)**2  #Following Class-PT
-                else: 
-                    A = 1 
-                
-                b1L  = params['b1p'] / sigma8 - 1.
-                b2L  = params['b2p'] / sigma8**2
-                bsL  = params['bs2p'] / sigma8**2
-                b3L  = params['b3nlp']
-                # --- Lagrangian → Eulerian with co-evo ---
-                b1E  = 1. + b1L
-                b2E  = b2L + 8. / 21. * b1L
-                bs2E = -4. / 7. * b1L + bsL    
-                b3E  = b3L + 32. / 315. * b1L  
-                pars = [b1E, b2E, bs2E, b3E]
-                c0, c2, c4 = params['alpha0p']/(A*A_AP), params['alpha2p']/(A*A_AP), params['alpha4p']/(A*A_AP)
-                pars += [-2/105*(105*c0-35*c2*f+9*c4*f**2), -2/7*f*(7*c2-6*f*c4), -2*f**2*c4, 0]
-                sigv = self.options['sigv']
-                pars += [params['alpha{:d}shotp'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
+        b1E  = 1.0 + b1L
+        b2E  = b2L + 8.0 / 21.0 * b1L
+        
+        # defaults (non-APscaling)
+        bsL  = params['bs2p'] / sigma8**2
+        b3L  = params['b3nlp']
+        bs2E = -4.0 / 7.0 * b1L + bsL
+        b3E  = b3L + 32.0 / 315.0 * b1L
 
-            else:
-                sigma8 = self.pt.sigma8
-                f = self.pt.fsigma8 / sigma8
-                sigma8_fid = self.options['sigma8_fid']
-                if sigma8_fid is not None:
-                    A = (sigma8/sigma8_fid)**2  #Following Class-PT
-                else: 
-                    A = 1 
+        ctildeE = params.get('ctildep', 0.0)
 
-                # Following notation from: https://arxiv.org/pdf/2404.07312
-                b1L  = params['b1p'] / sigma8 - 1.
-                b2L  = params['b2p'] / sigma8**2
-                bsL  = params['bs2p'] / sigma8**2
-                b3L  = params['b3nlp']
-                # --- Lagrangian → Eulerian with co-evo ---
-                b1E  = 1. + b1L
-                b2E  = b2L + 8. / 21. * b1L
-                bs2E = -4. / 7. * b1L + bsL    
-                b3E  = b3L + 32. / 315. * b1L  
-                pars = [b1E, b2E, bs2E, b3E]
+        # ============================================================
+        # Counterterms mapping
+        # ============================================================
+        if pb == 'physical_folps':
+            # interpret alpha?p as the actual EFT alpha0/alpha2/alpha4 coefficients
+            # (optionally undo overall A if you want the same convention as your other physical modes)
+            alpha0 = params['alpha0p'] / A
+            alpha2 = params['alpha2p'] / A
+            alpha4 = params['alpha4p'] / A
 
-                c0, c2, c4 = params['alpha0p']/A, params['alpha2p']/A, params['alpha4p']/A
-                pars += [-2/105*(105*c0-35*c2*f+9*c4*f**2), -2/7*f*(7*c2-6*f*c4), -2*f**2*c4, 0]
-                sigv = self.options['sigv']
-                pars += [params['alpha{:d}shotp'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
+        elif pb == 'physical_velocileptors':
+            # interpret alpha?p as tilde-alphas, map to FKPT alphas
+            a0t = params['alpha0p'] / A
+            a2t = params['alpha2p'] / A
+            a4t = params['alpha4p'] / A
+
+            alpha0 = (b1E**2) * a0t
+            alpha2 = (b1E * f) * (a0t + a2t)
+            alpha4 = (f**2) * a2t + (b1E * f) * a4t
+
+            # NOTE: ignores the mu^6 term if your true model has it.
+
+        elif pb == 'APscaling':
+            # ============================================================
+            # APscaling: include A_AP and decode the table-style priors
+            # ============================================================
+            qpar = self.pt.qpar
+            qper = self.pt.qper
+            h_fid = self.options.get('h_fid', None)
+            if h_fid is None:
+                raise ValueError("prior_basis='APscaling' requires option h_fid.")
+
+            h = self.all_params['h'].value
+            A_AP = (h_fid / h)**3 / (qper * qpar**2)
+            self.A_AP = A_AP
+
+            a0t = params['alpha0p'] / (A_AP * sqrtA)
+            a2t = params['alpha2p'] / (A_AP * sqrtA)
+            a4t = params['alpha4p'] / (A_AP * sqrtA)
+
+            alpha0 = (b1E**2) * a0t
+            alpha2 = (b1E * f) * (a0t + a2t)
+            alpha4 = (f**2) * a2t + (b1E * f) * a4t
+
+            if 'bK2p' not in params or 'btdp' not in params:
+                raise ValueError("APscaling requires sampled parameters 'bK2p' and 'btdp' "
+                                 "(or update the code to match your chosen names).")
+
+            bK2 = params['bK2p'] / (sigma8**2 * sqrtA)   # consistent with table convention
+            btd = params['btdp'] / (sigma8**2 * sqrtA)   # your stated typo-fix
+
+            # bK2 ---> bs2 mapping
+            bs2E = 2.0 * bK2
+
+            # mapping for b3nl using 1611.09787
+            b3E = -(32.0 / 21.0) * (bK2 + (2.0 / 5.0) * btd)
+
+            # use coevolution b3E = b3E + 32.0/315.0 * b1L ?
 
         else:
-            pars = [params[name] for name in self.required_bias_params]
-           
-        eulerian_names = [
-            'b1', 'b2', 'bs2', 'b3nl',
-            'alpha0', 'alpha2', 'alpha4', 'ctilde',
-            'alpha0shot', 'alpha2shot',
-        ]
-        for name, val in zip(eulerian_names, pars):
-            params[name] = val
+            raise ValueError(f"Internal error: unsupported normalized prior basis '{pb}'.")
+
+        # --- stochastic ---
+        sigv = self.options['sigv']
+        alpha0shot = params['alpha0shotp'] * self.snd * 1.0 * sigv**0
+        alpha2shot = params['alpha2shotp'] * self.snd * (self.fsat) * sigv**2
+
+        # write Eulerian params expected downstream
+        params['b1'] = b1E
+        params['b2'] = b2E
+        params['bs2'] = bs2E
+        params['b3nl'] = b3E
+
+        params['alpha0'] = alpha0
+        params['alpha2'] = alpha2
+        params['alpha4'] = alpha4
+
+        params['ctilde'] = ctildeE
+        params['alpha0shot'] = alpha0shot
+        params['alpha2shot'] = alpha2shot
 
         self.power = self.pt.combine_bias_terms_poles(
-            params, nd=self.nd, model=self.options['model'], mg_variant=self.options['mg_variant'],
-            prior_basis=self.options['prior_basis'], b3_coev=self.options['b3_coev'], beyond_eds=self.options['beyond_eds']
+            params, nd=self.nd,
+            model=self.options['model'], mg_variant=self.options['mg_variant'],
+            prior_basis='physical',
+            b3_coev=self.options['b3_coev'],
+            beyond_eds=self.options['beyond_eds'],
         )
+

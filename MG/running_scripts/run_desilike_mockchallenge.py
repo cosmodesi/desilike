@@ -1,193 +1,12 @@
-#!/usr/bin/env python3
-from __future__ import annotations
-import os
+import os,sys
+sys.path.insert(0, f"{os.getcwd()[:-18]}")
+from run_desilike import *
 
-# ---------------------------------------------------------------
-# Now it is safe to import desilike, cosmoprimo, mpi4py, etc.
-# ---------------------------------------------------------------
-import argparse
-import numpy as np
-from pathlib import Path
-from glob import glob
-from mpi4py import MPI
-
-import sys
-sys.path.insert(0, f"{os.getcwd()[:-19]}/desilike")
-from desilike import setup_logging, parameter
-from desilike.theories import Cosmoprimo
-from desilike.theories.galaxy_clustering import (
-    DirectPowerSpectrumTemplate,
-    fkptTracerPowerSpectrumMultipoles,
-)
-from cosmoprimo.fiducial import DESI
-from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
-from desilike.observables import ObservableCovariance
-from desilike.likelihoods import ObservablesGaussianLikelihood
-from desilike.samplers import MCMCSampler, NautilusSampler
-from desilike.samplers import StaticDynestySampler, DynamicDynestySampler
-from desilike.emulators import Emulator, EmulatedCalculator, TaylorEmulatorEngine
-from desilike.profilers import MinuitProfiler
-
-def parse_args():
-    p = argparse.ArgumentParser(description="Multi-tracer fkpt with optional Taylor emulators and binning (MCMC or MAP).")
-    g = p.add_mutually_exclusive_group()
-    g.add_argument("--create-emu", action="store_true", help="Build per-tracer emulators then exit.")
-    g.add_argument("--use-emu", action="store_true", help="Load and use per-tracer emulators.")
-
-    # run mode
-    p.add_argument(
-        "--mode",
-        choices=["mcmc", "nautilus", "dynesty-static", "dynesty-dynamic", "map"],
-        default="mcmc",
-        help="Choose 'mcmc' for MCMCSampler, 'nautilus' for nested sampling, 'dynesty-static', 'dynesty-dynamic', or 'map' for MinuitProfiler."
-    )
-
-    # IO
-    p.add_argument("--chain-prefix", type=str, default="chain_fs_direct_fkpt_isitgr",
-                   help="Base prefix for MCMC output chain files (desilike expands * to 0..N-1).")
-    p.add_argument("--emu-dir", type=Path, default=Path("/n/netscratch/eisenstein_lab/Lab/cristhian/desilike/Emulators"),
-                   help="Directory for emulator files.")
-    p.add_argument("--chains-dir", type=Path, default=Path("./chains"), help="Output dir for chains (and MAP if not overridden).")
-
-    # data / theory controls
-    p.add_argument("--kmin-cut", type=float, default=0.02, help="k_min cut to align to data length.")
-    p.add_argument("--ells", type=str, default="0,2,4", help='Multipoles to use, e.g. "0,2" or "0,2,4".')
-    p.add_argument("--freedom", choices=["max", "min"], default="max",
-                   help="fkpt nuisance freedom. 'min' typically omits bs/b3.")
-    p.add_argument("--priors-basis", type=str, choices=["standard", "physical"], default="standard", help="prior basis to use, default is standard")
-    p.add_argument("--fid-model", type=str, default="LCDM", help='Underlying model tag for IO (e.g., LCDM or F4).')
-    p.add_argument("--skip-ns-prior", action="store_true", help="Do not apply a prior on n_s.")
-    p.add_argument("--skip-bbn-prior", action="store_true", help="Do not apply the BBN prior on omega_b.")
-    p.add_argument("--resume", action="store_true", help="Resume from existing chain files matching the built prefix.")
-
-    # MG toggles
-    p.add_argument("--force-GR", action="store_true", help="Force GR run.")
-    p.add_argument("--MG-model", choices=["LCDM", "HS", "HDKI"], default="LCDM", help="Base model.")
-    p.add_argument("--mg-variant", choices=["mu_OmDE", "BZ", "BZ_fR", "binning"], default="mu_OmDE") 
-    p.add_argument("--beyond-eds", action="store_true", help="Enable beyond-EdS kernels (default False).")
-    #p.add_argument("--rescale-PS", action="store_true", help="Rescale input PS (default False).")
-    p.add_argument("--redshift-bins", action="store_true", help="Enable redshift binning.")
-    p.add_argument("--scale-bins-method", type=str, default="traditional", help="Scale binning method tag.")
-    p.add_argument("--scale-bins", action="store_true", help="Enable scale binning (requires --redshift-bins).")
-    p.add_argument("--kc", type=float, default=0.1, help="Scale for scale transition between bins (k_c).")
-
-    # MAP / MinuitProfiler options (ignored if --mode mcmc)
-    p.add_argument("--profiles-out", type=Path, default=None, help="Path to save Profiles (.npy). Defaults to chains-dir/<prefix>_profiles.npy")
-    p.add_argument("--nstart", type=int, default=None, help="Number of independent Minuit starts; default = MPI size.")
-    p.add_argument("--max-calls", type=int, default=int(1e5), help="Max function calls per Minuit run.")
-    p.add_argument("--gradient", action="store_true", help="Use JAX gradients if available.")
-    p.add_argument("--rescale", action="store_true", help="Internally rescale params using covariance/proposals.")
-    p.add_argument("--covariance", type=str, default=None, help="Path to covariance/chain to set scaling when --rescale is on.")
-    p.add_argument("--ref-scale", type=float, default=1.2, help="Scale factor for parameter reference dists (for profiler starts).")
-
-    # Nautilus-specific
-    p.add_argument("--nlive", type=int, default=800, help="Number of live points for the Nautilus nested sampler.")
-
-    return p.parse_args()
-
-def parse_ells_str(s: str) -> tuple[int, ...]:
-    vals = tuple(int(x.strip()) for x in s.split(",") if x.strip() != "")
-    allowed = {0, 2, 4}
-    if not set(vals).issubset(allowed) or len(vals) == 0:
-        raise ValueError(f"--ells must be a comma-separated subset of 0,2,4; got {s!r}")
-    return tuple(sorted(vals))
-
-def emu_filename(tag: str,
-                 k: np.ndarray,
-                 ells: tuple[int, ...],
-                 beyond_eds: bool,
-                 redshift_bins: bool,
-                 scale_bins: bool,
-                 mg_variant: str,
-                 kc: float | None = None,
-                 scale_bins_method: str | None = None) -> str:
-    """Per-tracer PT emulator filename with optional binning tags, k_c and MG variant."""
-    dk = float(np.median(np.diff(k))) if k.size > 1 else 0.0
-    kmin_edge = float(k.min() - 0.5 * dk)
-    kmax_edge = float(k.max() + 0.5 * dk)
-
-    if scale_bins and not redshift_bins:
-        raise ValueError("--scale-bins requires --redshift-bins")
-
-    if redshift_bins and scale_bins:
-        mode = "binning_zk"
-        if scale_bins_method:
-            mode = f"{mode}-{scale_bins_method}"
-        if kc is not None:
-            mode = f"{mode}_with_kc_{kc:g}"
-    elif redshift_bins:
-        mode = "binning_z"
-    else:
-        # Non-binned MG variants
-        if mg_variant == "mu_OmDE":
-            mode = "mu0"
-        elif mg_variant == "BZ":
-            mode = "BZ"
-        elif mg_variant == "BZ_fR":
-            mode = "BZ_fR"
-        elif mg_variant == "binning":
-            # This shouldn't really happen without redshift_bins,
-            # but keep a sensible label.
-            mode = "binning"
-        else:
-            mode = mg_variant
-
-    if not beyond_eds:
-        mode = "eds_" + mode
-
-    return (
-        f"emu-fs_fkpt_isitgr_{mode}_{tag}"
-        f"_k{kmin_edge:.3f}-{kmax_edge:.3f}"
-        f"_l{''.join(map(str, ells))}.npy"
-    )
-
-def infer_present_ells(vec_size: int) -> tuple[int, ...]:
-    if vec_size % 3 == 0:
-        return (0, 2, 4)
-    elif vec_size % 2 == 0:
-        return (0, 2)
-    else:
-        return (0,)
-
-def select_data_and_cov(Pvec: np.ndarray, cov: np.ndarray,
-                        present_ells: tuple[int, ...], requested_ells: tuple[int, ...],
-                        start: int, Ncut: int) -> tuple[np.ndarray, np.ndarray]:
-    if not set(requested_ells).issubset(set(present_ells)):
-        raise ValueError(f"Requested ells {requested_ells} not subset of present {present_ells}")
-    Nraw = Pvec.size // len(present_ells)
-    order_map = {ell: i for i, ell in enumerate(present_ells)}
-    idx = []
-    for ell in requested_ells:
-        base = order_map[ell] * Nraw
-        idx.extend(range(base + start, base + start + Ncut))
-    idx = np.array(idx, dtype=int)
-    return Pvec[idx], cov[np.ix_(idx, idx)]
-
-def output_indices_for_ells(present_ells: tuple[int, ...], requested_ells: tuple[int, ...], Nraw: int) -> np.ndarray:
-    """Indices that keep only requested ℓ blocks from a (stacked) emulator output."""
-    order_map = {ell: i for i, ell in enumerate(present_ells)}  # e.g. {0:0, 2:1, 4:2}
-    idx = []
-    for ell in requested_ells:
-        base = order_map[ell] * Nraw
-        idx.extend(range(base, base + Nraw))
-    return np.asarray(idx, dtype=int)
-
-class SlicedEmu:
-    """Adapter that slices a loaded emulator's vector output to a subset of ℓ blocks."""
-    def __init__(self, base: EmulatedCalculator, idx: np.ndarray):
-        self.base = base
-        self.idx = np.asarray(idx)
-        self.init = base.init  # preserve param interface
-    def __call__(self, *args, **kwargs):
-        y = self.base(*args, **kwargs)
-        return y[self.idx]
-
-def main():
+if __name__ == "__main__":
     args = parse_args()
     setup_logging("info")
 
     # IO setup
-    workdir = Path("/n/home12/cgarciaquintero/DESI/MG_validation/fR_noiseless_desilike")
     args.chains_dir.mkdir(parents=True, exist_ok=True)
     args.emu_dir.mkdir(parents=True, exist_ok=True)
 
@@ -196,13 +15,11 @@ def main():
     os.environ.setdefault("OMP_NUM_THREADS", "1")
 
     # Tracers: (file tag, tracer tag, b1 prior center, z_eff)
+    ################################# might need to be adjusted, especially sigma8 value(last col)
     tracer_table = [
-        ("BGS",  "BGS",  1.5, 0.295, -0.52, 0.693770),
-        ("LRG1", "LRG",  2.1, 0.510, -0.99, 0.620894),
-        ("LRG2", "LRG",  2.1, 0.706, -1.12, 0.563789),
-        ("LRG3", "LRG",  2.1, 0.919, -1.07, 0.510742),
-        ("ELG",  "ELG",  1.2, 1.317, 0.03, 0.431973),
-        ("QSO",  "QSO",  2.1, 1.492, -0.71, 0.403964),
+        ("LRG", "LRG",  2.1, 0.8, -1.10, 0.538705, 'z08', 'EZmocks_LRG2ndGen_cubic'), 
+        ("ELG", "ELG",  1.2, 0.95, 0.03, 0.503071, 'z095','EZELG_boxz095_bin01'), 
+        ("QSO", "QSO",  2.1, 1.4, -0.71, 0.410860, 'z14', 'EZQSO_boxz1400_bin01'),
     ]
 
     ells = parse_ells_str(args.ells)
@@ -265,29 +82,29 @@ def main():
         print("[Emulator] Build requested; constructing per-tracer emulators…")
 
     cosmo = None
-    for file_tag, tracer_tag, b1_val, z_tracer, b2_val, sigma8_fid_val in tracer_table:
+    for file_tag, tracer_tag, b1_val, z_tracer, b2_val, sigma8_fid_val, zsnap, fn_mid in tracer_table:
         namespace = file_tag.lower()
 
         # load data
-        k_all   = np.loadtxt(workdir / f"{file_tag}_{fid_model}_k.txt")
-        P_all   = np.loadtxt(workdir / f"{file_tag}_{fid_model}_P0P2P4.txt")
-        cov_all = np.loadtxt(workdir / f"{file_tag}_{fid_model}_cov.txt")
+        ############################## adjusted to the format from the following file
+        datadir = Path('/global/cfs/cdirs/desi/science/gqc/y3_fits/mockchallenge_abacus/measurements/scoccimarro_basis/EZmocks/Pk/')
+        k_all   = np.loadtxt(datadir / f"{tracer_tag}_{zsnap}" /f"Power_Spectrum_{fn_mid}_10.txt",usecols=0)
+        # k-range alignment
+        sel     = (args.kmin_cut<k_all)
+        k_out   = k_all[sel]
+        #################### define ells in advance
+        present_ells = ells
+        Pk_all = []
+        for i in range(1000): # LRG mock 933 had two fewer columns
+            sel_pk    = (args.kmin_cut<np.loadtxt(datadir / f"{tracer_tag}_{zsnap}" /f"Power_Spectrum_{fn_mid}_{i+1}.txt",usecols=0))
+            Pk_all.append(np.array([np.loadtxt(datadir / f"{tracer_tag}_{zsnap}" /f"Power_Spectrum_{fn_mid}_{i+1}.txt",usecols=2+k)[sel_pk] for k in range(len(present_ells))]).flatten())
+        data_vec= np.mean(Pk_all,axis=0)
+        cov_mat = np.cov(np.array(Pk_all).T)
 
-        present_ells = infer_present_ells(P_all.size)
         if not set(ells).issubset(set(present_ells)):
             raise RuntimeError(f"[{file_tag}] requested ells {ells} not available; present={present_ells}")
 
-        # k-range alignment
-        dk_est  = float(np.median(np.diff(k_all))) if k_all.size > 1 else 0.0
-        start   = int(np.searchsorted(k_all, args.kmin_cut - 0.5 * dk_est, side='left'))
-        Ncut    = k_all.size - start
-        if Ncut <= 0:
-            raise RuntimeError(f"[{file_tag}] kmin-cut removed all bins (kmin_cut={args.kmin_cut}).")
-        k_out = k_all[start:start+Ncut]
-
-        data_vec, cov_mat = select_data_and_cov(P_all, cov_all, present_ells, ells, start, Ncut)
-
-        dk = float(np.median(np.diff(k_out))) if k_out.size > 1 else dk_est
+        dk = float(np.median(np.diff(k_out))) 
         kmin_edge = float(k_out[0] - 0.5 * dk)
         kmax_edge = float(k_out[-1] + 0.5 * dk)
         klim = {L: (kmin_edge, kmax_edge, dk) for L in ells}
@@ -707,7 +524,7 @@ def main():
         comm.Barrier()
         if rank == 0:
             print("[Emulator] Done. Exiting because --create-emu was set.")
-        return
+        sys.exit()
 
     likelihood = sum(likelihoods)
 
@@ -742,153 +559,4 @@ def main():
             ref_scale=args.ref_scale,
         )
         sampler.run(check={'max_eigen_gr': 0.01}, check_every=3000, max_iterations=50000)
-        
-    elif args.mode == "nautilus":
-        # For nested sampling, usually a single run per MPI-world is enough.
-        if args.resume:
-            existing = sorted(glob(str(outdir / f"{prefix}_*.npy")))
-            if not existing:
-                print(f"[resume/nautilus] No existing files found for {prefix}; starting fresh nested run.")
-                chains_arg = 1
-            else:
-                print(f"[resume/nautilus] Resuming Nautilus from:")
-                for f in existing:
-                    print("  -", f)
-                chains_arg = existing  # pass list of existing chains to resume
-        else:
-            chains_arg = 1
 
-        sampler = NautilusSampler(
-            likelihood,
-            #chains=chains_arg,
-            seed=42,
-            save_fn=save_pattern,    # required: Nautilus uses this to write .nautilus.state.h5
-            #mpicomm=MPI.COMM_WORLD,
-            #ref_scale=args.ref_scale,
-            #nlive=args.nlive,
-        )
-        # Use Nautilus' own defaults for min_iterations / max_iterations / checks
-        sampler.run()
-
-    elif args.mode == "dynesty-static":
-        # Static NestedSampler (evidence + posterior)
-        outdir = args.chains_dir
-        save_pattern = str(outdir / f"{prefix}_*.npy")
-
-        if args.resume:
-            existing = sorted(glob(str(outdir / f"{prefix}_*.npy")))
-            if not existing:
-                print(f"[resume/dynesty-static] No existing files found for {prefix}; starting fresh nested run.")
-                chains_arg = 1
-            else:
-                print(f"[resume/dynesty-static] Resuming from:")
-                for f in existing:
-                    print("  -", f)
-                chains_arg = existing  # list of existing chains to resume
-        else:
-            chains_arg = 1  # usually one dynesty run per MPI world
-
-        sampler = StaticDynestySampler(
-            likelihood,
-            chains=chains_arg,
-            seed=42,
-            save_fn=save_pattern,     # dynesty wrapper uses this to write .dynesty.state
-            mpicomm=MPI.COMM_WORLD,
-            ref_scale=args.ref_scale,
-            nlive=args.nlive,         # number of live points
-            # You can also pass: bound='multi', sample='auto', update_interval=None, ...
-        )
-        # Let dynesty’s own stopping criteria handle convergence
-        sampler.run()
-
-    elif args.mode == "dynesty-dynamic":
-        # DynamicNestedSampler (posterior-oriented)
-        outdir = args.chains_dir
-        save_pattern = str(outdir / f"{prefix}_*.npy")
-
-        if args.resume:
-            existing = sorted(glob(str(outdir / f"{prefix}_*.npy")))
-            if not existing:
-                print(f"[resume/dynesty-dynamic] No existing files found for {prefix}; starting fresh nested run.")
-                chains_arg = 1
-            else:
-                print(f"[resume/dynesty-dynamic] Resuming from:")
-                for f in existing:
-                    print("  -", f)
-                chains_arg = existing
-        else:
-            chains_arg = 1
-
-        sampler = DynamicDynestySampler(
-            likelihood,
-            chains=chains_arg,
-            seed=42,
-            save_fn=save_pattern,
-            mpicomm=MPI.COMM_WORLD,
-            ref_scale=args.ref_scale,
-            nlive=args.nlive,
-            # bound / sample / update_interval use defaults for now
-        )
-        sampler.run()
-
-    elif args.mode == "map":
-        profiler = MinuitProfiler(
-            likelihood,
-            gradient=args.gradient,
-            rescale=args.rescale,
-            covariance=args.covariance,
-            save_fn=str(profiles_out),
-            # mpicomm=MPI.COMM_WORLD,  # uncomment if you really want MPI for profiling
-            ref_scale=args.ref_scale
-        )
-
-        profiles = profiler.maximize(
-            niterations=args.nstart,      # defaults to MPI size if None
-            max_iterations=args.max_calls
-        )
-
-        # helpers to pick the best row
-        def _np(arr_like):
-            return np.asarray(arr_like[()])
-
-        def _pick_max(arr):
-            a = _np(arr)
-            if a.ndim == 0:
-                return 0, float(a.item())
-            idx = int(np.nanargmax(a))
-            return idx, float(a[idx])
-
-        # choose MAP row using logposterior
-        argmax, logpost = _pick_max(profiles.bestfit[profiles.bestfit._logposterior])
-
-        try:
-            _, loglike = _pick_max(profiles.bestfit[profiles.bestfit._loglikelihood])
-        except KeyError:
-            loglike = np.nan
-
-        try:
-            _, logprior = _pick_max(profiles.bestfit[profiles.bestfit._logprior])
-        except KeyError:
-            logprior = (logpost - loglike) if np.isfinite(loglike) else np.nan
-
-        if rank == 0:
-            print(f"logpost = {logpost:.6g}")
-            if np.isfinite(loglike):
-                print(f"loglike = {loglike:.6g}, logprior = {logprior:.6g}")
-
-            # Pretty-print MAP params (skip log fields)
-            best_map = profiles.bestfit.choice(index=argmax, input=True, return_type='dict')
-            skip = {
-                profiles.bestfit._loglikelihood,
-                profiles.bestfit._logprior,
-                profiles.bestfit._logposterior,
-            }
-            print("\n=== MAP parameters ===")
-            for k, v in best_map.items():
-                if k not in skip:
-                    print(f"{k:20s} = {float(np.squeeze(v)):.6g}")
-    else:
-        raise ValueError(f"Unknown --mode {args.mode!r}; expected 'mcmc', 'nautilus', or 'map'")
-
-if __name__ == "__main__":
-    main()

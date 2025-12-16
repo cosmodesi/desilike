@@ -1,0 +1,376 @@
+class: fkptPowerSpectrumMultipoles
+info: {}
+params:
+  h:
+    value: null
+    fixed: false
+    derived: false
+    prior:
+      dist: uniform
+      limits: [0.4, 1.0]
+    ref:
+      dist: norm
+      limits: [-.inf, .inf]
+      loc: 0.6736
+      scale: 0.001
+    proposal: null
+    delta: [0.03, 0.03]
+    latex: h
+    shape: []
+    drop: false
+  omega_cdm:
+    value: null
+    fixed: false
+    derived: false
+    prior:
+      dist: uniform
+      limits: [0.001, 0.99]
+    ref:
+      dist: norm
+      limits: [-.inf, .inf]
+      loc: 0.12
+      scale: 0.001
+    proposal: null
+    delta: [0.007, 0.007]
+    latex: \omega_{cdm}
+    shape: []
+    drop: false
+  omega_b:
+    value: null
+    fixed: false
+    derived: false
+    prior:
+      dist: norm
+      limits: [-.inf, .inf]
+      loc: 0.02237
+      scale: 0.00055
+    ref:
+      dist: norm
+      limits: [-.inf, .inf]
+      loc: 0.02237
+      scale: 0.00015
+    proposal: null
+    delta: [0.0015, 0.0015]
+    latex: \omega_{b}
+    shape: []
+    drop: false
+  logA:
+    value: null
+    fixed: false
+    derived: false
+    prior:
+      dist: uniform
+      limits: [1.61, 3.91]
+    ref:
+      dist: norm
+      limits: [-.inf, .inf]
+      loc: 3.036394
+      scale: 0.001
+    proposal: null
+    delta: [0.1, 0.1]
+    latex: \ln(10^{10} A_{s})
+    shape: []
+    drop: false
+  n_s:
+    value: null
+    fixed: false
+    derived: false
+    prior:
+      dist: norm
+      limits: [-.inf, .inf]
+      loc: 0.9649
+      scale: 0.02
+    ref:
+      dist: norm
+      limits: [-.inf, .inf]
+      loc: 0.9649
+      scale: 0.004
+    proposal: null
+    delta: [0.01, 0.01]
+    latex: n_{s}
+    shape: []
+    drop: false
+  tau_reio:
+    value: 0.0544
+    fixed: true
+    derived: false
+    prior:
+      dist: uniform
+      limits: [0.01, 0.8]
+    ref:
+      dist: norm
+      limits: [-.inf, .inf]
+      loc: 0.0544
+      scale: 0.01
+    proposal: null
+    delta: [0.01, 0.01]
+    latex: \tau
+    shape: []
+    drop: false
+  m_ncdm:
+    value: 0.06
+    fixed: true
+    derived: false
+    prior:
+      dist: uniform
+      limits: [0.0, 5.0]
+    ref:
+      dist: norm
+      limits: [0.0, 10.0]
+      loc: 0.06
+      scale: 0.12
+    proposal: null
+    delta: [0.31, 0.15, 0.15]
+    latex: m_{ncdm}
+    shape: []
+    drop: false
+  N_eff:
+    value: 3.046
+    fixed: true
+    derived: false
+    prior:
+      dist: uniform
+      limits: [0.01, 10.0]
+    ref:
+      dist: norm
+      limits: [-.inf, .inf]
+      loc: 3.046
+      scale: 0.16
+    proposal: null
+    delta: [0.2, 0.2]
+    latex: N_{eff}
+    shape: []
+    drop: false
+  w0_fld:
+    value: null
+    fixed: true
+    derived: false
+    prior:
+      dist: uniform
+      limits: [-3.0, 1.0]
+    ref:
+      dist: norm
+      limits: [-.inf, .inf]
+      loc: -1.0
+      scale: 0.08
+    proposal: null
+    delta: [0.1, 0.1]
+    latex: w_{0}
+    shape: []
+    drop: false
+  wa_fld:
+    value: null
+    fixed: true
+    derived: false
+    prior:
+      dist: uniform
+      limits: [-3.0, 2.0]
+    ref:
+      dist: norm
+      limits: [-.inf, .inf]
+      loc: 0.0
+      scale: 0.3
+    proposal: null
+    delta: [0.3, 0.3]
+    latex: w_{a}
+    shape: []
+    drop: false
+  Omega_k:
+    value: null
+    fixed: true
+    derived: false
+    prior:
+      dist: uniform
+      limits: [-0.3, 0.3]
+    ref:
+      dist: norm
+      limits: [-.inf, .inf]
+      loc: 0.0
+      scale: 0.0065
+    proposal: null
+    delta: [0.05, 0.05]
+    latex: \Omega_{k}
+    shape: []
+    drop: false
+  sigma8_m:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: \sigma_8
+    shape: []
+    drop: false
+  mu0:
+    value: 0.0
+    fixed: false
+    derived: false
+    prior:
+      dist: uniform
+      limits: [-3.0, 3.0]
+    ref:
+      dist: norm
+      limits: [-.inf, .inf]
+      loc: 0.0
+      scale: 0.01
+    proposal: null
+    delta: [0.25, 0.25]
+    latex: null
+    shape: []
+    drop: false
+  sigma8:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: null
+    shape: []
+    drop: false
+  fsigma8:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: null
+    shape: []
+    drop: false
+  jac:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: null
+    shape: []
+    drop: false
+  kap:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: null
+    shape: []
+    drop: false
+  muap:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: null
+    shape: []
+    drop: false
+  qpar:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: null
+    shape: []
+    drop: false
+  qper:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: null
+    shape: []
+    drop: false
+  fk:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: null
+    shape: []
+    drop: false
+  f0:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: null
+    shape: []
+    drop: false
+  tables:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: null
+    shape: []
+    drop: false

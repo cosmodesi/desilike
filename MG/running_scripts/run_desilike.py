@@ -11,8 +11,6 @@ from pathlib import Path
 from glob import glob
 from mpi4py import MPI
 
-import sys
-sys.path.insert(0, f"{os.getcwd()[:-19]}/desilike")
 from desilike import setup_logging, parameter
 from desilike.theories import Cosmoprimo
 from desilike.theories.galaxy_clustering import (
@@ -79,6 +77,11 @@ def parse_args():
     p.add_argument("--rescale", action="store_true", help="Internally rescale params using covariance/proposals.")
     p.add_argument("--covariance", type=str, default=None, help="Path to covariance/chain to set scaling when --rescale is on.")
     p.add_argument("--ref-scale", type=float, default=1.2, help="Scale factor for parameter reference dists (for profiler starts).")
+    # TCM priors (only meaningful for prior_basis='physical')
+    p.add_argument("--use-tcm-priors", action="store_true",
+                   help="Enable TCM/AP-aware priors mapping inside fkptTracerPowerSpectrumMultipoles (requires --priors-basis physical).")
+    p.add_argument("--h-fid", type=float, default=None,
+                   help="Fiducial h used in A_AP factor for TCM priors. If not provided, will try to infer from DESI() fiducial.")
 
     # Nautilus-specific
     p.add_argument("--nlive", type=int, default=800, help="Number of live points for the Nautilus nested sampler.")
@@ -101,7 +104,7 @@ def emu_filename(tag: str,
                  mg_variant: str,
                  kc: float | None = None,
                  scale_bins_method: str | None = None) -> str:
-    """Per-tracer PT emulator filename with optional binning tags, k_c and MG variant."""
+    """Per-tracer PT emulator filename (independent of prior basis / TCM)."""
     dk = float(np.median(np.diff(k))) if k.size > 1 else 0.0
     kmin_edge = float(k.min() - 0.5 * dk)
     kmax_edge = float(k.max() + 0.5 * dk)
@@ -109,6 +112,7 @@ def emu_filename(tag: str,
     if scale_bins and not redshift_bins:
         raise ValueError("--scale-bins requires --redshift-bins")
 
+    # base mode = MG+binning info
     if redshift_bins and scale_bins:
         mode = "binning_zk"
         if scale_bins_method:
@@ -118,20 +122,9 @@ def emu_filename(tag: str,
     elif redshift_bins:
         mode = "binning_z"
     else:
-        # Non-binned MG variants
-        if mg_variant == "mu_OmDE":
-            mode = "mu0"
-        elif mg_variant == "BZ":
-            mode = "BZ"
-        elif mg_variant == "BZ_fR":
-            mode = "BZ_fR"
-        elif mg_variant == "binning":
-            # This shouldn't really happen without redshift_bins,
-            # but keep a sensible label.
-            mode = "binning"
-        else:
-            mode = mg_variant
+        mode = "mu0" if mg_variant == "mu_OmDE" else mg_variant
 
+    # kernels tag
     if not beyond_eds:
         mode = "eds_" + mode
 
@@ -208,6 +201,24 @@ def main():
     ells = parse_ells_str(args.ells)
     fid_model = str(args.fid_model)
 
+    if args.use_tcm_priors and args.priors_basis != "physical":
+        raise ValueError("--use-tcm-priors requires --priors-basis physical (TCM mapping uses b1p/alpha*p).")
+
+    # Compute fiducial h once (only needed if TCM priors are on)
+    h_fid_global = None
+    if args.use_tcm_priors:
+        if args.h_fid is not None:
+            h_fid_global = float(args.h_fid)
+        else:
+            fid = DESI()
+            h_fid_global = getattr(fid, "h", None)
+            if h_fid_global is None:
+                try:
+                    h_fid_global = fid["h"]
+                except Exception:
+                    raise RuntimeError("Could not infer h_fid from DESI() fiducial. Pass --h-fid explicitly.")
+            h_fid_global = float(h_fid_global)
+    
     # Priors
     ns_prior  = None if args.skip_ns_prior else {'dist': 'norm', 'loc': 0.9649, 'scale': 0.02}
     bbn_prior = None if args.skip_bbn_prior else {'dist': 'norm', 'loc': 0.02237, 'scale': 0.00055}
@@ -229,7 +240,10 @@ def main():
         prefix += "_eds"
     if args.use_emu:
         prefix += "_emu"
-    prefix += f"_{args.freedom}_{args.priors_basis}_{fid_model}"
+    prefix += f"_{args.freedom}_{args.priors_basis}"
+    if args.use_tcm_priors:
+        prefix += "_tcm"
+    prefix += f"_{fid_model}"
 
     if args.redshift_bins or args.scale_bins:
         prefix += "_binning"
@@ -456,10 +470,11 @@ def main():
             beyond_eds = True
         else:
             beyond_eds = False
-        if args.priors_basis=="standard":
-            sigma8_fid = None
-        elif args.priors_basis=="physical":
+        # For physical basis (and especially TCM) we want sigma8_fid for A = (sigma8/sigma8_fid)^2
+        if args.priors_basis == "physical" or args.use_tcm_priors:
             sigma8_fid = sigma8_fid_val
+        else:
+            sigma8_fid = None
         
         # Small tweak for BZ_fR
         fkpt_mg_variant = args.mg_variant
@@ -469,7 +484,9 @@ def main():
                            tracer=tracer_tag, template=template,
                            k=k_out, ells=list(ells), b3_coev=True,
                            model=args.MG_model, mg_variant=fkpt_mg_variant,
-                           beyond_eds=beyond_eds, rescale_PS=False, sigma8_fid=sigma8_fid
+                           beyond_eds=beyond_eds, rescale_PS=False, sigma8_fid=sigma8_fid,
+                           use_TCM_priors=args.use_tcm_priors, 
+                           h_fid=(h_fid_global if args.use_tcm_priors else None),
                            )
 
         # Emulator file path (built from requested ells, as in your original script)
@@ -478,9 +495,9 @@ def main():
             beyond_eds=beyond_eds,
             redshift_bins=args.redshift_bins,
             scale_bins=args.scale_bins,
-            mg_variant=args.mg_variant,
+            mg_variant=fkpt_mg_variant,
             kc=args.kc,
-            scale_bins_method=args.scale_bins_method
+            scale_bins_method=args.scale_bins_method,
         )
 
         # Create emulator?
@@ -553,10 +570,10 @@ def main():
             # In the physical basis b1p ≈ b1 * sigma8(z); if you want to be fancy you can
             # map Eulerian b1 -> b1p using sigma8_fid, but as a simple option you can just
             # shift the reference and keep the physical prior.
-            theory.params[b1_name].update(
-                # leave the physical prior limits as set in fkptTracerPowerSpectrumMultipoles._params
-                ref={"dist": "norm", "loc": b1_val, "scale": 0.05},
-            )
+            if is_physical and b1_name in theory.params:
+                theory.params[b1_name].update(ref={"dist": "norm", "loc": b1_val * sigma8_fid_val, "scale": 0.05 * sigma8_fid_val})
+            else:
+                theory.params[b1_name].update(ref={"dist": "norm", "loc": b1_val, "scale": 0.05},)
     
         # apply weak priors to higher-order bias parameters
         for base_name, value in [

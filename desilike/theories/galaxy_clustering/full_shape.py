@@ -2637,6 +2637,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         rescale_PS=True,
         #sigma8_fid=None,
         h_fid=None,   # only needed for prior_basis='APscaling'
+        b1_fid=None,
     )
 
     # -------------------------
@@ -2870,6 +2871,13 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                 if self.options.get(name, None) is None:
                     self.options[name] = value
             self.fsat = self.options['fsat']            
+        
+        if pb == 'APscaling':
+            self.b1_fid = self.options.get('b1_fid', None)
+            if self.b1_fid is None:
+                self.b1_fid = self.get_b1fid(tracer=self.options['tracer'])
+        else:
+            self.b1_fid = None
 
     @staticmethod
     def get_physical_stochastic_settings(tracer=None):
@@ -3002,9 +3010,9 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             #   X = bK2 * sigma8^2(z) * sqrt(A_ap)
             #   Y = btd * sigma8^3(z) * sqrt(A_ap)
             freedom = self.options.get('freedom', None)
-            b1_fid = self.options.get('b1_fid', None)
+            b1_fid = getattr(self, 'b1_fid', None)
             if b1_fid is None:
-                raise ValueError("APscaling table priors need option b1_fid (per tracer).")
+                raise ValueError("APscaling table priors need b1_fid; could not infer from tracer.")
 
             muX = -(2.0 / 7.0) * (b1_fid - 1.0) * sigma8
             muY =  (23.0 / 42.0) * (b1_fid - 1.0) * sigma8

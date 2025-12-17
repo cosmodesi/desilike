@@ -1534,4 +1534,19 @@ params:
     latex: s_{n, 2}
   PshotP:
     value: 10000
-
+  bK2:
+    value: 0.
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: b_{K^2}
+  btd:
+    value: 0.
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: b_{td}

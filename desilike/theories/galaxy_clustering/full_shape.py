@@ -2448,9 +2448,13 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
     _pt_attrs = ['jac', 'kap', 'muap','qpar','qper','fk','f0','tables','keys']  #Storing only these for now
     
     def initialize(self, *args, mu=6, **kwargs):
-        import pyfkpt.rsd as pyfkpt
+        # drop tracer-only / wrapper-only options that can accidentally get forwarded here
+        for key in ['freedom', 'prior_basis', 'tracer', 'fsat', 'sigv', 'shotnoise',
+                    'h_fid', 'b1_fid', 'b3_coev']:
+            kwargs.pop(key, None)
+    
         super(fkptPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
-        self.template.init.update(with_now='peakaverage')  #Need to discuss this
+        self.template.init.update(with_now='peakaverage')
 
     def calculate(self):
         super(fkptPowerSpectrumMultipoles, self).calculate()

@@ -34,7 +34,7 @@ ${calculator} python run_desilike_mockchallenge.py \
     --fid-model LCDM \
     --MG-model HDKI \
     --mg-variant ${mg_variant} \
-    --priors-basis physical_velocileptors \
+    --prior-basis physical_velocileptors \
     --beyond-eds \
     --resume \
     --chain-prefix "isitgr_fkpt_noextf_new" \

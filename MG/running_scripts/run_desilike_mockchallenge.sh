@@ -6,14 +6,12 @@ source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
 export PYTHONPATH=/global/homes/j/jiaxi/codes_mine/desilike:$PYTHONPATH
 
 task=$1
+Nnode=4
 if [ "$task" = "emu" ]; then
-    Nnode=1
     args="--create-emu "
 elif [ "$task" = "run-emu" ]; then
-    Nnode=4
     args="--use-emu "
 elif [ "$task" = "run" ]; then
-    Nnode=4
     args=""
 fi
 calculator="srun -N 1 -n ${Nnode} -C gpu -t 04:00:00 --qos shared_interactive --account desi_g select_gpu_device"

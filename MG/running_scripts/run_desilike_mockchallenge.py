@@ -13,7 +13,7 @@ if __name__ == "__main__":
     args.emu_dir.mkdir(parents=True, exist_ok=True)
 
     # Tracers: (file tag, tracer tag, b1 prior center, z_eff)
-    ################################# might need to be adjusted, especially sigma8 value(last col)
+    ################################# 
     tracer_table = [
         ("LRG_abacusHF_EZcov", "LRG",  2.1, 0.8, -1.10, 0.538705, 'z08', 'EZmocks_LRG2ndGen_cubic', 'abacusHF_cutsky_LRG0p725'), 
         ("ELG_abacusHF_EZcov", "ELG",  1.2, 0.95, 0.03, 0.503071, 'z095','EZELG_boxz095_bin01',     'abacusHF_cutsky_ELG0p950'), 
@@ -143,9 +143,9 @@ if __name__ == "__main__":
             sel_pk    = (args.kmin_cut<np.loadtxt(datadir / f"EZmocks/Pk/{tracer_tag}_{zsnap}" /f"Power_Spectrum_{mid_ez}_{i+1}.txt",usecols=0))
             Pk_all.append(np.array([np.loadtxt(datadir / f"EZmocks/Pk/{tracer_tag}_{zsnap}" /f"Power_Spectrum_{mid_ez}_{i+1}.txt",usecols=2+k)[sel_pk] for k in range(len(present_ells))]).flatten())
         cov_mat = np.cov(np.array(Pk_all).T)
-        #################### get data vector with Abacus 
-        sel_pk = (args.kmin_cut<np.loadtxt(datadir / f"abacusHF/Pk/{tracer_tag}" /f"Power_Spectrum_{mid_ref}_0.txt",usecols=0))
-        Pk_all = [np.array([np.loadtxt(datadir / f"abacusHF/Pk/{tracer_tag}" /f"Power_Spectrum_{mid_ref}_{i}.txt",usecols=2+k)[sel_pk] for k in range(len(present_ells))]).flatten() for i in range(25)]
+        #################### get data vector with Abacus: k is different from that of EZmock, so use mean(EZmock) instead
+        #sel_pk = (args.kmin_cut<np.loadtxt(datadir / f"abacusHF/Pk/{tracer_tag}" /f"Power_Spectrum_{mid_ref}_0.txt",usecols=0))
+        #Pk_all = [np.array([np.loadtxt(datadir / f"abacusHF/Pk/{tracer_tag}" /f"Power_Spectrum_{mid_ref}_{i}.txt",usecols=2+k)[sel_pk] for k in range(len(present_ells))]).flatten() for i in range(25)]
         data_vec = np.mean(Pk_all,axis=0)
 
         if not set(ells).issubset(set(present_ells)):
@@ -186,23 +186,26 @@ if __name__ == "__main__":
             prior_basis=prior_basis,
         )
 
-        if args.create_emu and rank == 0:
-            if emu_path.exists():
-                print(f"[Emulator] ({file_tag}) exists → {emu_path.name}")
-            else:
-                print(f"[Emulator] ({file_tag}) fitting Taylor emulator (finite, order={args.emu_order}) …")
+        if args.create_emu:
+            if rank == 0:
+                if emu_path.exists():
+                    print(f"[Emulator] ({file_tag}) exists → {emu_path.name}")
+                else:
+                    print(f"[Emulator] ({file_tag}) fitting Taylor emulator (finite, order={args.emu_order}) …")
+            if not emu_path.exists():
                 _ = theory.pt()  # warmup / ensure PT is initialized
                 emu_engine = TaylorEmulatorEngine(method="finite", order=int(args.emu_order))
                 emu = Emulator(theory.pt, engine=emu_engine)
                 emu.set_samples()
                 emu.fit()
                 emu.save(str(emu_path))
+                emu.mpicomm.barrier()
                 print(f"[Emulator] ({file_tag}) saved → {emu_path.name}")
 
         if args.use_emu:
             if rank == 0 and not emu_path.exists():
                 raise FileNotFoundError(f"[Emulator] Missing {emu_path} for {file_tag}. Run with --create-emu.")
-            comm.Barrier()
+            #comm.Barrier()
             emu_loaded = EmulatedCalculator.load(str(emu_path))
 
             # sync params from cosmology into emulator
@@ -247,7 +250,7 @@ if __name__ == "__main__":
             print("appended", namespace, "likelihood...")
 
     if args.create_emu:
-        comm.Barrier()
+        #comm.Barrier()
         if rank == 0:
             print("[Emulator] Done. Exiting because --create-emu was set.")
         sys.exit()

@@ -125,8 +125,10 @@ class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
                 self.chains = [None] * int(chains)
             else:
                 self.chains = load_source(chains)
+            print(self.chains)
 
         nchains = self.mpicomm.bcast(len(self.chains) if self.mpicomm.rank == 0 else None, root=0)
+        # print(len(self.chains))
         if self.mpicomm.rank != 0:
             self.chains = [None] * nchains
         self.save_fn = save_fn
@@ -440,6 +442,7 @@ class BaseBatchPosteriorSampler(BasePosteriorSampler):
             Optional sampler-specific arguments.
         """
         #self.derived = None
+        # print(self.nchains)
         nprocs_per_chain = max(self.mpicomm.size // self.nchains, 1)
 
         run_check = bool(check) or isinstance(check, dict)

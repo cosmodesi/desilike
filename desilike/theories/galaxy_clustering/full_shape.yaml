@@ -1458,3 +1458,145 @@ params:
       scale: 0.5
     delta: 2.
     latex: \sigma_{v}
+
+---
+class: FOLPSv2TracerPowerSpectrumMultipoles
+
+params:
+  b1:
+    prior:
+      limits: [0., 10.]
+    ref:
+      limits: [1.4, 1.6]
+    latex: b_{1}
+  b2:
+    prior:
+      limits: [-50., 50.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{2}
+  bs:
+    ref:
+      limits: [-1., 1.]
+    latex: b_{s}
+  b3:
+    fixed: True
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{3}
+  alpha0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{0}
+  alpha2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{2}
+  alpha4:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{4}
+  ct:
+    fixed: True
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{t}
+  sn0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 0}
+  sn2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 2}
+  sn4:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: s_{n, 4}
+  X_FoG_p:
+    prior: 
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: X_{FoG,p}
+---
+class: FOLPSv2TracerBispectrumMultipoles
+
+params:
+  b1:
+    prior:
+      limits: [0., 10.]
+    ref:
+      limits: [1.4, 1.6]
+    latex: b_{1}
+  b2:
+    prior:
+      limits: [-50., 50.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{2}
+  bs:
+    ref:
+      limits: [-1., 1.]
+    latex: b_{s}
+  c1:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{1}
+  c2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{2}
+  Pshot:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1e4
+    latex: P_{shot}
+  Bshot:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1e4
+    latex: B_{shot}
+  X_FoG_b:
+    prior: 
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: X_{FoG,b}
+---

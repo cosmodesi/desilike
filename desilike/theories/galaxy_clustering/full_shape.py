@@ -2572,19 +2572,6 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         params['rescale_PS']=False
         params['use_beyond_eds_kernels']=kwargs['beyond_eds']
 
-        # --- Co-evolution correction (optional): STANDARD basis only ---
-        prior_basis = kwargs.get('prior_basis', 'standard')
-        b3_coev = bool(kwargs.get('b3_coev', False))
-        
-        if b3_coev and prior_basis == 'standard' and 'b1' in params:
-            for name in ['b1', 'bs2', 'b3nl']:
-                if name not in params:
-                    raise ValueError(f"b3_coev=True requires '{name}' in params.")
-            b1 = params['b1']
-            delta_b1 = b1 - 1.0
-            params['bs2']  = params['bs2']  - 4.0 / 7.0 * delta_b1
-            params['b3nl'] = params['b3nl'] + 32.0 / 315.0 * delta_b1
-
         nuis = [] 
         required_bias_params = [
             'b1','b2','bs2','b3nl',
@@ -2636,9 +2623,9 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         tracer=None, fsat=None, sigv=None,
         shotnoise=1e4,
         model='HDKI', mg_variant='mu_OmDE',
-        b3_coev=False,
+        b3_coev=True,
         beyond_eds=True,
-        rescale_PS=True,
+        rescale_PS=False,
         #sigma8_fid=None,
         h_fid=None,   # only needed for prior_basis='APscaling'
         b1_fid=None,
@@ -2856,16 +2843,6 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
         super().set_params(pt_params=[])
 
-        # fix unused multipole-related params
-        fix = []
-        if 4 not in self.ells:
-            fix += ['alpha4'] if not self.is_physical_prior else ['alpha4p']
-        if 2 not in self.ells:
-            fix += (['alpha2', 'alpha2shot'] if not self.is_physical_prior else ['alpha2p', 'alpha2shotp'])
-
-        for param in self.init.params.select(basename=fix):
-            param.update(value=0., fixed=True)
-
         self.nd = 1e-4
         self.fsat = 1
         self.snd  = self.options['shotnoise'] * self.nd  # essentially = 1
@@ -2928,15 +2905,20 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         # Case A: STANDARD_FOLPS -> forward directly (Eulerian nuisances)
         # ============================================================
         if pb == 'standard_folps':
+            if self.options['b3_coev']:
+                b1 = params['b1']
+                db1 = b1 - 1.0
+                params['bs2']  = params['bs2']  - 4.0/7.0 * db1
+                params['b3nl'] = params['b3nl'] + 32.0/315.0 * db1
+
             self.power = self.pt.combine_bias_terms_poles(
                 params, nd=self.nd,
                 model=self.options['model'], mg_variant=self.options['mg_variant'],
                 prior_basis='standard',
-                b3_coev=self.options['b3_coev'],
                 beyond_eds=self.options['beyond_eds'],
             )
             return
-
+    
         # ============================================================
         # From here on: PHYSICAL modes
         # ============================================================
@@ -2966,10 +2948,16 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         b2E  = b2L + 8.0 / 21.0 * b1L
         
         # defaults (non-APscaling)
-        bsL  = params['bs2p'] / sigma8**2
-        b3L  = params['b3nlp']
-        bs2E = -4.0 / 7.0 * b1L + bsL
-        b3E  = b3L + 32.0 / 315.0 * b1L
+        bsL = params['bs2p'] / sigma8**2
+        b3L = params['b3nlp']
+
+        # apply coevolution factor
+        if self.options['b3_coev']:
+            bs2E = bsL - 4.0/7.0 * b1L
+            b3E  = b3L + 32.0/315.0 * b1L
+        else:
+            bs2E = bsL
+            b3E  = b3L
 
         ctildeE = params.get('ctildep', 0.0)
 
@@ -3050,6 +3038,16 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         alpha0shot = (params['alpha0shotp'] / Ashot) * (1/self.nd)
         alpha2shot = (params['alpha2shotp'] / Ashot) * (1/self.nd) * (self.fsat) * (sigv**2)
 
+        # fix unused multipole-related params
+        fix = []
+        if 4 not in self.ells:
+            fix += ['alpha4'] if not self.is_physical_prior else ['alpha4p']
+        if 2 not in self.ells:
+            fix += (['alpha2', 'alpha2shot'] if not self.is_physical_prior else ['alpha2p', 'alpha2shotp'])
+
+        for param in self.init.params.select(basename=fix):
+            param.update(value=0., fixed=True)
+        
         # write Eulerian params expected downstream
         params['b1'] = b1E
         params['b2'] = b2E

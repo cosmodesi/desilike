@@ -433,10 +433,6 @@ class PopulationSampler(BaseSampler):
 class MarkovChainSampler(BaseSampler):
     """Class defining common functions used by Markov chain samplers."""
 
-    # Convergence criteria.
-    criteria = {'gelman_rubin_diag_max', 'gelman_rubin_eigen_max',
-                'geweke_max'}
-
     def __init__(self, likelihood, n_chains=4, burn_in=0.2, rng=None,
                  directory=None):
         """Initialize the sampler.
@@ -544,29 +540,32 @@ class MarkovChainSampler(BaseSampler):
             burn_in = self.burn_in
         return [chain[burn_in:] for chain in self.chains]
 
-    def check(self, criteria, quiet=False):
-        """Check the status of the sampling, including convergence.
+    def check(self, gelman_rubin=1.1, geweke=None, ess=None, quiet=False):
+        """Check the status of the sampling.
 
         This function will also output the status of the analysis to the log.
 
         Parameters
         ----------
-        criteria : dict
-            Criteria for the chains to be considered converged.
+        gelman_rubin : float or None
+            If given, the maximum value of the Gelman-Rubin statistic. Default
+            is 1.1.
+        geweke : float or None
+            If given, the maximum value of the Geweke statistic. Default is
+            None.
+        ess : float or None
+            If given, the minimum effective sample size per chain. The
+            effective sample size is the number of chain elements divided
+            by the autocorrelation time. Default is None.
         quiet : bool, optional
             If True, do not log results. Default is False.
 
         Returns
         -------
         bool
-            Whether the chains are considered converged.
+            Whether the chains passed convergence checks.
 
         """
-        for key in criteria.keys():
-            if key not in type(self).criteria:
-                raise ValueError(
-                    f"Unknown convergence criterion '{key}'. Known criteria "
-                    f"are {type(self).criteria}.")
 
         if isinstance(self.burn_in, float):
             burn_in = round(self.burn_in * len(self.chains[0]))
@@ -578,72 +577,102 @@ class MarkovChainSampler(BaseSampler):
         if not quiet:
             self.log_info('Diagnostics:')
 
-        gelman_rubin_diag = np.amax(diagnostics.gelman_rubin(
-            chains, method='diag'))
-        gelman_rubin_eigen = np.amax(diagnostics.gelman_rubin(
-            chains, method='eigen'))
+        gelman_rubin_value = np.amax(diagnostics.gelman_rubin(chains))
         try:
-            geweke = np.amax(diagnostics.geweke(chains, first=0.1, last=0.5))
+            geweke_value = np.amax(
+                diagnostics.geweke(chains, first=0.1, last=0.5))
         except ValueError:
-            geweke = float('inf')
+            geweke_value = float('inf')
 
-        converged = True
+        iact = diagnostics.integrated_autocorrelation_time(chains)
+        ess_value = len(chains[0]) / iact.max()
 
-        for name, key, value in zip(
-                ["Gelman-Rubin (diagonal)", "Gelman-Rubin (eigen)", "Geweke"],
-                ['gelman_rubin_diag', 'gelman_rubin_eigen', 'geweke'],
-                [gelman_rubin_diag, gelman_rubin_eigen, geweke]):
+        passed_all = True
+
+        for name, threshold, upper, value in zip(
+                ["Gelman-Rubin", "Geweke", "Effective Sample Size"],
+                [gelman_rubin, geweke, ess], [True, True, False],
+                [gelman_rubin_value, geweke_value, ess_value]):
             if not quiet:
                 self.log_info(f"{name}: {value:.3g}")
-            if f'{key}_min' in criteria:
-                threshold = criteria[f'{key}_max']
-                passed = value > threshold
-                converged = converged and passed
+            if threshold is not None:
+                passed = value < threshold if upper else value >= threshold
+                passed_all = passed_all and passed
                 if not quiet:
                     self.log_info(
-                        f"{name}: {value:.3g} {'>' if passed else '<'} "
-                        f"{threshold:.3g} ({'' if passed else 'not '}passed)")
-            if f'{key}_max' in criteria:
-                threshold = criteria[f'{key}_max']
-                passed = value < threshold
-                converged = converged and passed
-                if not quiet:
-                    self.log_info(
-                        f"{name}: {value:.3g} {'<' if passed else '>'} "
+                        f"{value:.3g} {'<' if value < threshold else '>='} "
                         f"{threshold:.3g} ({'' if passed else 'not '}passed)")
 
-        return converged
+        return passed_all
 
-    def run(self, n_init=100, burn_in=0.2, min_iterations=0,
-            max_iterations=sys.maxsize, convergence_checks_interval=10,
-            convergence_checks_passed=10,
-            convergence_criteria=dict(gelman_rubin_diag_max=1.1),
-            flatten_chains=True, **kwargs):
-        """Run the sampler.
+    def is_converged(self, min_iterations=0, max_iterations=sys.maxsize,
+                     checks_passed=10):
+        """Check whether sampling should stop.
 
         Parameters
         ----------
-        n_init : int, optional
-            Maximum number of attempts to initialize each chain. Default is
-            100.
-        burn_in : float or int, optional
-            Fraction of samples to remove from each chain. If an integer,
-            number of iterations (steps) to remove. Default is 0.2.
         min_iterations : int, optional
             Minimum number of steps to run. Default is 0.
         max_iterations : int, optional
             Maximum number of steps to run. Default is infinity.
-        convergence_checks_interval : int, optional
+        checks_passed : int, optional
+            Threshold for the number of successive successful convergence
+            checks. If fulfilled (and the minimum number of iterations is
+            reached), the sampling will stop. Default is 10.
+
+        Returns
+        -------
+        bool
+            If True, sampling should stop.
+
+        """
+        if self.mpicomm.rank == 0:
+            converged = (len(self.chains[0]) >= max_iterations or
+                         (len(self.chains[0]) >= min_iterations and
+                          len(self.checks) >= checks_passed and
+                          all(self.checks[-checks_passed:])))
+        else:
+            converged = False
+
+        return self.mpicomm.bcast(converged, root=0)
+
+    def run(self, burn_in=0.2, min_iterations=0, max_iterations=sys.maxsize,
+            check_every=10, checks_passed=10, gelman_rubin=1.1, geweke=None,
+            ess=None, flatten_chains=True, save_every=10, n_init=100):
+        """Run the sampler.
+
+        Parameters
+        ----------
+        burn_in: float or int, optional
+            Fraction of samples to remove from each chain. If an integer,
+            number of iterations(steps) to remove. Default is 0.2.
+        min_iterations: int, optional
+            Minimum number of steps to run. Default is 0.
+        max_iterations: int, optional
+            Maximum number of steps to run. Default is infinity.
+        check_every: int, optional
             After how many steps convergence is checked. Default is 10.
-        convergence_checks_passed : int, optional
-            Threshold for the number of successive succesful convergence
-            checks. If fulfilled, the sampling will stop. Default is 10.
-        convergence_criteria : dict, optional
-            Criteria to define convergence.
-        flatten_chains : bool, optional
+        checks_passed: int, optional
+            Threshold for the number of successive successful convergence
+            checks. If fulfilled ( and the minimum number of iterations is
+            reached), the sampling will stop. Default is 10.
+        gelman_rubin: float or None
+            Used to asses convergence. If given, the maximum value of the
+            Gelman-Rubin statistic. Default is 1.1.
+        geweke: float or None
+            Used to asses convergence. If given, the maximum value of the
+            Geweke statistic. Default is None.
+        ess: float or None
+            Used to asses convergence.  If given, the minimum effective sample
+            size per chain. The effective sample size is the number of chain
+            elements divided by the autocorrelation time. Default is None.
+        flatten_chains: bool, optional
             Whether to concatenate individual chains into one chain.
-        kwargs : dict, optional
-            Keyword arguments passed to the run function of the sampler.
+        save_every: int, optional
+            After how many steps results are saved. Default is 10.
+        n_init: int, optional
+            Maximum number of attempts to initialize each chain. Default is
+            100.
 
         Returns
         -------
@@ -660,34 +689,31 @@ class MarkovChainSampler(BaseSampler):
         else:
             self.pool.wait()
 
+        if self.directory is None:
+            save_every = check_every  # Don't stop to save.
+
         # Run the chain until convergence.
-        while True:
-
-            if self.mpicomm.rank == 0:
-                if len(self.chains[0]) >= max_iterations:
-                    stop = True
-                else:
-                    stop = (len(self.chains[0]) >= min_iterations and
-                            len(self.checks) >= convergence_checks_passed and
-                            all(self.checks[-convergence_checks_passed:]))
-            else:
-                stop = False
-
-            if self.mpicomm.bcast(stop, root=0):
-                break
+        while not self.is_converged(
+                min_iterations=min_iterations, max_iterations=max_iterations,
+                checks_passed=checks_passed):
 
             # Advance the sampler and do convergence checks.
             if self.mpicomm.rank == 0:
-                n_steps = min(convergence_checks_interval,
-                              max_iterations - len(self.chains[0]))
-                self.run_sampler(n_steps, **kwargs)
-                self.checks.append(self.check(convergence_criteria))
+                n_steps_tot = len(self.chains[0])
+                n_steps = min(check_every - (n_steps_tot % check_every),
+                              save_every - (n_steps_tot % save_every),
+                              max_iterations - n_steps_tot)
+                self.run_sampler(n_steps)
+                n_steps_tot += n_steps
+                if n_steps_tot % check_every == 0:
+                    self.checks.append(self.check(
+                        gelman_rubin=gelman_rubin, geweke=geweke, ess=ess))
                 self.pool.stop_wait()
             else:
                 self.pool.wait()
 
             # Write results.
-            if self.directory is not None:
+            if self.directory is not None and n_steps_tot % save_every == 0:
                 self.write()
 
         if self.mpicomm.rank == 0:

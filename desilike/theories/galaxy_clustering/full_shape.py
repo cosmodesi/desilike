@@ -2515,6 +2515,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         self.qper = self.template.qper
         tables = pyfkpt.compute_tables(k=self.template.k, pk=self.template.pk_dd,**fkpt_params)
         keys = list(tables.keys())
+        print(tables,keys)
         self.tables = np.column_stack([tables[k] for k in keys]) #Storing only the 2d array part
         self.pt = Namespace(jac=jac, kap=kap, muap=muap, qpar = self.template.qpar, qper=self.template.qper,fk=self.template.fk,f0=self.template.f0,tables=self.tables,keys=keys)
 
@@ -2528,6 +2529,7 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
         muap=self.pt.muap
         tables=self.pt.tables
         keys=self.pt.keys
+        print(keys)
         tables_final = {k: tables[:, i] for i, k in enumerate(keys)}
         omega_b=self.all_params['omega_b'].value
         omega_cdm=self.all_params['omega_cdm'].value
@@ -2599,6 +2601,10 @@ class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPower
             if name in state: setattr(self, name, state.pop(name))
         if not hasattr(self, 'pt'): self.pt = Namespace()
         self.pt.update(**state)
+
+
+
+
 
 class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     r"""
@@ -3072,3 +3078,360 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             beyond_eds=self.options['beyond_eds'],
         )
 
+
+# Helper function to convert Kfuncs output fkptjax to tables for folps
+def Kfuncs_to_tables(k,pk,pk_now, **fkpt_params):
+    import folps as folpsv2
+    from tools_jax import extrapolate_pklin, simpson, interp
+    from fkptjax.types import KFunctionsOut
+    from fkptjax.calculate_jax import JaxCalculator
+    from fkptjax.util import setup_kfunctions
+    from fkptjax.ode import growth_factor, ModelDerivatives, ODESolver  # Step 2: ODE solver
+
+
+    z=fkpt_params['z']
+    Om=fkpt_params['Om']
+    fR0=fkpt_params.get('fR0',1e-15)
+    h=fkpt_params['h']
+
+    nHS = 1.0
+    beta2 = 1.0/6.0  # Coupling strength (default for Hu-Sawicki f(R))
+    screening = True
+    omegaBD = 0.0
+
+    solver = ODESolver(zout=z, xnow=-4, method='RKQS')
+    derivs = ModelDerivatives(
+            om=Om,
+            ol=1-Om,
+            fR0=fR0,
+            nHS=nHS,
+            beta2=beta2,
+            screening=screening,
+            omegaBD=omegaBD
+        )
+
+    # Which k to use here?
+    k_ext,pk_ext = extrapolate_pklin(k, pk)
+    _,pk_now_ext = extrapolate_pklin(k, pk_now)
+    fk = growth_factor(k_ext, derivs, solver)
+    f0 = np.mean(fk[k_ext < 0.001])
+    #What to do about NQ and NR?
+    init_data = setup_kfunctions(
+    k_in=k_ext,
+    kmin=0.001, kmax=0.5, Nk=120,  #Need to review
+    nquadSteps=fkpt_params['nquadSteps'], NQ=10, NR=10)
+
+    # Kernel parameters (standard ΛCDM values)
+    A_LCDM = 1.0
+    Ap_LCDM = 0.0
+    CFD3_LCDM = 1.0
+    CFD3p_LCDM = 1.0
+    ApOverf0 = Ap_LCDM/ f0
+
+    kout= np.linspace(0.001,0.5,120)
+    pk_out= interp(kout,k_ext,pk_ext)
+    pk_now_out= interp(kout,k_ext,pk_now_ext)
+    fk_out= interp(kout,k_ext,fk) 
+   
+    # Check these
+    sigma2psi = 1/(6 * np.pi**2) * simpson(pk_ext, x=k_ext)
+    sigma2v = 1/(6 * np.pi**2) * simpson(pk_ext*fk/f0, x=k_ext)
+    sigma2w = 1/(6 * np.pi**2) * simpson(pk_ext*(fk/f0)**2,x=k_ext)
+        
+    #Check these: no wiggle
+    sigma2w_NW = 1/(6 * np.pi**2) * simpson(pk_now_ext*(fk/f0)**2,x=k_ext)
+    # Should I make it a variable?
+    rbao = 104.
+    p = np.geomspace(10**(-6), 0.4, num=100)
+    PSL_NW = interp(p, k_ext, pk_now_ext)
+    sigma2_NW = 1 / (6 * np.pi**2) * simpson(PSL_NW * (1 - folpsv2.spherical_jn_backend(0, p * rbao) + 2 * folpsv2.spherical_jn_backend(2, p * rbao)), x=p)
+    delta_sigma2_NW = 1 / (2 * np.pi**2) * simpson(PSL_NW * folpsv2.spherical_jn_backend(2, p * rbao), x=p)
+
+
+
+    calculator = JaxCalculator()
+    calculator.initialize(init_data)
+    kfuncs = calculator.evaluate(
+        Pk_in=pk_ext,
+        Pk_nw_in=pk_now_ext,
+        fk_in=fk,
+        A=A_LCDM,
+        ApOverf0=ApOverf0,
+        CFD3=CFD3_LCDM,
+        CFD3p=CFD3p_LCDM,
+        sigma2v=sigma2v,
+        f0=f0
+    )
+
+    
+    
+    tables_folps=[kout,pk_out,fk_out/f0,kfuncs.P22dd[0] + kfuncs.P13dd[0], kfuncs.P22du[0] + kfuncs.P13du[0],
+        kfuncs.P22uu[0] + kfuncs.P13uu[0],   kfuncs.Pb1b2[0],
+        kfuncs.Pb1bs2[0],
+        kfuncs.Pb22[0],
+        kfuncs.Ps22[0],
+        kfuncs.Pb2s2[0],
+        kfuncs.sigma32PSL[0],
+        kfuncs.Pb2theta[0],
+        kfuncs.Pbs2theta[0],
+        kfuncs.I1udd1A[0],
+        kfuncs.I2uud1A[0],
+        kfuncs.I2uud2A[0],
+        kfuncs.I3uuu2A[0],
+        kfuncs.I3uuu3A[0],
+        kfuncs.I2uudd1BpC[0],
+        kfuncs.I2uudd2BpC[0],
+        kfuncs.I3uuud2BpC[0],
+        kfuncs.I3uuud3BpC[0],
+        kfuncs.I4uuuu2BpC[0],
+        kfuncs.I4uuuu3BpC[0],
+        kfuncs.I4uuuu4BpC[0],
+        np.zeros_like(kfuncs.I1udd1A[0]),
+        np.zeros_like(kfuncs.I1udd1A[0]),
+        sigma2w, f0
+        ]
+
+    tables_now_folps=[kout,pk_now_out,fk_out/f0,kfuncs.P22dd[1] + kfuncs.P13dd[1], kfuncs.P22du[1] + kfuncs.P13du[1],
+        kfuncs.P22uu[1] + kfuncs.P13uu[1],
+        kfuncs.Pb1b2[1],
+        kfuncs.Pb1bs2[1],
+        kfuncs.Pb22[1],
+        kfuncs.Ps22[1],
+        kfuncs.Pb2s2[1],
+        kfuncs.sigma32PSL[1],
+        kfuncs.Pb2theta[1],
+        kfuncs.Pbs2theta[1],
+        kfuncs.I1udd1A[1],
+        kfuncs.I2uud1A[1],
+        kfuncs.I2uud2A[1],
+        kfuncs.I3uuu2A[1],
+        kfuncs.I3uuu3A[1],
+        kfuncs.I2uudd1BpC[1],
+        kfuncs.I2uudd2BpC[1],
+        kfuncs.I3uuud2BpC[1],
+        kfuncs.I3uuud3BpC[1],
+        kfuncs.I4uuuu2BpC[1],
+        kfuncs.I4uuuu3BpC[1],
+        kfuncs.I4uuuu4BpC[1],
+        np.zeros_like(kfuncs.I1udd1A[0]),
+        np.zeros_like(kfuncs.I1udd1A[0]),
+        sigma2w_NW, sigma2_NW, delta_sigma2_NW, f0
+    ]
+
+    
+    
+
+    # Convert to tuples (immutable, hash-safe)
+    tables_folps = tuple(tables_folps)
+    tables_now_folps = tuple(tables_now_folps)
+
+    # print(tables_folps)
+
+    return tables_folps, tables_now_folps
+
+
+
+
+    
+class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+
+    # _default_options = dict(kernels='fk', rbao=104., A_full=True, remove_DeltaP=False)
+    _default_options = dict(model='HDKI',mg_variant='mu_OmDE',rescale_PS=False,beyond_eds=True)
+    _pt_attrs = ['jac', 'kap', 'muap','qpar','qper','fk','f0','tables','keys']  #Storing only these for now
+    
+    def initialize(self, *args, mu=6, **kwargs):
+        # drop tracer-only / wrapper-only options that can accidentally get forwarded here
+        for key in ['freedom', 'prior_basis', 'tracer', 'fsat', 'sigv', 'shotnoise',
+                    'h_fid', 'b1_fid', 'b3_coev']:
+            kwargs.pop(key, None)
+    
+        super(fkptjaxPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
+        self.template.init.update(with_now='peakaverage')
+
+    
+
+
+    def calculate(self):
+        super(fkptjaxPowerSpectrumMultipoles, self).calculate()
+        import pyfkpt.rsd as pyfkpt
+        import folps as folpsv2
+        
+        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        cosmo = getattr(self.template, 'cosmo', None)
+        mg_variant=self.options['mg_variant']
+        # Define which parameters are needed for each variant
+        required_params = {
+            'fR': ['fR0'],
+            'mu_OmDE': ['mu0'],
+            'BZ': ['beta_1', 'lambda_1', 'exp_s'],
+            'binning': ['mu1', 'mu2', 'mu3', 'mu4'],
+            'GR': []   # no MG parameters needed
+        }
+        
+        # Default values for all MG parameters
+        default_values = {
+            'fR0': 1e-15,
+            'mu0': 0.0,
+            'beta_1': 0.0,
+            'lambda_1': 0.0,
+            'exp_s': 0.0,
+            'mu1': 1.0, 'mu2': 1.0, 'mu3': 1.0, 'mu4': 1.0,
+        }
+        
+        # Build MG params depending on the selected variant
+        mg_params = {}
+        
+        # Loop through only the needed parameters
+        for p in required_params.get(mg_variant, []):
+            if hasattr(cosmo, p):
+                mg_params[p] = getattr(cosmo, p)
+            else:
+                print(f"MG variant '{mg_variant}' requires parameter '{p}', "
+                              f"but it was not provided. Using default: {default_values[p]}")
+                mg_params[p] = default_values[p]
+
+
+        fkpt_params = dict(
+        z=self.z, Om=cosmo['Omega_m'], h=cosmo['h'],
+        nquadSteps=300, chatty=0,
+        kmin =float(max(1e-3,min(self.k))),
+        kmax = min(max(self.k), 0.5),
+        Nk = min(len(self.k), 240),
+        model=self.options['model'],
+        mg_variant=self.options['mg_variant'],
+        rescale_PS=self.options['rescale_PS'],
+        use_beyond_eds_kernels=self.options['beyond_eds'],
+        fR0 = getattr(cosmo, 'fR0', 1e-15),
+        **mg_params
+    )
+
+       
+        table,table_now=Kfuncs_to_tables(k=self.template.k, pk=self.template.pk_dd, pk_now=self.template.pknow_dd,**fkpt_params)
+        # extra = 6 if self.options['A_full'] else 0
+        extra=0
+        # table_pklir = (table[0], *table[1:28+extra], *table[28+extra:])
+        # table_now_pklir = (table[0], *table_now[1:28+extra], *table_now[28+extra:])
+        # self.pklir = folpsv2.get_linear_ir_ini(table_pklir[0], table_pklir[1], table_now_pklir[1], h=self.all_params['h'].value)
+        
+
+        #Can be updated once we have A_full=True
+        self.pt = Namespace(jac=jac, kap=kap, muap=muap, table=table[1:28+extra], table_now=table_now[1:28+extra], scalars=table[28+extra:], scalars_now=table_now[28+extra:], A_full=False,remove_DeltaP=False,f=self.template.f,f0=self.template.f0,qpar = self.template.qpar, qper=self.template.qper)
+        # ,qpar = self.template.qpar, qper=self.template.qper, ,f=self.template.f,f0=self.template.f0
+        self.kt = table[0]
+        self.qpar = self.template.qpar
+        self.qper = self.template.qper
+        self.sigma8 = self.template.sigma8
+        self.fsigma8 = self.template.f * self.sigma8
+
+
+    def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
+        import folps as folpsv2
+        table = (self.kt, *self.pt.table, *self.pt.scalars)
+        table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
+        
+        # Inject shot noise at correct position
+        # pars = list(pars[:-1]) + [1. / nd, pars[-1]]  #1. / nd
+        pars=[]
+        params['PshotP']= 1./nd
+        params['X_FoG_p']=0.
+        required_bias_params = [
+            'b1','b2','bs2','b3nl',
+            'alpha0','alpha2','alpha4',
+            'ctilde','alpha0shot','alpha2shot','PshotP','X_FoG_p'
+        ]
+        for param in required_bias_params:
+            pars.append(params[param])
+        
+        b1 = pars[0]
+        # if kwargs['prior_basis']=='physical':
+        # if kwargs['b3_coev']:
+            # delta_b1 = b1 - 1.
+            # pars[3] = 23/42 * delta_b1  # b3 correction
+            # pars[3]=-1/6*(delta_b1)-5/2*pars[2]
+            # pars[3]=-736/2205 * (delta_b1) - 16/21 *pars[2]
+            # pars[3]=23/42 * delta_b1
+            # print(23/42 * delta_b1,-1/6*(delta_b1)-5/2*pars[2])
+            # pars[3] = 32/315 * delta_b1
+            # pars[2] -= 4. / 7. * delta_b1  # bs correction
+        # print(pars[0],pars[3])
+    
+
+        jac = self.pt.jac
+        kap = self.pt.kap
+        muap = self.pt.muap
+        ncols = len(table)
+        if getattr(self, '_get_poles', None) is None:
+        
+        
+            @jit(static_argnums=(4))
+            def _get_poles(jac, kap, muap, pars,bias_scheme, *table):
+                # print(self.pt.A_full)
+                folpsv2.MatrixCalculator(A_full=getattr(self.pt, "A_full", False),remove_DeltaP=getattr(self.pt, "remove_DeltaP", False))
+                folps_rsdmps_class = folpsv2.RSDMultipolesPowerSpectrumCalculator (model='FOLPSD')
+                pars = folps_rsdmps_class.set_bias_scheme(pars=pars,bias_scheme=bias_scheme) #folps
+                return self.to_poles(jac * folps_rsdmps_class.get_rsd_pkmu(kap, muap, pars, table[:ncols], table[ncols:],IR_resummation=True, damping='lor'))
+            
+            
+            # self._get_poles = jit(_get_poles) #Only going ahead with numpy implementation for now
+            # self._get_poles = jit(_get_poles)  if kwargs['backend'] == 'jax' else _get_poles
+            self._get_poles = _get_poles
+        # print("shapes",kap.shape,self.pt.table[3].shape)
+        poles= self._get_poles(self.pt.jac, self.pt.kap, self.pt.muap, jnp.array(pars),'folps', *table, *table_now)
+        return poles
+        
+
+    def __getstate__(self, varied=True, fixed=True):
+        state = {}
+        for name in (['k', 'z', 'ells', 'wmu', 'kt'] if fixed else []) + (['sigma8', 'fsigma8','qpar','qper'] if varied else []):
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        if varied:
+            for name in self._pt_attrs:
+                if hasattr(self.pt, name):
+                    state[name] = getattr(self.pt, name)
+        return state
+
+    def __setstate__(self, state):
+        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8','qpar','qper']:
+            if name in state: setattr(self, name, state.pop(name))
+        if not hasattr(self, 'pt'): self.pt = Namespace()
+        self.pt.update(**state)
+
+class fkptjaxTracerPowerSpectrumMultipoles(fkptTracerPowerSpectrumMultipoles):
+    r"""
+    FOLPS tracer power spectrum multipoles.
+    Can be exactly marginalized over counter terms and stochastic parameters alpha*, sn* and bias term b3*.
+    By default, bs and b3 are fixed to 0, following co-evolution.
+    For the matter (unbiased) power spectrum, set b1=1 and all other bias parameters to 0.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Theory wavenumbers where to evaluate multipoles.
+
+    ells : tuple, default=(0, 2, 4)
+        Multipoles to compute.
+
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+
+    shotnoise : float, default=1e4
+        Shot noise (which is usually marginalized over).
+
+    prior_basis : str, default='physical'
+        If 'physical', use physically-motivated prior basis for bias parameters, counterterms and stochastic terms:
+        :math:`b_{1}^\prime = (1 + b_{1}^{L}) \sigma_{8}(z), b_{2}^\prime = b_{2}^{L} \sigma_{8}(z)^2, b_{s}^\prime = b_{s}^{L} \sigma_{8}(z)^2, b_{3}^\prime = 0`
+        with: :math:`b_{1} = 1 + b_{1}^{L}, b_{2} = 8/21 b_{1}^{L} + b_{2}^{L}, b_{s} = -4/7 b_{1}^{L} + b_{s}^{L}`.
+        :math:`\alpha_{0} = (1 + b_{1}^{L})^{2} \alpha_{0}^\prime, \alpha_{2} = f (1 + b_{1}^{L}) (\alpha_{0}^\prime + \alpha_{2}^\prime), \alpha_{4} = f (f \alpha_{2}^\prime + (1 + b_{1}^{L}) \alpha_{4}^\prime)`.
+        :math:`s_{n, 0} = f_{\mathrm{sat}}/\bar{n} s_{n, 0}^\prime, s_{n, 2} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{2} s_{n, 2}^\prime, s_{n, 4} = f_{\mathrm{sat}}/\bar{n} \sigma_{v}^{4} s_{n, 4}^\prime`.
+
+    tracer : str, default=None
+        If ``prior_basis = 'physical'``, tracer to load preset ``fsat`` and ``sigv``. One of ['LRG', 'ELG', 'QSO'].
+
+    fsat : float, default=None
+        If ``prior_basis = 'physical'``, satellite fraction to assume.
+
+    sigv : float, default=None
+        If ``prior_basis = 'physical'``, velocity dispersion to assume.
+    """
+    _params = fkptTracerPowerSpectrumMultipoles._params

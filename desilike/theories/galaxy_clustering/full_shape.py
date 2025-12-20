@@ -2468,7 +2468,7 @@ def folpsv2_combine_bias_terms_pkmu(k, mu, jac, table, table_now, pars,rsd_class
 
 
 import folps as folpsv2
-@jit(static_argnums=(5,6,7))
+@jit(static_argnums=(5,6,7,8))
 def get_bs_multipoles_jit(
     pars,
     k1k2T,
@@ -2478,6 +2478,7 @@ def get_bs_multipoles_jit(
     precision,
     A_full=True,
     remove_DeltaP=False,
+    multipoles=['B000','B202'],
     f0=None,
     qpar=None,
     qperp=None,
@@ -2491,7 +2492,7 @@ def get_bs_multipoles_jit(
     kout = jnp.array(k1k2T)[:,0]
     f0 = jnp.asarray(f0)
     bpars = jnp.asarray(pars)
-
+   
 
     return folps_bispectrum_class.Bisp_Sugiyama(
         f=f0,
@@ -2504,7 +2505,8 @@ def get_bs_multipoles_jit(
         precision=precision,
         damping='lor',
         do_interp=True,
-        kout=kout
+        kout=kout,
+        multipoles=list(multipoles)
         
     )
 
@@ -2734,7 +2736,8 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         table = (self.kt, *self.pt.table, *self.pt.scalars)
         table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
         k_pkl_pklnw = jnp.array([table[0], table[1], table_now[1]])
-       
+        ells=kwargs['ells']
+        multipoles = [f"B{l1}{l2}{l3}" for (l1, l2, l3) in ells]
        
         # if getattr(self, '_get_bs_multipoles', None) is None:
         
@@ -2781,10 +2784,8 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
 
 
 
-        poles= get_bs_multipoles_jit(pars, kwargs['k1k2T'], k_pkl_pklnw, table, table_now, tuple(kwargs['precision']), getattr(self.pt, "A_full", True), getattr(self.pt, "remove_DeltaP", False),self.pt.f0, self.pt.qpar, self.pt.qper, self.z)
+        poles= get_bs_multipoles_jit(pars, kwargs['k1k2T'], k_pkl_pklnw, table, table_now, tuple(kwargs['precision']), getattr(self.pt, "A_full", True), getattr(self.pt, "remove_DeltaP", False),tuple(multipoles),self.pt.f0, self.pt.qpar, self.pt.qper, self.z)
         return jnp.asarray(poles)
-        
-
     
     
     
@@ -3124,7 +3125,11 @@ class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
         If 'physical', use physically-motivated prior basis for bias parameters:
         :math:`b_{1}^\prime = (b_{1}^{E}) \sigma_{8}(z), b_{2}^\prime = b_{2}^{E} \sigma_{8}(z)^2
 
-   
+    Reference
+    ---------
+    - https://arxiv.org/pdf/2303.15510v1
+    - https://github.com/dforero0896/geofptax
+    """
     config_fn = 'full_shape.yaml'
     _klim = (1e-3, 1., 500)
     _initialize_with_namespace = True
@@ -3132,7 +3137,7 @@ class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
     _default_options = dict(freedom=None, prior_basis='standard',basis='sugiyama', tracer=None, fsat=None, sigv=None, shotnoise=1e4, model='FOLPSD', bias_scheme='folps', IR_resummation=True, damping='lor',kernels='eds', rbao=104., A_full=True, remove_DeltaP=False, precision= [10,8,8])
 
 
-    def initialize(self, pt=None, template=None,k1k2T=None, **kwargs):
+    def initialize(self, pt=None, template=None,k1k2T=None,ells=((0,0,0),(2,0,2)), **kwargs):
             self.options = self._default_options.copy()
             shotnoise = kwargs.get('shotnoise', 1e4)
             for name, value in self._default_options.items():
@@ -3156,18 +3161,20 @@ class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
             for name in ['z', 'k']:
                 # print( dir(self.pt),getattr(self.pt, 'z', None))
                 setattr(self, name, getattr(self.pt, name))
-            k = self.pt.k
-            if utils.is_sequence(k[0]):  # Means k[0] is also a sequence → already 2D
-                k1k2T = np.array(k)
-            else:  # 1D array/list → make into (k1, k2) columns
-                ks = np.asarray(k)
-                k1k2T = np.vstack([ks, ks]).T
+
+            if k1k2T is None:
+                k = self.pt.k
+                if utils.is_sequence(k[0]):  # Means k[0] is also a sequence → already 2D
+                    k1k2T = np.array(k)
+                else:  # 1D array/list → make into (k1, k2) columns
+                    ks = np.asarray(k)
+                    k1k2T = np.vstack([ks, ks]).T
           
             self.k1k2T = k1k2T
             self.set_params()
             # setattr(self, 'k', ks)
             # setattr(self,'z',self.pt.z)
-            ells = ((0,0,0),(2,0,2))
+            # ells = ((0,0,0),(2,0,2))
             if utils.is_sequence(ells[0]):
                 self.ells = (ells,)
             self.ells = tuple(ells)
@@ -3175,49 +3182,8 @@ class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
 
 
 
-    
-    # def initialize(self, k=None, z=None, template=None, ells=((0, 0, 0),(2,0,2)), shotnoise=None, pt=None, **kwargs):
-    #     self.options = self._default_options | dict(kwargs)
-    #     self.ells = ells
-    #     if utils.is_sequence(ells[0]):
-    #         self.ells = (ells,)
-    #     self.ells = tuple(ells)
-    #     if k is None:
-    #         # Default k-bins (k1, k2) in Sugiyama basis
-    #         ks = np.logspace(np.log10(0.0001), np.log10(0.4), 30)
-    #         k1k2T = np.vstack([ks, ks]).T
 
-    #     else:
-    #         if utils.is_sequence(k[0]):  # Means k[0] is also a sequence → already 2D
-    #             k1k2T = np.array(k)
-    #         else:  # 1D array/list → make into (k1, k2) columns
-    #             ks = np.asarray(k)
-    #             k1k2T = np.vstack([ks, ks]).T
-
-    #     self.k1k2T = k1k2T
-    #     if shotnoise is None:
-    #         shotnoise = 0.
-        
-    #     # The input linear power spectrum (template)
-    #     if template is None:
-    #         template = DirectPowerSpectrumTemplate()
-    #     self.template = template
-    #     # k for input linear power spectrum
-    #     kin = np.geomspace(min(self._klim[0], min(kk.min() for kk in self.k1k2T) / 2, self.template.init.get('k', [1.])[0]), max(self._klim[1], max(kk.max() for kk in self.k1k2T) * 2, self.template.init.get('k', [0.])[0]), self._klim[2])  # margin for AP effect
-    #     # Ask for input k, z
-    #     self.template.init.update(k=kin)
-    #     if z is not None: self.template.init.update(z=z)
-    #     self.z = self.template.z
-    #     # Set parameters
-    #     self.set_params()
-    #     print(pt)
-    #     if pt is None:
-    #         pt = globals()[getattr(self, 'pt_cls', self.__class__.__name__.replace('TracerBispectrum', 'PowerSpectrum'))]()
-    #     self.pt = pt
-    #     self.pt.init.update(template=template)
-    #     setattr(self, 'k', ks)
-    #     setattr(self,'z',self.pt.z)
-    #     setattr(self,'ells',self.ells)
+ 
        
         
         
@@ -3313,7 +3279,7 @@ class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
         # opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
         
         
-        self.power = self.pt.bispectrum_calculator(pars,precision=self.options['precision'], damping=self.options['damping'],basis=self.options['basis'],model=self.options['model'],k1k2T = self.k1k2T )
+        self.power = self.pt.bispectrum_calculator(pars,precision=self.options['precision'], damping=self.options['damping'],basis=self.options['basis'],model=self.options['model'],k1k2T = self.k1k2T,ells=self.ells )
         # pars = [1.,0.,0.,0.,0.,0.,0.,0.,0.,0.,0.]
         # self.power = self.pt.combine_bias_terms_poles(pars, nd=1e4, model=self.options['model'], bias_scheme=self.options['bias_scheme'], IR_resummation=self.options['IR_resummation'], damping=self.options['damping'], prior_basis=self.options['prior_basis'],basis_rot_matrix = None)
         

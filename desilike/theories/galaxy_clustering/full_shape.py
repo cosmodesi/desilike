@@ -2843,7 +2843,19 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
         super().set_params(pt_params=[])
 
+        # fix unused parameters
+        fix = []
+        suffix = 'p' if self.is_physical_prior else ''
+        if 4 not in self.ells: fix += [f'alpha4{suffix}']
+        if 2 not in self.ells: fix += [f'alpha2{suffix}', f'alpha2shot{suffix}']
+        for par in self.init.params.select(basename=fix):
+            par.update(value=0.0, fixed=True, prior=None)
+
         self.nd = 1e-4
+        # PshotP fixed always
+        suffix = 'p' if self.is_physical_prior else ''
+        for par in self.init.params.select(basename=f'PshotP{suffix}'):
+            par.update(value=1.0/self.nd, fixed=True, prior=None)
         self.fsat = 1
         self.snd  = self.options['shotnoise'] * self.nd  # essentially = 1
         if self.is_physical_prior:
@@ -3035,18 +3047,8 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         sigv = self.options['sigv']  # sigma_1 == sigma_v
         # Table: SN* multiplied by A_AP. So in APscaling, divide out A_AP here.
         Ashot = (self.A_AP if pb == 'APscaling' else 1.0) # DR1 priors use A_AP=1, DR2 priors will use non-zero A_AP.
-        alpha0shot = (params['alpha0shotp'] / Ashot) * (1/self.nd)
-        alpha2shot = (params['alpha2shotp'] / Ashot) * (1/self.nd) * (self.fsat) * (sigv**2)
-
-        # fix unused multipole-related params
-        fix = []
-        if 4 not in self.ells:
-            fix += ['alpha4'] if not self.is_physical_prior else ['alpha4p']
-        if 2 not in self.ells:
-            fix += (['alpha2', 'alpha2shot'] if not self.is_physical_prior else ['alpha2p', 'alpha2shotp'])
-
-        for param in self.init.params.select(basename=fix):
-            param.update(value=0., fixed=True)
+        alpha0shot = (params['alpha0shotp'] / Ashot) * self.snd * (1.0)               # ≈ alpha0shotp / Ashot
+        alpha2shot = (params['alpha2shotp'] / Ashot) * self.snd * self.fsat * sigv**2 # ≈ alpha2shotp * fsat * sigv^2 / Ashot
         
         # write Eulerian params expected downstream
         params['b1'] = b1E

@@ -693,22 +693,24 @@ class MarkovChainSampler(BaseSampler):
             save_every = check_every  # Don't stop to save.
 
         # Run the chain until convergence.
+        n_steps_tot = self.mpicomm.bcast(
+            len(self.chains[0]) if self.pool.main else 0, root=0)
+
         while not self.is_converged(
                 min_iterations=min_iterations, max_iterations=max_iterations,
                 checks_passed=checks_passed):
 
             # Advance the sampler and do convergence checks.
+            n_steps = min(check_every - (n_steps_tot % check_every),
+                          save_every - (n_steps_tot % save_every),
+                          max_iterations - n_steps_tot)
+            n_steps_tot += n_steps
             if self.mpicomm.rank == 0:
-                n_steps_tot = len(self.chains[0])
-                n_steps = min(check_every - (n_steps_tot % check_every),
-                              save_every - (n_steps_tot % save_every),
-                              max_iterations - n_steps_tot)
                 self.run_sampler(n_steps)
-                n_steps_tot += n_steps
+                self.pool.stop_wait()
                 if n_steps_tot % check_every == 0:
                     self.checks.append(self.check(
                         gelman_rubin=gelman_rubin, geweke=geweke, ess=ess))
-                self.pool.stop_wait()
             else:
                 self.pool.wait()
 

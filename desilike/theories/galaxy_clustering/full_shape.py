@@ -3105,31 +3105,28 @@ class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
 
     Parameters
     ----------
-    k : tuple of arrays, default=None
-        Triangles of wavenumbers of shape (nk, 3) where to evaluate multipoles.
+    k : diagonal (k1=k2) at which Sugiyama Bk is evaluated
+    Support for non-diagonal entries will be available soon
+
 
     ells : tuple, default=((0, 0, 0), (2, 0, 2))
         Multipoles to compute.
+        Other ells available  are (1,1,0),(2,2,0),(4,0,4),(1,1,2)
 
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
 
     pt : str, default=None
-        Order of :math:`P(k)` fed into the bispectrum calculation.
-        If ``None``, linear :math:`P(k)`.
-        If '1loop', use 1-loop standard PT.
-
+     
     shotnoise : array, default=1e4
         Shot noise for each of the multipoles. Same length as ``k``.
 
-    prior_basis : str, default='physical'
-        If 'physical', use physically-motivated prior basis for bias parameters:
-        :math:`b_{1}^\prime = (b_{1}^{E}) \sigma_{8}(z), b_{2}^\prime = b_{2}^{E} \sigma_{8}(z)^2
+    prior_basis : str, default='standard'
+      "Physical basis under development"
 
     Reference
     ---------
-    - https://arxiv.org/pdf/2303.15510v1
-    - https://github.com/dforero0896/geofptax
+ 
     """
     config_fn = 'full_shape.yaml'
     _klim = (1e-3, 1., 500)

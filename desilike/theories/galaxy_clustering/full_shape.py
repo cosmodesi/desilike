@@ -2589,6 +2589,7 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         # pknow = folpsv2.extrapolate_pklin(self.template.k, self.template.pknow_dd)
         table, table_now = self._get_non_linear(self.template.pk_dd, self.template.pknow_dd, **cosmo_params)
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        print(kap.shape)
         
         extra = 6 if self.options['A_full'] else 0
 

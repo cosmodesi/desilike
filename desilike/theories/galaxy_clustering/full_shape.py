@@ -3237,7 +3237,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
 
     # _default_options = dict(kernels='fk', rbao=104., A_full=True, remove_DeltaP=False)
     _default_options = dict(model='HDKI',mg_variant='mu_OmDE',rescale_PS=False,beyond_eds=True)
-    _pt_attrs = ['jac', 'kap', 'muap','qpar','qper','fk','f0','tables','keys']  #Storing only these for now
+    _pt_attrs = ['jac', 'kap', 'muap', 'table', 'table_now', 'scalars', 'scalars_now','A_full','remove_DeltaP','qpar','qper','f','f0']  #Storing only these for now
     
     def initialize(self, *args, mu=6, **kwargs):
         # drop tracer-only / wrapper-only options that can accidentally get forwarded here

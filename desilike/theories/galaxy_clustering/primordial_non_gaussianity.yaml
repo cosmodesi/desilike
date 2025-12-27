@@ -7,7 +7,7 @@ params:
     ref:
       limits: [-10., 10.]
     delta: 1.
-    latex: f_{NL}^{\mathrm{loc}}
+    latex: f_{\mathrm{NL}}^{\mathrm{loc}}
   bphi:
     prior:
       limits: [-10, 10]

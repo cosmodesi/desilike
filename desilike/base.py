@@ -392,7 +392,7 @@ class BasePipeline(BaseClass):
     def __init__(self, calculator):
         """
         Initialize pipeline for input ``calculator``.
-        Calculators ``calculator`` depends upon are initialized.
+        Calculators that ``calculator`` depends upon are initialized.
         """
         self.calculators = []
         self.more_derived, self.more_calculate, self.more_initialize = None, None, None
@@ -404,9 +404,11 @@ class BasePipeline(BaseClass):
                 if calculator in self.calculators:
                     del self.calculators[self.calculators.index(calculator)]
                 for require in calculator.runtime_info.requires:
+                    require._mpicomm = calculator.mpicomm
                     callback2(require)
 
             for require in calculator.runtime_info.requires:
+                require._mpicomm = calculator.mpicomm
                 callback2(require)
                 require.runtime_info.initialize()  # can create new calculators, so remove the previous ones above
                 require.runtime_info._initialized_for_pipeline.append(id(self))
@@ -1105,6 +1107,15 @@ class RuntimeInfo(BaseClass):
         return new
 
 
+def get_calculator_config(cls):
+    dirname = os.path.dirname(sys.modules[cls.__module__].__file__)
+    config = BaseConfig(os.path.join(dirname, cls.config_fn), index={'class': cls.__name__})
+    info = Info(config.get('info', {}))
+    init = InitConfig(config.get('init', {}))
+    params = ParameterCollectionConfig(config.get('params', {})).init()
+    return info, init, params
+
+
 class BaseCalculator(BaseClass):
     """
     Base calculator class, to be extended by any calculator, which will typically redefine:
@@ -1128,17 +1139,25 @@ class BaseCalculator(BaseClass):
         else:
             cls_params = ParameterCollection(params)
         if getattr(cls, 'config_fn', None):
-            dirname = os.path.dirname(sys.modules[cls.__module__].__file__)
-            config = BaseConfig(os.path.join(dirname, cls.config_fn), index={'class': cls.__name__})
-            cls_info = Info({**config.get('info', {}), **cls_info})
-            params = ParameterCollectionConfig(config.get('params', {})).init()
-            params.update(cls_params)
-            init = InitConfig(config.get('init', {}))
+            config_is_calculator = False
+            try:
+                config_is_calculator = issubclass(cls.config_fn, BaseCalculator)
+            except TypeError:
+                config_is_calculator = False
+
+            if config_is_calculator:
+                # e.g. to make it possible to inherit the config file
+                info, init, params = get_calculator_config(cls.config_fn)
+            else:
+                info, init, params = get_calculator_config(cls)
+            info.update(cls_info)
             init.update(cls_init)
-            init.update(kwargs)
+            params.update(cls_params)
         else:
+            info = cls_info.deepcopy()
             init = cls_init.deepcopy()
             params = cls_params.deepcopy()
+        init.update(kwargs)
         new = super(BaseCalculator, cls).__new__(cls)
         new.info = cls_info
         init._cls_params = params.deepcopy()
@@ -1163,9 +1182,9 @@ class BaseCalculator(BaseClass):
 
     @mpicomm.setter
     def mpicomm(self, mpicomm):
-        if not self.runtime_info.initialized:
-            self._mpicomm = mpicomm
-        self.runtime_info.pipeline.mpicomm = mpicomm
+        self._mpicomm = mpicomm
+        if self.runtime_info.initialized:
+            self.runtime_info.pipeline.mpicomm = mpicomm
 
     @property
     def init(self):

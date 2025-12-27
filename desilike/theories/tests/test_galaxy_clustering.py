@@ -677,7 +677,7 @@ def test_tns():
     test(theory)
     theory(df=1.01, b1=1., b2=1.).shape
     from desilike.theories.galaxy_clustering import EFTLikeTNSTracerPowerSpectrumMultipoles, EFTLikeTNSTracerCorrelationFunctionMultipoles
-
+    """
     if False:
         #k = np.logspace(-3, 1.5, 1000)
         k = np.linspace(0.01, 0.3, 60)
@@ -750,7 +750,7 @@ def test_tns():
             ax.plot(theory.k[mask], theory.k[mask] * theory.power[ill][mask], color='C{:d}'.format(ill))
             ax.plot(theory_tns.k[mask], theory_tns.k[mask] * theory_tns.power[ill][mask], color='C{:d}'.format(ill), linestyle='--')
         plt.show()
-
+    """
     theory = EFTLikeTNSTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
 
     test(theory, emulate='pt')
@@ -1906,6 +1906,157 @@ def test_bispectrum():
     test(bk)
 
 
+def test_multitracer():
+    from desilike.theories.galaxy_clustering import (
+        StandardPowerSpectrumTemplate,
+        SimpleTracerPowerSpectrumMultipoles,
+        KaiserTracerPowerSpectrumMultipoles,
+        KaiserTracerCorrelationFunctionMultipoles,
+        EFTLikeKaiserTracerPowerSpectrumMultipoles,
+        EFTLikeKaiserTracerCorrelationFunctionMultipoles,
+        TNSTracerPowerSpectrumMultipoles,
+        TNSTracerCorrelationFunctionMultipoles,
+        EFTLikeTNSTracerPowerSpectrumMultipoles,
+        EFTLikeTNSTracerCorrelationFunctionMultipoles,
+        LPTVelocileptorsTracerPowerSpectrumMultipoles,
+        LPTVelocileptorsTracerCorrelationFunctionMultipoles,
+        REPTVelocileptorsTracerPowerSpectrumMultipoles,
+        REPTVelocileptorsTracerCorrelationFunctionMultipoles,
+        PyBirdTracerPowerSpectrumMultipoles,
+        PyBirdTracerCorrelationFunctionMultipoles,
+        FOLPSTracerPowerSpectrumMultipoles,
+        FOLPSTracerCorrelationFunctionMultipoles,
+        FOLPSAXTracerPowerSpectrumMultipoles,
+        FOLPSAXTracerCorrelationFunctionMultipoles,
+        GeoFPTAXTracerBispectrumMultipoles,
+    )
+
+    template = StandardPowerSpectrumTemplate()
+
+    def test_params(theory_cls, **kwargs):
+        theory = theory_cls(template=template, **kwargs)
+        bias_params = theory.deterministic_bias_params + theory.stochastic_bias_params
+        assert all(param in theory.init.params.names() for param in bias_params)
+        assert all(param in theory.all_params.names() for param in bias_params)
+        theory()
+
+        theory = theory_cls(template=template, tracers='lrg', **kwargs)
+        bias_params = [f'lrg.{param}' for param in theory.deterministic_bias_params + theory.stochastic_bias_params]
+        assert all(param in theory.init.params.names() for param in bias_params)
+        assert all(param in theory.all_params.names() for param in bias_params)
+        theory()
+
+        if not theory_cls._with_cross:
+            return
+
+        theory = theory_cls(template=template, tracers=('lrg', 'elg'), **kwargs)
+        bias_params = (
+            [f'lrg.{param}' for param in theory.deterministic_bias_params]
+            + [f'elg.{param}' for param in theory.deterministic_bias_params]
+            + [f'lrgxelg.{param}' for param in theory.stochastic_bias_params]
+        )
+        assert all(param in theory.init.params.names() for param in bias_params)
+        assert all(param in theory.all_params.names() for param in bias_params)
+        theory()
+
+        theory = theory_cls(template=template, tracers=('lrg', 'elg', 'cross'), **kwargs)
+        bias_params = (
+            [f'lrg.{param}' for param in theory.deterministic_bias_params]
+            + [f'elg.{param}' for param in theory.deterministic_bias_params]
+            + [f'cross.{param}' for param in theory.stochastic_bias_params]
+        )
+        assert all(param in theory.init.params.names() for param in bias_params)
+        assert all(param in theory.all_params.names() for param in bias_params)
+        theory()
+
+    def test_kaiser():
+        params = {'b1': 2.1, 'sn0': 0.2}
+        named_params = {'lrg.b1': 2.1, 'lrg.sn0': 0.2}
+        cross_params = {'lrg.b1': 2.1, 'elg.b1': 1.1, 'lrgxelg.sn0': 0.2}
+        cross_params2 = {'lrg.b1': 2.1, 'elg.b1': 2.1, 'lrgxelg.sn0': 0.2}
+
+        cls = KaiserTracerPowerSpectrumMultipoles
+        expected = cls(template=template)(params)
+        obtained = cls(template=template, tracers='lrg')(named_params)
+        np.testing.assert_allclose(obtained, expected)
+
+        obtained = cls(template=template, tracers=('lrg', 'elg'))(cross_params2)
+        np.testing.assert_allclose(obtained, expected)
+
+        theory = cls(template=template, tracers=('lrg', 'elg'))
+        theory(cross_params)
+        b1X, b1Y, sn0 = cross_params['lrg.b1'], cross_params['elg.b1'], cross_params['lrgxelg.sn0']
+        pk_dd, pk_dt, pk_tt = (theory.pt.pktable[name] for name in ('pk_dd', 'pk_dt', 'pk_tt'))
+        expected = b1X * b1Y * pk_dd + (b1X + b1Y) * pk_dt + pk_tt + sn0 / theory.nd * np.array([1, 0, 0])[:, None]
+        np.testing.assert_allclose(theory.power, expected)
+
+    def test_eft_kaiser():
+        dtbias, stbias = {'b1': 2.1, 'ct0_2': -0.5, 'ct2_2': -0.3, 'ct4_2': -0.1}, {'sn0': 1.2, 'sn0_2': 0.2, 'sn2_2': 0.1, 'sn4_2': 0.05}
+        params = dtbias | stbias
+        named_params = {f'lrg.{k}': v for k, v in params.items()}
+        cross_params = {f'lrg.{k}': v for k, v in dtbias.items()} | {f'elg.{k}': v/5 for k, v in dtbias.items()} | {f'lrgxelg.{k}': v for k, v in stbias.items()}
+        cross_params2 = {f'lrg.{k}': v for k, v in dtbias.items()} | {f'elg.{k}': v for k, v in dtbias.items()} | {f'lrgxelg.{k}': v for k, v in stbias.items()}
+
+        cls = EFTLikeKaiserTracerPowerSpectrumMultipoles
+        expected = cls(template=template)(params)
+        obtained = cls(template=template, tracers='lrg')(named_params)
+        np.testing.assert_allclose(obtained, expected)
+
+        obtained = cls(template=template, tracers=('lrg', 'elg'))(cross_params2)
+        np.testing.assert_allclose(obtained, expected)
+
+        theory = cls(template=template, tracers=('lrg', 'elg'))
+        theory(cross_params)
+        tmp = cls(template=template)
+        tmp({'b1': 0.} | {k: 0.5 * (cross_params[f'lrg.{k}'] + cross_params[f'elg.{k}']) for k in ('ct0_2', 'ct2_2', 'ct4_2')} | {k: v for k, v in stbias.items()})
+        b1X, b1Y, sn0 = cross_params['lrg.b1'], cross_params['elg.b1'], cross_params['lrgxelg.sn0']
+        pk_dd, pk_dt, pk_tt = (theory.pt.pktable[name] for name in ('pk_dd', 'pk_dt', 'pk_tt'))
+        expected = b1X * b1Y * pk_dd + (b1X + b1Y) * pk_dt + pk_tt + (tmp.power - pk_tt)
+        np.testing.assert_allclose(theory.power, expected)
+
+
+    def test_png():
+        from desilike.theories.galaxy_clustering import PNGTracerPowerSpectrumMultipoles
+        cls = PNGTracerPowerSpectrumMultipoles
+        mode, determinstic_params, stochastic_params = 'bphi', {'b1': 1.24, 'sigmas': 1.2, 'bphi': 1.2}, {'sn0': 1.}
+        theory = cls(template=template, mode=mode)(**determinstic_params, **stochastic_params)
+        named_params = {f'lrg.{k}': v for k, v in determinstic_params.items()} | {'lrg.sn0': 1.}
+        theory2 = cls(template=template, mode=mode, tracers=('lrg',))(**named_params)
+        assert np.allclose(theory2, theory)
+        named_params = {f'lrg.{k}': v for k, v in determinstic_params.items()} | {f'elg.{k}': v for k, v in determinstic_params.items()} | {f'lrgxelg.{k}': v for k, v in stochastic_params.items()}
+        theory2 = cls(template=template, mode=mode, tracers=('lrg', 'elg'))(**named_params)
+        assert np.allclose(theory2, theory)
+
+
+    # test_params(SimpleTracerPowerSpectrumMultipoles)
+    # test_params(KaiserTracerPowerSpectrumMultipoles)
+    # test_params(KaiserTracerCorrelationFunctionMultipoles)
+    # test_params(EFTLikeKaiserTracerPowerSpectrumMultipoles)
+    # test_params(EFTLikeKaiserTracerCorrelationFunctionMultipoles)
+    # test_params(TNSTracerPowerSpectrumMultipoles)
+    # test_params(TNSTracerCorrelationFunctionMultipoles)
+    # test_params(EFTLikeTNSTracerPowerSpectrumMultipoles)
+    # test_params(EFTLikeTNSTracerCorrelationFunctionMultipoles)
+    # for prior_basis in ['standard', 'physical']:
+    #     test_params(LPTVelocileptorsTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
+    #     test_params(LPTVelocileptorsTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
+    #     test_params(REPTVelocileptorsTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
+    #     test_params(REPTVelocileptorsTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
+    #     test_params(FOLPSTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
+    #     test_params(FOLPSTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
+    #     test_params(FOLPSAXTracerPowerSpectrumMultipoles, prior_basis=prior_basis)
+    #     test_params(FOLPSAXTracerCorrelationFunctionMultipoles, prior_basis=prior_basis)
+    # for eft_basis in ['eftoflss', 'velocileptors', 'eastcoast', 'westcoast']:
+    #     test_params(PyBirdTracerPowerSpectrumMultipoles, eft_basis=eft_basis)
+    #     test_params(PyBirdTracerCorrelationFunctionMultipoles, eft_basis=eft_basis)
+    # test_params(GeoFPTAXTracerBispectrumMultipoles)
+
+    assert SimpleTracerPowerSpectrumMultipoles(shotnoise=(1e3, 1e4)).nd == 1 / np.sqrt(1e3 * 1e4)
+    test_kaiser()
+    test_eft_kaiser()
+    test_png()
+
+
 if __name__ == '__main__':
 
     setup_logging()
@@ -1935,7 +2086,8 @@ if __name__ == '__main__':
     #test_ap_diff()
     #test_ptt()
     #test_tns()
-    test_bispectrum()
+    # test_bispectrum()
     #test_freedom()
     #test_bao_phaseshift()
     #comparison_folps_velocileptors()
+    test_multitracer()

@@ -49,6 +49,7 @@ class BasePowerSpectrumExtractor(BaseCalculator):
 
     def _set_base(self, fiducial=False, with_now=False):
         cosmo = self.fiducial if fiducial else self.cosmo
+        if not isinstance(cosmo, Cosmology): cosmo = cosmo.cosmo
         fo = cosmo.get_fourier()
         state = {}
         state['sigma8'] = fo.sigma8_z(self.z, of='delta_cb')

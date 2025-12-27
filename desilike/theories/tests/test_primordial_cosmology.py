@@ -70,8 +70,18 @@ def test_parameterization():
     print(derived['sigma8_m'])
 
 
+def test_cosmoprimo():
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, REPTVelocileptorsTracerPowerSpectrumMultipoles
+    cosmo = Cosmoprimo(engine='class')
+    template = DirectPowerSpectrumTemplate(z=0.5, cosmo=cosmo, with_now='wallish2018')
+    template()
+    theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
+    theory()
+
+
 if __name__ == '__main__':
 
     setup_logging()
     test_omegak()
     test_parameterization()
+    test_cosmoprimo()

@@ -1,14 +1,15 @@
 import numpy as np
 from scipy import constants
 
-from desilike import plotting
+from desilike import plotting, utils
 from desilike.jax import interp1d
 from desilike.jax import numpy as jnp
 from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
 from .power_template import FixedPowerSpectrumTemplate
+from .full_shape import BaseTracerTwoPointTheory
 
 
-class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedges):
+class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedges, BaseTracerTwoPointTheory):
     r"""
     Kaiser tracer power spectrum multipoles, with scale dependent bias sourced by local primordial non-Gaussianities.
 
@@ -48,9 +49,31 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
     https://arxiv.org/pdf/1904.08859.pdf
     """
     config_fn = 'primordial_non_gaussianity.yaml'
+    _deterministic_bias_params = ['b1', 'sigmas', 'bphi', 'p', 'bfnl_loc']
+    _stochastic_bias_params = ['sn0']
+    _with_cross = True
+
+    @classmethod
+    def _params(cls, params, tracers=None, mode='b-p'):
+        keep_params = ['b1', 'sigmas', 'sn0']
+        if mode == 'bphi':
+            keep_params += ['fnl_loc', 'bphi']
+        elif mode == 'b-p':
+            keep_params += ['fnl_loc', 'p']
+        elif mode == 'bfnl':
+            keep_params += ['bfnl_loc']
+        else:
+            raise ValueError('Unknown mode {}; it must be one of ["bphi", "b-p", "bfnl"]'.format(mode))
+        params = params.select(basename=keep_params)
+        return super()._params(params, tracers=tracers)
 
     def initialize(self, *args, ells=(0, 2), method='prim', mode='b-p', template=None, shotnoise=1e4, **kwargs):
-        super(PNGTracerPowerSpectrumMultipoles, self).initialize(*args, ells=ells, **kwargs)
+        BaseTracerTwoPointTheory.initialize(self, tracers=kwargs.pop('tracers', None))
+        if utils.is_sequence(shotnoise):
+            # cross correlation
+            shotnoise = np.sqrt(np.prod(shotnoise))
+        self.nd = 1. / float(shotnoise)
+        super().initialize(*args, ells=ells, **kwargs)
         self.nd = 1. / shotnoise
         if template is None:
             template = FixedPowerSpectrumTemplate()
@@ -60,19 +83,11 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
         self.template.init.update(k=kin)
         self.method = str(method)
         self.mode = str(mode)
-        keep_params = ['b1', 'sigmas', 'sn0']
-        if self.mode == 'bphi':
-            keep_params += ['fnl_loc', 'bphi']
-        elif self.mode == 'b-p':
-            keep_params += ['fnl_loc', 'p']
-        elif self.mode == 'bfnl':
-            keep_params += ['bfnl_loc']
-        else:
-            raise ValueError('Unknown mode {}; it must be one of ["bphi", "b-p", "bfnl"]'.format(self.mode))
         self.z = self.template.z
-        self.params = self.params.select(basename=keep_params)
 
-    def calculate(self, b1=2., sigmas=0., sn0=0., **params):
+    def calculate(self, **kwargs):
+        bias_params = self.pack_input_bias_params(kwargs, defaults=dict(b1=1., sigmas=0., sn0=0., bphi=1., p=1., bfnl_loc=0.))
+        (b1X, b1Y), (sigmasX, sigmasY), sn0 = [bias_params[name] for name in ['b1', 'sigmas', 'sn0']]
         self.z = self.template.z
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pk_dd = self.template.pk_dd
@@ -92,20 +107,21 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
             alpha = 3. * cosmo.Omega0_m * 100**2 / (2. * (constants.c / 1e3)**2 * kin**2 * tk * normalized_growth_factor)
         # Remove first k, used to normalize tk
         kin, pk_dd, alpha = kin[1:], pk_dd[1:], alpha[1:]
+        alpha = interp1d(jnp.log10(kap), np.log10(kin), alpha)
         if self.mode == 'bphi':
-            fnl_loc = params['fnl_loc']
-            bphi = params['bphi']
-            bfnl_loc = bphi * fnl_loc
+            fnl_loc = kwargs['fnl_loc']
+            bphiX, bphiY = bias_params['bphi']
+            bfnl_locX, bfnl_locY = bphiX * fnl_loc, bphiY * fnl_loc
         elif self.mode == 'b-p':
-            fnl_loc = params['fnl_loc']
-            p = params.get('p', 1.)
-            bfnl_loc = 2. * 1.686 * (b1 - p) * fnl_loc
+            fnl_loc = kwargs['fnl_loc']
+            pX, pY = bias_params['p']
+            bfnl_locX, bfnl_locY = [2. * 1.686 * (b1 - p) * fnl_loc for b1, p in [(b1X, pX), (b1Y, pY)]]
         else:
-            bfnl_loc = params['bfnl_loc']
+            bfnl_locX = bfnl_locY = bias_params['bfnl_loc']
         # bfnl_loc is typically 2 * delta_c * (b1 - p)
-        bias = b1 + bfnl_loc * interp1d(jnp.log10(kap), np.log10(kin), alpha)
-        fog = 1. / (1. + sigmas**2 * kap**2 * muap**2 / 2.)**2.
-        pkmu = jac * fog * (bias + f * muap**2)**2 * interp1d(jnp.log10(kap), np.log10(kin), pk_dd) + sn0 / self.nd
+        bX, bY = b1X + bfnl_locX * alpha, b1Y + bfnl_locY * alpha
+        fog = 1. / ((1. + sigmasX**2 * kap**2 * muap**2 / 2.) * (1. + sigmasY**2 * kap**2 * muap**2 / 2.))
+        pkmu = jac * fog * (bX + f * muap**2) * (bY + f * muap**2) * interp1d(jnp.log10(kap), np.log10(kin), pk_dd) + sn0 / self.nd
         self.power = self.to_poles(pkmu)
 
     def get(self):

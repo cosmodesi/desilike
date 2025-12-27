@@ -41,19 +41,20 @@ class Background(Section):
 
     @flatarray(dtype=np.float64)
     def efunc(self, z):
-        return self.classy.Hubble(z) * 2.99792458e5 / (100. * self.h)
+        # vectorize for class version < 3.1.1
+        return np.vectorize(self.classy.Hubble)(z) * 2.99792458e5 / (100. * self.h)
 
     @flatarray(dtype=np.float64)
     def angular_diameter_distance(self, z):
-        return self.classy.angular_distance(z) * self.h
+        return np.vectorize(self.classy.angular_distance)(z) * self.h
 
     @flatarray(dtype=np.float64)
     def comoving_angular_distance(self, z):
-        return self.angular_diameter_distance(z) * (1. + z)
+        return np.vectorize(self.angular_diameter_distance)(z) * (1. + z)
 
     @flatarray(dtype=np.float64)
     def luminosity_distance(self, z):
-        return self.angular_diameter_distance(z) * (1. + z)**2
+        return np.vectorize(self.angular_diameter_distance)(z) * (1. + z)**2
 
 
 class Thermodynamics(Section):

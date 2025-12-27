@@ -534,6 +534,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
             self.nobs = correct_covariance.get('nobs', self.nobs)
             correct_covariance = correct_covariance['correction']
         self.observables = list(observables)
+        for obs in self.observables: obs._mpicomm = self.mpicomm
         #for obs in observables: obs.all_params  # to set observable's pipelines, and initialize once (percival factor below requires all_params)
         covariance, scale_covariance, precision = (self.mpicomm.bcast(obj if self.mpicomm.rank == 0 else None, root=0) for obj in (covariance, scale_covariance, precision))
         if covariance is None:

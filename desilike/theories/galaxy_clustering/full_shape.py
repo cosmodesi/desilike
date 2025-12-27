@@ -2646,6 +2646,7 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseTracerThreePointTheory):
             pars = [params[name] for name in self.required_bias_params]
         # b1, b2, A_P, sigma_P, A_B, sigma_B, *_P
         pars = pars[:2] + [1., 4.] + [pars[3], pars[2]]
+        # Alcock-Paczynski parameters are self.template.qpar, self.template.qper
         all_pars = jnp.array([self.sigma8, self.f, self.template.qpar, self.template.qper] + pars)
         from geofptax.kernels import bk_multip
 

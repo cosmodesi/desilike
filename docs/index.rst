@@ -25,6 +25,7 @@ Table of Contents
 
   user/building
   user/getting_started
+  user/samplers
 
 .. toctree::
   :maxdepth: 1

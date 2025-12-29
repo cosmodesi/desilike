@@ -1,5 +1,5 @@
 **/dust
-doc/_build/
+docs/_build/
 **/__pycache__
 **/pytest_cache
 **/*.egg

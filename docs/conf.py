@@ -41,7 +41,7 @@ author = 'cosmodesi'
 # The full version, including alpha/beta/rc tags
 release = __version__
 
-html_theme = 'sphinx_rtd_theme'
+html_theme = 'furo'
 
 autodoc_mock_imports = ['cosmoprimo', 'mpi4py']
 

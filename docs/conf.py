@@ -28,8 +28,7 @@ extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.intersphinx',
     'sphinx.ext.extlinks',
-    'sphinx.ext.napoleon',
-    'sphinx_rtd_theme'
+    'sphinx.ext.napoleon'
 ]
 
 # -- Project information -----------------------------------------------------

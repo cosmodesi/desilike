@@ -5,6 +5,9 @@ Samplers
 
 As a stand-alone cosmological inference framework, `desilike` provides easy access to a variety of Bayesian inference algorithms, commonly referred to as "samplers". To streamline the process, `desilike` offers a unified interface to a wide range of samplers.
 
+Overview
+--------
+
 `desilike` distinguishes between three types of samplers: **static samplers**, **population samplers**, and **Markov chain samplers**.
 
 * **Static samplers** evaluate parts of parameter space and do not adapt to the actual likelihood surface. The parameter combinations to explore are set at the beginning of the algorithm.
@@ -62,3 +65,15 @@ The following population samplers are supported:
 * `nautilus` (:class:`desilike.samplers.NautilusSampler`, `Paper <https://doi.org/10.1093/mnras/stad2441>`_, `Code <https://github.com/johannesulf/nautilus>`_): A pure-Python importance nested sampling code. This is an evolution of `MultiNest`'s importance nested sampling (INS) mode and incorporates neural networks to improve sampling efficiency.
 * `pocoMC` (:class:`desilike.samplers.PocoMCSampler`, `Paper 1 <https://doi.org/10.21105/joss.04634>`_, `Paper 2 <https://doi.org/10.1093/mnras/stac2272>`_, `Code <https://github.com/minaskar/pocomc>`_): An implementation of preconditioned Monte Carlo (PMC), which is an extension of Sequential Monte Carlo. This code leverages normalizing flows to enhance sampling efficiency.
 
+If you use any of these classes in your published work, please make sure to cite the corresponding papers.
+
+MCMC Samplers
+-------------
+
+MCMC samplers approximate the posterior distribution by creating a Markov chain whose stable distribution approach the posterior. Unlike the population samplers, we can use the same convergence criterion for all samplers.
+
+Parallelization
+---------------
+
+Checkpointing
+-------------

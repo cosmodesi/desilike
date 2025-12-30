@@ -44,8 +44,8 @@ Base Classes
   :toctree: _autosummary
   :template: class.rst
 
-  desilike.base.BaseSampler
-  desilike.blackjax.BlackJAXSampler
-  desilike.base.MarkovChainSampler
-  desilike.base.PopulationSampler
-  desilike.base.StaticSampler
+  desilike.samplers.base.BaseSampler
+  desilike.samplers.blackjax.BlackJAXSampler
+  desilike.samplers.base.MarkovChainSampler
+  desilike.samplers.base.PopulationSampler
+  desilike.samplers.base.StaticSampler

@@ -73,15 +73,15 @@ MCMC Samplers
 MCMC samplers (:class:`desilike.samplers.base.MarkovChainSampler`) approximate the posterior distribution by creating a Markov chain whose stationary distribution approaches the posterior. Unlike population samplers, all MCMC algorithms in `desilike` follow the same unified interface and differ only in how they advance the chain.
 
 * Metropolis-Hastings MCMC (:class:`desilike.samplers.MetropolisHastingsSampler`): The classical MCMC algorithm. The version employed in `desilike` supports the fast-and-slow decomposition described in `Lewis (2013) <https://doi.org/10.1103/PhysRevD.87.103529>`_.
-* Hamiltonian Monte-Carlo (HMC, :class:`desilike.samplers.HMCSampler`), No-U-Turn Sampler (NUTS, :class:`desilike.samplers.NUTSSampler`, `Paper <https://jmlr.org/papers/v15/hoffman14a.html>`), and Microcanonical Langevin Monte Carlo (MCLMC, :class:`desilike.samplers.MCLMCSampler`, `Paper <https://proceedings.mlr.press/v253/robnik24a.html>_`): Classes of MCMC algorithms that leverage the derivative of the posterior to improve chain mixing. All three samplers are implemented via the `blackjax package <https://github.com/blackjax-devs/blackjax>`_.
+* Hamiltonian Monte-Carlo (HMC, :class:`desilike.samplers.HMCSampler`), No-U-Turn Sampler (NUTS, :class:`desilike.samplers.NUTSSampler`, `Paper <https://jmlr.org/papers/v15/hoffman14a.html>`_), and Microcanonical Langevin Monte Carlo (MCLMC, :class:`desilike.samplers.MCLMCSampler`, `Paper <https://proceedings.mlr.press/v253/robnik24a.html>`_): Classes of MCMC algorithms that leverage the derivative of the posterior to improve chain mixing. All three samplers are implemented via the `blackjax package <https://github.com/blackjax-devs/blackjax>`_.
 * emcee (:class:`desilike.samplers.EmceeSampler`, `Paper <https://doi.org/10.1086/670067>`_): The affine-invariant sampler popular in astronomy. It proposes new points by utilizing the positions of other walkers, i.e., chains.
 * zeus (:class:`desilike.samplers.ZeusSampler`, `Paper <https://doi.org/10.1093/mnras/stab2867>`_): An ensemble slice sampling MCMC algorithm. Like `emcee`, this sampler is insensitive to linear correlations.
 
 The implementation of all samplers is derived from the :class:`desilike.samplers.base.MarkovChainSampler` and differ only in their initialization and how they advance the chain via the `run_sampler(n_steps)` method. In particular, all samplers use the same run method, :meth:`desilike.samplers.base.MarkovChainSampler.run`. The run method defines how long the chain is run. The following convergence criterion can be employed.
 
-* Gelman-Rubin statistic (``gelman_rubin``): Maximum value of the `Gelman-Rubin statistic <https://en.wikipedia.org/wiki/Gelman-Rubin_statistic>_` :math:`R` across all parameters.
-* Geweke statistic (``geweke``): Maximum absolute value of the `Geweke statistic <https://math.arizona.edu/~piegorsch/675/GewekeDiagnostics.pdf>_` :math:`T` across all parameters.
-* Effective sample size (ESS, ``ess``): Minimum value for the ESS per chain. The ESS is defined as :math:`n / \tau` where :math:`n` is the length of the chain and `\tau` the integrated autocorrelation time.
+* Gelman-Rubin statistic (``gelman_rubin``): Maximum value of the `Gelman-Rubin statistic <https://en.wikipedia.org/wiki/Gelman-Rubin_statistic>`_ :math:`R` across all parameters.
+* Geweke statistic (``geweke``): Maximum absolute value of the `Geweke statistic <https://math.arizona.edu/~piegorsch/675/GewekeDiagnostics.pdf>`_ :math:`T` across all parameters.
+* Effective sample size (ESS, ``ess``): Minimum value for the ESS per chain. The ESS is defined as :math:`n / \tau` where :math:`n` is the length of the chain and :math:`\tau` the integrated autocorrelation time.
 
 Parallelization
 ---------------

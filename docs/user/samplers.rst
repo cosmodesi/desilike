@@ -47,7 +47,7 @@ Static Samplers
 Static samplers (:class:`desilike.samplers.base.StaticSampler`) do not adapt to the likelihood surface. As such, they are primarily used for low-dimensional problems or, in the case of importance sampling, when we already have a distribution that closely resembles the posterior distribution. The following samplers are supported:
 
 * Grid Sampler (:class:`desilike.samplers.StaticSampler`): This simple sampler evaluates the likelihood on a regular grid. The user provides the number of grid points per dimension. This sampler should not be used for high-dimensional problems, as the total number of grid points grows exponentially with the dimensionality.
-* Quasi-Monte Carlo (QMC) Sampler (:class:`desilike.samplers.QMCSampler`): This sampler is similar to the grid sampler but evaluates points on a non-regular "grid" derived from a `Quasi-Monte Carlo <https://en.wikipedia.org/wiki/Quasi-Monte_Carlo_method>`_ method. Compared to purely random uniform sampling, QMC-derived points have lower variance. This sampler can be very effective for low-dimensional problems, provided the volume of the typical set is not much smaller than the prior. `desilike` supports Halton sequences, Latin hypercube sampling, Sobol sequences (all implemented via `SciPy <https://docs.scipy.org/doc/scipy/reference/stats.qmc.html>`_), and Kronecker sequences.
+* Quasi-Monte Carlo (QMC) Sampler (:class:`desilike.samplers.QMCSampler`): This sampler is similar to the grid sampler but evaluates points on a non-regular "grid" derived from a `Quasi-Monte Carlo <https://en.wikipedia.org/wiki/Quasi-Monte_Carlo_method>`_ method. Compared to purely random uniform sampling, QMC-derived points have lower variance. This sampler can be very effective for low-dimensional problems, provided the typical set occupies a significant fraction of the prior volume. `desilike` supports Halton sequences, Latin hypercube sampling, Sobol sequences (all implemented via `SciPy <https://docs.scipy.org/doc/scipy/reference/stats.qmc.html>`_), and Kronecker sequences.
 * Importance Sampler (:class:`desilike.samplers.ImportanceSampler`): The importance sampler adjusts the weights of an existing posterior sample based on a new likelihood. The outcome is either:
   * ``mode='resample'``: Resamples the existing posterior samples based on the new likelihood, resulting in a new posterior distribution that is independent of the old posterior.
   * ``mode='combine'``: Combines the new likelihood with the old posterior by adjusting the weights of the existing samples. The resulting posterior is the product of the old posterior and the new likelihood (i.e., the product of the prior, the old likelihood, and the new likelihood). This mode is useful when you want to update your posterior based on new observations.
@@ -55,7 +55,7 @@ Static samplers (:class:`desilike.samplers.base.StaticSampler`) do not adapt to 
 Population Samplers
 -------------------
 
-Population samplers are dynamic samplers that utilize most or all previously evaluated points in parameter space to guide which regions to explore next. Unlike MCMC samplers, the resulting posterior samples are typically weighted. These samplers are also the only ones supported by `desilike` capable of computing Bayesian evidence.
+Population samplers (:class:`desilike.samplers.base.PopulationSampler`) are dynamic samplers that utilize most or all previously evaluated points in parameter space to guide which regions to explore next. Unlike MCMC samplers, the resulting posterior samples are typically weighted. These samplers are also the only ones supported by `desilike` capable of computing Bayesian evidence.
 
 `desilike` provides interfaces to a wide range of population samplers, each with its own terminology, convergence criteria, and other specifics. Unless unifying the interface improves the user experience, `desilike` allows users to interact directly with the underlying packages. For detailed information on how `desilike` interfaces with each sampler, please refer to their `run_sampler` methods.
 
@@ -70,10 +70,29 @@ If you use any of these classes in your published work, please make sure to cite
 MCMC Samplers
 -------------
 
-MCMC samplers approximate the posterior distribution by creating a Markov chain whose stable distribution approach the posterior. Unlike the population samplers, we can use the same convergence criterion for all samplers.
+MCMC samplers (:class:`desilike.samplers.base.MarkovChainSampler`) approximate the posterior distribution by creating a Markov chain whose stationary distribution approaches the posterior. Unlike population samplers, all MCMC algorithms in `desilike` follow the same unified interface and differ only in how they advance the chain.
+
+* Metropolis-Hastings MCMC (:class:`desilike.samplers.MetropolisHastingsSampler`): The classical MCMC algorithm. The version employed in `desilike` supports the fast-and-slow decomposition described in `Lewis (2013) <https://doi.org/10.1103/PhysRevD.87.103529>`_.
+* Hamiltonian Monte-Carlo (HMC, :class:`desilike.samplers.HMCSampler`), No-U-Turn Sampler (NUTS, :class:`desilike.samplers.NUTSSampler`, `Paper <https://jmlr.org/papers/v15/hoffman14a.html>`), and Microcanonical Langevin Monte Carlo (MCLMC, :class:`desilike.samplers.MCLMCSampler`, `Paper <https://proceedings.mlr.press/v253/robnik24a.html>_`): Classes of MCMC algorithms that leverage the derivative of the posterior to improve chain mixing. All three samplers are implemented via the `blackjax package <https://github.com/blackjax-devs/blackjax>`_.
+* emcee (:class:`desilike.samplers.EmceeSampler`, `Paper <https://doi.org/10.1086/670067>`_): The affine-invariant sampler popular in astronomy. It proposes new points by utilizing the positions of other walkers, i.e., chains.
+* zeus (:class:`desilike.samplers.ZeusSampler`, `Paper <https://doi.org/10.1093/mnras/stab2867>`_): An ensemble slice sampling MCMC algorithm. Like `emcee`, this sampler is insensitive to linear correlations.
+
+The implementation of all samplers is derived from the :class:`desilike.samplers.base.MarkovChainSampler` and differ only in their initialization and how they advance the chain via the `run_sampler(n_steps)` method. In particular, all samplers use the same run method, :meth:`desilike.samplers.base.MarkovChainSampler.run`. The run method defines how long the chain is run. The following convergence criterion can be employed.
+
+* Gelman-Rubin statistic (``gelman_rubin``): Maximum value of the `Gelman-Rubin statistic <https://en.wikipedia.org/wiki/Gelman-Rubin_statistic>_` :math:`R` across all parameters.
+* Geweke statistic (``geweke``): Maximum absolute value of the `Geweke statistic <https://math.arizona.edu/~piegorsch/675/GewekeDiagnostics.pdf>_` :math:`T` across all parameters.
+* Effective sample size (ESS, ``ess``): Minimum value for the ESS per chain. The ESS is defined as :math:`n / \tau` where :math:`n` is the length of the chain and `\tau` the integrated autocorrelation time.
 
 Parallelization
 ---------------
 
-Checkpointing
--------------
+All samplers in `desilike` natively support parallelization via the Message Passing Interface (MPI). `desilike` will distribute multiple concurrent likelihood calculation but will typically not parallelize individual likelihood computations. As a result, the efficiency of parallelization depends on the sampling algorithm. For example, MCMC chains typically do not scale beyond the number of chains, whereas population samplers may benefit more from parallel execution.
+
+To run a sampler in parallel, simply execute your Python script with MPI (e.g., using ``mpirun``). No modifications to your code are required.
+
+Saving Progress
+---------------
+
+Bayesian sampling can be computationally expensive. To make long runs more manageable, `desilike` allows saving the progress of a sampler. Specify a directory to store results using the ``directory`` argument. When the sampler is re-run, `desilike` will automatically detect any existing results in that directory and resume the run from the previous state, if available.
+
+**Warning**: Do **not** resume runs from a directory created with different settings, likelihoods, or parameters, as this may lead to incorrect results or unexpected errors.

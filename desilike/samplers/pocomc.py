@@ -52,8 +52,8 @@ class PocoMCSampler(PopulationSampler):
     Reference
     ---------
     - https://github.com/minaskar/pocomc
-    - https://arxiv.org/abs/2207.05652
-    - https://arxiv.org/abs/2207.05660
+    - https://doi.org/10.21105/joss.04634
+    - https://doi.org/10.1093/mnras/stac2272
 
     """
 

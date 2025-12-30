@@ -3,9 +3,11 @@
 #SBATCH -n 4                  # 4 MPI ranks
 #SBATCH -c 28                 # 28 threads per rank -> 4*28 = 112 cores total
 #SBATCH --mem=50GB               # take full node memory
-#SBATCH -t 48:00:00
-#SBATCH -p itc_cluster,sapphire
-#SBATCH -J mcmc_LCDM_emu_phys_mu0_beds_max_new
+#SBATCH -t 00:30:00
+##48:00:00
+#SBATCH -p test
+##itc_cluster,sapphire
+#SBATCH -J mcmc_LCDM_emu_phys_mu0_beds_min_standard
 #SBATCH -o logs/%x_%j.out
 #SBATCH -e logs/%x_%j.err
 
@@ -34,23 +36,21 @@ export PYTHONUNBUFFERED=1
 
 cd /n/home12/cgarciaquintero/DESI/MG_validation/synthetic_noiseless/desilike_runs/
 
-# RUN MCMC
 srun --mpi=pmix -n "${SLURM_NTASKS}" -c "${SLURM_CPUS_PER_TASK}" \
-  python -u run_desilike.py \
-    --use-emu \
+  python -u run_desilike_synthetic_data.py \
+    --data-tag LCDM \
+    --mode emcee \
     --ells 0,2 \
-    --freedom max \
+    --freedom min \
     --fid-model LCDM \
-    --MG-model HDKI \
     --mg-variant mu_OmDE \
-    --priors-basis physical_velocileptors \
     --beyond-eds \
-    --resume \
-    --chain-prefix "isitgr_fkpt_noextf_new" \
+    --prior-basis standard \
+    --chain-prefix "fkptjax" \
     --chains-dir /n/netscratch/eisenstein_lab/Lab/cristhian/desilike/chains \
     --emu-dir /n/netscratch/eisenstein_lab/Lab/cristhian/desilike/Emulators
 
-#python -u run_desilike.py --use-emu --ells 0,2 --freedom max --fid-model LCDM --MG-model HDKI --mg-variant mu_OmDE --chain-prefix "test" --mode nautilus --chains-dir /n/netscratch/eisenstein_lab/Lab/cristhian/desilike/chains  --emu-dir /n/netscratch/eisenstein_lab/Lab/cristhian/desilike/Emulators
+#python -u run_desilike.py --use-emu --ells 0,2 --freedom max --fid-model LCDM --MG-model HDKI --mg-variant mu_OmDE --prior-basis APscaling --chain-prefix "test" --mode mcmc --chains-dir /n/netscratch/eisenstein_lab/Lab/cristhian/desilike/chains  --emu-dir /n/netscratch/eisenstein_lab/Lab/cristhian/desilike/Emulators
 
 # RUN MINIMIZATION
 

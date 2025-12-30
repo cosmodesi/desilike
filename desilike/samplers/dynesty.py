@@ -12,8 +12,7 @@ from .base import update_kwargs, PopulationSampler
 class DynestySampler(PopulationSampler):
     """Class for the dynesty samplers.
 
-    Reference
-    ---------
+    .. rubric:: References
     - https://github.com/joshspeagle/dynesty
     - https://doi.org/10.1093/mnras/staa278
 

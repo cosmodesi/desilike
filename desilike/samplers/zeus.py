@@ -15,8 +15,7 @@ from .base import update_kwargs, MarkovChainSampler
 class ZeusSampler(MarkovChainSampler):
     """Wrapper for the ensemble slice sampler ``zeus``.
 
-    Reference
-    ---------
+    .. rubric:: References
     - https://github.com/minaskar/zeus
     - https://arxiv.org/abs/2002.06212
     - https://arxiv.org/abs/2105.03468

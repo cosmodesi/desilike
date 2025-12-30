@@ -12,8 +12,7 @@ from .base import update_kwargs, PopulationSampler
 class NautilusSampler(PopulationSampler):
     """Class for the nautilus sampler.
 
-    Reference
-    ---------
+    .. rubric:: References
     - https://github.com/johannesulf/nautilus
     - https://doi.org/10.1093/mnras/stad2441
 

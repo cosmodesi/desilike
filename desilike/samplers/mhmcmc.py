@@ -93,8 +93,7 @@ class StandAloneMetropolisHastingsSampler():
     Note that this is a from-scratch reimplementation of this algorithm. Also,
     this class works outside of ``desilike``.
 
-    Reference
-    ---------
+    .. rubric:: References
     - https://arxiv.org/abs/1304.4473
 
     """
@@ -314,8 +313,7 @@ class MetropolisHastingsSampler(MarkovChainSampler):
 
     Note that this is a from-scratch reimplementation of this algorithm.
 
-    Reference
-    ---------
+    .. rubric:: References
     - https://arxiv.org/abs/1304.4473
 
     """

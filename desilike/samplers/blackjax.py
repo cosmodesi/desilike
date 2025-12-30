@@ -75,8 +75,7 @@ def make_n_steps_factory(sampler):
 class BlackJAXSampler(MarkovChainSampler):
     """Wrapper for BlackJAX samplers.
 
-    Reference
-    ---------
+    .. rubric:: References
     - https://github.com/blackjax-devs/blackjax
 
     """
@@ -275,8 +274,7 @@ class NUTSSampler(BlackJAXSampler):
 class MCLMCSampler(BlackJAXSampler):
     """Wrapper for the Microcanonical Langevin Monte Carlo (MCLMC) sampler.
 
-    Reference
-    ---------
+    .. rubric:: References
     - https://blackjax-devs.github.io/sampling-book/algorithms/mclmc.html
     - https://arxiv.org/abs/2212.08549
     """

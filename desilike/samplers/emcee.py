@@ -13,8 +13,7 @@ from .base import update_kwargs, MarkovChainSampler
 class EmceeSampler(MarkovChainSampler):
     """Wrapper for the affine-invariant ensemble sampler ``emcee``.
 
-    Reference
-    ---------
+    .. rubric:: References
     - https://github.com/dfm/emcee
     - https://arxiv.org/abs/1202.3665
 

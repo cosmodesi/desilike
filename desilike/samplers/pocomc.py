@@ -49,8 +49,7 @@ class Prior(object):
 class PocoMCSampler(PopulationSampler):
     """Class for the pocoMC sampler.
 
-    Reference
-    ---------
+    .. rubric:: References
     - https://github.com/minaskar/pocomc
     - https://doi.org/10.21105/joss.04634
     - https://doi.org/10.1093/mnras/stac2272

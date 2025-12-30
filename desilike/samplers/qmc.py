@@ -67,8 +67,7 @@ class QMCSampler(StaticSampler):
 
     This module also implements Kronecker sequences.
 
-    Reference
-    ---------
+    .. rubric:: References
     - https://docs.scipy.org/doc/scipy/reference/stats.qmc.html
 
     """

@@ -54,19 +54,15 @@ class EmceeSampler(MarkovChainSampler):
         else:
             self.sampler = None
 
-    def run_sampler(self, n_steps, **kwargs):
+    def run_sampler(self, steps):
         """Run the ``emcee`` sampler.
 
         Parameters
         ----------
-        n_steps: int
+        steps: int
             Number of steps to take.
-        kwargs: dict, optional
-            Extra keyword arguments passed to ``emcee``'s ``run_mcmc`` method.
 
         """
-        kwargs = update_kwargs(kwargs, 'emcee', store=True)
-
         try:
             self.sampler.get_last_sample()
             initial_state = None
@@ -76,9 +72,9 @@ class EmceeSampler(MarkovChainSampler):
                 random_state=np.random.RandomState(self.rng.integers(
                     2**32 - 1)).get_state())
 
-        self.sampler.run_mcmc(initial_state, n_steps, **kwargs)
-        chains = np.transpose(self.sampler.get_chain()[-n_steps:],
+        self.sampler.run_mcmc(initial_state, steps, store=True)
+        chains = np.transpose(self.sampler.get_chain()[-steps:],
                               (1, 0, 2))
-        log_post = self.sampler.get_log_prob()[-n_steps:].T
+        log_post = self.sampler.get_log_prob()[-steps:].T
         self.chains = np.concatenate([self.chains, chains], axis=1)
         self.log_post = np.concatenate([self.log_post, log_post], axis=1)

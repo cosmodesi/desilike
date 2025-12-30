@@ -73,7 +73,7 @@ def make_n_steps_factory(sampler):
 
 
 class BlackJAXSampler(MarkovChainSampler):
-    """Wrapper for BlackJAX samplers.
+    """Wrapper for ``BlackJAX`` samplers.
 
     .. rubric:: References
     - https://github.com/blackjax-devs/blackjax

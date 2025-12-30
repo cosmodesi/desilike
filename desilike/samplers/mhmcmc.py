@@ -358,12 +358,12 @@ class MetropolisHastingsSampler(MarkovChainSampler):
                 cov[i, i] = param.proposal**2
         self.sampler.update(cov=cov)
 
-    def run_sampler(self, n_steps):
+    def run_sampler(self, steps):
         """Run the Metropolis-Hastings sampler.
 
         Parameters
         ----------
-        n_steps: int
+        steps: int
             Number of steps to take.
 
         """
@@ -371,6 +371,9 @@ class MetropolisHastingsSampler(MarkovChainSampler):
             self.sampler.update(
                 pos=self.chains[:, -1, :], log_p=self.log_post[:, -1])
 
-        chains, log_post = self.sampler.make_n_steps(n_steps)
+        chains, log_post = self.sampler.make_n_steps(steps)
         self.chains = np.concatenate([self.chains, chains], axis=1)
         self.log_post = np.concatenate([self.log_post, log_post], axis=1)
+
+        if len(self.chains[0]) < self.learn_steps:
+            self.sampler.update(cov=np.cov(np.stack(self.chains)))

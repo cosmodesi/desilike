@@ -478,41 +478,53 @@ class MarkovChainSampler(BaseSampler):
             except FileNotFoundError:
                 pass
 
-    def run_sampler(self, n_steps, **kwargs):
+    def run_sampler(self, steps):
         """Abstract method to run the sampler from the main MPI process.
 
         This needs to be implemented by the subclass.
 
         Parameters
         ----------
-        n_steps : int
+        steps : int
             How many additional steps to run.
-        kwargs: dict, optional
-            Extra keyword arguments passed to sampler's run method.
 
         """
         pass
 
-    def initialize_chains(self, n_init=100):
+    def adapt_sampler(self, steps):
+        """Abstract method to adapt the sampler from the main MPI process.
+
+        This needs to be implemented by the subclass.
+
+        Parameters
+        ----------
+        steps : int
+            How many additional steps to run.
+
+        """
+        pass
+
+    def initialize_chains(self, max_init_attempts=100):
         """Initialize the chains.
 
         Parameters
         ----------
-        n_init : int, optional
-            Maximum number of attempts for each chain. If None, there is
+        max_init_attempts : int, optional
+            Maximum number of attempts for each chain. If ``None``, there is
             no limit. Default is 100.
 
         Raises
         ------
         ValueError
-            If no finite posterior has been found after ``n_init`` attempts.
+            If no finite posterior has been found after ``max_init_attempts``
+            attempts.
 
         """
         chains = np.zeros((self.n_chains, self.n_dim))
         log_post = np.repeat(-np.inf, self.n_chains)
         n_try = 0
 
-        while n_try < n_init and not np.all(np.isfinite(log_post)):
+        while n_try < max_init_attempts and not np.all(np.isfinite(log_post)):
             use = ~np.isfinite(log_post)
             for i, param in enumerate(self.likelihood.varied_params):
                 if param.ref.is_proper():
@@ -526,7 +538,7 @@ class MarkovChainSampler(BaseSampler):
 
         if not np.all(np.isfinite(log_post)):
             raise ValueError('Could not find finite posterior '
-                             f'after {n_init:d} attempts.')
+                             f'after {max_init_attempts:d} attempts.')
 
         self.chains = chains[:, np.newaxis, :]
         self.log_post = log_post[:, np.newaxis]
@@ -552,11 +564,11 @@ class MarkovChainSampler(BaseSampler):
             is 1.1.
         geweke : float or None
             If given, the maximum value of the Geweke statistic. Default is
-            None.
+            ``None``.
         ess : float or None
             If given, the minimum effective sample size per chain. The
             effective sample size is the number of chain elements divided
-            by the autocorrelation time. Default is None.
+            by the autocorrelation time. Default is ``None``.
         quiet : bool, optional
             If True, do not log results. Default is False.
 
@@ -566,7 +578,6 @@ class MarkovChainSampler(BaseSampler):
             Whether the chains passed convergence checks.
 
         """
-
         if isinstance(self.burn_in, float):
             burn_in = round(self.burn_in * len(self.chains[0]))
         else:
@@ -605,15 +616,15 @@ class MarkovChainSampler(BaseSampler):
 
         return passed_all
 
-    def is_converged(self, min_iterations=0, max_iterations=sys.maxsize,
+    def is_converged(self, min_steps=0, max_steps=sys.maxsize,
                      checks_passed=10):
         """Check whether sampling should stop.
 
         Parameters
         ----------
-        min_iterations : int, optional
+        min_steps : int, optional
             Minimum number of steps to run. Default is 0.
-        max_iterations : int, optional
+        max_steps : int, optional
             Maximum number of steps to run. Default is infinity.
         checks_passed : int, optional
             Threshold for the number of successive successful convergence
@@ -627,8 +638,8 @@ class MarkovChainSampler(BaseSampler):
 
         """
         if self.mpicomm.rank == 0:
-            converged = (len(self.chains[0]) >= max_iterations or
-                         (len(self.chains[0]) >= min_iterations and
+            converged = (len(self.chains[0]) >= max_steps or
+                         (len(self.chains[0]) >= min_steps and
                           len(self.checks) >= checks_passed and
                           all(self.checks[-checks_passed:])))
         else:
@@ -636,9 +647,10 @@ class MarkovChainSampler(BaseSampler):
 
         return self.mpicomm.bcast(converged, root=0)
 
-    def run(self, burn_in=0.2, min_iterations=0, max_iterations=sys.maxsize,
+    def run(self, burn_in=0.2, min_steps=0, max_steps=None, learn_steps=None,
             check_every=10, checks_passed=10, gelman_rubin=1.1, geweke=None,
-            ess=None, flatten_chains=True, save_every=10, n_init=100):
+            ess=None, flatten_chains=True, save_every=10,
+            max_init_attempts=100):
         """Run the sampler.
 
         Parameters
@@ -646,10 +658,16 @@ class MarkovChainSampler(BaseSampler):
         burn_in: float or int, optional
             Fraction of samples to remove from each chain. If an integer,
             number of iterations(steps) to remove. Default is 0.2.
-        min_iterations: int, optional
+        min_steps: int, optional
             Minimum number of steps to run. Default is 0.
-        max_iterations: int, optional
-            Maximum number of steps to run. Default is infinity.
+        max_steps: int or None, optional
+            Maximum number of steps to run. If ``None``, no limit is applied.
+            Default is ``None``.
+        learn_steps: int, optional
+            Number of learning steps for samplers that can learn effective
+            hyperparameters online. These samplers include Metropolis-Hastings
+            MCMC, HMC, NUTS, and MCLMC. If ``None``, use the sampler-specific
+            default value. Default is ``None``.
         check_every: int, optional
             After how many steps convergence is checked. Default is 10.
         checks_passed: int, optional
@@ -661,16 +679,16 @@ class MarkovChainSampler(BaseSampler):
             Gelman-Rubin statistic. Default is 1.1.
         geweke: float or None
             Used to asses convergence. If given, the maximum value of the
-            Geweke statistic. Default is None.
+            Geweke statistic. Default is ``None``.
         ess: float or None
             Used to asses convergence.  If given, the minimum effective sample
             size per chain. The effective sample size is the number of chain
-            elements divided by the autocorrelation time. Default is None.
+            elements divided by the autocorrelation time. Default is ``None``.
         flatten_chains: bool, optional
             Whether to concatenate individual chains into one chain.
         save_every: int, optional
             After how many steps results are saved. Default is 10.
-        n_init: int, optional
+        max_init_attempts: int, optional
             Maximum number of attempts to initialize each chain. Default is
             100.
 
@@ -683,7 +701,7 @@ class MarkovChainSampler(BaseSampler):
         if self.mpicomm.rank == 0:
             # Initialize the chains, if necessary.
             if self.chains is None:
-                self.initialize_chains(n_init=n_init)
+                self.initialize_chains(max_init_attempts=max_init_attempts)
                 self.checks = []
             self.pool.stop_wait()
         else:
@@ -692,30 +710,40 @@ class MarkovChainSampler(BaseSampler):
         if self.directory is None:
             save_every = check_every  # Don't stop to save.
 
+        if learn_steps is None:
+            learn_steps = self.default_learn_steps
+        self.learn_steps = learn_steps  # only used for MH MCMC
+
+        if learn_steps > 0:
+            self.adapt_sampler(learn_steps)
+
         # Run the chain until convergence.
-        n_steps_tot = self.mpicomm.bcast(
+        steps = self.mpicomm.bcast(
             len(self.chains[0]) if self.pool.main else 0, root=0)
 
+        if max_steps is None:
+            max_steps = sys.maxsize
+
         while not self.is_converged(
-                min_iterations=min_iterations, max_iterations=max_iterations,
+                min_steps=min_steps, max_steps=max_steps,
                 checks_passed=checks_passed):
 
             # Advance the sampler and do convergence checks.
-            n_steps = min(check_every - (n_steps_tot % check_every),
-                          save_every - (n_steps_tot % save_every),
-                          max_iterations - n_steps_tot)
-            n_steps_tot += n_steps
+            steps_to_take = min(check_every - (steps % check_every),
+                                save_every - (steps % save_every),
+                                max_steps - steps)
+            steps += steps_to_take
             if self.mpicomm.rank == 0:
-                self.run_sampler(n_steps)
+                self.run_sampler(steps_to_take)
                 self.pool.stop_wait()
-                if n_steps_tot % check_every == 0:
+                if steps % check_every == 0:
                     self.checks.append(self.check(
                         gelman_rubin=gelman_rubin, geweke=geweke, ess=ess))
             else:
                 self.pool.wait()
 
             # Write results.
-            if self.directory is not None and n_steps_tot % save_every == 0:
+            if self.directory is not None and steps % save_every == 0:
                 self.write()
 
         if self.mpicomm.rank == 0:

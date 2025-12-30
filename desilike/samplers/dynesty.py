@@ -10,7 +10,7 @@ from .base import update_kwargs, PopulationSampler
 
 
 class DynestySampler(PopulationSampler):
-    """Class for the dynesty samplers.
+    """Wrapper for ``dynesty`` nested samplers.
 
     .. rubric:: References
     - https://github.com/joshspeagle/dynesty
@@ -20,7 +20,7 @@ class DynestySampler(PopulationSampler):
 
     def __init__(self, likelihood, dynamic=True, rng=None, directory=None,
                  **kwargs):
-        """Initialize the dynesty sampler.
+        """Initialize the ``dynesty`` sampler.
 
         Parameters
         ----------
@@ -34,7 +34,8 @@ class DynestySampler(PopulationSampler):
         directory : str, Path, optional
             Save samples to this location. Default is ``None``.
         kwargs: dict, optional
-            Extra keyword arguments passed to dynesty during initialization.
+            Extra keyword arguments passed to ``dynesty`` during
+            initialization.
 
         """
         if not DYNESTY_INSTALLED:
@@ -70,12 +71,13 @@ class DynestySampler(PopulationSampler):
             self.sampler = None
 
     def run_sampler(self, **kwargs):
-        """Run the dynesty sampler.
+        """Run the ``dynesty`` sampler.
 
         Parameters
         ----------
         kwargs: dict, optional
-            Extra keyword arguments passed to dynesty's ``run_nested`` method.
+            Extra keyword arguments passed to ``dynesty``'s ``run_nested``
+            method.
 
         Returns
         -------

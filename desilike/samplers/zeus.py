@@ -62,14 +62,14 @@ class ZeusSampler(MarkovChainSampler):
                           "not reproducible.")
 
     def run_sampler(self, n_steps, **kwargs):
-        """Run the zeus sampler.
+        """Run the ``zeus`` sampler.
 
         Parameters
         ----------
         n_steps: int
             Number of steps to take.
         kwargs: dict, optional
-            Extra keyword arguments passed to zeus's ``run_mcmc`` method.
+            Extra keyword arguments passed to ``zeus``'s ``run_mcmc`` method.
 
         """
         kwargs = update_kwargs(kwargs, 'zeus', nsteps=n_steps, log_prob0=None)

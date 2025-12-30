@@ -11,7 +11,7 @@ from .base import update_kwargs, PopulationSampler
 
 
 class Prior(object):
-    """Prior distribution for PocoMC."""
+    """Prior distribution for ``pocoMC``."""
 
     def __init__(self, params, random_state=None):
         self.dists = [param.prior for param in params]
@@ -47,7 +47,7 @@ class Prior(object):
 
 
 class PocoMCSampler(PopulationSampler):
-    """Class for the pocoMC sampler.
+    """Class for the ``pocoMC`` preconditioned Monte Carlo sampling.
 
     .. rubric:: References
     - https://github.com/minaskar/pocomc
@@ -57,7 +57,7 @@ class PocoMCSampler(PopulationSampler):
     """
 
     def __init__(self, likelihood, rng=None, directory=None, **kwargs):
-        """Initialize the PocoMC sampler.
+        """Initialize the ``PocoMC`` sampler.
 
         Parameters
         ----------
@@ -109,12 +109,12 @@ class PocoMCSampler(PopulationSampler):
             self.sampler = None
 
     def run_sampler(self, **kwargs):
-        """Run the pocoMC sampler.
+        """Run the ``pocoMC`` sampler.
 
         Parameters
         ----------
         kwargs: dict, optional
-            Extra keyword arguments passed to pocoMC's ``run`` method.
+            Extra keyword arguments passed to ``pocoMC``'s ``run`` method.
 
         Returns
         -------

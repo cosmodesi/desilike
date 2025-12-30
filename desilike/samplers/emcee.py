@@ -21,7 +21,7 @@ class EmceeSampler(MarkovChainSampler):
 
     def __init__(self, likelihood, n_chains=4, rng=None, directory=None,
                  **kwargs):
-        """Initialize the emcee sampler.
+        """Initialize the ``emcee`` sampler.
 
         Parameters
         ----------
@@ -55,14 +55,14 @@ class EmceeSampler(MarkovChainSampler):
             self.sampler = None
 
     def run_sampler(self, n_steps, **kwargs):
-        """Run the emcee sampler.
+        """Run the ``emcee`` sampler.
 
         Parameters
         ----------
         n_steps: int
             Number of steps to take.
         kwargs: dict, optional
-            Extra keyword arguments passed to emcee's ``run_mcmc`` method.
+            Extra keyword arguments passed to ``emcee``'s ``run_mcmc`` method.
 
         """
         kwargs = update_kwargs(kwargs, 'emcee', store=True)

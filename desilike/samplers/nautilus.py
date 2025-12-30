@@ -10,7 +10,7 @@ from .base import update_kwargs, PopulationSampler
 
 
 class NautilusSampler(PopulationSampler):
-    """Class for the nautilus sampler.
+    """Wrapper for ``nautilus`` importance nested sampling.
 
     .. rubric:: References
     - https://github.com/johannesulf/nautilus
@@ -19,7 +19,7 @@ class NautilusSampler(PopulationSampler):
     """
 
     def __init__(self, likelihood, rng=None, directory=None, **kwargs):
-        """Initialize the nautilus sampler.
+        """Initialize the ``nautilus`` sampler.
 
         Parameters
         ----------
@@ -30,7 +30,8 @@ class NautilusSampler(PopulationSampler):
         directory : str, Path, optional
             Save samples to this location. Default is ``None``.
         kwargs: dict, optional
-            Extra keyword arguments passed to nautilus during initialization.
+            Extra keyword arguments passed to ``nautilus`` during
+            initialization.
 
         """
         if not NAUTILUS_INSTALLED:
@@ -57,7 +58,7 @@ class NautilusSampler(PopulationSampler):
         Parameters
         ----------
         kwargs: dict, optional
-            Extra keyword arguments passed to nautilus' ``run`` method.
+            Extra keyword arguments passed to ``nautilus``'s ``run`` method.
 
         Returns
         -------

@@ -82,7 +82,7 @@ class BlackJAXSampler(MarkovChainSampler):
 
     def __init__(self, likelihood, n_chains=4, rng=None, directory=None,
                  **kwargs):
-        """Initialize the BlackJAX sampler.
+        """Initialize the ``BlackJAX`` sampler.
 
         Parameters
         ----------
@@ -111,7 +111,7 @@ class BlackJAXSampler(MarkovChainSampler):
         self.states = None
 
     def run_sampler(self, n_steps):
-        """Run the BlackJAX sampler.
+        """Run the ``BlackJAX`` sampler.
 
         Parameters
         ----------

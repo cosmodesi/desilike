@@ -63,9 +63,10 @@ ENGINES = dict(sobol=Sobol, halton=Halton, lhs=LatinHypercube,
 
 
 class QMCSampler(StaticSampler):
-    """Quasi Monte-Carlo (QMC) sequences implemented in :mod:`scipy.qmc`.
+    """Sampler based on Quasi Monte-Carlo (QMC) sequences.
 
-    This module also implements Kronecker sequences.
+    In addition to sequences in :mod:`scipy.qmc`, this module also implements
+    Kronecker sequences.
 
     .. rubric:: References
     - https://docs.scipy.org/doc/scipy/reference/stats.qmc.html

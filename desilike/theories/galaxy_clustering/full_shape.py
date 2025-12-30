@@ -3136,7 +3136,8 @@ def Kfuncs_to_tables(
     """
 
     import folps as folpsv2
-    from folps.tools_jax import extrapolate_pklin, simpson, interp
+    # from folps.tools_jax import extrapolate_pklin, simpson, interp
+    from tools_jax import extrapolate_pklin, simpson, interp
     from fkptjax.calculate_jax import JaxCalculator
     from fkptjax.util import setup_kfunctions
     from fkptjax.ode import ModelDerivatives, ODESolver, DP
@@ -3544,6 +3545,26 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             jnp.array(pars), "folps", *table, *table_now
         )
         return poles
+
+    '''
+    The next two functions are important to make emulators work
+    '''
+    def __getstate__(self, varied=True, fixed=True):
+        state = {}
+        for name in (['k', 'z', 'ells', 'wmu', 'kt'] if fixed else []) + (['sigma8', 'fsigma8','qpar','qper'] if varied else []):
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        if varied:
+            for name in self._pt_attrs:
+                if hasattr(self.pt, name):
+                    state[name] = getattr(self.pt, name)
+        return state
+
+    def __setstate__(self, state):
+        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8','qpar','qper']:
+            if name in state: setattr(self, name, state.pop(name))
+        if not hasattr(self, 'pt'): self.pt = Namespace()
+        self.pt.update(**state)
 
 
 class fkptjaxTracerPowerSpectrumMultipoles(fkptTracerPowerSpectrumMultipoles):

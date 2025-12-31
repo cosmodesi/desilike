@@ -590,8 +590,8 @@ class MarkovChainSampler(BaseSampler):
         if not quiet:
             self.log_info('Diagnostics:')
 
-        gelman_rubin_value = np.amax(diagnostics.gelman_rubin(chains),
-                                     method='diag')
+        gelman_rubin_value = np.amax(diagnostics.gelman_rubin(
+            chains, method='diag'))
         try:
             geweke_value = np.amax(
                 diagnostics.geweke(chains, first=0.1, last=0.5))

@@ -57,8 +57,15 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
         self.covariance = None
         if self.mpicomm.bcast(_is_array(covariance) or isinstance(covariance, ObservableCovariance), root=0):
             self.covariance = self.mpicomm.bcast(covariance, root=0)
-        elif covariance is not None:
-            raise ValueError('Provide covariance array')
+        else:
+            self.mocks = covariance
+        if self.mpicomm.bcast(self.mocks is not None, root=0):
+            covariance = None
+            if self.mpicomm.rank == 0:
+                covariance = np.cov(self.mocks, rowvar=False, ddof=1)
+            self.covariance = self.mpicomm.bcast(covariance, root=0)
+        #elif covariance is not None:
+        #    raise ValueError('Provide covariance array')
 
     @plotting.plotter(interactive={'kw_theory': {'color': 'black', 'label': 'reference'}})
     def plot(self, kw_theory=None, fig=None):

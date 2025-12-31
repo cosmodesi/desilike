@@ -5,6 +5,7 @@ from scipy import interpolate
 
 from desilike.jax import numpy as jnp
 from desilike.jax import jit, interp1d
+import jax as ojax
 from desilike import jax
 from desilike import plotting, utils, BaseCalculator
 from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
@@ -2630,6 +2631,7 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseTracerThreePointTheory):
         # Calculte the bispectrum (set attribute self.power, see at the end)
         self.z = self.template.z
         self.sigma8 = self.template.sigma8
+        self.f = self.template.f
         self.fsigma8 = self.template.f * self.sigma8
         params = self.pack_input_bias_params(params)
         params = {name: value[0] if isinstance(value, tuple) else value for name, value in params.items()}
@@ -2644,15 +2646,15 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseTracerThreePointTheory):
             pars = [params[name] for name in self.required_bias_params]
         # b1, b2, A_P, sigma_P, A_B, sigma_B, *_P
         pars = pars[:2] + [1., 4.] + [pars[3], pars[2]]
-        # Alock-Paczynski parameters are self.template.qpar, self.template.qper
-        all_pars = jnp.array([self.sigma8, self.fsigma8 / self.sigma8, self.template.qpar, self.template.qper] + pars)
+        # Alcock-Paczynski parameters are self.template.qpar, self.template.qper
+        all_pars = jnp.array([self.sigma8, self.f, self.template.qpar, self.template.qper] + pars)
         from geofptax.kernels import bk_multip
 
         kt = self.template.k
         pkt = self.template.pk_dd  # theory linear pk
         if self.pt:  # loop correction: update pkt with 1-loop calculation
             q = kt
-            ktmin, ktmax = min(kk.min() for kk in self.k) * 0.7, max(kk.max() for kk in self.k) * 1.3
+            ktmin, ktmax = min(kk.min() for kk in self.k) * 0.7, max(kk.max() for kk in self.k) * 2.
             kt = jnp.linspace(ktmin, ktmax, self._klim[2])
             wq = utils.weights_trapz(q)
             if getattr(self, 'kernel', None) is None:

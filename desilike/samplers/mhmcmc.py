@@ -3,6 +3,8 @@
 Note that the implemenation here is independent of the one in cobaya.
 """
 
+import sys
+
 import numpy as np
 
 from .base import MarkovChainSampler
@@ -318,6 +320,8 @@ class MetropolisHastingsSampler(MarkovChainSampler):
 
     """
 
+    default_adaptation_steps = sys.maxsize
+
     def __init__(self, likelihood, n_chains=4, cov=None, f_fast=1, f_drag=0,
                  fast=[], rng=None, directory=None):
         """Initialize the Metropolis-Hastings sampler.
@@ -375,5 +379,5 @@ class MetropolisHastingsSampler(MarkovChainSampler):
         self.chains = np.concatenate([self.chains, chains], axis=1)
         self.log_post = np.concatenate([self.log_post, log_post], axis=1)
 
-        if len(self.chains[0]) < self.learn_steps:
+        if len(self.chains[0]) < self.adaptation_steps:
             self.sampler.update(cov=np.cov(np.stack(self.chains)))

@@ -499,7 +499,7 @@ class MarkovChainSampler(BaseSampler):
         Parameters
         ----------
         steps : int
-            How many additional steps to run.
+            How steps to run for the adaptation.
 
         """
         pass
@@ -647,10 +647,10 @@ class MarkovChainSampler(BaseSampler):
 
         return self.mpicomm.bcast(converged, root=0)
 
-    def run(self, burn_in=0.2, min_steps=0, max_steps=None, learn_steps=None,
-            check_every=10, checks_passed=10, gelman_rubin=1.1, geweke=None,
-            ess=None, flatten_chains=True, save_every=10,
-            max_init_attempts=100):
+    def run(self, burn_in=0.2, min_steps=0, max_steps=None,
+            adaptation_steps=None, check_every=10, checks_passed=10,
+            gelman_rubin=1.1, geweke=None, ess=None, flatten_chains=True,
+            save_every=10, max_init_attempts=100):
         """Run the sampler.
 
         Parameters
@@ -663,7 +663,7 @@ class MarkovChainSampler(BaseSampler):
         max_steps: int or None, optional
             Maximum number of steps to run. If ``None``, no limit is applied.
             Default is ``None``.
-        learn_steps: int, optional
+        adaptation_steps: int, optional
             Number of learning steps for samplers that can learn effective
             hyperparameters online. These samplers include Metropolis-Hastings
             MCMC, HMC, NUTS, and MCLMC. If ``None``, use the sampler-specific
@@ -710,12 +710,12 @@ class MarkovChainSampler(BaseSampler):
         if self.directory is None:
             save_every = check_every  # Don't stop to save.
 
-        if learn_steps is None:
-            learn_steps = self.default_learn_steps
-        self.learn_steps = learn_steps  # only used for MH MCMC
+        if adaptation_steps is None:
+            adaptation_steps = self.default_adaptation_steps
+        self.adaptation_steps = adaptation_steps  # only used for MH MCMC
 
-        if learn_steps > 0:
-            self.adapt_sampler(learn_steps)
+        if self.mpicomm.rank == 0 and adaptation_steps > 0:
+            self.adapt_sampler(adaptation_steps)
 
         # Run the chain until convergence.
         steps = self.mpicomm.bcast(

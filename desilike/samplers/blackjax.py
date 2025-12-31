@@ -110,7 +110,7 @@ class BlackJAXSampler(MarkovChainSampler):
             partial(self.compute_posterior, save_derived=False),
             'compute_posterior')
 
-        self.kernel = self.kernel_type(
+        self.kernel = getattr(blackjax, self.kernel_type)(
             self.compute_posterior, **self.kernel_args)
         self.make_steps = self.pool.save_function(
             make_steps_factory(self.kernel.step), 'make_steps')
@@ -179,8 +179,8 @@ class BlackJAXSampler(MarkovChainSampler):
         initial_position = dict(zip(self.params.keys()[:self.n_dim],
                                     self.chains[0][-1]))
         rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
-        (state, parameters), _ = blackjax.window_adaptation(
-            self.kernel_type, self.compute_posterior).run(
+        (state, parameters), _ = getattr(blackjax, self.adaptation_fn)(
+            getattr(blackjax, self.kernel_type), self.compute_posterior).run(
             rng_key, initial_position, num_steps=steps, **fixed_kernel_args)
         self.kernel_args.update(parameters)
 
@@ -188,9 +188,9 @@ class BlackJAXSampler(MarkovChainSampler):
 class HMCSampler(BlackJAXSampler):
     """Wrapper for Hamiltonian Monte-Carlo (HMC)."""
 
-    kernel_type = blackjax.hmc
+    kernel_type = 'hmc'
     adaptable_args = ['step_size', 'inverse_mass_matrix']
-    adaptation_fn = blackjax.window_adaptation
+    adaptation_fn = 'window_adaptation'
 
     def __init__(self, likelihood, n_chains=4, step_size=1e-3,
                  inverse_mass_matrix=None, num_integration_steps=60, rng=None,
@@ -237,9 +237,9 @@ class HMCSampler(BlackJAXSampler):
 class NUTSSampler(BlackJAXSampler):
     """Wrapper for No-U-Turn Sampler (NUTS)."""
 
-    kernel_type = blackjax.nuts
+    kernel_type = 'nuts'
     adaptable_args = ['step_size', 'inverse_mass_matrix']
-    adaptation_fn = blackjax.window_adaptation
+    adaptation_fn = 'window_adaptation'
 
     def __init__(self, likelihood, n_chains=4, step_size=1e-3,
                  inverse_mass_matrix=None, rng=None, directory=None, **kwargs):
@@ -288,9 +288,9 @@ class MCLMCSampler(BlackJAXSampler):
 
     """
 
-    kernel_type = blackjax.mclmc
+    kernel_type = 'mclmc'
     adaptable_args = ['L', 'step_size']
-    adaptation_fn = blackjax.mclmc_find_L_and_step_size
+    adaptation_fn = 'mclmc_find_L_and_step_size'
 
     def __init__(self, likelihood, n_chains=4, L=1., step_size=0.1, rng=None,
                  directory=None, **kwargs):

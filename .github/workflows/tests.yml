@@ -51,6 +51,7 @@ jobs:
           brew install libomp
         fi
         python -m pip install .[tests]
+        python -m pip install ipython  # TODO: temporary fix for https://github.com/AnswerDotAI/fastprogress/issues/117
         # TODO: Currently, we need to specify the directory. This should not be necessary in the future once all tests are compatible with pytest.
         COVERAGE_FILE=.coverage.no_mpi python -m pytest tests --cov=desilike --durations=0
         mpirun -n 2 bash -c 'COVERAGE_FILE=.coverage.mpi.$OMPI_COMM_WORLD_RANK python -m pytest tests --cov=desilike --durations=0 --with-mpi'

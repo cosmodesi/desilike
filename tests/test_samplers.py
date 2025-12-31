@@ -42,11 +42,11 @@ KWARGS_RUN_FAST = dict(
     importance=dict(chain=Chain(dict(
         a=np.repeat(np.linspace(0, 1, 11), 101),
         b=np.tile(np.linspace(0, 1, 11), 101)))),
-    emcee=dict(max_iterations=100),
+    emcee=dict(max_steps=100),
     grid=dict(grid=np.linspace(0, 1, 101)),
     nautilus=dict(n_eff=0, n_like_max=100),
     pocomc=dict(n_total=10, n_evidence=10),
-    zeus=dict(max_iterations=100))
+    zeus=dict(max_steps=100))
 
 
 @pytest.fixture

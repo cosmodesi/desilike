@@ -433,6 +433,8 @@ class PopulationSampler(BaseSampler):
 class MarkovChainSampler(BaseSampler):
     """Class defining common functions used by Markov chain samplers."""
 
+    default_adaptation_steps = 0
+
     def __init__(self, likelihood, n_chains=4, burn_in=0.2, rng=None,
                  directory=None):
         """Initialize the sampler.

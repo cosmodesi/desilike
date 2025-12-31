@@ -380,4 +380,6 @@ class MetropolisHastingsSampler(MarkovChainSampler):
         self.log_post = np.concatenate([self.log_post, log_post], axis=1)
 
         if len(self.chains[0]) < self.adaptation_steps:
-            self.sampler.update(cov=np.cov(np.stack(self.chains)))
+            print()
+            self.sampler.update(cov=np.cov(
+                self.chains.reshape(-1, self.n_dim)))

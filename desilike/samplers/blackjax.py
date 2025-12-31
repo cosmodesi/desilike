@@ -110,8 +110,10 @@ class BlackJAXSampler(MarkovChainSampler):
             partial(self.compute_posterior, save_derived=False),
             'compute_posterior')
 
-        self.kernel = getattr(blackjax, self.kernel_type)(
+        self.kernel_type = getattr(blackjax, self.kernel_type)
+        self.kernel = self.kernel_type(
             self.compute_posterior, **self.kernel_args)
+        self.adaptation_fn = getattr(blackjax, self.adaptation_fn)
         self.make_steps = self.pool.save_function(
             make_steps_factory(self.kernel.step), 'make_steps')
 
@@ -179,8 +181,8 @@ class BlackJAXSampler(MarkovChainSampler):
         initial_position = dict(zip(self.params.keys()[:self.n_dim],
                                     self.chains[0][-1]))
         rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
-        (state, parameters), _ = getattr(blackjax, self.adaptation_fn)(
-            getattr(blackjax, self.kernel_type), self.compute_posterior).run(
+        (state, parameters), _ = self.adaptation_fn(
+            self.kernel_type, self.compute_posterior).run(
             rng_key, initial_position, num_steps=steps, **fixed_kernel_args)
         self.kernel_args.update(parameters)
 

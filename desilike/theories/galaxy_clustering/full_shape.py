@@ -3374,24 +3374,27 @@ def Kfuncs_to_tables(
 # ============================================================================
 
 import folps as folpsv2
-@jit(static_argnums=(5,6,7,8))
+@jit(static_argnums=(5,6,7,8,9,10,11))
 def get_bs_multipoles_jit(
     pars,
     k1k2T,
-    k_pkl_pklnw,
+    k_pkl_pklnw_fk,
     table,
     table_now,
     precision,
     A_full=True,
     remove_DeltaP=False,
     multipoles=['B000','B202'],
+    interpolation_method='linear',
+    bias_scheme='folps',
+    renormalized=True,
     f0=None,
     qpar=None,
     qperp=None,
     z_pk=None,
 ):
     # folpsv2.MatrixCalculator(A_full=A_full, remove_DeltaP=remove_DeltaP)
-    folps_bispectrum_class = folpsv2.BispectrumCalculator(basis='sugiyama', model='FOLPSD')
+    folps_bispectrum_class = folpsv2.BispectrumCalculator_fk(model='FOLPSD')
 
     kb_all = jnp.linspace(0.5 * jnp.asarray(k1k2T)[0, 0], 0.28, 64)
     k_ev_bk = jnp.vstack([kb_all, kb_all]).T
@@ -3400,19 +3403,21 @@ def get_bs_multipoles_jit(
     bpars = jnp.asarray(pars)
    
 
-    return folps_bispectrum_class.Bisp_Sugiyama(
+    return folps_bispectrum_class.Sugiyama_Bell(
         f=f0,
         bpars=bpars,
-        k_pkl_pklnw=k_pkl_pklnw,
-        z_pk=z_pk.astype(float),
+        k_pkl_pklnw_fk=k_pkl_pklnw_fk,
         k1k2pairs=k_ev_bk,
         qpar=qpar.astype(float),
         qper=qperp.astype(float),
         precision=precision,
         damping='lor',
-        do_interp=True,
+        do_interp_bk=True,
         kout=kout,
-        multipoles=list(multipoles)
+        multipoles=list(multipoles),
+        bias_scheme=bias_scheme,
+        renormalize=renormalized,
+        interpolation_method=interpolation_method
     )
 
 
@@ -3606,13 +3611,11 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         pars = [params[p] for p in required_bias_params]
         table = (self.kt, *self.pt.table, *self.pt.scalars)
         table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
-        k_pkl_pklnw = jnp.array([table[0], table[1], table_now[1]])
+        k_pkl_pklnw_fk = jnp.array([table[0], table[1], table_now[1],table[2]*self.pt.f0])
         ells=kwargs['ells']
         multipoles = [f"B{l1}{l2}{l3}" for (l1, l2, l3) in ells]
-        f0=table[-1]  #f0 from fkptjax
-        poles= get_bs_multipoles_jit(pars, kwargs['k1k2T'], k_pkl_pklnw, table, table_now, tuple(kwargs['precision']), getattr(self.pt, "A_full", True), getattr(self.pt, "remove_DeltaP", False),tuple(multipoles),f0, self.pt.qpar, self.pt.qper, self.z)
+        poles = get_bs_multipoles_jit(pars, kwargs['k1k2T'], k_pkl_pklnw_fk, table, table_now, tuple(kwargs['precision']), getattr(self.pt, "A_full", True), getattr(self.pt, "remove_DeltaP", False),tuple(multipoles),kwargs['interpolation_method'],kwargs['bias_scheme'],kwargs['renormalized'],self.pt.f0, self.pt.qpar, self.pt.qper, self.z)
         return jnp.asarray(poles)
-        
 
     '''
     The next two functions are important to make emulators work
@@ -3706,6 +3709,9 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
         #sigma8_fid=None,
         h_fid=None,   # only needed for prior_basis='APscaling'
         b1_fid=None,
+        renormalized=True,
+        interpolation_method='linear',
+        bias_scheme='folps'
     )
 
 
@@ -4041,7 +4047,10 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
                 prior_basis='standard',
                 beyond_eds=self.options['beyond_eds'],
                 k1k2T = self.k1k2T,ells=self.ells,
-                precision=self.options['precision'],basis=self.options['basis']
+                precision=self.options['precision'],basis=self.options['basis'],
+                bias_scheme=self.options['bias_scheme'],
+                renormalized=self.options['renormalized'],
+                interpolation_method=self.options['interpolation_method']
             )
             
             return

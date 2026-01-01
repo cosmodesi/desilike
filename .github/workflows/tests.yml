@@ -19,10 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
-        exclude:
-          - os: macos-latest
-            python-version: "3.9"
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -40,7 +37,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        python -m pip install ruff pytest pytest-cov
+        python -m pip install ruff pytest pytest-cov pytest-mpi
     - name: Lint with ruff
       run: |
         # TODO: Ultimately, all checks should work.
@@ -54,8 +51,12 @@ jobs:
           brew install libomp
         fi
         python -m pip install .[tests]
+        python -m pip install ipython  # TODO: temporary fix for https://github.com/AnswerDotAI/fastprogress/issues/117
         # TODO: Currently, we need to specify the directory. This should not be necessary in the future once all tests are compatible with pytest.
-        python -m pytest tests --cov=desilike --durations=0 --cov-report lcov
+        COVERAGE_FILE=.coverage.no_mpi python -m pytest tests --cov=desilike --durations=0
+        mpirun -n 2 bash -c 'COVERAGE_FILE=.coverage.mpi.$OMPI_COMM_WORLD_RANK python -m pytest tests --cov=desilike --durations=0 --with-mpi'
+        coverage combine
+        coverage lcov
     - name: Coverage with Coveralls
       if: ${{ success() && ( matrix.python-version == '3.13' ) && ( matrix.os == 'ubuntu-latest' ) }}
       uses: coverallsapp/github-action@v2

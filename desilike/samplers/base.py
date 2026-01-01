@@ -435,8 +435,7 @@ class MarkovChainSampler(BaseSampler):
 
     default_adaptation_steps = 0
 
-    def __init__(self, likelihood, n_chains=4, burn_in=0.2, rng=None,
-                 directory=None):
+    def __init__(self, likelihood, n_chains=4, rng=None, directory=None):
         """Initialize the sampler.
 
         Parameters
@@ -445,10 +444,6 @@ class MarkovChainSampler(BaseSampler):
             Likelihood to sample.
         n_chains : int, optional
             Number of chains. Default is 4.
-        burn_in : float or int, optional
-            Fraction of samples to remove from each chain before doing
-            convergence checks or returning results. If an integer, number of
-            iterations (steps) to remove. Default is 0.2.
         rng : numpy.random.RandomState, int, or None, optional
             Random number generator for seeding. If ``None``, no seed is used.
             Default is ``None``.
@@ -466,13 +461,6 @@ class MarkovChainSampler(BaseSampler):
         self.chains = None
         self.log_post = None
         self.checks = None
-
-        if isinstance(burn_in, float):
-            if burn_in > 1:
-                raise ValueError(
-                    f"'burn_in' cannot be a float and bigger than 1. Received "
-                    f"{burn_in}.")
-        self.burn_in = burn_in
 
         if self.directory is not None:
             try:
@@ -545,22 +533,39 @@ class MarkovChainSampler(BaseSampler):
         self.chains = chains[:, np.newaxis, :]
         self.log_post = log_post[:, np.newaxis]
 
-    @property
-    def chains_without_burn_in(self):
-        """Return the chains without burn in."""
-        if isinstance(self.burn_in, float):
-            burn_in = round(self.burn_in * len(self.chains[0]))
-        else:
-            burn_in = self.burn_in
+    def chains_without_burn_in(self, burn_in):
+        """Return the chains without burn-in.
+
+        Parameters
+        ----------
+        burn_in: float or int, optional
+            Fraction of samples to remove from each chain. If an integer,
+            number of iterations(steps) to remove. Default is 0.2.
+
+        Returns
+        -------
+        chains : numpy.ndarray
+            Chains with burn-in removed.
+
+        """
+        if isinstance(burn_in, float):
+            if burn_in > 1:
+                raise ValueError("If a float, 'burn_in' must be less than 1." +
+                                 f" Got {burn_in}.")
+            burn_in = round(burn_in * len(self.chains[0]))
         return [chain[burn_in:] for chain in self.chains]
 
-    def check(self, gelman_rubin=1.1, geweke=None, ess=None, quiet=False):
+    def check(self, burn_in=0.2, gelman_rubin=1.1, geweke=None, ess=None,
+              quiet=False):
         """Check the status of the sampling.
 
         This function will also output the status of the analysis to the log.
 
         Parameters
         ----------
+        burn_in: float or int, optional
+            Fraction of samples to remove from each chain. If an integer,
+            number of iterations(steps) to remove. Default is 0.2.
         gelman_rubin : float or None
             If given, the maximum value of the Gelman-Rubin statistic. Default
             is 1.1.
@@ -580,12 +585,8 @@ class MarkovChainSampler(BaseSampler):
             Whether the chains passed convergence checks.
 
         """
-        if isinstance(self.burn_in, float):
-            burn_in = round(self.burn_in * len(self.chains[0]))
-        else:
-            burn_in = self.burn_in
-        chains = [Chain([*chain[burn_in:].T], params=self.params[:self.n_dim])
-                  for chain in self.chains_without_burn_in]
+        chains = [Chain([*chain.T], params=self.params[:self.n_dim])
+                  for chain in self.chains_without_burn_in(burn_in)]
 
         if not quiet:
             self.log_info('Diagnostics:')
@@ -741,7 +742,8 @@ class MarkovChainSampler(BaseSampler):
                 self.pool.stop_wait()
                 if steps % check_every == 0:
                     self.checks.append(self.check(
-                        gelman_rubin=gelman_rubin, geweke=geweke, ess=ess))
+                        burn_in=burn_in, gelman_rubin=gelman_rubin,
+                        geweke=geweke, ess=ess))
             else:
                 self.pool.wait()
 
@@ -750,7 +752,7 @@ class MarkovChainSampler(BaseSampler):
                 self.write()
 
         if self.mpicomm.rank == 0:
-            chains = self.chains_without_burn_in
+            chains = self.chains_without_burn_in(burn_in)
         else:
             chains = [None] * self.n_chains
 

@@ -81,8 +81,7 @@ class BlackJAXSampler(MarkovChainSampler):
 
     """
 
-    def __init__(self, likelihood, n_chains=4, rng=None, directory=None,
-                 **kwargs):
+    def __init__(self, likelihood, n_chains=4, rng=None, directory=None):
         """Initialize the ``BlackJAX`` sampler.
 
         Parameters
@@ -96,9 +95,6 @@ class BlackJAXSampler(MarkovChainSampler):
             Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-        kwargs: dict, optional
-            Extra keyword arguments passed to ``blackjax`` during
-            initialization.
 
         """
         if not BLACKJAX_INSTALLED:
@@ -319,6 +315,5 @@ class MCLMCSampler(BlackJAXSampler):
         """
         self.kernel_args = dict(L=L, step_size=step_size, **kwargs)
 
-        super().__init__(
-            likelihood, n_chains=n_chains, L=L, step_size=step_size,
-            directory=directory, **kwargs)
+        super().__init__(likelihood, n_chains=n_chains, rng=rng,
+                         directory=directory)

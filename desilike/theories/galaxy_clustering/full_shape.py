@@ -3143,7 +3143,7 @@ def Kfuncs_to_tables(
 
     import folps as folpsv2
     # from folps.tools_jax import extrapolate_pklin, simpson, interp
-    from tools_jax import extrapolate_pklin, simpson, interp
+    from folps.tools_jax import extrapolate_pklin, simpson, interp
     from fkptjax.calculate_jax import JaxCalculator
     from fkptjax.util import setup_kfunctions
     from fkptjax.ode import ModelDerivatives, ODESolver, DP

@@ -124,7 +124,6 @@ def emu_filename(
     redshift_bins: bool,
     scale_bins: bool,
     mg_variant: str,
-    prior_basis: str,
     kc: float | None = None,
     scale_bins_method: str | None = None,
 ) -> str:
@@ -151,7 +150,7 @@ def emu_filename(
         mode = "eds_" + mode
 
     return (
-        f"emu-fs_folps_isitgr_{mode}_{tag}"
+        f"emu-fs_isitgr_fkptjax_folps_{mode}_{tag}"
         f"_k{kmin_edge:.3f}-{kmax_edge:.3f}"
         f"_l{''.join(map(str, ells))}.npy"
     )
@@ -183,7 +182,6 @@ def parse_args():
         type=Path,
         default=Path("/n/home12/cgarciaquintero/DESI/MG_validation/synthetic_noiseless/data_vectors/"),
     )
-    p.add_argument("--data-tag", type=str, default=None, help="Required (e.g. LCDM, HS_F4, ...).")
     p.add_argument("--use-cov-x10", action="store_true")
     p.add_argument("--cov-scale", type=float, default=1.0)
 
@@ -192,7 +190,7 @@ def parse_args():
     p.add_argument("--kmax-cut", type=float, default=0.30)
     p.add_argument("--ells", type=str, default="0,2")
     p.add_argument("--freedom", choices=["max", "min"], default="max")
-    p.add_argument("--fid-model", type=str, default="LCDM")
+    p.add_argument("--fid-model", type=str, default="LCDM", help="Required (e.g. LCDM, HS_F4, ...).")
 
     # IMPORTANT: match OLD script basis behavior
     p.add_argument(
@@ -245,9 +243,6 @@ def parse_args():
 def main():
     args = parse_args()
     setup_logging("info")
-
-    if args.data_tag is None:
-        raise ValueError("--data-tag is required (e.g. LCDM, HS_F4).")
 
     # IMPORTANT: your fkptjax wrapper expects this to be False for now
     RESCALE_PS = False
@@ -314,7 +309,7 @@ def main():
     else:
         prefix += "_GR" if args.force_GR else (f"_mu0" if args.mg_variant == "mu_OmDE" else f"_{args.mg_variant}")
     prefix += f"_l{''.join(map(str, ells))}"
-    prefix += f"_data-{args.data_tag}"
+    prefix += f"_data-{args.fid_model}"
     if args.use_cov_x10:
         prefix += "_covx10"
     if args.cov_scale != 1.0:
@@ -467,11 +462,11 @@ def main():
     for file_tag, tracer_tag, b1_fid, z_eff, b2_ref in tracer_table:
         namespace = file_tag.lower()
 
-        data_tag = str(args.data_tag)
-        k_path = args.data_dir / f"{file_tag}_{data_tag}_k.txt"
-        p_path = args.data_dir / f"{file_tag}_{data_tag}_P0P2P4.txt"
+        fid_model = str(args.fid_model)
+        k_path = args.data_dir / f"{file_tag}_{fid_model}_k.txt"
+        p_path = args.data_dir / f"{file_tag}_{fid_model}_P0P2P4.txt"
         c_suffix = "_cov_x10.txt" if args.use_cov_x10 else "_cov.txt"
-        c_path = args.data_dir / f"{file_tag}_{data_tag}{c_suffix}"
+        c_path = args.data_dir / f"{file_tag}_{fid_model}{c_suffix}"
 
         if not k_path.exists() or not p_path.exists() or not c_path.exists():
             raise FileNotFoundError(
@@ -551,7 +546,6 @@ def main():
             redshift_bins=bool(args.redshift_bins),
             scale_bins=bool(args.scale_bins),
             mg_variant=str(args.mg_variant),
-            prior_basis=prior_basis,
             kc=float(args.kc),
             scale_bins_method=str(args.scale_bins_method),
         )

@@ -2879,6 +2879,9 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             settings = {
                 'BGS': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.2)**(1/2)/70.},
                 'LRG': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
+                'LRG1': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
+                'LRG2': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
+                'LRG3': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
                 'ELG': {'fsat': 0.10, 'sigv': 150*(2.1)**(1/2)/70.},
                 'QSO': {'fsat': 0.03, 'sigv': 150*(10)**(0.7/3)*(2.4)**(1/2)/70.},
             }
@@ -2895,6 +2898,9 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             b1fid = {
                 'BGS': 1.5,
                 'LRG': 2.1,
+                'LRG1': 2.1,
+                'LRG2': 2.1,
+                'LRG3': 2.1,
                 'ELG': 1.2,
                 'QSO': 2.1,
             }
@@ -2998,9 +3004,9 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             # APscaling: include A_AP and decode the table-style priors
             # ============================================================
             # here, alpha*p should be alpha*tilde times Aap times sigma8, with U(-100,100), so divide by A_AP*sqrtA
-            a0t = params['alpha0p'] / (A_AP * sigma8)
-            a2t = params['alpha2p'] / (A_AP * sigma8)
-            a4t = params['alpha4p'] / (A_AP * sigma8)
+            a0t = params['alpha0p'] / (A_AP * sigma8 * sigma8)
+            a2t = params['alpha2p'] / (A_AP * sigma8 * sigma8)
+            a4t = params['alpha4p'] / (A_AP * sigma8 * sigma8)
 
             alpha0 = (b1E**2) * a0t
             alpha2 = (b1E * f) * (a0t + a2t)
@@ -3997,6 +4003,9 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
             settings = {
                 'BGS': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.2)**(1/2)/70.},
                 'LRG': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
+                'LRG1': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
+                'LRG2': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
+                'LRG3': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
                 'ELG': {'fsat': 0.10, 'sigv': 150*(2.1)**(1/2)/70.},
                 'QSO': {'fsat': 0.03, 'sigv': 150*(10)**(0.7/3)*(2.4)**(1/2)/70.},
             }
@@ -4123,9 +4132,9 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
             # APscaling: include A_AP and decode the table-style priors
             # ============================================================
             # here, alpha*p should be alpha*tilde times Aap times sigma8, with U(-100,100), so divide by A_AP*sqrtA
-            a0t = params['alpha0p'] / (A_AP * sigma8)
-            a2t = params['alpha2p'] / (A_AP * sigma8)
-            a4t = params['alpha4p'] / (A_AP * sigma8)
+            a0t = params['alpha0p'] / (A_AP * sigma8 * sigma8)
+            a2t = params['alpha2p'] / (A_AP * sigma8 * sigma8)
+            a4t = params['alpha4p'] / (A_AP * sigma8 * sigma8)
 
             alpha0 = (b1E**2) * a0t
             alpha2 = (b1E * f) * (a0t + a2t)

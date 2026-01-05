@@ -2626,7 +2626,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         b3_coev=True,
         beyond_eds=True,
         rescale_PS=False,
-        #sigma8_fid=None,
+        sigma8_ref=None,
         h_fid=None,   # only needed for prior_basis='APscaling'
         b1_fid=None,
     )
@@ -2748,7 +2748,8 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                     if param.fixed:
                         continue
                     if freedom == 'max':
-                        param.update(prior=dict(dist='uniform', limits=[-100.0, 100.0]),
+                        #param.update(prior=dict(dist='uniform', limits=[-100.0, 100.0]),
+                        param.update(prior=dict(dist='norm', loc=0.0, scale=100.0),
                                      ref=dict(dist='norm', loc=0.0, scale=1.0))
                     else:
                         param.update(prior=dict(dist='norm', loc=0.0, scale=12.5),
@@ -2759,7 +2760,8 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                     if param.fixed:
                         continue
                     if freedom == 'max':
-                        param.update(prior=dict(dist='uniform', limits=[-10.0, 10.0]),
+                        #param.update(prior=dict(dist='uniform', limits=[-10.0, 10.0]),
+                        param.update(prior=dict(dist='norm', loc=0.0, scale=10.0),
                                      ref=dict(dist='norm', loc=0.0, scale=1.0))
                     else:
                         param.update(prior=dict(dist='norm', loc=0.0, scale=2.0),
@@ -2769,7 +2771,8 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                     if param.fixed:
                         continue
                     if freedom == 'max':
-                        param.update(prior=dict(dist='uniform', limits=[-10.0, 10.0]),
+                        #param.update(prior=dict(dist='uniform', limits=[-10.0, 10.0]),
+                        param.update(prior=dict(dist='norm', loc=0.0, scale=10.0),
                                      ref=dict(dist='norm', loc=0.0, scale=1.0))
                     else:
                         param.update(prior=dict(dist='norm', loc=0.0, scale=5.0),
@@ -2827,6 +2830,24 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             # You will sample bK2p and btdp and then overwrite bs2E/b3E inside calculate()
             self.required_bias_params['bK2'] = 0.0
             self.required_bias_params['btd'] = 0.0
+            self.sigma8_ref = self.options.get("sigma8_ref", None)
+            if self.sigma8_ref is None:
+                # Prefer table values when available
+                try:
+                    self.sigma8_ref = self.get_sigma8ref(tracer=self.options["tracer"])
+                except Exception:
+                    # If ELG2 missing in the cropped table, compute from a reference cosmology instead
+                    # (replace this block with your actual reference cosmology choice)
+                    from cosmoprimo.fiducial import DESI as DESI_fid
+                    z_eff = {"ELG2": 1.321}.get(str(self.options["tracer"]).upper(), None)
+                    if z_eff is None:
+                        raise
+                    cosmo_ref = DESI_fid()
+                    if hasattr(cosmo_ref, "sigma8_z"):
+                        self.sigma8_ref = float(cosmo_ref.sigma8_z(z_eff))
+                    else:
+                        # fallback if your cosmoprimo version differs
+                        self.sigma8_ref = float(cosmo_ref.sigma8 * cosmo_ref.growth_factor(z_eff) / cosmo_ref.growth_factor(0.0))
 
         if self.is_physical_prior:
             # rename required nuisances to primed sampling names
@@ -2869,8 +2890,14 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             self.b1_fid = self.options.get('b1_fid', None)
             if self.b1_fid is None:
                 self.b1_fid = self.get_b1fid(tracer=self.options['tracer'])
+        
+            # NEW: sigma8_ref for the *prior means* (Table 1)
+            self.sigma8_ref = self.options.get('sigma8_ref', None)
+            if self.sigma8_ref is None:
+                self.sigma8_ref = self.get_sigma8ref(tracer=self.options['tracer'])
         else:
             self.b1_fid = None
+            self.sigma8_ref = None
 
     @staticmethod
     def get_physical_stochastic_settings(tracer=None):
@@ -2883,6 +2910,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                 'LRG2': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
                 'LRG3': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
                 'ELG': {'fsat': 0.10, 'sigv': 150*(2.1)**(1/2)/70.},
+                'ELG1': {'fsat': 0.10, 'sigv': 150*(2.1)**(1/2)/70.},
                 'QSO': {'fsat': 0.03, 'sigv': 150*(10)**(0.7/3)*(2.4)**(1/2)/70.},
             }
             try:
@@ -2890,6 +2918,27 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             except KeyError:
                 raise ValueError(f"unknown tracer: {tracer}, please use any of {list(settings.keys())}")
         return {'fsat': 0.1, 'sigv': 5.}
+
+    @staticmethod
+    def get_sigma8ref(tracer=None):
+        if tracer is None:
+            raise ValueError("sigma8_ref requires tracer (BGS/LRG1/LRG2/LRG3/ELG1/ELG2/QSO).")
+        tracer = str(tracer).upper()
+        # Values read from Table 1 (your screenshot)
+        table = {
+            "BGS":  0.680287,
+            "LRG1": 0.609684,
+            "LRG2": 0.554084,
+            "LRG3": 0.501571,
+            "ELG": 0.494276,
+            "ELG1": 0.494276,
+            "QSO":  0.398622,
+            "LRG":  0.554084,  # optional fallback if someone passes "LRG"
+            "ELG":  0.494276,  # optional fallback if someone passes "ELG"
+        }
+        if tracer not in table:
+            raise ValueError(f"unknown tracer '{tracer}' for sigma8_ref table lookup.")
+        return table[tracer]
 
     @staticmethod
     def get_b1fid(tracer=None):
@@ -3017,23 +3066,28 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                                  "(or update the code to match your chosen names).")
 
             # Implement priors according to 2pt+3pt priors document
-            #   X = bK2 * sigma8^2(z) * sqrt(A_ap)
-            #   Y = btd * sigma8^3(z) * sqrt(A_ap)
-            freedom = self.options.get('freedom', None)
-            b1_fid = getattr(self, 'b1_fid', None)
-            if b1_fid is None:
+            freedom = self.options.get('freedom', None) 
+            # get b1_fid
+            b1_fid = getattr(self, 'b1_fid', None) 
+            if b1_fid is None: 
                 raise ValueError("APscaling table priors need b1_fid; could not infer from tracer.")
+            # get sigma8_ref (btw, effectively, A_AP_ref is 1)
+            sigma8_ref = getattr(self, "sigma8_ref", None) 
+            if sigma8_ref is None: 
+                raise ValueError("APscaling requires sigma8_ref (from Table 1 or computed from reference cosmology).")
+                
+            # define central values for the priors
+            muX = -(2.0 / 7.0) * (b1_fid - 1.0) * sigma8_ref**2.0
+            muY = (23.0 / 42.0) * (b1_fid - 1.0) * sigma8_ref**3.0 
 
-            muX = -(2.0 / 7.0) * (b1_fid - 1.0) * sigma8
-            muY =  (23.0 / 42.0) * (b1_fid - 1.0) * sigma8
-
-            if freedom == 'min':
-                X = muX
-                Y = muY
-            else:
-                # bK2p, btdp are the deviations ΔX, ΔY with priors N(0,5^2)
-                X = muX + params['bK2p']
-                Y = muY + params['btdp']
+            # fix or apply a Gaussian prior dependending on the freedom
+            if freedom == 'min': 
+                X = muX 
+                Y = muY 
+            else: 
+                # bK2p, btdp are the deviations ΔX, ΔY with priors N(0,5^2) 
+                X = muX + params['bK2p'] 
+                Y = muY + params['btdp'] 
 
             bK2 = X / (sigma8**2 * sqrtA_AP)
             btd = Y / (sigma8**3 * sqrtA_AP)
@@ -4103,8 +4157,6 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
         else:
             bs2E = bsL
 
-
-    
 
         # ============================================================
         # Counterterms mapping

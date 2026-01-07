@@ -3642,7 +3642,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             #####@partial(jax.jit, static_argnums=(4,))
             @jit(static_argnums=(4))
             def _get_poles(jac, kap, muap, pars, bias_scheme, *table_all):
-                folpsv2.MatrixCalculator(A_full=False, remove_DeltaP=False)
+                folpsv2.MatrixCalculator(A_full=False, use_TNS_model=False)
                 calc = folpsv2.RSDMultipolesPowerSpectrumCalculator(model="FOLPSD")
                 pars2 = calc.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
                 pkmu = calc.get_rsd_pkmu(

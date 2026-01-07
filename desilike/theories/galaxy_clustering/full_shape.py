@@ -2992,7 +2992,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         sigma8 = self.pt.sigma8
         f = self.pt.fsigma8 / sigma8
 
-        # --- Lagrangian -> Eulerian ---
+        # --- Eulerian ---
         if pb == 'APscaling':
             # Define AP-factor
             qpar = self.pt.qpar
@@ -3005,26 +3005,24 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             self.A_AP = A_AP
             sqrtA_AP = A_AP**0.5
             # proceed with biases
-            b1L = params['b1p'] / (sigma8 * sqrtA_AP) - 1.0
-            b2L = params['b2p'] / (sigma8**2 * sqrtA_AP)
+            b1E = params['b1p'] / (sigma8 * sqrtA_AP)
+            b2E = params['b2p'] / (sigma8**2 * sqrtA_AP)
         else:
-            b1L = params['b1p'] / sigma8 - 1.0
-            b2L = params['b2p'] / sigma8**2
-        
-        b1E  = 1.0 + b1L
-        b2E  = b2L + 8.0 / 21.0 * b1L
-        
-        # defaults (non-APscaling)
-        bsL = params['bs2p'] / sigma8**2
-        b3L = params['b3nlp']
+            b1E = params['b1p'] / sigma8
+            b2E = params['b2p'] / sigma8**2
 
-        # apply coevolution factor
-        if self.options['b3_coev']:
-            bs2E = bsL - 4.0/7.0 * b1L
-            b3E  = b3L + 32.0/315.0 * b1L
-        else:
-            bs2E = bsL
-            b3E  = b3L
+        # defaults (non-APscaling)
+        b1L = b1E - 1.0
+        if pb != 'APscaling':
+            bsL = params['bs2p'] / sigma8**2 
+            b3L = params['b3nlp']
+            # apply coevolution factor
+            if self.options['b3_coev']:
+                bs2E = bsL - 4.0/7.0 * b1L
+                b3E  = b3L + 32.0/315.0 * b1L
+            else:
+                bs2E = bsL
+                b3E  = b3L
 
         ctildeE = params.get('ctildep', 0.0)
 
@@ -3066,39 +3064,42 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                                  "(or update the code to match your chosen names).")
 
             # Implement priors according to 2pt+3pt priors document
-            freedom = self.options.get('freedom', None) 
-            # get b1_fid
-            b1_fid = getattr(self, 'b1_fid', None) 
-            if b1_fid is None: 
-                raise ValueError("APscaling table priors need b1_fid; could not infer from tracer.")
-            # get sigma8_ref (btw, effectively, A_AP_ref is 1)
-            sigma8_ref = getattr(self, "sigma8_ref", None) 
-            if sigma8_ref is None: 
-                raise ValueError("APscaling requires sigma8_ref (from Table 1 or computed from reference cosmology).")
-                
-            # define central values for the priors
-            muX = -(2.0 / 7.0) * (b1_fid - 1.0) * sigma8_ref**2.0
-            muY = (23.0 / 42.0) * (b1_fid - 1.0) * sigma8_ref**3.0 
+            freedom = self.options.get('freedom', None)
 
-            # fix or apply a Gaussian prior dependending on the freedom
-            if freedom == 'min': 
-                X = muX 
-                Y = muY 
-            else: 
-                # bK2p, btdp are the deviations ΔX, ΔY with priors N(0,5^2) 
-                X = muX + params['bK2p'] 
-                Y = muY + params['btdp'] 
+            if freedom == "min":
+                # --- MINIMAL freedom: FIX bK2 and btd using the *varied* b1 (NOT b1_fid) ---])
+                bK2 = -(2.0 / 7.0) * (b1E - 1.0) # notice b1p here is actually b1
+                btd =  (23.0 / 42.0) * (b1E - 1.0)
 
-            bK2 = X / (sigma8**2 * sqrtA_AP)
-            btd = Y / (sigma8**3 * sqrtA_AP)
+            else:
+                # --- MAXIMAL freedom: Gaussian priors on X and Y around table central values ---
+                if 'bK2p' not in params or 'btdp' not in params:
+                    raise ValueError("APscaling requires sampled parameters 'bK2p' and 'btdp' "
+                                     "(or update the code to match your chosen names).")
 
-            # bK2 ---> bs2 mapping
+                b1_fid = getattr(self, 'b1_fid', None)
+                if b1_fid is None:
+                    raise ValueError("APscaling table priors need b1_fid; could not infer from tracer.")
+
+                sigma8_ref = getattr(self, "sigma8_ref", None)
+                if sigma8_ref is None:
+                    raise ValueError("APscaling requires sigma8_ref (from Table 1 or computed from reference cosmology).")
+
+                # Prior centers (reference/table cosmology; A_AP_ref = 1)
+                muX = -(2.0 / 7.0)  * (b1_fid - 1.0) * sigma8_ref**2.0
+                muY =  (23.0 / 42.0) * (b1_fid - 1.0) * sigma8_ref**3.0
+
+                # bK2p, btdp are ΔX, ΔY ~ N(0, 5^2)
+                X = muX + params['bK2p']
+                Y = muY + params['btdp']
+
+                # Convert back to bK2, btd using *current* sigma8(z) and A_AP
+                bK2 = X / (sigma8**2.0 * sqrtA_AP)
+                btd = Y / (sigma8**3.0 * sqrtA_AP)
+
+            # downstream mappings
             bs2E = 2.0 * bK2
-
-            # mapping for b3nl using 1611.09787
-            b3E = -(32.0 / 21.0) * (bK2 + (2.0 / 5.0) * btd)
-
-            # use coevolution b3E = b3E + 32.0/315.0 * b1L ?
+            b3E  = -(32.0 / 21.0) * (bK2 + (2.0 / 5.0) * btd)
 
         else:
             raise ValueError(f"Internal error: unsupported normalized prior basis '{pb}'.")

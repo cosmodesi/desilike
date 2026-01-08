@@ -1,4 +1,4 @@
-class: fkptPowerSpectrumMultipoles
+class: fkptjaxPowerSpectrumMultipoles
 info: {}
 params:
   h:
@@ -67,7 +67,7 @@ params:
       loc: 3.036394
       scale: 0.001
     proposal: null
-    delta: [0.1, 0.1]
+    delta: [0.05, 0.05]
     latex: \ln(10^{10} A_{s})
     shape: []
     drop: false
@@ -192,21 +192,6 @@ params:
     latex: \Omega_{k}
     shape: []
     drop: false
-  sigma8_m:
-    value: null
-    fixed: true
-    derived: true
-    prior:
-      dist: uniform
-      limits: [-.inf, .inf]
-    ref:
-      dist: uniform
-      limits: [-.inf, .inf]
-    proposal: null
-    delta: null
-    latex: \sigma_8
-    shape: []
-    drop: false
   mu0:
     value: 0.0
     fixed: false
@@ -240,6 +225,36 @@ params:
     shape: []
     drop: false
   fsigma8:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: null
+    shape: []
+    drop: false
+  qpar:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: null
+    shape: []
+    drop: false
+  qper:
     value: null
     fixed: true
     derived: true
@@ -299,7 +314,7 @@ params:
     latex: null
     shape: []
     drop: false
-  qpar:
+  table:
     value: null
     fixed: true
     derived: true
@@ -314,7 +329,7 @@ params:
     latex: null
     shape: []
     drop: false
-  qper:
+  table_now:
     value: null
     fixed: true
     derived: true
@@ -329,7 +344,37 @@ params:
     latex: null
     shape: []
     drop: false
-  fk:
+  scalars:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: null
+    shape: []
+    drop: false
+  scalars_now:
+    value: null
+    fixed: true
+    derived: true
+    prior:
+      dist: uniform
+      limits: [-.inf, .inf]
+    ref:
+      dist: uniform
+      limits: [-.inf, .inf]
+    proposal: null
+    delta: null
+    latex: null
+    shape: []
+    drop: false
+  f:
     value: null
     fixed: true
     derived: true
@@ -345,21 +390,6 @@ params:
     shape: []
     drop: false
   f0:
-    value: null
-    fixed: true
-    derived: true
-    prior:
-      dist: uniform
-      limits: [-.inf, .inf]
-    ref:
-      dist: uniform
-      limits: [-.inf, .inf]
-    proposal: null
-    delta: null
-    latex: null
-    shape: []
-    drop: false
-  tables:
     value: null
     fixed: true
     derived: true

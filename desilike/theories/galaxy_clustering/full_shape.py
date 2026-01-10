@@ -2992,7 +2992,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         sigma8 = self.pt.sigma8
         f = self.pt.fsigma8 / sigma8
 
-        # --- Lagrangian -> Eulerian ---
+        # --- Eulerian ---
         if pb == 'APscaling':
             # Define AP-factor
             qpar = self.pt.qpar
@@ -3005,26 +3005,24 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             self.A_AP = A_AP
             sqrtA_AP = A_AP**0.5
             # proceed with biases
-            b1L = params['b1p'] / (sigma8 * sqrtA_AP) - 1.0
-            b2L = params['b2p'] / (sigma8**2 * sqrtA_AP)
+            b1E = params['b1p'] / (sigma8 * sqrtA_AP)
+            b2E = params['b2p'] / (sigma8**2 * sqrtA_AP)
         else:
-            b1L = params['b1p'] / sigma8 - 1.0
-            b2L = params['b2p'] / sigma8**2
-        
-        b1E  = 1.0 + b1L
-        b2E  = b2L + 8.0 / 21.0 * b1L
-        
-        # defaults (non-APscaling)
-        bsL = params['bs2p'] / sigma8**2
-        b3L = params['b3nlp']
+            b1E = params['b1p'] / sigma8
+            b2E = params['b2p'] / sigma8**2
 
-        # apply coevolution factor
-        if self.options['b3_coev']:
-            bs2E = bsL - 4.0/7.0 * b1L
-            b3E  = b3L + 32.0/315.0 * b1L
-        else:
-            bs2E = bsL
-            b3E  = b3L
+        # defaults (non-APscaling)
+        b1L = b1E - 1.0
+        if pb != 'APscaling':
+            bsL = params['bs2p'] / sigma8**2 
+            b3L = params['b3nlp']
+            # apply coevolution factor
+            if self.options['b3_coev']:
+                bs2E = bsL - 4.0/7.0 * b1L
+                b3E  = b3L + 32.0/315.0 * b1L
+            else:
+                bs2E = bsL
+                b3E  = b3L
 
         ctildeE = params.get('ctildep', 0.0)
 
@@ -3066,39 +3064,42 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                                  "(or update the code to match your chosen names).")
 
             # Implement priors according to 2pt+3pt priors document
-            freedom = self.options.get('freedom', None) 
-            # get b1_fid
-            b1_fid = getattr(self, 'b1_fid', None) 
-            if b1_fid is None: 
-                raise ValueError("APscaling table priors need b1_fid; could not infer from tracer.")
-            # get sigma8_ref (btw, effectively, A_AP_ref is 1)
-            sigma8_ref = getattr(self, "sigma8_ref", None) 
-            if sigma8_ref is None: 
-                raise ValueError("APscaling requires sigma8_ref (from Table 1 or computed from reference cosmology).")
-                
-            # define central values for the priors
-            muX = -(2.0 / 7.0) * (b1_fid - 1.0) * sigma8_ref**2.0
-            muY = (23.0 / 42.0) * (b1_fid - 1.0) * sigma8_ref**3.0 
+            freedom = self.options.get('freedom', None)
 
-            # fix or apply a Gaussian prior dependending on the freedom
-            if freedom == 'min': 
-                X = muX 
-                Y = muY 
-            else: 
-                # bK2p, btdp are the deviations ΔX, ΔY with priors N(0,5^2) 
-                X = muX + params['bK2p'] 
-                Y = muY + params['btdp'] 
+            if freedom == "min":
+                # --- MINIMAL freedom: FIX bK2 and btd using the *varied* b1 (NOT b1_fid) ---])
+                bK2 = -(2.0 / 7.0) * (b1E - 1.0) # notice b1p here is actually b1
+                btd =  (23.0 / 42.0) * (b1E - 1.0)
 
-            bK2 = X / (sigma8**2 * sqrtA_AP)
-            btd = Y / (sigma8**3 * sqrtA_AP)
+            else:
+                # --- MAXIMAL freedom: Gaussian priors on X and Y around table central values ---
+                if 'bK2p' not in params or 'btdp' not in params:
+                    raise ValueError("APscaling requires sampled parameters 'bK2p' and 'btdp' "
+                                     "(or update the code to match your chosen names).")
 
-            # bK2 ---> bs2 mapping
+                b1_fid = getattr(self, 'b1_fid', None)
+                if b1_fid is None:
+                    raise ValueError("APscaling table priors need b1_fid; could not infer from tracer.")
+
+                sigma8_ref = getattr(self, "sigma8_ref", None)
+                if sigma8_ref is None:
+                    raise ValueError("APscaling requires sigma8_ref (from Table 1 or computed from reference cosmology).")
+
+                # Prior centers (reference/table cosmology; A_AP_ref = 1)
+                muX = -(2.0 / 7.0)  * (b1_fid - 1.0) * sigma8_ref**2.0
+                muY =  (23.0 / 42.0) * (b1_fid - 1.0) * sigma8_ref**3.0
+
+                # bK2p, btdp are ΔX, ΔY ~ N(0, 5^2)
+                X = muX + params['bK2p']
+                Y = muY + params['btdp']
+
+                # Convert back to bK2, btd using *current* sigma8(z) and A_AP
+                bK2 = X / (sigma8**2.0 * sqrtA_AP)
+                btd = Y / (sigma8**3.0 * sqrtA_AP)
+
+            # downstream mappings
             bs2E = 2.0 * bK2
-
-            # mapping for b3nl using 1611.09787
-            b3E = -(32.0 / 21.0) * (bK2 + (2.0 / 5.0) * btd)
-
-            # use coevolution b3E = b3E + 32.0/315.0 * b1L ?
+            b3E  = -(32.0 / 21.0) * (bK2 + (2.0 / 5.0) * btd)
 
         else:
             raise ValueError(f"Internal error: unsupported normalized prior basis '{pb}'.")
@@ -4250,225 +4251,3 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
                 renormalized=self.options['renormalized'],
                 interpolation_method=self.options['interpolation_method']
             )
-
-
-# class fkptjax_pkemu_PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
-
-#     _default_options = dict(
-#         model="HDKI",
-#         mg_variant="mu_OmDE",
-#         rescale_PS=False,
-#         beyond_eds=False,
-#         # HS defaults (fR0 will be optionally passed via init.update)
-#         nHS=1.0,
-#         beta2=1.0 / 6.0,
-#         screening=1,
-#         omegaBD=0.0,
-#         fR0=1e-15,
-#     )
-
-#     _pt_attrs = [
-#         "jac", "kap", "muap",
-#         "table", "table_now",
-#         "scalars", "scalars_now",
-#         "A_full", "remove_DeltaP",
-#         "qpar", "qper", "f", "f0",
-#     ]
-
-#     def initialize(self, *args, mu=6, **kwargs):
-#         # drop tracer-only / wrapper-only options that can accidentally get forwarded here
-#         for key in ["freedom", "prior_basis", "tracer", "fsat", "sigv", "shotnoise",
-#                     "h_fid", "b1_fid", "b3_coev"]:
-#             kwargs.pop(key, None)
-
-#         # Accept fR0 via init.update(...) and store it in options (so calculate() can read it)
-#         # NOTE: do NOT pop it away; BasePTPowerSpectrumMultipoles stores unknown kwargs in options.
-#         super().initialize(*args, mu=mu, method="leggauss", **kwargs)
-#         self.template.init.update(with_now="peakaverage")
-
-#     def _collect_mg_params(self, cosmo) -> Dict[str, float]:
-#         model_u = str(self.options.get("model", "HDKI")).upper()
-
-#         # HS: take fR0 from init.update (options), NOT from cosmo
-#         if model_u == "HS":
-#             return dict(
-#                 fR0=float(self.options.get("fR0", 1e-15)),
-#                 nHS=float(self.options.get("nHS", 1.0)),
-#                 beta2=float(self.options.get("beta2", 1.0 / 6.0)),
-#                 screening=int(self.options.get("screening", 1)),
-#                 omegaBD=float(self.options.get("omegaBD", 0.0)),
-#             )
-
-#         # HDKI: use mg_variant + params (fR0 ignored even if present)
-#         v = str(self.options.get("mg_variant", "mu_OmDE"))
-#         defaults = dict(
-#             mu0=0.0,
-#             beta_1=1.0, lambda_1=0.0, exp_s=0.0,
-#             mu1=0.0, mu2=0.0, mu3=0.0, mu4=0.0,
-#             k_c=0.1, k_tw=0.01, z_div=1.0, z_TGR=10.0, z_tw=0.5,
-#         )
-#         req = {
-#             "mu_OmDE": ["mu0"],
-#             "BZ": ["beta_1", "lambda_1", "exp_s"],
-#             "binning": ["mu1", "mu2", "mu3", "mu4", "k_c", "k_tw", "z_div", "z_TGR", "z_tw"],
-#             "GR": [],
-#         }
-
-#         out: Dict[str, float] = {}
-#         for p in req.get(v, []):
-#             out[p] = float(getattr(cosmo, p)) if hasattr(cosmo, p) else float(defaults[p])
-#         return out
-
-#     def calculate(self):
-#         super().calculate()
-
-#         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-#         cosmo = getattr(self.template, "cosmo", None)
-
-#         model = str(self.options.get("model", "HDKI"))
-#         model_u = model.upper()
-
-#         rescale_PS = bool(self.options.get("rescale_PS", False))
-
-#         # Your requirement: HS must have rescale_PS=False or error
-#         if model_u == "HS" and rescale_PS == 'False':
-#             raise ValueError("You set model='HS' but rescale_PS=False. This is forbidden by design.")
-
-#         mg_params = self._collect_mg_params(cosmo)
-
-#         fkpt_params = dict(
-#             z=float(self.z),
-#             Om=float(cosmo["Omega_m"]),
-#             kmin=float(max(1e-3, float(jnp.min(self.k)))),
-#             kmax=float(min(0.5, float(jnp.max(self.k)))),
-#             Nk_kernel=int(min(len(self.k), 240)),
-#             nquadSteps=300,
-#             NQ=10,
-#             NR=10,
-#             beyond_eds=bool(self.options.get("beyond_eds", False)),
-#             model=model,
-#             # HDKI uses mg_variant; HS ignores it (Kfuncs_to_tables will overwrite to "GR")
-#             mg_variant=str(self.options.get("mg_variant", "mu_OmDE")),
-#             rescale_PS=rescale_PS,
-#             xnow=-4.0,
-#             ode_method="RKQS",
-#             f0_kmax=1e-3,
-#             **mg_params,
-#         )
-
-    
-        
-
-#         self.pt = Namespace(
-#             jac=jac, kap=kap, muap=muap,
-#             # table=table[1:28 + extra],
-#             # table_now=table_now[1:28 + extra],
-#             # scalars=table[28 + extra:],
-#             # scalars_now=table_now[28 + extra:],
-#             pk = self.template.pk_dd, pknow=self.template.pknow_dd,
-#             A_full=False,
-#             remove_DeltaP=False,
-#             f=self.template.f, f0=self.template.f0,
-#             qpar=self.template.qpar, qper=self.template.qper,
-#         )
-
-#         self.kt = table[0]
-#         self.qpar = self.template.qpar
-#         self.qper = self.template.qper
-#         self.sigma8 = self.template.sigma8
-#         self.fsigma8 = self.template.f * self.sigma8
-
-#     def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
-#         import folps as folpsv2
-#         import jax.numpy as jnp
-#         import jax
-#         from functools import partial
-
-#         table, table_now = Kfuncs_to_tables(
-#             k=self.k,
-#             pk=self.pt.pk,
-#             pk_now=self.pt.pknow,
-#             **fkpt_params,
-#         )
-
-#         extra = 0  # A_full=False only
-#         table_p = table[1:28+extra]
-#         table_now_p = table_now[1:28+extra]
-#         scalars=table[28 + extra:],
-#         scalars_now=table_now[28 + extra:],
-
-
-#         table = (self.kt, *table, *scalars)
-#         table_now = (self.kt, *table_now, *scalars_now)
-
-#         params["PshotP"] = 1.0 / nd
-#         params["X_FoG_p"] = 0.0
-
-#         required_bias_params = [
-#             "b1", "b2", "bs2", "b3nl",
-#             "alpha0", "alpha2", "alpha4",
-#             "ctilde", "alpha0shot", "alpha2shot", "PshotP", "X_FoG_p",
-#         ]
-#         pars = [params[p] for p in required_bias_params]
-
-#         ncols = len(table)
-#         if getattr(self, "_get_poles", None) is None:
-
-#             #####@partial(jax.jit, static_argnums=(4,))
-#             @jit(static_argnums=(4))
-#             def _get_poles(jac, kap, muap, pars, bias_scheme, *table_all):
-#                 folpsv2.MatrixCalculator(A_full=False, remove_DeltaP=False)
-#                 calc = folpsv2.RSDMultipolesPowerSpectrumCalculator(model="FOLPSD")
-#                 pars2 = calc.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
-#                 pkmu = calc.get_rsd_pkmu(
-#                     kap, muap, pars2,
-#                     table_all[:ncols], table_all[ncols:],
-#                     IR_resummation=True, damping="lor",
-#                 )
-#                 return self.to_poles(jac * pkmu)
-
-#             self._get_poles = _get_poles
-
-#         poles = self._get_poles(
-#             self.pt.jac, self.pt.kap, self.pt.muap,
-#             jnp.array(pars), "folps", *table, *table_now
-#         )
-#         return poles
-
-    
-#     def bispectrum_calculator(self, params, nd=1e-4, **kwargs):
-#         import folps as folpsv2
-#         params["X_FoG_b"] = 0.0
-
-#         required_bias_params = [
-#             'b1', 'b2', 'bs2',
-#             'c1','c2','Pshot','Bshot','X_FoG_b'
-#         ]
-#         pars = [params[p] for p in required_bias_params]
-#         table = (self.kt, *self.pt.table, *self.pt.scalars)
-#         table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
-#         k_pkl_pklnw_fk = jnp.array([table[0], table[1], table_now[1],table[2]*self.pt.f0])
-#         ells=kwargs['ells']
-#         multipoles = [f"B{l1}{l2}{l3}" for (l1, l2, l3) in ells]
-#         poles = get_bs_multipoles_jit(pars, kwargs['k1k2T'], k_pkl_pklnw_fk, table, table_now, tuple(kwargs['precision']), getattr(self.pt, "A_full", True), getattr(self.pt, "remove_DeltaP", False),tuple(multipoles),kwargs['interpolation_method'],kwargs['bias_scheme'],kwargs['renormalized'],self.pt.f0, self.pt.qpar, self.pt.qper, self.z)
-#         return jnp.asarray(poles)
-
-#     '''
-#     The next two functions are important to make emulators work
-#     '''
-#     def __getstate__(self, varied=True, fixed=True):
-#         state = {}
-#         for name in (['k', 'z', 'ells', 'wmu', 'kt'] if fixed else []) + (['sigma8', 'fsigma8','qpar','qper'] if varied else []):
-#             if hasattr(self, name):
-#                 state[name] = getattr(self, name)
-#         if varied:
-#             for name in self._pt_attrs:
-#                 if hasattr(self.pt, name):
-#                     state[name] = getattr(self.pt, name)
-#         return state
-
-#     def __setstate__(self, state):
-#         for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8','qpar','qper']:
-#             if name in state: setattr(self, name, state.pop(name))
-#         if not hasattr(self, 'pt'): self.pt = Namespace()
-#         self.pt.update(**state)

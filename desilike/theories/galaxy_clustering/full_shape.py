@@ -3001,7 +3001,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             if h_fid is None:
                 raise ValueError("prior_basis='APscaling' requires option h_fid.")
             h0 = self.all_params['h'].value
-            A_AP = (h_fid / h0)**3 / (qper * qpar**2)
+            A_AP = (h_fid / h0)**3 / (qper**2 * qpar)
             self.A_AP = A_AP
             sqrtA_AP = A_AP**0.5
             # proceed with biases
@@ -3674,8 +3674,10 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
         k_pkl_pklnw_fk = jnp.array([table[0], table[1], table_now[1],table[2]*self.pt.f0])
         ells=kwargs['ells']
+        if ells==(0,2):   #To run chains from desilike
+            ells=((0,0,0),(2,0,2))
         multipoles = [f"B{l1}{l2}{l3}" for (l1, l2, l3) in ells]
-        poles = get_bs_multipoles_jit(pars, kwargs['k1k2T'], k_pkl_pklnw_fk, table, table_now, tuple(kwargs['precision']), getattr(self.pt, "A_full", True), getattr(self.pt, "remove_DeltaP", False),tuple(multipoles),kwargs['interpolation_method'],kwargs['bias_scheme'],kwargs['renormalized'],self.pt.f0, self.pt.qpar, self.pt.qper, self.z)
+        poles = get_bs_multipoles_jit(pars, kwargs['k1k2T'], k_pkl_pklnw_fk, table, table_now, tuple(kwargs['precision']), getattr(self.pt, "A_full", True), getattr(self.pt, "remove_DeltaP", False),tuple(multipoles),kwargs['interpolation_method'],kwargs['bias_scheme'],kwargs['renormalized'],self.pt.f0, kwargs['qpar'], kwargs['qper'], self.z)
         return jnp.asarray(poles)
 
     '''
@@ -4105,7 +4107,8 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
             #     db1 = b1 - 1.0
             #     params['bs2']  = params['bs2']  - 4.0/7.0 * db1
             #     params['b3nl'] = params['b3nl'] + 32.0/315.0 * db1
-
+            qpar=self.pt.qpar
+            qper=self.pt.qper
             self.power = self.pt.bispectrum_calculator(
                 params, nd=self.nd,
                 model=self.options['model'], mg_variant=self.options['mg_variant'],
@@ -4115,7 +4118,8 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
                 precision=self.options['precision'],basis=self.options['basis'],
                 bias_scheme=self.options['bias_scheme'],
                 renormalized=self.options['renormalized'],
-                interpolation_method=self.options['interpolation_method']
+                interpolation_method=self.options['interpolation_method'],
+                qpar=qpar, qper=qper
             )
             
             return
@@ -4136,7 +4140,7 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
             if h_fid is None:
                 raise ValueError("prior_basis='APscaling' requires option h_fid.")
             h0 = self.all_params['h'].value
-            A_AP = (h_fid / h0)**3 / (qper * qpar**2)
+            A_AP = (h_fid / h0)**3 / (qper**2 * qpar)
             self.A_AP = A_AP
             sqrtA_AP = A_AP**0.5
             # proceed with biases
@@ -4147,7 +4151,7 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
             b2L = params['b2p'] / sigma8**2
         
         b1E  = 1.0 + b1L
-        b2E  = b2L + 8.0 / 21.0 * b1L
+        b2E  = b2L 
         
         # defaults (non-APscaling)
         bsL = params['bs2p'] / sigma8**2
@@ -4239,7 +4243,8 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
         params['c2'] = c2
         params['Pshot'] = Pshot
         params['Bshot'] = Bshot
-        
+        qpar=self.pt.qpar
+        qper=self.pt.qper
         self.power = self.pt.bispectrum_calculator(
                 params, nd=self.nd,
                 model=self.options['model'], mg_variant=self.options['mg_variant'],
@@ -4249,5 +4254,6 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
                 precision=self.options['precision'],basis=self.options['basis'],
                 bias_scheme=self.options['bias_scheme'],
                 renormalized=self.options['renormalized'],
-                interpolation_method=self.options['interpolation_method']
+                interpolation_method=self.options['interpolation_method'],
+                qpar=qpar, qper=qper
             )

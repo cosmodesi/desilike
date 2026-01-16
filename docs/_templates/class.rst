@@ -1,0 +1,5 @@
+{{ name }}
+==========
+
+.. autoclass:: {{ fullname }}
+    :members:

@@ -1,58 +1,51 @@
 Samplers
 ========
 
-emcee
------
-.. automodule:: desilike.samplers.emcee
-  :members:
-  :inherited-members:
-  :show-inheritance:
+Static Samplers
+---------------
 
-zeus
-----
-.. automodule:: desilike.samplers.zeus
-  :members:
-  :inherited-members:
-  :show-inheritance:
+.. autosummary::
+  :toctree: _autosummary
+  :template: class.rst
 
-pocomc
-------
-.. automodule:: desilike.samplers.pocomc
-  :members:
-  :inherited-members:
-  :show-inheritance:
+  desilike.samplers.GridSampler
+  desilike.samplers.ImportanceSampler
+  desilike.samplers.QMCSampler
 
-dynesty
--------
-.. automodule:: desilike.samplers.dynesty
-  :members:
-  :inherited-members:
-  :show-inheritance:
+Population Samplers
+-------------------
 
-polychord
----------
-.. automodule:: desilike.samplers.polychord
-  :members:
-  :inherited-members:
-  :show-inheritance:
+.. autosummary::
+  :toctree: _autosummary
+  :template: class.rst
 
-mcmc
-----
-.. automodule:: desilike.samplers.mcmc
-  :members:
-  :inherited-members:
-  :show-inheritance:
+  desilike.samplers.DynestySampler
+  desilike.samplers.NautilusSampler
+  desilike.samplers.PocoMCSampler
 
-grid
-----
-.. automodule:: desilike.samplers.grid
-  :members:
-  :inherited-members:
-  :show-inheritance:
+MCMC Samplers
+-------------
 
-qmc
----
-.. automodule:: desilike.samplers.qmc
-  :members:
-  :inherited-members:
-  :show-inheritance:
+.. autosummary::
+  :toctree: _autosummary
+  :template: class.rst
+
+  desilike.samplers.EmceeSampler
+  desilike.samplers.HMCSampler
+  desilike.samplers.MCLMCSampler
+  desilike.samplers.MetropolisHastingsSampler
+  desilike.samplers.NUTSSampler
+  desilike.samplers.ZeusSampler
+
+Base Classes
+------------
+
+.. autosummary::
+  :toctree: _autosummary
+  :template: class.rst
+
+  desilike.samplers.base.BaseSampler
+  desilike.samplers.blackjax.BlackJAXSampler
+  desilike.samplers.base.MarkovChainSampler
+  desilike.samplers.base.PopulationSampler
+  desilike.samplers.base.StaticSampler

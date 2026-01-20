@@ -1,6 +1,7 @@
 import warnings
 
 import numpy as np
+import lsstypes as types
 
 from desilike.base import BaseCalculator, Parameter, ParameterCollection, ParameterArray
 from desilike.observables import ObservableCovariance
@@ -579,6 +580,7 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
             return matrix
 
         if isinstance(covariance, ObservableCovariance):
+            warnings.warn('desilike ObservableCovariance is deprecated. Please use lsstypes CovarianceMatrix.')
             cov_nobservables = len(covariance.observables())
             if len(self.observables) != cov_nobservables:
                 raise ValueError('provided {:d} observables, but the covariance contains {:d}'.format(len(self.observables), cov_nobservables))
@@ -588,6 +590,17 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
                 # Cut covariance matrix to input scales
                 covariance = covariance.xmatch(observables=iobs, x=x, projs=array.projs, select_projs=True, method='mid')
             covariance = covariance.view()
+
+        elif isinstance(covariance, types.CovarianceMatrix):
+            covariance = covariance.at.observable.get(observables=[observable.name for observable in self.observables])
+            tree = covariance.observable
+            for iobs, obs in enumerate(self.observables):
+                observable = obs.to_lsstypes('data')
+                print(observable)
+                print(tree.get(observables=obs.name))
+                tree = tree.at(observables=obs.name).match(observable)
+            covariance = covariance.at.observable.match(tree)
+            covariance = covariance.value()
 
         self.precision = check_matrix(precision, 'precision')
         self.covariance = check_matrix(covariance, 'covariance')
@@ -650,9 +663,15 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
     def flattheory(self):
         return jnp.concatenate([obs.flattheory for obs in self.observables], axis=0)
 
+    def to_lsstypes(self, kind='covariance'):
+        observables = [observable.to_lsstypes('data') for observable in self.observables]
+        tree = types.ObservableTree(observables, observables=[observable.name for observable in self.observables])
+        return types.CovarianceMatrix(value=self.covariance, observable=tree)
+
     def to_covariance(self):
+        warnings.warn('desilike ObservableCovariance is deprecated. Please use lsstypes CovarianceMatrix.')
         from desilike.observables import ObservableCovariance
-        return ObservableCovariance(value=self.covariance, observables=[o.to_array() for o in self.observables])
+        return ObservableCovariance(value=self.covariance, observables=[observable.to_array() for observable in self.observables])
 
     @plotting.plotter
     def plot_covariance_matrix(self, corrcoef=True, **kwargs):

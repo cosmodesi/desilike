@@ -431,7 +431,10 @@ class ParameterArray(numpy.lib.mixins.NDArrayOperatorsMixin):
         if isinstance(value, ParameterArray):
             value = value.value
         if value is not None and (copy or dtype or (not use_jax(value) and not isinstance(value, np.ndarray))):
-            value = np.array(value, copy=copy, dtype=dtype, **kwargs)
+            if copy:
+                value = np.array(value, copy=copy, dtype=dtype, **kwargs)
+            else:  # numpy>=2
+                value = np.asarray(value, dtype=dtype, **kwargs)
         self._value = value
         self.param = None if param is None else Parameter(param)
         self._derivs = None if derivs is None else tuple(Deriv(deriv) for deriv in derivs)
@@ -1005,7 +1008,7 @@ class Parameter(BaseClass):
             if namespace and (force_namespace or auto_namespace):
                 match1 = re.match('(.*)_(.)$', self._latex)
                 match2 = re.match('(.*)_{(.*)}$', self._latex)
-                latex_namespace = namespace if provided_namespace else ('\mathrm{%s}' % namespace.replace('\_', '_').replace('_', '\_'))
+                latex_namespace = namespace if provided_namespace else (r'\mathrm{%s}' % namespace.replace('\_', '_').replace('_', '\_'))
                 for match in [match1, match2, None]:
                     if match is not None:
                         if force_namespace or (auto_namespace and add_namespace(match.group(2))):  # check namespace is not in latex str already

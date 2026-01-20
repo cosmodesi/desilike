@@ -197,10 +197,10 @@ class ResummedPowerSpectrumWiggles(BaseCalculator):
         # https://www.overleaf.com/project/633e1b59130591a7bf55a9cd eq. 17
         skc = 1. - sk
         self.sigma_sn2 = 1. / self.smoothing_radius / 6 / np.pi**(3. / 2.)
-        self.sigma_nl2 = 1. / (3. * np.pi**2) * integrate.simps((1. - j0) * pklin, k)
-        self.sigma_dd2 = 1. / (3. * np.pi**2) * integrate.simps((1. - j0) * skc**2 * pklin, k)
+        self.sigma_nl2 = 1. / (3. * np.pi**2) * integrate.simpson((1. - j0) * pklin, k)
+        self.sigma_dd2 = 1. / (3. * np.pi**2) * integrate.simpson((1. - j0) * skc**2 * pklin, k)
         if self.mode == 'reciso':
-            self.sigma_x2 = 1. / (3. * np.pi**2) * integrate.simps((1. - j0) * skc * pklin, k)
+            self.sigma_x2 = 1. / (3. * np.pi**2) * integrate.simpson((1. - j0) * skc * pklin, k)
 
     def wiggles(self, k, mu, b1=1., f=0., d=1.):
         # b1 Eulerian bias, d scaling the growth factor, sigmas FoG

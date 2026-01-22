@@ -1,4 +1,5 @@
 import os,sys
+from desilike.samples import Chain
 from run_desilike_synthetic_DV import *
 
 if __name__ == "__main__":
@@ -16,6 +17,8 @@ if __name__ == "__main__":
         print("[JAX] backend:", jax.default_backend())
         print("[JAX] devices:", jax.devices())
         print("[JAX] x64:", jax.config.read("jax_enable_x64"))
+        print("CUDA_VISIBLE_DEVICES =", os.environ.get("CUDA_VISIBLE_DEVICES"))
+        print("NVIDIA_VISIBLE_DEVICES =", os.environ.get("NVIDIA_VISIBLE_DEVICES"))
 
     args.chains_dir.mkdir(parents=True, exist_ok=True)
     args.emu_dir.mkdir(parents=True, exist_ok=True)
@@ -219,8 +222,8 @@ if __name__ == "__main__":
 
         # load data
         ############################## adjusted to the format from the following file
-        datadir = Path('/global/cfs/cdirs/desi/science/gqc/y3_fits/mockchallenge_abacus/measurements/scoccimarro_basis/')
-        k_all   = np.loadtxt(datadir / f"EZmocks/Pk/{tracer_tag}_{zsnap}" /f"Power_Spectrum_{mid_ez}_10.txt",usecols=0)
+        datadir = Path('/lustre/work/jiaxiyu/MGtest/Pk/')
+        k_all   = np.loadtxt(datadir / f"{tracer_tag}_{zsnap}" /f"Power_Spectrum_{mid_ez}_10.txt",usecols=0)
         # k-range alignment
         sel     = (args.kmin_cut<k_all)
         k_out   = k_all[sel]
@@ -229,12 +232,12 @@ if __name__ == "__main__":
         #################### Compute covariance with EZmocks
         Pk_all = []
         for i in range(1000): # LRG mock 933 had two fewer rows
-            sel_pk    = (args.kmin_cut<np.loadtxt(datadir / f"EZmocks/Pk/{tracer_tag}_{zsnap}" /f"Power_Spectrum_{mid_ez}_{i+1}.txt",usecols=0))
-            Pk_all.append(np.array([np.loadtxt(datadir / f"EZmocks/Pk/{tracer_tag}_{zsnap}" /f"Power_Spectrum_{mid_ez}_{i+1}.txt",usecols=2+k)[sel_pk] for k in range(len(present_ells))]).flatten())
+            sel_pk    = (args.kmin_cut<np.loadtxt(datadir / f"{tracer_tag}_{zsnap}" /f"Power_Spectrum_{mid_ez}_{i+1}.txt",usecols=0))
+            Pk_all.append(np.array([np.loadtxt(datadir / f"{tracer_tag}_{zsnap}" /f"Power_Spectrum_{mid_ez}_{i+1}.txt",usecols=2+k)[sel_pk] for k in range(len(present_ells))]).flatten())
         cov_mat = np.cov(np.array(Pk_all).T)
         #################### get data vector with Abacus: k is different from that of EZmock, so use mean(EZmock) instead
         # we may read the shhotnoise from the file as well
-        shotnoise= np.loadtxt(datadir / f"EZmocks/Pk/{tracer_tag}_{zsnap}" /f"Power_Spectrum_{mid_ez}_{i+1}.txt",usecols=6)[0]
+        shotnoise= np.loadtxt(datadir / f"{tracer_tag}_{zsnap}" /f"Power_Spectrum_{mid_ez}_{i+1}.txt",usecols=6)[0]
         data_vec = np.mean(Pk_all,axis=0)
 
         if not set(ells).issubset(set(present_ells)):
@@ -297,13 +300,12 @@ if __name__ == "__main__":
                 print(f"[Emulator] ({file_tag}) exists → {emu_path.name}")
             else:
                 print(f"[Emulator] ({file_tag}) fitting Taylor emulator (finite, order={args.emu_order})…")
+                r"""
+                from matplotlib import pyplot as plt
                 import time
                 T0=time.time()
-                import pdb;pdb.set_trace()
-                _ = theory()
-                print(f'1 realisation took {time.time()-T0:.1f}s')
-                from matplotlib import pyplot as plt
                 plt.plot(theory.k,theory.k*theory()[0],'b')
+                print(f'1 realisation took {time.time()-T0:.1f}s')
                 plt.plot(k_out,k_out*data_vec[:len(k_out)],'b--')
                 plt.plot(theory.k,theory.k*theory()[1],'r')
                 plt.plot(k_out,k_out*data_vec[len(k_out):],'r--')
@@ -314,6 +316,7 @@ if __name__ == "__main__":
                 plt.savefig('emu_test_fkptjax')
                 plt.close()
                 sys.exit()
+                """
                 _ = theory.pt()  # force build
                 emu_engine = TaylorEmulatorEngine(method="finite", order=int(args.emu_order))
                 emu = Emulator(theory.pt, engine=emu_engine)
@@ -469,3 +472,16 @@ if __name__ == "__main__":
 
     else:
         raise ValueError(f"Unknown mode {args.mode!r}")
+
+   
+    # -----------------------------
+    # plot the best-fit Pk
+    # -----------------------------
+    if rank == 0:
+        chains=[]
+        for result_fn in glob(save_pattern):
+            chains.append(Chain.load(result_fn).remove_burnin(0.5)[::5])
+        chain = Chain.concatenate(chains)
+        
+        likelihood(**chain.choice(index='argmax', input=True))
+        observable.plot(fn=f'bestfit_{prior_basis}.png')

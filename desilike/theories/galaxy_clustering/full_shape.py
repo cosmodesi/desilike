@@ -944,24 +944,6 @@ class BaseVelocileptorsPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, Ba
                 state[name] = getattr(self.pt, name)
         return state
 
-
-def get_physical_stochastic_settings(tracer=None):
-    if tracer is not None:
-        tracer = str(tracer).upper()
-        # Mark Maus, Ruiyang Zhao
-        settings = {'BGS': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.2)**(1/2)/70.},
-                    'LRG': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
-                    'ELG': {'fsat': 0.10, 'sigv': 150*2.1**(1/2)/70.},
-                    'QSO': {'fsat': 0.03, 'sigv': 150*(10)**(0.7/3)*(2.4)**(1/2)/70.}}
-        try:
-            settings = settings[tracer]
-        except KeyError:
-            raise ValueError('unknown tracer: {}, please use any of {}'.format(tracer, list(settings.keys())))
-    else:
-        settings = {'fsat': 0.1, 'sigv': 5.}
-    return settings
-
-
 class BaseVelocileptorsTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
     """Base class for velocileptors-based tracer power spectrum multipoles."""
@@ -2440,166 +2422,6 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseCalculator):
                 state[name] = getattr(self, name)
         return state
 
-class fkptPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
-
-    # _default_options = dict(kernels='fk', rbao=104., A_full=True, remove_DeltaP=False)
-    _default_options = dict(model='HDKI',mg_variant='mu_OmDE',rescale_PS=False,beyond_eds=True)
-    _pt_attrs = ['jac', 'kap', 'muap','qpar','qper','fk','f0','tables','keys']  #Storing only these for now
-    
-    def initialize(self, *args, mu=6, **kwargs):
-        # drop tracer-only / wrapper-only options that can accidentally get forwarded here
-        for key in ['freedom', 'prior_basis', 'tracer', 'fsat', 'sigv', 'shotnoise',
-                    'h_fid', 'b1_fid', 'b3_coev']:
-            kwargs.pop(key, None)
-    
-        super(fkptPowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
-        self.template.init.update(with_now='peakaverage')
-
-    def calculate(self):
-        super(fkptPowerSpectrumMultipoles, self).calculate()
-        import pyfkpt.rsd as pyfkpt
-        
-        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        cosmo = getattr(self.template, 'cosmo', None)
-        mg_variant=self.options['mg_variant']
-        # Define which parameters are needed for each variant
-        required_params = {
-            'fR': ['fR0'],
-            'mu_OmDE': ['mu0'],
-            'BZ': ['beta_1', 'lambda_1', 'exp_s'],
-            'binning': ['mu1', 'mu2', 'mu3', 'mu4'],
-            'GR': []   # no MG parameters needed
-        }
-        
-        # Default values for all MG parameters
-        default_values = {
-            'fR0': 1e-15,
-            'mu0': 0.0,
-            'beta_1': 0.0,
-            'lambda_1': 0.0,
-            'exp_s': 0.0,
-            'mu1': 1.0, 'mu2': 1.0, 'mu3': 1.0, 'mu4': 1.0,
-        }
-        
-        # Build MG params depending on the selected variant
-        mg_params = {}
-        
-        # Loop through only the needed parameters
-        for p in required_params.get(mg_variant, []):
-            if hasattr(cosmo, p):
-                mg_params[p] = getattr(cosmo, p)
-            else:
-                print(f"MG variant '{mg_variant}' requires parameter '{p}', "
-                              f"but it was not provided. Using default: {default_values[p]}")
-                mg_params[p] = default_values[p]
-
-
-        fkpt_params = dict(
-        z=self.z, Om=cosmo['Omega_m'], h=cosmo['h'],
-        nquadSteps=300, chatty=0,
-        kmin =float(max(1e-3,min(self.k))),
-        kmax = min(max(self.k), 0.5),
-        Nk = min(len(self.k), 240),
-        model=self.options['model'],
-        mg_variant=self.options['mg_variant'],
-        rescale_PS=self.options['rescale_PS'],
-        use_beyond_eds_kernels=self.options['beyond_eds'],
-        fR0 = getattr(cosmo, 'fR0', 1e-15),
-        **mg_params
-    )
-
-        self.sigma8 = self.template.sigma8
-        self.fsigma8 = self.template.f * self.sigma8
-        self.qpar = self.template.qpar
-        self.qper = self.template.qper
-        tables = pyfkpt.compute_tables(k=self.template.k, pk=self.template.pk_dd,**fkpt_params)
-        keys = list(tables.keys())
-        self.tables = np.column_stack([tables[k] for k in keys]) #Storing only the 2d array part
-        self.pt = Namespace(jac=jac, kap=kap, muap=muap, qpar = self.template.qpar, qper=self.template.qper,fk=self.template.fk,f0=self.template.f0,tables=self.tables,keys=keys)
-
-    def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
-        import pyfkpt.rsd as pyfkpt
-
-        fk=self.pt.fk
-        f0=self.pt.f0
-        jac=self.pt.jac
-        kap=self.pt.kap
-        muap=self.pt.muap
-        tables=self.pt.tables
-        keys=self.pt.keys
-        tables_final = {k: tables[:, i] for i, k in enumerate(keys)}
-        omega_b=self.all_params['omega_b'].value
-        omega_cdm=self.all_params['omega_cdm'].value
-        m_ncdm = getattr(self.all_params.get('m_ncdm', None), 'value', 0.0)
-        h=self.all_params['h'].value
-        Omegam = (omega_b+omega_cdm+m_ncdm/93.14)/h**2
-        params['Om'] = Omegam
-        params['PshotP'] = 1. / nd     
-        params['model']= kwargs.get('model','HDKI')  #for now, we use these
-        params['mg_variant']=kwargs.get('mg_variant','mu_OmDE') #for now, we use these
-        
-        required_params = {
-            'fR': ['fR0'],
-            'mu_OmDE': ['mu0'],
-            'BZ': ['beta_1', 'lambda_1', 'exp_s'],
-            'binning': ['mu1', 'mu2', 'mu3', 'mu4'],
-            'GR': []   # no MG parameters needed
-        }
-        
-        # Default values for all MG parameters
-        default_values = {
-            'fR0': 1e-15,
-            'mu0': 0.0,
-            'beta_1': 0.0,
-            'lambda_1': 0.0,
-            'exp_s': 0.0,
-            'mu1': 0.0, 'mu2': 0.0, 'mu3': 0.0, 'mu4': 0.0,
-        }
-        
-        
-        for name in required_params.get(params['mg_variant'], []):
-             if name in self.all_params:
-                params[name] = self.all_params[name].value
-             else:
-                print(f"'{name}' not found. Setting {name} = {default_values[name]}.")
-                params[name] = default_values[name]
-       
-        params['h'] = h
-        params['z'] = self.z
-        params['nquadSteps'] = 300
-        params['chatty']=0
-        params['rescale_PS']=False
-        params['use_beyond_eds_kernels']=kwargs['beyond_eds']
-
-        nuis = [] 
-        required_bias_params = [
-            'b1','b2','bs2','b3nl',
-            'alpha0','alpha2','alpha4',
-            'ctilde','alpha0shot','alpha2shot','PshotP'
-        ]
-        for param in required_bias_params:
-            nuis.append(params[param])
-        pkmu = pyfkpt.get_pkmu(kap, muap, nuis=nuis, z=self.z, Om=Omegam, ap=False, Omfid=Omegam, tables=tables_final)
-        return self.to_poles(jac*pkmu)      
-
-    def __getstate__(self, varied=True, fixed=True):
-        state = {}
-        for name in (['k', 'z', 'ells', 'wmu', 'kt'] if fixed else []) + (['sigma8', 'fsigma8','qpar','qper'] if varied else []):
-            if hasattr(self, name):
-                state[name] = getattr(self, name)
-        if varied:
-            for name in self._pt_attrs:
-                if hasattr(self.pt, name):
-                    state[name] = getattr(self.pt, name)
-        return state
-
-    def __setstate__(self, state):
-        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8','qpar','qper']:
-            if name in state: setattr(self, name, state.pop(name))
-        if not hasattr(self, 'pt'): self.pt = Namespace()
-        self.pt.update(**state)
-
-
 class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     r"""
     fkpt tracer power spectrum multipoles.
@@ -2620,6 +2442,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     _default_options = dict(
         freedom=None,
         prior_basis='physical',   # alias -> physical_folps
+        mock_type='cutsky',
         tracer=None, fsat=None, sigv=None,
         shotnoise=1e4,
         model='HDKI', mg_variant='mu_OmDE',
@@ -2630,6 +2453,132 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         h_fid=None,   # only needed for prior_basis='APscaling'
         b1_fid=None,
     )
+
+    # -------------------------
+    # Table 1 (cutsky) and Table 2 (cubic) reference values
+    # -------------------------
+    _TABLE1 = {
+        "BGS":  dict(fsat=0.13, sigma8_ref=0.694, b1_ref=1.541, sigv_type="BGS"),
+        "LRG1": dict(fsat=0.13, sigma8_ref=0.621, b1_ref=1.883, sigv_type="LRG"),
+        "LRG2": dict(fsat=0.13, sigma8_ref=0.564, b1_ref=2.031, sigv_type="LRG"),
+        "LRG3": dict(fsat=0.13, sigma8_ref=0.510, b1_ref=2.216, sigv_type="LRG"),
+        "ELG1": dict(fsat=0.06, sigma8_ref=0.503, b1_ref=1.187, sigv_type="ELG"),
+        "ELG2": dict(fsat=0.06, sigma8_ref=0.431, b1_ref=1.429, sigv_type="ELG"),
+        "QSO":  dict(fsat=0.20, sigma8_ref=0.405, b1_ref=2.266, sigv_type="QSO"),
+    }
+    
+    _TABLE2 = {
+        "ABACUS_MC1_LRG": dict(fsat=0.13, sigma8_ref=0.539, b1_ref=2.109, sigv_type="LRG"),
+        "ABACUS_MC1_ELG": dict(fsat=0.06, sigma8_ref=0.504, b1_ref=1.184, sigv_type="ELG"),
+        "ABACUS_MC1_QSO": dict(fsat=0.20, sigma8_ref=0.418, b1_ref=2.162, sigv_type="QSO"),
+        "ABACUS_MC2_LRG": dict(fsat=0.13, sigma8_ref=0.559, b1_ref=2.047, sigv_type="LRG"),
+        "MC4_LRG_0P5":    dict(fsat=0.13, sigma8_ref=0.624, b1_ref=1.876, sigv_type="LRG"),
+        "MC4_LRG_0P7":    dict(fsat=0.13, sigma8_ref=0.565, b1_ref=2.027, sigv_type="LRG"),
+        "MC4_LRG_0P95":   dict(fsat=0.13, sigma8_ref=0.504, b1_ref=2.242, sigv_type="LRG"),
+    }
+
+    _SYNTHETIC = {
+        "BGS":  dict(z_eff=0.295, fsat=0.13, sigma8_ref=0.693770, b1_ref=1.5, sigv_type="BGS"),
+        "LRG1": dict(z_eff=0.51,  fsat=0.13, sigma8_ref=0.620894, b1_ref=2.1, sigv_type="LRG"),
+        "LRG2": dict(z_eff=0.706, fsat=0.13, sigma8_ref=0.563789, b1_ref=2.1, sigv_type="LRG"),
+        "LRG3": dict(z_eff=0.919, fsat=0.13, sigma8_ref=0.510742, b1_ref=2.1, sigv_type="LRG"),
+        "ELG":  dict(z_eff=1.317, fsat=0.06, sigma8_ref=0.431973, b1_ref=1.2, sigv_type="ELG"),
+        "QSO":  dict(z_eff=1.492, fsat=0.20, sigma8_ref=0.403964, b1_ref=2.1, sigv_type="QSO"),
+    }
+
+    _WEILIU = {
+        # Use the same tracer keys you wrote out: BGS, LRG1, LRG2, ELG1, ELG2, QSO
+        # If you want different fid values later, edit here.
+        "BGS":  dict(fsat=0.13, sigma8_ref=0.694, b1_ref=1.541, sigv_type="BGS"),
+        "LRG1": dict(fsat=0.13, sigma8_ref=0.621, b1_ref=1.883, sigv_type="LRG"),
+        "LRG2": dict(fsat=0.13, sigma8_ref=0.564, b1_ref=2.031, sigv_type="LRG"),
+        "ELG1": dict(fsat=0.06, sigma8_ref=0.503, b1_ref=1.187, sigv_type="ELG"),
+        "ELG2": dict(fsat=0.06, sigma8_ref=0.431, b1_ref=1.429, sigv_type="ELG"),
+        "QSO":  dict(fsat=0.20, sigma8_ref=0.405, b1_ref=2.266, sigv_type="QSO"),
+    }
+
+    @staticmethod
+    def _sigv_from_type(tracer_type: str) -> float:
+        """
+        sigma1eff -> sigv from Table 1 formulas, by tracer type.
+        Uses exactly the functional forms in your screenshot:
+          BGS: (150/70) * 10^(1/3) * (1+0.2)^(1/2)
+          LRG: (150/70) * 10^(1/3) * (1+0.8)^(1/2)
+          ELG: (150/70) * (2.1)^(1/2)
+          QSO: (150/70) * 10^(0.7/3) * (2.4)^(1/2)
+        """
+        t = str(tracer_type).upper()
+        if t == "BGS":
+            return 150.0 * (10.0)**(1.0/3.0) * (1.0 + 0.2)**0.5 / 70.0
+        if t == "LRG":
+            return 150.0 * (10.0)**(1.0/3.0) * (1.0 + 0.8)**0.5 / 70.0
+        if t == "ELG":
+            return 150.0 * (2.1)**0.5 / 70.0
+        if t == "QSO":
+            return 150.0 * (10.0)**(0.7/3.0) * (2.4)**0.5 / 70.0
+        raise ValueError(f"Unknown tracer_type='{tracer_type}' for sigv formula.")
+
+    @classmethod
+    def _get_mock_settings(cls, tracer: str, mock_type: str):
+        """
+        Return dict with fsat, sigma8_ref, b1_ref, sigv.
+        mock_type: 'cutsky' -> Table 1; 'cubic' -> Table 2; 'synthetic' -> settings from synthetic noiseless data; 'WeiLiu' -> formatted EZmock cubic-box cov/data (rescaled to 2 Gpc/h)
+        """
+        mt = str(mock_type).lower()
+        tr = str(tracer).upper()
+        if mt == "cutsky":
+            if tr not in cls._TABLE1:
+                raise ValueError(f"Unknown cutsky tracer '{tr}'. Expected one of {list(cls._TABLE1.keys())}.")
+            d = cls._TABLE1[tr]
+            return dict(
+                fsat=float(d["fsat"]),
+                sigma8_ref=float(d["sigma8_ref"]),
+                b1_ref=float(d["b1_ref"]),
+                sigv=float(cls._sigv_from_type(d["sigv_type"])),
+            )
+        if mt == "cubic":
+            if tr not in cls._TABLE2:
+                raise ValueError(
+                    f"Unknown cubic tracer '{tr}'. Expected one of {list(cls._TABLE2.keys())}.\n"
+                    "Tip: pass tracer like 'ABACUS_MC1_LRG' etc, matching Table 2 rows."
+                )
+            d = cls._TABLE2[tr]
+            # NOTE: sigma8_ref is None for MC4 rows in your screenshot.
+            # You can either fill them here, or compute from a fiducial cosmology at the corresponding z_eff.
+            if d["sigma8_ref"] is None:
+                raise ValueError(f"sigma8_ref is missing for '{tr}' in Table 2 dictionary. Fill it or compute it.")
+            return dict(
+                fsat=float(d["fsat"]),
+                sigma8_ref=float(d["sigma8_ref"]),
+                b1_ref=float(d["b1_ref"]),
+                sigv=float(cls._sigv_from_type(d["sigv_type"])),
+            )
+        if mt == "synthetic":
+            if tr not in cls._SYNTHETIC:
+                raise ValueError(
+                    f"Unknown synthetic tracer '{tr}'. Expected one of {list(cls._SYNTHETIC.keys())}."
+                )
+            d = cls._SYNTHETIC[tr]
+            return dict(
+                fsat=float(d["fsat"]),
+                sigma8_ref=float(d["sigma8_ref"]),
+                b1_ref=float(d["b1_ref"]),
+                sigv=float(cls._sigv_from_type(d["sigv_type"])),
+            )
+
+        if mt == "weiliu":
+            if tr not in cls._WEILIU:
+                raise ValueError(
+                    f"Unknown WeiLiu tracer '{tr}'. Expected one of {list(cls._WEILIU.keys())}."
+                )
+            d = cls._WEILIU[tr]
+            return dict(
+                fsat=float(d["fsat"]),
+                sigma8_ref=float(d["sigma8_ref"]),
+                b1_ref=float(d["b1_ref"]),
+                sigv=float(cls._sigv_from_type(d["sigv_type"])),
+            )
+        raise ValueError("mock_type must be 'cutsky', 'cubic', 'synthetic', or 'WeiLiu'.")
 
     # -------------------------
     # helpers
@@ -2655,6 +2604,34 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     def _is_physical_mode(pb: str) -> bool:
         return pb in ['physical_folps', 'physical_velocileptors', 'APscaling']
 
+    @classmethod
+    def _load_weiliu_pk(cls, tracer: str):
+        """
+        Load formatted WeiLiu files for a tracer.
+        Returns:
+          k (Nk,)
+          data (3*Nk,) stacked as [P0, P2, P4]
+          cov  (3*Nk, 3*Nk)
+        """
+        tr = str(tracer).upper()
+        f_data = f"/n/home12/cgarciaquintero/DESI/GQC_mocks/cubic_boxes/WeiLiu/formatted/{tr}_pk_kP0P2P4.txt"
+        f_cov  = f"/n/home12/cgarciaquintero/DESI/GQC_mocks/cubic_boxes/WeiLiu/formatted/{tr}_pk_cov.txt"
+
+        arr = np.loadtxt(f_data)
+        if arr.ndim != 2 or arr.shape[1] < 4:
+            raise ValueError(f"{f_data} must have >= 4 columns (k,P0,P2,P4), got {arr.shape}")
+        k = arr[:, 0]
+        p0, p2, p4 = arr[:, 1], arr[:, 2], arr[:, 3]
+        Nk = k.size
+
+        cov = np.loadtxt(f_cov)
+        if cov.shape != (3 * Nk, 3 * Nk):
+            raise ValueError(f"{f_cov} has shape {cov.shape}, expected {(3*Nk,3*Nk)} (Nk={Nk})")
+
+        data = np.concatenate([p0, p2, p4], axis=0)
+        return k, data, cov
+
+
     # -------------------------
     # parameter priors
     # -------------------------
@@ -2665,9 +2642,10 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         fix = []
         if freedom in ['min', 'max']:
             for param in params.select(basename=['b1']):
-                param.update(prior=dict(limits=[0., 10.]))
+                param.update(prior=dict(dist='uniform', limits=[0.1, 8.0]))
             for param in params.select(basename=['b2']):
-                param.update(prior=dict(limits=[-50., 50.]))
+                param.update(prior=dict(dist='norm', loc=0.0, scale=20.0),
+                             ref=dict(dist='norm', loc=0.0, scale=1.0))
 
             # remove priors for nuisances (re-defined below depending on basis)
             for param in params.select(basename=['bs2', 'b3nl', 'alpha*', 'alpha0shot', 'alpha2shot', 'ctilde']):
@@ -2718,61 +2696,67 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             for param in list(params):
                 param.update(basename=param.basename + 'p')
 
-            # b1p prior
+            # Table 3: priors are on b1*S*sqrt(A_AP) and b2*S^2*sqrt(A_AP)
             for param in params.select(basename='b1p'):
-                param.update(prior=dict(dist='uniform', limits=[0.1, 4.]),
-                             ref=dict(dist='norm', loc=1., scale=0.1))
-
-            # b2p prior
+                param.update(prior=dict(dist='uniform', limits=[0.1, 8.0]),
+                             ref=dict(dist='norm', loc=1.0, scale=0.1))
+            
             for param in params.select(basename='b2p'):
-                param.update(prior=dict(dist='norm', loc=0.0, scale=5.0),
+                param.update(prior=dict(dist='norm', loc=0.0, scale=20.0),
                              ref=dict(dist='norm', loc=0.0, scale=1.0))
 
-            # ---- IMPORTANT: APscaling special handling ----
             # add APscaling priors and exit, otherwise continue
             if pb == 'APscaling':
                 # these are ignored in calculate()
                 for param in params.select(basename=['bs2p', 'b3nlp']):
                     param.update(value=0.0, fixed=True, prior=None)
 
-                # bK2p/btdp represent DeltaX, DeltaY with N(0,5^2) in max freedom; fixed 0 in min
+                # Priors on bK2p and btdp
                 for par in params.select(basename=['bK2p', 'btdp']):
                     if freedom == 'min':
                         par.update(value=0.0, fixed=True, prior=None)
                     else:
-                        par.update(fixed=False,
-                                   prior=dict(dist='norm', loc=0.0, scale=5.0),
-                                   ref=dict(dist='norm', loc=0.0, scale=1.0))
+                        if par.basename == 'bK2p':
+                            par.update(
+                                fixed=False,
+                                prior=dict(dist='norm', loc=0.0, scale=20.0),
+                                ref=dict(dist='norm', loc=0.0, scale=1.0),
+                            )
+                        elif par.basename == 'btdp':
+                            par.update(
+                                fixed=False,
+                                prior=dict(dist='norm', loc=0.0, scale=80.0),
+                                ref=dict(dist='norm', loc=0.0, scale=1.0),
+                            )
 
+                # Table 3: alpha0/2/4
+                width = 500.0 if freedom == "max" else 50.0
                 for param in params.select(basename=['alpha0p', 'alpha2p', 'alpha4p']):
                     if param.fixed:
                         continue
-                    if freedom == 'max':
-                        #param.update(prior=dict(dist='uniform', limits=[-100.0, 100.0]),
-                        param.update(prior=dict(dist='norm', loc=0.0, scale=100.0),
-                                     ref=dict(dist='norm', loc=0.0, scale=1.0))
-                    else:
-                        param.update(prior=dict(dist='norm', loc=0.0, scale=12.5),
-                                     ref=dict(dist='norm', loc=0.0, scale=1.0))
+                    param.update(
+                        prior=dict(dist='norm', loc=0.0, scale=width),
+                        ref=dict(dist='norm', loc=0.0, scale=1.0),
+                    )
 
-                # stochastic (table: SN0 uses 2, SN2 uses 5 in min-free; max uses U(-10,10))
+                # Table 3: SN0 width is 20 (max-free) and 2 (min-free) in "units of 1/ng" after scaling.
+                # Our alpha0shotp is the knob prior before multiplying by snd/Ashot etc.
                 for param in params.select(basename='alpha0shotp'):
                     if param.fixed:
                         continue
                     if freedom == 'max':
-                        #param.update(prior=dict(dist='uniform', limits=[-10.0, 10.0]),
-                        param.update(prior=dict(dist='norm', loc=0.0, scale=10.0),
+                        param.update(prior=dict(dist='norm', loc=0.0, scale=20.0),
                                      ref=dict(dist='norm', loc=0.0, scale=1.0))
                     else:
                         param.update(prior=dict(dist='norm', loc=0.0, scale=2.0),
                                      ref=dict(dist='norm', loc=0.0, scale=1.0))
 
+                # Table 3: SN2 width is 50 (max-free) and 5 (min-free) after scaling by fsat*sigv^2/ng.
                 for param in params.select(basename='alpha2shotp'):
                     if param.fixed:
                         continue
                     if freedom == 'max':
-                        #param.update(prior=dict(dist='uniform', limits=[-10.0, 10.0]),
-                        param.update(prior=dict(dist='norm', loc=0.0, scale=10.0),
+                        param.update(prior=dict(dist='norm', loc=0.0, scale=50.0),
                                      ref=dict(dist='norm', loc=0.0, scale=1.0))
                     else:
                         param.update(prior=dict(dist='norm', loc=0.0, scale=5.0),
@@ -2830,34 +2814,26 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             # You will sample bK2p and btdp and then overwrite bs2E/b3E inside calculate()
             self.required_bias_params['bK2'] = 0.0
             self.required_bias_params['btd'] = 0.0
-            self.sigma8_ref = self.options.get("sigma8_ref", None)
-            if self.sigma8_ref is None:
-                # Prefer table values when available
-                try:
-                    self.sigma8_ref = self.get_sigma8ref(tracer=self.options["tracer"])
-                except Exception:
-                    # If ELG2 missing in the cropped table, compute from a reference cosmology instead
-                    # (replace this block with your actual reference cosmology choice)
-                    from cosmoprimo.fiducial import DESI as DESI_fid
-                    z_eff = {"ELG2": 1.321}.get(str(self.options["tracer"]).upper(), None)
-                    if z_eff is None:
-                        raise
-                    cosmo_ref = DESI_fid()
-                    if hasattr(cosmo_ref, "sigma8_z"):
-                        self.sigma8_ref = float(cosmo_ref.sigma8_z(z_eff))
-                    else:
-                        # fallback if your cosmoprimo version differs
-                        self.sigma8_ref = float(cosmo_ref.sigma8 * cosmo_ref.growth_factor(z_eff) / cosmo_ref.growth_factor(0.0))
+            # NEW: sigma8_ref comes from Table 1 or Table 2 depending on mock_type
+            if self.options.get("sigma8_ref", None) is None:
+                ms = fkptTracerPowerSpectrumMultipoles._get_mock_settings(tracer=self.options["tracer"],
+                                             mock_type=self.options.get("mock_type", "cutsky"))
+                self.sigma8_ref = ms["sigma8_ref"]
+            else:
+                self.sigma8_ref = float(self.options["sigma8_ref"])
 
         if self.is_physical_prior:
             # rename required nuisances to primed sampling names
             for name in list(self.required_bias_params):
                 self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
 
-            settings = self.get_physical_stochastic_settings(tracer=self.options['tracer'])
-            for name, value in settings.items():
-                if self.options[name] is None:
-                    self.options[name] = value
+            # NEW: fsat + sigv from tables (fsat depends on mock_type; sigv from tracer-type formula)
+            ms = fkptTracerPowerSpectrumMultipoles._get_mock_settings(tracer=self.options["tracer"],
+                                         mock_type=self.options.get("mock_type", "cutsky"))
+            if self.options.get("fsat", None) is None:
+                self.options["fsat"] = ms["fsat"]
+            if self.options.get("sigv", None) is None:
+                self.options["sigv"] = ms["sigv"]
 
             if self.mpicomm.rank == 0:
                 self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
@@ -2880,84 +2856,17 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         self.fsat = 1
         self.snd  = self.options['shotnoise'] * self.nd  # essentially = 1
         if self.is_physical_prior:
-            settings = self.get_physical_stochastic_settings(tracer=self.options['tracer'])
-            for name, value in settings.items():  # fills fsat AND sigv
-                if self.options.get(name, None) is None:
-                    self.options[name] = value
             self.fsat = self.options['fsat']            
         
         if pb == 'APscaling':
             self.b1_fid = self.options.get('b1_fid', None)
             if self.b1_fid is None:
-                self.b1_fid = self.get_b1fid(tracer=self.options['tracer'])
-        
-            # NEW: sigma8_ref for the *prior means* (Table 1)
-            self.sigma8_ref = self.options.get('sigma8_ref', None)
-            if self.sigma8_ref is None:
-                self.sigma8_ref = self.get_sigma8ref(tracer=self.options['tracer'])
+                ms = fkptTracerPowerSpectrumMultipoles._get_mock_settings(tracer=self.options["tracer"],
+                                             mock_type=self.options.get("mock_type", "cutsky"))
+                self.b1_fid = ms["b1_ref"]
         else:
             self.b1_fid = None
             self.sigma8_ref = None
-
-    @staticmethod
-    def get_physical_stochastic_settings(tracer=None):
-        if tracer is not None:
-            tracer = str(tracer).upper()
-            settings = {
-                'BGS': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.2)**(1/2)/70.},
-                'LRG': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
-                'LRG1': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
-                'LRG2': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
-                'LRG3': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
-                'ELG': {'fsat': 0.10, 'sigv': 150*(2.1)**(1/2)/70.},
-                'ELG1': {'fsat': 0.10, 'sigv': 150*(2.1)**(1/2)/70.},
-                'QSO': {'fsat': 0.03, 'sigv': 150*(10)**(0.7/3)*(2.4)**(1/2)/70.},
-            }
-            try:
-                return settings[tracer]
-            except KeyError:
-                raise ValueError(f"unknown tracer: {tracer}, please use any of {list(settings.keys())}")
-        return {'fsat': 0.1, 'sigv': 5.}
-
-    @staticmethod
-    def get_sigma8ref(tracer=None):
-        if tracer is None:
-            raise ValueError("sigma8_ref requires tracer (BGS/LRG1/LRG2/LRG3/ELG1/ELG2/QSO).")
-        tracer = str(tracer).upper()
-        # Values read from Table 1 (your screenshot)
-        table = {
-            "BGS":  0.680287,
-            "LRG1": 0.609684,
-            "LRG2": 0.554084,
-            "LRG3": 0.501571,
-            "ELG": 0.494276,
-            "ELG1": 0.494276,
-            "QSO":  0.398622,
-            "LRG":  0.554084,  # optional fallback if someone passes "LRG"
-            "ELG":  0.494276,  # optional fallback if someone passes "ELG"
-        }
-        if tracer not in table:
-            raise ValueError(f"unknown tracer '{tracer}' for sigma8_ref table lookup.")
-        return table[tracer]
-
-    @staticmethod
-    def get_b1fid(tracer=None):
-        if tracer is not None:
-            tracer = str(tracer).upper()
-            b1fid = {
-                'BGS': 1.5,
-                'LRG': 2.1,
-                'LRG1': 2.1,
-                'LRG2': 2.1,
-                'LRG3': 2.1,
-                'ELG': 1.2,
-                'QSO': 2.1,
-            }
-            try:
-                return b1fid[tracer]
-            except KeyError:
-                raise ValueError(f"unknown tracer: {tracer}, please use any of {list(b1fid.keys())}")
-        return 2.0  # safe default if tracer is None (prakhar wants b1fid=2)
 
     # -------------------------
     # main mapping
@@ -2990,7 +2899,10 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         # From here on: PHYSICAL modes
         # ============================================================
         sigma8 = self.pt.sigma8
-        f = self.pt.fsigma8 / sigma8
+        # Use MG growth rate used by fkptjax tables; avoid accidental GR f
+        f = getattr(self.pt, "f0", None)
+        if f is None:
+            raise ValueError("Missing MG growth rate: expected pt.f0 (preferred) or pt.f.")
 
         # --- Eulerian ---
         if pb == 'APscaling':
@@ -3004,15 +2916,21 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             A_AP = (h_fid / h0)**3 / (qper**2 * qpar)
             self.A_AP = A_AP
             sqrtA_AP = A_AP**0.5
+            # NEW: Table 3 scaling variable
+            sigma8_ref = getattr(self, "sigma8_ref", None)
+            if sigma8_ref is None:
+                raise ValueError("APscaling requires sigma8_ref")
+            S = sigma8 / float(sigma8_ref)
+            self.S = S
             # proceed with biases
-            b1E = params['b1p'] / (sigma8 * sqrtA_AP)
-            b2E = params['b2p'] / (sigma8**2 * sqrtA_AP)
+            b1E = params['b1p'] / (S * sqrtA_AP)
+            b2E = params['b2p'] / (S**2 * sqrtA_AP)
         else:
             b1E = params['b1p'] / sigma8
             b2E = params['b2p'] / sigma8**2
 
         # defaults (non-APscaling)
-        b1L = b1E - 1.0
+        b1L = params['b1p'] / sigma8 - 1.0 # forcing this even for the APscaling case (just used for the coevolution)
         if pb != 'APscaling':
             bsL = params['bs2p'] / sigma8**2 
             b3L = params['b3nlp']
@@ -3050,10 +2968,11 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             # ============================================================
             # APscaling: include A_AP and decode the table-style priors
             # ============================================================
-            # here, alpha*p should be alpha*tilde times Aap times sigma8, with U(-100,100), so divide by A_AP*sqrtA
-            a0t = params['alpha0p'] / (A_AP * sigma8 * sigma8)
-            a2t = params['alpha2p'] / (A_AP * sigma8 * sigma8)
-            a4t = params['alpha4p'] / (A_AP * sigma8 * sigma8)
+            # Table 3 says alpha_i are expressed with A_AP * S^2 factors.
+            # Interpret alpha*p as (alpha_tilde * A_AP * S^2) and divide that out.
+            a0t = params['alpha0p'] / (A_AP * (S**2))
+            a2t = params['alpha2p'] / (A_AP * (S**2))
+            a4t = params['alpha4p'] / (A_AP * (S**2))
 
             alpha0 = (b1E**2) * a0t
             alpha2 = (b1E * f) * (a0t + a2t)
@@ -3081,21 +3000,17 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                 if b1_fid is None:
                     raise ValueError("APscaling table priors need b1_fid; could not infer from tracer.")
 
-                sigma8_ref = getattr(self, "sigma8_ref", None)
-                if sigma8_ref is None:
-                    raise ValueError("APscaling requires sigma8_ref (from Table 1 or computed from reference cosmology).")
-
                 # Prior centers (reference/table cosmology; A_AP_ref = 1)
-                muX = -(2.0 / 7.0)  * (b1_fid - 1.0) * sigma8_ref**2.0
-                muY =  (23.0 / 42.0) * (b1_fid - 1.0) * sigma8_ref**3.0
+                muX = -(2.0 / 7.0)  * (b1_fid - 1.0)
+                muY =  (23.0 / 42.0) * (b1_fid - 1.0)
 
                 # bK2p, btdp are ΔX, ΔY ~ N(0, 5^2)
                 X = muX + params['bK2p']
                 Y = muY + params['btdp']
 
                 # Convert back to bK2, btd using *current* sigma8(z) and A_AP
-                bK2 = X / (sigma8**2.0 * sqrtA_AP)
-                btd = Y / (sigma8**3.0 * sqrtA_AP)
+                bK2 = X / (S**2.0 * sqrtA_AP)
+                btd = Y / (S**4.0 * A_AP)
 
             # downstream mappings
             bs2E = 2.0 * bK2
@@ -3108,7 +3023,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         sigv = self.options['sigv']  # sigma_1 == sigma_v
         # Table: SN* multiplied by A_AP. So in APscaling, divide out A_AP here.
         Ashot = (self.A_AP if pb == 'APscaling' else 1.0) # DR1 priors use A_AP=1, DR2 priors will use non-zero A_AP.
-        alpha0shot = (params['alpha0shotp'] / Ashot) * self.snd * (1.0)               # ≈ alpha0shotp / Ashot
+        alpha0shot = (params['alpha0shotp'] / Ashot) * self.snd            # ≈ alpha0shotp / Ashot
         alpha2shot = (params['alpha2shotp'] / Ashot) * self.snd * self.fsat * sigv**2 # ≈ alpha2shotp * fsat * sigv^2 / Ashot
         
         # write Eulerian params expected downstream
@@ -3142,6 +3057,15 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import jax.numpy as jnp
 
+def _get_cosmo_param(cosmo, name, default):
+    # 1) attribute-style
+    if hasattr(cosmo, name):
+        return getattr(cosmo, name)
+    # 2) dict-like / mapping-style
+    try:
+        return cosmo[name]
+    except Exception:
+        return default
 
 def Kfuncs_to_tables(
     k,
@@ -3205,7 +3129,7 @@ def Kfuncs_to_tables(
 
     model_u = str(model).upper()
     if model_u == "HS":
-        # Per your requirement: HS must NOT use rescale_PS (error if True).
+        # Per your requirement: HS MUST use rescale_PS (error if False).
         if bool(rescale_PS) is not True:
             raise ValueError("For model='HS', rescale_PS must be True (passed False).")
         # mg_variant is irrelevant for HS, but ModelDerivatives signature has it.
@@ -3435,6 +3359,7 @@ def Kfuncs_to_tables(
 # ============================================================================
 
 import folps as folpsv2
+
 @jit(static_argnums=(5,6,7,8,9,10,11))
 def get_bs_multipoles_jit(
     pars,
@@ -3506,7 +3431,8 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         "table", "table_now",
         "scalars", "scalars_now",
         "A_full", "remove_DeltaP",
-        "qpar", "qper", "f", "f0",
+        "qpar", "qper",
+        "kt", "fk_norm", "fk", "f0",
     ]
 
     def initialize(self, *args, mu=6, **kwargs):
@@ -3564,8 +3490,8 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
 
         rescale_PS = bool(self.options.get("rescale_PS", False))
 
-        # Your requirement: HS must have rescale_PS=False or error
-        if model_u == "HS" and rescale_PS == 'False':
+        # Your requirement: HS must have rescale_PS=True or error
+        if model_u == "HS" and (not rescale_PS):
             raise ValueError("You set model='HS' but rescale_PS=False. This is forbidden by design.")
 
         mg_params = self._collect_mg_params(cosmo)
@@ -3599,6 +3525,25 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
 
         extra = 0  # A_full=False only
 
+        #self.pt = Namespace(
+        #    jac=jac, kap=kap, muap=muap,
+        #    table=table[1:28 + extra],
+        #    table_now=table_now[1:28 + extra],
+        #    scalars=table[28 + extra:],
+        #    scalars_now=table_now[28 + extra:],
+        #    A_full=False,
+        #    remove_DeltaP=False,
+        #    f=self.template.f, f0=self.template.f0,
+        #    qpar=self.template.qpar, qper=self.template.qper,
+        #)
+
+        # Extract MG growth info from tables
+        kt = np.asarray(table[0])
+        fk_norm = np.asarray(table[2])        # this is f(k)/f0 on kout
+        f0_mg = float(table[-1])              # scalar f0 used for normalization
+        fk_mg = fk_norm * f0_mg               # actual f(k) on kout
+
+        # Store it in pt (so you can use it downstream if needed)
         self.pt = Namespace(
             jac=jac, kap=kap, muap=muap,
             table=table[1:28 + extra],
@@ -3607,7 +3552,11 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             scalars_now=table_now[28 + extra:],
             A_full=False,
             remove_DeltaP=False,
-            f=self.template.f, f0=self.template.f0,
+            # NEW: MG growth
+            kt=kt,
+            fk_norm=fk_norm,
+            fk=fk_mg,        # optional: expose actual f(k) as pt.fk
+            f0=f0_mg,        # IMPORTANT: pt.f0 must match table normalization
             qpar=self.template.qpar, qper=self.template.qper,
         )
 
@@ -3615,7 +3564,10 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         self.qpar = self.template.qpar
         self.qper = self.template.qper
         self.sigma8 = self.template.sigma8
-        self.fsigma8 = self.template.f * self.sigma8
+        self.fsigma8 = self.pt.f0 * self.sigma8
+        self.f0 = self.pt.f0
+        self.fk = self.pt.fk
+        self.fk_norm = self.pt.fk_norm
 
     def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
         import folps as folpsv2
@@ -3672,12 +3624,18 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         pars = [params[p] for p in required_bias_params]
         table = (self.kt, *self.pt.table, *self.pt.scalars)
         table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
-        k_pkl_pklnw_fk = jnp.array([table[0], table[1], table_now[1],table[2]*self.pt.f0])
+        # table[2] is f(k)/f0 ; multiply by the MATCHING scalar pt.f0 (MG)
+        k_pkl_pklnw_fk = jnp.array([table[0], table[1], table_now[1], table[2] * self.pt.f0])
         ells=kwargs['ells']
         if ells==(0,2):   #To run chains from desilike
             ells=((0,0,0),(2,0,2))
         multipoles = [f"B{l1}{l2}{l3}" for (l1, l2, l3) in ells]
-        poles = get_bs_multipoles_jit(pars, kwargs['k1k2T'], k_pkl_pklnw_fk, table, table_now, tuple(kwargs['precision']), getattr(self.pt, "A_full", True), getattr(self.pt, "remove_DeltaP", False),tuple(multipoles),kwargs['interpolation_method'],kwargs['bias_scheme'],kwargs['renormalized'],self.pt.f0, kwargs['qpar'], kwargs['qper'], self.z)
+        poles = get_bs_multipoles_jit(
+            pars, kwargs['k1k2T'], k_pkl_pklnw_fk, table, table_now, tuple(kwargs['precision']),
+            getattr(self.pt, "A_full", True), getattr(self.pt, "remove_DeltaP", False),
+            tuple(multipoles), kwargs['interpolation_method'], kwargs['bias_scheme'], kwargs['renormalized'],
+            self.pt.f0, kwargs['qpar'], kwargs['qper'], self.z
+        )
         return jnp.asarray(poles)
 
     '''
@@ -3695,10 +3653,23 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         return state
 
     def __setstate__(self, state):
-        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8','qpar','qper']:
-            if name in state: setattr(self, name, state.pop(name))
-        if not hasattr(self, 'pt'): self.pt = Namespace()
+        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8', 'qpar', 'qper']:
+            if name in state:
+                setattr(self, name, state.pop(name))
+    
+        if not hasattr(self, 'pt'):
+            self.pt = Namespace()
         self.pt.update(**state)
+    
+        # --- NEW: mirror commonly-used PT scalars to top-level ---
+        for name in ['kt', 'fk_norm', 'fk', 'f0', 'qpar', 'qper']:
+            if hasattr(self.pt, name):
+                setattr(self, name, getattr(self.pt, name))
+    
+        # Optional: reconstruct fsigma8 if it wasn't saved
+        if getattr(self, 'sigma8', None) is not None and getattr(self, 'f0', None) is not None:
+            if not hasattr(self, 'fsigma8'):
+                self.fsigma8 = self.f0 * self.sigma8
 
 
 class fkptjaxTracerPowerSpectrumMultipoles(fkptTracerPowerSpectrumMultipoles):
@@ -3762,6 +3733,7 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
     _default_options = dict(
         freedom=None,
         prior_basis='physical',   # alias -> physical_folps
+        mock_type='cutsky',  # 'cutsky', 'cubic', or 'synthetic'
         basis='sugiyama',         # bispectrum basis 
         precision =  [10,8,8],    # bispectrum precision settings
         tracer=None, fsat=None, sigv=None,
@@ -3769,7 +3741,7 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
         model='HDKI', mg_variant='mu_OmDE',
         beyond_eds=True,
         rescale_PS=False,
-        #sigma8_fid=None,
+        sigma8_ref=None,
         h_fid=None,   # only needed for prior_basis='APscaling'
         b1_fid=None,
         b3_coev=True,
@@ -3817,8 +3789,6 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
                 k1k2T = np.vstack([ks, ks]).T
         
         self.k1k2T = k1k2T
-        if utils.is_sequence(ells[0]):
-            self.ells = (ells,)
         self.ells = tuple(ells)
         self.set_params()
         # setattr(self, 'k', ks)
@@ -3937,32 +3907,28 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
                 for param in params.select(basename=['bs2p']):
                     param.update(value=0.0, fixed=True, prior=None)
 
-                # bK2p/btdp represent DeltaX, DeltaY with N(0,5^2) in max freedom; fixed 0 in min
+                # bK2p represents ΔX with N(0,20^2) in max freedom; fixed 0 in min
                 for par in params.select(basename=['bK2p']):
                     if freedom == 'min':
                         par.update(value=0.0, fixed=True, prior=None)
                     else:
                         par.update(fixed=False,
-                                   prior=dict(dist='norm', loc=0.0, scale=5.0),
+                                   prior=dict(dist='norm', loc=0.0, scale=2.0),
                                    ref=dict(dist='norm', loc=0.0, scale=1.0))
 
-                for param in params.select(basename=['c1p','c2p']):
-                    if param.fixed:
-                        continue
-                    else:
-                        param.update(prior=dict(dist='norm', loc=0.0, scale=5),
+                # Table 3 (B(k)): c1 width 20, c2 fixed 0 (both columns)
+                for param in params.select(basename='c1p'):
+                    if not param.fixed:
+                        param.update(prior=dict(dist='norm', loc=0.0, scale=20.0),
                                      ref=dict(dist='norm', loc=0.0, scale=1.0))
-
+                for param in params.select(basename='c2p'):
+                    param.update(value=0.0, fixed=True, prior=None)
                 
-                for param in params.select(basename=['Pshotp','Bshotp']):
-                    if param.fixed:
-                        continue
-                    if freedom == 'max':
+                # Table 3 (B(k)): Bshot width 1; keep Pshot as you wish (table indicates Bshot only in B(k)).
+                for param in params.select(basename='Bshotp'):
+                    if not param.fixed:
                         param.update(prior=dict(dist='norm', loc=0.0, scale=1.0),
-                                     ref=dict(dist='norm', loc=0.0, scale=0.5))
-                    else:
-                        param.update(prior=dict(dist='norm', loc=1.0, scale=1.0),
-                                     ref=dict(dist='norm', loc=0.0, scale=0.5))
+                                     ref=dict(dist='norm', loc=0.0, scale=1.0))
 
                 return params
 
@@ -3974,23 +3940,22 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
             # ============================================================
             # PHYSICAL_FOLPS / PHYSICAL_VELOCILEPTORS priors (Need to be reviewed)
             # ============================================================
-                for param in params.select(basename=['c1p','c2p']):
-                    if param.fixed:
-                        continue
-                    else:
-                        param.update(prior=dict(dist='norm', loc=0.0, scale=5),
-                                     ref=dict(dist='norm', loc=0.0, scale=1.0))
-
-                
-                for param in params.select(basename=['Pshotp','Bshotp']):
-                    if param.fixed:
-                        continue
-                    if freedom == 'max':
-                        param.update(prior=dict(dist='norm', loc=0.0, scale=1.0),
-                                     ref=dict(dist='norm', loc=0.0, scale=0.5))
-                    else:
-                        param.update(prior=dict(dist='norm', loc=1.0, scale=1.0),
-                                     ref=dict(dist='norm', loc=0.0, scale=0.5))
+            for param in params.select(basename=['c1p','c2p']):
+                if param.fixed:
+                    continue
+                else:
+                    param.update(prior=dict(dist='norm', loc=0.0, scale=5),
+                                 ref=dict(dist='norm', loc=0.0, scale=1.0))
+            
+            for param in params.select(basename=['Pshotp','Bshotp']):
+                if param.fixed:
+                    continue
+                if freedom == 'max':
+                    param.update(prior=dict(dist='norm', loc=0.0, scale=1.0),
+                                 ref=dict(dist='norm', loc=0.0, scale=0.5))
+                else:
+                    param.update(prior=dict(dist='norm', loc=1.0, scale=1.0),
+                                 ref=dict(dist='norm', loc=0.0, scale=0.5))
 
         return params
 
@@ -4013,22 +3978,39 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
             # You will sample bK2p and then overwrite bs2E inside calculate()
             self.required_bias_params['bK2'] = 0.0
             # self.required_bias_params['btd'] = 0.0
+            # NEW: sigma8_ref comes from Table 1 or Table 2 depending on mock_type
+            if self.options.get("sigma8_ref", None) is None:
+                ms = fkptTracerPowerSpectrumMultipoles._get_mock_settings(tracer=self.options["tracer"],
+                                             mock_type=self.options.get("mock_type", "cutsky"))
+                self.sigma8_ref = ms["sigma8_ref"]
+            else:
+                self.sigma8_ref = float(self.options["sigma8_ref"])
 
         if self.is_physical_prior:
             # rename required nuisances to primed sampling names
             for name in list(self.required_bias_params):
                 self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
 
-            settings = self.get_physical_stochastic_settings(tracer=self.options['tracer'])
-            for name, value in settings.items():
-                if self.options[name] is None:
-                    self.options[name] = value
+            # Use Table 1 (cutsky) or Table 2 (cubic) settings consistently with P(k) class
+            ms = fkptTracerPowerSpectrumMultipoles._get_mock_settings(
+                tracer=self.options["tracer"],
+                mock_type=self.options.get("mock_type", "cutsky"),
+            )
+
+            # Overwrite to avoid legacy defaults (and avoid mismatches vs the tables)
+            if self.options.get("fsat") is None: self.options["fsat"] = ms["fsat"]
+            if self.options.get("sigv") is None: self.options["sigv"] = ms["sigv"]
 
             if self.mpicomm.rank == 0:
-                self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
+                self.log_debug(
+                    "Using fsat, sigv = {:.3f}, {:.3f} (from {} tables).".format(
+                        self.options["fsat"], self.options["sigv"],
+                        "Table 1" if str(self.options.get("mock_type", "cutsky")).lower() == "cutsky" else "Table 2"
+                    )
+                )
 
         # Commenting this line out for now, need to check with Cristhian
-        # super().set_params(pt_params=[])
+        super().set_params(pt_params=[])
 
 
         self.nd = 1e-4
@@ -4039,55 +4021,24 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
         self.fsat = 1
         self.snd  = self.options['shotnoise'] * self.nd  # essentially = 1
         if self.is_physical_prior:
-            settings = self.get_physical_stochastic_settings(tracer=self.options['tracer'])
-            for name, value in settings.items():  # fills fsat AND sigv
-                if self.options.get(name, None) is None:
-                    self.options[name] = value
-            self.fsat = self.options['fsat']            
+            ms = fkptTracerPowerSpectrumMultipoles._get_mock_settings(
+                tracer=self.options["tracer"],
+                mock_type=self.options.get("mock_type", "cutsky"),
+            )
+            if self.options.get("fsat", None) is None:
+                self.options["fsat"] = ms["fsat"]
+            if self.options.get("sigv", None) is None:
+                self.options["sigv"] = ms["sigv"]
+            self.fsat = self.options["fsat"]    
         
         if pb == 'APscaling':
             self.b1_fid = self.options.get('b1_fid', None)
             if self.b1_fid is None:
-                self.b1_fid = self.get_b1fid(tracer=self.options['tracer'])
-        else:
-            self.b1_fid = None
-
-    
-
-    @staticmethod
-    def get_physical_stochastic_settings(tracer=None):
-        if tracer is not None:
-            tracer = str(tracer).upper()
-            settings = {
-                'BGS': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.2)**(1/2)/70.},
-                'LRG': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
-                'LRG1': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
-                'LRG2': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
-                'LRG3': {'fsat': 0.15, 'sigv': 150*(10)**(1/3)*(1+0.8)**(1/2)/70.},
-                'ELG': {'fsat': 0.10, 'sigv': 150*(2.1)**(1/2)/70.},
-                'QSO': {'fsat': 0.03, 'sigv': 150*(10)**(0.7/3)*(2.4)**(1/2)/70.},
-            }
-            try:
-                return settings[tracer]
-            except KeyError:
-                raise ValueError(f"unknown tracer: {tracer}, please use any of {list(settings.keys())}")
-        return {'fsat': 0.1, 'sigv': 5.}
-
-    @staticmethod
-    def get_b1fid(tracer=None):
-        if tracer is not None:
-            tracer = str(tracer).upper()
-            b1fid = {
-                'BGS': 1.5,
-                'LRG': 2.1,
-                'ELG': 1.2,
-                'QSO': 2.1,
-            }
-            try:
-                return b1fid[tracer]
-            except KeyError:
-                raise ValueError(f"unknown tracer: {tracer}, please use any of {list(b1fid.keys())}")
-        return 2.0  # safe default if tracer is None (prakhar wants b1fid=2)
+                ms = fkptTracerPowerSpectrumMultipoles._get_mock_settings(
+                    tracer=self.options["tracer"],
+                    mock_type=self.options.get("mock_type", "cutsky"),
+                )
+                self.b1_fid = ms["b1_ref"]
 
     # -------------------------
     # main mapping
@@ -4129,7 +4080,6 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
         # This needs to be modified to include bispectrum-specific mappings
         # ============================================================
         sigma8 = self.pt.sigma8
-        f = self.pt.fsigma8 / sigma8
 
         # --- Lagrangian -> Eulerian ---
         if pb == 'APscaling':
@@ -4143,24 +4093,30 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
             A_AP = (h_fid / h0)**3 / (qper**2 * qpar)
             self.A_AP = A_AP
             sqrtA_AP = A_AP**0.5
+            # S = sigma8 / sigma8_ref
+            sigma8_ref = getattr(self, "sigma8_ref", None)
+            if sigma8_ref is None:
+                raise ValueError("APscaling requires sigma8_ref")
+            S = sigma8 / float(sigma8_ref)
+            self.S = S
             # proceed with biases
-            b1L = params['b1p'] / (sigma8 * sqrtA_AP) - 1.0
-            b2L = params['b2p'] / (sigma8**2 * sqrtA_AP)
+            b1E = params['b1p'] / (S * sqrtA_AP)
+            b2E = params['b2p'] / (S**2 * sqrtA_AP)
         else:
-            b1L = params['b1p'] / sigma8 - 1.0
-            b2L = params['b2p'] / sigma8**2
-        
-        b1E  = 1.0 + b1L
-        b2E  = b2L 
-        
-        # defaults (non-APscaling)
-        bsL = params['bs2p'] / sigma8**2
+            b1E = params['b1p'] / sigma8
+            b2E = params['b2p'] / sigma8**2
 
-        # apply coevolution factor
-        if self.options['b3_coev']:
-            bs2E = bsL - 4.0/7.0 * b1L
-        else:
-            bs2E = bsL
+        # defaults (non-APscaling)
+        b1L = params['b1p'] / sigma8 - 1.0 # forcing this even for the APscaling case (just used for the coevolution)
+        if pb != 'APscaling':
+            bsL = params['bs2p'] / sigma8**2 
+            # apply coevolution factor
+            if self.options['b3_coev']:
+                bs2E = bsL - 4.0/7.0 * b1L
+                #b3E  = b3L + 32.0/315.0 * b1L
+            else:
+                bs2E = bsL
+                #b3E  = b3L
 
 
         # ============================================================
@@ -4182,8 +4138,14 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
             # APscaling: include A_AP and decode the table-style priors
             # ============================================================
             # here, c*p should be c*t times Aap times sigma8^2, so divide by A_AP*A
-            c1t = params['c1p'] / (A_AP * sigma8**2)
-            c2t = params['c2p'] / (A_AP * sigma8**2)
+            sigma8_ref = getattr(self, "sigma8_ref", None)
+            if sigma8_ref is None:
+                raise ValueError("APscaling requires sigma8_ref")
+            S = sigma8 / float(sigma8_ref)
+            self.S = S
+            # Table 3 expresses c1 with A_AP*S^2
+            c1t = params['c1p'] / (A_AP * (S**2))
+            c2t = params['c2p'] / (A_AP * (S**2))
             
             kNL = 0.3
             c1 = c1t/(kNL**2)
@@ -4194,26 +4156,20 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
                                  "(or update the code to match your chosen names).")
 
             # Implement priors according to 2pt+3pt priors document
-            #   X = bK2 * sigma8^2(z) * sqrt(A_ap)
-            #   Y = btd * sigma8^3(z) * sqrt(A_ap)
             freedom = self.options.get('freedom', None)
-            b1_fid = getattr(self, 'b1_fid', None)
-            if b1_fid is None:
-                raise ValueError("APscaling table priors need b1_fid; could not infer from tracer.")
-
-            muX = -(2.0 / 7.0) * (b1_fid - 1.0) * sigma8
-            muY =  (23.0 / 42.0) * (b1_fid - 1.0) * sigma8
 
             if freedom == 'min':
-                X = muX
-                Y = muY
+                # minimal freedom: FIX bK2 using the *varied* Eulerian b1
+                bK2 = -(2.0 / 7.0) * (b1E - 1.0)
             else:
+                # maximal freedom: Gaussian prior around reference b1_fid center
+                b1_fid = getattr(self, 'b1_fid', None)
+                if b1_fid is None:
+                    raise ValueError("APscaling table priors need b1_fid; could not infer from tracer.")
+                muX = -(2.0 / 7.0) * (b1_fid - 1.0)
                 # bK2p, btdp are the deviations ΔX, ΔY with priors N(0,5^2)
                 X = muX + params['bK2p']
-                # Y = muY + params['btdp']
-
-            bK2 = X / (sigma8**2 * sqrtA_AP)
-            # btd = Y / (sigma8**3 * sqrtA_AP)
+                bK2 = X / (S**2.0 * sqrtA_AP)            # btd = Y / (S**4.0 * A_AP)
 
             # bK2 ---> bs2 mapping
             bs2E = 2.0 * bK2

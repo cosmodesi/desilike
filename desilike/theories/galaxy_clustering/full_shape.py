@@ -2914,6 +2914,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                 raise ValueError("prior_basis='APscaling' requires option h_fid.")
             h0 = self.all_params['h'].value
             A_AP = (h_fid / h0)**3 / (qper**2 * qpar)
+            # A_AP = 1/(qper**2 * qpar)
             self.A_AP = A_AP
             sqrtA_AP = A_AP**0.5
             # NEW: Table 3 scaling variable
@@ -3114,6 +3115,7 @@ def Kfuncs_to_tables(
     rbao: float = 104.0,
     pmax_bao: float = 0.4,
     Np_bao: int = 100,
+    return_kernel_constants=True,  # calA, calAp parameters needed by Folps Bk
 ) -> Tuple[Tuple[Any, ...], Tuple[Any, ...]]:
     """
     Return (table_wiggle, table_now) in the A_full=False layout expected by FOLPS.
@@ -3350,7 +3352,8 @@ def Kfuncs_to_tables(
         delta_sigma2_NW,
         f0,
     )
-
+    if return_kernel_constants:
+        return table_w, table_nw, (A, ApOverf0*f0, CFD3, CFD3p)
     return table_w, table_nw
 
 
@@ -3516,11 +3519,12 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             **mg_params,
         )
 
-        table, table_now = Kfuncs_to_tables(
+        table, table_now, kcs = Kfuncs_to_tables(
             k=self.template.k,
             pk=self.template.pk_dd,
             pk_now=self.template.pknow_dd,
             **fkpt_params,
+            return_kernel_constants=True,   
         )
 
         extra = 0  # A_full=False only
@@ -3543,6 +3547,8 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         f0_mg = float(table[-1])              # scalar f0 used for normalization
         fk_mg = fk_norm * f0_mg               # actual f(k) on kout
 
+        calA, calAp, CFD3, CFD3p = kcs  # optional: expose these kernel constants as pt.calA, etc. if you want to use them in the bispectrum calculator
+
         # Store it in pt (so you can use it downstream if needed)
         self.pt = Namespace(
             jac=jac, kap=kap, muap=muap,
@@ -3558,6 +3564,8 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             fk=fk_mg,        # optional: expose actual f(k) as pt.fk
             f0=f0_mg,        # IMPORTANT: pt.f0 must match table normalization
             qpar=self.template.qpar, qper=self.template.qper,
+            calA=calA, calAp=calAp, CFD3=CFD3, CFD3p=CFD3p,
+            
         )
 
         self.kt = table[0]
@@ -3624,8 +3632,11 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         pars = [params[p] for p in required_bias_params]
         table = (self.kt, *self.pt.table, *self.pt.scalars)
         table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
+        calA, calAp, CFD3, CFD3p = self.pt.calA, self.pt.calAp, self.pt.CFD3, self.pt.CFD3p
+        calA_arr = jnp.ones_like(table[0]) * calA
+        calAp_arr = jnp.ones_like(table[0]) * calAp
         # table[2] is f(k)/f0 ; multiply by the MATCHING scalar pt.f0 (MG)
-        k_pkl_pklnw_fk = jnp.array([table[0], table[1], table_now[1], table[2] * self.pt.f0])
+        k_pkl_pklnw_fk = jnp.array([table[0], table[1], table_now[1], table[2] * self.pt.f0,calA_arr, calAp_arr])
         ells=kwargs['ells']
         if ells==(0,2):   #To run chains from desilike
             ells=((0,0,0),(2,0,2))
@@ -4010,7 +4021,7 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
                 )
 
         # Commenting this line out for now, need to check with Cristhian
-        super().set_params(pt_params=[])
+        # super().set_params(pt_params=[])
 
 
         self.nd = 1e-4

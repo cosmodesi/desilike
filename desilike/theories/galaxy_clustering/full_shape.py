@@ -2913,8 +2913,8 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             if h_fid is None:
                 raise ValueError("prior_basis='APscaling' requires option h_fid.")
             h0 = self.all_params['h'].value
-            A_AP = (h_fid / h0)**3 / (qper**2 * qpar)
-            # A_AP = 1/(qper**2 * qpar)
+            # A_AP = (h_fid / h0)**3 / (qper**2 * qpar)
+            A_AP = 1/(qper**2 * qpar)
             self.A_AP = A_AP
             sqrtA_AP = A_AP**0.5
             # NEW: Table 3 scaling variable
@@ -4101,7 +4101,8 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
             if h_fid is None:
                 raise ValueError("prior_basis='APscaling' requires option h_fid.")
             h0 = self.all_params['h'].value
-            A_AP = (h_fid / h0)**3 / (qper**2 * qpar)
+            # A_AP = (h_fid / h0)**3 / (qper**2 * qpar)
+            A_AP = 1 / (qper**2 * qpar)
             self.A_AP = A_AP
             sqrtA_AP = A_AP**0.5
             # S = sigma8 / sigma8_ref

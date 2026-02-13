@@ -96,6 +96,8 @@ WEILIU_ZEFF = {
     "QSO": 1.400,
 }
 
+WEILIU_ONLY_TRACERS = {"BGS", "LRG1", "ELG1", "ELG2"}  # the ones you want from WeiLiu
+
 def apply_alpha_analytic_marginalization(theory):
     """Mark alphas as analytically marginalized (derived='.marg')."""
     is_phys = bool(getattr(theory, "is_physical_prior", False))
@@ -121,6 +123,9 @@ def allowed_tracers_for(mock_type: str) -> set[str]:
         return set(SYNTHETIC_ZEFF.keys())
     if mt == "weiliu":
         return set(WEILIU_ZEFF.keys())
+    if mt in ("cubic+weiliu", "mixed"):
+        # allow both families; we'll decide per tracer
+        return set(CUBIC_ZEFF.keys()) | set(WEILIU_ZEFF.keys())
     raise ValueError(f"Unknown mock_type={mock_type!r} (expected cubic/cutsky/synthetic).")
 
 
@@ -135,6 +140,11 @@ def z_eff_for(tracer: str, mock_type: str) -> float:
         return float(SYNTHETIC_ZEFF[tr])
     if mt == "weiliu":
         return float(WEILIU_ZEFF[tr])
+    if mt in ("cubic+weiliu", "mixed"):
+        if tr in WEILIU_ZEFF:
+            return float(WEILIU_ZEFF[tr])
+        if tr in CUBIC_ZEFF:
+            return float(CUBIC_ZEFF[tr])
     raise ValueError(f"Unknown mock_type={mock_type!r} (expected cubic/cutsky/synthetic).")
 
 
@@ -299,14 +309,18 @@ def parse_args():
     p.add_argument(
         "--mg-variant",
         default="mu_OmDE",
-        choices=["mu_OmDE", "BZ", "BZ_fR", "binning"],
+        choices=["mu_OmDE", "BZ", "BZ_fR", "binning", "growth_index", "growth_index_yukawa"],
         help="MG variant; use mu_OmDE to vary mu0.",
     )
 
+    # --- NEW: growth-index controls (only used if --mg-variant growth_index) ---
+    p.add_argument("--gammaa", type=float, default=0.0, help="Growth-index gamma_a.")
+    p.add_argument("--GI_tk", type=float, default=100.0, help="Growth-index transition k-scale (GI_tk).")
+    p.add_argument("--GI_ds", type=float, default=1e-2, help="Growth-index transition width (GI_ds).")
     p.add_argument(
         "--mock-type",
         default="cubic",
-        choices=["cubic", "cutsky", "synthetic", "weiliu"],
+        choices=["cubic", "cutsky", "synthetic", "weiliu", "cubic+weiliu"],
         help="cubic: Mike cubic-box data+EZ cov; cutsky: not wired here; "
              "synthetic: file-based vectors/cov; "
              "weiliu: formatted EZmock vectors/cov (P0/P2/P4) from WEILIU_FORMATTED_DIR.",
@@ -346,8 +360,13 @@ def parse_args():
     # OLD-script binning controls
     p.add_argument("--redshift-bins", action="store_true")
     p.add_argument("--scale-bins", action="store_true")
-    p.add_argument("--scale-bins-method", type=str, default="traditional")
-    p.add_argument("--kc", type=float, default=0.1)
+    p.add_argument("--k_c", type=float, default=0.1, help="Binning: k_c [h/Mpc].")
+    p.add_argument("--k_tw", type=float, default=0.01, help="Binning: k transition width k_tw [h/Mpc].")
+    p.add_argument("--z_div", type=float, default=1.0, help="Binning: redshift division z_div.")
+    p.add_argument("--z_TGR", type=float, default=2.0, help="Binning: GR restoration redshift z_TGR.")
+    p.add_argument("--z_tw", type=float, default=0.05, help="Binning: redshift transition width z_tw.")
+    p.add_argument("--k_TGR", type=float, default=0.001, help="Binning: k_TGR (if used in Z1/Z2).")
+    p.add_argument("--k_S",   type=float, default=0.5,   help="Binning: return-to-GR scale k_S.")
 
     # Optional override for mu0 prior
     p.add_argument(
@@ -379,7 +398,7 @@ def parse_args():
     g.add_argument("--use-emu", action="store_true", help="Load and use per-tracer emulator(s).")
     p.add_argument("--emu-dir", type=Path, default=Path("./emulators"))
     p.add_argument("--emu-order-lcdm", type=int, default=4, help="Taylor order for non-MG params.")
-    p.add_argument("--emu-order-mg", type=int, default=6, help="Taylor order for MG params.")
+    p.add_argument("--emu-order-mg", type=int, default=8, help="Taylor order for MG params.")
 
     # Best-fit (MAP/profile) run
     p.add_argument("--run-bestfit", action="store_true", help="Run MinuitProfiler (MAP / best-fit) instead of MCMC.")
@@ -389,6 +408,7 @@ def parse_args():
     p.add_argument("--gradient", action="store_true", help="Use gradients if available.")
     p.add_argument("--rescale", action="store_true", help="Rescale parameters in profiler.")
     p.add_argument("--covariance", type=str, default=None, help="Covariance option passed to MinuitProfiler (string).")
+    p.add_argument("--niterations", type=int, default=4, help="Number of independent Minuit starts (best-of-N).")
 
     return p.parse_args()
 
@@ -490,15 +510,15 @@ def apply_oldstyle_cosmo_and_mg_priors(cosmo: Cosmoprimo, args):
             "mu0",
             value=0.0,
             fixed=force_gr,
-            prior=None if force_gr else {"dist": "uniform", "limits": (-3.0, 3.0)},
+            prior=None if force_gr else {"dist": "uniform", "limits": (-3.0, 1.0)},
             ref=None if force_gr else {"dist": "norm", "loc": 0.0, "scale": 0.01},
-            delta=None if force_gr else 0.25,
+            delta=None if force_gr else 0.3,
         )
         if (not force_gr) and (args.mu0_prior is not None):
             cosmo.init.params["mu0"].update(prior=parse_prior(args.mu0_prior))
 
     elif args.mg_variant in ["BZ", "BZ_fR"]:
-        for nm, val in [("beta_1", 0.0), ("lambda_1", 0.0), ("exp_s", 0.0)]:
+        for nm, val in [("beta_1", 1.0), ("lambda_1", 1.0), ("exp_s", 1.0)]:
             add_or_update_param(cosmo, nm, value=val, fixed=True)
 
         if force_gr:
@@ -547,11 +567,13 @@ def apply_oldstyle_cosmo_and_mg_priors(cosmo: Cosmoprimo, args):
                 delta=None if force_gr else 0.5,
             )
         for nm, val in [
-            ("z_div", 1.0),
-            ("z_TGR", 2.0),
-            ("z_tw", 0.05),
-            ("k_tw", 0.01),
-            ("k_c", float(args.kc)),
+            ("z_div", float(args.z_div)),
+            ("z_TGR", float(args.z_TGR)),
+            ("z_tw",  float(args.z_tw)),
+            ("k_tw",  float(args.k_tw)),
+            ("k_c",   float(args.k_c)),
+            ("k_TGR", float(getattr(args, "k_TGR", 0.001))),
+            ("k_S",   float(getattr(args, "k_S", 0.5))),
             ("Sigma1", 1.0),
             ("Sigma2", 1.0),
             ("Sigma3", 1.0),
@@ -559,11 +581,31 @@ def apply_oldstyle_cosmo_and_mg_priors(cosmo: Cosmoprimo, args):
         ]:
             add_or_update_param(cosmo, nm, value=float(val), fixed=True)
 
+    elif args.mg_variant in ("growth_index", "growth_index_yukawa"):
+        # By default: vary gamma_0, keep the transition knobs fixed unless you decide otherwise.
+        # (You *can* unfix them later by changing fixed=... below.)
+        force_gr = bool(args.force_GR)
+
+        add_or_update_param(
+            cosmo,
+            "gamma_0",
+            value=0.54545,
+            fixed=force_gr,
+            prior=None if force_gr else {"dist": "uniform", "limits": (0.2, 1.2)},
+            ref=None if force_gr else {"dist": "norm", "loc": 0.54545, "scale": 0.02},
+            delta=None if force_gr else 0.05,
+        )
+
+        # Keep these fixed by default (your ModelDerivatives already reads them).
+        add_or_update_param(cosmo, "gamma_a", value=float(args.gammaa), fixed=True)
+        add_or_update_param(cosmo, "GI_tk",   value=float(args.GI_tk), fixed=True)
+        add_or_update_param(cosmo, "GI_ds",   value=float(args.GI_ds), fixed=True)
+
 
 # -----------------------------------------------------------------------------
 # Emulator helpers
 # -----------------------------------------------------------------------------
-def emulator_engine_for(mg_variant: str, order_lcdm: int = 4, order_mg: int = 6) -> TaylorEmulatorEngine:
+def emulator_engine_for(mg_variant: str, order_lcdm: int = 4, order_mg: int = 8) -> TaylorEmulatorEngine:
     order = {"*": int(order_lcdm)}
 
     if mg_variant == "mu_OmDE":
@@ -574,7 +616,13 @@ def emulator_engine_for(mg_variant: str, order_lcdm: int = 4, order_mg: int = 6)
     elif mg_variant == "binning":
         for nm in ["mu1", "mu2", "mu3", "mu4"]:
             order[nm] = int(order_mg)
-
+    elif mg_variant in ("growth_index", "growth_index_yukawa"):
+        order["gamma_0"] = int(order_mg)
+        # If later you decide to emulate more:
+        # order["gamma_a"] = int(order_mg)
+        # order["GI_tk"]   = int(order_mg)
+        # order["GI_ds"]   = int(order_mg)
+ 
     return TaylorEmulatorEngine(method="finite", order=order)
 
 
@@ -669,6 +717,8 @@ def _allowed_emu_param_basenames(mg_variant: str) -> set[str]:
         allowed |= {"beta_1", "lambda_1", "exp_s"}
     elif mg_variant == "binning":
         allowed |= {"mu1", "mu2", "mu3", "mu4"}
+    elif mg_variant in ("growth_index", "growth_index_yukawa"):
+        allowed |= {"gamma_0"}  # add others if you decide to emulate them too
     return allowed
 
 
@@ -698,21 +748,22 @@ def _restore_fixed_flags(calc, saved: dict[str, bool]):
 # ObservableCovariance metadata helper
 # -----------------------------------------------------------------------------
 def covmeta_from_observables(obs_list):
-    """
-    ObservableCovariance expects `observables` to be list of ObservableArray or dict metadata.
-    It does NOT accept TracerPowerSpectrumMultipolesObservable directly.
-    """
     metas = []
     for obs in obs_list:
         ells = list(getattr(obs, "ells", []))
         k = getattr(obs, "k", None)
+
         if isinstance(k, (list, tuple)):
             x = [np.asarray(kk).reshape(-1) for kk in k]
         else:
             x = [np.asarray(k).reshape(-1) for _ in ells]
-        metas.append({"name": "PowerSpectrumMultipoles", "x": x, "projs": ells})
-    return metas
 
+        # detect bispectrum-style projections like (l1,l2,l3)
+        is_bk = any(isinstance(e, (tuple, list)) and len(e) == 3 for e in ells)
+        name = "BispectrumMultipoles" if is_bk else "PowerSpectrumMultipoles"
+
+        metas.append({"name": name, "x": x, "projs": ells})
+    return metas
 
 # -----------------------------------------------------------------------------
 # Synthetic helpers (file-based)
@@ -876,7 +927,7 @@ def build_cubic_observables_for_tracer(
         covariance=cov[start:, start:],
         theory=bs_theory,
         kin=k_thy,
-        ells=[0, 2],
+        ells=[(0, 0, 0), (2, 0, 2)],
         k=[kr_b0, kr_b2],
         wmatrix=wmatrix_bk,
     )
@@ -992,21 +1043,20 @@ def main():
         raise ValueError("Choose only one of: --test, --run_chains, --run-bestfit, --create-emu.")
     
     mt = str(args.mock_type).lower()
+    
     freedom = None if args.freedom == "none" else str(args.freedom)
 
     if args.scale_bins and not args.redshift_bins:
         raise ValueError("--scale-bins requires --redshift-bins")
     if (args.redshift_bins or args.scale_bins) and args.mg_variant != "binning":
-        raise ValueError("--redshift-bins/--scale-bins only for --mg_variant binning.")
-    if args.mg_variant == "binning" and not (args.redshift_bins or args.scale_bins):
-        raise ValueError("--mg_variant binning requires --redshift-bins and/or --scale-bins")
+        raise ValueError("--redshift-bins/--scale-bins only for --mg-variant binning.")
+    if args.mg_variant == "binning" and (not args.redshift_bins) and (not args.scale_bins):
+        args.redshift_bins = True
 
     if mt == "synthetic" and args.add_bispectrum:
         raise ValueError("mock_type='synthetic' currently supports P(k) only (no bispectrum).")
     if mt == "cutsky":
         raise NotImplementedError("mock_type='cutsky' not wired here yet.")
-    if str(args.mock_type).lower() == "weiliu" and args.add_bispectrum:
-        raise ValueError("[weiliu] Bispectrum is not available for WeiLiu formatted measurements (Pk only).")
 
     req_ells = parse_ells_str(args.ells)
     if mt == "cubic" and tuple(req_ells) not in ((0, 2), (0, 2, 4)):
@@ -1031,12 +1081,61 @@ def main():
 
     fid = DESI()
 
-    cosmo = Cosmoprimo(
-        engine="isitgr",
-        redshift_bins=bool(args.redshift_bins),
-        scale_bins=bool(args.scale_bins),
-        scale_bins_method=str(args.scale_bins_method),
-    )
+    # -------------------------
+    # Cosmoprimo / ISiTGR engine flags by MG variant
+    # -------------------------
+    # defaults (match your IsitgrEngine._default_calculation_parameters)
+    MG_parameterization = "muSigma"
+    use_BZ_form = False
+    use_growth_index = None
+    damping_yukawa = False
+
+    # default binning switches: OFF unless mv == "binning"
+    redshift_bins = False
+    scale_bins = False
+    # hardcode:
+    scale_bins_method = "traditional"
+
+    if str(args.mg_variant) in ("BZ", "BZ_fR"):
+        MG_parameterization = "mueta"
+        use_BZ_form = True
+        use_growth_index = None
+
+    elif str(args.mg_variant) in ("growth_index", "growth_index_yukawa"):
+        MG_parameterization = "mueta"
+        use_BZ_form = False
+        use_growth_index = "constant"
+        damping_yukawa = (str(args.mg_variant) == "growth_index_yukawa")
+
+    elif str(args.mg_variant) == "mu_OmDE":
+        MG_parameterization = "muSigma"
+        use_BZ_form = False
+        use_growth_index = None
+
+    elif str(args.mg_variant) == "binning":
+        MG_parameterization = "muSigma"
+        use_BZ_form = False
+        use_growth_index = None
+        # IMPORTANT: these control whether the binning parametrization is active
+        redshift_bins = bool(args.redshift_bins)
+        scale_bins = bool(args.scale_bins)
+    try:
+        cosmo = Cosmoprimo(
+            engine="isitgr",
+            redshift_bins=redshift_bins,
+            scale_bins=scale_bins,
+            scale_bins_method=scale_bins_method,  # always "traditional"
+            MG_parameterization=MG_parameterization,
+            use_BZ_form=use_BZ_form,
+            use_growth_index=use_growth_index,
+            damping_yukawa=damping_yukawa,
+        )
+    except TypeError:
+        raise SystemExit(
+            "Cosmoprimo(...) did not accept ISiTGR calculation flags "
+            "(MG_parameterization/use_BZ_form/use_growth_index and/or binning flags). "
+            "Abort as requested.\n"
+        )
 
     for nm, latex in [("H0", None), ("Omega_m", None), ("sigma8_m", r"\sigma_8")]:
         if nm in cosmo.init.params:
@@ -1051,7 +1150,14 @@ def main():
     obs_for_plot: dict[str, list] = {}
 
     for tracer in tracers:
-        z = z_eff_for(tracer, mt)
+        # Decide dataset source per tracer if mixed
+        if mt in ("cubic+weiliu", "mixed"):
+            mt_tr = "weiliu" if tracer in WEILIU_ONLY_TRACERS else "cubic"
+        else:
+            mt_tr = mt
+        include_bk = bool(args.add_bispectrum) and (mt_tr == "cubic")
+            
+        z = z_eff_for(tracer, mt_tr)
         template = DirectPowerSpectrumTemplate(fiducial=fid, cosmo=cosmo, z=float(z))
         theory_variant = "BZ" if str(args.mg_variant) == "BZ_fR" else str(args.mg_variant)
 
@@ -1059,7 +1165,7 @@ def main():
         kin_expected = None
         bs_theory = None
 
-        if mt == "synthetic":
+        if mt_tr == "synthetic":
             fid_model = str(args.fid_model)
             k_path = args.data_dir / f"{tracer}_{fid_model}_k.txt"
             p_path = args.data_dir / f"{tracer}_{fid_model}_P0P2P4.txt"
@@ -1115,7 +1221,7 @@ def main():
             cov_like = ObservableCovariance(cov_mat, observables=covmeta_from_observables([ps_obs]))
             obs_list = [ps_obs]
 
-        elif mt == "cubic":
+        elif mt_tr == "cubic":
             ps_theory = fkptjaxTracerPowerSpectrumMultipoles(
                 template=template,
                 prior_basis=args.prior_basis,
@@ -1131,7 +1237,10 @@ def main():
                 ells=req_ells,
             )
 
-            if args.add_bispectrum:
+            # Analytic marginalization over alphas (same as synthetic/weiliu)
+            _ = apply_alpha_analytic_marginalization(ps_theory)
+
+            if include_bk:
                 bs_theory = fkptjaxTracerBispectrumMultipoles(
                     pt=ps_theory.pt,
                     template=template,
@@ -1157,9 +1266,9 @@ def main():
                 ps_theory=ps_theory,
                 bs_theory=bs_theory,
                 kr_max=args.kr_max,
-                kr_b0_max=(args.kr_b0_max if args.add_bispectrum else None),
-                kr_b2_max=(args.kr_b2_max if args.add_bispectrum else None),
-                include_bispectrum=args.add_bispectrum,
+                kr_b0_max=(args.kr_b0_max if include_bk else None),
+                kr_b2_max=(args.kr_b2_max if include_bk else None),
+                include_bispectrum=include_bk,
                 ells=tuple(req_ells),
             )
 
@@ -1168,7 +1277,7 @@ def main():
 
             cov_like = ObservableCovariance(cov_mat, observables=covmeta_from_observables(obs_list))
 
-        elif mt == "weiliu":
+        elif mt_tr == "weiliu":
             # Load WeiLiu vector/cov + k grid first
             data_vec, cov_mat, k_out = load_weiliu_vector_and_covariance(
                 tracer,
@@ -1212,15 +1321,15 @@ def main():
             nkin_for_name = None
             
         else:
-            raise ValueError(f"Unhandled mock_type={mt!r}")
+            raise ValueError(f"Unhandled mock_type={mt_tr!r}")
 
         emu_path = args.emu_dir / emu_filename(
             tracer=tracer,
             kr_max=float(args.kr_max),
             mg_variant=str(args.mg_variant),
             beyond_eds=bool(args.beyond_eds),
-            add_bispectrum=bool(args.add_bispectrum),
-            mock_type=mt,
+            add_bispectrum=bool(include_bk),
+            mock_type=mt_tr,
             ells=tuple(req_ells),
             nkin=nkin_for_name,
         )
@@ -1240,7 +1349,7 @@ def main():
                 pt_for_emu = ps_theory.pt
 
                 # cubic: force PT k-grid = kin
-                if mt == "cubic":
+                if mt_tr == "cubic":
                     print(f"[Emu] ({tracer}) cubic: enforcing PT k-grid = kin (len={kin_expected.size})")
                     _set_pt_kgrid_for_cubic(pt_for_emu, kin_expected)
 
@@ -1276,13 +1385,13 @@ def main():
                 if p in emu_loaded.init.params:
                     emu_loaded.init.params.set(p)
 
-            if mt == "cubic":
+            if mt_tr == "cubic":
                 # Make sure emulator uses the same k-grid (kin) as window expects
                 _set_pt_kgrid_for_cubic(emu_loaded, kin_expected)
 
             # Plug emulator as PT in theory calculators
             ps_theory.init.update(pt=emu_loaded)
-            if args.add_bispectrum and bs_theory is not None:
+            if include_bk and bs_theory is not None:
                 bs_theory.init.update(pt=emu_loaded)
 
             if rank == 0:
@@ -1307,7 +1416,7 @@ def main():
 
         for par in ps_theory.params.select(basename=[pname(nm) for nm in nuis_to_namespace]):
             par.update(namespace=tracer.lower())
-        if args.add_bispectrum and bs_theory is not None:
+        if include_bk and bs_theory is not None:
             for par in bs_theory.params.select(basename=[pname(nm) for nm in nuis_to_namespace]):
                 par.update(namespace=tracer.lower())
 
@@ -1394,19 +1503,23 @@ def main():
             print(f"[MAP] Saving profiles to {profiles_out}")
             print(f"[MAP] Saving best-fit params to {bestfit_out}")
 
-            profiler = MinuitProfiler(
-                likelihood,
-                gradient=bool(args.gradient),
-                rescale=bool(args.rescale),
-                covariance=args.covariance,
-                save_fn=str(profiles_out),
-                ref_scale=float(args.ref_scale),
-            )
+        save_fn = str(profiles_out) if rank == 0 else None
+        profiler = MinuitProfiler(
+            likelihood,
+            gradient=bool(args.gradient),
+            rescale=bool(args.rescale),
+            covariance=args.covariance,
+            save_fn=save_fn,
+            ref_scale=float(args.ref_scale),
+        )
 
-            profiler.maximize(max_iterations=int(args.max_calls))
+        profiler.maximize(
+            niterations=int(args.niterations),        # e.g. 4
+            max_iterations=int(args.max_calls),
+        )
 
+        if rank == 0:
             # After maximize, likelihood.params should sit at the best-fit point.
-            # Save *all* current parameter values (including nuisance).
             bestfit = {}
             for p in likelihood.params:
                 try:

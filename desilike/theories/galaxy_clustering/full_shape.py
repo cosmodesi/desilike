@@ -2913,8 +2913,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             if h_fid is None:
                 raise ValueError("prior_basis='APscaling' requires option h_fid.")
             h0 = self.all_params['h'].value
-            # A_AP = (h_fid / h0)**3 / (qper**2 * qpar)
-            A_AP = 1/(qper**2 * qpar)
+            A_AP = 1/(qper**2 * qpar)  # before it was: A_AP = (h_fid / h0)**3 / (qper**2 * qpar)  ---- corrected
             self.A_AP = A_AP
             sqrtA_AP = A_AP**0.5
             # NEW: Table 3 scaling variable
@@ -3055,18 +3054,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 # ============================================================================
 from typing import Any, Dict, Optional, Tuple
 
-import numpy as np
 import jax.numpy as jnp
-
-def _get_cosmo_param(cosmo, name, default):
-    # 1) attribute-style
-    if hasattr(cosmo, name):
-        return getattr(cosmo, name)
-    # 2) dict-like / mapping-style
-    try:
-        return cosmo[name]
-    except Exception:
-        return default
 
 def Kfuncs_to_tables(
     k,
@@ -3085,7 +3073,7 @@ def Kfuncs_to_tables(
     NQ: int = 10,
     NR: int = 10,
     # ODE options
-    xnow: float = -4.0,
+    xnow: float = -3.912023, #### Matches ISiTGR value of z=49 to activate MG (Don't change!)
     ode_method: str = "RKQS",
     f0_kmax: float = 1e-3,
     # MG switches / params (forwarded to ModelDerivatives)
@@ -3100,17 +3088,24 @@ def Kfuncs_to_tables(
     # HDKI params
     mu0: float = 0.0,
     beta_1: float = 1.0,
-    lambda_1: float = 0.0,
-    exp_s: float = 0.0,
-    mu1: float = 0.0,
-    mu2: float = 0.0,
-    mu3: float = 0.0,
-    mu4: float = 0.0,
-    k_c: float = 0.1,
-    k_tw: float = 0.01,
+    lambda_1: float = 1.0,
+    exp_s: float = 1.0,
+    mu1: float = 1.0,
+    mu2: float = 1.0,
+    mu3: float = 1.0,
+    mu4: float = 1.0,
     z_div: float = 1.0,
     z_TGR: float = 10.0,
     z_tw: float = 0.5,
+    scale_bins: bool = False,
+    k_TGR: float = 0.001,
+    k_S: float = 0.5,
+    k_c: float = 0.1,
+    k_tw: float = 0.01,
+    gamma_0: float = 0.54545,
+    gamma_a: float = 0.0, 
+    GI_tk: float = 100.0, 
+    GI_ds: float = 0.0001,
     # BAO helper scalars (needed by FOLPS "now" table scalars)
     rbao: float = 104.0,
     pmax_bao: float = 0.4,
@@ -3163,8 +3158,9 @@ def Kfuncs_to_tables(
         mu0=float(mu0),
         beta_1=float(beta_1), lambda_1=float(lambda_1), exp_s=float(exp_s),
         mu1=float(mu1), mu2=float(mu2), mu3=float(mu3), mu4=float(mu4),
-        k_c=float(k_c), k_tw=float(k_tw),
         z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
+        scale_bins=bool(scale_bins), k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw), 
+        gamma_0=float(gamma_0), gamma_a=float(gamma_a), GI_tk=float(GI_tk), GI_ds=float(GI_ds),
     )
 
     # -----------------------------
@@ -3463,22 +3459,37 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             )
 
         # HDKI: use mg_variant + params (fR0 ignored even if present)
-        v = str(self.options.get("mg_variant", "mu_OmDE"))
+        v_u = str(self.options.get("mg_variant", "mu_OmDE")).strip().upper()
+
         defaults = dict(
             mu0=0.0,
             beta_1=1.0, lambda_1=0.0, exp_s=0.0,
-            mu1=0.0, mu2=0.0, mu3=0.0, mu4=0.0,
-            k_c=0.1, k_tw=0.01, z_div=1.0, z_TGR=10.0, z_tw=0.5,
+
+            # BINNING (GR-ish defaults!)
+            mu1=1.0, mu2=1.0, mu3=1.0, mu4=1.0,
+            z_div=1.0, z_TGR=10.0, z_tw=0.5,
+            scale_bins=False,
+            k_TGR=0.001,
+            k_c=0.1,
+            k_S=0.5,
+            k_tw=0.01,
+
+            # Growth-index
+            gamma_0=0.545454, gamma_a=0.0, GI_tk=100.0, GI_ds=0.0001,
         )
+
         req = {
-            "mu_OmDE": ["mu0"],
+            "MU_OMDE": ["mu0"],
             "BZ": ["beta_1", "lambda_1", "exp_s"],
-            "binning": ["mu1", "mu2", "mu3", "mu4", "k_c", "k_tw", "z_div", "z_TGR", "z_tw"],
+            "BINNING": ["mu1","mu2","mu3","mu4","z_div","z_TGR","z_tw",
+                        "scale_bins","k_TGR","k_c","k_S","k_tw"],
+            "GROWTH_INDEX": ["gamma_0","gamma_a","GI_tk","GI_ds"],
+            "GROWTH_INDEX_YUKAWA": ["gamma_0","gamma_a","GI_tk","GI_ds"],
             "GR": [],
         }
 
         out: Dict[str, float] = {}
-        for p in req.get(v, []):
+        for p in req.get(v_u, []):
             out[p] = float(getattr(cosmo, p)) if hasattr(cosmo, p) else float(defaults[p])
         return out
 

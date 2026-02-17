@@ -50,6 +50,7 @@ class BasePowerSpectrumExtractor(BaseCalculator):
         cosmo = self.fiducial if fiducial else self.cosmo
         if not isinstance(cosmo, Cosmology): cosmo = cosmo.cosmo
         fo = cosmo.get_fourier()
+        ba = cosmo.get_background()     # adding BG for IDE
         state = {}
         state['sigma8'] = fo.sigma8_z(self.z, of='delta_cb')
         state['fsigma8'] = fo.sigma8_z(self.z, of='theta_cb')
@@ -63,6 +64,9 @@ class BasePowerSpectrumExtractor(BaseCalculator):
         if with_now:
             self.filter(state['pk_dd_interpolator'], cosmo=cosmo)
             state['pknow_dd_interpolator'] = self.filter.smooth_pk_interpolator()
+        # Adding IDE growth rate and factor
+        state['f_IDE'] = ba.get_IDE_growth_rate_z(self.z)   
+        state['D_IDE'] = ba.get_IDE_growth_factor_z(self.z)
         for name, value in state.items(): setattr(self, name + ('_fid' if fiducial else ''), value)
 
 
@@ -105,7 +109,9 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
         # See BasePowerSpectrumExtrator._set_base for how to get these quantities from self.cosmo
         # fk is sqrt(pk_tt / pk_dd)
         # f0 is the limit of fk for k -> 0
-        for name in ['sigma8', 'fsigma8', 'f', 'f0', 'fk', 'pk_dd_interpolator', 'pk_dd']:
+        # f_IDE is the scale independent growth rate in the IDE model
+        # D_IDE is the growth factor in the IDE model
+        for name in ['sigma8', 'fsigma8', 'f', 'f0', '  fk', 'pk_dd_interpolator', 'pk_dd', 'f_IDE', 'D_IDE']:
             setattr(self, name, getattr(self, name + '_fid'))
         if self.with_now:
             for name in ['pknow_dd_interpolator', 'pknow_dd']:
@@ -136,7 +142,7 @@ class BasePowerSpectrumTemplate(BasePowerSpectrumExtractor):
                 state[name] = getattr(self, name)
         for suffix in ['', '_fid']:
             #for name in ['sigma8', 'fsigma8', 'f', 'f0', 'pk_dd_interpolator', 'pk_dd'] + ['pknow_dd_interpolator', 'pknow_dd']:
-            for name in ['sigma8', 'fsigma8', 'f', 'f0', 'fk', 'pk_dd', 'pknow_dd']:
+            for name in ['sigma8', 'fsigma8', 'f', 'f0', 'fk', 'pk_dd', 'pknow_dd', 'f_IDE', 'D_IDE']:
                 name = name + suffix
                 if hasattr(self, name):
                     state[name] = getattr(self, name)
@@ -300,7 +306,7 @@ class BAOExtractor(BasePowerSpectrumExtractor):
         self.cosmo = cosmo
         params = self.init.params.select(derived=True) + self.init.params.select(basename=['rs_drag'])
         if is_external_cosmo(self.cosmo):
-            self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}}
+            self.cosmo_requires['background'] = {'efunc': {'z': self.z}, 'comoving_angular_distance': {'z': self.z}} # need to check i need to add here
             self.cosmo_requires['thermodynamics'] = {'rs_drag': None}
         elif cosmo is None:
             self.cosmo = Cosmoprimo(fiducial=self.fiducial)
@@ -374,6 +380,8 @@ class BAOPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
         self.fk = self.fk_fid * df
+        self.f_IDE = self.f_IDE_fid * df
+        self.D_IDE = self.D_IDE_fid * df
 
     def get(self):
         self.DH_over_rd = self.qpar * self.DH_over_rd_fid
@@ -594,7 +602,9 @@ class StandardPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
         self.fk = self.fk_fid * df
-
+        self.f_IDE = self.f_IDE_fid * df
+        self.D_IDE = self.D_IDE_fid * df
+        
     def get(self):
         return self
 
@@ -758,6 +768,8 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
         self.fk = self.fk_fid * df
+        self.f_IDE = self.f_IDE_fid * df
+        self.D_IDE = self.D_IDE_fid * df
         self.f_sqrt_Ap = self.f * self.Ap_fid**0.5
 
     def get(self):
@@ -805,12 +817,15 @@ class BandVelocityPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         qiso = 1. if fiducial else self.apeffect.qiso
         r = 8. * qiso
         fo = cosmo.get_fourier()
+        ba = cosmo.get_background()
         state = {}
         state['sigmar'] = fo.sigma_rz(r, self.z, of='delta_cb')
         state['fsigmar'] = fo.sigma_rz(r, self.z, of='theta_cb')
         state['f'] = state['fsigmar'] / state['sigmar']
         state['pk_tt_interpolator'] = fo.pk_interpolator(of='theta_cb', **_kw_interp)
         state['pk_tt'] = state['pk_tt_interpolator'](self.kp / qiso) / qiso**3
+        state['f_IDE'] = ba.get_IDE_growth_rate_z(self.z)
+        state['D_IDE'] = ba.get_IDE_growth_factor_z(self.z)
         state['qap'] = 1. if fiducial else self.apeffect.qap
         for name, value in state.items(): setattr(self, name + ('_fid' if fiducial else ''), value)
 
@@ -938,6 +953,7 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate):
             self.templates.append(np.maximum(1. - diff, 0.))
         self.templates = np.array(self.templates)
         fo = self.fiducial.get_fourier()
+        ba = self.fiducial.get_background()
         #self.sigma8_fid = fo.sigma8_z(self.z, of='delta_cb')
         #self.fsigma8_fid = fo.sigma8_z(self.z, of='theta_cb')
         #self.f_fid = self.fsigma8_fid / self.sigma8_fid
@@ -948,6 +964,8 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate):
             self.filter = PowerSpectrumBAOFilter(self.pk_tt_interpolator_fid, engine=self.with_now, cosmo=self.cosmo, cosmo_fid=self.fiducial)
             self.pknow_tt_fid = self.filter.smooth_pk_interpolator()(self.k)
             self.pknow_dd_fid = self.pknow_tt_fid / self.f_fid**2
+        self.f_IDE = ba.get_IDE_growth_rate_z(self.z)
+        self.D_IDE = ba.get_IDE_growth_factor_z(self.z)
         self.sigma8 = fo.sigma8_z(self.z, of='delta_cb')
         self.fsigma8 = fo.sigma8_z(self.z, of='theta_cb')
 
@@ -955,6 +973,8 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
         self.fk = self.fk_fid * df
+        self.f_IDE = self.f_IDE_fid * df
+        self.D_IDE = self.D_IDE_fid * df
         dptt = jnp.array([params['{}{:d}'.format(self._base_param_name, ii)] - 1. for ii in range(len(self.templates))])
         factor = _bcast_shape(1. + jnp.dot(dptt, self.templates), self.pk_tt_fid.shape, axis=0)
         self.pk_tt = self.pk_tt_fid * factor
@@ -1130,6 +1150,7 @@ class WiggleSplitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         DV = getattr(self, 'DV', self.DV_fid)
         r = self.r * DV / self.DV_fid
         fo = cosmo.get_fourier()
+        ba = cosmo.get_background()
         state = {}
         state['pk_tt_interpolator'] = fo.pk_interpolator(of='theta_cb', **_kw_interp)
         state['pk_dd_interpolator'] = fo.pk_interpolator(of='delta_cb', **_kw_interp)
@@ -1137,6 +1158,8 @@ class WiggleSplitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         state['sigmar'] = integrate_sigma_r2(r, state['pk_dd_interpolator'], kernel=self.kernel)**0.5
         state['f'] = state['fsigmar'] / state['sigmar']
         state['m'] = - integrate_sigma_r2(r, state['pk_tt_interpolator'], kernel=self.kernel_deriv) / state['fsigmar']**2 - 3.
+        state['f_IDE'] = ba.get_IDE_growth_rate_z(self.z)
+        state['D_IDE'] = ba.get_IDE_growth_factor_z(self.z)
         for name, value in state.items(): setattr(self, name + ('_fid' if fiducial else ''), value)
 
     def get(self):
@@ -1189,6 +1212,8 @@ class WiggleSplitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
         self.fk = self.fk_fid * df
+        self.f_IDE = self.f_IDE_fid * df
+        self.D_IDE = self.D_IDE_fid * df
         kp = 0.05
         k = k = np.geomspace(self.pk_dd_interpolator_fid.extrap_kmin, self.pk_dd_interpolator_fid.extrap_kmax, 2000)
         k = k[(k > k[0] * 2.) & (k < k[-1] / 2.)]  # to avoid hitting boundaries with qbao
@@ -1335,6 +1360,8 @@ class TurnOverPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         self.pknow_dd = self.pk_dd
         self.f = self.f_fid * df
         self.f0 = self.f0_fid * df
+        self.f_IDE = self.f_IDE_fid * df
+        self.D_IDE = self.D_IDE_fid * df
         self.fk = self.fk_fid * df
         self.DV_times_kTO = self.apeffect.qiso * self.DV_times_kTO_fid
         self.DH_over_DM = self.apeffect.qap * self.DH_over_DM_fid

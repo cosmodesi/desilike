@@ -2889,7 +2889,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
             self.power = self.pt.combine_bias_terms_poles(
                 params, nd=self.nd,
-                model=self.options['model'], mg_variant=self.options['mg_variant'],
+                model=self.options['model'], mg_variant=self.options['mg_variant'], ide_variant=self.options['ide_variant'],
                 prior_basis='standard',
                 beyond_eds=self.options['beyond_eds'],
             )
@@ -3042,7 +3042,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
         self.power = self.pt.combine_bias_terms_poles(
             params, nd=self.nd,
-            model=self.options['model'], mg_variant=self.options['mg_variant'],
+            model=self.options['model'], mg_variant=self.options['mg_variant'], ide_variant=self.options['ide_variant'],
             prior_basis='physical',
             b3_coev=self.options['b3_coev'],
             beyond_eds=self.options['beyond_eds'],
@@ -3110,6 +3110,12 @@ def Kfuncs_to_tables(
     z_div: float = 1.0,
     z_TGR: float = 10.0,
     z_tw: float = 0.5,
+    # IDE params
+    ide_variant: str = "IDEModel1",
+    beta: float = 0.0,
+    w: float = -1.0,
+    wa: float = 0.0,
+    # f0_IDE: Optional[float] = None,       # to get the full growth rate for IDE models
     # BAO helper scalars (needed by FOLPS "now" table scalars)
     rbao: float = 104.0,
     pmax_bao: float = 0.4,
@@ -3163,6 +3169,8 @@ def Kfuncs_to_tables(
         mu1=float(mu1), mu2=float(mu2), mu3=float(mu3), mu4=float(mu4),
         k_c=float(k_c), k_tw=float(k_tw),
         z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
+        # IDE params (used only if model == "IDE")
+        ide_variant=str(ide_variant), beta=float(beta), w=float(w), wa=float(wa),
     )
 
     # -----------------------------
@@ -3183,6 +3191,23 @@ def Kfuncs_to_tables(
         jnp.mean(fk_ext[:nhead]),
     )
     f0 = float(f0_jax)
+    
+    # # adding IDE growth rate as f if the model is IDE
+    # if model_u == "IDE" and f0_IDE is not None:
+    #     f0 = float(f0_IDE)
+    #     fk_ext = jnp.full_like(k_ext, f0)
+        
+    #     print(f"\n{'='*60}")
+    #     print(f"Checking for IDE model:")
+    #     print(f"  f0 from fkptjax ODE: {f0_fkptjax:.6f}")
+    #     print(f"  f0 from template:    {f0:.6f}")
+    #     print(f"  fk_ext range:        [{float(jnp.min(fk_ext)):.6f}, {float(jnp.max(fk_ext)):.6f}]")
+    #     print(f"  Using constant f(k) = f0 for IDE")
+    #     print(f"{'='*60}\n")
+    # else:
+    #     # Use fkptjax's computed f0 for non-IDE models
+    #     f0 = f0_fkptjax
+    #     fk_ext = fk_ext_fkptjax
 
     # Optional: rescale input LCDM P(k) -> MG P(k) using growth ratio anchored at kmin
     # (disabled for HS by the check above; can still be used for HDKI if you want)
@@ -3424,6 +3449,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         screening=1,
         omegaBD=0.0,
         fR0=1e-15,
+        ide_variant="IDEModel1",
     )
 
     _pt_attrs = [
@@ -3466,18 +3492,41 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             beta_1=1.0, lambda_1=0.0, exp_s=0.0,
             mu1=0.0, mu2=0.0, mu3=0.0, mu4=0.0,
             k_c=0.1, k_tw=0.01, z_div=1.0, z_TGR=10.0, z_tw=0.5,
+            beta=0.0, w=-1.0, wa=0.0,
         )
         req = {
             "mu_OmDE": ["mu0"],
             "BZ": ["beta_1", "lambda_1", "exp_s"],
             "binning": ["mu1", "mu2", "mu3", "mu4", "k_c", "k_tw", "z_div", "z_TGR", "z_tw"],
             "GR": [],
+            "IDE": ["beta", "w", "wa"],
         }
 
         out: Dict[str, float] = {}
         for p in req.get(v, []):
             out[p] = float(getattr(cosmo, p)) if hasattr(cosmo, p) else float(defaults[p])
         return out
+    
+    # def _collect_IDE_params(self, cosmo) -> Dict[str, float]:
+    #     model_u = str(self.options.get("model", "IDE")).upper()
+        
+    #     if model_u != "IDE":
+    #         return {}
+
+    #     # later to add other couplings   
+    #     v = str(self.options.get("ide_variant", "IDEModel1"))
+    #     defaults = dict(
+    #         beta=0.0, w=-1.0, wa=0.0,
+    #     )
+    #     req = {
+    #         "IDEModel1": ["beta", "w", "wa"],
+    #         "IDEModel2": ["beta", "w", "wa"],
+    #     }     
+        
+    #     out: Dict[str, float] = {}
+    #     for p in req.get(v, []):
+    #         out[p] = float(getattr(cosmo, p)) if hasattr(cosmo, p) else float(defaults[p])
+    #     return out
 
     def calculate(self):
         super().calculate()
@@ -3494,7 +3543,18 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         if model_u == "HS" and (not rescale_PS):
             raise ValueError("You set model='HS' but rescale_PS=False. This is forbidden by design.")
 
-        mg_params = self._collect_mg_params(cosmo)
+        model_params = self._collect_mg_params(cosmo)
+        # if model_u == "IDE":
+        #     model_params = self._collect_IDE_params(cosmo)
+        # else:
+        #     model_params = self._collect_mg_params(cosmo)
+        # # ide_params = self._collect_IDE_params(cosmo)
+        
+        # f0_IDE = None
+        
+        # if model_u == "IDE":
+        #     rescale_PS = False
+        #     f0_IDE = float(self.template.f0)
 
         fkpt_params = dict(
             z=float(self.z),
@@ -3509,11 +3569,14 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             model=model,
             # HDKI uses mg_variant; HS ignores it (Kfuncs_to_tables will overwrite to "GR")
             mg_variant=str(self.options.get("mg_variant", "mu_OmDE")),
+            ide_variant=str(self.options.get("ide_variant", "IDEModel1")),
             rescale_PS=rescale_PS,
             xnow=-4.0,
             ode_method="RKQS",
             f0_kmax=1e-3,
-            **mg_params,
+            **model_params,
+            # f0_IDE=f0_IDE,
+            # **ide_params,
         )
 
         table, table_now = Kfuncs_to_tables(
@@ -3738,7 +3801,7 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
         precision =  [10,8,8],    # bispectrum precision settings
         tracer=None, fsat=None, sigv=None,
         shotnoise=1e4,
-        model='HDKI', mg_variant='mu_OmDE',
+        model='HDKI', mg_variant='mu_OmDE', ide_variant='IDEModel1',
         beyond_eds=True,
         rescale_PS=False,
         sigma8_ref=None,
@@ -4062,7 +4125,7 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
             qper=self.pt.qper
             self.power = self.pt.bispectrum_calculator(
                 params, nd=self.nd,
-                model=self.options['model'], mg_variant=self.options['mg_variant'],
+                model=self.options['model'], mg_variant=self.options['mg_variant'], ide_variant=self.options['ide_variant'],
                 prior_basis='standard',
                 beyond_eds=self.options['beyond_eds'],
                 k1k2T = self.k1k2T,ells=self.ells,
@@ -4203,7 +4266,7 @@ class fkptjaxTracerBispectrumMultipoles(BaseCalculator):
         qper=self.pt.qper
         self.power = self.pt.bispectrum_calculator(
                 params, nd=self.nd,
-                model=self.options['model'], mg_variant=self.options['mg_variant'],
+                model=self.options['model'], mg_variant=self.options['mg_variant'], ide_variant=self.options['ide_variant'],
                 prior_basis='standard',
                 beyond_eds=self.options['beyond_eds'],
                 k1k2T = self.k1k2T,ells=self.ells,

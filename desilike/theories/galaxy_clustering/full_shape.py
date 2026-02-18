@@ -3122,6 +3122,9 @@ def Kfuncs_to_tables(
     beta: float = 0.0,
     w: float = -1.0,
     wa: float = 0.0,
+    rho_m_IDE: float,
+    rho_de_IDE: float,
+    omegam_IDE: float,
     f_IDE: Optional[float] = None,       # to get the full growth rate for IDE models
     # BAO helper scalars (needed by FOLPS "now" table scalars)
     rbao: float = 104.0,
@@ -3178,6 +3181,7 @@ def Kfuncs_to_tables(
         z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
         # IDE params (used only if model == "IDE")
         ide_variant=str(ide_variant), beta=float(beta), w=float(w), wa=float(wa),
+        rho_m_IDE=float(rho_m_IDE), rho_de_IDE=float(rho_de_IDE), omegam_IDE=float(omegam_IDE),
     )
 
     # -----------------------------
@@ -3512,7 +3516,6 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             beta_1=1.0, lambda_1=0.0, exp_s=0.0,
             mu1=0.0, mu2=0.0, mu3=0.0, mu4=0.0,
             k_c=0.1, k_tw=0.01, z_div=1.0, z_TGR=10.0, z_tw=0.5,
-            beta=0.0, w=-1.0, wa=0.0,
         )
         req = {
             "mu_OmDE": ["mu0"],
@@ -3552,7 +3555,8 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
 
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         cosmo = getattr(self.template, "cosmo", None)
-
+        ba = cosmo.get_background()
+        
         model = str(self.options.get("model", "HDKI"))
         model_u = model.upper()
 
@@ -3570,12 +3574,14 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             model_params = self._collect_IDE_params(cosmo)
             rescale_PS = False
             f_IDE = float(self.template.f_IDE)
-            
+            rho_m_IDE = float(ba.rho_m(self.z))
+            rho_de_IDE = float(ba.rho_de(self.z))
+            omegam_IDE = float(ba.Omega_m(self.z))
         else:
             print("Collecting MG params inside fkptjaxPowerSpectrumMultipoles.calculate()")
             model_params = self._collect_mg_params(cosmo)
         
-
+        # breakpoint()
         fkpt_params = dict(
             z=float(self.z),
             Om=float(cosmo["Omega_m"]),
@@ -3596,7 +3602,11 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             f0_kmax=1e-3,
             **model_params,
             f_IDE=f_IDE,
+            rho_m_IDE=rho_m_IDE, 
+            rho_de_IDE=rho_de_IDE, 
+            omegam_IDE=omegam_IDE,
         )
+        # breakpoint()
 
         table, table_now = Kfuncs_to_tables(
             k=self.template.k,

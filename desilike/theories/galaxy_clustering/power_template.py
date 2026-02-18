@@ -65,8 +65,12 @@ class BasePowerSpectrumExtractor(BaseCalculator):
             self.filter(state['pk_dd_interpolator'], cosmo=cosmo)
             state['pknow_dd_interpolator'] = self.filter.smooth_pk_interpolator()
         # Adding IDE growth rate and factor
-        state['f_IDE'] = ba.get_IDE_growth_rate_z(self.z)   
-        state['D_IDE'] = ba.get_IDE_growth_factor_z(self.z)
+        # state['f_IDE'] = ba.IDE_growth_rate_z(self.z)     # this one gives an attribute error
+        # state['D_IDE'] = ba.IDE_growth_factor_z(self.z)
+        print(dir(ba))
+        print(dir(fo))
+        state['f_IDE'] = ba.growth_rate(self.z)
+        state['D_IDE'] = ba.growth_factor(self.z)
         for name, value in state.items(): setattr(self, name + ('_fid' if fiducial else ''), value)
 
 
@@ -824,8 +828,8 @@ class BandVelocityPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         state['f'] = state['fsigmar'] / state['sigmar']
         state['pk_tt_interpolator'] = fo.pk_interpolator(of='theta_cb', **_kw_interp)
         state['pk_tt'] = state['pk_tt_interpolator'](self.kp / qiso) / qiso**3
-        state['f_IDE'] = ba.get_IDE_growth_rate_z(self.z)
-        state['D_IDE'] = ba.get_IDE_growth_factor_z(self.z)
+        state['f_IDE'] = ba.growth_rate(self.z)
+        state['D_IDE'] = ba.growth_factor(self.z)
         state['qap'] = 1. if fiducial else self.apeffect.qap
         for name, value in state.items(): setattr(self, name + ('_fid' if fiducial else ''), value)
 
@@ -964,8 +968,8 @@ class BandVelocityPowerSpectrumTemplate(BasePowerSpectrumTemplate):
             self.filter = PowerSpectrumBAOFilter(self.pk_tt_interpolator_fid, engine=self.with_now, cosmo=self.cosmo, cosmo_fid=self.fiducial)
             self.pknow_tt_fid = self.filter.smooth_pk_interpolator()(self.k)
             self.pknow_dd_fid = self.pknow_tt_fid / self.f_fid**2
-        self.f_IDE = ba.get_IDE_growth_rate_z(self.z)
-        self.D_IDE = ba.get_IDE_growth_factor_z(self.z)
+        self.f_IDE = ba.growth_rate(self.z)
+        self.D_IDE = ba.growth_factor(self.z)
         self.sigma8 = fo.sigma8_z(self.z, of='delta_cb')
         self.fsigma8 = fo.sigma8_z(self.z, of='theta_cb')
 
@@ -1158,8 +1162,8 @@ class WiggleSplitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         state['sigmar'] = integrate_sigma_r2(r, state['pk_dd_interpolator'], kernel=self.kernel)**0.5
         state['f'] = state['fsigmar'] / state['sigmar']
         state['m'] = - integrate_sigma_r2(r, state['pk_tt_interpolator'], kernel=self.kernel_deriv) / state['fsigmar']**2 - 3.
-        state['f_IDE'] = ba.get_IDE_growth_rate_z(self.z)
-        state['D_IDE'] = ba.get_IDE_growth_factor_z(self.z)
+        state['f_IDE'] = ba.growth_rate(self.z)
+        state['D_IDE'] = ba.growth_factor(self.z)
         for name, value in state.items(): setattr(self, name + ('_fid' if fiducial else ''), value)
 
     def get(self):

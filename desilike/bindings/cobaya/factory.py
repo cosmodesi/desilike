@@ -30,6 +30,8 @@ class CobayaEngine(BaseExternalEngine):
                         toret[name] = tmp
                     if name in ['comoving_angular_distance', 'luminosity_distance']:
                         toret['angular_diameter_distance'] = tmp
+                    if name in ['IDE_growth_rate', 'IDE_growth_factor']:
+                        toret[name] = tmp
                 elif section == 'thermodynamics':  # rs_drag
                     if name == 'rs_drag':
                         toret['rdrag'] = None
@@ -126,6 +128,15 @@ class Background(Section):
     @flatarray(dtype=np.float64)
     def luminosity_distance(self, z):
         return self.angular_diameter_distance(z) * (1. + z)**2
+    
+    # # IDE growth rate and factor
+    # @flatarray(dtype=np.float64)
+    # def IDE_growth_rate(self, z):
+    #     return self._provider.get_IDE_growth_rate(z)
+    
+    # @flatarray(dtype=np.float64)
+    # def IDE_growth_factor(self, z):
+    #     return self._provider.get_IDE_growth_factor(z)
 
 
 class Thermodynamics(Section):

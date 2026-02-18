@@ -2445,7 +2445,7 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         mock_type='cutsky',
         tracer=None, fsat=None, sigv=None,
         shotnoise=1e4,
-        model='HDKI', mg_variant='mu_OmDE',
+        model='HDKI', mg_variant='mu_OmDE', ide_variant='IDEModel1',
         b3_coev=True,
         beyond_eds=True,
         rescale_PS=False,
@@ -2903,6 +2903,13 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         f = getattr(self.pt, "f0", None)
         if f is None:
             raise ValueError("Missing MG growth rate: expected pt.f0 (preferred) or pt.f.")
+        
+        if self.options['model'] == 'IDE':
+            f_IDE = getattr(self.pt, "f_IDE", None)
+            if f_IDE is None:
+                raise ValueError("Missing IDE growth rate: expected pt.f_IDE.")
+            f = f_IDE
+            print(f"Using IDE growth rate: {f:.3f} at z={self.z:.3f}")
 
         # --- Eulerian ---
         if pb == 'APscaling':
@@ -3115,7 +3122,7 @@ def Kfuncs_to_tables(
     beta: float = 0.0,
     w: float = -1.0,
     wa: float = 0.0,
-    # f0_IDE: Optional[float] = None,       # to get the full growth rate for IDE models
+    f_IDE: Optional[float] = None,       # to get the full growth rate for IDE models
     # BAO helper scalars (needed by FOLPS "now" table scalars)
     rbao: float = 104.0,
     pmax_bao: float = 0.4,
@@ -3181,33 +3188,37 @@ def Kfuncs_to_tables(
     Y = DP(k_ext_np, derivs, solver)  # shape (2, nk)
     D_ext, Dp_ext = Y[0], Y[1]
 
-    fk_ext = jnp.asarray(Dp_ext / D_ext)
+    fk_ext_fkptjax = jnp.asarray(Dp_ext / D_ext)
 
     mask0 = (k_ext < float(f0_kmax))
     nhead = int(min(5, int(k_ext.shape[0])))
     f0_jax = jnp.where(
         jnp.any(mask0),
-        jnp.sum(jnp.where(mask0, fk_ext, 0.0)) / jnp.maximum(jnp.sum(mask0), 1),
-        jnp.mean(fk_ext[:nhead]),
+        jnp.sum(jnp.where(mask0, fk_ext_fkptjax, 0.0)) / jnp.maximum(jnp.sum(mask0), 1),
+        jnp.mean(fk_ext_fkptjax[:nhead]),
     )
-    f0 = float(f0_jax)
+    f0_fkptjax = float(f0_jax)
     
-    # # adding IDE growth rate as f if the model is IDE
-    # if model_u == "IDE" and f0_IDE is not None:
-    #     f0 = float(f0_IDE)
-    #     fk_ext = jnp.full_like(k_ext, f0)
-        
-    #     print(f"\n{'='*60}")
-    #     print(f"Checking for IDE model:")
-    #     print(f"  f0 from fkptjax ODE: {f0_fkptjax:.6f}")
-    #     print(f"  f0 from template:    {f0:.6f}")
-    #     print(f"  fk_ext range:        [{float(jnp.min(fk_ext)):.6f}, {float(jnp.max(fk_ext)):.6f}]")
-    #     print(f"  Using constant f(k) = f0 for IDE")
-    #     print(f"{'='*60}\n")
-    # else:
-    #     # Use fkptjax's computed f0 for non-IDE models
-    #     f0 = f0_fkptjax
-    #     fk_ext = fk_ext_fkptjax
+    # adding IDE growth rate as f if the model is IDE
+    if model_u == "IDE":
+        f0_IDE = float(f_IDE)
+        if f0_IDE is None:
+            raise ValueError("Missing IDE growth rate: expected pt.f_IDE.")
+        f0 = float(f0_IDE)
+        fk_ext = jnp.full_like(k_ext, f0_IDE)
+
+        print(f"\n{'='*60}")
+        print("At Step 3:Growth rate f(k) on extended grid + f0 convention")
+        print(f"Checking for IDE model:")
+        print(f"  f0 from fkptjax ODE: {f0_fkptjax:.6f}")
+        print(f"  f0 from template:    {f0:.6f}")
+        print(f"  fk_ext range:        [{float(jnp.min(fk_ext)):.6f}, {float(jnp.max(fk_ext)):.6f}]")
+        print(f"  Using constant f(k) = f0 for IDE")
+        print(f"{'='*60}\n")
+    else:
+        # Use fkptjax's computed f0 for non-IDE models
+        f0 = f0_fkptjax
+        fk_ext = fk_ext_fkptjax
 
     # Optional: rescale input LCDM P(k) -> MG P(k) using growth ratio anchored at kmin
     # (disabled for HS by the check above; can still be used for HDKI if you want)
@@ -3281,6 +3292,15 @@ def Kfuncs_to_tables(
         ApOverf0 = 0.0
         CFD3 = 1.0
         CFD3p = 1.0
+    
+    print(f"\n{'='*60}")
+    print("At Step 6: Kernel constants: EdS vs beyond-EdS")
+    print(f"f0: {f0:.6f}")
+    print(f"A: {A:.6f}")
+    print(f"ApOverf0: {ApOverf0:.6f}")
+    print(f"CFD3: {CFD3:.6f}")
+    print(f"CFD3p: {CFD3p:.6f}")
+    print(f"{'='*60}\n")
 
     # -----------------------------
     # 7) Evaluate k-functions on fkptjax native grids
@@ -3458,7 +3478,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         "scalars", "scalars_now",
         "A_full", "remove_DeltaP",
         "qpar", "qper",
-        "kt", "fk_norm", "fk", "f0",
+        "kt", "fk_norm", "fk", "f0", "f_IDE",
     ]
 
     def initialize(self, *args, mu=6, **kwargs):
@@ -3499,7 +3519,6 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             "BZ": ["beta_1", "lambda_1", "exp_s"],
             "binning": ["mu1", "mu2", "mu3", "mu4", "k_c", "k_tw", "z_div", "z_TGR", "z_tw"],
             "GR": [],
-            "IDE": ["beta", "w", "wa"],
         }
 
         out: Dict[str, float] = {}
@@ -3507,26 +3526,26 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             out[p] = float(getattr(cosmo, p)) if hasattr(cosmo, p) else float(defaults[p])
         return out
     
-    # def _collect_IDE_params(self, cosmo) -> Dict[str, float]:
-    #     model_u = str(self.options.get("model", "IDE")).upper()
+    def _collect_IDE_params(self, cosmo) -> Dict[str, float]:
+        model_u = str(self.options.get("model")).upper()
         
-    #     if model_u != "IDE":
-    #         return {}
+        if model_u != "IDE":
+            return {}
 
-    #     # later to add other couplings   
-    #     v = str(self.options.get("ide_variant", "IDEModel1"))
-    #     defaults = dict(
-    #         beta=0.0, w=-1.0, wa=0.0,
-    #     )
-    #     req = {
-    #         "IDEModel1": ["beta", "w", "wa"],
-    #         "IDEModel2": ["beta", "w", "wa"],
-    #     }     
+        # later to add other couplings   
+        v = str(self.options.get("ide_variant", "IDEModel1"))
+        defaults = dict(
+            beta=0.0, w=-1.0, wa=0.0,
+        )
+        req = {
+            "IDEModel1": ["beta", "w", "wa"],
+            "IDEModel2": ["beta", "w", "wa"],
+        }     
         
-    #     out: Dict[str, float] = {}
-    #     for p in req.get(v, []):
-    #         out[p] = float(getattr(cosmo, p)) if hasattr(cosmo, p) else float(defaults[p])
-    #     return out
+        out: Dict[str, float] = {}
+        for p in req.get(v, []):
+            out[p] = float(getattr(cosmo, p)) if hasattr(cosmo, p) else float(defaults[p])
+        return out
 
     def calculate(self):
         super().calculate()
@@ -3539,22 +3558,23 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
 
         rescale_PS = bool(self.options.get("rescale_PS", False))
 
+        f_IDE = None
+
         # Your requirement: HS must have rescale_PS=True or error
         if model_u == "HS" and (not rescale_PS):
             raise ValueError("You set model='HS' but rescale_PS=False. This is forbidden by design.")
 
-        model_params = self._collect_mg_params(cosmo)
-        # if model_u == "IDE":
-        #     model_params = self._collect_IDE_params(cosmo)
-        # else:
-        #     model_params = self._collect_mg_params(cosmo)
-        # # ide_params = self._collect_IDE_params(cosmo)
+        # model_params = self._collect_mg_params(cosmo)
+        if model_u == "IDE":
+            print("Collecting IDE params inside fkptjaxPowerSpectrumMultipoles.calculate()")
+            model_params = self._collect_IDE_params(cosmo)
+            rescale_PS = False
+            f_IDE = float(self.template.f_IDE)
+            
+        else:
+            print("Collecting MG params inside fkptjaxPowerSpectrumMultipoles.calculate()")
+            model_params = self._collect_mg_params(cosmo)
         
-        # f0_IDE = None
-        
-        # if model_u == "IDE":
-        #     rescale_PS = False
-        #     f0_IDE = float(self.template.f0)
 
         fkpt_params = dict(
             z=float(self.z),
@@ -3575,8 +3595,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             ode_method="RKQS",
             f0_kmax=1e-3,
             **model_params,
-            # f0_IDE=f0_IDE,
-            # **ide_params,
+            f_IDE=f_IDE,
         )
 
         table, table_now = Kfuncs_to_tables(
@@ -3605,6 +3624,15 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         fk_norm = np.asarray(table[2])        # this is f(k)/f0 on kout
         f0_mg = float(table[-1])              # scalar f0 used for normalization
         fk_mg = fk_norm * f0_mg               # actual f(k) on kout
+        
+        if model_u == "IDE":
+            f_IDE = float(self.template.f_IDE)
+            f0_IDE = float(self.template.f0)
+            fk_model = fk_norm * f0_IDE
+            f0_model = f0_IDE
+        else:
+            f0_model = f0_mg
+            fk_model = fk_mg
 
         # Store it in pt (so you can use it downstream if needed)
         self.pt = Namespace(
@@ -3618,8 +3646,9 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             # NEW: MG growth
             kt=kt,
             fk_norm=fk_norm,
-            fk=fk_mg,        # optional: expose actual f(k) as pt.fk
-            f0=f0_mg,        # IMPORTANT: pt.f0 must match table normalization
+            fk=fk_model,        # optional: expose actual f(k) as pt.fk
+            f0=f0_model,        # IMPORTANT: pt.f0 must match table normalization
+            f_IDE=f_IDE,        # Storing IDE growth rate as pt.f_IDE
             qpar=self.template.qpar, qper=self.template.qper,
         )
 
@@ -3631,6 +3660,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         self.f0 = self.pt.f0
         self.fk = self.pt.fk
         self.fk_norm = self.pt.fk_norm
+        self.f_IDE = self.pt.f_IDE
 
     def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
         import folps as folpsv2

@@ -3122,9 +3122,8 @@ def Kfuncs_to_tables(
     beta: float = 0.0,
     w: float = -1.0,
     wa: float = 0.0,
-    rho_m_IDE: float,
-    rho_de_IDE: float,
-    omegam_IDE: float,
+    Oc: float = 0.0,
+    Ol: float = 0.0,
     f_IDE: Optional[float] = None,       # to get the full growth rate for IDE models
     # BAO helper scalars (needed by FOLPS "now" table scalars)
     rbao: float = 104.0,
@@ -3168,7 +3167,7 @@ def Kfuncs_to_tables(
     solver = ODESolver(zout=float(z), xnow=float(xnow), method=str(ode_method))
 
     derivs = ModelDerivatives(
-        om=float(Om), ol=float(1.0 - Om),
+        om=float(Om), ol=float(Ol),
         # HS params (used only if model == "HS")
         fR0=float(fR0), beta2=float(beta2), nHS=float(nHS),
         screening=int(screening), omegaBD=float(omegaBD),
@@ -3180,8 +3179,7 @@ def Kfuncs_to_tables(
         k_c=float(k_c), k_tw=float(k_tw),
         z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
         # IDE params (used only if model == "IDE")
-        ide_variant=str(ide_variant), beta=float(beta), w=float(w), wa=float(wa),
-        rho_m_IDE=float(rho_m_IDE), rho_de_IDE=float(rho_de_IDE), omegam_IDE=float(omegam_IDE),
+        ide_variant=str(ide_variant), beta=float(beta), w=float(w), wa=float(wa), oc=float(Oc)
     )
 
     # -----------------------------
@@ -3192,6 +3190,7 @@ def Kfuncs_to_tables(
     Y = DP(k_ext_np, derivs, solver)  # shape (2, nk)
     D_ext, Dp_ext = Y[0], Y[1]
 
+    # adding a suffix fkptjax to the growth rate from the fkptjax ODE solver
     fk_ext_fkptjax = jnp.asarray(Dp_ext / D_ext)
 
     mask0 = (k_ext < float(f0_kmax))
@@ -3203,7 +3202,7 @@ def Kfuncs_to_tables(
     )
     f0_fkptjax = float(f0_jax)
     
-    # adding IDE growth rate as f if the model is IDE
+    # set f0 and fk_ext both to be equal to f_IDE if the model is IDE
     if model_u == "IDE":
         f0_IDE = float(f_IDE)
         if f0_IDE is None:
@@ -3211,16 +3210,16 @@ def Kfuncs_to_tables(
         f0 = float(f0_IDE)
         fk_ext = jnp.full_like(k_ext, f0_IDE)
 
-        print(f"\n{'='*60}")
-        print("At Step 3:Growth rate f(k) on extended grid + f0 convention")
-        print(f"Checking for IDE model:")
-        print(f"  f0 from fkptjax ODE: {f0_fkptjax:.6f}")
-        print(f"  f0 from template:    {f0:.6f}")
-        print(f"  fk_ext range:        [{float(jnp.min(fk_ext)):.6f}, {float(jnp.max(fk_ext)):.6f}]")
-        print(f"  Using constant f(k) = f0 for IDE")
-        print(f"{'='*60}\n")
+        # print(f"\n{'='*60}")
+        # print("At Step 3:Growth rate f(k) on extended grid + f0 convention")
+        # print(f"Checking for IDE model:")
+        # print(f"  f0 from fkptjax ODE: {f0_fkptjax:.6f}")
+        # print(f"  f0 from template:    {f0:.6f}")
+        # print(f"  fk_ext range:        [{float(jnp.min(fk_ext)):.6f}, {float(jnp.max(fk_ext)):.6f}]")
+        # print(f"  Using constant f(k) = f0 for IDE")
+        # print(f"{'='*60}\n")
     else:
-        # Use fkptjax's computed f0 for non-IDE models
+        # Otherwise use the f0 and fk_ext from fkptjax
         f0 = f0_fkptjax
         fk_ext = fk_ext_fkptjax
 
@@ -3296,15 +3295,6 @@ def Kfuncs_to_tables(
         ApOverf0 = 0.0
         CFD3 = 1.0
         CFD3p = 1.0
-    
-    print(f"\n{'='*60}")
-    print("At Step 6: Kernel constants: EdS vs beyond-EdS")
-    print(f"f0: {f0:.6f}")
-    print(f"A: {A:.6f}")
-    print(f"ApOverf0: {ApOverf0:.6f}")
-    print(f"CFD3: {CFD3:.6f}")
-    print(f"CFD3p: {CFD3p:.6f}")
-    print(f"{'='*60}\n")
 
     # -----------------------------
     # 7) Evaluate k-functions on fkptjax native grids
@@ -3535,7 +3525,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         if model_u != "IDE":
             return {}
 
-        # later to add other couplings   
+        # later to add other couplings & coupling-specificparameters  
         v = str(self.options.get("ide_variant", "IDEModel1"))
         defaults = dict(
             beta=0.0, w=-1.0, wa=0.0,
@@ -3570,18 +3560,12 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
 
         # model_params = self._collect_mg_params(cosmo)
         if model_u == "IDE":
-            print("Collecting IDE params inside fkptjaxPowerSpectrumMultipoles.calculate()")
             model_params = self._collect_IDE_params(cosmo)
             rescale_PS = False
             f_IDE = float(self.template.f_IDE)
-            rho_m_IDE = float(ba.rho_m(self.z))
-            rho_de_IDE = float(ba.rho_de(self.z))
-            omegam_IDE = float(ba.Omega_m(self.z))
         else:
-            print("Collecting MG params inside fkptjaxPowerSpectrumMultipoles.calculate()")
             model_params = self._collect_mg_params(cosmo)
         
-        # breakpoint()
         fkpt_params = dict(
             z=float(self.z),
             Om=float(cosmo["Omega_m"]),
@@ -3602,11 +3586,9 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             f0_kmax=1e-3,
             **model_params,
             f_IDE=f_IDE,
-            rho_m_IDE=rho_m_IDE, 
-            rho_de_IDE=rho_de_IDE, 
-            omegam_IDE=omegam_IDE,
+            Oc=float(cosmo["Omega_cdm"]),
+            Ol=float(cosmo["Omega_de"])
         )
-        # breakpoint()
 
         table, table_now = Kfuncs_to_tables(
             k=self.template.k,
@@ -3632,17 +3614,16 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         # Extract MG growth info from tables
         kt = np.asarray(table[0])
         fk_norm = np.asarray(table[2])        # this is f(k)/f0 on kout
-        f0_mg = float(table[-1])              # scalar f0 used for normalization
-        fk_mg = fk_norm * f0_mg               # actual f(k) on kout
+        f0_fkptjax = float(table[-1])              # scalar f0 used for normalization
+        fk_fkptjax = fk_norm * f0_fkptjax               # actual f(k) on kout
         
         if model_u == "IDE":
-            f_IDE = float(self.template.f_IDE)
-            f0_IDE = float(self.template.f0)
-            fk_model = fk_norm * f0_IDE
-            f0_model = f0_IDE
+            f_IDE = float(self.template.f_IDE)   # scale-independent IDE growth rate
+            f0_model = f_IDE
+            fk_model = fk_norm * f_IDE
         else:
-            f0_model = f0_mg
-            fk_model = fk_mg
+            f0_model = f0_fkptjax
+            fk_model = fk_fkptjax
 
         # Store it in pt (so you can use it downstream if needed)
         self.pt = Namespace(
@@ -3658,7 +3639,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             fk_norm=fk_norm,
             fk=fk_model,        # optional: expose actual f(k) as pt.fk
             f0=f0_model,        # IMPORTANT: pt.f0 must match table normalization
-            f_IDE=f_IDE,        # Storing IDE growth rate as pt.f_IDE
+            f_IDE=f_IDE,
             qpar=self.template.qpar, qper=self.template.qper,
         )
 
@@ -3671,7 +3652,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         self.fk = self.pt.fk
         self.fk_norm = self.pt.fk_norm
         self.f_IDE = self.pt.f_IDE
-
+        
     def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
         import folps as folpsv2
         import jax.numpy as jnp

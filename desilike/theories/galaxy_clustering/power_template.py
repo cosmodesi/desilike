@@ -65,10 +65,6 @@ class BasePowerSpectrumExtractor(BaseCalculator):
             self.filter(state['pk_dd_interpolator'], cosmo=cosmo)
             state['pknow_dd_interpolator'] = self.filter.smooth_pk_interpolator()
         # Adding IDE growth rate and factor
-        # state['f_IDE'] = ba.IDE_growth_rate_z(self.z)     # this one gives an attribute error
-        # state['D_IDE'] = ba.IDE_growth_factor_z(self.z)
-        print(dir(ba))
-        print(dir(fo))
         state['f_IDE'] = ba.growth_rate(self.z)
         state['D_IDE'] = ba.growth_factor(self.z)
         for name, value in state.items(): setattr(self, name + ('_fid' if fiducial else ''), value)

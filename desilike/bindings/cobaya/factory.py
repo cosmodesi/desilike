@@ -30,8 +30,9 @@ class CobayaEngine(BaseExternalEngine):
                         toret[name] = tmp
                     if name in ['comoving_angular_distance', 'luminosity_distance']:
                         toret['angular_diameter_distance'] = tmp
-                    if name in ['IDE_growth_rate', 'IDE_growth_factor']:
-                        toret[name] = tmp
+                    # for the cobaya factory, IDE changes need to be checked    
+                    # if name in ['IDE_growth_rate', 'IDE_growth_factor']:
+                    #     toret[name] = tmp
                 elif section == 'thermodynamics':  # rs_drag
                     if name == 'rs_drag':
                         toret['rdrag'] = None

@@ -666,6 +666,8 @@ class MarkovChainSampler(BaseSampler):
         else:
             chains = [None] * self.n_chains
 
+        chains = self.pool.bcast(chains, root=0)
+
         if flatten_chains:
             return Chain.concatenate(chains)
         else:

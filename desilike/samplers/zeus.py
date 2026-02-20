@@ -54,36 +54,30 @@ class ZeusSampler(MarkovChainSampler):
         if self.mpicomm.rank == 0:
             self.sampler = zeus.EnsembleSampler(
                 self.n_chains, self.n_dim, self.compute_posterior, **kwargs)
-        else:
-            self.sampler = None
 
         if rng is not None:
             warnings.warn("Zeus does not support random seeds. Results are "
-                          "not reproducible.")
+                          "not deterministic.")
 
-    def run_sampler(self, n_steps, **kwargs):
+    def run_sampler(self, n_steps):
         """Run the ``zeus`` sampler.
 
         Parameters
         ----------
         n_steps: int
             Number of steps to take.
-        kwargs: dict, optional
-            Extra keyword arguments passed to ``zeus``'s ``run_mcmc`` method.
 
         """
-        kwargs = update_kwargs(kwargs, 'zeus', nsteps=n_steps, log_prob0=None)
+        start, blobs0, log_prob0 = self.state
+        samples = np.zeros((self.n_chains, n_steps, self.n_dim))
+        derived = np.zeros((self.n_chains, n_steps, len(
+            self.likelihood.params.select(derived=True))))
+        log_post = np.zeros((self.n_chains, n_steps))
+        for i, state in enumerate(self.sampler.sample(
+                start, log_prob0=log_prob0, blobs0=np.squeeze(blobs0),
+                iterations=n_steps, progress=False)):
+            samples[:, i, :] = state[0]
+            derived[:, i, :] = state[2].reshape(self.n_chains, -1)
+            log_post[:, i] = state[1]
 
-        try:
-            self.sampler.get_last_sample()
-            start = None
-        except AttributeError:
-            start = self.chains[:, -1, :]
-            kwargs['log_prob0'] = self.log_post[:, -1]
-
-        self.sampler.run_mcmc(start, **kwargs)
-        chains = np.transpose(self.sampler.get_chain()[-n_steps:],
-                              (1, 0, 2))
-        log_post = self.sampler.get_log_prob()[-n_steps:].T
-        self.chains = np.concatenate([self.chains, chains], axis=1)
-        self.log_post = np.concatenate([self.log_post, log_post], axis=1)
+        self.extend(samples, derived, log_post)

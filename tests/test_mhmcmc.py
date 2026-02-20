@@ -71,7 +71,7 @@ def test_rosenbrock(n_fast, f_fast, f_drag):
         posterior, f_fast=f_fast, f_drag=f_drag, fast=fast, rng=rng)
     sampler.update(pos=np.zeros((10, 2)), cov=cov)
 
-    chains, log_p = sampler.make_n_steps(30000)
+    chains, _, log_p = sampler.make_n_steps(30000)
     chains = chains[:, 1000:]  # burn-in
 
     tau = np.amax(integrated_time(np.transpose(chains, (1, 0, 2))))

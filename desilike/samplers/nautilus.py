@@ -49,11 +49,9 @@ class NautilusSampler(PopulationSampler):
             self.sampler = nautilus.Sampler(
                 self.prior_transform, self.compute_likelihood, self.n_dim,
                 **kwargs)
-        else:
-            self.sampler = None
 
     def run_sampler(self, **kwargs):
-        """Run the nautilus sampler.
+        """Run the ``nautilus`` sampler.
 
         Parameters
         ----------
@@ -63,15 +61,15 @@ class NautilusSampler(PopulationSampler):
         Returns
         -------
         samples : numpy.ndarray of shape (n_samples, n_dim)
-            Sampler results.
+            Samples of varied parameters.
+        derived : numpy.ndarray
+            Samples of derived parameters.
         extras : dict
-            Extra parameters such as weights and derived parameters.
+            Extra parameters such as weights.
 
         """
         self.sampler.run(**kwargs)
         samples, log_w, log_l, blobs = self.sampler.posterior(
             return_blobs=True)
-        extras = dict(aweight=np.exp(log_w), loglikelihood=log_l)
-        extras.update(dict(zip(self.params.keys()[self.n_dim:],
-                               np.atleast_2d(blobs.T))))
-        return samples, extras
+        return samples, blobs.reshape(len(samples), -1), dict(
+            aweight=np.exp(log_w))

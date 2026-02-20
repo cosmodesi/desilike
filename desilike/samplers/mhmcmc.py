@@ -141,7 +141,7 @@ class StandAloneMetropolisHastingsSampler():
             self.map = pool.map
         self.rng = rng
 
-    def update(self, pos=None, log_p=None, cov=None):
+    def update(self, pos=None, log_p=None, blobs=None, cov=None):
         """Update the sampler's starting position and/or proposal.
 
         Parameters
@@ -151,6 +151,8 @@ class StandAloneMetropolisHastingsSampler():
         log_p : numpy.ndarray of shape (n_chains) or None, optional
             Logarith of the posterior of the starting position(s). If not
             provided, these values are computed.
+        blobs : numpy.ndarray of shape (n_chains, ...) or None, optional
+            Blobs for the starting positions.
         cov : numpy.ndarray or None, optional
             Covariance matrix used to whiten parameter space.
 
@@ -159,10 +161,11 @@ class StandAloneMetropolisHastingsSampler():
             self.pos = np.array(pos, dtype=float)
             self.n_chains = len(pos)
 
-            if log_p is None:
-                self.log_p = self.compute_posterior(self.pos)
-            else:
-                self.log_p = np.array(log_p)
+            if log_p is None or blobs is None:
+                log_p, blobs = self.compute_posterior(self.pos)
+
+            self.log_p = np.array(log_p)
+            self.blobs = np.array(blobs)
 
             self.counter = 0
             self.proposal_fast = []
@@ -178,16 +181,25 @@ class StandAloneMetropolisHastingsSampler():
 
         Parameters
         ----------
-        point : numpy.ndarray of shape (n_points, n_dim)
+        points : numpy.ndarray of shape (n_points, n_dim)
             Points for which to compute the likelihood.
 
         Returns
         -------
-        log_p : float
+        log_p : np.ndarray of shape (n_points, )
             Natural logarithm of the posterior.
+        blobs : np.ndarray of shape (n_points, ...)
+            Blobs associated with the posterior function.
 
         """
-        return np.array(list(self.map(self.posterior, points)))
+        results = list(self.map(self.posterior, points))
+        if isinstance(results[0], tuple):
+            log_p = np.array([r[0] for r in results])
+            blobs = np.array([r[1] for r in results])
+        else:
+            log_p = np.array(results)
+            blobs = np.zeros((len(points), 0))
+        return log_p, blobs
 
     def propose_fast(self):
         """Propose a fast-parameter step.
@@ -231,6 +243,8 @@ class StandAloneMetropolisHastingsSampler():
         -------
         pos : numpy.ndarray of shape (n_chains, n_dim)
             New positions in parameter space.
+        blobs : np.ndarray of shape (n_chains, ...)
+            Blobs associated with the posterior function.
         log_p : numpy.ndarray of shape (n_chains)
             Logarithm of the posterior.
 
@@ -244,7 +258,7 @@ class StandAloneMetropolisHastingsSampler():
 
         # First, assume we do a regular step.
         pos_prop = self.pos + step
-        log_p_prop = np.array(list(self.map(self.posterior, pos_prop)))
+        log_p_prop, blobs_prop = self.compute_posterior(pos_prop)
         p_accept = np.exp(log_p_prop - self.log_p)
 
         # If applicable, do a dragging step, instead.
@@ -263,10 +277,10 @@ class StandAloneMetropolisHastingsSampler():
 
             # Run a mini MCMC chain on x, the fast parameter.
             for i, step in enumerate(steps_drag, start=1):
-                log_p_new_prop = self.compute_posterior(
+                log_p_new_prop, blobs_prop = self.compute_posterior(
                     y_new + x[-1] + step)
                 log_p_old_prop = self.compute_posterior(
-                    y_old + x[-1] + step)
+                    y_old + x[-1] + step)[0]
                 p_accept = np.exp(
                     ((n - i) * log_p_old_prop + i * log_p_new_prop -
                      (n - i) * log_p_old[-1] - i * log_p_new[-1]) / n)
@@ -285,8 +299,9 @@ class StandAloneMetropolisHastingsSampler():
         accept = self.rng.random(size=self.n_chains) < p_accept
         self.pos = np.where(accept[:, None], pos_prop, self.pos)
         self.log_p = np.where(accept, log_p_prop, self.log_p)
+        self.blobs = np.where(accept[:, None], blobs_prop, self.blobs)
 
-        return self.pos.copy(), self.log_p.copy()
+        return self.pos.copy(), self.blobs.copy(), self.log_p.copy()
 
     def make_n_steps(self, n_steps):
         """Advance all chains by :math:`n` steps.
@@ -300,14 +315,17 @@ class StandAloneMetropolisHastingsSampler():
         -------
         chains : numpy.ndarray of shape (n_chains, n_steps, n_dim)
             Positiions in parameter space.
+        blobs : numpy.ndarray of shape (n_chains, n_steps, ...)
+            Blobs returned from the posterior.
         log_p : numpy.ndarray of shape (n_chains, n_steps)
             Logarithm of the posterior.
 
         """
         results = [self.make_one_step() for _ in range(n_steps)]
         chains = np.stack([r[0] for r in results], axis=1)
-        log_p = np.stack([r[1] for r in results], axis=1)
-        return chains, log_p
+        blobs = np.stack([r[1] for r in results], axis=1)
+        log_p = np.stack([r[2] for r in results], axis=1)
+        return chains, blobs, log_p
 
 
 class MetropolisHastingsSampler(MarkovChainSampler):
@@ -372,15 +390,15 @@ class MetropolisHastingsSampler(MarkovChainSampler):
 
         """
         if not hasattr(self.sampler, 'pos'):
+            samples, derived, log_post = self.state
             self.sampler.update(
-                pos=self.chains[:, -1, :], log_p=self.log_post[:, -1])
+                pos=samples, log_p=log_post, blobs=derived)
 
-        chains, log_post = self.sampler.make_n_steps(steps)
-        self.chains = np.concatenate([self.chains, chains], axis=1)
-        self.log_post = np.concatenate([self.log_post, log_post], axis=1)
+        self.extend(*self.sampler.make_n_steps(steps))
 
         if len(self.chains[0]) < self.adaptation_steps:
-            cov = np.cov(self.chains.reshape(-1, self.n_dim), rowvar=False)
+            cov = np.mean([chain.covariance(self.likelihood.varied_params)
+                           for chain in self.chains], axis=0)
             try:
                 self.sampler.update(cov=cov)
             except np.linalg.LinAlgError:

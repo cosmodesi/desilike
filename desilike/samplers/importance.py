@@ -14,13 +14,13 @@ class ImportanceSampler(StaticSampler):
     experiments.
     """
 
-    def get_samples(self, chain=None):
+    def get_samples(self, samples=None):
         """Get samples on the grid.
 
         Parameters
         ----------
         chain : desilike.samples.Chain, optional
-            Input chain that defines the samples. Default is None.
+            Input chain that defines the samples.
 
         Returns
         -------
@@ -28,22 +28,21 @@ class ImportanceSampler(StaticSampler):
             Grid to be evaluated.
 
         """
-        return np.column_stack([chain[key].value for key in
-                                self.params[:self.n_dim]])
+        return np.column_stack([
+            samples[key].value for key in self.likelihood.varied_params])
 
-    def run(self, chain, mode='resample'):
-        """Reweight a chain using importance sampling.
+    def run(self, samples, resample=True):
+        """Reweight a sample using importance sampling.
 
         Parameters
         ----------
-        chain : desilike.samples.Chain
-            Input chain that samples a posterior.
-        mode : str, optional
-            If 'resample', the new weights for the chain will be the ratio
-            of the new and old posterior. Effectively, the new chain will
-            sample the new posterior. If 'combine', the new weights are the
-            product of the old posterior and the new likelihood. Default is
-            'resample'.
+        samples : desilike.samples.Chain
+            Input samples with a corresponding posterior.
+        resample : bool, optional
+            If True, the new weights for the chain will be the ratio of the new
+            and old posterior. Effectively, the new chain will sample the new
+            posterior. If False, the new weights are the product of the old
+            posterior and the new likelihood. Default is True.
 
         Returns
         -------
@@ -51,23 +50,13 @@ class ImportanceSampler(StaticSampler):
             Sampler results.
 
         """
-        if mode not in ['resample', 'combine']:
-            raise ValueError(
-                f"Unkown mode '{mode}'. Choose 'resample' or 'combine'.")
+        results = super().run(samples=samples)
 
-        chain_new = super().run(chain=chain)
-        chain_old = chain
-        if mode == 'resample':
-            chain = chain_new
-            # The new chain is already weighted by the new posterior. Now undo
-            # the weighting of the old posterior.
-            log_w = -chain_old.logposterior
+        if resample:
+            log_w = results.logposterior - samples.logposterior
         else:
-            chain = chain_old.copy()
-            log_l_new = chain_new[chain_new._loglikelihood]
-            if chain._loglikelihood in chain:
-                chain[chain._loglikelihood] += log_l_new
-            chain.logposterior += log_l_new
-            log_w = log_l_new
-        chain.aweight *= np.exp(log_w - logsumexp(log_w))
-        return chain
+            log_w = (results.logposterior - results[results._logprior] +
+                     samples.logposterior)
+
+        results.aweight = np.exp(log_w - logsumexp(log_w))
+        return results

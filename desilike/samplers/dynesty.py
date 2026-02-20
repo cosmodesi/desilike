@@ -67,8 +67,6 @@ class DynestySampler(PopulationSampler):
                 self.sampler = sampler_cls(
                     self.compute_likelihood, self.prior_transform, self.n_dim,
                     **kwargs)
-        else:
-            self.sampler = None
 
     def run_sampler(self, **kwargs):
         """Run the ``dynesty`` sampler.
@@ -82,20 +80,20 @@ class DynestySampler(PopulationSampler):
         Returns
         -------
         samples : numpy.ndarray of shape (n_samples, n_dim)
-            Sampler results.
-        extras : dict
-            Extra parameters such as weights and derived parameters.
+            Samples of varied parameters.
+        derived : numpy.ndarray
+            Samples of derived parameters.
+        weights : numpy.ndarray
+            Weights for the samples.
 
         """
         checkpoint_file = None if self.directory is None else str(
             self.directory / 'dynesty.pkl')
-        kwargs = update_kwargs(kwargs, 'dynesty',
-                               checkpoint_file=checkpoint_file)
+        kwargs = update_kwargs(
+            kwargs, 'dynesty', checkpoint_file=checkpoint_file)
 
         self.sampler.run_nested(**kwargs)
         results = self.sampler.results
-        samples = results.samples
-        extras = dict(aweight=results.importance_weights())
-        extras.update(dict(zip(self.params.keys()[self.n_dim:],
-                               results['blob'].T)))
-        return samples, extras
+
+        return results.samples, results['blob'], dict(
+            aweight=results.importance_weights())

@@ -31,7 +31,7 @@ KWARGS_INIT_FAST = dict(
 KWARGS_RUN = dict(
     dynesty=dict(n_effective=0),
     grid=dict(grid=np.linspace(0, 1, 101)),
-    importance=dict(chain=Chain(dict(
+    importance=dict(samples=Chain(dict(
         a=np.repeat(np.linspace(0, 1, 101), 101),
         b=np.tile(np.linspace(0, 1, 101), 101)))),
     nautilus=dict(n_eff=100),
@@ -39,7 +39,7 @@ KWARGS_RUN = dict(
     qmc=dict(size=10000))
 KWARGS_RUN_FAST = dict(
     dynesty=dict(n_effective=0),
-    importance=dict(chain=Chain(dict(
+    importance=dict(samples=Chain(dict(
         a=np.repeat(np.linspace(0, 1, 11), 101),
         b=np.tile(np.linspace(0, 1, 11), 101)))),
     emcee=dict(max_steps=100),
@@ -76,16 +76,16 @@ def test_accuracy(likelihood, key):
     # produce acceptable results.
 
     sampler = SAMPLER_CLS[key](likelihood, rng=42, **KWARGS_INIT.get(key, {}))
-    chain = sampler.run(**KWARGS_RUN.get(key, {}))
+    results = sampler.run(**KWARGS_RUN.get(key, {}))
 
     # The mean should match.
-    assert np.allclose(chain.mean(likelihood.varied_params),
+    assert np.allclose(results.mean(likelihood.varied_params),
                        likelihood.flatdata, atol=0.05, rtol=0)
     # The covariance should match.
     cov = np.linalg.inv(likelihood.precision + np.array([[100, 0], [0, 0]]))
     cov_err = np.sqrt(
         (cov**2 + np.outer(np.diag(cov), np.diag(cov))) / 100)
-    assert np.allclose(chain.covariance(likelihood.varied_params), cov,
+    assert np.allclose(results.covariance(likelihood.varied_params), cov,
                        atol=3 * cov_err)
 
 
@@ -95,16 +95,16 @@ def test_importance_combine(likelihood):
     # double counting the prior.
 
     sampler = samplers.GridSampler(likelihood)
-    chain = sampler.run(grid=np.linspace(0, 1, 101))
+    results = sampler.run(grid=np.linspace(0, 1, 101))
 
     sampler = samplers.ImportanceSampler(likelihood)
-    chain = sampler.run(chain=chain, mode='combine')
+    results = sampler.run(samples=results, resample=False)
 
     cov = np.linalg.inv(2 * likelihood.precision +
                         np.array([[100, 0], [0, 0]]))
-    assert np.allclose(chain.mean(likelihood.varied_params),
+    assert np.allclose(results.mean(likelihood.varied_params),
                        likelihood.flatdata, atol=1e-3, rtol=0)
-    assert np.allclose(chain.covariance(likelihood.varied_params), cov,
+    assert np.allclose(results.covariance(likelihood.varied_params), cov,
                        atol=1e-3)
 
 
@@ -115,30 +115,30 @@ def test_derived(likelihood, key):
 
     sampler = SAMPLER_CLS[key](likelihood, rng=42,
                                **KWARGS_INIT_FAST.get(key, {}))
-    chain = sampler.run(**KWARGS_RUN_FAST.get(key, {}))
-    assert np.allclose(chain['a'] + chain['b'], chain['c'])
+    results = sampler.run(**KWARGS_RUN_FAST.get(key, {}))
+    assert np.allclose(results['a'] + results['b'], results['c'])
 
 
 @pytest.mark.mpi
 @pytest.mark.parametrize('key', SAMPLER_CLS.keys())
 def test_write(likelihood, key, tmp_path):
-    # Check that the sampler correctly saves chains and state, if applicable.
+    # Check that the sampler correctly saves resultss and state, if applicable.
 
     sampler_1 = SAMPLER_CLS[key](
         likelihood, rng=42, directory=tmp_path,
         **KWARGS_INIT_FAST.get(key, {}))
-    chain_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
+    results_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
 
-    # The second sampler should not create any new samples if old chains
+    # The second sampler should not create any new samples if old resultss
     # are read correctly.
     sampler_2 = SAMPLER_CLS[key](
         likelihood, rng=43, directory=tmp_path,
         **KWARGS_INIT_FAST.get(key, {}))
-    chain_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
+    results_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
 
-    assert len(chain_1) == len(chain_2)
-    assert np.allclose(chain_1.logposterior.value,
-                       chain_2.logposterior.value, atol=1e-6)
+    assert len(results_1) == len(results_2)
+    assert np.allclose(results_1.logposterior.value,
+                       results_2.logposterior.value, atol=1e-6)
 
 
 @pytest.mark.mpi
@@ -151,12 +151,12 @@ def test_rng(likelihood, key):
 
     sampler_1 = SAMPLER_CLS[key](
         likelihood, rng=42, **KWARGS_INIT_FAST.get(key, {}))
-    chain_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
+    results_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
 
     sampler_2 = SAMPLER_CLS[key](
         likelihood, rng=42, **KWARGS_INIT_FAST.get(key, {}))
-    chain_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
+    results_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
 
-    assert len(chain_1) == len(chain_2)
-    assert np.allclose(chain_1.logposterior.value,
-                       chain_2.logposterior.value, atol=1e-6)
+    assert len(results_1) == len(results_2)
+    assert np.allclose(results_1.logposterior.value,
+                       results_2.logposterior.value, atol=1e-6)

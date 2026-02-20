@@ -7,6 +7,8 @@ except ModuleNotFoundError:
     EMCEE_INSTALLED = False
 import numpy as np
 
+from desilike.samples import Chain
+
 from .base import update_kwargs, MarkovChainSampler
 
 
@@ -51,30 +53,31 @@ class EmceeSampler(MarkovChainSampler):
         if self.mpicomm.rank == 0:
             self.sampler = emcee.EnsembleSampler(
                 self.n_chains, self.n_dim, self.compute_posterior, **kwargs)
-        else:
-            self.sampler = None
 
-    def run_sampler(self, steps):
+    def run_sampler(self, n_steps):
         """Run the ``emcee`` sampler.
 
         Parameters
         ----------
-        steps: int
+        n_steps: int
             Number of steps to take.
 
         """
-        try:
-            self.sampler.get_last_sample()
-            initial_state = None
-        except AttributeError:
-            initial_state = emcee.State(
-                self.chains[:, -1, :], log_prob=self.log_post[:, -1],
-                random_state=np.random.RandomState(self.rng.integers(
-                    2**32 - 1)).get_state())
+        samples, derived, log_post = self.state
 
-        self.sampler.run_mcmc(initial_state, steps, store=True)
-        chains = np.transpose(self.sampler.get_chain()[-steps:],
-                              (1, 0, 2))
-        log_post = self.sampler.get_log_prob()[-steps:].T
-        self.chains = np.concatenate([self.chains, chains], axis=1)
-        self.log_post = np.concatenate([self.log_post, log_post], axis=1)
+        initial_state = emcee.State(
+            samples, blobs=np.squeeze(derived), log_prob=log_post,
+            random_state=np.random.RandomState(
+                self.rng.integers(2**32 - 1)).get_state())
+
+        samples = np.zeros((self.n_chains, n_steps, self.n_dim))
+        derived = np.zeros((self.n_chains, n_steps, len(
+            self.likelihood.params.select(derived=True))))
+        log_post = np.zeros((self.n_chains, n_steps))
+        for i, state in enumerate(self.sampler.sample(
+                initial_state, iterations=n_steps, store=False)):
+            samples[:, i, :] = state.coords
+            derived[:, i, :] = state.blobs.reshape(self.n_chains, -1)
+            log_post[:, i] = state.log_prob
+
+        self.extend(samples, derived, log_post)

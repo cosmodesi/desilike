@@ -105,8 +105,6 @@ class PocoMCSampler(PopulationSampler):
                     log_likelihood = self.sampler.log_likelihood
                     self.sampler.load_state(filepath_max)
                     self.sampler.log_likelihood = log_likelihood
-        else:
-            self.sampler = None
 
     def run_sampler(self, **kwargs):
         """Run the ``pocoMC`` sampler.
@@ -119,9 +117,11 @@ class PocoMCSampler(PopulationSampler):
         Returns
         -------
         samples : numpy.ndarray of shape (n_samples, n_dim)
-            Sampler results.
+            Samples of varied parameters.
+        derived : numpy.ndarray
+            Samples of derived parameters.
         extras : dict
-            Extra parameters such as weights and derived parameters.
+            Extra parameters such as weights.
 
         """
         kwargs = update_kwargs(kwargs, 'pocoMC', resume_state_path=None,
@@ -131,7 +131,6 @@ class PocoMCSampler(PopulationSampler):
         self.sampler.run(**kwargs)
         samples, weights, logl, logp, blobs = self.sampler.posterior(
             return_blobs=True)
-        extras = dict(aweight=weights, loglikelihood=logl, logposterior=logp)
-        extras.update(dict(zip(self.params.keys()[self.n_dim:],
-                               np.atleast_2d(blobs.T))))
-        return samples, extras
+        extras = dict(aweight=weights, logposterior=logp)
+
+        return samples, blobs.reshape(len(samples), -1), extras

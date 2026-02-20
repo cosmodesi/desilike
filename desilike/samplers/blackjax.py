@@ -102,65 +102,86 @@ class BlackJAXSampler(MarkovChainSampler):
                               "installed.")
 
         super().__init__(likelihood, n_chains, rng=rng, directory=directory)
-        self.compute_posterior = self.pool.save_function(
-            partial(self.compute_posterior, save_derived=False),
-            'compute_posterior')
+
+        self.compute_posterior_without_derived = self.pool.save_function(
+            partial(self.compute_posterior_without_derived),
+            'compute_posterior_without_derived')
 
         self.kernel_type = getattr(blackjax, self.kernel_type)
         self.kernel = self.kernel_type(
-            self.compute_posterior, **self.kernel_args)
+            self.compute_posterior_without_derived, **self.kernel_args)
         self.adaptation_fn = getattr(blackjax, self.adaptation_fn)
         self.make_steps = self.pool.save_function(
             make_steps_factory(self.kernel.step), 'make_steps')
 
-        self.states = None
+    def compute_posterior_without_derived(self, sample):
+        """Compute the natural logarithm of the posterior.
 
-    def run_sampler(self, steps):
+        Parameters
+        ----------
+        sample : dict
+            Sample for which to compute the likelihood.
+
+        Returns
+        -------
+        log_post : float
+            Natural logarithm of the posterior.
+
+        """
+        return self.likelihood(sample, return_derived=False)
+
+    def run_sampler(self, n_steps):
         """Run the ``BlackJAX`` sampler.
 
         Parameters
         ----------
-        steps : int
+        n_steps : int
             Number of steps to take.
 
         """
-        if self.states is None:
-            self.states = []
+        if not hasattr(self, 'blackjax_states'):
+            self.blackjax_states = []
             for i in range(self.n_chains):
-                initial_position = dict(zip(self.params.keys()[:self.n_dim],
-                                            self.chains[i][-1]))
+                initial_position = dict(zip(
+                    self.likelihood.varied_params.keys(), self.state[0][i]))
                 try:
-                    self.states.append(self.kernel.init(initial_position))
+                    self.blackjax_states.append(
+                        self.kernel.init(initial_position))
                 except TypeError:
                     rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
-                    self.states.append(self.kernel.init(initial_position,
-                                                        rng_key))
+                    self.blackjax_states.append(self.kernel.init(
+                        initial_position, rng_key))
 
         rng_keys = jax.random.split(jax.random.PRNGKey(
             self.rng.integers(2**32)), self.n_chains)
 
-        inputs = [(self.states[i], jax.random.split(rng_keys[i], steps)) for
-                  i in range(self.n_chains)]
+        # Make the steps.
+        inputs = [(self.blackjax_states[i], jax.random.split(
+            rng_keys[i], n_steps)) for i in range(self.n_chains)]
         results = self.pool.map(self.make_steps, inputs)
-        self.states = [r[0] for r in results]
-        chains = np.stack([np.column_stack([result[1].position[key] for key in
-                                            self.params.keys()[:self.n_dim]])
-                           for result in results])
-        log_post = np.stack([result[1].logdensity for result in results])
-        self.chains = np.concatenate([self.chains, chains], axis=1)
-        self.log_post = np.concatenate([self.log_post, log_post], axis=1)
 
-        for i in range(self.n_chains):
+        # Update the blackjox states.
+        self.blackjax_states = [r[0] for r in results]
+
+        # Update the chains.
+        samples = np.vstack([np.column_stack([
+            r[1].position[key] for key in self.likelihood.varied_params.keys()])
+            for r in results])
+        log_post = np.concatenate([r[1].logdensity for r in results])
+
+        if len(self.likelihood.params.select(derived=True)) > 0:
             # Recompute the derived parameters since they couldn't be saved
             # during the sampling.
-            samples = results[i][1].position
-            derived = jax.vmap(lambda sample: self.likelihood(
-                sample, return_derived=True)[1])(samples)
-            for i, key in enumerate(self.params.keys()):
-                if i < self.n_dim:
-                    self.derived[key].append(samples[key])
-                else:
-                    self.derived[key].append(derived[key])
+            results = self.pool.map(
+                self.compute_posterior, samples)
+            derived = np.array([r[1] for r in results])
+        else:
+            derived = np.zeros((self.n_chains * n_steps, 0))
+
+        samples = samples.reshape((self.n_chains, n_steps, -1))
+        derived = derived.reshape((self.n_chains, n_steps, -1))
+        log_post = log_post.reshape((self.n_chains, n_steps))
+        self.extend(samples, derived, log_post)
 
     def adapt_sampler(self, steps):
         """Adapt the step size and mass matrix.
@@ -178,7 +199,7 @@ class BlackJAXSampler(MarkovChainSampler):
                                     self.chains[0][-1]))
         rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
         (state, parameters), _ = self.adaptation_fn(
-            self.kernel_type, self.compute_posterior).run(
+            self.kernel_type, self.compute_posterior_without_derived).run(
             rng_key, initial_position, num_steps=steps, **fixed_kernel_args)
         self.kernel_args.update(parameters)
 

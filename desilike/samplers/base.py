@@ -253,13 +253,13 @@ class StaticSampler(BaseSampler):
 
                 self.pool.stop_wait()
             else:
-                self.results = None
                 self.pool.wait()
 
         if self.directory is not None:
             self.write()
 
-        return self.mpicomm.bcast(self.results, root=0)
+        return self.mpicomm.bcast(
+            self.results if self.mpicomm.rank == 0 else None, root=0)
 
     def write(self):
         """Write internal calculations to disk."""

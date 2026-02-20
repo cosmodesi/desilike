@@ -29,7 +29,7 @@ class DynestySampler(PopulationSampler):
         dynamic : boolean, optional
             If True, use ``dynesty.DynamicPopulationSampler`` instead of
             ``dynesty.PopulationSampler``. Default is True.
-        rng : numpy.random.RandomState or int, optional
+        rng : numpy.random.Generator, int or None, optional
             Random number generator. Default is ``None``.
         directory : str, Path, optional
             Save samples to this location. Default is ``None``.

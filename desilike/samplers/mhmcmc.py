@@ -314,7 +314,7 @@ class StandAloneMetropolisHastingsSampler():
         Returns
         -------
         chains : numpy.ndarray of shape (n_chains, n_steps, n_dim)
-            Positiions in parameter space.
+            Positions in parameter space.
         blobs : numpy.ndarray of shape (n_chains, n_steps, ...)
             Blobs returned from the posterior.
         log_p : numpy.ndarray of shape (n_chains, n_steps)
@@ -361,9 +361,8 @@ class MetropolisHastingsSampler(MarkovChainSampler):
             dragging.
         fast : list, optional
             List of dimensions that are considered fast.
-        rng : numpy.random.RandomState, int, or None, optional
-            Random number generator for seeding. If ``None``, no seed is used.
-            Default is ``None``.
+        rng : numpy.random.Generator, int or None, optional
+            Random number generator. Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
 

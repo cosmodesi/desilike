@@ -64,9 +64,8 @@ class BaseSampler(BaseClass):
         ----------
         likelihood : BaseLikelihood
             Likelihood to sample.
-        rng : numpy.random.RandomState, int, or None, optional
-            Random number generator for seeding. If ``None``, no seed is used.
-            Default is ``None``.
+        rng : numpy.random.Generator, int or None, optional
+            Random number generator. Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this folder. Default is ``None``.
 
@@ -387,7 +386,7 @@ class MarkovChainSampler(BaseSampler):
 
         Parameters
         ----------
-        max_init_attempts : int, optional
+        max_init_attempts : int or None, optional
             Maximum number of attempts per chain. If ``None``, there is no
             limit. Default is 100.
 
@@ -398,6 +397,9 @@ class MarkovChainSampler(BaseSampler):
             attempts.
 
         """
+        if max_init_attempts is None:
+            max_init_attempts = sys.maxsize
+
         if self.mpicomm.rank == 0:
 
             for _ in range(max_init_attempts):
@@ -429,7 +431,7 @@ class MarkovChainSampler(BaseSampler):
 
             self.pool.stop_wait()
         else:
-            self.wait()
+            self.pool.wait()
 
         if self.mpicomm.bcast(len(self.chains) < self.n_chains, root=0):
             raise ValueError('Could not find finite posterior '
@@ -451,6 +453,18 @@ class MarkovChainSampler(BaseSampler):
         return samples, derived, log_post
 
     def extend(self, samples, derived, log_post):
+        """Extend the sampler chains.
+
+        Parameters
+        ----------
+        samples : numpy.ndarray of shape (n_chains, n_steps, n_dim)
+            Positions in parameter space.
+        derived : numpy.ndarray of shape (n_chains, n_steps, ...)
+            Blobs returned from the posterior.
+        log_post : numpy.ndarray of shape (n_chains, n_steps)
+            Logarithm of the posterior.
+
+        """
         for i in range(self.n_chains):
             chain = Chain(data=np.hstack([samples[i], derived[i]]).T,
                           params=self.likelihood.params)

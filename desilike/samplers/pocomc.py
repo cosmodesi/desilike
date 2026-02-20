@@ -63,7 +63,7 @@ class PocoMCSampler(PopulationSampler):
         ----------
         likelihood : BaseLikelihood
             Likelihood to sample.
-        rng : numpy.random.RandomState or int, optional
+        rng : numpy.random.Generator, int or None, optional
             Random number generator. Default is ``None``.
         directory : str, Path, optional
             Save samples to this location. Default is ``None``.

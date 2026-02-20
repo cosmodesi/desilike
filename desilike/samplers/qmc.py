@@ -80,7 +80,6 @@ class QMCSampler(StaticSampler):
         ----------
         size : dict or int, optional
             Size of the sequence. Default is 1000.
-
         engine : str, optional
             Engine to use. Choices are 'sobol', 'halton', 'lhs', 'kronecker'.
             Default is 'kronecker'.

@@ -32,9 +32,8 @@ class ZeusSampler(MarkovChainSampler):
             Likelihood to sample.
         n_chains : int, optional
             Number of chains. Default is 4.
-        rng : numpy.random.RandomState, int, or None, optional
-            Random number generator for seeding. If ``None``, no seed is used.
-            Default is ``None``.
+        rng : numpy.random.Generator, int or None, optional
+            Random number generator. Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
         kwargs: dict, optional

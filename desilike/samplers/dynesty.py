@@ -6,7 +6,7 @@ try:
 except ModuleNotFoundError:
     DYNESTY_INSTALLED = False
 
-from .base import update_kwargs, PopulationSampler
+from .base import update_parameters, PopulationSampler
 
 
 class DynestySampler(PopulationSampler):
@@ -44,8 +44,8 @@ class DynestySampler(PopulationSampler):
 
         super().__init__(likelihood, rng=rng, directory=directory)
 
-        kwargs = update_kwargs(kwargs, 'dynesty', blob=True, pool=self.pool,
-                               rstate=self.rng)
+        kwargs = update_parameters(kwargs, 'dynesty', blob=True,
+                                   pool=self.pool, rstate=self.rng)
 
         if not dynamic and self.directory is not None:
             raise ValueError("dynesty does not support checkpointing for the "
@@ -89,7 +89,7 @@ class DynestySampler(PopulationSampler):
         """
         checkpoint_file = None if self.directory is None else str(
             self.directory / 'dynesty.pkl')
-        kwargs = update_kwargs(
+        kwargs = update_parameters(
             kwargs, 'dynesty', checkpoint_file=checkpoint_file)
 
         self.sampler.run_nested(**kwargs)

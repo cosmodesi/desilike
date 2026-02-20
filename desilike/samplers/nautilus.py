@@ -6,7 +6,7 @@ except ModuleNotFoundError:
     NAUTILUS_INSTALLED = False
 import numpy as np
 
-from .base import update_kwargs, PopulationSampler
+from .base import update_parameters, PopulationSampler
 
 
 class NautilusSampler(PopulationSampler):
@@ -40,7 +40,7 @@ class NautilusSampler(PopulationSampler):
 
         super().__init__(likelihood, rng=rng, directory=directory)
 
-        kwargs = update_kwargs(
+        kwargs = update_parameters(
             kwargs, 'nautilus', pass_dict=False,
             filepath=None if self.directory is None else self.directory /
             'nautilus.hdf5', pool=self.pool, seed=self.rng.integers(2**32))

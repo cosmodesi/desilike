@@ -11,6 +11,7 @@ specialized classes implementing specific samplers such as `emcee` or
 import json
 import sys
 import warnings
+from abc import ABC, abstractmethod
 from pathlib import Path
 
 import numpy as np
@@ -21,13 +22,13 @@ from desilike.utils import BaseClass
 from .pool import MPIPool
 
 
-def update_kwargs(user_kwargs, sampler, **desilike_kwargs):
+def update_parameters(user_kwargs, sampler, **desilike_kwargs):
     """
-    Update the keyword arguments passed to a sampler.
+    Update the parameter passed to a sampler.
 
     desilike homogenizes the interface to several samplers. In some cases, this
-    requires overwriting keyword arguments the user tries to pass to the
-    sampler explicitly.
+    requires overwriting parameters the user tries to pass to the sampler
+    explicitly.
 
     Parameters
     ----------
@@ -54,7 +55,7 @@ def update_kwargs(user_kwargs, sampler, **desilike_kwargs):
     return kwargs
 
 
-class BaseSampler(BaseClass):
+class BaseSampler(BaseClass, ABC):
     """Abstract class defining common functions used by all samplers."""
 
     def __init__(self, likelihood, rng=None, directory=None):
@@ -666,7 +667,7 @@ class MarkovChainSampler(BaseSampler):
         else:
             chains = [None] * self.n_chains
 
-        chains = self.pool.bcast(chains, root=0)
+        chains = self.mpicomm.bcast(chains, root=0)
 
         if flatten_chains:
             return Chain.concatenate(chains)

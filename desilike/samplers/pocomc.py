@@ -7,7 +7,7 @@ try:
 except ModuleNotFoundError:
     POCOMC_INSTALLED = False
 
-from .base import update_kwargs, PopulationSampler
+from .base import update_parameters, PopulationSampler
 
 
 class Prior(object):
@@ -77,7 +77,7 @@ class PocoMCSampler(PopulationSampler):
 
         super().__init__(likelihood, rng=rng, directory=directory)
 
-        kwargs = update_kwargs(
+        kwargs = update_parameters(
             kwargs, 'pocoMC', pool=self.pool, output_dir=self.directory,
             random_state=self.rng.integers(2**32 - 1))
 
@@ -124,9 +124,9 @@ class PocoMCSampler(PopulationSampler):
             Extra parameters such as weights.
 
         """
-        kwargs = update_kwargs(kwargs, 'pocoMC', resume_state_path=None,
-                               save_every=1 if self.directory is not None else
-                               None)
+        kwargs = update_parameters(
+            kwargs, 'pocoMC', resume_state_path=None,
+            save_every=1 if self.directory is not None else None)
 
         self.sampler.run(**kwargs)
         samples, weights, logl, logp, blobs = self.sampler.posterior(

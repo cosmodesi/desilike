@@ -7,7 +7,7 @@ except ModuleNotFoundError:
     EMCEE_INSTALLED = False
 import numpy as np
 
-from .base import update_kwargs, MarkovChainSampler
+from .base import update_parameters, MarkovChainSampler
 
 
 class EmceeSampler(MarkovChainSampler):
@@ -44,8 +44,8 @@ class EmceeSampler(MarkovChainSampler):
         super().__init__(likelihood, n_chains=n_chains, rng=rng,
                          directory=directory)
 
-        kwargs = update_kwargs(kwargs, 'emcee', pool=self.pool, args=None,
-                               kwargs=None, vectorize=False)
+        kwargs = update_parameters(kwargs, 'emcee', pool=self.pool, args=None,
+                                   kwargs=None, vectorize=False)
 
         if self.mpicomm.rank == 0:
             self.sampler = emcee.EnsembleSampler(

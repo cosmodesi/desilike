@@ -9,7 +9,7 @@ try:
 except ModuleNotFoundError:
     ZEUS_INSTALLED = False
 
-from .base import update_kwargs, MarkovChainSampler
+from .base import update_parameters, MarkovChainSampler
 
 
 class ZeusSampler(MarkovChainSampler):
@@ -47,8 +47,8 @@ class ZeusSampler(MarkovChainSampler):
         super().__init__(likelihood, n_chains=n_chains, rng=rng,
                          directory=directory)
 
-        kwargs = update_kwargs(kwargs, 'zeus', pool=self.pool, args=None,
-                               kwargs=None, vectorize=False)
+        kwargs = update_parameters(kwargs, 'zeus', pool=self.pool, args=None,
+                                   kwargs=None, vectorize=False)
 
         if self.mpicomm.rank == 0:
             self.sampler = zeus.EnsembleSampler(

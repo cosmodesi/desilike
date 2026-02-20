@@ -11,7 +11,7 @@ specialized classes implementing specific samplers such as `emcee` or
 import json
 import sys
 import warnings
-from abc import ABC, abstractmethod
+from abc import ABC, ABCMeta, abstractmethod
 from pathlib import Path
 
 import numpy as np
@@ -55,7 +55,12 @@ def update_parameters(user_kwargs, sampler, **desilike_kwargs):
     return kwargs
 
 
-class BaseSampler(BaseClass, ABC):
+class BaseSamplerMeta(type(BaseClass), ABCMeta):
+    """Metaclass combining BaseClass metaclass and ABCMeta."""
+    pass
+
+
+class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
     """Abstract class defining common functions used by all samplers."""
 
     def __init__(self, likelihood, rng=None, directory=None):
@@ -183,28 +188,23 @@ class BaseSampler(BaseClass, ABC):
 
         return log_post - log_prior, derived
 
+    @abstractmethod
     def write(self):
-        """Abstract method to write internal calculations to disk.
-
-        This needs to be implemented by the subclass.
-        """
+        """Abstract method to write internal calculations to disk."""
         pass
 
+    @abstractmethod
     def read(self):
-        """Abstract method to  read internal calculations from disk.
-
-        This needs to be implemented by the subclass.
-        """
+        """Abstract method to  read internal calculations from disk."""
         pass
 
 
 class StaticSampler(BaseSampler):
     """Class defining common functions used by static samplers."""
 
+    @abstractmethod
     def get_samples(self, **kwargs):
         """Abstract method to get the samples to be evaluated.
-
-        This needs to be implemented by the subclass.
 
         Parameters
         ----------
@@ -275,10 +275,9 @@ class StaticSampler(BaseSampler):
 class PopulationSampler(BaseSampler):
     """Class defining common functions used by population samplers."""
 
+    @abstractmethod
     def run_sampler(self, **kwargs):
         """Abstract method to run the sampler from the main MPI process.
-
-        This needs to be implemented by the subclass.
 
         Parameters
         ----------
@@ -356,10 +355,9 @@ class MarkovChainSampler(BaseSampler):
         self.checks = []
         super().__init__(likelihood, rng=rng, directory=directory)
 
+    @abstractmethod
     def run_sampler(self, steps):
         """Abstract method to run the sampler from the main MPI process.
-
-        This needs to be implemented by the subclass.
 
         Parameters
         ----------
@@ -369,10 +367,9 @@ class MarkovChainSampler(BaseSampler):
         """
         pass
 
+    @abstractmethod
     def adapt_sampler(self, steps):
         """Abstract method to adapt the sampler from the main MPI process.
-
-        This needs to be implemented by the subclass.
 
         Parameters
         ----------

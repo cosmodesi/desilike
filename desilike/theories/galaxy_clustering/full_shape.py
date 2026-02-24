@@ -3104,8 +3104,8 @@ def Kfuncs_to_tables(
     k_tw: float = 0.01,
     gamma_0: float = 0.54545,
     gamma_a: float = 0.0, 
-    GI_tk: float = 100.0, 
-    GI_ds: float = 0.0001,
+    t_k: float = 100.0, 
+    d_s: float = 0.0001,
     # BAO helper scalars (needed by FOLPS "now" table scalars)
     rbao: float = 104.0,
     pmax_bao: float = 0.4,
@@ -3160,7 +3160,7 @@ def Kfuncs_to_tables(
         mu1=float(mu1), mu2=float(mu2), mu3=float(mu3), mu4=float(mu4),
         z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
         scale_bins=bool(scale_bins), k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw), 
-        gamma_0=float(gamma_0), gamma_a=float(gamma_a), GI_tk=float(GI_tk), GI_ds=float(GI_ds),
+        gamma_0=float(gamma_0), gamma_a=float(gamma_a), t_k=float(t_k), d_s=float(d_s),
     )
 
     # -----------------------------
@@ -3475,7 +3475,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             k_tw=0.01,
 
             # Growth-index
-            gamma_0=0.545454, gamma_a=0.0, GI_tk=100.0, GI_ds=0.0001,
+            gamma_0=0.545454, gamma_a=0.0, t_k=100.0, d_s=0.0001,
         )
 
         req = {
@@ -3483,8 +3483,8 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             "BZ": ["beta_1", "lambda_1", "exp_s"],
             "BINNING": ["mu1","mu2","mu3","mu4","z_div","z_TGR","z_tw",
                         "scale_bins","k_TGR","k_c","k_S","k_tw"],
-            "GROWTH_INDEX": ["gamma_0","gamma_a","GI_tk","GI_ds"],
-            "GROWTH_INDEX_YUKAWA": ["gamma_0","gamma_a","GI_tk","GI_ds"],
+            "GROWTH_INDEX": ["gamma_0","gamma_a","t_k","d_s"],
+            "GROWTH_INDEX_YUKAWA": ["gamma_0","gamma_a","t_k","d_s"],
             "GR": [],
         }
 

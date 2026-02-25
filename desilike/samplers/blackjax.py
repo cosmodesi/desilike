@@ -13,8 +13,6 @@ import numpy as np
 from .base import MarkovChainSampler
 
 
-# TODO: Properly implement abstract classes and methods.
-
 def make_steps_factory(step):
     """Produce a JIT compiled version of the `make_steps` function.
 
@@ -95,16 +93,27 @@ class BlackJAXSampler(MarkovChainSampler):
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
 
+        Raises
+        ------
+        TypeError
+            If called by this class.
+
         """
         if not BLACKJAX_INSTALLED:
             raise ImportError("The 'blackjax' package is required but not "
                               "installed.")
+
+        if type(self) is BlackJAXSampler:
+            raise TypeError("BlackJAXSampler cannot be iniated directly.")
 
         super().__init__(likelihood, n_chains, rng=rng, directory=directory)
 
         self.compute_posterior_without_derived = self.pool.save_function(
             partial(self.compute_posterior_without_derived),
             'compute_posterior_without_derived')
+        self.compute_derived = self.pool.save_function(
+            jax.vmap(lambda sample: self.likelihood(
+                sample, return_derived=True)[1]), 'compute_derived')
 
         self.kernel_type = getattr(blackjax, self.kernel_type)
         self.kernel = self.kernel_type(
@@ -171,9 +180,11 @@ class BlackJAXSampler(MarkovChainSampler):
         if len(self.likelihood.params.select(derived=True)) > 0:
             # Recompute the derived parameters since they couldn't be saved
             # during the sampling.
-            results = self.pool.map(
-                self.compute_posterior, samples)
-            derived = np.array([r[1] for r in results])
+            derived = self.pool.map(
+                self.compute_derived, [r[1].position for r in results])
+            derived = np.vstack([np.column_stack([
+                d[key] for key in self.likelihood.params.select(derived=True)])
+                for d in derived])
         else:
             derived = np.zeros((self.n_chains * n_steps, 0))
 

@@ -55,8 +55,7 @@ def likelihood():
     class Likelihood(BaseGaussianLikelihood):
 
         def calculate(self, **kwargs):
-            self.flattheory = jnp.array([kwargs[name] for name in
-                                         self.varied_params.names()])
+            self.flattheory = jnp.array([kwargs[name] for name in ['a', 'b']])
             self.c = kwargs['a'] + kwargs['b']
             super().calculate()
 
@@ -122,14 +121,14 @@ def test_derived(likelihood, key):
 @pytest.mark.mpi
 @pytest.mark.parametrize('key', SAMPLER_CLS.keys())
 def test_write(likelihood, key, tmp_path):
-    # Check that the sampler correctly saves resultss and state, if applicable.
+    # Check that the sampler correctly saves results and state, if applicable.
 
     sampler_1 = SAMPLER_CLS[key](
         likelihood, rng=42, directory=tmp_path,
         **KWARGS_INIT_FAST.get(key, {}))
     results_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
 
-    # The second sampler should not create any new samples if old resultss
+    # The second sampler should not create any new samples if old results
     # are read correctly.
     sampler_2 = SAMPLER_CLS[key](
         likelihood, rng=43, directory=tmp_path,

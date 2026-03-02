@@ -163,7 +163,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
             sample = dict(zip(self.likelihood.varied_params.names(), sample))
         log_post, derived = self.likelihood(sample, return_derived=True)
         derived = [float(derived[key]) for key in
-                   self.likelihood.params.select(derived=True)]
+                   self.likelihood.all_params.select(derived=True)]
 
         return float(log_post), derived
 
@@ -246,7 +246,7 @@ class StaticSampler(BaseSampler):
 
                 self.results = Chain(
                     data=np.hstack([samples, derived]).T,
-                    params=self.likelihood.params)
+                    params=self.likelihood.all_params)
                 self.results.aweight = np.exp(log_post - logsumexp(log_post))
                 self.results.logposterior = log_post
                 self.results[self.results._logprior] = log_prior
@@ -313,7 +313,7 @@ class PopulationSampler(BaseSampler):
         if self.mpicomm.rank == 0:
             samples, derived, extras = self.run_sampler(**kwargs)
             results = Chain(data=np.hstack([samples, derived]).T,
-                            params=self.likelihood.params)
+                            params=self.likelihood.all_params)
             for key in extras.keys():
                 setattr(results, key, extras[key])
             self.pool.stop_wait()
@@ -419,7 +419,7 @@ class MarkovChainSampler(BaseSampler):
                 for i in np.arange(self.n_chains)[np.isfinite(log_post)]:
                     chain = Chain(
                         data=np.concatenate((samples[i], derived[i])),
-                        params=self.likelihood.params)
+                        params=self.likelihood.all_params)
                     chain.logposterior = log_post[i]
                     chain.shape = (1, )
                     self.chains.append(chain)
@@ -440,13 +440,13 @@ class MarkovChainSampler(BaseSampler):
         """Return the current state of the chains as NumPy arrays."""
         samples = np.zeros((self.n_chains, self.n_dim))
         derived = np.zeros(
-            (self.n_chains, len(self.likelihood.params.select(derived=True))))
+            (self.n_chains, len(self.likelihood.all_params.select(derived=True))))
         log_post = np.zeros(self.n_chains)
         for i in range(self.n_chains):
             samples[i] = [self.chains[i][key][-1].value for key in
                           self.likelihood.varied_params]
             derived[i] = [self.chains[i][key][-1].value for key in
-                          self.likelihood.params.select(derived=True)]
+                          self.likelihood.all_params.select(derived=True)]
             log_post[i] = self.chains[i].logposterior[-1]
         return samples, derived, log_post
 
@@ -465,7 +465,7 @@ class MarkovChainSampler(BaseSampler):
         """
         for i in range(self.n_chains):
             chain = Chain(data=np.hstack([samples[i], derived[i]]).T,
-                          params=self.likelihood.params)
+                          params=self.likelihood.all_params)
             chain.logposterior = log_post[i]
             self.chains[i] = Chain.concatenate(self.chains[i], chain)
 

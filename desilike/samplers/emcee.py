@@ -69,7 +69,7 @@ class EmceeSampler(MarkovChainSampler):
 
         samples = np.zeros((self.n_chains, n_steps, self.n_dim))
         derived = np.zeros((self.n_chains, n_steps, len(
-            self.likelihood.params.select(derived=True))))
+            self.likelihood.all_params.select(derived=True))))
         log_post = np.zeros((self.n_chains, n_steps))
         for i, state in enumerate(self.sampler.sample(
                 initial_state, iterations=n_steps, store=False)):

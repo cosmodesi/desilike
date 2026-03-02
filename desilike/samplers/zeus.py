@@ -70,7 +70,7 @@ class ZeusSampler(MarkovChainSampler):
         start, blobs0, log_prob0 = self.state
         samples = np.zeros((self.n_chains, n_steps, self.n_dim))
         derived = np.zeros((self.n_chains, n_steps, len(
-            self.likelihood.params.select(derived=True))))
+            self.likelihood.all_params.select(derived=True))))
         log_post = np.zeros((self.n_chains, n_steps))
         for i, state in enumerate(self.sampler.sample(
                 start, log_prob0=log_prob0, blobs0=np.squeeze(blobs0),

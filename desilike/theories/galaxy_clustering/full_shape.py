@@ -2614,8 +2614,8 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
           cov  (3*Nk, 3*Nk)
         """
         tr = str(tracer).upper()
-        f_data = f"/n/home12/cgarciaquintero/DESI/GQC_mocks/cubic_boxes/WeiLiu/formatted/{tr}_pk_kP0P2P4.txt"
-        f_cov  = f"/n/home12/cgarciaquintero/DESI/GQC_mocks/cubic_boxes/WeiLiu/formatted/{tr}_pk_cov.txt"
+        f_data = f"/global/homes/n/nishavk/desilike/MG/weiliu_data/{tr}_pk_kP0P2P4.txt"
+        f_cov  = f"/global/homes/n/nishavk/desilike/MG/weiliu_data/{tr}_pk_cov.txt"
 
         arr = np.loadtxt(f_data)
         if arr.ndim != 2 or arr.shape[1] < 4:

@@ -2614,8 +2614,8 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
           cov  (3*Nk, 3*Nk)
         """
         tr = str(tracer).upper()
-        f_data = f"/global/homes/n/nishavk/desilike/MG/weiliu_data/{tr}_pk_kP0P2P4.txt"
-        f_cov  = f"/global/homes/n/nishavk/desilike/MG/weiliu_data/{tr}_pk_cov.txt"
+        f_data = f"/global/homes/n/nishavk/desilike/IDE/weiliu_data/{tr}_pk_kP0P2P4.txt"
+        f_cov  = f"/global/homes/n/nishavk/desilike/IDE/weiliu_data/{tr}_pk_cov.txt"
 
         arr = np.loadtxt(f_data)
         if arr.ndim != 2 or arr.shape[1] < 4:
@@ -2909,7 +2909,6 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             if f_IDE is None:
                 raise ValueError("Missing IDE growth rate: expected pt.f_IDE.")
             f = f_IDE
-            print(f"Using IDE growth rate: {f:.3f} at z={self.z:.3f}")
 
         # --- Eulerian ---
         if pb == 'APscaling':

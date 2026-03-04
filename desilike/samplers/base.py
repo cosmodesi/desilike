@@ -565,7 +565,7 @@ class MarkovChainSampler(BaseSampler):
         return self.mpicomm.bcast(converged, root=0)
 
     def run(self, burn_in=0.2, min_steps=0, max_steps=None,
-            adaptation_steps=None, check_every=10, checks_passed=10,
+            adaptation_steps=None, check_every=300, checks_passed=10,
             gelman_rubin=1.1, geweke=None, ess=None, flatten_chains=True,
             save_every=10, max_init_attempts=100):
         """Run the sampler.
@@ -586,7 +586,7 @@ class MarkovChainSampler(BaseSampler):
             MCMC, HMC, NUTS, and MCLMC. If ``None``, use the sampler-specific
             default value. Default is ``None``.
         check_every: int, optional
-            After how many steps convergence is checked. Default is 10.
+            After how many steps convergence is checked. Default is 300.
         checks_passed: int, optional
             Threshold for the number of successive successful convergence
             checks. If fulfilled ( and the minimum number of iterations is

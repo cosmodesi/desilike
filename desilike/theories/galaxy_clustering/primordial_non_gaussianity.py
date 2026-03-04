@@ -157,6 +157,7 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
         return fig
 
+
 class PNGTracerCrossPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedges):
     r"""
     Kaiser tracer power spectrum multipoles, with scale dependent bias sourced by local primordial non-Gaussianities (for cross tracers).
@@ -208,7 +209,7 @@ class PNGTracerCrossPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFro
         self.template.init.update(k=kin)
         self.method = str(method)
         self.mode = str(mode)
-        
+
         keep_params = ['b1','b2','sigmas_1','sigmas_2','sn0']
         if self.mode == 'bphi':
             keep_params += ['fnl_loc', 'bphi1', 'bphi2']
@@ -265,7 +266,7 @@ class PNGTracerCrossPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFro
     def plot(self, fig=None, scaling='loglog'):
         """
         Plot power spectrum multipoles.
-        
+
         Parameters
         ----------
         fig : matplotlib.figure.Figure, default=None

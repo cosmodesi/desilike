@@ -357,3 +357,21 @@ class APEffect(BaseCalculator):
 
     def ap_s_mu(self, s, mu):
         return ap_s_mu(s, mu, qpar=self.qpar, qper=self.qper)
+
+
+_registered_legendre = [None] * 11
+_registered_legendre[0] = lambda x: jnp.ones_like(x)
+_registered_legendre[1] = lambda x: x
+_registered_legendre[2] = lambda x: 3*x**2/2 - 1/2
+_registered_legendre[3] = lambda x: 5*x**3/2 - 3*x/2
+_registered_legendre[4] = lambda x: 35*x**4/8 - 15*x**2/4 + 3/8
+_registered_legendre[5] = lambda x: 63*x**5/8 - 35*x**3/4 + 15*x/8
+_registered_legendre[6] = lambda x: 231*x**6/16 - 315*x**4/16 + 105*x**2/16 - 5/16
+_registered_legendre[7] = lambda x: 429*x**7/16 - 693*x**5/16 + 315*x**3/16 - 35*x/16
+_registered_legendre[8] = lambda x: 6435*x**8/128 - 3003*x**6/32 + 3465*x**4/64 - 315*x**2/32 + 35/128
+_registered_legendre[9] = lambda x: 12155*x**9/128 - 6435*x**7/32 + 9009*x**5/64 - 1155*x**3/32 + 315*x/128
+_registered_legendre[10] = lambda x: 46189*x**10/256 - 109395*x**8/256 + 45045*x**6/128 - 15015*x**4/128 + 3465*x**2/256 - 63/256
+
+
+def get_legendre(ell):
+    return _registered_legendre[ell]

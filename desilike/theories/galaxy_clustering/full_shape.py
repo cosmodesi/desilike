@@ -2,14 +2,14 @@ import re
 
 import numpy as np
 from scipy import interpolate
-
+import time
 from desilike.jax import numpy as jnp
 from desilike.jax import jit, interp1d
 from desilike import jax
 from desilike import plotting, utils, BaseCalculator
-from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
-from .base import BaseTheoryPowerSpectrumMultipoles, BaseTheoryCorrelationFunctionMultipoles, BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
-from .power_template import DirectPowerSpectrumTemplate, StandardPowerSpectrumTemplate
+from .base import (BaseTheoryPowerSpectrumMultipolesFromWedges, BaseTheoryPowerSpectrumMultipoles, BaseTheoryCorrelationFunctionMultipoles,
+                   BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles, APEffect, get_legendre)
+from .power_template import DirectPowerSpectrumTemplate, StandardPowerSpectrumTemplate, Cosmoprimo, get_cosmo
 
 
 class BasePTPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
@@ -172,6 +172,7 @@ class BaseTracerPowerSpectrumMultipoles(BaseTracerTwoPointTheory):
         self.required_bias_params, self.optional_bias_params = {}, {}
         self.pt.init.update(kwargs)
         for name in ['z', 'k', 'ells']:
+            # print( dir(self.pt),getattr(self.pt, 'z', None))
             setattr(self, name, getattr(self.pt, name))
         self.set_params()
 
@@ -2052,7 +2053,7 @@ def folps_combine_bias_terms_pkmu(k, mu, jac, f0, table, table_now, sigma2t, par
     pars = list(pars) + [1. / nd]  # add shot noise
     b1 = pars[0]
     # Add co-evolution part
-    pars[2] = pars[2] - 4. / 7. * (b1 - 1.)  # bs
+    # pars[2] = pars[2] - 4. / 7. * (b1 - 1.)  # bs
     pars[3] = pars[3] + 32. / 315. * (b1 - 1.)  # b3
     FOLPS.f0 = f0
     fk = table[1] * f0
@@ -2082,7 +2083,7 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         # only used for neutrinos
         # sensitive to omega_b + omega_cdm, not omega_b, omega_cdm separately
         cosmo_params = [self.z, 0.022, 0.12, 0., 0.7]
-        cosmo = getattr(self.template, 'cosmo', None)
+
         if cosmo is not None:
             cosmo_params = [self.z, cosmo['omega_b'], cosmo['omega_cdm'], cosmo['omega_ncdm_tot'], cosmo['h']]
         FOLPS.NonLinear([self.template.k, self.template.pk_dd], cosmo_params, kminout=self.k[0] * 0.7, kmaxout=self.k[-1] * 1.3, nk=max(len(self.k), 120),
@@ -2103,6 +2104,10 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
     def combine_bias_terms_poles(self, pars, nd=1e-4):
         return self.to_poles(folps_combine_bias_terms_pkmu(self.pt.kap, self.pt.muap, self.pt.jac, self.pt.f0,
                                                            self.pt.table, self.pt.table_now, self.pt.sigma2t, pars, nd=nd))
+
+
+
+
 
     def __getstate__(self):
         state = {}
@@ -2334,7 +2339,6 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             self._get_non_linear = jit(_get_non_linear)
 
         table, table_now = self._get_non_linear(self.template.pk_dd, self.template.pknow_dd, **cosmo_params)
-
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         self.pt = Namespace(jac=jac, kap=kap, muap=muap, table=table[1:26], table_now=table_now[1:26], scalars=table[26:], scalars_now=table_now[26:])
         self.kt = table[0]
@@ -2347,10 +2351,10 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         pars = list(pars) + [1. / nd]  # add shot noise
         b1 = pars[0]
         # add co-evolution part
-        pars[2] = pars[2] - 4. / 7. * (b1 - 1.)  # bs
-        pars[3] = pars[3] + 32. / 315. * (b1 - 1.)  # b3
+        # pars[2] = pars[2] - 4. / 7. * (b1 - 1.)  # bs
+        # pars[3] = pars[3] + 32. / 315. * (b1 - 1.)  # b3
+        pars[3] =  32. / 315. * (b1 - 1.)
         ncols = len(table)
-
         if getattr(self, '_get_poles', None) is None:
 
             from folpsax import get_rsd_pkmu
@@ -2359,6 +2363,7 @@ class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
                 return self.to_poles(jac * get_rsd_pkmu(kap, muap, pars, table[:ncols], table[ncols:]))
 
             self._get_poles = jit(_get_poles)
+
         return self._get_poles(self.pt.jac, self.pt.kap, self.pt.muap, jnp.array(pars), *table, *table_now)
         #pkmu = self.pt.jac * get_rsd_pkmu(self.pt.kap, self.pt.muap, pars, table, table_now)
         #return self.to_poles(pkmu)
@@ -2693,28 +2698,6 @@ class GeoFPTAXTracerBispectrumMultipoles(BaseTracerThreePointTheory):
         return state
 
 
-from desilike.theories.primordial_cosmology import Cosmoprimo, get_cosmo
-from .base import APEffect
-
-
-_registered_legendre = [None] * 11
-_registered_legendre[0] = lambda x: jnp.ones_like(x)
-_registered_legendre[1] = lambda x: x
-_registered_legendre[2] = lambda x: 3*x**2/2 - 1/2
-_registered_legendre[3] = lambda x: 5*x**3/2 - 3*x/2
-_registered_legendre[4] = lambda x: 35*x**4/8 - 15*x**2/4 + 3/8
-_registered_legendre[5] = lambda x: 63*x**5/8 - 35*x**3/4 + 15*x/8
-_registered_legendre[6] = lambda x: 231*x**6/16 - 315*x**4/16 + 105*x**2/16 - 5/16
-_registered_legendre[7] = lambda x: 429*x**7/16 - 693*x**5/16 + 315*x**3/16 - 35*x/16
-_registered_legendre[8] = lambda x: 6435*x**8/128 - 3003*x**6/32 + 3465*x**4/64 - 315*x**2/32 + 35/128
-_registered_legendre[9] = lambda x: 12155*x**9/128 - 6435*x**7/32 + 9009*x**5/64 - 1155*x**3/32 + 315*x/128
-_registered_legendre[10] = lambda x: 46189*x**10/256 - 109395*x**8/256 + 45045*x**6/128 - 15015*x**4/128 + 3465*x**2/256 - 63/256
-
-
-def get_legendre(ell):
-    return _registered_legendre[ell]
-
-
 class JAXEffortTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
     r"""
     Wrapper to JAXEffort emulator.
@@ -2875,3 +2858,644 @@ class JAXEffortTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
 
     def get(self):
         return self.power
+
+
+# @jit
+@jit(static_argnames=['rsd_class', 'IR_resummation', 'damping'])
+def folpsv2_combine_bias_terms_pkmu(k, mu, jac, table, table_now, pars,rsd_class, IR_resummation=True, damping='lor'):
+    b1 = pars[0]
+    f0 = table[-1]
+    fk = table[1] * f0
+    pkl, pkl_now = table[0], table_now[0]
+    sigma2, delta_sigma2 = table_now[-3:-1]
+    # Sigma² tot for IR-resummations, see eq.~ 3.59 at arXiv:2208.02791
+    if IR_resummation:
+        sigma2t = (1 + f0*mu**2 * (2 + f0)) * sigma2 + (f0*mu)**2 * (mu**2 - 1) * delta_sigma2
+    else:
+        sigma2t = 0
+    pkmu = ((b1 + fk * mu**2)**2 * (pkl_now + jnp.exp(-k**2 * sigma2t)*(pkl - pkl_now)*(1 + k**2 * sigma2t))
+                 + jnp.exp(-k**2 * sigma2t) * rsd_class.get_eft_pkmu(k, mu, pars, table, damping)
+                 + (1 - jnp.exp(-k**2 * sigma2t)) * rsd_class.get_eft_pkmu(k, mu, pars, table_now, damping))
+    return pkmu * jac
+
+
+try:
+    import folps as folpsv2
+except ImportError:
+    pass
+
+@jit(static_argnames=['damping', 'multipoles', 'interpolation_method', 'bias_scheme', 'model', 'full', 'renormalized'])
+def get_bispectrum_multipoles_jit(
+    pars,
+    k1k2,
+    k_pkl_pklnw_fk,
+    f0, qpar, qperp,
+    precision=(8, 10, 10),
+    damping='lor',
+    multipoles=['B000', 'B202'],
+    interpolation_size=20,
+    interpolation_method='linear',
+    bias_scheme='folps',
+    model='FOLPSD',
+    full=True,
+    renormalized=True,
+):
+    #folpsv2.MatrixCalculator(A_full=A_full, use_TNS_model=remove_DeltaP)
+    # folps_bispectrum_class = folpsv2.BispectrumCalculator_fk(model='FOLPSD')
+    f0 = jnp.asarray(f0)
+    bpars = jnp.asarray(pars)
+
+    if full:
+        bs = folpsv2.WindowConvolvedBispectrum(model=model)
+        results = bs.reduced_Bl1l2L(bpars, None,
+                        qpar, qperp, k_pkl_pklnw_fk, k1k2, Ssize=interpolation_size,
+                        precision_full=[8, 10, 10], precision_diag=[12, 15, 15],
+                        f=f0,
+                        renormalize=renormalized,
+                        interpolation_method_full=interpolation_method,
+                        interpolation_method_diag=interpolation_method,
+                        use_full_diag=True)
+
+        return results
+
+    bispectrum = folpsv2.BispectrumCalculator(model=model)
+    return bispectrum.Sugiyama_Bell(
+        f=f0,
+        bpars=bpars,
+        k_pkl_pklnw_fk=k_pkl_pklnw_fk,
+        k1k2pairs=k1k2,
+        qpar=qpar,
+        qper=qperp,
+        precision=precision,
+        damping=damping,
+        multipoles=list(multipoles),
+        bias_scheme=bias_scheme,
+        renormalize=renormalized,
+        interpolation_method=interpolation_method
+    )
+
+
+class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+
+    _default_options = dict(kernels='fk', rbao=104., A_full=True, remove_DeltaP=False,backend='jax')
+    r"""
+    models: EFT, TNS, folps
+    bias_scheme:
+    """
+    # 'qpar','qper','f','f0',
+    _pt_attrs = ['jac', 'kap', 'muap', 'table', 'table_now', 'scalars', 'scalars_now', 'A_full', 'remove_DeltaP', 'qpar', 'qper', 'f', 'f0', 'pklir']
+
+    def initialize(self, *args, mu=6, **kwargs):
+        super(FOLPSv2PowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
+        # folpsv2.BackendManager(preferred_backend=self.options['backend'])
+
+        # from folpsv2 import MatrixCalculator
+        folps_matrix_class = folpsv2.MatrixCalculator(A_full=self.options['A_full'], use_TNS_model=self.options['remove_DeltaP'])
+        self.matrices = folps_matrix_class.get_mmatrices()
+        self.template.init.update(with_now='peakaverage')
+
+    def calculate(self):
+        super(FOLPSv2PowerSpectrumMultipoles, self).calculate()
+        cosmo_params = {}
+        cosmo_params['pkttlin'] = self.template.pk_dd * self.template.fk**2
+        cosmo_params['f0'] = self.template.f0
+
+        if getattr(self, '_get_non_linear', None) is None:
+            # from folpsv2 import NonLinearPowerSpectrumCalculator
+            # folpsv2.BackendManager(preferred_backend='jax')
+            def _get_non_linear(pk_dd, pknow_dd, **cosmo_params):
+                #folpsv2.MatrixCalculator(A_full=self.options['A_full'], use_TNS_model=self.options['remove_DeltaP'])
+                folps_nlps_class = folpsv2.NonLinearPowerSpectrumCalculator(mmatrices=self.matrices,
+                                    kernels=self.options['kernels'], rbao=self.options['rbao'], **cosmo_params)
+                # pknow = folpsv2.extrapolate_pklin(k, pknow_dd)
+                # folps_nlps_class._initialize_nonwiggle_power_spectrum(pknow=pknow_dd)
+                return folps_nlps_class.calculate_loop_table(k=self.template.k, pklin=pk_dd, pknow=pknow_dd, **cosmo_params)
+
+            self._get_non_linear = jit(_get_non_linear) if self.options['backend'] == 'jax' else _get_non_linear
+            #Commented out for now, only going ahead with numpy implementation
+            # self._get_non_linear = _get_non_linear
+
+        table, table_now = self._get_non_linear(self.template.pk_dd, self.template.pknow_dd, **cosmo_params)
+        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+
+        extra = 6 if self.options['A_full'] else 0
+        table_pklir = (table[0], *table[1:28 + extra], *table[28 + extra:])
+        table_now_pklir = (table[0], *table_now[1:28 + extra], *table_now[28 + extra:])
+        self.pklir = folpsv2.get_linear_ir_ini(table_pklir[0], table_pklir[1], table_now_pklir[1], k_BAO=1. / self.template.rs_drag)
+
+        self.pt = Namespace(jac=jac, kap=kap, muap=muap, table=table[1:28 + extra], table_now=table_now[1:28 + extra],
+                            scalars=table[28 + extra:], scalars_now=table_now[28 + extra:], A_full=self.options['A_full'],
+                            remove_DeltaP=self.options['remove_DeltaP'], f=self.template.f,
+                            f0=self.template.f0, qpar = self.template.qpar, qper=self.template.qper, pklir=self.pklir)
+        # ,qpar = self.template.qpar, qper=self.template.qper, ,f=self.template.f,f0=self.template.f0
+        self.kt = table[0]
+        self.qpar = self.template.qpar
+        self.qper = self.template.qper
+        self.sigma8 = self.template.sigma8
+        self.fsigma8 = self.template.f * self.sigma8
+
+    def combine_bias_terms_spectrum_poles(self, pars, nd=1e-4, **kwargs):
+        table = (self.kt, *self.pt.table, *self.pt.scalars)
+        table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
+        # Inject shot noise at correct position
+        pars = list(pars[:-1]) + [1. / nd, pars[-1]]  #1. / nd
+        ncols = len(table)
+        if getattr(self, '_get_poles', None) is None:
+
+            @jit(static_argnums=(4, 5))
+            def _get_poles(jac, kap, muap, pars, bias_scheme, damping, *table):
+                # print(self.pt.A_full)
+                # folpsv2.MatrixCalculator(A_full=getattr(self.pt, "A_full", True), use_TNS_model=getattr(self.pt, "remove_DeltaP", False))
+                folps_rsdmps_class = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD')
+                pars = folps_rsdmps_class.set_bias_scheme(pars=pars, bias_scheme=bias_scheme) #folps
+                return self.to_poles(jac * folps_rsdmps_class.get_rsd_pkmu(kap, muap, pars, table[:ncols], table[ncols:], IR_resummation=True, damping=damping))
+
+            # self._get_poles = jit(_get_poles) #Only going ahead with numpy implementation for now
+            # self._get_poles = jit(_get_poles)  if kwargs['backend'] == 'jax' else _get_poles
+            self._get_poles = _get_poles
+
+        return self._get_poles(self.pt.jac, self.pt.kap, self.pt.muap, jnp.array(pars), kwargs['bias_scheme'], kwargs['damping'], *table, *table_now)
+
+    def combine_bias_terms_bispectrum_poles(self, pars, k1k2, ells=None, **kwargs):
+        table = (self.kt, *self.pt.table, *self.pt.scalars)
+        table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
+        k_pkl_pklnw_fk = jnp.array([table[0], table[1], table_now[1], table[2] * self.pt.f0])
+        multipoles = [f"B{ell1}{ell2}{ell3}" for (ell1, ell2, ell3) in ells]
+        poles = get_bispectrum_multipoles_jit(pars, k1k2, k_pkl_pklnw_fk, self.template.f0, self.template.qpar, self.template.qper,
+                                      multipoles=multipoles, **{key: kwargs[key] for key in ['precision', 'dampling', 'interpolation_method', 'bias_scheme', 'renormalized'] if key in kwargs})
+        return jnp.vstack(poles)
+
+    def __getstate__(self, varied=True, fixed=True):
+        state = {}
+        for name in (['k', 'z', 'ells', 'wmu', 'kt'] if fixed else []) + (['sigma8', 'fsigma8', 'qpar', 'qper'] if varied else []):
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        if varied:
+            for name in self._pt_attrs:
+                if hasattr(self.pt, name):
+                    state[name] = getattr(self.pt, name)
+        return state
+
+    def __setstate__(self, state):
+        # print("state",state.keys())
+        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8', 'qpar', 'qper']:
+            if name in state: setattr(self, name, state.pop(name))
+        if not hasattr(self, 'pt'): self.pt = Namespace()
+        self.pt.update(**state)
+
+    # @classmethod
+    # def install(cls, installer):
+    #     installer.pip('git+https://github.com/cosmodesi/folpsax')
+
+
+class FOLPSv2TracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
+    r"""
+    FOLPS power spectrum multipoles.
+    Can be exactly marginalized over stochastic parameters sn*.
+    For the matter (unbiased) power spectrum, set b1=1 and all other bias parameters to 0.
+
+    Parameters
+    ----------
+    pt : FOLPSv2PowerSpectrumMultipoles, optional
+        PT calculator.
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+    k : array (N, 2)
+        Output wavenumbers.
+    ells : tuple, default=((0, 0, 0), (2, 0, 2))
+        Multipoles to compute.
+        Available are (0, 0, 0), (1, 1, 0), (2, 2, 0), (0, 2, 2), (1, 1, 2)
+    shotnoise : array, default=1e4
+        Shot noise for each of the multipoles.
+    prior_basis : str, default='standard'
+        - standard: standard basis as used in folps paper (ArXiv: 2404.07269)
+        - physical: physical basis as used in velocileptors paper from DR1
+        - physical_aap: physical basis from the 2pt3pt prior document
+        - tcm_chudaykin_aap: physical basis with AP scaling along with class-pt basis from Chudaykin et. al.
+    """
+    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4, model='FOLPSD',
+                            bias_scheme='folps', IR_resummation=True, damping='lor',
+                            b3_coev=True, backend='jax', sigma8_fid=None, h_fid=None)
+
+    # Helpers
+    @staticmethod
+    def _rename_prior_basis(prior_basis: str) -> str:
+        pb = str(prior_basis).strip()
+        aliases = {
+            'standard': 'standard_folps',
+            'physical': 'physical_velocileptors',
+            'physical_aap': 'physical_aap',
+            'tcm_chudaykin_aap': 'tcm_chudaykin_aap',
+        }
+        if pb not in aliases:
+            raise ValueError(f"Unknown prior_basis='{prior_basis}'. "
+                             "Valid: ['standard', 'physical', 'physical_aap',"
+                             "'tcm_chudaykin_aap'].")
+        return aliases[pb]
+
+    @staticmethod
+    def _is_physical_mode(prior_basis: str) -> bool:
+        return 'physical' in prior_basis
+
+    # Default parameter priors (before initialization)
+    @staticmethod
+    def _params(params, freedom=None, prior_basis='physical'):
+        prior_basis = FOLPSv2TracerPowerSpectrumMultipoles._rename_prior_basis(prior_basis)
+        # freedom logic (pre-rename)
+        fix = []
+        if freedom in ['min', 'max']:
+            for param in params.select(basename=['b1']):
+                param.update(prior=dict(limits=[0., 10.]))
+            for param in params.select(basename=['b2']):
+                param.update(prior=dict(limits=[-50., 50.]))
+
+            # remove priors for the nuisances (let later blocks define them)
+            for param in params.select(basename=['bs', 'b3', 'alpha*', 'sn*','X_FoG_p']):
+                param.update(prior=None)
+
+        if freedom == 'max':
+            for param in params.select(basename=['b1', 'b2', 'bs', 'b3','X_FoG_p']):
+                param.update(fixed=False)
+            fix += ['ct']
+
+        if freedom == 'min':
+            fix += ['b3', 'bs', 'ct']
+
+        for param in params.select(basename=fix):
+            param.update(value=0., fixed=True)
+
+        # physical modes: rename -> add suffix 'p'
+        if FOLPSv2TracerPowerSpectrumMultipoles._is_physical_mode(prior_basis):
+            for param in list(params):
+                param.update(basename=param.basename + 'p')
+            # b1p prior
+            for param in params.select(basename='b1p'):
+                param.update(prior=dict(dist='uniform', limits=[0., 3.]),
+                             ref=dict(dist='norm', loc=1., scale=0.1))
+            for param in params.select(basename=['b2p', 'bsp', 'b3p']):
+                param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
+            for param in params.select(basename='b3p'):
+                param.update(value=0., fixed=True)
+            for param in params.select(basename='alpha*p'):
+                param.update(prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.))  # 50% at k = 0.2 h/Mpc
+            for param in params.select(basename='sn*p'):
+                param.update(prior=dict(dist='norm', loc=0., scale=2. if 'sn0' in param.basename else 5.), ref=dict(dist='norm', loc=0., scale=1.))
+
+        return params
+
+    # Process the input parameters (at initialization)
+    def set_params(self):
+        self.required_bias_params = ['b1', 'b2', 'bs', 'b3', 'alpha0', 'alpha2', 'alpha4', 'ct', 'sn0', 'sn2','X_FoG_p']
+        default_values = {'b1': 2.}
+        self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
+        prior_basis = self._rename_prior_basis(self.options['prior_basis'])
+        self._prior_basis_norm = prior_basis
+        self.is_physical_prior = self._is_physical_mode(prior_basis)
+
+        if self.is_physical_prior:
+            # rename required nuisances to primed sampling names
+            for name in list(self.required_bias_params):
+                self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
+
+            settings = get_physical_stochastic_settings(tracer=self.options['tracer'])
+            for name, value in settings.items():
+                if self.options[name] is None:
+                    self.options[name] = value
+
+            if self.mpicomm.rank == 0:
+                self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
+
+        super().set_params(pt_params=[])
+        # fix unused multipole-related params
+        fix = []
+        if 4 not in self.ells:
+            fix += ['alpha4'] if not self.is_physical_prior else ['alpha4p']
+        if 2 not in self.ells:
+            fix += (['alpha2', 'alpha2shot'] if not self.is_physical_prior else ['alpha2p', 'alpha2shotp'])
+
+        for param in self.init.params.select(basename=fix):
+            param.update(value=0., fixed=True)
+
+        self.nd = 1e-4
+        self.fsat = self.snd = 1.
+        if self.is_physical_prior:
+            self.fsat = self.options['fsat']
+            self.snd = self.options['shotnoise'] * self.nd  # normalized by 1e-4
+
+    # main mapping
+    def calculate(self, **params):
+        super(FOLPSv2TracerPowerSpectrumMultipoles, self).calculate()
+        params = {**self.required_bias_params, **params}
+        prior_basis = self._prior_basis_norm  # already normalized in set_params
+        # Case A: STANDARD_FOLPS -> forward directly (Eulerian nuisances)
+        if prior_basis == 'standard_folps':
+            pars = [params[name] for name in self.required_bias_params]
+            if self.options['b3_coev']:
+                b1 = pars[0]
+                pars[3] = 32 / 315 * (b1 - 1)
+            opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
+            self.power = self.pt.combine_bias_terms_spectrum_poles(pars, **opts, nd=self.nd, model=self.options['model'],
+                                                                    bias_scheme=self.options['bias_scheme'], IR_resummation=self.options['IR_resummation'],
+                                                                    damping=self.options['damping'], prior_basis=self.options['prior_basis'],
+                                                                    b3_coev=self.options['b3_coev'], backend=self.options['backend'])
+            return
+
+        # From here on: PHYSICAL modes
+        sigma8 = self.pt.sigma8
+        f = self.pt.fsigma8 / sigma8
+        sigma8_fid = self.options.get('sigma8_fid', None)
+        # amplitude rescaling convention (Class-PT style)
+        A = (sigma8 / sigma8_fid)**2 if sigma8_fid is not None else 1.0
+        qpar, qper = self.pt.qpar, self.pt.qper
+        # A_AP = (h_fid / h)**3 / (qper**2 * qpar)
+        A_AP = 1 / (qper**2 * qpar)
+        sqrt_A_AP = A_AP**0.5
+        self.A_AP = A_AP
+
+        # Counterterms mapping
+        if prior_basis == 'physical_velocileptors':
+            # This one need to be fixed
+            # --- Lagrangian -> Eulerian ---
+            b1L = params['b1p'] / sigma8 - 1.0
+            b2L = params['b2p'] / sigma8**2
+            bsL = params['bsp'] / sigma8**2
+            b1E  = 1.0 + b1L
+            b2E  = b2L + 8.0 / 21.0 * b1L
+            # defaults (non-APscaling)
+            b3L  = params['b3p']
+            bsE = -4.0 / 7.0 * b1L + bsL
+            b3E  = b3L + 32.0 / 315.0 * b1L
+            ctildeE = params.get('ctp', 0.0)
+            # interpret alpha?p as the actual EFT alpha0/alpha2/alpha4 coefficients
+            # (optionally undo overall A if you want the same convention as your other physical modes)
+            alpha0, alpha2, alpha4 = (params[name] / A for name in ['alpha0', 'alpha2', 'alpha4'])
+            pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, ctildeE]
+            sigv = self.options['sigv']
+            pars += [params['sn{:d}p'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
+            pars += [params['X_FoG_pp']]
+        elif prior_basis == 'physical_aap':
+                # --- Lagrangian -> Eulerian ---
+            b1L = params['b1p'] / sigma8 / sqrt_A_AP - 1.0
+            b2L = params['b2p'] / sigma8**2 / sqrt_A_AP
+            bK2 = params['bsp'] / sigma8**2 / sqrt_A_AP
+            # btd = params['bsp'] / sigma8**3 / sqrt_A_AP
+            btd = params['b3p'] / A_AP / sigma8**4
+            b1E  = 1.0 + b1L
+            # b2E  = b2L + 8.0 / 21.0 * b1L
+            b2E  = b2L
+            if self.options['b3_coev']:
+                # bK2 = -2/7*(b1E-1)
+                btd = 23 / 42 * (b1E - 1)
+            bsE = 2 * bK2
+            b3E = 64 / 105 * (-5 / 4 * bsE - btd)
+            # bsE = -4.0 / 7.0 * (b1E-1)
+            # b3E  = 32.0 / 315.0 * (b1E-1)
+            ctildeE = params.get('ctp', 0.0)
+            # interpret alpha?p as tilde-alphas, map to folps alphas
+            a0t, a2t, a4t = (params[name] / A_AP / sigma8**2 for name in ['alpha0', 'alpha2', 'alpha4'])
+            alpha0 = (b1E**2) * a0t
+            alpha2 = (b1E * f) * (a0t + a2t)
+            alpha4 = (f**2) * a2t + (b1E * f) * a4t
+            pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, ctildeE]
+            # NOTE: ignores the mu^6 term if your true model has it.
+            sigv = self.options['sigv']
+            pars += [params['sn{:d}p'.format(i)] / A_AP * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
+            pars += [params['X_FoG_pp']]
+        elif prior_basis == 'tcm_chudaykin':
+            # APscaling: include A_AP and decode the table-style priors
+            self.options['bias_scheme'] = 'classpt' #As in chudaykin et. al.
+            b1L, b2L, bsL, b3 = params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p'] / A
+            pars = [1. + b1L, b2L, bsL, b3]   #Class-pt bias free b3
+            c0, c2, c4 = (params[name] / (A * A_AP) for name in ['alpha0p', 'alpha2p', 'alpha4p'])
+            pars += [-2 / 105 * (105 * c0 - 35 * c2 * f + 9 * c4 * f**2), -2 / 7 * f * (7 * c2 - 6 * f * c4), -2 * f**2 * c4, 0]
+            sigv = self.options['sigv']
+            pars += [params['sn{:d}p'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
+            pars += [params['X_FoG_pp']]
+            # use coevolution b3E = b3E + 32.0/315.0 * b1L ?
+        else:
+            raise ValueError(f"Internal error: unsupported normalized prior basis '{prior_basis}'.")
+
+        opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
+        self.power = self.pt.combine_bias_terms_poles(pars, **opts, nd=self.nd, model=self.options['model'], bias_scheme=self.options['bias_scheme'], IR_resummation=self.options['IR_resummation'], damping=self.options['damping'], prior_basis=self.options['prior_basis'],basis_rot_matrix = self.options['basis_rot_matrix'],b3_coev = self.options['b3_coev'],backend=self.options['backend'])
+
+
+class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
+    r"""
+    FOLPS bispectrum multipoles.
+    Can be exactly marginalized over stochastic parameters sn*.
+    For the matter (unbiased) power spectrum, set b1=1 and all other bias parameters to 0.
+
+    Parameters
+    ----------
+    pt : FOLPSv2PowerSpectrumMultipoles, optional
+        PT calculator.
+    template : BasePowerSpectrumTemplate
+        Power spectrum template. Defaults to :class:`DirectPowerSpectrumTemplate`.
+    k : array (N, 2)
+        Output wavenumbers.
+    ells : tuple, default=((0, 0, 0), (2, 0, 2))
+        Multipoles to compute.
+        Available are (0, 0, 0), (1, 1, 0), (2, 2, 0), (0, 2, 2), (1, 1, 2)
+    shotnoise : array, default=1e4
+        Shot noise for each of the multipoles.
+    prior_basis : str, default='standard'
+        - standard: standard basis as used in folps paper (ArXiv: 2404.07269)
+        - physical: physical basis as used in velocileptors paper from DR1
+        - physical_aap: physical basis from the 2pt3pt prior document
+        - tcm_chudaykin_aap: physical basis with AP scaling along with class-pt basis from Chudaykin et. al.
+    """
+    config_fn = 'full_shape.yaml'
+    _klim = (1e-3, 1., 500)
+    _initialize_with_namespace = True
+    # _default_options = dict(prior_basis='physical', mu=50)
+    _default_options = dict(freedom=None, prior_basis='standard', basis='sugiyama',
+                            tracer=None, fsat=None, sigv=None,
+                            shotnoise=1e4, h_fid=None, sigma8_fid=None,
+                            model='FOLPSD', bias_scheme='folps', IR_resummation=True, damping='lor', rbao=104.,
+                            A_full=True, remove_DeltaP=False, precision=(8, 10, 10),
+                            renormalized=True, interpolation_method='linear')
+
+
+    def initialize(self, pt=None, template=None, k=None, ells=((0, 0, 0), (2, 0, 2)), **kwargs):
+        self.options = self._default_options.copy()
+        shotnoise = kwargs.get('shotnoise', 1e4)
+        for name, value in self._default_options.items():
+            self.options[name] = kwargs.pop(name, value)
+        self.nd = 1. / float(shotnoise)
+        if pt is None:
+            pt = globals()[getattr(self, 'pt_cls', self.__class__.__name__.replace('TracerBispectrum', 'PowerSpectrum'))]()
+        self.pt = pt
+        if template is not None:
+            self.pt.init.update(template=template)
+        for name, value in self.pt._default_options.items():
+            if name in kwargs:
+                self.pt.init.update({name: kwargs.pop(name)})
+            elif name in self.options:
+                self.pt.init.update({name: self.options[name]})
+        for name in ['method', 'mu']:
+            if name in kwargs:
+                self.pt.init.update({name: kwargs.pop(name)})
+        self.required_bias_params, self.optional_bias_params = {}, {}
+        self.pt.init.update(kwargs)
+        for name in ['z', 'k']:
+            # print( dir(self.pt),getattr(self.pt, 'z', None))
+            setattr(self, name, getattr(self.pt, name))
+
+        if k is None:
+            k = np.column_stack([self.pt.k] * 2)
+
+        self.k = k  # (nk, 2)
+        self.set_params()
+        if utils.is_sequence(ells[0]):
+            self.ells = (ells,)
+        self.ells = tuple(ells)
+
+    @staticmethod
+    def _rename_prior_basis(prior_basis: str) -> str:
+        return FOLPSv2TracerPowerSpectrumMultipoles._rename_prior_basis(prior_basis)
+
+    @staticmethod
+    def _is_physical_mode(prior_basis: str) -> bool:
+        return FOLPSv2TracerPowerSpectrumMultipoles._is_physical_mode(prior_basis)
+
+    @staticmethod
+    def _params(params, prior_basis='physical'):
+        prior_basis = FOLPSv2TracerBispectrumMultipoles._rename_prior_basis(prior_basis)
+        for param in params.select(basename=['b1']):
+            param.update(prior=dict(limits=[0., 10.]))
+        for param in params.select(basename=['b2']):
+            param.update(prior=dict(limits=[-50., 50.]))
+        for param in params.select(basename=['bs', 'c1', 'c2', 'Pshot', 'Bshot', 'X_FoG_b']):
+            param.update(prior=None)
+        for param in params.select(basename=['bs', 'c1', 'c2', 'Pshot', 'Bshot', 'X_FoG_b']):
+            param.update(fixed=False)
+        # for param in params.select(basename=fix):
+        #     param.update(value=0., fixed=True)
+        if FOLPSv2TracerBispectrumMultipoles._is_physical_mode(prior_basis):
+            for param in list(params):
+                basename = param.basename
+                param.update(basename=basename + 'p')
+                #params.set({'basename': basename, 'namespace': param.namespace, 'derived': True})
+            for param in params.select(basename='b1p'):
+                param.update(prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1))
+            for param in params.select(basename=['b2p', 'bsp']):
+                param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
+            # Decide the priors for c1 and c2 (Not worrying about it now)
+        return params
+
+    def set_params(self):
+        self.required_bias_params = ['b1', 'b2', 'bs', 'c1', 'c2', 'Pshot', 'Bshot', 'X_FoG_b']
+        default_values = {'b1': 2.}
+        self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
+
+        prior_basis = self._rename_prior_basis(self.options['prior_basis'])
+        self._prior_basis_norm = prior_basis
+        self.is_physical_prior = self._is_physical_mode(prior_basis)
+
+        if self.is_physical_prior:
+            # rename required nuisances to primed sampling names
+            for name in list(self.required_bias_params):
+                self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
+
+            settings = get_physical_stochastic_settings(tracer=self.options['tracer'])
+            for name, value in settings.items():
+                if self.options[name] is None:
+                    self.options[name] = value
+
+            if self.mpicomm.rank == 0:
+                self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
+
+        # super().set_params(pt_params=[])
+        # fix unused multipole-related params
+        self.nd = 1e-4
+        self.fsat = self.snd = 1.
+        if self.is_physical_prior:
+            self.fsat = self.options['fsat']
+            self.snd = self.options['shotnoise'] * self.nd  # normalized by 1e-4
+
+    def calculate(self, **params):
+        super(FOLPSv2TracerBispectrumMultipoles, self).calculate()
+        params = {**self.required_bias_params, **params}
+        # import folps as folpsv2
+        # folpsv2.MatrixCalculator(A_full=getattr(self.pt, "A_full", True),remove_DeltaP=getattr(self.pt, "remove_DeltaP", False))
+        #Initialise global variables
+        prior_basis = self._prior_basis_norm  # already normalized in set_params
+        qpar, qper = self.pt.qpar, self.pt.qper
+        # Case A: STANDARD_FOLPS -> forward directly (Eulerian nuisances)
+        if prior_basis == 'standard_folps':
+            pars = [params[name] for name in self.required_bias_params]
+            self.power = self.pt.combine_bias_terms_bispectrum_poles(pars, self.k, precision=self.options['precision'], damping=self.options['damping'],
+                                                                basis=self.options['basis'], model=self.options['model'],
+                                                                bias_scheme=self.options['bias_scheme'], renormalized=self.options['renormalized'],
+                                                                interpolation_method=self.options['interpolation_method'],
+                                                                ells=self.ells, qpar=qpar, qper=qper)
+            return
+        # From here on: PHYSICAL modes
+        sigma8 = self.pt.sigma8
+        f = self.pt.fsigma8 / sigma8
+        sigma8_fid = self.options.get('sigma8_fid', None)
+        # Amplitude rescaling convention (Class-PT style)
+        A = (sigma8 / sigma8_fid)**2 if sigma8_fid is not None else 1.0
+        A_AP = 1 / (qper**2 * qpar)
+        sqrt_A_AP = A_AP**0.5
+        self.A_AP = A_AP
+        # Counterterms mapping
+        if prior_basis == 'physical_velocileptors':
+            # This one need to be fixed
+            # --- Lagrangian -> Eulerian ---
+            b1L = params['b1p'] / sigma8 - 1.0
+            b2L = params['b2p'] / sigma8**2
+            bsL = params['bsp'] / sigma8**2
+            b1E  = 1.0 + b1L
+            b2E  = b2L + 8.0 / 21.0 * b1L
+            # defaults (non-APscaling)
+            b3L  = params['b3p']
+            bsE = -4.0 / 7.0 * b1L + bsL
+            c1, c2 = (params[name] / (kNL**2) for name in ['c1p', 'c2p'])
+            pars = [b1E, b2E, bsE, c1, c2, Pshot, Bshot, params['X_FoG_bp']]
+        elif prior_basis == 'physical_aap':
+            # --- Lagrangian -> Eulerian ---
+            b1L = params['b1p'] / sigma8 / sqrt_A_AP - 1.0
+            b2L = params['b2p'] / sigma8**2 / sqrt_A_AP
+            # b2L  = params['b2p']
+            bK2 = params['bsp'] / sigma8**2 / sqrt_A_AP
+            b1E = 1.0 + b1L
+            b2E = b2L
+            bsE = 2 * bK2
+            kNL = 0.3
+            c1, c2 = (params[name] / (kNL**2) / (A_AP * sigma8**2) for name in ['c1p', 'c2p'])
+            Ashot = A_AP
+            Pshot = (params['Pshotp'] / Ashot) * self.snd * (1.0)
+            Bshot = (params['Bshotp'] / Ashot) * self.snd * (1.0)
+            # c1 = params['c1p']
+            # c2 = params['c2p']
+            # Pshot = params['Pshotp']
+            # Bshot = params['Bshotp']
+            pars = [b1E, b2E, bsE, c1, c2, Pshot, Bshot, params['X_FoG_bp']]
+        elif prior_basis == 'tcm_chudaykin':
+            # APscaling: include A_AP and decode the table-style priors
+            self.options['bias_scheme'] = 'classpt' #As in chudaykin et. al.
+            b1L, b2L, bsL, b3 = params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p']/A
+            pars = [1. + b1L, b2L, bsL, b3]   #Class-pt bias free b3
+            c0, c2, c4 = (params[name] / (A * A_AP) for name in ['alpha0p', 'alpha2p', 'alpha4p'])
+            pars += [-2. / 105 * (105 * c0 - 35 * c2 * f + 9 * c4 * f**2), -2. / 7 * f * (7 * c2 - 6 * f * c4), -2 * f**2 * c4, 0]
+            sigv = self.options['sigv']
+            pars += [params['sn{:d}p'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
+            pars += [params['X_FoG_pp']]
+            # use coevolution b3E = b3E + 32.0/315.0 * b1L
+        # pars = [params[name] for name in self.required_bias_params]
+        self.power = self.pt.combine_bias_terms_bispectrum_poles(pars, self.k, precision=self.options['precision'], damping=self.options['damping'], basis=self.options['basis'],
+                                                                 model=self.options['model'] ,bias_scheme=self.options['bias_scheme'], renormalized=self.options['renormalized'],
+                                                                 interpolation_method=self.options['interpolation_method'], ells=self.ells, qpar=qpar, qper=qper)
+
+    def get(self):
+        # Returned value when calling the calculator
+        return self.power
+
+    def __getstate__(self):
+        # Required only for quick emulation (Taylor expansion)
+        state = {}
+        for name in ['k', 'z', 'ells', 'power']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        return state

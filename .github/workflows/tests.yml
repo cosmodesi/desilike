@@ -31,7 +31,9 @@ jobs:
     - name: Cache pip wheels
       uses: actions/cache@v4
       with:
-        path: ${{ runner.os == 'Linux' && '~/.cache/pip' || '~/Library/Caches/pip' }}
+        path: |
+          wheelhouse
+          ${{ runner.os == 'Linux' && '~/.cache/pip' || '~/Library/Caches/pip' }}
         key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/pyproject.toml') }}
         restore-keys: ${{ runner.os }}-pip-${{ matrix.python-version }}-
     - name: Install dependencies
@@ -44,7 +46,16 @@ jobs:
           brew install openmpi
           brew install libomp
         fi
-        pip install torch --index-url https://download.pytorch.org/whl/cpu  # prevent pocoMC from pulling CUDA libraries
+        python -m pip install torch --index-url https://download.pytorch.org/whl/cpu  # prevent pocoMC from pulling CUDA libraries
+        # TODO: Explicitly caching pyclass and cosmoprimo shouldn't be necessary once they're on PyPI.
+        mkdir -p wheelhouse
+        if ! ls wheelhouse/pyclass-*.whl > /dev/null 2>&1; then
+            pip wheel -w wheelhouse git+https://github.com/adematti/pyclass
+        fi
+        if ! ls wheelhouse/cosmoprimo-*.whl > /dev/null 2>&1; then
+            pip wheel -w wheelhouse git+https://github.com/cosmodesi/cosmoprimo
+        fi
+        python -m pip install --no-index --find-links=wheelhouse pyclass cosmoprimo
         python -m pip install .[tests]
         python -m pip install ipython  # TODO: temporary fix for https://github.com/AnswerDotAI/fastprogress/issues/117
     - name: Lint with ruff

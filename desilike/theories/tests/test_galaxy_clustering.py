@@ -1480,7 +1480,7 @@ def test_ptt():
         ax.plot(template.k, (pklin1 - pklin0) / pklin0 / dp, color='k')
         ax.plot(theory.k, (pk1 - pk0) / pk0 / dp, color='C{:d}'.format(i))
     ax.set_xlim(theory.k[0], theory.k[-1])
-    ax.set_xlabel('$k [h/\mathrm{Mpc}]$')
+    ax.set_xlabel(r'$k [h/\mathrm{Mpc}]$')
     ax.set_ylabel('dln(P)/dp')
     savefig('test_ptt.png')
 
@@ -2014,6 +2014,20 @@ def test_multitracer():
         expected = b1X * b1Y * pk_dd + (b1X + b1Y) * pk_dt + pk_tt + (tmp.power - pk_tt)
         np.testing.assert_allclose(theory.power, expected)
 
+
+    def test_png():
+        from desilike.theories.galaxy_clustering import PNGTracerPowerSpectrumMultipoles
+        cls = PNGTracerPowerSpectrumMultipoles
+        mode, determinstic_params, stochastic_params = 'bphi', {'b1': 1.24, 'sigmas': 1.2, 'bphi': 1.2}, {'sn0': 1.}
+        theory = cls(template=template, mode=mode)(**determinstic_params, **stochastic_params)
+        named_params = {f'lrg.{k}': v for k, v in determinstic_params.items()} | {'lrg.sn0': 1.}
+        theory2 = cls(template=template, mode=mode, tracers=('lrg',))(**named_params)
+        assert np.allclose(theory2, theory)
+        named_params = {f'lrg.{k}': v for k, v in determinstic_params.items()} | {f'elg.{k}': v for k, v in determinstic_params.items()} | {f'lrgxelg.{k}': v for k, v in stochastic_params.items()}
+        theory2 = cls(template=template, mode=mode, tracers=('lrg', 'elg'))(**named_params)
+        assert np.allclose(theory2, theory)
+
+
     # test_params(SimpleTracerPowerSpectrumMultipoles)
     # test_params(KaiserTracerPowerSpectrumMultipoles)
     # test_params(KaiserTracerCorrelationFunctionMultipoles)
@@ -2040,6 +2054,7 @@ def test_multitracer():
     assert SimpleTracerPowerSpectrumMultipoles(shotnoise=(1e3, 1e4)).nd == 1 / np.sqrt(1e3 * 1e4)
     test_kaiser()
     test_eft_kaiser()
+    test_png()
 
 
 def test_jaxeffort():
@@ -2068,10 +2083,23 @@ def test_jaxeffort():
     plt.show()
 
 
+def test_folpsv2():
+    from cosmoprimo.fiducial import DESI
+    from desilike.theories.galaxy_clustering import FOLPSv2TracerPowerSpectrumMultipoles, FOLPSv2TracerBispectrumMultipoles, ShapeFitPowerSpectrumTemplate
+
+    template = ShapeFitPowerSpectrumTemplate(z=0.5, fiducial=DESI())
+    theory = FOLPSv2TracerPowerSpectrumMultipoles(template=template)
+    theory()
+    theory = FOLPSv2TracerBispectrumMultipoles(template=template)
+    theory()
+
+
+
 if __name__ == '__main__':
 
     setup_logging()
 
+    test_folpsv2()
     #test_velocileptors_lpt_rsd()
     #test_velocileptors_rept()
     #test_pybird()
@@ -2097,9 +2125,8 @@ if __name__ == '__main__':
     #test_ap_diff()
     #test_ptt()
     #test_tns()
-    # test_bispectrum()
+    #test_bispectrum()
     #test_freedom()
     #test_bao_phaseshift()
     #comparison_folps_velocileptors()
-    #test_multitracer()
-    test_jaxeffort()
+    # test_multitracer()

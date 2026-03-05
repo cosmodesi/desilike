@@ -85,22 +85,22 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
                 start = stop
                 data.insert(leaf, ells=ell)
         if window is None:
-            kin = np.unique(np.concatenate([pole.coords('k') for pole in data], axis=0))
-            window = []
+            kin = np.unique(np.concatenate([pole.coords('k') for pole in data], axis=0), axis=0)
+            window, ellsin = [], []
             for label, pole in data.items():
-                tmp = np.zeros((pole.size, kin.size))
-                index = np.searchsorted(kin, pole.coords('k'), side='left')
-                tmp[:, index] = 1.
-                window.append(tmp)
-            window = sp.linalg.block_diag(window)
+                tmp = np.all(pole.coords('k')[:, None, :] == kin[None, :, :], axis=-1)
+                window.append(1. * tmp)
+                ellsin.append(label['ells'])
+            window = sp.linalg.block_diag(*window)
         if custom_window:
             window = np.array(window)
             assert window.ndim == 2
-            theory = types.ObservableTree(ells=[])
+            theory = []
             start = 0
             for ell in ellsin:
-                leaf = types.ObservableLeaf(k=kin, value=np.zeros_like(kin), coords=['k'])
-                theory.insert(leaf, ells=ell)
+                leaf = types.ObservableLeaf(k=kin, value=np.zeros_like(kin[..., 0]), coords=['k'])
+                theory.append(leaf)
+            theory = types.ObservableTree(theory, ells=ellsin)
             window = types.WindowMatrix(value=window, theory=theory, observable=data.clone(value=np.zeros_like(data.value())))
         elif not custom_data:  # match
             window = window.at.observable.match(data)
@@ -161,7 +161,8 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
             show_legend = False
 
         wtheory = self.data.clone(value=self.flattheory)
-        for label in labels:
+        for ill, label in enumerate(labels):
+            ell = label['ells']
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
             if 'scoccimarro' in data_pole.basis:
@@ -183,7 +184,8 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
             std = self.covariance.at.observable.get(**label).std()
             lax[0].errorbar(x, scale * data_pole.value(), yerr=scale * std, color=f'C{ill:d}', linestyle='none', marker='o', label=rf'$\ell = {ell}$')
             lax[0].plot(x, scale * wtheory_pole.value(), **kw_theory[ill])
-        for ill, ell in enumerate(self.ells):
+        for ill, label in enumerate(labels):
+            ell = label['ells']
             lax[ill + 1].plot(x, (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ill])
             lax[ill + 1].set_ylim(-4, 4)
             for offset in [-2., 2.]: lax[ill + 1].axhline(offset, color='k', linestyle='--')
@@ -196,8 +198,8 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
         return fig
 
     def calculate(self):
-        # Set flattheory with bispectrum prediction
-        self.flattheory = jnp.dot(self.window.value(), self.theory.power)
+        # Set flattheory with window-convolved bispectrum prediction
+        self.flattheory = jnp.dot(self.window.value(), self.theory.power.ravel())
 
     def __getstate__(self):
         # Optional

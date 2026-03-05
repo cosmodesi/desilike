@@ -63,7 +63,7 @@ from cosmoprimo.jax import Interpolator1D, Interpolator2D
 def jit(*args, **kwargs):
     """Return :mod:`jax` just-in-time compiler."""
 
-    def get_wrapper(func):
+    def get_wrapper(func, kwargs=kwargs):
         if jax is None:
             return func
         return jax.jit(func, **kwargs)

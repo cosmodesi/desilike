@@ -1,3 +1,4 @@
+import os
 import re
 
 import numpy as np
@@ -75,11 +76,14 @@ class BaseTracerTheory(BaseCalculator):
             return params
         *tracer_namespaces, cross_namespace = cls.multitracer_namespace(tracers)
         for name in cls._deterministic_bias_params:
-            param = params.pop(name)
-            for namespace in tracer_namespaces:
-                params[f"{namespace}.{name}"] = param.clone(namespace=namespace)
+            param = params.pop(name, None)
+            if param is not None:  # only if parameter exists (in case of a preselection)
+                for namespace in tracer_namespaces:
+                    params.set(param.clone(namespace=namespace))
         for name in cls._stochastic_bias_params:
-            params[name].update(namespace=cross_namespace)
+            param = params.get(name, None)
+            if param is not None:
+                param.update(namespace=cross_namespace)
         return params
 
     @classmethod
@@ -128,6 +132,7 @@ class BaseTracerTheory(BaseCalculator):
         if not self.tracers or isinstance(self.tracers, str):
             return False
         return True
+
 
 class BaseTracerTwoPointTheory(BaseTracerTheory):
     _ntracers = 2
@@ -2879,53 +2884,54 @@ def folpsv2_combine_bias_terms_pkmu(k, mu, jac, table, table_now, pars,rsd_class
     return pkmu * jac
 
 
-try:
-    import folps as folpsv2
-except ImportError:
-    pass
 
-@jit(static_argnames=['damping', 'multipoles', 'interpolation_method', 'bias_scheme', 'model', 'full', 'renormalized'])
-def get_bispectrum_multipoles_jit(
+def _get_bispectrum_multipoles_folpsv2(
     pars,
     k1k2,
     k_pkl_pklnw_fk,
-    f0, qpar, qperp,
+    f0, qpar, qper,
+    multipoles=['B000', 'B202'],
     precision=(8, 10, 10),
     damping='lor',
-    multipoles=['B000', 'B202'],
     interpolation_size=20,
     interpolation_method='linear',
     bias_scheme='folps',
     model='FOLPSD',
-    full=True,
     renormalized=True,
 ):
-    #folpsv2.MatrixCalculator(A_full=A_full, use_TNS_model=remove_DeltaP)
+    import folps as folpsv2
+    # folpsv2.MatrixCalculator(A_full=True, use_TNS_model=False)
     # folps_bispectrum_class = folpsv2.BispectrumCalculator_fk(model='FOLPSD')
     f0 = jnp.asarray(f0)
     bpars = jnp.asarray(pars)
 
-    if full:
+    if k1k2.ndim == 1:
         bs = folpsv2.WindowConvolvedBispectrum(model=model)
         results = bs.reduced_Bl1l2L(bpars, None,
-                        qpar, qperp, k_pkl_pklnw_fk, k1k2, Ssize=interpolation_size,
+                        qpar, qper, k_pkl_pklnw_fk, k1k2, Ssize=interpolation_size,
                         precision_full=[8, 10, 10], precision_diag=[12, 15, 15],
                         f=f0,
                         renormalize=renormalized,
                         interpolation_method_full=interpolation_method,
                         interpolation_method_diag=interpolation_method,
                         use_full_diag=True)
-
-        return results
+        ells = ['B000', 'B110', 'B220', 'B112', 'B202']
+        toret = []
+        for ell in multipoles:
+            if ell in ells:
+                toret.append(results[ells.index(ell)].ravel())
+            else:
+                toret.append(np.zeros((k1k2.size,) * 2).ravel())
+        return toret
 
     bispectrum = folpsv2.BispectrumCalculator(model=model)
-    return bispectrum.Sugiyama_Bell(
+    toret = bispectrum.Sugiyama_Bell(
         f=f0,
         bpars=bpars,
-        k_pkl_pklnw_fk=k_pkl_pklnw_fk,
+        k_pkl_pklnw=k_pkl_pklnw_fk,
         k1k2pairs=k1k2,
         qpar=qpar,
-        qper=qperp,
+        qper=qper,
         precision=precision,
         damping=damping,
         multipoles=list(multipoles),
@@ -2933,11 +2939,13 @@ def get_bispectrum_multipoles_jit(
         renormalize=renormalized,
         interpolation_method=interpolation_method
     )
+    folpsv2.BispectrumCalculator._tables_cache = {}  # to avoid leak
+    return toret
 
 
 class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
 
-    _default_options = dict(kernels='fk', rbao=104., A_full=True, remove_DeltaP=False,backend='jax')
+    _default_options = dict(kernels='fk', rbao=104., A_full=True, remove_DeltaP=False, backend='jax')
     r"""
     models: EFT, TNS, folps
     bias_scheme:
@@ -2947,14 +2955,14 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
 
     def initialize(self, *args, mu=6, **kwargs):
         super(FOLPSv2PowerSpectrumMultipoles, self).initialize(*args, mu=mu, method='leggauss', **kwargs)
-        # folpsv2.BackendManager(preferred_backend=self.options['backend'])
-
-        # from folpsv2 import MatrixCalculator
+        os.environ.setdefault('FOLPS_BACKEND', self.options['backend'])
+        import folps as folpsv2
         folps_matrix_class = folpsv2.MatrixCalculator(A_full=self.options['A_full'], use_TNS_model=self.options['remove_DeltaP'])
         self.matrices = folps_matrix_class.get_mmatrices()
         self.template.init.update(with_now='peakaverage')
 
     def calculate(self):
+        import folps as folpsv2
         super(FOLPSv2PowerSpectrumMultipoles, self).calculate()
         cosmo_params = {}
         cosmo_params['pkttlin'] = self.template.pk_dd * self.template.fk**2
@@ -2981,7 +2989,7 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         extra = 6 if self.options['A_full'] else 0
         table_pklir = (table[0], *table[1:28 + extra], *table[28 + extra:])
         table_now_pklir = (table[0], *table_now[1:28 + extra], *table_now[28 + extra:])
-        self.pklir = folpsv2.get_linear_ir_ini(table_pklir[0], table_pklir[1], table_now_pklir[1], k_BAO=1. / self.template.rs_drag)
+        self.pklir = folpsv2.get_linear_ir_ini(table_pklir[0], table_pklir[1], table_now_pklir[1], k_BAO=1. / self.template.cosmo.rs_drag)
 
         self.pt = Namespace(jac=jac, kap=kap, muap=muap, table=table[1:28 + extra], table_now=table_now[1:28 + extra],
                             scalars=table[28 + extra:], scalars_now=table_now[28 + extra:], A_full=self.options['A_full'],
@@ -2995,6 +3003,7 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         self.fsigma8 = self.template.f * self.sigma8
 
     def combine_bias_terms_spectrum_poles(self, pars, nd=1e-4, **kwargs):
+        import folps as folpsv2
         table = (self.kt, *self.pt.table, *self.pt.scalars)
         table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
         # Inject shot noise at correct position
@@ -3020,10 +3029,18 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         table = (self.kt, *self.pt.table, *self.pt.scalars)
         table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
         k_pkl_pklnw_fk = jnp.array([table[0], table[1], table_now[1], table[2] * self.pt.f0])
-        multipoles = [f"B{ell1}{ell2}{ell3}" for (ell1, ell2, ell3) in ells]
+        multipoles = tuple(f"B{ell1}{ell2}{ell3}" for (ell1, ell2, ell3) in ells)
+        get_bispectrum_multipoles_jit = _get_bispectrum_multipoles_folpsv2
+        full = not np.allclose(k1k2[..., 1], k1k2[..., 0])
+        if full:
+            k1k2 = np.unique(k1k2[..., 0])
+        if self.options['backend'] == 'jax':
+            get_bispectrum_multipoles_jit = jit(static_argnames=['multipoles', 'precision', 'damping', 'interpolation_method', 'bias_scheme', 'renormalized'])(_get_bispectrum_multipoles_folpsv2)
         poles = get_bispectrum_multipoles_jit(pars, k1k2, k_pkl_pklnw_fk, self.template.f0, self.template.qpar, self.template.qper,
-                                      multipoles=multipoles, **{key: kwargs[key] for key in ['precision', 'dampling', 'interpolation_method', 'bias_scheme', 'renormalized'] if key in kwargs})
-        return jnp.vstack(poles)
+                                              multipoles=multipoles,
+                                              **{key: kwargs[key] for key in ['precision', 'damping', 'interpolation_method', 'bias_scheme', 'renormalized'] if key in kwargs})
+        poles = jnp.asarray(poles)
+        return poles
 
     def __getstate__(self, varied=True, fixed=True):
         state = {}
@@ -3228,7 +3245,7 @@ class FOLPSv2TracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             ctildeE = params.get('ctp', 0.0)
             # interpret alpha?p as the actual EFT alpha0/alpha2/alpha4 coefficients
             # (optionally undo overall A if you want the same convention as your other physical modes)
-            alpha0, alpha2, alpha4 = (params[name] / A for name in ['alpha0', 'alpha2', 'alpha4'])
+            alpha0, alpha2, alpha4 = (params[name] / A for name in ['alpha0p', 'alpha2p', 'alpha4p'])
             pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, ctildeE]
             sigv = self.options['sigv']
             pars += [params['sn{:d}p'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
@@ -3252,7 +3269,7 @@ class FOLPSv2TracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             # b3E  = 32.0 / 315.0 * (b1E-1)
             ctildeE = params.get('ctp', 0.0)
             # interpret alpha?p as tilde-alphas, map to folps alphas
-            a0t, a2t, a4t = (params[name] / A_AP / sigma8**2 for name in ['alpha0', 'alpha2', 'alpha4'])
+            a0t, a2t, a4t = (params[name] / A_AP / sigma8**2 for name in ['alpha0p', 'alpha2p', 'alpha4p'])
             alpha0 = (b1E**2) * a0t
             alpha2 = (b1E * f) * (a0t + a2t)
             alpha4 = (f**2) * a2t + (b1E * f) * a4t
@@ -3276,7 +3293,8 @@ class FOLPSv2TracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             raise ValueError(f"Internal error: unsupported normalized prior basis '{prior_basis}'.")
 
         opts = {name: params.get(name, default) for name, default in self.optional_bias_params.items()}
-        self.power = self.pt.combine_bias_terms_poles(pars, **opts, nd=self.nd, model=self.options['model'], bias_scheme=self.options['bias_scheme'], IR_resummation=self.options['IR_resummation'], damping=self.options['damping'], prior_basis=self.options['prior_basis'],basis_rot_matrix = self.options['basis_rot_matrix'],b3_coev = self.options['b3_coev'],backend=self.options['backend'])
+        self.power = self.pt.combine_bias_terms_spectrum_poles(pars, **opts, nd=self.nd, model=self.options['model'], bias_scheme=self.options['bias_scheme'], IR_resummation=self.options['IR_resummation'],
+                                                               damping=self.options['damping'], prior_basis=self.options['prior_basis'], b3_coev=self.options['b3_coev'], backend=self.options['backend'])
 
 
 class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
@@ -3417,7 +3435,7 @@ class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
         super(FOLPSv2TracerBispectrumMultipoles, self).calculate()
         params = {**self.required_bias_params, **params}
         # import folps as folpsv2
-        # folpsv2.MatrixCalculator(A_full=getattr(self.pt, "A_full", True),remove_DeltaP=getattr(self.pt, "remove_DeltaP", False))
+        # folpsv2.MatrixCalculator(A_full=getattr(self.pt, "A_full", True), use_TNS_model=getattr(self.pt, "remove_DeltaP", False))
         #Initialise global variables
         prior_basis = self._prior_basis_norm  # already normalized in set_params
         qpar, qper = self.pt.qpar, self.pt.qper

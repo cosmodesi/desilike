@@ -502,6 +502,66 @@ def test_correlation_function():
         tmp.s, tmp.ells, tmp.flatdata, tmp.flattheory
 
 
+def test_bispectrum():
+
+    from cosmoprimo.fiducial import DESI
+    from desilike.theories.galaxy_clustering import FOLPSv2TracerBispectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.observables.galaxy_clustering import TracerBispectrumMultipolesObservable
+
+    template = ShapeFitPowerSpectrumTemplate(z=0.5, fiducial=DESI())
+    theory = FOLPSv2TracerBispectrumMultipoles(template=template)
+
+    from lsstypes import Mesh3SpectrumPole, Mesh3SpectrumPoles, WindowMatrix, CovarianceMatrix
+
+    def get_data(size):
+        edges = np.linspace(0., 0.2, size + 1)
+        edges = np.column_stack([edges[:-1], edges[1:]])
+        edges = np.concatenate([edges[:, None, :]] * 2, axis=1)
+        k = np.mean(edges, axis=-1)
+        value = np.zeros_like(k[..., 0])
+        ells = [(0, 0, 0), (2, 0, 2)]
+        data = [Mesh3SpectrumPole(k=k, num_raw=value, k_edges=edges, basis='sugiyama-diagonal', ell=ell) for ell in ells]
+        return Mesh3SpectrumPoles(data)
+
+    def get_window(observable, size):
+        edges = np.linspace(0., 0.2, size + 1)
+        edges = np.column_stack([edges[:-1], edges[1:]])
+        k = np.mean(edges, axis=-1)
+
+        def get_grid(*arrays):
+            arrays = np.meshgrid(*arrays, indexing='ij')
+            return np.column_stack([array.ravel() for array in arrays])
+
+        edges = np.column_stack([get_grid(edges[..., axis], edges[..., axis])[:, None, :] for axis in range(2)])
+        k = get_grid(k, k)
+        ells = [(0, 0, 0), (2, 0, 2), (1, 1, 0)]
+        theory = [Mesh3SpectrumPole(k=k, num_raw=np.zeros_like(k[..., 0]), k_edges=edges, basis='sugiyama', ell=ell) for ell in ells]
+        theory = Mesh3SpectrumPoles(theory)
+        window = np.zeros((observable.size, theory.size))
+        return WindowMatrix(observable=observable, theory=theory, value=window)
+
+    def get_covariance(observable):
+        covariance = np.eye(observable.size)
+        return CovarianceMatrix(observable=observable, value=covariance)
+
+    data = get_data(size=20)
+    window = get_window(data, 40)
+    covariance = get_covariance(data)
+
+    observable = TracerBispectrumMultipolesObservable(data=data, covariance=covariance, theory=theory)
+    observable()
+    observable = TracerBispectrumMultipolesObservable(data=data.select(k=(0., 0.1)), covariance=covariance.at.observable.select(k=(0., 0.1)), theory=theory)
+    observable()
+
+    observable = TracerBispectrumMultipolesObservable(data=data, window=window, covariance=covariance, theory=theory)
+    observable()
+    #observable.plot(show=True)
+    observable = TracerBispectrumMultipolesObservable(data=data.select(k=(0., 0.1)), window=window.at.observable.select(k=(0., 0.1)),
+                                                      covariance=covariance.at.observable.select(k=(0., 0.1)), theory=theory)
+    observable()
+    #observable.plot(show=True)
+
+
 def test_bao():
 
     from cosmoprimo.fiducial import DESI
@@ -1296,10 +1356,11 @@ if __name__ == '__main__':
 
     setup_logging()
 
+    test_bispectrum()
     # test_systematic_templates()
     # test_bao()
-    test_power_spectrum()
-    test_correlation_function()
+    # test_power_spectrum()
+    # test_correlation_function()
     # test_footprint()
     # test_covariance_matrix()
     # test_covariance_matrix_mocks()

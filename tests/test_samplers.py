@@ -40,10 +40,10 @@ KWARGS_RUN = dict(
 KWARGS_RUN_FAST = dict(
     dynesty=dict(n_effective=0),
     importance=dict(samples=Chain(dict(
-        a=np.repeat(np.linspace(0, 1, 11), 101),
-        b=np.tile(np.linspace(0, 1, 11), 101)))),
+        a=np.repeat(np.linspace(0, 1, 11), 11),
+        b=np.tile(np.linspace(0, 1, 11), 11)))),
     emcee=dict(max_steps=100),
-    grid=dict(grid=np.linspace(0, 1, 101)),
+    grid=dict(grid=np.linspace(0, 1, 11)),
     nautilus=dict(n_eff=0, n_like_max=100),
     pocomc=dict(n_total=10, n_evidence=10),
     zeus=dict(max_steps=100))
@@ -88,7 +88,7 @@ def test_accuracy(likelihood, key):
                        atol=3 * cov_err)
 
 
-@pytest.mark.mpi_skip
+@pytest.mark.mpi
 def test_importance_combine(likelihood):
     # Test that importance sampling can combine two likelihood without
     # double counting the prior.

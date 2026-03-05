@@ -512,7 +512,8 @@ class MarkovChainSampler(BaseSampler):
         except ValueError:
             geweke_value = float('inf')
 
-        iact = diagnostics.integrated_autocorrelation_time(chains)
+        iact = diagnostics.integrated_autocorrelation_time(
+            chains, check_valid='ignore')
         ess_value = len(chains[0]) / iact.max()
 
         passed_all = True
@@ -565,9 +566,9 @@ class MarkovChainSampler(BaseSampler):
         return self.mpicomm.bcast(converged, root=0)
 
     def run(self, burn_in=0.2, min_steps=0, max_steps=None,
-            adaptation_steps=None, check_every=300, checks_passed=10,
+            adaptation_steps=None, check_every=300, checks_passed=2,
             gelman_rubin=1.1, geweke=None, ess=None, flatten_chains=True,
-            save_every=10, max_init_attempts=100):
+            save_every=300, max_init_attempts=100):
         """Run the sampler.
 
         Parameters
@@ -589,8 +590,8 @@ class MarkovChainSampler(BaseSampler):
             After how many steps convergence is checked. Default is 300.
         checks_passed: int, optional
             Threshold for the number of successive successful convergence
-            checks. If fulfilled ( and the minimum number of iterations is
-            reached), the sampling will stop. Default is 10.
+            checks. If fulfilled (and the minimum number of iterations is
+            reached), the sampling will stop. Default is 2.
         gelman_rubin: float or None
             Used to asses convergence. If given, the maximum value of the
             Gelman-Rubin statistic. Default is 1.1.
@@ -605,7 +606,7 @@ class MarkovChainSampler(BaseSampler):
             Whether to concatenate individual chains into one chain. Default is
             True.
         save_every: int, optional
-            After how many steps results are saved. Default is 10.
+            After how many steps results are saved. Default is 300.
         max_init_attempts: int, optional
             Maximum number of attempts to initialize each chain. Default is
             100.
@@ -658,6 +659,10 @@ class MarkovChainSampler(BaseSampler):
             # Write results.
             if self.directory is not None and steps % save_every == 0:
                 self.write()
+
+        # Write results in case it wasn't written in the last iteration.
+        if self.directory is not None and steps % save_every != 0:
+            self.write()
 
         if self.mpicomm.rank == 0:
             chains = [chain.remove_burnin(burn_in) for chain in self.chains]

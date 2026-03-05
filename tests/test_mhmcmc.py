@@ -17,8 +17,8 @@ def test_proposer(n_fast):
     fast = rng.choice(np.arange(n_dim), size=n_fast, replace=False)
     prop = FastSlowProposer(cov, fast=fast, rng=rng)
 
-    steps_fast = np.vstack([prop.propose_fast() for i in range(n_samples)])
-    steps_slow = np.vstack([prop.propose_slow() for i in range(n_samples)])
+    steps_fast = np.vstack(prop.propose_fast(n_samples))
+    steps_slow = np.vstack(prop.propose_slow(n_samples))
 
     # Slow parameters should not be changed for fast proposals.
     assert np.allclose(steps_fast[:, ~np.isin(range(n_dim), fast)], 0)
@@ -69,10 +69,10 @@ def test_rosenbrock(n_fast, f_fast, f_drag):
     fast = rng.choice(np.arange(n_dim), size=n_fast, replace=False)
     sampler = StandAloneMetropolisHastingsSampler(
         posterior, f_fast=f_fast, f_drag=f_drag, fast=fast, rng=rng)
-    sampler.update(pos=np.zeros((10, 2)), cov=cov)
+    sampler.update(pos=np.zeros((100, 2)), cov=cov)
 
-    chains, _, log_p = sampler.make_n_steps(30000)
-    chains = chains[:, 1000:]  # burn-in
+    chains, _, log_p = sampler.make_n_steps(5000)
+    chains = chains[:, 2000:]  # burn-in
 
     tau = np.amax(integrated_time(np.transpose(chains, (1, 0, 2))))
     chains = np.concatenate(chains)

@@ -13,7 +13,7 @@ from .base import MarkovChainSampler
 class FastSlowProposer:
     """Proposer sampling fast and slow parameter spaces separately."""
 
-    def __init__(self, cov, fast=[], rng=np.random.default_rng()):
+    def __init__(self, cov, fast=None, rng=np.random.default_rng()):
         """Initialize the proposal distribution.
 
         Parameters
@@ -29,6 +29,8 @@ class FastSlowProposer:
         self.rng = rng
 
         self.n_dim = len(cov)
+        if fast is None:
+            fast = []
         is_fast = np.isin(np.arange(self.n_dim), fast)
         self.n_fast = np.sum(is_fast)
         self.n_slow = self.n_dim - self.n_fast
@@ -37,56 +39,70 @@ class FastSlowProposer:
         self.unsort = np.argsort(self.sort)
         self.L = np.linalg.cholesky(cov[:, self.sort][self.sort, :])
 
-    def _propose(self, n_dim):
-        """Generate :math:`n` random :math:`n`-dimensional orthogonal vectors.
+    def _propose(self, n_dim, k):
+        r"""Generate :math:`k \cdot n` random orthogonal vectors.
 
         Parameters
         ----------
         n_dim : int
             Number of dimensions :math:`n`.
+        k : int
+            Number of samples.
 
         Returns
         -------
-        numpy.ndarray of shape (n_dim, n_dim)
-            :math:`n` :math:`n`-dimensional orthogonal vectors drawn from a
-            unit normal. All vectors are orthogonal to each other.
+        numpy.ndarray of shape (k, n_dim, n_dim)
+            :math:`k \cdot n` :math:`n`-dimensional orthogonal vectors drawn
+            from a unit normal. All vectors within each of the :math:`k` sets
+            are orthogonal to each other.
 
         """
-        m = self.rng.standard_normal((n_dim, n_dim))
-        d = np.linalg.norm(m, axis=1)
-        Q = (np.linalg.qr(m.T)[0])
-        return (Q * d * 2 * (self.rng.integers(0, 2, n_dim) - 0.5)).T
+        m = self.rng.standard_normal((k, n_dim, n_dim))
+        d = np.sqrt(self.rng.chisquare(n_dim, size=(k, n_dim))) * (
+            self.rng.choice([-1, +1], (k, n_dim)))
+        Q = np.linalg.qr(m)[0]
+        return Q * d[:, :, np.newaxis]
 
-    def propose_fast(self):
+    def propose_fast(self, k):
         r"""Generate random vectors along the fast parameter directions.
 
+        Parameters
+        ----------
+        k : int
+            Number of samples.
+
         Returns
         -------
-        numpy.ndarray of shape (n_fast, n_dim)
-            :math:`n_\mathrm{fast}` :math:`n`-dimensional vectors. All vectors
-            are 0 along slow dimensions.
+        numpy.ndarray of shape (k, n_fast, n_dim)
+            :math:`k \cdot n_\mathrm{fast}` :math:`n`-dimensional vectors. All
+            vectors are 0 along slow dimensions.
 
         """
+        m_fast = np.zeros((k, self.n_fast, self.n_dim))
         if self.n_fast == 0:
-            return np.zeros((0, self.n_dim))
-        m_fast = np.hstack((np.zeros((self.n_fast, self.n_slow)),
-                            self._propose(self.n_fast)))
-        return (self.L @ m_fast.T).T[:, self.unsort]
+            return np.zeros((k, 0, self.n_dim))
+        m_fast[:, :, self.n_slow:] = self._propose(self.n_fast, k)
+        return (m_fast @ self.L.T)[:, :, self.unsort]
 
-    def propose_slow(self):
+    def propose_slow(self, k):
         r"""Generate random vectors along the slow parameter directions.
 
+        Parameters
+        ----------
+        k : int
+            Number of samples.
+
         Returns
         -------
-        numpy.ndarray of shape (n_fast, n_dim)
-            :math:`n_\mathrm{slow}` :math:`n`-dimensional vectors.
+        numpy.ndarray of shape (k, n_slow, n_dim)
+            :math:`k \cdot n_\mathrm{slow}` :math:`n`-dimensional vectors.
 
         """
+        m_slow = np.zeros((k, self.n_slow, self.n_dim))
         if self.n_slow == 0:
-            return np.zeros((0, self.n_dim))
-        m_slow = np.hstack((self._propose(self.n_slow),
-                            np.zeros((self.n_slow, self.n_fast))))
-        return (self.L @ m_slow.T).T[:, self.unsort]
+            return m_slow
+        m_slow[:, :, :self.n_slow] = self._propose(self.n_slow, k)
+        return (m_slow @ self.L.T)[:, :, self.unsort]
 
 
 class StandAloneMetropolisHastingsSampler():
@@ -211,9 +227,8 @@ class StandAloneMetropolisHastingsSampler():
 
         """
         if len(self.proposal_fast) == 0:
-            self.proposal_fast = list(np.stack([
-                self.proposer.propose_fast() for _ in range(self.n_chains)],
-                axis=1))
+            self.proposal_fast = list(np.transpose(self.proposer.propose_fast(
+                self.n_chains), axes=[1, 0, 2]))
         return self.proposal_fast.pop()
 
     def propose_slow(self):
@@ -226,14 +241,12 @@ class StandAloneMetropolisHastingsSampler():
 
         """
         if len(self.proposal_slow) == 0:
-            self.proposal_slow = list(np.stack([
-                self.proposer.propose_slow() for _ in range(self.n_chains)],
-                axis=1))
+            self.proposal_slow = list(np.transpose(self.proposer.propose_slow(
+                self.n_chains), axes=[1, 0, 2]))
         proposal_drag = []
         for _ in range(self.f_drag):
-            proposal_drag += list(np.stack([
-                self.proposer.propose_fast() for _ in range(self.n_chains)],
-                axis=1))
+            proposal_drag += list(np.transpose(self.proposer.propose_fast(
+                self.n_chains), axes=[1, 0, 2]))
         return self.proposal_slow.pop(), proposal_drag
 
     def make_one_step(self):

@@ -1885,8 +1885,8 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             b1v, b2v, bsv, b3v = [params.pop(name) for name in ['b1', 'b2', 'bs', 'b3']]
             params['b1'] = b1v # + 1 - 1
             params['b2'] = 1. + 7. / 2. * bsv
-            params['b3'] = 7. / 441. * (42. - 145. * b1v - 21. * b3v + 630. * bsv)
-            params['b4'] = -7. / 5. * (params['b1'] - 1.) - 7. / 10. * b2v
+            params['b3'] = 21. / 882. * (42. - 145. * b1v - 21. * b3v + 630. * bsv)
+            params['b4'] = (params['b1'] - 1.) + b2v / 2.
         if self.options['freedom'] == 'min':
             params['b2'] = 1.
             params['b3'] = (294. - 1015. * (params['b1'] - 1.)) / 441.

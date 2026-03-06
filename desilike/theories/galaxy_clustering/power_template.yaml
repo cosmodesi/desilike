@@ -345,6 +345,16 @@ params:
   n:
     derived: True
     latex: n
+  dA:
+    value: 1
+    fixed: True
+    prior:
+      limits: [0, 20.]
+    ref:
+      dist: norm
+      loc: 1.
+      scale: 0.1
+    latex: dA
 
 ---
 

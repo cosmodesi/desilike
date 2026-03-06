@@ -114,7 +114,9 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
             elif not custom_data:  # match
                 covariance = covariance.at.observable.match(data)
             assert covariance.shape[0] == data.size, 'covariance shape should match data size'
-        self.data, self.window, self.covariance = data, window, covariance
+        self.data, self.window, self.cov = data, window, covariance
+        self.flatdata = self.data.value()
+        self.covariance = self.cov.value()
         self.theory.init.update(k=next(iter(self.window.theory)).coords('k'), ells=self.window.theory.ells)
         if shotnoise is not None:
             self.theory.init.update(shotnoise=shotnoise)
@@ -184,7 +186,7 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
                     x = np.arange(data_pole.size)
                     xlabel = r'$k$ triangle index'
                 ylabel = r'$k^2 B_{\ell}(k, k)$ [$(\mathrm{Mpc}/h)^4$]'
-            std = self.covariance.at.observable.get(**label).std()
+            std = self.cov.at.observable.get(**label).std()
             lax[0].errorbar(x, scale * data_pole.value(), yerr=scale * std, color=f'C{ill:d}', linestyle='none', marker='o', label=rf'$\ell = {ell}$')
             lax[0].plot(x, scale * wtheory_pole.value(), **kw_theory[ill])
         for ill, label in enumerate(labels):

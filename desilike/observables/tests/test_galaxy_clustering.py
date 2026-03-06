@@ -576,6 +576,10 @@ def test_bispectrum():
                                                       ellsin=window.theory.ells,  # list of tuples
                                                       theory=theory)
     observable()
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    likelihood = ObservablesGaussianLikelihood(observables=observable)
+    assert np.isfinite(likelihood())
+    assert 'c1p' in likelihood.all_params
 
 
 def test_bao():

@@ -64,26 +64,27 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
         custom_covariance = not isinstance(covariance, types.CovarianceMatrix)
         if custom_data:
             data = np.ravel(data)
-            for name, value in {'k': k, 'ells': ells, 'shotnoise': shotnoise}.items():
+            for name, value in {'k': k, 'ells': ells}.items():
                 if value is None:
                     raise ValueError(f'when input data is an array, provide {name}')
             if basis == 'sugiyama':
                 if np.ndim(ells) == 0:
                     raise ValueError('input ell should be a list of tuples, e.g. [(0, 0, 0), (2, 0, 2)]')
-                if np.dim(ells[0]) == 0:
+                if np.ndim(ells[0]) == 0:
                     ells = [ells]
                 ells = [tuple(ell) for ell in ells]
             k = _make_list(k, len(ells))
             ksizes = tuple(len(kk) for kk in k)
             assert sum(ksizes) == data.size, f'total k-size should be the same as data, but got {ksizes} and {data.size}'
             value = data
-            data = types.ObservableTree(ells=[])
+            data = []
             start = 0
             for ell, kk in zip(ells, k):
                 stop = start + len(kk)
                 leaf = types.ObservableLeaf(k=kk, value=value[start:stop], coords=['k'], meta={'basis': basis})
                 start = stop
-                data.insert(leaf, ells=ell)
+                data.append(leaf)
+            data = types.ObservableTree(data, ells=ells)
         if window is None:
             kin = np.unique(np.concatenate([pole.coords('k') for pole in data], axis=0), axis=0)
             window, ellsin = [], []
@@ -115,6 +116,8 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
             assert covariance.shape[0] == data.size, 'covariance shape should match data size'
         self.data, self.window, self.covariance = data, window, covariance
         self.theory.init.update(k=next(iter(self.window.theory)).coords('k'), ells=self.window.theory.ells)
+        if shotnoise is not None:
+            self.theory.init.update(shotnoise=shotnoise)
 
     @plotting.plotter(interactive={'kw_theory': {'color': 'black', 'label': 'reference'}})
     def plot(self, kw_theory=None, fig=None):

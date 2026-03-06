@@ -550,6 +550,13 @@ def test_bispectrum():
 
     observable = TracerBispectrumMultipolesObservable(data=data, covariance=covariance, theory=theory)
     observable()
+    observable = TracerBispectrumMultipolesObservable(data=data.value(),  # nparray
+                                                      covariance=covariance.value(),  # nparray
+                                                      ells=data.ells, # list of tuples
+                                                      k=[pole.coords('k') for pole in data],  # list of nparrays
+                                                      theory=theory)
+    observable()
+    observable.plot(show=True)
     observable = TracerBispectrumMultipolesObservable(data=data.select(k=(0., 0.1)), covariance=covariance.at.observable.select(k=(0., 0.1)), theory=theory)
     observable()
 
@@ -560,6 +567,15 @@ def test_bispectrum():
                                                       covariance=covariance.at.observable.select(k=(0., 0.1)), theory=theory)
     observable()
     #observable.plot(show=True)
+    observable = TracerBispectrumMultipolesObservable(data=data.value(),  # nparray
+                                                      window=window.value(),  # nparray
+                                                      covariance=covariance.value(),  # nparray
+                                                      ells=data.ells, # list of tuples
+                                                      k=[pole.coords('k') for pole in data],  # list of nparrays
+                                                      kin=window.theory.get(ells=(0, 0, 0)).coords('k'),  # single k (nk, 2)
+                                                      ellsin=window.theory.ells,  # list of tuples
+                                                      theory=theory)
+    observable()
 
 
 def test_bao():

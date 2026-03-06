@@ -1,5 +1,6 @@
 **/dust
 docs/_build/
+docs/api/_autosummary
 **/__pycache__
 **/pytest_cache
 **/*.egg

@@ -19,8 +19,8 @@ class EmceeSampler(MarkovChainSampler):
 
     """
 
-    def __init__(self, likelihood, n_chains=4, rng=None, directory=None,
-                 **kwargs):
+    def __init__(self, likelihood, n_chains=4, chains=None, rng=None,
+                 directory=None, **kwargs):
         """Initialize the ``emcee`` sampler.
 
         Parameters
@@ -29,7 +29,10 @@ class EmceeSampler(MarkovChainSampler):
             Likelihood to sample.
         n_chains : int, optional
             Number of chains. Default is 4.
-        rng : numpy.random.Generator, int or None, optional
+        chains : list of desilike.samples.Chain, optional
+            If given, continue the chains. In that case, we will ignore what
+            was read from disk. Default is ``None``.
+        rng : numpy.random.Generator, int, or None, optional
             Random number generator. Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
@@ -41,7 +44,7 @@ class EmceeSampler(MarkovChainSampler):
             raise ImportError("The 'emcee' package is required but not "
                               "installed.")
 
-        super().__init__(likelihood, n_chains=n_chains, rng=rng,
+        super().__init__(likelihood, n_chains=n_chains, chains=chains, rng=rng,
                          directory=directory)
 
         kwargs = update_parameters(kwargs, 'emcee', pool=self.pool, args=None,

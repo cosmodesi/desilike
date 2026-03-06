@@ -34,7 +34,7 @@ MCMC Samplers
   desilike.samplers.HMCSampler
   desilike.samplers.MCLMCSampler
   desilike.samplers.MetropolisHastingsSampler
-  desilike.samplers.NUTSSampler
+  desilike.samplers.NoUTurnSampler
   desilike.samplers.ZeusSampler
 
 Base Classes

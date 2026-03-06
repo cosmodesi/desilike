@@ -16,7 +16,7 @@ SAMPLER_CLS = dict(
     mclmc=samplers.MCLMCSampler,
     mhmcmc=samplers.MetropolisHastingsSampler,
     nautilus=samplers.NautilusSampler,
-    nuts=samplers.NUTSSampler,
+    nuts=samplers.NoUTurnSampler,
     pocomc=samplers.PocoMCSampler,
     qmc=samplers.QMCSampler,
     zeus=samplers.ZeusSampler)
@@ -159,3 +159,22 @@ def test_rng(likelihood, key):
     assert len(results_1) == len(results_2)
     assert np.allclose(results_1.logposterior.value,
                        results_2.logposterior.value, atol=1e-6)
+
+
+@pytest.mark.mpi
+@pytest.mark.parametrize('key', ['emcee', 'hmc', 'mhmcmc', 'zeus'])
+def test_continue_chain(likelihood, key):
+    # Test that we can continue a chain.
+
+    sampler = SAMPLER_CLS[key](likelihood, rng=42)
+    chains_100 = sampler.run(burn_in=0, min_steps=100, max_steps=100,
+                             flatten_chains=False)
+    sampler = samplers.MetropolisHastingsSampler(
+        likelihood, rng=43, chains=[c.copy() for c in chains_100])
+    chains_200 = sampler.run(burn_in=0, min_steps=200, max_steps=200,
+                             flatten_chains=False)
+
+    for chain_100, chain_200 in zip(chains_100, chains_200):
+        assert len(chain_100) == 100
+        assert len(chain_200) == 200
+        assert np.allclose(chain_100['a'], chain_200['a'][:100])

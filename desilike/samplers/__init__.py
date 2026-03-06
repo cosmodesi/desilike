@@ -1,6 +1,6 @@
 """Module providing wrappers for commonly used samplers."""
 
-from .blackjax import HMCSampler, MCLMCSampler, NUTSSampler
+from .blackjax import HMCSampler, MCLMCSampler, NoUTurnSampler
 from .dynesty import DynestySampler
 from .emcee import EmceeSampler
 from .grid import GridSampler
@@ -13,5 +13,5 @@ from .zeus import ZeusSampler
 
 __all__ = ['DynestySampler', 'GridSampler', 'HMCSampler', 'EmceeSampler',
            'ImportanceSampler', 'MCLMCSampler', 'MetropolisHastingsSampler',
-           'NautilusSampler', 'NUTSSampler', 'PocoMCSampler', 'QMCSampler',
+           'NautilusSampler', 'NoUTurnSampler', 'PocoMCSampler', 'QMCSampler',
            'ZeusSampler']

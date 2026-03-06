@@ -6,8 +6,6 @@ specialized classes implementing specific samplers such as `emcee` or
 `dynesty`.
 """
 
-# TODO: Properly implement abstract classes and methods.
-
 import json
 import sys
 import warnings
@@ -79,10 +77,6 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
         self.likelihood = likelihood
         self.n_dim = len(self.likelihood.varied_params)
 
-        if isinstance(rng, int) or rng is None:
-            rng = np.random.default_rng(seed=rng)
-        self.rng = rng
-
         self.mpicomm = likelihood.mpicomm
         self.pool = MPIPool(comm=self.mpicomm)
         for name, f in zip(
@@ -105,6 +99,14 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
                 self.read()
             except FileNotFoundError:
                 pass
+
+        if hasattr(self, 'rng') and rng is None:
+            pass
+        else:
+            # Overwrite the RNG that may be read.
+            if isinstance(rng, int) or rng is None:
+                rng = np.random.default_rng(seed=rng)
+            self.rng = rng
 
     def prior_transform(self, sample):
         """Transform from the unit cube to parameter space using the prior.
@@ -188,15 +190,18 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         return log_post - log_prior, derived
 
-    @abstractmethod
     def write(self):
-        """Abstract method to write internal calculations to disk."""
-        pass
+        """Write all results to disk."""
+        if self.mpicomm.rank == 0:
+            with open(self.directory / 'rng.json', 'w') as fstream:
+                json.dump(self.rng.bit_generator.state, fstream)
 
-    @abstractmethod
     def read(self):
-        """Abstract method to  read internal calculations from disk."""
-        pass
+        """Read internal calculations from disk."""
+        if self.mpicomm.rank == 0:
+            with open(self.directory / 'rng.json', 'r') as fstream:
+                self.rng = np.random.default_rng()
+                self.rng.bit_generator.state = json.load(fstream)
 
 
 class StaticSampler(BaseSampler):
@@ -329,7 +334,8 @@ class MarkovChainSampler(BaseSampler):
 
     default_adaptation_steps = 0
 
-    def __init__(self, likelihood, n_chains=4, rng=None, directory=None):
+    def __init__(self, likelihood, n_chains=4, chains=None, rng=None,
+                 directory=None):
         """Initialize the sampler.
 
         Parameters
@@ -338,9 +344,11 @@ class MarkovChainSampler(BaseSampler):
             Likelihood to sample.
         n_chains : int, optional
             Number of chains. Default is 4.
-        rng : numpy.random.RandomState, int, or None, optional
-            Random number generator for seeding. If ``None``, no seed is used.
-            Default is ``None``.
+        chains : list of desilike.samples.Chain, optional
+            If given, continue the chains. In that case, we will ignore what
+            was read from disk. Default is ``None``.
+        rng : numpy.random.Generator, int, or None, optional
+            Random number generator. Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
 
@@ -350,10 +358,20 @@ class MarkovChainSampler(BaseSampler):
             If ``burn_in`` is a float and larger than unity.
 
         """
-        self.n_chains = n_chains
-        self.chains = []
-        self.checks = []
+        if chains is None:
+            self.n_chains = n_chains
+        else:
+            self.n_chains = len(chains)
+
         super().__init__(likelihood, rng=rng, directory=directory)
+
+        if chains is not None:
+            self.chains = chains
+            self.checks = []
+
+        if not hasattr(self, 'chains'):
+            self.chains = []
+            self.checks = []
 
     @abstractmethod
     def run_sampler(self, steps):
@@ -678,18 +696,16 @@ class MarkovChainSampler(BaseSampler):
 
     def write(self):
         """Write all results to disk."""
+        super().write()
         if self.mpicomm.rank == 0:
             for i, chain in enumerate(self.chains):
                 chain.save(self.directory / f'chain_{i + 1}.npy')
             np.save(self.directory / 'checks.npy', self.checks)
-            with open(self.directory / 'rng.json', 'w') as fstream:
-                json.dump(self.rng.bit_generator.state, fstream)
 
     def read(self):
         """Read internal calculations from disk."""
+        super().read()
         if self.mpicomm.rank == 0:
             self.chains = [Chain.load(self.directory / f'chain_{i + 1}.npy')
                            for i in range(self.n_chains)]
             self.checks = list(np.load(self.directory / 'checks.npy'))
-            with open(self.directory / 'rng.json', 'r') as fstream:
-                self.rng.bit_generator.state = json.load(fstream)

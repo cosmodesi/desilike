@@ -13,7 +13,7 @@ from .base import MarkovChainSampler
 class FastSlowProposer:
     """Proposer sampling fast and slow parameter spaces separately."""
 
-    def __init__(self, cov, fast=None, rng=np.random.default_rng()):
+    def __init__(self, cov, fast=None, rng=None):
         """Initialize the proposal distribution.
 
         Parameters
@@ -23,7 +23,7 @@ class FastSlowProposer:
         fast : list, optional
             List of dimensions that are considered fast.
         rng : numpy.random.Generator, optional
-            NumPy random number generator used for seeding.
+            Random number generator. Default is ``None``.
 
         """
         self.rng = rng
@@ -354,7 +354,7 @@ class MetropolisHastingsSampler(MarkovChainSampler):
     default_adaptation_steps = sys.maxsize
 
     def __init__(self, likelihood, n_chains=4, cov=None, f_fast=1, f_drag=0,
-                 fast=[], rng=None, directory=None):
+                 fast=[], chains=None, rng=None, directory=None):
         """Initialize the Metropolis-Hastings sampler.
 
         Parameters
@@ -374,13 +374,16 @@ class MetropolisHastingsSampler(MarkovChainSampler):
             dragging.
         fast : list, optional
             List of dimensions that are considered fast.
-        rng : numpy.random.Generator, int or None, optional
+        chains : list of desilike.samples.Chain, optional
+            If given, continue the chains. In that case, we will ignore what
+            was read from disk. Default is ``None``.
+        rng : numpy.random.Generator, int, or None, optional
             Random number generator. Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
 
         """
-        super().__init__(likelihood, n_chains=n_chains, rng=rng,
+        super().__init__(likelihood, n_chains=n_chains, chains=chains, rng=rng,
                          directory=directory)
 
         self.sampler = StandAloneMetropolisHastingsSampler(

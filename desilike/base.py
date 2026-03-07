@@ -1068,6 +1068,7 @@ class RuntimeInfo(BaseClass):
             #print(self.calculator, self.input_values)
             self._calculation = True
             self.monitor.start()
+            #print('tocalculate', list(self.input_values), self.input_names)
             self.calculator.calculate(**self.input_values)
             self._derived = None
             self.calculated = True

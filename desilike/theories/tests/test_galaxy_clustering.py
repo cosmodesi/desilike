@@ -1871,7 +1871,7 @@ def test_bispectrum():
         from desilike.emulators import Emulator, TaylorEmulatorEngine
 
         bak = theory(**{param.name: param.value for param in theory.all_params.select(input=True)})
-        if 'spectrum' in theory.__class__.__name__: theory.k
+        if 'spectrum' in theory.__class__.__name__.lower(): theory.k
         else: theory.s
         if emulate == 'pt': calculator = theory.pt
         else: calculator = theory
@@ -1885,7 +1885,7 @@ def test_bispectrum():
             theory = calculator
         assert np.allclose(theory(), bak)
         theory.z, theory.ells
-        if 'spectrum' in theory.__class__.__name__:
+        if 'spectrum' in theory.__class__.__name__.lower():
             theory.k
         else:
             theory.s
@@ -2085,13 +2085,52 @@ def test_jaxeffort():
 
 def test_folpsv2():
     from cosmoprimo.fiducial import DESI
-    from desilike.theories.galaxy_clustering import FOLPSv2TracerPowerSpectrumMultipoles, FOLPSv2TracerBispectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    from desilike.theories.galaxy_clustering import FOLPSv2TracerPowerSpectrumMultipoles, FOLPSv2TracerBispectrumMultipoles, ShapeFitPowerSpectrumTemplate, DirectPowerSpectrumTemplate
 
-    template = ShapeFitPowerSpectrumTemplate(z=0.5, fiducial=DESI())
-    theory = FOLPSv2TracerPowerSpectrumMultipoles(template=template)
-    theory()
-    theory = FOLPSv2TracerBispectrumMultipoles(template=template)
-    theory()
+    def test(theory, emulate=True, show=False):
+
+        from desilike.emulators import Emulator, EmulatedCalculator, TaylorEmulatorEngine
+
+        bak = theory(**{param.name: param.value for param in theory.all_params.select(input=True)})
+        if 'spectrum' in theory.__class__.__name__.lower(): theory.k
+        else: theory.s
+        if emulate == 'pt': calculator = theory.pt
+        else: calculator = theory
+        emulator = Emulator(calculator, engine=TaylorEmulatorEngine(order=0))
+        emulator.set_samples()
+        emulator.fit()
+        fn = '_tests/emulator.npy'
+        emulator.save(fn)
+        calculator = EmulatedCalculator.load(fn)
+        if emulate == 'pt':
+            theory.init.update(pt=calculator)
+        else:
+            theory = calculator
+        assert np.allclose(theory(), bak)
+        theory.z, theory.ells
+        if 'spectrum' in theory.__class__.__name__.lower():
+            theory.k
+        else:
+            theory.s
+        for param in theory.init.params:
+            param.update(namespace='LRG')
+        basenames = theory.init.params.basenames()
+        theory()
+        for param in theory.all_params:
+            if param.basename in basenames:
+                assert param.namespace == 'LRG'
+        for param in theory.init.params: param.update(namespace=None)
+
+    for Template in [DirectPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate]:
+        template = Template()
+        theory = FOLPSv2TracerBispectrumMultipoles(template=template)
+        theory()
+        test(theory, emulate='pt')
+        theory = FOLPSv2TracerPowerSpectrumMultipoles(template=template)
+        theory()
+        test(theory)
+        test(theory, emulate='pt')
+
 
 
 

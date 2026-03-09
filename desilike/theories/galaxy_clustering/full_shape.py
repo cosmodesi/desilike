@@ -2090,7 +2090,7 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
         # only used for neutrinos
         # sensitive to omega_b + omega_cdm, not omega_b, omega_cdm separately
         cosmo_params = [self.z, 0.022, 0.12, 0., 0.7]
-
+        cosmo = getattr(self.template, 'cosmo', None)
         if cosmo is not None:
             cosmo_params = [self.z, cosmo['omega_b'], cosmo['omega_cdm'], cosmo['omega_ncdm_tot'], cosmo['h']]
         FOLPS.NonLinear([self.template.k, self.template.pk_dd], cosmo_params, kminout=self.k[0] * 0.7, kmaxout=self.k[-1] * 1.3, nk=max(len(self.k), 120),
@@ -2111,10 +2111,6 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowe
     def combine_bias_terms_poles(self, pars, nd=1e-4):
         return self.to_poles(folps_combine_bias_terms_pkmu(self.pt.kap, self.pt.muap, self.pt.jac, self.pt.f0,
                                                            self.pt.table, self.pt.table_now, self.pt.sigma2t, pars, nd=nd))
-
-
-
-
 
     def __getstate__(self):
         state = {}
@@ -2922,6 +2918,8 @@ def _get_bispectrum_multipoles_folpsv2(
         for ell in multipoles:
             if ell in ells:
                 toret.append(results[ells.index(ell)].ravel())
+            elif (ell_swap:=ell[0] + ell[2:0:-1] + ell[3:]) in ells:
+                toret.append(results[ells.index(ell_swap)].T.ravel())
             else:
                 toret.append(np.zeros((k1k2.size,) * 2).ravel())
         return toret
@@ -3016,7 +3014,7 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         ncols = len(table)
         # Sync the FOLPSpip-module-level globals to the A_full / remove_DeltaP settings
         import folps.folps as _folps_module
-        _folps_module.A_full_state = getattr(self.pt, 'A_full', True)
+        _folps_module.A_full_status = getattr(self.pt, 'A_full', True)
         _folps_module.use_TNS_model_status = getattr(self.pt, 'remove_DeltaP', True)
         if getattr(self, '_get_poles', None) is None:
 
@@ -3482,7 +3480,10 @@ class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
             # defaults (non-APscaling)
             #b3L  = params['b3p']
             bsE = -4.0 / 7.0 * b1L + bsL
+            kNL = 0.3
             c1, c2 = (params[name] / (kNL**2) for name in ['c1p', 'c2p'])
+            Pshot = params['Pshotp'] * self.snd
+            Bshot = params['Bshotp'] * self.snd
             pars = [b1E, b2E, bsE, c1, c2, Pshot, Bshot, params['X_FoG_bp']]
         elif prior_basis == 'physical_aap':
             # --- Lagrangian -> Eulerian ---
@@ -3496,8 +3497,8 @@ class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
             kNL = 0.3
             c1, c2 = (params[name] / (kNL**2) / (A_AP * sigma8**2) for name in ['c1p', 'c2p'])
             Ashot = A_AP
-            Pshot = (params['Pshotp'] / Ashot) * self.snd * (1.0)
-            Bshot = (params['Bshotp'] / Ashot) * self.snd * (1.0)
+            Pshot = (params['Pshotp'] / Ashot) * self.snd
+            Bshot = (params['Bshotp'] / Ashot) * self.snd
             # c1 = params['c1p']
             # c2 = params['c2p']
             # Pshot = params['Pshotp']

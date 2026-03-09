@@ -57,13 +57,14 @@ def likelihood():
         def calculate(self, **kwargs):
             self.flattheory = jnp.array([kwargs[name] for name in ['a', 'b']])
             self.c = kwargs['a'] + kwargs['b']
+            self.d = np.arange(3) * self.c
             super().calculate()
 
     likelihood = Likelihood(np.array([0.4, 0.6]), covariance=np.eye(2) * 0.01)
     likelihood.init.params = dict(
         a=dict(prior=dict(dist='norm', limits=[0, 1], loc=0.4, scale=0.1)),
         b=dict(prior=dict(dist='uniform', limits=[0, 1])),
-        c=dict(derived=True))
+        c=dict(derived=True), d=dict(derived=True, shape=(3, )))
 
     return likelihood
 
@@ -116,6 +117,9 @@ def test_derived(likelihood, key):
                                **KWARGS_INIT_FAST.get(key, {}))
     results = sampler.run(**KWARGS_RUN_FAST.get(key, {}))
     assert np.allclose(results['a'] + results['b'], results['c'])
+    for i in range(3):
+        assert np.allclose((results['a'] + results['b']) * i,
+                           results['d'][:, i])
 
 
 @pytest.mark.mpi

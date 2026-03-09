@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 from scipy.special import logsumexp
 
+from desilike import ParameterArray
 from desilike.samples import Chain, diagnostics
 from desilike.utils import BaseClass
 from .pool import MPIPool
@@ -76,6 +77,9 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
         """
         self.likelihood = likelihood
         self.n_dim = len(self.likelihood.varied_params)
+        self.n_derived = int(np.sum([
+            np.prod(param.shape) for param in
+            self.likelihood.all_params.select(derived=True)]))
 
         self.mpicomm = likelihood.mpicomm
         self.pool = MPIPool(comm=self.mpicomm)
@@ -164,8 +168,9 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
         if not isinstance(sample, dict):
             sample = dict(zip(self.likelihood.varied_params.names(), sample))
         log_post, derived = self.likelihood(sample, return_derived=True)
-        derived = [float(derived[key]) for key in
-                   self.likelihood.all_params.select(derived=True)]
+        derived = np.concatenate([
+            np.asarray(derived[key]).flatten() for key in
+            self.likelihood.all_params.select(derived=True)])
 
         return float(log_post), derived
 
@@ -189,6 +194,36 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
         log_post, derived = self.compute_posterior(sample)
 
         return log_post - log_prior, derived
+
+    def array_to_chain(self, samples, derived, **kwargs):
+        """Convert NumPy arrays to desilike chains.
+
+        Parameters
+        ----------
+        samples : numpy.ndarray of shape (n_samples, n_dim)
+            Samples of varied parameters.
+        derived : numpy.ndarray of shape (n_samples, n_derived)
+            Samples of derived parameters.
+        kwargs : dict, optional
+            Extra parameters such as weights.
+
+        """
+        params = self.likelihood.varied_params
+        samples = [ParameterArray(samples[:, i], param=param) for i, param in
+                   enumerate(params)]
+        params = self.likelihood.all_params.select(derived=True)
+        derived = np.split(derived, np.cumsum([
+            int(np.prod(param.shape)) for param in params])[:-1], axis=1)
+        derived = [derived[i].reshape((-1, ) + param.shape) for i, param in
+                   enumerate(params)]
+        derived = [ParameterArray(derived[i], param=param) for i, param in
+                   enumerate(params)]
+
+        chain = Chain(samples + derived)
+        for key, value in kwargs.items():
+            setattr(chain, key, value)
+
+        return chain
 
     def write(self):
         """Write all results to disk."""
@@ -249,11 +284,9 @@ class StaticSampler(BaseSampler):
                 log_post = np.array([r[0] for r in results])
                 derived = np.array([r[1] for r in results])
 
-                self.results = Chain(
-                    data=np.hstack([samples, derived]).T,
-                    params=self.likelihood.all_params)
-                self.results.aweight = np.exp(log_post - logsumexp(log_post))
-                self.results.logposterior = log_post
+                self.results = self.array_to_chain(
+                    samples, derived, logposterior=log_post,
+                    aweight=np.exp(log_post - logsumexp(log_post)))
                 self.results[self.results._logprior] = log_prior
 
                 self.pool.stop_wait()
@@ -317,10 +350,7 @@ class PopulationSampler(BaseSampler):
         """
         if self.mpicomm.rank == 0:
             samples, derived, extras = self.run_sampler(**kwargs)
-            results = Chain(data=np.hstack([samples, derived]).T,
-                            params=self.likelihood.all_params)
-            for key in extras.keys():
-                setattr(results, key, extras[key])
+            results = self.array_to_chain(samples, derived, **extras)
             self.pool.stop_wait()
         else:
             results = None
@@ -435,11 +465,9 @@ class MarkovChainSampler(BaseSampler):
 
                 # Accept those with finite posterior.
                 for i in np.arange(self.n_chains)[np.isfinite(log_post)]:
-                    chain = Chain(
-                        data=np.concatenate((samples[i], derived[i])),
-                        params=self.likelihood.all_params)
-                    chain.logposterior = log_post[i]
-                    chain.shape = (1, )
+                    chain = self.array_to_chain(
+                        np.atleast_2d(samples[i]), np.atleast_2d(derived[i]),
+                        logposterior=np.atleast_1d(log_post[i]))
                     self.chains.append(chain)
 
                 if len(self.chains) >= self.n_chains:
@@ -455,18 +483,26 @@ class MarkovChainSampler(BaseSampler):
 
     @property
     def state(self):
-        """Return the current state of the chains as NumPy arrays."""
-        samples = np.zeros((self.n_chains, self.n_dim))
-        derived = np.zeros(
-            (self.n_chains, len(self.likelihood.all_params.select(derived=True))))
-        log_post = np.zeros(self.n_chains)
-        for i in range(self.n_chains):
-            samples[i] = [self.chains[i][key][-1].value for key in
-                          self.likelihood.varied_params]
-            derived[i] = [self.chains[i][key][-1].value for key in
-                          self.likelihood.all_params.select(derived=True)]
-            log_post[i] = self.chains[i].logposterior[-1]
-        return samples, derived, log_post
+        """Return the current state of the chains as NumPy arrays.
+
+        Returns
+        -------
+        samples : numpy.ndarray of shape (n_chains, n_dim)
+            Current position of the chains.
+        derived : numpy.ndarray of shape (n_chain, n_derived)
+            Current derived paramters.
+        log_post : numpy.ndarray of shape (n_chains, )
+            Current logarithm of the posterior.
+
+        """
+        samples = [[chain[key][-1].value for key in
+                    self.likelihood.varied_params] for chain in self.chains]
+        derived = [np.concatenate([
+            np.asarray(chain[key][-1].value).flatten() for key in
+            self.likelihood.all_params.select(derived=True)]) for chain in
+            self.chains]
+        log_post = [chain.logposterior[-1] for chain in self.chains]
+        return np.array(samples), np.array(derived), np.array(log_post)
 
     def extend(self, samples, derived, log_post):
         """Extend the sampler chains.
@@ -482,9 +518,8 @@ class MarkovChainSampler(BaseSampler):
 
         """
         for i in range(self.n_chains):
-            chain = Chain(data=np.hstack([samples[i], derived[i]]).T,
-                          params=self.likelihood.all_params)
-            chain.logposterior = log_post[i]
+            chain = self.array_to_chain(
+                samples[i], derived[i], logposterior=log_post[i])
             self.chains[i] = Chain.concatenate(self.chains[i], chain)
 
     def check(self, burn_in=0.2, gelman_rubin=1.1, geweke=None, ess=None,

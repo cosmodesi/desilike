@@ -4,7 +4,6 @@ import numpy as np
 import lsstypes as types
 
 from desilike.base import BaseCalculator, Parameter, ParameterCollection, ParameterArray
-from desilike.observables import ObservableCovariance
 from desilike.jax import numpy as jnp
 from desilike.jax import jit
 from desilike import plotting, utils
@@ -470,10 +469,8 @@ class BaseGaussianLikelihood(BaseLikelihood):
     ----------
     data : array
         Data.
-
     covariance : array, default=None
         Covariance matrix (or its diagonal).
-
     precision : array, default=None
         If ``covariance`` is not provided, precision matrix (or its diagonal).
     """
@@ -502,7 +499,6 @@ class BaseGaussianLikelihood(BaseLikelihood):
 
 
 class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
-
     """
     Gaussian likelihood of observables.
 
@@ -510,133 +506,93 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
     ----------
     observables : list, BaseCalculator
         List of (or single) observable, e.g. :class:`TracerPowerSpectrumMultipolesObservable` or :class:`TracerCorrelationFunctionMultipolesObservable`.
-
-    covariance : array, default=None
+    covariance : array, types.CovarianceMatrix, default=None
         Covariance matrix (or its diagonal) for input ``observables``.
-        If ``None``, covariance matrix is computed on-the-fly using observables' mocks.
-
     scale_covariance : float, default=1.
         Scale precision by the inverse of this value.
-
-    correct_covariance : str, default='hartlap-percival2014'
-        Only applies if mocks are provided to input observables.
+    correct_covariance : dict, default=None
         'hartlap' to apply Hartlap 2007 factor (https://arxiv.org/abs/astro-ph/0608064).
         'percival2014' to apply Percival 2014 factor (https://arxiv.org/abs/1312.4841).
-        Can be a dictionary to specify the number of observations, ``{'nobs': nobs, 'correction': 'hartlap-percival2014'}``.
-
+        A dictionary to specify the number of observations, ``{'nobs': nobs, 'correction': 'hartlap-percival2014'}``.
     precision : array, default=None
         Precision matrix to be used instead of the inverse covariance.
     """
-    def initialize(self, observables, covariance=None, scale_covariance=1., correct_covariance='hartlap-percival2014', precision=None, **kwargs):
+    def initialize(self, observables, covariance=None, scale_covariance=1., correct_covariance=None, precision=None, **kwargs):
         if not utils.is_sequence(observables):
             observables = [observables]
-        self.nobs = getattr(covariance, 'nobs', None)
         if isinstance(correct_covariance, dict):
-            self.nobs = correct_covariance.get('nobs', self.nobs)
+            nobs = correct_covariance.get('nobs', self.nobs)
             correct_covariance = correct_covariance['correction']
+        else:
+            nobs = getattr(covariance, 'nobs', None)
+        if correct_covariance is None:
+            correct_covariance = {'correction': '', 'nobs': None}
+        else:
+            correct_covariance = {'correction': correct_covariance, 'nobs': nobs}
         self.observables = list(observables)
         for obs in self.observables: obs._mpicomm = self.mpicomm
         #for obs in observables: obs.all_params  # to set observable's pipelines, and initialize once (percival factor below requires all_params)
         covariance, scale_covariance, precision = (self.mpicomm.bcast(obj if self.mpicomm.rank == 0 else None, root=0) for obj in (covariance, scale_covariance, precision))
         if covariance is None:
-            nmocks = [self.mpicomm.bcast(len(obs.mocks) if getattr(obs, 'mocks', None) is not None else 0) for obs in self.observables]
-            if any(nmocks):
-                if self.nobs is None: self.nobs = nmocks[0]
-                if not all(nmock == nmocks[0] for nmock in nmocks):
-                    raise ValueError('Provide the same number of mocks for each observable, found {}'.format(nmocks))
-                if self.mpicomm.rank == 0:
-                    list_y = [np.concatenate(y, axis=0) for y in zip(*[obs.mocks for obs in self.observables])]
-                    covariance = np.cov(list_y, rowvar=False, ddof=1)
-                covariance = self.mpicomm.bcast(covariance if self.mpicomm.rank == 0 else None, root=0)
-            elif all(getattr(obs, 'covariance', None) is not None for obs in self.observables):
-                covariances = [obs.covariance for obs in self.observables]
-                if self.nobs is None:
-                    nobs = [getattr(obs, 'nobs', None) for obs in self.observables]
-                    if all(nobs):
-                        self.nobs = np.mean(nobs).astype('i4')
-                size = sum(cov.shape[0] for cov in covariances)
-                covariance = np.zeros((size, size), dtype='f8')
-                start = 0
-                for cov in covariances:
-                    stop = start + cov.shape[0]
-                    sl = slice(start, stop)
-                    covariance[sl, sl] = cov
-                    start = stop
+            if len(self.observables) == 1 and getattr(self.observables[0], 'covariance', None) is not None:
+                covariance = self.observables[0].covariance
+                if correct_covariance['correction']:
+                    correct_covariance.setdefault('nobs', getattr(covariance, 'nobs', None))
+                covariance = covariance.clone(observable=types.ObservableTree([covariance.observable], observables=[self.observables[0].name]))
             elif precision is None:
-                raise ValueError('Observables must have mocks or their own covariance if global covariance or precision matrix not provided')
-        self.flatdata = np.concatenate([obs.flatdata for obs in self.observables], axis=0)
+                raise ValueError('Observables must have their own covariance if global covariance or precision matrix not provided')
+        data = [observable.data for observable in self.observables]
+        self.data = types.ObservableTree(data, observables=[observable.name for observable in self.observables])
+        self.flatdata = self.data.value()
 
         def check_matrix(matrix, name):
-            if matrix is None:
-                return None
             matrix = np.atleast_2d(matrix).copy()
             if matrix.shape != (matrix.shape[0],) * 2:
                 raise ValueError('{} must be a square matrix, but found shape {}'.format(name, matrix.shape))
             mshape = '({0}, {0})'.format(matrix.shape[0])
             shape = '({0}, {0})'.format(self.flatdata.size)
-            shape_obs = '({0}, {0})'.format(' + '.join(['{:d}'.format(obs.flatdata.size) for obs in self.observables]))
+            shape_obs = '({0}, {0})'.format(' + '.join([str(obs.flatdata.size) for obs in self.observables]))
             if matrix.shape[0] != self.flatdata.size:
                 raise ValueError('based on provided observables, {} expected to be a matrix of shape {} = {}, but found {}'.format(name, shape, shape_obs, mshape))
             return matrix
 
-        if isinstance(covariance, ObservableCovariance):
-            warnings.warn('desilike ObservableCovariance is deprecated. Please use lsstypes CovarianceMatrix.')
-            cov_nobservables = len(covariance.observables())
-            if len(self.observables) != cov_nobservables:
-                raise ValueError('provided {:d} observables, but the covariance contains {:d}'.format(len(self.observables), cov_nobservables))
-            for iobs, obs in enumerate(self.observables):
-                array = obs.to_array()
-                x = [(edges[:-1] + edges[1:]) / 2. for edges in array.edges()]
-                # Cut covariance matrix to input scales
-                covariance = covariance.xmatch(observables=iobs, x=x, projs=array.projs, select_projs=True, method='mid')
-            covariance = covariance.view()
+        self.precision = check_matrix(precision, 'precision') if precision is not None else None
 
-        elif isinstance(covariance, types.CovarianceMatrix):
-            covariance = covariance.at.observable.get(observables=[observable.name for observable in self.observables])
-            tree = covariance.observable
-            for iobs, obs in enumerate(self.observables):
-                observable = obs.to_lsstypes('data')
-                print(observable)
-                print(tree.get(observables=obs.name))
-                tree = tree.at(observables=obs.name).match(observable)
-            covariance = covariance.at.observable.match(tree)
-            covariance = covariance.value()
+        self.covariance = None
+        if isinstance(covariance, types.CovarianceMatrix):
+            self.covariance = covariance.at.observable.match(self.data)
+        elif covariance is not None:
+            covariance = check_matrix(covariance, 'covariance')
+            self.covariance = types.CovarianceMatrix(observable=self.data.clone(value=0. * self.data.value()), value=covariance)
 
-        self.precision = check_matrix(precision, 'precision')
-        self.covariance = check_matrix(covariance, 'covariance')
-        self.runtime_info.requires = self.observables
-        if self.covariance is not None:
-            self.covariance *= scale_covariance
-            start, slices, covariances = 0, [], []
-            for obs in observables:
-                stop = start + len(obs.flatdata)
-                sl = slice(start, stop)
-                slices.append(sl)
-                obs.covariance = self.covariance[sl, sl]  # Set each observable's (scaled) covariance (for, e.g., plots)
-                start = stop
-            if self.precision is None:
-                # Block-inversion is usually more numerically stable
-                self.precision = utils.blockinv([[self.covariance[sl1, sl2] for sl2 in slices] for sl1 in slices])
-        else:
-            self.precision /= scale_covariance
+        if self.precision is None:
+            if self.covariance is None:
+                raise ValueError('if precision is not provided, provide covariance')
+            self.precision = self.covariance.inv(level=1) / scale_covariance
         self.correct_covariance = correct_covariance
-        if self.nobs is not None and 'hartlap' in self.correct_covariance:
+        if self.correct_covariance['correction'] and self.correct_covariance['nobs'] is None:
+            raise ValueError(f'provide nobs to apply correction {self.correct_covariance["correction"]}')
+        if 'hartlap' in self.correct_covariance['correction']:
             nbins = self.precision.shape[0]
-            self.hartlap2007_factor = (self.nobs - nbins - 2.) / (self.nobs - 1.)
+            nobs = self.correct_covariance['nobs']
+            hartlap2007_factor = (nobs - nbins - 2.) / (nobs - 1.)
             if self.mpicomm.rank == 0:
-                self.log_info('Covariance matrix with {:d} points built from {:d} observations.'.format(nbins, self.nobs))
-                self.log_info('...resulting in a Hartlap 2007 factor of {:.4f}.'.format(self.hartlap2007_factor))
-            self.precision *= self.hartlap2007_factor
+                self.log_info(f'Covariance matrix with {nbins:d} points built from {nobs:d} observations.')
+                self.log_info(f'...resulting in a Hartlap 2007 factor of {hartlap2007_factor:.4f}.')
+            self.precision *= hartlap2007_factor
+
+        self.runtime_info.requires = self.observables
         super(ObservablesGaussianLikelihood, self).initialize(self.flatdata, covariance=self.covariance, precision=self.precision, **kwargs)
         self.precision_hartlap2007 = self.precision.copy()
 
     def _pipeline_initialize(self, pipeline):
         varied_params = pipeline._params.select(varied=True, input=True)
-        if self.nobs is not None and 'percival' in self.correct_covariance:
+        if 'percival' in self.correct_covariance['correction']:
             nbins = self.precision_hartlap2007.shape[0]
-            # eq. 8 and 18 of https://arxiv.org/pdf/1312.4841.pdf
-            A = 2. / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
-            B = (self.nobs - nbins - 2.) / (self.nobs - nbins - 1.) / (self.nobs - nbins - 4.)
+            nobs = self.correct_covariance['nobs']
+            # Eq. 8 and 18 of https://arxiv.org/pdf/1312.4841.pdf
+            A = 2. / (nobs - nbins - 1.) / (nobs - nbins - 4.)
+            B = (nobs - nbins - 2.) / (nobs - nbins - 1.) / (nobs - nbins - 4.)
 
             params = set()
 
@@ -645,71 +601,25 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
                 for require in calculator.runtime_info.requires:
                     callback(require, params)
 
-            #for obs in self.observables: params |= set(obs.all_params.names())  # wrong, this will reinitialize calculators once more, which will result in unreferenced calculators if created at initialize() step in the current pipeline
+            # Wrong, this will reinitialize calculators once more, which will result in unreferenced calculators if created at initialize() step in the current pipeline
+            #for obs in self.observables: params |= set(obs.all_params.names())
             for obs in self.observables: callback(obs, params)
             params = [param for param in params if param in varied_params]
             nparams = len(params)
             self.percival2014_factor = (1 + B * (nbins - nparams)) / (1 + A + B * (nparams + 1))
             if self.mpicomm.rank == 0:
-                self.log_info('Covariance matrix with {:d} points built from {:d} observations, varying {:d} parameters.'.format(nbins, self.nobs, nparams))
-                self.log_info('...resulting in a Percival 2014 factor of {:.4f}.'.format(self.percival2014_factor))
+                self.log_info(f'Covariance matrix with {nbins:d} points built from {nobs:d} observations, varying {nparams:d} parameters.')
+                self.log_info(f'...resulting in a Percival 2014 factor of {self.percival2014_factor:.4f}.')
             self.precision = self.precision_hartlap2007 / self.percival2014_factor
 
     def calculate(self):
+        """Set :attr:`flatdiff` and :attr:`loglikelihood`."""
         self.flatdiff = self.flattheory - self.flatdata
         self.loglikelihood = -0.5 * chi2(self.flatdiff, self.precision)
 
     @property
     def flattheory(self):
-        return jnp.concatenate([obs.flattheory for obs in self.observables], axis=0)
-
-    def to_lsstypes(self, kind='covariance'):
-        observables = [observable.to_lsstypes('data') for observable in self.observables]
-        tree = types.ObservableTree(observables, observables=[observable.name for observable in self.observables])
-        return types.CovarianceMatrix(value=self.covariance, observable=tree)
-
-    def to_covariance(self):
-        warnings.warn('desilike ObservableCovariance is deprecated. Please use lsstypes CovarianceMatrix.')
-        from desilike.observables import ObservableCovariance
-        return ObservableCovariance(value=self.covariance, observables=[observable.to_array() for observable in self.observables])
-
-    @plotting.plotter
-    def plot_covariance_matrix(self, corrcoef=True, **kwargs):
-        """
-        Plot covariance matrix.
-
-        Parameters
-        ----------
-        corrcoef : bool, default=True
-            If ``True``, plot the correlation matrix; else the covariance.
-
-        barlabel : str, default=None
-            Optionally, label for the color bar.
-
-        label1 : str, list of str, default=None
-            Optionally, label(s) for the observable(s).
-
-        figsize : int, tuple, default=None
-            Optionally, figure size.
-
-        norm : matplotlib.colors.Normalize, default=None
-            Scales the covariance / correlation to the canonical colormap range [0, 1] for mapping to colors.
-            By default, the covariance / correlation range is mapped to the color bar range using linear scaling.
-
-        labelsize : int, default=None
-            Optionally, size for labels.
-
-        fig : matplotlib.figure.Figure, default=None
-            Optionally, a figure with at least ``len(self.observables) * len(self.observables)`` axes.
-
-        Returns
-        -------
-        fig : matplotlib.figure.Figure
-        """
-        from desilike.observables.plotting import plot_covariance_matrix
-        cumsize = np.insert(np.cumsum([len(obs.flatdata) for obs in self.observables]), 0, 0)
-        mat = [[self.covariance[start1:stop1, start2:stop2] for start2, stop2 in zip(cumsize[:-1], cumsize[1:])] for start1, stop1 in zip(cumsize[:-1], cumsize[1:])]
-        return plot_covariance_matrix(mat, corrcoef=corrcoef, **kwargs)
+        return jnp.concatenate([observable.flattheory for observable in self.observables], axis=0)
 
 
 class SumLikelihood(BaseLikelihood):

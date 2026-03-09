@@ -7,11 +7,11 @@ from desilike.theories.primordial_cosmology import get_cosmo
 from desilike.base import BaseCalculator, CollectionCalculator
 from desilike.utils import BaseClass
 from desilike import utils
-from .power_spectrum import TracerPowerSpectrumMultipolesObservable
-from .correlation_function import TracerCorrelationFunctionMultipolesObservable
+from .spectrum import TracerPowerSpectrumMultipolesObservable
+from .correlation import TracerCorrelationFunctionMultipolesObservable
 
 
-def integral_legendre_product(ells, range=(-1, 1), norm=False):
+def integral_legendre_product(ells: tuple, range: tuple=(-1, 1), normalized: bool=False):
     r"""
     Return integral of product of Legendre polynomials.
 
@@ -19,11 +19,9 @@ def integral_legendre_product(ells, range=(-1, 1), norm=False):
     ----------
     ells : int, list, tuple
         Order(s) of Legendre polynomials to multiply together.
-
     range : tuple, default=(-1, 1)
         :math:`\mu`-integration range.
-
-    norm : bool, default=False
+    nnormalized : bool, default=False
         If ``True``, normalize integral by the :math:`\mu`-integration range.
 
     Returns
@@ -37,7 +35,7 @@ def integral_legendre_product(ells, range=(-1, 1), norm=False):
         poly *= special.legendre(ell)
     integ = poly.integ()
     toret = integ(range[-1]) - integ(range[0])
-    if norm:
+    if normalized:
         toret /= (range[-1] - range[0])
     return toret
 
@@ -63,13 +61,11 @@ class BaseFootprint(BaseClass):
         Parameters
         ----------
         nbar : float, default=None
-            Density, in :math:`(h / \mathrm{Mpc})^{3}`.
-
+            Density, in :math:`(h / \mathrm{Mpc})^3`.
         size : float, default=None
             If ``nbar`` is not provided, the number of objects.
-
         volume : float, default=None
-            Volume, in :math:`(\mathrm{Mpc} / h)^{3}`.
+            Volume, in :math:`(\mathrm{Mpc} / h)^3`.
         """
         if nbar is None and size is None:
             raise ValueError('provide either "size" (number of objects) or "nbar" (mean comoving density in (Mpc/h)^(-3))')
@@ -84,7 +80,7 @@ class BaseFootprint(BaseClass):
 
     @property
     def volume(self):
-        r"""Volume, in :math:`(\mathrm{Mpc} / h)^{3}`."""
+        r"""Volume, in :math:`(\mathrm{Mpc} / h)^3`."""
         return self._volume
 
     @property
@@ -96,8 +92,24 @@ class BaseFootprint(BaseClass):
 
     @property
     def shotnoise(self):
-        r"""Shot noise, in :math:`(h / \mathrm{Mpc})^{3}`."""
+        r"""Shot noise, in :math:`(h / \mathrm{Mpc})^3`."""
         return self.volume / self.size
+
+    def volume_eff(self, P0):
+        """
+        Return effective volume, given input fiducial power spectrum value.
+
+        Parameters
+        ----------
+        P0 : float
+            Fiducial power spectrum value.
+
+        Returns
+        -------
+        veff : float
+        """
+        nP = self._nbar * P0
+        return self.volume * nP / (1. + nP)
 
     def __and__(self, other):
         """Intersection of footprints ``self`` with ``other``."""
@@ -132,17 +144,14 @@ class CutskyFootprint(BaseFootprint):
         ----------
         nbar : float, array, default=None
             If scalar, surface density, in :math:`\mathrm{deg}^{-2}`.
-            Else, for each redshift in ``zrange``, density, in :math:`(h / \mathrm{Mpc})^{3}`.
-
+            If an array, for each redshift in ``zrange``, density, in :math:`(h / \mathrm{Mpc})^3`.
         size : float, default=None
             If ``nbar`` is not provided, the number of objects.
-
-        area : float, default=None
-            Area, in :math:`\mathrm{deg}^{2}`.
-
+        area : float, array, default=None
+            If float, area, in :math:`\mathrm{deg}^2`.
+            If an array (1D), (pixel) map over the full sky, with values between [0, 1] to indicate fractional area.
         zrange : tuple, array, default=None
-            Redshift range, or array of redshifts where ``nbar`` is tabulated.
-
+            Redshift range if ``nbar`` is a scalar, else array of redshifts where ``nbar`` is tabulated.
         cosmo : cosmoprimo.Cosmology
             Cosmology instance, for redshift-to-distance conversion.
         """
@@ -171,38 +180,57 @@ class CutskyFootprint(BaseFootprint):
 
     @property
     def volume(self):
-        r"""Volume, in :math:`(\mathrm{Mpc} / h)^{3}`."""
+        r"""Volume, in :math:`(\mathrm{Mpc} / h)^3`."""
         volume = self.cosmo.comoving_radial_distance(self._zrange)**3
         return self.area / (180. / np.pi)**2 / 3. * np.diff(volume, axis=-1).sum()
 
     @property
     def area(self):
-        r"""Area, in :math:`\mathrm{deg}^{2}`."""
+        r"""Area, in :math:`\mathrm{deg}^2`."""
         if self._area.ndim == 0:
             return self._area
         return np.mean(self._area) * (180. / np.pi)**2 * (4. * np.pi)
 
-    @property
-    def zavg(self):
-        r"""Average redshift."""
+    def z_eff(self, order=1):
+        """
+        Effective redshift.
+
+        Parameters
+        ----------
+        order : int, default=1
+            - 1, mean redshift.
+            - 2, effective redshift for the power spectrum.
+
+        Returns
+        -------
+        zeff : float
+        """
         z = (self._zrange[:-1] + self._zrange[1:]) / 2.
         if self._nbar.ndim:
             volume = np.diff(self.cosmo.comoving_radial_distance(self._zrange)**3)
             if self._nbar.size == self._zrange.size - 1: nbar = self._nbar
             else: nbar = (self._nbar[:-1] + self._nbar[1:]) / 2.
-            return np.average(z, weights=nbar * volume)
+            return np.average(z, weights=nbar**order * volume)
         return np.mean(z)
 
-    @property
-    def zeff(self):
-        r"""Effective redshift."""
-        z = (self._zrange[:-1] + self._zrange[1:]) / 2.
-        if self._nbar.ndim:
-            volume = np.diff(self.cosmo.comoving_radial_distance(self._zrange)**3)
-            if self._nbar.size == self._zrange.size - 1: nbar = self._nbar
-            else: nbar = (self._nbar[:-1] + self._nbar[1:]) / 2.
-            return np.average(z, weights=nbar**2 * volume)
-        return np.mean(z)
+    def volume_eff(self, P0):
+        """
+        Return effective volume, given input fiducial power spectrum value.
+
+        Parameters
+        ----------
+        P0 : float
+            Fiducial power spectrum value.
+
+        Returns
+        -------
+        veff : float
+        """
+        nP = self._nbar * P0
+        volume = self.cosmo.comoving_radial_distance(self._zrange)**3
+        volume = self.area / (180. / np.pi)**2 / 3. * np.diff(volume, axis=-1)
+        veff = volume * nP / (1. + nP)
+        return np.sum(veff)
 
     @property
     def zlim(self):
@@ -221,14 +249,20 @@ class CutskyFootprint(BaseFootprint):
         return self.area * self._nbar
 
     def __and__(self, other):
-        """Intersection of footprints ``self`` with ``other``."""
+        """
+        Intersection of footprints ``self`` with ``other``:
+        - selecting common area
+        - adding up densities
+        """
+        # Common area
         if self._area.ndim == 0 or other._area.ndim == 0:
-            area = min(self.area, other.area)
+            area = np.minimum(self.area, other.area)
         else:
             area = self._area * other._area
         zrange = np.unique(np.concatenate([self._zrange, other._zrange], axis=0))
         mask = (zrange >= max(self._zrange[0], other._zrange[0])) & (zrange <= min(self._zrange[-1], other._zrange[-1]))
         zrange = zrange[mask]
+        # Adding densities
         if self._size is not None or other._size is not None or self._nbar.ndim == 0 or other._nbar.ndim == 0:
             nbar = self._nbar + other._nbar
         else:
@@ -274,7 +308,7 @@ class CutskyFootprint(BaseFootprint):
 class ObservablesCovarianceMatrix(BaseClass):
     """
     Compute Gaussian covariance matrix for input observables.
-    Warning: does not handle cross-correlations of different tracers!
+    FIXME: does not handle cross-correlations of different tracers!
     """
     def __init__(self, observables, footprints=None, theories=None, resolution=1):
         """
@@ -283,14 +317,11 @@ class ObservablesCovarianceMatrix(BaseClass):
         Parameters
         ----------
         observables : list, BaseCalculator
-            List of (or single) observable, e.g. :class:`TracerPowerSpectrumMultipolesObservable` or :class:`TracerCorrelationFunctionMultipolesObservable`.
-
+            List of (or single) observable, e.g. :class:`TracerSpectrum2PolesObservable` or :class:`TracerCorrelation2PolesObservable`.
         footprints : list, BaseFootprint
             List of (or single) footprints for input ``observables``.
-
         theories : list, BaseCalculator
             List of theories for input ``observables``. Defaults to first calculator in observable that has ``power`` attribute.
-
         resolution : int, default=1
             Number of integration points in each bin.
         """
@@ -352,7 +383,7 @@ class ObservablesCovarianceMatrix(BaseClass):
                 else:
                     covariance[io2][io1] = c.T
         value = np.block(covariance)
-        observable = types.ObservableTree([o.to_lsstypes('data') for o in self.observables], observables=[o.name for o in self.observables])
+        observable = types.ObservableTree([o.data.clone(value=0. * o.data.value()) for o in self.observables], observables=[o.name for o in self.observables])
         self.covariance = types.CovarianceMatrix(value=value, observable=observable)
 
     def _run(self, io1, io2):
@@ -398,9 +429,7 @@ class ObservablesCovarianceMatrix(BaseClass):
 
         if all(isinstance(o, TracerPowerSpectrumMultipolesObservable) for o in obs):
 
-            def get_bin_cov(obs, ells, ibins):
-                ills = [o.ells.index(ell) for o, ell in zip(obs, ells)]
-                bins = [o.kedges[ill][ibin] for o, ill, ibin in zip(obs, ills, ibins)]
+            def get_bin_cov(bins, ells):
                 bin = _interval_intersection(*bins)
                 if _interval_empty(bin):
                     return 0.
@@ -409,9 +438,7 @@ class ObservablesCovarianceMatrix(BaseClass):
 
         if isinstance(obs[0], TracerCorrelationFunctionMultipolesObservable) and isinstance(obs[1], TracerPowerSpectrumMultipolesObservable):
 
-            def get_bin_cov(obs, ells, ibin):
-                ills = [o.ells.index(ell) for o, ell in zip(obs, ells)]
-                bins = [edges[ill][i] for edges, ill, i in zip([obs[0].sedges, obs[1].kedges], ills, ibin)]
+            def get_bin_cov(bins, ells):
                 s, k = [get_integ_points(bin) for bin in bins]
                 weights = np.sum(s[:, None]**2 * special.spherical_jn(ells[0], s[:, None] * k), axis=0) / np.sum(s**2, axis=0)
                 sigmak = get_sigma_k(*pks, *ells, k)
@@ -422,9 +449,7 @@ class ObservablesCovarianceMatrix(BaseClass):
 
         if all(isinstance(o, TracerCorrelationFunctionMultipolesObservable) for o in obs):
 
-            def get_bin_cov(obs, ells, ibin):
-                ills = [o.ells.index(ell) for o, ell in zip(obs, ells)]
-                bins = [o.sedges[ill][i] for o, ill, i in zip(obs, ills, ibin)]
+            def get_bin_cov(bins, ells):
                 if 'k' in cache:
                     k = cache['k']
                 else:
@@ -447,11 +472,12 @@ class ObservablesCovarianceMatrix(BaseClass):
                 return toret
 
         covariance = []
-        for ill1, ell1 in enumerate(obs[0].ells):
+        for ill1, label1 in enumerate(obs[0].data.labels()):
             row = []
-            for ill2, ell2 in enumerate(obs[1].ells):
-                n1, n2 = [len(o.data[ill]) for o, ill in zip(obs, [ill1, ill2])]
-                row.append(np.array([[get_bin_cov(obs, (ell1, ell2), (i1, i2)) for i2 in range(n2)] for i1 in range(n1)], dtype='f8'))
+            for ill2, label2 in enumerate(obs[1].data.labels()):
+                ell1, ell2 = label1['ells'], label2['ells']
+                bins1, bins2 = [next(iter(o.data.get(**label).edges().values())) for o, label in zip(obs, [label1, label2])]
+                row.append(np.array([[get_bin_cov((bin1, bin2), (ell1, ell2)) for bin2 in bins2] for bin1 in bins1], dtype='f8'))
             covariance.append(row)
 
         return np.block(covariance)

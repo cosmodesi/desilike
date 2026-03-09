@@ -37,8 +37,8 @@ class P1DPowerSpectrumExtractor(BaseCalculator):
                                    'background': {'efunc': {'z': self.z}}}
         elif cosmo is None:
             self.cosmo = Cosmoprimo()
-            self.cosmo.params = self.params.copy()
-        self.params.clear()
+            self.cosmo.init.params = self.init.params.copy()
+        self.init.params.clear()
 
     def calculate(self):
         fo = self.cosmo.get_fourier()

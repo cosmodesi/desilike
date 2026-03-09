@@ -809,7 +809,7 @@ class BandVelocityPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         state['sigmar'] = fo.sigma_rz(r, self.z, of='delta_cb')
         state['fsigmar'] = fo.sigma_rz(r, self.z, of='theta_cb')
         state['f'] = state['fsigmar'] / state['sigmar']
-        state['pk_tt_interpolator'] = fo.pk_interpolator(of='theta_cb', **_kw_interp)
+        state['pk_tt_interpolator'] = fo.pk_interpolator(of='theta_cb', **_kw_interp).to_1d(z=self.z)
         state['pk_tt'] = state['pk_tt_interpolator'](self.kp / qiso) / qiso**3
         state['qap'] = 1. if fiducial else self.apeffect.qap
         for name, value in state.items(): setattr(self, name + ('_fid' if fiducial else ''), value)
@@ -1131,8 +1131,8 @@ class WiggleSplitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         r = self.r * DV / self.DV_fid
         fo = cosmo.get_fourier()
         state = {}
-        state['pk_tt_interpolator'] = fo.pk_interpolator(of='theta_cb', **_kw_interp)
-        state['pk_dd_interpolator'] = fo.pk_interpolator(of='delta_cb', **_kw_interp)
+        state['pk_tt_interpolator'] = fo.pk_interpolator(of='theta_cb', **_kw_interp).to_1d(z=self.z)
+        state['pk_dd_interpolator'] = fo.pk_interpolator(of='delta_cb', **_kw_interp).to_1d(z=self.z)
         state['fsigmar'] = integrate_sigma_r2(r, state['pk_tt_interpolator'], kernel=self.kernel)**0.5
         state['sigmar'] = integrate_sigma_r2(r, state['pk_dd_interpolator'], kernel=self.kernel)**0.5
         state['f'] = state['fsigmar'] / state['sigmar']

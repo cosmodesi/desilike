@@ -539,6 +539,7 @@ class KaiserTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     _deterministic_bias_params = ['b1']
     _stochastic_bias_params = ['sn0']
     _with_cross = True
+    _default_options = dict(shotnoise=1e4)
 
     def set_params(self):
         self.required_bias_params.update(dict(b1=1., sn0=0.))
@@ -938,7 +939,7 @@ class TNSTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     shotnoise : float, default=1e4
         Shot noise (which is usually marginalized over).
     """
-    _default_options = dict(freedom=None)
+    _default_options = dict(freedom=None, shotnoise=1e4)
     _deterministic_bias_params = ['b1', 'b2', 'bs', 'b3']
     _stochastic_bias_params = ['sn0']
 
@@ -3013,6 +3014,10 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         # Inject shot noise at correct position
         pars = list(pars[:-1]) + [1. / nd, pars[-1]]  #1. / nd
         ncols = len(table)
+        # Sync the FOLPSpip-module-level globals to the A_full / remove_DeltaP settings
+        import folps.folps as _folps_module
+        _folps_module.A_full_state = getattr(self.pt, 'A_full', True)
+        _folps_module.use_TNS_model_status = getattr(self.pt, 'remove_DeltaP', True)
         if getattr(self, '_get_poles', None) is None:
 
             @jit(static_argnums=(4, 5))

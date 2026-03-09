@@ -67,6 +67,7 @@ class Emulator(tools.Emulator):
         if is_calculator_sequence:
             is_calculator_sequence = len(calculator)
             calculator = CollectionCalculator(calculators=calculator)
+        calculator()  # to set all_calculators
         if isinstance(calculator, CollectionCalculator):
             is_calculator_sequence = len(calculator.all_calculators)
         pipeline = calculator.runtime_info.pipeline

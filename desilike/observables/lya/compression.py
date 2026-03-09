@@ -6,27 +6,33 @@ class P1DCompressionObservable(BaseCompressionObservable):
     """
     P1D compression observable: compare P1D compressed measurements to theory predictions.
 
-    Parameters
-    ----------
-    data : str, Path, array, Profiles, Chain
-        P1D compressed parameters. If array, provide corresponding ``quantities``.
-        Else, chain, profiles or path to such objects.
-
-    covariance : str, Path, 2D array, Profiles, Chain, ParameterCovariance
-        Covariance for P1D compressed parameters. If 2D array, provide corresponding ``quantities``.
-        Else, chain, profiles, covariance or path to such objects.
-
-    quantities : list, tuple
-        Quantities to take from ``data`` and ``covariance``:
-        chose from ``['delta2star', 'nstar', 'alphastar']``.
-
-    **kwargs : dict
-        Optional arguments for :class:`P1DPowerSpectrumExtractor`, e.g. ``z``, ``qstar``.
-
-
     Reference
     ---------
     https://arxiv.org/abs/2106.07641
+
+    Parameters
+    ----------
+    data : array, lsstypes.ObservableTree, default=None
+        BAO parameters. Either:
+        - flat array (of all parameters). Additionally provide list of parameters;
+        - :class:`lsstypes.ObservableTree` (contains all necessary information);
+        - ``None``. Set to 0.
+    covariance : array, lsstypes.CovarianceMatrix, default=None
+        Covariance matrix. Either:
+        - 2D array, of shape ``(len(data), len(data))``;
+        - :class:`lsstypes.CovarianceMatrix` (contains all necessary information);
+        - ``None``. Pass covariance to the likelihood.
+    cosmo : BasePrimordialCosmology, default=None
+        Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
+    parameters : list, tuple
+        Parameters; choose from ``['delta2star', 'nstar', 'alphastar']``.
+    z : float, default=None
+        Effective redshift.
+    name : str, optional
+        Observable name. Used to match covariance matrix when creating likelihood of multiple observables.
+        See :class:`ObservablesGaussianLikelihood`.
+    **kwargs: dict
+        Optional arguments for :class:`P1DPowerSpectrumExtractor`, e.g. ``z``, ``qstar``.
     """
-    def initialize(self, *args, **kwargs):
-        super(P1DCompressionObservable, self).initialize(*args, extractor=P1DPowerSpectrumExtractor(), **kwargs)
+    def initialize(self, *args, name='p1d', **kwargs):
+        super(P1DCompressionObservable, self).initialize(*args, extractor=P1DPowerSpectrumExtractor(), name=name, **kwargs)

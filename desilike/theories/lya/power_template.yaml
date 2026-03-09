@@ -9,9 +9,8 @@ params:
       dist: norm
       loc: 0.6736
       scale: 0.005
-    delta: 0.002
+    delta: 0.03
     latex: h
-    fixed: True
   omega_cdm:
     prior:
       limits: [0.01, 0.99]
@@ -19,27 +18,27 @@ params:
       dist: norm
       loc: 0.12
       scale: 0.0012
-    delta: 0.00017
+    delta: 0.01
     latex: \omega_{cdm}
-    fixed: True
   omega_b:
     prior:
-      limits: [0.005, 0.1]
+      dist: norm
+      loc: 0.02237
+      scale: 0.00037
     ref:
       dist: norm
       loc: 0.02237
       scale: 0.00015
-    delta: 0.0001
+    delta: 0.0015
     latex: \omega_{b}
-    fixed: True
   logA:
     prior:
-      limits: [1.61, 3.91]
+      limits: [2., 4.]
     ref:
       dist: norm
       loc: 3.036394
       scale: 0.014
-    delta: 0.0014
+    delta: 0.05
     latex: \ln(10^{10} A_{s})
   n_s:
     prior:
@@ -48,17 +47,9 @@ params:
       dist: norm
       loc: 0.9649
       scale: 0.0042
-    delta: 0.004
+    delta: 0.005
     latex: n_{s}
-  alpha_s:
-    prior:
-      limits: [-0.1, 0.1]
-    ref:
-      dist: norm
-      loc: 0.
-      scale: 0.0067
-    delta: 0.001
-    latex: \alpha_{s}
+    fixed: True
   tau_reio:
     value: 0.0544
     prior:
@@ -67,8 +58,9 @@ params:
       dist: norm
       loc: 0.0544
       scale: 0.008
-    delta: 0.012
+    delta: 0.01
     latex: \tau
+    fixed: True
   m_ncdm:
     prior:
       limits: [0., 5.]
@@ -76,16 +68,18 @@ params:
       dist: norm
       loc: 0.06
       scale: 0.12
-    delta: 0.01
+    delta: [0.31, 0.15, 0.15]
     latex: m_{ncdm}
-  N_ur:
+    fixed: True
+  N_eff:
     prior:
-      limits: [0.05, 10.]
+      limits: [0.01, 10.]
     ref:
       dist: norm
-      loc: 2.0328
-      scale: 0.32
-    latex: N_{ur}
+      loc: 3.046
+      scale: 0.16
+    latex: N_{eff}
+    delta: 0.2
     fixed: True
   w0_fld:
     prior:
@@ -94,7 +88,7 @@ params:
       dist: norm
       loc: -1
       scale: 0.08
-    delta: 0.01
+    delta: 0.1
     latex: w_{0}
     fixed: True
   wa_fld:
@@ -104,7 +98,7 @@ params:
       dist: norm
       loc: 0.
       scale: 0.3
-    delta: 0.01
+    delta: 0.3
     latex: w_{a}
     fixed: True
   Omega_k:
@@ -114,6 +108,6 @@ params:
       dist: norm
       loc: 0.
       scale: 0.0065
-    delta: 0.002
+    delta: 0.05
     latex: \Omega_{k}
     fixed: True

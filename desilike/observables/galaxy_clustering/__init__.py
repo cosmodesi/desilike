@@ -1,9 +1,4 @@
-from .power_spectrum import TracerPowerSpectrumMultipolesObservable
-from .correlation_function import TracerCorrelationFunctionMultipolesObservable
+from .spectrum import TracerPowerSpectrumMultipolesObservable, TracerBispectrumMultipolesObservable, TracerSpectrum2PolesObservable, TracerSpectrum3PolesObservable
+from .correlation import TracerCorrelationFunctionMultipolesObservable, TracerCorrelation2PolesObservable
 from .compression import BaseCompressionObservable, BAOCompressionObservable, BAOPhaseShiftCompressionObservable, StandardCompressionObservable, ShapeFitCompressionObservable, WiggleSplitCompressionObservable, BandVelocityCompressionObservable, TurnOverCompressionObservable
 from .covariance import ObservablesCovarianceMatrix, BoxFootprint, CutskyFootprint
-from .window import (WindowedPowerSpectrumMultipoles, WindowedCorrelationFunctionMultipoles,
-                     FiberCollisionsPowerSpectrumMultipoles, FiberCollisionsCorrelationFunctionMultipoles,
-                     TopHatFiberCollisionsPowerSpectrumMultipoles, TopHatFiberCollisionsCorrelationFunctionMultipoles,
-                     SystematicTemplatePowerSpectrumMultipoles, SystematicTemplateCorrelationFunctionMultipoles)
-from .bispectrum import TracerBispectrumMultipolesObservable

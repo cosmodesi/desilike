@@ -524,10 +524,8 @@ def inv(mat, inv=np.linalg.inv, check_valid='raise'):
     ----------
     mat : 2D array, scalar
         Input matrix to invert.
-
     inv : callable, default=np.linalg.inv
         Function that takes in 2D array and returns its inverse.
-
     check_valid : str, bool, default='raise'
         If inversion is inaccurate, and ``check_valid`` is:
 
@@ -558,18 +556,16 @@ def inv(mat, inv=np.linalg.inv, check_valid='raise'):
     return toret
 
 
-def blockinv(blocks, inv=np.linalg.inv, check_valid='raise'):
+def blockinv(blocks, inv=np.linalg.inv, check_valid: str='raise'):
     """
     Return inverse of input ``blocks`` matrix.
 
     Parameters
     ----------
-    blocks : list of list of arrays
-        Input matrix to invert, in the form of blocks, e.g. ``[[A,B],[C,D]]``.
-
+    blocks : list of list of 2D arrays
+        Input matrix to invert, in the form of blocks, e.g. ``[[A, B], [C, D]]``.
     inv : callable, default=np.linalg.inv
         Function that takes in 2D array and returns its inverse.
-
     check_valid : str, bool, default='raise'
         If inversion is inaccurate, and ``check_valid`` is:
 
@@ -579,24 +575,24 @@ def blockinv(blocks, inv=np.linalg.inv, check_valid='raise'):
 
     Returns
     -------
-    toret : 2D array
+    inverse : 2D array
         Inverse of ``blocks`` matrix.
     """
     A = blocks[0][0]
     if (len(blocks), len(blocks[0])) == (1, 1):
         return inv(A)
-    B = np.bmat(blocks[0][1:]).A
-    C = np.bmat([b[0].T for b in blocks[1:]]).A.T
+    B = np.block(blocks[0][1:])
+    C = np.block([b[0].T for b in blocks[1:]]).T
     invD = blockinv([b[1:] for b in blocks[1:]], inv=inv)
 
     def dot(*args):
         return np.linalg.multi_dot(args)
 
     invShur = inv(A - dot(B, invD, C))
-    toret = np.bmat([[invShur, -dot(invShur, B, invD)], [-dot(invD, C, invShur), invD + dot(invD, C, invShur, B, invD)]]).A
-    mat = np.bmat(blocks).A
-    _check_valid_inv(mat, toret, check_valid=check_valid)
-    return toret
+    inverse = np.block([[invShur, -dot(invShur, B, invD)], [-dot(invD, C, invShur), invD + dot(invD, C, invShur, B, invD)]])
+    mat = np.block(blocks)
+    _check_valid_inv(mat, inverse, check_valid=check_valid)
+    return inverse
 
 
 def cov_to_corrcoef(cov):

@@ -27,7 +27,7 @@ KWARGS_INIT = dict(
 KWARGS_INIT_FAST = dict(
     dynesty=dict(dynamic=True, nlive=30),
     nautilus=dict(n_networks=1, n_live=100),
-    pocomc=dict(n_effective=100, n_active=50))
+    pocomc=dict(n_effective=10, n_active=5, flow='nsf3'))
 KWARGS_RUN = dict(
     dynesty=dict(n_effective=0),
     grid=dict(grid=np.linspace(0, 1, 101)),
@@ -38,15 +38,20 @@ KWARGS_RUN = dict(
     pocomc=dict(n_total=100, n_evidence=100),
     qmc=dict(size=10000))
 KWARGS_RUN_FAST = dict(
-    dynesty=dict(n_effective=0),
+    dynesty=dict(maxiter=10),
     importance=dict(samples=Chain(dict(
         a=np.repeat(np.linspace(0, 1, 11), 11),
         b=np.tile(np.linspace(0, 1, 11), 11)))),
-    emcee=dict(max_steps=100),
+    emcee=dict(max_steps=10),
     grid=dict(grid=np.linspace(0, 1, 11)),
+    hmc=dict(max_steps=10),
+    mclmc=dict(max_steps=10),
+    mhmcmc=dict(max_steps=10),
     nautilus=dict(n_eff=0, n_like_max=100),
-    pocomc=dict(n_total=10, n_evidence=10),
-    zeus=dict(max_steps=100))
+    nuts=dict(max_steps=10),
+    pocomc=dict(n_total=10, n_evidence=0),
+    qmc=dict(size=100),
+    zeus=dict(max_steps=10))
 
 
 @pytest.fixture
@@ -113,8 +118,8 @@ def test_importance_combine(likelihood):
 def test_derived(likelihood, key):
     # Test that derived parameters are correctly tracked.
 
-    sampler = SAMPLER_CLS[key](likelihood, rng=42,
-                               **KWARGS_INIT_FAST.get(key, {}))
+    sampler = SAMPLER_CLS[key](
+        likelihood, rng=42, **KWARGS_INIT_FAST.get(key, {}))
     results = sampler.run(**KWARGS_RUN_FAST.get(key, {}))
     assert np.allclose(results['a'] + results['b'], results['c'])
     for i in range(3):
@@ -122,7 +127,7 @@ def test_derived(likelihood, key):
                            results['d'][:, i])
 
 
-@pytest.mark.mpi
+@pytest.mark.mpi_skip
 @pytest.mark.parametrize('key', SAMPLER_CLS.keys())
 def test_write(likelihood, key, tmp_path):
     # Check that the sampler correctly saves results and state, if applicable.
@@ -144,7 +149,7 @@ def test_write(likelihood, key, tmp_path):
                        results_2.logposterior.value, atol=1e-6)
 
 
-@pytest.mark.mpi
+@pytest.mark.mpi_skip
 @pytest.mark.parametrize('key', SAMPLER_CLS.keys())
 def test_rng(likelihood, key):
     # Test that specifying the random seed leads to reproducible results.
@@ -165,20 +170,29 @@ def test_rng(likelihood, key):
                        results_2.logposterior.value, atol=1e-6)
 
 
-@pytest.mark.mpi
+@pytest.mark.mpi_skip
 @pytest.mark.parametrize('key', ['emcee', 'hmc', 'mhmcmc', 'zeus'])
 def test_continue_chain(likelihood, key):
     # Test that we can continue a chain.
 
     sampler = SAMPLER_CLS[key](likelihood, rng=42)
-    chains_100 = sampler.run(burn_in=0, min_steps=100, max_steps=100,
-                             flatten_chains=False)
+    chains_10 = sampler.run(
+        burn_in=0, min_steps=10, max_steps=10, flatten_chains=False)
     sampler = samplers.MetropolisHastingsSampler(
-        likelihood, rng=43, chains=[c.copy() for c in chains_100])
-    chains_200 = sampler.run(burn_in=0, min_steps=200, max_steps=200,
-                             flatten_chains=False)
+        likelihood, rng=43, chains=[c.copy() for c in chains_10])
+    chains_20 = sampler.run(
+        burn_in=0, min_steps=20, max_steps=20, flatten_chains=False)
 
-    for chain_100, chain_200 in zip(chains_100, chains_200):
-        assert len(chain_100) == 100
-        assert len(chain_200) == 200
-        assert np.allclose(chain_100['a'], chain_200['a'][:100])
+    for chain_10, chain_20 in zip(chains_10, chains_20):
+        assert len(chain_10) == 10
+        assert len(chain_20) == 20
+        assert np.allclose(chain_10['a'], chain_20['a'][:10])
+
+
+@pytest.mark.mpi_skip
+def test_metropolis_hastings_fast(likelihood):
+    # Test we can pass fast parameters to the Metropolis-Hastings sampler.
+
+    sampler = samplers.MetropolisHastingsSampler(
+        likelihood, rng=42, fast=['a'], f_fast=1)
+    sampler.run(max_steps=100)

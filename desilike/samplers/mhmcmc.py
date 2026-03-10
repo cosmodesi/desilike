@@ -372,7 +372,7 @@ class MetropolisHastingsSampler(MarkovChainSampler):
         f_drag : int, optional
             Factor for dragging of fast parameters. The default is 0, i.e., no
             dragging.
-        fast : list, optional
+        fast : list of str, optional
             List of dimensions that are considered fast.
         chains : list of desilike.samples.Chain, optional
             If given, continue the chains. In that case, we will ignore what
@@ -383,11 +383,16 @@ class MetropolisHastingsSampler(MarkovChainSampler):
             Save samples to this location. Default is ``None``.
 
         """
-        super().__init__(likelihood, n_chains=n_chains, chains=chains, rng=rng,
-                         directory=directory)
+        super().__init__(
+            likelihood, n_chains=n_chains, chains=chains, rng=rng,
+            directory=directory)
+
+        for i in range(len(fast)):
+            fast[i] = self.likelihood.varied_params.names().index(fast[i])
 
         self.sampler = StandAloneMetropolisHastingsSampler(
-            self.compute_posterior, pool=self.pool, rng=self.rng)
+            self.compute_posterior, fast=fast, f_fast=f_fast, f_drag=f_drag,
+            pool=self.pool, rng=self.rng)
         if cov is None:
             n_dim = len(self.likelihood.varied_params)
             cov = np.zeros((n_dim, n_dim))

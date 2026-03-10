@@ -106,6 +106,7 @@ class Cosmoprimo(BasePrimordialCosmology):
         else:
             self.fiducial = get_cosmo(fiducial)
             massive_neutrino = self.fiducial.m_ncdm.size != 0
+            kwargs['engine'] = self.fiducial.engine
 
         self.overrides = {}
         if not massive_neutrino:

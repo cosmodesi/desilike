@@ -61,6 +61,7 @@ def _clone(self, params, base='input'):
     cparams = {}
     for name, value in params.items():
         cparams[conversions.get(name, name)] = value
+    cparams |= self.overrides
 
     theta_MC_100 = cparams.pop('theta_MC_100', None)
     self.cosmo = self.fiducial.clone(base=base, **cparams)
@@ -97,13 +98,18 @@ class Cosmoprimo(BasePrimordialCosmology):
     config_fn = 'primordial_cosmology.yaml'
     _likelihood_catch_errors = (CosmologyError,)
 
-    def initialize(self, fiducial=None, **kwargs):
+    def initialize(self, fiducial=None, massive_neutrino=True, **kwargs):
         # kwargs is engine, extra_params
         fiducial_input = bool(fiducial)
         if fiducial is None:
             self.fiducial = Cosmology()
         else:
             self.fiducial = get_cosmo(fiducial)
+            massive_neutrino = self.fiducial.m_ncdm.size != 0
+
+        self.overrides = {}
+        if not massive_neutrino:
+            self.overrides = {'m_ncdm': []}
 
         self.fiducial = _clone(self, kwargs)
         if any(name in self.params.basenames(input=True) for name in ['h', 'H0']):

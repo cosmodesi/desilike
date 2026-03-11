@@ -12,8 +12,8 @@ from .full_shape import (SimpleTracerPowerSpectrumMultipoles, KaiserTracerPowerS
                          PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles,
                          FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles,
                          FOLPSAXTracerPowerSpectrumMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles,
-                         GeoFPTAXTracerBispectrumMultipoles)
-from .primordial_non_gaussianity import PNGTracerPowerSpectrumMultipoles
+                         GeoFPTAXTracerBispectrumMultipoles, JAXEffortTracerPowerSpectrumMultipoles)
+from .primordial_non_gaussianity import PNGTracerPowerSpectrumMultipoles, PNGTracerCrossPowerSpectrumMultipoles, PNGTracerVelocityPowerSpectrumMultipoles
 from .power_template import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate,
                              BAOPowerSpectrumTemplate, BAOPhaseShiftPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate, TurnOverPowerSpectrumTemplate, DirectWiggleSplitPowerSpectrumTemplate,
                              BAOExtractor, BAOPhaseShiftExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor, BandVelocityPowerSpectrumCalculator)

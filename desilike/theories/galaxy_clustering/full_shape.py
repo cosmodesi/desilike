@@ -2614,8 +2614,8 @@ class fkptTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
           cov  (3*Nk, 3*Nk)
         """
         tr = str(tracer).upper()
-        f_data = f"/global/homes/n/nishavk/desilike/IDE/weiliu_data/{tr}_pk_kP0P2P4.txt"
-        f_cov  = f"/global/homes/n/nishavk/desilike/IDE/weiliu_data/{tr}_pk_cov.txt"
+        f_data = f"/home/nxk230035/work/desilike/IDE/weiliu_data/{tr}_pk_kP0P2P4.txt"
+        f_cov  = f"/home/nxk230035/work/desilike/IDE/weiliu_data/{tr}_pk_cov.txt"
 
         arr = np.loadtxt(f_data)
         if arr.ndim != 2 or arr.shape[1] < 4:
@@ -3745,7 +3745,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         self.pt.update(**state)
     
         # --- NEW: mirror commonly-used PT scalars to top-level ---
-        for name in ['kt', 'fk_norm', 'fk', 'f0', 'qpar', 'qper']:
+        for name in ['kt', 'fk_norm', 'fk', 'f0', 'f_IDE', 'qpar', 'qper']:
             if hasattr(self.pt, name):
                 setattr(self, name, getattr(self.pt, name))
     

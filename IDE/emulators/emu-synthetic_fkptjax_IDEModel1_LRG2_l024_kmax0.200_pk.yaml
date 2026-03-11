@@ -205,7 +205,7 @@ params:
       loc: 0.0
       scale: 0.01
     proposal: null
-    delta: [0.25, 0.25]
+    delta: [0.025, 0.025]
     latex: null
     shape: []
     drop: false

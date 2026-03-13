@@ -78,6 +78,33 @@ def test_cosmoprimo():
     theory = REPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
     theory()
 
+def test_massless_neutrino():
+    from cosmoprimo.fiducial import DESI
+    
+    cosmo = Cosmoprimo(massive_neutrino=False)
+    cosmo.init.params['m_ncdm'].update(fixed=False)
+    cosmo()
+    assert cosmo.m_ncdm_tot == 0
+    assert cosmo.all_params['m_ncdm'].value == 0
+    assert cosmo.all_params['m_ncdm'].fixed
+
+    fiducial = DESI().clone(m_ncdm=[])
+    cosmo = Cosmoprimo(fiducial=fiducial)
+    cosmo()
+    assert cosmo.m_ncdm_tot == 0
+
+
+def test_engine_inheritance():
+    from cosmoprimo.fiducial import DESI
+    fiducial = DESI(engine='class')
+    cosmo = Cosmoprimo(fiducial=fiducial)
+    cosmo()
+    assert 'class' in cosmo.cosmo.engine.__class__.__name__.lower()
+
+    cosmo.init.update(fiducial=fiducial.clone(engine='camb'))
+    cosmo()
+    assert 'camb' in cosmo.cosmo.engine.__class__.__name__.lower()
+
 
 if __name__ == '__main__':
 
@@ -85,3 +112,5 @@ if __name__ == '__main__':
     test_omegak()
     test_parameterization()
     test_cosmoprimo()
+    test_massless_neutrino()
+    test_engine_inheritance()

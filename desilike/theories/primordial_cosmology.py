@@ -91,6 +91,9 @@ class Cosmoprimo(BasePrimordialCosmology):
         - dict: dictionary of parameters
         - :class:`cosmoprimo.Cosmology`: Cosmology instance
 
+    massive_neutrino : bool, optional
+        Assuming massive neutrinos, by default True. If `fiducial` is given, this option will be inferred from `fiducial`.
+
     **kwargs : dict
         Optionally, dictionary of parameters to update ``fiducial`` with.
     """
@@ -111,6 +114,8 @@ class Cosmoprimo(BasePrimordialCosmology):
         self.overrides = {}
         if not massive_neutrino:
             self.overrides = {'m_ncdm': []}
+            for param in self.params.select(basename='m_ncdm'):
+                param.update(fixed=True, value=0.)
 
         self.fiducial = _clone(self, kwargs)
         if any(name in self.params.basenames(input=True) for name in ['h', 'H0']):

@@ -3641,6 +3641,8 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
         b1_fid=None,
     )
 
+    _initialize_with_namespace = False
+    _calculate_with_namespace = False
     @classmethod
     def _load_weiliu_pk(cls, tracer: str):
         """
@@ -4341,6 +4343,8 @@ def get_bs_multipoles_jit(
         for ell in multipoles:
             if ell in supported:
                 toret.append(jnp.asarray(results[supported.index(ell)]).ravel())
+            elif (ell_swap:=ell[0] + ell[2:0:-1] + ell[3:]) in supported:   #Handling B022 -> B202 by swapping l1 and l2
+                toret.append(results[supported.index(ell_swap)].T.ravel())
             else:
                 toret.append(jnp.zeros((k1k2T.size,) * 2).ravel())
         return jnp.asarray(toret)
@@ -4664,7 +4668,8 @@ class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseCalculator):
 
     config_fn = 'full_shape.yaml'
     _klim = (1e-3, 1., 500)
-    _initialize_with_namespace = True
+    _initialize_with_namespace = False
+    _calculate_with_namespace = False
 
     _default_options = dict(
         freedom=None,

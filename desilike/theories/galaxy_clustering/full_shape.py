@@ -3531,3 +3531,1499 @@ class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
+
+# ============================================================================
+# FKPT tracer class
+# ============================================================================
+
+class _FKPTTracerConfigMixin:
+
+    @staticmethod
+    def _rename_prior_basis(prior_basis: str) -> str:
+        pb = str(prior_basis).strip()
+        aliases = {
+            'standard': 'standard_folps',
+            'physical': 'physical_folps',
+            'physical_folps': 'physical_folps',
+            'standard_folps': 'standard_folps',
+            'physical_velocileptors': 'physical_velocileptors',
+            'APscaling': 'APscaling',
+        }
+        if pb not in aliases:
+            raise ValueError(
+                f"Unknown prior_basis='{prior_basis}'. "
+                "Valid: ['standard','physical','standard_folps','physical_folps',"
+                "'physical_velocileptors','APscaling']."
+            )
+        return aliases[pb]
+
+    @staticmethod
+    def _is_physical_mode(pb: str) -> bool:
+        return pb in ['physical_folps', 'physical_velocileptors', 'APscaling']
+
+    @staticmethod
+    def _resolve_option(options, name, default=None):
+        """
+        Resolution order:
+          1) explicit option: options[name]
+          2) tracer_config[name]
+          3) default
+        """
+        value = options.get(name, None)
+        if value is not None:
+            return value
+
+        tracer_config = options.get("tracer_config", None)
+        if tracer_config is not None and name in tracer_config and tracer_config[name] is not None:
+            return tracer_config[name]
+
+        return default
+
+    @classmethod
+    def _require_option(cls, options, name, *, context=""):
+        value = cls._resolve_option(options, name, default=None)
+        if value is None:
+            msg = f"Missing required option '{name}'"
+            if context:
+                msg += f" for {context}"
+            msg += ". Pass it explicitly or inside tracer_config."
+            raise ValueError(msg)
+        return value
+
+# ============================================================================
+# fkpt tracer power spectrum multipoles
+# ============================================================================
+
+class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerSpectrumMultipoles):
+    r"""
+    fkpt tracer power spectrum multipoles.
+
+    prior_basis strings:
+
+    # Standard --- standard basis as used in folps paper (ArXiv: 2404.07269)
+    # Physical --- physical basis as used in velocileptors paper (ArXiv: 2404.07312) but with the basis from folps
+    # Physical_velocileptors --- physical basis as used in velocileptors paper (ArXiv: 2404.07312)
+    # APscaling --- physical basis as used in velocileptors paper (ArXiv: 2404.07312) with mapping to folps basis,
+    #               but including AP-scaling as done in Tsedrik et al. (ArXiv: 2509.09562)
+
+    Aliases:
+      - prior_basis='standard' -> 'standard_folps'
+      - prior_basis='physical' -> 'physical_folps'
+
+    Runtime tracer settings can be passed as either:
+      - explicit options: fsat=..., sigv=..., sigma8_ref=..., b1_fid=...
+      - tracer_config=dict(...)
+      - tracer_type='LRG' / 'ELG' / 'QSO' / 'BGS' to derive sigv if sigv is not passed
+
+    Resolution order:
+      explicit option > tracer_config > derived sigv from tracer_type
+    """
+
+    _default_options = dict(
+        freedom=None,
+        prior_basis='physical',   # alias -> physical_folps
+        tracer=None,
+
+        tracer_config=None,       # NEW
+        tracer_type=None,         # NEW
+
+        fsat=None,
+        sigv=None,
+
+        shotnoise=1e4,
+        model='HDKI',
+        mg_variant='mu_OmDE',
+        b3_coev=True,
+        beyond_eds=True,
+        rescale_PS=False,
+
+        sigma8_ref=None,
+        b1_fid=None,
+    )
+
+    @classmethod
+    def _load_weiliu_pk(cls, tracer: str):
+        """
+        Load formatted WeiLiu files for a tracer.
+        Returns:
+          k (Nk,)
+          data (3*Nk,) stacked as [P0, P2, P4]
+          cov  (3*Nk, 3*Nk)
+        """
+        tr = str(tracer).upper()
+        f_data = f"/n/home12/cgarciaquintero/DESI/GQC_mocks/cubic_boxes/WeiLiu/formatted/{tr}_pk_kP0P2P4.txt"
+        f_cov  = f"/n/home12/cgarciaquintero/DESI/GQC_mocks/cubic_boxes/WeiLiu/formatted/{tr}_pk_cov.txt"
+
+        arr = np.loadtxt(f_data)
+        if arr.ndim != 2 or arr.shape[1] < 4:
+            raise ValueError(f"{f_data} must have >= 4 columns (k,P0,P2,P4), got {arr.shape}")
+        k = arr[:, 0]
+        p0, p2, p4 = arr[:, 1], arr[:, 2], arr[:, 3]
+        Nk = k.size
+
+        cov = np.loadtxt(f_cov)
+        if cov.shape != (3 * Nk, 3 * Nk):
+            raise ValueError(f"{f_cov} has shape {cov.shape}, expected {(3*Nk,3*Nk)} (Nk={Nk})")
+
+        data = np.concatenate([p0, p2, p4], axis=0)
+        return k, data, cov
+
+    # -------------------------
+    # parameter priors
+    # -------------------------
+    @staticmethod
+    def _params(params, freedom=None, prior_basis='physical'):
+        pb = fkptTracerPowerSpectrumMultipoles._rename_prior_basis(prior_basis)
+
+        fix = []
+        if freedom in ['min', 'max']:
+            for param in params.select(basename=['b1']):
+                param.update(prior=dict(dist='uniform', limits=[0.1, 8.0]))
+            for param in params.select(basename=['b2']):
+                param.update(prior=dict(dist='norm', loc=0.0, scale=20.0),
+                             ref=dict(dist='norm', loc=0.0, scale=1.0))
+
+            for param in params.select(basename=['bs2', 'b3nl', 'alpha*', 'alpha0shot', 'alpha2shot', 'ctilde']):
+                param.update(prior=None)
+
+        if freedom == 'max':
+            for param in params.select(basename=['b1', 'b2', 'bs2', 'b3nl']):
+                param.update(fixed=False)
+            fix += ['ctilde']
+
+        if freedom == 'min':
+            fix += ['b3nl', 'bs2', 'ctilde']
+
+        for param in params.select(basename=fix):
+            param.update(value=0., fixed=True)
+
+        # ============================================================
+        # STANDARD_FOLPS priors (Eulerian)
+        # ============================================================
+        if pb == 'standard_folps':
+            width_EFT = 125.0
+            width_SN0 = 20.0
+            width_SN2 = 50.0
+
+            for param in params.select(basename=['alpha0', 'alpha2', 'alpha4']):
+                if not param.fixed:
+                    param.update(prior=dict(dist='norm', loc=0.0, scale=width_EFT),
+                                 ref=dict(dist='norm', loc=0.0, scale=1.0))
+
+            for param in params.select(basename='alpha0shot'):
+                if not param.fixed:
+                    param.update(prior=dict(dist='norm', loc=0.0, scale=width_SN0),
+                                 ref=dict(dist='norm', loc=0.0, scale=1.0))
+            for param in params.select(basename='alpha2shot'):
+                if not param.fixed:
+                    param.update(prior=dict(dist='norm', loc=0.0, scale=width_SN2),
+                                 ref=dict(dist='norm', loc=0.0, scale=1.0))
+
+            return params
+
+        # ============================================================
+        # PHYSICAL modes: rename -> add suffix 'p'
+        # ============================================================
+        if fkptTracerPowerSpectrumMultipoles._is_physical_mode(pb):
+            for param in list(params):
+                param.update(basename=param.basename + 'p')
+
+            for param in params.select(basename='b1p'):
+                param.update(prior=dict(dist='uniform', limits=[0.1, 8.0]),
+                             ref=dict(dist='norm', loc=1.0, scale=0.1))
+
+            for param in params.select(basename='b2p'):
+                param.update(prior=dict(dist='norm', loc=0.0, scale=20.0),
+                             ref=dict(dist='norm', loc=0.0, scale=1.0))
+
+            if pb == 'APscaling':
+                for param in params.select(basename=['bs2p', 'b3nlp']):
+                    param.update(value=0.0, fixed=True, prior=None)
+
+                for par in params.select(basename=['bK2p', 'btdp']):
+                    if freedom == 'min':
+                        par.update(value=0.0, fixed=True, prior=None)
+                    else:
+                        if par.basename == 'bK2p':
+                            par.update(
+                                fixed=False,
+                                prior=dict(dist='norm', loc=0.0, scale=20.0),
+                                ref=dict(dist='norm', loc=0.0, scale=1.0),
+                            )
+                        elif par.basename == 'btdp':
+                            par.update(
+                                fixed=False,
+                                prior=dict(dist='norm', loc=0.0, scale=2.0),
+                                ref=dict(dist='norm', loc=0.0, scale=1.0),
+                            )
+
+                width = 500.0 if freedom == "max" else 50.0
+                for param in params.select(basename=['alpha0p', 'alpha2p', 'alpha4p']):
+                    if param.fixed:
+                        continue
+                    param.update(
+                        prior=dict(dist='norm', loc=0.0, scale=width),
+                        ref=dict(dist='norm', loc=0.0, scale=1.0),
+                    )
+
+                for param in params.select(basename='alpha0shotp'):
+                    if param.fixed:
+                        continue
+                    if freedom == 'max':
+                        param.update(prior=dict(dist='norm', loc=0.0, scale=20.0),
+                                     ref=dict(dist='norm', loc=0.0, scale=1.0))
+                    else:
+                        param.update(prior=dict(dist='norm', loc=0.0, scale=2.0),
+                                     ref=dict(dist='norm', loc=0.0, scale=1.0))
+
+                for param in params.select(basename='alpha2shotp'):
+                    if param.fixed:
+                        continue
+                    if freedom == 'max':
+                        param.update(prior=dict(dist='norm', loc=0.0, scale=50.0),
+                                     ref=dict(dist='norm', loc=0.0, scale=1.0))
+                    else:
+                        param.update(prior=dict(dist='norm', loc=0.0, scale=5.0),
+                                     ref=dict(dist='norm', loc=0.0, scale=1.0))
+
+                return params
+
+            for param in params.select(basename=['bs2p', 'b3nlp']):
+                param.update(prior=dict(dist='uniform', limits=[-50.0, 50.0]),
+                             ref=dict(dist='norm', loc=0.0, scale=1.0))
+
+            width_EFT = 30.0
+            width_SN0 = 2.0
+            width_SN2 = 5.0
+
+            for param in params.select(basename=['alpha0p', 'alpha2p', 'alpha4p']):
+                if not param.fixed:
+                    param.update(prior=dict(dist='norm', loc=0.0, scale=width_EFT),
+                                 ref=dict(dist='norm', loc=0.0, scale=1.0))
+
+            for param in params.select(basename='alpha0shotp'):
+                if not param.fixed:
+                    param.update(prior=dict(dist='norm', loc=0.0, scale=width_SN0),
+                                 ref=dict(dist='norm', loc=0.0, scale=1.0))
+            for param in params.select(basename='alpha2shotp'):
+                if not param.fixed:
+                    param.update(prior=dict(dist='norm', loc=0.0, scale=width_SN2),
+                                 ref=dict(dist='norm', loc=0.0, scale=1.0))
+
+        return params
+
+    # -------------------------
+    # required params
+    # -------------------------
+    def set_params(self):
+        self.required_bias_params = [
+            'b1', 'b2', 'bs2', 'b3nl',
+            'alpha0', 'alpha2', 'alpha4',
+            'ctilde',
+            'alpha0shot', 'alpha2shot',
+            'PshotP',
+        ]
+        default_values = {'b1': 1.}
+        self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
+
+        pb = self._rename_prior_basis(self.options['prior_basis'])
+        self._prior_basis_norm = pb
+        self.is_physical_prior = self._is_physical_mode(pb)
+
+        if pb == 'APscaling':
+            self.required_bias_params['bK2'] = 0.0
+            self.required_bias_params['btd'] = 0.0
+            self.sigma8_ref = float(self._require_option(self.options, "sigma8_ref", context="prior_basis='APscaling'"))
+        else:
+            self.sigma8_ref = None
+
+        if self.is_physical_prior:
+            for name in list(self.required_bias_params):
+                self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
+
+            fsat = self._require_option(self.options, "fsat", context=f"prior_basis='{pb}'")
+            sigv = self._require_option(self.options, "sigv", context=f"prior_basis='{pb}'")
+
+            self.options["fsat"] = float(fsat)
+            self.options["sigv"] = float(sigv)
+
+            if self.mpicomm.rank == 0:
+                self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
+
+        super().set_params(pt_params=[])
+
+        fix = []
+        suffix = 'p' if self.is_physical_prior else ''
+        if 4 not in self.ells:
+            fix += [f'alpha4{suffix}']
+        if 2 not in self.ells:
+            fix += [f'alpha2{suffix}', f'alpha2shot{suffix}']
+        for par in self.init.params.select(basename=fix):
+            par.update(value=0.0, fixed=True, prior=None)
+
+        self.nd = 1e-4
+
+        suffix = 'p' if self.is_physical_prior else ''
+        for par in self.init.params.select(basename=f'PshotP{suffix}'):
+            par.update(value=1.0/self.nd, fixed=True, prior=None)
+
+        self.fsat = 1.0
+        self.snd = self.options['shotnoise'] * self.nd
+        if self.is_physical_prior:
+            self.fsat = self.options['fsat']
+
+        if pb == 'APscaling':
+            self.b1_fid = float(self._require_option(self.options, "b1_fid", context="prior_basis='APscaling'"))
+        else:
+            self.b1_fid = None
+
+    # -------------------------
+    # main mapping
+    # -------------------------
+    def calculate(self, **params):
+        super(fkptTracerPowerSpectrumMultipoles, self).calculate()
+        params = {**self.required_bias_params, **params}
+
+        pb = self._prior_basis_norm
+
+        if pb == 'standard_folps':
+            if self.options['b3_coev']:
+                b1 = params['b1']
+                db1 = b1 - 1.0
+                params['bs2']  = params['bs2']  - 4.0/7.0 * db1
+                params['b3nl'] = params['b3nl'] + 32.0/315.0 * db1
+
+            self.power = self.pt.combine_bias_terms_poles(
+                params, nd=self.nd,
+                model=self.options['model'], mg_variant=self.options['mg_variant'],
+                prior_basis='standard',
+                beyond_eds=self.options['beyond_eds'],
+            )
+            return
+
+        sigma8 = self.pt.sigma8
+        f = getattr(self.pt, "f0", None)
+        if f is None:
+            raise ValueError("Missing MG growth rate: expected pt.f0 (preferred) or pt.f.")
+
+        if pb == 'APscaling':
+            qpar = self.pt.qpar
+            qper = self.pt.qper
+            A_AP = 1.0 / (qper**2 * qpar)
+            self.A_AP = A_AP
+            sqrtA_AP = A_AP**0.5
+
+            sigma8_ref = getattr(self, "sigma8_ref", None)
+            if sigma8_ref is None:
+                raise ValueError("APscaling requires sigma8_ref")
+            S = sigma8 / float(sigma8_ref)
+            self.S = S
+
+            b1E = params['b1p'] / (S * sqrtA_AP)
+            b2E = params['b2p'] / (S**2 * sqrtA_AP)
+        else:
+            b1E = params['b1p'] / sigma8
+            b2E = params['b2p'] / sigma8**2
+
+        b1L = params['b1p'] / sigma8 - 1.0
+
+        if pb != 'APscaling':
+            bsL = params['bs2p'] / sigma8**2
+            b3L = params['b3nlp']
+            if self.options['b3_coev']:
+                bs2E = bsL - 4.0/7.0 * b1L
+                b3E  = b3L + 32.0/315.0 * b1L
+            else:
+                bs2E = bsL
+                b3E  = b3L
+
+        ctildeE = params.get('ctildep', 0.0)
+
+        if pb == 'physical_folps':
+            alpha0 = params['alpha0p']
+            alpha2 = params['alpha2p']
+            alpha4 = params['alpha4p']
+
+        elif pb == 'physical_velocileptors':
+            a0t = params['alpha0p']
+            a2t = params['alpha2p']
+            a4t = params['alpha4p']
+
+            alpha0 = (b1E**2) * a0t
+            alpha2 = (b1E * f) * (a0t + a2t)
+            alpha4 = (f**2) * a2t + (b1E * f) * a4t
+
+        elif pb == 'APscaling':
+            a0t = params['alpha0p'] / (A_AP * (S**2))
+            a2t = params['alpha2p'] / (A_AP * (S**2))
+            a4t = params['alpha4p'] / (A_AP * (S**2))
+
+            alpha0 = (b1E**2) * a0t
+            alpha2 = (b1E * f) * (a0t + a2t)
+            alpha4 = (f**2) * a2t + (b1E * f) * a4t
+
+            if 'bK2p' not in params or 'btdp' not in params:
+                raise ValueError("APscaling requires sampled parameters 'bK2p' and 'btdp' "
+                                 "(or update the code to match your chosen names).")
+
+            freedom = self.options.get('freedom', None)
+
+            if freedom == "min":
+                bK2 = -(2.0 / 7.0) * (b1E - 1.0)
+                btd =  (23.0 / 42.0) * (b1E - 1.0)
+            else:
+                b1_fid = getattr(self, 'b1_fid', None)
+                if b1_fid is None:
+                    raise ValueError("APscaling table priors need b1_fid; could not infer from tracer_config / options.")
+
+                muX = -(2.0 / 7.0)  * (b1_fid - 1.0)
+                muY =  (23.0 / 42.0) * (b1_fid - 1.0)
+
+                X = muX + params['bK2p']
+                Y = muY + params['btdp']
+
+                bK2 = X / (S**2.0 * sqrtA_AP)
+                btd = Y / (S**4.0 * A_AP)
+
+            bs2E = 2.0 * bK2
+            b3E  = -(32.0 / 21.0) * (bK2 + (2.0 / 5.0) * btd)
+
+        else:
+            raise ValueError(f"Internal error: unsupported normalized prior basis '{pb}'.")
+
+        sigv = self.options['sigv']
+        Ashot = (self.A_AP if pb == 'APscaling' else 1.0)
+        alpha0shot = (params['alpha0shotp'] / Ashot) * self.snd
+        alpha2shot = (params['alpha2shotp'] / Ashot) * self.snd * self.fsat * sigv**2
+
+        params['b1'] = b1E
+        params['b2'] = b2E
+        params['bs2'] = bs2E
+        params['b3nl'] = b3E
+
+        params['alpha0'] = alpha0
+        params['alpha2'] = alpha2
+        params['alpha4'] = alpha4
+
+        params['ctilde'] = ctildeE
+        params['alpha0shot'] = alpha0shot
+        params['alpha2shot'] = alpha2shot
+
+        self.power = self.pt.combine_bias_terms_poles(
+            params, nd=self.nd,
+            model=self.options['model'], mg_variant=self.options['mg_variant'],
+            prior_basis='physical',
+            b3_coev=self.options['b3_coev'],
+            beyond_eds=self.options['beyond_eds'],
+        )
+
+
+# ============================================================================
+# Helper: fkptjax k-functions -> FOLPS tables
+# ============================================================================
+
+from typing import Any, Dict, Optional, Tuple
+
+import jax.numpy as jnp
+
+def Kfuncs_to_tables(
+    k,
+    pk,
+    pk_now,
+    *,
+    z: float,
+    Om: float,
+    beyond_eds: bool = False,
+    rescale_PS: bool = False,
+    kmin: Optional[float] = None,
+    kmax: Optional[float] = None,
+    Nk_kernel: int = 240,
+    nquadSteps: int = 300,
+    NQ: int = 10,
+    NR: int = 10,
+    xnow: float = -3.912023,
+    ode_method: str = "RKQS",
+    f0_kmax: float = 1e-3,
+    model: str = "HDKI",
+    mg_variant: str = "mu_OmDE",
+    fR0: float = 1e-15,
+    nHS: float = 1.0,
+    beta2: float = 1.0 / 6.0,
+    screening: int = 1,
+    omegaBD: float = 0.0,
+    mu0: float = 0.0,
+    beta_1: float = 1.0,
+    lambda_1: float = 1.0,
+    exp_s: float = 1.0,
+    mu1: float = 1.0,
+    mu2: float = 1.0,
+    mu3: float = 1.0,
+    mu4: float = 1.0,
+    z_div: float = 1.0,
+    z_TGR: float = 10.0,
+    z_tw: float = 0.5,
+    scale_bins: bool = False,
+    k_TGR: float = 0.001,
+    k_S: float = 0.5,
+    k_c: float = 0.1,
+    k_tw: float = 0.01,
+    gamma_0: float = 0.54545,
+    gamma_a: float = 0.0,
+    t_k: float = 100.0,
+    d_s: float = 0.0001,
+    rbao: float = 104.0,
+    pmax_bao: float = 0.4,
+    Np_bao: int = 100,
+    return_kernel_constants=True,
+) -> Tuple[Tuple[Any, ...], Tuple[Any, ...]]:
+    """
+    Return (table_wiggle, table_now) in the A_full=False layout expected by FOLPS.
+    Uses fkptjax internal output grid by default (init_data.logk_grid).
+    """
+
+    import folps as folpsv2
+    from folps.tools_jax import extrapolate_pklin, simpson, interp
+    from fkptjax.calculate_jax import JaxCalculator
+    from fkptjax.util import setup_kfunctions
+    from fkptjax.ode import ModelDerivatives, ODESolver, DP
+
+    model_u = str(model).upper()
+    if model_u == "HS":
+        if bool(rescale_PS) is not True:
+            raise ValueError("For model='HS', rescale_PS must be True (passed False).")
+        mg_variant = None
+
+    k = jnp.asarray(k)
+    pk = jnp.asarray(pk)
+    pk_now = jnp.asarray(pk_now)
+
+    k_ext, pk_ext = extrapolate_pklin(k, pk)
+    _, pk_now_ext = extrapolate_pklin(k, pk_now)
+
+    solver = ODESolver(zout=float(z), xnow=float(xnow), method=str(ode_method))
+
+    derivs = ModelDerivatives(
+        om=float(Om), ol=float(1.0 - Om),
+        fR0=float(fR0), beta2=float(beta2), nHS=float(nHS),
+        screening=int(screening), omegaBD=float(omegaBD),
+        model=str(model), mg_variant=str(mg_variant),
+        mu0=float(mu0),
+        beta_1=float(beta_1), lambda_1=float(lambda_1), exp_s=float(exp_s),
+        mu1=float(mu1), mu2=float(mu2), mu3=float(mu3), mu4=float(mu4),
+        z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
+        scale_bins=bool(scale_bins), k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw),
+        gamma_0=float(gamma_0), gamma_a=float(gamma_a), t_k=float(t_k), d_s=float(d_s),
+    )
+
+    k_ext_np = np.asarray(k_ext, dtype=float)
+
+    Y = DP(k_ext_np, derivs, solver)
+    D_ext, Dp_ext = Y[0], Y[1]
+
+    fk_ext = jnp.asarray(Dp_ext / D_ext)
+
+    mask0 = (k_ext < float(f0_kmax))
+    nhead = int(min(5, int(k_ext.shape[0])))
+    f0_jax = jnp.where(
+        jnp.any(mask0),
+        jnp.sum(jnp.where(mask0, fk_ext, 0.0)) / jnp.maximum(jnp.sum(mask0), 1),
+        jnp.mean(fk_ext[:nhead]),
+    )
+    f0 = float(f0_jax)
+
+    if bool(rescale_PS):
+        idx0 = int(np.argmin(k_ext_np))
+        D0 = float(D_ext[idx0])
+        scale = jnp.asarray((D_ext / D0) ** 2)
+        pk_ext = pk_ext * scale
+        pk_now_ext = pk_now_ext * scale
+
+    if kmin is None:
+        kmin = float(jnp.maximum(1e-3, jnp.min(k)))
+    if kmax is None:
+        kmax = float(jnp.minimum(0.5, jnp.max(k)))
+
+    init_data = setup_kfunctions(
+        k_in=k_ext,
+        kmin=float(kmin),
+        kmax=float(kmax),
+        Nk=int(Nk_kernel),
+        nquadSteps=int(nquadSteps),
+        NQ=int(NQ),
+        NR=int(NR),
+    )
+    kout = init_data.logk_grid
+
+    fk_out = interp(kout, k_ext, fk_ext)
+    fk_norm_out = fk_out / f0
+
+    ff = fk_ext / f0
+    sigma2w = float(1.0 / (6.0 * jnp.pi**2) * simpson(pk_ext * ff**2, x=k_ext))
+    sigma2w_NW = float(1.0 / (6.0 * jnp.pi**2) * simpson(pk_now_ext * ff**2, x=k_ext))
+
+    p = jnp.exp(jnp.linspace(jnp.log(1e-6), jnp.log(float(pmax_bao)), int(Np_bao)))
+    PSL_NW = interp(p, k_ext, pk_now_ext)
+
+    sigma2_NW = float(
+        1.0 / (6.0 * jnp.pi**2)
+        * simpson(
+            PSL_NW * (
+                1.0
+                - folpsv2.spherical_jn_backend(0, p * float(rbao))
+                + 2.0 * folpsv2.spherical_jn_backend(2, p * float(rbao))
+            ),
+            x=p,
+        )
+    )
+    delta_sigma2_NW = float(
+        1.0 / (2.0 * jnp.pi**2)
+        * simpson(PSL_NW * folpsv2.spherical_jn_backend(2, p * float(rbao)), x=p)
+    )
+
+    if bool(beyond_eds):
+        from fkptjax.ode import kernel_constants
+        KA, KAp, KR1, KR1p = kernel_constants(f0=f0, derivs=derivs, solver=solver)
+        A = float(KA)
+        ApOverf0 = float(KAp) / float(f0)
+        CFD3 = float(KR1)
+        CFD3p = float(KR1p)
+    else:
+        A = 1.0
+        ApOverf0 = 0.0
+        CFD3 = 1.0
+        CFD3p = 1.0
+
+    calculator = JaxCalculator()
+    calculator.initialize(init_data)
+
+    kfuncs = calculator.evaluate(
+        Pk_in=pk_ext,
+        Pk_nw_in=pk_now_ext,
+        fk_in=fk_ext,
+        A=A,
+        ApOverf0=ApOverf0,
+        CFD3=CFD3,
+        CFD3p=CFD3p,
+        sigma2v=0.0,
+        f0=f0,
+    )
+
+    def _arr(x):
+        return jnp.asarray(x)
+
+    zeros = jnp.zeros_like(_arr(kout))
+
+    pkl_out_w = kfuncs.pkl[0]
+    pkl_out_nw = kfuncs.pkl[1]
+
+    table_w = (
+        kout,
+        _arr(pkl_out_w),
+        _arr(fk_norm_out),
+        _arr(kfuncs.P22dd[0] + kfuncs.P13dd[0]),
+        _arr(kfuncs.P22du[0] + kfuncs.P13du[0]),
+        _arr(kfuncs.P22uu[0] + kfuncs.P13uu[0]),
+        _arr(kfuncs.Pb1b2[0]),
+        _arr(kfuncs.Pb1bs2[0]),
+        _arr(kfuncs.Pb22[0]),
+        _arr(kfuncs.Pb2s2[0]),
+        _arr(kfuncs.Ps22[0]),
+        _arr(kfuncs.sigma32PSL[0]),
+        _arr(kfuncs.Pb2theta[0]),
+        _arr(kfuncs.Pbs2theta[0]),
+        _arr(kfuncs.I1udd1A[0]),
+        _arr(kfuncs.I2uud1A[0]),
+        _arr(kfuncs.I2uud2A[0]),
+        _arr(kfuncs.I3uuu2A[0]),
+        _arr(kfuncs.I3uuu3A[0]),
+        _arr(kfuncs.I2uudd1BpC[0]),
+        _arr(kfuncs.I2uudd2BpC[0]),
+        _arr(kfuncs.I3uuud2BpC[0]),
+        _arr(kfuncs.I3uuud3BpC[0]),
+        _arr(kfuncs.I4uuuu2BpC[0]),
+        _arr(kfuncs.I4uuuu3BpC[0]),
+        _arr(kfuncs.I4uuuu4BpC[0]),
+        zeros,
+        zeros,
+        sigma2w,
+        f0,
+    )
+
+    table_nw = (
+        kout,
+        _arr(pkl_out_nw),
+        _arr(fk_norm_out),
+        _arr(kfuncs.P22dd[1] + kfuncs.P13dd[1]),
+        _arr(kfuncs.P22du[1] + kfuncs.P13du[1]),
+        _arr(kfuncs.P22uu[1] + kfuncs.P13uu[1]),
+        _arr(kfuncs.Pb1b2[1]),
+        _arr(kfuncs.Pb1bs2[1]),
+        _arr(kfuncs.Pb22[1]),
+        _arr(kfuncs.Pb2s2[1]),
+        _arr(kfuncs.Ps22[1]),
+        _arr(kfuncs.sigma32PSL[1]),
+        _arr(kfuncs.Pb2theta[1]),
+        _arr(kfuncs.Pbs2theta[1]),
+        _arr(kfuncs.I1udd1A[1]),
+        _arr(kfuncs.I2uud1A[1]),
+        _arr(kfuncs.I2uud2A[1]),
+        _arr(kfuncs.I3uuu2A[1]),
+        _arr(kfuncs.I3uuu3A[1]),
+        _arr(kfuncs.I2uudd1BpC[1]),
+        _arr(kfuncs.I2uudd2BpC[1]),
+        _arr(kfuncs.I3uuud2BpC[1]),
+        _arr(kfuncs.I3uuud3BpC[1]),
+        _arr(kfuncs.I4uuuu2BpC[1]),
+        _arr(kfuncs.I4uuuu3BpC[1]),
+        _arr(kfuncs.I4uuuu4BpC[1]),
+        zeros,
+        zeros,
+        sigma2w_NW,
+        sigma2_NW,
+        delta_sigma2_NW,
+        f0,
+    )
+    if return_kernel_constants:
+        return table_w, table_nw, (A, ApOverf0 * f0, CFD3, CFD3p)
+    return table_w, table_nw
+
+
+# ============================================================================
+# Bk multipoles via FOLPS (JIT-ed)
+# ============================================================================
+
+import folps as folpsv2
+
+@jit(static_argnums=(5, 6, 7, 8, 9, 10, 11))
+def get_bs_multipoles_jit(
+    pars,
+    k1k2T,
+    k_pkl_pklnw_fk,
+    table,
+    table_now,
+    precision,
+    A_full=True,
+    remove_DeltaP=False,
+    multipoles=['B000', 'B202'],
+    interpolation_method='linear',
+    bias_scheme='folps',
+    renormalized=True,
+    f0=None,
+    qpar=None,
+    qperp=None,
+    z_pk=None,
+):
+    f0 = jnp.asarray(f0)
+    bpars = jnp.asarray(pars)
+    k1k2T = jnp.asarray(k1k2T)
+
+    if k1k2T.ndim == 1:
+        bs = folpsv2.WindowConvolvedBispectrum(model='FOLPSD')
+        results = bs.reduced_Bl1l2L(
+            bpars,
+            None,
+            qpar,
+            qperp,
+            k_pkl_pklnw_fk,
+            k1k2T,
+            Ssize=20,
+            precision_full=[8, 10, 10],
+            precision_diag=[12, 15, 15],
+            f=f0,
+            renormalize=renormalized,
+            interpolation_method_full=interpolation_method,
+            interpolation_method_diag=interpolation_method,
+            use_full_diag=True,
+        )
+
+        supported = ['B000', 'B110', 'B220', 'B112', 'B202']
+        toret = []
+        for ell in multipoles:
+            if ell in supported:
+                toret.append(jnp.asarray(results[supported.index(ell)]).ravel())
+            else:
+                toret.append(jnp.zeros((k1k2T.size,) * 2).ravel())
+        return jnp.asarray(toret)
+
+    bispectrum = folpsv2.BispectrumCalculator(model='FOLPSD')
+
+    kb_all = jnp.linspace(0.5 * k1k2T[0, 0], 0.28, 64)
+    k_ev_bk = jnp.vstack([kb_all, kb_all]).T
+    kout = k1k2T[:, 0]
+
+    toret = bispectrum.Sugiyama_Bell(
+        f=f0,
+        bpars=bpars,
+        k_pkl_pklnw=k_pkl_pklnw_fk,
+        k1k2pairs=k_ev_bk,
+        qpar=qpar.astype(float),
+        qper=qperp.astype(float),
+        precision=precision,
+        damping='lor',
+        do_interp_bk=True,
+        kout=kout,
+        multipoles=list(multipoles),
+        bias_scheme=bias_scheme,
+        renormalize=renormalized,
+        interpolation_method=interpolation_method
+    )
+    folpsv2.BispectrumCalculator._tables_cache = {}
+    return toret
+
+
+# ============================================================================
+# desilike wrapper: fkptjaxPowerSpectrumMultipoles
+# ============================================================================
+
+class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+
+    _default_options = dict(
+        model="HDKI",
+        mg_variant="mu_OmDE",
+        rescale_PS=False,
+        beyond_eds=False,
+        nHS=1.0,
+        beta2=1.0 / 6.0,
+        screening=1,
+        omegaBD=0.0,
+        fR0=1e-15,
+    )
+
+    _pt_attrs = [
+        "jac", "kap", "muap",
+        "table", "table_now",
+        "scalars", "scalars_now",
+        "A_full", "remove_DeltaP",
+        "qpar", "qper",
+        "kt", "fk_norm", "fk", "f0",
+        "calA", "calAp", "CFD3", "CFD3p",
+    ]
+
+    def initialize(self, *args, mu=6, **kwargs):
+        for key in ["freedom", "prior_basis", "tracer", "tracer_config", "tracer_type",
+                    "fsat", "sigv", "shotnoise", "b1_fid", "b3_coev", "sigma8_ref"]:
+            kwargs.pop(key, None)
+
+        super().initialize(*args, mu=mu, method="leggauss", **kwargs)
+        self.template.init.update(with_now="peakaverage")
+
+    def _collect_mg_params(self, cosmo) -> Dict[str, float]:
+        model_u = str(self.options.get("model", "HDKI")).upper()
+
+        if model_u == "HS":
+            return dict(
+                fR0=float(self.options.get("fR0", 1e-15)),
+                nHS=float(self.options.get("nHS", 1.0)),
+                beta2=float(self.options.get("beta2", 1.0 / 6.0)),
+                screening=int(self.options.get("screening", 1)),
+                omegaBD=float(self.options.get("omegaBD", 0.0)),
+            )
+
+        v_u = str(self.options.get("mg_variant", "mu_OmDE")).strip().upper()
+
+        defaults = dict(
+            mu0=0.0,
+            beta_1=1.0, lambda_1=0.0, exp_s=0.0,
+            mu1=1.0, mu2=1.0, mu3=1.0, mu4=1.0,
+            z_div=1.0, z_TGR=10.0, z_tw=0.5,
+            scale_bins=False,
+            k_TGR=0.001,
+            k_c=0.1,
+            k_S=0.5,
+            k_tw=0.01,
+            gamma_0=0.545454, gamma_a=0.0, t_k=100.0, d_s=0.0001,
+        )
+
+        req = {
+            "MU_OMDE": ["mu0"],
+            "BZ": ["beta_1", "lambda_1", "exp_s"],
+            "BINNING": ["mu1", "mu2", "mu3", "mu4", "z_div", "z_TGR", "z_tw",
+                        "scale_bins", "k_TGR", "k_c", "k_S", "k_tw"],
+            "GROWTH_INDEX": ["gamma_0", "gamma_a", "t_k", "d_s"],
+            "GROWTH_INDEX_YUKAWA": ["gamma_0", "gamma_a", "t_k", "d_s"],
+            "GR": [],
+        }
+
+        out: Dict[str, float] = {}
+        for p in req.get(v_u, []):
+            if cosmo is not None:
+                try:
+                    out[p] = float(cosmo[p])
+                    continue
+                except Exception:
+                    pass
+
+                try:
+                    out[p] = float(getattr(cosmo, p))
+                    continue
+                except Exception:
+                    pass
+
+            if p in self.options and self.options[p] is not None:
+                out[p] = float(self.options[p])
+            else:
+                out[p] = float(defaults[p])
+
+        return out
+
+    def calculate(self):
+        super().calculate()
+
+        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+        cosmo = getattr(self.template, "cosmo", None)
+
+        model = str(self.options.get("model", "HDKI"))
+        model_u = model.upper()
+        rescale_PS = bool(self.options.get("rescale_PS", False))
+
+        if model_u == "HS" and (not rescale_PS):
+            raise ValueError("You set model='HS' but rescale_PS=False. This is forbidden by design.")
+
+        mg_params = self._collect_mg_params(cosmo)
+
+        fkpt_params = dict(
+            z=float(self.z),
+            Om=float(cosmo["Omega_m"]),
+            kmin=float(max(1e-3, float(jnp.min(self.k)))),
+            kmax=float(min(0.5, float(jnp.max(self.k)))),
+            Nk_kernel=int(min(len(self.k), 240)),
+            nquadSteps=300,
+            NQ=10,
+            NR=10,
+            beyond_eds=bool(self.options.get("beyond_eds", False)),
+            model=model,
+            mg_variant=str(self.options.get("mg_variant", "mu_OmDE")),
+            rescale_PS=rescale_PS,
+            xnow=-3.912023,
+            ode_method="RKQS",
+            f0_kmax=1e-3,
+            **mg_params,
+        )
+
+        table, table_now, kcs = Kfuncs_to_tables(
+            k=self.template.k,
+            pk=self.template.pk_dd,
+            pk_now=self.template.pknow_dd,
+            **fkpt_params,
+            return_kernel_constants=True,
+        )
+
+        extra = 0
+
+        kt = np.asarray(table[0])
+        fk_norm = np.asarray(table[2])
+        f0_mg = float(table[-1])
+        fk_mg = fk_norm * f0_mg
+
+        calA, calAp, CFD3, CFD3p = kcs
+
+        self.pt = Namespace(
+            jac=jac, kap=kap, muap=muap,
+            table=table[1:28 + extra],
+            table_now=table_now[1:28 + extra],
+            scalars=table[28 + extra:],
+            scalars_now=table_now[28 + extra:],
+            A_full=False,
+            remove_DeltaP=False,
+            kt=kt,
+            fk_norm=fk_norm,
+            fk=fk_mg,
+            f0=f0_mg,
+            qpar=self.template.qpar, qper=self.template.qper,
+            calA=calA, calAp=calAp, CFD3=CFD3, CFD3p=CFD3p,
+        )
+
+        self.kt = table[0]
+        self.qpar = self.template.qpar
+        self.qper = self.template.qper
+        self.sigma8 = self.template.sigma8
+        self.fsigma8 = self.pt.f0 * self.sigma8
+        self.f0 = self.pt.f0
+        self.fk = self.pt.fk
+        self.fk_norm = self.pt.fk_norm
+
+    def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
+        import folps as folpsv2
+        import jax.numpy as jnp
+
+        table = (self.kt, *self.pt.table, *self.pt.scalars)
+        table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
+        params["PshotP"] = 1.0 / nd
+        params["X_FoG_p"] = 0.0
+
+        required_bias_params = [
+            "b1", "b2", "bs2", "b3nl",
+            "alpha0", "alpha2", "alpha4",
+            "ctilde", "alpha0shot", "alpha2shot", "PshotP", "X_FoG_p",
+        ]
+        pars = [params[p] for p in required_bias_params]
+
+        ncols = len(table)
+        if getattr(self, "_get_poles", None) is None:
+
+            @jit(static_argnums=(4))
+            def _get_poles(jac, kap, muap, pars, bias_scheme, *table_all):
+                folpsv2.MatrixCalculator(A_full=False, use_TNS_model=False)
+                calc = folpsv2.RSDMultipolesPowerSpectrumCalculator(model="FOLPSD")
+                pars2 = calc.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
+                pkmu = calc.get_rsd_pkmu(
+                    kap, muap, pars2,
+                    table_all[:ncols], table_all[ncols:],
+                    IR_resummation=True, damping="lor",
+                )
+                return self.to_poles(jac * pkmu)
+
+            self._get_poles = _get_poles
+
+        poles = self._get_poles(
+            self.pt.jac, self.pt.kap, self.pt.muap,
+            jnp.array(pars), "folps", *table, *table_now
+        )
+        return poles
+
+    def bispectrum_calculator(self, params, nd=1e-4, **kwargs):
+        import folps as folpsv2
+        params["X_FoG_b"] = 0.0
+
+        required_bias_params = [
+            'b1', 'b2', 'bs2',
+            'c1', 'c2', 'Pshot', 'Bshot', 'X_FoG_b'
+        ]
+        pars = [params[p] for p in required_bias_params]
+        table = (self.kt, *self.pt.table, *self.pt.scalars)
+        table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
+        calA, calAp, CFD3, CFD3p = self.pt.calA, self.pt.calAp, self.pt.CFD3, self.pt.CFD3p
+        calA_arr = jnp.ones_like(table[0]) * calA
+        calAp_arr = jnp.ones_like(table[0]) * calAp
+        k_pkl_pklnw_fk = jnp.array([table[0], table[1], table_now[1], table[2] * self.pt.f0, calA_arr, calAp_arr])
+        ells = kwargs['ells']
+
+        if ells == (0, 2):
+            ells = ((0, 0, 0), (2, 0, 2))
+        multipoles = [f"B{l1}{l2}{l3}" for (l1, l2, l3) in ells]
+        k1k2T = np.asarray(kwargs['k1k2T'])
+        full = not np.allclose(k1k2T[..., 1], k1k2T[..., 0])
+        if full:
+            k1k2_use = np.unique(k1k2T[..., 0])
+        else:
+            k1k2_use = k1k2T
+        poles = get_bs_multipoles_jit(
+            pars, k1k2_use, k_pkl_pklnw_fk, table, table_now, tuple(kwargs['precision']),
+            getattr(self.pt, "A_full", True), getattr(self.pt, "remove_DeltaP", False),
+            tuple(multipoles), kwargs['interpolation_method'], kwargs['bias_scheme'], kwargs['renormalized'],
+            self.pt.f0, kwargs['qpar'], kwargs['qper'], self.z
+        )
+        return jnp.asarray(poles)
+
+    def __getstate__(self, varied=True, fixed=True):
+        state = {}
+        for name in (['k', 'z', 'ells', 'wmu', 'kt'] if fixed else []) + (['sigma8', 'fsigma8', 'qpar', 'qper'] if varied else []):
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        if varied:
+            for name in self._pt_attrs:
+                if hasattr(self.pt, name):
+                    state[name] = getattr(self.pt, name)
+        return state
+
+    def __setstate__(self, state):
+        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8', 'qpar', 'qper']:
+            if name in state:
+                setattr(self, name, state.pop(name))
+
+        if not hasattr(self, 'pt'):
+            self.pt = Namespace()
+        self.pt.update(**state)
+
+        for name in ['kt', 'fk_norm', 'fk', 'f0', 'qpar', 'qper']:
+            if hasattr(self.pt, name):
+                setattr(self, name, getattr(self.pt, name))
+
+        if getattr(self, 'sigma8', None) is not None and getattr(self, 'f0', None) is not None:
+            if not hasattr(self, 'fsigma8'):
+                self.fsigma8 = self.f0 * self.sigma8
+
+
+class fkptjaxTracerPowerSpectrumMultipoles(fkptTracerPowerSpectrumMultipoles):
+    _params = fkptTracerPowerSpectrumMultipoles._params
+
+
+# ============================================================================
+# fkptjax tracer bispectrum multipoles
+# ============================================================================
+
+class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseCalculator):
+    r"""
+    FOLPS bispectrum multipoles.
+
+    Runtime tracer settings can be passed as either:
+      - explicit options: fsat=..., sigv=..., sigma8_ref=..., b1_fid=...
+      - tracer_config=dict(...)
+      - tracer_type='LRG' / 'ELG' / 'QSO' / 'BGS' to derive sigv if sigv is not passed
+    """
+
+    config_fn = 'full_shape.yaml'
+    _klim = (1e-3, 1., 500)
+    _initialize_with_namespace = True
+
+    _default_options = dict(
+        freedom=None,
+        prior_basis='physical',
+        basis='sugiyama',
+        precision=[10, 8, 8],
+
+        tracer=None,
+        tracer_config=None,   # NEW
+        tracer_type=None,     # NEW
+        fsat=None,
+
+        shotnoise=1e4,
+        model='HDKI',
+        mg_variant='mu_OmDE',
+        beyond_eds=True,
+        rescale_PS=False,
+
+        sigma8_ref=None,
+        b1_fid=None,
+
+        b3_coev=True,
+        renormalized=True,
+        interpolation_method='linear',
+        bias_scheme='folps'
+    )
+
+    def initialize(self, pt=None, template=None, k=None, ells=((0, 0, 0), (2, 0, 2)), **kwargs):
+        self.options = self._default_options.copy()
+        shotnoise = kwargs.get('shotnoise', 1e4)
+        for name, value in self._default_options.items():
+            self.options[name] = kwargs.pop(name, value)
+        self.nd = 1. / float(shotnoise)
+        if pt is None:
+            pt = globals()[getattr(self, 'pt_cls', self.__class__.__name__.replace('TracerBispectrum', 'PowerSpectrum'))]()
+        self.pt = pt
+        if template is not None:
+            self.pt.init.update(template=template)
+        for name, value in self.pt._default_options.items():
+            if name in kwargs:
+                self.pt.init.update({name: kwargs.pop(name)})
+            elif name in self.options:
+                self.pt.init.update({name: self.options[name]})
+        for name in ['method', 'mu']:
+            if name in kwargs:
+                self.pt.init.update({name: kwargs.pop(name)})
+        self.required_bias_params, self.optional_bias_params = {}, {}
+        self.pt.init.update(kwargs)
+        if hasattr(self.pt, 'z'):
+            self.z = self.pt.z
+
+        if k is None:
+            kpt = np.asarray(self.pt.k)
+            if kpt.ndim != 1:
+                raise ValueError(f"Expected inner PT k to be 1D, got shape {kpt.shape}")
+            k = np.column_stack([kpt, kpt])
+        else:
+            k = np.asarray(k)
+
+        self.k = k
+        self.k1k2T = k
+
+        if utils.is_sequence(ells[0]):
+            self.ells = tuple(ells)
+        else:
+            self.ells = (ells,)
+        self.set_params()
+
+    # -------------------------
+    # parameter priors
+    # -------------------------
+    @staticmethod
+    def _params(params, freedom=None, prior_basis='physical'):
+        pb = fkptjaxTracerBispectrumMultipoles._rename_prior_basis(prior_basis)
+
+        fix = []
+        if freedom in ['min', 'max']:
+            for param in params.select(basename=['b1']):
+                param.update(prior=dict(limits=[0., 10.]))
+            for param in params.select(basename=['b2']):
+                param.update(prior=dict(limits=[-50., 50.]))
+
+            for param in params.select(basename=['bs2', 'c1', 'c2', 'Pshot', 'Bshot', 'X_FoG_b']):
+                param.update(prior=None)
+
+        if freedom == 'max':
+            for param in params.select(basename=['b1', 'b2', 'bs2']):
+                param.update(fixed=False)
+
+        if freedom == 'min':
+            fix += ['bs2']
+
+        for param in params.select(basename=fix):
+            param.update(value=0., fixed=True)
+
+        if pb == 'standard_folps':
+            Ppoisson = 1 / 0.0002118763
+
+            for param in params.select(basename='c1'):
+                if not param.fixed:
+                    param.update(prior=dict(dist='norm', loc=66.66, scale=66.6 * 4),
+                                 ref=dict(dist='norm', loc=0.0, scale=20.0))
+            for param in params.select(basename='c2'):
+                if not param.fixed:
+                    param.update(prior=dict(dist='norm', loc=0, scale=1 * 4),
+                                 ref=dict(dist='norm', loc=0.0, scale=1))
+
+            for param in params.select(basename='Pshot'):
+                if not param.fixed:
+                    param.update(prior=dict(dist='norm', loc=0, scale=Ppoisson * 4),
+                                 ref=dict(dist='norm', loc=0.0, scale=Ppoisson))
+
+            for param in params.select(basename='Bshot'):
+                if not param.fixed:
+                    param.update(prior=dict(dist='norm', loc=0, scale=Ppoisson * 4),
+                                 ref=dict(dist='norm', loc=0.0, scale=Ppoisson))
+
+            for param in params.select(basename='X_FoG_b'):
+                if not param.fixed:
+                    param.update(prior=dict(dist='norm', loc=0, scale=15),
+                                 ref=dict(dist='norm', loc=0.0, scale=5))
+
+            return params
+
+        if fkptjaxTracerBispectrumMultipoles._is_physical_mode(pb):
+            for param in list(params):
+                param.update(basename=param.basename + 'p')
+
+            for param in params.select(basename='b1p'):
+                param.update(prior=dict(dist='uniform', limits=[0.1, 8.0]),
+                             ref=dict(dist='norm', loc=1., scale=0.1))
+
+            for param in params.select(basename='b2p'):
+                param.update(prior=dict(dist='norm', loc=0.0, scale=20.0),
+                             ref=dict(dist='norm', loc=0.0, scale=1.0))
+
+            if pb == 'APscaling':
+                for param in params.select(basename=['bs2p']):
+                    param.update(value=0.0, fixed=True, prior=None)
+
+                for par in params.select(basename=['bK2p', 'btdp']):
+                    if freedom == 'min':
+                        par.update(value=0.0, fixed=True, prior=None)
+                    else:
+                        if par.basename == 'bK2p':
+                            par.update(fixed=False,
+                                       prior=dict(dist='norm', loc=0.0, scale=20.0),
+                                       ref=dict(dist='norm', loc=0.0, scale=1.0))
+                        elif par.basename == 'btdp':
+                            par.update(
+                                fixed=False,
+                                prior=dict(dist='norm', loc=0.0, scale=2.0),
+                                ref=dict(dist='norm', loc=0.0, scale=1.0),
+                            )
+
+                for param in params.select(basename='c1p'):
+                    if not param.fixed:
+                        param.update(prior=dict(dist='norm', loc=0.0, scale=20.0),
+                                     ref=dict(dist='norm', loc=0.0, scale=1.0))
+                for param in params.select(basename='c2p'):
+                    param.update(value=0.0, fixed=True, prior=None)
+
+                for param in params.select(basename='Bshotp'):
+                    if not param.fixed:
+                        param.update(prior=dict(dist='norm', loc=0.0, scale=1.0),
+                                     ref=dict(dist='norm', loc=0.0, scale=1.0))
+
+                return params
+
+            for param in params.select(basename=['bs2p']):
+                param.update(prior=dict(dist='uniform', limits=[-50.0, 50.0]),
+                             ref=dict(dist='norm', loc=0.0, scale=1.0))
+
+            for param in params.select(basename=['c1p', 'c2p']):
+                if not param.fixed:
+                    param.update(prior=dict(dist='norm', loc=0.0, scale=5),
+                                 ref=dict(dist='norm', loc=0.0, scale=1.0))
+
+            for param in params.select(basename=['Pshotp', 'Bshotp']):
+                if not param.fixed:
+                    if freedom == 'max':
+                        param.update(prior=dict(dist='norm', loc=0.0, scale=1.0),
+                                     ref=dict(dist='norm', loc=0.0, scale=0.5))
+                    else:
+                        param.update(prior=dict(dist='norm', loc=1.0, scale=1.0),
+                                     ref=dict(dist='norm', loc=0.0, scale=0.5))
+
+        return params
+
+    # -------------------------
+    # required params
+    # -------------------------
+    def set_params(self):
+        self.required_bias_params = [
+            'b1', 'b2', 'bs2',
+            'c1', 'c2', 'Pshot', 'Bshot', 'X_FoG_b'
+        ]
+        default_values = {'b1': 1.}
+        self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
+
+        pb = self._rename_prior_basis(self.options['prior_basis'])
+        self._prior_basis_norm = pb
+        self.is_physical_prior = self._is_physical_mode(pb)
+
+        if pb == 'APscaling':
+            self.required_bias_params['bK2'] = 0.0
+            self.required_bias_params['btd'] = 0.0
+            self.sigma8_ref = float(self._require_option(self.options, "sigma8_ref", context="prior_basis='APscaling'"))
+        else:
+            self.sigma8_ref = None
+
+        if self.is_physical_prior:
+            for name in list(self.required_bias_params):
+                self.required_bias_params[name + 'p'] = self.required_bias_params.pop(name)
+
+            fsat = self._require_option(self.options, "fsat", context=f"prior_basis='{pb}'")
+            self.options["fsat"] = float(fsat)
+
+        self.nd = 1e-4
+        self.fsat = 1.0
+        self.snd = self.options['shotnoise'] * self.nd
+        if self.is_physical_prior:
+            self.fsat = self.options["fsat"]
+
+        if pb == 'APscaling':
+            self.b1_fid = float(self._require_option(self.options, "b1_fid", context="prior_basis='APscaling'"))
+        else:
+            self.b1_fid = None
+
+    # -------------------------
+    # main mapping
+    # -------------------------
+    def calculate(self, **params):
+        super(fkptjaxTracerBispectrumMultipoles, self).calculate()
+        params = {**self.required_bias_params, **params}
+
+        pb = self._prior_basis_norm
+
+        if pb == 'standard_folps':
+            qpar = self.pt.qpar
+            qper = self.pt.qper
+            self.power = self.pt.bispectrum_calculator(
+                params, nd=self.nd,
+                model=self.options['model'], mg_variant=self.options['mg_variant'],
+                prior_basis='standard',
+                beyond_eds=self.options['beyond_eds'],
+                k1k2T=self.k1k2T, ells=self.ells,
+                precision=self.options['precision'], basis=self.options['basis'],
+                bias_scheme=self.options['bias_scheme'],
+                renormalized=self.options['renormalized'],
+                interpolation_method=self.options['interpolation_method'],
+                qpar=qpar, qper=qper
+            )
+            return
+
+        sigma8 = self.pt.sigma8
+
+        if pb == 'APscaling':
+            qpar = self.pt.qpar
+            qper = self.pt.qper
+            A_AP = 1 / (qper**2 * qpar)
+            self.A_AP = A_AP
+            sqrtA_AP = A_AP**0.5
+            sigma8_ref = getattr(self, "sigma8_ref", None)
+            if sigma8_ref is None:
+                raise ValueError("APscaling requires sigma8_ref")
+            S = sigma8 / float(sigma8_ref)
+            self.S = S
+            b1E = params['b1p'] / (S * sqrtA_AP)
+            b2E = params['b2p'] / (S**2 * sqrtA_AP)
+        else:
+            b1E = params['b1p'] / sigma8
+            b2E = params['b2p'] / sigma8**2
+
+        b1L = params['b1p'] / sigma8 - 1.0
+        if pb != 'APscaling':
+            bsL = params['bs2p'] / sigma8**2
+            if self.options['b3_coev']:
+                bs2E = bsL - 4.0/7.0 * b1L
+            else:
+                bs2E = bsL
+
+        if pb == 'physical_folps':
+            c1 = params['c1p']
+            c2 = params['c2p']
+
+        elif pb == 'physical_velocileptors':
+            c1 = params['c1p']
+            c2 = params['c2p']
+
+        elif pb == 'APscaling':
+            sigma8_ref = getattr(self, "sigma8_ref", None)
+            if sigma8_ref is None:
+                raise ValueError("APscaling requires sigma8_ref")
+            S = sigma8 / float(sigma8_ref)
+            self.S = S
+            c1t = params['c1p'] / (A_AP * (S**2))
+            c2t = params['c2p'] / (A_AP * (S**2))
+
+            kNL = 0.3
+            c1 = c1t / (kNL**2)
+            c2 = c2t / (kNL**2)
+
+            if 'bK2p' not in params:
+                raise ValueError("APscaling requires sampled parameter 'bK2p' for bispectrum "
+                                 "(or update the code to match your chosen names).")
+
+            freedom = self.options.get('freedom', None)
+
+            if freedom == 'min':
+                bK2 = -(2.0 / 7.0) * (b1E - 1.0)
+            else:
+                b1_fid = getattr(self, 'b1_fid', None)
+                if b1_fid is None:
+                    raise ValueError("APscaling table priors need b1_fid; could not infer from tracer_config / options.")
+                muX = -(2.0 / 7.0) * (b1_fid - 1.0)
+                X = muX + params['bK2p']
+                bK2 = X / (S**2.0 * sqrtA_AP)
+
+            bs2E = 2.0 * bK2
+
+        else:
+            raise ValueError(f"Internal error: unsupported normalized prior basis '{pb}'.")
+
+        Ashot = (self.A_AP if pb == 'APscaling' else 1.0)
+
+        Pshot = (params['Pshotp'] / Ashot) * self.snd * (1.0)
+        Bshot = (params['Bshotp'] / Ashot) * self.snd * (1.0)
+
+        params['b1'] = b1E
+        params['b2'] = b2E
+        params['bs2'] = bs2E
+
+        params['c1'] = c1
+        params['c2'] = c2
+        params['Pshot'] = Pshot
+        params['Bshot'] = Bshot
+        qpar = self.pt.qpar
+        qper = self.pt.qper
+        self.power = self.pt.bispectrum_calculator(
+            params, nd=self.nd,
+            model=self.options['model'], mg_variant=self.options['mg_variant'],
+            prior_basis='standard',
+            beyond_eds=self.options['beyond_eds'],
+            k1k2T=self.k1k2T, ells=self.ells,
+            precision=self.options['precision'], basis=self.options['basis'],
+            bias_scheme=self.options['bias_scheme'],
+            renormalized=self.options['renormalized'],
+            interpolation_method=self.options['interpolation_method'],
+            qpar=qpar, qper=qper
+        )
+
+    def get(self):
+        return self.power
+
+    def __getstate__(self):
+        state = {}
+        for name in ['k', 'z', 'ells', 'power']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        return state
+

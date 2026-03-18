@@ -15,8 +15,8 @@ from pathlib import Path
 import numpy as np
 from scipy.special import logsumexp
 
-from desilike import ParameterArray
-from desilike.samples import Chain, diagnostics
+from desilike.samples import diagnostics
+from desilike.statistics import Samples
 from desilike.utils import BaseClass
 from .pool import MPIPool
 

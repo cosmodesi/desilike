@@ -39,7 +39,7 @@ class ZeusSampler(MarkovChainSampler):
             Random number generator. Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-        kwargs: dict, optional
+        **kwargs: dict, optional
             Extra keyword arguments passed to ``zeus`` during initialization.
 
         """

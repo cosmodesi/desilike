@@ -29,7 +29,7 @@ class NautilusSampler(PopulationSampler):
             Random number generator. Default is ``None``.
         directory : str, Path, optional
             Save samples to this location. Default is ``None``.
-        kwargs: dict, optional
+        **kwargs: dict, optional
             Extra keyword arguments passed to ``nautilus`` during
             initialization.
 
@@ -55,7 +55,7 @@ class NautilusSampler(PopulationSampler):
 
         Parameters
         ----------
-        kwargs: dict, optional
+        **kwargs: dict, optional
             Extra keyword arguments passed to ``nautilus``'s ``run`` method.
 
         Returns

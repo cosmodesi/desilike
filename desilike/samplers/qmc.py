@@ -83,6 +83,8 @@ class QMCSampler(StaticSampler):
         engine : str, optional
             Engine to use. Choices are 'sobol', 'halton', 'lhs', 'kronecker'.
             Default is 'kronecker'.
+        **kwargs: dict, optional
+            Extra keyword arguments passed to the engine.
 
         Returns
         -------

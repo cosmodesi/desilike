@@ -252,7 +252,7 @@ class HMCSampler(BlackJAXSampler):
             Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-        kwargs: dict, optional
+        **kwargs: dict, optional
             Extra keyword arguments passed to ``blackjax.hmc`` during
             initialization.
 
@@ -297,7 +297,7 @@ class NoUTurnSampler(BlackJAXSampler):
             Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-        kwargs: dict, optional
+        **kwargs: dict, optional
             Extra keyword arguments passed to ``blackjax.nuts`` during
             initialization.
 
@@ -344,7 +344,7 @@ class MCLMCSampler(BlackJAXSampler):
             Random number generator. Default is ``None``.
         directory : str, Path, optional
             Save samples to this location. Default is ``None``.
-        kwargs: dict, optional
+        **kwargs: dict, optional
             Extra keyword arguments passed to ``blackjax.mclmc`` during
             initialization.
 

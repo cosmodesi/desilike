@@ -27,11 +27,9 @@ class BaseDESY3Likelihood(BaseGaussianLikelihood):
         if theory is None: theory = DESWeakLensing3x2pt()
         self.theory = theory
         if cosmo is not None: self.theory.init.update(cosmo=cosmo)
-        self.theory.calculate()
         self.use_sr=use_sr
         self.load_data(data_dir, **kwargs)
-        self.initialize_postload()
-        super().initialize(data=self.data_vector, precision=self.covinv, **kwargs)
+        self.data_vector = self.make_vector(self.data_arrays)
 
     def load_data(self, data_dir):
         ini = IniFile(os.path.join(data_dir, 'DES_3YR_final.dataset'))
@@ -44,7 +42,7 @@ class BaseDESY3Likelihood(BaseGaussianLikelihood):
         self.theta_edges = theta[:,0]
         self.theta_edges = np.append(self.theta_edges, theta[-1,1])
         self.theta_bins = theta[:,2]
-        self.iintrinsic_alignment_model = ini.string('intrinsic_alignment_model')
+        self.intrinsic_alignment_model = ini.string('intrinsic_alignment_model')
         self.data_types = ini.string('data_types').split()
         self.used_types = ini.list('used_data_types', self.data_types)
         with open(ini.relativeFileName('data_selection'), encoding="utf-8") as f:
@@ -138,7 +136,6 @@ class BaseDESY3Likelihood(BaseGaussianLikelihood):
     def initialize_postload(self):
         self.covmat = self.fullcov[np.ix_(self.used_indices, self.used_indices)]
         self.covinv_orig = np.linalg.inv(self.covmat)
-        self.data_vector = self.make_vector(self.data_arrays)
         self.errors = copy.deepcopy(self.data_arrays)
         cov_ix = 0
         for i, (type_ix, f1, f2, ix) in enumerate(self.indices):
@@ -264,12 +261,13 @@ class BaseDESY3Likelihood(BaseGaussianLikelihood):
         return data
     
     def chi_squared(self, theory):
-        theory_vec = self.make_vector([theory.xip, theory.xim, theory.gammat, theory.wtheta])
-        delta = self.flatdata - theory_vec
-        chi2 = self.precision.dot(delta).dot(delta)
+        theory_vector = self.make_vector([theory.xip, theory.xim, theory.gammat, theory.wtheta])
+        delta = self.data_vector - theory_vector
+        chi2 = self.covinv.dot(delta).dot(delta)
         return chi2
 
-    def calculate(self, **params):
+    def calculate(self):
+        self.initialize_postload()
         if self.use_sr:
             s_ref = self.sr_nbin_source
             corrs_th_t = self.theory.gammat

@@ -3513,7 +3513,7 @@ class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
             pars += [-2. / 105 * (105 * c0 - 35 * c2 * f + 9 * c4 * f**2), -2. / 7 * f * (7 * c2 - 6 * f * c4), -2 * f**2 * c4, 0]
             sigv = self.options['sigv']
             pars += [params['sn{:d}p'.format(i)] * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
-            pars += [params['X_FoG_pp']]
+            pars += [params['X_FoG_bp']]
             # use coevolution b3E = b3E + 32.0/315.0 * b1L
         # pars = [params[name] for name in self.required_bias_params]
         self.power = self.pt.combine_bias_terms_bispectrum_poles(pars, self.k, precision=self.options['precision'], damping=self.options['damping'], basis=self.options['basis'],

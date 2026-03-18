@@ -210,9 +210,9 @@ class BaseLikelihood(BaseCalculator):
         if 'name' in kwargs:
             self.name = kwargs['name']
         for name in self._attrs:
-            if name not in self.params.basenames():
-                self.params.set(Parameter(basename=name, namespace=self.name, latex=utils.outputs_to_latex(name), derived=True))
-            param = self.params.select(basename=name)
+            if name not in self.init.params.basenames():
+                self.init.params.set(Parameter(basename=name, namespace=self.name, latex=utils.outputs_to_latex(name), derived=True))
+            param = self.init.params.select(basename=name)
             if not len(param):
                 raise ValueError('{} derived parameter not found'.format(name))
             elif len(param) > 1:

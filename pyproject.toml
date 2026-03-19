@@ -31,7 +31,8 @@ tests = [
     "pyclass @ git+https://github.com/adematti/pyclass",
     "jax",
     "interpax",
-    "blackjax"]
+    "blackjax",
+    "arviz"]
 plotting = [
     "matplotlib",
     "tabulate",

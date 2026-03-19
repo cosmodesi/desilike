@@ -117,7 +117,7 @@ class Samples(BaseClass):
 
     def __len__(self):
         """Return the number of samples."""
-        return self.n_samples
+        return 0 if self.n_samples is None else self.n_samples
 
     def append(self, samples):
         """Append a sample, i.e., add additional rows.
@@ -321,7 +321,7 @@ class Samples(BaseClass):
 
         Parameters
         ----------
-        keys : list of desilike.Samples
+        samples : list of desilike.Samples
             Samples to concatenate.
 
         Returns
@@ -330,5 +330,4 @@ class Samples(BaseClass):
             Concatenated samples.
 
         """
-
         combined = samples[0]

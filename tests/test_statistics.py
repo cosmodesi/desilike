@@ -1,3 +1,4 @@
+import arviz
 import emcee
 import numpy as np
 import pytest
@@ -30,14 +31,13 @@ def test_samples_basic():
         samples.append(statistics.Samples(a=[1, 2]))  # not all keys present
 
 
-def test_autocorrelation_time():
-    # Test that autocorrelation time compuations agree with those of
-    # ``emcee``.
+def test_diagnostics():
+    # Test that the diagnostics agree with external libraries.
 
     np.random.seed(42)
 
     n_chains = 4
-    n_dim = 25
+    n_dim = 5
     n_steps = 10000
     rho = np.random.uniform(0.9, 1.0, size=n_dim)
 
@@ -51,3 +51,10 @@ def test_autocorrelation_time():
     assert np.allclose(
         emcee.autocorr.integrated_time(np.transpose(chains, [1, 0, 2]), tol=0),
         statistics.diagnostics.autocorrelation_time(chains), rtol=1e-2)
+
+    gr_arviz = arviz.rhat({str(i): chains[:, :, i] for i in range(n_dim)},
+                          method='identity')
+    gr_arviz = [gr_arviz[key].values for key in gr_arviz]
+    assert np.allclose(
+        gr_arviz, statistics.diagnostics.gelman_rubin(chains, n_splits=2),
+        rtol=1e-6)

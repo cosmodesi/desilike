@@ -19,7 +19,7 @@ class ImportanceSampler(StaticSampler):
 
         Parameters
         ----------
-        chain : desilike.samples.Chain, optional
+        chain : desilike.Samples, optional
             Input chain that defines the samples.
 
         Returns
@@ -29,7 +29,7 @@ class ImportanceSampler(StaticSampler):
 
         """
         return np.column_stack([
-            samples[key].value for key in self.likelihood.varied_params])
+            samples[key] for key in self.likelihood.varied_params.names()])
 
     def run(self, samples, resample=True):
         """Reweight a sample using importance sampling.
@@ -39,24 +39,23 @@ class ImportanceSampler(StaticSampler):
         samples : desilike.samples.Chain
             Input samples with a corresponding posterior.
         resample : bool, optional
-            If True, the new weights for the chain will be the ratio of the new
-            and old posterior. Effectively, the new chain will sample the new
-            posterior. If False, the new weights are the product of the old
-            posterior and the new likelihood. Default is True.
+            If True, the weights for the chain will be multiplied by the ratio
+            of the new and old posterior. Effectively, the new chain will
+            sample the new posterior (if it previously sampled the old). If
+            False, the weights will be multiplied by the the new likelihood.
+            This can be useful when combining observations. Default is True.
 
         Returns
         -------
-        desilike.samples.Chain
-            Sampler results.
+        desilike.Samples
 
         """
         results = super().run(samples=samples)
 
         if resample:
-            log_w = results.logposterior - samples.logposterior
+            log_weight = results['log_posterior'] - samples['log_posterior']
         else:
-            log_w = (results.logposterior - results[results._logprior] +
-                     samples.logposterior)
+            log_weight = results['log_posterior'] - results['log_prior']
 
-        results.aweight = np.exp(log_w - logsumexp(log_w))
+        results['log_weight'] = np.log(samples.weight) + log_weight
         return results

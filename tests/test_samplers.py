@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 from jax import numpy as jnp
 
+from desilike import Samples
 import desilike.samplers as samplers
-from desilike.samples import Chain
 from desilike.likelihoods import BaseGaussianLikelihood
 
 
@@ -30,18 +30,20 @@ KWARGS_INIT_FAST = dict(
     pocomc=dict(n_effective=10, n_active=5, flow='nsf3'))
 KWARGS_RUN = dict(
     dynesty=dict(n_effective=0),
-    grid=dict(grid=np.linspace(0, 1, 101)),
-    importance=dict(samples=Chain(dict(
-        a=np.repeat(np.linspace(0, 1, 101), 101),
-        b=np.tile(np.linspace(0, 1, 101), 101)))),
+    grid=dict(grid=np.linspace(0, 1, 50)),
+    importance=dict(samples=Samples(
+        a=np.repeat(np.linspace(0, 1, 50), 50),
+        b=np.tile(np.linspace(0, 1, 50), 50),
+        log_posterior=np.zeros(50**2))),
     nautilus=dict(n_eff=100),
     pocomc=dict(n_total=100, n_evidence=100),
     qmc=dict(size=10000))
 KWARGS_RUN_FAST = dict(
     dynesty=dict(maxiter=10),
-    importance=dict(samples=Chain(dict(
+    importance=dict(samples=Samples(
         a=np.repeat(np.linspace(0, 1, 11), 11),
-        b=np.tile(np.linspace(0, 1, 11), 11)))),
+        b=np.tile(np.linspace(0, 1, 11), 11),
+        log_posterior=np.zeros(11**2))),
     emcee=dict(max_steps=10),
     grid=dict(grid=np.linspace(0, 1, 11)),
     hmc=dict(max_steps=10),
@@ -84,33 +86,40 @@ def test_accuracy(likelihood, key):
     results = sampler.run(**KWARGS_RUN.get(key, {}))
 
     # The mean should match.
-    assert np.allclose(results.mean(likelihood.varied_params),
-                       likelihood.flatdata, atol=0.05, rtol=0)
+    keys = likelihood.varied_params.names()
+    assert np.allclose(results.mean(keys), likelihood.flatdata, atol=0.05,
+                       rtol=0)
     # The covariance should match.
     cov = np.linalg.inv(likelihood.precision + np.array([[100, 0], [0, 0]]))
     cov_err = np.sqrt(
         (cov**2 + np.outer(np.diag(cov), np.diag(cov))) / 100)
-    assert np.allclose(results.covariance(likelihood.varied_params), cov,
-                       atol=3 * cov_err)
+    assert np.allclose(results.covariance(keys), cov, atol=3 * cov_err)
 
 
 @pytest.mark.mpi
 def test_importance_combine(likelihood):
     # Test that importance sampling can combine two likelihood without
-    # double counting the prior.
+    # double counting the prior. We use Gaussian quadrature integration to
+    # speed up results.
+
+    deg = 30
+    x, weight = np.polynomial.legendre.leggauss(deg)
+    x = (x + 1) / 2  # shift from [-1, +1] to [0, 1]
+    weight /= 2
+    log_weight = np.log(np.outer(weight, weight).flatten())
 
     sampler = samplers.GridSampler(likelihood)
-    results = sampler.run(grid=np.linspace(0, 1, 101))
+    results = sampler.run(grid=x)
+    results['log_weight'] += log_weight
 
     sampler = samplers.ImportanceSampler(likelihood)
     results = sampler.run(samples=results, resample=False)
 
     cov = np.linalg.inv(2 * likelihood.precision +
                         np.array([[100, 0], [0, 0]]))
-    assert np.allclose(results.mean(likelihood.varied_params),
-                       likelihood.flatdata, atol=1e-3, rtol=0)
-    assert np.allclose(results.covariance(likelihood.varied_params), cov,
-                       atol=1e-3)
+    keys = likelihood.varied_params.names()
+    assert np.allclose(results.mean(keys), likelihood.flatdata, atol=1e-6)
+    assert np.allclose(results.covariance(keys), cov, atol=1e-3)
 
 
 @pytest.mark.mpi_skip
@@ -145,8 +154,9 @@ def test_write(likelihood, key, tmp_path):
     results_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
 
     assert len(results_1) == len(results_2)
-    assert np.allclose(results_1.logposterior.value,
-                       results_2.logposterior.value, atol=1e-6)
+    statistic = ('log_posterior' if 'log_posterior' in results_1.keys else
+                 'log_likelihood')
+    assert np.allclose(results_1[statistic], results_2[statistic], atol=1e-6)
 
 
 @pytest.mark.mpi_skip
@@ -166,8 +176,10 @@ def test_rng(likelihood, key):
     results_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
 
     assert len(results_1) == len(results_2)
-    assert np.allclose(results_1.logposterior.value,
-                       results_2.logposterior.value, atol=1e-6)
+
+    statistic = ('log_posterior' if 'log_posterior' in results_1.keys else
+                 'log_likelihood')
+    assert np.allclose(results_1[statistic], results_2[statistic], atol=1e-6)
 
 
 @pytest.mark.mpi_skip

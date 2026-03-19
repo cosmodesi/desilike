@@ -95,4 +95,4 @@ class DynestySampler(PopulationSampler):
         results = self.sampler.results
 
         return results.samples, results['blob'], dict(
-            aweight=results.importance_weights())
+            log_weight=results['logwt'], log_likelihood=results['logl'])

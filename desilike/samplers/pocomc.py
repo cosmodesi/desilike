@@ -131,6 +131,7 @@ class PocoMCSampler(PopulationSampler):
         self.sampler.run(**kwargs)
         samples, weights, logl, logp, blobs = self.sampler.posterior(
             return_blobs=True)
-        extras = dict(aweight=weights, logposterior=logp)
+        extras = dict(log_weight=np.log(weights), log_posterior=logp,
+                      log_likelihood=logl)
 
-        return samples, blobs.reshape(len(samples), -1), extras
+        return samples, blobs, extras

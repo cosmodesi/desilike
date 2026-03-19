@@ -14,10 +14,8 @@ from abc import ABC, ABCMeta, abstractmethod
 from pathlib import Path
 
 import numpy as np
-from scipy.special import logsumexp
 
-from desilike.samples import diagnostics
-from desilike.statistics import Samples
+from desilike import Samples
 from desilike.utils import BaseClass
 from .pool import MPIPool
 
@@ -268,6 +266,11 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
         **kwargs
             Extra parameters such as weights.
 
+        Returns
+        -------
+        samples : desilike.Samples
+            Samples with all derived parameters, weights, etc.
+
         """
         params = self.varied_params
         samples = [ParameterArray(samples[:, i], param=param) for i, param in
@@ -277,14 +280,18 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
             int(np.prod(param.shape)) for param in params])[:-1], axis=1)
         derived = [derived[i].reshape((-1, ) + param.shape) for i, param in
                    enumerate(params)]
-        derived = [ParameterArray(derived[i], param=param) for i, param in
-                   enumerate(params)]
+        derived = dict(zip(params.names(), derived))
+        for old_key, new_key in zip(
+                ['logposterior', 'logprior', 'loglikelihood'],
+                ['log_posterior', 'log_prior', 'log_likelihood']):
+            if old_key in derived.keys():
+                derived[new_key] = derived.pop(old_key)
 
-        chain = Chain(samples + derived)
+        samples = Samples(**(samples | derived))
         for key, value in kwargs.items():
-            setattr(chain, key, value)
+            samples[key] = value
 
-        return chain
+        return samples
 
     def _write(self):
         """Write all results to disk."""
@@ -361,7 +368,7 @@ class StaticSampler(BaseSampler):
     def _read(self):
         """Read internal calculations from disk."""
         if self.mpicomm.rank == 0:
-            self.results = Chain.load(self.directory / 'results.npz')
+            self.results = Samples.load(self.directory / 'results.npz')
 
 
 class PopulationSampler(BaseSampler):

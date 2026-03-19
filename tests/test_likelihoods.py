@@ -5,7 +5,6 @@ from desilike.likelihoods.bbn import Schoneberg2024BBNLikelihood
 from desilike.likelihoods.hubble import Riess2020H0Likelihood
 
 
-@pytest.mark.mpi_skip
 def test_bbn():
     # Test that the BBN likelihood behaves correctly, i.e., gives results
     # consistent with Schoneberg (2024).

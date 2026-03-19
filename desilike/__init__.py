@@ -6,7 +6,7 @@ from .base import BaseCalculator, PipelineError, vmap
 from .parameter import Parameter, ParameterPrior, ParameterCollection, ParameterArray, ParameterCovariance, ParameterPrecision
 from .differentiation import Differentiation
 from .fisher import Fisher, LikelihoodFisher, FisherGaussianLikelihood
-from .simple_samples import Samples
+from .statistics import Samples
 
 
 from .install import Installer

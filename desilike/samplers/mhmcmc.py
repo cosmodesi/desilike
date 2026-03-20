@@ -417,8 +417,9 @@ class MetropolisHastingsSampler(MarkovChainSampler):
         self.extend(*self.sampler.make_n_steps(steps))
 
         if len(self.chains[0]) < self.adaptation_steps:
-            cov = np.mean([chain.covariance(self.likelihood.varied_params)
-                           for chain in self.chains], axis=0)
+            cov = np.mean(
+                [chain.covariance(self.likelihood.varied_params.names())
+                 for chain in self.chains], axis=0)
             try:
                 self.sampler.update(cov=cov)
             except np.linalg.LinAlgError:

@@ -78,7 +78,7 @@ def _prepare_input(chains, keys=None):
     return chains, return_type, keys
 
 
-def autocorrelation_time(chains, keys=None):
+def integrated_autocorrelation_time(chains, keys=None):
     """Estimate the integrated autocorrelation time for Markov chains.
 
     Autocorrelation times are computed in the same way as in ``emcee``. See

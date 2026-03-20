@@ -50,11 +50,11 @@ def test_diagnostics():
     # small number is off by less than 1%.
     assert np.allclose(
         emcee.autocorr.integrated_time(np.transpose(chains, [1, 0, 2]), tol=0),
-        statistics.diagnostics.autocorrelation_time(chains), rtol=1e-2)
+        statistics.diagnostics.integrated_autocorrelation_time(chains),
+        rtol=1e-2)
 
     gr_arviz = arviz.rhat({str(i): chains[:, :, i] for i in range(n_dim)},
                           method='identity')
     gr_arviz = [gr_arviz[key].values for key in gr_arviz]
     assert np.allclose(
-        gr_arviz, statistics.diagnostics.gelman_rubin(chains, n_splits=2),
-        rtol=1e-6)
+        gr_arviz, statistics.diagnostics.gelman_rubin(chains), rtol=1e-6)

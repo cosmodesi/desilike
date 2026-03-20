@@ -70,4 +70,6 @@ class NautilusSampler(PopulationSampler):
         self.sampler.run(**kwargs)
         samples, log_w, log_l, blobs = self.sampler.posterior(
             return_blobs=True)
-        return samples, blobs, dict(log_weight=log_w, log_likelihood=log_l)
+        print('nautlus', blobs.shape)
+        return samples, blobs.reshape(len(samples), -1), dict(
+            log_weight=log_w, log_likelihood=log_l)

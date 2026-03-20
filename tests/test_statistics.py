@@ -6,6 +6,7 @@ import pytest
 from desilike import statistics
 
 
+@pytest.mark.mpi_skip
 def test_samples_basic():
     # Test the basic functionality of Samples.
 
@@ -31,6 +32,7 @@ def test_samples_basic():
         samples.append(statistics.Samples(a=[1, 2]))  # not all keys present
 
 
+@pytest.mark.mpi_skip
 def test_diagnostics():
     # Test that the diagnostics agree with external libraries.
 

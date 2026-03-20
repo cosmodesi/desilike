@@ -279,15 +279,11 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
                    enumerate(params)]
         params = self.derived_params
         derived = np.split(derived, np.cumsum([
-            int(np.prod(param.shape)) for param in params])[:-1], axis=1)
-        derived = [derived[i].reshape((-1, ) + param.shape) for i, param in
-                   enumerate(params)]
-        derived = dict(zip(params.names(), derived))
-        for old_key, new_key in zip(
-                ['logposterior', 'logprior', 'loglikelihood'],
-                ['log_posterior', 'log_prior', 'log_likelihood']):
-            if old_key in derived.keys():
-                derived[new_key] = derived[old_key]
+            int(np.prod(shape)) for shape in self.derived_shapes])[:-1],
+            axis=1)
+        derived = [derived[i].reshape((-1, ) + shape) for i, shape in
+                   enumerate(self.derived_shapes)]
+        derived = dict(zip(self.derived_params, derived))
 
         samples = Samples(**(samples | derived))
         for key, value in kwargs.items():
@@ -622,7 +618,8 @@ class MarkovChainSampler(BaseSampler):
         except ValueError:
             geweke_value = float('inf')
 
-        tau = max(diagnostics.integrated_autocorrelation_time(chains).values())
+        tau = max(diagnostics.integrated_autocorrelation_time(
+            chains, keys=self.varied_params).values())
         ess_value = len(chains[0]) / tau
 
         passed_all = True
@@ -671,9 +668,6 @@ class MarkovChainSampler(BaseSampler):
         gelman_rubin: float or None
             Used to asses convergence. If given, the maximum value of the
             Gelman-Rubin statistic. Default is 1.1.
-        geweke: float or None
-            Used to asses convergence. If given, the maximum value of the
-            Geweke statistic. Default is ``None``.
         ess: float or None
             Used to asses convergence.  If given, the minimum effective sample
             size per chain. The effective sample size is the number of chain

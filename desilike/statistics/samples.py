@@ -201,9 +201,10 @@ class Samples(BaseClass):
                     raise ValueError(
                         "`h5py` is required to save samples to HDF5 files.")
                 with h5py.File(filepath, 'w') as fstream:
-                    fstream['latex_keys'] = latex_keys
-                    fstream['latex_values'] = latex_values
-                    fstream['profiled'] = profiled
+                    dtype = h5py.string_dtype(encoding='utf-8')
+                    fstream['latex_keys'] = latex_keys.astype(dtype)
+                    fstream['latex_values'] = latex_values.astype(dtype)
+                    fstream['profiled'] = profiled.astype(dtype)
                     for key, value in data.items():
                         fstream[key] = value
         else:
@@ -244,10 +245,10 @@ class Samples(BaseClass):
         else:
             raise ValueError(f"File ending '{suffix}' not supported.")
 
-        latex_keys = data.pop('latex_keys')
-        latex_values = data.pop('latex_values')
+        latex_keys = data.pop('latex_keys').astype('U')
+        latex_values = data.pop('latex_values').astype('U')
         latex = {key: value for key, value in zip(latex_keys, latex_values)}
-        profiled = list(data.pop('profiled'))
+        profiled = list(data.pop('profiled').astype('U'))
 
         return cls(latex=latex, profiled=profiled, **data)
 

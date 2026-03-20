@@ -1,5 +1,9 @@
+from pathlib import Path
+
 import arviz
 import emcee
+import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
@@ -33,6 +37,37 @@ def test_samples_basic():
 
 
 @pytest.mark.mpi_skip
+@pytest.mark.parametrize('suffix', ['.hdf5', '.npz', '.csv', '.npy'])
+def test_samples_save(suffix, tmp_path):
+    # Test that samples can be saved correctly.
+
+    filepath = tmp_path / ('samples' + suffix)
+
+    samples = statistics.Samples(
+        a=np.linspace(0, 1, 10), b=np.arange(20).reshape(10, 2),
+        latex=dict(a=r'$\lambda$'), profiled=['b'])
+
+    if suffix == '.npy':
+        with pytest.raises(ValueError):
+            samples.save(filepath)
+    else:
+        if suffix == '.csv':
+            with pytest.raises(ValueError):
+                samples.save(filepath)
+            samples.data.pop('b')
+            samples.save(filepath)
+        else:
+            samples.save(filepath)
+
+    if suffix in ['.hdf5', '.npz']:
+        samples_read = statistics.Samples.load(filepath)
+        assert samples.latex == samples_read.latex
+        assert samples.profiled == samples_read.profiled
+        for key in samples.keys:
+            assert np.all(samples[key] == samples_read[key])
+
+
+@pytest.mark.mpi_skip
 def test_diagnostics():
     # Test that the diagnostics agree with external libraries.
 
@@ -60,3 +95,25 @@ def test_diagnostics():
     gr_arviz = [gr_arviz[key].values for key in gr_arviz]
     assert np.allclose(
         gr_arviz, statistics.diagnostics.gelman_rubin(chains), rtol=1e-6)
+
+
+@pytest.mark.mpi_skip
+def test_plotting_trace(tmp_path):
+    # Test that the plotting works, i.e., produces a figure and doesn't crash.
+
+    chains = statistics.Samples(
+        a=np.random.random(100), b=np.random.random(100),
+        latex=dict(a=r'$\lambda$'))
+    fig = statistics.plotting.trace(chains)
+    assert isinstance(fig, matplotlib.figure.Figure)
+    assert len(fig.axes) == 2
+    statistics.plotting.trace([chains, chains])
+    statistics.plotting.trace(
+        chains, keys=['a'], colors='red', plot_options=dict(ls=':'))
+    with pytest.raises(KeyError):
+        statistics.plotting.trace(chains, keys=['c'])
+    with pytest.raises(ValueError):
+        statistics.plotting.trace(chains, fig=plt.subplots(nrows=1)[0])
+
+    statistics.plotting.trace(chains, filepath=tmp_path / 'trace.pdf')
+    assert (tmp_path / 'trace.pdf').is_file()

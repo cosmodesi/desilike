@@ -16,7 +16,7 @@ from desilike.utils import BaseClass
 class Samples(BaseClass):
     """Class for storing samples of parameters."""
 
-    def __init__(self, latex=None, profiled=None, **kwargs):
+    def __init__(self, latex=dict(), profiled=None, **kwargs):
         """Initialize a sample of parameters.
 
         Parameters
@@ -26,7 +26,7 @@ class Samples(BaseClass):
         profiled : array-like or None, optional
             List of parameters being profiled, i.e., the ones for which the
             maximum likelihood or posterior is evaluated while other parameters
-            are optimized. Default is ``None``.
+            are optimized. Default is ``dict()``.
         **kwargs : dict, optional
             Samples of parameters. Each sample must have the same length.
 
@@ -107,8 +107,8 @@ class Samples(BaseClass):
                 self.data[key] = np.concatenate(self.data[key])
             return self.data[key]
         elif isinstance(key, slice):
-            return Samples(latex=self.latex, profiled=self.profiled,
-                           **{k: v[key] for k, v in self.data.items()})
+            return self.__class__(latex=self.latex, profiled=self.profiled,
+                                  **{k: self[k][key] for k in self.keys})
         elif isinstance(key, int):
             return {k: v[key] for k, v in self.data.items()}
         else:
@@ -195,7 +195,7 @@ class Samples(BaseClass):
             if suffix == '.npz':
                 np.savez(
                     filepath, latex_keys=latex_keys, latex_values=latex_values,
-                    profiled=profiled, allow_pickle=False, **data)
+                    profiled=profiled, **data)
             elif suffix in ['.hdf5', '.h5']:
                 if not H5PY_INSTALLED:
                     raise ValueError(
@@ -232,6 +232,7 @@ class Samples(BaseClass):
 
         if suffix == '.npz':
             data = np.load(filepath)
+            data = {key: data[key] for key in data}
         elif suffix in ['.hdf5', '.h5']:
             if not H5PY_INSTALLED:
                 raise ValueError(
@@ -316,7 +317,7 @@ class Samples(BaseClass):
             latex=self.latex.copy(), profiled=self.profiled.copy(), **kwargs)
 
     @classmethod
-    def concatenate(samples):
+    def concatenate(cls, samples):
         """Concatenate samples.
 
         Parameters
@@ -330,4 +331,9 @@ class Samples(BaseClass):
             Concatenated samples.
 
         """
-        combined = samples[0]
+        if not samples:
+            return cls()
+        combined = samples[0].copy()
+        for sample in samples[1:]:
+            combined.append(sample)
+        return combined

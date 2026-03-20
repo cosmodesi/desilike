@@ -2,8 +2,8 @@
 Base classes for posterior samplers.
 
 This module defines common functions and classes that are inherited by
-specialized classes implementing specific samplers such as `emcee` or
-`dynesty`.
+specialized classes implementing specific samplers such as ``emcee`` or
+``dynesty``.
 """
 
 import functools
@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from desilike import Samples
+from desilike.statistics import diagnostics
 from desilike.utils import BaseClass
 from .pool import MPIPool
 
@@ -82,6 +83,7 @@ def _update_parameters(user_kwargs, sampler, **desilike_kwargs):
 
 class BaseSamplerMeta(type(BaseClass), ABCMeta):
     """Metaclass combining BaseClass metaclass and ABCMeta."""
+
     pass
 
 
@@ -285,7 +287,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
                 ['logposterior', 'logprior', 'loglikelihood'],
                 ['log_posterior', 'log_prior', 'log_likelihood']):
             if old_key in derived.keys():
-                derived[new_key] = derived.pop(old_key)
+                derived[new_key] = derived[old_key]
 
         samples = Samples(**(samples | derived))
         for key, value in kwargs.items():
@@ -584,26 +586,22 @@ class MarkovChainSampler(BaseSampler):
         gelman_rubin : float or None
             If given, the maximum value of the Gelman-Rubin statistic. Default
             is 1.1.
-        geweke : float or None
-            If given, the maximum value of the Geweke statistic. Default is
-            ``None``.
         ess : float or None
             If given, the minimum effective sample size per chain. The
             effective sample size is the number of chain elements divided
             by the autocorrelation time. Default is ``None``.
-        quiet : bool, optional
-            If True, do not log results. Default is False.
 
         Returns
         -------
-        bool
-            Whether the chains passed convergence checks.
+        passed : bool
+            Whether the chains passed all convergence checks.
 
         """
-        chains = [chain.remove_burnin(burn_in) for chain in self.chains]
+        if isinstance(burn_in, float):
+            burn_in = int(burn_in) * len(self.chains[0])
+        chains = [chain[burn_in:] for chain in self.chains]
 
-        if not quiet:
-            self.log_info('Diagnostics:')
+        self.log_info('Diagnostics:')
 
         if len(chains) == 1:
             nsplits = 4
@@ -624,25 +622,21 @@ class MarkovChainSampler(BaseSampler):
         except ValueError:
             geweke_value = float('inf')
 
-        iact = diagnostics.integrated_autocorrelation_time(
-            chains, check_valid='ignore')
-        ess_value = len(chains[0]) / iact.max()
+        tau = max(diagnostics.integrated_autocorrelation_time(chains).values())
+        ess_value = len(chains[0]) / tau
 
         passed_all = True
 
         for name, threshold, upper, value in zip(
-                ["Gelman-Rubin", "Geweke", "Effective Sample Size"],
-                [gelman_rubin, geweke, ess], [True, True, False],
-                [gelman_rubin_value, geweke_value, ess_value]):
-            if not quiet:
-                self.log_info(f"{name}: {value:.3g}")
+                ["Gelman-Rubin", "Effective Sample Size"], [gelman_rubin, ess],
+                [True, False], [gelman_rubin_value, ess_value]):
+            self.log_info(f"{name}: {value:.3g}")
             if threshold is not None:
                 passed = value < threshold if upper else value >= threshold
                 passed_all = passed_all and passed
-                if not quiet:
-                    self.log_info(
-                        f"{value:.3g} {'<' if value < threshold else '>='} "
-                        f"{threshold:.3g} ({'' if passed else 'not '}passed)")
+                self.log_info(
+                    f"{value:.3g} {'<' if value < threshold else '>='} "
+                    f"{threshold:.3g} ({'' if passed else 'not '}passed)")
 
         return passed_all
 
@@ -755,13 +749,13 @@ class MarkovChainSampler(BaseSampler):
         super()._write()
         if self.mpicomm.rank == 0:
             for i, chain in enumerate(self.chains):
-                chain.save(self.directory / f'chain_{i + 1}.npy')
+                chain.save(self.directory / f'chain_{i + 1}.npz')
             np.save(self.directory / 'checks.npy', self.checks)
 
     def _read(self):
         """Read internal calculations from disk."""
         super()._read()
         if self.mpicomm.rank == 0:
-            self.chains = [Chain.load(self.directory / f'chain_{i + 1}.npy')
+            self.chains = [Samples.load(self.directory / f'chain_{i + 1}.npz')
                            for i in range(self.n_chains)]
             self.checks = list(np.load(self.directory / 'checks.npy'))

@@ -178,18 +178,17 @@ class BlackJAXSampler(MarkovChainSampler):
 
         # Update the chains.
         samples = np.vstack([np.column_stack([
-            r[1].position[key] for key in self.likelihood.varied_params.keys()])
-            for r in results])
+            r[1].position[key] for key in self.varied_params]) for r in
+            results])
         log_post = np.concatenate([r[1].logdensity for r in results])
 
-        if len(self.likelihood.all_params.select(derived=True)) > 0:
+        if len(self.derived_params) > 0:
             # Recompute the derived parameters since they couldn't be saved
             # during the sampling.
             derived = self.pool.map(
                 self.compute_derived, [r[1].position for r in results])
             derived = np.vstack([np.column_stack([
-                d[key] for key in self.likelihood.all_params.select(derived=True)])
-                for d in derived])
+                d[key] for key in self.derived_params]) for d in derived])
         else:
             derived = np.zeros((self.n_chains * n_steps, 0))
 

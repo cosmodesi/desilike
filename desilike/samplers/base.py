@@ -76,10 +76,16 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         """
         self.likelihood = likelihood
-        self.n_dim = len(self.likelihood.varied_params)
-        self.n_derived = int(np.sum([
-            np.prod(param.shape) for param in
-            self.likelihood.all_params.select(derived=True)]))
+        self.varied_params = likelihood.varied_params.names()
+        self.n_dim = len(self.varied_params)
+
+        params = self.likelihood.all_params.select(derived=True)
+        params = [param for param in params if param.name not in
+                  ['loglikelihood', 'logprior']]
+        self.derived_params = [param.name for param in params]
+        self.derived_shapes = [param.shape for param in params]
+        self.n_derived = int(sum(
+            np.prod(shape) for shape in self.derived_shapes))
 
         self.mpicomm = likelihood.mpicomm
         self.pool = MPIPool(comm=self.mpicomm)
@@ -145,8 +151,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         """
         if not isinstance(sample, dict):
-            sample = dict(
-                zip(self.likelihood.varied_params.names(), sample))
+            sample = dict(zip(self.varied_params, sample))
         return self.likelihood.all_params.prior(**sample)
 
     def compute_posterior(self, sample):
@@ -166,11 +171,10 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         """
         if not isinstance(sample, dict):
-            sample = dict(zip(self.likelihood.varied_params.names(), sample))
+            sample = dict(zip(self.varied_params, sample))
         log_post, derived = self.likelihood(sample, return_derived=True)
         derived = np.concatenate([
-            np.asarray(derived[key]).flatten() for key in
-            self.likelihood.all_params.select(derived=True)])
+            np.asarray(derived[key]).flatten() for key in self.derived_params])
 
         return float(log_post), derived
 
@@ -213,19 +217,14 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
             Samples with all derived parameters, weights, etc.
 
         """
-        samples = dict(zip(self.likelihood.varied_params.names(), samples.T))
+        samples = dict(zip(self.varied_params, samples.T))
 
-        params = self.likelihood.all_params.select(derived=True)
         derived = np.split(derived, np.cumsum([
-            int(np.prod(param.shape)) for param in params])[:-1], axis=1)
-        derived = [derived[i].reshape((-1, ) + param.shape) for i, param in
-                   enumerate(params)]
-        derived = dict(zip(params.names(), derived))
-        for old_key, new_key in zip(
-                ['logposterior', 'logprior', 'loglikelihood'],
-                ['log_posterior', 'log_prior', 'log_likelihood']):
-            if old_key in derived.keys():
-                derived[new_key] = derived[old_key]
+            int(np.prod(shape)) for shape in self.derived_shapes])[:-1],
+            axis=1)
+        derived = [derived[i].reshape((-1, ) + shape) for i, shape in
+                   enumerate(self.derived_shapes)]
+        derived = dict(zip(self.derived_params, derived))
 
         samples = Samples(**(samples | derived))
         for key, value in kwargs.items():
@@ -502,13 +501,11 @@ class MarkovChainSampler(BaseSampler):
             Current logarithm of the posterior.
 
         """
-        samples = [[
-            chain[key][-1] for key in self.likelihood.varied_params.names()]
-            for chain in self.chains]
+        samples = [[chain[key][-1] for key in self.varied_params] for chain in
+                   self.chains]
         derived = [np.concatenate([
             np.asarray(chain[key][-1]).flatten() for key in
-            self.likelihood.all_params.select(derived=True).names()])
-            for chain in self.chains]
+            self.derived_params]) for chain in self.chains]
         log_post = [chain['log_posterior'][-1] for chain in self.chains]
         return np.array(samples), np.array(derived), np.array(log_post)
 
@@ -560,9 +557,11 @@ class MarkovChainSampler(BaseSampler):
 
         self.log_info('Diagnostics:')
 
-        gelman_rubin_value = max(diagnostics.gelman_rubin(chains).values())
+        gelman_rubin_value = max(diagnostics.gelman_rubin(
+            chains, keys=self.varied_params).values())
 
-        tau = max(diagnostics.integrated_autocorrelation_time(chains).values())
+        tau = max(diagnostics.integrated_autocorrelation_time(
+            chains, keys=self.varied_params).values())
         ess_value = len(chains[0]) / tau
 
         passed_all = True
@@ -613,8 +612,8 @@ class MarkovChainSampler(BaseSampler):
 
     def run(self, burn_in=0.2, min_steps=0, max_steps=None,
             adaptation_steps=None, check_every=300, checks_passed=2,
-            gelman_rubin=1.1, geweke=None, ess=None, flatten_chains=True,
-            save_every=300, max_init_attempts=100):
+            gelman_rubin=1.1, ess=None, flatten_chains=True, save_every=300,
+            max_init_attempts=100):
         """Run the sampler.
 
         Parameters
@@ -641,9 +640,6 @@ class MarkovChainSampler(BaseSampler):
         gelman_rubin: float or None
             Used to asses convergence. If given, the maximum value of the
             Gelman-Rubin statistic. Default is 1.1.
-        geweke: float or None
-            Used to asses convergence. If given, the maximum value of the
-            Geweke statistic. Default is ``None``.
         ess: float or None
             Used to asses convergence.  If given, the minimum effective sample
             size per chain. The effective sample size is the number of chain
@@ -696,8 +692,7 @@ class MarkovChainSampler(BaseSampler):
                 self.run_sampler(steps_to_take)
                 if steps % check_every == 0:
                     self.checks.append(self.check(
-                        burn_in=burn_in, gelman_rubin=gelman_rubin,
-                        geweke=geweke, ess=ess))
+                        burn_in=burn_in, gelman_rubin=gelman_rubin, ess=ess))
                 self.pool.stop_wait()
             else:
                 self.pool.wait()

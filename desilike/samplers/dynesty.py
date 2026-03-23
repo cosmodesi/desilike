@@ -44,9 +44,6 @@ class DynestySampler(PopulationSampler):
 
         super().__init__(likelihood, rng=rng, directory=directory)
 
-        kwargs = update_parameters(kwargs, 'dynesty', blob=True,
-                                   pool=self.pool, rstate=self.rng)
-
         if not dynamic and self.directory is not None:
             raise ValueError("dynesty does not support checkpointing for the "
                              "static sampler.")
@@ -64,9 +61,11 @@ class DynestySampler(PopulationSampler):
                 except (FileNotFoundError, ValueError):
                     pass
             if not hasattr(self, 'sampler'):
-                self.sampler = sampler_cls(
-                    self.compute_likelihood, self.prior_transform, self.n_dim,
-                    **kwargs)
+                kwargs = update_parameters(
+                    kwargs, 'dynesty', loglikelihood=self.compute_likelihood,
+                    prior_transform=self.prior_transform, ndim=self.n_dim,
+                    blob=True, pool=self.pool, rstate=self.rng)
+                self.sampler = sampler_cls(**kwargs)
 
     def run_sampler(self, **kwargs):
         """Run the ``dynesty`` sampler.

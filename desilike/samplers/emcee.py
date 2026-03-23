@@ -36,7 +36,7 @@ class EmceeSampler(MarkovChainSampler):
             Random number generator. Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-        kwargs: dict, optional
+        **kwargs: dict, optional
             Extra keyword arguments passed to ``emcee`` during initialization.
 
         """
@@ -47,12 +47,12 @@ class EmceeSampler(MarkovChainSampler):
         super().__init__(likelihood, n_chains=n_chains, chains=chains, rng=rng,
                          directory=directory)
 
-        kwargs = update_parameters(kwargs, 'emcee', pool=self.pool, args=None,
-                                   kwargs=None, vectorize=False)
-
         if self.mpicomm.rank == 0:
-            self.sampler = emcee.EnsembleSampler(
-                self.n_chains, self.n_dim, self.compute_posterior, **kwargs)
+            kwargs = update_parameters(
+                kwargs, 'emcee', nwalkers=self.n_chains, ndim=self.n_dim,
+                log_prob_fn=self.compute_posterior, pool=self.pool, args=None,
+                kwargs=None, vectorize=False)
+            self.sampler = emcee.EnsembleSampler(**kwargs)
 
     def run_sampler(self, n_steps):
         """Run the ``emcee`` sampler.

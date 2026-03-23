@@ -50,16 +50,16 @@ class ZeusSampler(MarkovChainSampler):
         super().__init__(likelihood, n_chains=n_chains, chains=chains, rng=rng,
                          directory=directory)
 
-        kwargs = update_parameters(kwargs, 'zeus', pool=self.pool, args=None,
-                                   kwargs=None, vectorize=False)
-
         if self.mpicomm.rank == 0:
-            self.sampler = zeus.EnsembleSampler(
-                self.n_chains, self.n_dim, self.compute_posterior, **kwargs)
+            kwargs = update_parameters(
+                kwargs, 'zeus', nwalkers=self.n_chains, ndim=self.n_dim,
+                logprob_fn=self.compute_posterior, pool=self.pool, args=None,
+                kwargs=None, vectorize=False)
+            self.sampler = zeus.EnsembleSampler(**kwargs)
 
-        if rng is not None:
-            warnings.warn("Zeus does not support random seeds. Results are "
-                          "not deterministic.")
+            if rng is not None:
+                warnings.warn("Zeus does not support random seeds. Results "
+                              "are not deterministic.")
 
     def run_sampler(self, n_steps):
         """Run the ``zeus`` sampler.

@@ -77,14 +77,14 @@ class PocoMCSampler(PopulationSampler):
 
         super().__init__(likelihood, rng=rng, directory=directory)
 
-        kwargs = update_parameters(
-            kwargs, 'pocoMC', pool=self.pool, output_dir=self.directory,
-            random_state=self.rng.integers(2**32 - 1))
-
         if self.mpicomm.rank == 0:
             prior = Prior(self.likelihood.varied_params)
-            self.sampler = pocomc.Sampler(
-                prior, self.compute_likelihood, **kwargs)
+            kwargs = update_parameters(
+                kwargs, 'pocoMC', prior=prior,
+                likelihood=self.compute_likelihood, n_dim=self.n_dim,
+                pool=self.pool, output_dir=self.directory,
+                random_state=self.rng.integers(2**32 - 1))
+            self.sampler = pocomc.Sampler(**kwargs)
 
             # Try to read existing sampler state, if available.
             if self.directory is not None:

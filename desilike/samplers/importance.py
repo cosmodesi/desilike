@@ -46,7 +46,7 @@ class ImportanceSampler(StaticSampler):
 
         Returns
         -------
-        desilike.samples. Chain
+        desilike.samples.Chain
             Sampler results.
 
         """

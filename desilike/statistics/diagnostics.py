@@ -170,7 +170,8 @@ def gelman_rubin(chains, n_splits=None, keys=None):
     Raises
     ------
     ValueError
-        If ``n_chains * n_splits`` is 1.
+        If ``n_chains * n_splits`` is 1 or ``n_splits`` is larger than the
+        number of samples.
 
     """
     chains, return_type, keys = _prepare_input(chains, keys)
@@ -181,6 +182,9 @@ def gelman_rubin(chains, n_splits=None, keys=None):
             n_splits = 2
         else:
             n_splits = 1
+
+    if n_splits > len(chains[0]):
+        raise ValueError('Cannot have more splits than samples.')
 
     if n_chains * n_splits <= 1:
         raise ValueError(

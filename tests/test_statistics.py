@@ -98,22 +98,29 @@ def test_diagnostics():
 
 
 @pytest.mark.mpi_skip
-def test_plotting_trace(tmp_path):
+@pytest.mark.parametrize('plot_function', [
+    statistics.plotting.trace, statistics.plotting.gelman_rubin])
+def test_plotting_diagnostics(plot_function, tmp_path):
     # Test that the plotting works, i.e., produces a figure and doesn't crash.
 
     chains = statistics.Samples(
-        a=np.random.random(100), b=np.random.random(100),
+        a=np.random.random(1000), b=np.random.random(1000),
         latex=dict(a=r'$\lambda$'))
-    fig = statistics.plotting.trace(chains)
+    fig = plot_function(chains)
     assert isinstance(fig, matplotlib.figure.Figure)
-    assert len(fig.axes) == 2
+    if plot_function == statistics.plotting.trace:
+        assert len(fig.axes) == 2
+    else:
+        assert len(fig.axes) == 1
+
     statistics.plotting.trace([chains, chains])
     statistics.plotting.trace(
         chains, keys=['a'], colors='red', plot_options=dict(ls=':'))
     with pytest.raises(KeyError):
         statistics.plotting.trace(chains, keys=['c'])
-    with pytest.raises(ValueError):
-        statistics.plotting.trace(chains, fig=plt.subplots(nrows=1)[0])
+    if plot_function == statistics.plotting.trace:
+        with pytest.raises(ValueError):
+            statistics.plotting.trace(chains, fig=plt.subplots(nrows=1)[0])
 
-    statistics.plotting.trace(chains, filepath=tmp_path / 'trace.pdf')
-    assert (tmp_path / 'trace.pdf').is_file()
+    statistics.plotting.trace(chains, filepath=tmp_path / 'plot.pdf')
+    assert (tmp_path / 'plot.pdf').is_file()

@@ -124,3 +124,13 @@ def test_plotting_diagnostics(function, tmp_path):
 
     function(chains, filepath=tmp_path / 'plot.pdf')
     assert (tmp_path / 'plot.pdf').is_file()
+
+
+@pytest.mark.mpi_skip
+def test_triangle_posterior():
+    # Test that the triangle plot doesn't crash.
+
+    samples = statistics.Samples(
+        a=np.random.random(1000), b=np.random.random(1000),
+        latex=dict(a=r'$\lambda$'))
+    statistics.plotting.triangle_posterior(samples, colors=['red', 'blue'])

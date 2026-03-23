@@ -113,9 +113,91 @@ def trace(chains, keys=None, colors=None, fontsize=None, plot_options=None,
 
 
 @plotter
-def gelman_rubin(chains, keys=None, colors=None, n_splits=None, threshold=None,
-                 slices=100, offset=None, fontsize=None, plot_options=None,
-                 legend_options=None, fig=None):
+def integrated_autocorrelation_time(
+        chains, keys=None, colors=None, slices=10, fontsize=None,
+        plot_options=None, legend_options=None, fig=None):
+    """Plot integrated autocorrelation time as a function of steps.
+
+    Parameters
+    ----------
+    chains : desilike.Samples or list of desilike.Samples
+        List of (or single) :class:``Samples`` instance(s).
+    keys : list or None, optional
+        Parameters to plot the integrated autocorrelation time for. If
+        ``None``, plot all parameters. Default is ``None``.
+    colors : str, list, or None, optional
+        Dictionary of (or single) color(s) for parameters. Default is ``None``.
+    slices : int, optional
+        Number of linearly spaced steps for which to compute the integrated
+        autocorrelation time. Default is 10.
+    fontsize : int or None, optional
+        Label sizes. Default is None.
+    plot_options : dict or None, optional
+        Optional arguments for `matplotlib.axes.Axes.plot`. Default is
+        ``None``.
+    legend_options : dict or None, optional
+        Optional arguments for `matplotlib.axes.Axes.legend`. Default is
+        ``None``.
+    fig : matplotlib.figure.Figure or None, optional
+        Figure to plot on. If ``None``, create a new one. Default is ``None``.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        Figure with plot on it.
+
+    Raises
+    ------
+    ValueError
+        If not all chains have the same length.
+
+    """
+    if not isinstance(chains, list):
+        chains = [chains]
+
+    if not len(np.unique([len(chain) for chain in chains])) == 1:
+        raise ValueError('All chains must have the same length.')
+
+    if keys is None:
+        keys = chains[0].keys
+
+    if fig is None:
+        fig, ax = plt.subplots(nrows=1, ncols=1)
+    else:
+        ax = fig.gca()
+
+    if plot_options is None:
+        plot_options = {}
+
+    if legend_options is None:
+        legend_options = {}
+
+    if not isinstance(colors, dict):
+        colors = {key: colors for key in keys}
+
+    n_steps = len(chains[0])
+    steps = np.linspace(0, n_steps, slices + 1)[1:].astype(int)
+    tau = []
+    for steps_max in steps:
+        tau.append(diagnostics.integrated_autocorrelation_time(
+            [chain[:steps_max] for chain in chains], keys=keys))
+    tau = {key: np.array([step[key] for step in tau]) for key in keys}
+
+    for key in keys:
+        ax.plot(steps, tau[key], label=chains[0].latex.get(key, key),
+                color=colors.get(key, None), **plot_options)
+    ax.set_xlabel('Step', fontsize=fontsize)
+    ax.set_ylabel(r'$\tau$', fontsize=fontsize)
+    ax.legend(fontsize=fontsize, **legend_options)
+
+    return fig
+
+
+@plotter
+def gelman_rubin(
+        chains, keys=None, colors=None, n_splits=None, threshold=None,
+        slices=100, offset=None, fontsize=None, plot_options=None,
+        legend_options=None, fig=None):
     """Plot Gelman-Rubin statistics as a function of steps.
 
     Parameters
@@ -123,8 +205,8 @@ def gelman_rubin(chains, keys=None, colors=None, n_splits=None, threshold=None,
     chains : desilike.Samples or list of desilike.Samples
         List of (or single) :class:``Samples`` instance(s).
     keys : list or None, optional
-        Parameters to plot trace for. If ``None``, plot all parameters. Default
-        is ``None``.
+        Parameters to plot the Gelman-Rubin statistic for. If ``None``, plot
+        all parameters. Default is ``None``.
     colors : str, list, or None, optional
         Dictionary of (or single) color(s) for parameters. Default is ``None``.
     n_splits : int or None, optional

@@ -98,29 +98,29 @@ def test_diagnostics():
 
 
 @pytest.mark.mpi_skip
-@pytest.mark.parametrize('plot_function', [
-    statistics.plotting.trace, statistics.plotting.gelman_rubin])
-def test_plotting_diagnostics(plot_function, tmp_path):
+@pytest.mark.parametrize('function', [
+    statistics.plotting.trace, statistics.plotting.gelman_rubin,
+    statistics.plotting.integrated_autocorrelation_time])
+def test_plotting_diagnostics(function, tmp_path):
     # Test that the plotting works, i.e., produces a figure and doesn't crash.
 
     chains = statistics.Samples(
         a=np.random.random(1000), b=np.random.random(1000),
         latex=dict(a=r'$\lambda$'))
-    fig = plot_function(chains)
+    fig = function(chains)
     assert isinstance(fig, matplotlib.figure.Figure)
-    if plot_function == statistics.plotting.trace:
+    if function == statistics.plotting.trace:
         assert len(fig.axes) == 2
     else:
         assert len(fig.axes) == 1
 
-    statistics.plotting.trace([chains, chains])
-    statistics.plotting.trace(
-        chains, keys=['a'], colors='red', plot_options=dict(ls=':'))
+    function([chains, chains])
+    function(chains, keys=['a'], colors='red', plot_options=dict(ls=':'))
     with pytest.raises(KeyError):
-        statistics.plotting.trace(chains, keys=['c'])
-    if plot_function == statistics.plotting.trace:
+        function(chains, keys=['c'])
+    if function == statistics.plotting.trace:
         with pytest.raises(ValueError):
-            statistics.plotting.trace(chains, fig=plt.subplots(nrows=1)[0])
+            function(chains, fig=plt.subplots(nrows=1)[0])
 
-    statistics.plotting.trace(chains, filepath=tmp_path / 'plot.pdf')
+    function(chains, filepath=tmp_path / 'plot.pdf')
     assert (tmp_path / 'plot.pdf').is_file()

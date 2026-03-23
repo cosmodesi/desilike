@@ -3,6 +3,12 @@
 from functools import wraps
 
 try:
+    from getdist import MCSamples
+    from getdist import plots as getdist_plots
+    GETDIST_INSTALLED = True
+except ModuleNotFoundError:
+    GETDIST_INSTALLED = False
+try:
     import matplotlib.pyplot as plt
     MATPLOTLIB_INSTALLED = True
 except ModuleNotFoundError:
@@ -58,7 +64,7 @@ def trace(chains, keys=None, colors=None, fontsize=None, plot_options=None,
     Parameters
     ----------
     chains : desilike.Samples or list of desilike.Samples
-        List of (or single) :class:``Samples`` instance(s).
+        List of (or single) :class:``desilike.Samples`` instance(s).
     keys : list or None, optional
         Parameters to plot trace for. If ``None``, plot all parameters. Default
         is ``None``.
@@ -121,7 +127,7 @@ def integrated_autocorrelation_time(
     Parameters
     ----------
     chains : desilike.Samples or list of desilike.Samples
-        List of (or single) :class:``Samples`` instance(s).
+        List of (or single) :class:``desilike.Samples`` instance(s).
     keys : list or None, optional
         Parameters to plot the integrated autocorrelation time for. If
         ``None``, plot all parameters. Default is ``None``.
@@ -203,7 +209,7 @@ def gelman_rubin(
     Parameters
     ----------
     chains : desilike.Samples or list of desilike.Samples
-        List of (or single) :class:``Samples`` instance(s).
+        List of (or single) :class:``desilike.Samples`` instance(s).
     keys : list or None, optional
         Parameters to plot the Gelman-Rubin statistic for. If ``None``, plot
         all parameters. Default is ``None``.
@@ -293,3 +299,46 @@ def gelman_rubin(
         ax.axhline(y=threshold, linestyle='--', linewidth=1, color='k')
 
     return fig
+
+
+def triangle_posterior(samples, keys=None, **kwargs):
+    """Create a posterior triangle plot using ``getdist``.
+
+    .. rubric:: References
+    - https://getdist.readthedocs.io/en/latest/plots.html#getdist.plots.GetDistPlotter.triangle_plot
+
+    Parameters
+    ----------
+    samples : desilike.Samples or list of desilike.Samples
+        List of (or single) :class:``desilike.Samples`` instance(s).
+    keys : list or None, optional
+        Parameters to plot posterior for. If ``None``, plot all parameters.
+        Default is ``None``.
+    **kwargs : dict, optional
+        Optional parameters for ``getdist.plots.GetDistPlotter.triangle_plot``.
+
+    Returns
+    -------
+    g : getdist.plots.GetDistPlotter
+
+    """
+    if not GETDIST_INSTALLED:
+        raise ImportError("'getdist' is required for triangle plots.")
+
+    if not isinstance(samples, list):
+        samples = [samples]
+
+    if keys is None:
+        keys = samples[0].keys
+
+    g = getdist_plots.get_subplot_plotter()
+    samples_getdist = []
+    for sample in samples:
+        samples_getdist.append(MCSamples(
+            samples=np.column_stack([sample[key] for key in keys]),
+            weights=sample.weight, names=keys,
+            labels=[sample.latex.get(key, key).replace('$', '') for key in
+                    keys]))
+
+    g.triangle_plot(samples_getdist, **kwargs)
+    return g

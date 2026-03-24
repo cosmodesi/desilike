@@ -66,11 +66,10 @@ class TracerCorrelation2PolesObservable(BaseClusteringObservable):
             if np.ndim(ells) == 0:
                 ells = [ells]
             ells = [int(ell) for ell in ells]
-        self.data, self.window, self.cov = _format_clustering_data_window_covariance(data=data, window=window, covariance=covariance,
+        self.data, self.window, self.covariance = _format_clustering_data_window_covariance(data=data, window=window, covariance=covariance,
                                                                           coords=s, ells=ells,
                                                                           coordin=sin, ellsin=ellsin, coord_name='s')
         self.flatdata = self.data.value()
-        self.covariance = self.cov.value()
         self.theory.init.update(s=next(iter(self.window.theory)).coords('s'), ells=self.window.theory.ells)
         if shotnoise is not None:
             self.theory.init.update(shotnoise=shotnoise)
@@ -129,7 +128,7 @@ class TracerCorrelation2PolesObservable(BaseClusteringObservable):
             xlabel = r'$s$ [\mathrm{Mpc}/h]'
             scale = x**2
             ylabel = r'$s^2 \xi_\ell(s)$ [$(\mathrm{Mpc}/h)^2$]'
-            std = self.cov.at.observable.get(**label).std()
+            std = self.covariance.at.observable.get(**label).std()
             lax[0].errorbar(x, scale * data_pole.value(), yerr=scale * std, color=f'C{ill:d}', linestyle='none', marker='o', label=rf'$\ell = {ell}$')
             lax[0].plot(x, scale * wtheory_pole.value(), **kw_theory[ill])
         for ill, label in enumerate(labels):
@@ -183,7 +182,7 @@ class TracerCorrelation2PolesObservable(BaseClusteringObservable):
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
             wtheorynobao_pole = wtheorynobao.get(**label)
-            std = self.cov.at.observable.get(**label).std()
+            std = self.covariance.at.observable.get(**label).std()
             ax = lax[ill]
             x = data_pole.coords('s')
             scale = x**2

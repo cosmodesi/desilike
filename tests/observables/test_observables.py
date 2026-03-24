@@ -144,6 +144,8 @@ def test_clustering():
     for Observable, list_kwargs in Observables.items():
         for kwargs in list_kwargs:
             data, window, theory = kwargs['data'], kwargs['window'], kwargs['theory']
+            observable = Observable(**kwargs, name='observable1')
+            observable()
             covariance = get_covariance(data)
             observable = Observable(**kwargs, covariance=covariance, name='observable1')
             test_observable(observable)
@@ -182,9 +184,8 @@ def test_clustering():
     for Observable, list_kwargs in Observables.items():
         for kwargs in list_kwargs:
             data, window, theory = kwargs['data'], kwargs['window'], kwargs['theory']
-            covariance = get_covariance(data)
-            observable = Observable(**kwargs, covariance=covariance, name='observable1')
-            test_observable(observable)
+            observable = Observable(**kwargs, name='observable1')
+            observable()
             covariance = get_covariance(data)
             observable = Observable(**kwargs, covariance=covariance, name='observable1')
             test_observable(observable)

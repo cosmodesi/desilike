@@ -33,7 +33,8 @@ tests = [
     "interpax",
     "blackjax",
     "arviz",
-    "matplotlib"]
+    "matplotlib",
+    "getdist"]
 plotting = [
     "matplotlib",
     "tabulate",

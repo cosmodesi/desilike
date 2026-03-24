@@ -286,7 +286,7 @@ class TracerSpectrum2PolesObservable(BaseClusteringObservable):
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
             x = data_pole.coords('k')
-            xlabel = r'$k$ [h/\mathrm{Mpc}]'
+            xlabel = r'$k$ [$h/\mathrm{Mpc}$]'
             if scaling == 'kpk':
                 scale = x
                 ylabel = r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]'
@@ -501,7 +501,7 @@ class TracerSpectrum3PolesObservable(BaseClusteringObservable):
                 scale = k.prod(axis=-1)
                 if np.allclose(k[..., 1], k[..., 0]):
                     x = k[..., 0]
-                    xlabel = r'$k$ [h/\mathrm{Mpc}]'
+                    xlabel = r'$k$ [$h/\mathrm{Mpc}$]'
                     ylabel = r'$k^2 B_{\ell}(k, k)$ [$(\mathrm{Mpc}/h)^4$]'
                 else:
                     x = np.arange(data_pole.size)

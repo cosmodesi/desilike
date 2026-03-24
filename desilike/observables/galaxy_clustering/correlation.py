@@ -125,7 +125,7 @@ class TracerCorrelation2PolesObservable(BaseClusteringObservable):
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
             x = data_pole.coords('s')
-            xlabel = r'$s$ [\mathrm{Mpc}/h]'
+            xlabel = r'$s$ [$\mathrm{Mpc}/h$]'
             scale = x**2
             ylabel = r'$s^2 \xi_\ell(s)$ [$(\mathrm{Mpc}/h)^2$]'
             std = self.covariance.at.observable.get(**label).std()
@@ -186,7 +186,7 @@ class TracerCorrelation2PolesObservable(BaseClusteringObservable):
             ax = lax[ill]
             x = data_pole.coords('s')
             scale = x**2
-            xlabel = r'$s$ [\mathrm{Mpc}/h]'
+            xlabel = r'$s$ [$\mathrm{Mpc}/h$]'
             color = f'C{ill:d}'
             ax.errorbar(x, scale * (data_pole.value() - wtheorynobao_pole.value()), yerr=scale * std, color=color, linestyle='none', marker='o')
             ax.plot(x, scale * (wtheory_pole.value() - wtheorynobao_pole.value()), color=color)

@@ -125,6 +125,8 @@ class BaseClusteringObservable(BaseCalculator):
         template = self.theory.template
         only_now = template.only_now
         template.only_now = True
+        if not template.with_now:
+            raise ValueError(f'pass with_now to power spectrum template {template}')
 
         def callback(calculator):
             all_requires.append(calculator)

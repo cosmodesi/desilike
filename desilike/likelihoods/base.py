@@ -564,6 +564,8 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
         elif covariance is not None:
             covariance = check_matrix(covariance, 'covariance')
             self.covariance = types.CovarianceMatrix(observable=self.data.clone(value=0. * self.data.value()), value=covariance)
+        for observable in self.observables:
+            observable.covariance = self.covariance.at.observable.get(observables=observable.name)
 
         if self.precision is None:
             if self.covariance is None:

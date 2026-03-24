@@ -58,7 +58,7 @@ def test_compression():
 def test_clustering():
 
     from desilike.observables.galaxy_clustering import TracerSpectrum2PolesObservable, TracerSpectrum3PolesObservable, TracerCorrelation2PolesObservable
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, FOLPSv2TracerBispectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
+    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles, FOLPSv2TracerBispectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles
     from desilike.likelihoods import ObservablesGaussianLikelihood
 
     def get_spectrum2_data(size=10):
@@ -130,17 +130,18 @@ def test_clustering():
     def test_observable(observable):
         observable()
         observable.plot()
-        #if hasattr(Observable, 'plot_bao'):
-        #    observable.plot_bao()
+        if hasattr(Observable, 'plot_bao'):
+            observable.plot_bao()
 
+    template = DirectPowerSpectrumTemplate(z=1., with_now='peakaverage')  # with_now for plot_bao
     # Test Fourier-space observables first
     Observables = {TracerSpectrum2PolesObservable: [{'data': get_spectrum2_data(),
                                                      'window': get_spectrum2_window(get_spectrum2_data()),
-                                                     'theory': KaiserTracerPowerSpectrumMultipoles()}],
+                                                     'theory': KaiserTracerPowerSpectrumMultipoles(template=template)}],
                   TracerSpectrum3PolesObservable: [{'data': get_spectrum3_data(),
                                                     'window': get_spectrum3_window(get_spectrum3_data()),
-                                                    'theory': FOLPSv2TracerBispectrumMultipoles()}]}
-    Observables = {}
+                                                    'theory': FOLPSv2TracerBispectrumMultipoles(template=template)}]}
+    #Observables = {}
     for Observable, list_kwargs in Observables.items():
         for kwargs in list_kwargs:
             data, window, theory = kwargs['data'], kwargs['window'], kwargs['theory']
@@ -162,10 +163,11 @@ def test_clustering():
             else:
                 assert np.allclose(observable2.theory.nd, 1. / shotnoise)
 
-            observable = Observable(**kwargs, covariance=covariance, name='observable1')
+            observable = Observable(**kwargs, name='observable1')
             observable2 = Observable(**kwargs, covariance=covariance, name='observable2')
             likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=covariance.value())
             likelihood()
+            observable.plot()
             covariance3 = types.CovarianceMatrix(observable=types.ObservableTree([data] * 3, observables=['observable1', 'observable2', 'observable3']),
                                                 value=sp.linalg.block_diag(*[covariance.value()] * 3))
             likelihood2 = ObservablesGaussianLikelihood(observables=[observable, observable2], covariance=covariance3)
@@ -179,7 +181,7 @@ def test_clustering():
     # Then configuration-space observables
     data, window = get_correlation2_data_window()
     Observables = {TracerCorrelation2PolesObservable: [{'data': data, 'window': window,
-                                                     'theory': KaiserTracerCorrelationFunctionMultipoles()}]}
+                                                     'theory': KaiserTracerCorrelationFunctionMultipoles(template=template)}]}
 
     for Observable, list_kwargs in Observables.items():
         for kwargs in list_kwargs:

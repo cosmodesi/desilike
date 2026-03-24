@@ -2863,6 +2863,10 @@ class JAXEffortTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles):
     def get(self):
         return self.power
 
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/cosmodesi/jaxeffort')
+
 
 # @jit
 @jit(static_argnames=['rsd_class', 'IR_resummation', 'damping'])
@@ -2923,6 +2927,7 @@ def _get_bispectrum_multipoles_folpsv2(
                 toret.append(results[ells.index(ell_swap)].T.ravel())
             else:
                 toret.append(np.zeros((k1k2.size,) * 2).ravel())
+        folpsv2.BispectrumCalculator._tables_cache = {}  # to avoid leak
         return toret
 
     bispectrum = folpsv2.BispectrumCalculator(model=model)
@@ -4295,7 +4300,6 @@ def Kfuncs_to_tables(
 # Bk multipoles via FOLPS (JIT-ed)
 # ============================================================================
 
-import folps as folpsv2
 
 @jit(static_argnums=(5, 6, 7, 8, 9, 10, 11))
 def get_bs_multipoles_jit(
@@ -4316,6 +4320,8 @@ def get_bs_multipoles_jit(
     qperp=None,
     z_pk=None,
 ):
+
+    import folps as folpsv2
     f0 = jnp.asarray(f0)
     bpars = jnp.asarray(pars)
     k1k2T = jnp.asarray(k1k2T)
@@ -5032,4 +5038,3 @@ class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseCalculator):
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
-

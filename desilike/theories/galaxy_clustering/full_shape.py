@@ -2302,6 +2302,7 @@ class FOLPSTracerCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionFrom
             self.deterministic_bias_params = [name + 'p' for name in self.deterministic_bias_params]
             self.stochastic_bias_params = [name + 'p' for name in self.stochastic_bias_params]
 
+
 class FOLPSAXPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
 
     _default_options = dict(kernels='fk', rbao=104.)

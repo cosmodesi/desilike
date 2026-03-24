@@ -212,10 +212,6 @@ def test_covariance():
         window = np.zeros((observable.size, theory.size))
         return types.WindowMatrix(observable=observable, theory=theory, value=window)
 
-    def get_covariance(observable):
-        covariance = np.eye(observable.size)
-        return types.CovarianceMatrix(observable=observable, value=covariance)
-
     data = get_spectrum2_data()
     observable = TracerSpectrum2PolesObservable(data=data, window=get_spectrum2_window(data), theory=KaiserTracerPowerSpectrumMultipoles())
     footprint = CutskyFootprint(nbar=np.array([0.001, 0.002]), area=1000.0, zrange=np.array([0.0, 1.0, 2.0]), cosmo='DESI')

@@ -1,4 +1,5 @@
 import re
+import functools
 
 import numpy as np
 from cosmoprimo import PowerSpectrumBAOFilter, PowerSpectrumInterpolator1D
@@ -284,7 +285,7 @@ class BAOExtractor(BasePowerSpectrumExtractor):
 
     """
     config_fn = 'power_template.yaml'
-    conflicts = [('DM_over_rd', 'qper'), ('DH_over_rd', 'qper'), ('DM_over_DH', 'qap'), ('DV_over_rd', 'qiso')]
+    conflicts = [('DM_over_rd', 'qper'), ('DH_over_rd', 'qper'), ('DH_over_DM', 'qap'), ('DV_over_rd', 'qiso')]
 
     @staticmethod
     def _params(params, rs_drag_varied=False):
@@ -638,6 +639,8 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
     https://arxiv.org/abs/2106.07641
     https://arxiv.org/pdf/2212.04522.pdf
     """
+    conflicts = BAOExtractor.conflicts + [('df', 'f_sqrt_Ap'), ('dm', 'm'), ('n', 'dn')]
+
     def initialize(self, *args, kp=0.03, a=0.6, eta=1. / 3., n_varied=False, dfextractor='Ap', r=8., with_now='peakaverage', **kwargs):
         self.kp, self.a = float(kp), float(a)
         self.n_varied = bool(n_varied)
@@ -788,6 +791,7 @@ class BandVelocityPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
     """
     _base_param_name = 'dptt'
+    conflicts = [('f', 'fsigmar'), ('qap',)]
 
     def initialize(self, *args, eta=1. / 3., kp=None, **kwargs):
         super(BandVelocityPowerSpectrumExtractor, self).initialize(*args, **kwargs)
@@ -1103,6 +1107,8 @@ class WiggleSplitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
     cosmo : BasePrimordialCosmology, default=None
         Cosmology calculator. Defaults to ``Cosmoprimo(fiducial=fiducial)``.
     """
+    conflicts = [('qbao', 'DV_over_rd'), ('qap', 'DH_over_DM'), ('df', 'fsigmar'), ('dm', 'm')]
+
     def initialize(self, *args, r=8., kernel='gauss', eta=1. / 3., **kwargs):
         self.r = float(r)
         self.eta = float(eta)
@@ -1214,10 +1220,8 @@ class WiggleSplitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         return self
 
 
-def find_turn_over(pk_interpolator, **kwargs):
+def find_turn_over(k, pk):
     # Find turn over, with parabolic interpolation
-    k = pk_interpolator.k
-    pk = pk_interpolator(k, **kwargs)
     imax = np.argmax(pk, axis=0).flat[0]
     logk = np.log10(k[imax - 1:imax + 2])
     logpk = np.log10(pk[imax - 1:imax + 2])
@@ -1228,8 +1232,7 @@ def find_turn_over(pk_interpolator, **kwargs):
     assert np.all(a <= 0.)
     assert np.all(logk[0] <= logk0) and np.all(logk0 <= logk[2])
     k0 = 10**logk0
-    if kwargs: kwargs.setdefault('grid', False)
-    return k0, pk_interpolator(k0, **kwargs)
+    return k0
 
 
 class TurnOverPowerSpectrumExtractor(BasePowerSpectrumExtractor):
@@ -1262,7 +1265,7 @@ class TurnOverPowerSpectrumExtractor(BasePowerSpectrumExtractor):
     https://arxiv.org/pdf/2302.07484.pdf
     """
     config_fn = 'power_template.yaml'
-    conflicts = [('DM_over_DH', 'qap'), ('DV_times_kTO', 'qto')]
+    conflicts = [('DH_over_DM', 'qap'), ('DV_times_kTO', 'qto')]
 
     def initialize(self, *args, r=8., eta=1. / 3., **kwargs):
         self.eta = float(eta)
@@ -1283,8 +1286,10 @@ class TurnOverPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         state['DV'] = state['DH']**self.eta * state['DM']**(1. - self.eta) * self.z**(1. / 3.)
         state['DH_over_DM'] = state['DH'] / state['DM']
         fo = cosmo.get_fourier()
-        state['pk_dd_interpolator'] = fo.pk_interpolator(of='delta_cb', **_kw_interp).to_1d(z=self.z)
-        state['kTO'], state['pkTO_dd'] = find_turn_over(state['pk_dd_interpolator'])
+        pk_interpolator = fo.pk_interpolator(of='delta_cb', **_kw_interp)
+        state['pk_dd_interpolator'] = pk_interpolator.to_1d(z=self.z)
+        kTO = find_turn_over(pk_interpolator.k, pk_interpolator(pk_interpolator.k, z=self.z))
+        state['kTO'], state['pkTO_dd'] = kTO, pk_interpolator(kTO, z=self.z, grid=False)
         state['DV_times_kTO'] = state['DV'] * state['kTO']
         for name, value in state.items(): setattr(self, name + ('_fid' if fiducial else ''), value)
 

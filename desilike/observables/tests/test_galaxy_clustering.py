@@ -873,7 +873,7 @@ def test_integral_cosn():
     for n in np.arange(6):
         limits = (-0.3, 0.8)
         x = np.linspace(*limits, num=1000)
-        ref = np.trapz(np.cos(x)**n, x=x)
+        ref = np.trapezoid(np.cos(x)**n, x=x)
         test = integral_cosn(n=n, range=limits)
         assert np.abs(test / ref - 1.) < 1e-6
 

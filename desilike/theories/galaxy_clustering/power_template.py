@@ -1077,7 +1077,7 @@ def integrate_sigma_r2(r, pk, kmin=1e-6, kmax=1e2, nk=2048, kernel=kernel_tophat
     integrand = pk(k, **kwargs)
     k = _bcast_shape(k, shape=integrand.shape, axis=0)
     integrand *= kernel(k * r) * k**3  # extra k factor because log integration
-    return 1. / 2. / np.pi**2 * np.trapz(integrand, x=logk, axis=0)
+    return 1. / 2. / np.pi**2 * np.trapezoid(integrand, x=logk, axis=0)
 
 
 class WiggleSplitPowerSpectrumExtractor(BasePowerSpectrumExtractor):

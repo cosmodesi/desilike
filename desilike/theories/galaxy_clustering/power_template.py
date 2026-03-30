@@ -31,6 +31,16 @@ Templates (compute power spectrum for given cosmological parameters at wavenumbe
     - TurnOverPowerSpectrumTemplate: Turn-over scale
     - BandVelocityPowerSpectrumTemplate: Band power template
     - DirectWiggleSplitPowerSpectrumTemplate: Direct + wiggle-split
+
+To implement a new template, inherit from BasePowerSpectrumTemplate and implement the calculate() method to set the attributes:
+- pk_dd (linear CDM + baryon power spectrum at :attr:`k`)
+- pknow_dd (no-Wiggle linear power spectrum, if with_now is set)
+- qpar, qper (Alcock-Paczynski parameters)
+- sigma8
+- fk, f0 (fk->f0 for k->0), f = fsigma8 / sigma8
+based on the current cosmological parameters.
+Use the _calculate() helper from BasePowerSpectrumExtractor to compute base quantities for both fiducial and current cosmology.
+A good example is ShapeFitPowerSpectrumTemplate.
 """
 
 import re
@@ -751,6 +761,7 @@ class ShapeFitPowerSpectrumExtractor(BasePowerSpectrumExtractor):
         cosmo = self.fiducial if fiducial else self.cosmo
         if not isinstance(cosmo, Cosmology):
             cosmo = cosmo.cosmo
+        # Base quantities (pk_dd_interpolator, etc.) and BAO parameters
         state = BasePowerSpectrumExtractor._calculate(self, fiducial=fiducial)
         state.update(BAOExtractor._calculate(self, fiducial=fiducial))
         s = cosmo.rs_drag / self.fiducial.rs_drag
@@ -833,6 +844,7 @@ class ShapeFitPowerSpectrumTemplate(BasePowerSpectrumTemplate):
         # Just copy fiducial values
         for name in ['sigma8']:
             setattr(self, name, getattr(self, f'{name}_fid'))
+        # Update the power spectrum with the ShapeFit parameterization, eq. 3.11 of https://arxiv.org/pdf/2212.04522.pdf
         factor = _bcast_shape(jnp.exp(dm / self.a * jnp.tanh(self.a * jnp.log(self.k / self.kp)) + dn * jnp.log(self.k / self.kp)), self.pk_dd_fid.shape)
         #factor = np.exp(dm * np.log(self.k / self.kp))
         self.pk_dd = self.pk_dd_fid * factor

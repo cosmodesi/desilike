@@ -624,3 +624,9 @@ def test_png():
     test_prim_method()
     results = {(0, 'matter'): 10011.16020071, (1, 'matter'): 10046.19588923, (0, 'prim'): 10011.33476181, (1, 'prim'): 10046.4520818}
     test_theory(PNGTracerPowerSpectrumMultipoles)
+
+
+
+if __name__ == '__main__':
+
+    test_templates()

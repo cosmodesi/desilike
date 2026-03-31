@@ -2468,7 +2468,7 @@ def folpsv2_combine_bias_terms_pkmu(k, mu, jac, table, table_now, pars,rsd_class
 
 
 import folps as folpsv2
-@jit(static_argnums=(5,6,7,8,9,10,11,12,13))
+@jit(static_argnums=(5,6,7,8,9,10,11,12,13,14))
 def get_bs_multipoles_jit(
     pars,
     k1k2T,
@@ -2480,6 +2480,7 @@ def get_bs_multipoles_jit(
     A_full=True,
     remove_DeltaP=False,
     multipoles=['B000','B202'],
+    multipoles_for_convolution=None,
     interpolation_method='linear',
     bias_scheme='folps',
     renormalized=True,
@@ -2492,10 +2493,12 @@ def get_bs_multipoles_jit(
     z_pk=None,
     k_window_=None,
     wmat_000=None,
-    wmat_202=None
+    wmat_202=None,
+
+    
 ):
     folpsv2.MatrixCalculator(A_full=A_full, use_TNS_model=remove_DeltaP)
-    # folps_bispectrum_class = folpsv2.BispectrumCalculator_fk(model='FOLPSD')
+    folps_bispectrum_class = folpsv2.BispectrumCalculator_fk(model='FOLPSD')
     f0 = jnp.asarray(f0)
     bpars = jnp.asarray(pars)
 
@@ -2510,7 +2513,8 @@ def get_bs_multipoles_jit(
                         renormalize=renormalized, 
                         interpolation_method_full='linear',
                         interpolation_method_diag='linear',
-                        use_full_diag=True)
+                        use_full_diag=True,multipoles_for_convolution=multipoles_for_convolution,
+                        window_source='Carol')
             
         return results
 
@@ -2608,9 +2612,10 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
 
         table_pklir = (table[0], *table[1:28+extra], *table[28+extra:])
         table_now_pklir = (table[0], *table_now[1:28+extra], *table_now[28+extra:])
-        self.pklir = folpsv2.get_linear_ir_ini(table_pklir[0], table_pklir[1], table_now_pklir[1], h=self.all_params['h'].value)
+        # self.pklir = folpsv2.get_linear_ir_ini(table_pklir[0], table_pklir[1], table_now_pklir[1], h=self.all_params['h'].value)
         
-        self.pt = Namespace(jac=jac, kap=kap, muap=muap, table=table[1:28+extra], table_now=table_now[1:28+extra], scalars=table[28+extra:], scalars_now=table_now[28+extra:], A_full=self.options['A_full'],remove_DeltaP=self.options['remove_DeltaP'],f=self.template.f,f0=self.template.f0,qpar = self.template.qpar, qper=self.template.qper,pklir=self.pklir)
+        # self.pt = Namespace(jac=jac, kap=kap, muap=muap, table=table[1:28+extra], table_now=table_now[1:28+extra], scalars=table[28+extra:], scalars_now=table_now[28+extra:], A_full=self.options['A_full'],remove_DeltaP=self.options['remove_DeltaP'],f=self.template.f,f0=self.template.f0,qpar = self.template.qpar, qper=self.template.qper,pklir=self.pklir)
+        self.pt = Namespace(jac=jac, kap=kap, muap=muap, table=table[1:28+extra], table_now=table_now[1:28+extra], scalars=table[28+extra:], scalars_now=table_now[28+extra:], A_full=self.options['A_full'],remove_DeltaP=self.options['remove_DeltaP'],f=self.template.f,f0=self.template.f0,qpar = self.template.qpar, qper=self.template.qper)
         # ,qpar = self.template.qpar, qper=self.template.qper, ,f=self.template.f,f0=self.template.f0
         self.kt = table[0]
         self.qpar = self.template.qpar
@@ -2627,7 +2632,8 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         
         # Inject shot noise at correct position
         pars = list(pars[:-1]) + [1. / nd, pars[-1]]  #1. / nd
-    
+        # print("bias pars",pars)
+        # pars=np.array([1, 0., 0., 0., 0., 0., 0., 0., 0., 0., 10000., 0.])
         b1 = pars[0]
         # if kwargs['prior_basis']=='physical':
         # if kwargs['b3_coev']:
@@ -2764,14 +2770,19 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         k_ev_bk = jnp.vstack([kb_all, kb_all]).T
         do_interp_bk=True
         kout = jnp.array(k1k2T)[:,0]
+        multipoles_for_convolution=tuple(kwargs.get('multipoles_for_convolution'))
+    
         # if jnp.any(k1k2T[:, 0] != k1k2T[:, 1]):
         #     kout = None
         #     do_interp_bk = False
         #     k_ev_bk= jnp.array(k1k2T)
         #     print("Interpolation disabled as 2D k-grid is not diagonal.")
         # print()
-        poles= get_bs_multipoles_jit(pars, kwargs['k1k2T'], k_pkl_pklnw_fk, table, table_now, tuple(kwargs['precision']),kwargs['damping'], getattr(self.pt, "A_full", True), getattr(self.pt, "remove_DeltaP", False),tuple(multipoles),kwargs['interpolation_method'],kwargs['bias_scheme'],kwargs['renormalized'],do_interp_bk,kout,k_ev_bk,self.pt.f0, kwargs['qper'], kwargs['qper'], self.z,
-                        wmat_000=kwargs['wmat_000'], wmat_202=kwargs['wmat_202'], k_window_=kwargs['k_window'])
+        poles= get_bs_multipoles_jit(pars, kwargs['k1k2T'], k_pkl_pklnw_fk, table, table_now, tuple(kwargs['precision']),kwargs['damping'], getattr(self.pt, "A_full", True), getattr(self.pt, "remove_DeltaP", False),
+        tuple(multipoles),multipoles_for_convolution,kwargs['interpolation_method'],kwargs['bias_scheme'],kwargs['renormalized'],do_interp_bk,kout,k_ev_bk,self.pt.f0, kwargs['qper'], kwargs['qper'], self.z,
+                        wmat_000=kwargs['wmat_000'], wmat_202=kwargs['wmat_202'], k_window_=kwargs['k_window'],
+                        )
+                        # multipoles_for_convolution=tuple(kwargs.get('multipoles_for_convolution'))
         poles_stacked = jnp.vstack(poles)
         return poles_stacked
     
@@ -2859,7 +2870,8 @@ class FOLPSv2TracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     """
 
     _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4, model='FOLPSD', bias_scheme='folps', IR_resummation=True, damping='lor',basis_rot_matrix=None,b3_coev=True,backend='jax',sigma8_fid=None,h_fid=None)
-
+    _initialize_with_namespace = False
+    _calculate_with_namespace = False
 
     # -------------------------
     # helpers
@@ -3061,7 +3073,7 @@ class FOLPSv2TracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
                 bK2 = params['bsp'] / sigma8**2/sqrt_A_AP
                 # btd = params['bsp'] / sigma8**3/sqrt_A_AP
                 btd = params['b3p']/A_AP/sigma8**4
-
+                # print("b1p,b2p,bsp,b3p", params['b1p'], params['b2p'], params['bsp'], params['b3p'])
             
 
 
@@ -3165,7 +3177,6 @@ class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
     """
     config_fn = 'full_shape.yaml'
     _klim = (1e-3, 1., 500)
-    _initialize_with_namespace = True
     # _default_options = dict(prior_basis='physical', mu=50)
     _default_options = dict(freedom=None, 
     prior_basis='standard',
@@ -3174,7 +3185,11 @@ class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
     shotnoise=1e4, h_fid=None, sigma8_fid=None,
     model='FOLPSD', bias_scheme='folps', IR_resummation=True, damping='lor', rbao=104., 
     A_full=True, remove_DeltaP=False, precision= [8,10,10],
-    renormalized=True,interpolation_method='linear',k_window=None,wmat_000=None,wmat_202=None)
+    renormalized=True,interpolation_method='linear',k_window=None,wmat_000=None,wmat_202=None,
+    multipoles_for_convolution=None)
+
+    _initialize_with_namespace = False
+    _calculate_with_namespace = False
 
 
     def initialize(self, pt=None, template=None,k1k2T=None,ells=((0,0,0),(2,0,2)), **kwargs):
@@ -3448,7 +3463,8 @@ class FOLPSv2TracerBispectrumMultipoles(BaseCalculator):
         
         qpar=self.pt.qpar
         qper=self.pt.qper
-        self.power = self.pt.bispectrum_calculator(pars,precision=self.options['precision'], damping=self.options['damping'],basis=self.options['basis'],model=self.options['model'],bias_scheme=self.options['bias_scheme'],renormalized=self.options['renormalized'],interpolation_method=self.options['interpolation_method'],k1k2T = self.k1k2T,ells=self.ells,qpar=qpar,qper=qper,k_window=self.options['k_window'],wmat_000=self.options['wmat_000'],wmat_202=self.options['wmat_202'] )
+        self.power = self.pt.bispectrum_calculator(pars,precision=self.options['precision'], damping=self.options['damping'],basis=self.options['basis'],model=self.options['model'],bias_scheme=self.options['bias_scheme'],renormalized=self.options['renormalized'],interpolation_method=self.options['interpolation_method'],k1k2T = self.k1k2T,ells=self.ells,qpar=qpar,qper=qper,k_window=self.options['k_window'],wmat_000=self.options['wmat_000'],wmat_202=self.options['wmat_202'],
+        multipoles_for_convolution=self.options['multipoles_for_convolution'] )
      
       
         

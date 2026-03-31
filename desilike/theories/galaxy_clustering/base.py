@@ -43,12 +43,135 @@ class BaseTheoryCorrelationFunctionMultipoles(BaseCalculator):
         return state
 
 
+class SpectrumToCorrelationMultipoles(object):
+
+    """Helper class to compute correlation function multipoles from power spectrum multipoles using FFTLog."""
+
+    def __init__(self, s=None, spectrum=None, interp_order=1):
+        """
+        Initialize the class.
+
+        Parameters
+        ----------
+        s : array-like, default=None
+            Array of scales where to compute correlation function multipoles.
+        spectrum : Base Calculator, default=None
+            Power spectrum multipoles calculator, required to get the multipole orders and k sampling.
+             If None, it is assumed that the power spectrum multipoles will be provided with the same k sampling as self.k.
+        interp_order : str or int, default=1
+            Interpolation order for extrapolation of power spectrum multipoles at high k.
+        """
+        self.s = np.array(s, dtype='f8')
+        self.interp_order = {'linear': 1, 'cubic': 3}.get(interp_order, interp_order)
+        allowed_interp_order = [1, 3]
+        if self.interp_order not in allowed_interp_order:
+            raise ValueError('interp_order must be one of {}'.format(allowed_interp_order))
+        self.k = np.logspace(-4., 3., 2048)
+        kin = spectrum.init.get('k', None)
+        # Important to have high enough sampling, otherwise wiggles can be seen at small s
+        if kin is None:
+            self.kin = np.geomspace(self.k[0], 0.6, int(300. / self.interp_order + 0.5))  # kmax = 1. may be better
+        else: self.kin = np.array(kin, dtype='f8')
+        spectrum.init['k'] = self.kin
+        mask = self.k > self.kin[-1]
+        self.logk_high = np.log10(self.k[mask] / self.kin[-1])
+        self.damp_high = np.exp(-(self.k[mask] / self.kin[-1] - 1.)**2 / (2. * (10.)**2))
+        #self.k_high = self.k[mask] / self.kin[-1]
+        #self.damp = np.exp(-(self.k / 10.)**2)
+        self.k_mid = self.k[~mask]
+        self.ells = spectrum.ells
+        from cosmoprimo import PowerToCorrelation
+        self.fftlog = PowerToCorrelation(self.k, ell=self.ells, q=0, lowring=True)
+
+    def __call__(self, poles):
+        tmp = []
+        for pole in poles:
+            slope_high = (pole[-1] - pole[-2]) / np.log10(self.kin[-1] / self.kin[-2])
+            interp = interp1d(np.log10(self.k_mid), np.log10(self.kin), pole, method=self.interp_order)
+            tmp.append(jnp.concatenate([interp, (pole[-1] + slope_high * self.logk_high) * self.damp_high], axis=-1))
+            #tmp.append(jnp.concatenate([interp, (pole[-1] + slope_high * self.logk_high)], axis=-1) * self.damp)
+        s, corr = self.fftlog(jnp.vstack(tmp))
+        return jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
+
+    @plotting.plotter
+    def plot(self, poles, fig=None):
+        """
+        Plot comparison to brute-force (non-fftlog) computation.
+        We see convergence towards brute-force when decreasing damping sigma.
+        Difference between fftlog and brute-force comes from the effect of truncation / damping.
+
+        Parameters
+        ----------
+        poles : list of arrays
+            List of power spectrum multipoles, in the same order as :attr:`ells`.
+        fig : matplotlib.figure.Figure, default=None
+            Optionally, a figure with at least ``1 + len(self.ells)`` axes.
+        fn : str, Path, default=None
+            Optionally, path where to save figure.
+            If not provided, figure is not saved.
+        kw_save : dict, default=None
+            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
+        show : bool, default=False
+            If ``True``, show figure.
+        """
+        corr = []
+        weights = utils.weights_trapz(np.log(self.kin))
+        for ill, ell in enumerate(self.ells):
+            # Integration in log, adding a k
+            tmp = np.sum(self.kin**3 * poles[ill] * weights * special.spherical_jn(ell, self.s[:, None] * self.kin), axis=-1)
+            corr.append((-1) ** (ell // 2) / (2. * np.pi**2) * tmp)
+        from matplotlib import pyplot as plt
+        if fig is None:
+            height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
+            figsize = (6, 1.5 * sum(height_ratios))
+            fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
+            fig.subplots_adjust(hspace=0)
+        else:
+            lax = fig.axes
+        lax[0].plot([], [], linestyle='-', color='k', label='fftlog')
+        lax[0].plot([], [], linestyle='--', color='k', label='brute-force')
+        for ill, ell in enumerate(self.ells):
+            color = 'C{:d}'.format(ill)
+            lax[0].plot(self.s, self.s**2 * self.corr[ill], color=color, linestyle='-', label=r'$\ell = {:d}$'.format(ell))
+            lax[0].plot(self.s, self.s**2 * corr[ill], linestyle='--', color=color)
+        for ill, ell in enumerate(self.ells):
+            lax[ill + 1].plot(self.s, self.s**2 * (self.corr[ill] - corr[ill]), color='C{:d}'.format(ill))
+            lax[ill + 1].set_ylabel(r'$\Delta s^{{2}}\xi_{{{0:d}}}$ [$(\mathrm{{Mpc}}/h)^{{2}}$]'.format(ell))
+        for ax in lax: ax.grid(True)
+        lax[0].legend()
+        lax[0].set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
+        lax[-1].set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
+        return fig
+
+
+class ProjectToMultipoles(object):
+
+    """Helper class to compute multipoles from wedges using Legendre polynomials."""
+
+    def __init__(self, mu=20, method='leggauss', ells=(0, 2, 4)):
+        self.mu, wmu = utils.weights_mu(mu, method=method)
+        self.wmu = np.array([wmu * (2 * ell + 1) * special.legendre(ell)(self.mu) for ell in ells])
+
+    def __call__(self, fmu):
+        return jnp.sum(fmu * self.wmu[:, None, :], axis=-1)
+
+    def __getstate__(self):
+        state = {}
+        for name in ['mu', 'wmu']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
+
 class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrelationFunctionMultipoles):
 
     """Base class for theory correlation function from power spectrum multipoles."""
     _initialize_with_namespace = True
 
-    def initialize(self, s=None, power=None, interp_order=1, **kwargs):
+    def initialize(self, s=None, power=None, interp_order=1):
         if s is None: s = np.linspace(20., 200, 101)
         self.s = np.array(s, dtype='f8')
         self.interp_order = {'linear': 1, 'cubic': 3}.get(interp_order, interp_order)
@@ -60,7 +183,6 @@ class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrela
             power = KaiserTracerPowerSpectrumMultipoles()
         self.power = power
         self.k = np.logspace(-4., 3., 2048)
-        self.power.init.update(**kwargs)
         kin = self.power.init.get('k', None)
         # Important to have high enough sampling, otherwise wiggles can be seen at small s
         if kin is None: self.kin = np.geomspace(self.k[0], 0.6, int(300. / self.interp_order + 0.5))  # kmax = 1. may be better
@@ -238,36 +360,28 @@ def ap_s_mu(s, mu, qpar=1., qper=1.):
 
 class APEffect(BaseCalculator):
     r"""
-    Alcock-Paczynski effect.
+    Alcock-Paczynski effect: compute 'qpar', 'qper', 'qap' and 'qiso' parameters, either as free parameters
+    or from the ratio of distances in ``cosmo`` and ``fiducial`` cosmologies.
 
     Parameters
     ----------
     z : float, default=1.
         Effective redshift.
-
     cosmo : BasePrimordialCosmology, default=None
         Cosmology calculator, required only if ``mode`` is 'geometry' or 'bao';
         defaults to ``Cosmoprimo(fiducial=fiducial)``.
-
     fiducial : str, tuple, dict, cosmoprimo.Cosmology, default='DESI'
         Specifications for fiducial cosmology. Either:
-
         - str: name of fiducial cosmology in :class:`cosmoprimo.fiucial`
-        - tuple: (name of fiducial cosmology, dictionary of parameters to update)
         - dict: dictionary of parameters
         - :class:`cosmoprimo.Cosmology`: Cosmology instance
-
     mode : str, default='geometry'
         Alcock-Paczynski parameterization:
-
         - 'qiso': single istropic parameter 'qiso'
         - 'qap': single, Alcock-Paczynski parameter 'qap'
         - 'qisoqap': two parameters 'qiso', 'qap'
         - 'qparqper': two parameters 'qpar' (scaling along the line-of-sight), 'qper' (scaling perpendicular to the line-of-sight)
         - 'geometry': scaling parameters computed from the ratio of ``cosmo`` to ``fiducial`` cosmology distances
-        - 'bao': scaling parameters computed from the ratio of ``cosmo`` to ``fiducial`` cosmology distances, normalized by the :math:`r_{\mathrm{drag}}` coordinates.
-        TODO: 'bao' not used anywhere? best to remove it.
-
     eta : float, default=1. / 3.
         Relation between 'qpar', 'qper' and 'qiso', 'qap' parameters:
         ``qiso = qpar ** eta * qper ** (1 - eta)``.

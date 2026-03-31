@@ -143,12 +143,10 @@ def test_bao():
       - Alcock-Paczynski parameter handling
     """
 
-    from desilike.theories.galaxy_clustering import (SimpleBAOWigglesTracerPowerSpectrumMultipoles,
-                                                      DampedBAOWigglesTracerPowerSpectrumMultipoles,
+    from desilike.theories.galaxy_clustering import (DampedBAOWigglesTracerPowerSpectrumMultipoles,
                                                       ResummedBAOWigglesTracerPowerSpectrumMultipoles,
                                                       FlexibleBAOWigglesTracerPowerSpectrumMultipoles)
-    from desilike.theories.galaxy_clustering import (SimpleBAOWigglesTracerCorrelationFunctionMultipoles,
-                                                      DampedBAOWigglesTracerCorrelationFunctionMultipoles,
+    from desilike.theories.galaxy_clustering import (DampedBAOWigglesTracerCorrelationFunctionMultipoles,
                                                       ResummedBAOWigglesTracerCorrelationFunctionMultipoles,
                                                       FlexibleBAOWigglesTracerCorrelationFunctionMultipoles)
     from desilike.theories.galaxy_clustering import (BAOPowerSpectrumTemplate, DirectPowerSpectrumTemplate,
@@ -293,19 +291,16 @@ def test_bao():
             result = theory()
             assert np.allclose(result, bak), f"Emulator result {result} does not match baseline {bak}"
 
-    results = {(0, 'power'): 9360.63799029, (0, 'power3'): 9693.13640203, (0, 'pcs'): 9799.33388814,
-               (1, 'power'): 9235.29743028, (1, 'power3'): 9563.60481141, (1, 'pcs'): 9668.76099336,
-               (2, 'power'): 9558.48460935, (2, 'power3'): 9892.74482909, (2, 'pcs'): 9998.76162521,
-               (3, 'power'): 9400.15335596, (3, 'power3'): 9733.9904474, (3, 'pcs'): 9840.51407169,
-               (4, 'power'): 0.03039407, (4, 'power3'): 0.03041274, (4, 'pcs'): 0.18474672, (4, 'even-power'): 0.02883726, (4, 'pcs2'): 0.08183483,
-               (5, 'power'): 0.02953683, (5, 'power3'): 0.02955539, (5, 'pcs'): 0.1855233, (5, 'even-power'): 0.02808751, (5, 'pcs2'): 0.08246475,
-               (6, 'power'): 0.03042766, (6, 'power3'): 0.0304462, (6, 'pcs'): 0.18467982, (6, 'even-power'): 0.02878487, (6, 'pcs2'): 0.08170432,
-               (7, 'power'): 0.03072141, (7, 'power3'): 0.03074014, (7, 'pcs'): 0.18445573, (7, 'even-power'): 0.02912326, (7, 'pcs2'): 0.08160266}
-    for itheory, cls in enumerate([SimpleBAOWigglesTracerPowerSpectrumMultipoles,
+    results = {(0, 'power'): 9235.29743028, (0, 'power3'): 9563.60481141, (0, 'pcs'): 9668.76099336,
+               (1, 'power'): 9558.48460935, (1, 'power3'): 9892.74482909, (1, 'pcs'): 9998.76162521,
+               (2, 'power'): 9400.15335596, (2, 'power3'): 9733.9904474, (2, 'pcs'): 9840.51407169,
+               (3, 'power'): 0.02953683, (3, 'power3'): 0.02955539, (3, 'pcs'): 0.1855233, (3, 'even-power'): 0.02808751, (3, 'pcs2'): 0.08246475,
+               (4, 'power'): 0.03042766, (4, 'power3'): 0.0304462, (4, 'pcs'): 0.18467982, (4, 'even-power'): 0.02878487, (4, 'pcs2'): 0.08170432,
+               (5, 'power'): 0.03072141, (5, 'power3'): 0.03074014, (5, 'pcs'): 0.18445573, (5, 'even-power'): 0.02912326, (5, 'pcs2'): 0.08160266}
+    for itheory, cls in enumerate([
                 DampedBAOWigglesTracerPowerSpectrumMultipoles,
                 ResummedBAOWigglesTracerPowerSpectrumMultipoles,
                 FlexibleBAOWigglesTracerPowerSpectrumMultipoles,
-                SimpleBAOWigglesTracerCorrelationFunctionMultipoles,
                 DampedBAOWigglesTracerCorrelationFunctionMultipoles,
                 ResummedBAOWigglesTracerCorrelationFunctionMultipoles,
                 FlexibleBAOWigglesTracerCorrelationFunctionMultipoles]):
@@ -629,4 +624,5 @@ def test_png():
 
 if __name__ == '__main__':
 
-    test_templates()
+    #test_templates()
+    test_bao()

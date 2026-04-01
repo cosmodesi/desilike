@@ -1,6 +1,9 @@
 import glob
+import warnings
 
 import numpy as np
+import lsstypes as types
+from lsstypes.external import from_pypower
 
 from desilike import plotting, jax, utils
 from desilike.base import BaseCalculator
@@ -22,21 +25,21 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
     Parameters
     ----------
-    data : array, str, Path, list, pypower.PowerSpectrumMultipoles, dict, default=None
-        Data power spectrum measurement: flat array (of all multipoles), :class:`pypower.PowerSpectrumMultipoles` instance,
+    data : array, str, Path, list, lsstypes.Mesh2SpectrumPoles, dict, default=None
+        Data power spectrum measurement: flat array (of all multipoles), :class:`lsstypes.Mesh2SpectrumPoles` instance,
         or path to such instances, or list of such objects (in which case the average of them is taken).
         If dict, parameters to be passed to theory to generate mock measurement.
         If a (list of) flat array, additionally provide list of multipoles ``ells`` and wavenumbers ``k``, and optionally ``shotnoise`` (see ``kwargs``).
 
     covariance : array, list, default=None
-        2D array, list of :class:`pypower.PowerSpectrumMultipoles` instance` instances, or paths to such instances;
+        2D array, list of :class:`lsstypes.Mesh2SpectrumPoles` instance` instances, or paths to such instances;
         these are used to compute the covariance matrix.
 
     klim : dict, default=None
         Wavenumber limits: a dictionary mapping multipoles to (min separation, max separation, (optionally) step (float)),
         e.g. ``{0: (0.01, 0.2, 0.01), 2: (0.01, 0.15, 0.01)}``. If ``None``, no selection is applied for the given multipole.
 
-    wmatrix : str, Path, pypower.BaseMatrix, WindowedPowerSpectrumMultipoles, default=None
+    wmatrix : str, Path, lsstypes.WindowMatrix, WindowedPowerSpectrumMultipoles, default=None
         Optionally, window matrix.
 
     transform : array, default=None
@@ -56,12 +59,14 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
           and optionally ``shotnoise``.
 
     """
-    def initialize(self, data=None, covariance=None, klim=None, wmatrix=None, transform=None, kedges=None, **kwargs):
+    name = 'spectrum2poles'
+
+    def initialize(self, data=None, covariance=None, klim=None, wmatrix=None, transform=None, kedges=None, shotnoise=None, **kwargs):
         self.k, self.kedges, self.ells, self.shotnoise = None, kedges, None, None
         self.flatdata, self.mocks, self.covariance = None, None, None
         if not isinstance(data, dict):
             self.flatdata = self.load_data(data=data, klim=klim)[0]
-        if self.mpicomm.bcast(_is_array(covariance) or isinstance(covariance, ObservableCovariance), root=0):
+        if self.mpicomm.bcast(_is_array(covariance) or isinstance(covariance, (ObservableCovariance, types.CovarianceMatrix)), root=0):
             self.covariance = self.mpicomm.bcast(covariance, root=0)
         else:
             self.mocks = self.load_data(data=covariance, klim=klim)[-1]
@@ -84,6 +89,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         elif klim is not None:  # FIXME: we do not want limits to apply to k (but mid-k)
             self.wmatrix.init.update(klim=klim)
         self.wmatrix.init.update(kwargs)
+        if shotnoise is not None: self.shotnoise = shotnoise
         self.wmatrix.init.setdefault('shotnoise', self.shotnoise)
         #if self.shotnoise is None: self.shotnoise = 0.
         if self.flatdata is None:
@@ -101,10 +107,14 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
             ells = list(kmasklim)
             self.flatdata = np.concatenate([data[ells.index(ell)][kmasklim[ell]] for ell in self.ells])
         if isinstance(self.covariance, ObservableCovariance):
-            if input_kedges: x, method = [(edges[:-1] + edges[1:]) / 2. for edges in self.kedges], 'mid'
+            warnings.warn('ObservableCovariance is now deprecated. Use lsstypes CovarianceMatrix')
+            if input_kedges: x, method = [np.mean(edges, axis=-1) for edges in self.kedges], 'mid'
             else: x, method = list(self.k), 'mean'
             self.nobs = self.covariance.nobs
             self.covariance = self.covariance.xmatch(x=x, projs=list(self.ells), method=method).view(projs=list(self.ells))
+        elif isinstance(self.covariance, types.CovarianceMatrix):
+            self.covariance = self.covariance.at.observable.match(self.to_lsstypes('data')).value()
+            self.nobs = getattr(self.covariance, 'nobs', None)
         self.transform = transform
         allowed_transform = [None, 'cubic']
         if self.transform not in allowed_transform:
@@ -113,22 +123,29 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
     def load_data(self, data=None, klim=None):
 
         def load_data(fn):
-            from pypower import MeshFFTPower, PowerSpectrumMultipoles
-            #with utils.LoggingContext(level='warning'):
-            state = np.load(fn, allow_pickle=True)[()]
-            if '_projs' in state:
-                toret = ObservableArray.from_state(state)
-            else:
-                toret = MeshFFTPower.from_state(state)
-                if hasattr(toret, 'poles'):
-                    toret = toret.poles
+            fn = str(fn)
+            if fn.endswith('.npy'):
+                warnings.warn('Handling of *.npy files is deprecated. Switch to lsstypes format.')
+                #with utils.LoggingContext(level='warning'):
+                state = np.load(fn, allow_pickle=True)[()]
+                if '_projs' in state:
+                    toret = ObservableArray.from_state(state)
                 else:
-                    toret = PowerSpectrumMultipoles.from_state(state)
+                    from pypower import MeshFFTPower, PowerSpectrumMultipoles
+                    toret = MeshFFTPower.from_state(state)
+                    if hasattr(toret, 'poles'):
+                        toret = toret.poles
+                    else:
+                        toret = PowerSpectrumMultipoles.from_state(state)
+                    toret = from_pypower(toret)
+            else:
+                toret = types.read(fn)
             return toret
 
         def lim_data(power, klim=klim):
             ells, list_k, list_kedges, list_data = [], [], [], []
             if isinstance(power, ObservableArray):
+                warnings.warn('Handling of ObservableArray is deprecated. Switch to lsstypes format.')
                 shotnoise = power.attrs.get('shotnoise', None)
                 if klim is None:
                     klim = {ell: (0, np.inf) for ell in power.projs}
@@ -139,20 +156,26 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
                     power_slice = power.copy().select(xlim=(start, stop), rebin=rebin, projs=ell)
                     ells.append(ell)
                     list_k.append(power_slice.x(projs=ell))
-                    list_kedges.append(power_slice.edges(projs=ell))
+                    edges = power_slice.edges(projs=ell)
+                    edges = np.column_stack((edges[:-1], edges[1:]))
+                    list_kedges.append(edges)
                     list_data.append(power_slice.view(projs=ell))
             else:
-                if hasattr(power, 'poles'):
-                    power = power.poles
-                shotnoise = power.shotnoise
+                if not isinstance(power, types.ObservableTree):
+                    power = from_pypower(power)
                 if klim is None:
                     klim = {ell: (0, np.inf) for ell in power.ells}
                 for ell, lim in klim.items():
-                    power_slice = power.copy().select(lim)
+                    start, stop, *step = lim
+                    rebin = 1
+                    pole = power.get(ells=ell)
+                    if step and step[0] != 1: rebin = np.rint(step[0] / np.diff(pole.edges('k'), axis=-1).mean()).astype(int)
+                    pole = pole.select(k=slice(0, None, rebin)).select(k=tuple(lim[:2]))
                     ells.append(ell)
-                    list_k.append(power_slice.modeavg())
-                    list_kedges.append(power_slice.edges[0])
-                    list_data.append(power_slice(ell=ell, complex=False))
+                    list_k.append(pole.coords('k'))
+                    list_kedges.append(pole.edges('k'))
+                    list_data.append(pole.value())
+                shotnoise = power.get(ells=0).values('shotnoise').mean()
             return list_k, list_kedges, tuple(ells), list_data, shotnoise
 
         def load_all(lmocks):
@@ -196,7 +219,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         if self.mpicomm.rank == 0 and data is not None:
             if not utils.is_sequence(data):
                 data = [data]
-            if any(_is_from_pypower(dd) or isinstance(dd, ObservableArray) for dd in data):
+            if any(_is_from_pypower(dd) or isinstance(dd, (ObservableArray, types.ObservableTree)) for dd in data):
                 list_y, list_shotnoise = load_all(data)
                 if not list_y: raise ValueError('no data/mocks could be obtained from {}'.format(data))
             else:
@@ -210,7 +233,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         return flatdata, list_y
 
     @plotting.plotter(interactive={'kw_theory': {'color': 'black', 'label': 'reference'}})
-    def plot(self, scaling='kpk', kw_theory=None, fig=None):
+    def plot(self, scaling='kpk', kpower=None, kw_theory=None, fig=None, figsize=None):
         """
         Plot data and theory power spectrum multipoles.
 
@@ -219,11 +242,17 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         scaling : str, default='kpk'
             Either 'kpk' or 'loglog'.
 
+        kpower : int or None, default=None
+            If not None, will overwrite power of k suggested by `scaling` and will plot k**kpower * pk. 
+
         kw_theory : list of dict, default=None
             Change the default line parametrization of the theory, one dictionary for each ell or duplicate it.
 
         fig : matplotlib.figure.Figure, default=None
             Optionally, a figure with at least ``1 + len(self.ells)`` axes.
+
+        figsize : (width, height), default=None
+            If not figure is passed, fix the size of the created figure. By default: 
 
         fn : str, Path, default=None
             Optionally, path where to save figure.
@@ -254,7 +283,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
         if fig is None:
             height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
-            figsize = (6, 1.5 * sum(height_ratios))
+            figsize = (6, 1.5 * sum(height_ratios)) if figsize is None else figsize
             fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
             fig.subplots_adjust(hspace=0.1)
             show_legend = True
@@ -264,6 +293,7 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
         data, theory, std = self.data, self.theory, self.std
         k_exp = 1 if scaling == 'kpk' else 0
+        if kpower is not None: k_exp = kpower
 
         for ill, ell in enumerate(self.ells):
             lax[0].errorbar(self.k[ill], self.k[ill]**k_exp * data[ill], yerr=self.k[ill]**k_exp * std[ill], color='C{:d}'.format(ill), linestyle='none', marker='o', label=r'$\ell = {:d}$'.format(ell))
@@ -364,10 +394,8 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
         -------
         fig : matplotlib.figure.Figure
         """
-        from desilike.observables.plotting import plot_covariance_matrix
-        cumsize = np.insert(np.cumsum([len(k) for k in self.k]), 0, 0)
-        mat = [[self.covariance[start1:stop1, start2:stop2] for start2, stop2 in zip(cumsize[:-1], cumsize[1:])] for start1, stop1 in zip(cumsize[:-1], cumsize[1:])]
-        return plot_covariance_matrix(mat, x1=self.k, xlabel1=r'$k$ [$h/\mathrm{Mpc}$]', label1=[r'$\ell = {:d}$'.format(ell) for ell in self.ells], corrcoef=corrcoef, **kwargs)
+        covariance = self.to_lsstypes('covariance')
+        return covariance.plot(corrcoef=corrcoef, **kwargs)
 
     def calculate(self):
         self.flattheory = self.wmatrix.flatpower
@@ -429,10 +457,22 @@ class TracerPowerSpectrumMultipolesObservable(BaseCalculator):
 
     @classmethod
     def install(cls, config):
-        # TODO: remove this dependency
-        #config.pip('git+https://github.com/cosmodesi/pypower')
-        pass
+        config.pip('git+https://github.com/adematti/lsstypes')
+
+    def to_lsstypes(self, kind):
+        """Return data or covariance."""
+        shotnoise = self.shotnoise if self.shotnoise is not None else 0
+        data = [types.Mesh2SpectrumPole(k=self.k[ill], k_edges=self.kedges[ill], num_raw=self.data[ill] + shotnoise * (ell == 0),
+                                        num_shotnoise=shotnoise * (ell == 0) * np.ones_like(self.data[ill]), ell=ell) for ill, ell in enumerate(self.ells)]
+        data = types.Mesh2SpectrumPoles(data)
+        if kind == 'data':
+            return data
+        if kind == 'covariance':
+             return types.CovarianceMatrix(observable=data, value=self.covariance)
+        raise NotImplementedError(f'kind {kind} not recognized')
 
     def to_array(self):
+        warnings.warn('to_array is deprecated. Please use to_lsstypes')
         from desilike.observables import ObservableArray
-        return ObservableArray(x=self.k, edges=self.kedges, value=self.data, projs=self.ells, attrs={'shotnoise': self.shotnoise}, name=self.__class__.__name__)
+        kedges = [np.append(edges[:, 0], edges[-1, 1]) for edges in self.kedges]
+        return ObservableArray(x=self.k, edges=kedges, value=self.data, projs=self.ells, attrs={'shotnoise': self.shotnoise}, name=self.__class__.__name__)

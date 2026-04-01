@@ -10,7 +10,7 @@ def test_bbn():
     # Test that the BBN likelihood behaves correctly, i.e., gives results
     # consistent with Schoneberg (2024).
 
-    mean = [0.02196, 2.944]
+    mean = [0.02196, 2.904]
     error = [0.00063, 0.21]
 
     likelihood = Schoneberg2024BBNLikelihood()

@@ -119,7 +119,7 @@ class ObservableArray(BaseClass):
         shape = tuple(len(xx) for xx in self._x)
         eshape = tuple(len(edges) - 1 for edges in self._edges)
         if eshape != shape:
-            raise ValueError('edges should be of length(x) - 1, found = {}'.format(shape, eshape))
+            raise ValueError('edges should be of length(x) + 1 = {} + 1, found = {} + 1'.format(shape, eshape))
         if weights is None:
             weights = [None] * len(self._x)
         self._weights = [np.atleast_1d(ww) if ww is not None else np.ones(len(xx), dtype='f8') for xx, ww in zip(self._x, weights)]

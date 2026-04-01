@@ -10,23 +10,19 @@ except ModuleNotFoundError:
 import numpy as np
 from scipy.special import logsumexp
 
-from desilike.utils import BaseClass
+# from desilike.utils import BaseClass
 
 
-class Samples(BaseClass):
+class Samples():
     """Class for storing samples of parameters."""
 
-    def __init__(self, latex=dict(), profiled=None, **kwargs):
+    def __init__(self, latex=dict(), **kwargs):
         """Initialize a sample of parameters.
 
         Parameters
         ----------
         latex : dict or None, optional
             LaTeX expression for parameters. Default is ``None``.
-        profiled : array-like or None, optional
-            List of parameters being profiled, i.e., the ones for which the
-            maximum likelihood or posterior is evaluated while other parameters
-            are optimized. Default is ``dict()``.
         **kwargs : dict, optional
             Samples of parameters. Each sample must have the same length.
 
@@ -47,7 +43,7 @@ class Samples(BaseClass):
                 value = np.asarray(value)
             self.data[key] = value
         self.latex = latex
-        self.profiled = list(profiled) if profiled is not None else []
+        self._profiled = None
 
     @property
     def keys(self):
@@ -67,7 +63,8 @@ class Samples(BaseClass):
         Raises
         ------
         ValueError
-            If new sample does not have the same length as current samples.
+            If new sample does not have the same length as current samples or
+            if ``key`` contains a comma.
 
         """
         if self.n_samples is None:
@@ -76,6 +73,8 @@ class Samples(BaseClass):
             raise ValueError(
                 f"Input array must have length {self.n_samples}. Received "
                 f"array of length {len(value)}.")
+        if ',' in key:
+            raise ValueError("Keys cannot contain commas.")
         if not isinstance(value, np.ndarray):
             value = np.asarray(value)
         self.data[key] = value
@@ -107,8 +106,10 @@ class Samples(BaseClass):
                 self.data[key] = np.concatenate(self.data[key])
             return self.data[key]
         elif isinstance(key, slice):
-            return self.__class__(latex=self.latex, profiled=self.profiled,
-                                  **{k: self[k][key] for k in self.keys})
+            result = self.__class__(
+                latex=self.latex, **{k: self[k][key] for k in self.keys})
+            result._profiled = self._profiled
+            return result
         elif isinstance(key, int):
             return {k: v[key] for k, v in self.data.items()}
         else:
@@ -147,6 +148,30 @@ class Samples(BaseClass):
     def __repr__(self):
         """Get a summary of the samples."""
         return f"<Samples: n={len(self)}, keys=[{', '.join(self.keys)}]>"
+
+    def _set_profiled(self, combinations):
+        """Set which parameter combinations where profiled over.
+
+        Parameters
+        ----------
+        combinations : list of lists
+            List of parameter combinations that were profiled.
+
+        Raises
+        ------
+        ValueError
+            If the length of ``combinations`` does not match the length of
+            the samples.
+
+        """
+        if len(combinations) != len(self):
+            raise ValueError(
+                "'combinations' must be the same length as samples.")
+
+        combinations = list(map(frozenset, combinations))
+        self._profiled = list(set(combinations))
+        self['profiled_index'] = [
+            self._profiled.index(value) for value in combinations]
 
     def save(self, filepath, keys=None):
         """Save samples to a file.
@@ -188,14 +213,19 @@ class Samples(BaseClass):
                 filepath, np.column_stack(list(data.values())),
                 header=','.join(data.keys()), delimiter=',')
         elif suffix in ['.npz', '.hdf5', '.h5']:
-            profiled = np.asarray(self.profiled, dtype='U')
+            profiled = self._profiled
+            if profiled is not None:
+                profiled = np.asarray(
+                    [','.join(p) for p in profiled], dtype='U')
             latex_keys = np.asarray(list(self.latex.keys()), dtype='U')
             latex_values = np.asarray(list(self.latex.values()), dtype='U')
 
             if suffix == '.npz':
-                np.savez(
-                    filepath, latex_keys=latex_keys, latex_values=latex_values,
-                    profiled=profiled, **data)
+                kwds = data | dict(
+                    latex_keys=latex_keys, latex_values=latex_values)
+                if profiled is not None:
+                    kwds['profiled'] = profiled
+                np.savez(filepath, allow_pickle=False, **kwds)
             elif suffix in ['.hdf5', '.h5']:
                 if not H5PY_INSTALLED:
                     raise ValueError(
@@ -204,7 +234,8 @@ class Samples(BaseClass):
                     dtype = h5py.string_dtype(encoding='utf-8')
                     fstream['latex_keys'] = latex_keys.astype(dtype)
                     fstream['latex_values'] = latex_values.astype(dtype)
-                    fstream['profiled'] = profiled.astype(dtype)
+                    if profiled is not None:
+                        fstream['profiled'] = profiled.astype(dtype)
                     for key, value in data.items():
                         fstream[key] = value
         else:
@@ -248,9 +279,16 @@ class Samples(BaseClass):
         latex_keys = data.pop('latex_keys').astype('U')
         latex_values = data.pop('latex_values').astype('U')
         latex = {key: value for key, value in zip(latex_keys, latex_values)}
-        profiled = list(data.pop('profiled').astype('U'))
 
-        return cls(latex=latex, profiled=profiled, **data)
+        if 'profiled' in data:
+            profiled = [frozenset(p.split(',')) for p
+                        in data.pop('profiled').astype('U')]
+        else:
+            profiled = None
+        samples = cls(latex=latex, **data)
+        samples._profiled = profiled
+
+        return samples
 
     @property
     def weight(self):

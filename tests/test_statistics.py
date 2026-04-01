@@ -38,17 +38,15 @@ def test_samples_basic():
 
 @pytest.mark.mpi_skip
 @pytest.mark.parametrize('suffix', ['.hdf5', '.npz', '.csv', '.npy'])
-@pytest.mark.parametrize('set_profiled', [True, False])
-def test_samples_save(suffix, set_profiled, tmp_path):
+def test_samples_save(suffix, tmp_path):
     # Test that samples can be saved correctly.
 
     filepath = tmp_path / ('samples' + suffix)
 
     samples = statistics.Samples(
         a=np.linspace(0, 1, 10), b=np.arange(20).reshape(10, 2),
-        latex=dict(a=r'$\lambda$'))
-    if set_profiled:
-        samples._set_profiled([['a', ]] * 5 + [['b', ]] * 5)
+        latex=dict(a=r'$\lambda$'),
+        profiled=[['a', ]] * 5 + [['b', ]] * 5)
 
     if suffix == '.npy':
         with pytest.raises(ValueError):
@@ -65,8 +63,6 @@ def test_samples_save(suffix, set_profiled, tmp_path):
     if suffix in ['.hdf5', '.npz']:
         samples_read = statistics.Samples.load(filepath)
         assert samples.latex == samples_read.latex
-        if set_profiled:
-            assert samples._profiled == samples_read._profiled
         for key in samples.keys:
             assert np.all(samples[key] == samples_read[key])
 

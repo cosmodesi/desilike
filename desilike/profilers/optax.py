@@ -158,7 +158,7 @@ class OptaxProfiler(BaseProfiler):
 
         params = start
         state = tx.init(params)
-        loss = np.infty
+        loss = float('inf')  # not np.infty (removed in NumPy 2) — safe on all installs
         best_params, best_loss, test_loss = params, loss, loss
         early_stopping_counter = 0
 

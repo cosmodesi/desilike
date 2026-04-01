@@ -72,6 +72,10 @@ def _profiles_transform_forward(self, profiles):
         except KeyError:
             return array
         array.param = self.varied_params[iparam]
+        # ``None`` would become ``np.newaxis`` in NumPy indexing and corrupt 1D contour / bestfit arrays.
+        # Use ``...`` so both scalar (0D) and non-scalar arrays can be transformed safely.
+        if index is None:
+            index = Ellipsis
         array[index] = array[index] * self._params_transform_scale[iparam]
         if not scale_only: array[index] += self._params_transform_loc[iparam]
         return array
@@ -734,8 +738,14 @@ class BaseProfiler(BaseClass, metaclass=RegisteredProfiler):
         start, center, covariance = start[..., varied_indices], center[grid_indices], covariance[np.ix_(grid_indices, grid_indices)]
         limits = np.array([param.prior.limits for param in grid_params]).T
 
-        t, u = np.linalg.eig(covariance)
-        s = (t * factor) ** 0.5
+        # FD / approximate Hessians (e.g. BOBYQA) can be indefinite; use |λ| so the search ellipse does not collapse.
+        t, u = np.linalg.eigh(covariance)
+        abs_t = np.abs(np.real(t))
+        m = np.max(abs_t) if abs_t.size else 0.
+        floor = (max(float(m), 1.) if np.isfinite(m) else 1.) * 1e-15
+        radicand = np.maximum(abs_t, floor) * factor
+        radicand = np.clip(np.nan_to_num(radicand, nan=0., posinf=0., neginf=0.), 0., np.inf)
+        s = np.sqrt(radicand)
 
         def get_point(phi, z):
             r = u @ (z * s[0] * np.cos(phi), z * s[1] * np.sin(phi))

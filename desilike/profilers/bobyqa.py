@@ -75,8 +75,14 @@ class BOBYQAProfiler(BaseProfiler):
             return profiles
         attrs = {name: getattr(result, name) for name in ['nf', 'nx', 'nruns', 'flag', 'msg']}
         profiles.set(bestfit=ParameterBestFit([np.atleast_1d(xx) for xx in result.x] + [- 0.5 * np.atleast_1d(result.f)], params=state.varied_params + ['logposterior'], attrs=attrs))
+        # Py-BOBYQA returns a FD Hessian estimate; unlike Minuit's HESSE or BFGS's `hess_inv`, it is not
+        # guaranteed PSD, so inv(H) need not be a valid covariance and diag(cov) can be slightly negative.
         cov = utils.inv(result.hessian)
-        profiles.set(error=Samples(np.diag(cov)**0.5, params=state.varied_params, attrs=attrs))
+        d = np.diag(cov)
+        if np.any(d < 0) and self.mpicomm.rank == 0:
+            self.log_warning('BOBYQA Hessian inverse has negative diagonal(s); parabolic errors clipped to 0.')
+        diag_err = np.sqrt(np.clip(d, 0., np.inf))
+        profiles.set(error=Samples(diag_err, params=state.varied_params, attrs=attrs))
         profiles.set(covariance=ParameterCovariance(cov, params=state.varied_params, attrs=attrs))
         return profiles
 

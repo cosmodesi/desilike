@@ -18,7 +18,8 @@ dependencies = [
     "scipy",
     "pyyaml",
     "mpi4py",
-    "cosmoprimo @ git+https://github.com/cosmodesi/cosmoprimo"]
+    "cosmoprimo @ git+https://github.com/cosmodesi/cosmoprimo"
+    "lsstypes @ git+https://github.com/adematti/lsstypes"]
 
 [project.optional-dependencies]
 tests = [

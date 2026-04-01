@@ -16,13 +16,17 @@ from scipy.special import logsumexp
 class Samples():
     """Class for storing samples of parameters."""
 
-    def __init__(self, latex=dict(), **kwargs):
+    def __init__(self, latex=dict(), profiled=None, **kwargs):
         """Initialize a sample of parameters.
 
         Parameters
         ----------
         latex : dict or None, optional
             LaTeX expression for parameters. Default is ``None``.
+        profiled : array-like or None, optional
+            List of parameter combinations that were profiled. Each element
+            can be a string listing keys separated by a comma or a tuple
+            of strings, each indicating a key.
         **kwargs : dict, optional
             Samples of parameters. Each sample must have the same length.
 
@@ -32,6 +36,15 @@ class Samples():
             If not all samples have the same length.
 
         """
+        if profiled is not None:
+            profiled = list(profiled)
+            for i, element in enumerate(profiled):
+                if isinstance(element, (tuple, list, set)):
+                    profiled[i] = ','.join(list(element))
+                else:
+                    profiled[i] = ','.join(sorted(element.split(',')))
+            kwargs['profiled'] = np.asarray(profiled, dtype='U')
+
         self.data = {}
         self.n_samples = None
         for key, value in kwargs.items():
@@ -39,11 +52,8 @@ class Samples():
                 self.n_samples = len(value)
             elif len(value) != self.n_samples:
                 raise ValueError("All inputs must have the same length.")
-            if not isinstance(value, np.ndarray):
-                value = np.asarray(value)
-            self.data[key] = value
+            self[key] = value
         self.latex = latex
-        self._profiled = None
 
     @property
     def keys(self):
@@ -106,10 +116,8 @@ class Samples():
                 self.data[key] = np.concatenate(self.data[key])
             return self.data[key]
         elif isinstance(key, slice):
-            result = self.__class__(
+            return self.__class__(
                 latex=self.latex, **{k: self[k][key] for k in self.keys})
-            result._profiled = self._profiled
-            return result
         elif isinstance(key, int):
             return {k: v[key] for k, v in self.data.items()}
         else:
@@ -149,30 +157,6 @@ class Samples():
         """Get a summary of the samples."""
         return f"<Samples: n={len(self)}, keys=[{', '.join(self.keys)}]>"
 
-    def _set_profiled(self, combinations):
-        """Set which parameter combinations where profiled over.
-
-        Parameters
-        ----------
-        combinations : list of lists
-            List of parameter combinations that were profiled.
-
-        Raises
-        ------
-        ValueError
-            If the length of ``combinations`` does not match the length of
-            the samples.
-
-        """
-        if len(combinations) != len(self):
-            raise ValueError(
-                "'combinations' must be the same length as samples.")
-
-        combinations = list(map(frozenset, combinations))
-        self._profiled = list(set(combinations))
-        self['profiled_index'] = [
-            self._profiled.index(value) for value in combinations]
-
     def save(self, filepath, keys=None):
         """Save samples to a file.
 
@@ -199,10 +183,11 @@ class Samples():
         suffix = filepath.suffix.lower()
 
         keys = list(self.keys) if keys is None else keys
-
         data = {key: self[key] for key in keys}
 
         if suffix == '.csv':
+            data = {key: value for key, value in data.items() if
+                    key != 'profiled'}
             for key, value in data.items():
                 if not value.ndim == 1:
                     raise ValueError(
@@ -213,19 +198,12 @@ class Samples():
                 filepath, np.column_stack(list(data.values())),
                 header=','.join(data.keys()), delimiter=',')
         elif suffix in ['.npz', '.hdf5', '.h5']:
-            profiled = self._profiled
-            if profiled is not None:
-                profiled = np.asarray(
-                    [','.join(p) for p in profiled], dtype='U')
             latex_keys = np.asarray(list(self.latex.keys()), dtype='U')
             latex_values = np.asarray(list(self.latex.values()), dtype='U')
 
             if suffix == '.npz':
-                kwds = data | dict(
-                    latex_keys=latex_keys, latex_values=latex_values)
-                if profiled is not None:
-                    kwds['profiled'] = profiled
-                np.savez(filepath, allow_pickle=False, **kwds)
+                np.savez(filepath, allow_pickle=False, latex_keys=latex_keys,
+                         latex_values=latex_values, **data)
             elif suffix in ['.hdf5', '.h5']:
                 if not H5PY_INSTALLED:
                     raise ValueError(
@@ -234,10 +212,11 @@ class Samples():
                     dtype = h5py.string_dtype(encoding='utf-8')
                     fstream['latex_keys'] = latex_keys.astype(dtype)
                     fstream['latex_values'] = latex_values.astype(dtype)
-                    if profiled is not None:
-                        fstream['profiled'] = profiled.astype(dtype)
                     for key, value in data.items():
-                        fstream[key] = value
+                        if key == 'profiled':
+                            fstream[key] = value.astype(dtype)
+                        else:
+                            fstream[key] = value
         else:
             raise ValueError(f"File ending '{suffix}' not supported.")
 
@@ -279,16 +258,12 @@ class Samples():
         latex_keys = data.pop('latex_keys').astype('U')
         latex_values = data.pop('latex_values').astype('U')
         latex = {key: value for key, value in zip(latex_keys, latex_values)}
-
         if 'profiled' in data:
-            profiled = [frozenset(p.split(',')) for p
-                        in data.pop('profiled').astype('U')]
+            profiled = data.pop('profiled').astype('U')
         else:
             profiled = None
-        samples = cls(latex=latex, **data)
-        samples._profiled = profiled
 
-        return samples
+        return cls(latex=latex, profiled=profiled, **data)
 
     @property
     def weight(self):
@@ -352,8 +327,8 @@ class Samples():
     def copy(self):
         """Return a copy of the samples object."""
         kwargs = {key: self.data[key].copy() for key in self.keys}
-        return self.__class__(
-            latex=self.latex.copy(), profiled=self.profiled.copy(), **kwargs)
+        samples = self.__class__(latex=self.latex.copy(), **kwargs)
+        return samples
 
     @classmethod
     def concatenate(cls, samples):

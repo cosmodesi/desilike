@@ -274,7 +274,7 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
 
     def to_lsstypes(self, kind):
         """Return data or covariance."""
-        data = [types.Mesh3PowerSpectrumPole(k=self.k[ill], k_edges=self.kedges[ill], value=self.data[ill], ell=ell) for ell in self.ells]
+        data = [types.Mesh3PowerSpectrumPole(k=self.k[ill], k_edges=self.kedges[ill], value=self.data[ill], ell=ell) for ill, ell in enumerate(self.ells)]
         data = types.Mesh2PowerSpectrumPoles(data)
         if kind == 'data':
             return data
@@ -283,6 +283,7 @@ class TracerBispectrumMultipolesObservable(BaseCalculator):
         raise NotImplementedError(f'kind {kind} not recognized')
 
     def to_array(self):
+        import warnings 
         warnings.warn('to_array is deprecated. Please use to_lsstypes')
         from desilike.observables import ObservableArray
         return ObservableArray(x=self.k, value=self.data, projs=self.ells, attrs={'shotnoise': self.shotnoise}, name=self.__class__.__name__)

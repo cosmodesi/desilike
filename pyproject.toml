@@ -14,7 +14,7 @@ classifiers = ["License :: OSI Approved :: BSD License"]
 dynamic = ["version", "description"]
 requires-python = ">= 3.10"
 dependencies = [
-    "numpy>=1.18.0,<2.0",
+    "numpy>=1.18.0",
     "scipy",
     "pyyaml",
     "mpi4py",

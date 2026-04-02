@@ -18,7 +18,7 @@ import numpy as np
 from desilike import Samples
 from desilike.statistics import diagnostics
 from desilike.utils import BaseClass
-from .pool import MPIPool
+from desilike.pool import MPIPool
 
 
 def _main(func):
@@ -114,8 +114,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
         self.n_derived = int(np.sum([np.prod(param.shape) for param in
                                      self.derived_params]))
 
-        self.mpicomm = likelihood.mpicomm
-        self.pool = MPIPool(comm=self.mpicomm)
+        self.pool = MPIPool()
         for name, f in zip(
                 ['_prior_transform', '_compute_prior', '_compute_posterior',
                  '_compute_likelihood'],
@@ -127,7 +126,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
             directory = Path(directory)
             if directory.suffix:
                 raise ValueError("The directory cannot have a suffix.")
-            if self.mpicomm.rank == 0:
+            if self.pool.main:
                 directory.mkdir(parents=True, exist_ok=True)
         self.directory = directory
 
@@ -293,13 +292,13 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
     def _write(self):
         """Write all results to disk."""
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             with open(self.directory / 'rng.json', 'w') as fstream:
                 json.dump(self.rng.bit_generator.state, fstream)
 
     def _read(self):
         """Read internal calculations from disk."""
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             with open(self.directory / 'rng.json', 'r') as fstream:
                 self.rng = np.random.default_rng()
                 self.rng.bit_generator.state = json.load(fstream)
@@ -360,12 +359,12 @@ class StaticSampler(BaseSampler):
 
     def _write(self):
         """Write internal calculations to disk."""
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             self.results.save(self.directory / 'results.npz')
 
     def _read(self):
         """Read internal calculations from disk."""
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             self.results = Samples.load(self.directory / 'results.npz')
 
 

@@ -77,7 +77,7 @@ class PocoMCSampler(PopulationSampler):
 
         super().__init__(likelihood, rng=rng, directory=directory)
 
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             prior = Prior(self.likelihood.varied_params)
             kwargs = update_parameters(
                 kwargs, 'pocoMC', prior=prior,

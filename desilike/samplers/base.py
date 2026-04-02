@@ -17,7 +17,7 @@ import numpy as np
 from desilike import Samples
 from desilike.statistics import diagnostics
 from desilike.utils import BaseClass
-from .pool import MPIPool
+from desilike.pool import MPIPool
 
 
 def update_parameters(user_kwargs, sampler, **desilike_kwargs):
@@ -87,8 +87,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
         self.n_derived = int(sum(
             np.prod(shape) for shape in self.derived_shapes))
 
-        self.mpicomm = likelihood.mpicomm
-        self.pool = MPIPool(comm=self.mpicomm)
+        self.pool = MPIPool()
         for name, f in zip(
                 ['prior_transform', 'compute_prior', 'compute_posterior',
                  'compute_likelihood'],
@@ -100,7 +99,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
             directory = Path(directory)
             if directory.suffix:
                 raise ValueError("The directory cannot have a suffix.")
-            if self.mpicomm.rank == 0:
+            if self.pool.main:
                 directory.mkdir(parents=True, exist_ok=True)
         self.directory = directory
 
@@ -234,13 +233,13 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
     def write(self):
         """Write all results to disk."""
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             with open(self.directory / 'rng.json', 'w') as fstream:
                 json.dump(self.rng.bit_generator.state, fstream)
 
     def read(self):
         """Read internal calculations from disk."""
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             with open(self.directory / 'rng.json', 'r') as fstream:
                 self.rng = np.random.default_rng()
                 self.rng.bit_generator.state = json.load(fstream)
@@ -282,7 +281,7 @@ class StaticSampler(BaseSampler):
         """
         if not self.mpicomm.bcast(hasattr(self, 'results'), root=0):
             # Do the calculations.
-            if self.mpicomm.rank == 0:
+            if self.pool.main:
                 samples = self.get_samples(**kwargs)
                 log_prior = np.array(self.pool.map(
                     self.compute_prior, samples))
@@ -303,16 +302,16 @@ class StaticSampler(BaseSampler):
             self.write()
 
         return self.mpicomm.bcast(
-            self.results if self.mpicomm.rank == 0 else None, root=0)
+            self.results if self.pool.main else None, root=0)
 
     def write(self):
         """Write internal calculations to disk."""
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             self.results.save(self.directory / 'results.npz')
 
     def read(self):
         """Read internal calculations from disk."""
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             self.results = Samples.load(self.directory / 'results.npz')
 
 
@@ -354,7 +353,7 @@ class PopulationSampler(BaseSampler):
             Sampler results.
 
         """
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             samples, derived, extras = self.run_sampler(**kwargs)
             results = self.array_to_samples(samples, derived, **extras)
             self.pool.stop_wait()
@@ -452,7 +451,7 @@ class MarkovChainSampler(BaseSampler):
         if max_init_attempts is None:
             max_init_attempts = sys.maxsize
 
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
 
             for _ in range(max_init_attempts):
 
@@ -600,7 +599,7 @@ class MarkovChainSampler(BaseSampler):
             If True, sampling should stop.
 
         """
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             converged = (len(self.chains[0]) >= max_steps or
                          (len(self.chains[0]) >= min_steps and
                           len(self.checks) >= checks_passed and
@@ -669,7 +668,7 @@ class MarkovChainSampler(BaseSampler):
             adaptation_steps = self.default_adaptation_steps
         self.adaptation_steps = adaptation_steps  # only used for MH MCMC
 
-        if self.mpicomm.rank == 0 and adaptation_steps > 0:
+        if self.pool.main and adaptation_steps > 0:
             self.adapt_sampler(adaptation_steps)
 
         # Run the chain until convergence.
@@ -688,7 +687,7 @@ class MarkovChainSampler(BaseSampler):
                                 save_every - (steps % save_every),
                                 max_steps - steps)
             steps += steps_to_take
-            if self.mpicomm.rank == 0:
+            if self.pool.main:
                 self.run_sampler(steps_to_take)
                 if steps % check_every == 0:
                     self.checks.append(self.check(
@@ -705,7 +704,7 @@ class MarkovChainSampler(BaseSampler):
         if self.directory is not None and steps % save_every != 0:
             self.write()
 
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             if isinstance(burn_in, float):
                 burn_in = int(burn_in) * len(self.chains[0])
             chains = [chain[burn_in:] for chain in self.chains]
@@ -722,7 +721,7 @@ class MarkovChainSampler(BaseSampler):
     def write(self):
         """Write all results to disk."""
         super().write()
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             for i, chain in enumerate(self.chains):
                 chain.save(self.directory / f'chain_{i + 1}.npz')
             np.save(self.directory / 'checks.npy', self.checks)
@@ -730,7 +729,7 @@ class MarkovChainSampler(BaseSampler):
     def read(self):
         """Read internal calculations from disk."""
         super().read()
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             self.chains = [Samples.load(self.directory / f'chain_{i + 1}.npz')
                            for i in range(self.n_chains)]
             self.checks = list(np.load(self.directory / 'checks.npy'))

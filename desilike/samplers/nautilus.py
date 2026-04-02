@@ -4,7 +4,6 @@ try:
     NAUTILUS_INSTALLED = True
 except ModuleNotFoundError:
     NAUTILUS_INSTALLED = False
-import numpy as np
 
 from .base import update_parameters, PopulationSampler
 
@@ -40,7 +39,7 @@ class NautilusSampler(PopulationSampler):
 
         super().__init__(likelihood, rng=rng, directory=directory)
 
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             kwargs = update_parameters(
                 kwargs, 'nautilus', prior=self.prior_transform,
                 likelihood=self.compute_likelihood, n_dim=self.n_dim,
@@ -70,6 +69,5 @@ class NautilusSampler(PopulationSampler):
         self.sampler.run(**kwargs)
         samples, log_w, log_l, blobs = self.sampler.posterior(
             return_blobs=True)
-        print('nautlus', blobs.shape)
         return samples, blobs.reshape(len(samples), -1), dict(
             log_weight=log_w, log_likelihood=log_l)

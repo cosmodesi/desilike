@@ -81,17 +81,17 @@ def _error_function(task):
 class MPIPool(object):
     """An MPI pool capable of mapping functions."""
 
-    def __init__(self, comm=None):
+    def __init__(self):
         try:
             from mpi4py import MPI
             self.MPI = MPI
+            self.comm = self.MPI.COMM_WORLD
+            self.rank = self.comm.Get_rank()
+            self.size = self.comm.Get_size()
         except ImportError:
-            raise RuntimeError("MPI environment not found!")
-        if comm is None:
-            comm = self.MPI.COMM_WORLD
-        self.comm = comm
-        self.rank = self.comm.Get_rank()
-        self.size = self.comm.Get_size()
+            self.comm = None
+            self.rank = 0
+            self.size = 1
 
         self.function = _error_function
         self.registry = dict()
@@ -159,7 +159,7 @@ class MPIPool(object):
     def wait(self):
         """Wait for instructions. Should only be used by worker processes."""
         if self.main:
-            raise RuntimeError("Main node told to await jobs")
+            raise RuntimeError("Main node told to await jobs.")
         status = self.MPI.Status()
         while True:
             task = self.comm.recv(source=0, tag=self.MPI.ANY_TAG,
@@ -186,7 +186,7 @@ class MPIPool(object):
                 self.comm.isend(_stop_wait_message(), dest=i)
 
     def map(self, function, tasks):
-        """Apply a function to a list of tasks across MPI processes..
+        """Apply a function to a list of tasks across MPI processes.
 
         Parameters
         ----------
@@ -200,15 +200,17 @@ class MPIPool(object):
         results : list
             List of results.
 
-        Notes
-        -----
-        This should only be called from the main process. Worker (non-main)
-        process should instead call :meth:`wait`.
+        Raises
+        ------
+        ValueError
+            If this function is called by a worked (non-zero rank) process.
 
         """
+        if self.size == 1:
+            return map(function, tasks)
+
         if not self.main:
-            self.wait()
-            return
+            raise ValueError("'map' was called by a worker process.")
 
         tasks = list(tasks)
         # Send function if necessary.

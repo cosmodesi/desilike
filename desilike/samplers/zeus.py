@@ -50,7 +50,7 @@ class ZeusSampler(MarkovChainSampler):
         super().__init__(likelihood, n_chains=n_chains, chains=chains, rng=rng,
                          directory=directory)
 
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             kwargs = update_parameters(
                 kwargs, 'zeus', nwalkers=self.n_chains, ndim=self.n_dim,
                 logprob_fn=self.compute_posterior, pool=self.pool, args=None,

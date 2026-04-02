@@ -358,10 +358,9 @@ class PopulationSampler(BaseSampler):
             results = self.array_to_samples(samples, derived, **extras)
             self.pool.stop_wait()
         else:
-            results = None
             self.pool.wait()
 
-        return self.mpicomm.bcast(results, root=0)
+        return self.pool.bcast(results if self.pool.main else None)
 
 
 class MarkovChainSampler(BaseSampler):
@@ -482,7 +481,7 @@ class MarkovChainSampler(BaseSampler):
         else:
             self.pool.wait()
 
-        if self.mpicomm.bcast(len(self.chains) < self.n_chains, root=0):
+        if self.pool.bcast(len(self.chains) < self.n_chains):
             raise ValueError('Could not find finite posterior '
                              f'after {max_init_attempts:d} attempts.')
 
@@ -604,10 +603,8 @@ class MarkovChainSampler(BaseSampler):
                          (len(self.chains[0]) >= min_steps and
                           len(self.checks) >= checks_passed and
                           all(self.checks[-checks_passed:])))
-        else:
-            converged = False
 
-        return self.mpicomm.bcast(converged, root=0)
+        return self.pool.bcast(converged if self.pool.main else None)
 
     def run(self, burn_in=0.2, min_steps=0, max_steps=None,
             adaptation_steps=None, check_every=300, checks_passed=2,
@@ -658,7 +655,7 @@ class MarkovChainSampler(BaseSampler):
             Sampler results.
 
         """
-        if self.mpicomm.bcast(len(self.chains) == 0, root=0):
+        if self.pool.bcast(len(self.chains) == 0):
             self.initialize_chains(max_init_attempts=max_init_attempts)
 
         if self.directory is None:
@@ -672,8 +669,7 @@ class MarkovChainSampler(BaseSampler):
             self.adapt_sampler(adaptation_steps)
 
         # Run the chain until convergence.
-        steps = self.mpicomm.bcast(
-            len(self.chains[0]) if self.pool.main else 0, root=0)
+        steps = self.pool.bcast(len(self.chains[0]) if self.pool.main else 0)
 
         if max_steps is None:
             max_steps = sys.maxsize

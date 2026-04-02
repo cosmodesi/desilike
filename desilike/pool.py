@@ -236,3 +236,17 @@ class MPIPool(object):
                                     status=status)
             results[status.source::self.size] = result
         return results
+
+    def bcast(self, obj):
+        """Broadcast an object from main.
+
+        Parameters
+        ----------
+        obj : object
+            Object to be broadcasted.
+
+        """
+        if self.size == 1:
+            return obj
+        else:
+            return self.comm.bcast(obj)

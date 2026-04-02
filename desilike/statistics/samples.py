@@ -25,7 +25,7 @@ class Samples():
             LaTeX expression for parameters. Default is ``None``.
         profiled : array-like or None, optional
             List of parameter combinations that were profiled. Each element
-            can be a string listing keys separated by a comma or a tuple
+            can be a string listing keys separated by a comma or a list
             of strings, each indicating a key.
         **kwargs : dict, optional
             Samples of parameters. Each sample must have the same length.
@@ -94,16 +94,16 @@ class Samples():
 
         Parameters
         ----------
-        key : str, slice, or int
+        key : str, slice, numpy.ndarray, or int
             Key, slice, or number to use.
 
         Returns
         -------
         result : numpy.ndarray or desilike.statistics.Samples
             If ``key`` is a ``str``, the value, i.e., column, for that key.
-            If ``key`` is a slice, a new ``Samples`` object corresponding to
-            those rows. If ``key`` is an integer, a dictionary corresponding
-            to that row.
+            If ``key`` is a slice or boolean array, a new ``Samples`` object
+            corresponding to those rows. If ``key`` is an integer, a dictionary
+            corresponding to that row.
 
         Raises
         ------
@@ -115,7 +115,7 @@ class Samples():
             if isinstance(self.data[key], list):
                 self.data[key] = np.concatenate(self.data[key])
             return self.data[key]
-        elif isinstance(key, slice):
+        elif isinstance(key, (slice, np.ndarray)):
             return self.__class__(
                 latex=self.latex, **{k: self[k][key] for k in self.keys})
         elif isinstance(key, int):
@@ -142,16 +142,21 @@ class Samples():
             If keys do not match.
 
         """
-        if set(self.keys) != set(samples.keys):
-            raise ValueError("Keys do not match.")
+        if len(self) == 0:
+            self.data = samples.data
+            self.n_samples = len(samples)
+            self.latex.update(samples.latex)
+        else:
+            if set(self.keys) != set(samples.keys):
+                raise ValueError("Keys do not match.")
 
-        for key in self.keys:
-            if isinstance(self.data[key], list):
-                self.data[key].append(samples[key])
-            else:
-                self.data[key] = [self.data[key], samples[key]]
+            for key in samples.keys:
+                if isinstance(self.data[key], list):
+                    self.data[key].append(samples[key])
+                else:
+                    self.data[key] = [self.data[key], samples[key]]
 
-        self.n_samples += len(samples)
+            self.n_samples += len(samples)
 
     def __repr__(self):
         """Get a summary of the samples."""

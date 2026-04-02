@@ -16,17 +16,17 @@ from scipy.special import logsumexp
 class Samples():
     """Class for storing samples of parameters."""
 
-    def __init__(self, latex=dict(), profiled=None, **kwargs):
+    def __init__(self, latex=dict(), fixed=None, **kwargs):
         """Initialize a sample of parameters.
 
         Parameters
         ----------
         latex : dict or None, optional
             LaTeX expression for parameters. Default is ``None``.
-        profiled : array-like or None, optional
-            List of parameter combinations that were profiled. Each element
-            can be a string listing keys separated by a comma or a list
-            of strings, each indicating a key.
+        fixed : array-like or None, optional
+            List of parameter combinations that are fixed. Each element can be
+            a string listing keys separated by a "/" or a list of strings,
+            each indicating a key.
         **kwargs : dict, optional
             Samples of parameters. Each sample must have the same length.
 
@@ -36,14 +36,14 @@ class Samples():
             If not all samples have the same length.
 
         """
-        if profiled is not None:
-            profiled = list(profiled)
-            for i, element in enumerate(profiled):
+        if fixed is not None:
+            fixed = list(fixed)
+            for i, element in enumerate(fixed):
                 if isinstance(element, (tuple, list, set)):
-                    profiled[i] = ','.join(list(element))
+                    fixed[i] = '/'.join(list(element))
                 else:
-                    profiled[i] = ','.join(sorted(element.split(',')))
-            kwargs['profiled'] = np.asarray(profiled, dtype='U')
+                    fixed[i] = '/'.join(sorted(element.split('/')))
+            kwargs['fixed'] = np.asarray(fixed, dtype='U')
 
         self.data = {}
         self.n_samples = None
@@ -61,33 +61,39 @@ class Samples():
         return list(self.data.keys())
 
     def __setitem__(self, key, value):
-        """Set or add a new sample.
+        """Manipulate the samples.
 
         Parameters
         ----------
-        key : str
-            Key to use.
-        value : array-like
-            Value for that key.
+        key : str or int
+            Key (column) to modify or add. Alternatively, index (row) to
+            modify.
+        value : array-like or dict
+            Value for that key or index.
 
         Raises
         ------
         ValueError
             If new sample does not have the same length as current samples or
-            if ``key`` contains a comma.
+            if ``key`` contains a comma or a backslash.
 
         """
-        if self.n_samples is None:
-            self.n_samples = len(value)
-        if len(value) != self.n_samples:
-            raise ValueError(
-                f"Input array must have length {self.n_samples}. Received "
-                f"array of length {len(value)}.")
-        if ',' in key:
-            raise ValueError("Keys cannot contain commas.")
-        if not isinstance(value, np.ndarray):
-            value = np.asarray(value)
-        self.data[key] = value
+        if isinstance(key, str):
+            if self.n_samples is None:
+                self.n_samples = len(value)
+            if len(value) != self.n_samples:
+                raise ValueError(
+                    f"Input array must have length {self.n_samples}. Received "
+                    f"array of length {len(value)}.")
+            if ',' in key or '/' in key:
+                raise ValueError("Keys cannot contain commas or backslashes.")
+            if not isinstance(value, np.ndarray):
+                value = np.asarray(value)
+            self.data[key] = value
+        else:
+            index = key
+            for key in self.keys:
+                self.data[key][index] = value[key]
 
     def __getitem__(self, key):
         """Get a sample by column or row(s).
@@ -118,7 +124,7 @@ class Samples():
         elif isinstance(key, (slice, np.ndarray)):
             return self.__class__(
                 latex=self.latex, **{k: self[k][key] for k in self.keys})
-        elif isinstance(key, int):
+        elif np.issubdtype(type(key), np.integer):
             return {k: v[key] for k, v in self.data.items()}
         else:
             raise TypeError(
@@ -192,7 +198,7 @@ class Samples():
 
         if suffix == '.csv':
             data = {key: value for key, value in data.items() if
-                    key != 'profiled'}
+                    key != 'fixed'}
             for key, value in data.items():
                 if not value.ndim == 1:
                     raise ValueError(
@@ -218,7 +224,7 @@ class Samples():
                     fstream['latex_keys'] = latex_keys.astype(dtype)
                     fstream['latex_values'] = latex_values.astype(dtype)
                     for key, value in data.items():
-                        if key == 'profiled':
+                        if key == 'fixed':
                             fstream[key] = value.astype(dtype)
                         else:
                             fstream[key] = value
@@ -263,12 +269,12 @@ class Samples():
         latex_keys = data.pop('latex_keys').astype('U')
         latex_values = data.pop('latex_values').astype('U')
         latex = {key: value for key, value in zip(latex_keys, latex_values)}
-        if 'profiled' in data:
-            profiled = data.pop('profiled').astype('U')
+        if 'fixed' in data:
+            fixed = data.pop('fixed').astype('U')
         else:
-            profiled = None
+            fixed = None
 
-        return cls(latex=latex, profiled=profiled, **data)
+        return cls(latex=latex, fixed=fixed, **data)
 
     @property
     def weight(self):
@@ -356,3 +362,11 @@ class Samples():
         for sample in samples[1:]:
             combined.append(sample)
         return combined
+
+    def _get_fixed(self):
+        """Return a list of dictionaries of parameters."""
+        fixed_params = []
+        for i in range(len(self)):
+            fixed_params.append(
+                {key: self[key][i] for key in self['fixed'][i].split('/')})
+        return fixed_params

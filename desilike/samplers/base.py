@@ -279,7 +279,7 @@ class StaticSampler(BaseSampler):
             Sampler results.
 
         """
-        if not self.mpicomm.bcast(hasattr(self, 'results'), root=0):
+        if not self.pool.bcast(hasattr(self, 'results')):
             # Do the calculations.
             if self.pool.main:
                 samples = self.get_samples(**kwargs)
@@ -301,8 +301,7 @@ class StaticSampler(BaseSampler):
         if self.directory is not None:
             self.write()
 
-        return self.mpicomm.bcast(
-            self.results if self.pool.main else None, root=0)
+        return self.pool.bcast(self.results if self.pool.main else None)
 
     def write(self):
         """Write internal calculations to disk."""
@@ -704,10 +703,8 @@ class MarkovChainSampler(BaseSampler):
             if isinstance(burn_in, float):
                 burn_in = int(burn_in) * len(self.chains[0])
             chains = [chain[burn_in:] for chain in self.chains]
-        else:
-            chains = [None] * self.n_chains
 
-        chains = self.mpicomm.bcast(chains, root=0)
+        chains = self.pool.bcast(chains if self.pool.main else None)
 
         if flatten_chains:
             return Samples.concatenate(chains)

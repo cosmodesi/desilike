@@ -53,7 +53,7 @@ class DynestySampler(PopulationSampler):
             msg = "dynesty static samplers do not support checkpointing."
             raise ValueError(msg)
 
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             sampler_cls = (dynesty.DynamicNestedSampler if dynamic else
                            dynesty.NestedSampler)
             if self.directory is not None:

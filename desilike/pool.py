@@ -207,7 +207,7 @@ class MPIPool(object):
 
         """
         if self.size == 1:
-            return map(function, tasks)
+            return list(map(function, tasks))
 
         if not self.main:
             raise ValueError("'map' was called by a worker process.")

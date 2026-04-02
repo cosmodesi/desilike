@@ -207,7 +207,7 @@ class MPIPool(object):
 
         """
         if self.size == 1:
-            return map(function, tasks)
+            return list(map(function, tasks))
 
         if not self.main:
             raise ValueError("'map' was called by a worker process.")
@@ -238,12 +238,12 @@ class MPIPool(object):
         return results
 
     def bcast(self, obj):
-        """Broadcast an object from main.
+        """Broadcast an object from the main process.
 
         Parameters
         ----------
         obj : object
-            Object to be broadcasted.
+            Object to broadcast.
 
         """
         if self.size == 1:

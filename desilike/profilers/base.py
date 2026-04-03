@@ -2,6 +2,7 @@
 
 # this is a rough first draft
 # TODO: properly implement pool
+# TODO: properly implement rng
 # TODO: implement other minimizers
 # TODO: add plotting functions
 # TODO: expand functionality such as warm starts

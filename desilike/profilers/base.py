@@ -2,31 +2,34 @@
 
 # this is a rough first draft
 # TODO: properly implement pool
-# TODO: properly integrate into desi
 # TODO: implement other minimizers
 # TODO: add plotting functions
 # TODO: expand functionality such as warm starts
+# TODO: add IO
+# TODO: add remove_duplicates
 
 import numpy as np
 from scipy.optimize import minimize
 from functools import partial
 
 from desilike import Samples
+from desilike.pool import MPIPool
+from desilike.utils import BaseClass
 
 
-class Profiler():
+class Profiler(BaseClass):
     """Profiler used to find maximum likelihood or posterior profiles."""
 
-    def __init__(self, likelihood, prior=None, rng=None, directory=None):
+    def __init__(self, likelihood, posterior=True, rng=None, directory=None):
         """Initialize the profiler.
 
         Parameters
         ----------
-        likelihood : Calculator
+        likelihood : BaseLikelihood
             Likelihood to profile.
-        prior : Calculator or None, optional
-            If not ``None``, maximize the posterior instead of the likelihood.
-            Default is ``None``.
+        posterior : bool, optional
+            If ``True``, profile the posterior. Otherwise, profile the
+            likelihood. Default is ``True``.
         rng : numpy.random.Generator, int or None, optional
             Random number generator. Default is ``None``.
         directory : str, Path, or None, optional
@@ -34,23 +37,31 @@ class Profiler():
 
         """
         self.likelihood = likelihood
-        if prior is None:
-            self.neg_cost_key = 'log_likelihood'
-        else:
+        if posterior:
             self.neg_cost_key = 'log_posterior'
-        self.prior = prior
-        self.varied_params = likelihood.params
+        else:
+            self.neg_cost_key = 'log_likelihood'
+        self.params = likelihood.varied_params.names()
+        self.limits = {param.name: (param.limits[0], param.limits[1]) for param
+                       in likelihood.varied_params}
+
         self.samples = Samples()
+        self.pool = MPIPool()
+
         self.rng = rng
+
+    def add_global(self):
+        """Add finding the global optimum."""
+        samples = Samples(**{key: [np.nan, ] for key in self.params})
+        self._add_samples(samples)
 
     def add_sample(self, sample):
         """Add parameter combination to profile.
 
         Parameters
         ----------
-        sample : dict or None
-            Single parameter combination to profile. An empty dictionary
-            or ``None`` implies that all parameters are optimized.
+        sample : dict
+            Single parameter combination to profile.
 
         Raises
         ------
@@ -58,17 +69,15 @@ class Profiler():
             If a parameter is not described in the likelihood.
 
         """
-        if sample is None:
-            sample = []
         for key in sample.keys():
-            if key not in self.varied_params:
+            if key not in self.params:
                 raise ValueError(f"Unkown parameter '{key}'.")
         samples = Samples(
             **{key: [value, ] for key, value in sample.items()},
             fixed=[list(sample.keys()), ])
-        for key in self.varied_params:
+        for key in self.params:
             if key not in sample.keys():
-                samples[key] = [np.inf, ]
+                samples[key] = [np.nan, ]
         self._add_samples(samples)
 
     def add_grid(self, grid):
@@ -91,7 +100,7 @@ class Profiler():
             data[key] = np.tile(values, max(n, 1))
             n = len(data[key])
         samples = Samples(fixed=[list(grid.keys())] * n, **data)
-        for key in self.varied_params:
+        for key in self.params:
             if key not in grid.keys():
                 samples[key] = np.repeat(np.nan, len(samples))
         self._add_samples(samples)
@@ -105,9 +114,9 @@ class Profiler():
 
     def _remove_duplicates(self):
         """Remove duplicate parameter combinations to profile over."""
-        points = np.zeros((len(self.samples), len(self.varied_params)))
+        points = np.zeros((len(self.samples), len(self.params)))
         for i in range(len(points)):
-            for k, key in enumerate(self.varied_params):
+            for k, key in enumerate(self.params):
                 if key in self.samples['profiled'][i].split(','):
                     points[i, k] = self.samples[key][i]
                 else:
@@ -136,17 +145,16 @@ class Profiler():
             Dictionary including varied and fixed parameters.
 
         """
-        if len(vector) != len(self.varied_params) - len(
-                self.fixed_params[index]):
+        if len(vector) != len(self.params) - len(self.fixed_params[index]):
             raise ValueError("Incorrect number of parameters.")
 
-        varied_params = [p for p in self.varied_params if p not in
+        varied_params = [p for p in self.params if p not in
                          self.fixed_params[index].keys()]
-        limits = self.likelihood.limits
         vector = vector.copy()
         for i, key in enumerate(varied_params):
-            vector[i] = (vector[i] * (limits[key][1] - limits[key][0]) +
-                         limits[key][0])
+            vector[i] = (
+                vector[i] * (self.limits[key][1] - self.limits[key][0]) +
+                self.limits[key][0])
         return dict(zip(varied_params, vector)) | self.fixed_params[index]
 
     def _cost_function(self, vector, index=0):
@@ -171,10 +179,11 @@ class Profiler():
         else:
             params = vector
 
-        if self.prior is None:
-            return - self.likelihood.f(params)
+        if self.neg_cost_key == 'log_likelihood':
+            return - self.likelihood(params)
         else:
-            return - (self.likelihood(params) + self.prior(**params))
+            return - (self.likelihood(params) +
+                      self.likelihood.all_params.prior(**params))
 
     def _get_start(self, max_init_attempts=100):
         """Generate cold-start samples.
@@ -200,7 +209,7 @@ class Profiler():
             for i in range(len(self.samples)):
                 if np.isfinite(cost[i]):
                     pass
-                n_free = len(self.varied_params) - len(self.fixed_params[i])
+                n_free = len(self.params) - len(self.fixed_params[i])
                 x0[i] = np.random.uniform(size=n_free)
 
             args = [self._vector_to_params(x, i) for i, (x, c) in enumerate(
@@ -222,12 +231,15 @@ class Profiler():
         cost_function = partial(self._cost_function, index=index)
         if len(x0) == 0:
             return cost_function(x0)
-        res = minimize(cost_function, x0=x0)
+        res = minimize(cost_function, x0=x0, bounds=[(0, 1)] * len(x0))
         return res.x, res.fun
 
     def run(self, max_iter=100, tol=1e-3, warm_start=False,
             max_init_attempts=100):
-        """
+        """Run the profiler.
+
+        Parameters
+        ----------
         max_iter : int, optional
             Maximum number of iterations. At each iteration, all samples
             are optimized. Default is 100.
@@ -242,7 +254,20 @@ class Profiler():
             Maximum number of attempts to initialize each sample. Default is
             100.
 
+        Raises
+        ------
+        ValueError
+            If trying to run the profiler without having added samples.
+
+        Returns
+        -------
+        samples : Samples
+            Maxima found by the profiler.
+
         """
+        if len(self.samples) == 0:
+            raise ValueError("Cannot run profiler without samples.")
+
         for _ in range(max_iter):
             x0 = self._get_start(max_init_attempts=max_init_attempts)
             result = list(map(self._run_minimizer, enumerate(x0)))

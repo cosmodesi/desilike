@@ -15,9 +15,9 @@ from pathlib import Path
 import numpy as np
 
 from desilike import Samples
+from desilike.pool import MPIPool
 from desilike.statistics import diagnostics
 from desilike.utils import BaseClass
-from desilike.pool import MPIPool
 
 
 def update_parameters(user_kwargs, sampler, **desilike_kwargs):
@@ -275,8 +275,8 @@ class StaticSampler(BaseSampler):
 
         Returns
         -------
-        results : desilike.samples.Chain
-            Sampler results.
+        samples : desilike.Samples
+            Posterior samples.
 
         """
         if not self.pool.bcast(hasattr(self, 'results')):
@@ -348,8 +348,8 @@ class PopulationSampler(BaseSampler):
 
         Returns
         -------
-        results : desilike.samples.Chain
-            Sampler results.
+        samples : desilike.Samples
+            Posterior samples.
 
         """
         if self.pool.main:
@@ -594,7 +594,7 @@ class MarkovChainSampler(BaseSampler):
         Returns
         -------
         bool
-            If True, sampling should stop.
+            If ``True``, sampling should stop.
 
         """
         if self.pool.main:
@@ -641,7 +641,7 @@ class MarkovChainSampler(BaseSampler):
             elements divided by the autocorrelation time. Default is ``None``.
         flatten_chains: bool, optional
             Whether to concatenate individual chains into one chain. Default is
-            True.
+            ``True``.
         save_every: int, optional
             After how many steps results are saved. Default is 300.
         max_init_attempts: int, optional
@@ -650,8 +650,8 @@ class MarkovChainSampler(BaseSampler):
 
         Returns
         -------
-        desilike.samples.Chain or list of desilike.samples.Chain
-            Sampler results.
+        samples : desilike.Samples or list of desilike.Samples
+            Posterior chains.
 
         """
         if self.pool.bcast(len(self.chains) == 0):

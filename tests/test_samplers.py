@@ -2,8 +2,7 @@ import numpy as np
 import pytest
 from jax import numpy as jnp
 
-from desilike import Samples
-import desilike.samplers as samplers
+from desilike import samplers, Samples
 from desilike.likelihoods import BaseGaussianLikelihood
 
 

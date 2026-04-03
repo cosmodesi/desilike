@@ -1,7 +1,6 @@
 """Base class for profilers."""
 
 # this is a rough first draft
-# TODO: properly implement pool
 # TODO: properly implement rng
 # TODO: implement other minimizers
 # TODO: add plotting functions
@@ -48,6 +47,9 @@ class Profiler(BaseClass):
 
         self.samples = Samples()
         self.pool = MPIPool()
+        for name in ['_cost_function', '_run_minimizer']:
+            setattr(self, name, self.pool.save_function(
+                getattr(self, name), name))
 
         self.rng = rng
 
@@ -189,6 +191,9 @@ class Profiler(BaseClass):
     def _get_start(self, max_init_attempts=100):
         """Generate cold-start samples.
 
+        This should only be called by the main process while the others are
+        waiting.
+
         Parameters
         ----------
         max_init_attempts: int, optional
@@ -215,15 +220,15 @@ class Profiler(BaseClass):
 
             args = [self._vector_to_params(x, i) for i, (x, c) in enumerate(
                 zip(x0, cost)) if not np.isfinite(c)]
-            new_cost = list(map(self._cost_function, args))
+            new_cost = self.pool.map(self._cost_function, args)
             cost[~np.isfinite(cost)] = new_cost
 
             if np.all(np.isfinite(cost)):
                 break
 
         if not np.all(np.isfinite(cost)):
-            raise ValueError('Could not find finite posterior '
-                             f'after {max_init_attempts:d} attempts.')
+            raise ValueError("Could not find finite likelihood/posterior "
+                             f"after {max_init_attempts:d} attempts.")
 
         return x0
 
@@ -269,19 +274,25 @@ class Profiler(BaseClass):
         if len(self.samples) == 0:
             raise ValueError("Cannot run profiler without samples.")
 
-        for _ in range(max_iter):
-            x0 = self._get_start(max_init_attempts=max_init_attempts)
-            result = list(map(self._run_minimizer, enumerate(x0)))
-            x = [r[0] for r in result]
-            cost = np.array([r[1] for r in result])
-            update = cost < -self.samples[self.neg_cost_key]
-            d_cost = np.amax(-self.samples[self.neg_cost_key] - cost)
-            for i in np.arange(len(self.samples))[update]:
-                params = self.samples[i]
-                params.update(self._vector_to_params(x[i], i))
-                params[self.neg_cost_key] = -cost[i]
-                self.samples[i] = params
-            if d_cost < tol:
-                break
+        if self.pool.main:
 
-        return self.samples
+            for _ in range(max_iter):
+                x0 = self._get_start(max_init_attempts=max_init_attempts)
+                result = self.pool.map(self._run_minimizer, enumerate(x0))
+                x = [r[0] for r in result]
+                cost = np.array([r[1] for r in result])
+                update = cost < -self.samples[self.neg_cost_key]
+                d_cost = np.amax(-self.samples[self.neg_cost_key] - cost)
+                for i in np.arange(len(self.samples))[update]:
+                    params = self.samples[i]
+                    params.update(self._vector_to_params(x[i], i))
+                    params[self.neg_cost_key] = -cost[i]
+                    self.samples[i] = params
+                if d_cost < tol:
+                    break
+
+            self.pool.stop_wait()
+        else:
+            self.pool.wait()
+
+        return self.pool.bcast(self.samples)

@@ -1,3 +1,55 @@
+
+"""
+Full-shape power spectrum, correlation function and bispectrum multipoles with various perturbation theory models.
+
+This module provides theory predictions for full-shape power spectrum and bispectrum
+multipoles in galaxy clustering analyses. It supports multiple perturbation theory
+implementations with flexible bias parameterizations.
+
+Key Classes
+-----------
+Base Classes
+    - BasePTPowerSpectrumMultipoles: Base perturbation theory (PT) power spectrum multipoles
+    - BasePTCorrelationFunctionMultipoles: Base perturbation theory correlation function multipoles
+    - BaseTracerPowerSpectrumMultipoles: Base class for tracer power spectrum multipoles
+    - BaseTracerCorrelationFunctionMultipoles: Base class for tracer correlation function multipoles
+    - BaseTracerPowerSpectrumMultipoles: Base class for PT-based tracer power spectrum multipoles
+    - BaseTracerCorrelationFunctionMultipoles: Base class for PT-based tracer correlation function multipoles
+    - BaseTracerBispectrumMultipoles: Base class for tracer bispectrum multipoles
+    - BaseTracerPTBispectrumMultipoles: Base class for PT-based tracer bispectrum multipoles
+
+Tracer Power Spectrum
+    - SimpleTracerPowerSpectrumMultipoles: Simple Kaiser model with fixed damping
+    - KaiserTracerPowerSpectrumMultipoles: Kaiser with bias and shot noise
+    - TNSTracerPowerSpectrumMultipoles: TNS 1-loop tracer P(k)
+    - LPTVelocileptorsTracerPowerSpectrumMultipoles: Velocileptors LPT tracer P(k)
+    - REPTVelocileptorsTracerPowerSpectrumMultipoles: Velocileptors REPT tracer P(k)
+    - PyBirdTracerPowerSpectrumMultipoles: PyBird EFT-based tracer P(k)
+    - FOLPSTracerPowerSpectrumMultipoles: FOLPS infrared-resummed tracer P(k)
+    - FOLPSv2TracerPowerSpectrumMultipoles: FOLPS v2 tracer P(k)
+    - JAXEffortTracerPowerSpectrumMultipoles: JAXEffort emulator-based tracer P(k)
+
+Tracer Correlation Function
+    - KaiserTracerCorrelationFunctionMultipoles: Kaiser tracer xi(s)
+    - TNSTracerCorrelationFunctionMultipoles: TNS tracer xi(s)
+    - LPTVelocileptorsTracerCorrelationFunctionMultipoles: Velocileptors LPT tracer xi(s)
+    - REPTVelocileptorsTracerCorrelationFunctionMultipoles: Velocileptors REPT tracer xi(s)
+    - PyBirdTracerCorrelationFunctionMultipoles: PyBird tracer xi(s)
+    - FOLPSTracerCorrelationFunctionMultipoles: FOLPS tracer xi(s)
+    - FOLPSv2TracerBispectrumMultipoles: FOLPS bispectrum
+
+Bispectrum Models
+    - GeoFPTAXTracerBispectrumMultipoles: GeoFPTAX bispectrum model
+    - FOLPSv2TracerBispectrumMultipoles: FOLPS v2 bispectrum
+
+Class MultitracerBiasParameters handlses bias parameter namespacing for multitracer analyses.
+To implement a new power spectrum, correlation function or bispectrum model::
+- if it is a PT-based model, implement the PT part into a class inheriting from BasePTPowerSpectrumMultipoles or BasePTBispectrumMultipoles,
+and then implement a tracer version inheriting from BaseTracerPTPowerSpectrumMultipoles or BaseTracerPTBispectrumMultipoles.
+An example of this is the KaiserTracerPowerSpectrumMultipoles class, which inherits from BaseTracerPTPowerSpectrumMultipoles and uses the KaiserPowerSpectrumMultipoles as PT module.
+- if it is not a PT-based model, implement it directly into a class inheriting from BaseTracerPowerSpectrumMultipoles, BaseTracerCorrelationFunctionMultipoles or BaseTracerBispectrumMultipoles.
+"""
+
 import os
 import re
 import functools
@@ -176,6 +228,7 @@ class MultitracerBiasParameters(object):
 class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
 
     """Base class for theory tracer power spectrum multipoles."""
+
     config_fn = 'full_shape.yaml'
     _default_options = dict(shotnoise=1e4)
     _initialize_with_namespace = True
@@ -266,7 +319,7 @@ class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
 
 class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
 
-    """Base class for tracer correlation function multipoles, with theory natively in configuration space."""
+    """Base class for tracer correlation function multipoles."""
 
     config_fn = 'full_shape.yaml'
     _default_options = dict(shotnoise=1e4)
@@ -354,7 +407,8 @@ class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
 
 class BaseTracerPTPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
-    """Base class for theory tracers power spectrum multipoles."""
+    """Base class for theory tracers power spectrum multipoles, using a perturbation theory (PT) module."""
+
     config_fn = 'full_shape.yaml'
     _default_options = dict(shotnoise=1e4)
 
@@ -404,7 +458,8 @@ class BaseTracerPTPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
 class BaseTracerPTCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMultipoles):
 
-    """Base class for tracer correlation function multipoles, with theory natively in configuration space."""
+    """Base class for tracer correlation function multipoles, with perturbation theory (PT) natively in configuration space."""
+
     config_fn = 'full_shape.yaml'
     _default_options = dict(shotnoise=1e4)
 
@@ -455,6 +510,7 @@ class BaseTracerPTCorrelationFunctionMultipoles(BaseTracerCorrelationFunctionMul
 class BaseTracerCorrelationFunctionFromPowerSpectrumMultipoles(BaseTracerCorrelationFunctionMultipoles):
 
     """Base class for tracers correlation function multipoles as Hankel transforms of the power spectrum multipoles."""
+
     config_fn = 'full_shape.yaml'
 
     def initialize(self, s=None, ells=(0, 2, 4), tracers=None, pt=None, template=None, **kwargs):
@@ -915,7 +971,7 @@ class TNSTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipoles):
             param.update(value=0., fixed=True)
 
     def calculate(self, **params):
-        self.z = self.pt.z
+        self._set_from_pt()
         params = self.decode_params(params)
         b1, b2, bs, b3, sn0 = [params[name] for name in ['b1', 'b2', 'bs', 'b3', 'sn0']]
         self.power = b1**2 * self.pt.pktable['pk_dd'] + 2. * b1 * self.pt.pktable['pk_dt'] + self.pt.pktable['pk_tt'] + sn0 / self.nbar
@@ -1196,7 +1252,7 @@ class LPTVelocileptorsTracerPowerSpectrumMultipoles(BaseVelocileptorsTracerPower
             setattr(self, name, getattr(self.pt, name))
 
     def calculate(self, **params):
-        self.z = self.pt.z
+        self._set_from_pt()
         if self.is_physical_prior:
             params = self.decode_params(params, defaults={f'sn{i:d}p': 0. for i in [0, 2, 4]})  # defaults for correlation function
             sigma8 = self.pt.sigma8
@@ -2477,7 +2533,7 @@ class BaseTracerPTBispectrumMultipoles(BaseTracerBispectrumMultipoles):
 
     def _set_from_pt(self):
         # Update z, k, ells from pt
-        for name in ['z', 'ells']:
+        for name in ['z']:
             setattr(self, name, getattr(self.pt, name))
 
     def _set_params(self, pt_params=None):
@@ -2979,7 +3035,7 @@ class FOLPSv2TracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipoles):
 
     # main mapping
     def calculate(self, **params):
-        self.z = self.pt.z
+        self._set_from_pt()
         params = self.decode_params(params)
         # Case A: STANDARD_FOLPS -> forward directly (Eulerian nuisances)
         if self.prior_basis == 'standard_folps':
@@ -3137,9 +3193,9 @@ class FOLPSv2TracerBispectrumMultipoles(BaseTracerPTBispectrumMultipoles):
     def _rename_prior_basis(prior_basis: str) -> str:
         return FOLPSv2TracerPowerSpectrumMultipoles._rename_prior_basis(prior_basis)
 
-    @staticmethod
-    def _params(params, prior_basis='physical_aap'):
-        prior_basis = FOLPSv2TracerBispectrumMultipoles._rename_prior_basis(prior_basis)
+    @classmethod
+    def _params(cls, params, tracers=None, prior_basis='physical_aap'):
+        prior_basis = cls._rename_prior_basis(prior_basis)
         for param in params.select(basename=['b1']):
             param.update(prior=dict(limits=[0., 10.]))
         for param in params.select(basename=['b2']):
@@ -3160,6 +3216,7 @@ class FOLPSv2TracerBispectrumMultipoles(BaseTracerPTBispectrumMultipoles):
             for param in params.select(basename=['b2p', 'bsp']):
                 param.update(prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.))
             # Decide the priors for c1 and c2 (Not worrying about it now)
+        params = cls._get_multitracer(tracers=tracers, prior_basis=prior_basis)._params(params)
         return params
 
     def _set_params(self):
@@ -3180,10 +3237,11 @@ class FOLPSv2TracerBispectrumMultipoles(BaseTracerPTBispectrumMultipoles):
         self.fsat = self.snd = 1.
         if self.is_physical_prior:
             self.fsat = self.options['fsat']
-            self.snd = self.options['shotnoise'] * self.nbar  # normalized by 1e-4
+            # FIXME: theory modules should take density as input
+            self.snd = np.mean(self.options['shotnoise']) * self.nbar  # normalized by 1e-4
 
     def calculate(self, **params):
-        self.z = self.pt.z
+        self._set_from_pt()
         params = self.decode_params(params)
         # params = {**self.required_bias_params, **params}
         # import folps as folpsv2

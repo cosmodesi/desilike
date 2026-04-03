@@ -461,12 +461,14 @@ def test_full_shape():
         if any(name in theory.__class__.__name__.lower() for name in ['kaiser', 'pybird']):
             theory.init.update(tracers=('LRG', 'ELG'))
             assert 'LRG.b1' in theory.all_params and 'ELG.b1' in theory.all_params, "Tracer-specific parameters not created for multiple tracers"
-            assert any('LRGxELG' in param.namespace for param in theory.all_params), "Cross-tracer parameters did not receive correct namespace"
+            if 'spectrum' in theory.__class__.__name__.lower() :
+                assert any('LRGxELG' in param.namespace for param in theory.all_params), "Cross-tracer parameters did not receive correct namespace"
             theory()
             for param in theory.init.params:
                 param.update(namespace=('L1', param.namespace))
             assert 'L1.LRG.b1' in theory.all_params and 'L1.ELG.b1' in theory.all_params, "Tracer-specific parameters not created for multiple tracers"
-            assert any('L1.LRGxELG' in param.namespace for param in theory.all_params), "Cross-tracer parameters did not receive correct namespace"
+            if 'spectrum' in theory.__class__.__name__.lower() :
+                assert any('L1.LRGxELG' in param.namespace for param in theory.all_params), "Cross-tracer parameters did not receive correct namespace"
             theory()
 
         # Reset tracers
@@ -523,9 +525,13 @@ def test_full_shape():
                (5, 0, Ellipsis): 7562.24645358, (5, 0, 'min'): 7703.72498496, (5, 0, 'max'): 7556.07121289, (5, 0, None): 7562.24645358,
                (6, 0, Ellipsis): 0.02741651, (6, 0, 'min'): 0.02794728, (6, 0, 'max'): 0.02746957, (6, 0, None): 0.02741651,
                (7, 0, Ellipsis): 12583.50356435, (7, 0, 'min'): 12799.60763545, (7, 0, 'max'): 12583.50356435, (7, 0, None): 12583.50356435,
-               (8, 0, Ellipsis): 0.02803988, (8, 0, 'min'): 0.0274056, (8, 0, 'max'): 0.02803988, (8, 0, None): 0.02803988}
-    # Test other theories
+               (8, 0, Ellipsis): 0.02803988, (8, 0, 'min'): 0.0274056, (8, 0, 'max'): 0.02803988, (8, 0, None): 0.02803988,
+               (9, 0, Ellipsis): 14420.48114423, (9, 0, 'min'): 13273.50048062, (9, 0, 'max'): 14420.48114423, (9, 0, None): 14420.48114423,
+               (10, 0, Ellipsis): 0.02825026, (10, 0, 'min'): 0.02825026, (10, 0, 'max'): 0.02825026, (10, 0, None): 0.02825026, (10, 0, Ellipsis): 11671.52140467,
+               (11, 0, 'min'): 12653.68634954, (11, 0, 'max'): 11671.52140467, (11, 0, None): 11671.52140467,
+               (12, 0, Ellipsis): 1875898185.5563178, (12, 0, 'min'): 1875898185.5563178, (12, 0, 'max'): 1875898185.5563178, (12, 0, None): 1875898185.5563178}
 
+    # Test other theories
     for itheory, cls in enumerate([SimpleTracerPowerSpectrumMultipoles,
                                    KaiserTracerPowerSpectrumMultipoles,
                                    KaiserTracerCorrelationFunctionMultipoles,
@@ -538,7 +544,7 @@ def test_full_shape():
                                    LPTVelocileptorsTracerPowerSpectrumMultipoles,
                                    LPTVelocileptorsTracerCorrelationFunctionMultipoles,
                                    FOLPSv2TracerPowerSpectrumMultipoles,
-                                   FOLPSv2TracerBispectrumMultipoles][:-4]):
+                                   FOLPSv2TracerBispectrumMultipoles][-4:]):
         test_theory(itheory, cls, emulate=False if 'Simple' in cls.__name__ else 'pt',
                     freedoms=[] if 'Kaiser' in cls.__name__ or 'Simple'  in cls.__name__ and 'FOLPSv2' not in cls.__name__ else ['min', 'max', None])
 

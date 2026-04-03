@@ -23,6 +23,7 @@ def likelihood():
     return likelihood
 
 
+@pytest.mark.mpi
 def test_accuracy(likelihood):
     # Test that the profiler returns the correct result.
 

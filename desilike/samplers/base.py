@@ -16,9 +16,9 @@ from pathlib import Path
 import numpy as np
 
 from desilike import Samples
+from desilike.pool import MPIPool
 from desilike.statistics import diagnostics
 from desilike.utils import BaseClass
-from desilike.pool import MPIPool
 
 
 def _main(func):
@@ -335,8 +335,8 @@ class StaticSampler(BaseSampler):
 
         Returns
         -------
-        results : desilike.samples.Chain
-            Sampler results.
+        samples : desilike.Samples
+            Posterior samples.
 
         """
         if not hasattr(self, 'results'):
@@ -403,8 +403,8 @@ class PopulationSampler(BaseSampler):
 
         Returns
         -------
-        results : desilike.samples.Chain
-            Sampler results.
+        samples : desilike.Samples
+            Posterior samples.
 
         """
         samples, derived, extras = self._run(**kwargs)
@@ -682,8 +682,8 @@ class MarkovChainSampler(BaseSampler):
 
         Returns
         -------
-        desilike.samples.Chain or list of desilike.samples.Chain
-            Sampler results.
+        samples : desilike.Samples or list of desilike.Samples
+            Posterior chains.
 
         """
         if len(self.chains) == 0:

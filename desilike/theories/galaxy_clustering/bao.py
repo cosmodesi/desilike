@@ -731,13 +731,13 @@ class FlexibleBAOWigglesPowerSpectrumMultipoles(BaseBAOWigglesPowerSpectrumMulti
         self.wiggles = str(wiggles)
         if kp is None: self.kp = 2. * np.pi / self.rs_drag_fid
         else: self.kp = float(kp)
-        self.set_params()
+        self._set_params()
         # Fix wiggle parameters for no-wiggle-only
         if self.template.only_now:
             for param in self.init.params.select(basename='ml*_*'):
                 param.update(fixed=True)
 
-    def set_params(self):
+    def _set_params(self):
         """
         Build wiggle kernel matrix from parameters.
 
@@ -894,9 +894,9 @@ class BaseBAOWigglesTracerPowerSpectrumMultipoles(BaseCalculator):
         self.broadband = str(broadband)
         if kp is None: self.kp = 2. * np.pi / self.pt.rs_drag_fid
         else: self.kp = float(kp)
-        self.set_params()
+        self._set_params()
 
-    def set_params(self):
+    def _set_params(self):
         """
         Build broadband kernel matrix.
 
@@ -1252,11 +1252,11 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseCalculator):
         self.ells = tuple(ells)
         self.power.init.update(ells=self.ells, **kwargs)
         self.to_correlation = SpectrumToCorrelationMultipoles(s=self.s, spectrum=self.power)
-        self.set_params()
+        self._set_params()
         for name in ['z', 'ells']:
             setattr(self, name, getattr(self.power, name))
 
-    def set_params(self):
+    def _set_params(self):
         """
         Build broadband matrix for correlation function.
 
@@ -1266,7 +1266,7 @@ class BaseBAOWigglesTracerCorrelationFunctionMultipoles(BaseCalculator):
         if 'power' in self.broadband:
             self.k, self.kp = self.s, self.sp
             # other model parameters, e.g. bias
-            BaseBAOWigglesTracerPowerSpectrumMultipoles.set_params(self)
+            BaseBAOWigglesTracerPowerSpectrumMultipoles._set_params(self)
             del self.k, self.kp
         else:
             self.broadband_orders = _get_orders('bl', self.init.params, self.ells)

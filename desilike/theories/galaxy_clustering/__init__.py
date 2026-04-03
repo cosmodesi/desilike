@@ -3,18 +3,14 @@ from .bao import (DampedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWiggle
                   ResummedBAOWigglesTracerPowerSpectrumMultipoles, ResummedBAOWigglesTracerCorrelationFunctionMultipoles,
                   FlexibleBAOWigglesTracerPowerSpectrumMultipoles, FlexibleBAOWigglesTracerCorrelationFunctionMultipoles)
 from .full_shape import (SimpleTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles,
-                         EFTLikeKaiserTracerPowerSpectrumMultipoles, EFTLikeKaiserTracerCorrelationFunctionMultipoles,
                          TNSTracerPowerSpectrumMultipoles, TNSTracerCorrelationFunctionMultipoles,
-                         EFTLikeTNSTracerPowerSpectrumMultipoles, EFTLikeTNSTracerCorrelationFunctionMultipoles,
                          LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles,
                          REPTVelocileptorsTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerCorrelationFunctionMultipoles,
                          PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles,
                          FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles,
-                         FOLPSAXTracerPowerSpectrumMultipoles, FOLPSAXTracerCorrelationFunctionMultipoles,
                          GeoFPTAXTracerBispectrumMultipoles, JAXEffortTracerPowerSpectrumMultipoles,
-                         GeoFPTAXTracerBispectrumMultipoles, FOLPSv2TracerPowerSpectrumMultipoles, FOLPSv2TracerBispectrumMultipoles,
-                         fkptTracerPowerSpectrumMultipoles, fkptjaxTracerPowerSpectrumMultipoles, fkptjaxTracerBispectrumMultipoles)
-from .primordial_non_gaussianity import PNGTracerPowerSpectrumMultipoles
+                         GeoFPTAXTracerBispectrumMultipoles, FOLPSv2TracerPowerSpectrumMultipoles, FOLPSv2TracerBispectrumMultipoles)
+from .png import PNGTracerPowerSpectrumMultipoles
 from .power_template import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate,
                              BAOPowerSpectrumTemplate, BAOPhaseShiftPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate, TurnOverPowerSpectrumTemplate, DirectWiggleSplitPowerSpectrumTemplate,
                              BAOExtractor, BAOPhaseShiftExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor)

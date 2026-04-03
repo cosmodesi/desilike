@@ -357,16 +357,17 @@ def test_full_shape():
         SimpleTracerPowerSpectrumMultipoles,
         KaiserTracerPowerSpectrumMultipoles,
         KaiserTracerCorrelationFunctionMultipoles,
+        LPTVelocileptorsTracerCorrelationFunctionMultipoles,
+        LPTVelocileptorsTracerPowerSpectrumMultipoles,
         REPTVelocileptorsTracerPowerSpectrumMultipoles,
         REPTVelocileptorsTracerCorrelationFunctionMultipoles,
         PyBirdTracerPowerSpectrumMultipoles,
         PyBirdTracerCorrelationFunctionMultipoles,
         FOLPSTracerPowerSpectrumMultipoles,
         FOLPSTracerCorrelationFunctionMultipoles,
-        FOLPSAXTracerPowerSpectrumMultipoles,
-        FOLPSAXTracerCorrelationFunctionMultipoles,
+        FOLPSv2TracerPowerSpectrumMultipoles,
+        FOLPSv2TracerBispectrumMultipoles
     )
-    from desilike.theories.galaxy_clustering.base import BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles
     from desilike.emulators import Emulator, TaylorEmulatorEngine
 
     def clean_folps():
@@ -390,10 +391,10 @@ def test_full_shape():
         """
         # Store baseline prediction
         kw = dict()
-        if 'spectrum' in theory.__class__.__name__.lower():
+        if 'powerspectrum' in theory.__class__.__name__.lower():
             kw['k'] = np.linspace(0.01, 0.2, 201)
             _ = theory.k
-        else:
+        elif 'correlationfunction' in theory.__class__.__name__.lower():
             kw['s'] = np.linspace(30, 150, 201)
             _ = theory.s
 
@@ -421,8 +422,8 @@ def test_full_shape():
 
         # Access emulated theory coordinates
         _ = theory.z, theory.ells
-        if 'PowerSpectrum' in theory.__class__.__name__:
-            _ = theory.k, theory.nd
+        if 'spectrum' in theory.__class__.__name__.lower():
+            _ = theory.k
         else:
             _ = theory.s
 
@@ -452,6 +453,30 @@ def test_full_shape():
         for param in theory.init.params:
             param.update(namespace=None)
 
+        theory.init.update(tracers=('LRG',))
+        for param in theory.init.params:
+            if param.basename in basenames and param.basename not in ['sigmapar', 'sigmaper']:
+                assert param.namespace == namespace, f"Parameter {param.name} did not propapate namespace"
+
+        if any(name in theory.__class__.__name__.lower() for name in ['kaiser', 'pybird']):
+            theory.init.update(tracers=('LRG', 'ELG'))
+            assert 'LRG.b1' in theory.all_params and 'ELG.b1' in theory.all_params, "Tracer-specific parameters not created for multiple tracers"
+            assert any('LRGxELG' in param.namespace for param in theory.all_params), "Cross-tracer parameters did not receive correct namespace"
+            theory()
+            for param in theory.init.params:
+                param.update(namespace=('L1', param.namespace))
+            assert 'L1.LRG.b1' in theory.all_params and 'L1.ELG.b1' in theory.all_params, "Tracer-specific parameters not created for multiple tracers"
+            assert any('L1.LRGxELG' in param.namespace for param in theory.all_params), "Cross-tracer parameters did not receive correct namespace"
+            theory()
+
+        # Reset tracers
+        theory.init.update(tracers=None)
+        # Reset namespaces
+        for param in theory.init.params:
+            param.update(namespace=None)
+        theory()
+
+
     def test_theory(itheory, cls, emulate='pt', freedoms=tuple()):
         """
         Comprehensive test routine for a theory object.
@@ -464,6 +489,8 @@ def test_full_shape():
         for itemplate, template in enumerate([ShapeFitPowerSpectrumTemplate(fiducial=fiducial, z=1.),
                                              DirectPowerSpectrumTemplate(cosmo=cosmo, fiducial=fiducial, z=1.)][1:]):
             theory = cls(template=template)
+            test_namespace(theory)
+
             for freedom in [Ellipsis] + freedoms:
                 if freedom is not Ellipsis: theory.init.update(freedom=freedom)
                 size = 1
@@ -490,31 +517,30 @@ def test_full_shape():
 
     results = {(0, 0, Ellipsis): 6077.14180929,
                (1, 0, Ellipsis): 6077.14180929,
-               (2, 0, Ellipsis): 14326.36546248, (2, 0, 'min'): 13171.1865328, (2, 0, 'max'): 14326.36546248, (2, 0, None): 14326.36546248,
-               (3, 0, Ellipsis): 7562.24645358, (3, 0, 'min'): 7703.72498496, (3, 0, 'max'): 7556.07121289, (3, 0, None): 7562.24645358,
-               (4, 0, Ellipsis): 12583.50356435, (4, 0, 'min'): 12799.60763545, (4, 0, 'max'): 12583.50356435, (4, 0, None): 12583.50356435,
-               (5, 0, Ellipsis): 12572.95923741, (5, 0, 'min'): 12799.8090302, (5, 0, 'max'): 12572.95923741, (5, 0, None): 12572.95923741,
-               (6, 0, Ellipsis): 0.01660682,
-               (7, 0, Ellipsis): 0.02950103, (7, 0, 'min'): 0.02850522,
-               (7, 0, 'max'): 0.02950103, (7, 0, None): 0.02950103, (8, 0, Ellipsis): 0.02741651,
-               (8, 0, 'min'): 0.02794728, (8, 0, 'max'): 0.02746957, (8, 0, None): 0.02741651,
-               (9, 0, Ellipsis): 0.02803988, (9, 0, 'min'): 0.0274056, (9, 0, 'max'): 0.02803988, (9, 0, None): 0.02803988,
-               (10, 0, Ellipsis): 0.02804229, (10, 0, 'min'): 0.02740829, (10, 0, 'max'): 0.02804229, (10, 0, None): 0.02804229}
+               (2, 0, Ellipsis): 0.01660682,
+               (3, 0, Ellipsis): 14326.36546248, (3, 0, 'min'): 13171.1865328, (3, 0, 'max'): 14326.36546248, (3, 0, None): 14326.36546248,
+               (4, 0, Ellipsis): 0.02950103, (4, 0, 'min'): 0.02850522, (4, 0, 'max'): 0.02950103, (4, 0, None): 0.02950103,
+               (5, 0, Ellipsis): 7562.24645358, (5, 0, 'min'): 7703.72498496, (5, 0, 'max'): 7556.07121289, (5, 0, None): 7562.24645358,
+               (6, 0, Ellipsis): 0.02741651, (6, 0, 'min'): 0.02794728, (6, 0, 'max'): 0.02746957, (6, 0, None): 0.02741651,
+               (7, 0, Ellipsis): 12583.50356435, (7, 0, 'min'): 12799.60763545, (7, 0, 'max'): 12583.50356435, (7, 0, None): 12583.50356435,
+               (8, 0, Ellipsis): 0.02803988, (8, 0, 'min'): 0.0274056, (8, 0, 'max'): 0.02803988, (8, 0, None): 0.02803988}
     # Test other theories
 
     for itheory, cls in enumerate([SimpleTracerPowerSpectrumMultipoles,
-                KaiserTracerPowerSpectrumMultipoles,
-                REPTVelocileptorsTracerPowerSpectrumMultipoles,
-                PyBirdTracerPowerSpectrumMultipoles,
-                FOLPSTracerPowerSpectrumMultipoles,
-                FOLPSAXTracerPowerSpectrumMultipoles,
-                KaiserTracerCorrelationFunctionMultipoles,
-                REPTVelocileptorsTracerCorrelationFunctionMultipoles,
-                PyBirdTracerCorrelationFunctionMultipoles,
-                FOLPSTracerCorrelationFunctionMultipoles,
-                FOLPSAXTracerCorrelationFunctionMultipoles]):
+                                   KaiserTracerPowerSpectrumMultipoles,
+                                   KaiserTracerCorrelationFunctionMultipoles,
+                                   REPTVelocileptorsTracerPowerSpectrumMultipoles,
+                                   REPTVelocileptorsTracerCorrelationFunctionMultipoles,
+                                   PyBirdTracerPowerSpectrumMultipoles,
+                                   PyBirdTracerCorrelationFunctionMultipoles,
+                                   FOLPSTracerPowerSpectrumMultipoles,
+                                   FOLPSTracerCorrelationFunctionMultipoles,
+                                   LPTVelocileptorsTracerPowerSpectrumMultipoles,
+                                   LPTVelocileptorsTracerCorrelationFunctionMultipoles,
+                                   FOLPSv2TracerPowerSpectrumMultipoles,
+                                   FOLPSv2TracerBispectrumMultipoles][:-4]):
         test_theory(itheory, cls, emulate=False if 'Simple' in cls.__name__ else 'pt',
-                    freedoms=[] if 'Kaiser' in cls.__name__ or 'Simple'  in cls.__name__ else ['min', 'max', None])
+                    freedoms=[] if 'Kaiser' in cls.__name__ or 'Simple'  in cls.__name__ and 'FOLPSv2' not in cls.__name__ else ['min', 'max', None])
 
 
 def test_png():
@@ -580,8 +606,18 @@ def test_png():
     def test_namespace(theory):
         """Test parameter namespace."""
         theory.init.update(tracers=('LRG', 'ELG'))
+        assert 'LRG.b1' in theory.all_params and 'ELG.b1' in theory.all_params, "Tracer-specific parameters not created for multiple tracers"
         assert 'LRGxELG.sn0' in theory.all_params
+        theory()
+        for param in theory.init.params:
+            param.update(namespace=('L1', param.namespace))
+        assert 'L1.LRG.b1' in theory.all_params and 'L1.ELG.b1' in theory.all_params, "Tracer-specific parameters not created for multiple tracers"
+        assert any('L1.LRGxELG' in param.namespace for param in theory.all_params), "Cross-tracer parameters did not receive correct namespace"
+        theory()
         theory.init.update(tracers=None)
+        for param in theory.init.params:
+            param.update(namespace=None)
+        theory()
 
     def test_theory(cls):
         """
@@ -619,10 +655,3 @@ def test_png():
     test_prim_method()
     results = {(0, 'matter'): 10011.16020071, (1, 'matter'): 10046.19588923, (0, 'prim'): 10011.33476181, (1, 'prim'): 10046.4520818}
     test_theory(PNGTracerPowerSpectrumMultipoles)
-
-
-
-if __name__ == '__main__':
-
-    #test_templates()
-    test_bao()

@@ -732,8 +732,12 @@ class Parameter(BaseClass):
                 basename['basename'] = basename.pop('name')
             self.__init__(**basename)
             return
-        if namespace is None: self._namespace = ''
-        else: self._namespace = str(namespace)
+        if namespace is None:
+            self._namespace = ''
+        elif isinstance(namespace, tuple):  # handle tuples (namespace1, namespace2, ...)
+            self._namespace = base.namespace_delimiter.join([str(n) for n in namespace if n])
+        else:
+            self._namespace = str(namespace)
         names = str(basename).split(base.namespace_delimiter)
         self._basename, namespace = names[-1], base.namespace_delimiter.join(names[:-1])
         if namespace:

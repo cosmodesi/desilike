@@ -4,12 +4,12 @@ from scipy import constants
 from desilike import plotting, utils
 from desilike.jax import interp1d
 from desilike.jax import numpy as jnp
-from .base import BaseTheoryPowerSpectrumMultipolesFromWedges
 from .power_template import FixedPowerSpectrumTemplate
-from .full_shape import BaseTracerTwoPointTheory
+from .base import ProjectToMultipoles
+from .full_shape import BasePTPowerSpectrumMultipoles, BaseTracerPowerSpectrumMultipoles, MultitracerBiasParameters
 
 
-class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedges, BaseTracerTwoPointTheory):
+class PNGTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     r"""
     Kaiser tracer power spectrum multipoles, with scale dependent bias sourced by local primordial non-Gaussianities.
 
@@ -17,30 +17,23 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
     ----------
     k : array, default=None
         Theory wavenumbers where to evaluate multipoles.
-
     ells : tuple, default=(0, 2)
         Multipoles to compute.
-
-    mu : int, default=200
+    mu : int, default=8
         Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
-
     method : str, default='prim'
         Method to compute :math:`\alpha`, which relates primordial potential to current density contrast.
-
         - "prim": :math:`\alpha` is the square root of the primordial power spectrum to the current density power spectrum
         - else: :math:`\alpha` is the transfer function, rescaled by the factor in the Poisson equation, and the growth rate,
           normalized to :math:`1 / (1 + z)` at :math:`z = 10` (in the matter dominated era).
-
     mode : str, default='b-p'
         fnl_loc is degenerate with PNG bias bphi.
 
         - "b-p": ``bphi = 2 * 1.686 * (b1 - p)``, p as a parameter
         - "bphi": ``bphi`` as a parameter
         - "bfnl_loc": ``bfnl_loc = bphi * fnl_loc`` as a parameter
-
     template : BasePowerSpectrumTemplate
         Power spectrum template. Defaults to :class:`FixedPowerSpectrumTemplate`.
-
     shotnoise : float, default=1e4
         Shot noise (which is usually marginalized over).
 
@@ -48,10 +41,11 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
     ---------
     https://arxiv.org/pdf/1904.08859.pdf
     """
-    config_fn = 'primordial_non_gaussianity.yaml'
-    _deterministic_bias_params = ['b1', 'sigmas', 'bphi', 'p', 'bfnl_loc']
-    _stochastic_bias_params = ['sn0']
-    _with_cross = True
+    config_fn = 'png.yaml'
+
+    @classmethod
+    def _get_multitracer(cls, tracers=None):
+        return MultitracerBiasParameters(tracers=tracers, deterministic=['b1', 'sigmas', 'bphi', 'p', 'bfnl_loc'], stochastic=['sn0'], ntracers=2)
 
     @classmethod
     def _params(cls, params, tracers=None, mode='b-p'):
@@ -65,29 +59,27 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
         else:
             raise ValueError('Unknown mode {}; it must be one of ["bphi", "b-p", "bfnl"]'.format(mode))
         params = params.select(basename=keep_params)
-        return super()._params(params, tracers=tracers)
+        params = cls._get_multitracer(tracers=tracers)._params(params)
+        return params
 
-    def initialize(self, *args, ells=(0, 2), method='prim', mode='b-p', template=None, shotnoise=1e4, **kwargs):
-        BaseTracerTwoPointTheory.initialize(self, tracers=kwargs.pop('tracers', None))
-        if utils.is_sequence(shotnoise):
-            # cross correlation
-            shotnoise = np.sqrt(np.prod(shotnoise))
-        self.nd = 1. / float(shotnoise)
-        super().initialize(*args, ells=ells, **kwargs)
-        self.nd = 1. / shotnoise
+    def initialize(self, k=None, ells=(0, 2), mu=10, tracers=None, z=None, method='prim', mode='b-p', template=None):
+        self._set_options(k=k, ells=ells, tracers=tracers)
         if template is None:
             template = FixedPowerSpectrumTemplate()
-        self.template = template
+        BasePTPowerSpectrumMultipoles._set_template(self, template=template, z=z)
         kin = np.geomspace(min(1e-3, self.k[0] / 2, self.template.init.get('k', [1.])[0]), max(1., self.k[-1] * 2, self.template.init.get('k', [0.])[0]), 1000)
         kin = np.insert(kin, 0, 1e-4)
         self.template.init.update(k=kin)
         self.method = str(method)
         self.mode = str(mode)
         self.z = self.template.z
+        self.to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+        self.mu = self.to_poles.mu
+        self.decode_params = self._get_multitracer(tracers=tracers)
 
-    def calculate(self, **kwargs):
-        bias_params = self.pack_input_bias_params(kwargs, defaults=dict(b1=1., sigmas=0., sn0=0., bphi=1., p=1., bfnl_loc=0.))
-        (b1X, b1Y), (sigmasX, sigmasY), sn0 = [bias_params[name] for name in ['b1', 'sigmas', 'sn0']]
+    def calculate(self, **params):
+        params = self.decode_params(params, defaults=dict(b1=1., sigmas=0., sn0=0., bphi=1., p=1., bfnl_loc=0.))
+        (b1X, b1Y), (sigmasX, sigmasY), sn0 = [params[name] for name in ['b1', 'sigmas', 'sn0']]
         self.z = self.template.z
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         pk_dd = self.template.pk_dd
@@ -109,19 +101,19 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
         kin, pk_dd, alpha = kin[1:], pk_dd[1:], alpha[1:]
         alpha = interp1d(jnp.log10(kap), np.log10(kin), alpha)
         if self.mode == 'bphi':
-            fnl_loc = kwargs['fnl_loc']
-            bphiX, bphiY = bias_params['bphi']
+            fnl_loc = params['fnl_loc']
+            bphiX, bphiY = params['bphi']
             bfnl_locX, bfnl_locY = bphiX * fnl_loc, bphiY * fnl_loc
         elif self.mode == 'b-p':
-            fnl_loc = kwargs['fnl_loc']
-            pX, pY = bias_params['p']
+            fnl_loc = params['fnl_loc']
+            pX, pY = params['p']
             bfnl_locX, bfnl_locY = [2. * 1.686 * (b1 - p) * fnl_loc for b1, p in [(b1X, pX), (b1Y, pY)]]
         else:
-            bfnl_locX = bfnl_locY = bias_params['bfnl_loc']
+            bfnl_locX = bfnl_locY = params['bfnl_loc']
         # bfnl_loc is typically 2 * delta_c * (b1 - p)
         bX, bY = b1X + bfnl_locX * alpha, b1Y + bfnl_locY * alpha
         fog = 1. / ((1. + sigmasX**2 * kap**2 * muap**2 / 2.) * (1. + sigmasY**2 * kap**2 * muap**2 / 2.))
-        pkmu = jac * fog * (bX + f * muap**2) * (bY + f * muap**2) * interp1d(jnp.log10(kap), np.log10(kin), pk_dd) + sn0 / self.nd
+        pkmu = jac * fog * (bX + f * muap**2) * (bY + f * muap**2) * interp1d(jnp.log10(kap), np.log10(kin), pk_dd) + sn0 / self.nbar
         self.power = self.to_poles(pkmu)
 
     def get(self):
@@ -136,17 +128,13 @@ class PNGTracerPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedg
         ----------
         fig : matplotlib.figure.Figure, default=None
             Optionally, a figure with at least 1 axis.
-
         scaling : str, default='loglog'
             Either 'kpk' or 'loglog'.
-
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
-
         kw_save : dict, default=None
             Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
-
         show : bool, default=False
             If ``True``, show figure.
 

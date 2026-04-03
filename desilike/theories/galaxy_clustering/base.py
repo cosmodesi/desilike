@@ -7,43 +7,10 @@ from desilike.cosmo import is_external_cosmo
 from desilike.theories.primordial_cosmology import get_cosmo, Cosmoprimo, constants
 from desilike.base import BaseCalculator
 from desilike import plotting, utils
+from desilike.utils import BaseClass
 
 
-class BaseTheoryPowerSpectrumMultipoles(BaseCalculator):
-
-    """Base class for theory power spectrum multipoles."""
-
-    def initialize(self, k=None, ells=(0, 2, 4)):
-        if k is None: k = np.linspace(0.01, 0.2, 101)
-        self.k = np.array(k, dtype='f8')
-        self.ells = tuple(ells)
-
-    def __getstate__(self):
-        state = {}
-        for name in ['k', 'z', 'ells', 'power']:
-            if hasattr(self, name):
-                state[name] = getattr(self, name)
-        return state
-
-
-class BaseTheoryCorrelationFunctionMultipoles(BaseCalculator):
-
-    """Base class for theory correlation function multipoles."""
-
-    def initialize(self, s=None, ells=(0, 2, 4)):
-        if s is None: s = np.linspace(20., 200, 101)
-        self.s = np.array(s, dtype='f8')
-        self.ells = tuple(ells)
-
-    def __getstate__(self):
-        state = {}
-        for name in ['s', 'z', 'ells', 'corr', 'fiducial']:
-            if hasattr(self, name):
-                state[name] = getattr(self, name)
-        return state
-
-
-class SpectrumToCorrelationMultipoles(object):
+class SpectrumToCorrelationMultipoles(BaseClass):
 
     """Helper class to compute correlation function multipoles from power spectrum multipoles using FFTLog."""
 
@@ -144,7 +111,7 @@ class SpectrumToCorrelationMultipoles(object):
         return fig
 
 
-class ProjectToMultipoles(object):
+class ProjectToMultipoles(BaseClass):
 
     """Helper class to compute multipoles from wedges using Legendre polynomials."""
 
@@ -164,170 +131,6 @@ class ProjectToMultipoles(object):
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-
-
-class BaseTheoryCorrelationFunctionFromPowerSpectrumMultipoles(BaseTheoryCorrelationFunctionMultipoles):
-
-    """Base class for theory correlation function from power spectrum multipoles."""
-    _initialize_with_namespace = True
-
-    def initialize(self, s=None, power=None, interp_order=1):
-        if s is None: s = np.linspace(20., 200, 101)
-        self.s = np.array(s, dtype='f8')
-        self.interp_order = {'linear': 1, 'cubic': 3}.get(interp_order, interp_order)
-        allowed_interp_order = [1, 3]
-        if self.interp_order not in allowed_interp_order:
-            raise ValueError('interp_order must be one of {}'.format(allowed_interp_order))
-        if power is None:
-            from .full_shape import KaiserTracerPowerSpectrumMultipoles
-            power = KaiserTracerPowerSpectrumMultipoles()
-        self.power = power
-        self.k = np.logspace(-4., 3., 2048)
-        kin = self.power.init.get('k', None)
-        # Important to have high enough sampling, otherwise wiggles can be seen at small s
-        if kin is None: self.kin = np.geomspace(self.k[0], 0.6, int(300. / self.interp_order + 0.5))  # kmax = 1. may be better
-        else: self.kin = np.array(kin, dtype='f8')
-        self.power.init['k'] = self.kin
-        mask = self.k > self.kin[-1]
-        self.logk_high = np.log10(self.k[mask] / self.kin[-1])
-        self.damp_high = np.exp(-(self.k[mask] / self.kin[-1] - 1.)**2 / (2. * (10.)**2))
-        #self.k_high = self.k[mask] / self.kin[-1]
-        #self.damp = np.exp(-(self.k / 10.)**2)
-        self.k_mid = self.k[~mask]
-        self.ells = self.power.ells
-        from cosmoprimo import PowerToCorrelation
-        self.fftlog = PowerToCorrelation(self.k, ell=self.ells, q=0, lowring=True)
-        self.set_params()
-
-    def set_params(self):
-        self.power.init.params = self.init.params.copy()
-        self.init.params.clear()
-
-    # Below several methods for pk -> xi. In the end, differences do not matter for s > 20 Mpc / h.
-    """
-    def get_corr(self, power):
-        tmp = []
-        print(power[0].sum(), power[1].sum(), power[2].sum(), self.kin[0], self.kin[-1], self.kin.shape)
-        for pk in power:
-            slope_high = np.log10(np.abs(pk[-1] / pk[-2])) / np.log10(self.kin[-1] / self.kin[-2])
-            r = -2
-            from scipy.misc import derivative
-            from scipy.interpolate import InterpolatedUnivariateSpline as interpolate
-            pki = interpolate(self.kin, pk, k=5)
-            slope_high2 = derivative(pki, self.kin[r], dx=self.kin[r] * 1e-6, order=9) * self.kin[r] / pk[r]
-            print(slope_high, slope_high2)
-            interp = interp1d(np.log10(self.k_mid), np.log10(self.kin), pk, method=self.interp_order)
-            #tmp.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.k_high) * self.damp_high], axis=-1))
-            tmp.append(jnp.concatenate([interp, pk[-1] * self.k_high**slope_high2], axis=-1) * self.damp)
-        from matplotlib import pyplot as plt
-        ax = plt.gca()
-        for tt in tmp:
-            ax.loglog(self.k, tt)
-        plt.show()
-        #s, corr = self.fftlog(jnp.vstack(tmp))
-        from velocileptors.Utils.spherical_bessel_transform import SphericalBesselTransform as SphericalBesselTransformNP
-        sphr = SphericalBesselTransformNP(self.k, L=5, fourier=True)
-        ss0, xi0 = sphr.sph(0, tmp[0])
-        ss2, xi2 = sphr.sph(2, tmp[1]); xi2 *= -1
-        ss4, xi4 = sphr.sph(4, tmp[2])
-        s = [ss0, ss2, ss4]
-        corr = [xi0, xi2, xi4]
-        return jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
-
-    @jit(static_argnums=[0])
-    def get_corr(self, power):
-        tmp = []
-        for pk in power:
-            slope_high = jnp.log10(jnp.abs(pk[-1] / pk[-2])) / np.log10(self.kin[-1] / self.kin[-2])
-            interp = interp1d(np.log10(self.k_mid), np.log10(self.kin), pk, method=self.interp_order)
-            #tmp.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.k_high) * self.damp_high], axis=-1))
-            #print(np.array(pk[-1]), np.array(slope_high))
-            tmp.append(jnp.concatenate([interp, pk[-1] * self.k_high**slope_high], axis=-1) * self.damp)
-        s, corr = self.fftlog(jnp.vstack(tmp))
-        return jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
-    """
-    @jit(static_argnums=[0])
-    def get_corr(self, power):  # least terrible solution, others fail when pk2[-2] ~ 0 and pk2[-1] < 0
-        tmp = []
-        for pk in power:
-            slope_high = (pk[-1] - pk[-2]) / np.log10(self.kin[-1] / self.kin[-2])
-            interp = interp1d(np.log10(self.k_mid), np.log10(self.kin), pk, method=self.interp_order)
-            tmp.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.logk_high) * self.damp_high], axis=-1))
-            #tmp.append(jnp.concatenate([interp, (pk[-1] + slope_high * self.logk_high)], axis=-1) * self.damp)
-        s, corr = self.fftlog(jnp.vstack(tmp))
-        return jnp.array([jnp.interp(self.s, ss, cc) for ss, cc in zip(s, corr)])
-
-    def calculate(self):
-        self.corr = self.get_corr(self.power.power)
-
-    @plotting.plotter
-    def plot(self, fig=None):
-        """
-        Plot comparison to brute-force (non-fftlog) computation.
-        We see convergence towards brute-force when decreasing damping sigma.
-        Difference between fftlog and brute-force comes from the effect of truncation / damping.
-
-        Parameters
-        ----------
-        fig : matplotlib.figure.Figure, default=None
-            Optionally, a figure with at least ``1 + len(self.ells)`` axes.
-
-        fn : str, Path, default=None
-            Optionally, path where to save figure.
-            If not provided, figure is not saved.
-
-        kw_save : dict, default=None
-            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
-
-        show : bool, default=False
-            If ``True``, show figure.
-        """
-        corr = []
-        weights = utils.weights_trapz(np.log(self.kin))
-        for ill, ell in enumerate(self.ells):
-            # Integration in log, adding a k
-            tmp = np.sum(self.kin**3 * self.power.power[ill] * weights * special.spherical_jn(ell, self.s[:, None] * self.kin), axis=-1)
-            corr.append((-1) ** (ell // 2) / (2. * np.pi**2) * tmp)
-        from matplotlib import pyplot as plt
-        if fig is None:
-            height_ratios = [max(len(self.ells), 3)] + [1] * len(self.ells)
-            figsize = (6, 1.5 * sum(height_ratios))
-            fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
-            fig.subplots_adjust(hspace=0)
-        else:
-            lax = fig.axes
-        lax[0].plot([], [], linestyle='-', color='k', label='fftlog')
-        lax[0].plot([], [], linestyle='--', color='k', label='brute-force')
-        for ill, ell in enumerate(self.ells):
-            color = 'C{:d}'.format(ill)
-            lax[0].plot(self.s, self.s**2 * self.corr[ill], color=color, linestyle='-', label=r'$\ell = {:d}$'.format(ell))
-            lax[0].plot(self.s, self.s**2 * corr[ill], linestyle='--', color=color)
-        for ill, ell in enumerate(self.ells):
-            lax[ill + 1].plot(self.s, self.s**2 * (self.corr[ill] - corr[ill]), color='C{:d}'.format(ill))
-            lax[ill + 1].set_ylabel(r'$\Delta s^{{2}}\xi_{{{0:d}}}$ [$(\mathrm{{Mpc}}/h)^{{2}}$]'.format(ell))
-        for ax in lax: ax.grid(True)
-        lax[0].legend()
-        lax[0].set_ylabel(r'$s^{2} \xi_{\ell}(s)$ [$(\mathrm{Mpc}/h)^{2}$]')
-        lax[-1].set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
-        return fig
-
-
-class BaseTheoryPowerSpectrumMultipolesFromWedges(BaseTheoryPowerSpectrumMultipoles):
-
-    """Base class for theory correlation function multipoles computed from theory power spectrum multipoles."""
-
-    def initialize(self, *args, mu=20, method='leggauss', **kwargs):
-        super(BaseTheoryPowerSpectrumMultipolesFromWedges, self).initialize(*args, **kwargs)
-        self.set_k_mu(k=self.k, mu=mu, method=method, ells=self.ells)
-
-    def set_k_mu(self, k, mu=20, method='leggauss', ells=(0, 2, 4)):
-        self.k = np.asarray(k, dtype='f8')
-        self.mu, wmu = utils.weights_mu(mu, method=method)
-        self.wmu = np.array([wmu * (2 * ell + 1) * special.legendre(ell)(self.mu) for ell in ells])
-
-    @jit(static_argnums=[0])
-    def to_poles(self, pkmu):
-        return jnp.sum(pkmu * self.wmu[:, None, :], axis=-1)
 
 
 @jit

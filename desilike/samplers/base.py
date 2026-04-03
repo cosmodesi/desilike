@@ -481,8 +481,8 @@ class MarkovChainSampler(BaseSampler):
             self.pool.wait()
 
         if self.pool.bcast(len(self.chains) < self.n_chains):
-            raise ValueError('Could not find finite posterior '
-                             f'after {max_init_attempts:d} attempts.')
+            raise ValueError("Could not find finite posterior "
+                             f"after {max_init_attempts:d} attempts.")
 
     @property
     def state(self):

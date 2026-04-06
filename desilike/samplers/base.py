@@ -63,7 +63,7 @@ def _update_parameters(user_kwargs, sampler, **desilike_kwargs):
         Keyword arguments received from the user.
     sampler : str
         Name of the sampler. This is used to make warnings informative.
-    **desilike_kwargs : dict, optional
+    **desilike_kwargs
         Keyword arguments enforced by desilike.
 
     Returns

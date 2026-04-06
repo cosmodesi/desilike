@@ -44,20 +44,31 @@ def test_accuracy(likelihood, posterior):
     # Test that the profiler returns the correct result.
 
     profiler = Profiler(likelihood, rng=42, posterior=posterior)
+    profiler.add_global()
     profiler.add_grid(dict(a=np.linspace(-1, +1, 5)))
     samples = profiler.run(optimizer_kwargs=dict(maxiter=10))
 
     if posterior:
-        true = -0.5 * ((samples['a'] - MEAN_POSTERIOR[0])**2 /
-                       SD_POSTERIOR[0]**2)
-        result = samples['log_posterior']
-        true -= np.mean(true - result)  # correct normalization
+        key = 'log_posterior'
     else:
-        true = -0.5 * ((samples['a'] - MEAN_LIKELIHOOD[0])**2 /
-                       SD_LIKELIHOOD[0]**2)
-        result = samples['log_likelihood']
+        key = 'log_likelihood'
 
-    assert np.allclose(true, result, rtol=0, atol=1e-6)
+    if posterior:
+        samples[key] -= likelihood(dict(
+            a=MEAN_POSTERIOR[0], b=MEAN_POSTERIOR[1]))  # correct normalization
+
+    assert np.isclose(np.amax(samples[key]), 0, rtol=0, atol=1e-6)
+
+    if posterior:
+        truth = -0.5 * ((samples['a'] - MEAN_POSTERIOR[0])**2 /
+                        SD_POSTERIOR[0]**2)
+    else:
+        truth = -0.5 * ((samples['a'] - MEAN_LIKELIHOOD[0])**2 /
+                        SD_LIKELIHOOD[0]**2)
+
+    use = samples['fixed'] == 'a'
+    assert np.sum(use) == 5
+    assert np.allclose(truth[use], samples[key][use], rtol=0, atol=1e-6)
 
 
 @pytest.mark.mpi_skip
@@ -77,3 +88,16 @@ def test_rng(likelihood):
     assert len(samples_1) == len(samples_2)
 
     assert np.allclose(samples_1['log_posterior'], samples_2['log_posterior'])
+
+
+@pytest.mark.mpi_skip
+def test_remove_duplicates(likelihood):
+    # Test that duplicates are successfully removed.
+
+    profiler = Profiler(likelihood, rng=42)
+    profiler.add_global()
+    profiler.add_global()  # shouldn't be added
+    profiler.add_grid(dict(a=np.linspace(0, 1, 3)))
+    profiler.add_grid(dict(a=np.linspace(0, 1, 3)))  # shouldn't be added
+    profiler.add_grid(dict(b=np.linspace(0, 1, 5)))
+    assert len(profiler.samples) == 1 + 3 + 5

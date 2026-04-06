@@ -367,6 +367,9 @@ class Samples():
         """Return a list of dictionaries of parameters."""
         fixed_params = []
         for i in range(len(self)):
-            fixed_params.append(
-                {key: self[key][i] for key in self['fixed'][i].split('/')})
+            if len(self['fixed'][i]) > 0:
+                fixed_params.append(
+                    {key: self[key][i] for key in self['fixed'][i].split('/')})
+            else:
+                fixed_params.append({})
         return fixed_params

@@ -5,7 +5,6 @@
 # TODO: add plotting functions
 # TODO: expand functionality such as warm starts
 # TODO: add IO
-# TODO: add remove_duplicates
 
 import numpy as np
 from scipy.optimize import dual_annealing
@@ -60,7 +59,8 @@ class Profiler(BaseClass):
 
     def add_global(self):
         """Add finding the global optimum."""
-        samples = Samples(**{key: [np.nan, ] for key in self.params})
+        samples = Samples(**{key: [np.nan, ] for key in self.params},
+                          fixed=[[], ])
         self._add_samples(samples)
 
     def add_sample(self, sample):
@@ -117,20 +117,21 @@ class Profiler(BaseClass):
         """Add samples to profile."""
         samples[self.neg_cost_key] = np.repeat(-np.inf, len(samples))
         self.samples.append(samples)
-        # self._remove_duplicates()
+        self._remove_duplicates()
         self.fixed_params = self.samples._get_fixed()
 
     def _remove_duplicates(self):
         """Remove duplicate parameter combinations to profile over."""
-        points = np.zeros((len(self.samples), len(self.params)))
-        for i in range(len(points)):
+        samples = np.zeros((len(self.samples), len(self.params)))
+        fixed_params = self.samples._get_fixed()
+        for i in range(len(self.samples)):
             for k, key in enumerate(self.params):
-                if key in self.samples['profiled'][i].split(','):
-                    points[i, k] = self.samples[key][i]
+                if key in fixed_params[i]:
+                    samples[i, k] = self.samples[key][i]
                 else:
-                    points[i, k] = np.nan
+                    samples[i, k] = np.inf  # np.nan doesn't work with unique
         self.samples = self.samples[
-            np.unique(points, axis=0, return_index=True)[1]]
+            np.unique(samples, axis=0, return_index=True)[1]]
 
     def _vector_to_params(self, vector, index=0):
         """Convert an array of varied parameters to a (complete) dictionary.

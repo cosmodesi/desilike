@@ -7,12 +7,13 @@
 # TODO: add IO
 
 import numpy as np
-from scipy.optimize import dual_annealing
 from functools import partial
 
 from desilike import Samples
 from desilike.pool import MPIPool
 from desilike.utils import BaseClass
+
+from .optimizers import scipy_dual_annealing
 
 
 class Profiler(BaseClass):
@@ -213,7 +214,7 @@ class Profiler(BaseClass):
             after ``max_init_attempts``.
 
         """
-        x0 = [None] * len(self.samples)
+        x_0 = [None] * len(self.samples)
         cost = np.repeat(np.inf, len(self.samples))
 
         for _ in range(max_init_attempts):
@@ -222,10 +223,10 @@ class Profiler(BaseClass):
                 if np.isfinite(cost[i]):
                     pass
                 n_free = len(self.params) - len(self.fixed_params[i])
-                x0[i] = self.rng.uniform(size=n_free)
+                x_0[i] = self.rng.uniform(size=n_free)
 
             args = [self._vector_to_params(x, i) for i, (x, c) in enumerate(
-                zip(x0, cost)) if not np.isfinite(c)]
+                zip(x_0, cost)) if not np.isfinite(c)]
             new_cost = self.pool.map(self._cost_function, args)
             cost[~np.isfinite(cost)] = new_cost
 
@@ -236,19 +237,17 @@ class Profiler(BaseClass):
             raise ValueError("Could not find finite likelihood/posterior "
                              f"after {max_init_attempts:d} attempts.")
 
-        return x0
+        return x_0
 
     def _run_optimizer(self, args):
-        index, (x0, rng, optimizer, kwargs) = args
+        index, (optimizer, x_0, rng, kwargs) = args
         cost_function = partial(self._cost_function, index=index)
-        if len(x0) == 0:
-            return cost_function(x0)
-        res = optimizer(cost_function, x0=x0, bounds=[(0, 1)] * len(x0),
-                        rng=rng, **kwargs)
-        return res.x, res.fun
+        if len(x_0) == 0:
+            return x_0, cost_function(x_0), True
+        return optimizer(cost_function, x_0, rng, **kwargs)
 
     def run(self, max_iter=100, tol=1e-3, warm_start=False,
-            max_init_attempts=100, optimizer=dual_annealing,
+            max_init_attempts=100, optimizer=scipy_dual_annealing,
             optimizer_kwargs=None):
         """Run the profiler.
 
@@ -267,9 +266,9 @@ class Profiler(BaseClass):
         max_init_attempts: int, optional
             Maximum number of attempts to initialize each sample. Default is
             100.
-        optimizer : function, optional
+        optimizer : callable, optional
             Optimizer function from ``desilike.profilers.optimizers``. Default
-            is ``scipy.optimize.dual_annealing``.
+            is ``desilike.profilers.scipy_dual_annealing``.
         optimizer_kwargs : dict, optional
             Optional keyword arguments passed to the optimizer. Default is
             ``None``.
@@ -294,11 +293,11 @@ class Profiler(BaseClass):
         if self.pool.main:
 
             for _ in range(max_iter):
-                x0 = self._get_start(max_init_attempts=max_init_attempts)
-                n = len(x0)
+                x_0 = self._get_start(max_init_attempts=max_init_attempts)
+                n = len(x_0)
                 result = self.pool.map(
                     self._run_optimizer, enumerate(zip(
-                        x0, self.rng.spawn(n), [optimizer] * n,
+                        [optimizer] * n, x_0, self.rng.spawn(n),
                         [optimizer_kwargs] * n)))
                 x = [r[0] for r in result]
                 cost = np.array([r[1] for r in result])

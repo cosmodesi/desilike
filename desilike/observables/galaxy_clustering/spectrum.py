@@ -235,18 +235,22 @@ class TracerSpectrum2PolesObservable(BaseClusteringObservable):
             self.flattheory = (3. * (self.flattheory / self.flatdata)**(1. / 3.) - 2.) * self.flatdata
 
     @plotting.plotter(interactive={'kw_theory': {'color': 'black', 'label': 'reference'}})
-    def plot(self, kw_theory=None, scaling='kpk', fig=None):
+    def plot(self, kw_theory=None, scaling='kpk', kpower=None, fig=None, figsize=None):
         """
         Plot data and theory power spectrum multipoles.
 
         Parameters
         ----------
-        scaling : str, default='kpk'
-            Either 'kpk' or 'loglog'.
         kw_theory : list of dict, default=None
             Change the default line parametrization of the theory, one dictionary for each ell or duplicate it.
+        scaling : str, default='kpk'
+            Either 'kpk' or 'loglog'.
+        kpower : int or None, default=None
+            If not None, will overwrite power of k suggested by `scaling` and will plot k**kpower * pk. 
         fig : matplotlib.figure.Figure, default=None
             Optionally, a figure with at least ``1 + len(self.ells)`` axes.
+        figsize : (width, height), default=None
+            If not figure is passed, fix the size of the created figure.
         fn : str, Path, default=None
             Optionally, path where to save figure.
             If not provided, figure is not saved.
@@ -272,7 +276,7 @@ class TracerSpectrum2PolesObservable(BaseClusteringObservable):
 
         if fig is None:
             height_ratios = [max(len(labels), 3)] + [1] * len(labels)
-            figsize = (6, 1.5 * sum(height_ratios))
+            figsize = (6, 1.5 * sum(height_ratios)) if figsize is None else figsize
             fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False, gridspec_kw={'height_ratios': height_ratios}, figsize=figsize, squeeze=True)
             fig.subplots_adjust(hspace=0.1)
             show_legend = True
@@ -288,7 +292,8 @@ class TracerSpectrum2PolesObservable(BaseClusteringObservable):
             x = data_pole.coords('k')
             xlabel = r'$k$ [$h/\mathrm{Mpc}$]'
             if scaling == 'kpk':
-                scale = x
+                k_exp = 1 if kpower is None else kpower
+                scale = x**k_exp
                 ylabel = r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]'
             elif scaling == 'loglog':
                 scale = 1.

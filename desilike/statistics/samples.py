@@ -27,7 +27,7 @@ class Samples():
             List of parameter combinations that are fixed. Each element can be
             a string listing keys separated by a "/" or a list of strings,
             each indicating a key.
-        **kwargs : dict, optional
+        **kwargs
             Samples of parameters. Each sample must have the same length.
 
         Raises

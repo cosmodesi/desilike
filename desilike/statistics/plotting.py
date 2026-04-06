@@ -314,7 +314,7 @@ def triangle_posterior(samples, keys=None, **kwargs):
     keys : list or None, optional
         Parameters to plot posterior for. If ``None``, plot all parameters.
         Default is ``None``.
-    **kwargs : dict, optional
+    **kwargs
         Optional parameters for ``getdist.plots.GetDistPlotter.triangle_plot``.
 
     Returns

@@ -1,15 +1,14 @@
 """Base class for profilers."""
 
 # this is a rough first draft
-# TODO: properly implement rng
-# TODO: implement other minimizers
+# TODO: implement other optimizers
 # TODO: add plotting functions
 # TODO: expand functionality such as warm starts
 # TODO: add IO
 # TODO: add remove_duplicates
 
 import numpy as np
-from scipy.optimize import minimize
+from scipy.optimize import dual_annealing
 from functools import partial
 
 from desilike import Samples
@@ -47,11 +46,17 @@ class Profiler(BaseClass):
 
         self.samples = Samples()
         self.pool = MPIPool()
-        for name in ['_cost_function', '_run_minimizer']:
+        for name in ['_cost_function', '_run_optimizer']:
             setattr(self, name, self.pool.save_function(
                 getattr(self, name), name))
 
-        self.rng = rng
+        if hasattr(self, 'rng') and rng is None:
+            pass
+        else:
+            # Overwrite the RNG that may be read.
+            if isinstance(rng, int) or rng is None:
+                rng = np.random.default_rng(seed=rng)
+            self.rng = rng
 
     def add_global(self):
         """Add finding the global optimum."""
@@ -183,10 +188,10 @@ class Profiler(BaseClass):
             params = vector
 
         if self.neg_cost_key == 'log_likelihood':
-            return - self.likelihood(params)
-        else:
-            return - (self.likelihood(params) +
+            return - (self.likelihood(params) -
                       self.likelihood.all_params.prior(**params))
+        else:
+            return - self.likelihood(params)
 
     def _get_start(self, max_init_attempts=100):
         """Generate cold-start samples.
@@ -216,7 +221,7 @@ class Profiler(BaseClass):
                 if np.isfinite(cost[i]):
                     pass
                 n_free = len(self.params) - len(self.fixed_params[i])
-                x0[i] = np.random.uniform(size=n_free)
+                x0[i] = self.rng.uniform(size=n_free)
 
             args = [self._vector_to_params(x, i) for i, (x, c) in enumerate(
                 zip(x0, cost)) if not np.isfinite(c)]
@@ -232,16 +237,18 @@ class Profiler(BaseClass):
 
         return x0
 
-    def _run_minimizer(self, index_and_x0):
-        index, x0 = index_and_x0
+    def _run_optimizer(self, args):
+        index, (x0, rng, optimizer, kwargs) = args
         cost_function = partial(self._cost_function, index=index)
         if len(x0) == 0:
             return cost_function(x0)
-        res = minimize(cost_function, x0=x0, bounds=[(0, 1)] * len(x0))
+        res = optimizer(cost_function, x0=x0, bounds=[(0, 1)] * len(x0),
+                        rng=rng, **kwargs)
         return res.x, res.fun
 
     def run(self, max_iter=100, tol=1e-3, warm_start=False,
-            max_init_attempts=100):
+            max_init_attempts=100, optimizer=dual_annealing,
+            optimizer_kwargs=None):
         """Run the profiler.
 
         Parameters
@@ -259,6 +266,12 @@ class Profiler(BaseClass):
         max_init_attempts: int, optional
             Maximum number of attempts to initialize each sample. Default is
             100.
+        optimizer : function, optional
+            Optimizer function from ``desilike.profilers.optimizers``. Default
+            is ``scipy.optimize.dual_annealing``.
+        optimizer_kwargs : dict, optional
+            Optional keyword arguments passed to the optimizer. Default is
+            ``None``.
 
         Raises
         ------
@@ -274,11 +287,18 @@ class Profiler(BaseClass):
         if len(self.samples) == 0:
             raise ValueError("Cannot run profiler without samples.")
 
+        if optimizer_kwargs is None:
+            optimizer_kwargs = {}
+
         if self.pool.main:
 
             for _ in range(max_iter):
                 x0 = self._get_start(max_init_attempts=max_init_attempts)
-                result = self.pool.map(self._run_minimizer, enumerate(x0))
+                n = len(x0)
+                result = self.pool.map(
+                    self._run_optimizer, enumerate(zip(
+                        x0, self.rng.spawn(n), [optimizer] * n,
+                        [optimizer_kwargs] * n)))
                 x = [r[0] for r in result]
                 cost = np.array([r[1] for r in result])
                 update = cost < -self.samples[self.neg_cost_key]

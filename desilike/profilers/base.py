@@ -1,18 +1,17 @@
 """Base class for profilers."""
-
-# this is a rough first draft
 # TODO: implement other optimizers
 # TODO: add plotting functions
 # TODO: expand functionality such as warm starts
-# TODO: add IO
+
+import json
+from functools import partial
+from pathlib import Path
 
 import numpy as np
-from functools import partial
 
 from desilike import Samples
 from desilike.pool import MPIPool
 from desilike.utils import BaseClass
-
 from .optimizers import scipy_dual_annealing
 
 
@@ -44,19 +43,47 @@ class Profiler(BaseClass):
         self.limits = {param.name: (param.limits[0], param.limits[1]) for param
                        in likelihood.varied_params}
 
-        self.samples = Samples()
         self.pool = MPIPool()
         for name in ['_cost_function', '_run_optimizer']:
             setattr(self, name, self.pool.save_function(
                 getattr(self, name), name))
 
-        if hasattr(self, 'rng') and rng is None:
-            pass
-        else:
-            # Overwrite the RNG that may be read.
+        if directory is not None:
+            directory = Path(directory)
+            if directory.suffix:
+                raise ValueError("The directory cannot have a suffix.")
+            if self.pool.main:
+                directory.mkdir(parents=True, exist_ok=True)
+        self.directory = directory
+
+        if self.directory is not None:
+            try:
+                self.load()
+            except FileNotFoundError:
+                pass
+
+        if not hasattr(self, 'samples'):
+            self.samples = Samples()
+
+        if not hasattr(self, 'rng'):
             if isinstance(rng, int) or rng is None:
                 rng = np.random.default_rng(seed=rng)
             self.rng = rng
+
+    def save(self):
+        """Save all results to disk."""
+        if self.pool.main:
+            self.samples.save(self.directory / 'samples.npz')
+            with open(self.directory / 'rng.json', 'w') as fstream:
+                json.dump(self.rng.bit_generator.state, fstream)
+
+    def load(self):
+        """Load internal calculations from disk."""
+        if self.pool.main:
+            self.samples = Samples.load(self.directory / 'samples.npz')
+            with open(self.directory / 'rng.json', 'r') as fstream:
+                self.rng = np.random.default_rng()
+                self.rng.bit_generator.state = json.load(fstream)
 
     def add_global(self):
         """Add finding the global optimum."""
@@ -195,7 +222,7 @@ class Profiler(BaseClass):
         else:
             return - self.likelihood(params)
 
-    def _get_start(self, max_init_attempts=100):
+    def _get_start(self, n, max_init_attempts=100):
         """Generate cold-start samples.
 
         This should only be called by the main process while the others are
@@ -213,20 +240,28 @@ class Profiler(BaseClass):
             If a finite cost function value cannot be found for all samples
             after ``max_init_attempts``.
 
+        Returns
+        -------
+        index : numpy.ndarray
+            Indices corresponding to the sample.
+        x_0 : list of numpy.ndarray
+            Starting positions.
+
         """
-        x_0 = [None] * len(self.samples)
-        cost = np.repeat(np.inf, len(self.samples))
+        index = np.repeat(np.arange(len(self.samples)), n)
+        x_0 = [None] * len(index)
+        cost = np.repeat(np.inf, len(x_0))
 
         for _ in range(max_init_attempts):
 
-            for i in range(len(self.samples)):
+            for i in range(len(x_0)):
                 if np.isfinite(cost[i]):
                     pass
-                n_free = len(self.params) - len(self.fixed_params[i])
+                n_free = len(self.params) - len(self.fixed_params[index[i]])
                 x_0[i] = self.rng.uniform(size=n_free)
 
-            args = [self._vector_to_params(x, i) for i, (x, c) in enumerate(
-                zip(x_0, cost)) if not np.isfinite(c)]
+            args = [self._vector_to_params(x, i) for i, x, c in zip(
+                index, x_0, cost) if not np.isfinite(c)]
             new_cost = self.pool.map(self._cost_function, args)
             cost[~np.isfinite(cost)] = new_cost
 
@@ -237,28 +272,30 @@ class Profiler(BaseClass):
             raise ValueError("Could not find finite likelihood/posterior "
                              f"after {max_init_attempts:d} attempts.")
 
-        return x_0
+        return index, x_0
 
-    def _run_optimizer(self, args):
-        index, (optimizer, x_0, rng, kwargs) = args
+    def _run_optimizer(self, optimizer, args, **kwargs):
+        index, x_0, rng = args
         cost_function = partial(self._cost_function, index=index)
         if len(x_0) == 0:
             return x_0, cost_function(x_0), True
         return optimizer(cost_function, x_0, rng, **kwargs)
 
-    def run(self, max_iter=100, tol=1e-3, warm_start=False,
+    def run(self, n_per_iter=10, max_iter=10, tol=1e-3, warm_start=False,
             max_init_attempts=100, optimizer=scipy_dual_annealing,
             optimizer_kwargs=None):
         """Run the profiler.
 
         Parameters
         ----------
+        n_per_iter : int, optional
+            Independent optimizations per sample at each iteration. Default is
+            10.
         max_iter : int, optional
-            Maximum number of iterations. At each iteration, all samples
-            are optimized. Default is 100.
+            Maximum number of iterations. Default is 10.
         tol : float, optional
             Optimization stops if maximum improvement accross all samples
-            drops below ``tol``. Default is 1e-2.
+            drops below ``tol`` between optimizations. Default is 1e-2.
         warm_start : bool, optional
             If True, starting positions are derived from interpolating
             previous points. This can only be done if the profiler was
@@ -290,25 +327,30 @@ class Profiler(BaseClass):
         if optimizer_kwargs is None:
             optimizer_kwargs = {}
 
+        run_optimizer = partial(self._run_optimizer, optimizer,
+                                **optimizer_kwargs)
+
         if self.pool.main:
 
             for _ in range(max_iter):
-                x_0 = self._get_start(max_init_attempts=max_init_attempts)
-                n = len(x_0)
+                index, x_0 = self._get_start(
+                    n_per_iter, max_init_attempts=max_init_attempts)
                 result = self.pool.map(
-                    self._run_optimizer, enumerate(zip(
-                        [optimizer] * n, x_0, self.rng.spawn(n),
-                        [optimizer_kwargs] * n)))
-                x = [r[0] for r in result]
-                cost = np.array([r[1] for r in result])
-                update = cost < -self.samples[self.neg_cost_key]
-                d_cost = np.amax(-self.samples[self.neg_cost_key] - cost)
-                for i in np.arange(len(self.samples))[update]:
-                    params = self.samples[i]
-                    params.update(self._vector_to_params(x[i], i))
-                    params[self.neg_cost_key] = -cost[i]
-                    self.samples[i] = params
-                if d_cost < tol:
+                    run_optimizer, zip(index, x_0, self.rng.spawn(len(x_0))))
+
+                impr = np.zeros(len(self.samples))
+                for i, (x_min, f_min, success) in zip(index, result):
+                    if f_min < -self.samples[self.neg_cost_key][i]:
+                        impr[i] = -self.samples[self.neg_cost_key][i] - f_min
+                        params = self.samples[i]
+                        params.update(self._vector_to_params(x_min, i))
+                        params[self.neg_cost_key] = -f_min
+                        self.samples[i] = params
+
+                if self.directory is not None:
+                    self.save()
+
+                if np.amax(impr) < tol:
                     break
 
             self.pool.stop_wait()

@@ -136,10 +136,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
             except FileNotFoundError:
                 pass
 
-        if hasattr(self, 'rng') and rng is None:
-            pass
-        else:
-            # Overwrite the RNG that may be read.
+        if not hasattr(self, 'rng'):
             if isinstance(rng, int) or rng is None:
                 rng = np.random.default_rng(seed=rng)
             self.rng = rng
@@ -360,12 +357,12 @@ class StaticSampler(BaseSampler):
     def _write(self):
         """Write internal calculations to disk."""
         if self.pool.main:
-            self.results.save(self.directory / 'results.npz')
+            self.samples.save(self.directory / 'samples.npz')
 
     def _read(self):
         """Read internal calculations from disk."""
         if self.pool.main:
-            self.results = Samples.load(self.directory / 'results.npz')
+            self.samples = Samples.load(self.directory / 'samples.npz')
 
 
 class PopulationSampler(BaseSampler):

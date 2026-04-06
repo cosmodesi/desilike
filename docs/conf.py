@@ -28,8 +28,7 @@ extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.intersphinx',
     'sphinx.ext.extlinks',
-    'sphinx.ext.napoleon',
-    'sphinx_rtd_theme'
+    'sphinx.ext.napoleon'
 ]
 
 # -- Project information -----------------------------------------------------
@@ -41,7 +40,7 @@ author = 'cosmodesi'
 # The full version, including alpha/beta/rc tags
 release = __version__
 
-html_theme = 'sphinx_rtd_theme'
+html_theme = 'furo'
 
 autodoc_mock_imports = ['cosmoprimo', 'mpi4py']
 

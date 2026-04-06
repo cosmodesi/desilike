@@ -1009,7 +1009,7 @@ class Parameter(BaseClass):
             if namespace and (force_namespace or auto_namespace):
                 match1 = re.match('(.*)_(.)$', self._latex)
                 match2 = re.match('(.*)_{(.*)}$', self._latex)
-                latex_namespace = namespace if provided_namespace else ('\mathrm{%s}' % namespace.replace('\_', '_').replace('_', '\_'))
+                latex_namespace = namespace if provided_namespace else (r'\mathrm{%s}' % namespace.replace('\_', '_').replace('_', '\_'))
                 for match in [match1, match2, None]:
                     if match is not None:
                         if force_namespace or (auto_namespace and add_namespace(match.group(2))):  # check namespace is not in latex str already

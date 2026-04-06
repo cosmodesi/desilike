@@ -2168,4 +2168,5 @@ if __name__ == '__main__':
     #test_freedom()
     #test_bao_phaseshift()
     #comparison_folps_velocileptors()
-    # test_multitracer()
+    #test_multitracer()
+    test_jaxeffort()

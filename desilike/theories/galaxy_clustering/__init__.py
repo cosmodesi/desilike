@@ -8,9 +8,9 @@ from .full_shape import (SimpleTracerPowerSpectrumMultipoles, KaiserTracerPowerS
                          REPTVelocileptorsTracerPowerSpectrumMultipoles, REPTVelocileptorsTracerCorrelationFunctionMultipoles,
                          PyBirdTracerPowerSpectrumMultipoles, PyBirdTracerCorrelationFunctionMultipoles,
                          FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles,
-                         GeoFPTAXTracerBispectrumMultipoles, JAXEffortTracerPowerSpectrumMultipoles,
-                         GeoFPTAXTracerBispectrumMultipoles, FOLPSv2TracerPowerSpectrumMultipoles, FOLPSv2TracerBispectrumMultipoles)
-from .png import PNGTracerPowerSpectrumMultipoles
+                         FOLPSv2TracerPowerSpectrumMultipoles, FOLPSv2TracerBispectrumMultipoles,
+                         GeoFPTAXTracerBispectrumMultipoles, JAXEffortTracerPowerSpectrumMultipoles)
+from .png import PNGTracerPowerSpectrumMultipoles, PNGTracerVelocityPowerSpectrumMultipoles
 from .power_template import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate,
                              BAOPowerSpectrumTemplate, BAOPhaseShiftPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate, TurnOverPowerSpectrumTemplate, DirectWiggleSplitPowerSpectrumTemplate,
                              BAOExtractor, BAOPhaseShiftExtractor, StandardPowerSpectrumExtractor, ShapeFitPowerSpectrumExtractor, WiggleSplitPowerSpectrumExtractor, BandVelocityPowerSpectrumExtractor, TurnOverPowerSpectrumExtractor)

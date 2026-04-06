@@ -41,12 +41,15 @@ First::
 
 To install the code::
 
-  python setup.py install --user
+  pip install --user
 
 Or in development mode (any change to Python code will take place immediately)::
 
-  python setup.py develop --user
+  pip install --user -e .
 
+You may want to avoid installing dependencies in your local $HOME (in particular if you load the cosmodesi environment)::
+
+  pip install --no-deps --user -e .
 
 Pipeline dependencies, samplers, profilers, emulators
 -----------------------------------------------------

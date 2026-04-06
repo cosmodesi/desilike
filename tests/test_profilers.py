@@ -5,6 +5,19 @@ from jax import numpy as jnp
 from desilike.likelihoods import BaseGaussianLikelihood
 from desilike.profilers import Profiler
 
+MEAN_PRIOR = np.array([+0.2, -0.1])
+SD_PRIOR = np.array([0.1, 0.05])
+COV_PRIOR = np.diag(SD_PRIOR**2)
+MEAN_LIKELIHOOD = np.array([-0.2, +0.2])
+COV_LIKELIHOOD = np.array([[0.01, 0.01], [0.01, 0.02]])
+SD_LIKELIHOOD = np.sqrt(np.diag(COV_LIKELIHOOD))
+COV_POSTERIOR = np.linalg.inv(np.linalg.inv(COV_PRIOR) +
+                              np.linalg.inv(COV_LIKELIHOOD))
+SD_POSTERIOR = np.sqrt(np.diag(COV_POSTERIOR))
+MEAN_POSTERIOR = COV_POSTERIOR @ (
+    np.linalg.inv(COV_PRIOR) @ MEAN_PRIOR +
+    np.linalg.inv(COV_LIKELIHOOD) @ MEAN_LIKELIHOOD)
+
 
 @pytest.fixture
 def likelihood():
@@ -15,21 +28,52 @@ def likelihood():
             self.flattheory = jnp.array([kwargs[name] for name in ['a', 'b']])
             super().calculate()
 
-    likelihood = Likelihood(np.array([0.4, 0.6]), covariance=np.eye(2) * 0.01)
+    likelihood = Likelihood(MEAN_LIKELIHOOD, covariance=COV_LIKELIHOOD)
     likelihood.init.params = dict(
-        a=dict(prior=dict(dist='norm', limits=[0, 1], loc=0.4, scale=0.1)),
-        b=dict(prior=dict(dist='uniform', limits=[0, 1])))
+        a=dict(prior=dict(dist='norm', limits=[-3, +3], loc=MEAN_PRIOR[0],
+                          scale=SD_PRIOR[0])),
+        b=dict(prior=dict(dist='norm', limits=[-3, +3], loc=MEAN_PRIOR[1],
+                          scale=SD_PRIOR[1])))
 
     return likelihood
 
 
 @pytest.mark.mpi
-def test_accuracy(likelihood):
+@pytest.mark.parametrize('posterior', [True, False])
+def test_accuracy(likelihood, posterior):
     # Test that the profiler returns the correct result.
 
-    profiler = Profiler(likelihood, rng=42, posterior=False)
-    profiler.add_grid(dict(a=np.linspace(0, 1, 31)))
-    samples = profiler.run()
+    profiler = Profiler(likelihood, rng=42, posterior=posterior)
+    profiler.add_grid(dict(a=np.linspace(-1, +1, 5)))
+    samples = profiler.run(optimizer_kwargs=dict(maxiter=10))
 
-    assert np.allclose(samples['log_likelihood'],
-                       -(samples['a'] - 0.4)**2 * 100, rtol=0, atol=1e-3)
+    if posterior:
+        true = -0.5 * ((samples['a'] - MEAN_POSTERIOR[0])**2 /
+                       SD_POSTERIOR[0]**2)
+        result = samples['log_posterior']
+        true -= np.mean(true - result)  # correct normalization
+    else:
+        true = -0.5 * ((samples['a'] - MEAN_LIKELIHOOD[0])**2 /
+                       SD_LIKELIHOOD[0]**2)
+        result = samples['log_likelihood']
+
+    assert np.allclose(true, result, rtol=0, atol=1e-6)
+
+
+@pytest.mark.mpi_skip
+def test_rng(likelihood):
+    # Test that the profiler is deterministic.
+
+    optimizer_kwargs = dict(maxiter=1, no_local_search=True)
+
+    profiler_1 = Profiler(likelihood, rng=42)
+    profiler_1.add_grid(dict(a=np.linspace(0, 1, 20)))
+    samples_1 = profiler_1.run(optimizer_kwargs=optimizer_kwargs)
+
+    profiler_2 = Profiler(likelihood, rng=42)
+    profiler_2.add_grid(dict(a=np.linspace(0, 1, 20)))
+    samples_2 = profiler_2.run(optimizer_kwargs=optimizer_kwargs)
+
+    assert len(samples_1) == len(samples_2)
+
+    assert np.allclose(samples_1['log_posterior'], samples_2['log_posterior'])

@@ -41,13 +41,14 @@ class Samples(BaseClass):
 
         """
         if fixed is not None:
-            fixed = list(fixed)
-            for i, element in enumerate(fixed):
-                if isinstance(element, (tuple, list, set)):
-                    fixed[i] = '/'.join(list(element))
-                else:
-                    fixed[i] = '/'.join(sorted(element.split('/')))
-            kwargs['fixed'] = np.asarray(fixed, dtype='U')
+            if not isinstance(fixed, str):
+                for i, element in enumerate(fixed):
+                    if isinstance(element, (tuple, list, set)):
+                        fixed[i] = '/'.join(list(element))
+                    else:
+                        fixed[i] = '/'.join(sorted(element.split('/')))
+                fixed = np.asarray(fixed, dtype='U')
+            kwargs['fixed'] = fixed
 
         self.data = {}
         self.n_samples = None
@@ -79,7 +80,7 @@ class Samples(BaseClass):
 
         """
         if isinstance(key, str):
-            if not hasattr(value, '__len__'):
+            if isinstance(value, str) or not hasattr(value, '__len__'):
                 value = np.repeat(value, 1 if self.n_samples is None else
                                   self.n_samples)
             if self.n_samples is None:

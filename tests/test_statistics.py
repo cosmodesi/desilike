@@ -134,3 +134,8 @@ def test_triangle_posterior():
         a=np.random.random(1000), b=np.random.random(1000),
         latex=dict(a=r'$\lambda$'))
     statistics.plotting.triangle_posterior(samples, colors=['red', 'blue'])
+
+
+@pytest.mark.mpi_skip
+def test_tabulate():
+    # Test that tabulate doesn't crash.

@@ -10,10 +10,14 @@ except ModuleNotFoundError:
 import numpy as np
 from scipy.special import logsumexp
 
-# from desilike.utils import BaseClass
+from desilike.utils import BaseClass
 
 
-class Samples():
+PROTECTED_KEYS = ['fixed', 'log_weight', 'log_prior', 'log_likelihood',
+                  'log_posterior']
+
+
+class Samples(BaseClass):
     """Class for storing samples of parameters."""
 
     def __init__(self, latex=dict(), fixed=None, **kwargs):
@@ -79,6 +83,9 @@ class Samples():
 
         """
         if isinstance(key, str):
+            if not hasattr(value, '__len__'):
+                value = np.repeat(value, 1 if self.n_samples is None else
+                                  self.n_samples)
             if self.n_samples is None:
                 self.n_samples = len(value)
             if len(value) != self.n_samples:
@@ -284,12 +291,12 @@ class Samples():
         else:
             return np.ones(self.n_samples) / self.n_samples
 
-    def mean(self, keys=None, return_as_dict=False):
+    def mean(self, params=None, return_as_dict=False):
         """Compute the mean of the sample.
 
         Parameters
         ----------
-        keys : list or None, optional
+        params : list or None, optional
             Keys to compute the mean for. If ``None``, all keys are used.
             Default is ``None``.
         return_as_dict : bool, optional
@@ -302,22 +309,23 @@ class Samples():
             Means of the samples.
 
         """
-        keys = list(self.keys) if keys is None else keys
+        if params is None:
+            params = [key for key in self.keys if key not in PROTECTED_KEYS]
 
         means = [np.average(self[key], weights=self.weight, axis=0) for key in
-                 keys]
+                 params]
 
         if return_as_dict:
-            return dict(zip(keys, means))
+            return dict(zip(params, means))
         else:
             return means
 
-    def covariance(self, keys=None):
+    def covariance(self, params=None):
         """Compute the covariance of the sample.
 
         Parameters
         ----------
-        keys : list or None, optional
+        params : list or None, optional
             Keys to compute the covariance for. If ``None``, all keys are used.
             Default is ``None``.
 
@@ -328,10 +336,11 @@ class Samples():
             or ``self.keys`` if ``keys`` is ``None``.
 
         """
-        keys = list(self.keys) if keys is None else keys
+        if params is None:
+            params = [key for key in self.keys if key not in PROTECTED_KEYS]
 
         m = np.column_stack([
-            self[key].reshape(self.n_samples, -1) for key in keys])
+            self[key].reshape(self.n_samples, -1) for key in params])
 
         return np.cov(m, aweights=self.weight, rowvar=False)
 
@@ -373,3 +382,80 @@ class Samples():
             else:
                 fixed_params.append({})
         return fixed_params
+
+    def tabulate(self, keys=None, use_latex=False, **kwargs):
+        """Use the `tabulate` package to print the table.
+
+        Parameters
+        ----------
+        keys : array-like or None, optional
+            List of keys to print. If ``None``, all columns are printed.
+            Default is ``None``.
+        use_latex : bool, optional
+            Whether to use the LaTeX names in the columns headers. Default is
+            ``False``.
+        **kwargs
+            Additional keyword arguments passed to :meth:`tabulate.tabulate`.
+
+        Raises
+        ------
+        ImportError
+            If `tabulate` is not installed.
+
+        Returns
+        -------
+        str
+            Table as plain text.
+
+        """
+        try:
+            import tabulate
+        except ImportError:
+            raise ImportError(
+                "The 'tabulate' package is required for 'Samples.tabulate'.")
+
+        if keys is None:
+            keys = self.keys
+
+        if use_latex:
+            latex = self.latex
+        else:
+            latex = {}
+
+        kwargs = dict(tablefmt='simple_grid') | kwargs
+        data = {latex.get(key, key): self.data[key] for key in keys}
+        return tabulate.tabulate(data, headers='keys', **kwargs)
+
+    def getdist(self, params=None):
+        """Convert the sample into a ``getdist.MCSamples`` instance.
+
+        Parameters
+        ----------
+        params : array-like or None, optional
+            List of parameters to convert. If ``None``, all parameters are
+            included. Default is ``None``.
+
+        Raises
+        ------
+        ImportError
+            If `getdist` is not installed.
+
+        Returns
+        -------
+        getdist.MCSamples
+            Samples converted to `getdist` format.
+
+        """
+        try:
+            from getdist import MCSamples
+        except ImportError:
+            raise ImportError(
+                "The 'tabulate' package is required for 'Samples.getdist'.")
+
+        if params is None:
+            params = [key for key in self.keys if key not in PROTECTED_KEYS]
+
+        return MCSamples(
+            samples=np.column_stack([self[key] for key in params]),
+            weights=self.weight, names=params, labels=[
+                self.latex.get(key, key).replace('$', '') for key in params])

@@ -3,12 +3,6 @@
 from functools import wraps
 
 try:
-    from getdist import MCSamples
-    from getdist import plots as getdist_plots
-    GETDIST_INSTALLED = True
-except ModuleNotFoundError:
-    GETDIST_INSTALLED = False
-try:
     import matplotlib.pyplot as plt
     MATPLOTLIB_INSTALLED = True
 except ModuleNotFoundError:
@@ -301,7 +295,7 @@ def gelman_rubin(
     return fig
 
 
-def triangle_posterior(samples, keys=None, **kwargs):
+def triangle_posterior(samples, params=None, **kwargs):
     """Create a posterior triangle plot using ``getdist``.
 
     .. rubric:: References
@@ -311,34 +305,31 @@ def triangle_posterior(samples, keys=None, **kwargs):
     ----------
     samples : desilike.Samples or list of desilike.Samples
         List of (or single) :class:``desilike.Samples`` instance(s).
-    keys : list or None, optional
+    params : list or None, optional
         Parameters to plot posterior for. If ``None``, plot all parameters.
         Default is ``None``.
     **kwargs
-        Optional parameters for ``getdist.plots.GetDistPlotter.triangle_plot``.
+        Optional parameters for
+        :meth:`getdist.plots.GetDistPlotter.triangle_plot`.
+
+    Raises
+    ------
+    ImportError
+        If ``getdist`` is not installed.
 
     Returns
     -------
     g : getdist.plots.GetDistPlotter
 
     """
-    if not GETDIST_INSTALLED:
+    try:
+        from getdist import plots
+    except ImportError:
         raise ImportError("'getdist' is required for triangle plots.")
 
     if not isinstance(samples, list):
         samples = [samples]
 
-    if keys is None:
-        keys = samples[0].keys
+    samples = [sample.getdist(params) for sample in samples]
 
-    g = getdist_plots.get_subplot_plotter()
-    samples_getdist = []
-    for sample in samples:
-        samples_getdist.append(MCSamples(
-            samples=np.column_stack([sample[key] for key in keys]),
-            weights=sample.weight, names=keys,
-            labels=[sample.latex.get(key, key).replace('$', '') for key in
-                    keys]))
-
-    g.triangle_plot(samples_getdist, **kwargs)
-    return g
+    return plots.get_subplot_plotter().triangle_plot(samples, **kwargs)

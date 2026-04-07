@@ -87,8 +87,7 @@ class Profiler(BaseClass):
 
     def add_global(self):
         """Add finding the global optimum."""
-        samples = Samples(**{key: [np.nan, ] for key in self.params},
-                          fixed=[[], ])
+        samples = Samples(**{key: np.nan for key in self.params}, fixed='')
         self._add_samples(samples)
 
     def add_sample(self, sample):
@@ -109,7 +108,7 @@ class Profiler(BaseClass):
             if key not in self.params:
                 raise ValueError(f"Unkown parameter '{key}'.")
         samples = Samples(
-            **{key: [value, ] for key, value in sample.items()},
+            **{key: value for key, value in sample.items()},
             fixed=[list(sample.keys()), ])
         for key in self.params:
             if key not in sample.keys():
@@ -138,12 +137,12 @@ class Profiler(BaseClass):
         samples = Samples(fixed=[list(grid.keys())] * n, **data)
         for key in self.params:
             if key not in grid.keys():
-                samples[key] = np.repeat(np.nan, len(samples))
+                samples[key] = np.nan
         self._add_samples(samples)
 
     def _add_samples(self, samples):
         """Add samples to profile."""
-        samples[self.neg_cost_key] = np.repeat(-np.inf, len(samples))
+        samples[self.neg_cost_key] = -np.inf
         self.samples.append(samples)
         self._remove_duplicates()
         self.fixed_params = self.samples._get_fixed()

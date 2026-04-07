@@ -868,12 +868,13 @@ def test_compression():
 
 def test_integral_cosn():
 
+    from desilike.utils import numpy_trapz
     from desilike.observables.galaxy_clustering.window import integral_cosn
 
     for n in np.arange(6):
         limits = (-0.3, 0.8)
         x = np.linspace(*limits, num=1000)
-        ref = np.trapezoid(np.cos(x)**n, x=x)
+        ref = numpy_trapz(np.cos(x)**n, x=x)
         test = integral_cosn(n=n, range=limits)
         assert np.abs(test / ref - 1.) < 1e-6
 

@@ -19,6 +19,10 @@ from . import mpi, jax
 from .jax import numpy as jnp
 from .mpi import CurrentMPIComm
 
+try:
+    numpy_trapz = np.trapezoid
+except AttributeError:
+    numpy_trapz = np.trapz  # numpy < 2.0
 
 @CurrentMPIComm.enable
 def exception_handler(exc_type, exc_value, exc_traceback, mpicomm=None):

@@ -52,10 +52,6 @@ class Samples(BaseClass):
         self.data = {}
         self.n_samples = None
         for key, value in kwargs.items():
-            if self.n_samples is None:
-                self.n_samples = len(value)
-            elif len(value) != self.n_samples:
-                raise ValueError("All inputs must have the same length.")
             self[key] = value
         self.latex = latex
 

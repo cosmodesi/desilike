@@ -43,7 +43,7 @@ class Samples(BaseClass):
 
         """
         if fixed is not None:
-            if not isinstance(fixed, str):
+            if isinstance(fixed, str):
                 fixed = '/'.join(sorted(fixed.split('/')))
             else:
                 for i, element in enumerate(fixed):

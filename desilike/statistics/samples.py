@@ -27,10 +27,12 @@ class Samples(BaseClass):
         ----------
         latex : dict or None, optional
             LaTeX expression for parameters. Default is ``None``.
-        fixed : array-like or None, optional
+        fixed : str, array-like or None, optional
             List of parameter combinations that are fixed. Each element can be
             a string listing keys separated by a "/" or a list of strings,
-            each indicating a key.
+            each indicating a key. Alternatively, use a single string
+            if the same paramters are fixed for all samples. Default is
+            ``None``.
         **kwargs
             Samples of parameters. Each sample must have the same length.
 
@@ -42,6 +44,8 @@ class Samples(BaseClass):
         """
         if fixed is not None:
             if not isinstance(fixed, str):
+                fixed = '/'.join(sorted(fixed.split('/')))
+            else:
                 for i, element in enumerate(fixed):
                     if isinstance(element, (tuple, list, set)):
                         fixed[i] = '/'.join(list(element))
@@ -69,7 +73,7 @@ class Samples(BaseClass):
         key : str or int
             Key (column) to modify or add. Alternatively, index (row) to
             modify.
-        value : array-like or dict
+        value : object, array-like, or dict
             Value for that key or index.
 
         Raises

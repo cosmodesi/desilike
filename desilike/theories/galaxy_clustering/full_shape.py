@@ -3111,7 +3111,7 @@ class FOLPSv2TracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipoles):
             sigv = self.options['sigv']
             pars += [params['sn{:d}p'.format(i)] / A_AP * self.snd * (self.fsat if i > 0 else 1.) * sigv**i for i in [0, 2]]
             pars += [params['X_FoG_pp']]
-        elif self.prior_basis == 'tcm_chudaykin':
+        elif self.prior_basis == 'tcm_chudaykin_aap':
             # APscaling: include A_AP and decode the table-style priors
             self.options['bias_scheme'] = 'classpt' #As in chudaykin et. al.
             b1L, b2L, bsL, b3 = params['b1p'] / sigma8 - 1., params['b2p'] / sigma8**2, params['bsp'] / sigma8**2, params['b3p'] / A

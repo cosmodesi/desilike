@@ -2797,7 +2797,14 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             # self._get_poles = jit(_get_poles)  if kwargs['backend'] == 'jax' else _get_poles
             self._get_poles = _get_poles
 
-        return self._get_poles(self.pt.jac, self.pt.kap, self.pt.muap, jnp.array(pars), kwargs['bias_scheme'], kwargs['damping'], *table, *table_now)
+        #return self._get_poles(self.pt.jac, self.pt.kap, self.pt.muap, jnp.array(pars), kwargs['bias_scheme'], kwargs['damping'], *table, *table_now)
+        return self._get_poles(
+            self.pt.jac, self.pt.kap, self.pt.muap,
+            jnp.array(pars),
+            self.options.get("bias_scheme", "folps"),
+            self.options.get("damping", None),
+            *table, *table_now
+        )
 
     def combine_bias_terms_bispectrum_poles(self, pars, k1k2, ells=None, **kwargs):
         import folps as folpsv2
@@ -3273,7 +3280,6 @@ class FOLPSv2TracerBispectrumMultipoles(BaseTracerPTBispectrumMultipoles):
         return state
 
 
-
 # ============================================================================
 # FKPT tracer class
 # ============================================================================
@@ -3336,7 +3342,7 @@ class _FKPTTracerConfigMixin:
 # fkpt tracer power spectrum multipoles
 # ============================================================================
 
-class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerSpectrumMultipoles):
+class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTPowerSpectrumMultipoles):
     r"""
     fkpt tracer power spectrum multipoles.
 
@@ -3363,11 +3369,11 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
 
     _default_options = dict(
         freedom=None,
-        prior_basis='physical',   # alias -> physical_folps
+        prior_basis='physical',
         tracer=None,
 
-        tracer_config=None,       # NEW
-        tracer_type=None,         # NEW
+        tracer_config=None,
+        tracer_type=None,
 
         fsat=None,
         sigv=None,
@@ -3385,36 +3391,24 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
 
     _initialize_with_namespace = False
     _calculate_with_namespace = False
-    @classmethod
-    def _load_weiliu_pk(cls, tracer: str):
+
+    def _set_params(self):
+        return self.set_params()
+
+    def initialize(self, k=None, ells=(0, 2, 4), pt=None, template=None, tracers=None, **kwargs):
         """
-        Load formatted WeiLiu files for a tracer.
-        Returns:
-          k (Nk,)
-          data (3*Nk,) stacked as [P0, P2, P4]
-          cov  (3*Nk, 3*Nk)
+        Tracer-layer initialize, mirroring the working FOLPS structure:
+          - set tracer options
+          - attach PT object
+          - pull state from PT
+          - set nuisance/required parameters
         """
-        tr = str(tracer).upper()
-        f_data = f"/n/home12/cgarciaquintero/DESI/GQC_mocks/cubic_boxes/WeiLiu/formatted/{tr}_pk_kP0P2P4.txt"
-        f_cov  = f"/n/home12/cgarciaquintero/DESI/GQC_mocks/cubic_boxes/WeiLiu/formatted/{tr}_pk_cov.txt"
+        self._set_options(k=k, ells=ells, tracers=tracers, **kwargs)
+        self.prior_basis = self._rename_prior_basis(self.options['prior_basis'])
+        self._set_pt(pt=pt, template=template, **kwargs)
+        self._set_from_pt()
+        self._set_params()
 
-        arr = np.loadtxt(f_data)
-        if arr.ndim != 2 or arr.shape[1] < 4:
-            raise ValueError(f"{f_data} must have >= 4 columns (k,P0,P2,P4), got {arr.shape}")
-        k = arr[:, 0]
-        p0, p2, p4 = arr[:, 1], arr[:, 2], arr[:, 3]
-        Nk = k.size
-
-        cov = np.loadtxt(f_cov)
-        if cov.shape != (3 * Nk, 3 * Nk):
-            raise ValueError(f"{f_cov} has shape {cov.shape}, expected {(3*Nk,3*Nk)} (Nk={Nk})")
-
-        data = np.concatenate([p0, p2, p4], axis=0)
-        return k, data, cov
-
-    # -------------------------
-    # parameter priors
-    # -------------------------
     @staticmethod
     def _params(params, freedom=None, prior_basis='physical'):
         pb = fkptTracerPowerSpectrumMultipoles._rename_prior_basis(prior_basis)
@@ -3441,9 +3435,6 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
         for param in params.select(basename=fix):
             param.update(value=0., fixed=True)
 
-        # ============================================================
-        # STANDARD_FOLPS priors (Eulerian)
-        # ============================================================
         if pb == 'standard_folps':
             width_EFT = 125.0
             width_SN0 = 20.0
@@ -3465,9 +3456,6 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
 
             return params
 
-        # ============================================================
-        # PHYSICAL modes: rename -> add suffix 'p'
-        # ============================================================
         if fkptTracerPowerSpectrumMultipoles._is_physical_mode(pb):
             for param in list(params):
                 param.update(basename=param.basename + 'p')
@@ -3556,9 +3544,6 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
 
         return params
 
-    # -------------------------
-    # required params
-    # -------------------------
     def set_params(self):
         self.required_bias_params = [
             'b1', 'b2', 'bs2', 'b3nl',
@@ -3594,7 +3579,7 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
             if self.mpicomm.rank == 0:
                 self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
 
-        super().set_params(pt_params=[])
+        #super().set_params(pt_params=[])
 
         fix = []
         suffix = 'p' if self.is_physical_prior else ''
@@ -3607,9 +3592,8 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
 
         self.nd = 1e-4
 
-        suffix = 'p' if self.is_physical_prior else ''
         for par in self.init.params.select(basename=f'PshotP{suffix}'):
-            par.update(value=1.0/self.nd, fixed=True, prior=None)
+            par.update(value=1.0 / self.nd, fixed=True, prior=None)
 
         self.fsat = 1.0
         self.snd = self.options['shotnoise'] * self.nd
@@ -3621,9 +3605,6 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
         else:
             self.b1_fid = None
 
-    # -------------------------
-    # main mapping
-    # -------------------------
     def calculate(self, **params):
         super(fkptTracerPowerSpectrumMultipoles, self).calculate()
         params = {**self.required_bias_params, **params}
@@ -3634,8 +3615,8 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
             if self.options['b3_coev']:
                 b1 = params['b1']
                 db1 = b1 - 1.0
-                params['bs2']  = params['bs2']  - 4.0/7.0 * db1
-                params['b3nl'] = params['b3nl'] + 32.0/315.0 * db1
+                params['bs2'] = params['bs2'] - 4.0 / 7.0 * db1
+                params['b3nl'] = params['b3nl'] + 32.0 / 315.0 * db1
 
             self.power = self.pt.combine_bias_terms_poles(
                 params, nd=self.nd,
@@ -3675,11 +3656,11 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
             bsL = params['bs2p'] / sigma8**2
             b3L = params['b3nlp']
             if self.options['b3_coev']:
-                bs2E = bsL - 4.0/7.0 * b1L
-                b3E  = b3L + 32.0/315.0 * b1L
+                bs2E = bsL - 4.0 / 7.0 * b1L
+                b3E = b3L + 32.0 / 315.0 * b1L
             else:
                 bs2E = bsL
-                b3E  = b3L
+                b3E = b3L
 
         ctildeE = params.get('ctildep', 0.0)
 
@@ -3707,21 +3688,20 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
             alpha4 = (f**2) * a2t + (b1E * f) * a4t
 
             if 'bK2p' not in params or 'btdp' not in params:
-                raise ValueError("APscaling requires sampled parameters 'bK2p' and 'btdp' "
-                                 "(or update the code to match your chosen names).")
+                raise ValueError("APscaling requires sampled parameters 'bK2p' and 'btdp'.")
 
             freedom = self.options.get('freedom', None)
 
             if freedom == "min":
                 bK2 = -(2.0 / 7.0) * (b1E - 1.0)
-                btd =  (23.0 / 42.0) * (b1E - 1.0)
+                btd = (23.0 / 42.0) * (b1E - 1.0)
             else:
                 b1_fid = getattr(self, 'b1_fid', None)
                 if b1_fid is None:
                     raise ValueError("APscaling table priors need b1_fid; could not infer from tracer_config / options.")
 
-                muX = -(2.0 / 7.0)  * (b1_fid - 1.0)
-                muY =  (23.0 / 42.0) * (b1_fid - 1.0)
+                muX = -(2.0 / 7.0) * (b1_fid - 1.0)
+                muY = (23.0 / 42.0) * (b1_fid - 1.0)
 
                 X = muX + params['bK2p']
                 Y = muY + params['btdp']
@@ -3730,7 +3710,7 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
                 btd = Y / (S**4.0 * A_AP)
 
             bs2E = 2.0 * bK2
-            b3E  = -(32.0 / 21.0) * (bK2 + (2.0 / 5.0) * btd)
+            b3E = -(32.0 / 21.0) * (bK2 + (2.0 / 5.0) * btd)
 
         else:
             raise ValueError(f"Internal error: unsupported normalized prior basis '{pb}'.")
@@ -3744,11 +3724,9 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
         params['b2'] = b2E
         params['bs2'] = bs2E
         params['b3nl'] = b3E
-
         params['alpha0'] = alpha0
         params['alpha2'] = alpha2
         params['alpha4'] = alpha4
-
         params['ctilde'] = ctildeE
         params['alpha0shot'] = alpha0shot
         params['alpha2shot'] = alpha2shot
@@ -3760,7 +3738,6 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPowerS
             b3_coev=self.options['b3_coev'],
             beyond_eds=self.options['beyond_eds'],
         )
-
 
 # ============================================================================
 # Helper: fkptjax k-functions -> FOLPS tables
@@ -4036,42 +4013,37 @@ def Kfuncs_to_tables(
 # Bk multipoles via FOLPS (JIT-ed)
 # ============================================================================
 
-
-@jit(static_argnums=(5, 6, 7, 8, 9, 10, 11))
-def get_bs_multipoles_jit(
-    pars,
-    k1k2T,
-    k_pkl_pklnw_fk,
-    table,
-    table_now,
-    precision,
-    A_full=True,
-    remove_DeltaP=False,
-    multipoles=['B000', 'B202'],
-    interpolation_method='linear',
-    bias_scheme='folps',
-    renormalized=True,
-    f0=None,
-    qpar=None,
-    qperp=None,
-    z_pk=None,
-):
-
+def _get_bispectrum_multipoles_fkpt(
+     pars,
+     k1k2,
+     k_pkl_pklnw_fk,
+     f0, qpar, qper,
+     multipoles=('B000', 'B110', 'B220', 'B112', 'B202'),
+     precision=(8, 10, 10),
+     damping='lor',
+     interpolation_size=20,
+     interpolation_method='linear',
+     bias_scheme='folps',
+     model='FOLPSD',
+     renormalized=True,
+ ):
     import folps as folpsv2
     f0 = jnp.asarray(f0)
+    pars = [jnp.ravel(jnp.asarray(p))[0] for p in pars]
     bpars = jnp.asarray(pars)
-    k1k2T = jnp.asarray(k1k2T)
+    k1k2 = jnp.asarray(k1k2)
 
-    if k1k2T.ndim == 1:
-        bs = folpsv2.WindowConvolvedBispectrum(model='FOLPSD')
+    if k1k2.ndim == 1:
+        bs = folpsv2.WindowConvolvedBispectrum(model=model)
+
         results = bs.reduced_Bl1l2L(
             bpars,
             None,
             qpar,
-            qperp,
+            qper,
             k_pkl_pklnw_fk,
-            k1k2T,
-            Ssize=20,
+            k1k2,
+            Ssize=interpolation_size,
             precision_full=[8, 10, 10],
             precision_diag=[12, 15, 15],
             f=f0,
@@ -4086,29 +4058,24 @@ def get_bs_multipoles_jit(
         for ell in multipoles:
             if ell in supported:
                 toret.append(jnp.asarray(results[supported.index(ell)]).ravel())
-            elif (ell_swap:=ell[0] + ell[2:0:-1] + ell[3:]) in supported:   #Handling B022 -> B202 by swapping l1 and l2
+            elif (ell_swap := ell[0] + ell[2:0:-1] + ell[3:]) in supported:
                 toret.append(results[supported.index(ell_swap)].T.ravel())
             else:
-                toret.append(jnp.zeros((k1k2T.size,) * 2).ravel())
-        return jnp.asarray(toret)
+                toret.append(jnp.zeros((k1k2.size,) * 2).ravel())
+        folpsv2.BispectrumCalculator._tables_cache = {}
+        return toret
 
-    bispectrum = folpsv2.BispectrumCalculator(model='FOLPSD')
-
-    kb_all = jnp.linspace(0.5 * k1k2T[0, 0], 0.28, 64)
-    k_ev_bk = jnp.vstack([kb_all, kb_all]).T
-    kout = k1k2T[:, 0]
+    bispectrum = folpsv2.BispectrumCalculator(model=model)
 
     toret = bispectrum.Sugiyama_Bell(
         f=f0,
         bpars=bpars,
         k_pkl_pklnw=k_pkl_pklnw_fk,
-        k1k2pairs=k_ev_bk,
-        qpar=qpar.astype(float),
-        qper=qperp.astype(float),
+        k1k2pairs=k1k2,
+        qpar=qpar,
+        qper=qper,
         precision=precision,
-        damping='lor',
-        do_interp_bk=True,
-        kout=kout,
+        damping=damping,
         multipoles=list(multipoles),
         bias_scheme=bias_scheme,
         renormalize=renormalized,
@@ -4116,13 +4083,22 @@ def get_bs_multipoles_jit(
     )
     folpsv2.BispectrumCalculator._tables_cache = {}
     return toret
-
-
 # ============================================================================
 # desilike wrapper: fkptjaxPowerSpectrumMultipoles
 # ============================================================================
 
-class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPowerSpectrumMultipolesFromWedges):
+class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
+    """
+    FKPT-based PT wrapper that converts FKPT kernels into the FOLPS table format
+    and then reuses the FOLPS RSD multipole machinery.
+
+    This class is intentionally structured to look like FOLPSv2PowerSpectrumMultipoles
+    at the desilike-wrapper level:
+      - initialize projection machinery (to_poles, mu)
+      - build AP-transformed k, mu grids
+      - store PT state in self.pt
+      - expose combine_bias_terms_poles() using FOLPS RSD evaluator
+    """
 
     _default_options = dict(
         model="HDKI",
@@ -4134,6 +4110,10 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         screening=1,
         omegaBD=0.0,
         fR0=1e-15,
+        backend="jax",
+        bias_scheme="folps",
+        damping=None,
+        IR_resummation=True,
     )
 
     _pt_attrs = [
@@ -4146,15 +4126,41 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         "calA", "calAp", "CFD3", "CFD3p",
     ]
 
-    def initialize(self, *args, mu=6, **kwargs):
-        for key in ["freedom", "prior_basis", "tracer", "tracer_config", "tracer_type",
-                    "fsat", "sigv", "shotnoise", "b1_fid", "b3_coev", "sigma8_ref"]:
+    def initialize(self, k=None, ells=(0, 2, 4), mu=6, template=None, z=None, **kwargs):
+        """
+        Match the FOLPS PT wrapper structure:
+          - set options / template
+          - set projector to multipoles
+          - define self.mu explicitly
+        """
+        import os
+        from desilike.theories.galaxy_clustering.full_shape import ProjectToMultipoles
+
+        # Remove tracer-level options if they leak into the PT layer
+        for key in [
+            "freedom", "prior_basis", "tracer", "tracer_config", "tracer_type",
+            "fsat", "sigv", "shotnoise", "b1_fid", "b3_coev", "sigma8_ref"
+        ]:
             kwargs.pop(key, None)
 
-        super().initialize(*args, mu=mu, method="leggauss", **kwargs)
+        self._set_options(k=k, ells=ells, **kwargs)
+        self._set_template(template=template, z=z)
         self.template.init.update(with_now="peakaverage")
 
-    def _collect_mg_params(self, cosmo) -> Dict[str, float]:
+        self.to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+        self.mu = self.to_poles.mu
+
+        self.backend = self.options.get("backend", "jax")
+        self.bias_scheme = self.options.get("bias_scheme", "folps")
+        self.damping = self.options.get("damping", None)
+        self.IR_resummation = self.options.get("IR_resummation", True)
+
+        os.environ.setdefault("FOLPS_BACKEND", self.backend)
+
+    def _collect_mg_params(self, cosmo):
+        """
+        Collect MG parameters either from cosmology or from self.options.
+        """
         model_u = str(self.options.get("model", "HDKI")).upper()
 
         if model_u == "HS":
@@ -4191,7 +4197,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             "GR": [],
         }
 
-        out: Dict[str, float] = {}
+        out = {}
         for p in req.get(v_u, []):
             if cosmo is not None:
                 try:
@@ -4199,7 +4205,6 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
                     continue
                 except Exception:
                     pass
-
                 try:
                     out[p] = float(getattr(cosmo, p))
                     continue
@@ -4214,7 +4219,13 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         return out
 
     def calculate(self):
-        super().calculate()
+        """
+        Build FKPT tables, then store them in the same structural style as FOLPS.
+        """
+        import numpy as np
+        import jax.numpy as jnp
+
+        self.z = self.template.z
 
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         cosmo = getattr(self.template, "cosmo", None)
@@ -4265,7 +4276,9 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         calA, calAp, CFD3, CFD3p = kcs
 
         self.pt = Namespace(
-            jac=jac, kap=kap, muap=muap,
+            jac=jac,
+            kap=kap,
+            muap=muap,
             table=table[1:28 + extra],
             table_now=table_now[1:28 + extra],
             scalars=table[28 + extra:],
@@ -4276,11 +4289,15 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             fk_norm=fk_norm,
             fk=fk_mg,
             f0=f0_mg,
-            qpar=self.template.qpar, qper=self.template.qper,
-            calA=calA, calAp=calAp, CFD3=CFD3, CFD3p=CFD3p,
+            qpar=self.template.qpar,
+            qper=self.template.qper,
+            calA=calA,
+            calAp=calAp,
+            CFD3=CFD3,
+            CFD3p=CFD3p,
         )
 
-        self.kt = table[0]
+        self.kt = kt
         self.qpar = self.template.qpar
         self.qper = self.template.qper
         self.sigma8 = self.template.sigma8
@@ -4290,11 +4307,16 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         self.fk_norm = self.pt.fk_norm
 
     def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
+        """
+        Reuse FOLPS RSD multipole machinery, exactly like the original FKPT wrapper intended.
+        """
         import folps as folpsv2
         import jax.numpy as jnp
+        from jax import jit
 
         table = (self.kt, *self.pt.table, *self.pt.scalars)
         table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
+
         params["PshotP"] = 1.0 / nd
         params["X_FoG_p"] = 0.0
 
@@ -4308,57 +4330,71 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         ncols = len(table)
         if getattr(self, "_get_poles", None) is None:
 
-            @jit(static_argnums=(4))
-            def _get_poles(jac, kap, muap, pars, bias_scheme, *table_all):
+            @jit(static_argnums=(4, 5))
+            def _get_poles(jac, kap, muap, pars, bias_scheme, damping, *table_all):
                 folpsv2.MatrixCalculator(A_full=False, use_TNS_model=False)
-                calc = folpsv2.RSDMultipolesPowerSpectrumCalculator(model="FOLPSD")
+                calc = folpsv2.RSDMultipolesPowerSpectrumCalculator(model="EFT")
                 pars2 = calc.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
                 pkmu = calc.get_rsd_pkmu(
                     kap, muap, pars2,
                     table_all[:ncols], table_all[ncols:],
-                    IR_resummation=True, damping="lor",
+                    IR_resummation=True,
+                    damping=damping,
                 )
                 return self.to_poles(jac * pkmu)
 
             self._get_poles = _get_poles
 
         poles = self._get_poles(
-            self.pt.jac, self.pt.kap, self.pt.muap,
-            jnp.array(pars), "folps", *table, *table_now
+            self.pt.jac,
+            self.pt.kap,
+            self.pt.muap,
+            jnp.array(pars),
+            self.bias_scheme,
+            self.damping,
+            *table,
+            *table_now
         )
         return poles
 
-    def bispectrum_calculator(self, params, nd=1e-4, **kwargs):
+    def combine_bias_terms_bispectrum_poles(self, pars, k1k2, ells=None, **kwargs):
         import folps as folpsv2
-        params["X_FoG_b"] = 0.0
+        import jax.numpy as jnp
+        from jax import jit
 
-        required_bias_params = [
-            'b1', 'b2', 'bs2',
-            'c1', 'c2', 'Pshot', 'Bshot', 'X_FoG_b'
-        ]
-        pars = [params[p] for p in required_bias_params]
         table = (self.kt, *self.pt.table, *self.pt.scalars)
         table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
-        calA, calAp, CFD3, CFD3p = self.pt.calA, self.pt.calAp, self.pt.CFD3, self.pt.CFD3p
+
+        # Keep beyond-EdS information here
+        calA, calAp = self.pt.calA, self.pt.calAp
         calA_arr = jnp.ones_like(table[0]) * calA
         calAp_arr = jnp.ones_like(table[0]) * calAp
-        k_pkl_pklnw_fk = jnp.array([table[0], table[1], table_now[1], table[2] * self.pt.f0, calA_arr, calAp_arr])
-        ells = kwargs['ells']
+        k_pkl_pklnw_fk = jnp.array([
+            table[0], table[1], table_now[1], table[2] * self.pt.f0,
+            calA_arr, calAp_arr
+        ])
+        multipoles = tuple(f"B{ell1}{ell2}{ell3}" for (ell1, ell2, ell3) in ells)
 
-        if ells == (0, 2):
-            ells = ((0, 0, 0), (2, 0, 2))
-        multipoles = [f"B{l1}{l2}{l3}" for (l1, l2, l3) in ells]
-        k1k2T = np.asarray(kwargs['k1k2T'])
-        full = not np.allclose(k1k2T[..., 1], k1k2T[..., 0])
+        get_bispectrum_multipoles_jit = _get_bispectrum_multipoles_fkpt
+        full = not np.allclose(k1k2[..., 1], k1k2[..., 0])
         if full:
-            k1k2_use = np.unique(k1k2T[..., 0])
-        else:
-            k1k2_use = k1k2T
-        poles = get_bs_multipoles_jit(
-            pars, k1k2_use, k_pkl_pklnw_fk, table, table_now, tuple(kwargs['precision']),
-            getattr(self.pt, "A_full", True), getattr(self.pt, "remove_DeltaP", False),
-            tuple(multipoles), kwargs['interpolation_method'], kwargs['bias_scheme'], kwargs['renormalized'],
-            self.pt.f0, kwargs['qpar'], kwargs['qper'], self.z
+            k1k2 = np.unique(k1k2[..., 0])
+
+        if folpsv2.backend_manager.backend == 'jax':
+            get_bispectrum_multipoles_jit = jit(
+                static_argnames=['multipoles', 'precision', 'damping',
+                                 'interpolation_method', 'bias_scheme', 'renormalized']
+            )(_get_bispectrum_multipoles_fkpt)
+        qpar = getattr(self.pt, 'qpar', getattr(self, 'qpar', None))
+        qper = getattr(self.pt, 'qper', getattr(self, 'qper', None))
+        if qpar is None or qper is None:
+            raise AttributeError("Missing qpar/qper on both self.pt and self.")
+        poles = get_bispectrum_multipoles_jit(
+            pars, k1k2, k_pkl_pklnw_fk, self.pt.f0, qpar, qper,
+            multipoles=multipoles,
+            **{key: kwargs[key] for key in
+               ['precision', 'damping', 'interpolation_method', 'bias_scheme', 'renormalized']
+               if key in kwargs}
         )
         return jnp.asarray(poles)
 
@@ -4367,6 +4403,12 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         for name in (['k', 'z', 'ells', 'wmu', 'kt'] if fixed else []) + (['sigma8', 'fsigma8', 'qpar', 'qper'] if varied else []):
             if hasattr(self, name):
                 state[name] = getattr(self, name)
+
+        # Save runtime options needed after emulator reload
+        for name in ['backend', 'bias_scheme', 'damping', 'IR_resummation']:
+            if hasattr(self, name):
+                state[name] = getattr(self, name)
+
         if varied:
             for name in self._pt_attrs:
                 if hasattr(self.pt, name):
@@ -4374,7 +4416,8 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         return state
 
     def __setstate__(self, state):
-        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8', 'qpar', 'qper']:
+        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8', 'qpar', 'qper',
+                     'backend', 'bias_scheme', 'damping', 'IR_resummation']:
             if name in state:
                 setattr(self, name, state.pop(name))
 
@@ -4390,6 +4433,11 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             if not hasattr(self, 'fsigma8'):
                 self.fsigma8 = self.f0 * self.sigma8
 
+        # Rebuild projection operator (not serialized)
+        if hasattr(self, 'ells'):
+            from desilike.theories.galaxy_clustering.full_shape import ProjectToMultipoles
+            self.to_poles = ProjectToMultipoles(mu=6, ells=self.ells)
+            self.mu = self.to_poles.mu
 
 class fkptjaxTracerPowerSpectrumMultipoles(fkptTracerPowerSpectrumMultipoles):
     _params = fkptTracerPowerSpectrumMultipoles._params
@@ -4399,17 +4447,13 @@ class fkptjaxTracerPowerSpectrumMultipoles(fkptTracerPowerSpectrumMultipoles):
 # fkptjax tracer bispectrum multipoles
 # ============================================================================
 
-class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseCalculator):
+class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTBispectrumMultipoles):
     r"""
     FOLPS bispectrum multipoles.
-
-    Runtime tracer settings can be passed as either:
-      - explicit options: fsat=..., sigv=..., sigma8_ref=..., b1_fid=...
-      - tracer_config=dict(...)
-      - tracer_type='LRG' / 'ELG' / 'QSO' / 'BGS' to derive sigv if sigv is not passed
     """
 
     config_fn = 'full_shape.yaml'
+    _pt_cls = fkptjaxPowerSpectrumMultipoles
     _klim = (1e-3, 1., 500)
     _initialize_with_namespace = False
     _calculate_with_namespace = False
@@ -4418,51 +4462,30 @@ class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseCalculator):
         freedom=None,
         prior_basis='physical',
         basis='sugiyama',
-        precision=[10, 8, 8],
-
+        precision=(8, 10, 10),
         tracer=None,
-        tracer_config=None,   # NEW
-        tracer_type=None,     # NEW
+        tracer_config=None,
+        tracer_type=None,
         fsat=None,
-
         shotnoise=1e4,
         model='HDKI',
         mg_variant='mu_OmDE',
         beyond_eds=True,
         rescale_PS=False,
-
         sigma8_ref=None,
         b1_fid=None,
-
         b3_coev=True,
         renormalized=True,
         interpolation_method='linear',
         bias_scheme='folps'
     )
 
-    def initialize(self, pt=None, template=None, k=None, ells=((0, 0, 0), (2, 0, 2)), **kwargs):
-        self.options = self._default_options.copy()
-        shotnoise = kwargs.get('shotnoise', 1e4)
-        for name, value in self._default_options.items():
-            self.options[name] = kwargs.pop(name, value)
-        self.nd = 1. / float(shotnoise)
-        if pt is None:
-            pt = globals()[getattr(self, 'pt_cls', self.__class__.__name__.replace('TracerBispectrum', 'PowerSpectrum'))]()
-        self.pt = pt
-        if template is not None:
-            self.pt.init.update(template=template)
-        for name, value in self.pt._default_options.items():
-            if name in kwargs:
-                self.pt.init.update({name: kwargs.pop(name)})
-            elif name in self.options:
-                self.pt.init.update({name: self.options[name]})
-        for name in ['method', 'mu']:
-            if name in kwargs:
-                self.pt.init.update({name: kwargs.pop(name)})
-        self.required_bias_params, self.optional_bias_params = {}, {}
-        self.pt.init.update(kwargs)
-        if hasattr(self.pt, 'z'):
-            self.z = self.pt.z
+    def initialize(self, k=None, ells=((0, 0, 0), (2, 0, 2)), tracers=None,
+                   basis='sugiyama', pt=None, template=None, **kwargs):
+        self._set_options(k=k, ells=ells, tracers=tracers, basis=basis, **kwargs)
+        self.prior_basis = self._rename_prior_basis(self.options['prior_basis'])
+        self._set_pt(pt=pt, template=template, **kwargs)
+        self._set_from_pt()
 
         if k is None:
             kpt = np.asarray(self.pt.k)
@@ -4476,11 +4499,25 @@ class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseCalculator):
         self.k1k2T = k
 
         if utils.is_sequence(ells[0]):
-            self.ells = tuple(ells)
+            self.ells = tuple(tuple(ell) for ell in ells)
         else:
-            self.ells = (ells,)
-        self.set_params()
+            self.ells = (tuple(ells),)
 
+        # preserve the actual bispectrum multipoles explicitly
+        self._bispectrum_ells = self.ells
+
+        self.set_params()
+        self.decode_params = self._get_multitracer(tracers=tracers, prior_basis=self.prior_basis)
+
+    @classmethod
+    def _get_multitracer(cls, tracers=None, prior_basis='physical'):
+        deterministic = ['b1', 'b2', 'bs2', 'c1', 'c2', 'X_FoG_b']
+        stochastic = ['Pshot', 'Bshot']
+        if cls._is_physical_mode(cls._rename_prior_basis(prior_basis)):
+            deterministic = [name + 'p' for name in deterministic]
+            stochastic = [name + 'p' for name in stochastic]
+        return MultitracerBiasParameters(tracers=tracers, deterministic=deterministic,
+                                         stochastic=stochastic, ntracers=1)
     # -------------------------
     # parameter priors
     # -------------------------
@@ -4647,24 +4684,32 @@ class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseCalculator):
     # -------------------------
     def calculate(self, **params):
         super(fkptjaxTracerBispectrumMultipoles, self).calculate()
+
+        # PT sync likely overwrote self.ells with power-spectrum ells = (0,2,4)
+        self.ells = self._bispectrum_ells
+        
+        params = self.decode_params(params)
         params = {**self.required_bias_params, **params}
 
         pb = self._prior_basis_norm
 
         if pb == 'standard_folps':
-            qpar = self.pt.qpar
-            qper = self.pt.qper
-            self.power = self.pt.bispectrum_calculator(
-                params, nd=self.nd,
-                model=self.options['model'], mg_variant=self.options['mg_variant'],
-                prior_basis='standard',
-                beyond_eds=self.options['beyond_eds'],
-                k1k2T=self.k1k2T, ells=self.ells,
-                precision=self.options['precision'], basis=self.options['basis'],
+            qpar = getattr(self.pt, 'qpar', getattr(self, 'qpar', None))
+            qper = getattr(self.pt, 'qper', getattr(self, 'qper', None))
+            if qpar is None or qper is None:
+                raise AttributeError("Missing qpar/qper on both self.pt and self.")
+            params['X_FoG_b'] = 0.0
+            pars = [params[name] for name in ['b1', 'b2', 'bs2', 'c1', 'c2', 'Pshot', 'Bshot', 'X_FoG_b']]
+            self.power = self.pt.combine_bias_terms_bispectrum_poles(
+                pars, self.k,
+                precision=self.options['precision'],
+                damping=self.options.get('damping', 'lor'),
+                basis=self.options['basis'],
+                model=self.options['model'],
                 bias_scheme=self.options['bias_scheme'],
                 renormalized=self.options['renormalized'],
                 interpolation_method=self.options['interpolation_method'],
-                qpar=qpar, qper=qper
+                ells=self.ells, qpar=qpar, qper=qper
             )
             return
 
@@ -4750,19 +4795,22 @@ class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseCalculator):
         params['c2'] = c2
         params['Pshot'] = Pshot
         params['Bshot'] = Bshot
-        qpar = self.pt.qpar
-        qper = self.pt.qper
-        self.power = self.pt.bispectrum_calculator(
-            params, nd=self.nd,
-            model=self.options['model'], mg_variant=self.options['mg_variant'],
-            prior_basis='standard',
-            beyond_eds=self.options['beyond_eds'],
-            k1k2T=self.k1k2T, ells=self.ells,
-            precision=self.options['precision'], basis=self.options['basis'],
+        params['X_FoG_b'] = 0.0
+        qpar = getattr(self.pt, 'qpar', getattr(self, 'qpar', None))
+        qper = getattr(self.pt, 'qper', getattr(self, 'qper', None))
+        if qpar is None or qper is None:
+            raise AttributeError("Missing qpar/qper on both self.pt and self.")
+        pars = [params[name] for name in ['b1', 'b2', 'bs2', 'c1', 'c2', 'Pshot', 'Bshot', 'X_FoG_b']]
+        self.power = self.pt.combine_bias_terms_bispectrum_poles(
+            pars, self.k,
+            precision=self.options['precision'],
+            damping=self.options.get('damping', 'lor'),
+            basis=self.options['basis'],
+            model=self.options['model'],
             bias_scheme=self.options['bias_scheme'],
             renormalized=self.options['renormalized'],
             interpolation_method=self.options['interpolation_method'],
-            qpar=qpar, qper=qper
+            ells=self.ells, qpar=qpar, qper=qper
         )
 
     def get(self):

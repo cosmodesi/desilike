@@ -3853,9 +3853,28 @@ def Kfuncs_to_tables(
     f0 = float(f0_jax)
 
     if bool(rescale_PS):
-        idx0 = int(np.argmin(k_ext_np))
-        D0 = float(D_ext[idx0])
-        scale = jnp.asarray((D_ext / D0) ** 2)
+        # D_ext is already the MG growth if mg_params_override passed a nonzero mu0.
+        D_mg = jnp.asarray(D_ext)
+
+        # Build the corresponding GR growth for the same background and redshift.
+        derivs_gr = ModelDerivatives(
+            om=float(Om), ol=float(1.0 - Om),
+            fR0=0.0, beta2=float(beta2), nHS=float(nHS),
+            screening=int(screening), omegaBD=float(omegaBD),
+            model='HDKI', mg_variant="mu_OmDE",
+            mu0=0.0,
+            beta_1=1.0, lambda_1=0.0, exp_s=0.0,
+            mu1=1.0, mu2=1.0, mu3=1.0, mu4=1.0,
+            z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
+            scale_bins=bool(scale_bins),
+            k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw),
+            gamma_0=0.545454, gamma_a=0.0, t_k=float(t_k), d_s=float(d_s),
+        )
+        Y_gr = DP(k_ext_np, derivs_gr, solver)
+        D_gr = jnp.asarray(Y_gr[0])
+
+        # Rescale GR input linear spectrum to MG.
+        scale = (D_mg / D_gr) ** 2
         pk_ext = pk_ext * scale
         pk_now_ext = pk_now_ext * scale
 
@@ -4105,6 +4124,9 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         mg_variant="mu_OmDE",
         rescale_PS=False,
         beyond_eds=False,
+        # Allow passing MG params even if the template cosmology (e.g. CAMB) does not define them.
+        # Example: th.init.update(mg_params_override={"mu0": 0.5})
+        mg_params_override=None,
         nHS=1.0,
         beta2=1.0 / 6.0,
         screening=1,
@@ -4159,18 +4181,32 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
     def _collect_mg_params(self, cosmo):
         """
-        Collect MG parameters either from cosmology or from self.options.
+        Collect MG parameters either from cosmology or from self.options,
+        then apply mg_params_override (if provided) as the final authority.
         """
         model_u = str(self.options.get("model", "HDKI")).upper()
 
+        # --------
+        # HS branch
+        # --------
         if model_u == "HS":
-            return dict(
+            out = dict(
                 fR0=float(self.options.get("fR0", 1e-15)),
                 nHS=float(self.options.get("nHS", 1.0)),
                 beta2=float(self.options.get("beta2", 1.0 / 6.0)),
                 screening=int(self.options.get("screening", 1)),
                 omegaBD=float(self.options.get("omegaBD", 0.0)),
             )
+
+            override = self.options.get("mg_params_override") or {}
+            for k, v in dict(override).items():
+                out[k] = float(v)
+
+            return out
+
+        # --------
+        # HDKI branch
+        # --------
 
         v_u = str(self.options.get("mg_variant", "mu_OmDE")).strip().upper()
 
@@ -4199,6 +4235,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
         out = {}
         for p in req.get(v_u, []):
+            # 1) try cosmology object
             if cosmo is not None:
                 try:
                     out[p] = float(cosmo[p])
@@ -4211,10 +4248,16 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                 except Exception:
                     pass
 
+            # 2) try options (init/update)
             if p in self.options and self.options[p] is not None:
                 out[p] = float(self.options[p])
             else:
                 out[p] = float(defaults[p])
+
+        # 3) FINAL OVERRIDE: wins over cosmo/options/defaults
+        override = self.options.get("mg_params_override") or {}
+        for k, v in dict(override).items():
+            out[k] = float(v)
 
         return out
 

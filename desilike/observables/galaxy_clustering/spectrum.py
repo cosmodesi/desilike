@@ -122,7 +122,10 @@ class BaseClusteringObservable(BaseCalculator):
     def flattheory_nobao(self):
         # Return theory without BAO wiggles, for plotting
         # TODO: make simpler
-        template = self.theory.template
+        try:
+            template = self.theory.template
+        except AttributeError:
+            template = self.theory.pt.template
         only_now = template.only_now
         template.only_now = True
         if not template.with_now:

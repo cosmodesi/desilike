@@ -161,7 +161,7 @@ def test_clustering():
             if hasattr(observable2.theory, 'snd'):
                 assert np.allclose(observable2.theory.snd, shotnoise / 1e4)
             else:
-                assert np.allclose(observable2.theory.nd, 1. / shotnoise)
+                assert np.allclose(observable2.theory.nbar, 1. / shotnoise)
 
             observable = Observable(**kwargs, name='observable1')
             observable2 = Observable(**kwargs, covariance=covariance, name='observable2')

@@ -562,6 +562,7 @@ def test_png():
     """
     from desilike.theories.galaxy_clustering import (
         PNGTracerPowerSpectrumMultipoles,
+        PNGTracerVelocityPowerSpectrumMultipoles,
         ShapeFitPowerSpectrumTemplate,
     )
     from desilike.emulators import Emulator, TaylorEmulatorEngine
@@ -625,7 +626,7 @@ def test_png():
             param.update(namespace=None)
         theory()
 
-    def test_theory(cls):
+    def test_theory(cls, tests=['namespace', 'emulator', 'plotting']):
         """
         Comprehensive test routine for PNG theory.
 
@@ -645,19 +646,24 @@ def test_png():
                     poles = theory(**param_values)
                     assert np.isfinite(poles).all(), f"Non-finite result for {theory.__class__.__name__}"
                     if i == 0:
-                        #results[itemplate, method] = round(float(np.std(poles)), 8)
+                        # results[itemplate, method] = round(float(np.std(poles)), 8)
                         assert np.allclose(np.std(poles), results[itemplate, method])
 
-                test_namespace(theory)
-                test_emulator(theory)
+                if 'namespace' in tests:
+                    test_namespace(theory)
+                if 'emulator' in tests:
+                    test_emulator(theory)
 
                 # Test plotting
-                theory(fnl_loc=2.)
-                fig = theory.plot(show=False)
-                assert fig is not None, "Plot generation failed"
-                plt.close(fig)
+                if 'plotting' in tests:
+                    theory(fnl_loc=2.)
+                    fig = theory.plot(show=False)
+                    assert fig is not None, "Plot generation failed"
+                    plt.close(fig)
 
     # Test method consistency
     test_prim_method()
     results = {(0, 'matter'): 10011.16020071, (1, 'matter'): 10046.19588923, (0, 'prim'): 10011.33476181, (1, 'prim'): 10046.4520818}
     test_theory(PNGTracerPowerSpectrumMultipoles)
+    results = {(0, 'matter'): 10551095.16727103, (1, 'matter'): 10457917.48575002, (0, 'prim'): 10551235.69558888, (1, 'prim'): 10458120.89855347}
+    test_theory(PNGTracerVelocityPowerSpectrumMultipoles, tests=['plotting'])

@@ -738,7 +738,7 @@ def apply_oldstyle_cosmo_and_mg_priors(cosmo: Cosmoprimo, args):
             fixed=force_gr,
             prior=None if force_gr else {"dist": "uniform", "limits": (-1.0, 1.0)},
             ref=None if force_gr else {"dist": "norm", "loc": 0.0, "scale": 0.01},
-            delta=None if force_gr else 0.3,
+            delta=None if force_gr else 0.2,
         )
 
     elif args.mg_variant in ["BZ", "BZ_fR"]:

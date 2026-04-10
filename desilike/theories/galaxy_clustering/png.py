@@ -160,8 +160,8 @@ class PNGTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             ax.set_xscale('log')
         ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
         return fig
-      
-class PNGTracerVelocityPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipolesFromWedges):
+
+class PNGTracerVelocityPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     r"""
     Kaiser tracer-velocity power spectrum multipoles, with scale dependent bias sourced by local primordial non-Gaussianities.
 
@@ -199,10 +199,12 @@ class PNGTracerVelocityPowerSpectrumMultipoles(BaseTheoryPowerSpectrumMultipoles
     ---------
     To be added... 
     """
-    config_fn = 'primordial_non_gaussianity.yaml'
+    config_fn = 'png.yaml'
 
     def initialize(self, *args, ells=(1, 3), method='prim', mode='b-p', template=None, **kwargs):
-        super(PNGTracerVelocityPowerSpectrumMultipoles, self).initialize(*args, ells=ells,  method='trapz', mu=np.linspace(-1, 1, 81), **kwargs) #mu=np.linspace(-1, 1, 41), method='trapz', 
+        super(PNGTracerVelocityPowerSpectrumMultipoles, self).initialize(*args, ells=ells,  **kwargs)
+        self.to_poles = ProjectToMultipoles(mu=np.linspace(-1, 1, 81), method='trapz', ells=self.ells)
+        self.mu = self.to_poles.mu
         if template is None:
             template = FixedPowerSpectrumTemplate()
         self.template = template

@@ -1,62 +1,55 @@
-#!/bin/bash
-#SBATCH --job-name=MGtest
-#SBATCH -t 24:00:00
-#SBATCH -o logs/%x_%j.out
-#SBATCH -e logs/%x_%j.err
-#SBATCH --mem=80G
-#SBATCH -p main
+ #!/bin/bash
 #SBATCH -N 1
 #SBATCH -n 4
-#SBATCH --gres=gpu:4
-#SBATCH -c 2
+#SBATCH -c 1
+#SBATCH -t 12:00:00
+#SBATCH --constraint=gpu
+#SBATCH -J MG_holi
+#SBATCH -o logs/gpu_%x_%j.out
+#SBATCH -e logs/gpu_%x_%j.err
+#SBATCH -q regular
+#SBATCH -A desi_g
+
+source /global/common/software/desi/users/adematti/cosmodesi_environment.sh main
+source activate MGdesi
+export PYTHONNOUSERSITE=1
+export PYTHONPATH=/global/homes/j/jiaxi/codes_mine/desilike:/global/homes/j/jiaxi/codes_mine/isitgr_private:/global/homes/j/jiaxi/codes_mine/FolpsD:/global/homes/j/jiaxi/codes_mine/cosmoprimo:/global/homes/j/jiaxi/codes_mine/desi-clustering:/global/homes/j/jiaxi/codes_mine/fkptjax_muMG/src:$PYTHONPATH
 #
-# create a new environment, install desilike and pyfkpt locally with pip
-#conda init
-#conda activate MGdesi
-export PYTHONPATH=/home/jiaxiyu/codes/desilike:$PYTHONPATH
+cd /global/homes/j/jiaxi/codes_mine/desilike/MG/running_scripts || exit 1
 
 task=$1
-Ntask=4
-calculator="srun -N 1 -n ${Ntask} -c 2 --gres=gpu:${Ntask} --gpu-bind=single:1 -p main -t 24:00:00 --mem=80G"
+calculator="srun -N 1 -n 1 -C gpu --gpus-per-task=1 --gpu-bind=single:1 -t 04:00:00 --qos shared_interactive --account desi_g"
 
 if [ "$task" = "emu" ]; then
-    args="--create-emu --emu-order 3 "  
-    sufix=""
+    args="--create-emu"
 elif [ "$task" = "run-emu" ]; then
-    args="--use-emu "
-    sufix="_with-emu"
+    args="--use-emu --run_chains"
 elif [ "$task" = "run" ]; then
-    args=""
-    sufix="_no-emu"
+    args="--run_chains"
 else
-    echo "the input should be: emu, run-emu, run"
-    exit
-fi
-# MG null test
-mg_variant=mu_OmDE
-emu_dir=$SCRATCH/MGtest/emulators/${mg_variant}
-if [ ! -e "${emu_dir}" ]; then
-    mkdir -p "${emu_dir}"
-fi
-chains_dir=$SCRATCH/MGtest/chains/${mg_variant}_${task}
-if [ ! -e "${chains_dir}" ]; then
-    mkdir -p "${chains_dir}"
+    echo "usage: $0 {emu|run-emu|run}"
+    exit 1
 fi
 
+mg_variant=mu_OmDE
+emu_dir=/global/homes/j/jiaxi/codes_mine/desilike/MG/emulators/${mg_variant}_holi
+mkdir -p "${emu_dir}"
+chains_dir=$SCRATCH/DR2_MG/chains/${mg_variant}_holi_${task}
+mkdir -p "${chains_dir}"
+
 prior_bases=(standard physical_velocileptors APscaling)
-#for prior_basis in "${prior_bases[@]}"; do
-for ((j=0; j<=2; j++)); do
+for prior_basis in "${prior_bases[@]}"; do
     ${calculator} python run_desilike_mockchallenge.py \
-    ${args} \
-    --emu-dir ${emu_dir} \
-    --chains-dir ${chains_dir} \
-    --ells 0,2 \
-    --freedom min \
-    --fid-model LCDM \
-    --mg-variant ${mg_variant} \
-    --prior-basis ${prior_bases[${j}]} \
-    --beyond-eds \
-    --resume \
-    --chain-prefix "fkptjax_mcmc_${prior_bases[${j}]}" \
-    #> ./fkptjax_${prior_bases[${j}]}.log
+        ${args} \
+        --mock-type holi_cutsky \
+        --tracers LRG1 LRG2 LRG3 ELG1 ELG2 QSO \
+        --emu-dir "${emu_dir}" \
+        --chain_name "${chains_dir}/fkptjax_holi_${prior_basis}.npy" \
+        --ells 0,2 \
+        --freedom max \
+        --fid-model LCDM \
+        --mg-variant ${mg_variant} \
+        --prior_basis ${prior_basis} \
+        --beyond_eds \
+        --restart
 done

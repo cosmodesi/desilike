@@ -3747,6 +3747,147 @@ from typing import Any, Dict, Optional, Tuple
 
 import jax.numpy as jnp
 
+def Rescaling_MG(
+    k_ext,
+    pk_ext,
+    pk_now_ext,
+    *,
+    derivs,
+    solver,
+    Om,
+    model,
+    mg_variant,
+    fR0,
+    beta2,
+    nHS,
+    screening,
+    omegaBD,
+    mu0,
+    beta_1,
+    lambda_1,
+    exp_s,
+    mu1,
+    mu2,
+    mu3,
+    mu4,
+    z_div,
+    z_TGR,
+    z_tw,
+    scale_bins,
+    k_TGR,
+    k_S,
+    k_c,
+    k_tw,
+    gamma_0,
+    gamma_a,
+    t_k,
+    d_s,
+    f0_kmax=1e-3,
+):
+    """
+    Linear-spectrum-only MG rescaling.
+
+    Returns
+    -------
+    pk_ext_rescaled, pk_now_ext_rescaled
+    """
+
+    import numpy as np
+    import jax.numpy as jnp
+    from folps.tools_jax import interp
+    from fkptjax.ode import ModelDerivatives, DP
+
+    def build_k_growth(k_ext_np, k_TGR, k_c, k_S, k_tw,
+                       kmin=1e-4, kmax=None,
+                       nbase=500, nwin=160):
+        if kmax is None:
+            kmax = max(0.5, float(np.max(k_ext_np)))
+
+        base = np.geomspace(float(kmin), float(kmax), int(nbase))
+
+        local = []
+        for kc in [k_TGR, k_c, k_S]:
+            kc = float(kc)
+            if kc <= 0:
+                continue
+            w = max(float(k_tw), 1e-5)
+            lo = max(float(kmin), kc - 20.0 * w)
+            hi = min(float(kmax), kc + 20.0 * w)
+            if hi > lo:
+                local.append(np.linspace(lo, hi, int(nwin)))
+
+        k_growth = np.unique(np.concatenate([base] + local))
+        return k_growth
+
+    def make_derivs(**updates):
+        pars = dict(
+            om=float(Om), ol=float(1.0 - Om),
+            fR0=float(fR0), beta2=float(beta2), nHS=float(nHS),
+            screening=int(screening), omegaBD=float(omegaBD),
+            model=str(model), mg_variant=str(mg_variant),
+            mu0=float(mu0),
+            beta_1=float(beta_1), lambda_1=float(lambda_1), exp_s=float(exp_s),
+            mu1=float(mu1), mu2=float(mu2), mu3=float(mu3), mu4=float(mu4),
+            z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
+            scale_bins=bool(scale_bins),
+            k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw),
+            gamma_0=float(gamma_0), gamma_a=float(gamma_a), t_k=float(t_k), d_s=float(d_s),
+        )
+        pars.update(updates)
+        return ModelDerivatives(**pars)
+
+    def make_gr_derivs():
+        return ModelDerivatives(
+            om=float(Om), ol=float(1.0 - Om),
+            fR0=0.0, beta2=float(beta2), nHS=float(nHS),
+            screening=int(screening), omegaBD=float(omegaBD),
+            model='HDKI', mg_variant='mu_OmDE',
+            mu0=0.0,
+            beta_1=1.0, lambda_1=0.0, exp_s=0.0,
+            mu1=1.0, mu2=1.0, mu3=1.0, mu4=1.0,
+            z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
+            scale_bins=bool(scale_bins),
+            k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw),
+            gamma_0=0.545454, gamma_a=0.0, t_k=float(t_k), d_s=float(d_s),
+        )
+
+    k_ext_np = np.asarray(k_ext, dtype=float)
+
+    k_growth = build_k_growth(
+        k_ext_np=k_ext_np,
+        k_TGR=float(k_TGR),
+        k_c=float(k_c),
+        k_S=float(k_S),
+        k_tw=float(k_tw),
+        kmin=min(1e-4, float(np.min(k_ext_np))),
+        kmax=max(0.5, float(np.max(k_ext_np))),
+        nbase=700,
+        nwin=220,
+    )
+    k_growth_jax = jnp.asarray(k_growth)
+
+    # ------------------------------------------------------------
+    # Generic GR reference
+    # ------------------------------------------------------------
+    derivs_gr = make_gr_derivs()
+    Y_gr = DP(k_growth, derivs_gr, solver)
+    D_gr = jnp.asarray(Y_gr[0])
+
+    # Full growth-ratio rescaling
+    Y_mg = DP(k_growth, derivs, solver)
+    D_mg = jnp.asarray(Y_mg[0])
+    scale_growth = (D_mg / D_gr) ** 2
+
+    # interpolate multiplicative factor in log-space back to k_ext
+    log_scale_growth = jnp.log(scale_growth)
+    log_scale_ext = interp(k_ext, k_growth_jax, log_scale_growth)
+    log_scale_ext = jnp.clip(log_scale_ext,
+                             jnp.min(log_scale_growth),
+                             jnp.max(log_scale_growth))
+    scale = jnp.exp(log_scale_ext)
+
+    return pk_ext * scale, pk_now_ext * scale
+
 def Kfuncs_to_tables(
     k,
     pk,
@@ -3853,30 +3994,42 @@ def Kfuncs_to_tables(
     f0 = float(f0_jax)
 
     if bool(rescale_PS):
-        # D_ext is already the MG growth if mg_params_override passed a nonzero mu0.
-        D_mg = jnp.asarray(D_ext)
-
-        # Build the corresponding GR growth for the same background and redshift.
-        derivs_gr = ModelDerivatives(
-            om=float(Om), ol=float(1.0 - Om),
-            fR0=0.0, beta2=float(beta2), nHS=float(nHS),
-            screening=int(screening), omegaBD=float(omegaBD),
-            model='HDKI', mg_variant="mu_OmDE",
-            mu0=0.0,
-            beta_1=1.0, lambda_1=0.0, exp_s=0.0,
-            mu1=1.0, mu2=1.0, mu3=1.0, mu4=1.0,
-            z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
-            scale_bins=bool(scale_bins),
-            k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw),
-            gamma_0=0.545454, gamma_a=0.0, t_k=float(t_k), d_s=float(d_s),
+        pk_ext, pk_now_ext = Rescaling_MG(
+            k_ext,
+            pk_ext,
+            pk_now_ext,
+            derivs=derivs,
+            solver=solver,
+            Om=Om,
+            model=model,
+            mg_variant=mg_variant,
+            fR0=fR0,
+            beta2=beta2,
+            nHS=nHS,
+            screening=screening,
+            omegaBD=omegaBD,
+            mu0=mu0,
+            beta_1=beta_1,
+            lambda_1=lambda_1,
+            exp_s=exp_s,
+            mu1=mu1,
+            mu2=mu2,
+            mu3=mu3,
+            mu4=mu4,
+            z_div=z_div,
+            z_TGR=z_TGR,
+            z_tw=z_tw,
+            scale_bins=scale_bins,
+            k_TGR=k_TGR,
+            k_S=k_S,
+            k_c=k_c,
+            k_tw=k_tw,
+            gamma_0=gamma_0,
+            gamma_a=gamma_a,
+            t_k=t_k,
+            d_s=d_s,
+            f0_kmax=f0_kmax,
         )
-        Y_gr = DP(k_ext_np, derivs_gr, solver)
-        D_gr = jnp.asarray(Y_gr[0])
-
-        # Rescale GR input linear spectrum to MG.
-        scale = (D_mg / D_gr) ** 2
-        pk_ext = pk_ext * scale
-        pk_now_ext = pk_now_ext * scale
 
     if kmin is None:
         kmin = float(jnp.maximum(1e-3, jnp.min(k)))

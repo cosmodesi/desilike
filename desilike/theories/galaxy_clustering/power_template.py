@@ -258,6 +258,73 @@ class DirectPowerSpectrumTemplate(BasePowerSpectrumTemplate):
                 setattr(self, 'pk_' + name, getattr(self, 'pknow_' + name))
 
 
+class ExternalLinearPowerSpectrumTemplate(DirectPowerSpectrumTemplate):
+    """
+    Direct power spectrum template using an externally supplied linear P(k).
+
+    This keeps the DirectPowerSpectrumTemplate background/AP handling, but replaces
+    the linear density power spectrum with ``pklin`` before the PT code consumes it.
+    If ``with_now`` is enabled, the no-wiggle spectrum is recomputed from the same
+    external P(k), rather than rescaling a GR no-wiggle spectrum.
+    """
+
+    config_fn = DirectPowerSpectrumTemplate
+
+    def initialize(self, *args, pklin_k=None, pklin_pk=None, pknow_k=None, pknow_pk=None, **kwargs):
+        if pklin_k is None or pklin_pk is None:
+            raise ValueError("ExternalLinearPowerSpectrumTemplate requires pklin_k and pklin_pk.")
+        self._external_pklin_k, self._external_pklin_pk = self._validate_external_power(pklin_k, pklin_pk, name='pklin')
+        if (pknow_k is None) != (pknow_pk is None):
+            raise ValueError("ExternalLinearPowerSpectrumTemplate requires both pknow_k and pknow_pk, or neither.")
+        if pknow_k is None:
+            self._external_pknow_k = self._external_pknow_pk = None
+        else:
+            self._external_pknow_k, self._external_pknow_pk = self._validate_external_power(pknow_k, pknow_pk, name='pknow')
+        if kwargs.get('k', None) is None:
+            kwargs['k'] = self._external_pklin_k
+        super(ExternalLinearPowerSpectrumTemplate, self).initialize(*args, **kwargs)
+
+    @staticmethod
+    def _validate_external_power(k, pk, name='pklin'):
+        k = np.asarray(k, dtype='f8')
+        pk = np.asarray(pk, dtype='f8')
+        if k.ndim != 1 or pk.ndim != 1 or k.shape != pk.shape:
+            raise ValueError("{}_k and {}_pk must be 1D arrays with the same shape.".format(name, name))
+        if k.size < 2:
+            raise ValueError("{}_k must contain at least two samples.".format(name))
+        if not np.all(np.isfinite(k)) or not np.all(np.isfinite(pk)):
+            raise ValueError("{}_k and {}_pk must be finite.".format(name, name))
+        if not np.all(k > 0.):
+            raise ValueError("{}_k must be strictly positive.".format(name))
+        order = np.argsort(k)
+        k = k[order]
+        pk = pk[order]
+        if np.any(np.diff(k) <= 0.):
+            raise ValueError("{}_k contains duplicate or non-increasing k values.".format(name))
+        return k, pk
+
+    def calculate(self):
+        super(ExternalLinearPowerSpectrumTemplate, self).calculate()
+        self.pk_dd_interpolator = PowerSpectrumInterpolator1D(
+            k=self._external_pklin_k,
+            pk=self._external_pklin_pk,
+        )
+        self.pk_dd = self.pk_dd_interpolator(self.k)
+        if hasattr(self.pk_dd_interpolator, 'sigma_r'):
+            self.sigma8 = self.pk_dd_interpolator.sigma_r(8.)
+        if self.with_now:
+            if self._external_pknow_k is not None and self._external_pknow_pk is not None:
+                self.pknow_dd_interpolator = PowerSpectrumInterpolator1D(
+                    k=self._external_pknow_k,
+                    pk=self._external_pknow_pk,
+                )
+            else:
+                cosmo = self.cosmo.cosmo if hasattr(self.cosmo, 'cosmo') else self.cosmo
+                self.filter(self.pk_dd_interpolator, cosmo=cosmo)
+                self.pknow_dd_interpolator = self.filter.smooth_pk_interpolator()
+            self.pknow_dd = self.pknow_dd_interpolator(self.k)
+
+
 class BAOExtractor(BasePowerSpectrumExtractor):
     """
     Extract BAO parameters from base cosmological parameters.

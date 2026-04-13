@@ -3103,9 +3103,15 @@ def Kfuncs_to_tables(
     k_c: float = 0.1,
     k_tw: float = 0.01,
     gamma_0: float = 0.54545,
-    gamma_a: float = 0.0, 
-    t_k: float = 100.0, 
+    gamma_a: float = 0.0,
+    t_k: float = 100.0,
     d_s: float = 0.0001,
+    # EFTCAMB_HORNDESKI params:
+    # 1D interpolators callable(eta) -> h1/h3/h5(eta), built from EFTCAMB output.
+    # mu(k,eta) = h1(eta) * (1 + k^2*h5(eta)) / (1 + k^2*h3(eta))
+    eftcamb_h1_interp=None,
+    eftcamb_h3_interp=None,
+    eftcamb_h5_interp=None,
     # BAO helper scalars (needed by FOLPS "now" table scalars)
     rbao: float = 104.0,
     pmax_bao: float = 0.4,
@@ -3154,13 +3160,17 @@ def Kfuncs_to_tables(
         fR0=float(fR0), beta2=float(beta2), nHS=float(nHS),
         screening=int(screening), omegaBD=float(omegaBD),
         # HDKI params (used only if model == "HDKI")
-        model=str(model), mg_variant=str(mg_variant),
+        model=str(model), mg_variant=str(mg_variant) if mg_variant is not None else "mu_OmDE",
         mu0=float(mu0),
         beta_1=float(beta_1), lambda_1=float(lambda_1), exp_s=float(exp_s),
         mu1=float(mu1), mu2=float(mu2), mu3=float(mu3), mu4=float(mu4),
         z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
         scale_bins=bool(scale_bins), k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw), 
         gamma_0=float(gamma_0), gamma_a=float(gamma_a), t_k=float(t_k), d_s=float(d_s),
+        # EFTCAMB_HORNDESKI params (ignored for all other models)
+        eftcamb_h1_interp=eftcamb_h1_interp,
+        eftcamb_h3_interp=eftcamb_h3_interp,
+        eftcamb_h5_interp=eftcamb_h5_interp,
     )
 
     # -----------------------------
@@ -3241,8 +3251,11 @@ def Kfuncs_to_tables(
 
     # -----------------------------
     # 6) Kernel constants: EdS vs beyond-EdS
+    # For EFTCAMB_HORNDESKI, ModelDerivatives already carries the EFTCAMB
+    # h1/h3/h5 interpolators and kernel_constants solves the same ODE system
+    # with the resulting mu(k, eta). Avoid a separate h1-only shortcut here.
     # -----------------------------
-    if bool(beyond_eds):
+    if model_u == "EFTCAMB_HORNDESKI" or bool(beyond_eds):
         from fkptjax.ode import kernel_constants
         KA, KAp, KR1, KR1p = kernel_constants(f0=f0, derivs=derivs, solver=solver)
         A = float(KA)
@@ -3423,6 +3436,10 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         screening=1,
         omegaBD=0.0,
         fR0=1e-15,
+        # EFTCAMB_HORNDESKI callables eta -> h1/h3/h5
+        eftcamb_h1_interp=None,
+        eftcamb_h3_interp=None,
+        eftcamb_h5_interp=None,
     )
 
     _pt_attrs = [
@@ -3456,6 +3473,15 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
                 beta2=float(self.options.get("beta2", 1.0 / 6.0)),
                 screening=int(self.options.get("screening", 1)),
                 omegaBD=float(self.options.get("omegaBD", 0.0)),
+            )
+
+        # EFTCAMB_HORNDESKI: μ(k,a) interpolator and h1/h3/h5 are passed via options
+        # (they are pre-computed from EFTCAMB before calling calculate())
+        if model_u == "EFTCAMB_HORNDESKI":
+            return dict(
+                eftcamb_h1_interp=self.options.get("eftcamb_h1_interp", None),
+                eftcamb_h3_interp=self.options.get("eftcamb_h3_interp", None),
+                eftcamb_h5_interp=self.options.get("eftcamb_h5_interp", None),
             )
 
         # HDKI: use mg_variant + params (fR0 ignored even if present)
@@ -3508,6 +3534,13 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         if model_u == "HS" and (not rescale_PS):
             raise ValueError("You set model='HS' but rescale_PS=False. This is forbidden by design.")
 
+        # EFTCAMB_HORNDESKI: kernel constants always computed (equivalent to beyond_eds=True)
+        # The h1/h3/h5 kernels encode beyond-EdS corrections from exact Horndeski gravity.
+        if model_u == "EFTCAMB_HORNDESKI":
+            beyond_eds = True
+        else:
+            beyond_eds = bool(self.options.get("beyond_eds", False))
+
         mg_params = self._collect_mg_params(cosmo)
 
         fkpt_params = dict(
@@ -3519,9 +3552,9 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
             nquadSteps=300,
             NQ=10,
             NR=10,
-            beyond_eds=bool(self.options.get("beyond_eds", False)),
+            beyond_eds=beyond_eds,
             model=model,
-            # HDKI uses mg_variant; HS ignores it (Kfuncs_to_tables will overwrite to "GR")
+            # HDKI uses mg_variant; HS ignores it; EFTCAMB_HORNDESKI ignores it
             mg_variant=str(self.options.get("mg_variant", "mu_OmDE")),
             rescale_PS=rescale_PS,
             xnow=-4.0,
@@ -3610,8 +3643,6 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles, BaseTheoryPo
         ncols = len(table)
         if getattr(self, "_get_poles", None) is None:
 
-            #####@partial(jax.jit, static_argnums=(4,))
-            @jit(static_argnums=(4))
             def _get_poles(jac, kap, muap, pars, bias_scheme, *table_all):
                 folpsv2.MatrixCalculator(A_full=False, use_TNS_model=False)
                 calc = folpsv2.RSDMultipolesPowerSpectrumCalculator(model="FOLPSD")

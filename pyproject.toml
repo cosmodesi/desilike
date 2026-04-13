@@ -23,6 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 tests = [
+    "matplotlib",
     "emcee",
     "pyclass @ git+https://github.com/adematti/pyclass"]
 plotting = [

@@ -8,6 +8,8 @@ try:
 except ModuleNotFoundError:
     H5PY_INSTALLED = False
 import numpy as np
+from scipy.interpolate import interp1d
+from scipy.optimize import minimize_scalar, root_scalar
 from scipy.special import logsumexp
 
 from desilike.utils import BaseClass
@@ -465,3 +467,82 @@ class Samples(BaseClass):
             samples=np.column_stack([self[key] for key in params]),
             weights=self.weight, names=params, labels=[
                 self.latex.get(key, key).replace('$', '') for key in params])
+
+    def interval(self, param, threshold, posterior=None):
+        """Get interval where likelihood/posterior is above threshold.
+
+        Parameters
+        ----------
+        param : str
+            Parmater for which to get interval.
+        threshold : float, optional
+            Threshold such that the likelihood/posterior is at least
+            its maximum plus the threshold.
+        posterior: bool or None, optional
+            Whether to use the posterior or likelihood. If ``None``, determine
+            based on what is computed. Default is ``None``.
+
+        Raises
+        ------
+        ValueError
+            If ``posterior`` is ``None`` but both posterior and likelihood
+            have been computed. If there are not enough points to compute the
+            interval.
+
+        Returns
+        -------
+        x_min : float
+            Lowest value at threshold.
+        x_opt : float
+            Value where likelihood/posterior is maximal.
+        x_max : float
+            Highest value at threshold.
+
+        """
+        if posterior is None:
+            if 'log_posterior' in self.keys:
+                if 'log_likelihood' in self.keys:
+                    raise ValueError(
+                        "Samples have both posterior and likelihood.")
+                key = 'log_posterior'
+            else:
+                key = 'log_likelihood'
+
+        use = np.isin(self['fixed'], [param, ''])
+
+        if np.sum(use) < 4:
+            raise ValueError("Not enough points to compute interval.")
+
+        x = self[param][use]
+        y = self[key][use]
+        y = y[np.argsort(x)]
+        x = np.sort(x)
+
+        interp = interp1d(x, y, kind='cubic')
+        bounds = (np.amin(x), np.amax(x))
+
+        def f(x):
+            return -interp(x)
+        res = minimize_scalar(f, bounds=(np.amin(x), np.amax(x)))
+
+        # TODO: Add robustness.
+        x_opt = res.x
+        y_max = -res.fun
+
+        def f(x):
+            return interp(x) - (y_max + threshold)
+
+        x = np.linspace(*bounds, 1000)
+        y = interp(x)
+
+        res = root_scalar(
+            f, bracket=(bounds[0], x_opt),
+            x0=np.amin(x[y > y_max + threshold]))
+        x_min = res.root
+
+        res = root_scalar(
+            f, bracket=(x_opt, bounds[1]),
+            x0=np.amax(x[y > y_max + threshold]))
+        x_max = res.root
+
+        return x_min, x_opt, x_max

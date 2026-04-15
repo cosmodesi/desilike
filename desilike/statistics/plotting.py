@@ -375,12 +375,12 @@ def one_dimensional_profile(
 
     if 'log_posterior' in samples.keys:
         if 'log_likelihood' in samples.keys:
-            raise ValueError('Samples have both posterior and likelihood.')
+            raise ValueError("Samples have both posterior and likelihood.")
         key = 'log_posterior'
     elif 'log_likelihood' in samples.keys:
         key = 'log_likelihood'
     else:
-        raise ValueError('Samples have neither posterior nor likelihood.')
+        raise ValueError("Samples have neither posterior nor likelihood.")
 
     use = np.isin(samples['fixed'], [param, ''])
     if np.sum(use) < 4:
@@ -519,7 +519,7 @@ def two_dimensional_profile(
 def triangle_profile(
         samples, params=None, plot=True, plot_kwargs=None,
         levels=[-4.61, -3.00, -1.14], contour_kwargs=None, scatter=False,
-        scatter_kwargs=None, fig=None):
+        scatter_kwargs=None, threshold=-4.5, fig=None):
     r"""Create a triangle profile plot.
 
     Parameters
@@ -583,15 +583,14 @@ def triangle_profile(
         for k in range(i + 1, len(params)):
             axs[i, k].axis('off')
 
-    # Synchronize the ranges across rows.
-    for i in range(len(params)):
-        xmin, xmax = axs[i, i].get_xlim()
+    # Set x-ranges.
+    for i, param in enumerate(params):
+        x_min, x_opt, x_max = samples.interval(param, threshold)
+        x_min -= 0.05 * (x_max - x_min)
+        x_max += 0.05 * (x_max - x_min)
+        axs[i, i].set_xlim(x_min, x_max)
         for k in range(i):
-            xmin = min(xmin, axs[i, k].get_ylim()[0])
-            xmax = max(xmax, axs[i, k].get_ylim()[1])
-        axs[i, i].set_xlim(xmin, xmax)
-        for k in range(i):
-            axs[i, k].set_ylim(xmin, xmax)
+            axs[i, k].set_ylim(x_min, x_max)
 
     fig.subplots_adjust(hspace=0, wspace=0)
 

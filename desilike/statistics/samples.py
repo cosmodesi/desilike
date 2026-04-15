@@ -13,8 +13,8 @@ from scipy.special import logsumexp
 from desilike.utils import BaseClass
 
 
-PROTECTED_KEYS = ['fixed', 'log_weight', 'log_prior', 'log_likelihood',
-                  'log_posterior']
+SPECIAL_KEYS = ['fixed', 'log_weight', 'log_prior', 'log_likelihood',
+                'log_posterior']
 
 
 class Samples(BaseClass):
@@ -64,6 +64,11 @@ class Samples(BaseClass):
     def keys(self):
         """Return the keys of the sample as a list of strings."""
         return list(self.data.keys())
+
+    @property
+    def params(self):
+        """Return the parameters of the sample as a list of strings."""
+        return [key for key in self.keys if key not in SPECIAL_KEYS]
 
     def __setitem__(self, key, value):
         """Manipulate the samples.
@@ -311,7 +316,7 @@ class Samples(BaseClass):
 
         """
         if params is None:
-            params = [key for key in self.keys if key not in PROTECTED_KEYS]
+            params = self.params
 
         means = [np.average(self[key], weights=self.weight, axis=0) for key in
                  params]
@@ -338,7 +343,7 @@ class Samples(BaseClass):
 
         """
         if params is None:
-            params = [key for key in self.keys if key not in PROTECTED_KEYS]
+            params = self.params
 
         m = np.column_stack([
             self[key].reshape(self.n_samples, -1) for key in params])
@@ -454,7 +459,7 @@ class Samples(BaseClass):
                 "The 'tabulate' package is required for 'Samples.getdist'.")
 
         if params is None:
-            params = [key for key in self.keys if key not in PROTECTED_KEYS]
+            params = self.params
 
         return MCSamples(
             samples=np.column_stack([self[key] for key in params]),

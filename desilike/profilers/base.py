@@ -83,7 +83,7 @@ class Profiler(BaseClass):
                 self.rng = np.random.default_rng()
                 self.rng.bit_generator.state = json.load(fstream)
 
-    def add_global(self):
+    def add_optimize_all(self):
         """Add finding the global optimum."""
         samples = Samples(**{key: np.nan for key in self.params}, fixed='')
         self._add_samples(samples)

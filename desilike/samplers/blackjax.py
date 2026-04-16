@@ -262,7 +262,14 @@ class HMCSampler(BlackJAXSampler):
 
 
 class NoUTurnSampler(BlackJAXSampler):
-    """Wrapper for No-U-Turn Sampler (NUTS)."""
+    """Wrapper for No-U-Turn Sampler (NUTS).
+
+    .. rubric:: References
+
+    - `NUTS paper <https://www.jmlr.org/papers/volume15/hoffman14a/hoffman14a.
+    pdf>`_
+
+    """
 
     kernel_type = 'nuts'
     adaptable_args = ['step_size', 'inverse_mass_matrix']

@@ -469,15 +469,15 @@ class Samples(BaseClass):
                 self.latex.get(key, key).replace('$', '') for key in params])
 
     def interval(self, param, threshold, posterior=None):
-        """Get interval where likelihood/posterior is above threshold.
+        """Get interval where likelihood/posterior is above a threshold.
 
         Parameters
         ----------
         param : str
             Parmater for which to get interval.
-        threshold : float, optional
+        threshold : float
             Threshold such that the likelihood/posterior is at least
-            its maximum plus the threshold.
+            its maximum plus the threshold. Must be negative.
         posterior: bool or None, optional
             Whether to use the posterior or likelihood. If ``None``, determine
             based on what is computed. Default is ``None``.
@@ -486,8 +486,8 @@ class Samples(BaseClass):
         ------
         ValueError
             If ``posterior`` is ``None`` but both posterior and likelihood
-            have been computed. If there are not enough points to compute the
-            interval.
+            have been computed, if there are not enough points to compute the
+            interval, or if ``threshold`` is not negative.
 
         Returns
         -------
@@ -507,6 +507,9 @@ class Samples(BaseClass):
                 key = 'log_posterior'
             else:
                 key = 'log_likelihood'
+
+        if not threshold < 0:
+            raise ValueError("'threshold' must be negative.")
 
         use = np.isin(self['fixed'], [param, ''])
 

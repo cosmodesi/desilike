@@ -69,7 +69,9 @@ class QMCSampler(StaticSampler):
     Kronecker sequences.
 
     .. rubric:: References
-    - https://docs.scipy.org/doc/scipy/reference/stats.qmc.html
+
+    - `scipy QMC docs <https://docs.scipy.org/doc/scipy/reference/\
+        stats.qmc.html>`_
 
     """
 

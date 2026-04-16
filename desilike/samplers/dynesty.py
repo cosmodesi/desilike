@@ -13,8 +13,10 @@ class DynestySampler(PopulationSampler):
     """Wrapper for ``dynesty`` nested samplers.
 
     .. rubric:: References
-    - https://github.com/joshspeagle/dynesty
-    - https://doi.org/10.1093/mnras/staa278
+
+    - `dynesty repo <https://github.com/joshspeagle/dynesty>`_
+    - `dynesty docs <https://dynesty.readthedocs.io>`_
+    - `dynesty paper <https://doi.org/10.1093/mnras/staa278>`_
 
     """
 

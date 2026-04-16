@@ -6,12 +6,13 @@ from scipy.signal import correlate
 from .samples import Samples
 
 
-def chains_to_array(chains, keys=None):
+def _chains_to_array(chains, keys=None):
     """Convert a ``desilike.Samples`` object or list thereof into arrays.
 
     Parameters
     ----------
-    chains : desilike.Samples or list of desilike.Samples
+    chains : desilike.statistic.samples.Samples or list of \
+        desilike.statistic.samples.Samples
         Chains to convert.
     keys : list of str, optional
         Keys to extract. If ``None``, use all keys in the first chain. Default
@@ -59,7 +60,7 @@ def _prepare_input(chains, keys=None):
     elif isinstance(chains, np.ndarray):
         return_type = np.ndarray
     else:
-        chains, keys = chains_to_array(chains, keys=keys)
+        chains, keys = _chains_to_array(chains, keys=keys)
         return_type = dict
 
     if chains.ndim == 1:
@@ -88,12 +89,15 @@ def integrated_autocorrelation_time(chains, keys=None):
 
     Parameters
     ----------
-    chains : desilike.Samples, list of desilike.Samples, or numpy.ndarray
+    chains : desilike.statistics.samples.Samples, list of \
+        desilike.statistics.samples.Samples, or numpy.ndarray
         Chains for which to compute the autocorrelation time. If a numpy
-        array, the expected shapes are as follows.
-            - (n_steps,) if one-dimensional
-            - (n_steps, n_dim) if two-dimensional
-            - (n_chains, n_steps, n_dim) if three-dimensional
+        array, the expected shapes are as follows:
+
+        - (n_steps,) if one-dimensional
+        - (n_steps, n_dim) if two-dimensional
+        - (n_chains, n_steps, n_dim) if three-dimensional
+
     keys : list of str, optional
         Keys for which to compute the autocorrelation time. Only used if
         ``chains`` is a ``desilike.Samples`` or list thereof. If ``None``, use
@@ -103,9 +107,11 @@ def integrated_autocorrelation_time(chains, keys=None):
     -------
     tau : dict, float, or numpy.ndarray
         The estimated autocorrelation times.
-            - dict if ``chains`` is a ``desilike.Samples`` or list thereof
-            - float if ``chains`` is a one-dimensional array
-            - numpy.ndarray otherwise
+
+        - dict if ``chains`` is a ``desilike.Samples`` or list thereof
+        - float if ``chains`` is a one-dimensional array
+        - numpy.ndarray otherwise
+
         In all cases, the autocorrelation function (not time) for each
         parameter is averaged across chains, if multiple chains are provided.
 
@@ -144,12 +150,15 @@ def gelman_rubin(chains, n_splits=None, keys=None):
 
     Parameters
     ----------
-    chains : desilike.Samples, list of desilike.Samples, or numpy.ndarray
+    chains : desilike.statistics.samples.Samples, list of \
+        desilike.statistics.samples.Samples, or numpy.ndarray
         Chains for which to compute the Gelman-Rubin statistic. If a numpy
-        array, the expected shapes are as follows.
-            - (n_steps,) if one-dimensional
-            - (n_steps, n_dim) if two-dimensional
-            - (n_chains, n_steps, n_dim) if three-dimensional
+        array, the expected shapes are as follows:
+
+        - (n_steps,) if one-dimensional
+        - (n_steps, n_dim) if two-dimensional
+        - (n_chains, n_steps, n_dim) if three-dimensional
+
     n_splits : int or None, optional
         Number of splits for each chain. If ``None``, a single chain will be
         split into 2 parts. Splitting allows computation of Gelman-Rubin

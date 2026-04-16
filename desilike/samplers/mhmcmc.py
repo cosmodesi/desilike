@@ -348,7 +348,8 @@ class MetropolisHastingsSampler(MarkovChainSampler):
     Note that this is a from-scratch reimplementation of this algorithm.
 
     .. rubric:: References
-    - https://arxiv.org/abs/1304.4473
+
+    - `algorithm paper <https://doi.org/10.1103/PhysRevD.87.103529>`_
 
     """
 

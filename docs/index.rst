@@ -26,6 +26,7 @@ Table of Contents
   user/building
   user/getting_started
   user/samplers
+  user/profilers
 
 .. toctree::
   :maxdepth: 1
@@ -38,7 +39,7 @@ Table of Contents
   api/bindings
   api/profilers
   api/samplers
-  api/samples
+  api/statistics
   api/emulators
 
 .. toctree::

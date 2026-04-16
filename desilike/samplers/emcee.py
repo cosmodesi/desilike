@@ -14,8 +14,10 @@ class EmceeSampler(MarkovChainSampler):
     """Wrapper for the affine-invariant ensemble sampler ``emcee``.
 
     .. rubric:: References
-    - https://github.com/dfm/emcee
-    - https://arxiv.org/abs/1202.3665
+
+    - `emcee repo <https://github.com/dfm/emcee>`_
+    - `emcee docs <https://emcee.readthedocs.io>`_
+    - `emcee paper <https://doi.org/10.1086/670067>`_
 
     """
 

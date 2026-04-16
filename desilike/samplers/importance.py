@@ -1,7 +1,6 @@
 """Module implementing an importance sampler."""
 
 import numpy as np
-from scipy.special import logsumexp
 
 from .base import StaticSampler
 

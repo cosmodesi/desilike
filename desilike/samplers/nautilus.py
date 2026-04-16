@@ -12,8 +12,10 @@ class NautilusSampler(PopulationSampler):
     """Wrapper for ``nautilus`` importance nested sampling.
 
     .. rubric:: References
-    - https://github.com/johannesulf/nautilus
-    - https://doi.org/10.1093/mnras/stad2441
+
+    - `nautilus repo <https://github.com/johannesulf/nautilus>`_
+    - `nautilus docs <https://nautilus-sampler.readthedocs.io>`_
+    - `nautilus paper <https://doi.org/10.1093/mnras/stad2441>`_
 
     """
 

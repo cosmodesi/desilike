@@ -23,7 +23,6 @@ docs/api/_autosummary
 **/*.pyc
 **/*.npz
 **/*.npy
-**/*.png
 **/env
 **/.spyproject
 **/coverage.lcov

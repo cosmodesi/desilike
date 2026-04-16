@@ -10,11 +10,11 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
-from _version import __version__
 import os
 import sys
 sys.path.insert(0, os.path.abspath('..'))
 sys.path.insert(0, os.path.abspath(os.path.join('..', 'desilike')))
+from _version import __version__
 
 # -- General configuration ------------------------------------------------
 

@@ -72,7 +72,9 @@ class BlackJAXSampler(MarkovChainSampler):
     """Wrapper for ``BlackJAX`` samplers.
 
     .. rubric:: References
-    - https://github.com/blackjax-devs/blackjax
+
+    - `BlackJAX repo <https://github.com/blackjax-devs/blackjax>`_
+    - `BlackJAX docs <https://blackjax-devs.github.io/blackjax/>`_
 
     """
 
@@ -311,8 +313,10 @@ class MCLMCSampler(BlackJAXSampler):
     """Wrapper for the Microcanonical Langevin Monte Carlo (MCLMC) sampler.
 
     .. rubric:: References
-    - https://blackjax-devs.github.io/sampling-book/algorithms/mclmc.html
-    - https://arxiv.org/abs/2212.08549
+
+    - `MCLMC docs <https://blackjax-devs.github.io/blackjax/autoapi/blackjax/\
+        mcmc/mclmc/index.html>`_
+    - `MCLMC paper <https://doi.org/10.48550/arXiv.2212.08549>`_
 
     """
 

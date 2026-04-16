@@ -50,9 +50,11 @@ class PocoMCSampler(PopulationSampler):
     """Class for the ``pocoMC`` preconditioned Monte Carlo sampling.
 
     .. rubric:: References
-    - https://github.com/minaskar/pocomc
-    - https://doi.org/10.21105/joss.04634
-    - https://doi.org/10.1093/mnras/stac2272
+
+    - `pocoMC repo <https://github.com/minaskar/pocomc>`_
+    - `pocoMC docs <https://pocomc.readthedocs.io>`_
+    - `pocoMC paper A <https://doi.org/10.21105/joss.04634>`_
+    - `pocoMC paper B <https://doi.org/10.1093/mnras/stac2272>`_
 
     """
 

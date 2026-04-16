@@ -1,6 +1,4 @@
 """Base class for profilers."""
-# TODO: implement other optimizers
-# TODO: add plotting functions
 # TODO: expand functionality such as warm starts
 
 import json
@@ -16,7 +14,7 @@ from .optimizers import scipy_dual_annealing
 
 
 class Profiler(BaseClass):
-    """Profiler used to find maximum likelihood or posterior profiles."""
+    """Profiler used to compute likelihood and posterior profiles."""
 
     def __init__(self, likelihood, posterior=True, rng=None, directory=None):
         """Initialize the profiler.
@@ -58,7 +56,7 @@ class Profiler(BaseClass):
 
         if self.directory is not None:
             try:
-                self.load()
+                self._load()
             except FileNotFoundError:
                 pass
 
@@ -70,14 +68,14 @@ class Profiler(BaseClass):
                 rng = np.random.default_rng(seed=rng)
             self.rng = rng
 
-    def save(self):
+    def _save(self):
         """Save all results to disk."""
         if self.pool.main:
             self.samples.save(self.directory / 'samples.npz')
             with open(self.directory / 'rng.json', 'w') as fstream:
                 json.dump(self.rng.bit_generator.state, fstream)
 
-    def load(self):
+    def _load(self):
         """Load internal calculations from disk."""
         if self.pool.main:
             self.samples = Samples.load(self.directory / 'samples.npz')
@@ -91,7 +89,7 @@ class Profiler(BaseClass):
         self._add_samples(samples)
 
     def add_sample(self, sample):
-        """Add parameter combination to profile.
+        """Add parameter combination to optimize.
 
         Parameters
         ----------
@@ -115,8 +113,8 @@ class Profiler(BaseClass):
                 samples[key] = [np.nan, ]
         self._add_samples(samples)
 
-    def add_grid(self, grid):
-        """Add parameter grid to profile.
+    def add_grid_manual(self, grid):
+        """Manually add parameter grid to optimize.
 
         Parameters
         ----------
@@ -316,7 +314,7 @@ class Profiler(BaseClass):
 
         Returns
         -------
-        samples : Samples
+        samples : desilike.statistics.samples.Samples
             Maxima found by the profiler.
 
         """
@@ -347,7 +345,7 @@ class Profiler(BaseClass):
                         self.samples[i] = params
 
                 if self.directory is not None:
-                    self.save()
+                    self._save()
 
                 if np.amax(impr) < tol:
                     break

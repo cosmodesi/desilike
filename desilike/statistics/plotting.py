@@ -74,15 +74,15 @@ def trace(chains, keys=None, colors=None, fontsize=None, plot_options=None,
     fig : matplotlib.figure.Figure or None, optional
         Figure to plot on. If ``None``, create a new one. Default is ``None``.
 
-    Returns
-    -------
-    fig : matplotlib.figure.Figure
-        Figure with plot on it.
-
     Raises
     ------
     ValueError
         If the provided figure has less axes than the chains have keys.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        Figure with plot on it.
 
     """
     if not isinstance(chains, list):
@@ -143,15 +143,15 @@ def integrated_autocorrelation_time(
     fig : matplotlib.figure.Figure or None, optional
         Figure to plot on. If ``None``, create a new one. Default is ``None``.
 
-    Returns
-    -------
-    fig : matplotlib.figure.Figure
-        Figure with plot on it.
-
     Raises
     ------
     ValueError
         If not all chains have the same length.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        Figure with plot on it.
 
     """
     if not isinstance(chains, list):
@@ -235,15 +235,15 @@ def gelman_rubin(
     fig : matplotlib.figure.Figure or None, optional
         Figure to plot on. If ``None``, create a new one. Default is ``None``.
 
-    Returns
-    -------
-    fig : matplotlib.figure.Figure
-        Figure with plot on it.
-
     Raises
     ------
     ValueError
         If not all chains have the same length.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        Figure with plot on it.
 
     """
     if not isinstance(chains, list):
@@ -301,7 +301,9 @@ def triangle_posterior(samples, params=None, **kwargs):
     """Create a triangle posterior plot using ``getdist``.
 
     .. rubric:: References
-    - https://getdist.readthedocs.io/en/latest/plots.html#getdist.plots.GetDistPlotter.triangle_plot
+
+    - `triangle_plot documentation  <https://getdist.readthedocs.io/en/latest/\
+        plots.html#getdist.plots.GetDistPlotter.triangle_plot>`_
 
     Parameters
     ----------

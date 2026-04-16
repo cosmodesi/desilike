@@ -16,9 +16,11 @@ class ZeusSampler(MarkovChainSampler):
     """Wrapper for the ensemble slice sampler ``zeus``.
 
     .. rubric:: References
-    - https://github.com/minaskar/zeus
-    - https://arxiv.org/abs/2002.06212
-    - https://arxiv.org/abs/2105.03468
+
+    - `zeus repo <https://github.com/minaskar/zeus>`_
+    - `zeus docs <https://zeus-mcmc.readthedocs.io>`_
+    - `zeus paper A <https://doi.org/10.48550/arXiv.2002.06212>`_
+    - `zeus paper B <https://doi.org/10.1093/mnras/stab2867>`_
 
     """
 

@@ -1,4 +1,5 @@
 """Collection of wrappers for commonly used optimizers."""
+# TODO: implement other optimizers
 
 from scipy.optimize import dual_annealing, minimize
 

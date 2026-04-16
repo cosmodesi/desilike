@@ -10,16 +10,16 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
+from _version import __version__
 import os
 import sys
 sys.path.insert(0, os.path.abspath('..'))
 sys.path.insert(0, os.path.abspath(os.path.join('..', 'desilike')))
-from _version import __version__
 
 # -- General configuration ------------------------------------------------
 
 # If your documentation needs a minimal Sphinx version, state it here.
-#needs_sphinx = '1.0'
+# needs_sphinx = '1.0'
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
@@ -46,7 +46,7 @@ release = __version__
 
 html_theme = 'furo'
 
-autodoc_mock_imports = ['cosmoprimo', 'mpi4py']
+autodoc_mock_imports = ['cosmoprimo', 'mpi4py', 'lsstypes']
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -76,6 +76,8 @@ intersphinx_mapping = {
 }
 
 # Thanks to: https://github.com/sphinx-doc/sphinx/issues/4054#issuecomment-329097229
+
+
 def _replace(app, docname, source):
     result = source[0]
     for key in app.config.ultimate_replacements:
@@ -116,4 +118,3 @@ def setup(app):
 
 
 autoclass_content = 'both'
-

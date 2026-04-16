@@ -44,7 +44,7 @@ def test_accuracy(likelihood, posterior):
     # Test that the profiler returns the correct result.
 
     profiler = Profiler(likelihood, rng=42, posterior=posterior)
-    profiler.add_global()
+    profiler.add_optimize_all()
     profiler.add_grid_manual(dict(a=np.linspace(-1, +1, 5)))
     samples = profiler.run(optimizer_kwargs=dict(maxiter=10))
 

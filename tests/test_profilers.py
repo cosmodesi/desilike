@@ -95,8 +95,8 @@ def test_remove_duplicates(likelihood):
     # Test that duplicates are successfully removed.
 
     profiler = Profiler(likelihood, rng=42)
-    profiler.add_global()
-    profiler.add_global()  # shouldn't be added
+    profiler.add_optimize_all()
+    profiler.add_optimize_all()  # shouldn't be added
     profiler.add_grid_manual(dict(a=np.linspace(0, 1, 3)))
     profiler.add_grid_manual(
         dict(a=np.linspace(0, 1, 3)))  # shouldn't be added

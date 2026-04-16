@@ -542,7 +542,7 @@ def triangle_profile(
         values :math:`z` where
         :math:`\log \mathcal{P} = \max \log \mathcal{P} + z`. Default is
         [-4.61, -3.00, -1.14] which correspond to the 68%, 95%, and 99%
-        credible intervals for a two-dimensional Gaussian.
+        credible intervals of a two-dimensional Gaussian.
     contour_kwargs : dict or None, optional
         Optional arguments for :meth:`matplotlib.axes.Axes.contour`. Default is
         ``None``.

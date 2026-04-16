@@ -45,7 +45,7 @@ def test_accuracy(likelihood, posterior):
 
     profiler = Profiler(likelihood, rng=42, posterior=posterior)
     profiler.add_global()
-    profiler.add_grid(dict(a=np.linspace(-1, +1, 5)))
+    profiler.add_grid_manual(dict(a=np.linspace(-1, +1, 5)))
     samples = profiler.run(optimizer_kwargs=dict(maxiter=10))
 
     if posterior:
@@ -78,11 +78,11 @@ def test_rng(likelihood):
     optimizer_kwargs = dict(maxiter=1, no_local_search=True)
 
     profiler_1 = Profiler(likelihood, rng=42)
-    profiler_1.add_grid(dict(a=np.linspace(0, 1, 20)))
+    profiler_1.add_grid_manual(dict(a=np.linspace(0, 1, 20)))
     samples_1 = profiler_1.run(optimizer_kwargs=optimizer_kwargs)
 
     profiler_2 = Profiler(likelihood, rng=42)
-    profiler_2.add_grid(dict(a=np.linspace(0, 1, 20)))
+    profiler_2.add_grid_manual(dict(a=np.linspace(0, 1, 20)))
     samples_2 = profiler_2.run(optimizer_kwargs=optimizer_kwargs)
 
     assert len(samples_1) == len(samples_2)
@@ -97,9 +97,10 @@ def test_remove_duplicates(likelihood):
     profiler = Profiler(likelihood, rng=42)
     profiler.add_global()
     profiler.add_global()  # shouldn't be added
-    profiler.add_grid(dict(a=np.linspace(0, 1, 3)))
-    profiler.add_grid(dict(a=np.linspace(0, 1, 3)))  # shouldn't be added
-    profiler.add_grid(dict(b=np.linspace(0, 1, 5)))
+    profiler.add_grid_manual(dict(a=np.linspace(0, 1, 3)))
+    profiler.add_grid_manual(
+        dict(a=np.linspace(0, 1, 3)))  # shouldn't be added
+    profiler.add_grid_manual(dict(b=np.linspace(0, 1, 5)))
     assert len(profiler.samples) == 1 + 3 + 5
 
 
@@ -110,7 +111,7 @@ def test_write(likelihood, tmp_path):
     optimizer_kwargs = dict(maxiter=1, no_local_search=True)
 
     profiler_1 = Profiler(likelihood, rng=42, directory=tmp_path)
-    profiler_1.add_grid(dict(a=np.linspace(0, 1, 20)))
+    profiler_1.add_grid_manual(dict(a=np.linspace(0, 1, 20)))
     samples_1 = profiler_1.run(optimizer_kwargs=optimizer_kwargs)
 
     profiler_2 = Profiler(likelihood, directory=tmp_path)

@@ -56,6 +56,7 @@ def scipy_dual_annealing(f, x_0, rng, **kwargs):
         Whether the optimizer finished successfully.
 
     """
+    kwargs = kwargs | dict(maxiter=1)
     res = dual_annealing(
         f, [(0, 1)] * len(x_0), x0=x_0, rng=rng, **kwargs)
     return res.x, res.fun, res.success

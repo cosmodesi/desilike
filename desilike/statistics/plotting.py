@@ -511,7 +511,7 @@ def two_dimensional_profile(
         z_plot = interp(np.column_stack([x_plot.ravel(), y_plot.ravel()])
                         ).reshape(x_plot.shape)
         z_plot = z_plot - np.amax(z_plot)
-        ax.contour(x_plot, y_plot, z_plot, levels=levels, **contour_kwargs)
+        ax.contour(x_plot, y_plot, -z_plot, levels=levels, **contour_kwargs)
 
     ax.set_xlabel(samples.latex.get(params[0], params[0]))
     ax.set_ylabel(samples.latex.get(params[1], params[1]))
@@ -520,8 +520,8 @@ def two_dimensional_profile(
 @plotter
 def triangle_profile(
         samples, params=None, plot=True, plot_kwargs=None,
-        levels=[-4.61, -3.00, -1.14], contour_kwargs=None, scatter=False,
-        scatter_kwargs=None, threshold=-4.5, fig=None):
+        levels=[1.14, 3.00, 4.61], contour_kwargs=None, scatter=False,
+        scatter_kwargs=None, threshold=4.5, fig=None):
     r"""Create a triangle profile plot.
 
     Parameters
@@ -539,10 +539,11 @@ def triangle_profile(
         ``None``.
     levels : list, optional
         Confidence levels to plot for the two-dimensional profiles, i.e., the
-        values :math:`z` where
-        :math:`\log \mathcal{P} = \max \log \mathcal{P} + z`. Default is
-        [-4.61, -3.00, -1.14] which correspond to the 68%, 95%, and 99%
-        credible intervals of a two-dimensional Gaussian.
+        values :math:`\Delta \log \mathcal{P}` where
+        :math:`\log \mathcal{P} = \max \log \mathcal{P} -
+        \Delta \log \mathcal{P}`. Default is [1.14, 3.00, 4.61] which
+        corresponds to the 68%, 95%, and 99% credible intervals of a
+        two-dimensional Gaussian.
     contour_kwargs : dict or None, optional
         Optional arguments for :meth:`matplotlib.axes.Axes.contour`. Default is
         ``None``.
@@ -551,6 +552,9 @@ def triangle_profile(
     scatter_kwargs : dict or None, optional
         Optional arguments for :meth:`matplotlib.axes.Axes.scatter`. Default is
         ``None``.
+    threshold : float, optional
+        Limit the ranges for each parameter to the corresponding intervals for
+        this threshold. Default is 4.5.
     fig : matplotlib.figure.Figure or None, optional
         Figure to plot on. If ``None``, create a new one. Default is ``None``.
 

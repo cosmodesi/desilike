@@ -477,7 +477,7 @@ class Samples(BaseClass):
             Parmater for which to get interval.
         threshold : float
             Threshold such that the likelihood/posterior is at least
-            its maximum plus the threshold. Must be negative.
+            its maximum plus the threshold. Must be positive.
         posterior: bool or None, optional
             Whether to use the posterior or likelihood. If ``None``, determine
             based on what is computed. Default is ``None``.
@@ -487,7 +487,7 @@ class Samples(BaseClass):
         ValueError
             If ``posterior`` is ``None`` but both posterior and likelihood
             have been computed, if there are not enough points to compute the
-            interval, or if ``threshold`` is not negative.
+            interval, or if ``threshold`` is not positive.
 
         Returns
         -------
@@ -508,8 +508,8 @@ class Samples(BaseClass):
             else:
                 key = 'log_likelihood'
 
-        if not threshold < 0:
-            raise ValueError("'threshold' must be negative.")
+        if not threshold > 0:
+            raise ValueError("'threshold' must positive.")
 
         use = np.isin(self['fixed'], [param, ''])
 
@@ -533,19 +533,19 @@ class Samples(BaseClass):
         y_max = -res.fun
 
         def f(x):
-            return interp(x) - (y_max + threshold)
+            return interp(x) - (y_max - threshold)
 
         x = np.linspace(*bounds, 1000)
         y = interp(x)
 
         res = root_scalar(
             f, bracket=(bounds[0], x_opt),
-            x0=np.amin(x[y > y_max + threshold]))
+            x0=np.amin(x[y > y_max - threshold]))
         x_min = res.root
 
         res = root_scalar(
             f, bracket=(x_opt, bounds[1]),
-            x0=np.amax(x[y > y_max + threshold]))
+            x0=np.amax(x[y > y_max - threshold]))
         x_max = res.root
 
         return x_min, x_opt, x_max

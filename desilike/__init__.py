@@ -11,3 +11,5 @@ from .statistics import Samples
 
 from .install import Installer
 Installer().setenv()
+
+__all__ = ['Samples']

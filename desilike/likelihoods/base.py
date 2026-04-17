@@ -514,23 +514,20 @@ class ObservablesGaussianLikelihood(BaseGaussianLikelihood):
         'hartlap' to apply Hartlap 2007 factor (https://arxiv.org/abs/astro-ph/0608064).
         'percival2014' to apply Percival 2014 factor (https://arxiv.org/abs/1312.4841).
         A dictionary to specify the number of observations, ``{'nobs': nobs, 'correction': 'hartlap-percival2014'}``.
+        If nobs is None and no covariance is provided, nobs will be taken from observables[0].covariance.nobs.
     precision : array, default=None
         Precision matrix to be used instead of the inverse covariance.
     """
     def initialize(self, observables, covariance=None, scale_covariance=1., correct_covariance=None, precision=None, **kwargs):
+
+        correct_covariance = {'correction': '', 'nobs': None} if correct_covariance is None else correct_covariance
+        assert isinstance(correct_covariance, dict) , "correct_covariance should be a dict with keys 'correction' and 'nobs' or None" 
+
         if not utils.is_sequence(observables):
             observables = [observables]
-        if isinstance(correct_covariance, dict):
-            nobs = correct_covariance.get('nobs', self.nobs)
-            correct_covariance = correct_covariance['correction']
-        else:
-            nobs = getattr(covariance, 'nobs', None)
-        if correct_covariance is None:
-            correct_covariance = {'correction': '', 'nobs': None}
-        else:
-            correct_covariance = {'correction': correct_covariance, 'nobs': nobs}
         self.observables = list(observables)
         for obs in self.observables: obs._mpicomm = self.mpicomm
+        
         #for obs in observables: obs.all_params  # to set observable's pipelines, and initialize once (percival factor below requires all_params)
         covariance, scale_covariance, precision = (self.mpicomm.bcast(obj if self.mpicomm.rank == 0 else None, root=0) for obj in (covariance, scale_covariance, precision))
         if covariance is None:

@@ -3757,11 +3757,12 @@ def Rescaling_MG(
     Om,
     model,
     mg_variant,
-    fR0,
+    fR0_HS,
     beta2,
-    nHS,
+    n_HS,
     screening,
     omegaBD,
+    r_c,
     mu0,
     beta_1,
     lambda_1,
@@ -3822,8 +3823,9 @@ def Rescaling_MG(
     def make_derivs(**updates):
         pars = dict(
             om=float(Om), ol=float(1.0 - Om),
-            fR0=float(fR0), beta2=float(beta2), nHS=float(nHS),
+            fR0_HS=float(fR0_HS), beta2=float(beta2), n_HS=float(n_HS),
             screening=int(screening), omegaBD=float(omegaBD),
+            r_c=float(r_c),
             model=str(model), mg_variant=str(mg_variant),
             mu0=float(mu0),
             beta_1=float(beta_1), lambda_1=float(lambda_1), exp_s=float(exp_s),
@@ -3839,8 +3841,9 @@ def Rescaling_MG(
     def make_gr_derivs():
         return ModelDerivatives(
             om=float(Om), ol=float(1.0 - Om),
-            fR0=0.0, beta2=float(beta2), nHS=float(nHS),
+            fR0_HS=0.0, beta2=float(beta2), n_HS=float(n_HS),
             screening=int(screening), omegaBD=float(omegaBD),
+            r_c=float(r_c),
             model='HDKI', mg_variant='mu_OmDE',
             mu0=0.0,
             beta_1=1.0, lambda_1=0.0, exp_s=0.0,
@@ -3866,19 +3869,14 @@ def Rescaling_MG(
     )
     k_growth_jax = jnp.asarray(k_growth)
 
-    # ------------------------------------------------------------
-    # Generic GR reference
-    # ------------------------------------------------------------
     derivs_gr = make_gr_derivs()
     Y_gr = DP(k_growth, derivs_gr, solver)
     D_gr = jnp.asarray(Y_gr[0])
 
-    # Full growth-ratio rescaling
     Y_mg = DP(k_growth, derivs, solver)
     D_mg = jnp.asarray(Y_mg[0])
     scale_growth = (D_mg / D_gr) ** 2
 
-    # interpolate multiplicative factor in log-space back to k_ext
     log_scale_growth = jnp.log(scale_growth)
     log_scale_ext = interp(k_ext, k_growth_jax, log_scale_growth)
     log_scale_ext = jnp.clip(log_scale_ext,
@@ -3908,11 +3906,12 @@ def Kfuncs_to_tables(
     f0_kmax: float = 1e-3,
     model: str = "HDKI",
     mg_variant: str = "mu_OmDE",
-    fR0: float = 1e-15,
-    nHS: float = 1.0,
+    fR0_HS: float = 1e-15,
+    n_HS: float = 1.0,
     beta2: float = 1.0 / 6.0,
     screening: int = 1,
     omegaBD: float = 0.0,
+    r_c: float = 1.0e30,
     mu0: float = 0.0,
     beta_1: float = 1.0,
     lambda_1: float = 1.0,
@@ -3950,10 +3949,12 @@ def Kfuncs_to_tables(
     from fkptjax.ode import ModelDerivatives, ODESolver, DP
 
     model_u = str(model).upper()
+    if model_u in ("HS", "NDGP", "LCDM", "GR"):
+        mg_variant = None
+
     if model_u == "HS":
         if bool(rescale_PS) is not True:
             raise ValueError("For model='HS', rescale_PS must be True (passed False).")
-        mg_variant = None
 
     k = jnp.asarray(k)
     pk = jnp.asarray(pk)
@@ -3966,8 +3967,9 @@ def Kfuncs_to_tables(
 
     derivs = ModelDerivatives(
         om=float(Om), ol=float(1.0 - Om),
-        fR0=float(fR0), beta2=float(beta2), nHS=float(nHS),
+        fR0_HS=float(fR0_HS), beta2=float(beta2), n_HS=float(n_HS),
         screening=int(screening), omegaBD=float(omegaBD),
+        r_c=float(r_c),
         model=str(model), mg_variant=str(mg_variant),
         mu0=float(mu0),
         beta_1=float(beta_1), lambda_1=float(lambda_1), exp_s=float(exp_s),
@@ -4003,11 +4005,12 @@ def Kfuncs_to_tables(
             Om=Om,
             model=model,
             mg_variant=mg_variant,
-            fR0=fR0,
+            fR0_HS=fR0_HS,
             beta2=beta2,
-            nHS=nHS,
+            n_HS=n_HS,
             screening=screening,
             omegaBD=omegaBD,
+            r_c=r_c,
             mu0=mu0,
             beta_1=beta_1,
             lambda_1=lambda_1,
@@ -4280,11 +4283,18 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         # Allow passing MG params even if the template cosmology (e.g. CAMB) does not define them.
         # Example: th.init.update(mg_params_override={"mu0": 0.5})
         mg_params_override=None,
-        nHS=1.0,
+
+        # HS / f(R)
+        fR0_HS=1e-15,
+        n_HS=1.0,
         beta2=1.0 / 6.0,
         screening=1,
         omegaBD=0.0,
-        fR0=1e-15,
+
+        # nDGP
+        r_c=1.0e30,
+
+        # backend / projection
         backend="jax",
         bias_scheme="folps",
         damping=None,
@@ -4334,85 +4344,139 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
     def _collect_mg_params(self, cosmo):
         """
-        Collect MG parameters either from cosmology or from self.options,
-        then apply mg_params_override (if provided) as the final authority.
+        Collect only the MG parameters relevant for the chosen fkpt model.
+
+        Resolution order:
+          1) cosmology object (if parameter exists there)
+          2) self.options
+          3) hard-coded defaults
+          4) mg_params_override wins over everything
         """
-        model_u = str(self.options.get("model", "HDKI")).upper()
+        model_u = str(self.options.get("model", "HDKI")).strip().upper()
+        variant_u = str(self.options.get("mg_variant", "mu_OmDE")).strip().upper()
+        override = dict(self.options.get("mg_params_override") or {})
 
-        # --------
-        # HS branch
-        # --------
-        if model_u == "HS":
-            out = dict(
-                fR0=float(self.options.get("fR0", 1e-15)),
-                nHS=float(self.options.get("nHS", 1.0)),
-                beta2=float(self.options.get("beta2", 1.0 / 6.0)),
-                screening=int(self.options.get("screening", 1)),
-                omegaBD=float(self.options.get("omegaBD", 0.0)),
-            )
-
-            override = self.options.get("mg_params_override") or {}
-            for k, v in dict(override).items():
-                out[k] = float(v)
-
-            return out
-
-        # --------
-        # HDKI branch
-        # --------
-
-        v_u = str(self.options.get("mg_variant", "mu_OmDE")).strip().upper()
-
-        defaults = dict(
-            mu0=0.0,
-            beta_1=1.0, lambda_1=0.0, exp_s=0.0,
-            mu1=1.0, mu2=1.0, mu3=1.0, mu4=1.0,
-            z_div=1.0, z_TGR=10.0, z_tw=0.5,
-            scale_bins=False,
-            k_TGR=0.001,
-            k_c=0.1,
-            k_S=0.5,
-            k_tw=0.01,
-            gamma_0=0.545454, gamma_a=0.0, t_k=100.0, d_s=0.0001,
-        )
-
-        req = {
-            "MU_OMDE": ["mu0"],
-            "BZ": ["beta_1", "lambda_1", "exp_s"],
-            "BINNING": ["mu1", "mu2", "mu3", "mu4", "z_div", "z_TGR", "z_tw",
-                        "scale_bins", "k_TGR", "k_c", "k_S", "k_tw"],
-            "GROWTH_INDEX": ["gamma_0", "gamma_a", "t_k", "d_s"],
-            "GROWTH_INDEX_YUKAWA": ["gamma_0", "gamma_a", "t_k", "d_s"],
-            "GR": [],
-        }
-
-        out = {}
-        for p in req.get(v_u, []):
-            # 1) try cosmology object
+        def _get(name, default):
+            # 1) cosmology object
             if cosmo is not None:
                 try:
-                    out[p] = float(cosmo[p])
-                    continue
+                    return float(cosmo[name])
                 except Exception:
                     pass
                 try:
-                    out[p] = float(getattr(cosmo, p))
-                    continue
+                    return float(getattr(cosmo, name))
                 except Exception:
                     pass
 
-            # 2) try options (init/update)
-            if p in self.options and self.options[p] is not None:
-                out[p] = float(self.options[p])
+            # 2) explicit option
+            value = self.options.get(name, None)
+            if value is not None:
+                return float(value)
+
+            # 3) default
+            return float(default)
+
+        # --------------------------------------------------
+        # HS / f(R)
+        # --------------------------------------------------
+        if model_u == "HS":
+            out = dict(
+                fR0_HS=_get("fR0_HS", 1e-15),
+                n_HS=_get("n_HS", 1.0),
+                beta2=_get("beta2", 1.0 / 6.0),
+                screening=int(_get("screening", 1)),
+                omegaBD=_get("omegaBD", 0.0),
+            )
+            out.update({k: float(v) for k, v in override.items()})
+            return out
+
+        # --------------------------------------------------
+        # nDGP
+        # --------------------------------------------------
+        if model_u == "NDGP":
+            out = dict(
+                r_c=_get("r_c", 1.0e30),
+            )
+            out.update({k: float(v) for k, v in override.items()})
+            return out
+
+        # --------------------------------------------------
+        # LCDM / GR
+        # --------------------------------------------------
+        if model_u in ("LCDM", "GR"):
+            out = {}
+            out.update({k: float(v) for k, v in override.items()})
+            return out
+
+        # --------------------------------------------------
+        # HDKI-like variants
+        # --------------------------------------------------
+        if model_u == "HDKI":
+            if variant_u in ("MU_OMDE", "MUOMDE"):
+                out = dict(
+                    mu0=_get("mu0", 0.0),
+                )
+            elif variant_u == "BZ":
+                out = dict(
+                    beta_1=_get("beta_1", 1.0),
+                    lambda_1=_get("lambda_1", 0.0),
+                    exp_s=_get("exp_s", 0.0),
+                )
             else:
-                out[p] = float(defaults[p])
+                raise ValueError(
+                    f"Unknown mg_variant={self.options.get('mg_variant')!r} for model='HDKI'. "
+                    "Expected 'mu_OmDE' or 'BZ'."
+                )
 
-        # 3) FINAL OVERRIDE: wins over cosmo/options/defaults
-        override = self.options.get("mg_params_override") or {}
-        for k, v in dict(override).items():
-            out[k] = float(v)
+            out.update({k: float(v) for k, v in override.items()})
+            return out
 
-        return out
+        # --------------------------------------------------
+        # Phenomenological variants
+        # --------------------------------------------------
+        if model_u == "PHENOM":
+            if variant_u == "BINNING":
+                out = dict(
+                    mu1=_get("mu1", 1.0),
+                    mu2=_get("mu2", 1.0),
+                    mu3=_get("mu3", 1.0),
+                    mu4=_get("mu4", 1.0),
+                    z_div=_get("z_div", 1.0),
+                    z_TGR=_get("z_TGR", 10.0),
+                    z_tw=_get("z_tw", 0.5),
+                    scale_bins=bool(self.options.get("scale_bins", False)),
+                    k_TGR=_get("k_TGR", 0.001),
+                    k_c=_get("k_c", 0.1),
+                    k_S=_get("k_S", 0.5),
+                    k_tw=_get("k_tw", 0.01),
+                )
+            elif variant_u == "GROWTH_INDEX":
+                out = dict(
+                    gamma_0=_get("gamma_0", 0.545454),
+                    gamma_a=_get("gamma_a", 0.0),
+                    t_k=_get("t_k", 100.0),
+                    d_s=_get("d_s", 0.0001),
+                )
+            elif variant_u == "GROWTH_INDEX_YUKAWA":
+                out = dict(
+                    gamma_0=_get("gamma_0", 0.545454),
+                    gamma_a=_get("gamma_a", 0.0),
+                    t_k=_get("t_k", 100.0),
+                    d_s=_get("d_s", 0.0001),
+                )
+            else:
+                raise ValueError(
+                    f"Unknown mg_variant={self.options.get('mg_variant')!r} for model='PHENOM'. "
+                    "Expected 'binning', 'growth_index', or 'growth_index_yukawa'."
+                )
+
+            out.update({k: float(v) for k, v in override.items()})
+            return out
+
+        raise ValueError(
+            f"Unknown model={self.options.get('model')!r}. "
+            "Expected 'LCDM'/'GR', 'HS', 'NDGP', 'HDKI', or 'PHENOM'."
+        )
 
     def calculate(self):
         """
@@ -4426,12 +4490,18 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         cosmo = getattr(self.template, "cosmo", None)
 
-        model = str(self.options.get("model", "HDKI"))
+        model = str(self.options.get("model", "HDKI")).strip()
         model_u = model.upper()
         rescale_PS = bool(self.options.get("rescale_PS", False))
 
         if model_u == "HS" and (not rescale_PS):
             raise ValueError("You set model='HS' but rescale_PS=False. This is forbidden by design.")
+
+        # mg_variant matters only for HDKI / PHENOM
+        if model_u in ("HDKI", "PHENOM"):
+            mg_variant = str(self.options.get("mg_variant", "mu_OmDE")).strip()
+        else:
+            mg_variant = None
 
         mg_params = self._collect_mg_params(cosmo)
 
@@ -4446,7 +4516,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             NR=10,
             beyond_eds=bool(self.options.get("beyond_eds", False)),
             model=model,
-            mg_variant=str(self.options.get("mg_variant", "mu_OmDE")),
+            mg_variant=mg_variant,
             rescale_PS=rescale_PS,
             xnow=-3.912023,
             ode_method="RKQS",

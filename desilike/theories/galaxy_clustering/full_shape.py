@@ -3332,29 +3332,38 @@ class FOLPSv2TracerBispectrumMultipoles(BaseTracerPTBispectrumMultipoles):
 
 
 class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
-    _default_options = dict(shotnoise=1e4, model='VDG_infty')
+    _default_options = dict(shotnoise=1e4, model='VDG_infty', norm_by_shotnoise=False)
 
-    def initialize(self, k=None, ells=(0, 2, 4), tracers=None, z=1.0, cosmo=None, fiducial='DESI', **kwargs):
+    def initialize(self, k=None, ells=None, tracers=None, z=1.0, cosmo=None, fiducial='DESI', **kwargs):
+        self.options: dict
+
+        if ells is None:
+            ells = (0,) if kwargs.get('model', 'VDG_infty') == 'RS' else (0, 2, 4)
         super().initialize(k=k, ells=ells, tracers=tracers, **kwargs)
         self.z = z
         self.fiducial = get_cosmo(fiducial)
-        self.cosmo = cosmo
-        if cosmo is None:
-            self.cosmo = Cosmoprimo(fiducial=self.fiducial)
+        self.cosmo = cosmo or Cosmoprimo(fiducial=self.fiducial)
+        self.cosmo.init.update(massive_neutrino='nonu' not in self.options['model'])
+        self.cosmo = self.narrow_cosmo_params_range(self.cosmo)
         self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode='geometry', cosmo=self.cosmo)
 
         from comet import comet
         self.comet = comet(use_Mpc=False, model=self.options['model'])  # type: ignore
-        comet_fid = self._cosmoprimo_to_comet(self.fiducial)
-        self.comet.define_fiducial_cosmology(comet_fid)
+        if self.options['norm_by_shotnoise']:
+            self.comet.define_nbar(nbar=self.nbar)
 
     def calculate(self, **params):
-        comet_cosmo = self._cosmoprimo_to_comet(self.cosmo)
+        comet_cosmo = self.cosmoprimo_to_comet(self.cosmo)
         defaults = {param: 0.0 for param in self.decode_params.deterministic + self.decode_params.stochastic}
         defaults |= dict(b1=1.0, avir=0.0)
         params = self.decode_params(params, defaults=defaults)
+        if 'VDG_infty' not in self.options['model']:
+            params.pop('avir', 0.0)
+        if 'nonu' in self.options['model']:
+            comet_cosmo.pop('Mnu', None)
         q_tr_lo = [self.apeffect.qper, self.apeffect.qpar]
-        poles = self.comet.Pell(self.k, comet_cosmo | params, ell=list(self.ells), de_model='lambda', q_tr_lo=q_tr_lo)
+        self.de_model = self.get_de_model(self.cosmo)
+        poles = self.comet.Pell(self.k, comet_cosmo | params, ell=list(self.ells), de_model=self.de_model, q_tr_lo=q_tr_lo)
         self.power = jnp.vstack([poles[f'ell{ell}'] for ell in self.ells])
 
     @classmethod
@@ -3366,7 +3375,34 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             ntracers=1,
         )
 
-    def _cosmoprimo_to_comet(self, cosmo):
+    @classmethod
+    def emulator_params_range(cls):
+        # https://comet-emu.readthedocs.io/en/latest/spaceparams.html#ranges-of-emulated-parameters
+        return dict(omega_cdm=(0.08, 0.16), omega_b=(0.01930, 0.02535), n_s=(0.90, 1.03), mnu=(0.0, 1.0), A_s=(1e-9, 3.5e-9))
+
+    @classmethod
+    def narrow_cosmo_params_range(cls, cosmo):
+        def intersect(limits1, limits2):
+            return (max(limits1[0], limits2[0]), min(limits1[1], limits2[1]))
+        for basename, limits in cls.emulator_params_range().items():
+            for param in cosmo.init.params.select(basename=basename):
+                prior = param.prior
+                limits = intersect(prior.limits, limits)
+                param.update(prior=dict(dist=prior.dist, limits=limits, **prior.attrs))
+        return cosmo
+
+    @classmethod
+    def get_de_model(cls, cosmo):
+        # XXX: implementation as follows is very slow, return 'w0wa' as a workaround
+        return 'w0wa'
+        varied_params = [param for param in ('w0_fld', 'wa_fld') if cosmo.all_params[param].varied]
+        if 'w0_fld' in varied_params and 'wa_fld' in varied_params:
+            return 'w0wa'
+        if 'w0_fld' in varied_params:
+            return 'w0'
+        return 'lambda'
+
+    def cosmoprimo_to_comet(self, cosmo):
         comet_cosmo = {}
         comet_cosmo['wc'] = cosmo['omega_cdm']
         comet_cosmo['wb'] = cosmo['omega_b']

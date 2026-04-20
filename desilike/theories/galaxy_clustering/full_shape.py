@@ -3329,3 +3329,57 @@ class FOLPSv2TracerBispectrumMultipoles(BaseTracerPTBispectrumMultipoles):
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
+
+
+class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
+    _default_options = dict(shotnoise=1e4, model='VDG_infty')
+
+    def initialize(self, k=None, ells=(0, 2, 4), tracers=None, z=1.0, cosmo=None, fiducial='DESI', **kwargs):
+        super().initialize(k=k, ells=ells, tracers=tracers, **kwargs)
+        self.z = z
+        self.fiducial = get_cosmo(fiducial)
+        self.cosmo = cosmo
+        if cosmo is None:
+            self.cosmo = Cosmoprimo(fiducial=self.fiducial)
+        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode='geometry', cosmo=self.cosmo)
+
+        from comet import comet
+        self.comet = comet(use_Mpc=False, model=self.options['model'])  # type: ignore
+        comet_fid = self._cosmoprimo_to_comet(self.fiducial)
+        self.comet.define_fiducial_cosmology(comet_fid)
+
+    def calculate(self, **params):
+        comet_cosmo = self._cosmoprimo_to_comet(self.cosmo)
+        defaults = {param: 0.0 for param in self.decode_params.deterministic + self.decode_params.stochastic}
+        defaults |= dict(b1=1.0, avir=0.0)
+        params = self.decode_params(params, defaults=defaults)
+        q_tr_lo = [self.apeffect.qper, self.apeffect.qpar]
+        poles = self.comet.Pell(self.k, comet_cosmo | params, ell=list(self.ells), de_model='lambda', q_tr_lo=q_tr_lo)
+        self.power = jnp.vstack([poles[f'ell{ell}'] for ell in self.ells])
+
+    @classmethod
+    def _get_multitracer(cls, tracers=None):
+        return MultitracerBiasParameters(
+            tracers=tracers,
+            deterministic=['b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo'], # 'avir' is universal?
+            stochastic=['NP0', 'NP20', 'NP22'],
+            ntracers=1,
+        )
+
+    def _cosmoprimo_to_comet(self, cosmo):
+        comet_cosmo = {}
+        comet_cosmo['wc'] = cosmo['omega_cdm']
+        comet_cosmo['wb'] = cosmo['omega_b']
+        comet_cosmo['h'] = cosmo['h']
+        comet_cosmo['ns'] = cosmo['n_s']
+        comet_cosmo['As'] = cosmo['A_s'] * 1e9  # comet uses As in units of 1e-9
+        comet_cosmo['Mnu'] = cosmo['m_ncdm']
+        comet_cosmo['w0'] = cosmo['w0_fld']
+        comet_cosmo['wa'] = cosmo['wa_fld']
+        comet_cosmo['Ok'] = cosmo['Omega_k']
+        comet_cosmo['z'] = self.z
+        return comet_cosmo
+
+    @classmethod
+    def install(cls, installer):
+         installer.pip('git+https://gitlab.com/aegge/comet-emu.git')

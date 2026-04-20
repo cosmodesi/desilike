@@ -1,6 +1,8 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+import pytest
+from pytest import approx
 
 
 def test_templates():
@@ -667,3 +669,134 @@ def test_png():
     test_theory(PNGTracerPowerSpectrumMultipoles)
     results = {(0, 'matter'): 10551095.16727103, (1, 'matter'): 10457917.48575002, (0, 'prim'): 10551235.69558888, (1, 'prim'): 10458120.89855347}
     test_theory(PNGTracerVelocityPowerSpectrumMultipoles, tests=['plotting'])
+
+
+class TestCOMET:
+    @pytest.fixture(scope='class')
+    def pk_theory(self):
+        # pre-evaluated object shared between tests with default options and parameters
+        from desilike.theories.galaxy_clustering import COMETTracerPowerSpectrumMultipoles
+        theory = COMETTracerPowerSpectrumMultipoles()
+        theory()
+        return theory
+
+    def test_pk_theory(self, pk_theory):
+        assert pk_theory.k is not None
+        assert pk_theory.z is not None
+        assert pk_theory.ells is not None
+        assert np.isfinite(pk_theory()).all(), "Non-finite result from COMET power spectrum theory evaluation"
+
+    def test_plot_pk_theory(self, pk_theory):
+        pk_theory.plot(show=False)
+        plt.close(plt.gcf())
+
+    def test_cosmo_params_ranges(self, pk_theory):
+        def is_subset(small, large):
+            return small[0] >= large[0] and small[1] <= large[1]
+        for basename, limits in pk_theory.emulator_params_range().items():
+            for param in pk_theory.all_params.select(basename=basename):
+                assert is_subset(param.prior.limits, limits)
+
+    @pytest.mark.xfail(reason='not implemented yet')
+    def test_de_model(self):
+        from desilike.theories.primordial_cosmology import Cosmoprimo
+        from desilike.theories.galaxy_clustering import COMETTracerPowerSpectrumMultipoles
+        cosmo = Cosmoprimo()
+        theory = COMETTracerPowerSpectrumMultipoles(cosmo=cosmo)
+        theory()
+        assert theory.de_model == 'lambda'
+        cosmo.params['w0_fld'].update(fixed=False)
+        theory()
+        assert theory.de_model == 'w0'
+        cosmo.params['wa_fld'].update(fixed=False)
+        theory()
+        assert theory.de_model == 'w0wa'
+
+    def test_model_option(self):
+        from desilike.theories.galaxy_clustering import COMETTracerPowerSpectrumMultipoles
+        theory = COMETTracerPowerSpectrumMultipoles()
+        assert np.isfinite(theory()).all(), "Non-finite result from COMET power spectrum theory evaluation"
+        assert theory.options['model'] == 'VDG_infty'  # default
+
+        theory.init.update(model='VDG_infty')
+        theory.initialize()
+        assert theory.options['model'] == 'VDG_infty'
+
+        theory.init.update(model='EFT')
+        assert np.isfinite(theory()).all(), "Non-finite result from COMET power spectrum theory evaluation"
+        assert theory.options['model'] == 'EFT'
+
+        theory.init.update(model='RS')
+        assert np.isfinite(theory()).all(), "Non-finite result from COMET power spectrum theory evaluation"
+        assert theory.options['model'] == 'RS'
+        # by default ells == (0,)
+        assert theory.ells == (0,)
+    
+    def test_apeffect(self):
+        from desilike.theories.galaxy_clustering import COMETTracerPowerSpectrumMultipoles
+        from unittest.mock import MagicMock
+
+        theory = COMETTracerPowerSpectrumMultipoles()
+        theory()
+        assert theory.comet.params['q_tr'].item() == approx(1.0)
+        assert theory.comet.params['q_lo'].item() == approx(1.0)
+
+        # make sure AP parameters are computed by desilike
+        apeffect = MagicMock()
+        apeffect.qpar = 0.8
+        apeffect.qper = 1.2
+        theory.apeffect = apeffect
+        theory.calculate()
+        assert theory.comet.params['q_tr'].item() == approx(apeffect.qper)
+        assert theory.comet.params['q_lo'].item() == approx(apeffect.qpar)
+    
+    def test_norm_by_shotnoise(self):
+        from desilike.theories.galaxy_clustering import COMETTracerPowerSpectrumMultipoles
+        
+        shotnoise, NP0 = 1e4, 1.0
+        theory = COMETTracerPowerSpectrumMultipoles(ells=(0,))
+        poles = theory(NP0=NP0)
+        theory.init.update(norm_by_shotnoise=True, shotnoise=shotnoise)
+        diff = theory(NP0=NP0) - poles
+        np.testing.assert_allclose(diff, shotnoise - NP0)
+
+    def test_massless_neutrino(self):
+        from desilike.theories.galaxy_clustering import COMETTracerPowerSpectrumMultipoles
+
+        for model in ['VDG_infty_nonu', 'EFT_nonu', 'RS_nonu']:
+            theory = COMETTracerPowerSpectrumMultipoles(model='VDG_infty_nonu')
+            theory()
+            assert np.isfinite(theory()).all(), f"Non-finite result from COMET power spectrum theory evaluation with model {model}"
+            assert theory.cosmo.m_ncdm_tot == 0
+
+    def test_namespace(self):
+        from desilike.theories.galaxy_clustering import COMETTracerPowerSpectrumMultipoles
+
+        theory = COMETTracerPowerSpectrumMultipoles()
+
+        namespace = 'LRG'
+        for param in theory.init.params:
+            param.update(namespace=namespace)
+
+        basenames = theory.init.params.basenames()
+        theory()
+
+        for param in theory.all_params:
+            if param.basename in basenames:
+                assert param.namespace == namespace, f"Parameter {param.name} lost namespace assignment"
+
+        # Reset namespaces
+        for param in theory.init.params:
+            param.update(namespace=None)
+
+        theory.init.update(tracers=('LRG',))
+        for param in theory.init.params:
+            if param.basename in basenames and param.basename not in ['sigmapar', 'sigmaper', 'avir']:
+                assert param.namespace == namespace, f"Parameter {param.name} did not propapate namespace"
+
+        # Reset tracers
+        theory.init.update(tracers=None)
+        # Reset namespaces
+        for param in theory.init.params:
+            param.update(namespace=None)
+        theory()

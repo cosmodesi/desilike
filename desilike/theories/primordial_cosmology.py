@@ -92,7 +92,8 @@ class Cosmoprimo(BasePrimordialCosmology):
         - :class:`cosmoprimo.Cosmology`: Cosmology instance
 
     massive_neutrino : bool, optional
-        Assuming massive neutrinos, by default True. If `fiducial` is given, this option will be inferred from `fiducial`.
+        Whether to assume massive neutrinos. If not specified, this option will be inferred from `fiducial` if `fiducial` is given,
+        otherwise it will be set to `True` by default.
 
     **kwargs : dict
         Optionally, dictionary of parameters to update ``fiducial`` with.
@@ -101,15 +102,16 @@ class Cosmoprimo(BasePrimordialCosmology):
     config_fn = 'primordial_cosmology.yaml'
     _likelihood_catch_errors = (CosmologyError,)
 
-    def initialize(self, fiducial=None, massive_neutrino=True, **kwargs):
+    def initialize(self, fiducial=None, massive_neutrino=None, **kwargs):
         # kwargs is engine, extra_params
         fiducial_input = bool(fiducial)
         if fiducial is None:
             self.fiducial = Cosmology()
         else:
             self.fiducial = get_cosmo(fiducial)
-            massive_neutrino = self.fiducial.m_ncdm.size != 0
             kwargs['engine'] = self.fiducial.engine
+        if massive_neutrino is None:
+            massive_neutrino = True if fiducial is None else self.fiducial.m_ncdm.size != 0
 
         self.overrides = {}
         if not massive_neutrino:

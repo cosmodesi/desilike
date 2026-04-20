@@ -80,7 +80,13 @@ def test_cosmoprimo():
 
 def test_massless_neutrino():
     from cosmoprimo.fiducial import DESI
-    
+
+    # default: massive neutrinos
+    cosmo = Cosmoprimo()
+    cosmo()
+    assert cosmo.m_ncdm_tot != 0
+
+    # set massive_neutrino to False
     cosmo = Cosmoprimo(massive_neutrino=False)
     cosmo.init.params['m_ncdm'].update(fixed=False)
     cosmo()
@@ -88,8 +94,17 @@ def test_massless_neutrino():
     assert cosmo.all_params['m_ncdm'].value == 0
     assert cosmo.all_params['m_ncdm'].fixed
 
-    fiducial = DESI().clone(m_ncdm=[])
-    cosmo = Cosmoprimo(fiducial=fiducial)
+    # inferred from fiducial
+    cosmo = Cosmoprimo(fiducial=DESI())
+    cosmo()
+    assert cosmo.m_ncdm_tot != 0
+
+    cosmo = Cosmoprimo(fiducial=DESI().clone(m_ncdm=[]))
+    cosmo()
+    assert cosmo.m_ncdm_tot == 0
+
+    # option massive_neutrino takes precedence over fiducial
+    cosmo = Cosmoprimo(fiducial=DESI(), massive_neutrino=False)
     cosmo()
     assert cosmo.m_ncdm_tot == 0
 

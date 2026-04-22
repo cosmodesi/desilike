@@ -3752,6 +3752,7 @@ def Rescaling_MG(
     pk_ext,
     pk_now_ext,
     *,
+    k_ext_np=None,
     derivs,
     solver,
     Om,
@@ -3822,39 +3823,40 @@ def Rescaling_MG(
 
     def make_derivs(**updates):
         pars = dict(
-            om=float(Om), ol=float(1.0 - Om),
-            fR0_HS=float(fR0_HS), beta2=float(beta2), n_HS=float(n_HS),
-            screening=int(screening), omegaBD=float(omegaBD),
-            r_c=float(r_c),
+            om=Om, ol=1.0 - Om,
+            fR0_HS=fR0_HS, beta2=beta2, n_HS=n_HS,
+            screening=int(screening), omegaBD=omegaBD,
+            r_c=r_c,
             model=str(model), mg_variant=str(mg_variant),
-            mu0=float(mu0),
-            beta_1=float(beta_1), lambda_1=float(lambda_1), exp_s=float(exp_s),
-            mu1=float(mu1), mu2=float(mu2), mu3=float(mu3), mu4=float(mu4),
-            z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
+            mu0=mu0,
+            beta_1=beta_1, lambda_1=lambda_1, exp_s=exp_s,
+            mu1=mu1, mu2=mu2, mu3=mu3, mu4=mu4,
+            z_div=z_div, z_TGR=z_TGR, z_tw=z_tw,
             scale_bins=bool(scale_bins),
-            k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw),
-            gamma_0=float(gamma_0), gamma_a=float(gamma_a), t_k=float(t_k), d_s=float(d_s),
+            k_TGR=k_TGR, k_S=k_S, k_c=k_c, k_tw=k_tw,
+            gamma_0=gamma_0, gamma_a=gamma_a, t_k=t_k, d_s=d_s,
         )
         pars.update(updates)
         return ModelDerivatives(**pars)
 
     def make_gr_derivs():
         return ModelDerivatives(
-            om=float(Om), ol=float(1.0 - Om),
-            fR0_HS=0.0, beta2=float(beta2), n_HS=float(n_HS),
-            screening=int(screening), omegaBD=float(omegaBD),
-            r_c=float(r_c),
+            om=Om, ol=1.0 - Om,
+            fR0_HS=0.0, beta2=beta2, n_HS=n_HS,
+            screening=int(screening), omegaBD=omegaBD,
+            r_c=r_c,
             model='HDKI', mg_variant='mu_OmDE',
             mu0=0.0,
             beta_1=1.0, lambda_1=0.0, exp_s=0.0,
             mu1=1.0, mu2=1.0, mu3=1.0, mu4=1.0,
-            z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
+            z_div=z_div, z_TGR=z_TGR, z_tw=z_tw,
             scale_bins=bool(scale_bins),
-            k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw),
-            gamma_0=0.545454, gamma_a=0.0, t_k=float(t_k), d_s=float(d_s),
+            k_TGR=k_TGR, k_S=k_S, k_c=k_c, k_tw=k_tw,
+            gamma_0=0.545454, gamma_a=0.0, t_k=t_k, d_s=d_s,
         )
 
-    k_ext_np = np.asarray(k_ext, dtype=float)
+    if k_ext_np is None:
+        k_ext_np = np.asarray(k_ext, dtype=float)
 
     k_growth = build_k_growth(
         k_ext_np=k_ext_np,
@@ -3956,6 +3958,9 @@ def Kfuncs_to_tables(
         if bool(rescale_PS) is not True:
             raise ValueError("For model='HS', rescale_PS must be True (passed False).")
 
+    # Save concrete numpy k before jnp.asarray makes it an abstract tracer.
+    _k_np_orig = np.asarray(k, dtype=float)
+
     k = jnp.asarray(k)
     pk = jnp.asarray(pk)
     pk_now = jnp.asarray(pk_now)
@@ -3963,23 +3968,30 @@ def Kfuncs_to_tables(
     k_ext, pk_ext = extrapolate_pklin(k, pk)
     _, pk_now_ext = extrapolate_pklin(k, pk_now)
 
-    solver = ODESolver(zout=float(z), xnow=float(xnow), method=str(ode_method))
+    solver = ODESolver(zout=z, xnow=xnow, method=str(ode_method))
 
     derivs = ModelDerivatives(
-        om=float(Om), ol=float(1.0 - Om),
-        fR0_HS=float(fR0_HS), beta2=float(beta2), n_HS=float(n_HS),
-        screening=int(screening), omegaBD=float(omegaBD),
-        r_c=float(r_c),
+        om=Om, ol=1.0 - Om,
+        fR0_HS=fR0_HS, beta2=beta2, n_HS=n_HS,
+        screening=int(screening), omegaBD=omegaBD,
+        r_c=r_c,
         model=str(model), mg_variant=str(mg_variant),
-        mu0=float(mu0),
-        beta_1=float(beta_1), lambda_1=float(lambda_1), exp_s=float(exp_s),
-        mu1=float(mu1), mu2=float(mu2), mu3=float(mu3), mu4=float(mu4),
-        z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
-        scale_bins=bool(scale_bins), k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw),
-        gamma_0=float(gamma_0), gamma_a=float(gamma_a), t_k=float(t_k), d_s=float(d_s),
+        mu0=mu0,
+        beta_1=beta_1, lambda_1=lambda_1, exp_s=exp_s,
+        mu1=mu1, mu2=mu2, mu3=mu3, mu4=mu4,
+        z_div=z_div, z_TGR=z_TGR, z_tw=z_tw,
+        scale_bins=bool(scale_bins), k_TGR=k_TGR, k_S=k_S, k_c=k_c, k_tw=k_tw,
+        gamma_0=gamma_0, gamma_a=gamma_a, t_k=t_k, d_s=d_s,
     )
 
-    k_ext_np = np.asarray(k_ext, dtype=float)
+    # k_ext is produced by jnp.concatenate inside extrapolate_pklin, so it becomes
+    # an abstract tracer when pk is traced under jit, even though k_ext does not
+    # depend on pk.  Recompute the concrete k-grid directly from the original k
+    # using numpy so the ODE solver always receives a concrete array.
+    _logk = np.log10(_k_np_orig)
+    _k_low  = 10.0 ** np.linspace(np.log10(1e-7),   _logk[0]  - (_logk[1]  - _logk[0]),  16)
+    _k_high = 10.0 ** np.linspace(_logk[-1] + (_logk[-1] - _logk[-2]), np.log10(200.0), 64)
+    k_ext_np = np.concatenate([_k_low, _k_np_orig, _k_high])
 
     Y = DP(k_ext_np, derivs, solver)
     D_ext, Dp_ext = Y[0], Y[1]
@@ -3993,13 +4005,14 @@ def Kfuncs_to_tables(
         jnp.sum(jnp.where(mask0, fk_ext, 0.0)) / jnp.maximum(jnp.sum(mask0), 1),
         jnp.mean(fk_ext[:nhead]),
     )
-    f0 = float(f0_jax)
+    f0 = f0_jax
 
     if bool(rescale_PS):
         pk_ext, pk_now_ext = Rescaling_MG(
             k_ext,
             pk_ext,
             pk_now_ext,
+            k_ext_np=k_ext_np,
             derivs=derivs,
             solver=solver,
             Om=Om,
@@ -4035,12 +4048,12 @@ def Kfuncs_to_tables(
         )
 
     if kmin is None:
-        kmin = float(jnp.maximum(1e-3, jnp.min(k)))
+        kmin = float(max(1e-3, float(_k_np_orig[0])))
     if kmax is None:
-        kmax = float(jnp.minimum(0.5, jnp.max(k)))
+        kmax = float(min(0.5, float(_k_np_orig[-1])))
 
     init_data = setup_kfunctions(
-        k_in=k_ext,
+        k_in=k_ext_np,
         kmin=float(kmin),
         kmax=float(kmax),
         Nk=int(Nk_kernel),
@@ -4054,35 +4067,37 @@ def Kfuncs_to_tables(
     fk_norm_out = fk_out / f0
 
     ff = fk_ext / f0
-    sigma2w = float(1.0 / (6.0 * jnp.pi**2) * simpson(pk_ext * ff**2, x=k_ext))
-    sigma2w_NW = float(1.0 / (6.0 * jnp.pi**2) * simpson(pk_now_ext * ff**2, x=k_ext))
+    sigma2w = 1.0 / (6.0 * jnp.pi**2) * simpson(pk_ext * ff**2, x=k_ext)
+    sigma2w_NW = 1.0 / (6.0 * jnp.pi**2) * simpson(pk_now_ext * ff**2, x=k_ext)
 
-    p = jnp.exp(jnp.linspace(jnp.log(1e-6), jnp.log(float(pmax_bao)), int(Np_bao)))
+    # Pre-compute the BAO p-grid and Bessel values as concrete numpy arrays so
+    # that folpsv2.spherical_jn_backend (which calls np.asarray internally) is
+    # never called on an abstract JAX tracer inside jit.
+    _p_np = np.exp(np.linspace(np.log(1e-6), np.log(float(pmax_bao)), int(Np_bao)))
+    _j0_np = np.asarray(folpsv2.spherical_jn_backend(0, _p_np * float(rbao)))
+    _j2_np = np.asarray(folpsv2.spherical_jn_backend(2, _p_np * float(rbao)))
+    p    = jnp.asarray(_p_np)
+    _j0  = jnp.asarray(_j0_np)
+    _j2  = jnp.asarray(_j2_np)
+
     PSL_NW = interp(p, k_ext, pk_now_ext)
 
-    sigma2_NW = float(
+    sigma2_NW = (
         1.0 / (6.0 * jnp.pi**2)
-        * simpson(
-            PSL_NW * (
-                1.0
-                - folpsv2.spherical_jn_backend(0, p * float(rbao))
-                + 2.0 * folpsv2.spherical_jn_backend(2, p * float(rbao))
-            ),
-            x=p,
-        )
+        * simpson(PSL_NW * (1.0 - _j0 + 2.0 * _j2), x=p)
     )
-    delta_sigma2_NW = float(
+    delta_sigma2_NW = (
         1.0 / (2.0 * jnp.pi**2)
-        * simpson(PSL_NW * folpsv2.spherical_jn_backend(2, p * float(rbao)), x=p)
+        * simpson(PSL_NW * _j2, x=p)
     )
 
     if bool(beyond_eds):
         from fkptjax.ode import kernel_constants
         KA, KAp, KR1, KR1p = kernel_constants(f0=f0, derivs=derivs, solver=solver)
-        A = float(KA)
-        ApOverf0 = float(KAp) / float(f0)
-        CFD3 = float(KR1)
-        CFD3p = float(KR1p)
+        A = KA
+        ApOverf0 = KAp / f0
+        CFD3 = KR1
+        CFD3p = KR1p
     else:
         A = 1.0
         ApOverf0 = 0.0
@@ -4357,24 +4372,28 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         override = dict(self.options.get("mg_params_override") or {})
 
         def _get(name, default):
-            # 1) cosmology object
+            # 1) cosmology object — return as-is to preserve JAX traceability
             if cosmo is not None:
                 try:
-                    return float(cosmo[name])
+                    v = cosmo[name]
+                    if v is not None:
+                        return v
                 except Exception:
                     pass
                 try:
-                    return float(getattr(cosmo, name))
+                    v = getattr(cosmo, name, None)
+                    if v is not None:
+                        return v
                 except Exception:
                     pass
 
-            # 2) explicit option
+            # 2) explicit option (always a concrete Python scalar set at init)
             value = self.options.get(name, None)
             if value is not None:
-                return float(value)
+                return value
 
-            # 3) default
-            return float(default)
+            # 3) default (always a Python literal)
+            return default
 
         # --------------------------------------------------
         # HS / f(R)
@@ -4387,7 +4406,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                 screening=int(_get("screening", 1)),
                 omegaBD=_get("omegaBD", 0.0),
             )
-            out.update({k: float(v) for k, v in override.items()})
+            out.update(override)
             return out
 
         # --------------------------------------------------
@@ -4397,7 +4416,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             out = dict(
                 r_c=_get("r_c", 1.0e30),
             )
-            out.update({k: float(v) for k, v in override.items()})
+            out.update(override)
             return out
 
         # --------------------------------------------------
@@ -4405,7 +4424,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         # --------------------------------------------------
         if model_u in ("LCDM", "GR"):
             out = {}
-            out.update({k: float(v) for k, v in override.items()})
+            out.update(override)
             return out
 
         # --------------------------------------------------
@@ -4428,7 +4447,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                     "Expected 'mu_OmDE' or 'BZ'."
                 )
 
-            out.update({k: float(v) for k, v in override.items()})
+            out.update(override)
             return out
 
         # --------------------------------------------------
@@ -4470,7 +4489,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                     "Expected 'binning', 'growth_index', or 'growth_index_yukawa'."
                 )
 
-            out.update({k: float(v) for k, v in override.items()})
+            out.update(override)
             return out
 
         raise ValueError(
@@ -4506,8 +4525,8 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         mg_params = self._collect_mg_params(cosmo)
 
         fkpt_params = dict(
-            z=float(self.z),
-            Om=float(cosmo["Omega_m"]),
+            z=self.z,
+            Om=cosmo["Omega_m"],
             kmin=float(max(1e-3, float(jnp.min(self.k)))),
             kmax=float(min(0.5, float(jnp.max(self.k)))),
             Nk_kernel=int(min(len(self.k), 240)),
@@ -4534,9 +4553,9 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
         extra = 0
 
-        kt = np.asarray(table[0])
-        fk_norm = np.asarray(table[2])
-        f0_mg = float(table[-1])
+        kt = jnp.asarray(table[0])
+        fk_norm = jnp.asarray(table[2])
+        f0_mg = table[-1]
         fk_mg = fk_norm * f0_mg
 
         calA, calAp, CFD3, CFD3p = kcs

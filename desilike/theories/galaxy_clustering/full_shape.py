@@ -1975,8 +1975,8 @@ def folps_combine_bias_terms_pkmu(k, mu, jac, f0, table, table_now, sigma2t, par
 
 class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
-    _default_options = dict(kernels='fk')
-    _pt_attrs = ['kap', 'muap', 'table', 'table_now', 'sigma2t', 'f0', 'jac']
+    _default_options = dict(kernels='fk', use_IDE=False, ide_variant=None)
+    _pt_attrs = ['kap', 'muap', 'table', 'table_now', 'sigma2t', 'f0', 'jac', 'f_IDE']
 
     def initialize(self, k=None, ells=(0, 2, 4), mu=6, template=None, z=None, **kwargs):
         self._set_options(k=k, ells=ells, **kwargs)
@@ -2005,6 +2005,8 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         k = FOLPS.kTout
         jac, kap, muap = self.template.ap_k_mu(self.k, self.to_poles.mu)
         FOLPS.f0 = f0 = self.template.f0  # for Sigma2Total
+        if self.options['use_IDE']:
+            FOLPS.f0 = f0 = self.template.f_IDE  # for Sigma2Total
         table = FOLPS.Table_interp(kap, k, FOLPS.TableOut_interp(k))
         table_now = FOLPS.TableOut_NW_interp(k)
         sigma2t = FOLPS.Sigma2Total(k, muap, table_now)
@@ -2012,6 +2014,8 @@ class FOLPSPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         self.pt = Namespace(kap=kap, muap=muap, table=table, table_now=table_now, sigma2t=sigma2t, f0=f0, jac=jac)
         self.sigma8 = self.template.sigma8
         self.fsigma8 = self.template.f * self.sigma8
+        if self.options['use_IDE']:
+            self.fsigma8 = self.template.f_IDE * self.sigma8
 
     def combine_bias_terms_poles(self, pars, nd=1e-4):
         return self.to_poles(folps_combine_bias_terms_pkmu(self.pt.kap, self.pt.muap, self.pt.jac, self.pt.f0,
@@ -2075,7 +2079,7 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipoles):
     - https://arxiv.org/abs/2208.02791
     - https://github.com/henoriega/FOLPS-nu
     """
-    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4)
+    _default_options = dict(freedom=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4, use_IDE=False, ide_variant=None)
 
     @classmethod
     def _get_multitracer(cls, tracers=None, prior_basis='physical'):
@@ -2155,6 +2159,8 @@ class FOLPSTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipoles):
             params = self.decode_params(params, defaults={f'sn{i:d}p': 0. for i in [0, 2]})
             sigma8 = self.pt.sigma8
             f = self.pt.fsigma8 / sigma8
+            if self.options['use_IDE']:
+                f = self.pt.f_IDE * sigma8
             # b1E = b1L + 1
             # b2E = 8/21 * b1L + b2L
             # bsE = -4/7 b1L + bsL
@@ -2765,10 +2771,10 @@ def _get_bispectrum_multipoles_folpsv2(
 
 class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
-    _default_options = dict(kernels='fk', rbao=104., A_full=True, remove_DeltaP=False, backend='jax')
+    _default_options = dict(kernels='fk', rbao=104., A_full=True, remove_DeltaP=False, backend='jax', use_IDE=False, ide_variant=None)
 
     # 'qpar','qper','f','f0',
-    _pt_attrs = ['jac', 'kap', 'muap', 'table', 'table_now', 'scalars', 'scalars_now', 'A_full', 'remove_DeltaP', 'qpar', 'qper', 'f', 'f0', 'pklir']
+    _pt_attrs = ['jac', 'kap', 'muap', 'table', 'table_now', 'scalars', 'scalars_now', 'A_full', 'remove_DeltaP', 'qpar', 'qper', 'f', 'f0', 'pklir', 'f_IDE']
 
     def initialize(self, k=None, ells=(0, 2, 4), mu=6, template=None, z=None, **kwargs):
         self._set_options(k=k, ells=ells, **kwargs)
@@ -2785,8 +2791,16 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         import folps as folpsv2
         self.z = self.template.z
         cosmo_params = {}
-        cosmo_params['pkttlin'] = self.template.pk_dd * self.template.fk**2
-        cosmo_params['f0'] = self.template.f0
+        # Replacing growth rates with f_IDE for IDE models
+        f_eff = self.template.f_IDE if self.options['use_IDE'] else self.template.f
+        f0_eff = self.template.f_IDE if self.options['use_IDE'] else self.template.f0
+        cosmo_params['pkttlin'] = self.template.pk_dd * f_eff**2
+        cosmo_params['f0'] = f0_eff
+        cosmo_params['f_IDE'] = self.template.f_IDE
+        if self.options['use_IDE']:
+            cosmo_params['fk'] = self.template.f_IDE
+        # using EdS kernels for IDE models
+        kernels = 'eds' if self.options['use_IDE'] else self.options['kernels']
 
         if getattr(self, '_get_non_linear', None) is None:
             # from folpsv2 import NonLinearPowerSpectrumCalculator
@@ -2794,7 +2808,7 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             def _get_non_linear(pk_dd, pknow_dd, **cosmo_params):
                 #folpsv2.MatrixCalculator(A_full=self.options['A_full'], use_TNS_model=self.options['remove_DeltaP'])
                 folps_nlps_class = folpsv2.NonLinearPowerSpectrumCalculator(mmatrices=self.matrices,
-                                    kernels=self.options['kernels'], rbao=self.options['rbao'], **cosmo_params)
+                                    kernels=kernels, rbao=self.options['rbao'], **cosmo_params)
                 # pknow = folpsv2.extrapolate_pklin(k, pknow_dd)
                 # folps_nlps_class._initialize_nonwiggle_power_spectrum(pknow=pknow_dd)
                 return folps_nlps_class.calculate_loop_table(k=self.template.k, pklin=pk_dd, pknow=pknow_dd, **cosmo_params)
@@ -2813,12 +2827,12 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
         self.pt = Namespace(jac=jac, kap=kap, muap=muap, table=table[1:28 + extra], table_now=table_now[1:28 + extra],
                             scalars=table[28 + extra:], scalars_now=table_now[28 + extra:], A_full=self.options['A_full'],
-                            remove_DeltaP=self.options['remove_DeltaP'], f=self.template.f,
-                            f0=self.template.f0, qpar=self.template.qpar, qper=self.template.qper, pklir=self.pklir)
+                            remove_DeltaP=self.options['remove_DeltaP'], f=f_eff, f0=f0_eff, f_IDE=self.template.f_IDE,
+                            qpar=self.template.qpar, qper=self.template.qper, pklir=self.pklir)
         # ,qpar = self.template.qpar, qper=self.template.qper, ,f=self.template.f,f0=self.template.f0
         self.kt = table[0]
         self.sigma8 = self.template.sigma8
-        self.fsigma8 = self.template.f * self.sigma8
+        self.fsigma8 = f_eff * self.sigma8
 
     @property
     def qpar(self):

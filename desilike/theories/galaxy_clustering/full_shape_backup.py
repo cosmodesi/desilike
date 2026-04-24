@@ -211,7 +211,10 @@ class BaseTracerPowerSpectrumMultipoles(BaseCalculator):
         if 'shotnoise' in self.options:
             self.options['shotnoise'] = shotnoise
         # The quantity used for the rescaling
-        self.nbar = 1. / float(shotnoise)
+        if shotnoise == 0:
+            self.nbar = 0.0001
+        else:
+            self.nbar = 1. / float(shotnoise)
 
     def calculate(self, **params):
         params = self.decode_params(params)
@@ -303,7 +306,10 @@ class BaseTracerCorrelationFunctionMultipoles(BaseCalculator):
         if 'shotnoise' in self.options:
             self.options['shotnoise'] = shotnoise
         # The quantity used for the rescaling
-        self.nbar = 1. / float(shotnoise)
+        if shotnoise == 0:
+            self.nbar = 0.0001
+        else:
+            self.nbar = 1. / float(shotnoise)
 
     def calculate(self, **params):
         params = self.decode_params(params)
@@ -2378,7 +2384,10 @@ class BaseTracerBispectrumMultipoles(BaseCalculator):
         if 'shotnoise' in self.options:
             self.options['shotnoise'] = shotnoise
         # The quantity used for the rescaling
-        self.nbar = 1. / shotnoise
+        if shotnoise == 0:
+            self.nbar = 0.0001
+        else:
+            self.nbar = 1. / float(shotnoise)
 
     def calculate(self, **params):
         params = self.decode_params(params)
@@ -3592,11 +3601,16 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTPowe
 
         self.nd = 1e-4
 
-        for par in self.init.params.select(basename=f'PshotP{suffix}'):
-            par.update(value=1.0 / self.nd, fixed=True, prior=None)
 
         self.fsat = 1.0
         self.snd = self.options['shotnoise'] * self.nd
+        
+        for par in self.init.params.select(basename=f'PshotP{suffix}'):
+            if self.snd>0:
+                par.update(value=1.0 / self.nd, fixed=True, prior=None)
+            else:
+                par.update(value=0.0, fixed=True, prior=None)
+            
         if self.is_physical_prior:
             self.fsat = self.options['fsat']
 
@@ -4049,8 +4063,6 @@ def Kfuncs_to_tables(
         NR=int(NR),
     )
     kout = init_data.logk_grid
-    print('k_out:')
-    print(k_ext)
 
     fk_out = interp(kout, k_ext, fk_ext)
     fk_norm_out = fk_out / f0
@@ -4510,9 +4522,9 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         fkpt_params = dict(
             z=float(self.z),
             Om=float(cosmo["Omega_m"]),
-            kmin=float(min(1e-3, float(jnp.min(self.k)))),
-            kmax=float(max(0.5, float(jnp.max(self.k)))),
-            Nk_kernel=int(max(len(self.k), 120)),
+            kmin=float(max(1e-3, float(jnp.min(self.k)))),
+            kmax=float(min(0.5, float(jnp.max(self.k)))),
+            Nk_kernel=int(min(len(self.k), 120)),
             nquadSteps=300,
             NQ=10,
             NR=10,
@@ -4580,13 +4592,14 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         """
         import folps as folpsv2
         import jax.numpy as jnp
-        from jax import jit
         from functools import partial
+        from jax import jit
 
         table = (self.kt, *self.pt.table, *self.pt.scalars)
         table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
 
-        params["PshotP"] = 1.0 / nd
+        # params["PshotP"] = 1.0 / nd 
+        params["PshotP"] = 0.0
         params["X_FoG_p"] = 0.0
 
         required_bias_params = [

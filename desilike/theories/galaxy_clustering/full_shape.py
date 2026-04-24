@@ -4049,8 +4049,6 @@ def Kfuncs_to_tables(
         NR=int(NR),
     )
     kout = init_data.logk_grid
-    print('k_out:')
-    print(k_ext)
 
     fk_out = interp(kout, k_ext, fk_ext)
     fk_norm_out = fk_out / f0

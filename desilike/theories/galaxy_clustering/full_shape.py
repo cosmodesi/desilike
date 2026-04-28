@@ -3733,8 +3733,9 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTPowe
 
         self.power = self.pt.combine_bias_terms_poles(
             params, nd=self.nd,
-            model=self.options['model'], mg_variant=self.options['mg_variant'],
-            prior_basis='physical',
+            model=self.options['model'],
+            mg_variant=self.options['mg_variant'],
+            prior_basis=self.options['prior_basis'],
             b3_coev=self.options['b3_coev'],
             beyond_eds=self.options['beyond_eds'],
         )
@@ -3897,13 +3898,13 @@ def Kfuncs_to_tables(
     rescale_PS: bool = False,
     kmin: Optional[float] = None,
     kmax: Optional[float] = None,
-    Nk_kernel: int = 240,
+    Nk_kernel: int = 120,
     nquadSteps: int = 300,
     NQ: int = 10,
     NR: int = 10,
     xnow: float = -3.912023,
     ode_method: str = "RKQS",
-    f0_kmax: float = 1e-3,
+    f0_kmax: Optional[float] = None,
     model: str = "HDKI",
     mg_variant: str = "mu_OmDE",
     fR0_HS: float = 1e-15,
@@ -3986,7 +3987,17 @@ def Kfuncs_to_tables(
 
     fk_ext = jnp.asarray(Dp_ext / D_ext)
 
-    mask0 = (k_ext < float(f0_kmax))
+    # Define the kernel grid range before estimating f0.
+    # If f0_kmax is not explicitly provided, use the routine's kmin.
+    if kmin is None:
+        kmin = float(jnp.minimum(1e-3, jnp.min(k)))
+    if kmax is None:
+        kmax = float(jnp.maximum(0.5, jnp.max(k)))
+
+    if f0_kmax is None:
+        f0_kmax = float(kmin)
+
+    mask0 = (k_ext <= float(f0_kmax))
     nhead = int(min(5, int(k_ext.shape[0])))
     f0_jax = jnp.where(
         jnp.any(mask0),
@@ -4033,11 +4044,6 @@ def Kfuncs_to_tables(
             d_s=d_s,
             f0_kmax=f0_kmax,
         )
-
-    if kmin is None:
-        kmin = float(jnp.maximum(1e-3, jnp.min(k)))
-    if kmax is None:
-        kmax = float(jnp.minimum(0.5, jnp.max(k)))
 
     init_data = setup_kfunctions(
         k_in=k_ext,
@@ -4508,9 +4514,9 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         fkpt_params = dict(
             z=float(self.z),
             Om=float(cosmo["Omega_m"]),
-            kmin=float(max(1e-3, float(jnp.min(self.k)))),
-            kmax=float(min(0.5, float(jnp.max(self.k)))),
-            Nk_kernel=int(min(len(self.k), 240)),
+            kmin=float(min(1e-3, float(jnp.min(self.k)))),
+            kmax=float(max(1.0, float(jnp.max(self.k)))),
+            Nk_kernel=int(min(len(self.k), 120)),
             nquadSteps=300,
             NQ=10,
             NR=10,
@@ -4875,13 +4881,17 @@ class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTBisp
                     if not param.fixed:
                         param.update(prior=dict(dist='norm', loc=0.0, scale=20.0),
                                      ref=dict(dist='norm', loc=0.0, scale=1.0))
+
                 for param in params.select(basename='c2p'):
                     param.update(value=0.0, fixed=True, prior=None)
 
-                for param in params.select(basename='Bshotp'):
+                for param in params.select(basename='X_FoG_bp'):
+                    param.update(value=0.0, fixed=True, prior=None)
+
+                for param in params.select(basename=['Pshotp', 'Bshotp']):
                     if not param.fixed:
                         param.update(prior=dict(dist='norm', loc=0.0, scale=1.0),
-                                     ref=dict(dist='norm', loc=0.0, scale=1.0))
+                                     ref=dict(dist='norm', loc=0.0, scale=0.5))
 
                 return params
 

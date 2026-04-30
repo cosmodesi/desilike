@@ -3933,6 +3933,9 @@ def Kfuncs_to_tables(
     gamma_a: float = 0.0,
     t_k: float = 100.0,
     d_s: float = 0.0001,
+    eftcamb_h1_interp=None,
+    eftcamb_h3_interp=None,
+    eftcamb_h5_interp=None,
     rbao: float = 104.0,
     pmax_bao: float = 0.4,
     Np_bao: int = 100,
@@ -3971,13 +3974,16 @@ def Kfuncs_to_tables(
         fR0_HS=float(fR0_HS), beta2=float(beta2), n_HS=float(n_HS),
         screening=int(screening), omegaBD=float(omegaBD),
         r_c=float(r_c),
-        model=str(model), mg_variant=str(mg_variant),
+        model=str(model), mg_variant=str(mg_variant) if mg_variant is not None else "mu_OmDE",
         mu0=float(mu0),
         beta_1=float(beta_1), lambda_1=float(lambda_1), exp_s=float(exp_s),
         mu1=float(mu1), mu2=float(mu2), mu3=float(mu3), mu4=float(mu4),
         z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
         scale_bins=bool(scale_bins), k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw),
         gamma_0=float(gamma_0), gamma_a=float(gamma_a), t_k=float(t_k), d_s=float(d_s),
+        eftcamb_h1_interp=eftcamb_h1_interp,
+        eftcamb_h3_interp=eftcamb_h3_interp,
+        eftcamb_h5_interp=eftcamb_h5_interp,
     )
 
     k_ext_np = np.asarray(k_ext, dtype=float)
@@ -4300,6 +4306,11 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         # nDGP
         r_c=1.0e30,
 
+        # EFT_DE (note that these are interpolators, not floats)
+        eftcamb_h1_interp=None,
+        eftcamb_h3_interp=None,
+        eftcamb_h5_interp=None,
+        
         # backend / projection
         backend="jax",
         bias_scheme="folps",
@@ -4347,7 +4358,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         self.IR_resummation = self.options.get("IR_resummation", True)
 
         os.environ.setdefault("FOLPS_BACKEND", self.backend)
-
+        
     def _collect_mg_params(self, cosmo):
         """
         Collect only the MG parameters relevant for the chosen fkpt model.
@@ -4422,20 +4433,31 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                 out = dict(
                     mu0=_get("mu0", 0.0),
                 )
-            elif variant_u == "BZ":
+                out.update({k: float(v) for k, v in override.items()})
+                return out
+
+            if variant_u == "BZ":
                 out = dict(
                     beta_1=_get("beta_1", 1.0),
                     lambda_1=_get("lambda_1", 0.0),
                     exp_s=_get("exp_s", 0.0),
                 )
-            else:
-                raise ValueError(
-                    f"Unknown mg_variant={self.options.get('mg_variant')!r} for model='HDKI'. "
-                    "Expected 'mu_OmDE' or 'BZ'."
-                )
+                out.update({k: float(v) for k, v in override.items()})
+                return out
 
-            out.update({k: float(v) for k, v in override.items()})
-            return out
+            if variant_u in ("EFT_DE", "EFTDE"):
+                out = dict(
+                    eftcamb_h1_interp=self.options.get("eftcamb_h1_interp", None),
+                    eftcamb_h3_interp=self.options.get("eftcamb_h3_interp", None),
+                    eftcamb_h5_interp=self.options.get("eftcamb_h5_interp", None),
+                )
+                out.update(override)
+                return out
+
+            raise ValueError(
+                f"Unknown mg_variant={self.options.get('mg_variant')!r} for model='HDKI'. "
+                "Expected 'mu_OmDE', 'BZ', or 'EFT_DE'."
+            )
 
         # --------------------------------------------------
         # Phenomenological variants
@@ -4483,7 +4505,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             f"Unknown model={self.options.get('model')!r}. "
             "Expected 'LCDM'/'GR', 'HS', 'NDGP', 'HDKI', or 'PHENOM'."
         )
-
+        
     def calculate(self):
         """
         Build FKPT tables, then store them in the same structural style as FOLPS.

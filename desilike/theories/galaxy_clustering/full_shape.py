@@ -3414,17 +3414,24 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTPowe
         pb = fkptTracerPowerSpectrumMultipoles._rename_prior_basis(prior_basis)
 
         fix = []
-        if freedom in ['min', 'max']:
+        if freedom in ['min', 'int', 'max']:
+            b1_limits = [0.1, 4.0] if freedom == 'int' else [0.1, 8.0]
+            b2_scale = 5.0 if freedom == 'int' else 20.0
             for param in params.select(basename=['b1']):
-                param.update(prior=dict(dist='uniform', limits=[0.1, 8.0]))
+                param.update(prior=dict(dist='uniform', limits=b1_limits))
             for param in params.select(basename=['b2']):
-                param.update(prior=dict(dist='norm', loc=0.0, scale=20.0),
+                param.update(prior=dict(dist='norm', loc=0.0, scale=b2_scale),
                              ref=dict(dist='norm', loc=0.0, scale=1.0))
 
             for param in params.select(basename=['bs2', 'b3nl', 'alpha*', 'alpha0shot', 'alpha2shot', 'ctilde']):
                 param.update(prior=None)
 
         if freedom == 'max':
+            for param in params.select(basename=['b1', 'b2', 'bs2', 'b3nl']):
+                param.update(fixed=False)
+            fix += ['ctilde']
+
+        if freedom == 'int':
             for param in params.select(basename=['b1', 'b2', 'bs2', 'b3nl']):
                 param.update(fixed=False)
             fix += ['ctilde']
@@ -3461,11 +3468,13 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTPowe
                 param.update(basename=param.basename + 'p')
 
             for param in params.select(basename='b1p'):
-                param.update(prior=dict(dist='uniform', limits=[0.1, 8.0]),
+                b1_limits = [0.1, 4.0] if freedom == 'int' else [0.1, 8.0]
+                param.update(prior=dict(dist='uniform', limits=b1_limits),
                              ref=dict(dist='norm', loc=1.0, scale=0.1))
 
             for param in params.select(basename='b2p'):
-                param.update(prior=dict(dist='norm', loc=0.0, scale=20.0),
+                b2_scale = 5.0 if freedom == 'int' else 20.0
+                param.update(prior=dict(dist='norm', loc=0.0, scale=b2_scale),
                              ref=dict(dist='norm', loc=0.0, scale=1.0))
 
             if pb == 'APscaling':
@@ -3477,15 +3486,17 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTPowe
                         par.update(value=0.0, fixed=True, prior=None)
                     else:
                         if par.basename == 'bK2p':
+                            bK2_scale = 5.0 if freedom == 'int' else 20.0
                             par.update(
                                 fixed=False,
-                                prior=dict(dist='norm', loc=0.0, scale=20.0),
+                                prior=dict(dist='norm', loc=0.0, scale=bK2_scale),
                                 ref=dict(dist='norm', loc=0.0, scale=1.0),
                             )
                         elif par.basename == 'btdp':
+                            btd_scale = 1.0 if freedom == 'int' else 2.0
                             par.update(
                                 fixed=False,
-                                prior=dict(dist='norm', loc=0.0, scale=2.0),
+                                prior=dict(dist='norm', loc=0.0, scale=btd_scale),
                                 ref=dict(dist='norm', loc=0.0, scale=1.0),
                             )
 
@@ -4820,11 +4831,14 @@ class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTBisp
         pb = fkptjaxTracerBispectrumMultipoles._rename_prior_basis(prior_basis)
 
         fix = []
-        if freedom in ['min', 'max']:
+        if freedom in ['min', 'int', 'max']:
+            b1_limits = [0.1, 4.0] if freedom == 'int' else [0.1, 8.0]
+            b2_scale = 5.0 if freedom == 'int' else 20.0
             for param in params.select(basename=['b1']):
-                param.update(prior=dict(limits=[0., 10.]))
+                param.update(prior=dict(dist='uniform', limits=b1_limits))
             for param in params.select(basename=['b2']):
-                param.update(prior=dict(limits=[-50., 50.]))
+                param.update(prior=dict(dist='norm', loc=0.0, scale=b2_scale),
+                             ref=dict(dist='norm', loc=0.0, scale=1.0))
 
             for param in params.select(basename=['bs2', 'c1', 'c2', 'Pshot', 'Bshot', 'X_FoG_b']):
                 param.update(prior=None)
@@ -4833,6 +4847,10 @@ class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTBisp
             for param in params.select(basename=['b1', 'b2', 'bs2']):
                 param.update(fixed=False)
 
+        if freedom == 'int':
+            for param in params.select(basename=['b1', 'b2', 'bs2']):
+                param.update(fixed=False)
+        
         if freedom == 'min':
             fix += ['bs2']
 
@@ -4873,11 +4891,13 @@ class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTBisp
                 param.update(basename=param.basename + 'p')
 
             for param in params.select(basename='b1p'):
-                param.update(prior=dict(dist='uniform', limits=[0.1, 8.0]),
+                b1_limits = [0.1, 4.0] if freedom == 'int' else [0.1, 8.0]
+                param.update(prior=dict(dist='uniform', limits=b1_limits),
                              ref=dict(dist='norm', loc=1., scale=0.1))
 
             for param in params.select(basename='b2p'):
-                param.update(prior=dict(dist='norm', loc=0.0, scale=20.0),
+                b2_scale = 5.0 if freedom == 'int' else 20.0
+                param.update(prior=dict(dist='norm', loc=0.0, scale=b2_scale),
                              ref=dict(dist='norm', loc=0.0, scale=1.0))
 
             if pb == 'APscaling':
@@ -4889,13 +4909,15 @@ class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTBisp
                         par.update(value=0.0, fixed=True, prior=None)
                     else:
                         if par.basename == 'bK2p':
+                            bK2_scale = 5.0 if freedom == 'int' else 20.0
                             par.update(fixed=False,
-                                       prior=dict(dist='norm', loc=0.0, scale=20.0),
+                                       prior=dict(dist='norm', loc=0.0, scale=bK2_scale),
                                        ref=dict(dist='norm', loc=0.0, scale=1.0))
                         elif par.basename == 'btdp':
+                            btd_scale = 1.0 if freedom == 'int' else 2.0
                             par.update(
                                 fixed=False,
-                                prior=dict(dist='norm', loc=0.0, scale=2.0),
+                                prior=dict(dist='norm', loc=0.0, scale=btd_scale),
                                 ref=dict(dist='norm', loc=0.0, scale=1.0),
                             )
 

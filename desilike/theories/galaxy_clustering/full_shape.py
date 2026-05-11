@@ -3967,10 +3967,6 @@ def Kfuncs_to_tables(
     if model_u in ("HS", "NDGP", "LCDM", "GR"):
         mg_variant = None
 
-    if model_u == "HS":
-        if bool(rescale_PS) is not True:
-            raise ValueError("For model='HS', rescale_PS must be True (passed False).")
-
     k = jnp.asarray(k)
     pk = jnp.asarray(pk)
     pk_now = jnp.asarray(pk_now)
@@ -4532,9 +4528,6 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         model = str(self.options.get("model", "HDKI")).strip()
         model_u = model.upper()
         rescale_PS = bool(self.options.get("rescale_PS", False))
-
-        if model_u == "HS" and (not rescale_PS):
-            raise ValueError("You set model='HS' but rescale_PS=False. This is forbidden by design.")
 
         # mg_variant matters only for HDKI / PHENOM
         if model_u in ("HDKI", "PHENOM"):

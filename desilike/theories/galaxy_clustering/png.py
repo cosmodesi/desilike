@@ -109,8 +109,9 @@ class PNGTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             pX, pY = params['p']
             bfnl_locX, bfnl_locY = [2. * 1.686 * (b1 - p) * fnl_loc for b1, p in [(b1X, pX), (b1Y, pY)]]
         else:
-            bfnl_locX = bfnl_locY = params['bfnl_loc']
-        # bfnl_loc is typically 2 * delta_c * (b1 - p)
+            
+            bfnl_locX, bfnl_locY = params['bfnl_loc']
+        # bfnl_loc is typically 2 * delta_c * (b1 - p) * fnl_loc
         bX, bY = b1X + bfnl_locX * alpha, b1Y + bfnl_locY * alpha
         fog = 1. / ((1. + sigmasX**2 * kap**2 * muap**2 / 2.) * (1. + sigmasY**2 * kap**2 * muap**2 / 2.))
         pkmu = jac * fog * (bX + f * muap**2) * (bY + f * muap**2) * interp1d(jnp.log10(kap), np.log10(kin), pk_dd) + sn0 / self.nbar

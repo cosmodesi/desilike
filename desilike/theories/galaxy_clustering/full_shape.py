@@ -1714,17 +1714,20 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipoles):
     _default_options = dict(with_nnlo_counterterm=False, with_stoch=True, eft_basis=None, freedom=None, shotnoise=1e4)
 
     @classmethod
-    def _get_multitracer(cls, tracers=None):
-        return MultitracerBiasParameters(tracers=tracers,
-        deterministic=['b1', 'b2', 'b3', 'b4', 'bs', 'b2p4', 'b2m4', 'b2t', 'b2g', 'b3g', 'cct', 'cr1', 'cr2', 'cr4', 'cr6', 'c0', 'c2', 'c4', 'ct'],
-        stochastic=['ce0', 'ce1', 'ce2'], ntracers=2)
+    def _get_multitracer(cls, tracers=None, required_bias_params=None):
+        deterministic = ['b1', 'b2', 'b3', 'b4', 'bs', 'b2p4', 'b2m4', 'b2t', 'b2g', 'b3g', 'cct', 'cr1', 'cr2', 'cr4', 'cr6', 'c0', 'c2', 'c4', 'ct']
+        stochastic = ['ce0', 'ce1', 'ce2']
+        if required_bias_params:
+            deterministic = [param for param in deterministic if param in required_bias_params]
+            stochastic = [param for param in stochastic if param in required_bias_params]
+        return MultitracerBiasParameters(tracers=tracers, deterministic=deterministic, stochastic=stochastic, ntracers=2)
 
     def initialize(self, k=None, ells=(0, 2, 4), pt=None, template=None, tracers=None, **kwargs):
         self._set_options(k=k, ells=ells, tracers=tracers, **kwargs)
         self._set_pt(pt=pt, template=template, **kwargs)
         self._set_from_pt()
         self._set_params()
-        self.decode_params = self._get_multitracer(tracers=tracers)
+        self.decode_params = self._get_multitracer(tracers=tracers, required_bias_params=self.required_bias_params)
 
     @classmethod
     def _params(cls, params, freedom=None, tracers=None):
@@ -1779,6 +1782,7 @@ class PyBirdTracerPowerSpectrumMultipoles(BaseTracerPTPowerSpectrumMultipoles):
             self.required_bias_params += ['ce0', 'ce1', 'ce2']
         default_values = {'b1': 1.6}
         self.required_bias_params = {name: default_values.get(name, 0.) for name in self.required_bias_params}
+        self.init.params = self.init.params.select(basename=[param.basename for param in self.init.params if param.basename in self.required_bias_params or (param.derived is True)])
         fix = []
         if 4 not in self.ells: fix += ['cr2', 'c4']
         if 2 not in self.ells: fix += ['cr1', 'c2', 'ce2']

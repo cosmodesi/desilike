@@ -3332,7 +3332,7 @@ class FOLPSv2TracerBispectrumMultipoles(BaseTracerPTBispectrumMultipoles):
 
 
 class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
-    _default_options = dict(shotnoise=1e4, model='VDG_infty', norm_by_shotnoise=False)
+    _default_options = dict(shotnoise=1e4, model='VDG_infty', norm_by_shotnoise=False, comet_apeffect=False)
 
     def initialize(self, k=None, ells=None, tracers=None, z=1.0, cosmo=None, fiducial='DESI', **kwargs):
         self.options: dict
@@ -3345,7 +3345,8 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         self.cosmo = cosmo or Cosmoprimo(fiducial=self.fiducial)
         self.cosmo.init.update(massive_neutrino='nonu' not in self.options['model'])
         self.cosmo = self.narrow_cosmo_params_range(self.cosmo)
-        self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode='geometry', cosmo=self.cosmo)
+        if not self.options['comet_apeffect']:
+            self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode='geometry', cosmo=self.cosmo)
 
         from comet import comet
         self.comet = comet(use_Mpc=False, model=self.options['model'])  # type: ignore
@@ -3362,7 +3363,10 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             params.pop('avir', 0.0)
         if 'nonu' in self.options['model']:
             comet_cosmo.pop('Mnu', None)
-        q_tr_lo = [self.apeffect.qper, self.apeffect.qpar]
+        if not self.options['comet_apeffect']:
+            q_tr_lo = [self.apeffect.qper, self.apeffect.qpar]
+        else:
+            q_tr_lo = None
         self.de_model = self.get_de_model(self.cosmo)
         poles = self.comet.Pell(self.k, comet_cosmo | params, ell=list(self.ells), de_model=self.de_model, q_tr_lo=q_tr_lo)
         self.power = jnp.vstack([poles[f'ell{ell}'] for ell in self.ells])

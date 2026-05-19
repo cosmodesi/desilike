@@ -3351,6 +3351,7 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         self.comet = comet(use_Mpc=False, model=self.options['model'])  # type: ignore
         if self.options['norm_by_shotnoise']:
             self.comet.define_nbar(nbar=self.nbar)
+        self.comet.define_fiducial_cosmology(self.cosmoprimo_to_comet(self.fiducial))
 
     def calculate(self, **params):
         comet_cosmo = self.cosmoprimo_to_comet(self.cosmo)
@@ -3418,4 +3419,4 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
     @classmethod
     def install(cls, installer):
-         installer.pip('git+https://gitlab.com/aegge/comet-emu.git')
+         installer.pip('git+https://gitlab.com/aegge/comet-emu.git@bispec_ext')

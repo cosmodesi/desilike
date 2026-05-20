@@ -3375,7 +3375,7 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     def _get_multitracer(cls, tracers=None):
         return MultitracerBiasParameters(
             tracers=tracers,
-            deterministic=['b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo'], # 'avir' is universal?
+            deterministic=['b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'avir'],
             stochastic=['NP0', 'NP20', 'NP22'],
             ntracers=1,
         )
@@ -3424,3 +3424,63 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     @classmethod
     def install(cls, installer):
          installer.pip('git+https://gitlab.com/aegge/comet-emu.git@bispec_ext')
+
+class COMETracerBispectrumMultipoles(BaseTracerBispectrumMultipoles, COMETTracerPowerSpectrumMultipoles):
+    _default_options = dict(shotnoise=1e4, model='VDG_infty', norm_by_shotnoise=False,
+                            comet_apeffect=False, quad_deg=(7, 16, 5), mu12_transform='k3')
+
+    @classmethod
+    def _get_multitracer(cls, tracers=None):
+        return MultitracerBiasParameters(
+            tracers=tracers,
+            deterministic=['b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'cnloB', 'avir', 'avirB'],
+            stochastic=['NP0', 'NP20', 'NP22', 'NB0', 'MB0'],
+            ntracers=1,
+        )
+
+    def initialize(self, k=None, ells=((0, 0, 0), (2, 0, 2)), tracers=None, z=1.0,
+                   comet=None, cosmo=None, fiducial='DESI', basis='sugiyama', **kwargs):
+        self.options: dict
+        self.basis = basis
+        self._set_options(k=k, ells=ells, tracers=tracers, basis=basis, **kwargs)
+        self.decode_params = self._get_multitracer(tracers=tracers)
+        self.z = z
+        self.fiducial = get_cosmo(fiducial)
+        self.cosmo = cosmo or Cosmoprimo(fiducial=self.fiducial)
+        self.cosmo.init.update(massive_neutrino='nonu' not in self.options['model'])
+        self.cosmo = self.narrow_cosmo_params_range(self.cosmo)
+        if not self.options['comet_apeffect']:
+            self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode='geometry', cosmo=self.cosmo)
+
+        if comet is not None:
+            # Share the emulator instance with a COMETTracerPowerSpectrumMultipoles counterpart
+            self.comet = getattr(comet, 'comet', comet)
+        else:
+            from comet import comet as comet_emu
+            self.comet = comet_emu(use_Mpc=False, model=self.options['model'])  # type: ignore
+            if self.options['norm_by_shotnoise']:
+                self.comet.define_nbar(nbar=self.nbar)
+            self.comet.define_fiducial_cosmology(self.cosmoprimo_to_comet(self.fiducial))
+        self.comet.BispNum.backend = 'jax'
+
+    def calculate(self, **params):
+        comet_cosmo = self.cosmoprimo_to_comet(self.cosmo)
+        defaults = {param: 0.0 for param in self.decode_params.deterministic + self.decode_params.stochastic}
+        defaults |= dict(b1=1.0, avir=0.0)
+        params = self.decode_params(params, defaults=defaults)
+        if 'VDG_infty' not in self.options['model']:
+            params.pop('avir', 0.0)
+            params.pop('avirB', 0.0)
+        if 'nonu' in self.options['model']:
+            comet_cosmo.pop('Mnu', None)
+        if not self.options['comet_apeffect']:
+            q_tr_lo = [self.apeffect.qper, self.apeffect.qpar]
+        else:
+            q_tr_lo = None
+        self.de_model = self.get_de_model(self.cosmo)
+        poles = self.comet.Bell_Sugi(self.k, comet_cosmo | params,
+                                     ell=list(self.ells), de_model=self.de_model,
+                                     q_tr_lo=q_tr_lo,
+                                     quad_deg=tuple(self.options['quad_deg']),
+                                     mu12_transform=self.options['mu12_transform'])
+        self.power = jnp.vstack([poles[tuple(ell)] for ell in self.ells])

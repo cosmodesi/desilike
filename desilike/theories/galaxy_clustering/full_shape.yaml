@@ -1299,3 +1299,111 @@ params:
       loc: 0.
       scale: 0.1
     latex: NP_{2, 2}
+
+---
+
+class: COMETracerBispectrumMultipoles
+
+params:
+  b1:
+    prior:
+      limits: [0., 10.]
+    ref:
+      limits: [1.4, 1.6]
+    latex: b_{1}
+  b2:
+    prior:
+      limits: [-50., 50.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{2}
+  g2:
+    ref:
+      limits: [-1., 1.]
+    latex: g_{2}
+  g21:
+    fixed: True
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: g_{21}
+  avir:
+    prior:
+      limits: [0., 20.]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: a_{\mathrm{vir}}
+  c0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{0}
+  c2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{2}
+  c4:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{4}
+  cnlo:
+    value: 0.0
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: c_{\mathrm{nlo}}
+  cnloB:
+    value: 0.0
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: c_{\mathrm{nlo},B}
+  NP0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: NP_{0}
+  NP20:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: NP_{2, 0}
+  NP22:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: NP_{2, 2}
+  NB0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: NB_{0}
+  MB0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: MB_{0}

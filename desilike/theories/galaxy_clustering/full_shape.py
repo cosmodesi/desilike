@@ -3331,8 +3331,38 @@ class FOLPSv2TracerBispectrumMultipoles(BaseTracerPTBispectrumMultipoles):
         return state
 
 
+_COMET_PK_DIAGRAMS = (
+    'P0L_b1b1', 'PNL_b1', 'PNL_id',
+    'Pctr_c0', 'Pctr_c2', 'Pctr_c4',
+    'Pctr_b1b1cnlo', 'Pctr_b1cnlo', 'Pctr_cnlo',
+    'P1L_b1b1', 'P1L_b1b2', 'P1L_b1g2', 'P1L_b1g21',
+    'P1L_b2b2', 'P1L_b2g2', 'P1L_g2g2', 'P1L_b2', 'P1L_g2', 'P1L_g21',
+    'Pnoise_NP0', 'Pnoise_NP20', 'Pnoise_NP22',
+)
+
+
+def _comet_pk_bias_coefs(params, h, nbar, use_Mpc):
+    b1, b2, g2, g21 = params['b1'], params['b2'], params['g2'], params['g21']
+    c0, c2, c4, cnlo = params['c0'], params['c2'], params['c4'], params['cnlo']
+    if not use_Mpc:
+        c0, c2, c4 = c0 / h**2, c2 / h**2, c4 / h**2
+        cnlo = cnlo / h**4
+    NP0, NP20, NP22 = params['NP0'], params['NP20'], params['NP22']
+    inv_nbar = 1.0 / nbar
+    return dict(
+        P0L_b1b1=b1**2, PNL_b1=b1, PNL_id=1.0,
+        Pctr_c0=c0, Pctr_c2=c2, Pctr_c4=c4,
+        Pctr_b1b1cnlo=b1**2 * cnlo, Pctr_b1cnlo=b1 * cnlo, Pctr_cnlo=cnlo,
+        P1L_b1b1=b1**2, P1L_b1b2=b1 * b2, P1L_b1g2=b1 * g2, P1L_b1g21=b1 * g21,
+        P1L_b2b2=b2**2, P1L_b2g2=b2 * g2, P1L_g2g2=g2**2,
+        P1L_b2=b2, P1L_g2=g2, P1L_g21=g21,
+        Pnoise_NP0=NP0 * inv_nbar, Pnoise_NP20=NP20 * inv_nbar, Pnoise_NP22=NP22 * inv_nbar,
+    )
+
+
 class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
-    _default_options = dict(shotnoise=1e4, model='VDG_infty', norm_by_shotnoise=False, comet_apeffect=False)
+    _default_options = dict(shotnoise=1e4, model='VDG_infty', norm_by_shotnoise=False,
+                            comet_apeffect=False, marginalize=False)
 
     def initialize(self, k=None, ells=None, tracers=None, z=1.0, cosmo=None, fiducial='DESI', **kwargs):
         self.options: dict
@@ -3368,8 +3398,29 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         else:
             q_tr_lo = None
         self.de_model = self.get_de_model(self.cosmo)
-        poles = self.comet.Pell(self.k, comet_cosmo | params, ell=list(self.ells), de_model=self.de_model, q_tr_lo=q_tr_lo)
-        self.power = jnp.vstack([poles[f'ell{ell}'] for ell in self.ells])
+        if self.options['marginalize']:
+            self.power = self._calculate_pk_diagram_sum(comet_cosmo, params, q_tr_lo)
+        else:
+            poles = self.comet.Pell(self.k, comet_cosmo | params, ell=list(self.ells), de_model=self.de_model, q_tr_lo=q_tr_lo)
+            self.power = jnp.vstack([poles[f'ell{ell}'] for ell in self.ells])
+
+    def _calculate_pk_diagram_sum(self, comet_cosmo, params, q_tr_lo):
+        diag_pars = dict(comet_cosmo)
+        for name in self.comet.bias_params_list:
+            diag_pars[name] = 0.0
+        diag_pars['b1'] = 1.0
+        # `avir` is nonlinear (enters W_damping); keep its concrete value.
+        if 'VDG_infty' in self.options['model']:
+            diag_pars['avir'] = float(np.asarray(params.get('avir', 0.0)))
+        ell_for_recon = [0] if self.comet.real_space else [0, 2, 4, 6]
+        diagrams = self.comet.PX_ell(self.k, diag_pars, ell=list(self.ells),
+                                     X_list=list(_COMET_PK_DIAGRAMS),
+                                     de_model=self.de_model, q_tr_lo=q_tr_lo,
+                                     ell_for_recon=ell_for_recon)
+        coefs = _comet_pk_bias_coefs(params, comet_cosmo['h'], self.comet.nbar,
+                                     use_Mpc=self.comet.use_Mpc)
+        coef_vec = jnp.array([coefs[name] for name in _COMET_PK_DIAGRAMS])
+        return jnp.vstack([jnp.asarray(diagrams[f'ell{ell}']) @ coef_vec for ell in self.ells])
 
     @classmethod
     def _get_multitracer(cls, tracers=None):
@@ -3425,9 +3476,33 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     def install(cls, installer):
          installer.pip('git+https://gitlab.com/aegge/comet-emu.git@bispec_ext')
 
-class COMETracerBispectrumMultipoles(BaseTracerBispectrumMultipoles, COMETTracerPowerSpectrumMultipoles):
+_COMET_BK_DIAGRAMS = (
+    'B0L_b1b1b1', 'B0L_b1b1', 'B0L_b1',
+    'B0L_b1b1b2', 'B0L_b1b2', 'B0L_b2',
+    'B0L_b1b1g2', 'B0L_b1g2', 'B0L_g2',
+    'B0L_id', 'Bnoise_MB0b1b1', 'Bnoise_MB0b1', 'Bnoise_NP0', 'Bnoise_NB0')
+
+
+def _comet_bk_bias_coefs(params, nbar):
+    b1, b2, g2 = params['b1'], params['b2'], params['g2']
+    NP0, NB0, MB0 = params['NP0'], params['NB0'], params['MB0']
+    inv_nbar = 1.0 / nbar
+    return dict(
+        B0L_b1b1b1=b1**3, B0L_b1b1=b1**2, B0L_b1=b1,
+        B0L_b1b1b2=b1**2 * b2, B0L_b1b2=b1 * b2, B0L_b2=b2,
+        B0L_b1b1g2=b1**2 * g2, B0L_b1g2=b1 * g2, B0L_g2=g2,
+        B0L_id=1.0,
+        Bnoise_MB0b1b1=MB0 * b1**2 * inv_nbar,
+        Bnoise_MB0b1=(MB0 + NP0) * b1 * inv_nbar,
+        Bnoise_NP0=NP0 * inv_nbar,
+        Bnoise_NB0=NB0 * inv_nbar**2,
+    )
+
+
+class COMETTracerBispectrumMultipoles(BaseTracerBispectrumMultipoles, COMETTracerPowerSpectrumMultipoles):
     _default_options = dict(shotnoise=1e4, model='VDG_infty', norm_by_shotnoise=False,
-                            comet_apeffect=False, quad_deg=(7, 16, 5), mu12_transform='k3')
+                            comet_apeffect=False, quad_deg=(7, 16, 5), mu12_transform='k3',
+                            marginalize=False)
 
     @classmethod
     def _get_multitracer(cls, tracers=None):
@@ -3478,9 +3553,32 @@ class COMETracerBispectrumMultipoles(BaseTracerBispectrumMultipoles, COMETTracer
         else:
             q_tr_lo = None
         self.de_model = self.get_de_model(self.cosmo)
-        poles = self.comet.Bell_Sugi(self.k, comet_cosmo | params,
-                                     ell=list(self.ells), de_model=self.de_model,
-                                     q_tr_lo=q_tr_lo,
-                                     quad_deg=tuple(self.options['quad_deg']),
-                                     mu12_transform=self.options['mu12_transform'])
-        self.power = jnp.vstack([poles[tuple(ell)] for ell in self.ells])
+        if self.options['marginalize']:
+            self.power = self._calculate_bk_diagram_sum(comet_cosmo, params, q_tr_lo)
+        else:
+            poles = self.comet.Bell_Sugi(self.k, comet_cosmo | params,
+                                         ell=list(self.ells), de_model=self.de_model,
+                                         q_tr_lo=q_tr_lo,
+                                         quad_deg=tuple(self.options['quad_deg']),
+                                         mu12_transform=self.options['mu12_transform'])
+            self.power = jnp.vstack([poles[tuple(ell)] for ell in self.ells])
+
+    def _calculate_bk_diagram_sum(self, comet_cosmo, params, q_tr_lo):
+        diag_pars = dict(comet_cosmo)
+        for name in self.comet.bias_params_list:
+            diag_pars[name] = 0.0
+        diag_pars['b1'] = 1.0
+        if 'VDG_infty' in self.options['model']:
+            diag_pars['avir'] = float(np.asarray(params.get('avir', 0.0)))
+            diag_pars['avirB'] = float(np.asarray(params.get('avirB', 0.0)))
+        diag_pars['cnloB'] = float(np.asarray(params.get('cnloB', 0.0)))
+        ell_tuples = [tuple(ell) for ell in self.ells]
+        diagrams = self.comet.BX_ell_Sugi(self.k, diag_pars, ell=ell_tuples,
+                                          X_list=list(_COMET_BK_DIAGRAMS),
+                                          de_model=self.de_model, q_tr_lo=q_tr_lo,
+                                          quad_deg=tuple(self.options['quad_deg']),
+                                          mu12_transform=self.options['mu12_transform'])
+        coefs = _comet_bk_bias_coefs(params, self.comet.nbar)
+        coef_vec = jnp.array([coefs[name] for name in _COMET_BK_DIAGRAMS])
+        return jnp.vstack([jnp.atleast_2d(jnp.asarray(diagrams[ll])) @ coef_vec
+                           for ll in ell_tuples])

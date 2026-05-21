@@ -3331,45 +3331,200 @@ class FOLPSv2TracerBispectrumMultipoles(BaseTracerPTBispectrumMultipoles):
         return state
 
 
-_COMET_PK_DIAGRAMS = (
-    'P0L_b1b1', 'PNL_b1', 'PNL_id',
-    'Pctr_c0', 'Pctr_c2', 'Pctr_c4',
-    'Pctr_b1b1cnlo', 'Pctr_b1cnlo', 'Pctr_cnlo',
-    'P1L_b1b1', 'P1L_b1b2', 'P1L_b1g2', 'P1L_b1g21',
-    'P1L_b2b2', 'P1L_b2g2', 'P1L_g2g2', 'P1L_b2', 'P1L_g2', 'P1L_g21',
-    'Pnoise_NP0', 'Pnoise_NP20', 'Pnoise_NP22',
-)
-
-
-def _comet_pk_bias_coefs(params, h, nbar, use_Mpc):
-    b1, b2, g2, g21 = params['b1'], params['b2'], params['g2'], params['g21']
-    c0, c2, c4, cnlo = params['c0'], params['c2'], params['c4'], params['cnlo']
-    if not use_Mpc:
-        c0, c2, c4 = c0 / h**2, c2 / h**2, c4 / h**2
-        cnlo = cnlo / h**4
-    NP0, NP20, NP22 = params['NP0'], params['NP20'], params['NP22']
-    inv_nbar = 1.0 / nbar
-    return dict(
-        P0L_b1b1=b1**2, PNL_b1=b1, PNL_id=1.0,
-        Pctr_c0=c0, Pctr_c2=c2, Pctr_c4=c4,
-        Pctr_b1b1cnlo=b1**2 * cnlo, Pctr_b1cnlo=b1 * cnlo, Pctr_cnlo=cnlo,
-        P1L_b1b1=b1**2, P1L_b1b2=b1 * b2, P1L_b1g2=b1 * g2, P1L_b1g21=b1 * g21,
-        P1L_b2b2=b2**2, P1L_b2g2=b2 * g2, P1L_g2g2=g2**2,
-        P1L_b2=b2, P1L_g2=g2, P1L_g21=g21,
-        Pnoise_NP0=NP0 * inv_nbar, Pnoise_NP20=NP20 * inv_nbar, Pnoise_NP22=NP22 * inv_nbar,
-    )
-
 
 class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
+
     _default_options = dict(shotnoise=1e4, model='VDG_infty', norm_by_shotnoise=False,
-                            comet_apeffect=False, marginalize=False)
+                            comet_apeffect=False, diagram_recon=True,
+                            bias_basis='EggScoSmi', counterterm_basis='Comet',
+                            reparametrisation=None)
+
+    _pk_diagrams = (
+        'P0L_b1b1', 'PNL_b1', 'PNL_id',
+        'Pctr_c0', 'Pctr_c2', 'Pctr_c4',
+        'Pctr_b1b1cnlo', 'Pctr_b1cnlo', 'Pctr_cnlo',
+        'P1L_b1b1', 'P1L_b1b2', 'P1L_b1g2', 'P1L_b1g21',
+        'P1L_b2b2', 'P1L_b2g2', 'P1L_g2g2', 'P1L_b2', 'P1L_g2', 'P1L_g21',
+        'Pnoise_NP0', 'Pnoise_NP20', 'Pnoise_NP22',
+    )
+
+    _bias_names = {
+        'EggScoSmi': ('b1', 'b2', 'g2', 'g21'),
+        'AssBauGre': ('b1', 'b2', 'bG2', 'bGam3'),
+        'AmiGleKok': ('b1t', 'b2t', 'b3t', 'b4t'),
+        'DESI':      ('b1', 'b2d', 'bk2', 'btd'),
+    }
+
+    _ctr_names = {
+        'Comet':   ('c0',  'c2',  'c4',  'cnlo',  'NP0', 'NP20',  'NP22'),
+        'ClassPT': ('c0s', 'c2s', 'c4s', 'cnlos', 'NP0', 'NP20s', 'NP22s'),
+        'PBJ':     ('c0t', 'c2t', 'c4t', 'cnlo',  'NP0', 'eps0',  'eps2'),
+        'DESIct':  ('a0',  'a2',  'a4',  None,    'NP0', 'NP20',  'NP22'),
+    }
+    _comet_literal_names = {
+        'ClassPT': {'c0s': 'c0*', 'c2s': 'c2*', 'c4s': 'c4*', 'cnlos': 'cnlo*',
+                    'NP0': 'NP0', 'NP20s': 'NP20*', 'NP22s': 'NP22*'},
+    }
+
+    @classmethod
+    def _basis_param_names(cls, bias_basis, counterterm_basis):
+        bias = list(cls._bias_names[bias_basis])
+        ctr_and_stoch = list(cls._ctr_names[counterterm_basis])
+        ctr = [n for n in ctr_and_stoch[:4] if n is not None]
+        stoch = list(ctr_and_stoch[4:])
+        return bias, ctr, stoch
+
+    @classmethod
+    def _all_basis_param_names(cls):
+        names = set()
+        for basis in cls._bias_names.values():
+            names.update(basis)
+        for ctr in cls._ctr_names.values():
+            names.update(n for n in ctr if n is not None)
+        return names
+
+    @classmethod
+    def _user_to_comet_param_dict(cls, params, counterterm_basis):
+        mapping = cls._comet_literal_names.get(counterterm_basis)
+        if not mapping:
+            return params
+        return {mapping.get(k, k): v for k, v in params.items()}
+
+    @classmethod
+    def _translate_pk_params_to_canonical(cls, params, *, bias_basis,
+                                          counterterm_basis, reparametrisation,
+                                          f_growth, Aap, s12):
+        """Translate user-basis params into the canonical
+        (b1, b2, g2, g21, c0, c2, c4, cnlo, NP0, NP20, NP22) basis, mirroring
+        comet's PTEmu._update_bias_params (+ _rescale_params for TCM)."""
+
+        if reparametrisation not in (None, 'None', 'TCM'):
+            raise ValueError(f'Unsupported reparametrisation: {reparametrisation!r}')
+        g = lambda name: params.get(name, 0.0)
+
+        tcm = (reparametrisation == 'TCM')
+        desi_pre_rescale = tcm and bias_basis == 'DESI'
+        if desi_pre_rescale:
+            sqrt_Aap = Aap**0.5
+            b1 = g('b1') / (sqrt_Aap * s12)
+            b2d = g('b2d') / (sqrt_Aap * s12**2)
+            bk2 = g('bk2') / (sqrt_Aap * s12**2)
+            btd = g('btd') / (Aap * s12**4)
+            a0_r = g('a0') / (Aap * s12**2)
+            a2_r = g('a2') / (Aap * s12**2)
+            a4_r = g('a4') / (Aap * s12**2)
+            SN0_r = g('SN0') / Aap
+            SN20_r = g('SN20') / Aap
+            SN22_r = g('SN22') / Aap
+        else:
+            b1 = g('b1')
+            b2d, bk2, btd = g('b2d'), g('bk2'), g('btd')
+
+        if bias_basis == 'EggScoSmi':
+            b1, b2, g2, g21 = g('b1'), g('b2'), g('g2'), g('g21')
+        elif bias_basis == 'AssBauGre':
+            b1, b2 = g('b1'), g('b2')
+            bG2, bGam3 = g('bG2'), g('bGam3')
+            g2 = bG2
+            g21 = -4.0 / 7.0 * (bG2 + bGam3)
+        elif bias_basis == 'AmiGleKok':
+            b1t, b2t, b3t, b4t = g('b1t'), g('b2t'), g('b3t'), g('b4t')
+            b1 = b1t
+            b2 = 2.0 * (-b1t + b2t + b4t)
+            g2 = -2.0 / 7.0 * (b1t - b2t)
+            g21 = -2.0 / 147.0 * (11 * b1t - 18 * b2t + 7 * b3t)
+        elif bias_basis == 'DESI':
+            b2 = b2d + 4.0 / 3.0 * bk2
+            g2 = bk2
+            g21 = -4.0 / 7.0 * (bk2 + btd)
+        else:
+            raise ValueError(f'Unknown bias_basis: {bias_basis!r}')
+
+        if counterterm_basis == 'Comet':
+            c0, c2, c4, cnlo = g('c0'), g('c2'), g('c4'), g('cnlo')
+            NP0, NP20, NP22 = g('NP0'), g('NP20'), g('NP22')
+        elif counterterm_basis == 'ClassPT':
+            c0s, c2s, c4s, cnlos = g('c0s'), g('c2s'), g('c4s'), g('cnlos')
+            c0 = c0s
+            c2 = 2.0 / 3.0 * f_growth * c2s
+            c4 = 8.0 / 35.0 * f_growth**2 * c4s
+            cnlo = -cnlos
+            NP0 = g('NP0')
+            NP20 = g('NP20s') + 1.0 / 3.0 * g('NP22s')
+            NP22 = 2.0 / 3.0 * g('NP22s')
+        elif counterterm_basis == 'PBJ':
+            c0t, c2t, c4t = g('c0t'), g('c2t'), g('c4t')
+            c0 = c0t + 1.0/3.0 * f_growth * c2t + 1.0/5.0 * f_growth**2 * c4t
+            c2 = 2.0/3.0 * f_growth * c2t + 4.0/7.0 * f_growth**2 * c4t
+            c4 = 8.0/35.0 * f_growth**2 * c4t
+            cnlo = g('cnlo')
+            NP0 = g('NP0')
+            NP20 = g('eps0') + 1.0/3.0 * g('eps2')
+            NP22 = 2.0/3.0 * g('eps2')
+        elif counterterm_basis == 'DESIct':
+            if desi_pre_rescale:
+                a0, a2, a4 = a0_r, a2_r, a4_r
+                NP0, NP20, NP22 = SN0_r, SN20_r, SN22_r
+            else:
+                a0, a2, a4 = g('a0'), g('a2'), g('a4')
+                NP0, NP20, NP22 = g('SN0'), g('SN20'), g('SN22')
+            f = f_growth
+            c0 = -0.5 * (a0 * (b1**2 + b1 * f / 3.0)
+                         + a2 * (b1 * f / 3.0 + f**2 / 5.0)
+                         + a4 * (b1 * f / 5.0 + f**2 / 7.0))
+            c2 = -0.5 * (2.0 * a0 * b1 * f / 3.0
+                         + a2 * (2.0 * b1 * f / 3.0 + 4.0 * f**2 / 7.0)
+                         + a4 * (4.0 * b1 * f / 7.0 + 10.0 * f**2 / 21.0))
+            c4 = -0.5 * (8.0 * a2 * f**2 / 35.0
+                         + a4 * (8.0 * b1 * f / 35.0 + 24.0 * f**2 / 77.0))
+            cnlo = 0.0  # DESIct has no cnlo counterterm.
+        else:
+            raise ValueError(f'Unknown counterterm_basis: {counterterm_basis!r}')
+
+        if tcm and not desi_pre_rescale:
+            sqrt_Aap = Aap**0.5
+            b1 = b1 / (sqrt_Aap * s12)
+            b2 = b2 / (sqrt_Aap * s12**2)
+            g2 = g2 / (sqrt_Aap * s12**2)
+            g21 = g21 / (Aap * s12**4)
+            c0 = c0 / (Aap * s12**2)
+            c2 = c2 / (Aap * s12**2)
+            c4 = c4 / (Aap * s12**2)
+            NP0 = NP0 / Aap
+            NP20 = NP20 / Aap
+            NP22 = NP22 / Aap
+
+        return dict(b1=b1, b2=b2, g2=g2, g21=g21,
+                    c0=c0, c2=c2, c4=c4, cnlo=cnlo,
+                    NP0=NP0, NP20=NP20, NP22=NP22)
+
+    @staticmethod
+    def _pk_bias_coefs(params, h, nbar, use_Mpc):
+        b1, b2, g2, g21 = params['b1'], params['b2'], params['g2'], params['g21']
+        c0, c2, c4, cnlo = params['c0'], params['c2'], params['c4'], params['cnlo']
+        if not use_Mpc:
+            c0, c2, c4 = c0 / h**2, c2 / h**2, c4 / h**2
+            cnlo = cnlo / h**4
+        NP0, NP20, NP22 = params['NP0'], params['NP20'], params['NP22']
+        inv_nbar = 1.0 / nbar
+        return dict(
+            P0L_b1b1=b1**2, PNL_b1=b1, PNL_id=1.0,
+            Pctr_c0=c0, Pctr_c2=c2, Pctr_c4=c4,
+            Pctr_b1b1cnlo=b1**2 * cnlo, Pctr_b1cnlo=b1 * cnlo, Pctr_cnlo=cnlo,
+            P1L_b1b1=b1**2, P1L_b1b2=b1 * b2, P1L_b1g2=b1 * g2, P1L_b1g21=b1 * g21,
+            P1L_b2b2=b2**2, P1L_b2g2=b2 * g2, P1L_g2g2=g2**2,
+            P1L_b2=b2, P1L_g2=g2, P1L_g21=g21,
+            Pnoise_NP0=NP0 * inv_nbar, Pnoise_NP20=NP20 * inv_nbar,
+            Pnoise_NP22=NP22 * inv_nbar,
+        )
 
     def initialize(self, k=None, ells=None, tracers=None, z=1.0, cosmo=None, fiducial='DESI', **kwargs):
         self.options: dict
-
         if ells is None:
             ells = (0,) if kwargs.get('model', 'VDG_infty') == 'RS' else (0, 2, 4)
         super().initialize(k=k, ells=ells, tracers=tracers, **kwargs)
+        if not self.options['diagram_recon']:
+            self.log_warning('diagram_recon=False might break some reparametrisation options. Only use it for debugging purposes with EggScoSmi+Comet.')
         self.z = z
         self.fiducial = get_cosmo(fiducial)
         self.cosmo = cosmo or Cosmoprimo(fiducial=self.fiducial)
@@ -3379,16 +3534,27 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode='geometry', cosmo=self.cosmo)
 
         from comet import comet
-        self.comet = comet(use_Mpc=False, model=self.options['model'])  # type: ignore
+        self.comet = comet(use_Mpc=False, model=self.options['model'],
+                           bias_basis=self.options['bias_basis'],
+                           counterterm_basis=self.options['counterterm_basis'],
+                           reparametrisation=self.options['reparametrisation'])
         if self.options['norm_by_shotnoise']:
             self.comet.define_nbar(nbar=self.nbar)
         self.comet.define_fiducial_cosmology(self.cosmoprimo_to_comet(self.fiducial))
 
+        self.decode_params = self._get_multitracer(
+            tracers=tracers,
+            bias_basis=self.options['bias_basis'],
+            counterterm_basis=self.options['counterterm_basis'])
+
     def calculate(self, **params):
         comet_cosmo = self.cosmoprimo_to_comet(self.cosmo)
-        defaults = {param: 0.0 for param in self.decode_params.deterministic + self.decode_params.stochastic}
-        defaults |= dict(b1=1.0, avir=0.0)
+        active = set(self.decode_params.deterministic + self.decode_params.stochastic)
+        defaults = {param: 0.0 for param in active}
+        bias_names = self._bias_names[self.options['bias_basis']]
+        defaults |= {bias_names[0]: 1.0, 'avir': 0.0}
         params = self.decode_params(params, defaults=defaults)
+        params = {k: v for k, v in params.items() if k in active}
         if 'VDG_infty' not in self.options['model']:
             params.pop('avir', 0.0)
         if 'nonu' in self.options['model']:
@@ -3398,38 +3564,66 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         else:
             q_tr_lo = None
         self.de_model = self.get_de_model(self.cosmo)
-        if self.options['marginalize']:
+        if self.options['diagram_recon']:
             self.power = self._calculate_pk_diagram_sum(comet_cosmo, params, q_tr_lo)
         else:
-            poles = self.comet.Pell(self.k, comet_cosmo | params, ell=list(self.ells), de_model=self.de_model, q_tr_lo=q_tr_lo)
+            comet_params = self._user_to_comet_param_dict(params, self.options['counterterm_basis'])
+            poles = self.comet.Pell(self.k, comet_cosmo | comet_params, ell=list(self.ells), de_model=self.de_model, q_tr_lo=q_tr_lo)
             self.power = jnp.vstack([poles[f'ell{ell}'] for ell in self.ells])
 
     def _calculate_pk_diagram_sum(self, comet_cosmo, params, q_tr_lo):
         diag_pars = dict(comet_cosmo)
         for name in self.comet.bias_params_list:
             diag_pars[name] = 0.0
-        diag_pars['b1'] = 1.0
+        diag_pars[self.comet.bias_params_list[0]] = 1.0  # linear-bias param name varies by basis
         # `avir` is nonlinear (enters W_damping); keep its concrete value.
         if 'VDG_infty' in self.options['model']:
             diag_pars['avir'] = float(np.asarray(params.get('avir', 0.0)))
         ell_for_recon = [0] if self.comet.real_space else [0, 2, 4, 6]
         diagrams = self.comet.PX_ell(self.k, diag_pars, ell=list(self.ells),
-                                     X_list=list(_COMET_PK_DIAGRAMS),
+                                     X_list=list(self._pk_diagrams),
                                      de_model=self.de_model, q_tr_lo=q_tr_lo,
                                      ell_for_recon=ell_for_recon)
-        coefs = _comet_pk_bias_coefs(params, comet_cosmo['h'], self.comet.nbar,
-                                     use_Mpc=self.comet.use_Mpc)
-        coef_vec = jnp.array([coefs[name] for name in _COMET_PK_DIAGRAMS])
+        f_growth, Aap, s12 = self._read_params_for_rescaling()
+        canonical = self._translate_pk_params_to_canonical(
+            params,
+            bias_basis=self.options['bias_basis'],
+            counterterm_basis=self.options['counterterm_basis'],
+            reparametrisation=self.options['reparametrisation'],
+            f_growth=f_growth, Aap=Aap, s12=s12)
+        coefs = self._pk_bias_coefs(canonical, comet_cosmo['h'], self.comet.nbar,
+                                    use_Mpc=self.comet.use_Mpc)
+        coef_vec = jnp.array([coefs[name] for name in self._pk_diagrams])
         return jnp.vstack([jnp.asarray(diagrams[f'ell{ell}']) @ coef_vec for ell in self.ells])
 
+    def _read_params_for_rescaling(self):
+        f_growth = float(np.asarray(self.comet.params['f']).reshape(-1)[0])
+        q_tr = float(np.asarray(self.comet.params['q_tr']).reshape(-1)[0])
+        q_lo = float(np.asarray(self.comet.params['q_lo']).reshape(-1)[0])
+        Aap = 1.0 / (q_tr**2 * q_lo)
+        s12 = float(np.asarray(self.comet.params['s12']).reshape(-1)[0])
+        return f_growth, Aap, s12
+
     @classmethod
-    def _get_multitracer(cls, tracers=None):
+    def _get_multitracer(cls, tracers=None, bias_basis='EggScoSmi', counterterm_basis='Comet'):
+        bias, ctr, stoch = cls._basis_param_names(bias_basis, counterterm_basis)
         return MultitracerBiasParameters(
             tracers=tracers,
-            deterministic=['b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'avir'],
-            stochastic=['NP0', 'NP20', 'NP22'],
+            deterministic=bias + ctr + ['avir'],
+            stochastic=stoch,
             ntracers=1,
         )
+
+    @classmethod
+    def _params(cls, params, tracers=None, bias_basis='EggScoSmi', counterterm_basis='Comet'):
+        bias, ctr, stoch = cls._basis_param_names(bias_basis, counterterm_basis)
+        active = set(bias) | set(ctr) | set(stoch)
+        inactive = list(cls._all_basis_param_names() - active)
+        if inactive:
+            for param in params.select(basename=inactive):
+                param.update(value=0.0, fixed=True)
+        return cls._get_multitracer(tracers=tracers, bias_basis=bias_basis,
+                                    counterterm_basis=counterterm_basis)._params(params)
 
     @classmethod
     def emulator_params_range(cls):
@@ -3474,51 +3668,78 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
     @classmethod
     def install(cls, installer):
-         installer.pip('git+https://gitlab.com/aegge/comet-emu.git@bispec_ext')
-
-_COMET_BK_DIAGRAMS = (
-    'B0L_b1b1b1', 'B0L_b1b1', 'B0L_b1',
-    'B0L_b1b1b2', 'B0L_b1b2', 'B0L_b2',
-    'B0L_b1b1g2', 'B0L_b1g2', 'B0L_g2',
-    'B0L_id', 'Bnoise_MB0b1b1', 'Bnoise_MB0b1', 'Bnoise_NP0', 'Bnoise_NB0')
-
-
-def _comet_bk_bias_coefs(params, nbar):
-    b1, b2, g2 = params['b1'], params['b2'], params['g2']
-    NP0, NB0, MB0 = params['NP0'], params['NB0'], params['MB0']
-    inv_nbar = 1.0 / nbar
-    return dict(
-        B0L_b1b1b1=b1**3, B0L_b1b1=b1**2, B0L_b1=b1,
-        B0L_b1b1b2=b1**2 * b2, B0L_b1b2=b1 * b2, B0L_b2=b2,
-        B0L_b1b1g2=b1**2 * g2, B0L_b1g2=b1 * g2, B0L_g2=g2,
-        B0L_id=1.0,
-        Bnoise_MB0b1b1=MB0 * b1**2 * inv_nbar,
-        Bnoise_MB0b1=(MB0 + NP0) * b1 * inv_nbar,
-        Bnoise_NP0=NP0 * inv_nbar,
-        Bnoise_NB0=NB0 * inv_nbar**2,
-    )
+        installer.pip('git+https://gitlab.com/aegge/comet-emu.git@desilike')
 
 
 class COMETTracerBispectrumMultipoles(BaseTracerBispectrumMultipoles, COMETTracerPowerSpectrumMultipoles):
+
     _default_options = dict(shotnoise=1e4, model='VDG_infty', norm_by_shotnoise=False,
                             comet_apeffect=False, quad_deg=(7, 16, 5), mu12_transform='k3',
-                            marginalize=False)
+                            diagram_recon=True,
+                            bias_basis='EggScoSmi', counterterm_basis='Comet',
+                            reparametrisation=None)
+
+    _bk_diagrams = (
+        'B0L_b1b1b1', 'B0L_b1b1', 'B0L_b1',
+        'B0L_b1b1b2', 'B0L_b1b2', 'B0L_b2',
+        'B0L_b1b1g2', 'B0L_b1g2', 'B0L_g2',
+        'B0L_id', 'Bnoise_MB0b1b1', 'Bnoise_MB0b1', 'Bnoise_NP0', 'Bnoise_NB0',
+    )
+
+    @staticmethod
+    def _bk_bias_coefs(params, nbar):
+        b1, b2, g2 = params['b1'], params['b2'], params['g2']
+        NP0, NB0, MB0 = params['NP0'], params['NB0'], params['MB0']
+        inv_nbar = 1.0 / nbar
+        return dict(
+            B0L_b1b1b1=b1**3, B0L_b1b1=b1**2, B0L_b1=b1,
+            B0L_b1b1b2=b1**2 * b2, B0L_b1b2=b1 * b2, B0L_b2=b2,
+            B0L_b1b1g2=b1**2 * g2, B0L_b1g2=b1 * g2, B0L_g2=g2,
+            B0L_id=1.0,
+            Bnoise_MB0b1b1=MB0 * b1**2 * inv_nbar,
+            Bnoise_MB0b1=(MB0 + NP0) * b1 * inv_nbar,
+            Bnoise_NP0=NP0 * inv_nbar,
+            Bnoise_NB0=NB0 * inv_nbar**2,
+        )
+
+    @staticmethod
+    def _translate_bk_extra_params(params, canonical_pk, reparametrisation, Aap):
+        """Add bispectrum-only canonical params (cnloB, NB0, MB0) — these have
+        the same name in every basis."""
+        out = dict(canonical_pk)
+
+        out['cnloB'] = params.get('cnloB', 0.0)
+        if reparametrisation == 'TCM':
+            NB0 = params.get('NB0', 0.0) / Aap**2
+            MB0 = params.get('MB0', 0.0) / Aap
+        else:
+            NB0 = params.get('NB0', 0.0)
+            MB0 = params.get('MB0', 0.0)
+        out['NB0'] = NB0
+        out['MB0'] = MB0
+        return out
 
     @classmethod
-    def _get_multitracer(cls, tracers=None):
+    def _get_multitracer(cls, tracers=None, bias_basis='EggScoSmi', counterterm_basis='Comet'):
+        bias, ctr, stoch = cls._basis_param_names(bias_basis, counterterm_basis)
         return MultitracerBiasParameters(
             tracers=tracers,
-            deterministic=['b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'cnloB', 'avir', 'avirB'],
-            stochastic=['NP0', 'NP20', 'NP22', 'NB0', 'MB0'],
+            deterministic=bias + ctr + ['cnloB', 'avir', 'avirB'],
+            stochastic=stoch + ['NB0', 'MB0'],
             ntracers=1,
         )
+ 
+    _params = COMETTracerPowerSpectrumMultipoles._params
 
     def initialize(self, k=None, ells=((0, 0, 0), (2, 0, 2)), tracers=None, z=1.0,
                    comet=None, cosmo=None, fiducial='DESI', basis='sugiyama', **kwargs):
         self.options: dict
         self.basis = basis
         self._set_options(k=k, ells=ells, tracers=tracers, basis=basis, **kwargs)
-        self.decode_params = self._get_multitracer(tracers=tracers)
+        self.decode_params = self._get_multitracer(
+            tracers=tracers,
+            bias_basis=self.options['bias_basis'],
+            counterterm_basis=self.options['counterterm_basis'])
         self.z = z
         self.fiducial = get_cosmo(fiducial)
         self.cosmo = cosmo or Cosmoprimo(fiducial=self.fiducial)
@@ -3532,17 +3753,25 @@ class COMETTracerBispectrumMultipoles(BaseTracerBispectrumMultipoles, COMETTrace
             self.comet = getattr(comet, 'comet', comet)
         else:
             from comet import comet as comet_emu
-            self.comet = comet_emu(use_Mpc=False, model=self.options['model'])  # type: ignore
+            self.comet = comet_emu(use_Mpc=False, model=self.options['model'],  # type: ignore
+                                   bias_basis=self.options['bias_basis'],
+                                   counterterm_basis=self.options['counterterm_basis'],
+                                   reparametrisation=self.options['reparametrisation'])
             if self.options['norm_by_shotnoise']:
                 self.comet.define_nbar(nbar=self.nbar)
             self.comet.define_fiducial_cosmology(self.cosmoprimo_to_comet(self.fiducial))
         self.comet.BispNum.backend = 'jax'
+        if not self.options['diagram_recon']:
+            self.log_warning('diagram_recon=False might break some reparametrisation options. Only use it for debugging purposes with EggScoSmi+Comet.')
 
     def calculate(self, **params):
         comet_cosmo = self.cosmoprimo_to_comet(self.cosmo)
-        defaults = {param: 0.0 for param in self.decode_params.deterministic + self.decode_params.stochastic}
-        defaults |= dict(b1=1.0, avir=0.0)
+        active = set(self.decode_params.deterministic + self.decode_params.stochastic)
+        defaults = {param: 0.0 for param in active}
+        bias_names = self._bias_names[self.options['bias_basis']]
+        defaults |= {bias_names[0]: 1.0, 'avir': 0.0}
         params = self.decode_params(params, defaults=defaults)
+        params = {k: v for k, v in params.items() if k in active}
         if 'VDG_infty' not in self.options['model']:
             params.pop('avir', 0.0)
             params.pop('avirB', 0.0)
@@ -3553,10 +3782,11 @@ class COMETTracerBispectrumMultipoles(BaseTracerBispectrumMultipoles, COMETTrace
         else:
             q_tr_lo = None
         self.de_model = self.get_de_model(self.cosmo)
-        if self.options['marginalize']:
+        if self.options['diagram_recon']:
             self.power = self._calculate_bk_diagram_sum(comet_cosmo, params, q_tr_lo)
         else:
-            poles = self.comet.Bell_Sugi(self.k, comet_cosmo | params,
+            comet_params = self._user_to_comet_param_dict(params, self.options['counterterm_basis'])
+            poles = self.comet.Bell_Sugi(self.k, comet_cosmo | comet_params,
                                          ell=list(self.ells), de_model=self.de_model,
                                          q_tr_lo=q_tr_lo,
                                          quad_deg=tuple(self.options['quad_deg']),
@@ -3567,18 +3797,30 @@ class COMETTracerBispectrumMultipoles(BaseTracerBispectrumMultipoles, COMETTrace
         diag_pars = dict(comet_cosmo)
         for name in self.comet.bias_params_list:
             diag_pars[name] = 0.0
-        diag_pars['b1'] = 1.0
+        diag_pars[self.comet.bias_params_list[0]] = 1.0  # linear-bias name varies by basis
         if 'VDG_infty' in self.options['model']:
             diag_pars['avir'] = float(np.asarray(params.get('avir', 0.0)))
             diag_pars['avirB'] = float(np.asarray(params.get('avirB', 0.0)))
         diag_pars['cnloB'] = float(np.asarray(params.get('cnloB', 0.0)))
         ell_tuples = [tuple(ell) for ell in self.ells]
         diagrams = self.comet.BX_ell_Sugi(self.k, diag_pars, ell=ell_tuples,
-                                          X_list=list(_COMET_BK_DIAGRAMS),
+                                          X_list=list(self._bk_diagrams),
                                           de_model=self.de_model, q_tr_lo=q_tr_lo,
                                           quad_deg=tuple(self.options['quad_deg']),
                                           mu12_transform=self.options['mu12_transform'])
-        coefs = _comet_bk_bias_coefs(params, self.comet.nbar)
-        coef_vec = jnp.array([coefs[name] for name in _COMET_BK_DIAGRAMS])
+        f_growth, Aap, s12 = self._read_params_for_rescaling()
+        canonical_pk = self._translate_pk_params_to_canonical(
+            params,
+            bias_basis=self.options['bias_basis'],
+            counterterm_basis=self.options['counterterm_basis'],
+            reparametrisation=self.options['reparametrisation'],
+            f_growth=f_growth, Aap=Aap, s12=s12)
+        canonical = self._translate_bk_extra_params(params, canonical_pk, self.options['reparametrisation'], Aap)
+        coefs = self._bk_bias_coefs(canonical, self.comet.nbar)
+        coef_vec = jnp.array([coefs[name] for name in self._bk_diagrams])
         return jnp.vstack([jnp.atleast_2d(jnp.asarray(diagrams[ll])) @ coef_vec
                            for ll in ell_tuples])
+    
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://gitlab.com/aegge/comet-emu.git@desilike')

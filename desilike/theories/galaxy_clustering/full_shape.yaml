@@ -1218,6 +1218,7 @@ params:
 class: COMETTracerPowerSpectrumMultipoles
 
 params:
+  # EggScoSmi bias basis (default).
   b1:
     prior:
       limits: [0., 10.]
@@ -1242,6 +1243,64 @@ params:
       loc: 0.
       scale: 0.5
     latex: \gamma_{21}
+  # AssBauGre bias basis.
+  bG2:
+    ref:
+      limits: [-1., 1.]
+    latex: b_{\mathcal{G}_2}
+  bGam3:
+    fixed: True
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{\Gamma_3}
+  # AmiGleKok bias basis.
+  b1t:
+    prior:
+      limits: [0., 10.]
+    ref:
+      limits: [1.4, 1.6]
+    latex: \tilde{b}_{1}
+  b2t:
+    prior:
+      limits: [-50., 50.]
+    ref:
+      limits: [-1., 1.]
+    latex: \tilde{b}_{2}
+  b3t:
+    fixed: True
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: \tilde{b}_{3}
+  b4t:
+    ref:
+      limits: [-1., 1.]
+    latex: \tilde{b}_{4}
+  # DESI bias basis.
+  b2d:
+    prior:
+      limits: [-50., 50.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{2}
+  bk2:
+    ref:
+      limits: [-1., 1.]
+    latex: b_{K^2}
+  btd:
+    fixed: True
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: b_{\mathrm{td}}
+  # Velocity / FoG parameter (always active for VDG_infty).
   avir:
     prior:
       limits: [0., 20.]
@@ -1250,6 +1309,7 @@ params:
       loc: 0.
       scale: 1.
     latex: a_{\mathrm{vir}}
+  # Comet counterterm/stochastic basis (default).
   c0:
     prior:
     ref:
@@ -1299,12 +1359,115 @@ params:
       loc: 0.
       scale: 0.1
     latex: N^P_{2, 2}
+  # ClassPT counterterm/stochastic basis ('s' suffix replaces the literal '*'
+  # comet uses internally — restored at the call boundary).
+  c0s:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{0}^{\ast}
+  c2s:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{2}^{\ast}
+  c4s:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{4}^{\ast}
+  cnlos:
+    value: 0.0
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: c_{\mathrm{nlo}}^{\ast}
+  NP20s:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: N^{P,\ast}_{2, 0}
+  NP22s:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: N^{P,\ast}_{2, 2}
+  # PBJ counterterm/stochastic basis.
+  c0t:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \tilde{c}_{0}
+  c2t:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \tilde{c}_{2}
+  c4t:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \tilde{c}_{4}
+  eps0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: \epsilon_{0}
+  eps2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: \epsilon_{2}
+  # DESIct counterterm/stochastic basis (no cnlo counterterm).
+  a0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: a_{0}
+  a2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: a_{2}
+  a4:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: a_{4}
 
 ---
 
 class: COMETTracerBispectrumMultipoles
 
 params:
+  # EggScoSmi bias basis (default).
   b1:
     prior:
       limits: [0., 10.]
@@ -1321,6 +1484,65 @@ params:
     ref:
       limits: [-1., 1.]
     latex: \gamma_{2}
+  g21:
+    fixed: True
+    value: 0.0
+    latex: \gamma_{21}
+  # AssBauGre bias basis.
+  bG2:
+    ref:
+      limits: [-1., 1.]
+    latex: b_{\mathcal{G}_2}
+  bGam3:
+    fixed: True
+    value: 0.0
+    latex: b_{\Gamma_3}
+  # AmiGleKok bias basis.
+  b1t:
+    prior:
+      limits: [0., 10.]
+    ref:
+      limits: [1.4, 1.6]
+    latex: \tilde{b}_{1}
+  b2t:
+    prior:
+      limits: [-50., 50.]
+    ref:
+      limits: [-1., 1.]
+    latex: \tilde{b}_{2}
+  b3t:
+    fixed: True
+    value: 0.0
+    latex: \tilde{b}_{3}
+  b4t:
+    ref:
+      limits: [-1., 1.]
+    latex: \tilde{b}_{4}
+  # DESI bias basis.
+  b2d:
+    prior:
+      limits: [-50., 50.]
+    ref:
+      limits: [-1., 1.]
+    latex: b_{2}
+  bk2:
+    ref:
+      limits: [-1., 1.]
+    latex: b_{K^2}
+  btd:
+    fixed: True
+    value: 0.0
+    latex: b_{\mathrm{td}}
+  # FoG parameters.
+  avir:
+    fixed: True
+    prior:
+      limits: [0., 20.]
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: a_{\mathrm{vir}}
   avirB:
     prior:
       limits: [0., 20.]
@@ -1329,6 +1551,35 @@ params:
       loc: 0.
       scale: 1.
     latex: a^B_{\mathrm{vir}}
+  # Comet counterterm/stochastic basis (default).
+  c0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{0}
+  c2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{2}
+  c4:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{4}
+  cnlo:
+    value: 0.0
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: c_{\mathrm{nlo}}
   cnloB:
     value: 0.0
     ref:
@@ -1343,6 +1594,122 @@ params:
       loc: 0.
       scale: 0.1
     latex: N^P_{0}
+  NP20:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: N^P_{2, 0}
+  NP22:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: N^P_{2, 2}
+  # ClassPT counterterm/stochastic basis.
+  c0s:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{0}^{\ast}
+  c2s:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{2}^{\ast}
+  c4s:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{4}^{\ast}
+  cnlos:
+    value: 0.0
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: c_{\mathrm{nlo}}^{\ast}
+  NP20s:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: N^{P,\ast}_{2, 0}
+  NP22s:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: N^{P,\ast}_{2, 2}
+  # PBJ counterterm/stochastic basis.
+  c0t:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \tilde{c}_{0}
+  c2t:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \tilde{c}_{2}
+  c4t:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \tilde{c}_{4}
+  eps0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: \epsilon_{0}
+  eps2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.1
+    latex: \epsilon_{2}
+  # DESIct counterterm/stochastic basis.
+  a0:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: a_{0}
+  a2:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: a_{2}
+  a4:
+    prior:
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: a_{4}
+  # Bispectrum-only stochastic params.
   NB0:
     prior:
     ref:

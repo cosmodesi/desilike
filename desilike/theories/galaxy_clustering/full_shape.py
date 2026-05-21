@@ -3518,6 +3518,12 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             Pnoise_NP22=NP22 * inv_nbar,
         )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        bias_basis = self.init.get('bias_basis', self._default_options['bias_basis'])
+        counterterm_basis = self.init.get('counterterm_basis', self._default_options['counterterm_basis'])
+        self._apply_basis_fixing(self.init.params, bias_basis, counterterm_basis)
+
     def initialize(self, k=None, ells=None, tracers=None, z=1.0, cosmo=None, fiducial='DESI', **kwargs):
         self.options: dict
         if ells is None:
@@ -3615,15 +3621,21 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         )
 
     @classmethod
-    def _params(cls, params, tracers=None, bias_basis='EggScoSmi', counterterm_basis='Comet'):
+    def _params(cls, params, tracers=None):
+        bias_basis = cls._default_options['bias_basis']
+        counterterm_basis = cls._default_options['counterterm_basis']
+        return cls._get_multitracer(tracers=tracers, bias_basis=bias_basis,
+                                    counterterm_basis=counterterm_basis)._params(params)
+
+    @classmethod
+    def _apply_basis_fixing(cls, params, bias_basis, counterterm_basis):
         bias, ctr, stoch = cls._basis_param_names(bias_basis, counterterm_basis)
         active = set(bias) | set(ctr) | set(stoch)
         inactive = list(cls._all_basis_param_names() - active)
         if inactive:
             for param in params.select(basename=inactive):
                 param.update(value=0.0, fixed=True)
-        return cls._get_multitracer(tracers=tracers, bias_basis=bias_basis,
-                                    counterterm_basis=counterterm_basis)._params(params)
+        return params
 
     @classmethod
     def emulator_params_range(cls):

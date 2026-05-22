@@ -306,8 +306,8 @@ class TracerSpectrum2PolesObservable(BaseClusteringObservable):
             std = self.covariance.at.observable.get(**label).std()
             lax[0].errorbar(x, scale * data_pole.value(), yerr=scale * std, color=kw_theory[ill]['color'], linestyle='none', marker='o', label=rf'$\ell = {ell}$')
             lax[0].plot(x, scale * wtheory_pole.value(), **kw_theory[ill])
-        for ill, label in enumerate(labels):
-            ell = label['ells']
+        # for ill, label in enumerate(labels):
+            # ell = label['ells']
             lax[ill + 1].plot(x, (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ill])
             lax[ill + 1].set_ylim(-4, 4)
             for offset in [-2., 2.]: lax[ill + 1].axhline(offset, color='k', linestyle='--')

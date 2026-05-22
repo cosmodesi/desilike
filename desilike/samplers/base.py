@@ -18,7 +18,7 @@ from scipy.special import logsumexp
 from desilike import ParameterArray
 from desilike.samples import Chain, diagnostics
 from desilike.utils import BaseClass
-from .pool import MPIPool
+from .pool import MPIPool, FunctionWrapper
 
 
 def update_parameters(user_kwargs, sampler, **desilike_kwargs):
@@ -76,19 +76,13 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         """
         self.likelihood = likelihood
-        self.n_dim = len(self.likelihood.varied_params)
-        self.n_derived = int(np.sum([
-            np.prod(param.shape) for param in
-            self.likelihood.all_params.select(derived=True)]))
+        self.varied_params = self.likelihood.varied_params
+        self.derived_params = self.likelihood.all_params.select(derived=True) + self.likelihood.all_params.select(solved=True)
+        self.n_derived = int(np.sum([np.prod(param.shape) for param in self.derived_params]))
 
         self.mpicomm = likelihood.mpicomm
-        self.pool = MPIPool(comm=self.mpicomm)
-        for name, f in zip(
-                ['prior_transform', 'compute_prior', 'compute_posterior',
-                 'compute_likelihood'],
-                [self.prior_transform, self.compute_prior,
-                 self.compute_posterior, self.compute_likelihood]):
-            setattr(self, name, self.pool.save_function(f, name))
+        self.set_pool(mpicomm=self.mpicomm)
+        self.jit_likelihood(self.likelihood)
 
         if directory is not None:
             directory = Path(directory)
@@ -103,7 +97,10 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
                 self.read()
             except FileNotFoundError:
                 pass
+        self.set_rng(rng=rng)
 
+    def set_rng(self, rng):
+        """Set random number generator."""
         if hasattr(self, 'rng') and rng is None:
             pass
         else:
@@ -111,6 +108,49 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
             if isinstance(rng, int) or rng is None:
                 rng = np.random.default_rng(seed=rng)
             self.rng = rng
+
+    @property
+    def n_dim(self):
+        return len(self.varied_params)
+
+    def jit_likelihood(self, likelihood):
+        """JIT the likelihood with JAX, if possible."""
+        rng = np.random.default_rng(seed=42)
+
+        def get_start(size=1):
+            toret = {}
+            for param in self.varied_params:
+                if param.ref.is_proper():
+                    value = param.ref.sample(size=size, random_state=rng)
+                else:
+                    value = np.full(size, param.value)
+                toret[param.name] = value
+            return toret
+
+        likelihood()  # initialize before jit
+        try:
+            import jax
+            jitted_likelihood = jax.jit(likelihood, static_argnames=['return_derived'])
+            jitted_likelihood(get_start())
+            jitted_likelihood(get_start(), return_derived=True)
+            #raise ValueError
+        except:
+            if self.mpicomm.rank == 0:
+                self.log_info('Could *not* jit input likelihood.')
+            jitted_likelihood = self.likelihood
+        else:
+            if self.mpicomm.rank == 0:
+                self.log_info('Successfully jit input likelihood.')
+        self._likelihood = jitted_likelihood
+
+    def set_pool(self, mpicomm):
+        """Set MPI pool."""
+        self.pool = MPIPool(comm=mpicomm)
+        for name in ['prior_transform', 'compute_prior', 'compute_posterior', 'compute_likelihood']:
+            f = getattr(self, name)
+            if isinstance(f, FunctionWrapper):
+                f = f.function
+            setattr(self, name, self.pool.save_function(f, name))
 
     def prior_transform(self, sample):
         """Transform from the unit cube to parameter space using the prior.
@@ -127,7 +167,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         """
         return np.array([param.prior.ppf(x) for param, x in zip(
-            self.likelihood.varied_params, sample)])
+            self.varied_params, sample)])
 
     def compute_prior(self, sample):
         """
@@ -146,7 +186,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
         """
         if not isinstance(sample, dict):
             sample = dict(
-                zip(self.likelihood.varied_params.names(), sample))
+                zip(self.varied_params.names(), sample))
         return self.likelihood.all_params.prior(**sample)
 
     def compute_posterior(self, sample):
@@ -166,11 +206,12 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         """
         if not isinstance(sample, dict):
-            sample = dict(zip(self.likelihood.varied_params.names(), sample))
-        log_post, derived = self.likelihood(sample, return_derived=True)
+            sample = dict(zip(self.varied_params.names(), sample))
+        log_post, derived = self._likelihood(sample, return_derived=True)
+        # [()] to keep value (not derivatives)
         derived = np.concatenate([
-            np.asarray(derived[key]).flatten() for key in
-            self.likelihood.all_params.select(derived=True)])
+            np.asarray(derived[key][()]).flatten() for key in
+            self.derived_params])
 
         return float(log_post), derived
 
@@ -208,13 +249,13 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
             Extra parameters such as weights.
 
         """
-        params = self.likelihood.varied_params
-        samples = [ParameterArray(samples[:, i], param=param) for i, param in
+        params = self.varied_params
+        samples = [ParameterArray(samples[..., i], param=param) for i, param in
                    enumerate(params)]
-        params = self.likelihood.all_params.select(derived=True)
+        params = self.derived_params
         derived = np.split(derived, np.cumsum([
-            int(np.prod(param.shape)) for param in params])[:-1], axis=1)
-        derived = [derived[i].reshape((-1, ) + param.shape) for i, param in
+            int(np.prod(param.shape)) for param in params])[:-1], axis=-1)
+        derived = [derived[i].reshape(derived[i].shape[:-1] + param.shape) for i, param in
                    enumerate(params)]
         derived = [ParameterArray(derived[i], param=param) for i, param in
                    enumerate(params)]
@@ -270,7 +311,7 @@ class StaticSampler(BaseSampler):
         Returns
         -------
         results : desilike.samples.Chain
-            Sampler results.
+            Sampler results, returned on rank 0.
 
         """
         if not self.mpicomm.bcast(hasattr(self, 'results'), root=0):
@@ -291,13 +332,14 @@ class StaticSampler(BaseSampler):
 
                 self.pool.stop_wait()
             else:
+                self.results = None
                 self.pool.wait()
 
         if self.directory is not None:
             self.write()
 
-        return self.mpicomm.bcast(
-            self.results if self.mpicomm.rank == 0 else None, root=0)
+        # No need to broadcast
+        return self.results
 
     def write(self):
         """Write internal calculations to disk."""
@@ -345,10 +387,10 @@ class PopulationSampler(BaseSampler):
         Returns
         -------
         results : desilike.samples.Chain
-            Sampler results.
+            Sampler results, returned on rank 0.
 
         """
-        if self.mpicomm.rank == 0:
+        if self.pool.comm.rank == 0:
             samples, derived, extras = self.run_sampler(**kwargs)
             results = self.array_to_chain(samples, derived, **extras)
             self.pool.stop_wait()
@@ -364,7 +406,7 @@ class MarkovChainSampler(BaseSampler):
 
     default_adaptation_steps = 0
 
-    def __init__(self, likelihood, n_chains=4, chains=None, rng=None,
+    def __init__(self, likelihood, n_chains=1, chains=None, rng=None,
                  directory=None):
         """Initialize the sampler.
 
@@ -373,10 +415,10 @@ class MarkovChainSampler(BaseSampler):
         likelihood : BaseLikelihood
             Likelihood to sample.
         n_chains : int, optional
-            Number of chains. Default is 4.
+            Number of independent chains. Default is 1.
         chains : list of desilike.samples.Chain, optional
-            If given, continue the chains. In that case, we will ignore what
-            was read from disk. Default is ``None``.
+            If given (to be provided at least on rank 0), continue the chains.
+            In that case, we will ignore what was read from disk. Default is ``None``.
         rng : numpy.random.Generator, int, or None, optional
             Random number generator. Default is ``None``.
         directory : str, Path, or None, optional
@@ -388,20 +430,51 @@ class MarkovChainSampler(BaseSampler):
             If ``burn_in`` is a float and larger than unity.
 
         """
-        if chains is None:
-            self.n_chains = n_chains
-        else:
-            self.n_chains = len(chains)
+        self.mpicomm = likelihood.mpicomm
+        if not hasattr(self, '_chain'):
+            self._chain = None
+        input_chains = False
+        if self.mpicomm.rank == 0:
+            input_chains = chains is not None
+            if input_chains:
+                if not isinstance(chains, (tuple, list)):
+                    chains = [chains]
+                n_chains = len(chains)
+        input_chains, self.n_chains = self.mpicomm.bcast((input_chains, n_chains), root=0)
 
         super().__init__(likelihood, rng=rng, directory=directory)
+        if input_chains:
+            # Move chain to its local process
+            for ichain, dest in enumerate(self._pool_mains):
+                chain = Chain.sendrecv(chains[ichain] if self.mpicomm.rank == 0 else None,
+                                             source=0, dest=dest, mpicomm=self.mpicomm)
+                if self.mpicomm.rank == dest:
+                    self._chain = chain
+        self.checks = []
 
-        if chains is not None:
-            self.chains = chains
-            self.checks = []
+    def set_rng(self, rng):
+        """Set random number generator."""
+        if hasattr(self, 'rng') and rng is None:
+            pass
+        else:
+            # Overwrite the RNG that may be read.
+            if isinstance(rng, int) or rng is None:
+                rng = np.random.default_rng(seed=rng)
+            # Draw entropy from existing RNG
+            ss = np.random.SeedSequence(rng.integers(0, 2**63, size=4))
+            self.rng = [np.random.default_rng(s) for s in ss.spawn(self.n_chains)][self._ichain]
 
-        if not hasattr(self, 'chains'):
-            self.chains = []
-            self.checks = []
+    def set_pool(self, mpicomm):
+        """Set MPI pool."""
+        if self.n_chains > mpicomm.size:
+            raise ValueError(f"n_chains={self.n_chains} cannot exceed MPI size={mpicomm.size}")
+        color = mpicomm.rank * self.n_chains // mpicomm.size
+        mpicomm = mpicomm.Split(color=color, key=mpicomm.rank)
+        super().set_pool(mpicomm=mpicomm)
+        mains = self.mpicomm.allgather(self.mpicomm.rank if self.pool.main else None)
+        mains = [main for main in mains if main is not None]
+        self._pool_mains = mains
+        self._ichain = color
 
     @abstractmethod
     def run_sampler(self, steps):
@@ -427,7 +500,7 @@ class MarkovChainSampler(BaseSampler):
         """
         pass
 
-    def initialize_chains(self, max_init_attempts=100):
+    def initialize_chains(self, max_init_attempts=100, shape: tuple=None):
         """Initialize the chains.
 
         Parameters
@@ -435,6 +508,8 @@ class MarkovChainSampler(BaseSampler):
         max_init_attempts : int or None, optional
             Maximum number of attempts per chain. If ``None``, there is no
             limit. Default is 100.
+        shape : tuple, optional
+            Shape of chain.
 
         Raises
         ------
@@ -446,81 +521,92 @@ class MarkovChainSampler(BaseSampler):
         if max_init_attempts is None:
             max_init_attempts = sys.maxsize
 
-        if self.mpicomm.rank == 0:
+        if shape is None:
+            shape = ()
+        shape = tuple(shape)
+        size = np.empty(shape).size
 
-            for _ in range(max_init_attempts):
+        if self.pool.main:
+            if self._chain is None:
+                samples, log_post, derived = [], [], []
 
-                # Draw random samples.
-                samples = np.zeros((self.n_chains, self.n_dim))
-                for i, param in enumerate(self.likelihood.varied_params):
-                    if param.ref.is_proper():
-                        samples[:, i] = param.ref.sample(
-                            size=self.n_chains, random_state=self.rng)
-                    else:
-                        samples[:, i] = np.full(self.n_chains, param.value)
+                for _ in range(max_init_attempts):
 
-                results = self.pool.map(self.compute_posterior, samples)
-                log_post = np.array([r[0] for r in results])
-                derived = np.array([r[1] for r in results])
+                    # Draw random samples
+                    _samples = np.zeros((shape or (1,)) + (self.n_dim,))
+                    for i, param in enumerate(self.varied_params):
+                        if param.ref.is_proper():
+                            _samples[..., i] = param.ref.sample(size=shape, random_state=self.rng)
+                        else:
+                            _samples[..., i] = np.full(shape, param.value)
 
-                # Accept those with finite posterior.
-                for i in np.arange(self.n_chains)[np.isfinite(log_post)]:
-                    chain = self.array_to_chain(
-                        np.atleast_2d(samples[i]), np.atleast_2d(derived[i]),
-                        logposterior=np.atleast_1d(log_post[i]))
-                    self.chains.append(chain)
+                    results = self.pool.map(self.compute_posterior, _samples.reshape(size, self.n_dim))
+                    _log_post = np.array([r[0] for r in results])
+                    _derived = np.array([r[1] for r in results])
 
-                if len(self.chains) >= self.n_chains:
-                    break
+                    # Accept those with finite posterior
+                    is_finite = np.isfinite(_log_post)
+                    samples += _samples[is_finite].tolist()
+                    log_post += _log_post[is_finite].tolist()
+                    derived += _derived[is_finite].tolist()
+
+                    if len(samples) >= size:
+                        samples, log_post, derived = np.array(samples[:size]), np.array(log_post[:size]), np.array(derived[:size])
+                        if shape:
+                            samples, log_post, derived = samples[None, :], log_post[None, :], derived[None, :]
+                        self._chain = self.array_to_chain(samples, derived, logposterior=log_post)
+                        break
 
             self.pool.stop_wait()
         else:
             self.pool.wait()
 
-        if self.mpicomm.bcast(len(self.chains) < self.n_chains, root=0):
+        if any(np.array(self.mpicomm.allgather(self._chain is None))[self._pool_mains]):
             raise ValueError('Could not find finite posterior '
                              f'after {max_init_attempts:d} attempts.')
 
     @property
+    def chains(self):
+        """Gather and return all chains on rank 0."""
+        chains = []
+        for source in self._pool_mains:
+            chains.append(Chain.sendrecv(self._chain, source=source, dest=0, mpicomm=self.mpicomm))
+        return chains if self.mpicomm.rank == 0 else None
+
+    @property
     def state(self):
-        """Return the current state of the chains as NumPy arrays.
+        """Return the current state of the (local) chain as NumPy arrays; it is a process-local operation.
 
         Returns
         -------
-        samples : numpy.ndarray of shape (n_chains, n_dim)
-            Current position of the chains.
-        derived : numpy.ndarray of shape (n_chain, n_derived)
-            Current derived paramters.
-        log_post : numpy.ndarray of shape (n_chains, )
+        samples : numpy.ndarray of shape  (..., n_dim)
+            Current position of the chains, with ... a potential additional dimension (e.g. the number of walkers), if any.
+        derived : numpy.ndarray of shape (..., n_derived)
+            Current derived parameters.
+        log_post : numpy.ndarray of shape (...)
             Current logarithm of the posterior.
 
         """
-        samples = [[chain[key][-1].value for key in
-                    self.likelihood.varied_params] for chain in self.chains]
-        derived = [np.concatenate([
-            np.asarray(chain[key][-1].value).flatten() for key in
-            self.likelihood.all_params.select(derived=True)]) for chain in
-            self.chains]
-        log_post = [chain.logposterior[-1] for chain in self.chains]
+        samples = np.concatenate([np.asarray(self._chain[param][-1]).reshape(self._chain.shape[1:] + (-1,)) for param in self.varied_params], axis=-1)
+        derived = np.concatenate([np.asarray(self._chain[param][-1]).reshape(self._chain.shape[1:] + (-1,)) for param in self.derived_params], axis=-1)
+        log_post = self._chain.logposterior[-1]
         return np.array(samples), np.array(derived), np.array(log_post)
 
     def extend(self, samples, derived, log_post):
-        """Extend the sampler chains.
+        """Extend the sampler chain; it is a process-local operation.
 
         Parameters
         ----------
-        samples : numpy.ndarray of shape (n_chains, n_steps, n_dim)
+        samples : numpy.ndarray of shape (n_steps, ..., n_dim)
             Positions in parameter space.
-        derived : numpy.ndarray of shape (n_chains, n_steps, ...)
+        derived : numpy.ndarray of shape (n_steps, ..., ...)
             Blobs returned from the posterior.
-        log_post : numpy.ndarray of shape (n_chains, n_steps)
+        log_post : numpy.ndarray of shape (n_steps, ...)
             Logarithm of the posterior.
 
         """
-        for i in range(self.n_chains):
-            chain = self.array_to_chain(
-                samples[i], derived[i], logposterior=log_post[i])
-            self.chains[i] = Chain.concatenate(self.chains[i], chain)
+        chain = self.array_to_chain(samples, derived, logposterior=log_post)
+        self._chain = Chain.concatenate(self._chain, chain)
 
     def check(self, burn_in=0.2, gelman_rubin=1.1, geweke=None, ess=None,
               quiet=False):
@@ -552,44 +638,50 @@ class MarkovChainSampler(BaseSampler):
             Whether the chains passed convergence checks.
 
         """
-        chains = [chain.remove_burnin(burn_in) for chain in self.chains]
-
-        if not quiet:
-            self.log_info('Diagnostics:')
-
-        gelman_rubin_value = np.amax(diagnostics.gelman_rubin(
-            chains, method='diag'))
-        try:
-            geweke_value = np.amax(
-                diagnostics.geweke(chains, first=0.1, last=0.5))
-        except ValueError:
-            geweke_value = float('inf')
-
-        iact = diagnostics.integrated_autocorrelation_time(
-            chains, check_valid='ignore')
-        ess_value = len(chains[0]) / iact.max()
-
         passed_all = True
 
-        for name, threshold, upper, value in zip(
-                ["Gelman-Rubin", "Geweke", "Effective Sample Size"],
-                [gelman_rubin, geweke, ess], [True, True, False],
-                [gelman_rubin_value, geweke_value, ess_value]):
-            if not quiet:
-                self.log_info(f"{name}: {value:.3g}")
-            if threshold is not None:
-                passed = value < threshold if upper else value >= threshold
-                passed_all = passed_all and passed
-                if not quiet:
-                    self.log_info(
-                        f"{value:.3g} {'<' if value < threshold else '>='} "
-                        f"{threshold:.3g} ({'' if passed else 'not '}passed)")
+        # All on rank 0
+        chains = self.chains
+        if self.mpicomm.rank == 0:
+            chains = [chain.remove_burnin(burn_in) for chain in chains]
 
-        return passed_all
+            if not quiet:
+                self.log_info('Diagnostics:')
+
+            # At least 4 splits
+            nsplits = 4 // len(chains)
+            if nsplits <= 1: nsplits = None
+            gelman_rubin_value = np.max(diagnostics.gelman_rubin(
+                chains, method='diag', nsplits=nsplits))
+            try:
+                geweke_value = np.max(
+                    diagnostics.geweke(chains, first=0.1, last=0.5))
+            except ValueError:
+                geweke_value = float('inf')
+
+            iact = diagnostics.integrated_autocorrelation_time(
+                chains, check_valid='ignore')
+            ess_value = np.mean([len(chain) for chain in chains]) / iact.max()
+
+            for name, threshold, upper, value in zip(
+                    ["Gelman-Rubin", "Geweke", "Effective Sample Size"],
+                    [gelman_rubin, geweke, ess], [True, True, False],
+                    [gelman_rubin_value, geweke_value, ess_value]):
+                if not quiet:
+                    self.log_info(f"{name}: {value:.3g}")
+                if threshold is not None:
+                    passed = value < threshold if upper else value >= threshold
+                    passed_all = passed_all and passed
+                    if not quiet:
+                        self.log_info(
+                            f"{value:.3g} {'<' if value < threshold else '>='} "
+                            f"{threshold:.3g} ({'' if passed else 'not '}passed)")
+
+        return self.mpicomm.bcast(passed_all, root=0)
 
     def is_converged(self, min_steps=0, max_steps=sys.maxsize,
                      checks_passed=10):
-        """Check whether sampling should stop.
+        """Check whether sampling should stop for the local chain.
 
         Parameters
         ----------
@@ -608,20 +700,18 @@ class MarkovChainSampler(BaseSampler):
             If True, sampling should stop.
 
         """
-        if self.mpicomm.rank == 0:
-            converged = (len(self.chains[0]) >= max_steps or
-                         (len(self.chains[0]) >= min_steps and
-                          len(self.checks) >= checks_passed and
-                          all(self.checks[-checks_passed:])))
-        else:
-            converged = False
-
-        return self.mpicomm.bcast(converged, root=0)
+        converged = True
+        if self.pool.main:
+            converged = (len(self._chain) >= max_steps or
+                        (len(self._chain) >= min_steps and
+                        len(self.checks) >= checks_passed and
+                        all(self.checks[-checks_passed:])))
+        return all(self.mpicomm.allgather(converged))
 
     def run(self, burn_in=0.2, min_steps=0, max_steps=None,
             adaptation_steps=None, check_every=300, checks_passed=2,
-            gelman_rubin=1.1, geweke=None, ess=None, flatten_chains=True,
-            save_every=300, max_init_attempts=100):
+            gelman_rubin=1.1, geweke=None, ess=None,
+            save_every=300, max_init_attempts=100, concatenate: bool=True):
         """Run the sampler.
 
         Parameters
@@ -655,23 +745,22 @@ class MarkovChainSampler(BaseSampler):
             Used to asses convergence.  If given, the minimum effective sample
             size per chain. The effective sample size is the number of chain
             elements divided by the autocorrelation time. Default is ``None``.
-        flatten_chains: bool, optional
-            Whether to concatenate individual chains into one chain. Default is
-            True.
         save_every: int, optional
             After how many steps results are saved. Default is 300.
         max_init_attempts: int, optional
             Maximum number of attempts to initialize each chain. Default is
             100.
+        concatenate: bool, optional
+            Whether to concatenate individual chains into one chain. Default is
+            True.
 
         Returns
         -------
         desilike.samples.Chain or list of desilike.samples.Chain
-            Sampler results.
+            Sampler results, returned on rank 0.
 
         """
-        if self.mpicomm.bcast(len(self.chains) == 0, root=0):
-            self.initialize_chains(max_init_attempts=max_init_attempts)
+        self.initialize_chains(max_init_attempts=max_init_attempts)
 
         if self.directory is None:
             save_every = check_every  # Don't stop to save.
@@ -680,12 +769,11 @@ class MarkovChainSampler(BaseSampler):
             adaptation_steps = self.default_adaptation_steps
         self.adaptation_steps = adaptation_steps  # only used for MH MCMC
 
-        if self.mpicomm.rank == 0 and adaptation_steps > 0:
+        if adaptation_steps > 0:
             self.adapt_sampler(adaptation_steps)
 
         # Run the chain until convergence.
-        steps = self.mpicomm.bcast(
-            len(self.chains[0]) if self.pool.main else 0, root=0)
+        steps = min(self.mpicomm.allgather(len(self._chain) if self.pool.main else sys.maxsize))
 
         if max_steps is None:
             max_steps = sys.maxsize
@@ -699,48 +787,84 @@ class MarkovChainSampler(BaseSampler):
                                 save_every - (steps % save_every),
                                 max_steps - steps)
             steps += steps_to_take
-            if self.mpicomm.rank == 0:
-                self.run_sampler(steps_to_take)
-                if steps % check_every == 0:
-                    self.checks.append(self.check(
-                        burn_in=burn_in, gelman_rubin=gelman_rubin,
-                        geweke=geweke, ess=ess))
-                self.pool.stop_wait()
-            else:
-                self.pool.wait()
+            self.run_sampler(steps_to_take)
+            if steps % check_every == 0:
+                self.checks.append(self.check(
+                    burn_in=burn_in, gelman_rubin=gelman_rubin,
+                    geweke=geweke, ess=ess))
 
             # Write results.
             if self.directory is not None and steps % save_every == 0:
                 self.write()
-
         # Write results in case it wasn't written in the last iteration.
         if self.directory is not None and steps % save_every != 0:
             self.write()
 
-        if self.mpicomm.rank == 0:
-            chains = [chain.remove_burnin(burn_in) for chain in self.chains]
-        else:
-            chains = [None] * self.n_chains
+        if self.pool.main:
+            self._chain = self._chain.remove_burnin(burn_in)
 
-        chains = self.mpicomm.bcast(chains, root=0)
-
-        if flatten_chains:
-            return Chain.concatenate(chains)
-        else:
-            return chains
+        chains = self.chains
+        if concatenate and self.mpicomm.rank == 0:
+            chains = Chain.concatenate(chains)
+        return chains
 
     def write(self):
         """Write all results to disk."""
-        super().write()
+        if self.pool.main:
+            with open(self.directory / f'rng_{self._ichain + 1}.json', 'w') as fstream:
+                json.dump(self.rng.bit_generator.state, fstream)
+            self._chain.save(self.directory / f'chain_{self._ichain + 1}.npy')
         if self.mpicomm.rank == 0:
-            for i, chain in enumerate(self.chains):
-                chain.save(self.directory / f'chain_{i + 1}.npy')
             np.save(self.directory / 'checks.npy', self.checks)
 
     def read(self):
         """Read internal calculations from disk."""
-        super().read()
-        if self.mpicomm.rank == 0:
-            self.chains = [Chain.load(self.directory / f'chain_{i + 1}.npy')
-                           for i in range(self.n_chains)]
-            self.checks = list(np.load(self.directory / 'checks.npy'))
+        if self.pool.main:
+            with open(self.directory / f'rng_{self._ichain + 1}.json', 'r') as fstream:
+                self.rng = np.random.default_rng()
+                self.rng.bit_generator.state = json.load(fstream)
+            self._chain = Chain.load(self.directory / f'chain_{self._ichain + 1}.npy')
+        self.checks = list(np.load(self.directory / 'checks.npy'))
+
+
+
+class EnsembleSampler(MarkovChainSampler):
+
+    """Base class for ensemble samplers, which run ``nwalkers`` in parallel."""
+
+    def __init__(self, likelihood, n_chains=1, chains=None, rng=None,
+                 directory=None, nwalkers=None):
+        """Initialize the sampler.
+
+        Parameters
+        ----------
+        likelihood : BaseLikelihood
+            Likelihood to sample.
+        n_chains : int, optional
+            Number of chains. Default is 1.
+        chains : list of desilike.samples.Chain, optional
+            If given, continue the chains. In that case, we will ignore what
+            was read from disk. Default is ``None``.
+        nwalkers : int, str, default=None
+            Number of walkers, defaults to :attr:`Chain.shape[1]` of input chains, if any.
+        rng : numpy.random.Generator, int, or None, optional
+            Random number generator. Default is ``None``.
+        directory : str, Path, or None, optional
+            Save samples to this location. Default is ``None``.
+
+        Raises
+        ------
+        ValueError
+            If ``burn_in`` is a float and larger than unity.
+
+        """
+        super().__init__(likelihood, rng=rng, directory=directory, n_chains=n_chains, chains=chains)
+        if nwalkers is None and self._chain is not None:
+            nwalkers = self._chain.shape[1]
+        nwalkers = self.mpicomm.allgather(nwalkers)
+        for nwalkers in nwalkers:
+            if nwalkers is not None: break  # set by input chains
+        self.nwalkers = int(nwalkers) if nwalkers is not None else None
+
+    def initialize_chains(self, max_init_attempts=100):
+        super().initialize_chains(max_init_attempts=max_init_attempts, shape=(self.nwalkers,))

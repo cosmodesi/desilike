@@ -9,10 +9,10 @@ try:
 except ModuleNotFoundError:
     ZEUS_INSTALLED = False
 
-from .base import update_parameters, MarkovChainSampler
+from .base import update_parameters, EnsembleSampler
 
 
-class ZeusSampler(MarkovChainSampler):
+class ZeusSampler(EnsembleSampler):
     """Wrapper for the ensemble slice sampler ``zeus``.
 
     .. rubric:: References
@@ -22,8 +22,8 @@ class ZeusSampler(MarkovChainSampler):
 
     """
 
-    def __init__(self, likelihood, n_chains=4, chains=None, rng=None,
-                 directory=None, **kwargs):
+    def __init__(self, likelihood, n_chains=1, chains=None, rng=None,
+                 directory=None, nwalkers=None, **kwargs):
         """Initialize the ``zeus`` sampler.
 
         Parameters
@@ -31,7 +31,7 @@ class ZeusSampler(MarkovChainSampler):
         likelihood : BaseLikelihood
             Likelihood to sample.
         n_chains : int, optional
-            Number of chains. Default is 4.
+            Number of chains. Default is 1.
         chains : list of desilike.samples.Chain, optional
             If given, continue the chains. In that case, we will ignore what
             was read from disk. Default is ``None``.
@@ -39,6 +39,9 @@ class ZeusSampler(MarkovChainSampler):
             Random number generator. Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
+        nwalkers : int, optional
+            Number of walkers, defaults to :attr:`Chain.shape[1]` of input chains, if any,
+            else ``2 * ndim``.
         **kwargs: dict, optional
             Extra keyword arguments passed to ``zeus`` during initialization.
 
@@ -48,11 +51,12 @@ class ZeusSampler(MarkovChainSampler):
                               "installed.")
 
         super().__init__(likelihood, n_chains=n_chains, chains=chains, rng=rng,
-                         directory=directory)
-
-        if self.mpicomm.rank == 0:
+                         directory=directory, nwalkers=nwalkers)
+        if self.nwalkers is None:
+            self.nwalkers = 2 * self.n_dim
+        if self.pool.main:
             kwargs = update_parameters(
-                kwargs, 'zeus', nwalkers=self.n_chains, ndim=self.n_dim,
+                kwargs, 'zeus', nwalkers=self.nwalkers, ndim=self.n_dim,
                 logprob_fn=self.compute_posterior, pool=self.pool, args=None,
                 kwargs=None, vectorize=False)
             self.sampler = zeus.EnsembleSampler(**kwargs)
@@ -70,15 +74,19 @@ class ZeusSampler(MarkovChainSampler):
             Number of steps to take.
 
         """
-        start, blobs0, log_prob0 = self.state
-        samples = np.zeros((self.n_chains, n_steps, self.n_dim))
-        derived = np.zeros((self.n_chains, n_steps, self.n_derived))
-        log_post = np.zeros((self.n_chains, n_steps))
-        for i, state in enumerate(self.sampler.sample(
-                start, log_prob0=log_prob0, blobs0=np.squeeze(blobs0),
-                iterations=n_steps, progress=False)):
-            samples[:, i, :] = state[0]
-            derived[:, i, :] = state[2].reshape(self.n_chains, -1)
-            log_post[:, i] = state[1]
+        if self.pool.main:
+            start, blobs0, log_prob0 = self.state
+            samples = np.zeros((n_steps, self.nwalkers, self.n_dim))
+            derived = np.zeros((n_steps, self.nwalkers, self.n_derived))
+            log_post = np.zeros((n_steps, self.nwalkers))
+            for i, state in enumerate(self.sampler.sample(
+                    start, log_prob0=log_prob0, blobs0=np.squeeze(blobs0),
+                    iterations=n_steps, progress=False)):
+                samples[i, :, :] = state[0]
+                derived[i, :, :] = state[2]
+                log_post[i, :] = state[1]
 
-        self.extend(samples, derived, log_post)
+            self.extend(samples, derived, log_post)
+            self.pool.stop_wait()
+        else:
+            self.pool.wait()

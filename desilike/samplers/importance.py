@@ -28,8 +28,7 @@ class ImportanceSampler(StaticSampler):
             Grid to be evaluated.
 
         """
-        return np.column_stack([
-            samples[key].value for key in self.likelihood.varied_params])
+        return np.column_stack([samples[key].value for key in self.varied_params])
 
     def run(self, samples, resample=True):
         """Reweight a sample using importance sampling.
@@ -47,16 +46,16 @@ class ImportanceSampler(StaticSampler):
         Returns
         -------
         desilike.samples.Chain
-            Sampler results.
+            Sampler results, returned on rank 0.
 
         """
         results = super().run(samples=samples)
+        if results is not None:  # rank 0
+            if resample:
+                log_w = results.logposterior - samples.logposterior
+            else:
+                log_w = (results.logposterior - results[results._logprior] +
+                        samples.logposterior)
+            results.aweight = np.exp(log_w - logsumexp(log_w))
 
-        if resample:
-            log_w = results.logposterior - samples.logposterior
-        else:
-            log_w = (results.logposterior - results[results._logprior] +
-                     samples.logposterior)
-
-        results.aweight = np.exp(log_w - logsumexp(log_w))
         return results

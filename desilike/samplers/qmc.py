@@ -92,7 +92,7 @@ class QMCSampler(StaticSampler):
             Grid to be evaluated.
         """
         lower, upper = [], []
-        for param in self.likelihood.varied_params:
+        for param in self.varied_params:
             if param.limits is None:
                 raise ParameterPriorError(
                     f"Provide a limit for {param.name}.")
@@ -104,6 +104,6 @@ class QMCSampler(StaticSampler):
                              f"Received {engine}.")
 
         self.engine = ENGINES[engine](
-            d=len(self.likelihood.varied_params), **kwargs)
+            d=len(self.varied_params), **kwargs)
 
         return qmc.scale(self.engine.random(n=size), lower, upper)

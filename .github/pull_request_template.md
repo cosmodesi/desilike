@@ -4,7 +4,7 @@
 
 * [ ] bug fix
 * [ ] new feature
-* [ ] UI/UX improvement
+* [ ] user experience improvement
 * [ ] performance improvement
 * [ ] code refactoring
 

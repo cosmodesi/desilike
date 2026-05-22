@@ -31,6 +31,7 @@ plotting = [
     "getdist",
     "anesthetic"]
 jax = [
+    "numpy>=1.25",
     "jax",
     "interpax"]
 

@@ -8,8 +8,7 @@ try:
 except ModuleNotFoundError:
     H5PY_INSTALLED = False
 import numpy as np
-from scipy.interpolate import interp1d
-from scipy.optimize import minimize_scalar, root_scalar
+from scipy.interpolate import CubicSpline
 from scipy.special import logsumexp
 
 from desilike.utils import BaseClass
@@ -474,29 +473,28 @@ class Samples(BaseClass):
         Parameters
         ----------
         param : str
-            Parmater for which to get interval.
+            Paramater for which to get the interval.
         threshold : float
             Threshold such that the likelihood/posterior is at least
-            its maximum plus the threshold. Must be positive.
+            its maximum plus the threshold. Must be negative.
         posterior: bool or None, optional
             Whether to use the posterior or likelihood. If ``None``, determine
             based on what is computed. Default is ``None``.
+
+        Returns
+        -------
+        list
+            List of pairs of lower and upper bound. For unimodal likelihood,
+            this should typically be a single pair. If a lower and/or upper
+            bound cannot be determined inside the range sampled, the value
+            will be ``np.nan``.
 
         Raises
         ------
         ValueError
             If ``posterior`` is ``None`` but both posterior and likelihood
             have been computed, if there are not enough points to compute the
-            interval, or if ``threshold`` is not positive.
-
-        Returns
-        -------
-        x_min : float
-            Lowest value at threshold.
-        x_opt : float
-            Value where likelihood/posterior is maximal.
-        x_max : float
-            Highest value at threshold.
+            interval, or if ``threshold`` is not negative.
 
         """
         if posterior is None:
@@ -508,8 +506,8 @@ class Samples(BaseClass):
             else:
                 key = 'log_likelihood'
 
-        if not threshold > 0:
-            raise ValueError("'threshold' must positive.")
+        if not threshold < 0:
+            raise ValueError("'threshold' must negative.")
 
         use = np.isin(self['fixed'], [param, ''])
 
@@ -521,31 +519,19 @@ class Samples(BaseClass):
         y = y[np.argsort(x)]
         x = np.sort(x)
 
-        interp = interp1d(x, y, kind='cubic')
-        bounds = (np.amin(x), np.amax(x))
+        spline = CubicSpline(x, y, extrapolate=False)
 
-        def f(x):
-            return -interp(x)
-        res = minimize_scalar(f, bounds=(np.amin(x), np.amax(x)))
+        # Find the maximum by setting the derivative to 0.
+        x = spline.derivative().roots()
+        y_max = np.amax(spline(x))
 
-        # TODO: Add robustness.
-        x_opt = res.x
-        y_max = -res.fun
+        roots = spline.solve(y_max + threshold)
+        y_der = spline.derivative()(roots)
 
-        def f(x):
-            return interp(x) - (y_max - threshold)
+        # TODO: add robustness
+        if y_der[0] < 0:
+            roots = np.insert(roots, 0, np.nan)
+        if y_der[-1] > 0:
+            roots = np.append(roots, np.nan)
 
-        x = np.linspace(*bounds, 1000)
-        y = interp(x)
-
-        res = root_scalar(
-            f, bracket=(bounds[0], x_opt),
-            x0=np.amin(x[y > y_max - threshold]))
-        x_min = res.root
-
-        res = root_scalar(
-            f, bracket=(x_opt, bounds[1]),
-            x0=np.amax(x[y > y_max - threshold]))
-        x_max = res.root
-
-        return x_min, x_opt, x_max
+        return [tuple(r) for r in np.split(roots, len(roots) // 2)]

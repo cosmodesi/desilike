@@ -5,9 +5,9 @@ name: tests
 
 on:
   push:
-    paths: ['.github/**', 'desilike/**', 'tests/**', 'pyproject.toml']
+    paths: ['.github/workflows/**', 'desilike/**', 'tests/**', 'pyproject.toml']
   pull_request:
-    paths: ['.github/**', 'desilike/**', 'tests/**', 'pyproject.toml']
+    paths: ['.github/workflows/**', 'desilike/**', 'tests/**', 'pyproject.toml']
   schedule:
     - cron: '0 0 1 * *'
   workflow_dispatch:

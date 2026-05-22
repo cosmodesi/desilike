@@ -3337,7 +3337,7 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     _default_options = dict(shotnoise=1e4, model='VDG_infty', norm_by_shotnoise=False,
                             comet_apeffect=False, diagram_recon=True,
                             bias_basis='EggScoSmi', counterterm_basis='Comet',
-                            reparametrisation=None)
+                            reparametrisation=None, use_Mpc=False, sigmaR_ref=None)
 
     _pk_diagrams = (
         'P0L_b1b1', 'PNL_b1', 'PNL_id',
@@ -3393,7 +3393,7 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     @classmethod
     def _translate_pk_params_to_canonical(cls, params, *, bias_basis,
                                           counterterm_basis, reparametrisation,
-                                          f_growth, Aap, s12):
+                                          f_growth, Aap, sigma12, sigmaR_ref):
         """Translate user-basis params into the canonical
         (b1, b2, g2, g21, c0, c2, c4, cnlo, NP0, NP20, NP22) basis, mirroring
         comet's PTEmu._update_bias_params (+ _rescale_params for TCM)."""
@@ -3401,7 +3401,8 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         if reparametrisation not in (None, 'None', 'TCM'):
             raise ValueError(f'Unsupported reparametrisation: {reparametrisation!r}')
         g = lambda name: params.get(name, 0.0)
-
+        s12 = sigma12 / sigmaR_ref 
+        
         tcm = (reparametrisation == 'TCM')
         desi_pre_rescale = tcm and bias_basis == 'DESI'
         if desi_pre_rescale:
@@ -3413,9 +3414,9 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             a0_r = g('a0') / (Aap * s12**2)
             a2_r = g('a2') / (Aap * s12**2)
             a4_r = g('a4') / (Aap * s12**2)
-            SN0_r = g('SN0') / Aap
-            SN20_r = g('SN20') / Aap
-            SN22_r = g('SN22') / Aap
+            NP0_r = g('NP0') / Aap
+            NP20_r = g('NP20') / Aap
+            NP22_r = g('NP22') / Aap
         else:
             b1 = g('b1')
             b2d, bk2, btd = g('b2d'), g('bk2'), g('btd')
@@ -3464,10 +3465,10 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         elif counterterm_basis == 'DESIct':
             if desi_pre_rescale:
                 a0, a2, a4 = a0_r, a2_r, a4_r
-                NP0, NP20, NP22 = SN0_r, SN20_r, SN22_r
+                NP0, NP20, NP22 = NP0_r, NP20_r, NP22_r
             else:
                 a0, a2, a4 = g('a0'), g('a2'), g('a4')
-                NP0, NP20, NP22 = g('SN0'), g('SN20'), g('SN22')
+                NP0, NP20, NP22 = g('NP0'), g('NP20'), g('NP22')
             f = f_growth
             c0 = -0.5 * (a0 * (b1**2 + b1 * f / 3.0)
                          + a2 * (b1 * f / 3.0 + f**2 / 5.0)
@@ -3540,12 +3541,14 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             self.apeffect = APEffect(z=self.z, fiducial=self.fiducial, mode='geometry', cosmo=self.cosmo)
 
         from comet import comet
-        self.comet = comet(use_Mpc=False, model=self.options['model'],
+        self.comet = comet(use_Mpc=self.options['use_Mpc'], model=self.options['model'],
                            bias_basis=self.options['bias_basis'],
                            counterterm_basis=self.options['counterterm_basis'],
                            reparametrisation=self.options['reparametrisation'])
         if self.options['norm_by_shotnoise']:
             self.comet.define_nbar(nbar=self.nbar)
+        if self.options['sigmaR_ref'] is not None:
+            self.comet.define_s12_ref(self.options['sigmaR_ref'])
         self.comet.define_fiducial_cosmology(self.cosmoprimo_to_comet(self.fiducial))
 
         self.decode_params = self._get_multitracer(
@@ -3596,7 +3599,7 @@ class COMETTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
             bias_basis=self.options['bias_basis'],
             counterterm_basis=self.options['counterterm_basis'],
             reparametrisation=self.options['reparametrisation'],
-            f_growth=f_growth, Aap=Aap, s12=s12)
+            f_growth=f_growth, Aap=Aap, sigma12=s12, sigmaR_ref=self.comet.sigma12_ref)
         coefs = self._pk_bias_coefs(canonical, comet_cosmo['h'], self.comet.nbar,
                                     use_Mpc=self.comet.use_Mpc)
         coef_vec = jnp.array([coefs[name] for name in self._pk_diagrams])
@@ -3689,7 +3692,7 @@ class COMETTracerBispectrumMultipoles(BaseTracerBispectrumMultipoles, COMETTrace
                             comet_apeffect=False, quad_deg=(7, 16, 5), mu12_transform='k3',
                             diagram_recon=True,
                             bias_basis='EggScoSmi', counterterm_basis='Comet',
-                            reparametrisation=None)
+                            reparametrisation=None, use_Mpc=False, sigmaR_ref=None)
 
     _bk_diagrams = (
         'B0L_b1b1b1', 'B0L_b1b1', 'B0L_b1',
@@ -3765,12 +3768,14 @@ class COMETTracerBispectrumMultipoles(BaseTracerBispectrumMultipoles, COMETTrace
             self.comet = getattr(comet, 'comet', comet)
         else:
             from comet import comet as comet_emu
-            self.comet = comet_emu(use_Mpc=False, model=self.options['model'],  # type: ignore
+            self.comet = comet_emu(use_Mpc=self.options['use_Mpc'], model=self.options['model'],  # type: ignore
                                    bias_basis=self.options['bias_basis'],
                                    counterterm_basis=self.options['counterterm_basis'],
                                    reparametrisation=self.options['reparametrisation'])
             if self.options['norm_by_shotnoise']:
                 self.comet.define_nbar(nbar=self.nbar)
+            if self.options['sigmaR_ref'] is not None:
+                self.comet.define_s12_ref(self.options['sigmaR_ref'])
             self.comet.define_fiducial_cosmology(self.cosmoprimo_to_comet(self.fiducial))
         self.comet.BispNum.backend = 'jax'
         if not self.options['diagram_recon']:
@@ -3826,7 +3831,7 @@ class COMETTracerBispectrumMultipoles(BaseTracerBispectrumMultipoles, COMETTrace
             bias_basis=self.options['bias_basis'],
             counterterm_basis=self.options['counterterm_basis'],
             reparametrisation=self.options['reparametrisation'],
-            f_growth=f_growth, Aap=Aap, s12=s12)
+            f_growth=f_growth, Aap=Aap, sigma12=s12, sigmaR_ref=self.comet.sigma12_ref)
         canonical = self._translate_bk_extra_params(params, canonical_pk, self.options['reparametrisation'], Aap)
         coefs = self._bk_bias_coefs(canonical, self.comet.nbar)
         coef_vec = jnp.array([coefs[name] for name in self._bk_diagrams])

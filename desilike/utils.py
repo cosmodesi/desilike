@@ -641,6 +641,7 @@ def weights_mu(mu, method='leggauss'):
         if np.ndim(mu) == 0:
             return weights_leggauss(mu, sym=True)
         raise ValueError('gauss integration does not array of mus')
+    raise ValueError(f"method {method!r} is not supported, please use either 'trapz' or 'leggauss'")
 
 
 def matrix_lininterp(xin, xout):

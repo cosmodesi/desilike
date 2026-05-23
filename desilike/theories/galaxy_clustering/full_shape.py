@@ -2389,7 +2389,7 @@ class JAXEffortTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
 
 class BaseTracerBispectrumMultipoles(BaseCalculator):
 
-    """Base class for theory tracer power spectrum multipoles."""
+    """Base class for theory tracer bispectrum multipoles."""
     config_fn = 'full_shape.yaml'
     _default_options = dict(shotnoise=1e4)
     _initialize_with_namespace = True
@@ -2409,8 +2409,9 @@ class BaseTracerBispectrumMultipoles(BaseCalculator):
 
     def _set_options(self, k=None, ells=((0, 0, 0), (2, 0, 2)), tracers=None, basis='sugiyama', **kwargs):
         # Wavenumber and multipoles
+        self.basis = basis
         if k is None:
-            if basis == 'soccimarro':
+            if self.basis == 'soccimarro':
                 # Default k-bins (k1, k2, k3) in Soccimarro basis
                 k = np.linspace(0.01, 0.1, 11)
                 k = np.meshgrid(k, k, k, indexing='ij')
@@ -2428,9 +2429,11 @@ class BaseTracerBispectrumMultipoles(BaseCalculator):
         if shotnoise.shape[-1] > 1:
             # cross correlation: geometric mean
             shotnoise = np.prod(shotnoise)**(1. / len(shotnoise))
-        self.options = self._default_options.copy()
+        self.options: dict = self._default_options.copy()
         for name, value in self._default_options.items():
             self.options[name] = kwargs.pop(name, value)
+        if 'basis' in self.options:
+            self.options['basis'] = self.basis
         if 'shotnoise' in self.options:
             self.options['shotnoise'] = shotnoise
         # The quantity used for the rescaling
@@ -2442,12 +2445,12 @@ class BaseTracerBispectrumMultipoles(BaseCalculator):
         # a tuple if multitracer support
 
     def get(self):
-        # Return power spectrum multipoles
+        # Return bispectrum multipoles
         return self.power
 
     def __getstate__(self):
         state = {}
-        for name in ['k', 'z', 'ells', 'nbar', 'power']:
+        for name in ['k', 'z', 'ells', 'basis', 'nbar', 'power']:
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
@@ -2498,7 +2501,7 @@ class BaseTracerBispectrumMultipoles(BaseCalculator):
 
 class BaseTracerPTBispectrumMultipoles(BaseTracerBispectrumMultipoles):
 
-    """Base class for theory tracer power spectrum multipoles."""
+    """Base class for theory tracer bispectrum multipoles."""
     config_fn = 'full_shape.yaml'
     _default_options = dict(shotnoise=1e4)
 

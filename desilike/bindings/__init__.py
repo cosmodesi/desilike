@@ -1,3 +1,0 @@
-from .cobaya import CobayaLikelihoodGenerator
-from .cosmosis import CosmoSISLikelihoodGenerator
-from .montepython import MontePythonLikelihoodGenerator

@@ -192,7 +192,11 @@ class NautilusSampler(BasePosteriorSampler):
 
             return write
 
-        methods_bak = {name: getattr(nautilus.Sampler, name) for name in ['write', 'write_shell_update', 'write_shell_information_update']}
+        method_names = [
+            name for name in ['write', 'write_shell_update', 'write_shell_information_update']
+            if hasattr(nautilus.Sampler, name)
+        ]
+        methods_bak = {name: getattr(nautilus.Sampler, name) for name in method_names}
         for name, method in methods_bak.items():
             setattr(nautilus.Sampler, name, wrapper(method))
 

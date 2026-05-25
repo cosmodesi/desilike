@@ -3637,7 +3637,8 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTPowe
             )
             return
 
-        sigma8 = self.pt.sigma8
+        # APscaling needs sigma8(z) / sigma8_ref(z), not sigma8(z=0) / sigma8_ref(z).
+        sigma8 = getattr(self.pt, "sigma8_z", self.pt.sigma8)
         f = getattr(self.pt, "f0", None)
         if f is None:
             raise ValueError("Missing MG growth rate: expected pt.f0 (preferred) or pt.f.")
@@ -4589,6 +4590,8 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             f0=f0_mg,
             qpar=self.template.qpar,
             qper=self.template.qper,
+            sigma8=self.template.sigma8,
+            sigma8_z=float(self.template.cosmo.get_fourier().sigma8_z(z=self.z)),
             calA=calA,
             calAp=calAp,
             CFD3=CFD3,
@@ -4599,7 +4602,8 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         self.qpar = self.template.qpar
         self.qper = self.template.qper
         self.sigma8 = self.template.sigma8
-        self.fsigma8 = self.pt.f0 * self.sigma8
+        self.sigma8_z = self.pt.sigma8_z
+        self.fsigma8 = self.pt.f0 * self.sigma8_z
         self.f0 = self.pt.f0
         self.fk = self.pt.fk
         self.fk_norm = self.pt.fk_norm
@@ -4698,7 +4702,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
     def __getstate__(self, varied=True, fixed=True):
         state = {}
-        for name in (['k', 'z', 'ells', 'wmu', 'kt'] if fixed else []) + (['sigma8', 'fsigma8', 'qpar', 'qper'] if varied else []):
+        for name in (['k', 'z', 'ells', 'wmu', 'kt'] if fixed else []) + (['sigma8', 'sigma8_z', 'fsigma8', 'qpar', 'qper'] if varied else []):
             if hasattr(self, name):
                 state[name] = getattr(self, name)
 
@@ -4714,7 +4718,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         return state
 
     def __setstate__(self, state):
-        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'fsigma8', 'qpar', 'qper',
+        for name in ['k', 'z', 'ells', 'wmu', 'kt', 'sigma8', 'sigma8_z', 'fsigma8', 'qpar', 'qper',
                      'backend', 'bias_scheme', 'damping', 'IR_resummation']:
             if name in state:
                 setattr(self, name, state.pop(name))
@@ -4727,9 +4731,9 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             if hasattr(self.pt, name):
                 setattr(self, name, getattr(self.pt, name))
 
-        if getattr(self, 'sigma8', None) is not None and getattr(self, 'f0', None) is not None:
+        if getattr(self, 'sigma8_z', None) is not None and getattr(self, 'f0', None) is not None:
             if not hasattr(self, 'fsigma8'):
-                self.fsigma8 = self.f0 * self.sigma8
+                self.fsigma8 = self.f0 * self.sigma8_z
 
         # Rebuild projection operator (not serialized)
         if hasattr(self, 'ells'):
@@ -5026,7 +5030,7 @@ class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTBisp
             )
             return
 
-        sigma8 = self.pt.sigma8
+        sigma8 = getattr(self.pt, "sigma8_z", self.pt.sigma8)
 
         if pb == 'APscaling':
             qpar = self.pt.qpar

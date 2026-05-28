@@ -97,8 +97,9 @@ class Profiler(BaseClass):
         self.samples = self.samples[np.unique(x, axis=0, return_index=True)[1]]
 
         # Get a list of dictionaries of fixed parameters.
-        self.fixed_params = [dict()] * len(self.samples)
+        self.fixed_params = []
         for i in range(len(self.samples)):
+            self.fixed_params.append(dict())
             for param in self.params:
                 if not self.samples.get_flag('optimize', param)[i]:
                     self.fixed_params[i][param] = self.samples[i][param]

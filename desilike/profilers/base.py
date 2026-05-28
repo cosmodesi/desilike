@@ -83,9 +83,31 @@ class Profiler(BaseClass):
                 self.rng = np.random.default_rng()
                 self.rng.bit_generator.state = json.load(fstream)
 
+    def _add_samples(self, samples):
+        """Add samples to profile."""
+        samples[self.neg_cost_key] = -np.inf
+        self.samples.append(samples)
+
+        # Remove duplicate parameter combinations. Use a complex number as a
+        # placeholder for optimized parameters since np.nan is not treated
+        # as equal if present in arrays.
+        x = np.column_stack([np.where(
+            self.samples.get_flag('optimize', param), 1j,
+            self.samples[param]) for param in self.params])
+        self.samples = self.samples[np.unique(x, axis=0, return_index=True)[1]]
+
+        # Get a list of dictionaries of fixed parameters.
+        self.fixed_params = [dict()] * len(self.samples)
+        for i in range(len(self.samples)):
+            for param in self.params:
+                if not self.samples.get_flag('optimize', param)[i]:
+                    self.fixed_params[i][param] = self.samples[i][param]
+
     def add_optimize_all(self):
         """Add finding the global optimum."""
-        samples = Samples(**{key: np.nan for key in self.params}, fixed='')
+        samples = Samples(**{key: [np.nan, ] for key in self.params})
+        for param in self.params:
+            samples.set_flag('optimize', param, True)
         self._add_samples(samples)
 
     def add_sample(self, sample):
@@ -99,18 +121,26 @@ class Profiler(BaseClass):
         Raises
         ------
         ValueError
-            If a parameter is not described in the likelihood.
+            If no parameter is specificed or a parameter is not described in
+            the likelihood.
 
         """
-        for key in sample.keys():
-            if key not in self.params:
-                raise ValueError(f"Unkown parameter '{key}'.")
-        samples = Samples(
-            **{key: value for key, value in sample.items()},
-            fixed=[list(sample.keys()), ])
-        for key in self.params:
-            if key not in sample.keys():
-                samples[key] = [np.nan, ]
+        if not sample:
+            msg = "You must specify at least one parameter."
+            raise ValueError(msg)
+        for param in sample.keys():
+            if param not in self.params:
+                msg = f"Unkown parameter '{param}'."
+                raise ValueError(msg)
+
+        samples = Samples(**{key: [value, ] for key, value in sample.items()})
+        for param in self.params:
+            if param not in sample.keys():
+                samples[param] = np.nan
+                samples.set_flag('optimize', param, True)
+            else:
+                samples.set_flag('optimize', param, False)
+
         self._add_samples(samples)
 
     def add_grid_manual(self, grid):
@@ -124,63 +154,59 @@ class Profiler(BaseClass):
             and :math:`a=2`. If multiple parameters are specified, all
             combinations are profiled.
 
+        Raises
+        ------
+        ValueError
+            If no parameter is specificed or a parameter is not described in
+            the likelihood.
+
         """
-        data = dict()
-        n = 0
-        for key, values in grid.items():
-            for other_key in data.keys():
-                data[other_key] = np.repeat(data[other_key], len(values))
-            data[key] = np.tile(values, max(n, 1))
-            n = len(data[key])
-        samples = Samples(fixed=[list(grid.keys())] * n, **data)
-        for key in self.params:
-            if key not in grid.keys():
-                samples[key] = np.nan
+        if not grid:
+            msg = "You must specify at least one parameter."
+            raise ValueError(msg)
+        for param in grid.keys():
+            if param not in self.params:
+                msg = f"Unkown parameter '{param}'."
+                raise ValueError(msg)
+
+        # Get all combinations.
+        samples = dict(zip(grid.keys(), np.meshgrid(*grid.values())))
+        samples = {key: value.flatten() for key, value in samples.items()}
+
+        samples = Samples(**samples)
+        for param in self.params:
+            if param not in samples.params:
+                samples[param] = np.nan
+                samples.set_flag('optimize', param, True)
+            else:
+                samples.set_flag('optimize', param, False)
+
         self._add_samples(samples)
 
-    def _add_samples(self, samples):
-        """Add samples to profile."""
-        samples[self.neg_cost_key] = -np.inf
-        self.samples.append(samples)
-        self._remove_duplicates()
-        self.fixed_params = self.samples._get_fixed()
-
-    def _remove_duplicates(self):
-        """Remove duplicate parameter combinations to profile over."""
-        samples = np.zeros((len(self.samples), len(self.params)))
-        fixed_params = self.samples._get_fixed()
-        for i in range(len(self.samples)):
-            for k, key in enumerate(self.params):
-                if key in fixed_params[i]:
-                    samples[i, k] = self.samples[key][i]
-                else:
-                    samples[i, k] = np.inf  # np.nan doesn't work with unique
-        self.samples = self.samples[
-            np.unique(samples, axis=0, return_index=True)[1]]
-
-    def _vector_to_params(self, vector, index=0):
+    def _vector_to_params(self, vector, index):
         """Convert an array of varied parameters to a (complete) dictionary.
 
         Parameters
         ----------
         vector : numpy.ndarray
             Array of varied parameters normalized to [0, 1].
-        index : int, optional
+        index : int
             Index of the fixed parameters.
+
+        Returns
+        -------
+        params : dict
+            Dictionary including (not normalized) varied and fixed parameters.
 
         Raises
         ------
         ValueError
             If ``vector`` has the wrong length.
 
-        Returns
-        -------
-        params : dict
-            Dictionary including varied and fixed parameters.
-
         """
         if len(vector) != len(self.params) - len(self.fixed_params[index]):
-            raise ValueError("Incorrect number of parameters.")
+            msg = "Incorrect number of parameters."
+            raise ValueError(msg)
 
         varied_params = [p for p in self.params if p not in
                          self.fixed_params[index].keys()]
@@ -191,12 +217,12 @@ class Profiler(BaseClass):
                 self.limits[key][0])
         return dict(zip(varied_params, vector)) | self.fixed_params[index]
 
-    def _cost_function(self, vector, index=0):
+    def _cost_function(self, params, index=0):
         """Cost function to optimize.
 
         Parameters
         ----------
-        vector : numpy.ndarray or dict
+        params : numpy.ndarray or dict
             Array of varied parameters normalized to [0, 1]. Alternatively,
             can be a dictionary listing all parameters.
         index : int, optional
@@ -208,16 +234,14 @@ class Profiler(BaseClass):
             Cost function value.
 
         """
-        if not isinstance(vector, dict):
-            params = self._vector_to_params(vector, index=index)
-        else:
-            params = vector
+        if not isinstance(params, dict):
+            params = self._vector_to_params(params, index=index)
 
         if self.neg_cost_key == 'log_likelihood':
             return - (self.likelihood(params) -
                       self.likelihood.all_params.prior(**params))
-        else:
-            return - self.likelihood(params)
+
+        return - self.likelihood(params)
 
     def _get_start(self, n, max_init_attempts=100):
         """Generate cold-start samples.
@@ -231,18 +255,18 @@ class Profiler(BaseClass):
             Maximum number of attempts to initialize each sample. Default is
             100.
 
-        Raises
-        ------
-        ValueError
-            If a finite cost function value cannot be found for all samples
-            after ``max_init_attempts``.
-
         Returns
         -------
         index : numpy.ndarray
             Indices corresponding to the sample.
         x_0 : list of numpy.ndarray
             Starting positions.
+
+        Raises
+        ------
+        ValueError
+            If a finite cost function value cannot be found for all samples
+            after ``max_init_attempts``.
 
         """
         index = np.repeat(np.arange(len(self.samples)), n)
@@ -266,8 +290,9 @@ class Profiler(BaseClass):
                 break
 
         if not np.all(np.isfinite(cost)):
-            raise ValueError("Could not find finite likelihood/posterior "
-                             f"after {max_init_attempts:d} attempts.")
+            msg = ("Could not find finite likelihood/posterior after "
+                   f"{max_init_attempts:d} attempts.")
+            raise ValueError(msg)
 
         return index, x_0
 

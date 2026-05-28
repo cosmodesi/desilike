@@ -45,8 +45,8 @@ def test_samples_save(suffix, tmp_path):
 
     samples = statistics.Samples(
         a=np.linspace(0, 1, 10), b=np.arange(20).reshape(10, 2),
-        latex=dict(a=r'$\lambda$'),
-        fixed=[['a', ]] * 5 + [['b', ]] * 5)
+        latex=dict(a=r'$\lambda$'))
+    samples.set_flag('optimize', 'a', [True] * 5 + [False] * 5)
 
     if suffix == '.npy':
         with pytest.raises(ValueError):
@@ -144,3 +144,32 @@ def test_tabulate():
         a=np.random.random(1000), b=np.random.random(1000),
         latex=dict(a=r'$\lambda$'))
     samples.tabulate(use_latex=True)
+
+
+def test_sort_into_grid():
+    # Test that sorting into a grid works correctly.
+
+    def f(x1, x2, x3):
+        return x1 + x2**2 + x3**2
+
+    x1 = np.linspace(0, 1, 3)
+    x2 = np.linspace(1, 2, 4)
+    x3 = np.linspace(2, 3, 5)
+    xx1, xx2, xx3 = np.meshgrid(x1, x2, x3, indexing='ij')
+    y = f(xx1, xx2, xx3)
+    assert y.shape == (3, 4, 5)
+
+    np.random.seed(42)
+    idx = np.arange(np.prod(y.shape))
+    np.random.shuffle(idx)
+    xx1 = xx1.flatten()[idx]
+    xx2 = xx2.flatten()[idx]
+    xx3 = xx3.flatten()[idx]
+    yy = y.flatten()[idx]
+
+    result = statistics.samples._sort_into_grid(
+        np.column_stack((xx1, xx2, xx3)), yy)
+    assert np.all(x1 == result[0][0])
+    assert np.all(x2 == result[0][1])
+    assert np.all(x3 == result[0][2])
+    assert np.all(y == result[1])

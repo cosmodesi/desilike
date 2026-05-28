@@ -569,11 +569,11 @@ class Samples(BaseClass):
         params = np.atleast_1d(param)
         for param in self.params:
             # In case only one parameter is requested, use even the case
-            # where all parameters are optimized. In all other cases, the
+            # where the parameter itself is optimized. In all other cases, the
             # grid will not be regular, so don't.
             if param in params and len(params) > 1:
                 use = use & ~self.get_flag('optimize', param)
-            else:
+            elif param not in params:
                 try:
                     use = use & self.get_flag('optimize', param)
                 except ValueError:
@@ -582,7 +582,7 @@ class Samples(BaseClass):
                     pass
 
         x = np.column_stack([self[param][use] for param in params])
-        y = self['log_posterior' if posterior else 'log_likelihood']
+        y = self['log_posterior' if posterior else 'log_likelihood'][use]
 
         # Remove duplicates by only choosing the one with the highest
         # likelihood/posterior. First, sort by decreasing likelihood/posterior.

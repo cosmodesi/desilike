@@ -1,6 +1,7 @@
 """Module implementing the samples."""
 
 from pathlib import Path
+import re
 
 try:
     import h5py
@@ -8,32 +9,60 @@ try:
 except ModuleNotFoundError:
     H5PY_INSTALLED = False
 import numpy as np
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import CubicSpline, RegularGridInterpolator
 from scipy.special import logsumexp
 
 from desilike.utils import BaseClass
 
 
-SPECIAL_KEYS = ['fixed', 'log_weight', 'log_prior', 'log_likelihood',
-                'log_posterior']
+SPECIAL_KEYS = ['log_weight', 'log_prior', 'log_likelihood', 'log_posterior',
+                'flag_.*']
+FLAGS = ['optimize']
+
+
+def _sort_into_grid(x, y):
+    """Sort points into a regular grid.
+
+    Parameters
+    ----------
+    x : numpy.ndarray of shape (n, m)
+        Coordinates of grid points.
+    y : numpy.ndarray of shape (n, )
+        Associated values.
+
+    Returns
+    -------
+    x_grid : tuple of numpy.ndarray with shapes (k1, ), ..., (kn, )
+        Points defining the grid in each dimension.
+    y : numpy.ndarray of of shape (k1, ..., kn)
+        Associated values.
+
+    """
+    # Sort values.
+    for i in reversed(range(x.shape[1])):
+        idx = np.argsort(x[:, i], stable=True)
+        x = x[idx]
+        y = y[idx]
+
+    # Create the unique values and the grid.
+    x_grid = []
+    for i in range(x.shape[1]):
+        x_grid.append(np.unique(x[:, i]))
+    y = y.reshape(tuple([len(x) for x in x_grid]))
+
+    return x_grid, y
 
 
 class Samples(BaseClass):
     """Class for storing samples of parameters."""
 
-    def __init__(self, latex=dict(), fixed=None, **kwargs):
+    def __init__(self, latex=dict(), **kwargs):
         """Initialize a sample of parameters.
 
         Parameters
         ----------
         latex : dict or None, optional
             LaTeX expression for parameters. Default is ``None``.
-        fixed : str, array-like or None, optional
-            List of parameter combinations that are fixed. Each element can be
-            a string listing keys separated by a "/" or a list of strings,
-            each indicating a key. Alternatively, use a single string
-            if the same paramters are fixed for all samples. Default is
-            ``None``.
         **kwargs
             Samples of parameters. Each sample must have the same length.
 
@@ -43,18 +72,6 @@ class Samples(BaseClass):
             If not all samples have the same length.
 
         """
-        if fixed is not None:
-            if isinstance(fixed, str):
-                fixed = '/'.join(sorted(fixed.split('/')))
-            else:
-                for i, element in enumerate(fixed):
-                    if isinstance(element, (tuple, list, set)):
-                        fixed[i] = '/'.join(list(element))
-                    else:
-                        fixed[i] = '/'.join(sorted(element.split('/')))
-                fixed = np.asarray(fixed, dtype='U')
-            kwargs['fixed'] = fixed
-
         self.data = {}
         self.n_samples = None
         for key, value in kwargs.items():
@@ -69,7 +86,16 @@ class Samples(BaseClass):
     @property
     def params(self):
         """Return the parameters of the sample as a list of strings."""
-        return [key for key in self.keys if key not in SPECIAL_KEYS]
+        params = []
+        for key in self.keys:
+            match = False
+            for special_key in SPECIAL_KEYS:
+                if re.fullmatch(special_key, key):
+                    match = True
+                    break
+            if not match:
+                params.append(key)
+        return params
 
     def __setitem__(self, key, value):
         """Manipulate the samples.
@@ -80,27 +106,33 @@ class Samples(BaseClass):
             Key (column) to modify or add. Alternatively, index (row) to
             modify.
         value : object, array-like, or dict
-            Value for that key or index.
+            Value for that key or index. Can also be a single value for a all
+            rows in a specific column.
 
         Raises
         ------
         ValueError
-            If new sample does not have the same length as current samples or
-            if ``key`` contains a comma or a backslash.
+            - If new sample does not have the same length as current samples.
+            - If setting a column to a single value but object has no length.
+            - If `key` is a string but not in a valid format.
 
         """
         if isinstance(key, str):
+            for forbidden in [':', '/', ',']:
+                if forbidden in key:
+                    msg = "Keys cannot contain '{forbidden}'."
+                    raise ValueError(msg)
             if isinstance(value, str) or not hasattr(value, '__len__'):
-                value = np.repeat(value, 1 if self.n_samples is None else
-                                  self.n_samples)
+                if self.n_samples is None:
+                    msg = "Samples have no specified length."
+                    raise ValueError(msg)
+                value = np.repeat(value, self.n_samples)
             if self.n_samples is None:
                 self.n_samples = len(value)
             if len(value) != self.n_samples:
                 raise ValueError(
                     f"Input array must have length {self.n_samples}. Received "
                     f"array of length {len(value)}.")
-            if ',' in key or '/' in key:
-                raise ValueError("Keys cannot contain commas or backslashes.")
             if not isinstance(value, np.ndarray):
                 value = np.asarray(value)
             self.data[key] = value
@@ -115,20 +147,20 @@ class Samples(BaseClass):
         Parameters
         ----------
         key : str, slice, numpy.ndarray, or int
-            Key, slice, or number to use.
+            Key, slice, filter array, or number to use.
 
         Returns
         -------
         result : numpy.ndarray or desilike.statistics.Samples
             If ``key`` is a ``str``, the value, i.e., column, for that key.
-            If ``key`` is a slice or boolean array, a new ``Samples`` object
+            If ``key`` is a slice or filter array, a new ``Samples`` object
             corresponding to those rows. If ``key`` is an integer, a dictionary
             corresponding to that row.
 
         Raises
         ------
         TypeError
-            If ``key`` is not a string, slice, or integer.
+            If ``key`` is not a string, slice, filter array, or integer.
 
         """
         if isinstance(key, str):
@@ -211,8 +243,6 @@ class Samples(BaseClass):
         data = {key: self[key] for key in keys}
 
         if suffix == '.csv':
-            data = {key: value for key, value in data.items() if
-                    key != 'fixed'}
             for key, value in data.items():
                 if not value.ndim == 1:
                     raise ValueError(
@@ -234,14 +264,12 @@ class Samples(BaseClass):
                     raise ValueError(
                         "`h5py` is required to save samples to HDF5 files.")
                 with h5py.File(filepath, 'w') as fstream:
-                    dtype = h5py.string_dtype(encoding='utf-8')
-                    fstream['latex_keys'] = latex_keys.astype(dtype)
-                    fstream['latex_values'] = latex_values.astype(dtype)
+                    fstream['latex_keys'] = latex_keys.astype(
+                        h5py.string_dtype(encoding='utf-8'))
+                    fstream['latex_values'] = latex_values.astype(
+                        h5py.string_dtype(encoding='utf-8'))
                     for key, value in data.items():
-                        if key == 'fixed':
-                            fstream[key] = value.astype(dtype)
-                        else:
-                            fstream[key] = value
+                        fstream[key] = value
         else:
             raise ValueError(f"File ending '{suffix}' not supported.")
 
@@ -283,12 +311,8 @@ class Samples(BaseClass):
         latex_keys = data.pop('latex_keys').astype('U')
         latex_values = data.pop('latex_values').astype('U')
         latex = {key: value for key, value in zip(latex_keys, latex_values)}
-        if 'fixed' in data:
-            fixed = data.pop('fixed').astype('U')
-        else:
-            fixed = None
 
-        return cls(latex=latex, fixed=fixed, **data)
+        return cls(latex=latex, **data)
 
     @property
     def weight(self):
@@ -379,16 +403,67 @@ class Samples(BaseClass):
             combined.append(sample)
         return combined
 
-    def _get_fixed(self):
-        """Return a list of dictionaries of parameters."""
-        fixed_params = []
-        for i in range(len(self)):
-            if len(self['fixed'][i]) > 0:
-                fixed_params.append(
-                    {key: self[key][i] for key in self['fixed'][i].split('/')})
-            else:
-                fixed_params.append({})
-        return fixed_params
+    def _check_valid_flag(self, flag, param):
+        """Check if the flag and/or parameter is valid."""
+        if flag not in FLAGS:
+            msg = f"Unknown flag '{flag}'. Known flags are {FLAGS}."
+            raise ValueError(msg)
+        if param not in self.params:
+            msg = (f"Unknown parameter '{param}'. Known parameters are "
+                   f"{self.params}.")
+            raise ValueError(msg)
+
+    def get_flag(self, flag, param):
+        """Get the value of the status flag for all samples.
+
+        Parameters
+        ----------
+        flag : str
+            Status flag.
+        param : str or None, optional
+            The parameter to which the flag applies.
+
+        Returns
+        -------
+        value : numpy.ndarray
+            Boolean array contain the status flag for each sample.
+
+        Raises
+        ------
+        ValueError
+            If the status is not known, the parameter does not exist for this
+            sample, or the flag has not been set for this specific combination
+            of status and parameter.
+
+        """
+        self._check_valid_flag(flag, param)
+        if f'flag_{flag}_{param}' in self.keys:
+            return self[f'flag_{flag}_{param}']
+        else:
+            msg = f"Flag '{flag}' not set for parameter '{param}'."
+            raise ValueError(msg)
+
+    def set_flag(self, flag, param, value):
+        """Get the value of the status flag for all samples.
+
+        Parameters
+        ----------
+        flag : str
+            Status flag.
+        param : str or None, optional
+            The parameter to which the flag applies.
+        value : numpy.ndarray
+            Boolean array contain the status flag for each sample.
+
+        Raises
+        ------
+        ValueError
+            If the status is not known or the parameter does not exist for
+            this sample.
+
+        """
+        self._check_valid_flag(flag, param)
+        self[f'flag_{flag}_{param}'] = value
 
     def tabulate(self, keys=None, use_latex=False, **kwargs):
         """Use the `tabulate` package to print the table.
@@ -404,22 +479,22 @@ class Samples(BaseClass):
         **kwargs
             Additional keyword arguments passed to :meth:`tabulate.tabulate`.
 
+        Returns
+        -------
+        table : str
+            Table as plain text.
+
         Raises
         ------
         ImportError
             If `tabulate` is not installed.
 
-        Returns
-        -------
-        str
-            Table as plain text.
-
         """
         try:
             import tabulate
         except ImportError:
-            raise ImportError(
-                "The 'tabulate' package is required for 'Samples.tabulate'.")
+            msg = "The `tabulate` package is required for `Samples.tabulate`."
+            raise ImportError(msg)
 
         if keys is None:
             keys = self.keys
@@ -442,22 +517,22 @@ class Samples(BaseClass):
             List of parameters to convert. If ``None``, all parameters are
             included. Default is ``None``.
 
-        Raises
-        ------
-        ImportError
-            If `getdist` is not installed.
-
         Returns
         -------
         getdist.MCSamples
             Samples converted to `getdist` format.
 
+        Raises
+        ------
+        ImportError
+            If `getdist` is not installed.
+
         """
         try:
             from getdist import MCSamples
         except ImportError:
-            raise ImportError(
-                "The 'tabulate' package is required for 'Samples.getdist'.")
+            msg = "The `getdist` package is required for `Samples.getdist`."
+            raise ImportError(msg)
 
         if params is None:
             params = self.params
@@ -467,7 +542,67 @@ class Samples(BaseClass):
             weights=self.weight, names=params, labels=[
                 self.latex.get(key, key).replace('$', '') for key in params])
 
-    def interval(self, param, threshold, posterior=None):
+    def profile_interpolator(self, param, posterior=True):
+        """Get a cubic profile interpolator.
+
+        Parameters
+        ----------
+        param : str or list
+            Parameter(s) for which to compute the interpolator.
+        posterior : bool, optional
+            If ``True``, get a profile for the (log) posterior. If ``False``, a
+            profile for the (log) likelihood is returned. Default is ``True``.
+
+        Returns
+        -------
+        interp : scipy.interpolate.CubicSpline or\
+                 scipy.interpolate.RegularGridInterpolator
+            Profile interpolator.
+
+        Raises
+        ------
+        ValueError
+            If there are not enough points to compute an interpolation.
+
+        """
+        use = np.ones(len(self), dtype=bool)
+        params = np.atleast_1d(param)
+        for param in self.params:
+            # In case only one parameter is requested, use even the case
+            # where all parameters are optimized. In all other cases, the
+            # grid will not be regular, so don't.
+            if param in params and len(params) > 1:
+                use = use & ~self.get_flag('optimize', param)
+            else:
+                try:
+                    use = use & self.get_flag('optimize', param)
+                except ValueError:
+                    # Flag may not be set because the user added the parameter
+                    # later. Ignore.
+                    pass
+
+        x = np.column_stack([self[param][use] for param in params])
+        y = self['log_posterior' if posterior else 'log_likelihood']
+
+        # Remove duplicates by only choosing the one with the highest
+        # likelihood/posterior. First, sort by decreasing likelihood/posterior.
+        idx = np.argsort(-y)
+        x = x[idx]
+        y = y[idx]
+        # np.unique will return the first occurrence, i.e., the one with the
+        # higher likelihood/posterior.
+        idx = np.unique(x, return_index=True, axis=0)[1]
+        x = x[idx]
+        y = y[idx]
+
+        x_grid, y = _sort_into_grid(x, y)
+
+        if len(x_grid) == 1:
+            return CubicSpline(x_grid[0], y)
+
+        return RegularGridInterpolator(x_grid, y, method='cubic')
+
+    def interval(self, param, threshold, posterior=True):
         """Get interval where likelihood/posterior is above a threshold.
 
         Parameters
@@ -477,9 +612,10 @@ class Samples(BaseClass):
         threshold : float
             Threshold such that the likelihood/posterior is at least
             its maximum plus the threshold. Must be negative.
-        posterior: bool or None, optional
-            Whether to use the posterior or likelihood. If ``None``, determine
-            based on what is computed. Default is ``None``.
+        posterior : bool, optional
+            If ``True``, compute the intervals for the (log) posterior. If
+            ``False``, the intervals for the (log) likelihood are returned.
+            Default is ``True``.
 
         Returns
         -------
@@ -492,43 +628,29 @@ class Samples(BaseClass):
         Raises
         ------
         ValueError
-            If ``posterior`` is ``None`` but both posterior and likelihood
-            have been computed, if there are not enough points to compute the
-            interval, or if ``threshold`` is not negative.
+            If ``threshold`` is not negative.
+        RuntimeError
+            If the likelihood/posterior is identical to the maximum plus the
+            threshold over some range instead of specific points.
 
         """
-        if posterior is None:
-            if 'log_posterior' in self.keys:
-                if 'log_likelihood' in self.keys:
-                    raise ValueError(
-                        "Samples have both posterior and likelihood.")
-                key = 'log_posterior'
-            else:
-                key = 'log_likelihood'
-
         if not threshold < 0:
-            raise ValueError("'threshold' must negative.")
+            msg = "`threshold` must negative."
+            raise ValueError(msg)
 
-        use = np.isin(self['fixed'], [param, ''])
-
-        if np.sum(use) < 4:
-            raise ValueError("Not enough points to compute interval.")
-
-        x = self[param][use]
-        y = self[key][use]
-        y = y[np.argsort(x)]
-        x = np.sort(x)
-
-        spline = CubicSpline(x, y, extrapolate=False)
+        interp = self.profile_interpolator(param, posterior=posterior)
 
         # Find the maximum by setting the derivative to 0.
-        x = spline.derivative().roots()
-        y_max = np.amax(spline(x))
+        x = interp.derivative().roots()
+        y_max = np.amax(interp(x))
 
-        roots = spline.solve(y_max + threshold)
-        y_der = spline.derivative()(roots)
+        roots = np.sort(interp.solve(y_max + threshold))
+        if np.any(np.isnan(roots)):
+            msg = ("The likelihood/posterior is identical to the maximum plus "
+                   "the threshold over some range.")
+            raise RuntimeError(msg)
 
-        # TODO: add robustness
+        y_der = interp.derivative()(roots)
         if y_der[0] < 0:
             roots = np.insert(roots, 0, np.nan)
         if y_der[-1] > 0:

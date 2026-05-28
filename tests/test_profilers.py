@@ -66,7 +66,7 @@ def test_accuracy(likelihood, posterior):
         truth = -0.5 * ((samples['a'] - MEAN_LIKELIHOOD[0])**2 /
                         SD_LIKELIHOOD[0]**2)
 
-    use = samples['fixed'] == 'a'
+    use = ~samples.get_flag('optimize', 'a')
     assert np.sum(use) == 5
     assert np.allclose(truth[use], samples[key][use], rtol=0, atol=1e-6)
 

@@ -93,6 +93,14 @@ def test_accuracy(likelihood, posterior, key):
     assert np.allclose(-0.5 * ((a - mean['a'])**2 / sd['a']**2), interp(a),
                        rtol=0, atol=1e-6)
 
+    for threshold, sigma in zip([-0.5, -2, -4.5], [1, 2, 3]):
+        bounds = samples.interval('a', threshold, posterior=posterior)
+        assert len(bounds) == 1
+        assert np.isclose(bounds[0][0], mean['a'] - sigma * sd['a'], rtol=0,
+                          atol=1e-6)
+        assert np.isclose(bounds[0][1], mean['a'] + sigma * sd['a'], rtol=0,
+                          atol=1e-6)
+
     interp = samples.profile_interpolator(['a', 'b'], posterior=posterior)
     np.random.seed(42)
     ab = np.column_stack((np.random.uniform(-1, +1, 100),

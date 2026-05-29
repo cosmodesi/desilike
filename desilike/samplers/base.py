@@ -21,6 +21,22 @@ from desilike.utils import BaseClass
 from .pool import MPIPool
 
 
+def main(func):
+    """Execute function only from the main process."""
+    def wrapper(self, *args, **kwargs):
+        if self.pool.main:
+            try:
+                result = func(self, *args, **kwargs)
+                self.pool.stop_wait()
+            except Exception as e:
+                print(e)
+                self.mpicomm.Abort(1)
+        else:
+            self.pool.wait()
+        return self.mpicomm.bcast(None if not self.pool.main else result)
+    return wrapper
+
+
 def update_parameters(user_kwargs, sampler, **desilike_kwargs):
     """
     Update the parameter passed to a sampler.
@@ -47,9 +63,8 @@ def update_parameters(user_kwargs, sampler, **desilike_kwargs):
     kwargs = user_kwargs.copy()
     for key, value in desilike_kwargs.items():
         if key in user_kwargs:
-            warnings.warn(
-                f"The keyword argument '{key}' passed to {sampler} is "
-                "overwritten.")
+            msg = f"Overwriting keyword argument '{key}' passed to {sampler} "
+            warnings.warn(msg)
         kwargs[key] = value
     return kwargs
 
@@ -262,6 +277,7 @@ class StaticSampler(BaseSampler):
         """
         pass
 
+    @main
     def run(self, **kwargs):
         """Run the sampler.
 
@@ -276,31 +292,23 @@ class StaticSampler(BaseSampler):
             Sampler results.
 
         """
-        if not self.mpicomm.bcast(hasattr(self, 'results'), root=0):
+        if not hasattr(self, 'results'):
             # Do the calculations.
-            if self.mpicomm.rank == 0:
-                samples = self.get_samples(**kwargs)
-                log_prior = np.array(self.pool.map(
-                    self.compute_prior, samples))
-                results = self.pool.map(
-                    self.compute_posterior, samples)
-                log_post = np.array([r[0] for r in results])
-                derived = np.array([r[1] for r in results])
+            samples = self.get_samples(**kwargs)
+            log_prior = np.array(self.pool.map(self.compute_prior, samples))
+            results = self.pool.map(self.compute_posterior, samples)
+            log_post = np.array([r[0] for r in results])
+            derived = np.array([r[1] for r in results])
 
-                self.results = self.array_to_chain(
-                    samples, derived, logposterior=log_post,
-                    aweight=np.exp(log_post - logsumexp(log_post)))
-                self.results[self.results._logprior] = log_prior
-
-                self.pool.stop_wait()
-            else:
-                self.pool.wait()
+            self.results = self.array_to_chain(
+                samples, derived, logposterior=log_post,
+                aweight=np.exp(log_post - logsumexp(log_post)))
+            self.results[self.results._logprior] = log_prior
 
         if self.directory is not None:
             self.write()
 
-        return self.mpicomm.bcast(
-            self.results if self.mpicomm.rank == 0 else None, root=0)
+        return self.results
 
     def write(self):
         """Write internal calculations to disk."""
@@ -337,6 +345,7 @@ class PopulationSampler(BaseSampler):
         """
         pass
 
+    @main
     def run(self, **kwargs):
         """Run the sampler.
 
@@ -351,15 +360,8 @@ class PopulationSampler(BaseSampler):
             Sampler results.
 
         """
-        if self.mpicomm.rank == 0:
-            samples, derived, extras = self.run_sampler(**kwargs)
-            results = self.array_to_chain(samples, derived, **extras)
-            self.pool.stop_wait()
-        else:
-            results = None
-            self.pool.wait()
-
-        return self.mpicomm.bcast(results, root=0)
+        samples, derived, extras = self.run_sampler(**kwargs)
+        return self.array_to_chain(samples, derived, **extras)
 
 
 class MarkovChainSampler(BaseSampler):
@@ -407,24 +409,24 @@ class MarkovChainSampler(BaseSampler):
             self.checks = []
 
     @abstractmethod
-    def run_sampler(self, steps):
+    def run_sampler(self, n_steps):
         """Abstract method to run the sampler from the main MPI process.
 
         Parameters
         ----------
-        steps : int
+        n_steps : int
             How many additional steps to run.
 
         """
         pass
 
     @abstractmethod
-    def adapt_sampler(self, steps):
+    def adapt_sampler(self, n_steps):
         """Abstract method to adapt the sampler from the main MPI process.
 
         Parameters
         ----------
-        steps : int
+        n_steps : int
             How steps to run for the adaptation.
 
         """
@@ -449,40 +451,34 @@ class MarkovChainSampler(BaseSampler):
         if max_init_attempts is None:
             max_init_attempts = sys.maxsize
 
-        if self.mpicomm.rank == 0:
+        for i in range(1, max_init_attempts + 1):
 
-            for _ in range(max_init_attempts):
+            # Draw random samples.
+            samples = np.zeros((self.n_chains, self.n_dim))
+            for i, param in enumerate(self.varied_params):
+                if param.ref.is_proper():
+                    samples[:, i] = param.ref.sample(
+                        size=self.n_chains, random_state=self.rng)
+                else:
+                    samples[:, i] = np.full(self.n_chains, param.value)
 
-                # Draw random samples.
-                samples = np.zeros((self.n_chains, self.n_dim))
-                for i, param in enumerate(self.varied_params):
-                    if param.ref.is_proper():
-                        samples[:, i] = param.ref.sample(
-                            size=self.n_chains, random_state=self.rng)
-                    else:
-                        samples[:, i] = np.full(self.n_chains, param.value)
+            results = self.pool.map(self.compute_posterior, samples)
+            log_post = np.array([r[0] for r in results])
+            derived = np.array([r[1] for r in results])
 
-                results = self.pool.map(self.compute_posterior, samples)
-                log_post = np.array([r[0] for r in results])
-                derived = np.array([r[1] for r in results])
+            # Accept those with finite posterior.
+            for i in np.arange(self.n_chains)[np.isfinite(log_post)]:
+                chain = self.array_to_chain(
+                    np.atleast_2d(samples[i]), np.atleast_2d(derived[i]),
+                    logposterior=np.atleast_1d(log_post[i]))
+                self.chains.append(chain)
 
-                # Accept those with finite posterior.
-                for i in np.arange(self.n_chains)[np.isfinite(log_post)]:
-                    chain = self.array_to_chain(
-                        np.atleast_2d(samples[i]), np.atleast_2d(derived[i]),
-                        logposterior=np.atleast_1d(log_post[i]))
-                    self.chains.append(chain)
+            if len(self.chains) >= self.n_chains:
+                break
 
-                if len(self.chains) >= self.n_chains:
-                    break
-
-            self.pool.stop_wait()
-        else:
-            self.pool.wait()
-
-        if self.mpicomm.bcast(len(self.chains) < self.n_chains, root=0):
-            raise ValueError('Could not find finite posterior '
-                             f'after {max_init_attempts:d} attempts.')
+            if i == max_init_attempts:
+                msg = f"Could not find finite posterior after {i} attempts."
+                raise ValueError(msg)
 
     @property
     def state(self):
@@ -617,16 +613,14 @@ class MarkovChainSampler(BaseSampler):
             If True, sampling should stop.
 
         """
-        if self.mpicomm.rank == 0:
-            converged = (len(self.chains[0]) >= max_steps or
-                         (len(self.chains[0]) >= min_steps and
-                          len(self.checks) >= checks_passed and
-                          all(self.checks[-checks_passed:])))
-        else:
-            converged = False
+        converged = (len(self.chains[0]) >= max_steps or
+                     (len(self.chains[0]) >= min_steps and
+                      len(self.checks) >= checks_passed and
+                      all(self.checks[-checks_passed:])))
 
-        return self.mpicomm.bcast(converged, root=0)
+        return converged
 
+    @main
     def run(self, burn_in=0.2, min_steps=0, max_steps=None,
             adaptation_steps=None, check_every=300, checks_passed=2,
             gelman_rubin=1.1, geweke=None, ess=None, concatenate=True,
@@ -679,7 +673,7 @@ class MarkovChainSampler(BaseSampler):
             Sampler results.
 
         """
-        if self.mpicomm.bcast(len(self.chains) == 0, root=0):
+        if len(self.chains) == 0:
             self.initialize_chains(max_init_attempts=max_init_attempts)
 
         if self.directory is None:
@@ -689,12 +683,11 @@ class MarkovChainSampler(BaseSampler):
             adaptation_steps = self.default_adaptation_steps
         self.adaptation_steps = adaptation_steps  # only used for MH MCMC
 
-        if self.mpicomm.rank == 0 and adaptation_steps > 0:
+        if adaptation_steps > 0:
             self.adapt_sampler(adaptation_steps)
 
         # Run the chain until convergence.
-        steps = self.mpicomm.bcast(
-            len(self.chains[0]) if self.pool.main else 0, root=0)
+        n_steps = len(self.chains[0])
 
         if max_steps is None:
             max_steps = sys.maxsize
@@ -704,34 +697,25 @@ class MarkovChainSampler(BaseSampler):
                 checks_passed=checks_passed):
 
             # Advance the sampler and do convergence checks.
-            steps_to_take = min(check_every - (steps % check_every),
-                                save_every - (steps % save_every),
-                                max_steps - steps)
-            steps += steps_to_take
-            if self.mpicomm.rank == 0:
-                self.run_sampler(steps_to_take)
-                if steps % check_every == 0:
-                    self.checks.append(self.check(
-                        burn_in=burn_in, gelman_rubin=gelman_rubin,
-                        geweke=geweke, ess=ess))
-                self.pool.stop_wait()
-            else:
-                self.pool.wait()
+            n_steps_next = min(check_every - (n_steps % check_every),
+                               save_every - (n_steps % save_every),
+                               max_steps - n_steps)
+            n_steps += n_steps_next
+            self.run_sampler(n_steps_next)
+            if n_steps % check_every == 0:
+                self.checks.append(self.check(
+                    burn_in=burn_in, gelman_rubin=gelman_rubin,
+                    geweke=geweke, ess=ess))
 
             # Write results.
-            if self.directory is not None and steps % save_every == 0:
+            if self.directory is not None and n_steps % save_every == 0:
                 self.write()
 
         # Write results in case it wasn't written in the last iteration.
-        if self.directory is not None and steps % save_every != 0:
+        if self.directory is not None and n_steps % save_every != 0:
             self.write()
 
-        if self.mpicomm.rank == 0:
-            chains = [chain.remove_burnin(burn_in) for chain in self.chains]
-        else:
-            chains = [None] * self.n_chains
-
-        chains = self.mpicomm.bcast(chains, root=0)
+        chains = [chain.remove_burnin(burn_in) for chain in self.chains]
 
         if concatenate:
             chains = Chain.concatenate(chains)

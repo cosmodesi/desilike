@@ -3,7 +3,6 @@ import pytest
 from jax import numpy as jnp
 
 import desilike.samplers as samplers
-from desilike.samplers.base import MarkovChainSampler
 from desilike.samples import Chain
 from desilike.likelihoods import BaseGaussianLikelihood
 
@@ -180,13 +179,15 @@ def test_rng(likelihood, key):
 def test_continue_chain(likelihood, key):
     # Test that we can continue a chain.
 
-    sampler = SAMPLER_CLS[key](likelihood, rng=42)
+    sampler = SAMPLER_CLS[key](
+        likelihood, rng=42, **KWARGS_INIT_FAST.get(key, {}))
     chains_10 = sampler.run(
-        burn_in=0, min_steps=10, max_steps=10, flatten_chains=False)
-    sampler = samplers.MetropolisHastingsSampler(
-        likelihood, rng=43, chains=[c.copy() for c in chains_10])
+        burn_in=0, min_steps=10, max_steps=10, concatenate=False)
+    sampler = SAMPLER_CLS[key](
+        likelihood, rng=43, chains=[c.copy() for c in chains_10],
+        **KWARGS_INIT_FAST.get(key, {}))
     chains_20 = sampler.run(
-        burn_in=0, min_steps=20, max_steps=20, flatten_chains=False)
+        burn_in=0, min_steps=20, max_steps=20, concatenate=False)
 
     for chain_10, chain_20 in zip(chains_10, chains_20):
         assert len(chain_10) == 10

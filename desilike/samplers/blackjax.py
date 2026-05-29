@@ -79,7 +79,7 @@ class BlackJAXSampler(MarkovChainSampler):
 
     """
 
-    def __init__(self, likelihood, n_chains=4, chains=None, rng=None,
+    def __init__(self, likelihood, n_chains=1, chains=None, rng=None,
                  directory=None):
         """Initialize the ``BlackJAX`` sampler.
 
@@ -88,7 +88,7 @@ class BlackJAXSampler(MarkovChainSampler):
         likelihood : BaseLikelihood
             Likelihood to sample.
         n_chains : int, optional
-            Number of chains. Default is 4.
+            Number of **independent** chains. Default is 1.
         chains : list of desilike.samples.Chain, optional
             If given, continue the chains. In that case, we will ignore what
             was read from disk. Default is ``None``.
@@ -226,7 +226,7 @@ class HMCSampler(BlackJAXSampler):
     adaptable_args = ['step_size', 'inverse_mass_matrix']
     adaptation_fn = 'window_adaptation'
 
-    def __init__(self, likelihood, n_chains=1, step_size=1e-3,
+    def __init__(self, likelihood, n_chains=1, chains=None, step_size=1e-3,
                  inverse_mass_matrix=None, num_integration_steps=60, rng=None,
                  directory=None, **kwargs):
         """Initialize the HMC sampler.
@@ -237,6 +237,9 @@ class HMCSampler(BlackJAXSampler):
             Likelihood to sample.
         n_chains : int, optional
             Number of **independent** chains. Default is 1.
+        chains : list of desilike.samples.Chain or None, optional
+            If given on rank 0, continue the chains. In that case, we will
+            ignore what was read from disk. Default is ``None``.
         step_size : float, optional
             Size of the integration step. Default is 1e-3.
         inverse_mass_matrix : numpy.ndarray, optional
@@ -264,7 +267,7 @@ class HMCSampler(BlackJAXSampler):
             step_size=step_size, inverse_mass_matrix=inverse_mass_matrix,
             num_integration_steps=num_integration_steps, **kwargs)
 
-        super().__init__(likelihood, n_chains=n_chains, rng=rng,
+        super().__init__(likelihood, n_chains=n_chains, chains=chains, rng=rng,
                          directory=directory)
 
 
@@ -275,7 +278,7 @@ class NoUTurnSampler(BlackJAXSampler):
     adaptable_args = ['step_size', 'inverse_mass_matrix']
     adaptation_fn = 'window_adaptation'
 
-    def __init__(self, likelihood, n_chains=4, step_size=1e-3,
+    def __init__(self, likelihood, n_chains=1, chains=None, step_size=1e-3,
                  inverse_mass_matrix=None, rng=None, directory=None, **kwargs):
         """Initialize the No-U-Turn Sampler.
 
@@ -284,7 +287,10 @@ class NoUTurnSampler(BlackJAXSampler):
         likelihood : BaseLikelihood
             Likelihood to sample.
         n_chains : int, optional
-            Number of chains. Default is 4.
+            Number of **independent** chains. Default is 1.
+        chains : list of desilike.samples.Chain or None, optional
+            If given on rank 0, continue the chains. In that case, we will
+            ignore what was read from disk. Default is ``None``.
         step_size : float, optional
             Size of the integration step. Default is 1e-3.
         inverse_mass_matrix : numpy.ndarray, optional
@@ -309,7 +315,7 @@ class NoUTurnSampler(BlackJAXSampler):
             step_size=step_size, inverse_mass_matrix=inverse_mass_matrix,
             **kwargs)
 
-        super().__init__(likelihood, n_chains=n_chains, rng=rng,
+        super().__init__(likelihood, n_chains=n_chains, chains=chains, rng=rng,
                          directory=directory)
 
 
@@ -326,8 +332,8 @@ class MCLMCSampler(BlackJAXSampler):
     adaptable_args = ['L', 'step_size']
     adaptation_fn = 'mclmc_find_L_and_step_size'
 
-    def __init__(self, likelihood, n_chains=4, L=1., step_size=0.1, rng=None,
-                 directory=None, **kwargs):
+    def __init__(self, likelihood, n_chains=1, chains=None, L=1.,
+                 step_size=0.1, rng=None, directory=None, **kwargs):
         """Initialize the Microcanonical Langevin Monte Carlo (MCLMC) sampler.
 
         Parameters
@@ -335,7 +341,10 @@ class MCLMCSampler(BlackJAXSampler):
         likelihood : BaseLikelihood
             Likelihood to sample.
         n_chains : int, optional
-            Number of chains. Default is 4.
+            Number of **independent** chains. Default is 1.
+        chains : list of desilike.samples.Chain or None, optional
+            If given on rank 0, continue the chains. In that case, we will
+            ignore what was read from disk. Default is ``None``.
         L : float, default=1.
             Momentum decoherence scale.
         step_size : float, default=0.1
@@ -351,5 +360,5 @@ class MCLMCSampler(BlackJAXSampler):
         """
         self.kernel_args = dict(L=L, step_size=step_size, **kwargs)
 
-        super().__init__(likelihood, n_chains=n_chains, rng=rng,
+        super().__init__(likelihood, n_chains=n_chains, chains=chains, rng=rng,
                          directory=directory)

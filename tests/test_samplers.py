@@ -25,7 +25,6 @@ KWARGS_INIT = dict(
     nautilus=dict(n_networks=1, n_live=300),
     pocomc=dict(n_effective=200, n_active=100))
 KWARGS_INIT_FAST = dict(
-    emcee=dict(nwalkers=5),
     dynesty=dict(dynamic=True, nlive=30),
     nautilus=dict(n_networks=1, n_live=100),
     pocomc=dict(n_effective=10, n_active=5, flow='nsf3'))
@@ -84,16 +83,15 @@ def test_accuracy(likelihood, key):
     sampler = SAMPLER_CLS[key](likelihood, rng=42, **KWARGS_INIT.get(key, {}))
     results = sampler.run(**KWARGS_RUN.get(key, {}))
 
-    if sampler.mpicomm.rank == 0:
-        # The mean should match.
-        assert np.allclose(results.mean(likelihood.varied_params),
-                        likelihood.flatdata, atol=0.05, rtol=0)
-        # The covariance should match.
-        cov = np.linalg.inv(likelihood.precision + np.array([[100, 0], [0, 0]]))
-        cov_err = np.sqrt(
-            (cov**2 + np.outer(np.diag(cov), np.diag(cov))) / 100)
-        assert np.allclose(results.covariance(likelihood.varied_params), cov,
-                        atol=3 * cov_err)
+    # The mean should match.
+    assert np.allclose(results.mean(likelihood.varied_params),
+                       likelihood.flatdata, atol=0.05, rtol=0)
+    # The covariance should match.
+    cov = np.linalg.inv(likelihood.precision + np.array([[100, 0], [0, 0]]))
+    cov_err = np.sqrt(
+        (cov**2 + np.outer(np.diag(cov), np.diag(cov))) / 100)
+    assert np.allclose(results.covariance(likelihood.varied_params), cov,
+                       atol=3 * cov_err)
 
 
 @pytest.mark.mpi
@@ -107,53 +105,26 @@ def test_importance_combine(likelihood):
     sampler = samplers.ImportanceSampler(likelihood)
     results = sampler.run(samples=results, resample=False)
 
-    if sampler.mpicomm.rank == 0:
-        cov = np.linalg.inv(2 * likelihood.precision +
-                            np.array([[100, 0], [0, 0]]))
-        assert np.allclose(results.mean(likelihood.varied_params),
-                        likelihood.flatdata, atol=1e-3, rtol=0)
-        assert np.allclose(results.covariance(likelihood.varied_params), cov,
-                        atol=1e-3)
+    cov = np.linalg.inv(2 * likelihood.precision +
+                        np.array([[100, 0], [0, 0]]))
+    assert np.allclose(results.mean(likelihood.varied_params),
+                       likelihood.flatdata, atol=1e-3, rtol=0)
+    assert np.allclose(results.covariance(likelihood.varied_params), cov,
+                       atol=1e-3)
 
 
 @pytest.mark.mpi_skip
-@pytest.mark.parametrize('key', ['emcee'])
+@pytest.mark.parametrize('key', SAMPLER_CLS.keys())
 def test_derived(likelihood, key):
     # Test that derived parameters are correctly tracked.
 
     sampler = SAMPLER_CLS[key](
         likelihood, rng=42, **KWARGS_INIT_FAST.get(key, {}))
     results = sampler.run(**KWARGS_RUN_FAST.get(key, {}))
-    if sampler.mpicomm.rank == 0:
-        assert np.allclose(results['a'] + results['b'], results['c'])
-        for i in range(3):
-            assert np.allclose((results['a'] + results['b']) * i,
-                            results['d'][..., i])
-
-
-@pytest.mark.mpi_skip
-@pytest.mark.parametrize('key', ['emcee'])
-def test_solved(likelihood, key):
-    # Test that solved parameters are correctly tracked.
-    likelihood.all_params['b'].update(prior={}, derived='.best')
-
-    def best_fit_b_given_a(likelihood, a):
-        data = likelihood.flatdata
-        precision = likelihood.precision
-        # Here theory = [a, b]
-        # d chi2 / db = 2 * P[1] dot ([a, b] - data) = 0
-        p10 = precision[1, 0]
-        p11 = precision[1, 1]
-        b = data[1] - (p10 / p11) * (a - data[0])
-        return b
-
-    sampler = SAMPLER_CLS[key](
-        likelihood, rng=42, **KWARGS_INIT_FAST.get(key, {}))
-    results = sampler.run(**KWARGS_RUN_FAST.get(key, {}))
-    if sampler.mpicomm.rank == 0:
-        for i in range(3):
-            b = best_fit_b_given_a(likelihood, results['a'][i])
-            assert np.allclose(results['b'][i], b)
+    assert np.allclose(results['a'] + results['b'], results['c'])
+    for i in range(3):
+        assert np.allclose((results['a'] + results['b']) * i,
+                           results['d'][:, i])
 
 
 @pytest.mark.mpi_skip
@@ -173,10 +144,9 @@ def test_write(likelihood, key, tmp_path):
         **KWARGS_INIT_FAST.get(key, {}))
     results_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
 
-    if sampler_1.mpicomm.rank == 0:
-        assert len(results_1) == len(results_2)
-        assert np.allclose(results_1.logposterior.value,
-                        results_2.logposterior.value, atol=1e-6)
+    assert len(results_1) == len(results_2)
+    assert np.allclose(results_1.logposterior.value,
+                       results_2.logposterior.value, atol=1e-6)
 
 
 @pytest.mark.mpi_skip
@@ -195,10 +165,9 @@ def test_rng(likelihood, key):
         likelihood, rng=42, **KWARGS_INIT_FAST.get(key, {}))
     results_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
 
-    if sampler_1.mpicomm.rank == 0:
-        assert len(results_1) == len(results_2)
-        assert np.allclose(results_1.logposterior.value,
-                        results_2.logposterior.value, atol=1e-6)
+    assert len(results_1) == len(results_2)
+    assert np.allclose(results_1.logposterior.value,
+                       results_2.logposterior.value, atol=1e-6)
 
 
 @pytest.mark.mpi_skip
@@ -208,40 +177,16 @@ def test_continue_chain(likelihood, key):
 
     sampler = SAMPLER_CLS[key](likelihood, rng=42)
     chains_10 = sampler.run(
-        burn_in=0, min_steps=10, max_steps=10, concatenate=False)
-    sampler = SAMPLER_CLS[key](
-        likelihood, rng=43, chains=[c.copy() for c in chains_10] if sampler.mpicomm.rank == 0 else None)
+        burn_in=0, min_steps=10, max_steps=10, flatten_chains=False)
+    sampler = samplers.MetropolisHastingsSampler(
+        likelihood, rng=43, chains=[c.copy() for c in chains_10])
     chains_20 = sampler.run(
-        burn_in=0, min_steps=20, max_steps=20, concatenate=False)
+        burn_in=0, min_steps=20, max_steps=20, flatten_chains=False)
 
-    if sampler.mpicomm.rank == 0:
-        for chain_10, chain_20 in zip(chains_10, chains_20, strict=True):
-            assert len(chain_10) == 10
-            assert len(chain_20) == 20
-            assert np.allclose(chain_10['a'], chain_20['a'][:10])
-
-
-@pytest.mark.mpi
-@pytest.mark.parametrize('key', ['emcee', 'hmc', 'mhmcmc', 'zeus'])
-def test_multiple_chains(likelihood, key):
-    # Test that we can run multiple chains in parallel.
-
-    n_chains = likelihood.mpicomm.size
-    sampler = SAMPLER_CLS[key](likelihood, n_chains=n_chains, rng=42)
-    chains_10 = sampler.run(
-        burn_in=0, min_steps=10, max_steps=10, concatenate=False)
-    if sampler.mpicomm.rank == 0:
-        assert len(chains_10) == n_chains
-    sampler = SAMPLER_CLS[key](
-        likelihood, rng=43, chains=[c.copy() for c in chains_10] if sampler.mpicomm.rank == 0 else None)
-    chains_20 = sampler.run(
-        burn_in=0, min_steps=20, max_steps=20, concatenate=False)
-
-    if sampler.mpicomm.rank == 0:
-        for chain_10, chain_20 in zip(chains_10, chains_20, strict=True):
-            assert len(chain_10) == 10
-            assert len(chain_20) == 20
-            assert np.allclose(chain_10['a'], chain_20['a'][:10])
+    for chain_10, chain_20 in zip(chains_10, chains_20):
+        assert len(chain_10) == 10
+        assert len(chain_20) == 20
+        assert np.allclose(chain_10['a'], chain_20['a'][:10])
 
 
 @pytest.mark.mpi_skip

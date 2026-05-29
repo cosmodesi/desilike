@@ -127,7 +127,7 @@ class BlackJAXSampler(MarkovChainSampler):
         self.make_steps = self.pool.save_function(
             make_steps_factory(self.kernel.step), 'make_steps')
 
-    def run_sampler(self, n_steps):
+    def _run(self, n_steps):
         """Run the ``BlackJAX`` sampler.
 
         Parameters
@@ -140,7 +140,7 @@ class BlackJAXSampler(MarkovChainSampler):
             self.blackjax_states = []
             for i in range(self.n_chains):
                 initial_position = dict(zip(
-                    self.likelihood.varied_params.keys(), self.state[0][i]))
+                    self.likelihood.varied_params.keys(), self._state[0][i]))
                 try:
                     self.blackjax_states.append(
                         self.kernel.init(initial_position))
@@ -180,9 +180,9 @@ class BlackJAXSampler(MarkovChainSampler):
         samples = samples.reshape((self.n_chains, n_steps, -1))
         derived = derived.reshape((self.n_chains, n_steps, -1))
         log_post = log_post.reshape((self.n_chains, n_steps))
-        self.extend(samples, derived, log_post)
+        self._extend(samples, derived, log_post)
 
-    def adapt_sampler(self, steps):
+    def _adapt(self, steps):
         """Adapt the step size and mass matrix.
 
         Parameters

@@ -7,7 +7,7 @@ except ModuleNotFoundError:
     EMCEE_INSTALLED = False
 import numpy as np
 
-from .base import update_parameters, MarkovChainSampler
+from .base import _update_parameters, MarkovChainSampler
 
 
 class EmceeSampler(MarkovChainSampler):
@@ -48,13 +48,13 @@ class EmceeSampler(MarkovChainSampler):
                          directory=directory)
 
         if self.mpicomm.rank == 0:
-            kwargs = update_parameters(
+            kwargs = _update_parameters(
                 kwargs, 'emcee', nwalkers=self.n_chains, ndim=self.n_dim,
-                log_prob_fn=self.compute_posterior, pool=self.pool, args=None,
+                log_prob_fn=self._compute_posterior, pool=self.pool, args=None,
                 kwargs=None, vectorize=False)
             self.sampler = emcee.EnsembleSampler(**kwargs)
 
-    def run_sampler(self, n_steps):
+    def _run(self, n_steps):
         """Run the ``emcee`` sampler.
 
         Parameters
@@ -63,7 +63,7 @@ class EmceeSampler(MarkovChainSampler):
             Number of steps to take.
 
         """
-        samples, derived, log_post = self.state
+        samples, derived, log_post = self._state
 
         initial_state = emcee.State(
             samples, blobs=derived, log_prob=log_post,
@@ -79,4 +79,4 @@ class EmceeSampler(MarkovChainSampler):
             derived[:, i, :] = state.blobs.reshape(self.n_chains, -1)
             log_post[:, i] = state.log_prob
 
-        self.extend(samples, derived, log_post)
+        self._extend(samples, derived, log_post)

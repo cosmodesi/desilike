@@ -21,7 +21,7 @@ from desilike.utils import BaseClass
 from .pool import MPIPool
 
 
-def main(func):
+def _main(func):
     """Execute function only from the main process."""
     def wrapper(self, *args, **kwargs):
         if self.pool.main:
@@ -37,7 +37,7 @@ def main(func):
     return wrapper
 
 
-def update_parameters(user_kwargs, sampler, **desilike_kwargs):
+def _update_parameters(user_kwargs, sampler, **desilike_kwargs):
     """
     Update the parameter passed to a sampler.
 
@@ -104,10 +104,10 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
         self.mpicomm = likelihood.mpicomm
         self.pool = MPIPool(comm=self.mpicomm)
         for name, f in zip(
-                ['prior_transform', 'compute_prior', 'compute_posterior',
-                 'compute_likelihood'],
-                [self.prior_transform, self.compute_prior,
-                 self.compute_posterior, self.compute_likelihood]):
+                ['_prior_transform', '_compute_prior', '_compute_posterior',
+                 '_compute_likelihood'],
+                [self._prior_transform, self._compute_prior,
+                 self._compute_posterior, self._compute_likelihood]):
             setattr(self, name, self.pool.save_function(f, name))
 
         if directory is not None:
@@ -120,7 +120,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         if self.directory is not None:
             try:
-                self.read()
+                self._read()
             except FileNotFoundError:
                 pass
 
@@ -132,7 +132,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
                 rng = np.random.default_rng(seed=rng)
             self.rng = rng
 
-    def prior_transform(self, sample):
+    def _prior_transform(self, sample):
         """Transform from the unit cube to parameter space using the prior.
 
         Parameters
@@ -149,7 +149,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
         return np.array([param.prior.ppf(x) for param, x in zip(
             self.varied_params, sample)])
 
-    def compute_prior(self, sample):
+    def _compute_prior(self, sample):
         """
         Compute the natural logarithm of the prior.
 
@@ -168,7 +168,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
             sample = dict(zip(self.varied_params.names(), sample))
         return self.likelihood.all_params.prior(**sample)
 
-    def compute_posterior(self, sample):
+    def _compute_posterior(self, sample):
         """Compute the natural logarithm of the posterior.
 
         Parameters
@@ -192,7 +192,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         return float(log_post), derived
 
-    def compute_likelihood(self, sample):
+    def _compute_likelihood(self, sample):
         """Compute the natural logarithm of the likelihood.
 
         Parameters
@@ -208,12 +208,12 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
             Derived parameters.
 
         """
-        log_prior = self.compute_prior(sample)
-        log_post, derived = self.compute_posterior(sample)
+        log_prior = self._compute_prior(sample)
+        log_post, derived = self._compute_posterior(sample)
 
         return log_post - log_prior, derived
 
-    def array_to_chain(self, samples, derived, **kwargs):
+    def _array_to_chain(self, samples, derived, **kwargs):
         """Convert NumPy arrays to desilike chains.
 
         Parameters
@@ -243,13 +243,13 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         return chain
 
-    def write(self):
+    def _write(self):
         """Write all results to disk."""
         if self.mpicomm.rank == 0:
             with open(self.directory / 'rng.json', 'w') as fstream:
                 json.dump(self.rng.bit_generator.state, fstream)
 
-    def read(self):
+    def _read(self):
         """Read internal calculations from disk."""
         if self.mpicomm.rank == 0:
             with open(self.directory / 'rng.json', 'r') as fstream:
@@ -277,7 +277,7 @@ class StaticSampler(BaseSampler):
         """
         pass
 
-    @main
+    @_main
     def run(self, **kwargs):
         """Run the sampler.
 
@@ -295,27 +295,27 @@ class StaticSampler(BaseSampler):
         if not hasattr(self, 'results'):
             # Do the calculations.
             samples = self.get_samples(**kwargs)
-            log_prior = np.array(self.pool.map(self.compute_prior, samples))
-            results = self.pool.map(self.compute_posterior, samples)
+            log_prior = np.array(self.pool.map(self._compute_prior, samples))
+            results = self.pool.map(self._compute_posterior, samples)
             log_post = np.array([r[0] for r in results])
             derived = np.array([r[1] for r in results])
 
-            self.results = self.array_to_chain(
+            self.results = self._array_to_chain(
                 samples, derived, logposterior=log_post,
                 aweight=np.exp(log_post - logsumexp(log_post)))
             self.results[self.results._logprior] = log_prior
 
         if self.directory is not None:
-            self.write()
+            self._write()
 
         return self.results
 
-    def write(self):
+    def _write(self):
         """Write internal calculations to disk."""
         if self.mpicomm.rank == 0:
             self.results.save(self.directory / 'results.npz')
 
-    def read(self):
+    def _read(self):
         """Read internal calculations from disk."""
         if self.mpicomm.rank == 0:
             self.results = Chain.load(self.directory / 'results.npz')
@@ -325,8 +325,8 @@ class PopulationSampler(BaseSampler):
     """Class defining common functions used by population samplers."""
 
     @abstractmethod
-    def run_sampler(self, **kwargs):
-        """Abstract method to run the sampler from the main MPI process.
+    def _run(self, **kwargs):
+        """Run a specific sampler.
 
         Parameters
         ----------
@@ -345,7 +345,7 @@ class PopulationSampler(BaseSampler):
         """
         pass
 
-    @main
+    @_main
     def run(self, **kwargs):
         """Run the sampler.
 
@@ -360,8 +360,8 @@ class PopulationSampler(BaseSampler):
             Sampler results.
 
         """
-        samples, derived, extras = self.run_sampler(**kwargs)
-        return self.array_to_chain(samples, derived, **extras)
+        samples, derived, extras = self._run(**kwargs)
+        return self._array_to_chain(samples, derived, **extras)
 
 
 class MarkovChainSampler(BaseSampler):
@@ -409,8 +409,8 @@ class MarkovChainSampler(BaseSampler):
             self.checks = []
 
     @abstractmethod
-    def run_sampler(self, n_steps):
-        """Abstract method to run the sampler from the main MPI process.
+    def _run(self, n_steps):
+        """Run a specific sampler.
 
         Parameters
         ----------
@@ -422,7 +422,7 @@ class MarkovChainSampler(BaseSampler):
 
     @abstractmethod
     def adapt_sampler(self, n_steps):
-        """Abstract method to adapt the sampler from the main MPI process.
+        """Adapt a specific sampler.
 
         Parameters
         ----------
@@ -432,7 +432,7 @@ class MarkovChainSampler(BaseSampler):
         """
         pass
 
-    def initialize_chains(self, max_init_attempts=100):
+    def _initialize(self, max_init_attempts=100):
         """Initialize the chains.
 
         Parameters
@@ -462,13 +462,13 @@ class MarkovChainSampler(BaseSampler):
                 else:
                     samples[:, i] = np.full(self.n_chains, param.value)
 
-            results = self.pool.map(self.compute_posterior, samples)
+            results = self.pool.map(self._compute_posterior, samples)
             log_post = np.array([r[0] for r in results])
             derived = np.array([r[1] for r in results])
 
             # Accept those with finite posterior.
             for i in np.arange(self.n_chains)[np.isfinite(log_post)]:
-                chain = self.array_to_chain(
+                chain = self._array_to_chain(
                     np.atleast_2d(samples[i]), np.atleast_2d(derived[i]),
                     logposterior=np.atleast_1d(log_post[i]))
                 self.chains.append(chain)
@@ -481,7 +481,7 @@ class MarkovChainSampler(BaseSampler):
                 raise ValueError(msg)
 
     @property
-    def state(self):
+    def _state(self):
         """Return the current state of the chains as NumPy arrays.
 
         Returns
@@ -502,7 +502,7 @@ class MarkovChainSampler(BaseSampler):
         log_post = [chain.logposterior[-1] for chain in self.chains]
         return np.array(samples), np.array(derived), np.array(log_post)
 
-    def extend(self, samples, derived, log_post):
+    def _extend(self, samples, derived, log_post):
         """Extend the sampler chains.
 
         Parameters
@@ -516,12 +516,12 @@ class MarkovChainSampler(BaseSampler):
 
         """
         for i in range(self.n_chains):
-            chain = self.array_to_chain(
+            chain = self._array_to_chain(
                 samples[i], derived[i], logposterior=log_post[i])
             self.chains[i] = Chain.concatenate(self.chains[i], chain)
 
-    def check(self, burn_in=0.2, gelman_rubin=1.1, geweke=None, ess=None,
-              quiet=False):
+    def _check(self, burn_in=0.2, gelman_rubin=1.1, geweke=None, ess=None,
+               quiet=False):
         """Check the status of the sampling.
 
         This function will also output the status of the analysis to the log.
@@ -592,35 +592,7 @@ class MarkovChainSampler(BaseSampler):
 
         return passed_all
 
-    def is_converged(self, min_steps=0, max_steps=sys.maxsize,
-                     checks_passed=10):
-        """Check whether sampling should stop.
-
-        Parameters
-        ----------
-        min_steps : int, optional
-            Minimum number of steps to run. Default is 0.
-        max_steps : int, optional
-            Maximum number of steps to run. Default is infinity.
-        checks_passed : int, optional
-            Threshold for the number of successive successful convergence
-            checks. If fulfilled (and the minimum number of iterations is
-            reached), the sampling will stop. Default is 10.
-
-        Returns
-        -------
-        bool
-            If True, sampling should stop.
-
-        """
-        converged = (len(self.chains[0]) >= max_steps or
-                     (len(self.chains[0]) >= min_steps and
-                      len(self.checks) >= checks_passed and
-                      all(self.checks[-checks_passed:])))
-
-        return converged
-
-    @main
+    @_main
     def run(self, burn_in=0.2, min_steps=0, max_steps=None,
             adaptation_steps=None, check_every=300, checks_passed=2,
             gelman_rubin=1.1, geweke=None, ess=None, concatenate=True,
@@ -674,7 +646,7 @@ class MarkovChainSampler(BaseSampler):
 
         """
         if len(self.chains) == 0:
-            self.initialize_chains(max_init_attempts=max_init_attempts)
+            self._initialize(max_init_attempts=max_init_attempts)
 
         if self.directory is None:
             save_every = check_every  # Don't stop to save.
@@ -692,28 +664,30 @@ class MarkovChainSampler(BaseSampler):
         if max_steps is None:
             max_steps = sys.maxsize
 
-        while not self.is_converged(
-                min_steps=min_steps, max_steps=max_steps,
-                checks_passed=checks_passed):
+        while n_steps < max_steps:
+
+            if (n_steps >= min_steps and len(self.checks) >= checks_passed and
+                    all(self.checks[-checks_passed:])):
+                break
 
             # Advance the sampler and do convergence checks.
             n_steps_next = min(check_every - (n_steps % check_every),
                                save_every - (n_steps % save_every),
                                max_steps - n_steps)
             n_steps += n_steps_next
-            self.run_sampler(n_steps_next)
+            self._run(n_steps_next)
             if n_steps % check_every == 0:
-                self.checks.append(self.check(
+                self.checks.append(self._check(
                     burn_in=burn_in, gelman_rubin=gelman_rubin,
                     geweke=geweke, ess=ess))
 
             # Write results.
             if self.directory is not None and n_steps % save_every == 0:
-                self.write()
+                self._write()
 
         # Write results in case it wasn't written in the last iteration.
         if self.directory is not None and n_steps % save_every != 0:
-            self.write()
+            self._write()
 
         chains = [chain.remove_burnin(burn_in) for chain in self.chains]
 
@@ -722,17 +696,17 @@ class MarkovChainSampler(BaseSampler):
 
         return chains
 
-    def write(self):
+    def _write(self):
         """Write all results to disk."""
-        super().write()
+        super()._write()
         if self.mpicomm.rank == 0:
             for i, chain in enumerate(self.chains):
                 chain.save(self.directory / f'chain_{i + 1}.npy')
             np.save(self.directory / 'checks.npy', self.checks)
 
-    def read(self):
+    def _read(self):
         """Read internal calculations from disk."""
-        super().read()
+        super()._read()
         if self.mpicomm.rank == 0:
             self.chains = [Chain.load(self.directory / f'chain_{i + 1}.npy')
                            for i in range(self.n_chains)]

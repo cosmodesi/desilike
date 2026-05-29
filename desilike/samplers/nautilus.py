@@ -6,7 +6,7 @@ except ModuleNotFoundError:
     NAUTILUS_INSTALLED = False
 import numpy as np
 
-from .base import update_parameters, PopulationSampler
+from .base import _update_parameters, PopulationSampler
 
 
 class NautilusSampler(PopulationSampler):
@@ -41,15 +41,15 @@ class NautilusSampler(PopulationSampler):
         super().__init__(likelihood, rng=rng, directory=directory)
 
         if self.mpicomm.rank == 0:
-            kwargs = update_parameters(
-                kwargs, 'nautilus', prior=self.prior_transform,
-                likelihood=self.compute_likelihood, n_dim=self.n_dim,
+            kwargs = _update_parameters(
+                kwargs, 'nautilus', prior=self._prior_transform,
+                likelihood=self._compute_likelihood, n_dim=self.n_dim,
                 pass_dict=False,
                 filepath=None if self.directory is None else self.directory /
                 'nautilus.hdf5', pool=self.pool, seed=self.rng.integers(2**32))
             self.sampler = nautilus.Sampler(**kwargs)
 
-    def run_sampler(self, **kwargs):
+    def _run(self, **kwargs):
         """Run the ``nautilus`` sampler.
 
         Parameters

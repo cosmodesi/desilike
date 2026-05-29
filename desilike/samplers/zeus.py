@@ -9,7 +9,7 @@ try:
 except ModuleNotFoundError:
     ZEUS_INSTALLED = False
 
-from .base import update_parameters, MarkovChainSampler
+from .base import _update_parameters, MarkovChainSampler
 
 
 class ZeusSampler(MarkovChainSampler):
@@ -51,9 +51,9 @@ class ZeusSampler(MarkovChainSampler):
                          directory=directory)
 
         if self.mpicomm.rank == 0:
-            kwargs = update_parameters(
+            kwargs = _update_parameters(
                 kwargs, 'zeus', nwalkers=self.n_chains, ndim=self.n_dim,
-                logprob_fn=self.compute_posterior, pool=self.pool, args=None,
+                logprob_fn=self._compute_posterior, pool=self.pool, args=None,
                 kwargs=None, vectorize=False)
             self.sampler = zeus.EnsembleSampler(**kwargs)
 
@@ -61,7 +61,7 @@ class ZeusSampler(MarkovChainSampler):
                 warnings.warn("Zeus does not support random seeds. Results "
                               "are not deterministic.")
 
-    def run_sampler(self, n_steps):
+    def _run(self, n_steps):
         """Run the ``zeus`` sampler.
 
         Parameters
@@ -70,7 +70,7 @@ class ZeusSampler(MarkovChainSampler):
             Number of steps to take.
 
         """
-        start, blobs0, log_prob0 = self.state
+        start, blobs0, log_prob0 = self._state
         samples = np.zeros((self.n_chains, n_steps, self.n_dim))
         derived = np.zeros((self.n_chains, n_steps, self.n_derived))
         log_post = np.zeros((self.n_chains, n_steps))
@@ -81,4 +81,4 @@ class ZeusSampler(MarkovChainSampler):
             derived[:, i, :] = state[2].reshape(self.n_chains, -1)
             log_post[:, i] = state[1]
 
-        self.extend(samples, derived, log_post)
+        self._extend(samples, derived, log_post)

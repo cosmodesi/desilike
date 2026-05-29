@@ -178,7 +178,7 @@ class StandAloneMetropolisHastingsSampler:
             self.n_chains = len(pos)
 
             if log_p is None or blobs is None:
-                log_p, blobs = self.compute_posterior(self.pos)
+                log_p, blobs = self._compute_posterior(self.pos)
 
             self.log_p = np.array(log_p)
             self.blobs = np.array(blobs)
@@ -192,7 +192,7 @@ class StandAloneMetropolisHastingsSampler:
                 cov * 2.38**2 / np.sqrt(len(cov)), fast=self.fast,
                 rng=self.rng)
 
-    def compute_posterior(self, points):
+    def _compute_posterior(self, points):
         """Compute the natural logarithm of the posterior.
 
         Parameters
@@ -271,7 +271,7 @@ class StandAloneMetropolisHastingsSampler:
 
         # First, assume we do a regular step.
         pos_prop = self.pos + step
-        log_p_prop, blobs_prop = self.compute_posterior(pos_prop)
+        log_p_prop, blobs_prop = self._compute_posterior(pos_prop)
         p_accept = np.exp(log_p_prop - self.log_p)
 
         # If applicable, do a dragging step, instead.
@@ -290,9 +290,9 @@ class StandAloneMetropolisHastingsSampler:
 
             # Run a mini MCMC chain on x, the fast parameter.
             for i, step in enumerate(steps_drag, start=1):
-                log_p_new_prop, blobs_prop = self.compute_posterior(
+                log_p_new_prop, blobs_prop = self._compute_posterior(
                     y_new + x[-1] + step)
-                log_p_old_prop = self.compute_posterior(
+                log_p_old_prop = self._compute_posterior(
                     y_old + x[-1] + step)[0]
                 p_accept = np.exp(
                     ((n - i) * log_p_old_prop + i * log_p_new_prop -
@@ -391,7 +391,7 @@ class MetropolisHastingsSampler(MarkovChainSampler):
             fast[i] = self.varied_params.names().index(fast[i])
 
         self.sampler = StandAloneMetropolisHastingsSampler(
-            self.compute_posterior, fast=fast, f_fast=f_fast, f_drag=f_drag,
+            self._compute_posterior, fast=fast, f_fast=f_fast, f_drag=f_drag,
             pool=self.pool, rng=self.rng)
         if cov is None:
             n_dim = len(self.varied_params)
@@ -400,7 +400,7 @@ class MetropolisHastingsSampler(MarkovChainSampler):
                 cov[i, i] = param.proposal**2
         self.sampler.update(cov=cov)
 
-    def run_sampler(self, n_steps):
+    def _run(self, n_steps):
         """Run the Metropolis-Hastings sampler.
 
         Parameters
@@ -410,11 +410,11 @@ class MetropolisHastingsSampler(MarkovChainSampler):
 
         """
         if not hasattr(self.sampler, 'pos'):
-            samples, derived, log_post = self.state
+            samples, derived, log_post = self._state
             self.sampler.update(
                 pos=samples, log_p=log_post, blobs=derived)
 
-        self.extend(*self.sampler.make_n_steps(n_steps))
+        self._extend(*self.sampler.make_n_steps(n_steps))
 
         if len(self.chains[0]) < self.adaptation_steps:
             cov = np.mean([chain.covariance(self.varied_params)

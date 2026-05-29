@@ -7,7 +7,7 @@ try:
 except ModuleNotFoundError:
     POCOMC_INSTALLED = False
 
-from .base import update_parameters, PopulationSampler
+from .base import _update_parameters, PopulationSampler
 
 
 class Prior(object):
@@ -79,9 +79,9 @@ class PocoMCSampler(PopulationSampler):
 
         if self.mpicomm.rank == 0:
             prior = Prior(self.varied_params)
-            kwargs = update_parameters(
+            kwargs = _update_parameters(
                 kwargs, 'pocoMC', prior=prior,
-                likelihood=self.compute_likelihood, n_dim=self.n_dim,
+                likelihood=self._compute_likelihood, n_dim=self.n_dim,
                 pool=self.pool, output_dir=self.directory,
                 random_state=self.rng.integers(2**32 - 1))
             self.sampler = pocomc.Sampler(**kwargs)
@@ -106,7 +106,7 @@ class PocoMCSampler(PopulationSampler):
                     self.sampler.load_state(filepath_max)
                     self.sampler.log_likelihood = log_likelihood
 
-    def run_sampler(self, **kwargs):
+    def _run(self, **kwargs):
         """Run the ``pocoMC`` sampler.
 
         Parameters
@@ -124,7 +124,7 @@ class PocoMCSampler(PopulationSampler):
             Extra parameters such as weights.
 
         """
-        kwargs = update_parameters(
+        kwargs = _update_parameters(
             kwargs, 'pocoMC', resume_state_path=None,
             save_every=1 if self.directory is not None else None)
 

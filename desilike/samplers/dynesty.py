@@ -6,7 +6,7 @@ try:
 except ModuleNotFoundError:
     DYNESTY_INSTALLED = False
 
-from .base import update_parameters, PopulationSampler
+from .base import _update_parameters, PopulationSampler
 
 
 class DynestySampler(PopulationSampler):
@@ -56,18 +56,18 @@ class DynestySampler(PopulationSampler):
                     self.sampler = sampler_cls.restore(str(
                         self.directory / 'dynesty.pkl'))
                     self.sampler.loglikelihood.loglikelihood =\
-                        self.compute_likelihood
-                    self.sampler.prior_transform = self.prior_transform
+                        self._compute_likelihood
+                    self.sampler.prior_transform = self._prior_transform
                 except (FileNotFoundError, ValueError):
                     pass
             if not hasattr(self, 'sampler'):
-                kwargs = update_parameters(
-                    kwargs, 'dynesty', loglikelihood=self.compute_likelihood,
-                    prior_transform=self.prior_transform, ndim=self.n_dim,
+                kwargs = _update_parameters(
+                    kwargs, 'dynesty', loglikelihood=self._compute_likelihood,
+                    prior_transform=self._prior_transform, ndim=self.n_dim,
                     blob=True, pool=self.pool, rstate=self.rng)
                 self.sampler = sampler_cls(**kwargs)
 
-    def run_sampler(self, **kwargs):
+    def _run(self, **kwargs):
         """Run the ``dynesty`` sampler.
 
         Parameters
@@ -88,7 +88,7 @@ class DynestySampler(PopulationSampler):
         """
         checkpoint_file = None if self.directory is None else str(
             self.directory / 'dynesty.pkl')
-        kwargs = update_parameters(
+        kwargs = _update_parameters(
             kwargs, 'dynesty', checkpoint_file=checkpoint_file)
 
         self.sampler.run_nested(**kwargs)

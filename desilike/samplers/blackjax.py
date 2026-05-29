@@ -114,7 +114,7 @@ class BlackJAXSampler(MarkovChainSampler):
                          directory=directory)
 
         self.compute_posterior_without_derived = self.pool.save_function(
-            partial(self.compute_posterior_without_derived),
+            lambda sample: self.likelihood(sample, return_derived=False),
             'compute_posterior_without_derived')
         self.compute_derived = self.pool.save_function(
             jax.vmap(lambda sample: self.likelihood(
@@ -126,22 +126,6 @@ class BlackJAXSampler(MarkovChainSampler):
         self.adaptation_fn = getattr(blackjax, self.adaptation_fn)
         self.make_steps = self.pool.save_function(
             make_steps_factory(self.kernel.step), 'make_steps')
-
-    def compute_posterior_without_derived(self, sample):
-        """Compute the natural logarithm of the posterior.
-
-        Parameters
-        ----------
-        sample : dict
-            Sample for which to compute the likelihood.
-
-        Returns
-        -------
-        log_post : float
-            Natural logarithm of the posterior.
-
-        """
-        return self.likelihood(sample, return_derived=False)
 
     def run_sampler(self, n_steps):
         """Run the ``BlackJAX`` sampler.
@@ -182,7 +166,7 @@ class BlackJAXSampler(MarkovChainSampler):
             for r in results])
         log_post = np.concatenate([r[1].logdensity for r in results])
 
-        if len(self.likelihood.all_params.select(derived=True)) > 0:
+        if len(self.derived_params):
             # Recompute the derived parameters since they couldn't be saved
             # during the sampling.
             derived = self.pool.map(

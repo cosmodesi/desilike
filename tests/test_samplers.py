@@ -58,6 +58,12 @@ KWARGS_RUN_FAST = dict(
     zeus=dict(max_steps=10))
 
 
+for kwargs in [KWARGS_INIT, KWARGS_INIT_FAST, KWARGS_RUN, KWARGS_RUN_FAST]:
+    for sampler in SAMPLER_CLS:
+        if sampler not in kwargs:
+            kwargs[sampler] = dict()
+
+
 @pytest.fixture
 def likelihood():
 
@@ -84,8 +90,8 @@ def test_accuracy(likelihood, key):
     # Test that all samplers work with a simple two-dimensional likelihood and
     # produce acceptable results.
 
-    sampler = SAMPLER_CLS[key](likelihood, rng=42, **KWARGS_INIT.get(key, {}))
-    results = sampler.run(**KWARGS_RUN.get(key, {}))
+    sampler = SAMPLER_CLS[key](likelihood, rng=42, **KWARGS_INIT[key])
+    results = sampler.run(**KWARGS_RUN[key])
 
     # The mean should match.
     assert np.allclose(results.mean(likelihood.varied_params),
@@ -122,9 +128,8 @@ def test_importance_combine(likelihood):
 def test_derived(likelihood, key):
     # Test that derived parameters are correctly tracked.
 
-    sampler = SAMPLER_CLS[key](
-        likelihood, rng=42, **KWARGS_INIT_FAST.get(key, {}))
-    results = sampler.run(**KWARGS_RUN_FAST.get(key, {}))
+    sampler = SAMPLER_CLS[key](likelihood, rng=42, **KWARGS_INIT_FAST[key])
+    results = sampler.run(**KWARGS_RUN_FAST[key])
     assert np.allclose(results['a'] + results['b'], results['c'])
     for i in range(3):
         assert np.allclose((results['a'] + results['b']) * i,
@@ -137,16 +142,14 @@ def test_write(likelihood, key, tmp_path):
     # Check that the sampler correctly saves results and state, if applicable.
 
     sampler_1 = SAMPLER_CLS[key](
-        likelihood, rng=42, directory=tmp_path,
-        **KWARGS_INIT_FAST.get(key, {}))
-    results_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
+        likelihood, rng=42, directory=tmp_path, **KWARGS_INIT_FAST[key])
+    results_1 = sampler_1.run(**KWARGS_RUN_FAST[key])
 
     # The second sampler should not create any new samples if old results
     # are read correctly.
     sampler_2 = SAMPLER_CLS[key](
-        likelihood, rng=43, directory=tmp_path,
-        **KWARGS_INIT_FAST.get(key, {}))
-    results_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
+        likelihood, rng=43, directory=tmp_path, **KWARGS_INIT_FAST[key])
+    results_2 = sampler_2.run(**KWARGS_RUN_FAST[key])
 
     assert len(results_1) == len(results_2)
     assert np.allclose(results_1.logposterior.value,
@@ -162,12 +165,12 @@ def test_rng(likelihood, key):
         pytest.skip("Zeus does not support specifying a random seed.")
 
     sampler_1 = SAMPLER_CLS[key](
-        likelihood, rng=42, **KWARGS_INIT_FAST.get(key, {}))
-    results_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
+        likelihood, rng=42, **KWARGS_INIT_FAST[key])
+    results_1 = sampler_1.run(**KWARGS_RUN_FAST[key])
 
     sampler_2 = SAMPLER_CLS[key](
-        likelihood, rng=42, **KWARGS_INIT_FAST.get(key, {}))
-    results_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
+        likelihood, rng=42, **KWARGS_INIT_FAST[key])
+    results_2 = sampler_2.run(**KWARGS_RUN_FAST[key])
 
     assert len(results_1) == len(results_2)
     assert np.allclose(results_1.logposterior.value,
@@ -179,13 +182,12 @@ def test_rng(likelihood, key):
 def test_continue_chain(likelihood, key):
     # Test that we can continue a chain.
 
-    sampler = SAMPLER_CLS[key](
-        likelihood, rng=42, **KWARGS_INIT_FAST.get(key, {}))
+    sampler = SAMPLER_CLS[key](likelihood, rng=42, **KWARGS_INIT_FAST[key])
     chains_10 = sampler.run(
         burn_in=0, min_steps=10, max_steps=10, concatenate=False)
     sampler = SAMPLER_CLS[key](
         likelihood, rng=43, chains=[c.copy() for c in chains_10],
-        **KWARGS_INIT_FAST.get(key, {}))
+        **KWARGS_INIT_FAST[key])
     chains_20 = sampler.run(
         burn_in=0, min_steps=20, max_steps=20, concatenate=False)
 

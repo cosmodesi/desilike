@@ -3,7 +3,7 @@ import pytest
 from jax import numpy as jnp
 
 from desilike.likelihoods import BaseGaussianLikelihood
-from desilike.profilers import Profiler
+from desilike.profilers import optimizers, Profiler
 
 MEAN_PRIOR = np.array([+0.2, -0.1])
 SD_PRIOR = np.array([0.1, 0.05])
@@ -18,6 +18,12 @@ MEAN_POSTERIOR = COV_POSTERIOR @ (
     np.linalg.inv(COV_PRIOR) @ MEAN_PRIOR +
     np.linalg.inv(COV_LIKELIHOOD) @ MEAN_LIKELIHOOD)
 
+OPTIMIZERS = dict(
+    dual_annealing=optimizers.scipy_dual_annealing,
+    scipy_minimize=optimizers.scipy_minimize)
+OPTIMIZERS_KWARGS = dict(
+    dual_annealing=dict(maxiter=10),
+    scipy_minimize=None)
 
 @pytest.fixture
 def likelihood():
@@ -40,15 +46,18 @@ def likelihood():
 
 @pytest.mark.mpi
 @pytest.mark.parametrize('posterior', [True, False])
-def test_accuracy(likelihood, posterior):
+@pytest.mark.parametrize('key', OPTIMIZERS.keys())
+def test_accuracy(likelihood, posterior, key):
     # Test that the profiler returns the correct result.
 
     profiler = Profiler(likelihood, rng=42, posterior=posterior)
     profiler.add_optimize_all()
-    profiler.add_grid_manual(dict(a=np.linspace(-1, +1, 3)))
-    profiler.add_grid_manual(
+    profiler.add_single_sample(dict(a=0.35))
+    profiler.add_manual_grid(dict(a=np.linspace(-1, +1, 3)))
+    profiler.add_manual_grid(
         dict(a=np.linspace(-1, +1, 4), b=np.linspace(-1, +1, 5)))
-    samples = profiler.run(optimizer_kwargs=dict(maxiter=10))
+    samples = profiler.run(
+        optimizer=OPTIMIZERS[key], optimizer_kwargs=OPTIMIZERS_KWARGS[key])
 
     if posterior:
         key = 'log_posterior'
@@ -72,13 +81,14 @@ def test_accuracy(likelihood, posterior):
     sd = dict(zip(['a', 'b'], SD_POSTERIOR if posterior else SD_LIKELIHOOD))
     use = (~samples.get_flag('optimize', 'a') &
            samples.get_flag('optimize', 'b'))
-    assert np.sum(use) == 3
+    assert np.sum(use) == 4
     assert np.allclose(
         -0.5 * ((samples['a'] - mean['a'])**2 / sd['a']**2)[use],
         samples[key][use], rtol=0, atol=1e-6)
 
     # Check the interpolation works.
     interp = samples.profile_interpolator('a', posterior=posterior)
+    assert len(interp.x) == 5  # 1 (global) + 1 (single) + 3 (grid)
     a = np.linspace(-1, +1, 100)
     assert np.allclose(-0.5 * ((a - mean['a'])**2 / sd['a']**2), interp(a),
                        rtol=0, atol=1e-6)
@@ -101,11 +111,11 @@ def test_rng(likelihood):
     optimizer_kwargs = dict(maxiter=1, no_local_search=True)
 
     profiler_1 = Profiler(likelihood, rng=42)
-    profiler_1.add_grid_manual(dict(a=np.linspace(0, 1, 20)))
+    profiler_1.add_manual_grid(dict(a=np.linspace(0, 1, 20)))
     samples_1 = profiler_1.run(optimizer_kwargs=optimizer_kwargs)
 
     profiler_2 = Profiler(likelihood, rng=42)
-    profiler_2.add_grid_manual(dict(a=np.linspace(0, 1, 20)))
+    profiler_2.add_manual_grid(dict(a=np.linspace(0, 1, 20)))
     samples_2 = profiler_2.run(optimizer_kwargs=optimizer_kwargs)
 
     assert len(samples_1) == len(samples_2)
@@ -120,10 +130,10 @@ def test_remove_duplicates(likelihood):
     profiler = Profiler(likelihood, rng=42)
     profiler.add_optimize_all()
     profiler.add_optimize_all()  # shouldn't be added
-    profiler.add_grid_manual(dict(a=np.linspace(0, 1, 3)))
-    profiler.add_grid_manual(
+    profiler.add_manual_grid(dict(a=np.linspace(0, 1, 3)))
+    profiler.add_manual_grid(
         dict(a=np.linspace(0, 1, 3)))  # shouldn't be added
-    profiler.add_grid_manual(dict(b=np.linspace(0, 1, 5)))
+    profiler.add_manual_grid(dict(b=np.linspace(0, 1, 5)))
     assert len(profiler.samples) == 1 + 3 + 5
 
 
@@ -134,7 +144,7 @@ def test_write(likelihood, tmp_path):
     optimizer_kwargs = dict(maxiter=1, no_local_search=True)
 
     profiler_1 = Profiler(likelihood, rng=42, directory=tmp_path)
-    profiler_1.add_grid_manual(dict(a=np.linspace(0, 1, 20)))
+    profiler_1.add_manual_grid(dict(a=np.linspace(0, 1, 20)))
     samples_1 = profiler_1.run(optimizer_kwargs=optimizer_kwargs)
 
     profiler_2 = Profiler(likelihood, directory=tmp_path)

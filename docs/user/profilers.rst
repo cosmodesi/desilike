@@ -44,9 +44,9 @@ In the following, we will profile a simple two-dimensional Gaussian. We first ha
 
   profiler = profilers.Profiler(likelihood, posterior=True)
   profiler.add_optimize_all()
-  profiler.add_grid_manual(dict(a=np.linspace(0, 1, 5)))
-  profiler.add_grid_manual(dict(b=np.linspace(0, 1, 5)))
-  profiler.add_grid_manual(dict(a=np.linspace(0, 1, 5), b=np.linspace(0, 1, 4)))
+  profiler.add_manual_grid(dict(a=np.linspace(0, 1, 5)))
+  profiler.add_manual_grid(dict(b=np.linspace(0, 1, 5)))
+  profiler.add_manual_grid(dict(a=np.linspace(0, 1, 5), b=np.linspace(0, 1, 4)))
   samples = profiler.run()
 
   print("MAP Estimates")

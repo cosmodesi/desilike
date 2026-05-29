@@ -598,7 +598,7 @@ class Samples(BaseClass):
         x_grid, y = _sort_into_grid(x, y)
 
         if len(x_grid) == 1:
-            return CubicSpline(x_grid[0], y)
+            return CubicSpline(x_grid[0], y, extrapolate=False)
 
         return RegularGridInterpolator(x_grid, y, method='cubic')
 
@@ -619,7 +619,7 @@ class Samples(BaseClass):
 
         Returns
         -------
-        list
+        bounds : list
             List of pairs of lower and upper bound. For unimodal likelihood,
             this should typically be a single pair. If a lower and/or upper
             bound cannot be determined inside the range sampled, the value

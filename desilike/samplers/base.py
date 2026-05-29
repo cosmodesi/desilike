@@ -76,10 +76,15 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         """
         self.likelihood = likelihood
-        self.n_dim = len(self.likelihood.varied_params)
-        self.n_derived = int(np.sum([
-            np.prod(param.shape) for param in
-            self.likelihood.all_params.select(derived=True)]))
+        self.varied_params = self.likelihood.varied_params
+        self.derived_params = (
+            self.likelihood.all_params.select(derived=True) +
+            self.likelihood.all_params.select(solved=True))
+        self.n_dim = len(self.varied_params)
+        self.n_derived = len(self.derived_params)
+        # Derived parameters can be multi-dimensional.
+        self.n_derived = int(np.sum([np.prod(param.shape) for param in
+                                     self.derived_params]))
 
         self.mpicomm = likelihood.mpicomm
         self.pool = MPIPool(comm=self.mpicomm)
@@ -127,7 +132,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         """
         return np.array([param.prior.ppf(x) for param, x in zip(
-            self.likelihood.varied_params, sample)])
+            self.varied_params, sample)])
 
     def compute_prior(self, sample):
         """
@@ -145,8 +150,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         """
         if not isinstance(sample, dict):
-            sample = dict(
-                zip(self.likelihood.varied_params.names(), sample))
+            sample = dict(zip(self.varied_params.names(), sample))
         return self.likelihood.all_params.prior(**sample)
 
     def compute_posterior(self, sample):
@@ -166,11 +170,10 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         """
         if not isinstance(sample, dict):
-            sample = dict(zip(self.likelihood.varied_params.names(), sample))
+            sample = dict(zip(self.varied_params.names(), sample))
         log_post, derived = self.likelihood(sample, return_derived=True)
         derived = np.concatenate([
-            np.asarray(derived[key]).flatten() for key in
-            self.likelihood.all_params.select(derived=True)])
+            np.asarray(derived[key]).flatten() for key in self.derived_params])
 
         return float(log_post), derived
 
@@ -208,10 +211,10 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
             Extra parameters such as weights.
 
         """
-        params = self.likelihood.varied_params
+        params = self.varied_params
         samples = [ParameterArray(samples[:, i], param=param) for i, param in
                    enumerate(params)]
-        params = self.likelihood.all_params.select(derived=True)
+        params = self.derived_params
         derived = np.split(derived, np.cumsum([
             int(np.prod(param.shape)) for param in params])[:-1], axis=1)
         derived = [derived[i].reshape((-1, ) + param.shape) for i, param in
@@ -364,7 +367,7 @@ class MarkovChainSampler(BaseSampler):
 
     default_adaptation_steps = 0
 
-    def __init__(self, likelihood, n_chains=4, chains=None, rng=None,
+    def __init__(self, likelihood, n_chains=1, chains=None, rng=None,
                  directory=None):
         """Initialize the sampler.
 
@@ -373,10 +376,10 @@ class MarkovChainSampler(BaseSampler):
         likelihood : BaseLikelihood
             Likelihood to sample.
         n_chains : int, optional
-            Number of chains. Default is 4.
-        chains : list of desilike.samples.Chain, optional
-            If given, continue the chains. In that case, we will ignore what
-            was read from disk. Default is ``None``.
+            Number of **independent** chains. Default is 1.
+        chains : list of desilike.samples.Chain or None, optional
+            If given on rank 0, continue the chains. In that case, we will
+            ignore what was read from disk. Default is ``None``.
         rng : numpy.random.Generator, int, or None, optional
             Random number generator. Default is ``None``.
         directory : str, Path, or None, optional
@@ -452,7 +455,7 @@ class MarkovChainSampler(BaseSampler):
 
                 # Draw random samples.
                 samples = np.zeros((self.n_chains, self.n_dim))
-                for i, param in enumerate(self.likelihood.varied_params):
+                for i, param in enumerate(self.varied_params):
                     if param.ref.is_proper():
                         samples[:, i] = param.ref.sample(
                             size=self.n_chains, random_state=self.rng)
@@ -496,11 +499,10 @@ class MarkovChainSampler(BaseSampler):
 
         """
         samples = [[chain[key][-1].value for key in
-                    self.likelihood.varied_params] for chain in self.chains]
+                    self.varied_params] for chain in self.chains]
         derived = [np.concatenate([
             np.asarray(chain[key][-1].value).flatten() for key in
-            self.likelihood.all_params.select(derived=True)]) for chain in
-            self.chains]
+            self.derived_params]) for chain in self.chains]
         log_post = [chain.logposterior[-1] for chain in self.chains]
         return np.array(samples), np.array(derived), np.array(log_post)
 
@@ -557,8 +559,15 @@ class MarkovChainSampler(BaseSampler):
         if not quiet:
             self.log_info('Diagnostics:')
 
+        if len(chains) == 1:
+            nsplits = 4
+        elif len(chains) < 4:
+            nsplits = 2
+        else:
+            nsplits = None
+
         gelman_rubin_value = np.amax(diagnostics.gelman_rubin(
-            chains, method='diag'))
+            chains, nsplits=nsplits, method='diag'))
         try:
             geweke_value = np.amax(
                 diagnostics.geweke(chains, first=0.1, last=0.5))
@@ -620,7 +629,7 @@ class MarkovChainSampler(BaseSampler):
 
     def run(self, burn_in=0.2, min_steps=0, max_steps=None,
             adaptation_steps=None, check_every=300, checks_passed=2,
-            gelman_rubin=1.1, geweke=None, ess=None, flatten_chains=True,
+            gelman_rubin=1.1, geweke=None, ess=None, concatenate=True,
             save_every=300, max_init_attempts=100):
         """Run the sampler.
 
@@ -655,9 +664,9 @@ class MarkovChainSampler(BaseSampler):
             Used to asses convergence.  If given, the minimum effective sample
             size per chain. The effective sample size is the number of chain
             elements divided by the autocorrelation time. Default is ``None``.
-        flatten_chains: bool, optional
+        concatenate: bool, optional
             Whether to concatenate individual chains into one chain. Default is
-            True.
+            ``True``.
         save_every: int, optional
             After how many steps results are saved. Default is 300.
         max_init_attempts: int, optional
@@ -724,10 +733,10 @@ class MarkovChainSampler(BaseSampler):
 
         chains = self.mpicomm.bcast(chains, root=0)
 
-        if flatten_chains:
-            return Chain.concatenate(chains)
-        else:
-            return chains
+        if concatenate:
+            chains = Chain.concatenate(chains)
+
+        return chains
 
     def write(self):
         """Write all results to disk."""

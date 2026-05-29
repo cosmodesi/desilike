@@ -178,7 +178,7 @@ class BlackJAXSampler(MarkovChainSampler):
 
         # Update the chains.
         samples = np.vstack([np.column_stack([
-            r[1].position[key] for key in self.likelihood.varied_params.keys()])
+            r[1].position[key] for key in self.varied_params.keys()])
             for r in results])
         log_post = np.concatenate([r[1].logdensity for r in results])
 
@@ -188,7 +188,7 @@ class BlackJAXSampler(MarkovChainSampler):
             derived = self.pool.map(
                 self.compute_derived, [r[1].position for r in results])
             derived = np.vstack([np.column_stack([
-                d[key] for key in self.likelihood.all_params.select(derived=True)])
+                d[key] for key in self.derived_params])
                 for d in derived])
         else:
             derived = np.zeros((self.n_chains * n_steps, 0))
@@ -226,7 +226,7 @@ class HMCSampler(BlackJAXSampler):
     adaptable_args = ['step_size', 'inverse_mass_matrix']
     adaptation_fn = 'window_adaptation'
 
-    def __init__(self, likelihood, n_chains=4, step_size=1e-3,
+    def __init__(self, likelihood, n_chains=1, step_size=1e-3,
                  inverse_mass_matrix=None, num_integration_steps=60, rng=None,
                  directory=None, **kwargs):
         """Initialize the HMC sampler.
@@ -236,7 +236,7 @@ class HMCSampler(BlackJAXSampler):
         likelihood : BaseLikelihood
             Likelihood to sample.
         n_chains : int, optional
-            Number of chains. Default is 4.
+            Number of **independent** chains. Default is 1.
         step_size : float, optional
             Size of the integration step. Default is 1e-3.
         inverse_mass_matrix : numpy.ndarray, optional

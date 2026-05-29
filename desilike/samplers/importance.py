@@ -29,7 +29,7 @@ class ImportanceSampler(StaticSampler):
 
         """
         return np.column_stack([
-            samples[key].value for key in self.likelihood.varied_params])
+            samples[key].value for key in self.varied_params])
 
     def run(self, samples, resample=True):
         """Reweight a sample using importance sampling.

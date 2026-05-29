@@ -105,7 +105,7 @@ class FastSlowProposer:
         return (m_slow @ self.L.T)[:, :, self.unsort]
 
 
-class StandAloneMetropolisHastingsSampler():
+class StandAloneMetropolisHastingsSampler:
     """A Metropolis-Hastings sampler with fast-slow decomposition.
 
     Note that this is a from-scratch reimplementation of this algorithm. Also,
@@ -353,7 +353,7 @@ class MetropolisHastingsSampler(MarkovChainSampler):
 
     default_adaptation_steps = sys.maxsize
 
-    def __init__(self, likelihood, n_chains=4, cov=None, f_fast=1, f_drag=0,
+    def __init__(self, likelihood, n_chains=1, cov=None, f_fast=1, f_drag=0,
                  fast=[], chains=None, rng=None, directory=None):
         """Initialize the Metropolis-Hastings sampler.
 
@@ -362,7 +362,7 @@ class MetropolisHastingsSampler(MarkovChainSampler):
         likelihood : BaseLikelihood
             Likelihood to sample.
         n_chains : int, optional
-            Number of chains. Default is 4.
+            Number of **independent** chains. Default is 1.
         cov : numpy.ndarray or None, optional
             Covariance matrix estimate used to whiten parameter space. If None,
             the sampler will use each parameter's proposal scale.
@@ -388,24 +388,24 @@ class MetropolisHastingsSampler(MarkovChainSampler):
             directory=directory)
 
         for i in range(len(fast)):
-            fast[i] = self.likelihood.varied_params.names().index(fast[i])
+            fast[i] = self.varied_params.names().index(fast[i])
 
         self.sampler = StandAloneMetropolisHastingsSampler(
             self.compute_posterior, fast=fast, f_fast=f_fast, f_drag=f_drag,
             pool=self.pool, rng=self.rng)
         if cov is None:
-            n_dim = len(self.likelihood.varied_params)
+            n_dim = len(self.varied_params)
             cov = np.zeros((n_dim, n_dim))
-            for i, param in enumerate(self.likelihood.varied_params):
+            for i, param in enumerate(self.varied_params):
                 cov[i, i] = param.proposal**2
         self.sampler.update(cov=cov)
 
-    def run_sampler(self, steps):
+    def run_sampler(self, n_steps):
         """Run the Metropolis-Hastings sampler.
 
         Parameters
         ----------
-        steps: int
+        n_steps: int
             Number of steps to take.
 
         """
@@ -414,10 +414,10 @@ class MetropolisHastingsSampler(MarkovChainSampler):
             self.sampler.update(
                 pos=samples, log_p=log_post, blobs=derived)
 
-        self.extend(*self.sampler.make_n_steps(steps))
+        self.extend(*self.sampler.make_n_steps(n_steps))
 
         if len(self.chains[0]) < self.adaptation_steps:
-            cov = np.mean([chain.covariance(self.likelihood.varied_params)
+            cov = np.mean([chain.covariance(self.varied_params)
                            for chain in self.chains], axis=0)
             try:
                 self.sampler.update(cov=cov)

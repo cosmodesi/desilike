@@ -19,7 +19,7 @@ class EmceeSampler(MarkovChainSampler):
 
     """
 
-    def __init__(self, likelihood, n_chains=4, chains=None, rng=None,
+    def __init__(self, likelihood, n_chains=1, chains=None, rng=None,
                  directory=None, **kwargs):
         """Initialize the ``emcee`` sampler.
 
@@ -28,7 +28,7 @@ class EmceeSampler(MarkovChainSampler):
         likelihood : BaseLikelihood
             Likelihood to sample.
         n_chains : int, optional
-            Number of chains. Default is 4.
+            Number of **independent** chains. Default is 1.
         chains : list of desilike.samples.Chain, optional
             If given, continue the chains. In that case, we will ignore what
             was read from disk. Default is ``None``.

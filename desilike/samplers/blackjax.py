@@ -113,10 +113,10 @@ class BlackJAXSampler(MarkovChainSampler):
         super().__init__(likelihood, n_chains, chains=chains, rng=rng,
                          directory=directory)
 
-        self.compute_posterior_without_derived = self.pool.save_function(
+        self.compute_posterior_without_derived = self.pool.cache_function(
             lambda sample: self.likelihood(sample, return_derived=False),
             'compute_posterior_without_derived')
-        self.compute_derived = self.pool.save_function(
+        self.compute_derived = self.pool.cache_function(
             jax.vmap(lambda sample: self.likelihood(
                 sample, return_derived=True)[1]), 'compute_derived')
 
@@ -124,7 +124,7 @@ class BlackJAXSampler(MarkovChainSampler):
         self.kernel = self.kernel_type(
             self.compute_posterior_without_derived, **self.kernel_args)
         self.adaptation_fn = getattr(blackjax, self.adaptation_fn)
-        self.make_steps = self.pool.save_function(
+        self.make_steps = self.pool.cache_function(
             make_steps_factory(self.kernel.step), 'make_steps')
 
     def _run(self, n_steps):

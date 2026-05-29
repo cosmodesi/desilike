@@ -23,17 +23,28 @@ from .pool import MPIPool
 
 def _main(func):
     """Execute function only from the main process."""
+
     def wrapper(self, *args, **kwargs):
+        exception = None
         if self.pool.main:
             try:
                 result = func(self, *args, **kwargs)
-                self.pool.stop_wait()
-            except Exception as e:
-                print(e)
-                self.mpicomm.Abort(1)
+            except Exception as exc:
+                exception = exc
+            finally:
+                try:
+                    self.pool.stop_wait()
+                except:
+                    self.mpicomm.Abort(1)
         else:
             self.pool.wait()
+
+        exception = self.mpicomm.bcast(exception)
+        if exception:
+            raise exception
+
         return self.mpicomm.bcast(None if not self.pool.main else result)
+
     return wrapper
 
 
@@ -108,7 +119,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
                  '_compute_likelihood'],
                 [self._prior_transform, self._compute_prior,
                  self._compute_posterior, self._compute_likelihood]):
-            setattr(self, name, self.pool.save_function(f, name))
+            setattr(self, name, self.pool.cache_function(f, name))
 
         if directory is not None:
             directory = Path(directory)

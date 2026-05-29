@@ -96,8 +96,8 @@ class MPIPool(object):
         self.function = _error_function
         self.registry = dict()
 
-    def save_function(self, function, name):
-        """Save a function to the local registry.
+    def cache_function(self, function, name):
+        """Cache a function to the local registry.
 
         Parameters
         ----------
@@ -186,7 +186,7 @@ class MPIPool(object):
                 self.comm.isend(_stop_wait_message(), dest=i)
 
     def map(self, function, tasks):
-        """Apply a function to a list of tasks across MPI processes..
+        """Apply a function to a list of tasks across MPI processes.
 
         Parameters
         ----------
@@ -224,7 +224,7 @@ class MPIPool(object):
             requests.append(req)
 
         # Process local work.
-        results = [None]*len(tasks)
+        results = [None] * len(tasks)
         results[::self.size] = list(map(self.function, tasks[::self.size]))
 
         # Recover results from workers (in any order).
@@ -233,4 +233,25 @@ class MPIPool(object):
             result = self.comm.recv(source=self.MPI.ANY_SOURCE,
                                     status=status)
             results[status.source::self.size] = result
+
         return results
+
+    def split(self, n_groups):
+        """Create new independent groups of pools.
+
+        Parameters
+        ----------
+        n_groups: int
+            The number of independent groups.
+
+        Returns
+        -------
+        subpool : MPIPool
+            A new pool that only communicates with other pools in its group.
+            The new pool inherits the functions previously cached.
+
+        """
+        subpool = MPIPool(comm=self.comm.Split(
+            (self.rank * n_groups // self.size), self.rank))
+        subpool.registry = self.registry
+        return subpool

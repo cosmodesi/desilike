@@ -28,7 +28,7 @@ class DynestySampler(PopulationSampler):
             Likelihood to sample.
         dynamic : boolean, optional
             If True, use ``dynesty.DynamicPopulationSampler`` instead of
-            ``dynesty.PopulationSampler``. Default is True.
+            ``dynesty.PopulationSampler``. Default is ``True``.
         rng : numpy.random.Generator, int or None, optional
             Random number generator. Default is ``None``.
         directory : str, Path, optional
@@ -36,6 +36,11 @@ class DynestySampler(PopulationSampler):
         **kwargs: dict, optional
             Extra keyword arguments passed to ``dynesty`` during
             initialization.
+
+        Raises
+        ------
+        ValueError
+            If ``directory`` is not None but ``dynamic`` is Flalse.
 
         """
         if not DYNESTY_INSTALLED:
@@ -45,8 +50,8 @@ class DynestySampler(PopulationSampler):
         super().__init__(likelihood, rng=rng, directory=directory)
 
         if not dynamic and self.directory is not None:
-            raise ValueError("dynesty does not support checkpointing for the "
-                             "static sampler.")
+            msg = "dynesty static samplers do not support checkpointing."
+            raise ValueError(msg)
 
         if self.mpicomm.rank == 0:
             sampler_cls = (dynesty.DynamicNestedSampler if dynamic else

@@ -104,15 +104,8 @@ class Profiler(BaseClass):
                 if not self.samples.get_flag('optimize', param)[i]:
                     self.fixed_params[i][param] = self.samples[i][param]
 
-    def add_optimize_all(self):
-        """Add finding the global optimum."""
-        samples = Samples(**{key: [np.nan, ] for key in self.params})
-        for param in self.params:
-            samples.set_flag('optimize', param, True)
-        self._add_samples(samples)
-
-    def add_sample(self, sample):
-        """Add parameter combination to optimize.
+    def add_single_sample(self, sample):
+        """Add a parameter combination to optimize.
 
         Parameters
         ----------
@@ -122,13 +115,9 @@ class Profiler(BaseClass):
         Raises
         ------
         ValueError
-            If no parameter is specificed or a parameter is not described in
-            the likelihood.
+            If a parameter is not described in the likelihood.
 
         """
-        if not sample:
-            msg = "You must specify at least one parameter."
-            raise ValueError(msg)
         for param in sample.keys():
             if param not in self.params:
                 msg = f"Unkown parameter '{param}'."
@@ -137,14 +126,18 @@ class Profiler(BaseClass):
         samples = Samples(**{key: [value, ] for key, value in sample.items()})
         for param in self.params:
             if param not in sample.keys():
-                samples[param] = np.nan
+                samples[param] = [np.nan, ]
                 samples.set_flag('optimize', param, True)
             else:
                 samples.set_flag('optimize', param, False)
 
         self._add_samples(samples)
 
-    def add_grid_manual(self, grid):
+    def add_optimize_all(self):
+        """Add finding the global optimum."""
+        self.add_single_sample({})
+
+    def add_manual_grid(self, grid):
         """Manually add parameter grid to optimize.
 
         Parameters

@@ -44,9 +44,9 @@ class NautilusSampler(PopulationSampler):
             kwargs = _update_parameters(
                 kwargs, 'nautilus', prior=self._prior_transform,
                 likelihood=self._compute_likelihood, n_dim=self.n_dim,
-                pass_dict=False,
-                filepath=None if self.directory is None else self.directory /
-                'nautilus.hdf5', pool=self.pool, seed=self.rng.integers(2**32))
+                pass_dict=False, filepath=None if not self.directory else
+                self.directory / 'nautilus.hdf5', pool=self.pool,
+                seed=self.rng.integers(2**32))
             self.sampler = nautilus.Sampler(**kwargs)
 
     def _run(self, **kwargs):

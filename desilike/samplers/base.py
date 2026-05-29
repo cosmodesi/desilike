@@ -132,6 +132,36 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
                 rng = np.random.default_rng(seed=rng)
             self.rng = rng
 
+        self._jit_likelihood()
+
+    def _jit_likelihood(self):
+        """JIT the likelihood with JAX, if possible."""
+        rng = np.random.default_rng(seed=42)
+
+        def get_start(size=1):
+            toret = {}
+            for param in self.varied_params:
+                if param.ref.is_proper():
+                    value = param.ref.sample(size=size, random_state=rng)
+                else:
+                    value = np.full(size, param.value)
+                toret[param.name] = value
+            return toret
+
+        self.likelihood()  # initialize before jit
+        try:
+            import jax
+            likelihood = jax.jit(
+                self.likelihood, static_argnames=['return_derived'])
+            likelihood(get_start())
+            likelihood(get_start(), return_derived=True)
+            self._likelihood = likelihood
+            if self.mpicomm.rank == 0:
+                self.log_info("Successfully jit input likelihood.")
+        except:
+            if self.mpicomm.rank == 0:
+                self.log_info("Could *not* jit input likelihood.")
+
     def _prior_transform(self, sample):
         """Transform from the unit cube to parameter space using the prior.
 
@@ -186,7 +216,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
         """
         if not isinstance(sample, dict):
             sample = dict(zip(self.varied_params.names(), sample))
-        log_post, derived = self.likelihood(sample, return_derived=True)
+        log_post, derived = self._likelihood(sample, return_derived=True)
         derived = np.concatenate([
             np.asarray(derived[key]).flatten() for key in self.derived_params])
 

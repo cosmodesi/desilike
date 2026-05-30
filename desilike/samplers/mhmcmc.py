@@ -20,8 +20,8 @@ class FastSlowProposer:
         ----------
         cov : numpy.ndarray
             Covariance matrix used to whiten parameter space.
-        fast : list, optional
-            List of dimensions that are considered fast.
+        fast : list or None, optional
+            List of dimensions that are considered fast. Default is ``None``.
         rng : numpy.random.Generator, optional
             Random number generator. Default is ``None``.
 
@@ -29,8 +29,7 @@ class FastSlowProposer:
         self.rng = rng
 
         self.n_dim = len(cov)
-        if fast is None:
-            fast = []
+        fast = [] if fast is None else fast
         is_fast = np.isin(np.arange(self.n_dim), fast)
         self.n_fast = np.sum(is_fast)
         self.n_slow = self.n_dim - self.n_fast
@@ -116,7 +115,7 @@ class StandAloneMetropolisHastingsSampler:
 
     """
 
-    def __init__(self, posterior, fast=[], f_fast=1, f_drag=0, pool=None,
+    def __init__(self, posterior, fast=None, f_fast=1, f_drag=0, pool=None,
                  rng=np.random.default_rng()):
         """Initialize the sampler.
 
@@ -124,18 +123,20 @@ class StandAloneMetropolisHastingsSampler:
         ----------
         posterior : callable
             Logarithm of the posterior.
-        fast : list, optional
-            List of dimensions that are considered fast.
+        fast : list or None, optional
+            List of dimensions that are considered fast. Default is ``None``.
         f_fast : int, optional
             Oversampling factor of fast parameters. The default is 1 which
             implies not oversampling.
         f_drag : int, optional
             Factor for dragging of fast parameters. The default is 0, i.e., no
             dragging.
-        pool : object
-            Pool used for distributing the posterior computation.
+        pool : object or None, optional
+            Pool used for distributing the posterior computation. Default is
+            ``None``.
         rng : numpy.random.Generator, optional
-            NumPy random number generator used for seeding.
+            NumPy random number generator used for seeding. Default is
+            ``numpy.random.default_rng()``.
 
         Raises
         ------
@@ -144,7 +145,7 @@ class StandAloneMetropolisHastingsSampler:
 
         """
         self.posterior = posterior
-        self.fast = fast
+        self.fast = [] if fast is None else fast
         self.f_fast = int(f_fast)
         if self.f_fast < 1:
             raise ValueError("'f_fast' cannot be smaller than 1.")
@@ -354,7 +355,7 @@ class MetropolisHastingsSampler(MarkovChainSampler):
     default_adaptation_steps = sys.maxsize
 
     def __init__(self, likelihood, n_chains=1, cov=None, f_fast=1, f_drag=0,
-                 fast=[], chains=None, rng=None, directory=None):
+                 fast=None, chains=None, rng=None, directory=None):
         """Initialize the Metropolis-Hastings sampler.
 
         Parameters
@@ -372,8 +373,8 @@ class MetropolisHastingsSampler(MarkovChainSampler):
         f_drag : int, optional
             Factor for dragging of fast parameters. The default is 0, i.e., no
             dragging.
-        fast : list of str, optional
-            List of dimensions that are considered fast.
+        fast : list of str or None, optional
+            List of dimensions that are considered fast. Default is ``None``.
         chains : list of desilike.samples.Chain, optional
             If given, continue the chains. In that case, we will ignore what
             was read from disk. Default is ``None``.
@@ -386,6 +387,8 @@ class MetropolisHastingsSampler(MarkovChainSampler):
         super().__init__(
             likelihood, n_chains=n_chains, chains=chains, rng=rng,
             directory=directory)
+
+        fast = [] if fast is None else fast
 
         for i in range(len(fast)):
             fast[i] = self.varied_params.names().index(fast[i])

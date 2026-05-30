@@ -1,7 +1,4 @@
 """Module implementing the BlackJAX samplers."""
-
-from functools import partial
-
 try:
     import jax
     import blackjax
@@ -239,7 +236,7 @@ class HMCSampler(BlackJAXSampler):
             Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-        **kwargs: dict, optional
+        **kwargs
             Extra keyword arguments passed to ``blackjax.hmc`` during
             initialization.
 
@@ -287,7 +284,7 @@ class NoUTurnSampler(BlackJAXSampler):
             Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-        **kwargs: dict, optional
+        **kwargs
             Extra keyword arguments passed to ``blackjax.nuts`` during
             initialization.
 
@@ -329,15 +326,16 @@ class MCLMCSampler(BlackJAXSampler):
         chains : list of desilike.samples.Chain or None, optional
             If given on rank 0, continue the chains. In that case, we will
             ignore what was read from disk. Default is ``None``.
-        L : float, default=1.
-            Momentum decoherence scale.
-        step_size : float, default=0.1
-            The value to use for the step size in the integrator.
+        L : float, optional
+            Momentum decoherence scale. Default is 1.
+        step_size : float, optional
+            The value to use for the step size in the integrator. Default is
+            0.1.
         rng : numpy.random.RandomState or int, optional
             Random number generator. Default is ``None``.
         directory : str, Path, optional
             Save samples to this location. Default is ``None``.
-        **kwargs: dict, optional
+        **kwargs
             Extra keyword arguments passed to ``blackjax.mclmc`` during
             initialization.
 

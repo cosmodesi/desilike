@@ -17,15 +17,16 @@ class GridSampler(StaticSampler):
         ----------
         grid : dict, int, or numpy.ndarray, optional
             A dictionary giving either the grid size or the grid itself.
-            If providing a number, the parameter is evenly within the prior
-            limits. Wildcards are supported. If only a single value is provided
-            instead of a dictionary, it is applied to all parameters. Default
+            If providing a number, the parameter is evenly within the parameter
+            limits. If only a single value is provided instead of a dictionary,
+            it is applied to all parameters. Default
             is 11.
 
         Returns
         -------
         numpy.ndarray of shape (n_samples, n_dim)
             Grid to be evaluated.
+
         """
         grid = expand_dict(grid, self.varied_params.names())
         for param in self.varied_params:

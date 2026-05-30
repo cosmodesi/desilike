@@ -27,20 +27,20 @@ class DynestySampler(PopulationSampler):
         likelihood : BaseLikelihood
             Likelihood to sample.
         dynamic : boolean, optional
-            If True, use ``dynesty.DynamicPopulationSampler`` instead of
+            If ``True``, use ``dynesty.DynamicPopulationSampler`` instead of
             ``dynesty.PopulationSampler``. Default is ``True``.
         rng : numpy.random.Generator, int or None, optional
             Random number generator. Default is ``None``.
         directory : str, Path, optional
             Save samples to this location. Default is ``None``.
-        **kwargs: dict, optional
+        **kwargs
             Extra keyword arguments passed to ``dynesty`` during
             initialization.
 
         Raises
         ------
         ValueError
-            If ``directory`` is not None but ``dynamic`` is Flalse.
+            If ``directory`` is not ``None`` but ``dynamic`` is Flalse.
 
         """
         if not DYNESTY_INSTALLED:
@@ -77,7 +77,7 @@ class DynestySampler(PopulationSampler):
 
         Parameters
         ----------
-        **kwargs: dict, optional
+        **kwargs
             Extra keyword arguments passed to ``dynesty``'s ``run_nested``
             method.
 

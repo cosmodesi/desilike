@@ -4,48 +4,62 @@ Samplers
 Static Samplers
 ---------------
 
-.. autosummary::
-  :toctree: _autosummary
-  :template: class.rst
+.. autoclass:: desilike.samplers.GridSampler
+  :members:
 
-  desilike.samplers.GridSampler
-  desilike.samplers.ImportanceSampler
-  desilike.samplers.QMCSampler
+.. autoclass:: desilike.samplers.ImportanceSampler
+  :members:
+
+.. autoclass:: desilike.samplers.QMCSampler
+  :members:
 
 Population Samplers
 -------------------
 
-.. autosummary::
-  :toctree: _autosummary
-  :template: class.rst
+.. autoclass:: desilike.samplers.DynestySampler
+  :members:
 
-  desilike.samplers.DynestySampler
-  desilike.samplers.NautilusSampler
-  desilike.samplers.PocoMCSampler
+.. autoclass:: desilike.samplers.NautilusSampler
+  :members:
+
+.. autoclass:: desilike.samplers.PocoMCSampler
+  :members:
 
 MCMC Samplers
 -------------
 
-.. autosummary::
-  :toctree: _autosummary
-  :template: class.rst
+.. autoclass:: desilike.samplers.EmceeSampler
+  :members:
 
-  desilike.samplers.EmceeSampler
-  desilike.samplers.HMCSampler
-  desilike.samplers.MCLMCSampler
-  desilike.samplers.MetropolisHastingsSampler
-  desilike.samplers.NoUTurnSampler
-  desilike.samplers.ZeusSampler
+.. autoclass:: desilike.samplers.HMCSampler
+  :members:
+
+.. autoclass:: desilike.samplers.MCLMCSampler
+  :members:
+
+.. autoclass:: desilike.samplers.MetropolisHastingsSampler
+  :members:
+
+.. autoclass:: desilike.samplers.NoUTurnSampler
+  :members:
+
+.. autoclass:: desilike.samplers.ZeusSampler
+  :members:
 
 Base Classes
 ------------
 
-.. autosummary::
-  :toctree: _autosummary
-  :template: class.rst
+.. autoclass:: desilike.samplers.base.BaseSampler
+  :members:
 
-  desilike.samplers.base.BaseSampler
-  desilike.samplers.blackjax.BlackJAXSampler
-  desilike.samplers.base.MarkovChainSampler
-  desilike.samplers.base.PopulationSampler
-  desilike.samplers.base.StaticSampler
+.. autoclass:: desilike.samplers.blackjax.BlackJAXSampler
+  :members:
+
+.. autoclass:: desilike.samplers.base.MarkovChainSampler
+  :members:
+
+.. autoclass:: desilike.samplers.base.PopulationSampler
+  :members:
+
+.. autoclass:: desilike.samplers.base.StaticSampler
+  :members:

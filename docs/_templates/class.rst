@@ -1,5 +1,0 @@
-{{ name }}
-==========
-
-.. autoclass:: {{ fullname }}
-    :members:

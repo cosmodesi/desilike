@@ -36,7 +36,7 @@ class EmceeSampler(MarkovChainSampler):
             Random number generator. Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
-        **kwargs: dict, optional
+        **kwargs
             Extra keyword arguments passed to ``emcee`` during initialization.
 
         """

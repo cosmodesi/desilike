@@ -43,7 +43,7 @@ class Profiler(BaseClass):
 
         self.pool = MPIPool()
         for name in ['_cost_function', '_run_optimizer']:
-            setattr(self, name, self.pool.save_function(
+            setattr(self, name, self.pool.cache_function(
                 getattr(self, name), name))
 
         if directory is not None:

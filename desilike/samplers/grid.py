@@ -28,8 +28,8 @@ class GridSampler(StaticSampler):
             Grid to be evaluated.
 
         """
-        grid = expand_dict(grid, self.varied_params.names())
-        for param in self.varied_params:
+        grid = expand_dict(grid, self.varied_params)
+        for param in self.likelihood.varied_params:
             if not hasattr(grid[param.name], "__len__"):
                 if param.limits is None:
                     raise ParameterPriorError(
@@ -38,7 +38,7 @@ class GridSampler(StaticSampler):
                     param.limits[0], param.limits[1], grid[param.name])
                 self.log_info(f"Grid for {param.name} is {grid[param.name]}.")
 
-        grid = [grid[param] for param in self.varied_params.names()]
+        grid = [grid[param] for param in self.varied_params]
         grid = np.meshgrid(*grid, indexing='ij')
         grid = np.column_stack([arr.ravel() for arr in grid])
 

@@ -94,7 +94,7 @@ class QMCSampler(StaticSampler):
             Grid to be evaluated.
         """
         lower, upper = [], []
-        for param in self.varied_params:
+        for param in self.likelihood.varied_params:
             if param.limits is None:
                 raise ParameterPriorError(
                     f"Provide a limit for {param.name}.")

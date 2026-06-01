@@ -27,8 +27,7 @@ class ImportanceSampler(StaticSampler):
             Grid to be evaluated.
 
         """
-        return np.column_stack([
-            samples[key].value for key in self.varied_params])
+        return np.column_stack([samples[key] for key in self.varied_params])
 
     def run(self, samples, resample=True):
         """Reweight a sample using importance sampling.

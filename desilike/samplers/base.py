@@ -104,16 +104,19 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         """
         self.likelihood = likelihood
-        self.varied_params = self.likelihood.varied_params
-        self.derived_params = (
+        self.varied_params = self.likelihood.varied_params.names()
+        self.n_dim = len(self.varied_params)
+        params = (
             self.likelihood.all_params.select(derived=True) +
             self.likelihood.all_params.select(solved=True))
-        self.n_dim = len(self.varied_params)
-        self.n_derived = len(self.derived_params)
-        # Derived parameters can be multi-dimensional.
-        self.n_derived = int(np.sum([np.prod(param.shape) for param in
-                                     self.derived_params]))
+        params = [param for param in params if param.name not in
+                  ['loglikelihood', 'logprior']]
+        self.derived_params = [param.name for param in params]
+        self.derived_shapes = [param.shape for param in params]
+        self.n_derived = int(sum(
+            np.prod(shape) for shape in self.derived_shapes))
 
+        self.mpicomm = self.likelihood.mpicomm
         self.pool = MPIPool()
         for name, f in zip(
                 ['_prior_transform', '_compute_prior', '_compute_posterior',
@@ -132,7 +135,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         if self.directory is not None:
             try:
-                self._read()
+                self._load()
             except FileNotFoundError:
                 pass
 
@@ -149,7 +152,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         def get_start(size=1):
             toret = {}
-            for param in self.varied_params:
+            for param in self.likelihood.varied_params:
                 if param.ref.is_proper():
                     value = param.ref.sample(size=size, random_state=rng)
                 else:
@@ -186,7 +189,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         """
         return np.array([param.prior.ppf(x) for param, x in zip(
-            self.varied_params, sample)])
+            self.likelihood.all_params, sample)])
 
     def _compute_prior(self, sample):
         """
@@ -204,7 +207,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         """
         if not isinstance(sample, dict):
-            sample = dict(zip(self.varied_params.names(), sample))
+            sample = dict(zip(self.varied_params, sample))
         return self.likelihood.all_params.prior(**sample)
 
     def _compute_posterior(self, sample):
@@ -224,7 +227,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         """
         if not isinstance(sample, dict):
-            sample = dict(zip(self.varied_params.names(), sample))
+            sample = dict(zip(self.varied_params, sample))
         log_post, derived = self._likelihood(sample, return_derived=True)
         derived = np.concatenate([
             np.asarray(derived[key]).flatten() for key in self.derived_params])
@@ -252,7 +255,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         return log_post - log_prior, derived
 
-    def _array_to_chain(self, samples, derived, **kwargs):
+    def _array_to_samples(self, samples, derived, **kwargs):
         """Convert NumPy arrays to desilike chains.
 
         Parameters
@@ -270,10 +273,8 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
             Samples with all derived parameters, weights, etc.
 
         """
-        params = self.varied_params
-        samples = [ParameterArray(samples[:, i], param=param) for i, param in
-                   enumerate(params)]
-        params = self.derived_params
+        samples = dict(zip(self.varied_params, samples.T))
+
         derived = np.split(derived, np.cumsum([
             int(np.prod(shape)) for shape in self.derived_shapes])[:-1],
             axis=1)
@@ -287,13 +288,13 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
 
         return samples
 
-    def _write(self):
+    def _save(self):
         """Write all results to disk."""
         if self.pool.main:
             with open(self.directory / 'rng.json', 'w') as fstream:
                 json.dump(self.rng.bit_generator.state, fstream)
 
-    def _read(self):
+    def _load(self):
         """Read internal calculations from disk."""
         if self.pool.main:
             with open(self.directory / 'rng.json', 'r') as fstream:
@@ -341,25 +342,24 @@ class StaticSampler(BaseSampler):
             samples = self.get_samples(**kwargs)
             log_prior = np.array(self.pool.map(self._compute_prior, samples))
             results = self.pool.map(self._compute_posterior, samples)
-            log_post = np.array([r[0] for r in results])
+            log_posterior = np.array([r[0] for r in results])
             derived = np.array([r[1] for r in results])
 
-            self.results = self._array_to_chain(
-                samples, derived, logposterior=log_post,
-                aweight=np.exp(log_post - logsumexp(log_post)))
-            self.results[self.results._logprior] = log_prior
+            self.samples = self._array_to_samples(
+                samples, derived, log_posterior=log_posterior,
+                log_weight=log_posterior, log_prior=log_prior)
 
         if self.directory is not None:
-            self._write()
+            self._save()
 
-        return self.results
+        return self.samples
 
-    def _write(self):
+    def _save(self):
         """Write internal calculations to disk."""
         if self.pool.main:
             self.samples.save(self.directory / 'samples.npz')
 
-    def _read(self):
+    def _load(self):
         """Read internal calculations from disk."""
         if self.pool.main:
             self.samples = Samples.load(self.directory / 'samples.npz')
@@ -405,7 +405,7 @@ class PopulationSampler(BaseSampler):
 
         """
         samples, derived, extras = self._run(**kwargs)
-        return self._array_to_chain(samples, derived, **extras)
+        return self._array_to_samples(samples, derived, **extras)
 
 
 class MarkovChainSampler(BaseSampler):
@@ -499,7 +499,7 @@ class MarkovChainSampler(BaseSampler):
 
             # Draw random samples.
             samples = np.zeros((self.n_chains, self.n_dim))
-            for i, param in enumerate(self.varied_params):
+            for i, param in enumerate(self.likelihood.varied_params):
                 if param.ref.is_proper():
                     samples[:, i] = param.ref.sample(
                         size=self.n_chains, random_state=self.rng)
@@ -512,9 +512,9 @@ class MarkovChainSampler(BaseSampler):
 
             # Accept those with finite posterior.
             for i in np.arange(self.n_chains)[np.isfinite(log_post)]:
-                chain = self._array_to_chain(
+                chain = self._array_to_samples(
                     np.atleast_2d(samples[i]), np.atleast_2d(derived[i]),
-                    logposterior=np.atleast_1d(log_post[i]))
+                    log_posterior=np.atleast_1d(log_post[i]))
                 self.chains.append(chain)
 
             if len(self.chains) >= self.n_chains:
@@ -538,12 +538,12 @@ class MarkovChainSampler(BaseSampler):
             Current logarithm of the posterior.
 
         """
-        samples = [[chain[key][-1].value for key in
-                    self.varied_params] for chain in self.chains]
+        samples = [[chain[key][-1] for key in self.varied_params] for chain in
+                   self.chains]
         derived = [np.concatenate([
-            np.asarray(chain[key][-1].value).flatten() for key in
+            np.asarray(chain[key][-1]).flatten() for key in
             self.derived_params]) for chain in self.chains]
-        log_post = [chain.logposterior[-1] for chain in self.chains]
+        log_post = [chain['log_posterior'][-1] for chain in self.chains]
         return np.array(samples), np.array(derived), np.array(log_post)
 
     def _extend(self, samples, derived, log_post):
@@ -560,9 +560,9 @@ class MarkovChainSampler(BaseSampler):
 
         """
         for i in range(self.n_chains):
-            chain = self._array_to_chain(
-                samples[i], derived[i], logposterior=log_post[i])
-            self.chains[i] = Chain.concatenate(self.chains[i], chain)
+            chain = self._array_to_samples(
+                samples[i], derived[i], log_posterior=log_post[i])
+            self.chains[i].append(chain)
 
     def _check(self, burn_in=0.2, gelman_rubin=1.1, geweke=None, ess=None,
                quiet=False):
@@ -606,13 +606,8 @@ class MarkovChainSampler(BaseSampler):
             msg = "Gelman-Rubin is not strictly valid for ensemble samplers."
             warnings.warn(msg)
 
-        gelman_rubin_value = np.amax(diagnostics.gelman_rubin(
-            chains, nsplits=nsplits, method='diag'))
-        try:
-            geweke_value = np.amax(
-                diagnostics.geweke(chains, first=0.1, last=0.5))
-        except ValueError:
-            geweke_value = float('inf')
+        gelman_rubin_value = max(diagnostics.gelman_rubin(
+            chains, keys=self.varied_params).values())
 
         tau = max(diagnostics.integrated_autocorrelation_time(
             chains, keys=self.varied_params).values())
@@ -636,8 +631,8 @@ class MarkovChainSampler(BaseSampler):
     @_main
     def run(self, burn_in=0.2, min_steps=0, max_steps=None,
             adaptation_steps=None, check_every=300, checks_passed=2,
-            gelman_rubin=1.1, geweke=None, ess=None, concatenate=True,
-            save_every=300, max_init_attempts=100):
+            gelman_rubin=1.1, ess=None, concatenate=True, save_every=300,
+            max_init_attempts=100):
         """Run the sampler.
 
         Parameters
@@ -716,35 +711,36 @@ class MarkovChainSampler(BaseSampler):
             self._run(n_steps_next)
             if n_steps % check_every == 0:
                 self.checks.append(self._check(
-                    burn_in=burn_in, gelman_rubin=gelman_rubin,
-                    geweke=geweke, ess=ess))
+                    burn_in=burn_in, gelman_rubin=gelman_rubin, ess=ess))
 
             # Write results.
             if self.directory is not None and n_steps % save_every == 0:
-                self._write()
+                self._save()
 
         # Write results in case it wasn't written in the last iteration.
         if self.directory is not None and n_steps % save_every != 0:
-            self._write()
+            self._save()
 
-        chains = [chain.remove_burnin(burn_in) for chain in self.chains]
+        if isinstance(burn_in, float):
+            burn_in = int(burn_in) * len(self.chains[0])
+        chains = [chain[burn_in:] for chain in self.chains]
 
         if concatenate:
-            chains = Chain.concatenate(chains)
+            chains = Samples.concatenate(chains)
 
         return chains
 
-    def _write(self):
+    def _save(self):
         """Write all results to disk."""
-        super()._write()
+        super()._save()
         if self.mpicomm.rank == 0:
             for i, chain in enumerate(self.chains):
                 chain.save(self.directory / f'chain_{i + 1}.npz')
             np.save(self.directory / 'checks.npy', self.checks)
 
-    def _read(self):
+    def _load(self):
         """Read internal calculations from disk."""
-        super()._read()
+        super()._load()
         if self.mpicomm.rank == 0:
             self.chains = [Samples.load(self.directory / f'chain_{i + 1}.npz')
                            for i in range(self.n_chains)]

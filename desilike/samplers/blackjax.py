@@ -139,7 +139,7 @@ class BlackJAXSampler(MarkovChainSampler):
             self.blackjax_states = []
             for i in range(self.n_chains):
                 initial_position = dict(zip(
-                    self.likelihood.varied_params.keys(), self._state[0][i]))
+                    self.varied_params, self._state[0][i]))
                 try:
                     self.blackjax_states.append(
                         self.kernel.init(initial_position))
@@ -161,7 +161,7 @@ class BlackJAXSampler(MarkovChainSampler):
 
         # Update the chains.
         samples = np.vstack([np.column_stack([
-            r[1].position[key] for key in self.varied_params.keys()])
+            r[1].position[key] for key in self.varied_params])
             for r in results])
         log_post = np.concatenate([r[1].logdensity for r in results])
 
@@ -193,10 +193,8 @@ class BlackJAXSampler(MarkovChainSampler):
         fixed_kernel_args = {
             key: value for key, value in self.kernel_args.items() if key not in
             self.adaptable_args}
-        initial_position = dict(zip(
-            self.varied_params.names(), self.chains[0][-1]))
-        initial_position = {key: value.astype(
-            jax.numpy.float64) for key, value in initial_position.items()}
+        initial_position = {key: self.chains[0][key][-1].astype(
+            jax.numpy.float64) for key in self.varied_params}
         rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
         (state, parameters), _ = self.adaptation_fn(
             self.kernel_type, self.compute_posterior_without_derived,

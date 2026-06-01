@@ -392,7 +392,7 @@ class MetropolisHastingsSampler(MarkovChainSampler):
         fast = [] if fast is None else fast
 
         for i in range(len(fast)):
-            fast[i] = self.varied_params.names().index(fast[i])
+            fast[i] = self.varied_params.index(fast[i])
 
         self.sampler = StandAloneMetropolisHastingsSampler(
             self._compute_posterior, fast=fast, f_fast=f_fast, f_drag=f_drag,
@@ -400,7 +400,7 @@ class MetropolisHastingsSampler(MarkovChainSampler):
         if cov is None:
             n_dim = len(self.varied_params)
             cov = np.zeros((n_dim, n_dim))
-            for i, param in enumerate(self.varied_params):
+            for i, param in enumerate(self.likelihood.varied_params):
                 cov[i, i] = param.proposal**2
         self.sampler.update(cov=cov)
 

@@ -257,3 +257,15 @@ class MPIPool(object):
             (self.rank * n_groups // self.size), self.rank))
         subpool.registry = self.registry
         return subpool
+
+    def bcast(self, obj):
+        """Broadcast an object from the main process.
+        Parameters
+        ----------
+        obj : object
+            Object to broadcast.
+        """
+        if self.size == 1:
+            return obj
+        else:
+            return self.comm.bcast(obj)

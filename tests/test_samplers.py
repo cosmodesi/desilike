@@ -231,6 +231,6 @@ def test_adapt(likelihood, key):
 
     sampler = SAMPLER_CLS[key](likelihood, **kwargs)
     chain = sampler.run(max_steps=max_steps, burn_in=0, ess=100,
-                        adaptation_steps=1000)
+                        adaptation_steps=5000)
     # Should have converged with updated mass matrix.
     assert len(chain) < max_steps / 2

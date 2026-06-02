@@ -5187,8 +5187,18 @@ class MgEmulatorCosmology(BaseCalculator):
         "/pscratch/sd/p/prakharb/training_isitgr_plin_pnw_mg_binned_500000/scalars"
     )
 
-    # neutrino mass fixed during emulator training (eV)
+    # Original GR emulators (mnu/w0/wa CDM) used in desilike-Arnaud-bk, for the
+    # default no-wiggle approximation  pnw_MG = pnw_GR * plin_MG / plin_GR.
+    EMU_GR_PLIN_PATH = (
+        "/pscratch/sd/p/prakharb/training_classy_plin_pnw_mnuw0wacdm_nk200v2_200000/plin"
+    )
+    EMU_GR_PNW_PATH = (
+        "/pscratch/sd/p/prakharb/training_classy_plin_pnw_mnuw0wacdm_nk200v2_200000/pnw"
+    )
+
+    # neutrino mass / dark-energy background fixed during emulator training
     M_NCDM = 0.06
+    W0, WA = -1.0, 0.0
 
     # ISiTGR binning constants used during training (exposed for the PT class)
     BINNING = dict(_MG_EMU_BINNING)
@@ -5244,9 +5254,13 @@ class MgEmulatorCosmology(BaseCalculator):
         'Sigma2': {'shape': [], 'value': 1.0, 'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.1}, 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [-3., 3.]}},
         'Sigma3': {'shape': [], 'value': 1.0, 'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.1}, 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [-3., 3.]}},
         'Sigma4': {'shape': [], 'value': 1.0, 'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.1}, 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [-3., 3.]}},
+        # Derived cosmological quantities, mirroring what the original template
+        # (Cosmoprimo) exposes: total-matter density today and sigma8 at z=0.
+        'Omega_m': {'derived': True, 'latex': r'\Omega_{m}'},
+        'sigma8_m': {'derived': True, 'latex': r'\sigma_8'},
     }
 
-    def initialize(self, zs, fiducial=None, **kwargs):
+    def initialize(self, zs, fiducial=None, nw_method='gr_ratio', **kwargs):
         """
         Parameters
         ----------
@@ -5255,10 +5269,25 @@ class MgEmulatorCosmology(BaseCalculator):
             Fiducial cosmology used for the AP factors (qpar, qper).  Keys are
             a subset of ``logA, n_s, h, omega_b, omega_cdm``; any missing key
             falls back to ``DEFAULT_FIDUCIAL`` (DESI fiducial, GR limit).
+        nw_method : {'gr_ratio', 'folps'}, default 'gr_ratio'
+            How the no-wiggle spectrum ``pknow`` is derived from the emulated
+            MG linear spectrum:
+
+            - ``'gr_ratio'`` (default): the GR wiggle ratio approximation
+              ``pnw_MG = pnw_GR * plin_MG / plin_GR``, where ``pnw_GR`` and
+              ``plin_GR`` come from the original GR emulators
+              (``EMU_GR_*_PATH``) evaluated at the same base cosmology.  The
+              ``As * D(z)^2`` normalisation cancels in the ratio.
+            - ``'folps'``: derive ``pknow`` from the emulated ``plin`` with
+              folps' ``get_pknow`` (the previous behaviour).
         """
         from .pklin_mg_emulator import MgPkEmulator
 
         self.zs = list(zs)
+
+        if nw_method not in ('gr_ratio', 'folps'):
+            raise ValueError("nw_method must be 'gr_ratio' or 'folps', got %r" % nw_method)
+        self.nw_method = nw_method
 
         # Resolve fiducial cosmology: user-provided values override defaults.
         self.fiducial = dict(self.DEFAULT_FIDUCIAL)
@@ -5270,6 +5299,15 @@ class MgEmulatorCosmology(BaseCalculator):
             path_pnw=self.EMU_PNW_PATH,
             path_scalars=self.EMU_SCALARS_PATH,
         )
+
+        # Original GR emulators for the default no-wiggle approximation.
+        self._gr_emu = None
+        if self.nw_method == 'gr_ratio':
+            from .pklin_emulator_jit import PkEmulator
+            self._gr_emu = PkEmulator(
+                path_plin=self.EMU_GR_PLIN_PATH,
+                path_pnw=self.EMU_GR_PNW_PATH,
+            )
 
         # Precompute fiducial scalars (chi_z, e_z) for the AP ratios, once.
         self._build_fid_scalars()
@@ -5289,7 +5327,6 @@ class MgEmulatorCosmology(BaseCalculator):
 
     def calculate(self, logA, n_s, h, omega_b, omega_cdm,
                   mu1, mu2, mu3, mu4, Sigma1, Sigma2, Sigma3, Sigma4, **kwargs):
-        import folps as folpsv2
         H0 = h * 100.0
         ombh2, omch2 = omega_b, omega_cdm
         # matter density today (includes the fixed massive-neutrino species)
@@ -5297,19 +5334,17 @@ class MgEmulatorCosmology(BaseCalculator):
         plist = [logA, n_s, H0, omega_b, omega_cdm, self.M_NCDM]
 
         self._results = {}
+        sigma8_0 = None
         for z in self.zs:
-            # plin from the emulator (accurate); the no-wiggle spectrum is NOT
-            # taken from the emulator (its pnw is only ~5% accurate) but derived
-            # from the emulated plin with folps' get_pknow, as in the reference
-            # EmulatorCosmology (desilike-Arnaud-bk full_shape.py:3464,3699).
+            # plin from the MG emulator (accurate); the no-wiggle spectrum is NOT
+            # taken from the emulator pnw (only ~5% accurate).
             k, plin, _pnw_emu, scalars = self._emu.predict_all(
                 z=z, ln10As=logA, ns=n_s, H0=H0, ombh2=ombh2, omch2=omch2,
                 mu1=mu1, mu2=mu2, mu3=mu3, mu4=mu4,
                 Sigma1=Sigma1, Sigma2=Sigma2, Sigma3=Sigma3, Sigma4=Sigma4,
             )
             k = np.asarray(k); plin = np.asarray(plin)
-            k_nw, pknow_ext = folpsv2.get_pknow(k=k, pk=plin, h=h)
-            pnw = np.interp(k, np.asarray(k_nw), np.asarray(pknow_ext))
+            pnw = self._pknow(z, k, plin, logA, n_s, H0, ombh2, omch2, h)
 
             chi_fid, e_fid = self._fid_scalars[z]
             # AP factors in (Mpc/h) units, mirroring the reference:
@@ -5318,14 +5353,46 @@ class MgEmulatorCosmology(BaseCalculator):
             qper = h * scalars['chi_z'] / (chi_fid * self.fiducial['h'])
             qpar = e_fid / scalars['e_z']
 
+            if sigma8_0 is None:
+                sigma8_0 = scalars['sigma8_0']  # z=0 (cosmology-level), same for all z
+
             self._results[z] = dict(
                 k=np.asarray(k), pk_dd=np.asarray(plin), pknow=np.asarray(pnw),
                 Omega_m=Omega_m, h=h,
-                sigma8=scalars['sigma8_z'],
+                sigma8=scalars['sigma8_z'], sigma8_0=scalars['sigma8_0'],
                 qper=qper, qpar=qpar,
                 mu1=mu1, mu2=mu2, mu3=mu3, mu4=mu4,
                 plist=plist,
             )
+
+        # Derived cosmological parameters (cosmology-level, z-independent),
+        # exposed exactly like Cosmoprimo's Omega_m / sigma8_m.
+        self.Omega_m = float(Omega_m)
+        self.sigma8_m = float(sigma8_0)
+
+    def _pknow(self, z, k, plin, logA, n_s, H0, ombh2, omch2, h):
+        """No-wiggle spectrum on the emulator k-grid, per ``self.nw_method``.
+
+        - ``'gr_ratio'`` (default): ``pnw_MG = pnw_GR * plin_MG / plin_GR`` with
+          ``pnw_GR / plin_GR`` the GR wiggle ratio from the original GR
+          emulators at the same base cosmology.  The ``As * D(z)^2``
+          normalisation cancels in the ratio, so ``D`` is irrelevant (pass 1).
+        - ``'folps'``: folps' ``get_pknow`` applied to the emulated plin.
+        """
+        if self.nw_method == 'gr_ratio':
+            k_gr, plin_gr, pnw_gr = self._gr_emu.predict_both(
+                z=z, ln10As=logA, ns=n_s, H0=H0, ombh2=ombh2, omch2=omch2,
+                Mnu=self.M_NCDM, w0=self.W0, wa=self.WA, D=1.0,
+            )
+            wiggle_ratio = np.asarray(pnw_gr) / np.asarray(plin_gr)
+            # GR and MG emulators share the 200-pt k-grid; interp guards against
+            # any future grid mismatch.
+            wiggle_ratio = np.interp(k, np.asarray(k_gr), wiggle_ratio)
+            return plin * wiggle_ratio
+        # nw_method == 'folps'
+        import folps as folpsv2
+        k_nw, pknow_ext = folpsv2.get_pknow(k=k, pk=plin, h=h)
+        return np.interp(k, np.asarray(k_nw), np.asarray(pknow_ext))
 
     def get_at_z(self, z):
         return self._results[z]
@@ -5333,7 +5400,7 @@ class MgEmulatorCosmology(BaseCalculator):
     def __getstate__(self, varied=True, fixed=True):
         state = {}
         if fixed:
-            exclude = {'_emu', '_fid_scalars', '_results'}
+            exclude = {'_emu', '_gr_emu', '_fid_scalars', '_results'}
             state.update({k: v for k, v in self.__dict__.items() if k not in exclude})
         if varied and hasattr(self, '_results'):
             # plain numpy already (the MLP emulator is pure numpy) — copy as-is
@@ -5356,6 +5423,14 @@ class MgEmulatorCosmology(BaseCalculator):
                 path_scalars=self.EMU_SCALARS_PATH,
             )
             self._build_fid_scalars()
+        if not hasattr(self, '_gr_emu'):
+            self._gr_emu = None
+            if getattr(self, 'nw_method', 'gr_ratio') == 'gr_ratio':
+                from .pklin_emulator_jit import PkEmulator
+                self._gr_emu = PkEmulator(
+                    path_plin=self.EMU_GR_PLIN_PATH,
+                    path_pnw=self.EMU_GR_PNW_PATH,
+                )
 
 
 class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):

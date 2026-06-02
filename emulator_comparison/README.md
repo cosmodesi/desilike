@@ -150,12 +150,32 @@ Isolates the no-wiggle prescription once the grid is matched. Max |ΔP_ℓ|:
 Purely **oscillatory (BAO-shaped)**, high-k edge ramp gone (grid matched) —
 exactly the folps-vs-peakaverage no-wiggle difference.
 
+### F. Matched grid, GR wiggle-ratio no-wiggle (`test_matched_grid_gr_ratio.py`)
+Same matched loop k-grid as D/E, but P_nw is the **new default**
+`nw_method='gr_ratio'` approximation `pnw_MG = pnw_GR·plin_MG/plin_GR` (GR
+emulators). Isolates this prescription against the original (peakaverage) with
+the grid matched. Max |ΔP_ℓ|:
+
+| case | with P4 | P0,P2 only |
+|---|---|---|
+| GR            | 1.12 % | 0.43 % |
+| MG μ1=1.5     | 1.93 % | 0.99 % |
+| MG μ=0.5      | 3.06 % | 0.75 % |
+| MG mixed μ/Σ  | 9.61 % | 6.03 % |
+
+Sits between peakaverage (D) and folps (E): for μ=0.5 it is markedly better than
+folps (3.06 vs 5.68 %), for the mixed case comparable (9.61 vs 9.97 %). The
+mixed-case residual is dominated by the known original-class cosmoprimo-isitgr
+linear issue on dr2, **not** the no-wiggle. Residuals are P4-dominated at high k,
+no broadband oscillations.
+
 ### Summary: decomposing the original-vs-emulator residual (max |ΔP_ℓ| incl. P4)
 
 | variant | nw | loop grid | GR | μ1=1.5 | μ=0.5 | mixed |
 |---|---|---|---|---|---|---|
 | B production       | folps      | native (1e-4–10) | 0.84 | 2.12 | 14.11 | 12.17 |
 | E matched grid     | folps      | template (1e-3–1)| 0.68 | 1.52 | 5.68  | 9.97  |
+| F matched grid     | gr_ratio   | template (1e-3–1)| 1.12 | 1.93 | 3.06  | 9.61  |
 | D matched grid     | peakaverage| template (1e-3–1)| 0.21 | 0.19 | 1.27  | 0.44  |
 
 And the same decomposition **excluding P4** (P0, P2 only):
@@ -164,6 +184,7 @@ And the same decomposition **excluding P4** (P0, P2 only):
 |---|---|---|---|---|---|---|
 | B production       | folps      | native (1e-4–10) | 0.25 | 1.27 | 2.33 | 6.90 |
 | E matched grid     | folps      | template (1e-3–1)| 0.35 | 0.73 | 1.44 | 6.30 |
+| F matched grid     | gr_ratio   | template (1e-3–1)| 0.43 | 0.99 | 0.75 | 6.03 |
 | D matched grid     | peakaverage| template (1e-3–1)| 0.18 | 0.19 | 0.40 | 0.34 |
 
 Reading across: matching the **grid** removes the high-k P4 edge (B→E); matching
@@ -196,9 +217,22 @@ Neither residual is an emulator error.
 
 - **No-wiggle.** The standalone pnw emulator is only ~5 % accurate (RMS), which
   produced ~6–8 % multipole errors. The plin emulator, by contrast, is ~0.16 %.
-  So `MgEmulatorCosmology` now derives P_nw from the (accurate) emulated plin
-  with folps `get_pknow` (mirroring the reference `EmulatorCosmology` in
-  desilike-Arnaud-bk), which brings the multipoles to sub-percent.
+  So `MgEmulatorCosmology` derives P_nw from the (accurate) emulated plin, with
+  two prescriptions selectable via `nw_method=`:
+  - **`'gr_ratio'` (default)** — the GR wiggle-ratio approximation
+    `pnw_MG = pnw_GR * plin_MG / plin_GR`, where `pnw_GR/plin_GR` is taken from
+    the *original* GR emulators (`training_classy_plin_pnw_mnuw0wacdm_nk200v2`,
+    the same ones used by `EmulatorCosmology_new` in desilike-Arnaud-bk),
+    evaluated at the same base cosmology. The `As·D(z)²` normalisation cancels
+    in the ratio, so the growth factor is irrelevant. This keeps the BAO-wiggle
+    removal well-behaved even for strongly-modified MG plin (folps' GR-tuned
+    smoothing can leave residual wiggles there — see `test_nw_methods.py`).
+  - **`'folps'`** — folps `get_pknow` on the emulated plin (the previous
+    behaviour), kept as an option.
+
+  `test_nw_methods.py` compares the two: the difference is purely oscillatory
+  (BAO-shaped), ~3.8 % in GR rising to ~17–21 % in strong-MG cases (μ=0.5,
+  mixed), where folps' GR smoothing handles the MG-distorted wiggle less cleanly.
 
 - **Original-class path.** The literal `fkptjaxTracerPowerSpectrumMultipoles`
   (ISiTGR via the cosmoprimo engine) is now runnable in the cosmodesi base env by

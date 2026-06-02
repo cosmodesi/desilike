@@ -6,6 +6,7 @@ specialized classes implementing specific samplers such as `emcee` or
 `dynesty`.
 """
 
+import functools
 import json
 import sys
 import warnings
@@ -24,6 +25,7 @@ from .pool import MPIPool
 def _main(func):
     """Execute function only from the main process."""
 
+    @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
         exception = None
         if self.pool.main:
@@ -462,7 +464,7 @@ class MarkovChainSampler(BaseSampler):
         pass
 
     @abstractmethod
-    def adapt_sampler(self, n_steps):
+    def _adapt(self, n_steps):
         """Adapt a specific sampler.
 
         Parameters
@@ -701,7 +703,7 @@ class MarkovChainSampler(BaseSampler):
         self.adaptation_steps = adaptation_steps  # only used for MH MCMC
 
         if adaptation_steps > 0:
-            self.adapt_sampler(adaptation_steps)
+            self._adapt(adaptation_steps)
 
         # Run the chain until convergence.
         n_steps = len(self.chains[0])

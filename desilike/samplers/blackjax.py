@@ -191,13 +191,20 @@ class BlackJAXSampler(MarkovChainSampler):
         fixed_kernel_args = {
             key: value for key, value in self.kernel_args.items() if key not in
             self.adaptable_args}
-        initial_position = dict(zip(self.params.keys()[:self.n_dim],
-                                    self.chains[0][-1]))
+        initial_position = dict(zip(
+            self.varied_params.names(), self.chains[0][-1]))
+        initial_position = {key: value.astype(
+            jax.numpy.float64) for key, value in initial_position.items()}
         rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
         (state, parameters), _ = self.adaptation_fn(
-            self.kernel_type, self.compute_posterior_without_derived).run(
-            rng_key, initial_position, num_steps=steps, **fixed_kernel_args)
+            self.kernel_type, self.compute_posterior_without_derived,
+            **fixed_kernel_args).run(
+                rng_key, initial_position, num_steps=steps)
         self.kernel_args.update(parameters)
+        self.kernel = self.kernel_type(
+            self.compute_posterior_without_derived, **self.kernel_args)
+        self.make_steps = self.pool.cache_function(
+            make_steps_factory(self.kernel.step), 'make_steps')
 
 
 class HMCSampler(BlackJAXSampler):

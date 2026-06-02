@@ -1,6 +1,18 @@
 Samplers
 ========
 
+Base Classes
+------------
+
+.. autoclass:: desilike.samplers.base.StaticSampler
+  :members:
+
+.. autoclass:: desilike.samplers.base.PopulationSampler
+  :members:
+
+.. autoclass:: desilike.samplers.base.MarkovChainSampler
+  :members:
+
 Static Samplers
 ---------------
 
@@ -25,8 +37,8 @@ Population Samplers
 .. autoclass:: desilike.samplers.PocoMCSampler
   :members:
 
-MCMC Samplers
--------------
+Markov Chain Samplers
+---------------------
 
 .. autoclass:: desilike.samplers.EmceeSampler
   :members:
@@ -44,22 +56,4 @@ MCMC Samplers
   :members:
 
 .. autoclass:: desilike.samplers.ZeusSampler
-  :members:
-
-Base Classes
-------------
-
-.. autoclass:: desilike.samplers.base.BaseSampler
-  :members:
-
-.. autoclass:: desilike.samplers.blackjax.BlackJAXSampler
-  :members:
-
-.. autoclass:: desilike.samplers.base.MarkovChainSampler
-  :members:
-
-.. autoclass:: desilike.samplers.base.PopulationSampler
-  :members:
-
-.. autoclass:: desilike.samplers.base.StaticSampler
   :members:

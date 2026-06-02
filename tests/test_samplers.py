@@ -212,13 +212,14 @@ def test_adapt(likelihood, key):
     # Check that the BlackJAXSampler can adapt.
 
     max_steps = 10_000
-    kwargs = dict(n_chains=1, inverse_mass_matrix=np.repeat(1e-6, 2))
+    kwargs = dict(n_chains=1, inverse_mass_matrix=np.repeat(1e-10, 2), rng=42)
     sampler = SAMPLER_CLS[key](likelihood, **kwargs)
-    chain = sampler.run(max_steps=max_steps, burn_in=0)
+    chain = sampler.run(max_steps=max_steps, burn_in=0, ess=100)
     # Should not have converged because of bad mass matrix.
     assert len(chain) == max_steps
 
     sampler = SAMPLER_CLS[key](likelihood, **kwargs)
-    chain = sampler.run(max_steps=max_steps, adaptation_steps=1000, burn_in=0)
+    chain = sampler.run(max_steps=max_steps, burn_in=0, ess=100,
+                        adaptation_steps=1000)
     # Should have converged with updated mass matrix.
-    assert len(chain) <= max_steps
+    assert len(chain) < max_steps / 2

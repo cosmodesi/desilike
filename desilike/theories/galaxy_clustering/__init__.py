@@ -10,7 +10,8 @@ from .full_shape import (SimpleTracerPowerSpectrumMultipoles, KaiserTracerPowerS
                          FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles,
                          GeoFPTAXTracerBispectrumMultipoles, JAXEffortTracerPowerSpectrumMultipoles,
                          GeoFPTAXTracerBispectrumMultipoles, FOLPSv2TracerPowerSpectrumMultipoles, FOLPSv2TracerBispectrumMultipoles, 
-                         fkptTracerPowerSpectrumMultipoles, fkptjaxTracerPowerSpectrumMultipoles, fkptjaxTracerBispectrumMultipoles)
+                         fkptTracerPowerSpectrumMultipoles, fkptjaxTracerPowerSpectrumMultipoles, fkptjaxTracerBispectrumMultipoles,
+                         MgEmulatorCosmology, fkpt_pkemu_TracerPowerSpectrumMultipoles, fkpt_pkemu_TracerBispectrumMultipoles)
 
 from .png import PNGTracerPowerSpectrumMultipoles
 from .power_template import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate,

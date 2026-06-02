@@ -4472,19 +4472,21 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         # --------------------------------------------------
         if model_u == "PHENOM":
             if variant_u == "BINNING":
+                # Binning-constant defaults matched to the ISiTGR MG emulator
+                # training (see MgEmulatorCosmology._MG_EMU_BINNING).
                 out = dict(
                     mu1=_get("mu1", 1.0),
                     mu2=_get("mu2", 1.0),
                     mu3=_get("mu3", 1.0),
                     mu4=_get("mu4", 1.0),
                     z_div=_get("z_div", 1.0),
-                    z_TGR=_get("z_TGR", 10.0),
-                    z_tw=_get("z_tw", 0.5),
-                    scale_bins=bool(self.options.get("scale_bins", False)),
-                    k_TGR=_get("k_TGR", 0.001),
+                    z_TGR=_get("z_TGR", 2.0),
+                    z_tw=_get("z_tw", 0.05),
+                    scale_bins=bool(self.options.get("scale_bins", True)),
+                    k_TGR=_get("k_TGR", 0.01),
                     k_c=_get("k_c", 0.1),
-                    k_S=_get("k_S", 0.5),
-                    k_tw=_get("k_tw", 0.01),
+                    k_S=_get("k_S", 0.2),
+                    k_tw=_get("k_tw", 0.001),
                 )
             elif variant_u == "GROWTH_INDEX":
                 out = dict(
@@ -5139,3 +5141,363 @@ class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTBisp
             if hasattr(self, name):
                 state[name] = getattr(self, name)
         return state
+
+# =====================================================================
+# Emulator-backed fkpt  (analog of FOLPSv2_pkemu_* )
+# ---------------------------------------------------------------------
+# A single MgEmulatorCosmology provider evaluates the trained ISiTGR MG
+# emulators (binned mu/Sigma) once for all redshift bins and exposes
+# plin/pnw + scalars + AP factors via get_at_z(z).  fkpt_pkemu_* then runs
+# only the fkpt loop machinery (Kfuncs_to_tables) on top of that.
+# =====================================================================
+
+# ISiTGR binning constants the emulator was TRAINED with — the fkpt loops
+# must use exactly these so the linear (emulator) and loop (fkpt) MG
+# treatments are self-consistent.
+_MG_EMU_BINNING = dict(
+    z_div=1.0, z_TGR=2.0, z_tw=0.05,
+    k_c=0.1, k_tw=0.001, k_TGR=0.01, k_S=0.2,
+    scale_bins=True,
+)
+
+
+class MgEmulatorCosmology(BaseCalculator):
+    """
+    Single cosmo provider for ALL redshift bins, backed by the trained
+    ISiTGR modified-gravity emulators (binned mu/Sigma parameterisation).
+
+    Loads the emulators once and, on every parameter update, evaluates
+    P_lin(k), P_nw(k) and the scalar quantities (sigma8_z, chi_z, e_z, ...)
+    at each requested redshift, together with the Alcock-Paczynski factors
+    (qpar, qper) relative to a fixed fiducial cosmology.  Consumed by
+    :class:`fkpt_pkemu_PowerSpectrumMultipoles` via :meth:`get_at_z`.
+
+    This mirrors ``EmulatorCosmology_new`` in desilike-Arnaud-bk, but with
+    the MG (mu1..mu4, Sigma1..Sigma4) emulator inputs and a fixed
+    (mnu=0.06, w0=-1, wa=0) background.
+    """
+
+    EMU_PLIN_PATH = (
+        "/pscratch/sd/p/prakharb/training_isitgr_plin_pnw_mg_binned_500000/plin"
+    )
+    EMU_PNW_PATH = (
+        "/pscratch/sd/p/prakharb/training_isitgr_plin_pnw_mg_binned_500000_pnw_restart/pnw"
+    )
+    EMU_SCALARS_PATH = (
+        "/pscratch/sd/p/prakharb/training_isitgr_plin_pnw_mg_binned_500000/scalars"
+    )
+
+    # neutrino mass fixed during emulator training (eV)
+    M_NCDM = 0.06
+
+    # ISiTGR binning constants used during training (exposed for the PT class)
+    BINNING = dict(_MG_EMU_BINNING)
+
+    # Default fiducial cosmology used for the AP factors (DESI fiducial),
+    # mu_i = Sigma_i = 1 (GR limit).  Override any subset via ``fiducial=``.
+    DEFAULT_FIDUCIAL = {
+        'logA': 3.044,
+        'n_s': 0.9649,
+        'h': 0.6736,
+        'omega_b': 0.02237,
+        'omega_cdm': 0.1200,
+    }
+
+    _params = {
+        'logA': {
+            'shape': [],
+            'ref': {'dist': 'norm', 'loc': 3.044, 'scale': 0.014},
+            'fixed': False,
+            'prior': {'dist': 'uniform', 'limits': [2.3, 3.7]},
+        },
+        'n_s': {
+            'shape': [],
+            'ref': {'dist': 'norm', 'loc': 0.9649, 'scale': 0.0042},
+            'fixed': True,
+            'prior': {'dist': 'norm', 'loc': 0.9649, 'scale': 0.042},
+        },
+        'h': {
+            'shape': [],
+            'ref': {'dist': 'norm', 'loc': 0.6736, 'scale': 0.005},
+            'fixed': False,
+            'prior': {'dist': 'uniform', 'limits': [0.5, 0.9]},
+        },
+        'omega_b': {
+            'shape': [],
+            'ref': {'dist': 'norm', 'loc': 0.02218, 'scale': 0.00015},
+            'fixed': False,
+            'prior': {'dist': 'norm', 'loc': 0.02218, 'scale': 0.00055},
+        },
+        'omega_cdm': {
+            'shape': [],
+            'ref': {'dist': 'norm', 'loc': 0.12, 'scale': 0.0012},
+            'fixed': False,
+            'prior': {'dist': 'uniform', 'limits': [0.08, 0.18]},
+        },
+        # ISiTGR binned modified-gravity parameters; default to the GR limit
+        # (mu_i = Sigma_i = 1) and fixed.  Unfix the ones you wish to sample.
+        'mu1': {'shape': [], 'value': 1.0, 'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.1}, 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [-3., 3.]}},
+        'mu2': {'shape': [], 'value': 1.0, 'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.1}, 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [-3., 3.]}},
+        'mu3': {'shape': [], 'value': 1.0, 'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.1}, 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [-3., 3.]}},
+        'mu4': {'shape': [], 'value': 1.0, 'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.1}, 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [-3., 3.]}},
+        'Sigma1': {'shape': [], 'value': 1.0, 'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.1}, 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [-3., 3.]}},
+        'Sigma2': {'shape': [], 'value': 1.0, 'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.1}, 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [-3., 3.]}},
+        'Sigma3': {'shape': [], 'value': 1.0, 'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.1}, 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [-3., 3.]}},
+        'Sigma4': {'shape': [], 'value': 1.0, 'ref': {'dist': 'norm', 'loc': 1.0, 'scale': 0.1}, 'fixed': True, 'prior': {'dist': 'uniform', 'limits': [-3., 3.]}},
+    }
+
+    def initialize(self, zs, fiducial=None, **kwargs):
+        """
+        Parameters
+        ----------
+        zs : list of redshifts, e.g. [0.5, 0.8, 1.1].
+        fiducial : dict, optional
+            Fiducial cosmology used for the AP factors (qpar, qper).  Keys are
+            a subset of ``logA, n_s, h, omega_b, omega_cdm``; any missing key
+            falls back to ``DEFAULT_FIDUCIAL`` (DESI fiducial, GR limit).
+        """
+        from .pklin_mg_emulator import MgPkEmulator
+
+        self.zs = list(zs)
+
+        # Resolve fiducial cosmology: user-provided values override defaults.
+        self.fiducial = dict(self.DEFAULT_FIDUCIAL)
+        if fiducial is not None:
+            self.fiducial.update(fiducial)
+
+        self._emu = MgPkEmulator(
+            path_plin=self.EMU_PLIN_PATH,
+            path_pnw=self.EMU_PNW_PATH,
+            path_scalars=self.EMU_SCALARS_PATH,
+        )
+
+        # Precompute fiducial scalars (chi_z, e_z) for the AP ratios, once.
+        self._build_fid_scalars()
+
+    def _build_fid_scalars(self):
+        """Evaluate the scalar emulator at the fiducial cosmology for every z."""
+        fid = self.fiducial
+        self._fid_scalars = {}
+        for z in self.zs:
+            sc = self._emu.predict_scalars(
+                z=z, ln10As=fid['logA'], ns=fid['n_s'], H0=fid['h'] * 100.0,
+                ombh2=fid['omega_b'], omch2=fid['omega_cdm'],
+                mu1=1.0, mu2=1.0, mu3=1.0, mu4=1.0,
+                Sigma1=1.0, Sigma2=1.0, Sigma3=1.0, Sigma4=1.0,
+            )
+            self._fid_scalars[z] = (sc['chi_z'], sc['e_z'])
+
+    def calculate(self, logA, n_s, h, omega_b, omega_cdm,
+                  mu1, mu2, mu3, mu4, Sigma1, Sigma2, Sigma3, Sigma4, **kwargs):
+        import folps as folpsv2
+        H0 = h * 100.0
+        ombh2, omch2 = omega_b, omega_cdm
+        # matter density today (includes the fixed massive-neutrino species)
+        Omega_m = (omega_b + omega_cdm + self.M_NCDM / 93.14) / h**2
+        plist = [logA, n_s, H0, omega_b, omega_cdm, self.M_NCDM]
+
+        self._results = {}
+        for z in self.zs:
+            # plin from the emulator (accurate); the no-wiggle spectrum is NOT
+            # taken from the emulator (its pnw is only ~5% accurate) but derived
+            # from the emulated plin with folps' get_pknow, as in the reference
+            # EmulatorCosmology (desilike-Arnaud-bk full_shape.py:3464,3699).
+            k, plin, _pnw_emu, scalars = self._emu.predict_all(
+                z=z, ln10As=logA, ns=n_s, H0=H0, ombh2=ombh2, omch2=omch2,
+                mu1=mu1, mu2=mu2, mu3=mu3, mu4=mu4,
+                Sigma1=Sigma1, Sigma2=Sigma2, Sigma3=Sigma3, Sigma4=Sigma4,
+            )
+            k = np.asarray(k); plin = np.asarray(plin)
+            k_nw, pknow_ext = folpsv2.get_pknow(k=k, pk=plin, h=h)
+            pnw = np.interp(k, np.asarray(k_nw), np.asarray(pknow_ext))
+
+            chi_fid, e_fid = self._fid_scalars[z]
+            # AP factors in (Mpc/h) units, mirroring the reference:
+            #   qper = h * D_M(z) / (h_fid * D_M_fid(z))
+            #   qpar = E_fid(z) / E(z)
+            qper = h * scalars['chi_z'] / (chi_fid * self.fiducial['h'])
+            qpar = e_fid / scalars['e_z']
+
+            self._results[z] = dict(
+                k=np.asarray(k), pk_dd=np.asarray(plin), pknow=np.asarray(pnw),
+                Omega_m=Omega_m, h=h,
+                sigma8=scalars['sigma8_z'],
+                qper=qper, qpar=qpar,
+                mu1=mu1, mu2=mu2, mu3=mu3, mu4=mu4,
+                plist=plist,
+            )
+
+    def get_at_z(self, z):
+        return self._results[z]
+
+    def __getstate__(self, varied=True, fixed=True):
+        state = {}
+        if fixed:
+            exclude = {'_emu', '_fid_scalars', '_results'}
+            state.update({k: v for k, v in self.__dict__.items() if k not in exclude})
+        if varied and hasattr(self, '_results'):
+            # plain numpy already (the MLP emulator is pure numpy) — copy as-is
+            state['_results'] = {
+                z: {k: (np.array(v) if hasattr(v, 'device') else v) for k, v in zd.items()}
+                for z, zd in self._results.items()
+            }
+        return state
+
+    def __setstate__(self, state):
+        results = state.pop('_results', None)
+        self.__dict__.update(state)
+        if results is not None:
+            self._results = results
+        if not hasattr(self, '_emu'):
+            from .pklin_mg_emulator import MgPkEmulator
+            self._emu = MgPkEmulator(
+                path_plin=self.EMU_PLIN_PATH,
+                path_pnw=self.EMU_PNW_PATH,
+                path_scalars=self.EMU_SCALARS_PATH,
+            )
+            self._build_fid_scalars()
+
+
+class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
+    """
+    Emulator-backed variant of :class:`fkptjaxPowerSpectrumMultipoles`.
+
+    Replaces the Boltzmann-solver template with an :class:`MgEmulatorCosmology`
+    provider accessed via ``cosmo.get_at_z(z)``.  The MG loop tables are then
+    built with ``Kfuncs_to_tables`` forced to the ISiTGR binned variant whose
+    binning constants match the emulator's training values, so the linear
+    (emulator) and loop (fkpt) MG treatments are self-consistent.
+
+    All bias-term, bispectrum and serialisation logic is inherited unchanged
+    from the parent.
+
+    Parameters
+    ----------
+    k, ells, mu : same as parent.
+    z : float
+        Redshift at which the emulator is queried.
+    cosmo : MgEmulatorCosmology
+        Pre-configured emulator provider (built with ``zs`` containing ``z``).
+    """
+
+    def initialize(self, *args, k=None, mu=6, z, ells=(0, 2, 4), cosmo, **kwargs):
+        # drop tracer-/wrapper-only options that may be forwarded here
+        for key in ["freedom", "prior_basis", "tracer", "fsat", "sigv", "shotnoise",
+                    "h_fid", "b1_fid", "b3_coev"]:
+            kwargs.pop(key, None)
+
+        # Set self.k, self.ells, self.options and the wedge->multipole projector
+        # WITHOUT creating a DirectPowerSpectrumTemplate (the linear spectrum comes
+        # from the emulator `cosmo`).  Mirrors the reference FOLPSv2_pkemu pattern.
+        self._set_options(k=k, ells=ells, **kwargs)
+        self.to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+        self.mu = self.to_poles.mu
+
+        # mirror the attributes the parent's combine_bias_terms_poles relies on
+        import os
+        self.backend = self.options.get("backend", "jax")
+        self.bias_scheme = self.options.get("bias_scheme", "folps")
+        self.damping = self.options.get("damping", None)
+        self.IR_resummation = self.options.get("IR_resummation", True)
+        os.environ.setdefault("FOLPS_BACKEND", self.backend)
+
+        self.z = float(z)
+        self.cosmo = cosmo
+        self.template = None  # so the tracer's `.template` property is harmless
+        self.runtime_info._requires = None  # rescan -> cosmo becomes the dependency
+
+    def calculate(self):
+        from .base import ap_k_mu
+
+        emu = self.cosmo.get_at_z(self.z)
+
+        qpar, qper = emu['qpar'], emu['qper']
+        jac, kap, muap = ap_k_mu(self.k, self.mu, qpar, qper)
+
+        # Forced, self-consistent MG treatment (see class docstring).
+        B = _MG_EMU_BINNING
+        mg_params = dict(
+            mu1=float(emu['mu1']), mu2=float(emu['mu2']),
+            mu3=float(emu['mu3']), mu4=float(emu['mu4']),
+            z_div=B['z_div'], z_TGR=B['z_TGR'], z_tw=B['z_tw'],
+            scale_bins=B['scale_bins'],
+            k_TGR=B['k_TGR'], k_c=B['k_c'], k_S=B['k_S'], k_tw=B['k_tw'],
+        )
+
+        fkpt_params = dict(
+            z=float(self.z),
+            Om=float(emu['Omega_m']),
+            # match the parent fkptjaxPowerSpectrumMultipoles.calculate kernel grid
+            kmin=float(min(1e-3, float(jnp.min(self.k)))),
+            kmax=float(max(1.0, float(jnp.max(self.k)))),
+            Nk_kernel=int(min(len(self.k), 120)),
+            nquadSteps=300,
+            NQ=10,
+            NR=10,
+            beyond_eds=bool(self.options.get("beyond_eds", True)),
+            # In fkptjax the binned mu/Sigma variant lives under model='PHENOM'
+            # (phenomenological); HDKI is reserved for mu_OmDE/BZ/EFT_DE.
+            model="PHENOM",
+            mg_variant="binning",
+            rescale_PS=False,          # emulator plin is already the MG spectrum
+            xnow=-3.912023,            # DO NOT CHANGE
+            ode_method="RKQS",
+            f0_kmax=1e-3,
+            **mg_params,
+        )
+
+        table, table_now, kcs = Kfuncs_to_tables(
+            k=emu['k'],
+            pk=emu['pk_dd'],
+            pk_now=emu['pknow'],
+            **fkpt_params,
+            return_kernel_constants=True,
+        )
+
+        extra = 0  # A_full=False only
+
+        kt = np.asarray(table[0])
+        fk_norm = np.asarray(table[2])   # f(k)/f0 on kout
+        f0_mg = float(table[-1])         # scalar f0 used for normalization
+        fk_mg = fk_norm * f0_mg          # actual f(k) on kout
+        calA, calAp, CFD3, CFD3p = kcs
+
+        self.pt = Namespace(
+            jac=jac, kap=kap, muap=muap,
+            table=table[1:28 + extra],
+            table_now=table_now[1:28 + extra],
+            scalars=table[28 + extra:],
+            scalars_now=table_now[28 + extra:],
+            A_full=False,
+            remove_DeltaP=False,
+            kt=kt,
+            fk_norm=fk_norm,
+            fk=fk_mg,
+            f0=f0_mg,
+            qpar=qpar, qper=qper,
+            calA=calA, calAp=calAp, CFD3=CFD3, CFD3p=CFD3p,
+        )
+
+        self.kt = table[0]
+        self.qpar = qpar
+        self.qper = qper
+        self.sigma8 = emu['sigma8']
+        self.fsigma8 = self.pt.f0 * self.sigma8
+        self.f0 = self.pt.f0
+        self.fk = self.pt.fk
+        self.fk_norm = self.pt.fk_norm
+
+
+class fkpt_pkemu_TracerPowerSpectrumMultipoles(fkptTracerPowerSpectrumMultipoles):
+    """Emulator-backed tracer power spectrum multipoles (see
+    :class:`fkpt_pkemu_PowerSpectrumMultipoles`).  Pass ``cosmo=`` (an
+    :class:`MgEmulatorCosmology`) and ``z=`` at construction."""
+
+    pt_cls = 'fkpt_pkemu_PowerSpectrumMultipoles'
+    _params = fkptTracerPowerSpectrumMultipoles._params
+
+
+class fkpt_pkemu_TracerBispectrumMultipoles(fkptjaxTracerBispectrumMultipoles):
+    """Emulator-backed tracer bispectrum multipoles, reusing the same
+    emulator-backed PT calculator."""
+

@@ -603,6 +603,10 @@ class MarkovChainSampler(BaseSampler):
         else:
             nsplits = None
 
+        if gelman_rubin != float('inf') and getattr(self, 'ensemble', False):
+            msg = "Gelman-Rubin is not strictly valid for ensemble samplers."
+            warnings.warn(msg)
+
         gelman_rubin_value = np.amax(diagnostics.gelman_rubin(
             chains, nsplits=nsplits, method='diag'))
         try:

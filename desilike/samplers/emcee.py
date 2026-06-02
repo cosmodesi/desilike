@@ -19,7 +19,9 @@ class EmceeSampler(MarkovChainSampler):
 
     """
 
-    def __init__(self, likelihood, n_chains=1, chains=None, rng=None,
+    ensemble = True
+
+    def __init__(self, likelihood, n_walkers=10, chains=None, rng=None,
                  directory=None, **kwargs):
         """Initialize the ``emcee`` sampler.
 
@@ -27,8 +29,9 @@ class EmceeSampler(MarkovChainSampler):
         ----------
         likelihood : BaseLikelihood
             Likelihood to sample.
-        n_chains : int, optional
-            Number of **independent** chains. Default is 1.
+        n_walkers : int, optional
+            Number of walkers. Note that each walker produces a chain but
+            different chains are not strictly independent. Default is 10.
         chains : list of desilike.samples.Chain, optional
             If given, continue the chains. In that case, we will ignore what
             was read from disk. Default is ``None``.
@@ -44,12 +47,12 @@ class EmceeSampler(MarkovChainSampler):
             raise ImportError("The 'emcee' package is required but not "
                               "installed.")
 
-        super().__init__(likelihood, n_chains=n_chains, chains=chains, rng=rng,
-                         directory=directory)
+        super().__init__(likelihood, n_chains=n_walkers, chains=chains,
+                         rng=rng, directory=directory)
 
         if self.mpicomm.rank == 0:
             kwargs = _update_parameters(
-                kwargs, 'emcee', nwalkers=self.n_chains, ndim=self.n_dim,
+                kwargs, 'emcee', nwalkers=n_walkers, ndim=self.n_dim,
                 log_prob_fn=self._compute_posterior, pool=self.pool, args=None,
                 kwargs=None, vectorize=False)
             self.sampler = emcee.EnsembleSampler(**kwargs)

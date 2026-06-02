@@ -22,16 +22,16 @@ SAMPLER_CLS = dict(
     zeus=samplers.ZeusSampler)
 KWARGS_INIT = dict(
     dynesty=dict(dynamic=True, nlive=100),
-    emcee=dict(n_chains=4),
+    emcee=dict(n_walkers=4),
     nautilus=dict(n_networks=1, n_live=300),
     pocomc=dict(n_effective=200, n_active=100),
-    zeus=dict(n_chains=4))
+    zeus=dict(n_walkers=4))
 KWARGS_INIT_FAST = dict(
     dynesty=dict(dynamic=True, nlive=30),
-    emcee=dict(n_chains=4),
+    emcee=dict(n_walkers=4),
     nautilus=dict(n_networks=1, n_live=100),
     pocomc=dict(n_effective=10, n_active=5, flow='nsf3'),
-    zeus=dict(n_chains=4))
+    zeus=dict(n_walkers=4))
 KWARGS_RUN = dict(
     dynesty=dict(n_effective=0),
     grid=dict(grid=np.linspace(0, 1, 101)),

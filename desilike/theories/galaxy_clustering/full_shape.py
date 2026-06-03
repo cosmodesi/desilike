@@ -3952,6 +3952,7 @@ def Kfuncs_to_tables(
     pmax_bao: float = 0.4,
     Np_bao: int = 100,
     return_kernel_constants=True,
+    use_numba: bool = False,
 ) -> Tuple[Tuple[Any, ...], Tuple[Any, ...]]:
     """
     Return (table_wiggle, table_now) in the A_full=False layout expected by FOLPS.
@@ -3992,6 +3993,7 @@ def Kfuncs_to_tables(
         eftcamb_h1_interp=eftcamb_h1_interp,
         eftcamb_h3_interp=eftcamb_h3_interp,
         eftcamb_h5_interp=eftcamb_h5_interp,
+        use_numba=bool(use_numba),
     )
 
     k_ext_np = np.asarray(k_ext, dtype=float)
@@ -4073,27 +4075,35 @@ def Kfuncs_to_tables(
     fk_out = interp(kout, k_ext, fk_ext)
     fk_norm_out = fk_out / f0
 
+    # sigma^2 (wiggle / no-wiggle) and the BAO sigma^2 integrals are small 1D
+    # Simpson quadratures.  Evaluating them eagerly in jax forces a host<->device
+    # round-trip per op (device_put / apply_primitive churn ~20 ms/call); do them
+    # in numpy instead.  scipy's Simpson rule reproduces folps' jax `simpson`
+    # bit-for-bit (same composite rule), so results are unchanged.  The grid
+    # (extrapolate_pklin), the interp (interpax cubic) and folps' spherical
+    # Bessel backend stay in jax -- only the quadratures move host-side.
+    from scipy.integrate import simpson as _np_simpson
+
     ff = fk_ext / f0
-    sigma2w = float(1.0 / (6.0 * jnp.pi**2) * simpson(pk_ext * ff**2, x=k_ext))
-    sigma2w_NW = float(1.0 / (6.0 * jnp.pi**2) * simpson(pk_now_ext * ff**2, x=k_ext))
+    k_ext_h = np.asarray(k_ext)
+    ff_h = np.asarray(ff)
+    sigma2w = float(1.0 / (6.0 * np.pi**2) * _np_simpson(np.asarray(pk_ext) * ff_h**2, x=k_ext_h))
+    sigma2w_NW = float(1.0 / (6.0 * np.pi**2) * _np_simpson(np.asarray(pk_now_ext) * ff_h**2, x=k_ext_h))
 
     p = jnp.exp(jnp.linspace(jnp.log(1e-6), jnp.log(float(pmax_bao)), int(Np_bao)))
     PSL_NW = interp(p, k_ext, pk_now_ext)
+    p_h = np.asarray(p)
+    PSL_NW_h = np.asarray(PSL_NW)
+    j0_h = np.asarray(folpsv2.spherical_jn_backend(0, p * float(rbao)))
+    j2_h = np.asarray(folpsv2.spherical_jn_backend(2, p * float(rbao)))
 
     sigma2_NW = float(
-        1.0 / (6.0 * jnp.pi**2)
-        * simpson(
-            PSL_NW * (
-                1.0
-                - folpsv2.spherical_jn_backend(0, p * float(rbao))
-                + 2.0 * folpsv2.spherical_jn_backend(2, p * float(rbao))
-            ),
-            x=p,
-        )
+        1.0 / (6.0 * np.pi**2)
+        * _np_simpson(PSL_NW_h * (1.0 - j0_h + 2.0 * j2_h), x=p_h)
     )
     delta_sigma2_NW = float(
-        1.0 / (2.0 * jnp.pi**2)
-        * simpson(PSL_NW * folpsv2.spherical_jn_backend(2, p * float(rbao)), x=p)
+        1.0 / (2.0 * np.pi**2)
+        * _np_simpson(PSL_NW_h * j2_h, x=p_h)
     )
 
     if bool(beyond_eds):
@@ -4199,6 +4209,155 @@ def Kfuncs_to_tables(
         delta_sigma2_NW,
         f0,
     )
+    if return_kernel_constants:
+        return table_w, table_nw, (A, ApOverf0 * f0, CFD3, CFD3p)
+    return table_w, table_nw
+
+
+def build_jax_static_ctx(k, *, kmin, kmax, Nk_kernel, nquadSteps, NQ, NR,
+                         rbao=104.0, pmax_bao=0.4, Np_bao=100):
+    """Precompute the *static* (cosmology-independent) pieces of the jax fkpt
+    loop: the kernel grid (``init_data``), the ``JaxCalculator``, ``kout``, and
+    the BAO ``p``-grid + spherical Bessel ``j0``/``j2``.
+
+    These depend only on the k-grid and fixed loop parameters (NOT on pk or the
+    cosmology), so they are built once (concretely) and reused inside the jitted
+    :func:`Kfuncs_to_tables_jax`, keeping that function fully traceable.
+    """
+    import numpy as _np
+    import folps as folpsv2
+    from folps.tools_jax import extrapolate_pklin
+    from fkptjax.calculate_jax import JaxCalculator
+    from fkptjax.util import setup_kfunctions
+    k = jnp.asarray(k)
+    # k_ext depends only on k (the extrapolation grid), not pk -> use any pk.
+    k_ext, _ = extrapolate_pklin(k, jnp.ones_like(k))
+    init_data = setup_kfunctions(
+        k_in=_np.asarray(k_ext), kmin=float(kmin), kmax=float(kmax),
+        Nk=int(Nk_kernel), nquadSteps=int(nquadSteps), NQ=int(NQ), NR=int(NR))
+    calculator = JaxCalculator()
+    calculator.initialize(init_data)
+    p = jnp.exp(jnp.linspace(jnp.log(1e-6), jnp.log(float(pmax_bao)), int(Np_bao)))
+    j0 = jnp.asarray(folpsv2.spherical_jn_backend(0, p * float(rbao)))
+    j2 = jnp.asarray(folpsv2.spherical_jn_backend(2, p * float(rbao)))
+    return dict(init_data=init_data, calculator=calculator,
+                kout=jnp.asarray(init_data.logk_grid), p=p, j0=j0, j2=j2)
+
+
+def Kfuncs_to_tables_jax(
+    k, pk, pk_now, *, z, Om, beyond_eds=True,
+    kmin=None, kmax=None, Nk_kernel=120, nquadSteps=300, NQ=10, NR=10,
+    xnow=-3.912023, f0_kmax=None,
+    mu1=1.0, mu2=1.0, mu3=1.0, mu4=1.0,
+    z_div=1.0, z_TGR=10.0, z_tw=0.5, scale_bins=False,
+    k_TGR=0.001, k_S=0.5, k_c=0.1, k_tw=0.01,
+    rbao=104.0, pmax_bao=0.4, Np_bao=100,
+    return_kernel_constants=True, static_ctx=None,
+):
+    """Fully jax-traceable (jit/vmap-able) ``Kfuncs_to_tables`` for the
+    PHENOM/binning model.
+
+    Same physics/outputs as :func:`Kfuncs_to_tables`, but the growth and
+    beyond-EdS kernel ODEs are integrated with diffrax (``fkptjax.jax_ode``) on
+    the jax RHS (``fkptjax.binning_jax``), and every scalar stays ``jnp`` (no
+    ``float()``/``np`` concretisation), so the whole fkpt loop can be ``jax.jit``
+    / ``jax.vmap``'d.  The legacy numpy/numba :func:`Kfuncs_to_tables` is
+    unchanged.  (The jax ODE is fully converged, so results match the legacy path
+    to the legacy RKQS truncation, ~1e-3 in the multipoles.)
+    """
+    import folps as folpsv2
+    from folps.tools_jax import extrapolate_pklin, simpson, interp
+    from fkptjax.calculate_jax import JaxCalculator
+    from fkptjax.util import setup_kfunctions
+    from fkptjax import binning_jax as _bj
+    from fkptjax.jax_ode import DP_jax, kernel_constants_jax
+
+    k = jnp.asarray(k); pk = jnp.asarray(pk); pk_now = jnp.asarray(pk_now)
+    k_ext, pk_ext = extrapolate_pklin(k, pk)
+    _, pk_now_ext = extrapolate_pklin(k, pk_now)
+
+    # binning constants (Om and mu* may be traced); xstop concrete (z is a float).
+    P = _bj.pack_constants_jnp(
+        om=Om, ol=1.0 - Om,
+        mu1=mu1, mu2=mu2, mu3=mu3, mu4=mu4,
+        z_div=z_div, z_TGR=z_TGR, z_tw=z_tw, scale_bins=scale_bins,
+        k_TGR=k_TGR, k_c=k_c, k_S=k_S, k_tw=k_tw)
+    xstop = float(np.log(1.0 / (1.0 + float(z))))
+
+    # growth D(k), D'(k) via diffrax
+    Y = DP_jax(k_ext, P, float(xnow), xstop)
+    D_ext, Dp_ext = Y[0], Y[1]
+    fk_ext = Dp_ext / D_ext
+
+    if kmin is None:
+        kmin = float(jnp.minimum(1e-3, jnp.min(k)))
+    if kmax is None:
+        kmax = float(jnp.maximum(0.5, jnp.max(k)))
+    if f0_kmax is None:
+        f0_kmax = float(kmin)
+
+    mask0 = (k_ext <= float(f0_kmax))
+    nhead = int(min(5, int(k_ext.shape[0])))
+    f0 = jnp.where(
+        jnp.any(mask0),
+        jnp.sum(jnp.where(mask0, fk_ext, 0.0)) / jnp.maximum(jnp.sum(mask0), 1),
+        jnp.mean(fk_ext[:nhead]),
+    )
+
+    # static (cosmology-independent) pieces: precomputed (jit path) or built here.
+    if static_ctx is None:
+        static_ctx = build_jax_static_ctx(
+            k, kmin=kmin, kmax=kmax, Nk_kernel=Nk_kernel, nquadSteps=nquadSteps,
+            NQ=NQ, NR=NR, rbao=rbao, pmax_bao=pmax_bao, Np_bao=Np_bao)
+    calculator = static_ctx['calculator']
+    kout = static_ctx['kout']
+    p = static_ctx['p']
+    j0 = static_ctx['j0']
+    j2 = static_ctx['j2']
+
+    fk_out = interp(kout, k_ext, fk_ext)
+    fk_norm_out = fk_out / f0
+
+    ff = fk_ext / f0
+    sigma2w = 1.0 / (6.0 * jnp.pi**2) * simpson(pk_ext * ff**2, x=k_ext)
+    sigma2w_NW = 1.0 / (6.0 * jnp.pi**2) * simpson(pk_now_ext * ff**2, x=k_ext)
+
+    PSL_NW = interp(p, k_ext, pk_now_ext)
+    sigma2_NW = 1.0 / (6.0 * jnp.pi**2) * simpson(PSL_NW * (1.0 - j0 + 2.0 * j2), x=p)
+    delta_sigma2_NW = 1.0 / (2.0 * jnp.pi**2) * simpson(PSL_NW * j2, x=p)
+
+    if bool(beyond_eds):
+        KA, KAp, KR1, KR1p = kernel_constants_jax(f0, P, float(xnow), xstop)
+        A = KA
+        ApOverf0 = KAp / f0
+        CFD3 = KR1
+        CFD3p = KR1p
+    else:
+        A = 1.0; ApOverf0 = 0.0; CFD3 = 1.0; CFD3p = 1.0
+
+    kfuncs = calculator.evaluate_jax(
+        Pk_in=pk_ext, Pk_nw_in=pk_now_ext, fk_in=fk_ext,
+        A=A, ApOverf0=ApOverf0, CFD3=CFD3, CFD3p=CFD3p, sigma2v=0.0, f0=f0)
+
+    zeros = jnp.zeros_like(jnp.asarray(kout))
+
+    def _tab(i, tail):
+        return (
+            kout, kfuncs.pkl[i], fk_norm_out,
+            kfuncs.P22dd[i] + kfuncs.P13dd[i],
+            kfuncs.P22du[i] + kfuncs.P13du[i],
+            kfuncs.P22uu[i] + kfuncs.P13uu[i],
+            kfuncs.Pb1b2[i], kfuncs.Pb1bs2[i], kfuncs.Pb22[i], kfuncs.Pb2s2[i],
+            kfuncs.Ps22[i], kfuncs.sigma32PSL[i], kfuncs.Pb2theta[i], kfuncs.Pbs2theta[i],
+            kfuncs.I1udd1A[i], kfuncs.I2uud1A[i], kfuncs.I2uud2A[i], kfuncs.I3uuu2A[i],
+            kfuncs.I3uuu3A[i], kfuncs.I2uudd1BpC[i], kfuncs.I2uudd2BpC[i],
+            kfuncs.I3uuud2BpC[i], kfuncs.I3uuud3BpC[i], kfuncs.I4uuuu2BpC[i],
+            kfuncs.I4uuuu3BpC[i], kfuncs.I4uuuu4BpC[i], zeros, zeros,
+        ) + tail
+
+    table_w = _tab(0, (sigma2w, f0))
+    table_nw = _tab(1, (sigma2w_NW, sigma2_NW, delta_sigma2_NW, f0))
+
     if return_kernel_constants:
         return table_w, table_nw, (A, ApOverf0 * f0, CFD3, CFD3p)
     return table_w, table_nw
@@ -4324,6 +4483,10 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         bias_scheme="folps",
         damping=None,
         IR_resummation=True,
+
+        # opt-in numba fast path for the PHENOM/binning MG ODE RHS
+        # (fkptjax_muMG numba-binning-rhs branch); only active for binning.
+        use_numba=False,
     )
 
     _pt_attrs = [
@@ -5260,7 +5423,8 @@ class MgEmulatorCosmology(BaseCalculator):
         'sigma8_m': {'derived': True, 'latex': r'\sigma_8'},
     }
 
-    def initialize(self, zs, fiducial=None, nw_method='gr_ratio', **kwargs):
+    def initialize(self, zs, fiducial=None, nw_method='gr_ratio',
+                   use_jax_emulator=False, **kwargs):
         """
         Parameters
         ----------
@@ -5280,37 +5444,57 @@ class MgEmulatorCosmology(BaseCalculator):
               ``As * D(z)^2`` normalisation cancels in the ratio.
             - ``'folps'``: derive ``pknow`` from the emulated ``plin`` with
               folps' ``get_pknow`` (the previous behaviour).
+        use_jax_emulator : bool, default False
+            If True, use the JAX emulator (:class:`JaxMgPkEmulator`) and a fully
+            jax-traceable ``calculate`` path, so this provider can be ``jax.jit``
+            / ``jax.vmap``'d (clears "Wall 1").  Only ``nw_method='gr_ratio'`` is
+            supported in this mode (folps ``get_pknow`` is not traceable).
+            Results are bit-for-bit identical to the numpy path.
         """
-        from .pklin_mg_emulator import MgPkEmulator
-
         self.zs = list(zs)
 
         if nw_method not in ('gr_ratio', 'folps'):
             raise ValueError("nw_method must be 'gr_ratio' or 'folps', got %r" % nw_method)
         self.nw_method = nw_method
+        self.use_jax_emulator = bool(use_jax_emulator)
+        if self.use_jax_emulator and self.nw_method != 'gr_ratio':
+            raise ValueError("use_jax_emulator requires nw_method='gr_ratio' "
+                             "(folps get_pknow is not jax-traceable).")
 
         # Resolve fiducial cosmology: user-provided values override defaults.
         self.fiducial = dict(self.DEFAULT_FIDUCIAL)
         if fiducial is not None:
             self.fiducial.update(fiducial)
 
-        self._emu = MgPkEmulator(
-            path_plin=self.EMU_PLIN_PATH,
-            path_pnw=self.EMU_PNW_PATH,
-            path_scalars=self.EMU_SCALARS_PATH,
-        )
-
-        # Original GR emulators for the default no-wiggle approximation.
-        self._gr_emu = None
-        if self.nw_method == 'gr_ratio':
-            from .pklin_emulator_jit import PkEmulator
-            self._gr_emu = PkEmulator(
-                path_plin=self.EMU_GR_PLIN_PATH,
-                path_pnw=self.EMU_GR_PNW_PATH,
-            )
+        self._load_emulators()
 
         # Precompute fiducial scalars (chi_z, e_z) for the AP ratios, once.
         self._build_fid_scalars()
+
+    def _load_emulators(self):
+        """(Re)load the (MG and GR) emulators -- numpy or jax per use_jax_emulator."""
+        if self.use_jax_emulator:
+            from .pklin_mg_emulator_jax import JaxMgPkEmulator
+            self._emu = JaxMgPkEmulator(
+                path_plin=self.EMU_PLIN_PATH, path_pnw=self.EMU_PNW_PATH,
+                path_scalars=self.EMU_SCALARS_PATH)
+        else:
+            from .pklin_mg_emulator import MgPkEmulator
+            self._emu = MgPkEmulator(
+                path_plin=self.EMU_PLIN_PATH, path_pnw=self.EMU_PNW_PATH,
+                path_scalars=self.EMU_SCALARS_PATH)
+
+        # GR emulators for the gr_ratio no-wiggle; in jax mode also build the
+        # jit-compiled predict functions (traceable, D cancels in the ratio).
+        self._gr_emu = None
+        self._gr_predict_plin = self._gr_predict_pnw = None
+        if self.nw_method == 'gr_ratio':
+            from .pklin_emulator_jit import PkEmulator
+            self._gr_emu = PkEmulator(
+                path_plin=self.EMU_GR_PLIN_PATH, path_pnw=self.EMU_GR_PNW_PATH)
+            if self.use_jax_emulator:
+                self._gr_predict_plin = self._gr_emu.get_jit_predict_plin()
+                self._gr_predict_pnw = self._gr_emu.get_jit_predict_pnw()
 
     def _build_fid_scalars(self):
         """Evaluate the scalar emulator at the fiducial cosmology for every z."""
@@ -5323,10 +5507,17 @@ class MgEmulatorCosmology(BaseCalculator):
                 mu1=1.0, mu2=1.0, mu3=1.0, mu4=1.0,
                 Sigma1=1.0, Sigma2=1.0, Sigma3=1.0, Sigma4=1.0,
             )
-            self._fid_scalars[z] = (sc['chi_z'], sc['e_z'])
+            if self.use_jax_emulator:
+                # JaxMgPkEmulator returns the 5-vector [sigma8_z, sigma8_0, da_z, chi_z, e_z]
+                self._fid_scalars[z] = (float(sc[3]), float(sc[4]))
+            else:
+                self._fid_scalars[z] = (sc['chi_z'], sc['e_z'])
 
     def calculate(self, logA, n_s, h, omega_b, omega_cdm,
                   mu1, mu2, mu3, mu4, Sigma1, Sigma2, Sigma3, Sigma4, **kwargs):
+        if self.use_jax_emulator:
+            return self._calculate_jax(logA, n_s, h, omega_b, omega_cdm,
+                                       mu1, mu2, mu3, mu4, Sigma1, Sigma2, Sigma3, Sigma4)
         H0 = h * 100.0
         ombh2, omch2 = omega_b, omega_cdm
         # matter density today (includes the fixed massive-neutrino species)
@@ -5370,6 +5561,58 @@ class MgEmulatorCosmology(BaseCalculator):
         self.Omega_m = float(Omega_m)
         self.sigma8_m = float(sigma8_0)
 
+    def _calculate_jax(self, logA, n_s, h, omega_b, omega_cdm,
+                       mu1, mu2, mu3, mu4, Sigma1, Sigma2, Sigma3, Sigma4):
+        """Fully jax-traceable calculate (use_jax_emulator=True).
+
+        Identical arithmetic to :meth:`calculate` but with the JAX emulator and
+        jnp throughout (no ``np.asarray``/``float`` concretisation), so the
+        provider can be ``jax.jit``/``jax.vmap``'d.  Results match the numpy
+        path bit-for-bit.
+        """
+        H0 = h * 100.0
+        Omega_m = (omega_b + omega_cdm + self.M_NCDM / 93.14) / h**2
+
+        self._results = {}
+        sigma8_0 = None
+        for z in self.zs:
+            k, plin, _pnw_emu, sc = self._emu.predict_all(
+                z, logA, n_s, H0, omega_b, omega_cdm,
+                mu1, mu2, mu3, mu4, Sigma1, Sigma2, Sigma3, Sigma4)
+            # sc = [sigma8_z, sigma8_0, da_z, chi_z, e_z]
+            pnw = self._pknow_jax(z, k, plin, logA, n_s, H0, omega_b, omega_cdm)
+
+            chi_fid, e_fid = self._fid_scalars[z]
+            qper = h * sc[3] / (chi_fid * self.fiducial['h'])
+            qpar = e_fid / sc[4]
+
+            if sigma8_0 is None:
+                sigma8_0 = sc[1]
+
+            self._results[z] = dict(
+                k=k, pk_dd=plin, pknow=pnw, Omega_m=Omega_m, h=h,
+                sigma8=sc[0], sigma8_0=sc[1], qper=qper, qpar=qpar,
+                mu1=mu1, mu2=mu2, mu3=mu3, mu4=mu4, plist=None)
+
+        self.Omega_m = Omega_m
+        self.sigma8_m = sigma8_0
+
+    def _pknow_jax(self, z, k, plin, logA, n_s, H0, omega_b, omega_cdm):
+        """Jax-traceable GR wiggle-ratio no-wiggle: pnw_MG = pnw_GR*plin_MG/plin_GR.
+
+        Uses the jit-compiled GR predict functions (D cancels in the ratio, pass
+        D=1).  Mirrors :meth:`_pknow` 'gr_ratio' but with jnp (incl. ``jnp.interp``
+        matching the numpy ``np.interp`` linear interpolation of the ratio).
+        """
+        import jax.numpy as jnp
+        k_gr, plin_gr = self._gr_predict_plin(
+            z, logA, n_s, H0, omega_b, omega_cdm, self.M_NCDM, self.W0, self.WA, 1.0)
+        _, pnw_gr = self._gr_predict_pnw(
+            z, logA, n_s, H0, omega_b, omega_cdm, self.M_NCDM, self.W0, self.WA, 1.0)
+        wiggle_ratio = jnp.asarray(pnw_gr) / jnp.asarray(plin_gr)
+        wiggle_ratio = jnp.interp(jnp.asarray(k), jnp.asarray(k_gr), wiggle_ratio)
+        return plin * wiggle_ratio
+
     def _pknow(self, z, k, plin, logA, n_s, H0, ombh2, omch2, h):
         """No-wiggle spectrum on the emulator k-grid, per ``self.nw_method``.
 
@@ -5400,7 +5643,8 @@ class MgEmulatorCosmology(BaseCalculator):
     def __getstate__(self, varied=True, fixed=True):
         state = {}
         if fixed:
-            exclude = {'_emu', '_gr_emu', '_fid_scalars', '_results'}
+            exclude = {'_emu', '_gr_emu', '_gr_predict_plin', '_gr_predict_pnw',
+                       '_fid_scalars', '_results'}
             state.update({k: v for k, v in self.__dict__.items() if k not in exclude})
         if varied and hasattr(self, '_results'):
             # plain numpy already (the MLP emulator is pure numpy) — copy as-is
@@ -5415,22 +5659,12 @@ class MgEmulatorCosmology(BaseCalculator):
         self.__dict__.update(state)
         if results is not None:
             self._results = results
+        if not hasattr(self, 'use_jax_emulator'):
+            self.use_jax_emulator = False
         if not hasattr(self, '_emu'):
-            from .pklin_mg_emulator import MgPkEmulator
-            self._emu = MgPkEmulator(
-                path_plin=self.EMU_PLIN_PATH,
-                path_pnw=self.EMU_PNW_PATH,
-                path_scalars=self.EMU_SCALARS_PATH,
-            )
+            # Rebuild the (numpy or jax) MG + GR emulators and fiducial scalars.
+            self._load_emulators()
             self._build_fid_scalars()
-        if not hasattr(self, '_gr_emu'):
-            self._gr_emu = None
-            if getattr(self, 'nw_method', 'gr_ratio') == 'gr_ratio':
-                from .pklin_emulator_jit import PkEmulator
-                self._gr_emu = PkEmulator(
-                    path_plin=self.EMU_GR_PLIN_PATH,
-                    path_pnw=self.EMU_GR_PNW_PATH,
-                )
 
 
 class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
@@ -5454,6 +5688,14 @@ class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
     cosmo : MgEmulatorCosmology
         Pre-configured emulator provider (built with ``zs`` containing ``z``).
     """
+
+    # Numba fast path defaults ON here (always PHENOM/binning); override with
+    # ``use_numba=False`` to fall back to the pure-numpy ODE RHS.
+    # ``ode_backend='jax'`` switches the whole fkpt loop to the diffrax/jax path
+    # (jit/vmap-able; needs cosmo with use_jax_emulator=True for a fully
+    # traceable likelihood).  Default 'eager' keeps the numpy/numba path.
+    _default_options = dict(fkptjaxPowerSpectrumMultipoles._default_options,
+                            use_numba=True, ode_backend='eager')
 
     def initialize(self, *args, k=None, mu=6, z, ells=(0, 2, 4), cosmo, **kwargs):
         # drop tracer-/wrapper-only options that may be forwarded here
@@ -5481,10 +5723,23 @@ class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
         self.template = None  # so the tracer's `.template` property is harmless
         self.runtime_info._requires = None  # rescan -> cosmo becomes the dependency
 
+        # Loop-grid params (concrete, from the data k-grid) -- shared by both paths.
+        self._loop_kmin = float(min(1e-3, float(jnp.min(self.k))))
+        self._loop_kmax = float(max(1.0, float(jnp.max(self.k))))
+        self._loop_Nk = int(min(len(self.k), 120))
+        self.ode_backend = self.options.get("ode_backend", "eager")
+        # The static kernel grid (built from the emulator k-grid) is precomputed
+        # lazily on the first calculate -- the cosmo emulator isn't queried until
+        # then, and it must be built outside any jit boundary.
+        self._jax_static_ctx = None
+
     def calculate(self):
         from .base import ap_k_mu
 
         emu = self.cosmo.get_at_z(self.z)
+
+        if self.ode_backend == 'jax':
+            return self._calculate_jax(emu)
 
         qpar, qper = emu['qpar'], emu['qper']
         jac, kap, muap = ap_k_mu(self.k, self.mu, qpar, qper)
@@ -5518,6 +5773,9 @@ class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
             xnow=-3.912023,            # DO NOT CHANGE
             ode_method="RKQS",
             f0_kmax=1e-3,
+            # opt-in numba fast path for the binning MG ODE RHS (fkptjax_muMG
+            # numba-binning-rhs branch); on by default for the emulator PT.
+            use_numba=bool(self.options.get("use_numba", True)),
             **mg_params,
         )
 
@@ -5561,6 +5819,84 @@ class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
         self.f0 = self.pt.f0
         self.fk = self.pt.fk
         self.fk_norm = self.pt.fk_norm
+
+    def _calculate_jax(self, emu):
+        """Fully jax-traceable calculate (ode_backend='jax').
+
+        Uses the diffrax/jax fkpt loop (:func:`Kfuncs_to_tables_jax`) with a
+        precomputed static kernel grid, and keeps every quantity in ``jnp`` (no
+        ``np.asarray``/``float``), so -- with ``cosmo`` built with
+        ``use_jax_emulator=True`` -- the whole theory is ``jax.jit``/``jax.vmap``.
+        """
+        from .base import ap_k_mu
+
+        # Build (once) the static kernel grid + an internally-jit'd loop, so the
+        # heavy ODE/loop is compiled even when called eagerly (e.g. desilike's
+        # speed calibration) -- mirrors combine_bias_terms_poles' cached @jit.
+        if getattr(self, '_jit_kfuncs', None) is None:
+            self._build_jit_kfuncs(np.asarray(emu['k']))
+
+        qpar, qper = emu['qpar'], emu['qper']
+        jac, kap, muap = ap_k_mu(self.k, self.mu, qpar, qper)
+
+        table, table_now, kcs = self._jit_kfuncs(
+            emu['pk_dd'], emu['pknow'], emu['Omega_m'],
+            emu['mu1'], emu['mu2'], emu['mu3'], emu['mu4'])
+
+        kt = table[0]
+        fk_norm = table[2]
+        f0_mg = table[-1]
+        fk_mg = fk_norm * f0_mg
+        calA, calAp, CFD3, CFD3p = kcs
+
+        self.pt = Namespace(
+            jac=jac, kap=kap, muap=muap,
+            table=table[1:28], table_now=table_now[1:28],
+            scalars=table[28:], scalars_now=table_now[28:],
+            A_full=False, remove_DeltaP=False,
+            kt=kt, fk_norm=fk_norm, fk=fk_mg, f0=f0_mg,
+            qpar=qpar, qper=qper,
+            calA=calA, calAp=calAp, CFD3=CFD3, CFD3p=CFD3p)
+
+        self.kt = kt
+        self.qpar = qpar
+        self.qper = qper
+        self.sigma8 = emu['sigma8']
+        self.fsigma8 = f0_mg * self.sigma8
+        self.f0 = f0_mg
+        self.fk = fk_mg
+        self.fk_norm = fk_norm
+
+    def _build_jit_kfuncs(self, kgrid):
+        """Build the static kernel grid and an internally jit-compiled fkpt loop.
+
+        The returned ``self._jit_kfuncs(pk, pknow, Om, mu1..mu4)`` is a cached
+        ``jax.jit`` of :func:`Kfuncs_to_tables_jax` (static grid / binning
+        constants / z closed over).  Compiling it once means the loop is fast
+        even when invoked eagerly, and it inlines cleanly under an outer
+        jit/vmap.  Mirrors the ``_get_poles`` cached-jit pattern.
+        """
+        import jax
+        B = _MG_EMU_BINNING
+        self._jax_static_ctx = build_jax_static_ctx(
+            kgrid, kmin=self._loop_kmin, kmax=self._loop_kmax,
+            Nk_kernel=self._loop_Nk, nquadSteps=300, NQ=10, NR=10)
+        ctx = self._jax_static_ctx
+        z = float(self.z)
+        beyond_eds = bool(self.options.get("beyond_eds", True))
+        kmin, kmax, Nk = self._loop_kmin, self._loop_kmax, self._loop_Nk
+
+        @jax.jit
+        def _jit_kfuncs(pk, pknow, Om, mu1, mu2, mu3, mu4):
+            return Kfuncs_to_tables_jax(
+                k=kgrid, pk=pk, pk_now=pknow, z=z, Om=Om, beyond_eds=beyond_eds,
+                kmin=kmin, kmax=kmax, Nk_kernel=Nk, nquadSteps=300, NQ=10, NR=10,
+                xnow=-3.912023, f0_kmax=1e-3, mu1=mu1, mu2=mu2, mu3=mu3, mu4=mu4,
+                z_div=B['z_div'], z_TGR=B['z_TGR'], z_tw=B['z_tw'], scale_bins=B['scale_bins'],
+                k_TGR=B['k_TGR'], k_c=B['k_c'], k_S=B['k_S'], k_tw=B['k_tw'],
+                return_kernel_constants=True, static_ctx=ctx)
+
+        self._jit_kfuncs = _jit_kfuncs
 
 
 class fkpt_pkemu_TracerPowerSpectrumMultipoles(fkptTracerPowerSpectrumMultipoles):

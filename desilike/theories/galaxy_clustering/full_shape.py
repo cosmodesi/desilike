@@ -1,0 +1,2093 @@
+"""
+Full-shape power spectrum and correlation function multipoles.
+
+Classes
+-------
+KaiserPTSpectrum2Poles
+    Kaiser (linear) matter power spectrum multipoles with AP distortion and Gaussian FoG damping.
+KaiserTracerSpectrum2Poles
+    KaiserPTSpectrum2Poles with linear bias b1 and shot noise.
+KaiserTracerCorrelation2Poles
+    KaiserTracerSpectrum2Poles Fourier-transformed to configuration space via FFTLog.
+TNSPTSpectrum2Poles
+    TNS 1-loop matter power spectrum multipoles (Taruya, Nishimichi & Saito 2010).
+TNSTracerSpectrum2Poles
+    TNSPTSpectrum2Poles with full 1-loop bias expansion.
+TNSTracerCorrelation2Poles
+    TNSTracerSpectrum2Poles Fourier-transformed to configuration space via FFTLog.
+"""
+
+import numpy as np
+import jax
+import jax.numpy as jnp
+import interpax
+
+import os
+
+from ...base import Calculator, ExternalCalculator
+from ...parameter import Parameter
+from .bao import ProjectToMultipoles, SpectrumToCorrelation
+from .template import DirectSpectrum2Template, _ap_k_mu
+from ._multitracer import apply_tracers
+
+
+# ── utilities ─────────────────────────────────────────────────────────────────
+
+def get_nthreads(nthreads=None):
+    """Number of threads for external (velocileptors) calls; defaults to ``$OMP_NUM_THREADS`` or 1."""
+    if nthreads is None:
+        nthreads = os.getenv('OMP_NUM_THREADS', '1')
+    return int(nthreads)
+
+
+def get_physical_stochastic_settings(tracer=None):
+    """Per-tracer satellite fraction ``fsat`` and velocity dispersion ``sigv`` for the
+    physical_aap stochastic terms (Mark Maus, Ruiyang Zhao). ``tracer=None`` gives generic defaults."""
+    if tracer is not None:
+        tracer = str(tracer).upper()
+        settings = {'BGS': {'fsat': 0.15, 'sigv': 150 * 10**(1 / 3) * (1 + 0.2)**0.5 / 70.},
+                    'LRG': {'fsat': 0.15, 'sigv': 150 * 10**(1 / 3) * (1 + 0.8)**0.5 / 70.},
+                    'ELG': {'fsat': 0.10, 'sigv': 150 * 2.1**0.5 / 70.},
+                    'QSO': {'fsat': 0.03, 'sigv': 150 * 10**(0.7 / 3) * 2.4**0.5 / 70.}}
+        try:
+            settings = settings[tracer]
+        except KeyError:
+            raise ValueError('unknown tracer: {}, please use any of {}'.format(tracer, list(settings.keys())))
+    else:
+        settings = {'fsat': 0.1, 'sigv': 5.}
+    return settings
+
+
+def _velocileptors_kvec(k, boost_prec=2):
+    """Internal velocileptors evaluation k-grid spanning ``[k[0], k[-1]]`` with margin for the
+    cubic AP interpolation below/above (and numerical noise at the endpoint)."""
+    k = np.asarray(k, dtype='f8')
+    return np.concatenate([[min(0.0005, k[0])],
+                           np.geomspace(0.0015, 0.025, 10 * boost_prec, endpoint=True),
+                           np.arange(0.03, max(0.5, k[-1]) + 0.015 / boost_prec, 0.01 / boost_prec)])
+
+
+def _velocileptors_params_physical(b1p, b2p, bsp, b3p, alpha0p, alpha2p, alpha4p, alpha6p,
+                                   sn0p, sn2p, sn4p, sigma8, fsigma8, fsat, sigv, snd, rept=False):
+    r"""physical_aap -> standard velocileptors bias vector ``[b1, b2, bs, b3, alpha0, alpha2,
+    alpha4, alpha6, sn0, sn2, sn4]``.
+
+    The first four are Lagrangian bias for LPT; for REPT (``rept=True``) they are converted to
+    the Eulerian basis (:math:`b_1 = 1 + b_1^L,\ b_2 = 8/21\,b_1^L + b_2^L,\ b_s = b_s^L,\ b_3 = b_3^L`).
+    ``alpha6p`` is unused (``alpha6 = f^2 alpha4p``), kept for a uniform signature.
+    """
+    f = fsigma8 / sigma8
+    b1L = b1p / sigma8 - 1.
+    b2L = b2p / sigma8**2
+    bsL = bsp / sigma8**2
+    b3L = b3p / sigma8**3
+    if rept:  # REPT: Eulerian bias
+        bias = [1. + b1L, 8. / 21. * b1L + b2L, bsL, b3L]
+    else:  # LPT: Lagrangian bias
+        bias = [b1L, b2L, bsL, b3L]
+    alphas = [(1. + b1L)**2 * alpha0p,
+              f * (1. + b1L) * (alpha0p + alpha2p),
+              f * (f * alpha2p + (1. + b1L) * alpha4p),
+              f**2 * alpha4p]
+    stoch = [sn0p * snd, sn2p * snd * fsat * sigv**2, sn4p * snd * fsat * sigv**4]
+    return jnp.array(bias + alphas + stoch)
+
+
+def tablevel_combine_bias_terms_poles(pktable, pars, nd=1e-4):
+    """Contract a velocileptors bias table ``(n_ells, n_k, 19)`` with the 11 bias parameters."""
+    b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4 = pars
+    bias_monomials = jnp.array([1., b1, b1**2, b2, b1 * b2, b2**2, bs, b1 * bs, b2 * bs, bs**2, b3, b1 * b3,
+                                alpha0, alpha2, alpha4, alpha6, sn0 / nd, sn2 / nd, sn4 / nd])
+    return jnp.sum(pktable * bias_monomials, axis=-1)
+
+
+def _weights_trapz(x):
+    return np.concatenate([[x[1] - x[0]], x[2:] - x[:-2], [x[-1] - x[-2]]]) / 2.
+
+
+def _interp_loglog(k_query, k_knots, pk_knots):
+    """Cubic spline interpolation in log10(k) space."""
+    shape = jnp.shape(k_query)
+    flat = jnp.ravel(k_query)
+    result = interpax.interp1d(jnp.log10(flat), jnp.log10(k_knots), pk_knots, method='cubic', extrap=True)
+    return jnp.reshape(result, shape)
+
+
+# ── TNS perturbation theory ───────────────────────────────────────────────────
+
+def tns_kernels(k, q, wq):
+    """Precompute numpy kernel arrays for 1-loop TNS integrals at wavenumbers k."""
+    jq = q**2 * wq / (4. * np.pi**2)
+    k = k[:, None]
+    x = q / k
+
+    def kernel_ff(x):
+        x = np.array(x)
+        toret = (6. / x**2 - 79. + 50. * x**2 - 21. * x**4 + 0.75 * (1. / x - x)**3 * (2. + 7. * x**2) * 2 * np.log(np.abs((x - 1.) / (x + 1.)))) / 504.
+        mask = x > 10.
+        toret[mask] = - 61. / 630. + 2. / 105. / x[mask]**2 - 10. / 1323. / x[mask]**4
+        dx = x - 1.
+        mask = np.abs(dx) < 0.01
+        toret[mask] = - 11. / 126. + dx[mask] / 126. - 29. / 252. * dx[mask]**2
+        return toret / x**2
+
+    def kernel_gg(x):
+        x = np.array(x)
+        toret = (6. / x**2 - 41. + 2. * x**2 - 3. * x**4 + 0.75 * (1. / x - x)**3 * (2. + x**2) * 2 * np.log(np.abs((x - 1.) / (x + 1.)))) / 168.
+        mask = x > 10.
+        toret[mask] = - 3. / 10. + 26. / 245. / x[mask]**2 - 38. / 2205. / x[mask]**4
+        dx = x - 1.
+        mask = np.abs(dx) < 0.01
+        toret[mask] = - 3. / 14. - 5. / 42. * dx[mask] - 1. / 84. * dx[mask]**2
+        return toret / x**2
+
+    kernels = [2 * jq * kernel_ff(x), 2 * jq * kernel_gg(x)]
+
+    def kernel_a(x):
+        toret = np.zeros((5,) + x.shape, dtype='f8')
+        logx = np.zeros_like(x)
+        mask = np.abs(x - 1) > 1e-16
+        logx[mask] = np.log(np.abs((x[mask] + 1) / (x[mask] - 1)))
+        toret[0] = -1. / 84. / x * (2 * x * (19 - 24 * x**2 + 9 * x**4) - 9 * (x**2 - 1)**3 * logx)
+        toret[1] = 1. / 112. / x**3 * (2 * x * (x**2 + 1) * (3 - 14 * x**2 + 3 * x**4) - 3 * (x**2 - 1)**4 * logx)
+        toret[2] = 1. / 336. / x**3 * (2 * x * (9 - 185 * x**2 + 159 * x**4 - 63 * x**6) + 9 * (x**2 - 1)**3 * (7 * x**2 + 1) * logx)
+        toret[4] = 1. / 336. / x**3 * (2 * x * (9 - 109 * x**2 + 63 * x**4 - 27 * x**6) + 9 * (x**2 - 1)**3 * (3 * x**2 + 1) * logx)
+        mask = x < 1e-4
+        xm = x[mask]
+        toret[0][mask] = 8 * xm**8 / 735 + 24 * xm**6 / 245 - 24 * xm**4 / 35 + 8 * xm**2 / 7 - 2. / 3
+        toret[1][mask] = - 16 * xm**8 / 8085 - 16 * xm**6 / 735 + 48 * xm**4 / 245 - 16 * xm**2 / 35
+        toret[2][mask] = 32 * xm**8 / 1617 + 128 * xm**6 / 735 - 288 * xm**4 / 245 + 64 * xm**2 / 35 - 4. / 3
+        toret[4][mask] = 24 * xm**8 / 2695 + 8 * xm**6 / 105 - 24 * xm**4 / 49 + 24 * xm**2 / 35 - 2. / 3
+        mask = x > 1e2
+        xm = x[mask]
+        toret[0][mask] = 2. / 105 - 24 / (245 * xm**2) - 8 / (735 * xm**4) - 8 / (2695 * xm**6) - 8 / (7007 * xm**8)
+        toret[1][mask] = -16. / 35 + 48 / (245 * xm**2) - 16 / (735 * xm**4) - 16 / (8085 * xm**6) - 16 / (35035 * xm**8)
+        toret[2][mask] = -44. / 105 - 32 / (735 * xm**4) - 64 / (8085 * xm**6) - 96 / (35035 * xm**8)
+        toret[4][mask] = -46. / 105 + 24 / (245 * xm**2) - 8 / (245 * xm**4) - 8 / (1617 * xm**6) - 8 / (5005 * xm**8)
+        toret[3] = toret[1]
+        return toret / x**2
+
+    kernels.append(jq * kernel_a(x))
+    return kernels
+
+
+@jax.jit
+def tns_pt(k, q, wq, pk_q, kernel13_d, kernel13_t, kernel_a):
+    """1-loop TNS power spectrum components (JAX-jitted)."""
+    k11 = k
+    k = k[:, None]
+    jq = q**2 * wq / (4. * np.pi**2)
+    x = q / k
+
+    # GL quadrature over mu in [0, 1] (symmetric half of [-1, 1]).
+    _xf, _wf = np.polynomial.legendre.leggauss(20)
+    mus = _xf[10:]
+    wmus = (_wf[10:] + _wf[9::-1]) / 2.
+
+    pk_k = jnp.interp(k11, q, pk_q)
+
+    def get_terms(mu, wmu):
+        kdq = k * q * mu
+        kq2 = k**2 - 2. * kdq + q**2
+        qdkq = kdq - q**2
+        F2_d = 5. / 7. + 1. / 2. * qdkq * (1. / q**2 + 1. / kq2) + 2. / 7. * qdkq**2 / (q**2 * kq2)
+        F2_t = 3. / 7. + 1. / 2. * qdkq * (1. / q**2 + 1. / kq2) + 4. / 7. * qdkq**2 / (q**2 * kq2)
+        S = qdkq**2 / (q**2 * kq2) - 1. / 3.
+        D = 2. / 7. * (mu**2 - 1.)
+        pk_kq = jnp.interp(kq2**0.5, q, pk_q, left=0., right=0.)
+        jq_pk_q_pk_kq = jq * pk_q * pk_kq
+
+        _pk_b2d = wmu * jnp.sum(jq_pk_q_pk_kq * F2_d, axis=-1)
+        _pk_bs2d = wmu * jnp.sum(jq_pk_q_pk_kq * F2_d * S, axis=-1)
+        _pk_b2t = wmu * jnp.sum(jq_pk_q_pk_kq * F2_t, axis=-1)
+        _pk_bs2t = wmu * jnp.sum(jq_pk_q_pk_kq * F2_t * S, axis=-1)
+        _sig3sq = wmu * jnp.sum(105. / 16. * jq * pk_q * (D * S + 8. / 63.), axis=-1)
+        _pk_b22 = wmu / 2. * jnp.sum(jq * pk_q * (pk_kq - pk_q), axis=-1)
+        _pk_b2s2 = wmu / 2. * jnp.sum(jq * pk_q * (pk_kq * S - 2. / 3. * pk_q), axis=-1)
+        _pk_bs22 = wmu / 2. * jnp.sum(jq * pk_q * (pk_kq * S**2 - 4. / 9. * pk_q), axis=-1)
+        _pk22_dd = 2 * wmu * jnp.sum(F2_d**2 * jq_pk_q_pk_kq, axis=-1)
+        _pk22_dt = 2 * wmu * jnp.sum(F2_d * F2_t * jq_pk_q_pk_kq, axis=-1)
+        _pk22_tt = 2 * wmu * jnp.sum(F2_t * F2_t * jq_pk_q_pk_kq, axis=-1)
+
+        xmu = kq2 / k**2
+        kernel_A = [0] * 5
+        kernel_tA = [0] * 5
+        kernel_A[0] = - x**3 / 7. * (mu + 6 * mu**3 + x**2 * mu * (-3 + 10 * mu**2) + x * (-3 + mu**2 - 12 * mu**4))
+        kernel_A[1] = x**4 / 14. * (mu**2 - 1) * (-1 + 7 * x * mu - 6 * mu**2)
+        kernel_A[2] = x**3 / 14. * (x**2 * mu * (13 - 41 * mu**2) - 4 * (mu + 6 * mu**3) + x * (5 + 9 * mu**2 + 42 * mu**4))
+        kernel_A[3] = kernel_A[1]
+        kernel_A[4] = x**3 / 14. * (1 - 7 * x * mu + 6 * mu**2) * (-2 * mu + x * (-1 + 3 * mu**2))
+        kernel_tA[0] = 1. / 7. * (mu + x - 2 * x * mu**2) * (3 * x + 7 * mu - 10 * x * mu**2)
+        kernel_tA[1] = x / 14. * (mu**2 - 1) * (3 * x + 7 * mu - 10 * x * mu**2)
+        kernel_tA[2] = 1. / 14. * (28 * mu**2 + x * mu * (25 - 81 * mu**2) + x**2 * (1 - 27 * mu**2 + 54 * mu**4))
+        kernel_tA[3] = x / 14. * (1 - mu**2) * (x - 7 * mu + 6 * x * mu**2)
+        kernel_tA[4] = 1. / 14. * (x - 7 * mu + 6 * x * mu**2) * (-2 * mu - x + 3 * x * mu**2)
+        _A = wmu * jnp.sum(jq / x**2 * (jnp.array(kernel_A) * pk_k[:, None] + jnp.array(kernel_tA) * pk_q) * pk_kq / xmu**2, axis=-1)
+
+        jq_pk_q_pk_kq /= x**2 * xmu
+        _B = [0.] * 12
+        _B[0] = wmu * jnp.sum(x**2 * (mu**2 - 1.) / 2. * jq_pk_q_pk_kq, axis=-1)
+        _B[1] = wmu * jnp.sum(3. * x**2 * (mu**2 - 1.)**2 / 8. * jq_pk_q_pk_kq, axis=-1)
+        _B[2] = wmu * jnp.sum(3. * x**4 * (mu**2 - 1.)**2 / xmu / 8. * jq_pk_q_pk_kq, axis=-1)
+        _B[3] = wmu * jnp.sum(5. * x**4 * (mu**2 - 1.)**3 / xmu / 16. * jq_pk_q_pk_kq, axis=-1)
+        _B[4] = wmu * jnp.sum(x * (x + 2. * mu - 3. * x * mu**2) / 2. * jq_pk_q_pk_kq, axis=-1)
+        _B[5] = wmu * jnp.sum(- 3. * x * (mu**2 - 1.) * (-x - 2. * mu + 5. * x * mu**2) / 4. * jq_pk_q_pk_kq, axis=-1)
+        _B[6] = wmu * jnp.sum(3. * x**2 * (mu**2 - 1.) * (-2. + x**2 + 6. * x * mu - 5. * x**2 * mu**2) / xmu / 4. * jq_pk_q_pk_kq, axis=-1)
+        _B[7] = wmu * jnp.sum(- 3. * x**2 * (mu**2 - 1.)**2 * (6. - 5. * x**2 - 30. * x * mu + 35. * x**2 * mu**2) / xmu / 16. * jq_pk_q_pk_kq, axis=-1)
+        _B[8] = wmu * jnp.sum(x * (4. * mu * (3. - 5. * mu**2) + x * (3. - 30. * mu**2 + 35. * mu**4)) / 8. * jq_pk_q_pk_kq, axis=-1)
+        _B[9] = wmu * jnp.sum(x * (-8. * mu + x * (-12. + 36. * mu**2 + 12. * x * mu * (3. - 5. * mu**2) + x**2 * (3. - 30. * mu**2 + 35. * mu**4))) / xmu / 8. * jq_pk_q_pk_kq, axis=-1)
+        _B[10] = wmu * jnp.sum(3. * x * (mu**2 - 1.) * (-8. * mu + x * (-12. + 60. * mu**2 + 20. * x * mu * (3. - 7. * mu**2) + 5. * x**2 * (1. - 14. * mu**2 + 21. * mu**4))) / xmu / 16. * jq_pk_q_pk_kq, axis=-1)
+        _B[11] = wmu * jnp.sum(x * (8. * mu * (-3. + 5. * mu**2) - 6. * x * (3. - 30. * mu**2 + 35. * mu**4) + 6. * x**2 * mu * (15. - 70. * mu**2 + 63 * mu**4) + x**3 * (5. - 21. * mu**2 * (5. - 15. * mu**2 + 11. * mu**4))) / xmu / 16. * jq_pk_q_pk_kq, axis=-1)
+        return jnp.stack([_pk_b2d, _pk_bs2d, _pk_b2t, _pk_bs2t, _sig3sq, _pk_b22, _pk_b2s2, _pk_bs22, _pk22_dd, _pk22_dt, _pk22_tt] + list(_A) + _B)
+
+    res = jnp.sum(jax.vmap(get_terms)(mus, wmus), axis=0)
+    pk_b2d, pk_bs2d, pk_b2t, pk_bs2t, sig3sq, pk_b22, pk_b2s2, pk_bs22, pk22_dd, pk22_dt, pk22_tt = res[:11]
+    A, B = res[11:16], res[16:]
+    A += pk_k * jnp.sum(kernel_a * pk_q, axis=-1)
+    pk13_dd = 2. * jnp.sum(kernel13_d * pk_q, axis=-1) * pk_k
+    pk13_tt = 2. * jnp.sum(kernel13_t * pk_q, axis=-1) * pk_k
+    pk13_dt = (pk13_dd + pk13_tt) / 2.
+    pk_sig3sq = sig3sq * pk_k
+    pk_dd = pk_k + pk22_dd + pk13_dd
+    pk_dt = pk_k + pk22_dt + pk13_dt
+    pk_tt = pk_k + pk22_tt + pk13_tt
+    return [pk_k, pk_dd, pk_b2d, pk_bs2d, pk_sig3sq, pk_b22, pk_b2s2, pk_bs22, pk_dt, pk_b2t, pk_bs2t, pk_tt, A, B]
+
+
+# ── Kaiser model ──────────────────────────────────────────────────────────────
+
+class KaiserPTSpectrum2Poles(Calculator):
+    r"""
+    Kaiser power spectrum multipoles.
+
+    AP distortion, optional Gaussian FoG damping, and GL projection to multipoles.
+    Exposes ``table`` with keys ``pk_dd``, ``pk_dt``, ``pk_tt`` (and ``pk11 = pk_dd``).
+
+    Parameters
+    ----------
+    k : array, default=None
+        Output wavenumbers [h/Mpc]. Defaults to np.linspace(0.01, 0.2, 101).
+    template : template calculator, default=None
+        Power spectrum template. A default ``DirectSpectrum2Template()`` is created if None.
+    ells : tuple of int, default=(0, 2, 4)
+        Multipole orders to compute.
+    mu : int, default=8
+        Number of Gauss-Legendre mu-bins in [0, 1].
+    """
+
+    def __init__(self, k=None, template=None, ells=(0, 2, 4), mu=8):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        self.sigmapar = Parameter('sigmapar', value=0., fixed=True, latex=r'\Sigma_\parallel')
+        self.sigmaper = Parameter('sigmaper', value=0., fixed=True, latex=r'\Sigma_\perp')
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        if template is None:
+            template = DirectSpectrum2Template()
+        self.template = template
+        k_min = min(1e-4, self.k[0] / 2.)
+        k_max = max(1., self.k[-1] * 2.)
+        self.template.update(k=np.geomspace(k_min, k_max, 500))
+
+    def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=8):
+        # Non-node setup only.
+        self._to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+        self._mu = self._to_poles.mu
+
+    def __call__(self):
+        k = self.k[:, None]
+        mu = self._mu
+        jac, kap, muap = self.template.ap_k_mu(k, mu)
+        f = self.template.f
+        sigmanl2 = kap**2 * (self.sigmapar**2 * muap**2 + self.sigmaper**2 * (1. - muap**2))
+        damping = jnp.exp(-sigmanl2 / 2.)
+        pkt = jac * damping * _interp_loglog(kap, self.template.k, self.template.pk_dd)
+        self.table = {
+            'pk_dd': self._to_poles(pkt),
+            'pk_dt': self._to_poles(f * muap**2 * pkt),
+            'pk_tt': self._to_poles(f**2 * muap**4 * pkt),
+        }
+        self.table['pk11'] = self.table['pk_dd']
+
+    def tree_flatten(self):
+        return ([self.table['pk_dd'], self.table['pk_dt'], self.table['pk_tt']],
+                {'k': self.k, 'ells': self.ells})
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.table = {'pk_dd': children[0], 'pk_dt': children[1], 'pk_tt': children[2]}
+        obj.table['pk11'] = obj.table['pk_dd']
+        obj.k = aux['k']
+        obj.ells = aux['ells']
+        return obj
+
+
+class KaiserTracerSpectrum2Poles(Calculator):
+    r"""
+    Kaiser tracer power spectrum multipoles.
+
+    Combines ``KaiserPTSpectrum2Poles`` components with linear bias ``b1`` and shot noise ``sn0``.
+    For the matter (unbiased) power spectrum set b1=1 and sn0=0.
+
+    For cross-spectra between tracers :math:`X` and :math:`Y` the model is
+    :math:`b_1^X b_1^Y P_{dd} + (b_1^X + b_1^Y) P_{d\theta} + P_{\theta\theta} + s_n`.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Output wavenumbers [h/Mpc].
+    pt : KaiserPTSpectrum2Poles, default=None
+        Matter PT module. A default instance is created if None.
+    ells : tuple of int, default=(0, 2, 4)
+        Multipole orders.
+    template : template calculator, default=None
+        Passed to the pt module if provided.
+    shotnoise : float, default=1e4
+        Shot-noise scale [h/Mpc]^3. ``sn0`` parameter is in units of this.
+    tracers : str, (str, str), or None, default=None
+        Tracer namespacing of the bias parameters (auto, namespaced auto, or cross);
+        see :func:`._multitracer.apply_tracers`.
+    """
+
+    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        self.b1 = Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
+                            ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1')
+        self.sn0 = Parameter('sn0', value=0., prior=None,
+                             ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}')
+        apply_tracers(self, tracers, stochastic=('sn0',), cross=True)
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        if pt is None:
+            pt = KaiserPTSpectrum2Poles()
+        self.pt = pt
+        self.pt.update(k=self.k, ells=self.ells)
+        if template is not None:
+            self.pt.update(template=template)
+
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None):
+        # Non-node setup only.
+        self._nbar = 1. / float(shotnoise)
+
+    def __call__(self):
+        sn = jnp.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0.value / self._nbar
+        pk_dd, pk_dt, pk_tt = self.pt.table['pk_dd'], self.pt.table['pk_dt'], self.pt.table['pk_tt']
+        if isinstance(self.b1, tuple):
+            b1_X, b1_Y = self.b1
+            self.poles = b1_X * b1_Y * pk_dd + (b1_X + b1_Y) * pk_dt + pk_tt + sn
+        else:
+            self.poles = self.b1**2 * pk_dd + 2. * self.b1 * pk_dt + pk_tt + sn
+        return self.poles
+
+    def tree_flatten(self):
+        return [self.poles], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        return obj
+
+
+class KaiserTracerCorrelation2Poles(Calculator):
+    r"""
+    Kaiser tracer correlation function multipoles via FFTLog.
+
+    Parameters
+    ----------
+    s : array, default=None
+        Output separations [Mpc/h]. Defaults to np.linspace(20., 200., 181).
+    pt : KaiserTracerSpectrum2Poles, default=None
+        Tracer spectrum module. A default instance is created if None.
+    ells : tuple of int, default=(0, 2, 4)
+        Multipole orders.
+    template : template calculator, default=None
+        Passed to the pt module if provided.
+    """
+
+    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, tracers=None):
+        # Nodes (Calculator deps) and their update() live in __init__.
+        if s is None:
+            s = np.linspace(20., 200., 181)
+        self.s = np.asarray(s, dtype='f8')
+        self.ells = tuple(ells)
+        kin = np.geomspace(1e-4, 0.6, 300)
+        if pt is None:
+            pt = KaiserTracerSpectrum2Poles(tracers=tracers)
+        self.pt = pt
+        self.pt.update(k=kin, ells=self.ells)
+        if template is not None:
+            self.pt.update(template=template)
+
+    def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, tracers=None):
+        # Non-node setup only.
+        self._to_correlation = SpectrumToCorrelation(s=self.s, ells=self.ells, kin=np.geomspace(1e-4, 0.6, 300))
+
+    def __call__(self):
+        self.poles = self._to_correlation(self.pt.poles)
+        return self.poles
+
+    def tree_flatten(self):
+        return [self.poles], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        return obj
+
+
+# ── TNS model ─────────────────────────────────────────────────────────────────
+
+_TNS_TABLE_NAMES = ['pk11', 'pk_dd', 'pk_b2d', 'pk_bs2d', 'pk_sig3sq',
+                      'pk_b22', 'pk_b2s2', 'pk_bs22', 'pk_dt', 'pk_b2t', 'pk_bs2t', 'pk_tt', 'A', 'B']
+
+
+class TNSPTSpectrum2Poles(Calculator):
+    r"""
+    TNS 1-loop matter power spectrum multipoles.
+
+    Implements the model of Taruya, Nishimichi & Saito 2010 (arXiv:0912.0244).
+    TNS loop kernels are precomputed at compile time (``__post_init__``).
+
+    Parameters
+    ----------
+    k : array, default=None
+        Output wavenumbers [h/Mpc]. Defaults to np.linspace(0.01, 0.2, 101).
+    template : template calculator, default=None
+        Power spectrum template. A default ``DirectSpectrum2Template()`` is created if None.
+    ells : tuple of int, default=(0, 2, 4)
+        Multipole orders to compute.
+    mu : int, default=8
+        Number of Gauss-Legendre mu-bins in [0, 1].
+    fog : str, default='lorentzian'
+        Finger-of-God damping kernel: 'lorentzian' or 'gaussian'.
+    """
+
+    def __init__(self, k=None, template=None, ells=(0, 2, 4), mu=8, fog='lorentzian', namespace=None):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        # ``namespace`` prefixes the FoG parameter (for multitracer).
+        self.sigmav = Parameter('sigmav', value=3., prior=dict(limits=[0., 20.]),
+                                ref=dict(dist='norm', loc=3., scale=1.), latex=r'\sigma_v', namespace=namespace)
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        if template is None:
+            template = DirectSpectrum2Template()
+        self.template = template
+        kin = np.geomspace(1e-3, max(2., self.k[-1] * 2.), 500)
+        self.template.update(k=kin)
+
+    def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=8, fog='lorentzian', namespace=None):
+        # Non-node setup only (the template node already ran __post_init__ via update()).
+        self._fog = str(fog)
+        q = self.template.k
+        wq = _weights_trapz(q)
+        self._k11 = np.linspace(self.k[0] * 0.7, self.k[-1] * 1.3, int(len(self.k) * 1.6 + 0.5))
+        self._q = q
+        self._wq = wq
+        self._kernels = tns_kernels(self._k11, q, wq)
+        self._to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+        self._mu = self._to_poles.mu
+
+    def __call__(self):
+        k = self.k[:, None]
+        mu = self._mu
+        jac, kap, muap = self.template.ap_k_mu(k, mu)
+        f = self.template.f
+        if self._fog == 'lorentzian':
+            damping = 1. / (1. + (self.sigmav * kap * muap)**2 / 2.)**2.
+        else:
+            damping = jnp.exp(-(self.sigmav * kap * muap)**2)
+
+        tns_result = tns_pt(self._k11, self._q, self._wq, self.template.pk_dd, *self._kernels)
+        table = jnp.concatenate([x[None, :] for x in tns_result[:-2]] + tns_result[-2:], axis=0)
+        # table shape: (29, n_k11); interpolate and apply AP + FoG.
+        kap_flat = jnp.log10(jnp.ravel(kap))
+        table_interp = interpax.interp1d(kap_flat, jnp.log10(self._k11), table.T, method='cubic', extrap=True)
+        table = jac * damping * jnp.moveaxis(jnp.reshape(table_interp, kap.shape + (29,)), [0, 1], [1, 2])
+        # table shape: (29, n_k, n_mu)
+
+        A_raw = table[12:17]   # (5, n_k, n_mu)
+        B_raw = table[17:]     # (12, n_k, n_mu)
+        A = jnp.stack([f * A_raw[0] * muap**2,
+                       f**2 * (A_raw[1] * muap**2 + A_raw[2] * muap**4),
+                       f**3 * (A_raw[3] * muap**4 + A_raw[4] * muap**6)])
+        B = jnp.stack([f**2 * (B_raw[0] * muap**2 + B_raw[4] * muap**4),
+                       -f**3 * ((B_raw[1] + B_raw[2]) * muap**2 + (B_raw[5] + B_raw[6]) * muap**4 + (B_raw[8] + B_raw[9]) * muap**6),
+                       f**4 * (B_raw[3] * muap**2 + B_raw[7] * muap**4 + B_raw[10] * muap**6 + B_raw[11] * muap**8)])
+
+        group1 = self._to_poles(table[:8, None])                        # (8, n_ells, n_k)
+        group2 = self._to_poles(f * muap**2 * table[8:11, None])        # (3, n_ells, n_k)
+        group3 = self._to_poles(f**2 * muap**4 * table[11:12, None])   # (1, n_ells, n_k)
+        A_poles = self._to_poles(A[:, None, :, :])                        # (3, n_ells, n_k)
+        B_poles = self._to_poles(B[:, None, :, :])                        # (3, n_ells, n_k)
+
+        self.table = {}
+        for pk in group1: self.table[_TNS_TABLE_NAMES[len(self.table)]] = pk
+        for pk in group2: self.table[_TNS_TABLE_NAMES[len(self.table)]] = pk
+        for pk in group3: self.table[_TNS_TABLE_NAMES[len(self.table)]] = pk
+        self.table['A'] = A_poles
+        self.table['B'] = B_poles
+
+    def tree_flatten(self):
+        return [self.table[n] for n in _TNS_TABLE_NAMES], {'k': self.k, 'ells': self.ells}
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.table = dict(zip(_TNS_TABLE_NAMES, children))
+        obj.k = aux['k']
+        obj.ells = aux['ells']
+        return obj
+
+
+class TNSTracerSpectrum2Poles(Calculator):
+    r"""
+    TNS tracer power spectrum multipoles.
+
+    Combines ``TNSPTSpectrum2Poles`` components with a full 1-loop bias expansion
+    (b1, b2, bs, b3) plus shot noise.
+    For the matter (unbiased) power spectrum set b1=1 and all other bias parameters to 0.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Output wavenumbers [h/Mpc].
+    pt : TNSPTSpectrum2Poles, default=None
+        Matter PT module. A default instance is created if None.
+    ells : tuple of int, default=(0, 2, 4)
+        Multipole orders.
+    template : template calculator, default=None
+        Passed to the pt module if provided.
+    shotnoise : float, default=1e4
+        Shot-noise scale [h/Mpc]^3.
+    """
+
+    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        self.b1 = Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
+                            ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1')
+        self.b2 = Parameter('b2', value=0., prior=dict(limits=[-5., 5.]),
+                            ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
+        self.bs = Parameter('bs', value=0., prior=dict(limits=[-5., 5.]),
+                            ref=dict(dist='norm', loc=0., scale=1.), latex='b_s')
+        self.b3 = Parameter('b3', value=0., fixed=True, latex='b_3')
+        self.sn0 = Parameter('sn0', value=0., prior=None,
+                             ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}')
+        apply_tracers(self, tracers)  # namespacing only (no cross)
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        if pt is None:
+            pt = TNSPTSpectrum2Poles()
+        self.pt = pt
+        self.pt.update(k=self.k, ells=self.ells)
+        if template is not None:
+            self.pt.update(template=template)
+
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None):
+        # Non-node setup only.
+        self._nbar = 1. / float(shotnoise)
+
+    def __call__(self):
+        b1, b2, bs, b3 = self.b1, self.b2, self.bs, self.b3
+        bs2 = bs - 4. / 7. * (b1 - 1.)
+        b3nl = b3 + 32. / 315. * (b1 - 1.)
+        sn = jnp.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0.value / self._nbar
+        self.poles = (b1**2 * self.pt.table['pk_dd'] + 2. * b1 * self.pt.table['pk_dt']
+                      + self.pt.table['pk_tt'] + sn)
+        self.poles += (2 * b1 * b2 * self.pt.table['pk_b2d'] + 2. * b1 * bs2 * self.pt.table['pk_bs2d']
+                       + 2 * b1 * b3nl * self.pt.table['pk_sig3sq'] + b2**2 * self.pt.table['pk_b22']
+                       + 2 * b2 * bs2 * self.pt.table['pk_b2s2'] + bs2**2 * self.pt.table['pk_bs22']
+                       + b2 * self.pt.table['pk_b2t'] + b3nl * self.pt.table['pk_sig3sq'])
+        self.poles += b1**2 * (self.pt.table['A'][0] + self.pt.table['B'][0])
+        self.poles += b1 * (self.pt.table['A'][1] + self.pt.table['B'][1])
+        self.poles += self.pt.table['A'][2] + self.pt.table['B'][2]
+        return self.poles
+
+    def tree_flatten(self):
+        return [self.poles], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        return obj
+
+
+class TNSTracerCorrelation2Poles(Calculator):
+    r"""
+    TNS tracer correlation function multipoles via FFTLog.
+
+    The FFTLog Hankel transform is linear, so a transformation matrix is precomputed
+    at compile time and applied as a JAX einsum in ``__call__``.
+
+    Parameters
+    ----------
+    s : array, default=None
+        Output separations [Mpc/h]. Defaults to np.linspace(20., 200., 181).
+    pt : TNSTracerSpectrum2Poles, default=None
+        Tracer spectrum module. A default instance is created if None.
+    ells : tuple of int, default=(0, 2, 4)
+        Multipole orders.
+    template : template calculator, default=None
+        Passed to the pt module if provided.
+    """
+
+    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, tracers=None):
+        # Nodes (Calculator deps) and their update() live in __init__.
+        if s is None:
+            s = np.linspace(20., 200., 181)
+        self.s = np.asarray(s, dtype='f8')
+        self.ells = tuple(ells)
+        kin = np.geomspace(1e-4, 0.6, 300)
+        if pt is None:
+            pt = TNSTracerSpectrum2Poles(tracers=tracers)
+        self.pt = pt
+        self.pt.update(k=kin, ells=self.ells)
+        if template is not None:
+            self.pt.update(template=template)
+
+    def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, tracers=None):
+        # Non-node setup only.
+        self._to_correlation = SpectrumToCorrelation(s=self.s, ells=self.ells, kin=np.geomspace(1e-4, 0.6, 300))
+
+    def __call__(self):
+        self.poles = self._to_correlation(self.pt.poles)
+        return self.poles
+
+    def tree_flatten(self):
+        return [self.poles], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        return obj
+
+
+class LPTVelocileptorsPTSpectrum2Poles(ExternalCalculator):
+    r"""
+    Velocileptors LPT matter power spectrum multipoles (ExternalCalculator).
+
+    Wraps ``velocileptors.LPT.lpt_rsd_fftw.LPT_RSD``.
+    Exposes ``table`` (shape ``(n_ells, n_k, 19)``), ``sigma8``, ``fsigma8``.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Output wavenumbers [h/Mpc].
+    template : DirectSpectrum2Template, default=None
+    ells : tuple of int, default=(0, 2, 4)
+    mu : int, default=4
+        Gauss-Legendre mu order for AP integration.
+    **kwargs :
+        Velocileptors options: ``use_Pzel``, ``kIR``, ``cutoff``, ``extrap_min``, ``extrap_max``, ``N``, ``jn``, ``nthreads``.
+    """
+
+    _lpt_defaults = dict(use_Pzel=False, kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, jn=5)
+
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/sfschen/velocileptors')
+
+    def __init__(self, k=None, template=None, ells=(0, 2, 4), mu=4, **kwargs):
+        # Nodes (Calculator deps) and their update() live in __init__.
+        if k is None:
+            k = _velocileptors_kvec(np.linspace(0.01, 0.5, 200))
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        if template is None:
+            template = DirectSpectrum2Template()
+        self.template = template
+        self.template.update(k=np.geomspace(min(1e-4, self.k[0] / 2.), max(2., self.k[-1] * 2.), 500))
+
+    def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=4, **kwargs):
+        # Non-node setup only.
+        self.nmu = int(mu)
+        self._options = {name: kwargs.get(name, val) for name, val in self._lpt_defaults.items()}
+        self._options['threads'] = get_nthreads(kwargs.get('nthreads', None))
+
+    def __call__(self):
+        from scipy.interpolate import interp1d as _interp1d
+        from velocileptors.LPT import lpt_rsd_fftw
+        lpt_rsd_fftw.interp1d = lambda x, y: _interp1d(x, y, kind='cubic', assume_sorted=True)
+        from velocileptors.LPT.lpt_rsd_fftw import LPT_RSD
+        pt = LPT_RSD(np.asarray(self.template.k), np.asarray(self.template.pk_dd), **self._options)
+        pt.make_pltable(float(self.template.f), kv=np.asarray(self.k),
+                        apar=float(self.template.qpar), aperp=float(self.template.qper), ngauss=self.nmu)
+        pktable = {0: pt.p0ktable, 2: pt.p2ktable, 4: pt.p4ktable}
+        self.table = np.array([pktable[ell] for ell in self.ells])  # (n_ells, n_k, 19)
+        self.sigma8 = float(self.template.sigma8)
+        self.fsigma8 = float(self.template.fsigma8)
+
+    def tree_flatten(self):
+        return ([jnp.asarray(self.table), jnp.asarray(self.sigma8), jnp.asarray(self.fsigma8)],
+                {'k': self.k, 'ells': self.ells})
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.table, obj.sigma8, obj.fsigma8 = children
+        obj.k = aux['k']
+        obj.ells = aux['ells']
+        return obj
+
+
+class LPTVelocileptorsTracerSpectrum2Poles(Calculator):
+    r"""
+    Velocileptors LPT tracer power spectrum multipoles.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Output wavenumbers [h/Mpc].
+    pt : LPTVelocileptorsPTSpectrum2Poles, default=None
+    ells : tuple of int, default=(0, 2, 4)
+    template : template calculator, default=None
+    prior_basis : str, default='physical'
+        ``'physical'``: parameters ``b1p, b2p, bsp, b3p, alpha0p, ..., sn0p, sn2p, sn4p``.
+        Otherwise: ``b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4``.
+    tracer : str, default=None
+        Preset ``fsat``/``sigv`` for 'BGS', 'LRG', 'ELG', 'QSO' (physical basis only).
+    fsat, sigv : float, default=None
+        Override preset satellite fraction / velocity dispersion.
+    shotnoise : float, default=1e4
+        Shot-noise scale [(h/Mpc)^3]. Stochastic terms are in units of this.
+    """
+
+    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical',
+                 tracer=None, fsat=None, sigv=None, shotnoise=1e4, tracers=None, **kwargs):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        if prior_basis == 'physical':
+            self.b1 = Parameter('b1p', value=1., prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1), latex=r"b_1'")
+            self.b2 = Parameter('b2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'")
+            self.bs = Parameter('bsp', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'")
+            self.b3 = Parameter('b3p', value=0., fixed=True, latex=r"b_3'")
+            self.alpha0 = Parameter('alpha0p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_0'")
+            self.alpha2 = Parameter('alpha2p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_2'")
+            self.alpha4 = Parameter('alpha4p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_4'")
+            self.alpha6 = Parameter('alpha6p', value=0., fixed=True, latex=r"\alpha_6'")
+            self.sn0 = Parameter('sn0p', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'")
+            self.sn2 = Parameter('sn2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,2}'")
+            self.sn4 = Parameter('sn4p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,4}'")
+        else:
+            self.b1 = Parameter('b1', value=1., prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1')
+            self.b2 = Parameter('b2', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
+            self.bs = Parameter('bs', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_s')
+            self.b3 = Parameter('b3', value=0., fixed=True, latex='b_3')
+            self.alpha0 = Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_0')
+            self.alpha2 = Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2')
+            self.alpha4 = Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4')
+            self.alpha6 = Parameter('alpha6', value=0., fixed=True, latex=r'\alpha_6')
+            self.sn0 = Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}')
+            self.sn2 = Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}')
+            self.sn4 = Parameter('sn4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,4}')
+        apply_tracers(self, tracers)  # namespacing only (no cross)
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        if pt is None:
+            pt = LPTVelocileptorsPTSpectrum2Poles()
+        self.pt = pt
+        self.pt.update(k=_velocileptors_kvec(self.k), ells=self.ells)
+        if template is not None:
+            self.pt.update(template=template)
+
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4, tracers=None, **kwargs):
+        # Non-node setup only.
+        self._prior_basis = prior_basis
+        self._nbar = 1e-4
+        self._snd = float(shotnoise) * self._nbar
+        settings = get_physical_stochastic_settings(tracer)
+        self._fsat = fsat if fsat is not None else settings['fsat']
+        self._sigv = sigv if sigv is not None else settings['sigv']
+
+    def __call__(self):
+        if self._prior_basis == 'physical':
+            pars = _velocileptors_params_physical(self.b1, self.b2, self.bs, self.b3,
+                                                  self.alpha0, self.alpha2, self.alpha4, self.alpha6,
+                                                  self.sn0, self.sn2, self.sn4,
+                                                  self.pt.sigma8, self.pt.fsigma8, self._fsat, self._sigv, self._snd, rept=False)
+        else:
+            pars = jnp.array([self.b1, self.b2, self.bs, self.b3,
+                               self.alpha0, self.alpha2, self.alpha4, self.alpha6,
+                               self.sn0, self.sn2, self.sn4])
+        raw = tablevel_combine_bias_terms_poles(self.pt.table, pars, nd=self._nbar)  # (n_ells, n_k_pt)
+        self.poles = interpax.interp1d(self.k, self.pt.k, raw.T, method='cubic', extrap=True).T
+        return self.poles
+
+    def tree_flatten(self):
+        return [self.poles], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        return obj
+
+
+class LPTVelocileptorsTracerCorrelation2Poles(Calculator):
+    r"""
+    Velocileptors LPT tracer correlation function multipoles via FFTLog.
+
+    Parameters
+    ----------
+    s : array, default=None
+        Output separations [Mpc/h].
+    pt : LPTVelocileptorsTracerSpectrum2Poles, default=None
+    ells : tuple of int, default=(0, 2, 4)
+    template : template calculator, default=None
+    prior_basis : str, default='physical'
+    """
+
+    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', tracers=None, **kwargs):
+        # Nodes (Calculator deps) and their update() live in __init__.
+        if s is None:
+            s = np.linspace(20., 200., 181)
+        self.s = np.asarray(s, dtype='f8')
+        self.ells = tuple(ells)
+        kin = np.geomspace(1e-4, 0.6, 300)
+        if pt is None:
+            pt = LPTVelocileptorsTracerSpectrum2Poles(prior_basis=prior_basis, tracers=tracers)
+        self.pt = pt
+        self.pt.update(k=kin, ells=self.ells)
+        if template is not None:
+            self.pt.update(template=template)
+
+    def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', tracers=None, **kwargs):
+        # Non-node setup only.
+        self._to_correlation = SpectrumToCorrelation(s=self.s, ells=self.ells, kin=np.geomspace(1e-4, 0.6, 300))
+
+    def __call__(self):
+        self.poles = self._to_correlation(self.pt.poles)
+        return self.poles
+
+    def tree_flatten(self):
+        return [self.poles], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        return obj
+
+
+class REPTVelocileptorsPTSpectrum2Poles(ExternalCalculator):
+    r"""
+    Velocileptors REPT matter power spectrum multipoles (ExternalCalculator).
+
+    Wraps ``velocileptors.EPT.ept_fullresum_varyDz_nu_fftw.REPT``.
+    Exposes ``table`` (shape ``(n_ells, n_k, 19)``), ``sigma8``, ``fsigma8``.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Output wavenumbers [h/Mpc].
+    template : DirectSpectrum2Template, default=None
+    ells : tuple of int, default=(0, 2, 4)
+    mu : int, default=4
+    **kwargs :
+        REPT options: ``rbao``, ``sbao``, ``beyond_gauss``, ``one_loop``, ``shear``, ``cutoff``, ``jn``, ``N``, ``extrap_min``, ``extrap_max``, ``import_wisdom``, ``nthreads``.
+    """
+
+    _rept_defaults = dict(rbao=110, sbao=None, beyond_gauss=True, one_loop=True, shear=True, cutoff=20, jn=5, N=4000, extrap_min=-4, extrap_max=3, import_wisdom=False)
+
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/sfschen/velocileptors')
+
+    def __init__(self, k=None, template=None, ells=(0, 2, 4), mu=4, **kwargs):
+        # Nodes (Calculator deps) and their update() live in __init__.
+        if k is None:
+            k = _velocileptors_kvec(np.linspace(0.01, 0.5, 200))
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        if template is None:
+            template = DirectSpectrum2Template()
+        self.template = template
+        self.template.update(with_now='peakaverage')
+        self.template.update(k=np.geomspace(min(1e-4, self.k[0] / 2.), max(2., self.k[-1] * 2.), 500))
+
+    def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=4, **kwargs):
+        # Non-node setup only.
+        self.nmu = int(mu)
+        self._options = {name: kwargs.get(name, val) for name, val in self._rept_defaults.items()}
+        self._options['threads'] = get_nthreads(kwargs.get('nthreads', None))
+
+    def __call__(self):
+        from scipy.interpolate import interp1d as _interp1d
+        from velocileptors.EPT.ept_fullresum_varyDz_nu_fftw import REPT
+        pk_dd = np.asarray(self.template.pk_dd)
+        pknow_dd = np.asarray(self.template.pknow_dd)
+        opts = {k: v for k, v in self._options.items() if v is not None}
+        pt = REPT(np.asarray(self.template.k), pk_dd, pnw=pknow_dd, kmin=self.k[0], kmax=self.k[-1], nk=200, **opts)
+        log10_ktempl = np.log10(np.asarray(self.template.k))
+        log10_fk = np.log10(np.clip(np.asarray(self.template.fk), 1e-30, None))
+        fk = 10.**_interp1d(log10_ktempl, log10_fk, kind='cubic', fill_value='extrapolate', assume_sorted=True)(np.log10(pt.kv))
+        pks = pt.compute_redshift_space_power_multipoles_tables(fk, apar=float(self.template.qpar), aperp=float(self.template.qper), ngauss=self.nmu)[1:]
+        pktable_kv = np.array([pks[list([0, 2, 4]).index(ell)] for ell in self.ells])  # (n_ells, n_kv, 19)
+        self.table = _interp1d(pt.kv, pktable_kv, kind='cubic', fill_value='extrapolate', axis=1, assume_sorted=True)(self.k)
+        self.sigma8 = float(self.template.sigma8)
+        self.fsigma8 = float(self.template.fsigma8)
+
+    def tree_flatten(self):
+        return ([jnp.asarray(self.table), jnp.asarray(self.sigma8), jnp.asarray(self.fsigma8)],
+                {'k': self.k, 'ells': self.ells})
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.table, obj.sigma8, obj.fsigma8 = children
+        obj.k = aux['k']
+        obj.ells = aux['ells']
+        return obj
+
+
+class REPTVelocileptorsTracerSpectrum2Poles(Calculator):
+    r"""
+    Velocileptors REPT tracer power spectrum multipoles.
+
+    Differs from LPT in the physical-prior bias conversion and co-evolution correction applied to ``bs``/``b3``.
+
+    Parameters
+    ----------
+    k : array, default=None
+    pt : REPTVelocileptorsPTSpectrum2Poles, default=None
+    ells : tuple of int, default=(0, 2, 4)
+    template : template calculator, default=None
+    prior_basis : str, default='physical'
+    tracer, fsat, sigv, shotnoise : same as LPTVelocileptorsTracerSpectrum2Poles.
+    """
+
+    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical',
+                 tracer=None, fsat=None, sigv=None, shotnoise=1e4, tracers=None, **kwargs):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        if prior_basis == 'physical':
+            self.b1 = Parameter('b1p', value=1., prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1), latex=r"b_1'")
+            self.b2 = Parameter('b2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'")
+            self.bs = Parameter('bsp', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'")
+            self.b3 = Parameter('b3p', value=0., fixed=True, latex=r"b_3'")
+            self.alpha0 = Parameter('alpha0p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_0'")
+            self.alpha2 = Parameter('alpha2p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_2'")
+            self.alpha4 = Parameter('alpha4p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_4'")
+            self.alpha6 = Parameter('alpha6p', value=0., fixed=True, latex=r"\alpha_6'")
+            self.sn0 = Parameter('sn0p', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'")
+            self.sn2 = Parameter('sn2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,2}'")
+            self.sn4 = Parameter('sn4p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,4}'")
+        else:
+            self.b1 = Parameter('b1', value=1., prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1')
+            self.b2 = Parameter('b2', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
+            self.bs = Parameter('bs', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_s')
+            self.b3 = Parameter('b3', value=0., fixed=True, latex='b_3')
+            self.alpha0 = Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_0')
+            self.alpha2 = Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2')
+            self.alpha4 = Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4')
+            self.alpha6 = Parameter('alpha6', value=0., fixed=True, latex=r'\alpha_6')
+            self.sn0 = Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}')
+            self.sn2 = Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}')
+            self.sn4 = Parameter('sn4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,4}')
+        apply_tracers(self, tracers)  # namespacing only (no cross)
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        if pt is None:
+            pt = REPTVelocileptorsPTSpectrum2Poles()
+        self.pt = pt
+        self.pt.update(k=_velocileptors_kvec(self.k), ells=self.ells)
+        if template is not None:
+            self.pt.update(template=template)
+
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4, tracers=None, **kwargs):
+        # Non-node setup only.
+        self._prior_basis = prior_basis
+        self._nbar = 1e-4
+        self._snd = float(shotnoise) * self._nbar
+        settings = get_physical_stochastic_settings(tracer)
+        self._fsat = fsat if fsat is not None else settings['fsat']
+        self._sigv = sigv if sigv is not None else settings['sigv']
+
+    def __call__(self):
+        if self._prior_basis == 'physical':
+            pars = _velocileptors_params_physical(self.b1, self.b2, self.bs, self.b3,
+                                                  self.alpha0, self.alpha2, self.alpha4, self.alpha6,
+                                                  self.sn0, self.sn2, self.sn4,
+                                                  self.pt.sigma8, self.pt.fsigma8, self._fsat, self._sigv, self._snd, rept=True)
+        else:
+            b1 = self.b1
+            pars = jnp.array([b1, self.b2, self.bs - (2./7.)*(b1 - 1.), 3.*self.b3 + (b1 - 1.),
+                               self.alpha0, self.alpha2, self.alpha4, self.alpha6,
+                               self.sn0, self.sn2, self.sn4])
+        raw = tablevel_combine_bias_terms_poles(self.pt.table, pars, nd=self._nbar)
+        self.poles = interpax.interp1d(self.k, self.pt.k, raw.T, method='cubic', extrap=True).T
+        return self.poles
+
+    def tree_flatten(self):
+        return [self.poles], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        return obj
+
+
+class REPTVelocileptorsTracerCorrelation2Poles(Calculator):
+    r"""
+    Velocileptors REPT tracer correlation function multipoles via FFTLog.
+
+    Parameters
+    ----------
+    s : array, default=None
+    pt : REPTVelocileptorsTracerSpectrum2Poles, default=None
+    ells : tuple of int, default=(0, 2, 4)
+    template : template calculator, default=None
+    prior_basis : str, default='physical'
+    """
+
+    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', tracers=None, **kwargs):
+        # Nodes (Calculator deps) and their update() live in __init__.
+        if s is None:
+            s = np.linspace(20., 200., 181)
+        self.s = np.asarray(s, dtype='f8')
+        self.ells = tuple(ells)
+        kin = np.geomspace(1e-4, 0.6, 300)
+        if pt is None:
+            pt = REPTVelocileptorsTracerSpectrum2Poles(prior_basis=prior_basis, tracers=tracers)
+        self.pt = pt
+        self.pt.update(k=kin, ells=self.ells)
+        if template is not None:
+            self.pt.update(template=template)
+
+    def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', tracers=None, **kwargs):
+        # Non-node setup only.
+        self._to_correlation = SpectrumToCorrelation(s=self.s, ells=self.ells, kin=np.geomspace(1e-4, 0.6, 300))
+
+    def __call__(self):
+        self.poles = self._to_correlation(self.pt.poles)
+        return self.poles
+
+    def tree_flatten(self):
+        return [self.poles], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        return obj
+
+
+class PyBirdPTSpectrum2Poles(ExternalCalculator):
+    r"""
+    PyBird matter power spectrum multipoles (ExternalCalculator).
+
+    Wraps ``pybird.bird.Bird`` + pybird loop integrals.
+    Exposes ``P11l``, ``Ploopl``, ``Pctl``, ``Pstl``, ``Pnnlol`` arrays and metadata.
+
+    Parameters
+    ----------
+    k : array, default=None
+    template : DirectSpectrum2Template, default=None
+    ells : tuple of int, default=(0, 2, 4)
+    km, kr : float, default=0.7, 0.25
+    accboost, fftaccboost : int, default=1
+    fftbias : float, default=-1.6
+    with_nnlo_counterterm : bool, default=False
+    with_stoch : bool, default=True
+    with_resum : str or bool, default='full'
+    with_ap : bool, default=True
+    eft_basis : str, default='eftoflss'
+    """
+
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/pierrexyz/pybird')
+
+    def __init__(self, k=None, template=None, ells=(0, 2, 4), km=0.7, kr=0.25,
+                 accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False,
+                 with_stoch=True, with_resum='full', with_ap=True, eft_basis='eftoflss'):
+        # Nodes (Calculator deps) and their update() live in __init__.
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        if template is None:
+            template = DirectSpectrum2Template()
+        self.template = template
+        if with_nnlo_counterterm:
+            self.template.update(with_now='peakaverage')
+
+    def __post_init__(self, k=None, template=None, ells=(0, 2, 4), km=0.7, kr=0.25,
+                      accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False,
+                      with_stoch=True, with_resum='full', with_ap=True, eft_basis='eftoflss'):
+        # Non-node setup only (pybird Common/NonLinear/Resum/Projection are not Nodes).
+        self._with_stoch = bool(with_stoch)
+        self._with_nnlo = bool(with_nnlo_counterterm)
+        self._with_resum = with_resum
+        self._with_ap = bool(with_ap)
+        self.km = tuple(km) if hasattr(km, '__len__') else (float(km),) * 2
+        self.kr = tuple(kr) if hasattr(kr, '__len__') else (float(kr),) * 2
+        from pybird.common import Common
+        from pybird.nonlinear import NonLinear
+        from pybird.resum import Resum
+        from pybird.projection import Projection
+        eft = eft_basis if eft_basis not in (None, 'velocileptors') else 'eftoflss'
+        if self.k[0] * 0.8 < 1e-3:
+            import warnings
+            warnings.warn('pybird does not predict P(k) for k < 0.001 h/Mpc; nan will be replaced by 0')
+        self._co = Common(Nl=len(self.ells), kmin=1e-3, kmax=self.k[-1] * 1.3,
+                          km=min(self.km), kr=min(self.kr), nd=1e-4, eft_basis=eft,
+                          halohalo=True, with_cf=False, with_time=True,
+                          accboost=float(accboost), optiresum=(with_resum == 'opti'),
+                          with_uvmatch=False, exact_time=False, quintessence=False,
+                          with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
+        self._nonlinear = NonLinear(load=False, save=False, NFFT=256 * int(fftaccboost), fftbias=fftbias, co=self._co)
+        self._resum = Resum(co=self._co)
+        self._nnlo = None
+        if with_nnlo_counterterm:
+            from pybird.nnlo import NNLO_counterterm
+            self._nnlo = NNLO_counterterm(co=self._co)
+        self._projection = Projection(self.k, with_ap=with_ap, H_fid=None, D_fid=None, co=self._co)
+
+    def __call__(self):
+        from pybird.bird import Bird
+        from scipy.interpolate import interp1d as _interp1d
+        cosmo = {'kk': np.asarray(self.template.k), 'pk_lin': np.asarray(self.template.pk_dd),
+                 'pk_lin_2': None, 'f': float(self.template.f), 'DA': 1., 'H': 1.}
+        self._pt = Bird(cosmo, with_bias=False, eft_basis=self._co.eft_basis, with_stoch=self._with_stoch,
+                        with_nnlo_counterterm=self._nnlo is not None, co=self._co)
+        if self._nnlo is not None:
+            self._nnlo.Ps(self._pt, _interp1d(np.log(np.asarray(self.template.k)),
+                                               np.log(np.clip(np.asarray(self.template.pknow_dd), 1e-30, None)),
+                                               fill_value='extrapolate', assume_sorted=True))
+        self._nonlinear.PsCf(self._pt)
+        self._pt.setPsCfl()
+        if self._with_resum:
+            self._resum.PsCf(self._pt, makeIR=True, makeQ=True, setIR=True, setPs=True, setCf=False)
+        if self._with_ap:
+            self._projection.AP(self._pt, q=(float(self.template.qper), float(self.template.qpar)))
+        self._projection.xdata(self._pt)
+
+    def tree_flatten(self):
+        _z = jnp.zeros((len(self.ells), 1, len(self.k)))
+        P11l = jnp.asarray(self._pt.P11l)
+        Ploopl = jnp.asarray(self._pt.Ploopl)
+        Pctl = jnp.asarray(self._pt.Pctl)
+        Pstl = jnp.asarray(self._pt.Pstl) if self._with_stoch else _z
+        Pnnlol = jnp.asarray(self._pt.Pnnlol) if self._with_nnlo else _z
+        return ([P11l, Ploopl, Pctl, Pstl, Pnnlol],
+                {'k': self.k, 'ells': self.ells, 'km': self.km, 'kr': self.kr,
+                 'f': float(self._pt.f), 'eft_basis': self._pt.eft_basis,
+                 'with_stoch': self._with_stoch, 'with_nnlo': self._with_nnlo, 'co': self._co})
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        from pybird.bird import Bird
+        obj = object.__new__(cls)
+        pt = Bird.__new__(Bird)
+        pt.P11l, pt.Ploopl, pt.Pctl, pt.Pstl, pt.Pnnlol = children
+        pt.f = aux['f']
+        pt.eft_basis = aux['eft_basis']
+        pt.with_stoch = aux['with_stoch']
+        pt.with_nnlo_counterterm = aux['with_nnlo']
+        pt.with_bias = False
+        pt.co = aux['co']
+        pt.with_tidal_alignments = pt.co.with_tidal_alignments
+        obj._pt = pt
+        obj.k = aux['k']
+        obj.ells = aux['ells']
+        obj.km = aux['km']
+        obj.kr = aux['kr']
+        return obj
+
+
+class PyBirdTracerSpectrum2Poles(Calculator):
+    r"""
+    PyBird tracer power spectrum multipoles.
+
+    Parameters
+    ----------
+    k : array, default=None
+    pt : PyBirdPTSpectrum2Poles, default=None
+    ells : tuple of int, default=(0, 2, 4)
+    template : template calculator, default=None
+    eft_basis : str, default='eftoflss'
+        One of ``'eftoflss'``, ``'westcoast'``, ``'eastcoast'``, ``'velocileptors'``.
+    shotnoise : float, default=1e4
+    """
+
+    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss', shotnoise=1e4, tracers=None, **kwargs):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        eft = eft_basis if eft_basis not in (None, 'velocileptors') else 'eftoflss'
+        if eft in ('eftoflss', 'velocileptors'):
+            self.b1 = Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1')
+            self.b2 = Parameter('b2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
+            self.b3 = Parameter('b3', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_3')
+            self.b4 = Parameter('b4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_4')
+        elif eft == 'westcoast':
+            self.b1 = Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1')
+            self.b2p4 = Parameter('b2p4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2+4}')
+            self.b2m4 = Parameter('b2m4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2-4}')
+            self.b3 = Parameter('b3', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_3')
+        elif eft == 'eastcoast':
+            self.b1 = Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1')
+            self.b2t = Parameter('b2t', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2t}')
+            self.b2g = Parameter('b2g', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2g}')
+            self.b3g = Parameter('b3g', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{3g}')
+        self.cct = Parameter('cct', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{ct}')
+        self.cr1 = Parameter('cr1', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r1}')
+        self.cr2 = Parameter('cr2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r2}')
+        self.ce0 = Parameter('ce0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\epsilon_0')
+        self.ce1 = Parameter('ce1', value=0., fixed=True, latex=r'\epsilon_1')
+        self.ce2 = Parameter('ce2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\epsilon_2')
+        apply_tracers(self, tracers, stochastic=('ce0', 'ce1', 'ce2'), cross=True)
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        self._eft_basis = eft_basis if eft_basis not in (None, 'velocileptors') else 'eftoflss'
+        if pt is None:
+            pt = PyBirdPTSpectrum2Poles()
+        self.pt = pt
+        self.pt.update(k=self.k, ells=self.ells, eft_basis=self._eft_basis)
+        if template is not None:
+            self.pt.update(template=template)
+
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss', shotnoise=1e4, tracers=None, **kwargs):
+        # Non-node setup only.
+        self._nbar = 1. / float(shotnoise)
+
+    def _build_params(self, idx=None):
+        """Bias dict for pybird, with **raw** counterterms.
+
+        pybird's ``setBias`` divides ``cct``/``cr1``/``cr2`` by ``co.km**2``/``co.kr**2``
+        (and ``ce1``/``ce2`` by ``co.km**2``) once, so we pass the raw parameters here.
+
+        For cross-spectra, ``idx`` in ``{0, 1}`` selects tracer X or Y from the
+        tuple-valued (per-tracer) bias attributes; shared stochastic terms are scalars
+        and are returned as-is.
+        """
+        def get(name):
+            val = getattr(self, name)
+            return val[idx] if (idx is not None and isinstance(val, tuple)) else val
+        eft = self._eft_basis
+        b1 = get('b1')
+        if eft == 'westcoast':
+            b2 = (get('b2p4') + get('b2m4')) / 2.**0.5
+            b4 = (get('b2p4') - get('b2m4')) / 2.**0.5
+            b3 = get('b3')
+        elif eft == 'eastcoast':
+            b2g, b2t, b3g = get('b2g'), get('b2t'), get('b3g')
+            b2 = b1 + 7./2.*b2g
+            b3 = b1 + 15.*b2g + 6.*b3g
+            b4 = 0.5*b2t - 7./2.*b2g
+        else:
+            b2, b3, b4 = get('b2'), get('b3'), get('b4')
+        if eft in ('eftoflss', 'velocileptors', 'westcoast'):
+            return {'b1': b1, 'b2': b2, 'b3': b3, 'b4': b4,
+                    'cct': get('cct'), 'cr1': get('cr1'), 'cr2': get('cr2'),
+                    'ce0': get('ce0'), 'ce1': get('ce1'), 'ce2': get('ce2')}
+        return {'b1': b1, 'b2': b2, 'b3': b3, 'b4': b4,
+                'c0': get('cct'), 'c2': get('cr1'), 'c4': get('cr2'),
+                'ce0': get('ce0'), 'ce1': get('ce1'), 'ce2': get('ce2')}
+
+    def _fullps_cross(self, bird, biasX, biasY):
+        r"""Cross power-spectrum multipoles for two tracers X, Y.
+
+        Follows https://arxiv.org/abs/2308.06206 eq.(13): the shared matter loop
+        tables (``bird.P11l``/``Ploopl``/``Pctl``/``Pstl``) are contracted with
+        symmetric (X<->Y) bias vectors that reduce to the auto vectors when X == Y.
+        Counterterms are divided by ``km**2``/``kr**2`` here (single division, as in
+        :meth:`_build_params` the values are raw); stochastic terms are shared.
+        """
+        f = bird.f
+        b1X, b2X, b3X, b4X = (biasX[f'b{i:d}'] for i in (1, 2, 3, 4))
+        b1Y, b2Y, b3Y, b4Y = (biasY[f'b{i:d}'] for i in (1, 2, 3, 4))
+        kmX, kmY = self.pt.km
+        krX, krY = self.pt.kr
+        if bird.eft_basis in ('eftoflss', 'westcoast'):
+            b5X, b6X, b7X = (biasX[n] / ks**2 for n, ks in zip(('cct', 'cr1', 'cr2'), (kmX, krX, krX)))
+            b5Y, b6Y, b7Y = (biasY[n] / ks**2 for n, ks in zip(('cct', 'cr1', 'cr2'), (kmY, krY, krY)))
+            bct = jnp.array([b1X * b5Y + b1Y * b5X, b1Y * b6X + b1X * b6Y, b1Y * b7X + b1X * b7Y,
+                             (b5X + b5Y) * f, (b6X + b6Y) * f, (b7X + b7Y) * f])
+        else:  # eastcoast (inversion of eq. 2.23 of arXiv:2004.10607)
+            ct0X = biasX['c0'] - f / 3. * biasX['c2'] + 3. / 35. * f**2 * biasX['c4']
+            ct2X = biasX['c2'] - 6. / 7. * f * biasX['c4']
+            ct4X = biasX['c4']
+            ct0Y = biasY['c0'] - f / 3. * biasY['c2'] + 3. / 35. * f**2 * biasY['c4']
+            ct2Y = biasY['c2'] - 6. / 7. * f * biasY['c4']
+            ct4Y = biasY['c4']
+            bct = -jnp.array([ct0X + ct0Y, f * (ct2X + ct2Y), f**2 * (ct4X + ct4Y)])
+        if bird.with_nnlo_counterterm:
+            raise NotImplementedError('PyBird cross-power spectrum with nnlo counterterm is not implemented.')
+        b11 = jnp.array([b1X * b1Y, (b1X + b1Y) * f, f**2])
+        bloop = jnp.array([1., 0.5 * (b1X + b1Y), 0.5 * (b2X + b2Y), 0.5 * (b3X + b3Y), 0.5 * (b4X + b4Y),
+                           b1X * b1Y, 0.5 * (b1X * b2Y + b1Y * b2X), 0.5 * (b1X * b3Y + b1Y * b3X),
+                           0.5 * (b1X * b4Y + b1Y * b4X), b2X * b2Y, 0.5 * (b2X * b4Y + b2Y * b4X), b4X * b4Y])
+        Ps0 = jnp.einsum('b,lbx->lx', b11, bird.P11l)
+        Ps1 = jnp.einsum('b,lbx->lx', bloop, bird.Ploopl) + jnp.einsum('b,lbx->lx', bct, bird.Pctl)
+        if bird.with_stoch:
+            # Match pybird's setBias: stochastic terms divided by co.nd (the number density).
+            bst = jnp.array([biasX['ce0'], biasX['ce1'] / (kmX * kmY), biasX['ce2'] / (kmX * kmY)]) / bird.co.nd
+            Ps1 = Ps1 + jnp.einsum('b,lbx->lx', bst, bird.Pstl)
+        return jnp.nan_to_num(Ps0 + Ps1, nan=0., posinf=jnp.inf, neginf=-jnp.inf)
+
+    def __call__(self):
+        bird = self.pt._pt  # underlying pybird Bird (self.pt is the External wrapper)
+        if isinstance(self.b1, tuple):  # cross-spectrum of two tracers
+            self.poles = self._fullps_cross(bird, self._build_params(0), self._build_params(1))
+        else:
+            import pybird.bird as bird_module
+            bird_module.np = jnp
+            self._pt = bird
+            bird.co.nbar = self._nbar
+            bird.setreducePslb(self._build_params(), what='full')
+            bird_module.np = np
+            self.poles = jnp.nan_to_num(bird.fullPs, nan=0., posinf=jnp.inf, neginf=-jnp.inf)
+        return self.poles
+
+    def tree_flatten(self):
+        return [self.poles], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        return obj
+
+
+class PyBirdPTCorrelation2Poles(ExternalCalculator):
+    r"""
+    PyBird matter correlation function multipoles (ExternalCalculator).
+
+    Parameters
+    ----------
+    s : array, default=None
+    template : DirectSpectrum2Template, default=None
+    ells : tuple of int, default=(0, 2, 4)
+    km, kr, accboost, fftaccboost, fftbias, with_nnlo_counterterm, with_stoch, with_resum, with_ap, eft_basis : same as PyBirdPTSpectrum2Poles.
+    """
+
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/pierrexyz/pybird')
+
+    def __init__(self, s=None, template=None, ells=(0, 2, 4), km=0.7, kr=0.25,
+                 accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False,
+                 with_stoch=False, with_resum='full', with_ap=True, eft_basis='eftoflss'):
+        # Nodes (Calculator deps) and their update() live in __init__.
+        if s is None:
+            s = np.linspace(20., 200., 181)
+        self.s = np.asarray(s, dtype='f8')
+        self.ells = tuple(ells)
+        if template is None:
+            template = DirectSpectrum2Template()
+        self.template = template
+        if with_nnlo_counterterm:
+            self.template.update(with_now='peakaverage')
+
+    def __post_init__(self, s=None, template=None, ells=(0, 2, 4), km=0.7, kr=0.25,
+                      accboost=1, fftaccboost=1, fftbias=-1.6, with_nnlo_counterterm=False,
+                      with_stoch=False, with_resum='full', with_ap=True, eft_basis='eftoflss'):
+        # Non-node setup only (pybird Common/NonLinear/Resum/Projection are not Nodes).
+        self._with_stoch = bool(with_stoch)
+        self._with_nnlo = bool(with_nnlo_counterterm)
+        self._with_resum = with_resum
+        self._with_ap = bool(with_ap)
+        self.km = tuple(km) if hasattr(km, '__len__') else (float(km),) * 2
+        self.kr = tuple(kr) if hasattr(kr, '__len__') else (float(kr),) * 2
+        from pybird.common import Common
+        from pybird.nonlinear import NonLinear
+        from pybird.resum import Resum
+        from pybird.projection import Projection
+        eft = eft_basis if eft_basis not in (None, 'velocileptors') else 'eftoflss'
+        self._co = Common(Nl=len(self.ells), kmin=1e-3, kmax=0.25, km=min(self.km), kr=min(self.kr), nd=1e-4,
+                          eft_basis=eft, halohalo=True, with_cf=True, with_time=True,
+                          accboost=float(accboost), optiresum=(with_resum == 'opti'),
+                          with_uvmatch=False, exact_time=False, quintessence=False,
+                          with_tidal_alignments=False, nonequaltime=False, keep_loop_pieces_independent=False)
+        self._nonlinear = NonLinear(load=False, save=False, NFFT=256 * int(fftaccboost), fftbias=fftbias, co=self._co)
+        self._resum = Resum(co=self._co)
+        self._nnlo = None
+        if with_nnlo_counterterm:
+            from pybird.nnlo import NNLO_counterterm
+            self._nnlo = NNLO_counterterm(co=self._co)
+        self._projection = Projection(self.s, with_ap=with_ap, H_fid=None, D_fid=None, co=self._co)
+
+    def __call__(self):
+        from pybird.bird import Bird
+        from scipy.interpolate import interp1d as _interp1d
+        cosmo = {'kk': np.asarray(self.template.k), 'pk_lin': np.asarray(self.template.pk_dd),
+                 'pk_lin_2': None, 'f': float(self.template.f), 'DA': 1., 'H': 1.}
+        self._pt = Bird(cosmo, with_bias=False, eft_basis=self._co.eft_basis, with_stoch=self._with_stoch,
+                        with_nnlo_counterterm=self._nnlo is not None, co=self._co)
+        if self._nnlo is not None:
+            self._nnlo.Cf(self._pt, _interp1d(np.log(np.asarray(self.template.k)),
+                                               np.log(np.clip(np.asarray(self.template.pknow_dd), 1e-30, None)),
+                                               fill_value='extrapolate', assume_sorted=True))
+        self._nonlinear.PsCf(self._pt)
+        self._pt.setPsCfl()
+        if self._with_resum:
+            self._resum.PsCf(self._pt, makeIR=True, makeQ=True, setIR=True, setPs=True, setCf=True)
+        if self._with_ap:
+            self._projection.AP(self._pt, q=(float(self.template.qper), float(self.template.qpar)))
+        self._projection.xdata(self._pt)
+
+    def tree_flatten(self):
+        # Expose both Cf and Ps loop arrays: setreduceCflb ends with a call to
+        # setreducePslb (NNLO bookkeeping), which needs the P-arrays even though
+        # the tracer only reads fullCf.
+        _zc = jnp.zeros((len(self.ells), 1, len(self.s)))
+        C11l = jnp.asarray(self._pt.C11l)
+        Cloopl = jnp.asarray(self._pt.Cloopl)
+        Cctl = jnp.asarray(self._pt.Cctl)
+        Cstl = jnp.asarray(self._pt.Cstl) if self._with_stoch else _zc
+        Cnnlol = jnp.asarray(self._pt.Cnnlol) if self._with_nnlo else _zc
+        P11l = jnp.asarray(self._pt.P11l)
+        Ploopl = jnp.asarray(self._pt.Ploopl)
+        Pctl = jnp.asarray(self._pt.Pctl)
+        _zp = jnp.zeros((len(self.ells), 1, P11l.shape[-1]))
+        Pstl = jnp.asarray(self._pt.Pstl) if self._with_stoch else _zp
+        Pnnlol = jnp.asarray(self._pt.Pnnlol) if self._with_nnlo else _zp
+        return ([C11l, Cloopl, Cctl, Cstl, Cnnlol, P11l, Ploopl, Pctl, Pstl, Pnnlol],
+                {'s': self.s, 'ells': self.ells, 'km': self.km, 'kr': self.kr,
+                 'f': float(self._pt.f), 'eft_basis': self._pt.eft_basis,
+                 'with_stoch': self._with_stoch, 'with_nnlo': self._with_nnlo, 'co': self._co})
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        from pybird.bird import Bird
+        obj = object.__new__(cls)
+        pt = Bird.__new__(Bird)
+        (pt.C11l, pt.Cloopl, pt.Cctl, pt.Cstl, pt.Cnnlol,
+         pt.P11l, pt.Ploopl, pt.Pctl, pt.Pstl, pt.Pnnlol) = children
+        pt.f = aux['f']
+        pt.eft_basis = aux['eft_basis']
+        pt.with_stoch = aux['with_stoch']
+        pt.with_nnlo_counterterm = aux['with_nnlo']
+        pt.with_bias = False
+        pt.co = aux['co']
+        pt.with_tidal_alignments = pt.co.with_tidal_alignments
+        obj._pt = pt
+        obj.s = aux['s']
+        obj.ells = aux['ells']
+        obj.km = aux['km']
+        obj.kr = aux['kr']
+        return obj
+
+
+class PyBirdTracerCorrelation2Poles(Calculator):
+    r"""
+    PyBird tracer correlation function multipoles.
+
+    Parameters
+    ----------
+    s : array, default=None
+    pt : PyBirdPTCorrelation2Poles, default=None
+    ells : tuple of int, default=(0, 2, 4)
+    template : template calculator, default=None
+    eft_basis : str, default='eftoflss'
+    shotnoise : float, default=1e4
+    """
+
+    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss', shotnoise=1e4, tracers=None, **kwargs):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        eft = eft_basis if eft_basis not in (None, 'velocileptors') else 'eftoflss'
+        if eft in ('eftoflss', 'velocileptors'):
+            self.b1 = Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1')
+            self.b2 = Parameter('b2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
+            self.b3 = Parameter('b3', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_3')
+            self.b4 = Parameter('b4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_4')
+        elif eft == 'westcoast':
+            self.b1 = Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1')
+            self.b2p4 = Parameter('b2p4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2+4}')
+            self.b2m4 = Parameter('b2m4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2-4}')
+            self.b3 = Parameter('b3', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_3')
+        elif eft == 'eastcoast':
+            self.b1 = Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1')
+            self.b2t = Parameter('b2t', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2t}')
+            self.b2g = Parameter('b2g', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2g}')
+            self.b3g = Parameter('b3g', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{3g}')
+        self.cct = Parameter('cct', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{ct}')
+        self.cr1 = Parameter('cr1', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r1}')
+        self.cr2 = Parameter('cr2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r2}')
+        self.ce0 = Parameter('ce0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\epsilon_0')
+        self.ce1 = Parameter('ce1', value=0., fixed=True, latex=r'\epsilon_1')
+        self.ce2 = Parameter('ce2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\epsilon_2')
+        apply_tracers(self, tracers, stochastic=('ce0', 'ce1', 'ce2'))  # correlation does not support cross
+        if s is None:
+            s = np.linspace(20., 200., 181)
+        self.s = np.asarray(s, dtype='f8')
+        self.ells = tuple(ells)
+        self._eft_basis = eft_basis if eft_basis not in (None, 'velocileptors') else 'eftoflss'
+        if pt is None:
+            pt = PyBirdPTCorrelation2Poles()
+        self.pt = pt
+        self.pt.update(s=self.s, ells=self.ells, eft_basis=self._eft_basis)
+        if template is not None:
+            self.pt.update(template=template)
+
+    def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss', shotnoise=1e4, tracers=None, **kwargs):
+        # Non-node setup only.
+        self._nbar = 1. / float(shotnoise)
+
+    _build_params = PyBirdTracerSpectrum2Poles._build_params
+
+    def __call__(self):
+        import pybird.bird as bird_module
+        bird_module.np = jnp
+        self._pt = self.pt._pt  # underlying pybird Bird (self.pt is the External wrapper)
+        self._pt.co.nbar = self._nbar
+        self._pt.setreduceCflb(self._build_params(), what='full')
+        bird_module.np = np
+        self.poles = self._pt.fullCf
+        return self.poles
+
+    def tree_flatten(self):
+        return [self.poles], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        return obj
+
+
+class FOLPSPTSpectrum2Poles(ExternalCalculator):
+    r"""
+    FOLPS matter power spectrum multipoles (ExternalCalculator).
+
+    Wraps ``folps.NonLinearPowerSpectrumCalculator`` loop tables.
+    Exposes ``kap``, ``muap``, ``jac``, ``table``, ``table_now``,
+    ``f``, ``f0``, ``qpar``, ``qper``, ``sigma8``, ``fsigma8``.
+
+    Parameters
+    ----------
+    k : array, default=None
+    template : DirectSpectrum2Template, default=None
+    ells : tuple of int, default=(0, 2, 4)
+    mu : int, default=6
+    kernels : str, default='fk'
+    rbao : float, default=104.
+    A_full : bool, default=True
+    remove_DeltaP : bool, default=False
+    """
+
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/cosmodesi/FolpsD')
+
+    def __init__(self, k=None, template=None, ells=(0, 2, 4), mu=6, kernels='fk', rbao=104., A_full=True, remove_DeltaP=False):
+        # Nodes (Calculator deps) and their update() live in __init__.
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        if template is None:
+            template = DirectSpectrum2Template()
+        self.template = template
+        self.template.update(with_now='peakaverage')
+
+    def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=6, kernels='fk', rbao=104., A_full=True, remove_DeltaP=False):
+        # Non-node setup only.
+        self._kernels = str(kernels)
+        self._rbao = float(rbao)
+        self._A_full = bool(A_full)
+        self._remove_DeltaP = bool(remove_DeltaP)
+        self._to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+        os.environ.setdefault('FOLPS_BACKEND', 'jax')
+        import folps as folpsv2
+        self._matrices = folpsv2.MatrixCalculator(A_full=A_full, use_TNS_model=remove_DeltaP).get_mmatrices()
+
+    def __call__(self):
+        import folps as folpsv2
+        cosmo_params = {'pkttlin': np.asarray(self.template.pk_dd) * np.asarray(self.template.fk) ** 2,
+                        'f0': float(self.template.f0)}
+        folps_nlps = folpsv2.NonLinearPowerSpectrumCalculator(
+            mmatrices=self._matrices, kernels=self._kernels, rbao=self._rbao, **cosmo_params)
+        table, table_now = folps_nlps.calculate_loop_table(
+            k=np.asarray(self.template.k), pklin=np.asarray(self.template.pk_dd),
+            pknow=np.asarray(self.template.pknow_dd), **cosmo_params)
+        jac, kap, muap = self.template.ap_k_mu(self.k[:, None], self._to_poles.mu)
+        self.kap = np.asarray(kap)
+        self.muap = np.asarray(muap)
+        self.jac = np.asarray(jac)
+        # FOLPS returns mixed shapes: most loop terms are (nk_table,) arrays but the
+        # trailing entries (sigma2w, f0, and the NW sigma2/delta_sigma2) are scalars,
+        # which interp_table passes through unchanged.  Keep them as a tuple of
+        # per-element arrays (0-d for scalars) rather than a single rectangular array.
+        self.table = tuple(jnp.asarray(t) for t in table)
+        self.table_now = tuple(jnp.asarray(t) for t in table_now)
+        self.f = float(self.template.f)
+        self.f0 = float(self.template.f0)
+        self.qpar = float(self.template.qpar)
+        self.qper = float(self.template.qper)
+        self.sigma8 = float(self.template.sigma8)
+        self.fsigma8 = float(self.template.fsigma8)
+
+    def tree_flatten(self):
+        # table / table_now are tuples of per-element arrays; flatten each element
+        # as a separate child so JAX preserves their individual shapes.
+        table = list(self.table)
+        table_now = list(self.table_now)
+        children = ([self.kap, self.muap, self.jac] + table + table_now
+                    + [self.f, self.f0, self.qpar, self.qper, self.sigma8, self.fsigma8])
+        aux = {'k': self.k, 'ells': self.ells, 'mu': self._to_poles.mu, 'wmu': self._to_poles.wmu,
+               'A_full': self._A_full, 'remove_DeltaP': self._remove_DeltaP,
+               'n_table': len(table), 'n_table_now': len(table_now)}
+        return children, aux
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        it = iter(children)
+        obj.kap = next(it)
+        obj.muap = next(it)
+        obj.jac = next(it)
+        obj.table = tuple(next(it) for _ in range(aux['n_table']))
+        obj.table_now = tuple(next(it) for _ in range(aux['n_table_now']))
+        obj.f = next(it)
+        obj.f0 = next(it)
+        obj.qpar = next(it)
+        obj.qper = next(it)
+        obj.sigma8 = next(it)
+        obj.fsigma8 = next(it)
+        obj.k = aux['k']
+        obj.ells = aux['ells']
+        obj._A_full = aux['A_full']
+        obj._remove_DeltaP = aux['remove_DeltaP']
+        obj._to_poles = ProjectToMultipoles.__new__(ProjectToMultipoles)
+        obj._to_poles.mu = aux['mu']
+        obj._to_poles.wmu = aux['wmu']
+        obj._to_poles.ells = aux['ells']
+        return obj
+
+
+class FOLPSTracerSpectrum2Poles(Calculator):
+    r"""
+    FOLPS tracer power spectrum multipoles.
+
+    Parameters
+    ----------
+    k : array, default=None
+    pt : FOLPSPTSpectrum2Poles, default=None
+    ells : tuple of int, default=(0, 2, 4)
+    template : template calculator, default=None
+    prior_basis : str, default='physical'
+        ``'physical'`` uses the physical_aap basis (default, recommended).
+        ``'standard'`` uses standard Eulerian bias parameters.
+    tracer, fsat, sigv, shotnoise : same as LPTVelocileptorsTracerSpectrum2Poles.
+    mu : int, default=6
+    b3_coev : bool, default=True
+    damping : str, default='lor'
+    """
+
+    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical',
+                 tracer=None, fsat=None, sigv=None, shotnoise=1e4, mu=6, b3_coev=True, damping='lor', tracers=None, **kwargs):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        physical = (prior_basis != 'standard')
+        if physical:
+            self.b1 = Parameter('b1p', value=1., prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1), latex=r"b_1'")
+            self.b2 = Parameter('b2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'")
+            self.bs = Parameter('bsp', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'")
+            self.b3 = Parameter('b3p', value=0., fixed=True, latex=r"b_3'")
+            self.alpha0 = Parameter('alpha0p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_0'")
+            self.alpha2 = Parameter('alpha2p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_2'")
+            self.alpha4 = Parameter('alpha4p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_4'")
+            self.ct = Parameter('ctp', value=0., fixed=True, latex=r"c_t'")
+            self.X_FoG_p = Parameter('X_FoG_pp', value=0., fixed=True, latex=r"X_{\rm FoG}''")
+            self.sn0 = Parameter('sn0p', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'")
+            self.sn2 = Parameter('sn2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,2}'")
+        else:
+            self.b1 = Parameter('b1', value=1., prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1')
+            self.b2 = Parameter('b2', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
+            self.bs = Parameter('bs', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_s')
+            self.b3 = Parameter('b3', value=0., fixed=True, latex='b_3')
+            self.alpha0 = Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_0')
+            self.alpha2 = Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2')
+            self.alpha4 = Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4')
+            self.ct = Parameter('ct', value=0., fixed=True, latex='c_t')
+            self.X_FoG_p = Parameter('X_FoG_p', value=0., fixed=True, latex=r'X_{\rm FoG}')
+            self.sn0 = Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}')
+            self.sn2 = Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}')
+        apply_tracers(self, tracers)  # namespacing only (no cross)
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        if pt is None:
+            pt = FOLPSPTSpectrum2Poles()
+        self.pt = pt
+        self.pt.update(k=self.k, ells=self.ells, mu=mu)
+        if template is not None:
+            self.pt.update(template=template)
+
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical',
+                      tracer=None, fsat=None, sigv=None, shotnoise=1e4, mu=6, b3_coev=True, damping='lor', tracers=None, **kwargs):
+        # Non-node setup only.
+        self._prior_basis = prior_basis
+        self._b3_coev = bool(b3_coev)
+        self._damping = str(damping)
+        self._nbar = 1e-4
+        self._snd = float(shotnoise) * self._nbar
+        settings = get_physical_stochastic_settings(tracer)
+        self._fsat = fsat if fsat is not None else settings['fsat']
+        self._sigv = sigv if sigv is not None else settings['sigv']
+        self._to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+
+    def __call__(self):
+        import folps as folpsv2
+        import folps.folps as _folps_module
+        _folps_module.A_full_status = self.pt._A_full
+        _folps_module.use_TNS_model_status = self.pt._remove_DeltaP
+
+        sigma8 = self.pt.sigma8
+        fsigma8 = self.pt.fsigma8
+        f = fsigma8 / sigma8
+        qpar = self.pt.qpar
+        qper = self.pt.qper
+        A_AP = 1. / (qper ** 2 * qpar)
+        sqrt_A_AP = A_AP ** 0.5
+
+        if self._prior_basis == 'standard':
+            b1, b2, bs, b3 = self.b1, self.b2, self.bs, self.b3
+            alpha0, alpha2, alpha4, ct = self.alpha0, self.alpha2, self.alpha4, self.ct
+            sn0, sn2, X_FoG = self.sn0, self.sn2, self.X_FoG_p
+            if self._b3_coev:
+                b3 = 32. / 315. * (b1 - 1.)
+            pars = jnp.array([b1, b2, bs, b3, alpha0, alpha2, alpha4, ct, sn0, sn2, 1. / self._nbar, X_FoG])
+        else:  # physical (physical_aap)
+            b1L = self.b1 / sigma8 / sqrt_A_AP - 1.
+            b2L = self.b2 / sigma8 ** 2 / sqrt_A_AP
+            bK2 = self.bs / sigma8 ** 2 / sqrt_A_AP
+            b1E = 1. + b1L
+            b2E = b2L
+            btd = self.b3 / A_AP / sigma8 ** 4
+            if self._b3_coev:
+                btd = 23. / 42. * (b1E - 1.)
+            bsE = 2. * bK2
+            b3E = 64. / 105. * (-5. / 4. * bsE - btd)
+            a0t = self.alpha0 / A_AP / sigma8 ** 2
+            a2t = self.alpha2 / A_AP / sigma8 ** 2
+            a4t = self.alpha4 / A_AP / sigma8 ** 2
+            alpha0 = b1E ** 2 * a0t
+            alpha2 = b1E * f * (a0t + a2t)
+            alpha4 = f ** 2 * a2t + b1E * f * a4t
+            sn0 = self.sn0 / A_AP * self._snd
+            sn2 = self.sn2 / A_AP * self._snd * self._fsat * self._sigv ** 2
+            pars = jnp.array([b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, self.ct,
+                               sn0, sn2, 1. / self._nbar, self.X_FoG_p])
+
+        folps_rsdmps = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD')
+        pars = folps_rsdmps.set_bias_scheme(pars=pars, bias_scheme='folps')
+        table = tuple(self.pt.table)
+        table_now = tuple(self.pt.table_now)
+        pkmu = self.pt.jac * folps_rsdmps.get_rsd_pkmu(
+            self.pt.kap, self.pt.muap, pars, table, table_now, IR_resummation=True, damping=self._damping)
+        self.poles = self._to_poles(pkmu)
+        return self.poles
+
+    def tree_flatten(self):
+        return [self.poles], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        return obj
+
+
+class FOLPSTracerCorrelation2Poles(Calculator):
+    r"""
+    FOLPS tracer correlation function multipoles via FFTLog.
+
+    Parameters
+    ----------
+    s : array, default=None
+    pt : FOLPSTracerSpectrum2Poles, default=None
+    ells : tuple of int, default=(0, 2, 4)
+    template : template calculator, default=None
+    prior_basis : str, default='physical'
+    damping : str, default='lor'
+    """
+
+    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', tracers=None, **kwargs):
+        # Nodes (Calculator deps) and their update() live in __init__.
+        if s is None:
+            s = np.linspace(20., 200., 181)
+        self.s = np.asarray(s, dtype='f8')
+        self.ells = tuple(ells)
+        kin = np.geomspace(1e-4, 0.6, 300)
+        if pt is None:
+            pt = FOLPSTracerSpectrum2Poles(prior_basis=prior_basis, tracers=tracers)
+        self.pt = pt
+        self.pt.update(k=kin, ells=self.ells)
+        if template is not None:
+            self.pt.update(template=template)
+
+    def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', tracers=None, **kwargs):
+        # Non-node setup only.
+        self._to_correlation = SpectrumToCorrelation(s=self.s, ells=self.ells, kin=np.geomspace(1e-4, 0.6, 300))
+
+    def __call__(self):
+        self.poles = self._to_correlation(self.pt.poles)
+        return self.poles
+
+    def tree_flatten(self):
+        return [self.poles], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        return obj
+
+
+class FOLPSTracerSpectrum3Poles(ExternalCalculator):
+    r"""
+    FOLPS tracer bispectrum multipoles (Sugiyama basis, Eulerian/standard bias).
+
+    Computes the redshift-space bispectrum multipoles ``B_{l1 l2 L}(k1, k2)`` from the
+    linear power spectrum via ``folps.BispectrumCalculator.Sugiyama_Bell``.  The bias
+    parameters are the standard (Eulerian) FOLPS set; the model is built from a linear
+    power-spectrum template, so no power-spectrum loop tables are needed.
+
+    Parameters
+    ----------
+    k : array, shape (N, 2), default=None
+        Output ``(k1, k2)`` wavenumber pairs [h/Mpc].  Defaults to a diagonal grid
+        ``k1 == k2`` over ``np.linspace(0.01, 0.1, 11)`` (the case handled by Sugiyama_Bell).
+    template : template calculator, default=None
+        Linear power-spectrum template (with no-wiggle).  Defaults to
+        :class:`DirectSpectrum2Template`.
+    ells : tuple of (int, int, int), default=((0, 0, 0), (2, 0, 2))
+        Bispectrum multipole triplets ``(l1, l2, L)``.  Available: (0,0,0), (1,1,0),
+        (2,2,0), (0,2,2), (1,1,2).
+    shotnoise : float, default=1e4
+        Shot-noise scale [(h/Mpc)^3].
+    model : str, default='FOLPSD'
+    bias_scheme : str, default='folps'
+    damping : str, default='lor'
+    precision : tuple, default=(8, 10, 10)
+    renormalized : bool, default=True
+    interpolation_method : str, default='linear'
+
+    Notes
+    -----
+    Cross bispectra, the GeoFPTAX model, and window convolution are not implemented.
+
+    Reference
+    ---------
+    arXiv:2404.07269
+    """
+
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/cosmodesi/FolpsD')
+
+    def __init__(self, *args, template=None, tracers=None, **kwargs):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        # Standard (Eulerian) FOLPS bispectrum bias parameters.
+        self.b1 = Parameter('b1', value=2., prior=dict(limits=[0., 10.]),
+                            ref=dict(dist='norm', loc=2., scale=0.1), latex='b_1')
+        self.b2 = Parameter('b2', value=0., prior=dict(limits=[-50., 50.]),
+                            ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
+        self.bs = Parameter('bs', value=0., prior=None,
+                            ref=dict(dist='norm', loc=0., scale=1.), latex='b_s')
+        self.c1 = Parameter('c1', value=0., prior=None,
+                            ref=dict(dist='norm', loc=0., scale=1.), latex='c_1')
+        self.c2 = Parameter('c2', value=0., prior=None,
+                            ref=dict(dist='norm', loc=0., scale=1.), latex='c_2')
+        self.Pshot = Parameter('Pshot', value=0., prior=None,
+                               ref=dict(dist='norm', loc=0., scale=1.), latex='P_{shot}')
+        self.Bshot = Parameter('Bshot', value=0., prior=None,
+                               ref=dict(dist='norm', loc=0., scale=1.), latex='B_{shot}')
+        self.X_FoG_b = Parameter('X_FoG_b', value=0., fixed=True, latex=r'X_{\rm FoG, b}')
+        apply_tracers(self, tracers)  # namespacing only (cross bispectra not implemented)
+        if template is None:
+            template = DirectSpectrum2Template()
+        self.template = template
+        self.template.update(with_now='peakaverage')
+
+    def __post_init__(self, k=None, template=None, ells=((0, 0, 0), (2, 0, 2)), shotnoise=1e4,
+                      model='FOLPSD', bias_scheme='folps', damping='lor', precision=(8, 10, 10),
+                      renormalized=True, interpolation_method='linear', **kwargs):
+        # Non-node setup only.
+        if k is None:
+            k = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
+        self.k = np.atleast_2d(np.asarray(k, dtype='f8'))  # (N, 2): (k1, k2) pairs
+        self.ells = tuple(tuple(int(e) for e in ell) for ell in ells)
+        self._nbar = 1. / float(np.mean(shotnoise))
+        self._options = dict(model=str(model), bias_scheme=str(bias_scheme), damping=str(damping),
+                             precision=tuple(precision), renormalized=bool(renormalized),
+                             interpolation_method=str(interpolation_method))
+        os.environ.setdefault('FOLPS_BACKEND', 'jax')
+
+    def __call__(self):
+        k_pkl_pklnw_fk = np.array([np.asarray(self.template.k), np.asarray(self.template.pk_dd),
+                                   np.asarray(self.template.pknow_dd), np.asarray(self.template.fk)])
+        pars = [self.b1, self.b2, self.bs, self.c1, self.c2, self.Pshot, self.Bshot, self.X_FoG_b]
+        multipoles = tuple('B{:d}{:d}{:d}'.format(*ell) for ell in self.ells)
+        poles = _get_bispectrum_multipoles_folpsv2(
+            pars, self.k, k_pkl_pklnw_fk, float(self.template.f0),
+            float(self.template.qpar), float(self.template.qper),
+            multipoles=multipoles, **self._options)
+        self.power = jnp.asarray(poles)
+        return self.power
+
+    def tree_flatten(self):
+        return [self.power], {'k': self.k, 'ells': self.ells}
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.power = children[0]
+        obj.k = aux['k']
+        obj.ells = aux['ells']
+        return obj
+
+
+class JAXEffortTracerSpectrum2Poles(ExternalCalculator):
+    r"""
+    Tracer power-spectrum multipoles from a JAXEffort emulator.
+
+    Self-contained cosmology: the emulator's ``w0waCDMCosmology`` parameters
+    (``logA, n_s, h, omega_b, omega_cdm`` varied; ``m_ncdm, w0_fld, wa_fld`` fixed by
+    default) are owned directly.  Growth ``D(z)`` and Alcock-Paczynski distortion
+    (``qpar = D_H / D_H^fid``, ``qper = D_M / D_M^fid``) are computed from the same
+    JAXEffort cosmology.
+
+    Implemented as an :class:`~desilike.base.ExternalCalculator` (finite-difference
+    gradients): JAXEffort's growth ``D_z`` is a reverse-mode-only ``custom_vjp``, which
+    is incompatible with the pipeline's forward-mode AD for JAX calculators.
+
+    Bias parameters use the velocileptors (rept/lpt) standard basis
+    ``[b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4]``.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Output wavenumbers [h/Mpc].  Defaults to ``np.linspace(0.01, 0.2, 101)``.
+    ells : tuple of int, default=(0, 2, 4)
+        Multipole orders.
+    z : float, default=0.5
+        Effective redshift.
+    mu : int, default=8
+        Number of Gauss-Legendre mu-bins in [0, 1].
+    model : str, default='velocileptors_rept_mnuw0wacdm'
+        JAXEffort trained-emulator key.
+
+    Reference
+    ---------
+    https://github.com/CosmologicalEmulators/jaxeffort
+    """
+
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/CosmologicalEmulators/jaxeffort')
+
+    def __init__(self, *args, model='velocileptors_rept_mnuw0wacdm', tracers=None, **kwargs):
+        # ── cosmology (self-contained); m_ncdm / w0 / wa fixed by default ──
+        self.logA = Parameter('logA', value=3.044, prior=dict(limits=[2., 4.]),
+                              ref=dict(dist='norm', loc=3.044, scale=0.1), latex=r'\ln(10^{10}A_s)')
+        self.n_s = Parameter('n_s', value=0.9649, prior=dict(limits=[0.8, 1.1]),
+                             ref=dict(dist='norm', loc=0.9649, scale=0.02), latex='n_s')
+        self.h = Parameter('h', value=0.6736, prior=dict(limits=[0.5, 0.9]),
+                          ref=dict(dist='norm', loc=0.6736, scale=0.02), latex='h')
+        self.omega_b = Parameter('omega_b', value=0.02237, prior=dict(limits=[0.018, 0.026]),
+                                ref=dict(dist='norm', loc=0.02237, scale=0.0005), latex=r'\omega_b')
+        self.omega_cdm = Parameter('omega_cdm', value=0.1200, prior=dict(limits=[0.08, 0.16]),
+                                  ref=dict(dist='norm', loc=0.12, scale=0.005), latex=r'\omega_{cdm}')
+        self.m_ncdm = Parameter('m_ncdm', value=0.06, fixed=True, latex=r'\sum m_\nu')
+        self.w0_fld = Parameter('w0_fld', value=-1., fixed=True, latex='w_0')
+        self.wa_fld = Parameter('wa_fld', value=0., fixed=True, latex='w_a')
+        # ── velocileptors bias (standard basis) ──
+        self.b1 = Parameter('b1', value=2., prior=dict(limits=[0., 4.]),
+                           ref=dict(dist='norm', loc=2., scale=0.1), latex='b_1')
+        self.b2 = Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=2.),
+                           ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
+        self.bs = Parameter('bs', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_s')
+        self.b3 = Parameter('b3', value=0., fixed=True, latex='b_3')
+        self.alpha0 = Parameter('alpha0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=10.), latex=r'\alpha_0')
+        self.alpha2 = Parameter('alpha2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=10.), latex=r'\alpha_2')
+        self.alpha4 = Parameter('alpha4', value=0., fixed=True, latex=r'\alpha_4')
+        self.alpha6 = Parameter('alpha6', value=0., fixed=True, latex=r'\alpha_6')
+        self.sn0 = Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}')
+        self.sn2 = Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}')
+        self.sn4 = Parameter('sn4', value=0., fixed=True, latex='s_{n,4}')
+        # Cosmological parameters are shared across tracers; only bias is namespaced.
+        apply_tracers(self, tracers, shared=('logA', 'n_s', 'h', 'omega_b', 'omega_cdm', 'm_ncdm', 'w0_fld', 'wa_fld'))
+
+    def __post_init__(self, k=None, ells=(0, 2, 4), z=0.5, mu=8,
+                      model='velocileptors_rept_mnuw0wacdm', **kwargs):
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        self.z = float(z)
+        self._model = str(model)
+        self._to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+        self._mu = self._to_poles.mu
+        from scipy import special
+        # Legendre coefficients (highest power first, for jnp.polyval) per multipole.
+        self._leg_coeffs = [np.asarray(special.legendre(ell).c) for ell in self.ells]
+        import jaxeffort
+        self._emulators = [jaxeffort.trained_emulators[self._model][str(ell)] for ell in self.ells]
+        self._kgrid = np.asarray(self._emulators[0].P11.k_grid)
+        # Fiducial distances for AP (fixed); same distance formulas as in __call__.
+        fid = jaxeffort.w0waCDMCosmology(ln10As=3.044, ns=0.9649, h=0.6736, omega_b=0.02237,
+                                         omega_c=0.1200, m_nu=0.06, w0=-1., wa=0.)
+        self._h_fid = 0.6736
+        self._E_fid = float(fid.E_z(self.z))
+        self._dM_fid = float(fid.dM_z(self.z))
+
+    def __call__(self):
+        import jaxeffort
+        logA = jnp.asarray(self.logA.value); ns = jnp.asarray(self.n_s.value); h = jnp.asarray(self.h.value)
+        ob = jnp.asarray(self.omega_b.value); oc = jnp.asarray(self.omega_cdm.value)
+        mnu = jnp.asarray(self.m_ncdm.value); w0 = jnp.asarray(self.w0_fld.value); wa = jnp.asarray(self.wa_fld.value)
+        z = self.z
+        cosmo = jaxeffort.w0waCDMCosmology(ln10As=logA, ns=ns, h=h, omega_b=ob, omega_c=oc, m_nu=mnu, w0=w0, wa=wa)
+        theta = jnp.array([z, logA, ns, 100. * h, ob, oc, mnu, w0, wa])
+        D = cosmo.D_z(z)
+
+        b1 = jnp.asarray(self.b1.value); b2 = jnp.asarray(self.b2.value)
+        bs = jnp.asarray(self.bs.value); b3 = jnp.asarray(self.b3.value)
+        a0 = jnp.asarray(self.alpha0.value); a2 = jnp.asarray(self.alpha2.value)
+        a4 = jnp.asarray(self.alpha4.value); a6 = jnp.asarray(self.alpha6.value)
+        sn0 = jnp.asarray(self.sn0.value); sn2 = jnp.asarray(self.sn2.value); sn4 = jnp.asarray(self.sn4.value)
+        if 'rept' in self._model:  # velocileptors REPT co-evolution of bs / b3
+            bs, b3 = bs - (2. / 7.) * (b1 - 1.), 3. * b3 + (b1 - 1.)
+        biases = jnp.array([b1, b2, bs, b3, a0, a2, a4, a6, sn0, sn2, sn4])
+
+        poles = [emu.get_Pl(theta, biases, D) for emu in self._emulators]  # each on self._kgrid
+
+        # Alcock-Paczynski from the JAXEffort cosmology distances (qpar = D_H/D_H_fid, qper = D_M/D_M_fid).
+        qpar = (self._h_fid * self._E_fid) / (h * cosmo.E_z(z))
+        qper = cosmo.dM_z(z) / self._dM_fid
+        jac, kap, muap = _ap_k_mu(self.k[:, None], self._mu, qpar, qper)  # (n_k, n_mu)
+        pkmu = jnp.zeros_like(kap)
+        for leg_coeffs, pole in zip(self._leg_coeffs, poles):
+            pole_at_kap = jnp.interp(kap.ravel(), self._kgrid, pole).reshape(kap.shape)
+            pkmu = pkmu + pole_at_kap * jnp.polyval(leg_coeffs, muap)
+        pkmu = jac * pkmu
+        self.power = self._to_poles(pkmu)
+        return self.power
+
+    def tree_flatten(self):
+        return [self.power], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.power = children[0]
+        return obj

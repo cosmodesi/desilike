@@ -7,7 +7,7 @@ import jax.numpy as jnp
 
 jax.config.update('jax_enable_x64', True)
 
-from desilike.base import Calculator, ExternalCalculator, Likelihood, GaussianLikelihood, SumLikelihood, Prior, Posterior, CompiledGraph, compile
+from desilike.base import Calculator, ExternalCalculator, Likelihood, GaussianLikelihood, SumLikelihood, Prior, Posterior, CompiledGraph, compile, pmap
 from desilike.parameter import Parameter
 
 
@@ -23,7 +23,7 @@ class Cosmology(ExternalCalculator):
     """Non-JAX: growth_factor = omega_m^0.55 / (1 + z), growth_rate = omega_m^0.55."""
     _call_count = 0
 
-    def __post_init__(self, omega_m, z):
+    def __init__(self, omega_m, z):
         self.omega_m = omega_m
         self.z = z
 
@@ -47,7 +47,7 @@ class Cosmology(ExternalCalculator):
 class PowerSpectrum(Calculator):
     """JAX-native: P(k) = A * k^ns * D^2."""
 
-    def __post_init__(self, cosmo, A, ns):
+    def __init__(self, cosmo, A, ns):
         self.cosmo = cosmo
         self.A = A
         self.ns = ns
@@ -69,7 +69,7 @@ class PowerSpectrum(Calculator):
 class GaussianChi2(Calculator):
     """JAX-native: logL = -0.5 * sum((theory - data)^2 / sigma^2)."""
 
-    def __post_init__(self, spectrum, data, sigma=0.1):
+    def __init__(self, spectrum, data, sigma=0.1):
         self.spectrum = spectrum
         self._data = data
         self._sigma = sigma
@@ -93,7 +93,7 @@ class GaussianChi2(Calculator):
 class _LinearTheory(GaussianLikelihood):
     """theory = (A + alpha) * K, linear in alpha."""
 
-    def __post_init__(self, A, alpha, data, covariance):
+    def __init__(self, A, alpha, data, covariance):
         self.A = A
         self.alpha = alpha
         self.flatdata = jnp.asarray(data)
@@ -138,7 +138,7 @@ def test_param_names(pipeline):
 
 
 def test_correctness(pipeline):
-    got = float(pipeline(omega_m=0.3, z=0.5, A=1.0, ns=0.96)[0])
+    got = float(pipeline(omega_m=0.3, z=0.5, A=1.0, ns=0.96))
     expected = analytic_logL(0.3, 0.5, 1.0, 0.96)
     assert abs(got - expected) < 1e-8, f"got {got}, expected {expected}"
 
@@ -162,30 +162,30 @@ def test_eager_attrs_updated(pipeline):
 
 def test_jit(pipeline):
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.2, 'ns': 0.98}
-    assert abs(float(jax.jit(pipeline)(params)[0]) - analytic_logL(0.3, 0.5, 1.2, 0.98)) < 1e-8
+    assert abs(float(jax.jit(pipeline)(params)) - analytic_logL(0.3, 0.5, 1.2, 0.98)) < 1e-8
 
 
 def test_grad(pipeline):
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
-    grad = jax.grad(pipeline, has_aux=True)(params)[0]
+    grad = jax.grad(pipeline)(params)
     eps = 1e-5
     for name in pipeline.params.names():
-        fd = (float(pipeline({**params, name: params[name] + eps})[0]) - float(pipeline({**params, name: params[name] - eps})[0])) / (2 * eps)
+        fd = (float(pipeline({**params, name: params[name] + eps})) - float(pipeline({**params, name: params[name] - eps}))) / (2 * eps)
         assert abs(float(grad[name]) - fd) < 1e-4, f"grad[{name}]: got {float(grad[name]):.6f}, fd {fd:.6f}"
 
 
 def test_vmap(pipeline):
     omega_m_vals = jnp.linspace(0.25, 0.35, 5)
     params_batch = {'omega_m': omega_m_vals, 'z': jnp.full(5, 0.5), 'A': jnp.ones(5), 'ns': jnp.full(5, 0.96)}
-    batched = jax.vmap(pipeline)(params_batch)[0]
-    looped = jnp.stack([pipeline({'omega_m': float(omega_m_vals[i]), 'z': 0.5, 'A': 1.0, 'ns': 0.96})[0] for i in range(5)])
+    batched = jax.vmap(pipeline)(params_batch)
+    looped = jnp.stack([pipeline({'omega_m': float(omega_m_vals[i]), 'z': 0.5, 'A': 1.0, 'ns': 0.96}) for i in range(5)])
     assert jnp.allclose(batched, looped, atol=1e-8)
 
 
 def test_jit_grad(pipeline):
     params = {'omega_m': 0.28, 'z': 0.6, 'A': 1.1, 'ns': 0.97}
-    grad_eager = jax.grad(pipeline, has_aux=True)(params)[0]
-    grad_jit = jax.jit(lambda p: jax.grad(pipeline, has_aux=True)(p)[0])(params)
+    grad_eager = jax.grad(pipeline)(params)
+    grad_jit = jax.jit(jax.grad(pipeline))(params)
     assert all(jnp.allclose(grad_eager[k], grad_jit[k], atol=1e-8) for k in grad_eager)
 
 
@@ -194,14 +194,14 @@ def test_jacrev_external():
     _, _, _, _, _, spectrum, likelihood = _make_nodes()
     pipe_pk = compile(likelihood, output=lambda: spectrum.pk)
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
-    jac_rev = jax.jacobian(lambda p: pipe_pk(p)[0])(params)
+    jac_rev = jax.jacobian(pipe_pk)(params)
 
     for name in params:
         assert jac_rev[name].shape == (len(K),), f"jacrev[{name}].shape = {jac_rev[name].shape}"
     eps = 1e-5
     for name in params:
-        fd = (np.asarray(pipe_pk({**params, name: params[name] + eps})[0]) -
-              np.asarray(pipe_pk({**params, name: params[name] - eps})[0])) / (2 * eps)
+        fd = (np.asarray(pipe_pk({**params, name: params[name] + eps})) -
+              np.asarray(pipe_pk({**params, name: params[name] - eps}))) / (2 * eps)
         assert np.allclose(np.asarray(jac_rev[name]), fd, atol=1e-4), \
             f"jacrev vs FD mismatch for {name}: max err = {np.abs(np.asarray(jac_rev[name]) - fd).max():.2e}"
 
@@ -210,7 +210,7 @@ def test_jacfwd_grad_external():
     """jax.jacfwd(jax.grad(pipe)) works for ExternalCalculator pipelines via custom_jvp FD rule."""
     pipe = compile(_make_nodes()[-1])
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
-    grad_fn = lambda p: jax.grad(pipe, has_aux=True)(p)[0]
+    grad_fn = jax.grad(pipe)
     hess_jacfwd = jax.jacfwd(grad_fn)(params)
 
     eps = 1e-5
@@ -218,7 +218,7 @@ def test_jacfwd_grad_external():
         ref = (float(grad_fn({**params, p.name: params[p.name] + eps})[p.name]) - float(grad_fn({**params, p.name: params[p.name] - eps})[p.name])) / (2 * eps)
         assert abs(float(hess_jacfwd[p.name][p.name]) - ref) < 1e-3, f"H[{p.name},{p.name}]: jacfwd={float(hess_jacfwd[p.name][p.name]):.6f}, FD={ref:.6f}"
 
-    hess_jax = jax.hessian(lambda p: pipe(p)[0])(params)
+    hess_jax = jax.hessian(pipe)(params)
     for p in pipe.params:
         assert abs(float(hess_jax[p.name][p.name]) - float(hess_jacfwd[p.name][p.name])) < 1e-10
 
@@ -230,7 +230,7 @@ def test_external_cache():
     _call_count = [0]
 
     class CountedCosmology(ExternalCalculator):
-        def __post_init__(self, omega_m, z):
+        def __init__(self, omega_m, z):
             self.omega_m = omega_m
             self.z = z
 
@@ -272,7 +272,7 @@ def test_jax_cache():
     _call_count = [0]
 
     class CountedSpectrum(Calculator):
-        def __post_init__(self, cosmo, A, ns):
+        def __init__(self, cosmo, A, ns):
             self.cosmo = cosmo
             self.A = A
             self.ns = ns
@@ -319,14 +319,14 @@ def test_custom_output():
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
     D = 0.3 ** 0.55 / 1.5
     expected_pk = 1.0 * np.array(K) ** 0.96 * D ** 2
-    assert jnp.allclose(pipe_pk(params)[0], jnp.array(expected_pk), atol=1e-8)
+    assert jnp.allclose(pipe_pk(params), jnp.array(expected_pk), atol=1e-8)
 
     _, _, _, _, _, spectrum2, likelihood2 = _make_nodes()
     pipe_tuple = compile(likelihood2, output=lambda: (likelihood2.loglikelihood, spectrum2.pk))
-    (logL, pk), _ = pipe_tuple(params)
+    logL, pk = pipe_tuple(params)
     assert abs(float(logL) - analytic_logL(0.3, 0.5, 1.0, 0.96)) < 1e-8
     assert jnp.allclose(pk, jnp.array(expected_pk), atol=1e-8)
-    grad = jax.grad(lambda p: jnp.sum(pipe_pk(p)[0]))(params)
+    grad = jax.grad(lambda p: jnp.sum(pipe_pk(p)))(params)
     assert set(grad.keys()) == {'omega_m', 'z', 'A', 'ns'}
 
 
@@ -353,7 +353,7 @@ def test_array_param_jax():
     """Calculator: array-valued weight parameter flows correctly through pipeline."""
 
     class WeightedLikelihood(Calculator):
-        def __post_init__(self, spectrum, data, w):
+        def __init__(self, spectrum, data, w):
             self.spectrum = spectrum
             self._data = data
             self.w = w
@@ -382,12 +382,12 @@ def test_array_param_jax():
 
     w = np.ones(len(K))
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96, 'w': jnp.array(w)}
-    got = float(pipe(params)[0])
+    got = float(pipe(params))
     D = 0.3 ** 0.55 / 1.5
     expected = -0.5 * np.sum(w * (1.0 * np.array(K) ** 0.96 * D ** 2 - np.array(DATA)) ** 2)
     assert abs(got - expected) < 1e-8
 
-    grad = jax.grad(pipe, has_aux=True)(params)[0]
+    grad = jax.grad(pipe)(params)
     assert grad['w'].shape == (len(K),)
     assert 'omega_m' in grad
 
@@ -396,7 +396,7 @@ def test_array_param_external():
     """ExternalCalculator: array-valued parameter (k-weights) FD grad is correct."""
 
     class WeightedCosmology(ExternalCalculator):
-        def __post_init__(self, omega_m, k_weights):
+        def __init__(self, omega_m, k_weights):
             self.omega_m = omega_m
             self.k_weights = k_weights
 
@@ -414,7 +414,7 @@ def test_array_param_external():
             return obj
 
     class WeightedChi2(Calculator):
-        def __post_init__(self, wcos):
+        def __init__(self, wcos):
             self.wcos = wcos
 
         def __call__(self):
@@ -437,14 +437,14 @@ def test_array_param_external():
 
     k_weights = np.ones(len(K))
     params = {'omega_m': 0.3, 'k_weights': jnp.array(k_weights)}
-    got = float(pipe(params)[0])
+    got = float(pipe(params))
     D = 0.3 ** 0.55
     assert abs(got - (-0.5 * np.sum((k_weights * D) ** 2))) < 1e-8
 
-    grad = jax.grad(pipe, has_aux=True)(params)[0]
+    grad = jax.grad(pipe)(params)
     assert grad['k_weights'].shape == (len(K),)
     assert jnp.allclose(grad['k_weights'], jnp.array(-D ** 2 * k_weights), atol=1e-4)
-    fd_om = (float(pipe({**params, 'omega_m': jnp.array(0.3 + 1e-5)})[0]) - float(pipe({**params, 'omega_m': jnp.array(0.3 - 1e-5)})[0])) / 2e-5
+    fd_om = (float(pipe({**params, 'omega_m': jnp.array(0.3 + 1e-5)})) - float(pipe({**params, 'omega_m': jnp.array(0.3 - 1e-5)}))) / 2e-5
     assert abs(float(grad['omega_m']) - fd_om) < 1e-4
 
 
@@ -454,7 +454,7 @@ def test_internal_init():
     """Calculator and Parameter objects created inside init() are auto-discovered."""
 
     class InternalCosmology(ExternalCalculator):
-        def __post_init__(self):
+        def __init__(self):
             self.omega_m = Parameter('omega_m', value=0.3)
             self.z = Parameter('z', value=0.5)
 
@@ -474,7 +474,7 @@ def test_internal_init():
             return obj
 
     class InternalSpectrum(Calculator):
-        def __post_init__(self):
+        def __init__(self):
             self.cosmo = InternalCosmology()
             self.A = Parameter('A', value=1.0)
             self.ns = Parameter('ns', value=0.96)
@@ -495,14 +495,14 @@ def test_internal_init():
     pipe = compile(InternalSpectrum())
     assert set(pipe.params.names()) == {'omega_m', 'z', 'A', 'ns'}
     D = 0.3 ** 0.55 / 1.5
-    assert jnp.allclose(pipe(omega_m=0.3, z=0.5, A=1.0, ns=0.96)[0], jnp.array(1.0 * np.array(K) ** 0.96 * D ** 2), atol=1e-8)
+    assert jnp.allclose(pipe(omega_m=0.3, z=0.5, A=1.0, ns=0.96), jnp.array(1.0 * np.array(K) ** 0.96 * D ** 2), atol=1e-8)
 
 
 def test_duplicate_param_name_raises():
     """Two distinct Parameter objects with the same name raise ValueError at compile time."""
 
     class DupCosmology(ExternalCalculator):
-        def __post_init__(self):
+        def __init__(self):
             self.omega_m = Parameter('omega_m', value=0.3)
 
         def __call__(self):
@@ -519,7 +519,7 @@ def test_duplicate_param_name_raises():
             return obj
 
     class DupSpectrum(Calculator):
-        def __post_init__(self, cosmo):
+        def __init__(self, cosmo):
             self.cosmo = cosmo
             self.omega_m = Parameter('omega_m', value=0.3)  # different object, same name
 
@@ -544,7 +544,7 @@ def test_fd_acc():
     """param.fd_acc=4 gives smaller gradient error than fd_acc=2 at the same large step size."""
 
     class SinCosmology(ExternalCalculator):
-        def __post_init__(self, omega_m):
+        def __init__(self, omega_m):
             self.omega_m = omega_m
 
         def __call__(self):
@@ -562,7 +562,7 @@ def test_fd_acc():
             return obj
 
     class TrivialLikelihood(Calculator):
-        def __post_init__(self, cosmo):
+        def __init__(self, cosmo):
             self.cosmo = cosmo
 
         def __call__(self):
@@ -585,15 +585,15 @@ def test_fd_acc():
     for acc, tol in [(2, 2e-4), (4, 1e-8)]:
         om = Parameter('omega_m', value=x0, fd_eps=large_eps, fd_acc=acc)
         pipe = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om)))
-        g = float(jax.grad(pipe, has_aux=True)({'omega_m': jnp.array(x0)})[0]['omega_m'])
+        g = float(jax.grad(pipe)({'omega_m': jnp.array(x0)})['omega_m'])
         assert abs(g - analytic_grad) < tol, f'fd_acc={acc}: grad error {abs(g - analytic_grad):.2e} >= tol {tol:.2e}'
 
     om2 = Parameter('omega_m', value=x0, fd_eps=large_eps, fd_acc=2)
     om4 = Parameter('omega_m', value=x0, fd_eps=large_eps, fd_acc=4)
     pipe2 = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om2)))
     pipe4 = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om4)))
-    err2 = abs(float(jax.grad(pipe2, has_aux=True)({'omega_m': jnp.array(x0)})[0]['omega_m']) - analytic_grad)
-    err4 = abs(float(jax.grad(pipe4, has_aux=True)({'omega_m': jnp.array(x0)})[0]['omega_m']) - analytic_grad)
+    err2 = abs(float(jax.grad(pipe2)({'omega_m': jnp.array(x0)})['omega_m']) - analytic_grad)
+    err4 = abs(float(jax.grad(pipe4)({'omega_m': jnp.array(x0)})['omega_m']) - analytic_grad)
     assert err4 < err2, f'fd_acc=4 error {err4:.2e} should be smaller than fd_acc=2 error {err2:.2e}'
 
 
@@ -611,7 +611,7 @@ def test_no_tracer_leakage_after_jit(pipeline):
     assert not isinstance(cosmo.growth_factor, jax.core.Tracer)
     assert not isinstance(spectrum.pk, jax.core.Tracer)
     assert not isinstance(likelihood.loglikelihood, jax.core.Tracer)
-    assert np.isfinite(float(pipeline()[0]))
+    assert np.isfinite(float(pipeline()))
 
 
 def test_inplace_mutation_after_compile():
@@ -619,25 +619,32 @@ def test_inplace_mutation_after_compile():
     _, _, A, _, _, _, likelihood = _make_nodes()
     pipe = compile(likelihood)
 
-    assert abs(float(pipe()[0]) - analytic_logL(0.3, 0.5, 1.0, 0.96)) < 1e-8
+    assert abs(float(pipe()) - analytic_logL(0.3, 0.5, 1.0, 0.96)) < 1e-8
     A.value = 1.5
-    assert abs(float(pipe()[0]) - analytic_logL(0.3, 0.5, 1.5, 0.96)) < 1e-8
+    assert abs(float(pipe()) - analytic_logL(0.3, 0.5, 1.5, 0.96)) < 1e-8
     jax.jit(pipe)({'omega_m': 0.3, 'z': 0.5, 'A': 1.5, 'ns': 0.96})
-    assert abs(float(pipe()[0]) - analytic_logL(0.3, 0.5, 1.5, 0.96)) < 1e-8
+    assert abs(float(pipe()) - analytic_logL(0.3, 0.5, 1.5, 0.96)) < 1e-8
 
 
-def test_update_before_compile():
-    """Calculator.update() replaces init arguments before compile() is called."""
+def test_update_only_during_construction():
+    """update() is rejected after construction; use replace()/clone() instead."""
+    from desilike.base import replace
     _, _, _, _, _, spectrum, likelihood = _make_nodes()
-    spectrum.update(A=Parameter('A', value=1.5))
+
+    # Post-construction update() is forbidden (the graph is immutable once built).
+    with pytest.raises(RuntimeError, match='construction'):
+        spectrum.update(A=Parameter('A', value=1.5))
+
+    # Supported alternative: replace the parameter object, then compile.
+    replace(likelihood, lambda node: getattr(node, 'name', None) == 'A', Parameter('A', value=1.5))
     pipe = compile(likelihood)
-
     assert pipe.params['A'].value == 1.5
-    assert abs(float(pipe(omega_m=0.3, z=0.5, A=1.5, ns=0.96)[0]) - analytic_logL(0.3, 0.5, 1.5, 0.96)) < 1e-8
+    assert abs(float(pipe(omega_m=0.3, z=0.5, A=1.5, ns=0.96)) - analytic_logL(0.3, 0.5, 1.5, 0.96)) < 1e-8
 
-    likelihood.update(sigma=0.2)
-    pipe2 = compile(likelihood)
-    assert abs(float(pipe2(omega_m=0.3, z=0.5, A=1.5, ns=0.96)[0]) - analytic_logL(0.3, 0.5, 1.5, 0.96, sigma=0.2)) < 1e-8
+    # Supported alternative for init-argument changes: clone() produces a fresh instance.
+    likelihood2 = likelihood.clone(sigma=0.2)
+    pipe2 = compile(likelihood2)
+    assert abs(float(pipe2(omega_m=0.3, z=0.5, A=1.5, ns=0.96)) - analytic_logL(0.3, 0.5, 1.5, 0.96, sigma=0.2)) < 1e-8
 
 
 # ── prior / posterior ─────────────────────────────────────────────────────────
@@ -649,16 +656,20 @@ def test_prior_standalone():
     ns = Parameter('ns', value=0.96, fixed=True)
     pipe = compile(Prior(omega_m=omega_m, A=A, ns=ns))
 
-    params = {'omega_m': 0.3, 'A': 1.0}
-    got = float(pipe(params)[0])
-    expected = float(jax.scipy.stats.norm.logpdf(0.3, loc=0.3, scale=0.01) +
-                     jax.scipy.stats.uniform.logpdf(1.0, loc=0.5, scale=1.5))
+    # ParameterPrior.logpdf is zero-lag: it subtracts the logpdf at the
+    # distribution centre, so each term is 0 at the centre and < 0 elsewhere.
+    # omega_m is evaluated off-centre (0.32) to exercise a non-trivial value;
+    # A sits in the interior of its uniform prior, contributing 0.
+    params = {'omega_m': 0.32, 'A': 1.0}
+    got = float(pipe(params))
+    norm_lp = lambda x: float(jax.scipy.stats.norm.logpdf(x, loc=0.3, scale=0.01))
+    expected = norm_lp(0.32) - norm_lp(0.3)
     assert abs(got - expected) < 1e-8
-    assert float(pipe({'omega_m': 0.3, 'A': 0.3})[0]) == float(-jnp.inf)
+    assert float(pipe({'omega_m': 0.3, 'A': 0.3})) == float(-jnp.inf)
 
-    grad = jax.grad(pipe, has_aux=True)(params)[0]
+    grad = jax.grad(pipe)(params)
     assert 'omega_m' in grad and 'A' in grad
-    fd_om = (float(pipe({'omega_m': 0.3 + 1e-5, 'A': 1.0})[0]) - float(pipe({'omega_m': 0.3 - 1e-5, 'A': 1.0})[0])) / 2e-5
+    fd_om = (float(pipe({'omega_m': 0.32 + 1e-5, 'A': 1.0})) - float(pipe({'omega_m': 0.32 - 1e-5, 'A': 1.0}))) / 2e-5
     assert abs(float(grad['omega_m']) - fd_om) < 1e-6
 
 
@@ -666,7 +677,7 @@ def test_prior_in_posterior():
     """Prior combined with likelihood via a hand-rolled posterior node."""
 
     class LogPosterior(Calculator):
-        def __post_init__(self, likelihood, prior):
+        def __init__(self, likelihood, prior):
             self.likelihood = likelihood
             self.prior = prior
 
@@ -695,11 +706,13 @@ def test_prior_in_posterior():
     pipe = compile(LogPosterior(likelihood=likelihood, prior=prior))
 
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
-    got = float(pipe(params)[0])
-    logP = float(jax.scipy.stats.norm.logpdf(0.3, loc=0.3, scale=0.01))
+    got = float(pipe(params))
+    # Zero-lag prior: omega_m is evaluated at its centre (loc=0.3), so the prior
+    # contributes 0; z/A/ns have no (proper) prior and also contribute 0.
+    logP = 0.
     assert abs(got - (analytic_logL(0.3, 0.5, 1.0, 0.96) + logP)) < 1e-8
-    assert set(jax.grad(pipe, has_aux=True)(params)[0].keys()) == {'omega_m', 'z', 'A', 'ns'}
-    assert abs(float(jax.jit(pipe)(params)[0]) - got) < 1e-8
+    assert set(jax.grad(pipe)(params).keys()) == {'omega_m', 'z', 'A', 'ns'}
+    assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
 
 
 def test_posterior_value_and_grad():
@@ -716,11 +729,12 @@ def test_posterior_value_and_grad():
     pipe = compile(Posterior(likelihood, prior))
 
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
-    got = float(pipe(params)[0])
-    logP = float(jax.scipy.stats.norm.logpdf(0.3, loc=0.3, scale=0.01))
+    got = float(pipe(params))
+    # Zero-lag prior: omega_m evaluated at its centre (loc=0.3) → prior contributes 0.
+    logP = 0.
     assert abs(got - (analytic_logL(0.3, 0.5, 1.0, 0.96) + logP)) < 1e-8
-    assert set(jax.grad(pipe, has_aux=True)(params)[0].keys()) == {'omega_m', 'z', 'A', 'ns'}
-    assert abs(float(jax.jit(pipe)(params)[0]) - got) < 1e-8
+    assert set(jax.grad(pipe)(params).keys()) == {'omega_m', 'z', 'A', 'ns'}
+    assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
 
 
 def test_posterior_early_exit():
@@ -728,7 +742,7 @@ def test_posterior_early_exit():
     _call_count = [0]
 
     class CountedLikelihood(Calculator):
-        def __post_init__(self, spectrum, data, sigma=0.1):
+        def __init__(self, spectrum, data, sigma=0.1):
             self.spectrum = spectrum
             self._data = data
             self._sigma = sigma
@@ -761,7 +775,7 @@ def test_posterior_early_exit():
 
     pipe({'omega_m': 0.35, 'z': 0.5, 'A': 1.0, 'ns': 0.96})
     assert _call_count[0] == 1, f"Expected 1 call, got {_call_count[0]}"
-    assert float(pipe({'omega_m': 0.1, 'z': 0.5, 'A': 1.0, 'ns': 0.96})[0]) == float(-jnp.inf)
+    assert float(pipe({'omega_m': 0.1, 'z': 0.5, 'A': 1.0, 'ns': 0.96})) == float(-jnp.inf)
     assert _call_count[0] == 1, f"Expected still 1 call (no likelihood), got {_call_count[0]}"
     jax.jit(pipe)({'omega_m': 0.1, 'z': 0.5, 'A': 1.0, 'ns': 0.96})
     assert _call_count[0] == 2, f"Expected 2 calls (jit always traces), got {_call_count[0]}"
@@ -773,7 +787,7 @@ def test_gaussian_likelihood_base():
     """GaussianLikelihood: logpdf, tree_flatten, and grad flow through theory."""
 
     class SpectrumLikelihood(GaussianLikelihood):
-        def __post_init__(self, spectrum, data, covariance):
+        def __init__(self, spectrum, data, covariance):
             self.spectrum = spectrum
             self.flatdata = jnp.asarray(data)
             self.precision = jnp.linalg.inv(jnp.asarray(covariance))
@@ -788,7 +802,7 @@ def test_gaussian_likelihood_base():
     pipe = compile(lik)
 
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
-    assert abs(float(pipe(params)[0]) - analytic_logL(0.3, 0.5, 1.0, 0.96)) < 1e-8
+    assert abs(float(pipe(params)) - analytic_logL(0.3, 0.5, 1.0, 0.96)) < 1e-8
 
     lik()
     children, aux = lik.tree_flatten()
@@ -796,7 +810,7 @@ def test_gaussian_likelihood_base():
     recon = SpectrumLikelihood.tree_unflatten(aux, children)
     assert jnp.allclose(recon.flattheory, lik.flattheory)
     assert jnp.allclose(recon.precision, lik.precision)
-    assert set(jax.grad(pipe, has_aux=True)(params)[0].keys()) == {'omega_m', 'z', 'A', 'ns'}
+    assert set(jax.grad(pipe)(params).keys()) == {'omega_m', 'z', 'A', 'ns'}
 
 
 def test_analytic_marginalization():
@@ -809,7 +823,7 @@ def test_analytic_marginalization():
     pipe = compile(Posterior(_LinearTheory(A=A, alpha=alpha, data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2), Prior()))
 
     params = {'A': A_val, 'alpha': alpha_0}
-    got = float(pipe(params)[0])
+    got = float(pipe(params))
 
     K_np = np.array(K)
     r = np.array(DATA) - A_val * K_np
@@ -821,11 +835,11 @@ def test_analytic_marginalization():
     expected = float(-0.5 * r @ P @ r + 0.5 * float(b @ np.linalg.solve(F, b)) + 0.5 * np.log(1.0 / sigma_alpha ** 2) - 0.5 * np.log(float(F.flat[0])))
     assert abs(got - expected) < 1e-6, f'marg logpdf: got {got:.8f}, expected {expected:.8f}'
 
-    grad = jax.grad(pipe, has_aux=True)(params)[0]
+    grad = jax.grad(pipe)(params)
     eps = 1e-5
-    fd = (float(pipe({'A': A_val + eps, 'alpha': alpha_0})[0]) - float(pipe({'A': A_val - eps, 'alpha': alpha_0})[0])) / (2 * eps)
+    fd = (float(pipe({'A': A_val + eps, 'alpha': alpha_0})) - float(pipe({'A': A_val - eps, 'alpha': alpha_0}))) / (2 * eps)
     assert abs(float(grad['A']) - fd) < 1e-4
-    assert abs(float(jax.jit(pipe)(params)[0]) - got) < 1e-8
+    assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
 
 
 def test_best_fit_solved():
@@ -838,7 +852,7 @@ def test_best_fit_solved():
     pipe = compile(Posterior(_LinearTheory(A=A, alpha=alpha, data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2), Prior()))
 
     params = {'A': A_val, 'alpha': alpha_0}
-    got = float(pipe(params)[0])
+    got = float(pipe(params))
 
     K_np = np.array(K)
     r = np.array(DATA) - A_val * K_np
@@ -850,16 +864,16 @@ def test_best_fit_solved():
     assert abs(got - expected) < 1e-6
 
     eps = 1e-5
-    fd = (float(pipe({'A': A_val + eps, 'alpha': alpha_0})[0]) - float(pipe({'A': A_val - eps, 'alpha': alpha_0})[0])) / (2 * eps)
-    assert abs(float(jax.grad(pipe, has_aux=True)(params)[0]['A']) - fd) < 1e-4
-    assert abs(float(jax.jit(pipe)(params)[0]) - got) < 1e-8
+    fd = (float(pipe({'A': A_val + eps, 'alpha': alpha_0})) - float(pipe({'A': A_val - eps, 'alpha': alpha_0}))) / (2 * eps)
+    assert abs(float(jax.grad(pipe)(params)['A']) - fd) < 1e-4
+    assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
 
 
 def test_mixed_marg_best():
     """Mixed derived='marg' and derived='best': volume factor only for 'marg' param."""
 
     class TwoParamTheory(GaussianLikelihood):
-        def __post_init__(self, A, alpha_m, alpha_b, data, covariance):
+        def __init__(self, A, alpha_m, alpha_b, data, covariance):
             self.A = A
             self.alpha_m = alpha_m
             self.alpha_b = alpha_b
@@ -880,7 +894,7 @@ def test_mixed_marg_best():
     pipe = compile(Posterior(lik, Prior()))
 
     params = {'A': A_val, 'alpha_m': 0.0, 'alpha_b': 0.0}
-    got = float(pipe(params)[0])
+    got = float(pipe(params))
 
     K_np = np.array(K)
     r = np.array(DATA) - A_val * K_np
@@ -893,8 +907,8 @@ def test_mixed_marg_best():
     expected = float(-0.5 * r @ P @ r + 0.5 * quad + 0.5 * np.log(1.0 / sigma_m ** 2) - 0.5 * float(logdet_F) + 0.5 * np.log(float(F_full[1, 1])))
     assert abs(got - expected) < 1e-6, f'mixed logpdf: got {got:.8f}, expected {expected:.8f}'
 
-    assert 'A' in jax.grad(pipe, has_aux=True)(params)[0]
-    assert abs(float(jax.jit(pipe)(params)[0]) - got) < 1e-8
+    assert 'A' in jax.grad(pipe)(params)
+    assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
 
 
 def test_custom_jvp_linear_theory():
@@ -911,7 +925,7 @@ def test_custom_jvp_linear_theory():
         return alpha * template, dalpha * template
 
     class MixedTheory(GaussianLikelihood):
-        def __post_init__(self, A, ns, alpha, data, cov):
+        def __init__(self, A, ns, alpha, data, cov):
             self.A = A
             self.ns = ns
             self.alpha = alpha
@@ -932,7 +946,7 @@ def test_custom_jvp_linear_theory():
     pipe = compile(Posterior(lik, Prior()))
 
     params = {'A': A_val, 'ns': ns_val, 'alpha': alpha_0}
-    got = float(pipe(params)[0])
+    got = float(pipe(params))
 
     K_np = np.array(K)
     r = np.array(DATA) - A_val * K_np ** ns_val
@@ -944,12 +958,12 @@ def test_custom_jvp_linear_theory():
     expected = float(-0.5 * r @ P @ r + 0.5 * float(b @ np.linalg.solve(F, b)) + 0.5 * np.log(float(P_alpha.flat[0])) - 0.5 * np.log(float(F.flat[0])))
     assert abs(got - expected) < 1e-6
 
-    grad = jax.grad(pipe, has_aux=True)(params)[0]
+    grad = jax.grad(pipe)(params)
     eps = 1e-5
     for name in ('A', 'ns'):
-        fd = (float(pipe({**params, name: params[name] + eps})[0]) - float(pipe({**params, name: params[name] - eps})[0])) / (2 * eps)
+        fd = (float(pipe({**params, name: params[name] + eps})) - float(pipe({**params, name: params[name] - eps}))) / (2 * eps)
         assert abs(float(grad[name]) - fd) < 1e-4
-    assert abs(float(jax.jit(pipe)(params)[0]) - got) < 1e-8
+    assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
 
 
 def test_sum_likelihood():
@@ -963,7 +977,7 @@ def test_sum_likelihood():
     sigma1, sigma2, sigma_alpha = 0.1, 0.2, 1.5
 
     class Theory1(GaussianLikelihood):
-        def __post_init__(self, A, alpha, data, cov):
+        def __init__(self, A, alpha, data, cov):
             self.A = A
             self.alpha = alpha
             self.flatdata = jnp.asarray(data)
@@ -974,7 +988,7 @@ def test_sum_likelihood():
             return super().__call__()
 
     class Theory2(GaussianLikelihood):
-        def __post_init__(self, B, data, cov):
+        def __init__(self, B, data, cov):
             self.B = B
             self.flatdata = jnp.asarray(data)
             self.precision = jnp.linalg.inv(jnp.asarray(cov))
@@ -993,7 +1007,7 @@ def test_sum_likelihood():
 
     A_val, B_val, alpha_val = 1.0, 0.5, 0.0
     params = {'A': A_val, 'B': B_val, 'alpha': alpha_val}
-    got = float(pipe(params)[0])
+    got = float(pipe(params))
 
     K1_np, K2_np = np.array(K1), np.array(K2)
     r1 = np.array(data1) - A_val * K1_np
@@ -1007,9 +1021,9 @@ def test_sum_likelihood():
     logL2 = float(-0.5 * r2 @ np.eye(len(K2)) / sigma2 ** 2 @ r2)
     assert abs(got - (logL1_marg + logL2)) < 1e-6
 
-    grad = jax.grad(pipe, has_aux=True)(params)[0]
+    grad = jax.grad(pipe)(params)
     assert 'A' in grad and 'B' in grad
-    assert abs(float(jax.jit(pipe)(params)[0]) - got) < 1e-8
+    assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
 
 
 # ── derived params ────────────────────────────────────────────────────────────
@@ -1022,7 +1036,7 @@ def test_derived_param_export():
     data = jnp.array(rng.normal(1.0, sigma, 20))
 
     class TheoryWithDerived(GaussianLikelihood):
-        def __post_init__(self, A, ns, data, sigma=0.1):
+        def __init__(self, A, ns, data, sigma=0.1):
             self.A = A
             self.ns = ns
             self._sigma = sigma
@@ -1049,11 +1063,14 @@ def test_derived_param_export():
     params1 = {'A': 1.2, 'ns': 0.95}
     params2 = {'A': 0.9, 'ns': 0.98}
 
-    _, deriveds = pipe(params1)
+    _, deriveds = pipe(params1, return_derived=True)
     assert abs(float(pipe.params['chi2'].value) - expected_chi2(1.2, 0.95)) < 1e-6
     assert abs(float(deriveds['chi2']) - expected_chi2(1.2, 0.95)) < 1e-6
 
-    _, deriveds = jax.jit(pipe)(params2)
+    # jit: wrap in a lambda so that return_derived=True is a Python constant
+    # (jit cannot trace through a Python bool kwarg directly).
+    pipe_rd = lambda p: pipe(p, return_derived=True)
+    _, deriveds = jax.jit(pipe_rd)(params2)
     for p in pipe._derived_params:
         p._value = np.asarray(deriveds[p.name])
     assert abs(float(pipe.params['chi2'].value) - expected_chi2(0.9, 0.98)) < 1e-6
@@ -1062,7 +1079,7 @@ def test_derived_param_export():
     A_batch = jnp.linspace(0.8, 1.2, n)
     ns_batch = jnp.full(n, 0.96)
     expected_batch = jnp.array([expected_chi2(float(A_batch[i]), 0.96) for i in range(n)])
-    _, deriveds = jax.jit(jax.vmap(pipe))({'A': A_batch, 'ns': ns_batch})
+    _, deriveds = jax.jit(jax.vmap(pipe_rd))({'A': A_batch, 'ns': ns_batch})
     for p in pipe._derived_params:
         p._value = np.asarray(deriveds[p.name])
     assert jnp.allclose(pipe.params['chi2'].value, expected_batch, atol=1e-6)
@@ -1092,9 +1109,91 @@ def test_init_params_immediate():
     assert lik.ns is ns
 
     pipe = compile(lik)
-    got = float(pipe({'A': 1.2, 'ns': 0.95})[0])
+    got = float(pipe({'A': 1.2, 'ns': 0.95}))
     r = np.array(data) - 1.2 * np.array(K_loc) ** 0.95
     assert abs(got - float(-0.5 * r @ r / 0.1 ** 2)) < 1e-6
+
+
+# ── Calculator.clone() ────────────────────────────────────────────────────────
+
+def test_clone_same_result():
+    """clone() produces a graph that returns the same value as the original."""
+    _, _, _, _, _, spectrum, _ = _make_nodes()
+    spec2 = spectrum.clone()
+    pipe1 = compile(spectrum)
+    pipe2 = compile(spec2)
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    assert jnp.allclose(pipe1(params), pipe2(params), atol=1e-8)
+
+
+def test_clone_shares_init_params():
+    """clone() reuses the original's constructor-arg objects (shallow): params are shared.
+
+    Independence is obtained by passing freshly constructed nodes via clone(**kwargs),
+    not automatically — see test_clone_override_kwarg.
+    """
+    _, _, _, _, _, spectrum, likelihood = _make_nodes()
+    spec2 = spectrum.clone()
+    pipe1 = compile(likelihood)
+    pipe2 = compile(spec2)
+    for name in pipe2.params.names():
+        assert pipe1.params[name] is pipe2.params[name], \
+            f"param {name!r} should be shared between original and shallow clone"
+
+
+def test_clone_mutation_independence():
+    """Mutating a param value in the clone does not affect the original pipeline."""
+    _, _, A, _, _, spectrum, likelihood = _make_nodes()
+    spec2 = spectrum.clone()
+    pipe1 = compile(likelihood)
+    pipe2 = compile(spec2)
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    val1_before = float(pipe1(params))
+
+    # Mutate the clone's A param (find it from pipe2.params)
+    pipe2.params['A'].value = 3.0
+    val1_after = float(pipe1(params))
+    assert abs(val1_before - val1_after) < 1e-8, \
+        "Mutating the clone's param changed the original pipeline"
+
+
+def test_clone_override_kwarg():
+    """clone(A=...) overrides the init argument and produces the expected result."""
+    _, _, _, _, _, spectrum, _ = _make_nodes()
+    new_A = Parameter('A', value=2.0)
+    spec2 = spectrum.clone(A=new_A)
+    pipe2 = compile(spec2)
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 2.0, 'ns': 0.96}
+    D = 0.3 ** 0.55 / 1.5
+    expected_pk = 2.0 * np.array(K) ** 0.96 * D ** 2
+    assert jnp.allclose(pipe2(params), jnp.array(expected_pk), atol=1e-8)
+
+
+def test_clone_with_external_dep():
+    """clone() shares dependency objects (shallow); pipelines called with explicit
+    params are unaffected by mutations to the shared defaults' stored values."""
+    omega_m = Parameter('omega_m', value=0.3)
+    z = Parameter('z', value=0.5)
+    A = Parameter('A', value=1.0)
+    ns = Parameter('ns', value=0.96)
+    cosmo = Cosmology(omega_m=omega_m, z=z)
+    spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
+    spec2 = spectrum.clone()
+    pipe1 = compile(spectrum)
+    pipe2 = compile(spec2)
+
+    params = {'omega_m': 0.28, 'z': 0.6, 'A': 1.1, 'ns': 0.97}
+    assert jnp.allclose(pipe1(params), pipe2(params), atol=1e-8)
+
+    # Mutate the shared omega_m's stored value; pipe1 called with explicit params
+    # overrides the stored value and so stays consistent.
+    pipe2.params['omega_m'].value = 0.5
+    ref = jnp.array(pipe1(params))
+    assert jnp.allclose(ref, pipe1(params), atol=1e-8)  # explicit-param call unaffected
+    # pipe2() (no explicit params) uses the mutated default; z, A, ns stay at construction defaults (0.5, 1.0, 0.96)
+    D2 = 0.5 ** 0.55 / (1.0 + 0.5)
+    expected_pk2 = 1.0 * np.array(K) ** 0.96 * D2 ** 2
+    assert jnp.allclose(pipe2(), jnp.array(expected_pk2), atol=1e-8)
 
 
 def test_derived_expression_param():
@@ -1120,11 +1219,61 @@ def test_derived_expression_param():
     assert chi2() == 3.0
 
 
+@pytest.mark.parametrize('backend', ['jax', 'mpi', 'mpi_and_jax'])
+def test_pmap_generic(backend):
+    """pmap(fn) batches an arbitrary function over pytree args/outputs like jax.vmap."""
+    # scalar-leaf input, pytree (dict) output
+    fn = lambda x: {'sq': x ** 2, 'neg': -x}
+    x = jnp.linspace(0., 1., 13)            # odd size -> exercises device padding
+    out = pmap(fn, backend=backend)(x)
+    ref = jax.vmap(fn)(x)
+    assert set(out) == set(ref)
+    for key in ref:
+        assert out[key].shape == ref[key].shape
+        assert np.allclose(out[key], ref[key])
+
+    # multiple positional args
+    g = lambda a, b: a * b + 1.
+    a, b = jnp.arange(7.), jnp.arange(7.) * 2.
+    assert np.allclose(pmap(g, backend=backend)(a, b), jax.vmap(g)(a, b))
+
+    # vector-leaf input, scalar output; and tuple output
+    h = lambda v: (jnp.sum(v ** 2), v[0] - v[1])
+    vb = jnp.arange(12.).reshape(6, 2)
+    o0, o1 = pmap(h, backend=backend)(vb)
+    r0, r1 = jax.vmap(h)(vb)
+    assert np.allclose(o0, r0) and np.allclose(o1, r1)
+    assert o0.shape == (6,) and o1.shape == (6,)
+
+    # nested pytree input (dict of arrays)
+    k = lambda d: d['a'] + 2. * d['b']
+    d = {'a': jnp.arange(5.), 'b': jnp.arange(5.) + 10.}
+    assert np.allclose(pmap(k, backend=backend)(d), jax.vmap(k)(d))
+
+
+def test_pmap_mismatched_batch_raises():
+    """pmap requires all batched leaves to share the leading axis size."""
+    fn = lambda a, b: a + b
+    with pytest.raises(ValueError):
+        pmap(fn)(jnp.arange(4.), jnp.arange(5.))
+
+
+def test_pmap_compiled_graph(pipeline):
+    """pmap over a compiled pipeline matches jax.vmap of the same graph."""
+    n = 9
+    batch = {'omega_m': jnp.linspace(0.25, 0.35, n), 'z': jnp.full(n, 0.5),
+             'A': jnp.ones(n), 'ns': jnp.full(n, 0.96)}
+    out = pmap(pipeline, backend='mpi_and_jax')(batch)
+    ref = jax.vmap(pipeline)(batch)
+    assert out.shape == (n,)
+    assert np.allclose(out, ref)
+
+
 if __name__ == '__main__':
     _, _, _, _, _, _, likelihood = _make_nodes()
     pipe = compile(likelihood)
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
-    print('logL =', float(pipe(params)[0]))
-    print('grad =', jax.grad(pipe, has_aux=True)(params)[0])
+    print('logL =', float(pipe(params)))
+    print('grad =', jax.grad(pipe)(params))
     batch = {'omega_m': jnp.linspace(0.25, 0.35, 4), 'z': jnp.full(4, 0.5), 'A': jnp.ones(4), 'ns': jnp.full(4, 0.96)}
-    print('vmap logL =', jax.vmap(pipe)(batch)[0])
+    print('vmap logL =', jax.vmap(pipe)(batch))

@@ -3,24 +3,24 @@ BAO multipole models for galaxy clustering.
 
 Classes
 -------
-DampedBAOWigglesSpectrum2Poles
+DampedBAOWigglesPTSpectrum2Poles
     Power spectrum multipoles with Gaussian-damped BAO wiggles (Chen 2024 / Beutler 2017).
-ResummedBAOWigglesSpectrum2Poles
+ResummedBAOWigglesPTSpectrum2Poles
     Power spectrum multipoles with EFT-resummed BAO wiggles (Senatore & Zaldarriaga 2015).
 DampedBAOWigglesTracerSpectrum2Poles
-    DampedBAOWigglesSpectrum2Poles with additive polynomial broadband.
+    DampedBAOWigglesPTSpectrum2Poles with additive polynomial broadband.
 ResummedBAOWigglesTracerSpectrum2Poles
-    ResummedBAOWigglesSpectrum2Poles with additive polynomial broadband.
+    ResummedBAOWigglesPTSpectrum2Poles with additive polynomial broadband.
 SpectrumToCorrelation
     FFTLog Hankel transform helper: pk multipoles -> xi multipoles.
-DampedBAOWigglesCorrelation2Poles
-    Correlation function multipoles from DampedBAOWigglesSpectrum2Poles via FFTLog.
-ResummedBAOWigglesCorrelation2Poles
-    Correlation function multipoles from ResummedBAOWigglesSpectrum2Poles via FFTLog.
+DampedBAOWigglesPTCorrelation2Poles
+    Correlation function multipoles from DampedBAOWigglesPTSpectrum2Poles via FFTLog.
+ResummedBAOWigglesPTCorrelation2Poles
+    Correlation function multipoles from ResummedBAOWigglesPTSpectrum2Poles via FFTLog.
 DampedBAOWigglesTracerCorrelation2Poles
-    DampedBAOWigglesCorrelation2Poles with additive s-space polynomial broadband.
+    DampedBAOWigglesPTCorrelation2Poles with additive s-space polynomial broadband.
 ResummedBAOWigglesTracerCorrelation2Poles
-    ResummedBAOWigglesCorrelation2Poles with additive s-space polynomial broadband.
+    ResummedBAOWigglesPTCorrelation2Poles with additive s-space polynomial broadband.
 """
 
 import numpy as np
@@ -31,6 +31,7 @@ from scipy import special, integrate
 from ...base import Calculator, ExternalCalculator
 from ...parameter import Parameter
 from .template import BAOSpectrum2Template
+from ._multitracer import apply_tracers
 
 
 # ── interpolation ─────────────────────────────────────────────────────────────
@@ -72,7 +73,7 @@ class ProjectToMultipoles:
 
 # ── damped BAO multipoles ─────────────────────────────────────────────────────
 
-class DampedBAOWigglesSpectrum2Poles(Calculator):
+class DampedBAOWigglesPTSpectrum2Poles(Calculator):
     r"""
     BAO power spectrum multipoles with Gaussian-damped wiggles.
 
@@ -115,8 +116,9 @@ class DampedBAOWigglesSpectrum2Poles(Calculator):
     Beutler et al. 2017  https://arxiv.org/abs/1607.03149
     """
 
-    def __init__(self, *args, **kwargs):
-        # Nuisance and bias parameters.
+    def __init__(self, k=None, template=None, tracers=None, **kwargs):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        # ``tracers`` (a single tracer name) namespaces each parameter (e.g. 'LRG.b1').
         self.b1 = Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
                             ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1')
         self.dbeta = Parameter('dbeta', value=1., prior=dict(limits=[0., 3.]),
@@ -127,9 +129,29 @@ class DampedBAOWigglesSpectrum2Poles(Calculator):
                                   ref=dict(dist='norm', loc=9., scale=1.), latex=r'\Sigma_\parallel')
         self.sigmaper = Parameter('sigmaper', value=6., prior=dict(limits=[0., 20.]),
                                   ref=dict(dist='norm', loc=6., scale=1.), latex=r'\Sigma_\perp')
+        apply_tracers(self, tracers)  # namespacing only (no cross)
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        k = np.asarray(k, dtype='f8')
+        if template is None:
+            template = BAOSpectrum2Template()
+        self.template = template  # Calculator dep
+        # Extend template k range to cover AP-distorted queries with margin.
+        k_min = min(1e-4, float(np.min(k)) / 2.)
+        k_max = max(1., float(np.max(k)) * 2.)
+        _, tmpl_kw = self.template._init
+        update_kw = {'k': np.geomspace(k_min, k_max, 2000)}
+        if not tmpl_kw.get('with_now'):
+            update_kw['with_now'] = 'peakaverage'
+        self.template.update(**update_kw)
+        # Fix damping params when wiggles are suppressed.
+        if self.template._init[1].get('only_now', False):
+            self.sigmapar.update(fixed=True)
+            self.sigmaper.update(fixed=True)
 
     def __post_init__(self, k=None, template=None, ells=(0, 2), mu=10,
-                      mode='', smoothing_radius=15., model='standard'):
+                      mode='', smoothing_radius=15., model='standard', **kwargs):
+        # Non-node setup only.
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
@@ -139,25 +161,6 @@ class DampedBAOWigglesSpectrum2Poles(Calculator):
             raise ValueError(f"mode must be '', 'recsym', or 'reciso'; got {mode!r}")
         self.smoothing_radius = float(smoothing_radius)
         self.model = str(model)
-
-        if template is None:
-            template = BAOSpectrum2Template()
-        self.template = template  # Calculator dep — assigned here for graph discovery.
-
-        # Extend template k range to cover AP-distorted queries with margin.
-        k_min = min(1e-4, self.k[0] / 2.)
-        k_max = max(1., self.k[-1] * 2.)
-        _, tmpl_kw = self.template._init
-        update_kw = {'k': np.geomspace(k_min, k_max, 2000)}
-        if not tmpl_kw.get('with_now'):
-            update_kw['with_now'] = 'peakaverage'
-        self.template.update(**update_kw)
-
-        # Fix damping params when wiggles are suppressed.
-        if self.template._init[1].get('only_now', False):
-            self.sigmapar.update(fixed=True)
-            self.sigmaper.update(fixed=True)
-
         self._to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
         self._mu = self._to_poles.mu  # shape (n_mu,), GL nodes in [0, 1]
 
@@ -209,22 +212,22 @@ class DampedBAOWigglesSpectrum2Poles(Calculator):
             else:
                 pkmu = pksmooth * (fog + damped_wiggles)
 
-        self.spectrum = self._to_poles(pkmu)
-        return self.spectrum
+        self.poles = self._to_poles(pkmu)
+        return self.poles
 
     def tree_flatten(self):
-        return [self.spectrum], None
+        return [self.poles], None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.spectrum = children[0]
+        obj.poles = children[0]
         return obj
 
 
 # ── resummed BAO multipoles ───────────────────────────────────────────────────
 
-class ResummedBAOWigglesSpectrum2Poles(Calculator):
+class ResummedBAOWigglesPTSpectrum2Poles(Calculator):
     r"""
     BAO power spectrum multipoles with EFT-resummed wiggles.
 
@@ -267,7 +270,9 @@ class ResummedBAOWigglesSpectrum2Poles(Calculator):
     Beutler et al. 2017  https://arxiv.org/abs/1607.03149
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, k=None, template=None, tracers=None, **kwargs):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        # ``tracers`` (a single tracer name) namespaces each parameter via apply_tracers.
         self.b1 = Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
                             ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1')
         self.dbeta = Parameter('dbeta', value=1., prior=dict(limits=[0., 3.]),
@@ -277,9 +282,27 @@ class ResummedBAOWigglesSpectrum2Poles(Calculator):
         # d scales the growth factor relative to fiducial (d=1: fiducial).
         self.d = Parameter('d', value=1., prior=dict(limits=[0., 3.]),
                            ref=dict(dist='norm', loc=1., scale=0.05), latex='d')
+        apply_tracers(self, tracers)  # namespacing only (no cross)
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        k = np.asarray(k, dtype='f8')
+        if template is None:
+            template = BAOSpectrum2Template()
+        self.template = template
+        k_min = min(1e-4, float(np.min(k)) / 2.)
+        k_max = max(1., float(np.max(k)) * 2.)
+        _, tmpl_kw = self.template._init
+        update_kw = {'k': np.geomspace(k_min, k_max, 2000)}
+        if not tmpl_kw.get('with_now'):
+            update_kw['with_now'] = 'peakaverage'
+        self.template.update(**update_kw)
+        # Fix d when only_now: no wiggles means no BAO scale to constrain d.
+        if self.template._init[1].get('only_now', False):
+            self.d.update(fixed=True)
 
     def __post_init__(self, k=None, template=None, ells=(0, 2), mu=10,
-                      mode='', smoothing_radius=15., model='standard', shotnoise=0.):
+                      mode='', smoothing_radius=15., model='standard', shotnoise=0., **kwargs):
+        # Non-node setup only.
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
@@ -290,23 +313,6 @@ class ResummedBAOWigglesSpectrum2Poles(Calculator):
         self.smoothing_radius = float(smoothing_radius)
         self.model = str(model)
         self._shotnoise = float(shotnoise)
-
-        if template is None:
-            template = BAOSpectrum2Template()
-        self.template = template
-
-        k_min = min(1e-4, self.k[0] / 2.)
-        k_max = max(1., self.k[-1] * 2.)
-        _, tmpl_kw = self.template._init
-        update_kw = {'k': np.geomspace(k_min, k_max, 2000)}
-        if not tmpl_kw.get('with_now'):
-            update_kw['with_now'] = 'peakaverage'
-        self.template.update(**update_kw)
-
-        # Fix d when only_now: no wiggles means no BAO scale to constrain d.
-        if self.template._init[1].get('only_now', False):
-            self.d.update(fixed=True)
-
         self._to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
         self._mu = self._to_poles.mu
 
@@ -385,16 +391,16 @@ class ResummedBAOWigglesSpectrum2Poles(Calculator):
         else:
             pkmu = pksmooth * (fog + damped_wiggles)
 
-        self.spectrum = self._to_poles(pkmu)
-        return self.spectrum
+        self.poles = self._to_poles(pkmu)
+        return self.poles
 
     def tree_flatten(self):
-        return [self.spectrum], None
+        return [self.poles], None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.spectrum = children[0]
+        obj.poles = children[0]
         return obj
 
 
@@ -412,8 +418,9 @@ class _BAOWigglesTracerSpectrum2Poles(Calculator):
 
     _default_pt_cls = None  # set by DampedBAOWigglesTracerSpectrum2Poles etc.
 
-    def __init__(self, k=None, pt=None, ells=(0, 2), broadband_pows=(-3, -2, -1, 0, 1)):
+    def __init__(self, k=None, pt=None, ells=(0, 2), broadband_pows=(-3, -2, -1, 0, 1), tracers=None):
         # Broadband Parameters created here (Option B) so they appear in __dict__.
+        # ``tracers`` (a single tracer name) namespaces each parameter via apply_tracers.
         _ells = tuple(ells)
         _pows = tuple(broadband_pows)
         self.bb_params = []
@@ -425,15 +432,14 @@ class _BAOWigglesTracerSpectrum2Poles(Calculator):
                               latex=f'a_{{{ell},{pow}}}')
                 )
         self._bb_ell_pow = [(ell, pow) for ell in _ells for pow in _pows]
-
-    def __post_init__(self, k=None, pt=None, ells=(0, 2), broadband_pows=(-3, -2, -1, 0, 1)):
+        apply_tracers(self, tracers)  # namespaces bb_params (no cross)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
-        self.ells = tuple(ells)
+        self.ells = _ells
         if pt is None:
-            pt = self._default_pt_cls()
-        self.pt = pt  # Calculator dep — assigned here for graph discovery.
+            pt = self._default_pt_cls(tracers=tracers)  # bias namespaced to the same tracer
+        self.pt = pt  # Calculator dep
         self.pt.update(k=self.k, ells=self.ells)
 
     def __call__(self):
@@ -445,22 +451,22 @@ class _BAOWigglesTracerSpectrum2Poles(Calculator):
         for (ell, pow), param in zip(self._bb_ell_pow, self.bb_params):
             ill = ell_to_idx[ell]
             broadband = broadband.at[ill].add(param * (k / kp) ** pow)
-        self.spectrum = self.pt.spectrum + broadband
-        return self.spectrum
+        self.poles = self.pt.poles + broadband
+        return self.poles
 
     def tree_flatten(self):
-        return [self.spectrum], None
+        return [self.poles], None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.spectrum = children[0]
+        obj.poles = children[0]
         return obj
 
 
 class DampedBAOWigglesTracerSpectrum2Poles(_BAOWigglesTracerSpectrum2Poles):
     r"""
-    DampedBAOWigglesSpectrum2Poles with additive polynomial broadband.
+    DampedBAOWigglesPTSpectrum2Poles with additive polynomial broadband.
 
     Broadband parameters ``al{ell}_{pow}`` are created automatically for each
     (ell, pow) combination. The pivot wavenumber is kp = 2*pi / rs_drag_fid.
@@ -469,19 +475,19 @@ class DampedBAOWigglesTracerSpectrum2Poles(_BAOWigglesTracerSpectrum2Poles):
     ----------
     k : array, default=None
         Output wavenumbers [h/Mpc].
-    pt : DampedBAOWigglesSpectrum2Poles, default=None
+    pt : DampedBAOWigglesPTSpectrum2Poles, default=None
         Bare theory. A default instance is created if None.
     ells : tuple of int, default=(0, 2)
         Multipole orders.
     broadband_pows : tuple of int, default=(-3, -2, -1, 0, 1)
         Powers of k/kp to include in the broadband.
     """
-    _default_pt_cls = DampedBAOWigglesSpectrum2Poles
+    _default_pt_cls = DampedBAOWigglesPTSpectrum2Poles
 
 
 class ResummedBAOWigglesTracerSpectrum2Poles(_BAOWigglesTracerSpectrum2Poles):
     r"""
-    ResummedBAOWigglesSpectrum2Poles with additive polynomial broadband.
+    ResummedBAOWigglesPTSpectrum2Poles with additive polynomial broadband.
 
     Broadband parameters ``al{ell}_{pow}`` are created automatically for each
     (ell, pow) combination. The pivot wavenumber is kp = 2*pi / rs_drag_fid.
@@ -490,14 +496,14 @@ class ResummedBAOWigglesTracerSpectrum2Poles(_BAOWigglesTracerSpectrum2Poles):
     ----------
     k : array, default=None
         Output wavenumbers [h/Mpc].
-    pt : ResummedBAOWigglesSpectrum2Poles, default=None
+    pt : ResummedBAOWigglesPTSpectrum2Poles, default=None
         Bare theory. A default instance is created if None.
     ells : tuple of int, default=(0, 2)
         Multipole orders.
     broadband_pows : tuple of int, default=(-3, -2, -1, 0, 1)
         Powers of k/kp to include in the broadband.
     """
-    _default_pt_cls = ResummedBAOWigglesSpectrum2Poles
+    _default_pt_cls = ResummedBAOWigglesPTSpectrum2Poles
 
 
 # ── spectrum -> correlation transformer ──────────────────────────────────────
@@ -539,20 +545,19 @@ class SpectrumToCorrelation:
         -------
         ndarray, shape (n_ells, n_s)
         """
-        poles = np.asarray(poles)
         tmp = []
         for pole in poles:
             slope_high = (pole[-1] - pole[-2]) / np.log10(self.kin[-1] / self.kin[-2])
-            interp_mid = np.interp(np.log10(self.k_mid), np.log10(self.kin), pole)
+            interp_mid = jnp.interp(np.log10(self.k_mid), np.log10(self.kin), pole)
             extrap_high = (pole[-1] + slope_high * self.logk_high) * self.damp_high
-            tmp.append(np.concatenate([interp_mid, extrap_high]))
-        s_arr, corr_arr = self.fftlog(np.vstack(tmp))
-        return np.array([np.interp(self.s, ss, cc) for ss, cc in zip(s_arr, corr_arr)])
+            tmp.append(jnp.concatenate([interp_mid, extrap_high]))
+        s_arr, corr_arr = self.fftlog(jnp.vstack(tmp))
+        return jnp.stack([jnp.interp(self.s, ss, cc) for ss, cc in zip(s_arr, corr_arr)])
 
 
 # ── bare correlation function multipoles ─────────────────────────────────────
 
-class _BAOWigglesCorrelation2Poles(ExternalCalculator):
+class _BAOWigglesPTCorrelation2Poles(ExternalCalculator):
     """Base for BAO correlation function theories (FFTLog from spectrum to xi multipoles).
 
     Subclasses set ``_default_pt_cls`` to the spectrum theory class.
@@ -560,66 +565,69 @@ class _BAOWigglesCorrelation2Poles(ExternalCalculator):
 
     _default_pt_cls = None
 
-    def __post_init__(self, s=None, pt=None, ells=(0, 2)):
+    def __init__(self, s=None, pt=None, ells=(0, 2)):
+        # Nodes (Calculator deps) and their update() live in __init__.
         if s is None:
             s = np.linspace(20., 200., 181)
         self.s = np.asarray(s, dtype='f8')
         self.ells = tuple(ells)
-        kin = np.geomspace(1e-4, 0.6, 300)
         if pt is None:
             pt = self._default_pt_cls()
         self.pt = pt
-        self.pt.update(k=kin, ells=self.ells)
-        self._s2xi = SpectrumToCorrelation(s=self.s, ells=self.ells, kin=kin)
+        self.pt.update(k=np.geomspace(1e-4, 0.6, 300), ells=self.ells)
+
+    def __post_init__(self, s=None, pt=None, ells=(0, 2)):
+        # Non-node setup only.
+        self._to_correlation = SpectrumToCorrelation(s=self.s, ells=self.ells, kin=np.geomspace(1e-4, 0.6, 300))
 
     def __call__(self):
-        self.correlation = self._s2xi(self.pt.spectrum)
-        return self.correlation
+        self.poles = self._to_correlation(self.pt.poles)
+        return self.poles
 
     def tree_flatten(self):
-        return [self.correlation], None
+        return [self.poles], None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.correlation = children[0]
+        obj.poles = children[0]
         return obj
 
 
-class DampedBAOWigglesCorrelation2Poles(_BAOWigglesCorrelation2Poles):
+class DampedBAOWigglesPTCorrelation2Poles(_BAOWigglesPTCorrelation2Poles):
     r"""
     BAO correlation function multipoles with Gaussian-damped wiggles.
 
-    Applies FFTLog Hankel transform to ``DampedBAOWigglesSpectrum2Poles`` output.
+    Applies FFTLog Hankel transform to ``DampedBAOWigglesPTSpectrum2Poles`` output.
 
     Parameters
     ----------
     s : array, default=None
         Output separations [Mpc/h]. Defaults to np.linspace(20., 200., 181).
-    pt : DampedBAOWigglesSpectrum2Poles, default=None
+    pt : DampedBAOWigglesPTSpectrum2Poles, default=None
         Bare spectrum theory. A default instance is created if None.
     ells : tuple of int, default=(0, 2)
         Multipole orders.
     """
-    _default_pt_cls = DampedBAOWigglesSpectrum2Poles
+    _default_pt_cls = DampedBAOWigglesPTSpectrum2Poles
 
 
-class ResummedBAOWigglesCorrelation2Poles(_BAOWigglesCorrelation2Poles):
+class ResummedBAOWigglesPTCorrelation2Poles(_BAOWigglesPTCorrelation2Poles):
     r"""
     BAO correlation function multipoles with EFT-resummed wiggles.
 
-    Applies FFTLog Hankel transform to ``ResummedBAOWigglesSpectrum2Poles`` output.
+    Applies FFTLog Hankel transform to ``ResummedBAOWigglesPTSpectrum2Poles`` output.
 
     Parameters
     ----------
     s : array, default=None
         Output separations [Mpc/h]. Defaults to np.linspace(20., 200., 181).
-    pt : ResummedBAOWigglesSpectrum2Poles, default=None
+    pt : ResummedBAOWigglesPTSpectrum2Poles, default=None
         Bare spectrum theory. A default instance is created if None.
     ells : tuple of int, default=(0, 2)
         Multipole orders.
     """
-    _default_pt_cls = ResummedBAOWigglesSpectrum2Poles
+    _default_pt_cls = ResummedBAOWigglesPTSpectrum2Poles
 
 
 # ── tracer correlation function multipoles ────────────────────────────────────
@@ -636,7 +644,7 @@ class _BAOWigglesTracerCorrelation2Poles(ExternalCalculator):
 
     _default_pt_cls = None
 
-    def __init__(self, s=None, pt=None, ells=(0, 2), broadband_pows=(-2, -1, 0, 1, 2)):
+    def __init__(self, s=None, pt=None, ells=(0, 2), broadband_pows=(-2, -1, 0, 1, 2), tracers=None):
         _ells = tuple(ells)
         _pows = tuple(broadband_pows)
         self.bb_params = []
@@ -648,44 +656,45 @@ class _BAOWigglesTracerCorrelation2Poles(ExternalCalculator):
                               latex=f'a_{{{ell},{pow}}}')
                 )
         self._bb_ell_pow = [(ell, pow) for ell in _ells for pow in _pows]
-
-    def __post_init__(self, s=None, pt=None, ells=(0, 2), broadband_pows=(-2, -1, 0, 1, 2)):
+        apply_tracers(self, tracers)  # namespaces bb_params (no cross)
         if s is None:
             s = np.linspace(20., 200., 181)
         self.s = np.asarray(s, dtype='f8')
-        self.ells = tuple(ells)
-        kin = np.geomspace(1e-4, 0.6, 300)
+        self.ells = _ells
         if pt is None:
-            pt = self._default_pt_cls()
+            pt = self._default_pt_cls(tracers=tracers)  # bias namespaced to the same tracer
         self.pt = pt
-        self.pt.update(k=kin, ells=self.ells)
-        self._s2xi = SpectrumToCorrelation(s=self.s, ells=self.ells, kin=kin)
+        self.pt.update(k=np.geomspace(1e-4, 0.6, 300), ells=self.ells)
+
+    def __post_init__(self, s=None, pt=None, ells=(0, 2), broadband_pows=(-2, -1, 0, 1, 2), tracers=None):
+        # Non-node setup only.
+        self._to_correlation = SpectrumToCorrelation(s=self.s, ells=self.ells, kin=np.geomspace(1e-4, 0.6, 300))
 
     def __call__(self):
         sp = 2. * np.pi / 0.02  # pivot separation [Mpc/h]
         s = self.s
         ell_to_idx = {ell: i for i, ell in enumerate(self.ells)}
-        xi_bare = self._s2xi(self.pt.spectrum)
+        xi_bare = self._to_correlation(self.pt.poles)
         broadband = np.zeros((len(self.ells), len(s)))
         for (ell, pow), param in zip(self._bb_ell_pow, self.bb_params):
             ill = ell_to_idx[ell]
             broadband[ill] += float(param.value) * (s / sp) ** pow
-        self.correlation = xi_bare + broadband
-        return self.correlation
+        self.poles = xi_bare + broadband
+        return self.poles
 
     def tree_flatten(self):
-        return [self.correlation], None
+        return [self.poles], None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.correlation = children[0]
+        obj.poles = children[0]
         return obj
 
 
 class DampedBAOWigglesTracerCorrelation2Poles(_BAOWigglesTracerCorrelation2Poles):
     r"""
-    DampedBAOWigglesCorrelation2Poles with additive s-space polynomial broadband.
+    DampedBAOWigglesPTCorrelation2Poles with additive s-space polynomial broadband.
 
     Broadband parameters ``al{ell}_{pow}`` are created automatically for each
     (ell, pow) combination. The pivot separation is sp = 2*pi / 0.02 ~ 314 Mpc/h.
@@ -694,19 +703,19 @@ class DampedBAOWigglesTracerCorrelation2Poles(_BAOWigglesTracerCorrelation2Poles
     ----------
     s : array, default=None
         Output separations [Mpc/h].
-    pt : DampedBAOWigglesSpectrum2Poles, default=None
+    pt : DampedBAOWigglesPTSpectrum2Poles, default=None
         Bare spectrum theory. A default instance is created if None.
     ells : tuple of int, default=(0, 2)
         Multipole orders.
     broadband_pows : tuple of int, default=(-2, -1, 0, 1, 2)
         Powers of s/sp to include in the broadband.
     """
-    _default_pt_cls = DampedBAOWigglesSpectrum2Poles
+    _default_pt_cls = DampedBAOWigglesPTSpectrum2Poles
 
 
 class ResummedBAOWigglesTracerCorrelation2Poles(_BAOWigglesTracerCorrelation2Poles):
     r"""
-    ResummedBAOWigglesCorrelation2Poles with additive s-space polynomial broadband.
+    ResummedBAOWigglesPTCorrelation2Poles with additive s-space polynomial broadband.
 
     Broadband parameters ``al{ell}_{pow}`` are created automatically for each
     (ell, pow) combination. The pivot separation is sp = 2*pi / 0.02 ~ 314 Mpc/h.
@@ -715,11 +724,11 @@ class ResummedBAOWigglesTracerCorrelation2Poles(_BAOWigglesTracerCorrelation2Pol
     ----------
     s : array, default=None
         Output separations [Mpc/h].
-    pt : ResummedBAOWigglesSpectrum2Poles, default=None
+    pt : ResummedBAOWigglesPTSpectrum2Poles, default=None
         Bare spectrum theory. A default instance is created if None.
     ells : tuple of int, default=(0, 2)
         Multipole orders.
     broadband_pows : tuple of int, default=(-2, -1, 0, 1, 2)
         Powers of s/sp to include in the broadband.
     """
-    _default_pt_cls = ResummedBAOWigglesSpectrum2Poles
+    _default_pt_cls = ResummedBAOWigglesPTSpectrum2Poles

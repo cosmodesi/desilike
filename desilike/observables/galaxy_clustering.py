@@ -15,8 +15,40 @@ import numpy as np
 import scipy as sp
 import jax.numpy as jnp
 import lsstypes as types
+from matplotlib import pyplot as plt
 
-from ..base import Calculator
+from ..base import Calculator, compile, copy, replace, params as _get_params
+from ..base import _iter_calculators
+from ..theories.galaxy_clustering.template import Spectrum2Template
+from .. import plotting
+
+
+def _compute_flattheory_nobao(observable):
+    """Return *observable*'s flat theory vector computed with only the smooth (no-wiggle) power spectrum.
+
+    Locates the :class:`Spectrum2Template` in *observable*'s theory dependency tree, builds
+    an independent copy of *observable* (so the original and its compiled pipeline are not
+    mutated), replaces the template in the copy with ``template.clone(only_now=True)``,
+    then compiles and runs the copy at the current parameter values and returns its
+    ``flattheory``.
+
+    Raises :class:`ValueError` if no template is found (i.e. the theory does not support
+    BAO wiggle removal).
+    """
+    if not any(isinstance(calc, Spectrum2Template) for calc in _iter_calculators(observable.theory)):
+        raise ValueError(
+            'Cannot compute no-BAO theory: no Spectrum2Template instance found in theory dependency tree.')
+    # Copy the whole observable (its theory tree included) so that replacing the template
+    # below does not mutate the original observable or its theory.
+    nobao_observable = copy(observable, level=None)
+    template_node = next(calc for calc in _iter_calculators(nobao_observable.theory)
+                         if isinstance(calc, Spectrum2Template))
+    replace(nobao_observable, template_node, template_node.clone(only_now=True))
+    nobao_graph = compile(nobao_observable)
+    current_params = {param.name: param._value for param in _get_params(nobao_graph)
+                      if param._value is not None}
+    nobao_graph(current_params)
+    return np.asarray(nobao_observable.flattheory)
 
 
 def _make_list(array, nitems=1):
@@ -116,7 +148,7 @@ class Spectrum2PolesObservable(Calculator):
     r"""
     Power spectrum multipoles observable.
 
-    Computes ``flattheory = window_matrix @ theory.spectrum.ravel()`` and stores
+    Computes ``flattheory = window_matrix @ theory.poles.ravel()`` and stores
     ``flatdata`` for comparison by a likelihood.
 
     Parameters
@@ -161,17 +193,157 @@ class Spectrum2PolesObservable(Calculator):
             coords=k, ells=ells, coordin=kin, ellsin=ellsin, coord_name='k')
         self.flatdata = self.data.value()
         self._window_matrix = self.window.value()
-
-    def __post_init__(self, data, theory, k=None, ells=None,
-                      window=None, kin=None, ellsin=None,
-                      covariance=None, name='spectrum2poles'):
+        # Node dep (theory) and its update() live in __init__.
         self.theory = theory
         self.theory.update(k=next(iter(self.window.theory)).coords('k'),
                            ells=self.window.theory.ells)
 
     def __call__(self):
-        self.flattheory = jnp.dot(self._window_matrix, jnp.ravel(self.theory.spectrum))
+        self.flattheory = jnp.dot(self._window_matrix, jnp.ravel(self.theory.poles))
         return self.flattheory
+
+    @plotting.plotter(interactive={'kw_theory': {'color': 'black', 'label': 'reference'}})
+    def plot(self, kw_theory=None, scaling='kpk', kpower=None, fig=None, figsize=None):
+        """
+        Plot data and theory power spectrum multipoles.
+
+        Parameters
+        ----------
+        kw_theory : dict or list of dict, default=None
+            Line style overrides for the theory curve, one dict per multipole.
+        scaling : str, default='kpk'
+            ``'kpk'``: plot k * P_ell(k).  ``'loglog'``: log-log plot of P_ell(k).
+        kpower : int or None, default=None
+            When not None, overrides the k exponent implied by *scaling*.
+        fig : matplotlib.figure.Figure, default=None
+            Existing figure with at least ``1 + len(ells)`` axes.
+        figsize : tuple, default=None
+            Figure size passed to :func:`matplotlib.pyplot.subplots`.
+        fn : str or Path, default=None
+            Path where to save the figure.
+        kw_save : dict, default=None
+            Extra arguments for :meth:`matplotlib.figure.Figure.savefig`.
+        show : bool, default=False
+            Call :func:`matplotlib.pyplot.show` after returning.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        """
+        if kw_theory is None:
+            kw_theory = {}
+        if isinstance(kw_theory, dict):
+            kw_theory = [kw_theory]
+        labels = self.data.labels()
+        if len(kw_theory) != len(labels):
+            kw_theory = [{key: value for key, value in kw_theory[0].items()
+                          if key != 'label' or ell_idx == 0}
+                         for ell_idx in range(len(labels))]
+        kw_theory = [{'color': f'C{ell_idx:d}', **kw} for ell_idx, kw in enumerate(kw_theory)]
+
+        if fig is None:
+            height_ratios = [max(len(labels), 3)] + [1] * len(labels)
+            figsize = (6, 1.5 * sum(height_ratios)) if figsize is None else figsize
+            fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False,
+                                    gridspec_kw={'height_ratios': height_ratios},
+                                    figsize=figsize, squeeze=True)
+            fig.subplots_adjust(hspace=0.1)
+            show_legend = True
+        else:
+            lax = fig.axes
+            show_legend = False
+
+        wtheory = self.data.clone(value=np.asarray(self.flattheory))
+        for ell_idx, label in enumerate(labels):
+            ell = label['ells']
+            data_pole = self.data.get(**label)
+            wtheory_pole = wtheory.get(**label)
+            x = data_pole.coords('k')
+            xlabel = r'$k$ [$h/\mathrm{Mpc}$]'
+            if scaling == 'kpk':
+                k_exp = 1 if kpower is None else kpower
+                scale = x ** k_exp
+                ylabel = r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]'
+            elif scaling == 'loglog':
+                scale = 1.
+                ylabel = r'$P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{3}$]'
+                lax[0].set_yscale('log')
+                lax[0].set_xscale('log')
+            std = self.covariance.at.observable.get(**label).std()
+            lax[0].errorbar(x, scale * data_pole.value(), yerr=scale * std,
+                            color=kw_theory[ell_idx]['color'], linestyle='none', marker='o',
+                            label=rf'$\ell = {ell}$')
+            lax[0].plot(x, scale * wtheory_pole.value(), **kw_theory[ell_idx])
+        for ell_idx, label in enumerate(labels):
+            ell = label['ells']
+            data_pole = self.data.get(**label)
+            wtheory_pole = wtheory.get(**label)
+            std = self.covariance.at.observable.get(**label).std()
+            lax[ell_idx + 1].plot(x, (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ell_idx])
+            lax[ell_idx + 1].set_ylim(-4, 4)
+            for offset in [-2., 2.]:
+                lax[ell_idx + 1].axhline(offset, color='k', linestyle='--')
+            lax[ell_idx + 1].set_ylabel(rf'$\Delta P_{{{ell}}} / \sigma_{{P_{{{ell}}}}}$')
+
+        for ax in lax:
+            ax.grid(True)
+        if show_legend:
+            lax[0].legend()
+        lax[0].set_ylabel(ylabel)
+        lax[-1].set_xlabel(xlabel)
+        return fig
+
+    @plotting.plotter
+    def plot_bao(self, fig=None):
+        """
+        Plot BAO wiggles: data and theory minus the smooth (no-BAO) baseline.
+
+        The smooth (no-wiggle) baseline is computed automatically by re-running
+        the theory with the template's BAO wiggles switched off (``only_now=True``).
+
+        Parameters
+        ----------
+        fig : matplotlib.figure.Figure, default=None
+            Existing figure with at least ``len(ells)`` axes.
+        fn : str or Path, default=None
+            Path where to save the figure.
+        kw_save : dict, default=None
+            Extra arguments for :meth:`matplotlib.figure.Figure.savefig`.
+        show : bool, default=False
+            Call :func:`matplotlib.pyplot.show` after returning.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        """
+        labels = self.data.labels()
+        if fig is None:
+            figsize = (6, 2 * len(labels))
+            fig, lax = plt.subplots(len(labels), sharex=True, sharey=False,
+                                    figsize=figsize, squeeze=False)
+            lax = lax.ravel()
+            fig.subplots_adjust(hspace=0)
+        else:
+            lax = fig.axes
+
+        wtheory = self.data.clone(value=np.asarray(self.flattheory))
+        wtheory_nobao = self.data.clone(value=_compute_flattheory_nobao(self))
+
+        for ell_idx, label in enumerate(labels):
+            ell = label['ells']
+            data_pole = self.data.get(**label)
+            wtheory_pole = wtheory.get(**label)
+            wtheory_nobao_pole = wtheory_nobao.get(**label)
+            std = self.covariance.at.observable.get(**label).std()
+            x = data_pole.coords('k')
+            color = f'C{ell_idx:d}'
+            lax[ell_idx].errorbar(x, x * (data_pole.value() - wtheory_nobao_pole.value()),
+                                  yerr=x * std, color=color, linestyle='none', marker='o')
+            lax[ell_idx].plot(x, x * (wtheory_pole.value() - wtheory_nobao_pole.value()), color=color)
+            lax[ell_idx].set_ylabel(rf'$k \Delta P_{{{ell:d}}}(k)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]')
+            lax[ell_idx].grid(True)
+        lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
+        return fig
 
     def tree_flatten(self):
         return [self.flattheory], None
@@ -187,7 +359,7 @@ class Correlation2PolesObservable(Calculator):
     r"""
     Correlation function multipoles observable.
 
-    Computes ``flattheory = window_matrix @ theory.correlation.ravel()`` and
+    Computes ``flattheory = window_matrix @ theory.poles.ravel()`` and
     stores ``flatdata`` for comparison by a likelihood.
 
     Parameters
@@ -232,17 +404,142 @@ class Correlation2PolesObservable(Calculator):
             coords=s, ells=ells, coordin=sin, ellsin=ellsin, coord_name='s')
         self.flatdata = self.data.value()
         self._window_matrix = self.window.value()
-
-    def __post_init__(self, data, theory, s=None, ells=None,
-                      window=None, sin=None, ellsin=None,
-                      covariance=None, name='correlation2poles'):
         self.theory = theory
         self.theory.update(s=next(iter(self.window.theory)).coords('s'),
                            ells=self.window.theory.ells)
 
     def __call__(self):
-        self.flattheory = jnp.dot(self._window_matrix, jnp.ravel(self.theory.correlation))
+        self.flattheory = jnp.dot(self._window_matrix, jnp.ravel(self.theory.poles))
         return self.flattheory
+
+    @plotting.plotter(interactive={'kw_theory': {'color': 'black', 'label': 'reference'}})
+    def plot(self, kw_theory=None, fig=None):
+        """
+        Plot data and theory correlation function multipoles.
+
+        Parameters
+        ----------
+        kw_theory : dict or list of dict, default=None
+            Line style overrides for the theory curve, one dict per multipole.
+        fig : matplotlib.figure.Figure, default=None
+            Existing figure with at least ``1 + len(ells)`` axes.
+        fn : str or Path, default=None
+            Path where to save the figure.
+        kw_save : dict, default=None
+            Extra arguments for :meth:`matplotlib.figure.Figure.savefig`.
+        show : bool, default=False
+            Call :func:`matplotlib.pyplot.show` after returning.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        """
+        if kw_theory is None:
+            kw_theory = {}
+        if isinstance(kw_theory, dict):
+            kw_theory = [kw_theory]
+        labels = self.data.labels()
+        if len(kw_theory) != len(labels):
+            kw_theory = [{key: value for key, value in kw_theory[0].items()
+                          if key != 'label' or ell_idx == 0}
+                         for ell_idx in range(len(labels))]
+        kw_theory = [{'color': f'C{ell_idx:d}', **kw} for ell_idx, kw in enumerate(kw_theory)]
+
+        if fig is None:
+            height_ratios = [max(len(labels), 3)] + [1] * len(labels)
+            figsize = (6, 1.5 * sum(height_ratios))
+            fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False,
+                                    gridspec_kw={'height_ratios': height_ratios},
+                                    figsize=figsize, squeeze=True)
+            fig.subplots_adjust(hspace=0.1)
+            show_legend = True
+        else:
+            lax = fig.axes
+            show_legend = False
+
+        wtheory = self.data.clone(value=np.asarray(self.flattheory))
+        for ell_idx, label in enumerate(labels):
+            ell = label['ells']
+            data_pole = self.data.get(**label)
+            wtheory_pole = wtheory.get(**label)
+            x = data_pole.coords('s')
+            std = self.covariance.at.observable.get(**label).std()
+            scale = x ** 2
+            lax[0].errorbar(x, scale * data_pole.value(), yerr=scale * std,
+                            color=f'C{ell_idx:d}', linestyle='none', marker='o',
+                            label=rf'$\ell = {ell}$')
+            lax[0].plot(x, scale * wtheory_pole.value(), **kw_theory[ell_idx])
+        for ell_idx, label in enumerate(labels):
+            ell = label['ells']
+            data_pole = self.data.get(**label)
+            wtheory_pole = wtheory.get(**label)
+            std = self.covariance.at.observable.get(**label).std()
+            lax[ell_idx + 1].plot(x, (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ell_idx])
+            lax[ell_idx + 1].set_ylim(-4, 4)
+            for offset in [-2., 2.]:
+                lax[ell_idx + 1].axhline(offset, color='k', linestyle='--')
+            lax[ell_idx + 1].set_ylabel(rf'$\Delta \xi_{{{ell}}} / \sigma_{{\xi_{{{ell}}}}}$')
+
+        for ax in lax:
+            ax.grid(True)
+        if show_legend:
+            lax[0].legend()
+        lax[0].set_ylabel(r'$s^2 \xi_\ell(s)$ [$(\mathrm{Mpc}/h)^2$]')
+        lax[-1].set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
+        return fig
+
+    @plotting.plotter
+    def plot_bao(self, fig=None):
+        """
+        Plot BAO wiggles: data and theory minus the smooth (no-BAO) baseline.
+
+        The smooth (no-wiggle) baseline is computed automatically by re-running
+        the theory with the template's BAO wiggles switched off (``only_now=True``).
+
+        Parameters
+        ----------
+        fig : matplotlib.figure.Figure, default=None
+            Existing figure with at least ``len(ells)`` axes.
+        fn : str or Path, default=None
+            Path where to save the figure.
+        kw_save : dict, default=None
+            Extra arguments for :meth:`matplotlib.figure.Figure.savefig`.
+        show : bool, default=False
+            Call :func:`matplotlib.pyplot.show` after returning.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        """
+        labels = self.data.labels()
+        if fig is None:
+            figsize = (6, 2 * len(labels))
+            fig, lax = plt.subplots(len(labels), sharex=True, sharey=False,
+                                    figsize=figsize, squeeze=False)
+            lax = lax.ravel()
+            fig.subplots_adjust(hspace=0)
+        else:
+            lax = fig.axes
+
+        wtheory = self.data.clone(value=np.asarray(self.flattheory))
+        wtheory_nobao = self.data.clone(value=_compute_flattheory_nobao(self))
+
+        for ell_idx, label in enumerate(labels):
+            ell = label['ells']
+            data_pole = self.data.get(**label)
+            wtheory_pole = wtheory.get(**label)
+            wtheory_nobao_pole = wtheory_nobao.get(**label)
+            std = self.covariance.at.observable.get(**label).std()
+            x = data_pole.coords('s')
+            scale = x ** 2
+            color = f'C{ell_idx:d}'
+            lax[ell_idx].errorbar(x, scale * (data_pole.value() - wtheory_nobao_pole.value()),
+                                  yerr=scale * std, color=color, linestyle='none', marker='o')
+            lax[ell_idx].plot(x, scale * (wtheory_pole.value() - wtheory_nobao_pole.value()), color=color)
+            lax[ell_idx].set_ylabel(rf'$s^2 \Delta \xi_{{{ell:d}}}(s)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]')
+            lax[ell_idx].grid(True)
+        lax[-1].set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
+        return fig
 
     def tree_flatten(self):
         return [self.flattheory], None
@@ -258,7 +555,7 @@ class Spectrum3PolesObservable(Calculator):
     r"""
     Bispectrum multipoles observable.
 
-    Computes ``flattheory = window_matrix @ theory.spectrum.ravel()`` and
+    Computes ``flattheory = window_matrix @ theory.poles.ravel()`` and
     stores ``flatdata`` for comparison by a likelihood.
 
     Parameters
@@ -305,17 +602,105 @@ class Spectrum3PolesObservable(Calculator):
             coords=k, ells=ells, coordin=kin, ellsin=ellsin, coord_name='k')
         self.flatdata = self.data.value()
         self._window_matrix = self.window.value()
-
-    def __post_init__(self, data, theory, k=None, ells=None,
-                      window=None, kin=None, ellsin=None,
-                      covariance=None, name='spectrum3poles'):
         self.theory = theory
         self.theory.update(k=next(iter(self.window.theory)).coords('k'),
                            ells=self.window.theory.ells)
 
     def __call__(self):
-        self.flattheory = jnp.dot(self._window_matrix, jnp.ravel(self.theory.spectrum))
+        self.flattheory = jnp.dot(self._window_matrix, jnp.ravel(self.theory.poles))
         return self.flattheory
+
+    @plotting.plotter(interactive={'kw_theory': {'color': 'black', 'label': 'reference'}})
+    def plot(self, kw_theory=None, fig=None):
+        """
+        Plot data and theory bispectrum multipoles.
+
+        Parameters
+        ----------
+        kw_theory : dict or list of dict, default=None
+            Line style overrides for the theory curve, one dict per multipole.
+        fig : matplotlib.figure.Figure, default=None
+            Existing figure with at least ``1 + len(ells)`` axes.
+        fn : str or Path, default=None
+            Path where to save the figure.
+        kw_save : dict, default=None
+            Extra arguments for :meth:`matplotlib.figure.Figure.savefig`.
+        show : bool, default=False
+            Call :func:`matplotlib.pyplot.show` after returning.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        """
+        if kw_theory is None:
+            kw_theory = {}
+        if isinstance(kw_theory, dict):
+            kw_theory = [kw_theory]
+        labels = self.data.labels()
+        if len(kw_theory) != len(labels):
+            kw_theory = [{key: value for key, value in kw_theory[0].items()
+                          if key != 'label' or ell_idx == 0}
+                         for ell_idx in range(len(labels))]
+        kw_theory = [{'color': f'C{ell_idx:d}', **kw} for ell_idx, kw in enumerate(kw_theory)]
+
+        if fig is None:
+            height_ratios = [max(len(labels), 3)] + [1] * len(labels)
+            figsize = (6, 1.5 * sum(height_ratios))
+            fig, lax = plt.subplots(len(height_ratios), sharex=True, sharey=False,
+                                    gridspec_kw={'height_ratios': height_ratios},
+                                    figsize=figsize, squeeze=True)
+            fig.subplots_adjust(hspace=0.1)
+            show_legend = True
+        else:
+            lax = fig.axes
+            show_legend = False
+
+        wtheory = self.data.clone(value=np.asarray(self.flattheory))
+        xlabel = ylabel = None
+        for ell_idx, label in enumerate(labels):
+            ell = label['ells']
+            data_pole = self.data.get(**label)
+            wtheory_pole = wtheory.get(**label)
+            k_array = data_pole.coords('k')
+            if 'scoccimarro' in data_pole.basis:
+                x = np.arange(data_pole.size)
+                scale = k_array.prod(axis=-1)
+                xlabel = r'triangle index'
+                ylabel = r'$k_1 k_2 k_3 B_{\ell}(k_1, k_2, k_3)$ [$(\mathrm{Mpc}/h)^3$]'
+            else:
+                scale = k_array.prod(axis=-1)
+                if np.allclose(k_array[..., 1], k_array[..., 0]):
+                    x = k_array[..., 0]
+                    xlabel = r'$k$ [$h/\mathrm{Mpc}$]'
+                else:
+                    x = np.arange(data_pole.size)
+                    xlabel = r'triangle index'
+                ylabel = r'$k^2 B_{\ell}(k, k)$ [$(\mathrm{Mpc}/h)^4$]'
+            std = self.covariance.at.observable.get(**label).std()
+            lax[0].errorbar(x, scale * data_pole.value(), yerr=scale * std,
+                            color=kw_theory[ell_idx]['color'], linestyle='none', marker='o',
+                            label=rf'$\ell = {ell}$')
+            lax[0].plot(x, scale * wtheory_pole.value(), **kw_theory[ell_idx])
+        for ell_idx, label in enumerate(labels):
+            ell = label['ells']
+            data_pole = self.data.get(**label)
+            wtheory_pole = wtheory.get(**label)
+            std = self.covariance.at.observable.get(**label).std()
+            lax[ell_idx + 1].plot(x, (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ell_idx])
+            lax[ell_idx + 1].set_ylim(-4, 4)
+            for offset in [-2., 2.]:
+                lax[ell_idx + 1].axhline(offset, color='k', linestyle='--')
+            lax[ell_idx + 1].set_ylabel(rf'$\Delta B_{{{ell}}} / \sigma_{{B_{{{ell}}}}}$')
+
+        for ax in lax:
+            ax.grid(True)
+        if show_legend:
+            lax[0].legend()
+        if ylabel is not None:
+            lax[0].set_ylabel(ylabel)
+        if xlabel is not None:
+            lax[-1].set_xlabel(xlabel)
+        return fig
 
     def tree_flatten(self):
         return [self.flattheory], None

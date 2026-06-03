@@ -42,8 +42,9 @@ class ObservablesGaussianLikelihood(GaussianLikelihood):
         ``covariance``).
     """
 
-    def __post_init__(self, observables, covariance=None, scale_covariance=1.,
-                      correct_covariance=None, precision=None):
+    def __init__(self, observables, covariance=None, scale_covariance=1.,
+                 correct_covariance=None, precision=None):
+        # Nodes (the observable dependencies) and all derived data/covariance live in __init__.
         if not isinstance(observables, (list, tuple)):
             observables = [observables]
         self.observables = list(observables)

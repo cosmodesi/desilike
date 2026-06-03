@@ -2,19 +2,42 @@
 
 import re
 import copy
+import json
 import threading
 import numpy as np
 import jax
 import jax.numpy as jnp
 from scipy import stats as sp
+from .utils import NumpyEncoder, register_type, write as _utils_write, read as _utils_read
 
 _compile_context = threading.local()
+
+# Construction guard: incremented while a Calculator's __init__/__post_init__ runs.
+# update() is only permitted while this depth > 0 (i.e. during construction), so that
+# the dependency graph is immutable once construction completes.
+_construction = threading.local()
+
+
+def _in_construction():
+    return getattr(_construction, 'depth', 0) > 0
+
+
+import contextlib as _contextlib
+
+
+@_contextlib.contextmanager
+def _constructing():
+    """Context manager marking that node construction is in progress (enables update())."""
+    _construction.depth = getattr(_construction, 'depth', 0) + 1
+    try:
+        yield
+    finally:
+        _construction.depth -= 1
 
 
 class _CompileContext:
     def __init__(self):
-        self.traced = set()           # id(node) seen during __post_init__ (phase 1)
-        self.post_init_called = set() # id(node) whose __post_init__ has already run this compile
+        self.traced = set()           # id(node) seen during dependency discovery (phase 1)
         self.stack = []               # currently-tracing Calculator stack
         self.node_deps = {}           # id(node) -> list[Node], in access order, deduplicated
         self.node_order = []          # topological order: leaves first, root last
@@ -27,23 +50,195 @@ jax.config.update('jax_enable_x64', True)
 NAMESPACE_SEP = '.'
 
 
+# ── Name-matching helpers ──────────────────────────────────────────────────────
+
+def decode_name(name, default_start=0, default_stop=None, default_step=1):
+    """Split *name* into literal string segments and allowed integer index ranges.
+
+    Bracket expressions ``[start:stop:step]`` are decoded into :class:`range`
+    objects; ``*`` outside brackets is left as-is and handled by
+    :func:`find_names`.
+
+    Examples
+    --------
+    >>> decode_name('a_[-4:5:2]_b_[0:2]')
+    (['a_', '_b_', ''], [range(-4, 5, 2), range(0, 2)])
+    """
+    name = str(name)
+    replaces = re.finditer(r'\[([-+]?\d*):([-+]?\d*):*([-+]?\d*)\]', name)
+    strings, ranges = [], []
+    string_start = 0
+    for replace in replaces:
+        start, stop, step = replace.groups()
+        start = default_start if not start else int(start)
+        stop = default_stop if not stop else int(stop)
+        step = default_step if not step else int(step)
+        if start is None:
+            raise ValueError('Lower limit required for parameter index range')
+        if stop is None:
+            raise ValueError('Upper limit required for parameter index range')
+        strings.append(name[string_start:replace.start()])
+        string_start = replace.end()
+        ranges.append(range(start, stop, step))
+    strings.append(name[string_start:])
+    return strings, ranges
+
+
+def find_names(allnames, name, quiet=True):
+    """Return the subset of *allnames* matching *name*.
+
+    *name* may be a single string or a list of strings.  Each pattern supports:
+
+    * ``*`` – wildcard matching any substring (converted to non-greedy ``.*?``).
+    * ``[start:stop]`` / ``[start:stop:step]`` – integer index ranges.
+    * An already-compiled :class:`re.Pattern` (skips bracket parsing).
+
+    Parameters
+    ----------
+    allnames : list[str]
+        Candidate names to search.
+    name : str, list[str], re.Pattern
+        Pattern(s) to match against *allnames*.
+    quiet : bool, default=True
+        If ``False``, raise :class:`ValueError` when no match is found.
+
+    Returns
+    -------
+    list[str]
+        Matching names from *allnames*, in their original order.
+
+    Examples
+    --------
+    >>> find_names(['a_1', 'a_2', 'b_1'], 'a_*')
+    ['a_1', 'a_2']
+    >>> find_names(['a_1', 'a_2', 'b_1'], ['a_[:]', 'b_[:]'])
+    ['a_1', 'a_2', 'b_1']
+    """
+    if not allnames:
+        return []
+    if isinstance(name, (list, tuple)):
+        toret = []
+        for n in name:
+            toret += find_names(allnames, n, quiet=quiet)
+        return toret
+    if isinstance(name, re.Pattern):
+        pattern, ranges = name, []
+    else:
+        pat_str = name.replace('*', '.*?') + '$'
+        strings, ranges = decode_name(pat_str)
+        pattern = re.compile(r'([-+]?\d*)'.join(strings))
+    toret = []
+    for candidate in allnames:
+        match = re.match(pattern, candidate)
+        if match:
+            add = True
+            for s, ra in zip(match.groups(), ranges):
+                if int(s) not in ra:
+                    add = False
+                    break
+            if add:
+                toret.append(candidate)
+    if not toret and not quiet:
+        raise ValueError('No match found for {}'.format(name))
+    return toret
+
+
+# ── Parameter-specific JSON encoder / decoder ─────────────────────────────────
+
+class ParameterEncoder(NumpyEncoder):
+    """JSON encoder that additionally serialises :class:`ParameterPrior` objects.
+
+    ±inf limit values are converted to ``null`` (JSON / Python ``None``).
+    :class:`ParameterPrior.__init__` already maps ``None`` limits back to ±inf
+    on reconstruction, so the round-trip is lossless.
+    """
+
+    def default(self, obj):
+        if isinstance(obj, ParameterPrior):
+            lo, hi = obj.limits
+            d = {'__class__': 'ParameterPrior',
+                 'dist': obj.dist,
+                 'limits': [None if not np.isfinite(lo) else float(lo),
+                            None if not np.isfinite(hi) else float(hi)]}
+            if obj.shape is not None:
+                d['shape'] = list(obj.shape)
+            d.update(obj.attrs)
+            return d
+        return super().default(obj)
+
+
+def _parameter_object_hook(d):
+    """``object_hook`` for :func:`json.loads` that reconstructs :class:`ParameterPrior`."""
+    if d.get('__class__') == 'ParameterPrior':
+        d = dict(d)
+        d.pop('__class__')
+        if d.get('limits') is not None:
+            d['limits'] = tuple(d['limits'])   # __init__ maps None → ±inf
+        if d.get('shape') is not None:
+            d['shape'] = tuple(d['shape'])
+        return ParameterPrior(**d)
+    return d
+
+
+def _iter_nodes(value, _seen=None):
+    """Yield every :class:`Node` reachable from *value* through standard containers.
+
+    Descends into ``list``/``tuple``/``set``/``frozenset``/``dict`` (both keys and
+    values) but stops at any :class:`Node` (yielding it without descending into its
+    own attributes) and at non-container leaves (arrays, scalars, strings, arbitrary
+    objects).  Cycle-safe via an id-based visited set.
+    """
+    if _seen is None:
+        _seen = set()
+    if id(value) in _seen:
+        return
+    _seen.add(id(value))
+    if isinstance(value, Node):
+        yield value            # a Node is a leaf dependency; do not descend into it
+    elif isinstance(value, dict):
+        for key, val in value.items():
+            yield from _iter_nodes(key, _seen)
+            yield from _iter_nodes(val, _seen)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        for val in value:
+            yield from _iter_nodes(val, _seen)
+    # else: array / scalar / str / arbitrary object → not a dependency container
+
+
+def _substitute_node(value, match, new):
+    """Return *value* with every Node satisfying ``match(node)`` replaced by *new*.
+
+    Mutating, path-aware sibling of :func:`_iter_nodes`: rebuilds standard containers
+    (``list``/``tuple``/``set``/``frozenset``/``dict``, keys and values) so a node held
+    in e.g. a tuple-of-tuples is replaced.  Does not descend into Nodes (a Node is
+    replaced as a whole when it matches).
+    """
+    if isinstance(value, Node):
+        return new if match(value) else value
+    if isinstance(value, dict):
+        return {_substitute_node(key, match, new): _substitute_node(val, match, new) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_substitute_node(val, match, new) for val in value]
+    if isinstance(value, tuple):
+        return tuple(_substitute_node(val, match, new) for val in value)
+    if isinstance(value, set):
+        return {_substitute_node(val, match, new) for val in value}
+    if isinstance(value, frozenset):
+        return frozenset(_substitute_node(val, match, new) for val in value)
+    return value
+
+
 class Node:
     """Common base for mutable objects traced in the pipeline."""
 
     _is_calculator = False
-    _updated = False  # set to True by update(); reset to False by CompiledGraph.__init__
 
     def __getattribute__(self, name):
         value = object.__getattribute__(self, name)
         if not name.startswith('_'):
             ctx = getattr(_compile_context, 'ctx', None)
             if ctx is not None and ctx.phase == 'call' and ctx.stack and ctx.stack[-1] is self:
-                nodes = []
-                if isinstance(value, Node):
-                    nodes = [value]
-                elif isinstance(value, (list, tuple)):
-                    nodes = [v for v in value if isinstance(v, Node)]
-                for node in nodes:
+                for node in _iter_nodes(value):
                     if object.__getattribute__(node, '_is_calculator'):
                         if id(node) not in ctx.traced:
                             raise RuntimeError(
@@ -62,15 +257,22 @@ class Variable(Node):
     Parameter is a subclass adding prior/ref/sampling metadata.
     """
 
-    def __init__(self, name, value=None, derived=False):
-        self._name = str(name)
+    def __init__(self, name=None, value=None, derived=False, latex=None, namespace=None, basename=None, shape=None):
+        # Name may embed a namespace via NAMESPACE_SEP ('.'); ``basename`` overrides the
+        # parsed basename and ``namespace`` is prepended to any embedded namespace.
+        parts = str(name).split(NAMESPACE_SEP) if name is not None else ['']
+        bn = str(basename) if basename is not None else parts[-1]
+        embedded_ns = NAMESPACE_SEP.join(parts[:-1])
+        ns = NAMESPACE_SEP.join(filter(None, [namespace, embedded_ns])) if namespace else embedded_ns
+        self._name = NAMESPACE_SEP.join([ns, bn]) if ns else bn
+        self._latex = latex
         self._derived = bool(derived)
         if value is not None:
             v = np.asarray(value)
-            self.shape = v.shape
+            self.shape = tuple(shape) if shape is not None else v.shape
             self.value = float(v) if v.shape == () else v
         else:
-            self.shape = ()
+            self.shape = tuple(shape) if shape is not None else ()
             self._value = None
 
     @property
@@ -78,8 +280,34 @@ class Variable(Node):
         return self._name
 
     @property
+    def basename(self):
+        return self._name.split(NAMESPACE_SEP)[-1]
+
+    @property
+    def namespace(self):
+        parts = self._name.split(NAMESPACE_SEP)
+        return NAMESPACE_SEP.join(parts[:-1]) if len(parts) > 1 else ''
+
+    @property
     def derived(self):
         return self._derived
+
+    def latex(self, namespace=False, inline=False):
+        """Return LaTeX representation, optionally with namespace subscript and ``$`` delimiters."""
+        if self._latex is not None:
+            s = self._latex
+            if namespace and self.namespace:
+                ns = self.namespace
+                m1 = re.match(r'(.*)_(.)$', s)
+                m2 = re.match(r'(.*)_{(.*)}$', s)
+                if m1:
+                    s = r'%s_{%s,\mathrm{%s}}' % (m1.group(1), m1.group(2), ns)
+                elif m2:
+                    s = r'%s_{%s,\mathrm{%s}}' % (m2.group(1), m2.group(2), ns)
+                else:
+                    s = r'%s_{\mathrm{%s}}' % (s, ns)
+            return f'${s}$' if inline else s
+        return self._name
 
     @property
     def value(self):
@@ -99,14 +327,50 @@ class Variable(Node):
         return self._value
 
     def update(self, **kwargs):
+        if not _in_construction():
+            raise RuntimeError('update() can only be called during construction '
+                               '(__init__/__post_init__); reconstruct or use replace() instead.')
         self.__init__(
             kwargs.get('name', self._name),
             value=kwargs.get('value', self._value),
             derived=kwargs.get('derived', self._derived),
+            latex=kwargs.get('latex', self._latex),
         )
-        if getattr(_compile_context, 'ctx', None) is None:
-            self._updated = True
         return self
+
+    def __getstate__(self, to_file=False):
+        if to_file:
+            # Include 'shape' so that Chain can distinguish intrinsic Variable.shape
+            # from the leading sample dimensions stored in _value (backward-compat: old
+            # files without 'shape' fall back to inferring shape from value on load).
+            meta = {'__class__': 'Variable', 'name': self._name, 'derived': self._derived,
+                    'latex': self._latex, 'shape': list(self.shape)}
+            state = {'attrs': {'meta': json.dumps(meta)}}
+            if self._value is not None:
+                state['value'] = np.asarray(self._value)
+            return state
+        return {'name': self._name, 'value': self._value, 'derived': self._derived,
+                'latex': self._latex, 'shape': self.shape}
+
+    def __setstate__(self, state):
+        if 'attrs' in state:
+            # file format: metadata in JSON, value as numpy dataset
+            raw = state['attrs'].get('meta', '{}')
+            if isinstance(raw, bytes):
+                raw = raw.decode()
+            meta = json.loads(raw)
+            self.__init__(name=meta['name'], value=state.get('value'), derived=meta.get('derived', False),
+                          latex=meta.get('latex'))
+            # Restore intrinsic shape when explicitly stored (used by Chain to keep
+            # Variable.shape = per-sample shape, separate from the leading sample dims).
+            if 'shape' in meta:
+                self.shape = tuple(meta['shape'])
+        else:
+            # in-memory format
+            self.__init__(name=state['name'], value=state.get('value'), derived=state.get('derived', False),
+                          latex=state.get('latex'))
+            if 'shape' in state:
+                self.shape = tuple(state['shape'])
 
     # Minimal FD defaults so ExternalCalculator works when Variable is a dep.
     @property
@@ -116,6 +380,20 @@ class Variable(Node):
     @property
     def fd_acc(self):
         return 2
+
+    @property
+    def dtype(self):
+        # Delegate to the stored value's .dtype when available (works for both
+        # numpy arrays and JAX-traced values without concretizing the trace).
+        if hasattr(self._value, 'dtype'):
+            return self._value.dtype
+        return np.asarray(self._value).dtype
+
+    @property
+    def ndim(self):
+        if hasattr(self._value, 'ndim'):
+            return self._value.ndim
+        return np.ndim(self._value)
 
     def __jax_array__(self):
         return jnp.asarray(self._value)
@@ -145,6 +423,12 @@ class Variable(Node):
 
     def __hash__(self):
         return hash(self._name)
+
+    def clone(self, **kwargs):
+        """Return a copy with selected attributes overridden."""
+        state = self.__getstate__()
+        state.update(kwargs)
+        return Variable(**state)
 
     def __repr__(self):
         return f'Variable({self._name!r})'
@@ -221,6 +505,7 @@ class ParameterPrior:
                     return jnp.where((lo_ < x) & (x < hi_), 0., -jnp.inf)
                 self._logpdf_fn = _logpdf
                 self._sample_fn = None
+                self._ppf_fn = None
                 finite = [l for l in (lo, hi) if np.isfinite(l)]
                 self._center = float(np.mean(finite)) if finite else 0.
                 self._std = None
@@ -230,10 +515,14 @@ class ParameterPrior:
                     return jax.scipy.stats.uniform.logpdf(jnp.asarray(x), loc=lo_, scale=hi_ - lo_)
                 def _sample(key, shape):
                     return jax.random.uniform(key, shape=shape, minval=lo_, maxval=hi_, dtype=jnp.float64)
+                def _ppf(u, _lo=lo_, _hi=hi_):
+                    return _lo + jnp.asarray(u, dtype=float) * (_hi - _lo)
                 self._logpdf_fn = _logpdf
                 self._sample_fn = _sample
+                self._ppf_fn = _ppf
                 self._center = (lo + hi) / 2.
                 self._std = (hi - lo) / float(np.sqrt(12.))
+            self._logpdf_center_val = float(self._logpdf_fn(jnp.asarray(self._center)))
             return
 
         # ── norm (with optional truncation via truncnorm) ─────────────────────
@@ -246,6 +535,8 @@ class ParameterPrior:
                     return jax.scipy.stats.norm.logpdf(jnp.asarray(x), loc=loc_, scale=scale_)
                 def _sample(key, shape):
                     return jax.random.normal(key, shape=shape, dtype=jnp.float64) * scale_ + loc_
+                def _ppf(u, _s=scale_, _l=loc_):
+                    return jax.scipy.special.ndtri(jnp.asarray(u, dtype=float)) * _s + _l
                 self._center, self._std = loc_, scale_
             else:
                 a = float((lo - loc_) / scale_) if np.isfinite(lo) else -np.inf
@@ -259,9 +550,15 @@ class ParameterPrior:
                     u = jax.random.uniform(key, shape=shape, minval=_plo, maxval=_phi, dtype=jnp.float64)
                     return jax.scipy.special.ndtri(u) * _s + _l
                 rv = sp.truncnorm(a, b, loc=loc_, scale=scale_)
+                # inverse truncated-normal CDF: map u in [0, 1] into the truncated
+                # quantile range [p_lo_, p_hi_], then apply the (JAX) inverse normal CDF.
+                def _ppf(u, _plo=p_lo_, _phi=p_hi_, _s=scale_, _l=loc_):
+                    return jax.scipy.special.ndtri(_plo + jnp.asarray(u, dtype=float) * (_phi - _plo)) * _s + _l
                 self._center, self._std = float(rv.mean()), float(rv.std())
             self._logpdf_fn = _logpdf
             self._sample_fn = _sample
+            self._ppf_fn = _ppf
+            self._logpdf_center_val = float(self._logpdf_fn(jnp.asarray(self._center)))
             return
 
         # ── other dists via jax.scipy.stats ──────────────────────────────────
@@ -282,14 +579,25 @@ class ParameterPrior:
                 return jnp.where((_lo < x) & (x < _hi), jss.logpdf(x, **attrs) - _lz, -jnp.inf)
         self._logpdf_fn = _logpdf
 
-        # sampling via inverse CDF (scipy ppf, result converted to JAX)
+        # sampling and ppf via inverse CDF (scipy, result converted to JAX)
         rv_sp = getattr(sp, dist)(**attrs)
         p_lo_ = float(rv_sp.cdf(lo) if np.isfinite(lo) else 0.)
         p_hi_ = float(rv_sp.cdf(hi) if np.isfinite(hi) else 1.)
         def _sample(key, shape, _rv=rv_sp, _plo=p_lo_, _phi=p_hi_):
             u = jax.random.uniform(key, shape=shape, minval=_plo, maxval=_phi, dtype=jnp.float64)
             return jnp.asarray(_rv.ppf(np.asarray(u)), dtype=jnp.float64)
+        # jax.scipy.stats has no generic ppf; keep scipy's inverse CDF but expose it
+        # through jax.pure_callback so it stays traceable under jit/vmap (same pattern
+        # as ExternalCalculator in base.py).
+        def _ppf(u, _rv=rv_sp, _plo=p_lo_, _phi=p_hi_):
+            u = jnp.asarray(u, dtype=jnp.float64)
+            def _scipy_ppf(uu):
+                return np.asarray(_rv.ppf(_plo + np.asarray(uu) * (_phi - _plo)), dtype='f8')
+            return jax.pure_callback(
+                _scipy_ppf, jax.ShapeDtypeStruct(jnp.shape(u), jnp.float64), u,
+                vmap_method='broadcast_all')
         self._sample_fn = _sample
+        self._ppf_fn = _ppf
 
         # moments via scipy
         try:
@@ -307,10 +615,18 @@ class ParameterPrior:
             self._std = s if np.isfinite(s) else None
         except Exception:
             self._center, self._std = 0., None
+        self._logpdf_center_val = float(self._logpdf_fn(jnp.asarray(self._center)))
 
     def logpdf(self, x):
-        """JAX-differentiable log probability density at x."""
-        return self._logpdf_fn(jnp.asarray(x))
+        """Return log PDF relative to center: logpdf(x) - logpdf(center) ≤ 0.
+
+        Removing the constant logpdf at the center (= maximum for unimodal
+        priors) means the prior contribution is always ≤ 0 and equals 0 at the
+        peak, so the posterior equals the likelihood at the best-fit point.
+        This matches the behaviour of the backup desilike ``remove_zerolag=True``
+        convention.
+        """
+        return self._logpdf_fn(jnp.asarray(x)) - self._logpdf_center_val
 
     def sample(self, key, shape=None):
         """Draw samples using JAX PRNG key; raises if prior is improper.
@@ -324,6 +640,35 @@ class ParameterPrior:
         if isinstance(shape, int):
             shape = (shape,)
         return self._sample_fn(key, shape)
+
+    def ppf(self, u):
+        """Percent-point function (inverse CDF) at quantile *u* ∈ [0, 1].
+
+        Maps a uniformly distributed value *u* to parameter space using the
+        prior's inverse CDF.  This is the prior transform required by nested
+        samplers such as ``dynesty`` and ``nautilus``.
+
+        JAX-traceable (``jit``/``vmap``-able): *u* may be a scalar or an array,
+        and the return value is a JAX array of the same shape.
+
+        Parameters
+        ----------
+        u : float or array_like
+            Quantile(s) in [0, 1].
+
+        Returns
+        -------
+        jax.Array
+            Parameter value(s) at quantile *u*.
+
+        Raises
+        ------
+        ValueError
+            If the prior is improper (no finite integral).
+        """
+        if self._ppf_fn is None:
+            raise ValueError('Cannot evaluate ppf of improper prior')
+        return self._ppf_fn(u)
 
     def center(self):
         """Return distribution center as a Python float."""
@@ -537,15 +882,7 @@ class Parameter(Variable):
         return self._value
 
     # ── read-only properties ──────────────────────────────────────────────────
-
-    @property
-    def basename(self):
-        return self._name.split(NAMESPACE_SEP)[-1]
-
-    @property
-    def namespace(self):
-        parts = self._name.split(NAMESPACE_SEP)
-        return NAMESPACE_SEP.join(parts[:-1]) if len(parts) > 1 else ''
+    # basename / namespace / latex() are inherited from Variable.
 
     @property
     def proposal(self):
@@ -578,34 +915,20 @@ class Parameter(Variable):
     def solved(self):
         return self._derived in self._solved_values
 
-    # ── latex ─────────────────────────────────────────────────────────────────
-
-    def latex(self, namespace=False, inline=False):
-        """Return LaTeX representation, optionally with namespace subscript and $ delimiters."""
-        if self._latex is not None:
-            s = self._latex
-            if namespace and self.namespace:
-                ns = self.namespace
-                m1 = re.match(r'(.*)_(.)$', s)
-                m2 = re.match(r'(.*)_{(.*)}$', s)
-                if m1:
-                    s = r'%s_{%s,\mathrm{%s}}' % (m1.group(1), m1.group(2), ns)
-                elif m2:
-                    s = r'%s_{%s,\mathrm{%s}}' % (m2.group(1), m2.group(2), ns)
-                else:
-                    s = r'%s_{\mathrm{%s}}' % (s, ns)
-            return f'${s}$' if inline else s
-        return self._name
+    # latex() is inherited from Variable.
 
     # ── cloning / serialisation ───────────────────────────────────────────────
 
     def update(self, **kwargs):
-        """Re-initialize in-place with overridden attributes; value= bypasses the derived-expression guard."""
+        """Re-initialize in-place with overridden attributes; value= bypasses the derived-expression guard.
+
+        Only permitted during construction (``__init__``/``__post_init__``)."""
+        if not _in_construction():
+            raise RuntimeError('update() can only be called during construction '
+                               '(__init__/__post_init__); reconstruct or use replace() instead.')
         state = self.__getstate__()
         state.update(kwargs)
         self.__init__(**state)
-        if getattr(_compile_context, 'ctx', None) is None:
-            self._updated = True
         return self
 
     def clone(self, **kwargs):
@@ -629,29 +952,53 @@ class Parameter(Variable):
         new.ref = self.ref.copy()
         return new
 
-    def __getstate__(self):
-        return {
+    def __getstate__(self, to_file=False):
+        state = {
             'name': self._name,
-            'value': self._value,
-            'prior': self.prior.__getstate__(),
-            'ref': self.ref.__getstate__(),
+            'prior': self.prior if to_file else self.prior.__getstate__(),
+            'ref': self.ref if to_file else self.ref.__getstate__(),
             'latex': self._latex,
             'fixed': self.fixed,
             'derived': self._derived,
-            'shape': self.shape,
+            'shape': list(self.shape) if to_file else self.shape,
             'proposal': self._proposal,
             'fd_eps': self._fd_eps,
             'fd_acc': self._fd_acc,
-            'depends': dict(self.depends),
+            'depends': {k: dep.name for k, dep in self.depends.items()} if to_file else dict(self.depends),
         }
+        if to_file:
+            file_state = {'attrs': {'meta': json.dumps({'__class__': 'Parameter', **state}, cls=ParameterEncoder)}}
+            if self._value is not None:
+                file_state['value'] = np.asarray(self._value)
+            return file_state
+        state['value'] = self._value
+        return state
 
     def __setstate__(self, state):
-        self.__init__(**state)
+        if 'attrs' in state:
+            # file format: metadata in JSON, value as numpy dataset
+            raw = state['attrs'].get('meta', '{}')
+            if isinstance(raw, bytes):
+                raw = raw.decode()
+            meta = json.loads(raw, object_hook=_parameter_object_hook)
+            self.__init__(
+                name=meta['name'], value=state.get('value'),
+                prior=meta.get('prior'), ref=meta.get('ref'),
+                latex=meta.get('latex'), fixed=meta.get('fixed', True),
+                derived=meta.get('derived', False),
+                shape=tuple(meta.get('shape', [])),
+                proposal=meta.get('proposal'), fd_eps=meta.get('fd_eps'),
+                fd_acc=meta.get('fd_acc', 2), depends={})
+            # depends resolved later by VariableCollection.__setstate__
+        else:
+            # in-memory format: feed directly to __init__
+            self.__init__(**state)
 
     def __repr__(self):
         return f'Parameter({self._name!r}, {"fixed" if self.fixed else "varied"})'
 
 
+@register_type
 class VariableCollection:
     """Ordered collection of Variable (or Parameter) instances.
 
@@ -662,12 +1009,14 @@ class VariableCollection:
     - another VariableCollection (shallow copy)
     """
 
+    _name = 'VariableCollection'
+
     def __init__(self, data=None):
         self._data = []
         if data is None:
             return
         if isinstance(data, VariableCollection):
-            self._data = [copy.copy(p) for p in data._data]
+            self._data = list(data._data)
             return
         if isinstance(data, list):
             for item in data:
@@ -725,10 +1074,45 @@ class VariableCollection:
         return [p.name for p in self._data]
 
     def select(self, **kwargs):
-        """Return new collection containing variables whose attributes match all kwargs."""
-        result = VariableCollection()
+        """Return new collection containing variables whose attributes match all kwargs.
+
+        String-valued attributes ``name``, ``basename``, and ``namespace``
+        support ``*`` wildcards and ``[start:stop:step]`` index range patterns
+        (see :func:`find_names`).  All other attributes are matched with
+        equality; if the supplied value is a sequence each element is tried.
+
+        Examples
+        --------
+        >>> col.select(name='omega_*')           # wildcard
+        >>> col.select(name='a_[0:3]')           # index range 0,1,2
+        >>> col.select(derived=False)            # exact match
+        """
+        _name_attrs = {'name', 'basename', 'namespace'}
+        result = type(self)()
+        result._data = []
+        allnames_cache = {}  # cached per string attribute key
         for p in self._data:
-            if all(getattr(p, k, None) == v for k, v in kwargs.items()):
+            match = True
+            for key, value in kwargs.items():
+                param_value = getattr(p, key, None)
+                if key in _name_attrs:
+                    # Build the per-key candidate list once
+                    if key not in allnames_cache:
+                        allnames_cache[key] = [getattr(q, key, None) for q in self._data]
+                    candidates = allnames_cache[key]
+                    matched_names = find_names(candidates, value)
+                    key_match = param_value in matched_names
+                else:
+                    key_match = (value == param_value)
+                    if not key_match:
+                        try:
+                            key_match = any(v == param_value for v in value)
+                        except TypeError:
+                            pass
+                if not key_match:
+                    match = False
+                    break
+            if match:
                 result._data.append(p)
         return result
 
@@ -750,3 +1134,138 @@ class VariableCollection:
 
     def __repr__(self):
         return f'VariableCollection({self.names()})'
+
+    # ── serialisation ─────────────────────────────────────────────────────────
+
+    def __getstate__(self, to_file=False):
+        """Return a state dict for this collection.
+
+        Parameters
+        ----------
+        to_file : bool
+            When ``False`` (default) each entry is a plain Python dict suitable
+            for in-memory copy/pickle.  When ``True`` each entry uses the
+            file-ready format produced by :meth:`Variable.__getstate__` /
+            :meth:`Parameter.__getstate__` (numpy value as a native dataset,
+            all other metadata as a JSON string); a ``'__names__'`` array
+            preserves insertion order and a root ``'attrs'`` carries the class
+            tag used by :func:`~desilike.utils.read` for dispatch.
+        """
+        state = {}
+        if to_file:
+            state['attrs'] = {'__class__': self._name}
+            state['__names__'] = np.array([p.name for p in self._data])
+        for p in self._data:
+            state[p.name] = p.__getstate__(to_file=to_file)
+        return state
+
+    def __setstate__(self, state):
+        """Populate from a state dict produced by :meth:`__getstate__`."""
+        self._data = []
+        is_file = 'attrs' in state and '__class__' in state.get('attrs', {})
+
+        # Determine ordered names
+        if is_file:
+            names = [str(n) for n in state.get('__names__', [])]
+        else:
+            names = [k for k in state if k not in ('__names__', 'attrs')]
+
+        # Helper: determine Variable vs Parameter from a sub-state
+        def _is_parameter(pstate):
+            if 'attrs' in pstate:
+                raw = pstate['attrs'].get('meta', '{}')
+                if isinstance(raw, bytes):
+                    raw = raw.decode()
+                return json.loads(raw).get('__class__') == 'Parameter'
+            return 'prior' in pstate
+
+        # First pass: build objects (depends left empty for file format)
+        params_by_name = {}
+        for name in names:
+            pstate = state[name]
+            cls = Parameter if _is_parameter(pstate) else Variable
+            p = cls.__new__(cls)
+            p.__setstate__(pstate)
+            params_by_name[p.name] = p
+
+        # Second pass: resolve depends (file format stores them as name-strings)
+        if is_file:
+            for name in names:
+                pstate = state[name]
+                if not _is_parameter(pstate):
+                    continue
+                raw = pstate['attrs'].get('meta', '{}')
+                if isinstance(raw, bytes):
+                    raw = raw.decode()
+                dep_names = json.loads(raw).get('depends', {})
+                if dep_names:
+                    resolved = {k: params_by_name[n] for k, n in dep_names.items() if n in params_by_name}
+                    if resolved:
+                        params_by_name[name].update(depends=resolved)
+
+        self._data = [params_by_name[n] for n in names if n in params_by_name]
+
+    def write(self, filename):
+        """Write to an HDF5 or text file.
+
+        The format is determined by the file extension:
+
+        - ``.h5`` / ``.hdf5`` — HDF5 via h5py; each parameter's value is stored
+          as a native dataset and all other metadata as a JSON string attribute.
+        - ``.txt`` — directory of ``.txt`` / ``.json`` files (useful for
+          human-readable inspection).
+
+        Parameters
+        ----------
+        filename : str
+        """
+        _utils_write(filename, self)
+
+    @classmethod
+    def read(cls, filename):
+        """Read from an HDF5 or text file written by :meth:`write`.
+
+        Parameters
+        ----------
+        filename : str
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return _utils_read(filename)
+
+
+def expand_dict(di, names):
+    """Expand a (possibly wildcard) dict to cover all *names*.
+
+    Parameters
+    ----------
+    di : dict, sequence, or scalar
+        Input mapping.  A bare scalar is treated as ``{'*': di}`` (applied to
+        all names).  A sequence is zipped with *names*.  Wildcard ``*`` in
+        keys matches any suffix.
+    names : list of str
+        Target parameter names.
+
+    Returns
+    -------
+    dict
+        A dict with exactly the keys in *names*.
+
+    Examples
+    --------
+    >>> expand_dict({'*': 2}, ['a', 'b'])
+    {'a': 2, 'b': 2}
+    >>> expand_dict({'a*': 2, 'b': 1}, ['a1', 'a2', 'b'])
+    {'a1': 2, 'a2': 2, 'b': 1}
+    """
+    toret = dict.fromkeys(names)
+    if isinstance(di, (list, tuple)):
+        di = dict(zip(names, di))
+    if not hasattr(di, 'items'):
+        di = {'*': di}
+    for template, value in di.items():
+        for matched_name in find_names(names, template):
+            toret[matched_name] = value
+    return toret

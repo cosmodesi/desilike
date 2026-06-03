@@ -11,21 +11,21 @@ def _make_fiducial():
 
 
 def _make_spectrum_theory(k, ells=(0, 2)):
-    from desilike.theories.galaxy_clustering import (DampedBAOWigglesSpectrum2Poles,
+    from desilike.theories.galaxy_clustering import (DampedBAOWigglesPTSpectrum2Poles,
                                                       DampedBAOWigglesTracerSpectrum2Poles,
                                                       BAOSpectrum2Template)
     fiducial = _make_fiducial()
     tmpl = BAOSpectrum2Template(k=k, z=0.5, fiducial=fiducial)
-    pt = DampedBAOWigglesSpectrum2Poles(template=tmpl, ells=ells)
+    pt = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=ells)
     return DampedBAOWigglesTracerSpectrum2Poles(k=k, pt=pt, ells=ells)
 
 
 def _make_correlation_theory(s, ells=(0, 2)):
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelation2Poles, DampedBAOWigglesSpectrum2Poles, BAOSpectrum2Template
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelation2Poles, DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
     fiducial = _make_fiducial()
     kin = np.geomspace(1e-4, 0.6, 300)
     tmpl = BAOSpectrum2Template(k=kin, z=0.5, fiducial=fiducial)
-    pt = DampedBAOWigglesSpectrum2Poles(template=tmpl, ells=ells)
+    pt = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=ells)
     theory = DampedBAOWigglesTracerCorrelation2Poles(s=s, pt=pt, ells=ells)
     return theory
 
@@ -33,7 +33,7 @@ def _make_correlation_theory(s, ells=(0, 2)):
 # ── Spectrum2PolesObservable ────────────────────────────────────────────────
 
 def test_spectrum2poles_no_window():
-    """Spectrum2PolesObservable: no window, flattheory matches theory.spectrum.ravel()."""
+    """Spectrum2PolesObservable: no window, flattheory matches theory.poles.ravel()."""
     from desilike.observables import Spectrum2PolesObservable
     from desilike.base import compile
 
@@ -48,7 +48,7 @@ def test_spectrum2poles_no_window():
 
     assert obs.flattheory.shape == (len(ells) * len(k),)
     assert obs.flatdata.shape == (len(ells) * len(k),)
-    np.testing.assert_allclose(np.asarray(obs.flattheory), np.ravel(theory.spectrum), rtol=1e-10)
+    np.testing.assert_allclose(np.asarray(obs.flattheory), np.ravel(theory.poles), rtol=1e-10)
 
 
 def test_spectrum2poles_with_data():
@@ -95,14 +95,14 @@ def test_spectrum2poles_with_window():
     pipe(pipe_params)
 
     assert obs.flattheory.shape == (n_data,)
-    expected = window @ np.ravel(theory.spectrum)
+    expected = window @ np.ravel(theory.poles)
     np.testing.assert_allclose(np.asarray(obs.flattheory), expected, rtol=1e-6)
 
 
 # ── Correlation2PolesObservable ─────────────────────────────────────────────
 
 def test_correlation2poles_no_window():
-    """Correlation2PolesObservable: no window, flattheory matches theory.correlation.ravel()."""
+    """Correlation2PolesObservable: no window, flattheory matches theory.poles.ravel()."""
     from desilike.observables import Correlation2PolesObservable
     from desilike.base import compile
 
@@ -116,7 +116,7 @@ def test_correlation2poles_no_window():
     pipe(pipe_params)
 
     assert obs.flattheory.shape == (len(ells) * len(s),)
-    np.testing.assert_allclose(np.asarray(obs.flattheory), np.ravel(theory.correlation), rtol=1e-10)
+    np.testing.assert_allclose(np.asarray(obs.flattheory), np.ravel(theory.poles), rtol=1e-10)
 
 
 def test_correlation2poles_with_data():
@@ -210,12 +210,12 @@ def test_gaussian_likelihood_scale_covariance():
     obs1 = Spectrum2PolesObservable(data=data, theory=theory, k=k, ells=ells)
     like1 = ObservablesGaussianLikelihood(observables=obs1, covariance=cov, scale_covariance=1.)
 
-    from desilike.theories.galaxy_clustering import (DampedBAOWigglesSpectrum2Poles,
+    from desilike.theories.galaxy_clustering import (DampedBAOWigglesPTSpectrum2Poles,
                                                       DampedBAOWigglesTracerSpectrum2Poles,
                                                       BAOSpectrum2Template)
     fiducial = _make_fiducial()
     tmpl2 = BAOSpectrum2Template(k=k, z=0.5, fiducial=fiducial)
-    pt2 = DampedBAOWigglesSpectrum2Poles(template=tmpl2, ells=ells)
+    pt2 = DampedBAOWigglesPTSpectrum2Poles(template=tmpl2, ells=ells)
     theory2 = DampedBAOWigglesTracerSpectrum2Poles(k=k, pt=pt2, ells=ells)
     obs2 = Spectrum2PolesObservable(data=data, theory=theory2, k=k, ells=ells)
     like2 = ObservablesGaussianLikelihood(observables=obs2, covariance=cov, scale_covariance=2.)
@@ -236,7 +236,7 @@ def test_gaussian_likelihood_multi_observable():
     from desilike.observables import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike.base import compile
-    from desilike.theories.galaxy_clustering import (DampedBAOWigglesSpectrum2Poles,
+    from desilike.theories.galaxy_clustering import (DampedBAOWigglesPTSpectrum2Poles,
                                                       BAOSpectrum2Template)
 
     k = np.linspace(0.01, 0.3, 15)
@@ -246,7 +246,7 @@ def test_gaussian_likelihood_multi_observable():
 
     # Use the same theory object for both observables so all parameters are shared.
     tmpl = BAOSpectrum2Template(k=k, z=0.5, fiducial=fiducial)
-    theory1 = theory2 = DampedBAOWigglesSpectrum2Poles(template=tmpl, ells=ells)
+    theory1 = theory2 = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=ells)
 
     rng = np.random.default_rng(6)
     data1 = rng.normal(size=n)
@@ -375,7 +375,7 @@ def test_spectrum2poles_lsstypes():
     import lsstypes as types
     from desilike.observables import Spectrum2PolesObservable
     from desilike.base import compile
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesSpectrum2Poles, BAOSpectrum2Template
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
 
     data = _make_spectrum2_lsstypes(size=8)
     window = _make_spectrum2_window(data, size=12)
@@ -383,7 +383,7 @@ def test_spectrum2poles_lsstypes():
 
     fiducial = _make_fiducial()
     tmpl = BAOSpectrum2Template(k=np.linspace(0.01, 0.2, 12), z=0.5, fiducial=fiducial)
-    theory = DampedBAOWigglesSpectrum2Poles(template=tmpl, ells=[0, 2])
+    theory = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=[0, 2])
 
     # lsstypes path
     obs = Spectrum2PolesObservable(data=data, theory=theory, window=window, covariance=covariance, name='obs1')
@@ -412,7 +412,7 @@ def test_spectrum3poles_lsstypes():
     import lsstypes as types
     from desilike.observables import Spectrum3PolesObservable
     from desilike.base import compile
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesSpectrum2Poles, BAOSpectrum2Template
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
 
     data = _make_spectrum3_lsstypes(size=5)
     window = _make_spectrum3_window(data, size=4)
@@ -422,7 +422,7 @@ def test_spectrum3poles_lsstypes():
     fiducial = _make_fiducial()
     kin = next(iter(window.theory)).coords('k')
     tmpl = BAOSpectrum2Template(k=kin[..., 0], z=0.5, fiducial=fiducial)
-    theory = DampedBAOWigglesSpectrum2Poles(template=tmpl, ells=[(0, 0, 0), (2, 0, 2)])
+    theory = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=[(0, 0, 0), (2, 0, 2)])
 
     obs = Spectrum3PolesObservable(data=data, theory=theory, window=window, covariance=covariance, name='obs1')
     assert obs.flatdata.shape == (data.size,)
@@ -442,7 +442,7 @@ def test_correlation2poles_lsstypes():
     from desilike.observables import Correlation2PolesObservable
     from desilike.base import compile
     from desilike.theories.galaxy_clustering import (DampedBAOWigglesTracerCorrelation2Poles,
-                                                      DampedBAOWigglesSpectrum2Poles,
+                                                      DampedBAOWigglesPTSpectrum2Poles,
                                                       BAOSpectrum2Template)
 
     data, window = _make_correlation2_lsstypes()
@@ -452,7 +452,7 @@ def test_correlation2poles_lsstypes():
     kin = np.geomspace(1e-4, 0.6, 300)
     sin = next(iter(window.theory)).coords('s')
     tmpl = BAOSpectrum2Template(k=kin, z=0.5, fiducial=fiducial)
-    pt = DampedBAOWigglesSpectrum2Poles(template=tmpl, ells=window.theory.ells)
+    pt = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=window.theory.ells)
     theory = DampedBAOWigglesTracerCorrelation2Poles(s=sin, pt=pt, ells=window.theory.ells)
 
     obs = Correlation2PolesObservable(data=data, theory=theory, window=window, covariance=covariance, name='obs1')
@@ -481,14 +481,14 @@ def test_gaussian_likelihood_lsstypes_covariance():
     from desilike.observables import Spectrum2PolesObservable
     from desilike.likelihoods import ObservablesGaussianLikelihood
     from desilike.base import compile
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesSpectrum2Poles, BAOSpectrum2Template
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
 
     data = _make_spectrum2_lsstypes(size=8)
     covariance = types.CovarianceMatrix(observable=data, value=np.eye(data.size))
 
     fiducial = _make_fiducial()
     tmpl = BAOSpectrum2Template(k=np.linspace(0.01, 0.2, 8), z=0.5, fiducial=fiducial)
-    theory = DampedBAOWigglesSpectrum2Poles(template=tmpl, ells=[0, 2])
+    theory = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=[0, 2])
 
     obs1 = Spectrum2PolesObservable(data=data, theory=theory, name='obs1')
     obs2 = Spectrum2PolesObservable(data=data, theory=theory, name='obs2')

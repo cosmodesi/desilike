@@ -8,7 +8,7 @@ import jax.numpy as jnp
 
 jax.config.update('jax_enable_x64', True)
 
-from desilike.parameter import ParameterPrior, Parameter, VariableCollection, NAMESPACE_SEP
+from desilike.parameter import ParameterPrior, Parameter, VariableCollection, NAMESPACE_SEP, decode_name, find_names
 
 
 # ── ParameterPrior ────────────────────────────────────────────────────────────
@@ -302,9 +302,11 @@ class TestVariableCollection:
         c1 = VariableCollection({'omega_m': 0.3, 'z': 0.5})
         c2 = VariableCollection(c1)
         assert c2.names() == c1.names()
-        # must be independent copies
-        c2['omega_m']._value = 99.
-        assert c1['omega_m'].value == 0.3
+        # Variable objects are shared (shallow copy of the list)
+        assert c2['omega_m'] is c1['omega_m']
+        # Lists are independent: adding to c2 doesn't affect c1
+        c2.set(Parameter('sigma8', value=0.8))
+        assert 'sigma8' not in c1.names()
 
     def test_set_insert_and_replace(self):
         c = VariableCollection()
@@ -389,4 +391,128 @@ class TestVariableCollection:
         c = VariableCollection({'omega_m': 0.3})
         assert 'omega_m' in repr(c)
 
+
+# ── decode_name ───────────────────────────────────────────────────────────────
+
+class TestDecodeName:
+    def test_no_brackets(self):
+        strings, ranges = decode_name('omega_m')
+        assert strings == ['omega_m']
+        assert ranges == []
+
+    def test_single_bracket(self):
+        strings, ranges = decode_name('a_[0:3]')
+        assert ranges == [range(0, 3)]
+        assert strings[0] == 'a_'
+
+    def test_multi_bracket(self):
+        strings, ranges = decode_name('a_[-4:5:2]_b_[0:2]')
+        assert ranges == [range(-4, 5, 2), range(0, 2)]
+
+    def test_wildcard_passthrough(self):
+        # '*' is not touched by decode_name; find_names performs the substitution
+        strings, ranges = decode_name('omega_*')
+        assert ranges == []
+        assert strings == ['omega_*']
+
+
+# ── find_names ────────────────────────────────────────────────────────────────
+
+class TestFindNames:
+    NAMES = ['omega_m', 'omega_b', 'sigma8', 'A_0', 'A_1', 'A_2', 'ns']
+
+    def test_exact(self):
+        assert find_names(self.NAMES, 'sigma8') == ['sigma8']
+
+    def test_star_wildcard(self):
+        assert find_names(self.NAMES, 'omega_*') == ['omega_m', 'omega_b']
+
+    def test_star_matches_all(self):
+        assert find_names(self.NAMES, '*') == self.NAMES
+
+    def test_range(self):
+        assert find_names(self.NAMES, 'A_[0:2]') == ['A_0', 'A_1']
+
+    def test_range_full(self):
+        assert find_names(self.NAMES, 'A_[0:3]') == ['A_0', 'A_1', 'A_2']
+
+    def test_list_of_patterns(self):
+        result = find_names(self.NAMES, ['omega_*', 'ns'])
+        assert result == ['omega_m', 'omega_b', 'ns']
+
+    def test_no_match_quiet(self):
+        assert find_names(self.NAMES, 'z_*') == []
+
+    def test_no_match_not_quiet(self):
+        with pytest.raises(ValueError):
+            find_names(self.NAMES, 'z_*', quiet=False)
+
+    def test_empty_allnames(self):
+        assert find_names([], 'omega_*') == []
+
+    def test_regex_pattern(self):
+        import re
+        pattern = re.compile(r'A_\d+$')
+        assert find_names(self.NAMES, pattern) == ['A_0', 'A_1', 'A_2']
+
+
+# ── VariableCollection.select with wildcards ──────────────────────────────────
+
+class TestSelectWildcard:
+    def _make(self):
+        c = VariableCollection()
+        for name in ['omega_m', 'omega_b', 'sigma8', 'A_0', 'A_1', 'ns']:
+            c.set(Parameter(name, value=1.0))
+        return c
+
+    def test_select_exact_name(self):
+        c = self._make()
+        s = c.select(name='sigma8')
+        assert s.names() == ['sigma8']
+
+    def test_select_star_wildcard(self):
+        c = self._make()
+        s = c.select(name='omega_*')
+        assert set(s.names()) == {'omega_m', 'omega_b'}
+
+    def test_select_range(self):
+        c = self._make()
+        s = c.select(name='A_[0:2]')
+        assert s.names() == ['A_0', 'A_1']
+
+    def test_select_combined_fixed_and_name(self):
+        c = VariableCollection()
+        c.set(Parameter('omega_m', value=0.3, prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.01}))
+        c.set(Parameter('omega_b', value=0.05, prior={'dist': 'norm', 'loc': 0.05, 'scale': 0.005}))
+        c.set(Parameter('z', value=0.5))   # fixed (no prior)
+        # wildcard name + attribute filter
+        s = c.select(name='omega_*', fixed=False)
+        assert set(s.names()) == {'omega_m', 'omega_b'}
+
+    def test_select_no_match_returns_empty(self):
+        c = self._make()
+        s = c.select(name='h_*')
+        assert len(s) == 0
+
+    def test_select_preserves_type(self):
+        """select on a VariableCollection returns a VariableCollection, not a base object."""
+        c = self._make()
+        s = c.select(name='omega_*')
+        assert type(s) is VariableCollection
+
+    def test_select_basename_wildcard(self):
+        c = VariableCollection()
+        c.set(Parameter('ns.omega_m', value=0.3))
+        c.set(Parameter('ns.omega_b', value=0.05))
+        c.set(Parameter('ns.sigma8', value=0.8))
+        s = c.select(basename='omega_*')
+        assert set(s.names()) == {'ns.omega_m', 'ns.omega_b'}
+
+    def test_select_namespace_wildcard(self):
+        c = VariableCollection()
+        c.set(Parameter('survey1.omega_m', value=0.3))
+        c.set(Parameter('survey2.omega_m', value=0.3))
+        c.set(Parameter('omega_b', value=0.05))
+        s = c.select(namespace='survey*')
+        assert set(s.names()) == {'survey1.omega_m', 'survey2.omega_m'}
 

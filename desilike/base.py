@@ -6,18 +6,22 @@ Two base classes:
 - ExternalCalculator: arbitrary Python/numpy, wrapped via pure_callback +
   custom_vjp (finite-difference backward pass) so that jit/vmap/grad all work.
 
-Lazy initialization:
-- Calculator(*args, **kwargs) stores args without calling __post_init__(). If a subclass defines __init__, args are saved automatically.
-- CompiledGraph calls __post_init__() during graph construction, then scans
-  instance attributes for Node objects to discover dependencies.
+Lifecycle:
+- Calculator(*args, **kwargs) saves args and runs __init__ (inside a construction context).
+  __init__ defines and updates ALL nodes (Parameters + Calculator deps + dep.update()), fixing
+  node identity at construction (enabling replace()/share_params() and cheap construction).
+- compile() runs __post_init__ on each node in dependency order (then __call__). __post_init__
+  is non-node setup only (numpy/scalars, non-Node helpers); it never creates nodes or calls update().
+- build_graph/CompiledGraph discover dependencies by scanning instance attributes for Node objects
+  set in __init__ (before __post_init__ runs).
 
 __call__() interface:
-- __call__(self) reads own params and dep outputs directly from self (e.g. self.A, self.cosmo.growth_factor).
-- The pipeline sets param attributes on self before invoking __call__().
+- The pipeline sets param attributes and update dep on self before invoking __call__().
+- __call__() reads own params and dep outputs directly from self (e.g. self.A, self.cosmo.growth_factor).
 - __call__() sets named output attributes on self (e.g. self.growth_factor).
 - __call__() may return any value (including self); that value
   is forwarded as the pipeline output if this node is the root. tree_flatten()
-  defines which outputs are passed to downstream nodes.
+  defines all __call__ products that may be useful to downstream nodes, and not aimed to be derived as Variable.
 
 tree_flatten / tree_unflatten:
 - Each calculator must define tree_flatten(self) -> (children, aux) and
@@ -38,7 +42,9 @@ from collections import defaultdict
 
 jax.config.update('jax_enable_x64', True)
 
-from .parameter import Node, Variable, Parameter, VariableCollection, _compile_context, _CompileContext
+from .parameter import (Node, Variable, Parameter, VariableCollection, _compile_context, _CompileContext,
+                        _iter_nodes, _substitute_node, _constructing, _in_construction)
+from .distributed import default_mpicomm, get_mpicomm, gather as _mpi_gather
 
 
 # ── base classes ──────────────────────────────────────────────────────────────
@@ -48,22 +54,30 @@ class Calculator(Node):
     Base class for calculators implemented with JAX ops.
 
     Subclasses define:
-      __post_init__(*args, **kwargs): wire dependencies and parameters by setting
-        Calculator instances (deps) and Variable/Parameter instances (params) as attributes.
-        Any Node-typed attribute (or list/tuple of Nodes) accessed during __post_init__
-        or __call__ is auto-registered as a dependency during compile().
+      __init__(*args, **kwargs): define AND update all nodes here — create every
+        Variable/Parameter and Calculator dependency as a public (non-underscore) attribute
+        (self.b1 = Parameter(...), self.pt = pt) and call any dep.update(...). These attributes
+        (incl. Nodes nested in list/tuple/dict) are auto-discovered as dependencies.
+      __post_init__(*args, **kwargs): non-node setup only — numpy/scalar config and non-Node
+        helper objects. May read what __init__ set; must NOT create Parameters or Calculator deps.
       __call__(self): read params via self.param.value and dep outputs via self.dep.attr;
-        compute and store output attributes; return the output value.
+        compute and store output attributes; return the output value (array, tuple, None, or self).
       tree_flatten(self) -> (children, aux): children = list of output arrays,
         aux = static data needed by tree_unflatten.
       tree_unflatten(cls, aux, children) -> instance: reconstruct an instance
         carrying only the output attrs (no dep refs, no init args).
 
-    Instantiation is lazy: __init__ stores args/kwargs and does NOT call __post_init__().
-    compile() calls __post_init__() then __call__() to discover dependencies.
+    __init__ runs at construction (saving args and wiring all nodes); __post_init__ runs at
+    compile() in dependency order, then __call__(). build_graph scans attributes for Nodes
+    (set in __init__) to discover dependencies before __post_init__ runs.
     """
 
     _is_calculator = True
+    # Whether this node is evaluated as a non-JAX (numpy/arbitrary-Python) calculator,
+    # wrapped via pure_callback + finite-difference JVP. Read off the *instance* at compile
+    # time, so a subclass may toggle it per-instance (e.g. a cosmology wrapper that is
+    # JAX-traceable for some engines and external for others). Defaults to False (pure JAX).
+    _is_external = False
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -73,33 +87,54 @@ class Calculator(Node):
             cls.tree_unflatten,
         )
         if '__init__' in cls.__dict__:
-            _orig = cls.__dict__['__init__']
-            @functools.wraps(_orig)
-            def _wrapped(self, *args, _f=_orig, **kwargs):
+            _orig_init = cls.__dict__['__init__']
+            @functools.wraps(_orig_init)
+            def _wrapped_init(self, *args, _f=_orig_init, **kwargs):
                 self._init = (args, kwargs)
-                _f(self, *args, **kwargs)
-            cls.__init__ = _wrapped
-        if '__post_init__' in cls.__dict__:
-            _orig_pi = cls.__dict__['__post_init__']
-            @functools.wraps(_orig_pi)
-            def _wrapped_pi(self, *args, _f=_orig_pi, **kwargs):
-                _f(self, *args, **kwargs)
-                ctx = getattr(_compile_context, 'ctx', None)
-                if ctx is not None:
-                    ctx.post_init_called.add(id(self))
-            cls.__post_init__ = _wrapped_pi
+                # __init__ creates and updates all nodes (fixing node identity at construction,
+                # which enables replace()/share_params()); __post_init__ is deferred to compile().
+                with _constructing():
+                    _f(self, *args, **kwargs)
+            cls.__init__ = _wrapped_init
 
     def __init__(self, *args, **kwargs):
+        # No custom __init__: nothing to wire at construction; __post_init__ runs at compile().
         self._init = (args, kwargs)
 
     def update(self, *args, **kwargs):
-        """Re-initialize in-place with overridden arguments; new kwargs override old ones."""
+        """Re-initialize in-place with overridden arguments; new kwargs override old ones.
+
+        Only permitted **during construction** (``__init__``/``__post_init__``) — e.g. a
+        parent configuring a child dependency.  Outside construction the dependency graph
+        is immutable; reconstruct the calculator or use :func:`replace` instead.
+        """
+        if not _in_construction():
+            raise RuntimeError('update() can only be called during construction '
+                               '(__init__/__post_init__); reconstruct the calculator or use replace() instead.')
         old_args, old_kwargs = self._init
         merged_args = args if args else old_args
         merged_kwargs = {**old_kwargs, **kwargs}
         self.__init__(*merged_args, **merged_kwargs)
-        if getattr(_compile_context, 'ctx', None) is None:
-            self._updated = True
+
+    def clone(self, **kwargs):
+        """Return a new instance of the same type with updated keyword arguments.
+
+        The existing constructor arguments are reused as-is; keyword overrides
+        in *kwargs* replace matching keys.  Pass freshly constructed nodes in
+        *kwargs* when independent objects are required.
+
+        Returns
+        -------
+        A new instance of ``type(self)``.
+
+        Examples
+        --------
+        Override a single argument while keeping the rest::
+
+            spec2 = spec.clone(arg=...)
+        """
+        old_args, old_kwargs = self._init
+        return type(self)(*old_args, **{**old_kwargs, **kwargs})
 
     def __post_init__(self, *args, **kwargs):
         pass
@@ -128,6 +163,8 @@ class ExternalCalculator(Calculator):
     param.fd_eps falls back through: explicit → param.proposal → param.ref.std() → 1e-5.
     param.fd_acc defaults to 2; set to 4, 6, ... for higher-accuracy stencils.
     """
+
+    _is_external = True
 
 
 class Likelihood(Calculator):
@@ -176,34 +213,48 @@ class GaussianLikelihood(Likelihood):
         obj.logpdf, obj.flattheory, obj.precision = children
         return obj
 
-    def _gaussians(self):
-        return [self]
-
 
 class SumLikelihood(Likelihood):
     """
     Sums logpdf from multiple Likelihood components.
 
-    __post_init__(*likelihoods): each argument must be a Likelihood instance.
+    __init__(*likelihoods): each argument must be a Likelihood instance.
     __call__(): sums logpdf across components (deps are called before this node in the pipeline).
-    _gaussians(): recursively collects GaussianLikelihood leaves so Posterior can
-      perform per-component analytic marginalization, skipping jacfwd for components
-      that don't depend on any solved parameter.
     """
 
-    def __post_init__(self, *likelihoods):
+    def __init__(self, *likelihoods):
+        # Nodes (the Likelihood dependencies) live in __init__.
         self.likelihoods = list(likelihoods)
 
     def __call__(self):
         self.logpdf = sum(like.logpdf for like in self.likelihoods)
         return self.logpdf
 
-    def _gaussians(self):
-        result = []
-        for like in self.likelihoods:
-            if hasattr(like, '_gaussians'):
-                result.extend(like._gaussians())
-        return result
+
+def _collect_likelihood_components(likelihood):
+    """Walk a ``(Sum)Likelihood`` tree and split into Gaussian and non-Gaussian leaves.
+
+    Parameters
+    ----------
+    likelihood : Likelihood
+        Root likelihood node (may be a :class:`SumLikelihood`).
+
+    Returns
+    -------
+    gaussians : list of GaussianLikelihood
+    non_gaussians : list of Likelihood
+        Leaf components that are not :class:`GaussianLikelihood` instances.
+    """
+    if isinstance(likelihood, SumLikelihood):
+        gaussians, non_gaussians = [], []
+        for component in likelihood.likelihoods:
+            g, ng = _collect_likelihood_components(component)
+            gaussians.extend(g)
+            non_gaussians.extend(ng)
+        return gaussians, non_gaussians
+    if isinstance(likelihood, GaussianLikelihood):
+        return [likelihood], []
+    return [], [likelihood]
 
 
 class Prior(Calculator):
@@ -218,11 +269,11 @@ class Prior(Calculator):
     Returns -inf when any parameter is outside its prior support.
 
     To include a Prior in a pipeline it must be a dependency of the root node
-    (directly or transitively). Typically users create a thin Calculator that
-    takes both likelihood and prior as deps and returns their sum.
+    (directly or transitively). See :class:`Posterior`.
     """
 
-    def __post_init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
+        # Nodes (the collected Parameters) live in __init__.
         seen_ids = set()
         params = []
         for arg in args:
@@ -242,7 +293,8 @@ class Prior(Calculator):
         logprior = jnp.zeros(())
         for p in self.params:
             if not p.fixed:
-                logprior = logprior + p.prior.logpdf(p)
+                # Sum over all elements for vector params (independent joint prior).
+                logprior = logprior + jnp.sum(p.prior.logpdf(p))
         self.logpdf = logprior
         return self.logpdf
 
@@ -285,16 +337,40 @@ class Posterior(Calculator):
     is always built.
     """
 
-    def __post_init__(self, likelihood, prior):
+    def __init__(self, likelihood, prior):
+        # Posterior builds its internal compiled sub-pipelines and surfaces the
+        # likelihood's Parameters (self.likelihood_params) as its node dependencies — all
+        # in __init__ so they are discoverable before __post_init__/compile.
         self._likelihood = compile(likelihood)
         self._solved_params = self._likelihood.params.select(solved=True)
 
-        self.likelihood_params = list(self._likelihood.params)
+        # Public (scanned by build_graph) so non-solved likelihood params are in Posterior's
+        # deps and get their values set before each __call__.  Solved params are excluded here
+        # to avoid a name collision with the derived-True clone in self.solved_params.
+        self.likelihood_params = [p for p in self._likelihood.params if not getattr(p, 'solved', False)]
 
         if self._solved_params:
-            gaussians = likelihood._gaussians() if hasattr(likelihood, '_gaussians') else []
+            gaussians, non_gaussians = _collect_likelihood_components(likelihood)
             if not gaussians:
-                raise ValueError('Analytic marginalization requires a GaussianLikelihood (or SumLikelihood of them)')
+                raise ValueError(
+                    'Analytic marginalization requires at least one GaussianLikelihood '
+                    '(or a SumLikelihood containing one) whose theory depends on the '
+                    'solved parameters.'
+                )
+
+            alpha_names_set = set(p.name for p in self._solved_params)
+            non_gaussian_comps = []
+            for ng in non_gaussians:
+                ng_pipe = compile(ng)
+                bad = alpha_names_set & set(ng_pipe.params.names())
+                if bad:
+                    raise ValueError(
+                        f'Non-Gaussian likelihood component depends on solved '
+                        f'parameter(s) {sorted(bad)!r}; analytic marginalization '
+                        f'requires that such components are GaussianLikelihood.'
+                    )
+                non_gaussian_comps.append(ng_pipe)
+            self._non_gaussian_comps = non_gaussian_comps
 
             alpha_names = [p.name for p in self._solved_params]
             n_alpha = len(alpha_names)
@@ -370,14 +446,35 @@ class Posterior(Calculator):
 
         self._prior = compile(prior)
 
-    def _marg_loglik(self, params):
-        """Profile/marginalize over solved params, one independent group at a time."""
-        logL = jnp.zeros(())
+        # Derived outputs exposed to the pipeline (their .value is set in __call__).
+        self.logposterior = Variable(basename='logposterior', value=0., derived=True, latex=r'\ln\mathcal{P}')
+        self.logprior = Variable(basename='logprior', value=0., derived=True, latex=r'\ln\Pi')
+        self.loglikelihood = Variable(basename='loglikelihood', value=0., derived=True, latex=r'\ln\mathcal{L}')
+        # Deep copies of solved params with derived=True so build_graph discovers them as
+        # Posterior's own deps and the pipeline tracks best-fit values as derived outputs.
+        # The originals stay hidden in _likelihood_params (underscore → not scanned).
+        self.solved_params = [sp.clone(derived=True) for sp in self._solved_params]
 
-        # Components with no solved-param dependence: contribute only to logL.
+    def _marg_loglik(self, params):
+        """Profile/marginalize over solved params, one independent group at a time.
+
+        Returns
+        -------
+        logL : jax array
+        solved_values : dict mapping each solved-param name to its best-fit value
+        """
+        logL = jnp.zeros(())
+        solved_values = {}
+
+        # Non-Gaussian components: add logpdf directly (they do not depend on solved params).
+        for ng_pipe in self._non_gaussian_comps:
+            ng_params = {p.name: jnp.asarray(params[p.name]) for p in ng_pipe.params}
+            logL = logL + ng_pipe(ng_params)
+
+        # Gaussian components with no solved-param dependence: standard chi-squared.
         for theory_pipe, precision, flatdata in self._no_alpha_components:
             comp_params = {p.name: jnp.asarray(params[p.name]) for p in theory_pipe.params}
-            theory = theory_pipe(comp_params)[0]
+            theory = theory_pipe(comp_params)
             r = flatdata - theory
             logL = logL - 0.5 * r @ (precision @ r)
 
@@ -394,10 +491,12 @@ class Posterior(Calculator):
 
                 def theory_fn(alpha_vec, _pipe=theory_pipe, _cp=comp_params, _names=comp_alpha_names):
                     p = {**_cp, **{name: alpha_vec[i] for i, name in enumerate(_names)}}
-                    return _pipe(p)[0]
+                    return _pipe(p)
 
-                theory = theory_fn(comp_alpha_vals)
+                # Jacobian first — forward-mode leaves JVP-augmented internal state.
                 B = jax.jacfwd(theory_fn)(comp_alpha_vals)      # (n_data, len(local_idx))
+                # Standard (primal) pass second — authoritative values for residuals.
+                theory = theory_fn(comp_alpha_vals)
                 r = flatdata - theory
                 BtP = B.T @ precision
                 ix = np.array(local_idx)
@@ -409,7 +508,12 @@ class Posterior(Calculator):
             if marg_local.size:
                 F_g = F_g.at[marg_local[:, None], marg_local[None, :]].add(pp_g)
 
-            logL = logL + 0.5 * b_g @ jnp.linalg.solve(F_g, b_g)
+            delta_alpha = jnp.linalg.solve(F_g, b_g)
+            logL = logL + 0.5 * b_g @ delta_alpha
+
+            # Store absolute best-fit values (linearisation point + delta).
+            for j, name in enumerate(group_alpha_names):
+                solved_values[name] = jnp.asarray(params[name]) + delta_alpha[j]
 
             # Volume factor: only 'marg' params contribute.
             # Mixed case uses Schur complement: + ½ log|P_α| − ½ log|F_g| + ½ log|F_g[best,best]|.
@@ -422,17 +526,41 @@ class Posterior(Calculator):
                 else:
                     logL = logL + 0.5 * logdet_Pa - 0.5 * logdet_F
 
-        return logL
+        return logL, solved_values
 
     def __call__(self):
-        params = {p.name: p.value for p in self.likelihood_params}
-        logprior = self._prior(params)[0]
+        # Reset solved params to zero so _marg_loglik always starts from a neutral
+        # linearisation point.  The Schur-complement formula is exact for linear theories
+        # regardless of starting point, so this has no effect on the log-likelihood value,
+        # but it prevents numerical drift when p._value was left at a previous best-fit.
+        for sp in self._solved_params:
+            sp._value = jnp.zeros(sp.shape) if sp.shape else jnp.zeros(())
+        params = {p.name: p.value for p in self._likelihood.params}
+        logprior = self._prior(params)
         is_tracing = isinstance(logprior, jax.core.Tracer)
         if is_tracing or not bool(jnp.isneginf(logprior)):
-            loglik = self._marg_loglik(params) if self._solved_params else self._likelihood(params)[0]
+            if self._solved_params:
+                loglik, solved_values = self._marg_loglik(params)
+                params = {**params, **solved_values}
+                for var in self.solved_params:
+                    var.value = solved_values[var.name]
+                # Extra standard pass to re-capture derived params: the inner
+                # _run_graph restores p._value after each call; requesting
+                # return_derived=True gives back the traced values so the outer
+                # _run_graph reads them correctly.
+                _, inner_derived = self._likelihood(params, return_derived=True)
+            else:
+                loglik, inner_derived = self._likelihood(params, return_derived=True)
+            for p in self._likelihood._derived_params:
+                p._value = inner_derived[p.name]
             self.logpdf = logprior + loglik
         else:
+            loglik = jnp.full((), -jnp.inf)
             self.logpdf = jnp.full((), -jnp.inf)
+        # Expose derived outputs (captured by the pipeline as derived params).
+        self.loglikelihood.value = loglik
+        self.logprior.value = logprior
+        self.logposterior.value = self.logpdf
         return self.logpdf
 
     def tree_flatten(self):
@@ -467,14 +595,102 @@ def _fd_stencil(order, acc):
     return offsets[mask], coeffs[mask]
 
 
+def _jacfwd_wrap(fn, name):
+    """Lift *fn(p_dict) -> y* to one ``jax.jacfwd`` pass w.r.t. parameter *name*.
+
+    Nest k times to obtain the k-th derivative."""
+    def wrapped(p_dict):
+        return jax.jacfwd(lambda v: fn({**p_dict, name: v}))(p_dict[name])
+    return wrapped
+
+
+def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k):
+    """Lift *fn(p_dict) -> y* to the k-th order FD stencil derivative w.r.t. *name*.
+
+    Uses the *direct* order-k stencil (k + acc - 1 evaluations, linear in k)
+    rather than nesting k order-1 stencils (exponential cost).
+
+    *fn* may return any JAX pytree (scalar, array, tuple, dict, …).  The
+    derivative has the same pytree structure; each leaf's shape gains the
+    trailing axes of *name* when *name* is array-valued.
+
+    Scalar *name*: output shape of each leaf unchanged.
+    Array *name* of shape S: each leaf gains trailing axes S; for order > 1
+    these are the diagonal elements (cross-element terms are not computed).
+
+    For array parameters the stencil is vectorised via ``jax.vmap`` over the
+    basis directions, so the Python loop runs only over the ``k + acc - 1``
+    stencil points.
+    """
+    h_k = eps ** k
+
+    def _tree_scale(tree, s):
+        return jax.tree_util.tree_map(lambda x: s * x, tree)
+
+    def _tree_add(tree_a, tree_b):
+        return jax.tree_util.tree_map(lambda a, b: a + b, tree_a, tree_b)
+
+    def _tree_div(tree, s):
+        return jax.tree_util.tree_map(lambda x: x / s, tree)
+
+    def _move_batch_to_param_axes(tree, p_shape):
+        """Move the leading batch axis (flat_size) to trailing axes matching p_shape."""
+        def _per_leaf(x):
+            # x: (flat_size, *leaf_shape)
+            n_out = x.ndim - 1
+            if n_out == 0:
+                return x.reshape(p_shape)
+            perm = tuple(range(1, n_out + 1)) + (0,)
+            moved = jnp.transpose(x, perm)   # (*leaf_shape, flat_size)
+            return moved.reshape(moved.shape[:-1] + p_shape)
+        return jax.tree_util.tree_map(_per_leaf, tree)
+
+    def wrapped(p_dict):
+        p0 = jnp.asarray(p_dict[name])
+
+        if p0.ndim == 0:
+            # Scalar param: plain stencil sum — pytree-safe via tree_map.
+            acc = None
+            for off, coeff in zip(offsets, coeffs):
+                fi = fn({**p_dict, name: p0 + off * eps})
+                acc = _tree_scale(fi, coeff) if acc is None else _tree_add(acc, _tree_scale(fi, coeff))
+            return _tree_div(acc, h_k)
+
+        # Array param: vmap over one-hot basis vectors, stencil loop in Python.
+        # Each basis direction selects one element; the stencil gives its
+        # element-wise k-th derivative.  The Python loop over stencil points
+        # (k + acc - 1 iterations) keeps the inner vmap small.
+        flat_size = p0.size
+        basis = jnp.eye(flat_size)  # (flat_size, flat_size)
+
+        acc_vmap = None
+        for off, coeff in zip(offsets, coeffs):
+            def eval_along(e_flat, _off=off):
+                return fn({**p_dict, name: p0 + _off * eps * e_flat.reshape(p0.shape)})
+            # vals: pytree with each leaf having shape (flat_size, *leaf_shape)
+            vals = jax.vmap(eval_along)(basis)
+            acc_vmap = _tree_scale(vals, coeff) if acc_vmap is None else _tree_add(acc_vmap, _tree_scale(vals, coeff))
+
+        # Divide by h_k, then move the batch axis to match p0.shape at the end.
+        result = _tree_div(acc_vmap, h_k)
+        return _move_batch_to_param_axes(result, p0.shape)
+
+    return wrapped
+
+
 # ── external function factory ─────────────────────────────────────────────────
 
 def _make_external_fn(node: ExternalCalculator, params_list: list, calc_deps: list, call_return, node_state: dict, dep_states: list):
     """
-    Return (fn_dep, fn_call) — two pure_callback-wrapped callables for node().
+    Return (fn_dep, fn_call, call_kind).
 
-    fn_dep  -> tree_flatten children (used to pass outputs downstream).
-    fn_call -> __call__() return value (used when this node is the pipeline root).
+    fn_dep  -> pure_callback-wrapped callable returning tree_flatten children
+               (used to pass outputs downstream).
+    fn_call -> pure_callback-wrapped callable returning the __call__() return value
+               (used when this node is the pipeline root), or ``None`` when
+               ``call_kind`` is ``'none'``/``'self'`` (no array output to marshal).
+    call_kind -> ``'value'`` (a real array/tuple output), ``'none'`` (__call__ returned
+               None) or ``'self'`` (__call__ returned the node itself).
 
     Differentiation is handled at the CompiledGraph level via _build_graph_call_fn;
     these functions carry no custom_jvp of their own.
@@ -488,11 +704,15 @@ def _make_external_fn(node: ExternalCalculator, params_list: list, calc_deps: li
     own_children, _ = node.tree_flatten()
     dep_sdt = tuple(jax.ShapeDtypeStruct(np.asarray(c).shape, np.asarray(c).dtype) for c in own_children)
 
-    if isinstance(call_return, tuple):
-        call_sdt = tuple(jax.ShapeDtypeStruct(np.asarray(r).shape, np.asarray(r).dtype) for r in call_return)
+    # __call__ may return None (outputs live in attributes) or self (the populated
+    # node); neither carries a separate array output to marshal through pure_callback,
+    # so no call-result callback is built and the pipeline handles them directly.
+    if call_return is None:
+        call_kind = 'none'
+    elif call_return is node:
+        call_kind = 'self'
     else:
-        call_sdt = (jax.ShapeDtypeStruct(np.asarray(call_return).shape, np.asarray(call_return).dtype),)
-    call_result_sdt = call_sdt[0] if len(call_sdt) == 1 else call_sdt
+        call_kind = 'value'
 
     def _run_or_cache(own_params_tuple, dep_args):
         dep_was_called = any(s['was_called'] for s in dep_states)
@@ -530,7 +750,15 @@ def _make_external_fn(node: ExternalCalculator, params_list: list, calc_deps: li
             return jax.pure_callback(callback, result_sdt, own_params_tuple, *dep_attr_flat, vmap_method='sequential')
         return fn
 
-    return _make_fn(_inject_and_call_dep, dep_sdt), _make_fn(_inject_and_call_call, call_result_sdt)
+    fn_dep = _make_fn(_inject_and_call_dep, dep_sdt)
+    if call_kind != 'value':
+        return fn_dep, None, call_kind
+    if isinstance(call_return, tuple):
+        call_sdt = tuple(jax.ShapeDtypeStruct(np.asarray(r).shape, np.asarray(r).dtype) for r in call_return)
+    else:
+        call_sdt = (jax.ShapeDtypeStruct(np.asarray(call_return).shape, np.asarray(call_return).dtype),)
+    call_result_sdt = call_sdt[0] if len(call_sdt) == 1 else call_sdt
+    return fn_dep, _make_fn(_inject_and_call_call, call_result_sdt), call_kind
 
 
 # ── graph-level custom JVP ────────────────────────────────────────────────────
@@ -556,6 +784,7 @@ def _build_graph_call_fn(pipeline):
     fn_dep = pipeline._fn_dep
     fn_call = pipeline._fn_call
     ext_n_children = pipeline._ext_n_children
+    ext_call_kind = pipeline._ext_call_kind
     root = pipeline.root
     output = pipeline.output
     all_params = list(pipeline.params)
@@ -587,7 +816,7 @@ def _build_graph_call_fn(pipeline):
             nvd = node_var_deps[id(node)]
             ncd = node_calc_deps[id(node)]
 
-            if isinstance(node, ExternalCalculator):
+            if node._is_external:
                 n_ch = ext_n_children[id(node)]
                 if ext_flat is not None:
                     # JAX sub-graph mode: unpack frozen External outputs.
@@ -604,8 +833,14 @@ def _build_graph_call_fn(pipeline):
                     node.__dict__.update(proxy.__dict__)
                     ext_collected.extend(raw_dep)
                     if node is root and output is None:
-                        # fn_call reuses the cached computation from fn_dep above.
-                        result = fn_call[i](own_params_tuple, dep_attr_flat)
+                        kind = ext_call_kind[id(node)]
+                        if kind == 'none':
+                            result = None
+                        elif kind == 'self':
+                            result = node  # populated above via tree_unflatten
+                        else:
+                            # fn_call reuses the cached computation from fn_dep above.
+                            result = fn_call[i](own_params_tuple, dep_attr_flat)
                 ext_flat_offset += n_ch
             else:
                 node_state = node_states[id(node)]
@@ -623,14 +858,36 @@ def _build_graph_call_fn(pipeline):
                         for param in nvd:
                             param.value = params[param.name]
                         result = node()
+                        # Write back derived param values: after __call__ the node may have
+                        # set self.<name> = computed_value, overwriting the Parameter reference.
+                        # Capture that value into p._value so callers can read it.
+                        for param in nvd:
+                            if param.derived is True:
+                                val = node.__dict__.get(param.name)
+                                if val is not None and not isinstance(val, Variable):
+                                    param._value = np.asarray(val)
                         node_state['last_params'] = own_params_np
                         node_state['last_result'] = result
+                        # Cache the output-function result for the root node, to guard
+                        # against stale live attributes when multiple CompiledGraph
+                        # instances share the same node.
+                        if node is root and output is not None:
+                            node_state['last_output'] = output()
                         node_state['was_called'] = True
                     else:
                         result = node_state['last_result']
                         node_state['was_called'] = False
 
-        return_val = output() if output is not None else result
+        # Use the cached output value when available, so live attributes updated by
+        # a different CompiledGraph sharing the same node are not incorrectly returned.
+        root_state = node_states.get(id(root))
+        if (output is not None and root_state is not None
+                and 'last_output' in root_state and not root_state.get('was_called', True)):
+            return_val = root_state['last_output']
+        else:
+            return_val = output() if output is not None else result
+        # Capture derived (incl. solved) values before the tracing restore below
+        # overwrites _value back to the pre-call snapshot.
         derived_dict = {p.name: p._value for p in derived_params}
         ext_flat_out = tuple(ext_collected)
 
@@ -657,20 +914,26 @@ def _build_graph_call_fn(pipeline):
 
         # ── FD tangent for fd_params ──────────────────────────────────────────
         # One full-graph call per stencil point per scalar element of each fd_param.
-        tangent_val = jnp.zeros_like(primal_val)
+        # return_val may be an arbitrary pytree (array, None for a side-effect-only
+        # root, or the node itself), so all arithmetic goes through tree_map.
+        tangent_val = jax.tree_util.tree_map(jnp.zeros_like, primal_val)
+        tangent_derived = jax.tree_util.tree_map(jnp.zeros_like, primal_derived)
         for i, param in enumerate(fd_params):
             eps = param.fd_eps if param.fd_eps is not None else 1e-5
             offsets, coeffs = _fd_stencil(1, param.fd_acc)
             param_arr = jnp.asarray(fd_p[i])
             for idx in np.ndindex(param_arr.shape):
                 v_ij = vfd[i][idx] if param_arr.ndim > 0 else vfd[i]
-                df = jnp.zeros_like(primal_val)
+                df = jax.tree_util.tree_map(jnp.zeros_like, primal_val)
+                df_derived = jax.tree_util.tree_map(jnp.zeros_like, primal_derived)
                 for off, coeff in zip(offsets, coeffs):
                     shifted = list(fd_p)
                     shifted[i] = param_arr.at[idx].add(off * eps) if param_arr.ndim > 0 else param_arr + off * eps
-                    fi = call_fn(tuple(shifted), jax_p)[0]
-                    df = df + coeff * fi
-                tangent_val = tangent_val + v_ij * df / eps
+                    fi, fi_derived, _ = call_fn(tuple(shifted), jax_p)
+                    df = jax.tree_util.tree_map(lambda a, b, c=coeff: a + c * b, df, fi)
+                    df_derived = jax.tree_util.tree_map(lambda a, b, c=coeff: a + c * b, df_derived, fi_derived)
+                tangent_val = jax.tree_util.tree_map(lambda t, d, vv=v_ij: t + vv * d / eps, tangent_val, df)
+                tangent_derived = jax.tree_util.tree_map(lambda a, b: a + v_ij * b / eps, tangent_derived, df_derived)
 
         # ── JAX tangent for jax_params ────────────────────────────────────────
         # Forward-mode AD through the JAX sub-graph; External outputs frozen at
@@ -679,10 +942,11 @@ def _build_graph_call_fn(pipeline):
             def _jax_sub(jp):
                 params = {**dict(zip(fd_names, fd_p)), **dict(zip(jax_names, jp))}
                 return _run_graph(params, ext_flat=primal_ext)
-            _, (jax_tv, _, _) = jax.jvp(_jax_sub, (jax_p,), (vjax,))
-            tangent_val = tangent_val + jax_tv
+            _, (jax_tv, jax_tv_derived, _) = jax.jvp(_jax_sub, (jax_p,), (vjax,))
+            tangent_val = jax.tree_util.tree_map(lambda a, b: a + b, tangent_val, jax_tv)
+            tangent_derived = jax.tree_util.tree_map(lambda a, b: a + b, tangent_derived, jax_tv_derived)
 
-        tangent_out = (tangent_val, jax.tree_util.tree_map(jnp.zeros_like, primal_derived), tuple(jnp.zeros_like(e) for e in primal_ext))
+        tangent_out = (tangent_val, tangent_derived, tuple(jnp.zeros_like(e) for e in primal_ext))
         return (primal_val, primal_derived, primal_ext), tangent_out
 
     return call_fn
@@ -694,13 +958,8 @@ class CompiledGraph:
     """
     Static computation graph compiled from a root calculator.
 
-    __call__(params_flat) is a pure function fully compatible with
+    ``__call__(params)`` is a pure function fully compatible with
     jax.jit, jax.vmap, and jax.grad.
-
-    Parameters
-    ----------
-    root : Calculator
-        Terminal node (e.g. a likelihood) whose output is returned.
     """
 
     def __init__(self, root: Calculator, ctx: '_CompileContext', output=None):
@@ -730,12 +989,6 @@ class CompiledGraph:
 
         self._derived_params = [p for p in self.params if p.derived is True]
 
-        # Clear stale flags on all nodes seen during compilation.
-        for node in self.nodes:
-            node._updated = False
-        for p in self.params:
-            p._updated = False
-
         # Per-node cache state for all nodes (keyed by node id).
         self._node_states = {id(node): {'last_params': None, 'was_called': False, 'last_result': None, 'dep_result': None, 'call_result': None}
                              for node in self.nodes}
@@ -745,18 +998,20 @@ class CompiledGraph:
         self._fn_dep = []
         self._fn_call = []
         self._ext_n_children = {}
+        self._ext_call_kind = {}  # id(node) -> 'value' | 'none' | 'self' (External roots)
         for node in self.nodes:
             children, aux = node.tree_flatten()
             self._tree_own_aux.append(aux)
-            if isinstance(node, ExternalCalculator):
+            if node._is_external:
                 self._ext_n_children[id(node)] = len(children)
                 node_state = self._node_states[id(node)]
                 calc_deps = self._node_calc_deps[id(node)]
                 dep_states = [self._node_states[id(dep)] for dep in calc_deps]
                 call_return = ctx.call_returns[id(node)]
-                fn_dep, fn_call = _make_external_fn(node, self._node_var_deps[id(node)], calc_deps, call_return, node_state, dep_states)
+                fn_dep, fn_call, call_kind = _make_external_fn(node, self._node_var_deps[id(node)], calc_deps, call_return, node_state, dep_states)
                 self._fn_dep.append(fn_dep)
                 self._fn_call.append(fn_call)
+                self._ext_call_kind[id(node)] = call_kind
             else:
                 self._fn_dep.append(None)
                 self._fn_call.append(None)
@@ -770,55 +1025,268 @@ class CompiledGraph:
 
         ext_reach = set()
         for node in reversed(self.nodes):
-            if isinstance(node, ExternalCalculator):
+            if node._is_external:
                 ext_reach.add(id(node))
             elif any(id(ds) in ext_reach for ds in downstream_of[id(node)]):
                 ext_reach.add(id(node))
 
         fd_param_names = {p.name for node in self.nodes if id(node) in ext_reach for p in self._node_var_deps[id(node)]}
-        self._fd_params = [p for p in self.params if p.name in fd_param_names]
+        self._fd_params  = [p for p in self.params if p.name in fd_param_names]
         self._jax_params = [p for p in self.params if p.name not in fd_param_names]
         self._fd_names = [p.name for p in self._fd_params]
         self._jax_names = [p.name for p in self._jax_params]
 
         self._call_fn = _build_graph_call_fn(self)
 
-    def __call__(self, params=None, **kwargs):
+    def __call__(self, params=None, return_derived=False, **kwargs):
         """
-        Pure function: dict of params → (return_val, derived_dict).
-        Compatible with jax.jit, jax.vmap, jax.grad (dict form only for JAX transforms).
+        Pure function: dict of params → return_val, or ``(return_val, derived_dict)``
+        when *return_derived* is ``True``.
+        Compatible with jax.jit, jax.vmap, jax.grad (dict form only for JAX transforms;
+        pass ``return_derived`` via a lambda/partial rather than as a kwarg to jit/vmap).
         Kwargs form (pipeline(omega_m=0.3, ...)) is a convenience for eager calls;
-        missing params are filled from defaults.
+        missing params are filled from the parameters' current values.
+
+        After each eager call the parameters' ``.value`` attributes are restored
+        to whatever they were on entry, so that finite-difference mutations
+        inside ``pure_callback`` do not corrupt subsequent default-argument calls.
         """
-        stale = [n for n in self.nodes if n._updated] + [p for p in self.params if p._updated]
-        if stale:
-            names = ', '.join(getattr(n, 'name', type(n).__name__) for n in stale)
-            raise RuntimeError(f"Pipeline is stale — {names} updated since compile(); call compile() again")
+        # Snapshot current values; used as defaults and for post-call restoration.
+        # Only non-derived params are restored: derived Variables are computed
+        # *outputs* whose values the caller reads after the call.  Input params
+        # may be mutated by pure_callback FD side-effects and must be restored.
+        all_saved = {p.name: p._value for p in self.params}
+        input_saved = {n: v for n, v in all_saved.items()
+                       if not self.params[n].derived}
         if params is None:
-            params = {p.name: p.value for p in self.params}
+            params = dict(all_saved)
             params.update(kwargs)
         else:
-            missing = {p.name: p.value for p in self.params if p.name not in params}
+            missing = {n: v for n, v in all_saved.items() if n not in params}
             if missing:
                 params = {**params, **missing}
         fd_params_tuple = tuple(jnp.asarray(params[n]) for n in self._fd_names)
         jax_params_tuple = tuple(jnp.asarray(params[n]) for n in self._jax_names)
-        return_val, derived_dict, _ = self._call_fn(fd_params_tuple, jax_params_tuple)
-        return return_val, derived_dict
+        try:
+            return_val, derived_dict, _ = self._call_fn(fd_params_tuple, jax_params_tuple)
+        finally:
+            # Restore only input params to pre-call values (undo FD mutations).
+            for p in self.params:
+                if p.name in input_saved:
+                    p._value = input_saved[p.name]
+        if return_derived:
+            return return_val, derived_dict
+        return return_val
+
+
+def _node_sources(calc):
+    """Return the values to scan for a calculator's Node references: its constructor
+    args/kwargs (``_init``) plus its public attributes."""
+    args, kwargs = calc._init
+    return list(args) + list(kwargs.values()) + [val for key, val in calc.__dict__.items() if not key.startswith('_')]
+
+
+def _iter_calculators(calc, maxlevel=None, exclude=None):
+    """Yield *calc* and its transitive Calculator dependencies (depth-first, cycle-safe).
+
+    Sub-calculators are discovered (via :func:`_iter_nodes`) in both the constructor
+    args (``_init``) and the public attributes.  Each calculator is yielded *before* its
+    children are scanned, so a consumer that mutates a calculator (e.g. :func:`replace`)
+    affects what is subsequently descended into.
+
+    Parameters
+    ----------
+    maxlevel : int or None
+        Maximal recursion depth (``None`` = unlimited, ``0`` = *calc* only, ``1`` =
+        *calc* and its direct Calculator dependencies, ...).
+    exclude : set of int or None
+        Object ids never yielded nor descended into.
+    """
+    seen = set(exclude or ())
+
+    def _walk(current, level):
+        if id(current) in seen:
+            return
+        seen.add(id(current))
+        yield current
+        if maxlevel is not None and level >= maxlevel:
+            return
+        for src in _node_sources(current):
+            for dep in _iter_nodes(src):
+                if isinstance(dep, Calculator) and id(dep) not in seen:
+                    yield from _walk(dep, level + 1)
+
+    yield from _walk(calc, 0)
+
+
+def replace(node, old, new, level: int=None):
+    """Replace, in *node* and its (transitive) Calculator dependencies, every Node
+    matched by *old* with *new*.
+
+    Parameters
+    ----------
+    node : Calculator
+        Root calculator to rewrite in place.
+    old : Node or callable
+        Either a :class:`~desilike.parameter.Node` (matched by identity) or a predicate
+        ``callable(Node) -> bool`` returning ``True`` for nodes that should be replaced.
+    new : Node
+        Replacement node.
+    level : int or None
+        Maximal dependency depth to descend into (see :func:`_iter_calculators`);
+        ``None`` (default) is unlimited.
+
+    Walks both the stored constructor arguments (``_init``) and the public attributes
+    (``__dict__``), rebuilding nested containers.  Intended at construction time, before
+    :func:`compile` — e.g. to share a parameter across calculators::
+
+        replace(bispectrum, bispectrum.b1, power_spectrum.b1)
+        replace(bispectrum, lambda p: p.name == 'b1', power_spectrum.b1)
+
+    Returns *node* (for chaining).
+    """
+    # Normalize *old* to a predicate.  A Node is itself callable, so test
+    # ``isinstance(old, Node)`` before treating *old* as a predicate.
+    if isinstance(old, Node):
+        match = lambda candidate: candidate is old
+    else:
+        match = old
+    # Never descend into (or substitute inside) the freshly-inserted replacement.
+    exclude = {id(new)} if isinstance(new, Node) else None
+    for calc in _iter_calculators(node, maxlevel=level, exclude=exclude):
+        # Constructor args (so a later __post_init__ that reads _init stays consistent).
+        args, kwargs = calc._init
+        calc._init = (tuple(_substitute_node(arg, match, new) for arg in args),
+                      {key: _substitute_node(val, match, new) for key, val in kwargs.items()})
+        # Public attributes.
+        for key, val in list(calc.__dict__.items()):
+            if key.startswith('_'):
+                continue
+            new_val = _substitute_node(val, match, new)
+            if new_val is not val:
+                setattr(calc, key, new_val)
+    return node
+
+
+def copy(node, level=1):
+    """Return a (partially) independent copy of *node* and its Calculator dependencies.
+
+    Each Calculator in the tree up to depth *level* is re-instantiated (the constructor is
+    called again with a shallow copy of the stored ``_init`` arguments), so that mutations
+    such as :func:`replace` on the copy do not affect the original.  Nodes *below* the
+    copied region — and all :class:`Variable` / :class:`Parameter` nodes — are shared with
+    the original, not duplicated.
+
+    The *level* semantics follow :func:`_iter_calculators` and :func:`replace`:
+    ``level=0`` copies only *node* itself; ``level=1`` copies *node* and its direct
+    Calculator dependencies; ``None`` copies the entire tree.
+
+    Parameters
+    ----------
+    node : Calculator
+        Root calculator to copy.
+    level : int or None, default=1
+        Maximum dependency depth to copy (``None`` = unlimited).
+
+    Returns
+    -------
+    Calculator
+        The newly-created root instance.
+    """
+    # Collect all Calculator nodes up to *level* in depth-first (root-first) order.
+    # Reversing gives bottom-up order so that deps are copied before their parents.
+    nodes_to_copy = list(_iter_calculators(node, maxlevel=level))
+
+    # Build old-id → new-instance mapping, bottom-up.
+    old_to_new = {}
+
+    def _remap(value):
+        """Recursively substitute copied Calculators in nested containers."""
+        if isinstance(value, Calculator) and id(value) in old_to_new:
+            return old_to_new[id(value)]
+        if isinstance(value, (list, tuple)):
+            remapped = [_remap(item) for item in value]
+            return type(value)(remapped)
+        if isinstance(value, dict):
+            return {key: _remap(val) for key, val in value.items()}
+        return value
+
+    for calc in reversed(nodes_to_copy):
+        args, kwargs = calc._init
+        new_args = tuple(_remap(arg) for arg in args)
+        new_kwargs = {key: _remap(val) for key, val in kwargs.items()}
+        old_to_new[id(calc)] = type(calc)(*new_args, **new_kwargs)
+
+    return old_to_new[id(node)]
+
+
+def _deep_variables(calc, level=None):
+    """Yield every :class:`Variable` reachable from *calc* through its constructor args
+    (``_init``), public attributes, and (transitive) Calculator dependencies, down to
+    dependency depth *level* (``None`` = unlimited)."""
+    for current in _iter_calculators(calc, maxlevel=level):
+        for src in _node_sources(current):
+            for node in _iter_nodes(src):
+                if isinstance(node, Variable):
+                    yield node
+
+
+def share_params(calculators, names=None, level: int=None):
+    """Share Parameter objects across *calculators* so that same-named parameters
+    become a single object — one prior and one value when they are compiled together.
+
+    Parameters
+    ----------
+    calculators : sequence of Calculator
+        Instances whose parameters should be unified.  For each shared name the
+        **first** calculator (in list order) that defines it provides the canonical
+        Parameter object; every other occurrence is rewired to it (via :func:`replace`).
+    names : str, sequence of str, or None
+        Parameter name(s) to share.  ``None`` (default) shares **every** name that
+        appears, i.e. all same-named parameters across *calculators* are unified.
+    level : int or None
+        Maximal dependency depth to search/rewrite (see :func:`_iter_calculators`);
+        ``None`` (default) is unlimited.
+
+    Returns
+    -------
+    list of Calculator
+        The same instances, modified in place.
+
+    Examples
+    --------
+    >>> share_params([power_spectrum, bispectrum], names='b1')
+    >>> share_params([power_spectrum, bispectrum])   # unify all same-named parameters
+    """
+    calculators = list(calculators)
+    if isinstance(names, str):
+        names = [names]
+    names = None if names is None else set(names)
+    # Canonical Parameter per name: first occurrence (in calculator order) wins.
+    canonical = {}
+    for calc in calculators:
+        for var in _deep_variables(calc, level=level):
+            if names is not None and var.name not in names:
+                continue
+            canonical.setdefault(var.name, var)
+    # Rewire every matching parameter in every calculator to its canonical object.
+    for name, canon in canonical.items():
+        for calc in calculators:
+            replace(calc, lambda node, _name=name: isinstance(node, Variable) and node.name == _name, canon, level=level)
+    return calculators
 
 
 def _trace_node(node: Calculator, ctx: _CompileContext) -> None:
-    """DFS helper for build_graph: run __post_init__ and scan __dict__ for deps."""
+    """DFS helper for build_graph: scan __dict__ for deps (all nodes were created in
+    ``__init__`` at construction, so dependencies are present here before ``__post_init__``)."""
     ctx.traced.add(id(node))
-    if id(node) not in ctx.post_init_called:
-        args, kwargs = node._init
-        node.__post_init__(*args, **kwargs)
-    # Discover deps from public attributes set during __post_init__
+    # Discover deps from public attributes set during construction (__init__/__post_init__).  _iter_nodes
+    # walks arbitrarily nested standard containers (list/tuple/set/dict), stopping
+    # at each Node, so deps held in e.g. a dict or tuple-of-tuples are all found.
     for key, val in node.__dict__.items():
         if key.startswith('_'):
             continue
-        candidates = [val] if isinstance(val, Node) else [v for v in val if isinstance(v, Node)] if isinstance(val, (list, tuple)) else []
-        for dep in candidates:
+        for dep in _iter_nodes(val):
             deps = ctx.node_deps.setdefault(id(node), [])
             if id(dep) not in {id(d) for d in deps}:
                 deps.append(dep)
@@ -828,10 +1296,11 @@ def _trace_node(node: Calculator, ctx: _CompileContext) -> None:
 
 
 def build_graph(root: Calculator) -> _CompileContext:
-    """Run __post_init__ on root and all reachable Calculators; return the compilation context.
+    """Traverse root and all reachable Calculators; return the compilation context.
 
-    Discovers all node dependencies (Variable, Parameter, Calculator) by scanning public
-    attributes set during __post_init__, without executing any __call__.
+    All nodes were created in __init__ at construction, so this only discovers node
+    dependencies (Variable, Parameter, Calculator) by scanning public attributes — without
+    running __post_init__ or any __call__.
     Use params() or inspect ctx.node_deps / ctx.node_order to examine the graph.
     """
     outer_ctx = getattr(_compile_context, 'ctx', None)
@@ -848,7 +1317,7 @@ def params(node_or_graph) -> VariableCollection:
     """Return the Variable/Parameter collection for a Calculator or CompiledGraph.
 
     For a CompiledGraph, returns the already-collected params. For a Calculator,
-    builds the graph via __post_init__ only (no __call__) and collects Variable deps.
+    traverses the constructed graph (no __call__) and collects Variable deps.
     """
     if isinstance(node_or_graph, CompiledGraph):
         return node_or_graph.params
@@ -868,17 +1337,45 @@ def params(node_or_graph) -> VariableCollection:
 def compile(root: Calculator, output=None) -> CompiledGraph:
     """Trace root's dependency graph and return a CompiledGraph.
 
-    Phase 1 (build_graph): runs __post_init__ on all reachable Calculators; discovers deps
-    by scanning public attributes. Phase 2: runs __call__ on each node in topological order;
-    raises if __call__ introduces a new Calculator not declared in __post_init__; prunes
-    nodes not activated during __call__.
+    Phase 1 (build_graph): discovers deps by scanning the constructed nodes' public attributes.
+    Phase 2: runs __post_init__ on each node in dependency order (non-node setup). Phase 3: runs
+    __call__ on each node in topological order; raises if __call__ introduces a new Calculator
+    not declared at construction; prunes nodes not activated during __call__.
+
+    Parameters
+    ----------
+    root : Calculator
+    output : callable, optional
+        Custom output extractor called after the root node to produce the
+        pipeline's return value.
+
+    Notes
+    -----
+    To get derived parameter values on a call, pass ``return_derived=True`` to the
+    compiled graph's ``__call__``, e.g. ``val, derived = pipe(params, return_derived=True)``.
     """
     outer_ctx = getattr(_compile_context, 'ctx', None)
     ctx = build_graph(root)
     _compile_context.ctx = ctx
     try:
+        # Run __post_init__ (deferred non-node setup) in dependency order — node_order is
+        # post-order DFS, so a node's deps run before it (e.g. a template's __post_init__
+        # sets template.k before a theory's __post_init__ reads it). No new nodes here.
+        for node in ctx.node_order:
+            args, kwargs = node._init
+            node.__post_init__(*args, **kwargs)
         ctx.phase = 'call'
         ctx.call_activated.add(id(root))
+        # Seed solved parameters (derived='best'/'marg') with a zero placeholder so
+        # that __call__ can be traced without a None-value error.  These parameters
+        # have no prior and no explicit value, so _value is None at this point.
+        seen_param_ids = set()
+        for node in ctx.node_order:
+            for dep in ctx.node_deps.get(id(node), []):
+                if isinstance(dep, Variable) and id(dep) not in seen_param_ids:
+                    seen_param_ids.add(id(dep))
+                    if getattr(dep, 'solved', False) and dep._value is None:
+                        dep._value = np.zeros(dep.shape) if dep.shape else 0.
         for node in ctx.node_order:
             ctx.stack.append(node)
             ret = node.__call__()
@@ -891,3 +1388,301 @@ def compile(root: Calculator, output=None) -> CompiledGraph:
     finally:
         _compile_context.ctx = outer_ctx
     return CompiledGraph(root, ctx, output=output)
+
+
+def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None):
+    """
+    Build a derivative callable for a compiled graph.
+
+    Analogous to ``jax.jacfwd``: ``differentiate(graph, order)`` returns a
+    function; call that function on a *params* dict to evaluate the mixed
+    partial derivative at that point.
+
+    Uses JAX forward-mode AD for parameters that feed only JAX calculators and
+    *direct* finite-difference stencils for parameters that feed
+    ``ExternalCalculator`` nodes.  The FD stencil for order *k* and accuracy
+    *fd_acc* costs ``k + fd_acc - 1`` graph evaluations — linear in *k* —
+    versus the ``fd_acc^k`` cost of nested JVP calls.
+
+    When JAX and FD parameters are mixed the JAX derivative is built first
+    (cheaper inner function), and the FD stencil wraps it.  Mixed partials are
+    correct because partial derivatives of smooth functions commute.
+
+    Parameters
+    ----------
+    graph : CompiledGraph
+    order : dict[str | Variable, int]
+        Maps each parameter to its derivative order.
+        ``{'omega_m': 2, 'sigma8': 1}`` → d³/(dω_m² dσ₈).
+    fd_acc : int or dict[str | Variable, int], optional
+        FD accuracy order; overrides ``param.fd_acc`` for each FD parameter
+        in *order*.  A scalar value applies to all FD parameters; a dict
+        gives per-parameter control.  Falls back to ``param.fd_acc``
+        (default 2) when absent.
+    fd_eps : float or dict[str | Variable, float], optional
+        FD step size; overrides ``param.fd_eps`` for each FD parameter in
+        *order*.  A scalar value applies to all FD parameters; a dict gives
+        per-parameter control.  Falls back to ``param.fd_eps``
+        (→ ``param.proposal`` → ``1e-5``) when absent.
+
+    Returns
+    -------
+    callable
+        ``(params: dict = None, return_derived: bool = False, **kwargs) -> jax array``
+
+        When ``return_derived=False`` (default) returns the derivative of
+        ``graph``'s return value.  When ``return_derived=True`` returns a
+        tuple ``(d_return_val, d_derived_dict)`` — derivatives of the full
+        ``(return_val, derived_dict)`` pytree.
+
+        *params* defaults to stored parameter values; *kwargs* are merged as
+        overrides.  The returned function is compatible with ``jax.jit``.
+        For graphs with only JAX parameters it can also be passed to
+        ``jax.vmap``; for graphs with FD parameters the outer stencil loop
+        runs in Python (vmap is used *internally* for array-valued FD
+        parameters).
+
+    Examples
+    --------
+    First derivative, then call at default params::
+
+        grad_omega = differentiate(graph, {'omega_m': 1})
+        g = grad_omega()
+
+    Override step and accuracy::
+
+        d2 = differentiate(graph, {'omega_m': 2}, fd_acc=4, fd_eps=1e-4)
+        v  = d2({'omega_m': 0.3})
+
+    Mixed JAX + FD partial::
+
+        cross = differentiate(graph, {'a': 1, 'x': 1})   # 'a' JAX, 'x' FD
+        v = cross()
+
+    Return value + derived params simultaneously::
+
+        d_all = differentiate(graph, {'omega_m': 1})
+        d_rv, d_derived = d_all(return_derived=True)
+    """
+    def _resolve_per_param(value, names):
+        """Normalise a scalar-or-dict override to a ``{name: value}`` dict.
+
+        A scalar *value* is broadcast to all *names*; a dict is key-normalised.
+        """
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return {(k.name if isinstance(k, Variable) else str(k)): v for k, v in value.items()}
+        return {n: value for n in names}
+
+    # ── normalise order keys ───────────────────────────────────────────────────
+    order_dict = {(k.name if isinstance(k, Variable) else str(k)): v for k, v in order.items()}
+
+    # ── validate ──────────────────────────────────────────────────────────────
+    known = set(graph._fd_names) | set(graph._jax_names)
+    bad = set(order_dict) - known
+    if bad:
+        raise ValueError(f'Unknown parameter(s): {sorted(bad)}')
+
+    # ── split by differentiation strategy ─────────────────────────────────────
+    fd_items  = [(n, k) for n, k in order_dict.items() if n in graph._fd_names  and k > 0]
+    jax_items = [(n, k) for n, k in order_dict.items() if n in graph._jax_names and k > 0]
+
+    # ── resolve fd_acc / fd_eps overrides for FD params ──────────────────────
+    fd_names_in_order = [n for n, _ in fd_items]
+    acc_ov = _resolve_per_param(fd_acc, fd_names_in_order)
+    eps_ov = _resolve_per_param(fd_eps, fd_names_in_order)
+
+    # ── precompute stencils ────────────────────────────────────────────────────
+    fd_specs = []
+    for name, k in fd_items:
+        param_obj = graph.params[name]
+        _eps = eps_ov.get(name, param_obj.fd_eps)
+        if _eps is None:
+            _eps = 1e-5
+        _acc = acc_ov.get(name, param_obj.fd_acc)
+        offsets, coeffs = _fd_stencil(k, _acc)
+        fd_specs.append((name, offsets, coeffs, float(_eps), k))
+
+    # ── build the derivative function chain once ───────────────────────────────
+    # _return_derived is a one-element mutable box shared between _eval and
+    # _derivative.  _eval reads it at trace time so that when return_derived=False
+    # (the common case) the derivative chain only differentiates val, not
+    # derived_dict.  jax.jacfwd re-traces on every call so changing the flag
+    # between calls is safe.
+    _return_derived = [False]
+
+    def _eval(p_dict):
+        fd_t  = tuple(jnp.asarray(p_dict[n]) for n in graph._fd_names)
+        jax_t = tuple(jnp.asarray(p_dict[n]) for n in graph._jax_names)
+        val, derived_dict, _ = graph._call_fn(fd_t, jax_t)
+        if _return_derived[0]:
+            return val, derived_dict
+        return val
+
+    fn = _eval
+
+    # JAX derivatives first (inner): nest jacfwd once per order unit.
+    for name, k in jax_items:
+        for _ in range(k):
+            fn = _jacfwd_wrap(fn, name)
+
+    # FD stencils outside (outer): direct order-k stencil, linear cost.
+    for name, offsets, coeffs, _eps, _k in fd_specs:
+        fn = _fd_direct_wrap(fn, name, offsets, coeffs, _eps, _k)
+
+    # ── returned callable ──────────────────────────────────────────────────────
+    def _derivative(params=None, return_derived=False, **kwargs):
+        # Use current param values as defaults (supports in-place mutation after
+        # compile).  After the call, restore only *input* param values so that
+        # FD mutations from pure_callback do not corrupt subsequent default calls.
+        all_saved = {p.name: p._value for p in graph.params}
+        input_saved = {n: v for n, v in all_saved.items()
+                       if not graph.params[n].derived}
+        p0 = dict(all_saved)
+        if params is not None:
+            p0.update(params)
+        p0.update(kwargs)
+        _return_derived[0] = return_derived
+        try:
+            return fn(p0)
+        finally:
+            for p in graph.params:
+                if p.name in input_saved:
+                    p._value = input_saved[p.name]
+
+    return _derivative
+
+
+@default_mpicomm
+def pmap(fn, backend='mpi_and_jax', mpicomm=None):
+    """Return a batched version of *fn*, distributed across MPI ranks and/or local JAX devices.
+
+    Like :func:`jax.vmap`, ``pmap(fn)`` returns ``mapped(*args)`` that maps *fn* over the
+    **leading (batch) axis 0** of every array leaf of its pytree arguments, and returns
+    *fn*'s output as a pytree with the same leading batch axis.  On top of ``vmap`` it adds
+    distribution: the batch is split across MPI ranks (outer) and local JAX devices (inner).
+
+    * ``'jax'``         — shard the full batch across local JAX devices via
+      :func:`jax.experimental.shard_map`; each device runs :func:`jax.vmap` on its slice.
+    * ``'mpi'``         — split the batch across MPI ranks; each rank runs ``jax.vmap`` on a
+      single device, then outputs are gathered (Allgatherv) so every rank holds the full result.
+    * ``'mpi_and_jax'`` *(default)* — MPI outer loop + JAX inner loop: each rank takes a
+      contiguous slice and fans it out across its local devices via ``shard_map``.
+
+    Sub-batches whose size is not a multiple of the local device count are zero-padded before
+    sharding; the padding is stripped from the output, so it never affects the result.  On a
+    single-device, single-rank machine all three backends reduce to a plain ``vmap``.
+
+    Parameters
+    ----------
+    fn : callable
+        Function ``fn(*unbatched_args) -> output``.  Both inputs and output may be arbitrary
+        pytrees; every array leaf of ``*args`` must share the same leading batch size ``N``.
+    backend : {'jax', 'mpi', 'mpi_and_jax'}, optional
+        Parallelism strategy.  Default is ``'mpi_and_jax'``.
+    mpicomm : MPI communicator, optional
+        Communicator for the ``'mpi'`` / ``'mpi_and_jax'`` backends.  Defaults to
+        :func:`desilike.distributed.get_mpicomm`.
+
+    Returns
+    -------
+    callable
+        ``mapped(*args) -> output`` where every array leaf of ``args`` is batched on axis 0,
+        and the returned pytree carries the batch on axis 0.  For the MPI backends the result
+        is identical on all ranks (Allgatherv semantics).
+
+    Examples
+    --------
+    ::
+
+        eval_batch = pmap(lambda x: {'sq': x**2, 'sum': jnp.sum(x)})
+        out = eval_batch(jnp.arange(1000.))   # out['sq'].shape == (1000,), out['sum'].shape == (1000,)
+
+        # Vectorise a compiled likelihood over a batch of parameter dicts:
+        pipe = compile(my_likelihood)
+        logpdf = pmap(pipe)({'omega_m': jnp.linspace(0.2, 0.4, 1000)})
+    """
+    _VALID_BACKENDS = ('jax', 'mpi', 'mpi_and_jax')
+    if backend not in _VALID_BACKENDS:
+        raise ValueError(f'pmap(): backend must be one of {_VALID_BACKENDS}, got {backend!r}')
+
+    try:  # jax >= 0.8.0
+        from jax import shard_map
+    except ImportError:  # older jax
+        from jax.experimental.shard_map import shard_map
+    from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
+    from jax import tree_util as jtu
+
+    devices     = jax.local_devices()
+    ndevices    = len(devices)
+    mesh        = Mesh(np.array(devices), ('batch',))
+    batch_shard = NamedSharding(mesh, P('batch'))
+
+    vfn     = jax.vmap(fn)
+    vfn_jit = jax.jit(vfn)
+
+    # Cache the (jitted shard_map'd fn, output treedef) keyed on the per-element input
+    # structure (treedef + each leaf's non-batch shape and dtype) so the wrappers are built
+    # once and reused across calls / batch sizes (jax.jit then caches compilation by shape).
+    _sharded_cache = {}
+
+    def _get_sharded(sig):
+        if sig not in _sharded_cache:
+            treedef, leafsig = sig
+            dummy = [jax.ShapeDtypeStruct((1,) + shape, np.dtype(dt)) for shape, dt in leafsig]
+            dummy_args = jtu.tree_unflatten(treedef, dummy)
+            out_struct = jax.eval_shape(vfn, *dummy_args)
+            in_specs  = jtu.tree_unflatten(treedef, [P('batch')] * len(leafsig))
+            out_specs = jtu.tree_map(lambda _: P('batch'), out_struct)
+            sharded = jax.jit(shard_map(vfn, mesh=mesh, in_specs=in_specs, out_specs=out_specs))
+            _sharded_cache[sig] = (sharded, jtu.tree_structure(out_struct))
+        return _sharded_cache[sig]
+
+    def _run_sharded(sub_args, sub_n, sig):
+        """Run *sub_args* (batch ``sub_n``) through shard_map, zero-padding to a device multiple."""
+        if sub_n == 0:
+            return vfn_jit(*sub_args)   # empty batch: plain vmap preserves the output structure
+        sharded, _ = _get_sharded(sig)
+        remainder = sub_n % ndevices
+        if remainder:
+            pad_n = ndevices - remainder
+            sub_args = jtu.tree_map(
+                lambda x: jnp.concatenate([x, jnp.zeros((pad_n,) + x.shape[1:], dtype=x.dtype)], axis=0),
+                sub_args)
+        sub_args = jtu.tree_map(lambda x: jax.device_put(x, batch_shard), sub_args)
+        out = sharded(*sub_args) if isinstance(sub_args, tuple) else sharded(sub_args)
+        return jtu.tree_map(lambda x: x[:sub_n], out)
+
+    def mapped(*args):
+        leaves, in_treedef = jtu.tree_flatten(args)
+        if not leaves:
+            raise ValueError('pmap(): no array arguments to map over')
+        leaves = [jnp.asarray(leaf) for leaf in leaves]
+        batch_size = int(leaves[0].shape[0])
+        if any(int(leaf.shape[0]) != batch_size for leaf in leaves):
+            raise ValueError('pmap(): all batched leaves must share the same leading (batch) axis size')
+        args = jtu.tree_unflatten(in_treedef, leaves)
+        sig = (in_treedef, tuple((tuple(leaf.shape[1:]), leaf.dtype.str) for leaf in leaves))
+
+        if backend == 'jax':
+            return _run_sharded(args, batch_size, sig)
+
+        # 'mpi' / 'mpi_and_jax': split the batch across ranks, run locally, allgather.
+        rank, nranks = mpicomm.rank, mpicomm.size
+        local_start = rank * batch_size // nranks
+        local_stop  = (rank + 1) * batch_size // nranks
+        local_n     = local_stop - local_start
+        local_args  = jtu.tree_map(lambda x: x[local_start:local_stop], args)
+
+        if backend == 'mpi_and_jax':
+            local_out = _run_sharded(local_args, local_n, sig)
+        else:  # 'mpi'
+            local_out = vfn_jit(*local_args)
+
+        out_leaves, out_treedef = jtu.tree_flatten(local_out)
+        gathered = [jnp.asarray(_mpi_gather(np.asarray(leaf), mpiroot=Ellipsis, mpicomm=mpicomm))
+                    for leaf in out_leaves]
+        return jtu.tree_unflatten(out_treedef, gathered)
+
+    return mapped

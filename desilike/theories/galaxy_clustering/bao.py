@@ -29,9 +29,9 @@ import interpax
 from scipy import special, integrate
 
 from ...base import Calculator, ExternalCalculator
-from ...parameter import Parameter
+from ...parameter import Parameter, VariableCollection
 from .template import BAOSpectrum2Template
-from ._multitracer import apply_tracers
+from ._multitracer import propose_params_multitracer, assign_params
 
 
 # ── interpolation ─────────────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ def _interp_loglog(k_query, k_knots, pk_knots):
 
 # ── multipole projection ──────────────────────────────────────────────────────
 
-class ProjectToMultipoles:
+class ProjectToPoles:
     """Project P(k, mu) -> P_ell(k) via Gauss-Legendre quadrature on mu in [0, 1].
 
     Uses the symmetry P(k, mu) = P(k, -mu) to integrate only over [0, 1].
@@ -116,20 +116,37 @@ class DampedBAOWigglesPTSpectrum2Poles(Calculator):
     Beutler et al. 2017  https://arxiv.org/abs/1607.03149
     """
 
-    def __init__(self, k=None, template=None, tracers=None, **kwargs):
+    @classmethod
+    def propose_params(cls, tracers=None):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
+
+        Parameters
+        ----------
+        tracers : str, (str, str), or None, default=None
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return propose_params_multitracer([
+            Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
+                      ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1'),
+            Parameter('dbeta', value=1., prior=dict(limits=[0., 3.]),
+                      ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta\beta'),
+            Parameter('sigmas', value=0., prior=dict(limits=[-1., 10.]),
+                      ref=dict(dist='norm', loc=0., scale=1.), latex=r'\Sigma_s'),
+            Parameter('sigmapar', value=9., prior=dict(limits=[0., 25.]),
+                      ref=dict(dist='norm', loc=9., scale=1.), latex=r'\Sigma_\parallel'),
+            Parameter('sigmaper', value=6., prior=dict(limits=[0., 20.]),
+                      ref=dict(dist='norm', loc=6., scale=1.), latex=r'\Sigma_\perp'),
+        ], tracers)
+
+    def __init__(self, k=None, template=None, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        # ``tracers`` (a single tracer name) namespaces each parameter (e.g. 'LRG.b1').
-        self.b1 = Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
-                            ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1')
-        self.dbeta = Parameter('dbeta', value=1., prior=dict(limits=[0., 3.]),
-                               ref=dict(dist='norm', loc=1., scale=0.05), latex=r'\delta\beta')
-        self.sigmas = Parameter('sigmas', value=0., prior=dict(limits=[-1., 10.]),
-                                ref=dict(dist='norm', loc=0., scale=1.), latex=r'\Sigma_s')
-        self.sigmapar = Parameter('sigmapar', value=9., prior=dict(limits=[0., 25.]),
-                                  ref=dict(dist='norm', loc=9., scale=1.), latex=r'\Sigma_\parallel')
-        self.sigmaper = Parameter('sigmaper', value=6., prior=dict(limits=[0., 20.]),
-                                  ref=dict(dist='norm', loc=6., scale=1.), latex=r'\Sigma_\perp')
-        apply_tracers(self, tracers)  # namespacing only (no cross)
+        vc = type(self).propose_params(tracers=tracers)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         k = np.asarray(k, dtype='f8')
@@ -161,7 +178,7 @@ class DampedBAOWigglesPTSpectrum2Poles(Calculator):
             raise ValueError(f"mode must be '', 'recsym', or 'reciso'; got {mode!r}")
         self.smoothing_radius = float(smoothing_radius)
         self.model = str(model)
-        self._to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+        self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
         self._mu = self._to_poles.mu  # shape (n_mu,), GL nodes in [0, 1]
 
     def __call__(self):
@@ -270,19 +287,35 @@ class ResummedBAOWigglesPTSpectrum2Poles(Calculator):
     Beutler et al. 2017  https://arxiv.org/abs/1607.03149
     """
 
-    def __init__(self, k=None, template=None, tracers=None, **kwargs):
+    @classmethod
+    def propose_params(cls, tracers=None):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
+
+        Parameters
+        ----------
+        tracers : str, (str, str), or None, default=None
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return propose_params_multitracer([
+            Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
+                      ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1'),
+            Parameter('dbeta', value=1., prior=dict(limits=[0., 3.]),
+                      ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta\beta'),
+            Parameter('sigmas', value=0., prior=dict(limits=[-1., 10.]),
+                      ref=dict(dist='norm', loc=0., scale=1.), latex=r'\Sigma_s'),
+            Parameter('d', value=1., prior=dict(limits=[0., 3.]),
+                      ref=dict(dist='norm', loc=1., scale=0.05), latex='d'),
+        ], tracers)
+
+    def __init__(self, k=None, template=None, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        # ``tracers`` (a single tracer name) namespaces each parameter via apply_tracers.
-        self.b1 = Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
-                            ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1')
-        self.dbeta = Parameter('dbeta', value=1., prior=dict(limits=[0., 3.]),
-                               ref=dict(dist='norm', loc=1., scale=0.05), latex=r'\delta\beta')
-        self.sigmas = Parameter('sigmas', value=0., prior=dict(limits=[-1., 10.]),
-                                ref=dict(dist='norm', loc=0., scale=1.), latex=r'\Sigma_s')
-        # d scales the growth factor relative to fiducial (d=1: fiducial).
-        self.d = Parameter('d', value=1., prior=dict(limits=[0., 3.]),
-                           ref=dict(dist='norm', loc=1., scale=0.05), latex='d')
-        apply_tracers(self, tracers)  # namespacing only (no cross)
+        vc = type(self).propose_params(tracers=tracers)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         k = np.asarray(k, dtype='f8')
@@ -313,7 +346,7 @@ class ResummedBAOWigglesPTSpectrum2Poles(Calculator):
         self.smoothing_radius = float(smoothing_radius)
         self.model = str(model)
         self._shotnoise = float(shotnoise)
-        self._to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+        self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
         self._mu = self._to_poles.mu
 
     def _sigma_base(self):
@@ -404,53 +437,193 @@ class ResummedBAOWigglesPTSpectrum2Poles(Calculator):
         return obj
 
 
+# ── broadband helpers ─────────────────────────────────────────────────────────
+
+#: Power-law broadband modes (Pk powers range).
+_BB_SPECTRUM_POWER_POWS = (-3, -2, -1, 0, 1)
+#: Power-law broadband modes (xi powers range).
+_BB_CORRELATION_POWER_POWS = (-2, -1, 0, 1, 2)
+#: Kernel node indices (enough for k < 0.4 h/Mpc or reasonable s range).
+_BB_SPECTRUM_KERNEL_IKS = tuple(range(-2, 10))
+_BB_CORRELATION_KERNEL_IKS = tuple(range(-2, 3))
+#: Real-space (bl) correction powers for kernel xi broadband.
+_BB_XI_BL_POWS = (0, 2)
+
+_BB_POWER_MODES = ('power', 'power3', 'even-power')
+_BB_KERNEL_MODES = ('ngp', 'cic', 'tsc', 'pcs', 'pcs2')
+
+
+def _kernel_func(x, kernel='pcs'):
+    """Evaluate a 1-D window kernel at |x|.
+
+    Parameters
+    ----------
+    x : array
+        Dimensionless distance from kernel center (|k/kp - ik|).
+    kernel : str
+        One of ``'ngp'``, ``'cic'``, ``'tsc'``, ``'pcs'``.
+
+    Returns
+    -------
+    ndarray of same shape as *x*, values in [0, 1].
+    """
+    x = np.abs(x)
+    if kernel == 'ngp':
+        return np.where(x < 0.5, 1., 0.)
+    if kernel == 'cic':
+        return np.where(x < 1., 1. - x, 0.)
+    if kernel == 'tsc':
+        return np.where(x < 0.5, 0.75 - x**2,
+               np.where(x < 1.5, 0.5 * (1.5 - x)**2, 0.))
+    if kernel in ('pcs', 'pcs2'):
+        # Piecewise cubic spline over [0, 2].
+        return np.where(x < 1., (4. - 6.*x**2 + 3.*x**3) / 4.,
+               np.where(x < 2., (2. - x)**3 / 4., 0.))
+    raise ValueError(f'Unknown broadband kernel {kernel!r}; choose ngp/cic/tsc/pcs.')
+
+
+def _bb_pk_auto_params(ells, broadband):
+    """Return the ``Parameter`` list for Pk broadband of the given mode."""
+    auto_params = []
+    ells = tuple(ells)
+    if 'power' in broadband:
+        for ell in ells:
+            for pow in _BB_SPECTRUM_POWER_POWS:
+                fixed = (broadband == 'power3') and (pow not in (-2, -1, 0))
+                auto_params.append(Parameter(f'al{ell}_{pow}', value=0., fixed=fixed,
+                                             prior=None, ref=dict(dist='norm', loc=0., scale=1.),
+                                             fd_eps=0.005, latex=f'a_{{{ell},{pow}}}'))
+    else:
+        for ell in ells:
+            for ik in _BB_SPECTRUM_KERNEL_IKS:
+                auto_params.append(Parameter(f'al{ell}_{ik}', value=0.,
+                                             prior=dict(dist='norm', loc=0., scale=1e4),
+                                             ref=dict(dist='norm', loc=0., scale=1e-2),
+                                             fd_eps=0.005, latex=f'a_{{{ell},{ik}}}'))
+    return auto_params
+
+
+def _bb_xi_auto_params(ells, broadband):
+    """Return the ``Parameter`` list for xi broadband of the given mode."""
+    auto_params = []
+    ells = tuple(ells)
+    if 'power' in broadband:
+        for ell in ells:
+            for pow in _BB_CORRELATION_POWER_POWS:
+                fixed = ((broadband == 'power3') and (pow not in (-2, -1, 0))) or \
+                        ((broadband == 'even-power') and (pow not in (0, 2)))
+                auto_params.append(Parameter(f'al{ell}_{pow}', value=0., fixed=fixed,
+                                             prior=None, ref=dict(dist='norm', loc=0., scale=1.),
+                                             fd_eps=0.005, latex=f'a_{{{ell},{pow}}}'))
+    else:
+        for ell in ells:
+            for ik in _BB_CORRELATION_KERNEL_IKS:
+                fixed = (broadband == 'pcs2') and (ell != 0 or ik not in (0, 1))
+                auto_params.append(Parameter(f'al{ell}_{ik}', value=0., fixed=fixed,
+                                             prior=None, ref=dict(dist='norm', loc=0., scale=1e2),
+                                             fd_eps=0.005, latex=f'a_{{{ell},{ik}}}'))
+        for ell in ells:
+            for pow in _BB_XI_BL_POWS:
+                auto_params.append(Parameter(f'bl{ell}_{pow}', value=0.,
+                                             prior=None, ref=dict(dist='norm', loc=0., scale=1e-3),
+                                             fd_eps=0.005, latex=f'b_{{{ell},{pow}}}'))
+    return auto_params
+
+
 # ── tracer base (broadband) ───────────────────────────────────────────────────
 
 class _BAOWigglesTracerSpectrum2Poles(Calculator):
-    """Base for BAO tracer theories: wraps a bare BAO theory and adds polynomial broadband.
+    r"""Base for BAO tracer power spectrum theories: bare model + additive broadband.
 
-    The broadband is a sum of power-law terms per multipole:
-      P_tracer_ell(k) = P_bare_ell(k) + sum_pow al{ell}_{pow} * (k / kp)^pow
-    where kp = 2*pi / rs_drag_fid is the BAO scale pivot.
+    Supports four broadband parameterizations (``broadband=`` kwarg):
+
+    - ``'power'``: :math:`\sum_n a_{\ell,n}\,(k/k_p)^n`, :math:`n \in \{-3,\ldots,1\}`.
+    - ``'power3'``: same but only :math:`n \in \{-2,-1,0\}` are free (others fixed at 0).
+    - ``'ngp'``, ``'cic'``, ``'tsc'``, ``'pcs'``: kernel basis,
+      :math:`\sum_{i} a_{\ell,i}\,W(|k/k_p - i|)\,P_\mathrm{nw}(i\,k_p)`.
+
+    Parameters
+    ----------
+    k : array, default=None
+    pt : bare BAO PT class, default=None
+    ells : tuple of int, default=(0, 2)
+    broadband : str, default='power'
+    kp : float, default=None
+        Broadband pivot wavenumber [h/Mpc].  Defaults to :math:`2\pi/r_d^\mathrm{fid}`.
+    tracers, params : standard multitracer/override kwargs.
 
     Subclasses set ``_default_pt_cls`` to the bare theory class.
     """
 
     _default_pt_cls = None  # set by DampedBAOWigglesTracerSpectrum2Poles etc.
 
-    def __init__(self, k=None, pt=None, ells=(0, 2), broadband_pows=(-3, -2, -1, 0, 1), tracers=None):
-        # Broadband Parameters created here (Option B) so they appear in __dict__.
-        # ``tracers`` (a single tracer name) namespaces each parameter via apply_tracers.
+    @classmethod
+    def propose_params(cls, tracers=None, ells=(0, 2), broadband='power'):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
+
+        Parameters
+        ----------
+        tracers : str, (str, str), or None, default=None
+        ells : tuple of int, default=(0, 2)
+        broadband : str, default='power'
+            Broadband parameterization.  One of ``'power'``, ``'power3'``, ``'ngp'``,
+            ``'cic'``, ``'tsc'``, ``'pcs'``.
+
+        Returns
+        -------
+        VariableCollection
+        """
+        if broadband not in _BB_POWER_MODES + _BB_KERNEL_MODES:
+            raise ValueError(f'Unknown broadband mode {broadband!r}.')
+        return propose_params_multitracer(_bb_pk_auto_params(ells, broadband), tracers)
+
+    def __init__(self, k=None, pt=None, ells=(0, 2), broadband='power', kp=None, tracers=None, params=None):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         _ells = tuple(ells)
-        _pows = tuple(broadband_pows)
-        self.bb_params = []
-        for ell in _ells:
-            for pow in _pows:
-                self.bb_params.append(
-                    Parameter(f'al{ell}_{pow}', value=0., prior=None,
-                              ref=dict(dist='norm', loc=0., scale=1.),
-                              latex=f'a_{{{ell},{pow}}}')
-                )
-        self._bb_ell_pow = [(ell, pow) for ell in _ells for pow in _pows]
-        apply_tracers(self, tracers)  # namespaces bb_params (no cross)
+        vc = type(self).propose_params(tracers=tracers, ells=_ells, broadband=broadband)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        # Store all broadband params as a flat ordered list; build_graph discovers them via self.bb_params.
+        # We bypass assign_params because some basenames (e.g. al0_0) are valid identifiers and would
+        # be split out of the list, breaking the matrix row-index correspondence.
+        self.bb_params = list(vc)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
         self.ells = _ells
         if pt is None:
-            pt = self._default_pt_cls(tracers=tracers)  # bias namespaced to the same tracer
-        self.pt = pt  # Calculator dep
+            pt = self._default_pt_cls(tracers=tracers)
+        self.pt = pt
         self.pt.update(k=self.k, ells=self.ells)
 
+    def __post_init__(self, k=None, pt=None, ells=(0, 2), broadband='power', kp=None, tracers=None, params=None):
+        # Non-node setup: build the broadband basis matrix.
+        _ells = tuple(ells)
+        kp_val = float(kp) if kp is not None else 2. * np.pi / self.pt.template._fiducial.rs_drag
+        if 'power' in broadband:
+            # shape (n_ells * n_pows, n_k) — rows ordered as self._bb_ell_idx
+            self._bb_matrix = np.stack(
+                [(self.k / kp_val) ** pow for ell in _ells for pow in _BB_SPECTRUM_POWER_POWS])
+        else:
+            kernel = broadband[:3]  # 'pcs2' -> 'pcs', 'ngp' -> 'ngp', etc.
+            pk_now_interp = lambda ki: float(np.interp(ki, self.pt.template.k,
+                                                        self.pt.template._pknow_dd_fid))
+            rows = []
+            for ell in _ells:
+                for ik in _BB_SPECTRUM_KERNEL_IKS:
+                    w = _kernel_func(np.abs(self.k / kp_val - ik), kernel=kernel)
+                    rows.append(w * pk_now_interp(float(np.clip(ik * kp_val, self.k[0], self.k[-1]))))
+            self._bb_matrix = np.stack(rows)  # (n_ells * n_iks, n_k)
+        self._bb_n = len(_BB_SPECTRUM_POWER_POWS if 'power' in broadband else _BB_SPECTRUM_KERNEL_IKS)
+
     def __call__(self):
-        # kp from the fiducial rs_drag (numpy scalar, constant under JIT).
-        kp = 2. * np.pi / self.pt.template._fiducial.rs_drag
-        k = self.k  # (n_k,)
-        ell_to_idx = {ell: i for i, ell in enumerate(self.ells)}
-        broadband = jnp.zeros((len(self.ells), len(k)))
-        for (ell, pow), param in zip(self._bb_ell_pow, self.bb_params):
-            ill = ell_to_idx[ell]
-            broadband = broadband.at[ill].add(param * (k / kp) ** pow)
+        broadband = jnp.zeros((len(self.ells), len(self.k)))
+        n = self._bb_n
+        for ill in range(len(self.ells)):
+            params_ell = self.bb_params[ill * n:(ill + 1) * n]
+            matrix_ell = jnp.asarray(self._bb_matrix[ill * n:(ill + 1) * n])  # (n, n_k)
+            bb_vals = jnp.stack([p.value for p in params_ell])  # (n,)
+            broadband = broadband.at[ill].add(bb_vals.dot(matrix_ell))
         self.poles = self.pt.poles + broadband
         return self.poles
 
@@ -466,42 +639,38 @@ class _BAOWigglesTracerSpectrum2Poles(Calculator):
 
 class DampedBAOWigglesTracerSpectrum2Poles(_BAOWigglesTracerSpectrum2Poles):
     r"""
-    DampedBAOWigglesPTSpectrum2Poles with additive polynomial broadband.
+    DampedBAOWigglesPTSpectrum2Poles with additive broadband.
 
-    Broadband parameters ``al{ell}_{pow}`` are created automatically for each
-    (ell, pow) combination. The pivot wavenumber is kp = 2*pi / rs_drag_fid.
+    Supports ``broadband=`` modes: ``'power'`` (default), ``'power3'``,
+    ``'ngp'``, ``'cic'``, ``'tsc'``, ``'pcs'``.
+    Pivot wavenumber ``kp`` defaults to :math:`2\pi/r_d^\mathrm{fid}`.
 
     Parameters
     ----------
     k : array, default=None
-        Output wavenumbers [h/Mpc].
     pt : DampedBAOWigglesPTSpectrum2Poles, default=None
-        Bare theory. A default instance is created if None.
     ells : tuple of int, default=(0, 2)
-        Multipole orders.
-    broadband_pows : tuple of int, default=(-3, -2, -1, 0, 1)
-        Powers of k/kp to include in the broadband.
+    broadband : str, default='power'
+    kp : float, default=None
     """
     _default_pt_cls = DampedBAOWigglesPTSpectrum2Poles
 
 
 class ResummedBAOWigglesTracerSpectrum2Poles(_BAOWigglesTracerSpectrum2Poles):
     r"""
-    ResummedBAOWigglesPTSpectrum2Poles with additive polynomial broadband.
+    ResummedBAOWigglesPTSpectrum2Poles with additive broadband.
 
-    Broadband parameters ``al{ell}_{pow}`` are created automatically for each
-    (ell, pow) combination. The pivot wavenumber is kp = 2*pi / rs_drag_fid.
+    Supports ``broadband=`` modes: ``'power'`` (default), ``'power3'``,
+    ``'ngp'``, ``'cic'``, ``'tsc'``, ``'pcs'``.
+    Pivot wavenumber ``kp`` defaults to :math:`2\pi/r_d^\mathrm{fid}`.
 
     Parameters
     ----------
     k : array, default=None
-        Output wavenumbers [h/Mpc].
     pt : ResummedBAOWigglesPTSpectrum2Poles, default=None
-        Bare theory. A default instance is created if None.
     ells : tuple of int, default=(0, 2)
-        Multipole orders.
-    broadband_pows : tuple of int, default=(-3, -2, -1, 0, 1)
-        Powers of k/kp to include in the broadband.
+    broadband : str, default='power'
+    kp : float, default=None
     """
     _default_pt_cls = ResummedBAOWigglesPTSpectrum2Poles
 
@@ -633,52 +802,106 @@ class ResummedBAOWigglesPTCorrelation2Poles(_BAOWigglesPTCorrelation2Poles):
 # ── tracer correlation function multipoles ────────────────────────────────────
 
 class _BAOWigglesTracerCorrelation2Poles(ExternalCalculator):
-    r"""Base for BAO tracer correlation function theories: FFTLog + s-space polynomial broadband.
+    r"""Base for BAO tracer correlation function theories.
 
-    The broadband is:
-      xi_tracer_ell(s) = xi_bare_ell(s) + sum_pow al{ell}_{pow} * (s / sp)^pow
-    where sp = 2*pi / 0.02 ~ 314 Mpc/h.
+    Supports the same ``broadband=`` modes as :class:`_BAOWigglesTracerSpectrum2Poles`:
 
-    Subclasses set ``_default_pt_cls`` to the bare spectrum theory class.
+    **Power-law modes** (``'power'``, ``'power3'``, ``'even-power'``):
+      :math:`\xi_\ell(s) = \xi_\ell^\mathrm{bare}(s) + \sum_n a_{\ell,n}(s/s_p)^n`
+      where :math:`s_p = 2\pi/0.02 \approx 314\,\mathrm{Mpc}/h`.
+      Parameters: ``al{ell}_{pow}``.
+
+    **Kernel modes** (``'ngp'``, ``'cic'``, ``'tsc'``, ``'pcs'``, ``'pcs2'``):
+      The :math:`a_{\ell,i}` broadband is applied in Fourier space (owned by an inner
+      :class:`_BAOWigglesTracerSpectrum2Poles` dep), plus an additive s-space correction
+      :math:`\sum_{n \in \{0,2\}} b_{\ell,n}(s/s_p)^n` (``bl{ell}_{pow}`` parameters).
+
+    Subclasses set ``_default_pt_cls`` (bare PT class) and ``_default_tracer_cls``
+    (tracer spectrum class used for kernel modes).
     """
 
     _default_pt_cls = None
+    _default_tracer_cls = None  # set by concrete subclasses; used for kernel broadband
 
-    def __init__(self, s=None, pt=None, ells=(0, 2), broadband_pows=(-2, -1, 0, 1, 2), tracers=None):
+    @classmethod
+    def propose_params(cls, tracers=None, ells=(0, 2), broadband='power'):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
+
+        Parameters
+        ----------
+        tracers : str, (str, str), or None, default=None
+        ells : tuple of int, default=(0, 2)
+        broadband : str, default='power'
+            One of ``'power'``, ``'power3'``, ``'even-power'``, ``'ngp'``,
+            ``'cic'``, ``'tsc'``, ``'pcs'``, ``'pcs2'``.
+
+        Returns
+        -------
+        VariableCollection
+        """
+        if broadband not in _BB_POWER_MODES + ('even-power',) + _BB_KERNEL_MODES:
+            raise ValueError(f'Unknown broadband mode {broadband!r}.')
+        return propose_params_multitracer(_bb_xi_auto_params(ells, broadband), tracers)
+
+    def __init__(self, s=None, pt=None, ells=(0, 2), broadband='power', sp=None, tracers=None, params=None):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         _ells = tuple(ells)
-        _pows = tuple(broadband_pows)
-        self.bb_params = []
-        for ell in _ells:
-            for pow in _pows:
-                self.bb_params.append(
-                    Parameter(f'al{ell}_{pow}', value=0., prior=None,
-                              ref=dict(dist='norm', loc=0., scale=1.),
-                              latex=f'a_{{{ell},{pow}}}')
-                )
-        self._bb_ell_pow = [(ell, pow) for ell in _ells for pow in _pows]
-        apply_tracers(self, tracers)  # namespaces bb_params (no cross)
+        vc = type(self).propose_params(tracers=tracers, ells=_ells, broadband=broadband)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+
+        if 'power' in broadband or broadband == 'even-power':
+            # Power-law: al params live on this class; pt is a bare PT.
+            # Store as ordered list; build_graph discovers them via self.bb_params.
+            self.bb_params = list(vc)
+            if pt is None:
+                pt = self._default_pt_cls(tracers=tracers)
+            self.pt = pt
+            self.pt.update(k=np.geomspace(1e-4, 0.6, 300), ells=_ells)
+        else:
+            # Kernel: al params go to the inner tracer spectrum dep; bl params stay here.
+            al_vc = vc.select(basename='al*')
+            bl_vc = vc.select(basename='bl*')
+            if pt is None:
+                pt = self._default_tracer_cls(broadband=broadband, tracers=tracers, params=al_vc)
+            self.pt = pt  # tracer spectrum dep (owns al params)
+            self.pt.update(k=np.geomspace(1e-4, 0.6, 300), ells=_ells)
+            # bl params: real-space correction; stored as list so build_graph discovers them.
+            self.bl_params = list(bl_vc)
+
         if s is None:
             s = np.linspace(20., 200., 181)
         self.s = np.asarray(s, dtype='f8')
         self.ells = _ells
-        if pt is None:
-            pt = self._default_pt_cls(tracers=tracers)  # bias namespaced to the same tracer
-        self.pt = pt
-        self.pt.update(k=np.geomspace(1e-4, 0.6, 300), ells=self.ells)
 
-    def __post_init__(self, s=None, pt=None, ells=(0, 2), broadband_pows=(-2, -1, 0, 1, 2), tracers=None):
-        # Non-node setup only.
-        self._to_correlation = SpectrumToCorrelation(s=self.s, ells=self.ells, kin=np.geomspace(1e-4, 0.6, 300))
+    def __post_init__(self, s=None, pt=None, ells=(0, 2), broadband='power', sp=None, tracers=None, params=None):
+        # Non-node setup: FFTLog transformer + broadband basis matrix.
+        _ells = tuple(ells)
+        self._to_correlation = SpectrumToCorrelation(s=self.s, ells=_ells, kin=np.geomspace(1e-4, 0.6, 300))
+        sp_val = float(sp) if sp is not None else 2. * np.pi / 0.02
+        if 'power' in broadband or broadband == 'even-power':
+            pows = _BB_CORRELATION_POWER_POWS
+            n = len(pows)
+            self._bb_matrix = np.stack(
+                [(self.s / sp_val) ** pow for ell in _ells for pow in pows])
+            self._bb_n = n
+            # Flat ordered list of Parameter objects matching _bb_matrix rows.
+            self._bb_params_flat = self.bb_params  # set by assign_params in __init__
+        else:
+            # Kernel mode: al params are in self.pt; bl params are self.bl_params.
+            n = len(_BB_XI_BL_POWS)
+            self._bb_matrix = np.stack(
+                [(self.s / sp_val) ** pow for ell in _ells for pow in _BB_XI_BL_POWS])
+            self._bb_n = n
+            self._bb_params_flat = self.bl_params
 
     def __call__(self):
-        sp = 2. * np.pi / 0.02  # pivot separation [Mpc/h]
-        s = self.s
-        ell_to_idx = {ell: i for i, ell in enumerate(self.ells)}
         xi_bare = self._to_correlation(self.pt.poles)
-        broadband = np.zeros((len(self.ells), len(s)))
-        for (ell, pow), param in zip(self._bb_ell_pow, self.bb_params):
-            ill = ell_to_idx[ell]
-            broadband[ill] += float(param.value) * (s / sp) ** pow
+        broadband = np.zeros((len(self.ells), len(self.s)))
+        # _bb_params_flat and _bb_matrix are set up in __post_init__ for both modes.
+        for row_idx, param in enumerate(self._bb_params_flat):
+            ill = row_idx // self._bb_n
+            broadband[ill] += float(param.value) * self._bb_matrix[row_idx]
         self.poles = xi_bare + broadband
         return self.poles
 
@@ -694,41 +917,39 @@ class _BAOWigglesTracerCorrelation2Poles(ExternalCalculator):
 
 class DampedBAOWigglesTracerCorrelation2Poles(_BAOWigglesTracerCorrelation2Poles):
     r"""
-    DampedBAOWigglesPTCorrelation2Poles with additive s-space polynomial broadband.
+    BAO correlation function with damped wiggles and additive broadband.
 
-    Broadband parameters ``al{ell}_{pow}`` are created automatically for each
-    (ell, pow) combination. The pivot separation is sp = 2*pi / 0.02 ~ 314 Mpc/h.
+    Supports ``broadband=`` modes: ``'power'`` (default), ``'power3'``,
+    ``'even-power'``, ``'ngp'``, ``'cic'``, ``'tsc'``, ``'pcs'``, ``'pcs2'``.
+    Pivot separation ``sp`` defaults to :math:`2\pi/0.02 \approx 314\,\mathrm{Mpc}/h`.
 
     Parameters
     ----------
     s : array, default=None
-        Output separations [Mpc/h].
-    pt : DampedBAOWigglesPTSpectrum2Poles, default=None
-        Bare spectrum theory. A default instance is created if None.
+    pt : DampedBAOWigglesPTSpectrum2Poles or DampedBAOWigglesTracerSpectrum2Poles, default=None
     ells : tuple of int, default=(0, 2)
-        Multipole orders.
-    broadband_pows : tuple of int, default=(-2, -1, 0, 1, 2)
-        Powers of s/sp to include in the broadband.
+    broadband : str, default='power'
+    sp : float, default=None
     """
     _default_pt_cls = DampedBAOWigglesPTSpectrum2Poles
+    _default_tracer_cls = DampedBAOWigglesTracerSpectrum2Poles
 
 
 class ResummedBAOWigglesTracerCorrelation2Poles(_BAOWigglesTracerCorrelation2Poles):
     r"""
-    ResummedBAOWigglesPTCorrelation2Poles with additive s-space polynomial broadband.
+    BAO correlation function with resummed wiggles and additive broadband.
 
-    Broadband parameters ``al{ell}_{pow}`` are created automatically for each
-    (ell, pow) combination. The pivot separation is sp = 2*pi / 0.02 ~ 314 Mpc/h.
+    Supports ``broadband=`` modes: ``'power'`` (default), ``'power3'``,
+    ``'even-power'``, ``'ngp'``, ``'cic'``, ``'tsc'``, ``'pcs'``, ``'pcs2'``.
+    Pivot separation ``sp`` defaults to :math:`2\pi/0.02 \approx 314\,\mathrm{Mpc}/h`.
 
     Parameters
     ----------
     s : array, default=None
-        Output separations [Mpc/h].
-    pt : ResummedBAOWigglesPTSpectrum2Poles, default=None
-        Bare spectrum theory. A default instance is created if None.
+    pt : ResummedBAOWigglesPTSpectrum2Poles or ResummedBAOWigglesTracerSpectrum2Poles, default=None
     ells : tuple of int, default=(0, 2)
-        Multipole orders.
-    broadband_pows : tuple of int, default=(-2, -1, 0, 1, 2)
-        Powers of s/sp to include in the broadband.
+    broadband : str, default='power'
+    sp : float, default=None
     """
     _default_pt_cls = ResummedBAOWigglesPTSpectrum2Poles
+    _default_tracer_cls = ResummedBAOWigglesTracerSpectrum2Poles

@@ -149,7 +149,7 @@ class BaseMatrix:
         # Resolve each requested param to a Variable object.
         # Params present in self._params keep the stored object (with all attrs);
         # unknown params keep the caller-supplied object if it is a Variable/Parameter
-        # (so that .proposal, .prior, etc. are preserved), or fall back to a bare
+        # (so that .ref, .prior, etc. are preserved), or fall back to a bare
         # Variable(name) placeholder when only a string was given.
         resolved = []
         for p in params:
@@ -157,7 +157,7 @@ class BaseMatrix:
             if name in self._params:
                 resolved.append(self._params[name])
             elif isinstance(p, Variable):
-                resolved.append(p)   # keep caller's Parameter/Variable (has .proposal etc.)
+                resolved.append(p)   # keep caller's Parameter/Variable (has .ref etc.)
             else:
                 resolved.append(Variable(name))
 
@@ -333,7 +333,7 @@ class Covariance(BaseMatrix):
     _name = 'Covariance'
     _fill_value = np.nan
 
-    # ── covariance-specific view: fill with proposal^2 ───────────────────────
+    # ── covariance-specific view: fill with ref.std()^2 ──────────────────────
 
     def view(self, params=None, return_type=None, fill=None):
         """Return the sub-matrix for *params*.
@@ -342,26 +342,27 @@ class Covariance(BaseMatrix):
         ----------
         params : str, Variable, list, or None
         return_type : {None, 'nparray'}
-        fill : {'proposal', None}
-            When ``'proposal'``, unknown params whose :attr:`~desilike.parameter.Parameter.proposal`
-            is set get ``proposal**2`` on the diagonal instead of ``NaN``.
+        fill : {'ref', None}
+            When ``'ref'``, unknown params whose ``ref.std()`` is finite get
+            ``ref.std()**2`` on the diagonal instead of ``NaN``.
 
         Returns
         -------
         array or Covariance
         """
         new = super().view(params=params, return_type=None)
-        if fill == 'proposal':
+        if fill == 'ref':
             cumsizes = np.cumsum([0] + _param_sizes(new._params))
             for param_idx, param in enumerate(new._params):
                 if param.name not in self._params:
-                    proposal = getattr(param, 'proposal', None)
-                    if proposal is not None and np.isfinite(float(proposal)):
+                    ref = getattr(param, 'ref', None)
+                    std = ref.std() if ref is not None else None
+                    if std is not None and np.isfinite(float(std)):
                         diag_start = cumsizes[param_idx]
                         diag_end   = cumsizes[param_idx + 1]
                         flat_size  = diag_end - diag_start
                         new._value[diag_start:diag_end, diag_start:diag_end] = (
-                            np.eye(flat_size) * float(proposal) ** 2
+                            np.eye(flat_size) * float(std) ** 2
                         )
         if return_type == 'nparray':
             scalar = isinstance(params, (str, Variable))

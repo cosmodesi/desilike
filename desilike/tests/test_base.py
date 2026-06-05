@@ -626,27 +626,6 @@ def test_inplace_mutation_after_compile():
     assert abs(float(pipe()) - analytic_logL(0.3, 0.5, 1.5, 0.96)) < 1e-8
 
 
-def test_update_only_during_construction():
-    """update() is rejected after construction; use replace()/clone() instead."""
-    from desilike.base import replace
-    _, _, _, _, _, spectrum, likelihood = _make_nodes()
-
-    # Post-construction update() is forbidden (the graph is immutable once built).
-    with pytest.raises(RuntimeError, match='construction'):
-        spectrum.update(A=Parameter('A', value=1.5))
-
-    # Supported alternative: replace the parameter object, then compile.
-    replace(likelihood, lambda node: getattr(node, 'name', None) == 'A', Parameter('A', value=1.5))
-    pipe = compile(likelihood)
-    assert pipe.params['A'].value == 1.5
-    assert abs(float(pipe(omega_m=0.3, z=0.5, A=1.5, ns=0.96)) - analytic_logL(0.3, 0.5, 1.5, 0.96)) < 1e-8
-
-    # Supported alternative for init-argument changes: clone() produces a fresh instance.
-    likelihood2 = likelihood.clone(sigma=0.2)
-    pipe2 = compile(likelihood2)
-    assert abs(float(pipe2(omega_m=0.3, z=0.5, A=1.5, ns=0.96)) - analytic_logL(0.3, 0.5, 1.5, 0.96, sigma=0.2)) < 1e-8
-
-
 # ── prior / posterior ─────────────────────────────────────────────────────────
 
 def test_prior_standalone():

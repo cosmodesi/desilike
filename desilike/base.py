@@ -38,12 +38,13 @@ import functools
 import numpy as np
 import jax
 import jax.numpy as jnp
+from jax.custom_derivatives import SymbolicZero
 from collections import defaultdict
 
 jax.config.update('jax_enable_x64', True)
 
 from .parameter import (Node, Variable, Parameter, VariableCollection, _compile_context, _CompileContext,
-                        _iter_nodes, _substitute_node, _constructing, _in_construction)
+                        _iter_nodes, _substitute_node)
 from .distributed import default_mpicomm, get_mpicomm, gather as _mpi_gather
 
 
@@ -91,10 +92,7 @@ class Calculator(Node):
             @functools.wraps(_orig_init)
             def _wrapped_init(self, *args, _f=_orig_init, **kwargs):
                 self._init = (args, kwargs)
-                # __init__ creates and updates all nodes (fixing node identity at construction,
-                # which enables replace()/share_params()); __post_init__ is deferred to compile().
-                with _constructing():
-                    _f(self, *args, **kwargs)
+                _f(self, *args, **kwargs)
             cls.__init__ = _wrapped_init
 
     def __init__(self, *args, **kwargs):
@@ -108,9 +106,6 @@ class Calculator(Node):
         parent configuring a child dependency.  Outside construction the dependency graph
         is immutable; reconstruct the calculator or use :func:`replace` instead.
         """
-        if not _in_construction():
-            raise RuntimeError('update() can only be called during construction '
-                               '(__init__/__post_init__); reconstruct the calculator or use replace() instead.')
         old_args, old_kwargs = self._init
         merged_args = args if args else old_args
         merged_kwargs = {**old_kwargs, **kwargs}
@@ -160,7 +155,7 @@ class ExternalCalculator(Calculator):
     (finite-difference JVP for grad/jacfwd/hessian).
 
     Per-parameter FD step and accuracy are taken from param.fd_eps and param.fd_acc.
-    param.fd_eps falls back through: explicit → param.proposal → param.ref.std() → 1e-5.
+    param.fd_eps falls back through: explicit → param.ref.std() → 1e-5.
     param.fd_acc defaults to 2; set to 4, 6, ... for higher-accuracy stencils.
     """
 
@@ -224,6 +219,9 @@ class SumLikelihood(Likelihood):
 
     def __init__(self, *likelihoods):
         # Nodes (the Likelihood dependencies) live in __init__.
+        # Accept a single list/tuple argument: SumLikelihood([l1, l2]) == SumLikelihood(l1, l2).
+        if len(likelihoods) == 1 and isinstance(likelihoods[0], (list, tuple)):
+            likelihoods = likelihoods[0]
         self.likelihoods = list(likelihoods)
 
     def __call__(self):
@@ -337,10 +335,12 @@ class Posterior(Calculator):
     is always built.
     """
 
-    def __init__(self, likelihood, prior):
+    def __init__(self, likelihood, prior=None):
         # Posterior builds its internal compiled sub-pipelines and surfaces the
         # likelihood's Parameters (self.likelihood_params) as its node dependencies — all
         # in __init__ so they are discoverable before __post_init__/compile.
+        if prior is None:
+            prior = Prior(params(likelihood))
         self._likelihood = compile(likelihood)
         self._solved_params = self._likelihood.params.select(solved=True)
 
@@ -604,7 +604,26 @@ def _jacfwd_wrap(fn, name):
     return wrapped
 
 
-def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k):
+def _fd_parse_eps(fd_eps_val):
+    """Parse an ``fd_eps`` value into ``(eps_below, eps_above, eps_avg)``.
+
+    Accepts:
+    - scalar float ``eps``:              both sides use ``eps``, average is ``eps``.
+    - 3-tuple ``(center, eb, ea)``:      below uses ``eb``, above uses ``ea``,
+                                          average is ``(eb + ea) / 2``.
+                                          The ``center`` element is informational only.
+    """
+    if fd_eps_val is None:
+        fd_eps_val = 1e-5
+    if isinstance(fd_eps_val, (tuple, list)):
+        _, eps_below, eps_above = fd_eps_val
+        eps_below, eps_above = float(eps_below), float(eps_above)
+    else:
+        eps_below = eps_above = float(fd_eps_val)
+    return eps_below, eps_above, (eps_below + eps_above) * 0.5
+
+
+def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=None):
     """Lift *fn(p_dict) -> y* to the k-th order FD stencil derivative w.r.t. *name*.
 
     Uses the *direct* order-k stencil (k + acc - 1 evaluations, linear in k)
@@ -621,8 +640,37 @@ def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k):
     For array parameters the stencil is vectorised via ``jax.vmap`` over the
     basis directions, so the Python loop runs only over the ``k + acc - 1``
     stencil points.
+
+    prior_limits : (lo, hi) or None
+        Hard prior limits.  When set, the stencil base is shifted inward so all
+        stencil points stay within ``[lo, hi]`` (mirrors desilike_bak boundary logic).
     """
-    h_k = eps ** k
+    # Parse eps: scalar or (center, eps_below, eps_above).
+    eps_below, eps_above, eps_avg = _fd_parse_eps(eps)
+    h_k = eps_avg ** k
+    hsize = len(offsets) // 2  # half-width of stencil (= 1 for acc=2, order=1)
+    # For boundary shifting use the larger of the two steps.
+    eps_max = max(eps_below, eps_above)
+
+    # Resolve finite prior bounds as Python floats (None means unbounded on that side).
+    _prior_lo = _prior_hi = None
+    if prior_limits is not None:
+        _lo, _hi = prior_limits
+        if np.isfinite(_lo): _prior_lo = float(_lo)
+        if np.isfinite(_hi): _prior_hi = float(_hi)
+
+    def _shift_base(p0):
+        """Shift the stencil center inward to keep all points within prior limits."""
+        x = p0
+        if _prior_lo is not None:
+            x = jnp.maximum(x, _prior_lo + hsize * eps_max)
+        if _prior_hi is not None:
+            x = jnp.minimum(x, _prior_hi - hsize * eps_max)
+        return x
+
+    def _off_step(off):
+        """Step size for a given signed stencil offset."""
+        return eps_below if off < 0 else eps_above
 
     def _tree_scale(tree, s):
         return jax.tree_util.tree_map(lambda x: s * x, tree)
@@ -647,12 +695,13 @@ def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k):
 
     def wrapped(p_dict):
         p0 = jnp.asarray(p_dict[name])
+        p_base = _shift_base(p0)  # boundary-safe stencil center
 
         if p0.ndim == 0:
             # Scalar param: plain stencil sum — pytree-safe via tree_map.
             acc = None
             for off, coeff in zip(offsets, coeffs):
-                fi = fn({**p_dict, name: p0 + off * eps})
+                fi = fn({**p_dict, name: p_base + off * _off_step(off)})
                 acc = _tree_scale(fi, coeff) if acc is None else _tree_add(acc, _tree_scale(fi, coeff))
             return _tree_div(acc, h_k)
 
@@ -665,8 +714,9 @@ def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k):
 
         acc_vmap = None
         for off, coeff in zip(offsets, coeffs):
-            def eval_along(e_flat, _off=off):
-                return fn({**p_dict, name: p0 + _off * eps * e_flat.reshape(p0.shape)})
+            _step = _off_step(off)
+            def eval_along(e_flat, _off=off, _s=_step):
+                return fn({**p_dict, name: p_base + _off * _s * e_flat.reshape(p0.shape)})
             # vals: pytree with each leaf having shape (flat_size, *leaf_shape)
             vals = jax.vmap(eval_along)(basis)
             acc_vmap = _tree_scale(vals, coeff) if acc_vmap is None else _tree_add(acc_vmap, _tree_scale(vals, coeff))
@@ -905,7 +955,6 @@ def _build_graph_call_fn(pipeline):
         params = {**dict(zip(fd_names, fd_params_tuple)), **dict(zip(jax_names, jax_params_tuple))}
         return _run_graph(params)
 
-    @call_fn.defjvp
     def call_fn_jvp(primals, tangents):
         fd_p, jax_p = primals
         vfd, vjax = tangents
@@ -916,38 +965,71 @@ def _build_graph_call_fn(pipeline):
         # One full-graph call per stencil point per scalar element of each fd_param.
         # return_val may be an arbitrary pytree (array, None for a side-effect-only
         # root, or the node itself), so all arithmetic goes through tree_map.
+        # ``symbolic_zeros=True`` lets us skip params that are not being differentiated:
+        # this avoids needless graph re-evaluations and, crucially, never perturbs a
+        # fixed/constant param out of its valid domain (e.g. a negative neutrino mass).
         tangent_val = jax.tree_util.tree_map(jnp.zeros_like, primal_val)
         tangent_derived = jax.tree_util.tree_map(jnp.zeros_like, primal_derived)
         for i, param in enumerate(fd_params):
-            eps = param.fd_eps if param.fd_eps is not None else 1e-5
+            if isinstance(vfd[i], SymbolicZero):
+                continue
+            eps_below, eps_above, eps_avg = _fd_parse_eps(param.fd_eps)
+            eps_max = max(eps_below, eps_above)
             offsets, coeffs = _fd_stencil(1, param.fd_acc)
             param_arr = jnp.asarray(fd_p[i])
+            hsize = len(offsets) // 2  # half-width of stencil (= 1 for acc=2)
+            # Prior hard limits for boundary-safe stencil shifting.
+            _prior_lo = _prior_hi = None
+            if param.prior is not None:
+                _lo, _hi = param.prior.limits
+                if np.isfinite(_lo): _prior_lo = float(_lo)
+                if np.isfinite(_hi): _prior_hi = float(_hi)
             for idx in np.ndindex(param_arr.shape):
                 v_ij = vfd[i][idx] if param_arr.ndim > 0 else vfd[i]
+                x_ij = param_arr[idx] if param_arr.ndim > 0 else param_arr
+                # Shift the stencil base so all points [x_base ± k*eps] stay within prior limits.
+                # This mirrors the desilike_bak grid-shifting strategy: if x is near a hard
+                # boundary, the stencil is shifted inward rather than clipped asymmetrically.
+                x_base = x_ij
+                if _prior_lo is not None:
+                    x_base = jnp.maximum(x_base, _prior_lo + hsize * eps_max)
+                if _prior_hi is not None:
+                    x_base = jnp.minimum(x_base, _prior_hi - hsize * eps_max)
                 df = jax.tree_util.tree_map(jnp.zeros_like, primal_val)
                 df_derived = jax.tree_util.tree_map(jnp.zeros_like, primal_derived)
                 for off, coeff in zip(offsets, coeffs):
+                    # Use eps_below for negative offsets and eps_above for positive offsets.
+                    # This gives the correct non-uniform central difference for 1st order acc=2:
+                    #   (f(x+eps_above) - f(x-eps_below)) / (eps_below+eps_above).
+                    step = eps_below if off < 0 else eps_above
                     shifted = list(fd_p)
-                    shifted[i] = param_arr.at[idx].add(off * eps) if param_arr.ndim > 0 else param_arr + off * eps
+                    shifted[i] = param_arr.at[idx].set(x_base + off * step) if param_arr.ndim > 0 else x_base + off * step
                     fi, fi_derived, _ = call_fn(tuple(shifted), jax_p)
                     df = jax.tree_util.tree_map(lambda a, b, c=coeff: a + c * b, df, fi)
                     df_derived = jax.tree_util.tree_map(lambda a, b, c=coeff: a + c * b, df_derived, fi_derived)
-                tangent_val = jax.tree_util.tree_map(lambda t, d, vv=v_ij: t + vv * d / eps, tangent_val, df)
-                tangent_derived = jax.tree_util.tree_map(lambda a, b: a + v_ij * b / eps, tangent_derived, df_derived)
+                tangent_val = jax.tree_util.tree_map(lambda t, d, vv=v_ij: t + vv * d / eps_avg, tangent_val, df)
+                tangent_derived = jax.tree_util.tree_map(lambda a, b: a + v_ij * b / eps_avg, tangent_derived, df_derived)
 
         # ── JAX tangent for jax_params ────────────────────────────────────────
         # Forward-mode AD through the JAX sub-graph; External outputs frozen at
         # primal_ext so their contribution is zero (treated as constants).
-        if jax_names:
+        # Materialise symbolic-zero tangents to concrete zeros for jax.jvp; skip the
+        # sub-graph entirely when no jax_param is being differentiated.
+        if jax_names and any(not isinstance(v, SymbolicZero) for v in vjax):
+            vjax_concrete = tuple(jnp.zeros_like(jax_p[j]) if isinstance(vjax[j], SymbolicZero) else vjax[j]
+                                  for j in range(len(jax_p)))
+
             def _jax_sub(jp):
                 params = {**dict(zip(fd_names, fd_p)), **dict(zip(jax_names, jp))}
                 return _run_graph(params, ext_flat=primal_ext)
-            _, (jax_tv, jax_tv_derived, _) = jax.jvp(_jax_sub, (jax_p,), (vjax,))
+            _, (jax_tv, jax_tv_derived, _) = jax.jvp(_jax_sub, (jax_p,), (vjax_concrete,))
             tangent_val = jax.tree_util.tree_map(lambda a, b: a + b, tangent_val, jax_tv)
             tangent_derived = jax.tree_util.tree_map(lambda a, b: a + b, tangent_derived, jax_tv_derived)
 
         tangent_out = (tangent_val, tangent_derived, tuple(jnp.zeros_like(e) for e in primal_ext))
         return (primal_val, primal_derived, primal_ext), tangent_out
+
+    call_fn.defjvp(call_fn_jvp, symbolic_zeros=True)
 
     return call_fn
 
@@ -962,7 +1044,7 @@ class CompiledGraph:
     jax.jit, jax.vmap, and jax.grad.
     """
 
-    def __init__(self, root: Calculator, ctx: '_CompileContext', output=None):
+    def __init__(self, root: Calculator, ctx: _CompileContext, output=None):
         self.root = root
         self.output = output
         self.nodes = ctx.node_order
@@ -1423,7 +1505,7 @@ def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None):
         FD step size; overrides ``param.fd_eps`` for each FD parameter in
         *order*.  A scalar value applies to all FD parameters; a dict gives
         per-parameter control.  Falls back to ``param.fd_eps``
-        (→ ``param.proposal`` → ``1e-5``) when absent.
+        (→ ``param.ref.std()`` → ``1e-5``) when absent.
 
     Returns
     -------
@@ -1502,7 +1584,8 @@ def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None):
             _eps = 1e-5
         _acc = acc_ov.get(name, param_obj.fd_acc)
         offsets, coeffs = _fd_stencil(k, _acc)
-        fd_specs.append((name, offsets, coeffs, float(_eps), k))
+        _prior_limits = param_obj.prior.limits if param_obj.prior is not None else None
+        fd_specs.append((name, offsets, coeffs, _eps, k, _prior_limits))
 
     # ── build the derivative function chain once ───────────────────────────────
     # _return_derived is a one-element mutable box shared between _eval and
@@ -1528,8 +1611,8 @@ def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None):
             fn = _jacfwd_wrap(fn, name)
 
     # FD stencils outside (outer): direct order-k stencil, linear cost.
-    for name, offsets, coeffs, _eps, _k in fd_specs:
-        fn = _fd_direct_wrap(fn, name, offsets, coeffs, _eps, _k)
+    for name, offsets, coeffs, _eps, _k, _prior_limits in fd_specs:
+        fn = _fd_direct_wrap(fn, name, offsets, coeffs, _eps, _k, prior_limits=_prior_limits)
 
     # ── returned callable ──────────────────────────────────────────────────────
     def _derivative(params=None, return_derived=False, **kwargs):

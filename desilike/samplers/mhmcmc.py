@@ -162,12 +162,12 @@ class StandAloneMetropolisHastingsSampler:
 
         Parameters
         ----------
-        pos : numpy.ndarray of shape (n_chains, n_dim) or None, optional
+        pos : numpy.ndarray of shape (nchains, n_dim) or None, optional
             Starting position(s) of the chains.
-        log_p : numpy.ndarray of shape (n_chains) or None, optional
+        log_p : numpy.ndarray of shape (nchains) or None, optional
             Logarith of the posterior of the starting position(s). If not
             provided, these values are computed.
-        blobs : numpy.ndarray of shape (n_chains, ...) or None, optional
+        blobs : numpy.ndarray of shape (nchains, ...) or None, optional
             Blobs for the starting positions.
         cov : numpy.ndarray or None, optional
             Covariance matrix used to whiten parameter space.
@@ -175,7 +175,7 @@ class StandAloneMetropolisHastingsSampler:
         """
         if pos is not None:
             self.pos = np.array(pos, dtype=float)
-            self.n_chains = len(pos)
+            self.nchains = len(pos)
 
             if log_p is None or blobs is None:
                 log_p, blobs = self.compute_posterior(self.pos)
@@ -222,13 +222,13 @@ class StandAloneMetropolisHastingsSampler:
 
         Returns
         -------
-        step_fast : numpy.ndararay of shape (n_chains, n_dim)
+        step_fast : numpy.ndararay of shape (nchains, n_dim)
             Fast-parameter steps where slow parameters are unchanged.
 
         """
         if len(self.proposal_fast) == 0:
             self.proposal_fast = list(np.transpose(self.proposer.propose_fast(
-                self.n_chains), axes=[1, 0, 2]))
+                self.nchains), axes=[1, 0, 2]))
         return self.proposal_fast.pop()
 
     def propose_slow(self):
@@ -236,17 +236,17 @@ class StandAloneMetropolisHastingsSampler:
 
         Returns
         -------
-        step_slow : numpy.ndararay of shape (n_chains, n_dim)
+        step_slow : numpy.ndararay of shape (nchains, n_dim)
             Slow-parameter steps.
 
         """
         if len(self.proposal_slow) == 0:
             self.proposal_slow = list(np.transpose(self.proposer.propose_slow(
-                self.n_chains), axes=[1, 0, 2]))
+                self.nchains), axes=[1, 0, 2]))
         proposal_drag = []
         for _ in range(self.f_drag):
             proposal_drag += list(np.transpose(self.proposer.propose_fast(
-                self.n_chains), axes=[1, 0, 2]))
+                self.nchains), axes=[1, 0, 2]))
         return self.proposal_slow.pop(), proposal_drag
 
     def make_one_step(self):
@@ -254,11 +254,11 @@ class StandAloneMetropolisHastingsSampler:
 
         Returns
         -------
-        pos : numpy.ndarray of shape (n_chains, n_dim)
+        pos : numpy.ndarray of shape (nchains, n_dim)
             New positions in parameter space.
-        blobs : np.ndarray of shape (n_chains, ...)
+        blobs : np.ndarray of shape (nchains, ...)
             Blobs associated with the posterior function.
-        log_p : numpy.ndarray of shape (n_chains)
+        log_p : numpy.ndarray of shape (nchains)
             Logarithm of the posterior.
 
         """
@@ -297,7 +297,7 @@ class StandAloneMetropolisHastingsSampler:
                 p_accept = np.exp(
                     ((n - i) * log_p_old_prop + i * log_p_new_prop -
                      (n - i) * log_p_old[-1] - i * log_p_new[-1]) / n)
-                accept = self.rng.random(size=self.n_chains) < p_accept
+                accept = self.rng.random(size=self.nchains) < p_accept
                 x.append(np.where(accept[:, None], x[-1] + step, x[-1]))
                 log_p_new.append(
                     np.where(accept, log_p_new_prop, log_p_new[-1]))
@@ -309,7 +309,7 @@ class StandAloneMetropolisHastingsSampler:
             p_accept = np.exp(np.mean(log_p_new, axis=0) -
                               np.mean(log_p_old, axis=0))
 
-        accept = self.rng.random(size=self.n_chains) < p_accept
+        accept = self.rng.random(size=self.nchains) < p_accept
         self.pos = np.where(accept[:, None], pos_prop, self.pos)
         self.log_p = np.where(accept, log_p_prop, self.log_p)
         self.blobs = np.where(accept[:, None], blobs_prop, self.blobs)
@@ -326,11 +326,11 @@ class StandAloneMetropolisHastingsSampler:
 
         Returns
         -------
-        chains : numpy.ndarray of shape (n_chains, n_steps, n_dim)
+        chains : numpy.ndarray of shape (nchains, n_steps, n_dim)
             Positions in parameter space.
-        blobs : numpy.ndarray of shape (n_chains, n_steps, ...)
+        blobs : numpy.ndarray of shape (nchains, n_steps, ...)
             Blobs returned from the posterior.
-        log_p : numpy.ndarray of shape (n_chains, n_steps)
+        log_p : numpy.ndarray of shape (nchains, n_steps)
             Logarithm of the posterior.
 
         """
@@ -353,19 +353,17 @@ class MetropolisHastingsSampler(MarkovChainSampler):
 
     default_adaptation_steps = sys.maxsize
 
-    def __init__(self, posterior, n_chains=1, cov=None, f_fast=1, f_drag=0,
-                 fast=[], chains=None, rng=None, directory=None):
+    def __init__(self, posterior, nchains=1, f_fast=1, f_drag=0,
+                 fast=[], chains=None, rng=None, directory=None,
+                 rescale=False, covariance=None):
         """Initialize the Metropolis-Hastings sampler.
 
         Parameters
         ----------
         posterior : CompiledGraph
             Compiled pipeline returning the log-posterior.
-        n_chains : int, optional
+        nchains : int, optional
             Number of chains. Default is 1.
-        cov : numpy.ndarray or None, optional
-            Covariance matrix estimate used to whiten parameter space. If None,
-            the sampler will use each parameter's proposal scale.
         f_fast : int, optional
             Oversampling factor of fast parameters. The default is 1 which
             implies not oversampling.
@@ -381,28 +379,40 @@ class MetropolisHastingsSampler(MarkovChainSampler):
             Random number generator. Default is ``None``.
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
+        rescale : bool, optional
+            Normalise parameters to ~ unit variation range (see :class:`BaseSampler`).
+        covariance : numpy.ndarray or None, optional
+            Covariance matrix estimate (original parameter space). Used both as the
+            initial Metropolis-Hastings proposal covariance and, when ``rescale=True``,
+            to set the rescaling scale. If ``None``, each parameter's ``ref.std()`` is
+            used instead.
 
         """
         super().__init__(
-            posterior, n_chains=n_chains, chains=chains, rng=rng,
-            directory=directory)
+            posterior, nchains=nchains, chains=chains, rng=rng,
+            directory=directory, rescale=rescale, covariance=covariance)
 
         for i in range(len(fast)):
             fast[i] = self.varied_params.names().index(fast[i])
 
-        # each MH sampler runs independently on its own process
+        # each MH sampler runs independently on its own process.  It operates in the
+        # sampler's rescaled working space (compute_posterior maps positions back to
+        # original space), so the proposal covariance is built from the transformed
+        # proposals.  An explicit *covariance* is in original space → whiten it.
         self.sampler = StandAloneMetropolisHastingsSampler(self.compute_posterior,
                                                            fast=fast, f_fast=f_fast, f_drag=f_drag, rng=self.rng)
-        if cov is None:
+        if covariance is None:
             ndim = self.ndim
             cov = np.zeros((ndim, ndim))
             col = 0
-            for param in self.varied_params:
+            for param in self._transformed_params:
                 size = int(np.prod(param.shape)) if param.shape else 1
-                proposal = float(param.proposal)
+                std = float(param.ref.std())
                 for offset in range(size):
-                    cov[col + offset, col + offset] = proposal**2
+                    cov[col + offset, col + offset] = std**2
                 col += size
+        else:
+            cov = np.asarray(covariance) / np.outer(self._scale, self._scale)
         self.sampler.update(cov=cov)
 
     def adapt_sampler(self, steps):
@@ -432,7 +442,10 @@ class MetropolisHastingsSampler(MarkovChainSampler):
         if any(self.mpicomm.allgather(len(self._samples) < self.adaptation_steps if self.pool.main else False)):
             cov = None
             if self.pool.main:
+                # Stored samples are in original space; whiten to the working space the
+                # proposer operates in: cov_working = cov_orig / (scale ⊗ scale).
                 cov = np.asarray(self._samples.covariance(self.varied_params.names()))
+                cov = cov / np.outer(self._scale, self._scale)
             cov = np.mean([c for c in self.mpicomm.allgather(cov) if c is not None], axis=0)
             try:
                 self.sampler.update(cov=cov)

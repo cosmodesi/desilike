@@ -10,29 +10,8 @@ import jax.numpy as jnp
 from scipy import stats as sp
 from .utils import NumpyEncoder, register_type, write as _utils_write, read as _utils_read
 
+
 _compile_context = threading.local()
-
-# Construction guard: incremented while a Calculator's __init__/__post_init__ runs.
-# update() is only permitted while this depth > 0 (i.e. during construction), so that
-# the dependency graph is immutable once construction completes.
-_construction = threading.local()
-
-
-def _in_construction():
-    return getattr(_construction, 'depth', 0) > 0
-
-
-import contextlib as _contextlib
-
-
-@_contextlib.contextmanager
-def _constructing():
-    """Context manager marking that node construction is in progress (enables update())."""
-    _construction.depth = getattr(_construction, 'depth', 0) + 1
-    try:
-        yield
-    finally:
-        _construction.depth -= 1
 
 
 class _CompileContext:
@@ -184,9 +163,9 @@ def _iter_nodes(value, _seen=None):
     """Yield every :class:`Node` reachable from *value* through standard containers.
 
     Descends into ``list``/``tuple``/``set``/``frozenset``/``dict`` (both keys and
-    values) but stops at any :class:`Node` (yielding it without descending into its
-    own attributes) and at non-container leaves (arrays, scalars, strings, arbitrary
-    objects).  Cycle-safe via an id-based visited set.
+    values) and :class:`VariableCollection`, but stops at any :class:`Node` (yielding
+    it without descending into its own attributes) and at non-container leaves (arrays,
+    scalars, strings, arbitrary objects).  Cycle-safe via an id-based visited set.
     """
     if _seen is None:
         _seen = set()
@@ -199,7 +178,7 @@ def _iter_nodes(value, _seen=None):
         for key, val in value.items():
             yield from _iter_nodes(key, _seen)
             yield from _iter_nodes(val, _seen)
-    elif isinstance(value, (list, tuple, set, frozenset)):
+    elif isinstance(value, (list, tuple, set, frozenset, VariableCollection)):
         for val in value:
             yield from _iter_nodes(val, _seen)
     # else: array / scalar / str / arbitrary object → not a dependency container
@@ -209,9 +188,9 @@ def _substitute_node(value, match, new):
     """Return *value* with every Node satisfying ``match(node)`` replaced by *new*.
 
     Mutating, path-aware sibling of :func:`_iter_nodes`: rebuilds standard containers
-    (``list``/``tuple``/``set``/``frozenset``/``dict``, keys and values) so a node held
-    in e.g. a tuple-of-tuples is replaced.  Does not descend into Nodes (a Node is
-    replaced as a whole when it matches).
+    (``list``/``tuple``/``set``/``frozenset``/``dict``, keys and values) and
+    :class:`VariableCollection` so a node held in e.g. a tuple-of-tuples or a collection
+    is replaced.  Does not descend into Nodes (a Node is replaced as a whole when it matches).
     """
     if isinstance(value, Node):
         return new if match(value) else value
@@ -225,6 +204,11 @@ def _substitute_node(value, match, new):
         return {_substitute_node(val, match, new) for val in value}
     if isinstance(value, frozenset):
         return frozenset(_substitute_node(val, match, new) for val in value)
+    if isinstance(value, VariableCollection):
+        substituted = VariableCollection()
+        for val in value:
+            substituted.set(_substitute_node(val, match, new))
+        return substituted
     return value
 
 
@@ -327,15 +311,9 @@ class Variable(Node):
         return self._value
 
     def update(self, **kwargs):
-        if not _in_construction():
-            raise RuntimeError('update() can only be called during construction '
-                               '(__init__/__post_init__); reconstruct or use replace() instead.')
-        self.__init__(
-            kwargs.get('name', self._name),
-            value=kwargs.get('value', self._value),
-            derived=kwargs.get('derived', self._derived),
-            latex=kwargs.get('latex', self._latex),
-        )
+        state = self.__getstate__()
+        state.update(kwargs)
+        self.__init__(**state)
         return self
 
     def __getstate__(self, to_file=False):
@@ -745,7 +723,7 @@ class Parameter(Variable):
     _solved_values = frozenset(['best', 'marg'])
 
     def __init__(self, name, value=None, prior=None, ref=None, latex=None, fixed=None,
-                 derived=False, shape=(), proposal=None, fd_eps=None, fd_acc=2,
+                 derived=False, shape=(), fd_eps=None, fd_acc=2,
                  namespace=None, depends=None):
         """
         Parameters
@@ -768,10 +746,8 @@ class Parameter(Variable):
             {param_name} placeholders (e.g. '{omega_m} * {h}**2').
         shape : tuple
             Array shape; () for scalars.
-        proposal : float, optional
-            MCMC proposal scale. Defaults to ref.std().
         fd_eps : float, optional
-            Finite-difference step. Defaults to proposal.
+            Finite-difference step. Defaults to ref.std().
         fd_acc : int, optional
             Finite-difference accuracy order (must be a positive even integer). Defaults to 2.
         namespace : str, optional
@@ -846,8 +822,15 @@ class Parameter(Variable):
                 setattr(self, attr, p.clone(shape=self.shape))
             elif p.shape != self.shape:
                 raise ValueError(f'{attr} shape {p.shape} inconsistent with parameter shape {self.shape}')
-        self._proposal = float(proposal) if proposal is not None else None
-        self._fd_eps = float(fd_eps) if fd_eps is not None else None
+        if fd_eps is not None:
+            if hasattr(fd_eps, '__len__'):
+                # 3-tuple (center, eps_below, eps_above) — same convention as desilike_bak delta.
+                center_val, eps_below, eps_above = fd_eps
+                self._fd_eps = (float(center_val), float(eps_below), float(eps_above))
+            else:
+                self._fd_eps = float(fd_eps)
+        else:
+            self._fd_eps = None
         self._fd_acc = int(fd_acc)
 
     # ── derived property (overrides Variable.derived; read-only after init) ──────
@@ -885,18 +868,11 @@ class Parameter(Variable):
     # basename / namespace / latex() are inherited from Variable.
 
     @property
-    def proposal(self):
-        """MCMC proposal scale; falls back to ref.std()."""
-        if self._proposal is not None:
-            return self._proposal
-        return self.ref.std()
-
-    @property
     def fd_eps(self):
-        """Finite-difference step; falls back to proposal."""
+        """Finite-difference step; falls back to ref.std()."""
         if self._fd_eps is not None:
             return self._fd_eps
-        return self.proposal
+        return self.ref.std()
 
     @property
     def fd_acc(self):
@@ -920,12 +896,7 @@ class Parameter(Variable):
     # ── cloning / serialisation ───────────────────────────────────────────────
 
     def update(self, **kwargs):
-        """Re-initialize in-place with overridden attributes; value= bypasses the derived-expression guard.
-
-        Only permitted during construction (``__init__``/``__post_init__``)."""
-        if not _in_construction():
-            raise RuntimeError('update() can only be called during construction '
-                               '(__init__/__post_init__); reconstruct or use replace() instead.')
+        """Re-initialize in-place with overridden attributes; value= bypasses the derived-expression guard."""
         state = self.__getstate__()
         state.update(kwargs)
         self.__init__(**state)
@@ -961,7 +932,6 @@ class Parameter(Variable):
             'fixed': self.fixed,
             'derived': self._derived,
             'shape': list(self.shape) if to_file else self.shape,
-            'proposal': self._proposal,
             'fd_eps': self._fd_eps,
             'fd_acc': self._fd_acc,
             'depends': {k: dep.name for k, dep in self.depends.items()} if to_file else dict(self.depends),
@@ -987,7 +957,7 @@ class Parameter(Variable):
                 latex=meta.get('latex'), fixed=meta.get('fixed', True),
                 derived=meta.get('derived', False),
                 shape=tuple(meta.get('shape', [])),
-                proposal=meta.get('proposal'), fd_eps=meta.get('fd_eps'),
+                fd_eps=meta.get('fd_eps'),
                 fd_acc=meta.get('fd_acc', 2), depends={})
             # depends resolved later by VariableCollection.__setstate__
         else:

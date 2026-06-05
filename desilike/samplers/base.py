@@ -1,5 +1,6 @@
 """Base classes for posterior samplers."""
 
+import copy
 import json
 import sys
 import logging
@@ -12,6 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 from scipy.special import logsumexp
 
+from desilike.parameter import VariableCollection
 from desilike.samples import MCSamples, diagnostics
 from desilike.distributed import default_mpicomm, get_mpicomm
 from .pool import make_pool
@@ -51,6 +53,35 @@ def _param_sizes(varied_params):
     return result
 
 
+
+
+def _normalize_chain_ids(nchains):
+    """Return explicit chain ids from an integer count or an iterable of ids.
+
+    Parameters
+    ----------
+    nchains : int or iterable
+        If an integer, use chain ids ``1, ..., nchains``.  Otherwise, use the
+        provided values as explicit chain ids, e.g. ``[4, 5, 6, 7]``.
+
+    Returns
+    -------
+    list
+        Explicit chain ids, suitable for filenames such as ``chain_<id>.h5``.
+    """
+    if isinstance(nchains, (int, np.integer)):
+        if nchains < 1:
+            raise ValueError('nchains must be >= 1.')
+        return list(range(1, int(nchains) + 1))
+
+    chain_ids = list(nchains)
+    if not chain_ids:
+        raise ValueError('nchains cannot be an empty list.')
+    if len(set(chain_ids)) != len(chain_ids):
+        raise ValueError(f'Duplicate chain ids in nchains={chain_ids}.')
+    return chain_ids
+
+
 def _flat_to_dict(sample, varied_params):
     """Convert a flat ``(ndim,)`` array to a ``{name: shaped_array}`` dict.
 
@@ -73,6 +104,35 @@ def _flat_to_dict(sample, varied_params):
     return result
 
 
+def _batched(core, returns_tuple):
+    """Wrap a single-sample core into a batched evaluator.
+
+    The vectorized pool calls the returned function once on a stacked
+    ``(N, ndim)`` batch and iterates the result, so it yields ``N``
+    per-sample results: an ``(N, ...)`` array for the array-returning cores,
+    or a list of ``N`` ``(log, derived)`` tuples for the posterior/likelihood
+    cores.  A single ``(ndim,)`` sample is also accepted (promoted to a batch
+    of one, leading axis squeezed on return) so callers that evaluate one
+    point at a time outside the pool — e.g. mhmcmc's standalone sampler —
+    still work.
+    """
+    vfn = jax.jit(jax.vmap(core))
+    if returns_tuple:
+        def batched(batch):
+            batch = jnp.asarray(batch)
+            single = batch.ndim == 1
+            log, derived = vfn(batch[None] if single else batch)
+            results = list(zip(np.asarray(log), np.asarray(derived)))
+            return results[0] if single else results
+        return batched
+    def batched_array(batch):
+        batch = jnp.asarray(batch)
+        single = batch.ndim == 1
+        out = np.asarray(vfn(batch[None] if single else batch))
+        return out[0] if single else out
+    return batched_array
+
+
 # ── BaseSampler ───────────────────────────────────────────────────────────────
 
 class BaseSampler(ABC):
@@ -81,7 +141,8 @@ class BaseSampler(ABC):
     logger = logging.getLogger('BaseSampler')
 
     @default_mpicomm
-    def __init__(self, posterior, rng=None, mpicomm=None, directory=None):
+    def __init__(self, posterior, rng=None, mpicomm=None, directory=None,
+                 rescale=False, covariance=None):
         """
         Parameters
         ----------
@@ -94,6 +155,14 @@ class BaseSampler(ABC):
             ``desilike.mpi.COMM_WORLD``.
         directory : str, Path, or None
             Save samples to this folder.  Default is ``None``.
+        rescale : bool
+            Internally normalise parameters so that their expected variation
+            range is ~ unity (mirrors :class:`~desilike.profilers.base.BaseProfiler`).
+            The sampler then explores the rescaled space while the posterior is
+            evaluated in original space.  Default is ``False``.
+        covariance : array_like, optional
+            ``(ndim, ndim)`` covariance whose diagonal sets the rescaling scale.
+            When ``None``, each parameter's ``ref.std()`` is used instead.
         """
         # ── parameter sets ────────────────────────────────────────────────────
         # Varied = free non-derived, non-fixed parameters
@@ -105,6 +174,13 @@ class BaseSampler(ABC):
             int(np.prod(p.shape)) if p.shape else 1
             for p in self.derived_params
         ))
+
+        # ── rescaling transform ───────────────────────────────────────────────
+        # Build _loc/_scale (flat, per scalar dimension) and a _transformed_params
+        # collection whose priors/refs/proposals live in rescaled space.  The
+        # sampler works in rescaled coordinates; _forward/_backward convert to and
+        # from original parameter values at the posterior / storage boundaries.
+        self._build_rescaling(rescale=rescale, covariance=covariance)
 
         # ── MPI communicator ─────────────────────────────────────────────────
         self.mpicomm = mpicomm
@@ -132,6 +208,88 @@ class BaseSampler(ABC):
                 pass
 
         self.set_rng(rng=rng)
+
+    def _build_rescaling(self, rescale=False, covariance=None):
+        """Build the ``_loc``/``_scale`` flat vectors and ``_transformed_params``.
+
+        ``_loc[k]`` and ``_scale[k]`` are the centre and step of flat scalar element
+        ``k`` (mirrors :class:`~desilike.profilers.base.BaseProfiler`).  ``_loc`` is the
+        parameter centre (``value`` or ``ref.center()``); ``_scale`` is ``sqrt(diag(covariance))``
+        when *covariance* is given, each parameter's ``ref.std()`` when *rescale* is set,
+        or all-ones otherwise (no rescaling).
+        """
+        # Flat per-scalar layout: shape () → 1 element, shape (n,) → n elements.
+        loc_parts = []
+        for param, size, col in _param_sizes(self.varied_params):
+            center = np.asarray(
+                param.value if param.value is not None else param.ref.center()).ravel()
+            if center.size == 1 and size > 1:
+                center = np.full(size, float(center[0]))
+            loc_parts.append(center.astype('f8'))
+        self._loc = np.concatenate(loc_parts) if loc_parts else np.array([], dtype='f8')
+
+        flat_size = self._loc.size
+        if rescale:
+            if covariance is not None:
+                self._scale = np.sqrt(np.diag(np.asarray(covariance)))
+            else:
+                scale_parts = []
+                for param, size, col in _param_sizes(self.varied_params):
+                    std = param.ref.std()
+                    if std is None or not np.isfinite(std) or std <= 0.:
+                        raise ValueError(
+                            f'Parameter {param.name!r}: cannot determine rescale scale from '
+                            f'ref.std()={std!r}. Provide covariance or set a proper ref distribution.')
+                    scale_parts.append(np.full(size, float(std), dtype='f8'))
+                self._scale = np.concatenate(scale_parts) if scale_parts else np.array([], dtype='f8')
+        else:
+            self._scale = np.ones(flat_size, dtype='f8')
+
+        # Transformed collection: priors/refs expressed in rescaled space (the rescaled
+        # step size is recovered from the transformed ref.std()).
+        self._transformed_params = VariableCollection()
+        for param, size, col in _param_sizes(self.varied_params):
+            loc_p   = self._loc[col:col + size]
+            scale_p = self._scale[col:col + size]
+            param_copy = copy.copy(param)
+            if not param.shape:
+                loc_s, scale_s = float(loc_p[0]), float(scale_p[0])
+                param_copy.prior = param.prior.affine_transform(loc=-loc_s / scale_s, scale=1. / scale_s)
+                param_copy.ref   = param.ref.affine_transform(loc=-loc_s / scale_s, scale=1. / scale_s)
+            else:
+                loc_arr   = loc_p.reshape(param.shape)
+                scale_arr = scale_p.reshape(param.shape)
+                param_copy.prior = param.prior.affine_transform(loc=-loc_arr / scale_arr, scale=1. / scale_arr)
+                param_copy.ref   = param.ref.affine_transform(loc=-loc_arr / scale_arr, scale=1. / scale_arr)
+            self._transformed_params.set(param_copy)
+
+    def _forward(self, x):
+        """Rescaled → original space along the last axis: ``x * scale + loc``.
+
+        JAX-safe (used inside jitted/vmapped cores); broadcasts over leading axes.
+        """
+        return jnp.asarray(x) * self._scale + self._loc
+
+    def _backward(self, x):
+        """Original → rescaled space along the last axis: ``(x - loc) / scale``.
+
+        JAX-safe; broadcasts over leading axes.
+        """
+        return (jnp.asarray(x) - self._loc) / self._scale
+
+    def _forward_dict(self, sample):
+        """Map a ``{name: rescaled_value}`` dict to original parameter values.
+
+        For samplers (e.g. blackjax) that carry positions as per-name dicts in the
+        rescaled working space rather than as a flat vector.  JAX-safe.
+        """
+        result = {}
+        for param, size, col in _param_sizes(self.varied_params):
+            scale = self._scale[col:col + size]
+            loc   = self._loc[col:col + size]
+            value = jnp.ravel(jnp.asarray(sample[param.name])) * scale + loc
+            result[param.name] = value.reshape(param.shape) if param.shape else value[0]
+        return result
 
     def set_rng(self, rng):
         """Set the random number generator."""
@@ -165,60 +323,38 @@ class BaseSampler(ABC):
                  ('compute_posterior',  self._compute_posterior_one,  True),
                  ('compute_likelihood', self._compute_likelihood_one, True)]
         for name, core, returns_tuple in specs:
-            setattr(self, name, self.pool.save_function(self._batched(core, returns_tuple), name))
-
-    @staticmethod
-    def _batched(core, returns_tuple):
-        """Wrap a single-sample core into a batched evaluator.
-
-        The vectorized pool calls the returned function once on a stacked
-        ``(N, ndim)`` batch and iterates the result, so it yields ``N``
-        per-sample results: an ``(N, ...)`` array for the array-returning cores,
-        or a list of ``N`` ``(log, derived)`` tuples for the posterior/likelihood
-        cores.  A single ``(ndim,)`` sample is also accepted (promoted to a batch
-        of one, leading axis squeezed on return) so callers that evaluate one
-        point at a time outside the pool — e.g. mhmcmc's standalone sampler —
-        still work.
-        """
-        vfn = jax.jit(jax.vmap(core))
-        if returns_tuple:
-            def batched(batch):
-                batch = jnp.asarray(batch)
-                single = batch.ndim == 1
-                log, derived = vfn(batch[None] if single else batch)
-                results = list(zip(np.asarray(log), np.asarray(derived)))
-                return results[0] if single else results
-            return batched
-        def batched_array(batch):
-            batch = jnp.asarray(batch)
-            single = batch.ndim == 1
-            out = np.asarray(vfn(batch[None] if single else batch))
-            return out[0] if single else out
-        return batched_array
+            setattr(self, name, self.pool.save_function(_batched(core, returns_tuple), name))
 
     def _prior_transform_one(self, sample):
-        """Map a unit-cube sample ``(ndim,)`` to parameter space via each prior's PPF."""
+        """Map a unit-cube sample ``(ndim,)`` to *rescaled* parameter space via each prior's PPF.
+
+        The transformed priors' PPF already returns rescaled-space values, so the result
+        is the sampler's working-space vector (``_forward`` maps it back to original).
+        """
         result = []
-        for param, size, col in _param_sizes(self.varied_params):
+        for param, size, col in _param_sizes(self._transformed_params):
             u_chunk = sample[col:col + size]
             result.append(jnp.atleast_1d(param.prior.ppf(u_chunk)))
         return jnp.concatenate(result)
 
     def _compute_prior_one(self, sample):
-        """Return the log-prior for a single ``(ndim,)`` sample (Parameter priors only).
+        """Return the log-prior for a single rescaled-space ``(ndim,)`` sample (Parameter priors only).
+
+        The sample is mapped back to original space before evaluating the original priors,
+        so the log-prior is consistent with the posterior's internal prior.
 
         Warning
         -------
         This is *not* necessarily the real prior, which may be more complex.
         """
-        sample = _flat_to_dict(sample, self.varied_params)
+        sample = _flat_to_dict(self._forward(sample), self.varied_params)
         return sum((param.prior.logpdf(sample[param.name])
                     for param in self.varied_params if param.prior is not None),
                    jnp.array(0.))
 
     def _compute_posterior_one(self, sample):
-        """Return ``(log_posterior, derived_flat)`` for a single ``(ndim,)`` sample."""
-        sample = _flat_to_dict(sample, self.varied_params)
+        """Return ``(log_posterior, derived_flat)`` for a single rescaled-space ``(ndim,)`` sample."""
+        sample = _flat_to_dict(self._forward(sample), self.varied_params)
         if self.n_derived:
             log_post, derived_dict = self.posterior(sample, return_derived=True)
             derived_flat = jnp.concatenate([
@@ -274,7 +410,13 @@ class BaseSampler(ABC):
         **kwargs
             Extra attributes to set on the returned samples (e.g.
             ``logposterior``, ``aweight``).
+
+        Notes
+        -----
+        *samples* is in the sampler's rescaled working space; it is mapped back to
+        original parameter values via :meth:`_forward` before being stored.
         """
+        samples = np.asarray(self._forward(samples))
         data = []
         # ── varied params ─────────────────────────────────────────────────────
         for param, size, col in _param_sizes(self.varied_params):
@@ -323,7 +465,9 @@ class StaticSampler(BaseSampler):
         """Evaluate the posterior on the sample grid and return a MCSamples."""
         if not self.mpicomm.bcast(hasattr(self, 'samples'), root=0):
             if self.mpicomm.rank == 0:
-                grid      = self.get_samples(**kwargs)
+                # get_samples returns original-space points; the cores and
+                # array_to_samples work in the rescaled space, so map once here.
+                grid      = np.asarray(self._backward(self.get_samples(**kwargs)))
                 log_prior = np.array(self.pool.map(self.compute_prior, grid))
                 results   = self.pool.map(self.compute_posterior, grid)
                 log_post  = np.array([result[0] for result in results])
@@ -385,37 +529,53 @@ class MarkovChainSampler(BaseSampler):
     default_adaptation_steps = 0
 
     @default_mpicomm
-    def __init__(self, posterior, n_chains=1, chains=None, rng=None,
-                 mpicomm=None, directory=None):
+    def __init__(self, posterior, nchains=1, chains=None, rng=None,
+                 mpicomm=None, directory=None, rescale=False, covariance=None):
         """
         Parameters
         ----------
         posterior : CompiledGraph
             Compiled pipeline returning the log-posterior.
-        n_chains : int
-            Number of independent chains.  Default is 1.
+        nchains : int or sequence
+            Number of independent chains, or explicit chain ids.  If an integer,
+            ids are ``1, ..., nchains``.  If a sequence, ids are taken from it
+            and used in checkpoint filenames, e.g. ``[4, 5, 6, 7]`` writes
+            ``chain_4.h5`` through ``chain_7.h5``.  Default is 1.
         chains : list of MCSamples, optional
             If provided (at least on rank 0), continue from these chains.
         rng : numpy.random.Generator, int, or None
         mpicomm : MPI communicator, optional
         directory : str, Path, or None
+        rescale : bool
+            Normalise parameters to ~ unit variation range (see :class:`BaseSampler`).
+        covariance : array_like, optional
+            ``(ndim, ndim)`` covariance setting the rescaling scale.
         """
         self.mpicomm = mpicomm
 
         if not hasattr(self, '_samples'):
             self._samples = None
 
-        # Broadcast n_chains and whether input chains were supplied.
+        # Broadcast explicit chain ids and whether input chains were supplied.
         input_chains = False
         if self.mpicomm.rank == 0:
             input_chains = chains is not None
+            chain_ids = _normalize_chain_ids(nchains)
             if input_chains:
                 if not isinstance(chains, (tuple, list)):
                     chains = [chains]
-                n_chains = len(chains)
-        input_chains, self.n_chains = self.mpicomm.bcast((input_chains, n_chains), root=0)
+                if len(chains) != len(chain_ids):
+                    raise ValueError(
+                        f'Expected {len(chain_ids)} input chains, got {len(chains)}.'
+                    )
+        else:
+            chain_ids = None
 
-        super().__init__(posterior, rng=rng, mpicomm=mpicomm, directory=directory)
+        input_chains, self.chain_ids = self.mpicomm.bcast((input_chains, chain_ids), root=0)
+        self.nchains = len(self.chain_ids)
+
+        super().__init__(posterior, rng=rng, mpicomm=mpicomm, directory=directory,
+                         rescale=rescale, covariance=covariance)
 
         # Distribute pre-supplied chains to the owning ranks.
         if input_chains:
@@ -435,12 +595,12 @@ class MarkovChainSampler(BaseSampler):
             if isinstance(rng, int) or rng is None:
                 rng = np.random.default_rng(seed=rng)
             seed_seq = np.random.SeedSequence(rng.integers(0, 2**63, size=4))
-            self.rng = [np.random.default_rng(seed) for seed in seed_seq.spawn(self.n_chains)][self._ichain]
+            self.rng = [np.random.default_rng(seed) for seed in seed_seq.spawn(self.nchains)][self._ichain]
 
     def set_pool(self, mpicomm):
-        if self.n_chains > mpicomm.size:
-            raise ValueError(f'n_chains={self.n_chains} cannot exceed MPI size={mpicomm.size}')
-        color = mpicomm.rank * self.n_chains // mpicomm.size
+        if self.nchains > mpicomm.size:
+            raise ValueError(f'nchains={self.nchains} cannot exceed MPI size={mpicomm.size}')
+        color = mpicomm.rank * self.nchains // mpicomm.size
         # Split communicator so each chain gets its own sub-communicator.
         if mpicomm.size > 1:
             sub_comm = mpicomm.Split(color=color, key=mpicomm.rank)
@@ -484,6 +644,9 @@ class MarkovChainSampler(BaseSampler):
                         else:
                             batch_samples[..., col:col + size] = np.asarray(param.value).ravel()
 
+                    # Drawn in original space; map to the sampler's rescaled working space.
+                    batch_samples = np.asarray(self._backward(batch_samples))
+
                     results = self.pool.map(
                         self.compute_posterior,
                         batch_samples.reshape(total_size, self.ndim))
@@ -524,8 +687,17 @@ class MarkovChainSampler(BaseSampler):
         return gathered if self.mpicomm.rank == 0 else None
 
     @property
+    def chain_id(self):
+        """Explicit id of the chain handled by this sampler rank."""
+        return self.chain_ids[self._ichain]
+
+    @property
     def state(self):
-        """Return current chain position as ``(samples, derived, log_post)``."""
+        """Return current chain position as ``(samples, derived, log_post)``.
+
+        ``samples`` is returned in the sampler's rescaled working space (stored
+        parameter values are in original space and mapped via :meth:`_backward`).
+        """
         # self._samples[name] returns a Variable; use ._value to get the raw array.
         walker_shape = self._samples.shape[1:]
         samples  = np.concatenate([
@@ -535,7 +707,7 @@ class MarkovChainSampler(BaseSampler):
             np.asarray(self._samples[param.name])[-1].reshape(walker_shape + (-1,))
             for param in self.derived_params], axis=-1) if self.n_derived else np.empty(0)
         log_post = np.asarray(self._samples.logposterior)[-1]
-        return np.array(samples), np.array(derived), np.array(log_post)
+        return np.asarray(self._backward(samples)), np.array(derived), np.array(log_post)
 
     def extend(self, samples, derived, log_post):
         """Append new steps to the local chain."""
@@ -670,17 +842,17 @@ class MarkovChainSampler(BaseSampler):
 
     def write(self):
         if self.pool.main:
-            with open(self.directory / f'rng_{self._ichain + 1}.json', 'w') as fstream:
+            with open(self.directory / f'rng_{self.chain_id}.json', 'w') as fstream:
                 json.dump(self.rng.bit_generator.state, fstream)
-            self._samples.write(self.directory / f'chain_{self._ichain + 1}.h5')
+            self._samples.write(self.directory / f'chain_{self.chain_id}.h5')
         if self.mpicomm.rank == 0:
             with open(self.directory / 'checks.json', 'w') as fstream:
                 json.dump(self.checks, fstream)
 
     def read(self):
         if self.pool.main:
-            rng_path    = self.directory / f'rng_{self._ichain + 1}.json'
-            chain_path  = self.directory / f'chain_{self._ichain + 1}.h5'
+            rng_path    = self.directory / f'rng_{self.chain_id}.json'
+            chain_path  = self.directory / f'chain_{self.chain_id}.h5'
             if rng_path.exists():
                 with open(rng_path, 'r') as fstream:
                     self.rng = np.random.default_rng()
@@ -700,10 +872,12 @@ class EnsembleSampler(MarkovChainSampler):
 
     logger = logging.getLogger('EnsembleSampler')
 
-    def __init__(self, posterior, n_chains=1, chains=None, rng=None,
-                 mpicomm=None, directory=None, nwalkers=None):
-        super().__init__(posterior, n_chains=n_chains, chains=chains,
-                         rng=rng, mpicomm=mpicomm, directory=directory)
+    def __init__(self, posterior, nchains=1, chains=None, rng=None,
+                 mpicomm=None, directory=None, nwalkers=None,
+                 rescale=False, covariance=None):
+        super().__init__(posterior, nchains=nchains, chains=chains,
+                         rng=rng, mpicomm=mpicomm, directory=directory,
+                         rescale=rescale, covariance=covariance)
         if nwalkers is None and self._samples is not None:
             nwalkers = self._samples.shape[1] if len(self._samples.shape) > 1 else None
         nwalkers_all = self.mpicomm.allgather(nwalkers)

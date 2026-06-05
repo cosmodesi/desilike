@@ -19,15 +19,15 @@ class EmceeSampler(EnsembleSampler):
 
     """
 
-    def __init__(self, posterior, n_chains=1, chains=None, rng=None,
-                 directory=None, nwalkers=None, **kwargs):
+    def __init__(self, posterior, nchains=1, chains=None, rng=None,
+                 directory=None, nwalkers=None, rescale=False, covariance=None, **kwargs):
         """Initialize the ``emcee`` sampler.
 
         Parameters
         ----------
         posterior : CompiledGraph
             Compiled pipeline returning the log-posterior.
-        n_chains : int, optional
+        nchains : int, optional
             Number of independent chains. Default is 1.
         chains : list of desilike.samples.MCSamples, optional
             If given, continue the chains. In that case, we will ignore what
@@ -47,8 +47,9 @@ class EmceeSampler(EnsembleSampler):
             raise ImportError("The 'emcee' package is required but not "
                               "installed.")
 
-        super().__init__(posterior, n_chains=n_chains, chains=chains, rng=rng,
-                         directory=directory, nwalkers=nwalkers)
+        super().__init__(posterior, nchains=nchains, chains=chains, rng=rng,
+                         directory=directory, nwalkers=nwalkers,
+                         rescale=rescale, covariance=covariance)
         if self.nwalkers is None:
             self.nwalkers = 2 * max((int(2.5 * self.ndim) + 1) // 2, 2)
         if self.pool.main:

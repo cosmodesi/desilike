@@ -25,19 +25,54 @@ import interpax
 import os
 
 from ...base import Calculator, ExternalCalculator
-from ...parameter import Parameter
-from .bao import ProjectToMultipoles, SpectrumToCorrelation
+from ...parameter import Parameter, VariableCollection
+from .bao import ProjectToPoles, SpectrumToCorrelation
 from .template import DirectSpectrum2Template, _ap_k_mu
-from ._multitracer import apply_tracers
+from ._multitracer import propose_params_multitracer, assign_params
 
 
 # ── utilities ─────────────────────────────────────────────────────────────────
+
+def _velocileptors_default_params(prior_basis):
+    """Return the 11 default auto_params for LPT/REPT Velocileptors tracer classes."""
+    if prior_basis == 'physical':
+        return [
+            Parameter('b1p', value=1., prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1), latex=r"b_1'"),
+            Parameter('b2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'"),
+            Parameter('bsp', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'"),
+            Parameter('b3p', value=0., fixed=True, latex=r"b_3'"),
+            Parameter('alpha0p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_0'"),
+            Parameter('alpha2p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_2'"),
+            Parameter('alpha4p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_4'"),
+            Parameter('alpha6p', value=0., fixed=True, latex=r"\alpha_6'"),
+            Parameter('sn0p', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'"),
+            Parameter('sn2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,2}'"),
+            Parameter('sn4p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,4}'"),
+        ]
+    return [
+        Parameter('b1', value=1., prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1'),
+        Parameter('b2', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
+        Parameter('bs', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_s'),
+        Parameter('b3', value=0., fixed=True, latex='b_3'),
+        Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_0'),
+        Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2'),
+        Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4'),
+        Parameter('alpha6', value=0., fixed=True, latex=r'\alpha_6'),
+        Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+        Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
+        Parameter('sn4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,4}'),
+    ]
+
 
 def get_nthreads(nthreads=None):
     """Number of threads for external (velocileptors) calls; defaults to ``$OMP_NUM_THREADS`` or 1."""
     if nthreads is None:
         nthreads = os.getenv('OMP_NUM_THREADS', '1')
     return int(nthreads)
+
+
+#: Valid FOLPS prior_basis options (mirrors FOLPSv2 in desilike_bak).
+_FOLPS_PRIOR_BASES = ('standard', 'physical', 'physical_aap', 'tcm_chudaykin_aap')
 
 
 def get_physical_stochastic_settings(tracer=None):
@@ -292,7 +327,7 @@ class KaiserPTSpectrum2Poles(Calculator):
 
     def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=8):
         # Non-node setup only.
-        self._to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+        self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
         self._mu = self._to_poles.mu
 
     def __call__(self):
@@ -351,13 +386,31 @@ class KaiserTracerSpectrum2Poles(Calculator):
         see :func:`._multitracer.apply_tracers`.
     """
 
-    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None):
+    @classmethod
+    def propose_params(cls, tracers=None):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
+
+        Parameters
+        ----------
+        tracers : str, (str, str), or None, default=None
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return propose_params_multitracer([
+            Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
+                      ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1'),
+            Parameter('sn0', value=0., prior=None,
+                      ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+        ], tracers, stochastic=('sn0',), cross=True)
+
+    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None, params=None):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        self.b1 = Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
-                            ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1')
-        self.sn0 = Parameter('sn0', value=0., prior=None,
-                             ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}')
-        apply_tracers(self, tracers, stochastic=('sn0',), cross=True)
+        vc = type(self).propose_params(tracers=tracers)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
@@ -369,7 +422,7 @@ class KaiserTracerSpectrum2Poles(Calculator):
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None):
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None, params=None):
         # Non-node setup only.
         self._nbar = 1. / float(shotnoise)
 
@@ -397,6 +450,8 @@ class KaiserTracerCorrelation2Poles(Calculator):
     r"""
     Kaiser tracer correlation function multipoles via FFTLog.
 
+    propose_params delegates to :class:`KaiserTracerSpectrum2Poles`.
+
     Parameters
     ----------
     s : array, default=None
@@ -408,6 +463,11 @@ class KaiserTracerCorrelation2Poles(Calculator):
     template : template calculator, default=None
         Passed to the pt module if provided.
     """
+
+    @classmethod
+    def propose_params(cls, tracers=None, **kwargs):
+        """Delegate to :meth:`KaiserTracerSpectrum2Poles.propose_params`."""
+        return KaiserTracerSpectrum2Poles.propose_params(tracers=tracers, **kwargs)
 
     def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, tracers=None):
         # Nodes (Calculator deps) and their update() live in __init__.
@@ -492,7 +552,7 @@ class TNSPTSpectrum2Poles(Calculator):
         self._q = q
         self._wq = wq
         self._kernels = tns_kernels(self._k11, q, wq)
-        self._to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+        self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
         self._mu = self._to_poles.mu
 
     def __call__(self):
@@ -569,18 +629,36 @@ class TNSTracerSpectrum2Poles(Calculator):
         Shot-noise scale [h/Mpc]^3.
     """
 
-    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None):
+    @classmethod
+    def propose_params(cls, tracers=None):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
+
+        Parameters
+        ----------
+        tracers : str, (str, str), or None, default=None
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return propose_params_multitracer([
+            Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
+                      ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1'),
+            Parameter('b2', value=0., prior=dict(limits=[-5., 5.]),
+                      ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
+            Parameter('bs', value=0., prior=dict(limits=[-5., 5.]),
+                      ref=dict(dist='norm', loc=0., scale=1.), latex='b_s'),
+            Parameter('b3', value=0., fixed=True, latex='b_3'),
+            Parameter('sn0', value=0., prior=None,
+                      ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+        ], tracers)
+
+    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None, params=None):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        self.b1 = Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
-                            ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1')
-        self.b2 = Parameter('b2', value=0., prior=dict(limits=[-5., 5.]),
-                            ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
-        self.bs = Parameter('bs', value=0., prior=dict(limits=[-5., 5.]),
-                            ref=dict(dist='norm', loc=0., scale=1.), latex='b_s')
-        self.b3 = Parameter('b3', value=0., fixed=True, latex='b_3')
-        self.sn0 = Parameter('sn0', value=0., prior=None,
-                             ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}')
-        apply_tracers(self, tracers)  # namespacing only (no cross)
+        vc = type(self).propose_params(tracers=tracers)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
@@ -592,7 +670,7 @@ class TNSTracerSpectrum2Poles(Calculator):
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None):
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None, params=None):
         # Non-node setup only.
         self._nbar = 1. / float(shotnoise)
 
@@ -640,6 +718,11 @@ class TNSTracerCorrelation2Poles(Calculator):
     template : template calculator, default=None
         Passed to the pt module if provided.
     """
+
+    @classmethod
+    def propose_params(cls, tracers=None, **kwargs):
+        """Delegate to :meth:`TNSTracerSpectrum2Poles.propose_params`."""
+        return TNSTracerSpectrum2Poles.propose_params(tracers=tracers, **kwargs)
 
     def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, tracers=None):
         # Nodes (Calculator deps) and their update() live in __init__.
@@ -755,42 +838,39 @@ class LPTVelocileptorsTracerSpectrum2Poles(Calculator):
     prior_basis : str, default='physical'
         ``'physical'``: parameters ``b1p, b2p, bsp, b3p, alpha0p, ..., sn0p, sn2p, sn4p``.
         Otherwise: ``b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4``.
-    tracer : str, default=None
-        Preset ``fsat``/``sigv`` for 'BGS', 'LRG', 'ELG', 'QSO' (physical basis only).
-    fsat, sigv : float, default=None
-        Override preset satellite fraction / velocity dispersion.
+    fsat : float, default=None
+        Satellite fraction for the physical stochastic terms.  Defaults to
+        ``get_physical_stochastic_settings(None)['fsat']``.  Pass the output of
+        :func:`get_physical_stochastic_settings` directly for a specific tracer.
+    sigv : float, default=None
+        Velocity dispersion for the physical stochastic terms.  Defaults to
+        ``get_physical_stochastic_settings(None)['sigv']``.
     shotnoise : float, default=1e4
         Shot-noise scale [(h/Mpc)^3]. Stochastic terms are in units of this.
     """
 
+    @classmethod
+    def propose_params(cls, tracers=None, prior_basis='physical'):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
+
+        Parameters
+        ----------
+        tracers : str, (str, str), or None, default=None
+        prior_basis : str, default='physical'
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return propose_params_multitracer(_velocileptors_default_params(prior_basis), tracers)
+
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical',
-                 tracer=None, fsat=None, sigv=None, shotnoise=1e4, tracers=None, **kwargs):
+                 fsat=None, sigv=None, shotnoise=1e4, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        if prior_basis == 'physical':
-            self.b1 = Parameter('b1p', value=1., prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1), latex=r"b_1'")
-            self.b2 = Parameter('b2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'")
-            self.bs = Parameter('bsp', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'")
-            self.b3 = Parameter('b3p', value=0., fixed=True, latex=r"b_3'")
-            self.alpha0 = Parameter('alpha0p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_0'")
-            self.alpha2 = Parameter('alpha2p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_2'")
-            self.alpha4 = Parameter('alpha4p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_4'")
-            self.alpha6 = Parameter('alpha6p', value=0., fixed=True, latex=r"\alpha_6'")
-            self.sn0 = Parameter('sn0p', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'")
-            self.sn2 = Parameter('sn2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,2}'")
-            self.sn4 = Parameter('sn4p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,4}'")
-        else:
-            self.b1 = Parameter('b1', value=1., prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1')
-            self.b2 = Parameter('b2', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
-            self.bs = Parameter('bs', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_s')
-            self.b3 = Parameter('b3', value=0., fixed=True, latex='b_3')
-            self.alpha0 = Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_0')
-            self.alpha2 = Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2')
-            self.alpha4 = Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4')
-            self.alpha6 = Parameter('alpha6', value=0., fixed=True, latex=r'\alpha_6')
-            self.sn0 = Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}')
-            self.sn2 = Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}')
-            self.sn4 = Parameter('sn4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,4}')
-        apply_tracers(self, tracers)  # namespacing only (no cross)
+        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
@@ -802,25 +882,28 @@ class LPTVelocileptorsTracerSpectrum2Poles(Calculator):
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4, tracers=None, **kwargs):
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', fsat=None, sigv=None, shotnoise=1e4, tracers=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = prior_basis
         self._nbar = 1e-4
         self._snd = float(shotnoise) * self._nbar
-        settings = get_physical_stochastic_settings(tracer)
-        self._fsat = fsat if fsat is not None else settings['fsat']
-        self._sigv = sigv if sigv is not None else settings['sigv']
+        settings = get_physical_stochastic_settings(None)
+        self._fsat = float(fsat) if fsat is not None else settings['fsat']
+        self._sigv = float(sigv) if sigv is not None else settings['sigv']
 
     def __call__(self):
+        # Physical-basis parameters carry a trailing 'p' (e.g. b1p); standard ones do not.
+        suffix = 'p' if self._prior_basis == 'physical' else ''
+        def g(name): return getattr(self, name + suffix)
         if self._prior_basis == 'physical':
-            pars = _velocileptors_params_physical(self.b1, self.b2, self.bs, self.b3,
-                                                  self.alpha0, self.alpha2, self.alpha4, self.alpha6,
-                                                  self.sn0, self.sn2, self.sn4,
+            pars = _velocileptors_params_physical(g('b1'), g('b2'), g('bs'), g('b3'),
+                                                  g('alpha0'), g('alpha2'), g('alpha4'), g('alpha6'),
+                                                  g('sn0'), g('sn2'), g('sn4'),
                                                   self.pt.sigma8, self.pt.fsigma8, self._fsat, self._sigv, self._snd, rept=False)
         else:
-            pars = jnp.array([self.b1, self.b2, self.bs, self.b3,
-                               self.alpha0, self.alpha2, self.alpha4, self.alpha6,
-                               self.sn0, self.sn2, self.sn4])
+            pars = jnp.array([g('b1'), g('b2'), g('bs'), g('b3'),
+                               g('alpha0'), g('alpha2'), g('alpha4'), g('alpha6'),
+                               g('sn0'), g('sn2'), g('sn4')])
         raw = tablevel_combine_bias_terms_poles(self.pt.table, pars, nd=self._nbar)  # (n_ells, n_k_pt)
         self.poles = interpax.interp1d(self.k, self.pt.k, raw.T, method='cubic', extrap=True).T
         return self.poles
@@ -848,6 +931,11 @@ class LPTVelocileptorsTracerCorrelation2Poles(Calculator):
     template : template calculator, default=None
     prior_basis : str, default='physical'
     """
+
+    @classmethod
+    def propose_params(cls, tracers=None, **kwargs):
+        """Delegate to :meth:`LPTVelocileptorsTracerSpectrum2Poles.propose_params`."""
+        return LPTVelocileptorsTracerSpectrum2Poles.propose_params(tracers=tracers, **kwargs)
 
     def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', tracers=None, **kwargs):
         # Nodes (Calculator deps) and their update() live in __init__.
@@ -965,37 +1053,31 @@ class REPTVelocileptorsTracerSpectrum2Poles(Calculator):
     ells : tuple of int, default=(0, 2, 4)
     template : template calculator, default=None
     prior_basis : str, default='physical'
-    tracer, fsat, sigv, shotnoise : same as LPTVelocileptorsTracerSpectrum2Poles.
+    fsat, sigv, shotnoise : same as LPTVelocileptorsTracerSpectrum2Poles.
     """
 
+    @classmethod
+    def propose_params(cls, tracers=None, prior_basis='physical'):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
+
+        Parameters
+        ----------
+        tracers : str, (str, str), or None, default=None
+        prior_basis : str, default='physical'
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return propose_params_multitracer(_velocileptors_default_params(prior_basis), tracers)
+
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical',
-                 tracer=None, fsat=None, sigv=None, shotnoise=1e4, tracers=None, **kwargs):
+                 fsat=None, sigv=None, shotnoise=1e4, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        if prior_basis == 'physical':
-            self.b1 = Parameter('b1p', value=1., prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1), latex=r"b_1'")
-            self.b2 = Parameter('b2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'")
-            self.bs = Parameter('bsp', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'")
-            self.b3 = Parameter('b3p', value=0., fixed=True, latex=r"b_3'")
-            self.alpha0 = Parameter('alpha0p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_0'")
-            self.alpha2 = Parameter('alpha2p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_2'")
-            self.alpha4 = Parameter('alpha4p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_4'")
-            self.alpha6 = Parameter('alpha6p', value=0., fixed=True, latex=r"\alpha_6'")
-            self.sn0 = Parameter('sn0p', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'")
-            self.sn2 = Parameter('sn2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,2}'")
-            self.sn4 = Parameter('sn4p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,4}'")
-        else:
-            self.b1 = Parameter('b1', value=1., prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1')
-            self.b2 = Parameter('b2', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
-            self.bs = Parameter('bs', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_s')
-            self.b3 = Parameter('b3', value=0., fixed=True, latex='b_3')
-            self.alpha0 = Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_0')
-            self.alpha2 = Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2')
-            self.alpha4 = Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4')
-            self.alpha6 = Parameter('alpha6', value=0., fixed=True, latex=r'\alpha_6')
-            self.sn0 = Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}')
-            self.sn2 = Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}')
-            self.sn4 = Parameter('sn4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,4}')
-        apply_tracers(self, tracers)  # namespacing only (no cross)
+        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
@@ -1007,26 +1089,29 @@ class REPTVelocileptorsTracerSpectrum2Poles(Calculator):
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', tracer=None, fsat=None, sigv=None, shotnoise=1e4, tracers=None, **kwargs):
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', fsat=None, sigv=None, shotnoise=1e4, tracers=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = prior_basis
         self._nbar = 1e-4
         self._snd = float(shotnoise) * self._nbar
-        settings = get_physical_stochastic_settings(tracer)
-        self._fsat = fsat if fsat is not None else settings['fsat']
-        self._sigv = sigv if sigv is not None else settings['sigv']
+        settings = get_physical_stochastic_settings(None)
+        self._fsat = float(fsat) if fsat is not None else settings['fsat']
+        self._sigv = float(sigv) if sigv is not None else settings['sigv']
 
     def __call__(self):
+        # Physical-basis parameters carry a trailing 'p' (e.g. b1p); standard ones do not.
+        suffix = 'p' if self._prior_basis == 'physical' else ''
+        def g(name): return getattr(self, name + suffix)
         if self._prior_basis == 'physical':
-            pars = _velocileptors_params_physical(self.b1, self.b2, self.bs, self.b3,
-                                                  self.alpha0, self.alpha2, self.alpha4, self.alpha6,
-                                                  self.sn0, self.sn2, self.sn4,
+            pars = _velocileptors_params_physical(g('b1'), g('b2'), g('bs'), g('b3'),
+                                                  g('alpha0'), g('alpha2'), g('alpha4'), g('alpha6'),
+                                                  g('sn0'), g('sn2'), g('sn4'),
                                                   self.pt.sigma8, self.pt.fsigma8, self._fsat, self._sigv, self._snd, rept=True)
         else:
-            b1 = self.b1
-            pars = jnp.array([b1, self.b2, self.bs - (2./7.)*(b1 - 1.), 3.*self.b3 + (b1 - 1.),
-                               self.alpha0, self.alpha2, self.alpha4, self.alpha6,
-                               self.sn0, self.sn2, self.sn4])
+            b1 = g('b1')
+            pars = jnp.array([b1, g('b2'), g('bs') - (2./7.)*(b1 - 1.), 3.*g('b3') + (b1 - 1.),
+                               g('alpha0'), g('alpha2'), g('alpha4'), g('alpha6'),
+                               g('sn0'), g('sn2'), g('sn4')])
         raw = tablevel_combine_bias_terms_poles(self.pt.table, pars, nd=self._nbar)
         self.poles = interpax.interp1d(self.k, self.pt.k, raw.T, method='cubic', extrap=True).T
         return self.poles
@@ -1053,6 +1138,11 @@ class REPTVelocileptorsTracerCorrelation2Poles(Calculator):
     template : template calculator, default=None
     prior_basis : str, default='physical'
     """
+
+    @classmethod
+    def propose_params(cls, tracers=None, **kwargs):
+        """Delegate to :meth:`REPTVelocileptorsTracerSpectrum2Poles.propose_params`."""
+        return REPTVelocileptorsTracerSpectrum2Poles.propose_params(tracers=tracers, **kwargs)
 
     def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', tracers=None, **kwargs):
         # Nodes (Calculator deps) and their update() live in __init__.
@@ -1225,31 +1315,61 @@ class PyBirdTracerSpectrum2Poles(Calculator):
     shotnoise : float, default=1e4
     """
 
-    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss', shotnoise=1e4, tracers=None, **kwargs):
-        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+    @classmethod
+    def _auto_params(cls, eft_basis):
+        """Return default auto_params list for the given EFT basis (shared with Correlation variant)."""
         eft = eft_basis if eft_basis not in (None, 'velocileptors') else 'eftoflss'
         if eft in ('eftoflss', 'velocileptors'):
-            self.b1 = Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1')
-            self.b2 = Parameter('b2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
-            self.b3 = Parameter('b3', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_3')
-            self.b4 = Parameter('b4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_4')
+            bias = [
+                Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1'),
+                Parameter('b2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
+                Parameter('b3', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_3'),
+                Parameter('b4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_4'),
+            ]
         elif eft == 'westcoast':
-            self.b1 = Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1')
-            self.b2p4 = Parameter('b2p4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2+4}')
-            self.b2m4 = Parameter('b2m4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2-4}')
-            self.b3 = Parameter('b3', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_3')
-        elif eft == 'eastcoast':
-            self.b1 = Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1')
-            self.b2t = Parameter('b2t', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2t}')
-            self.b2g = Parameter('b2g', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2g}')
-            self.b3g = Parameter('b3g', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{3g}')
-        self.cct = Parameter('cct', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{ct}')
-        self.cr1 = Parameter('cr1', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r1}')
-        self.cr2 = Parameter('cr2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r2}')
-        self.ce0 = Parameter('ce0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\epsilon_0')
-        self.ce1 = Parameter('ce1', value=0., fixed=True, latex=r'\epsilon_1')
-        self.ce2 = Parameter('ce2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\epsilon_2')
-        apply_tracers(self, tracers, stochastic=('ce0', 'ce1', 'ce2'), cross=True)
+            bias = [
+                Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1'),
+                Parameter('b2p4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2+4}'),
+                Parameter('b2m4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2-4}'),
+                Parameter('b3', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_3'),
+            ]
+        else:  # eastcoast
+            bias = [
+                Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1'),
+                Parameter('b2t', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2t}'),
+                Parameter('b2g', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2g}'),
+                Parameter('b3g', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{3g}'),
+            ]
+        return bias + [
+            Parameter('cct', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{ct}'),
+            Parameter('cr1', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r1}'),
+            Parameter('cr2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r2}'),
+            Parameter('ce0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\epsilon_0'),
+            Parameter('ce1', value=0., fixed=True, latex=r'\epsilon_1'),
+            Parameter('ce2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\epsilon_2'),
+        ]
+
+    @classmethod
+    def propose_params(cls, tracers=None, eft_basis='eftoflss'):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
+
+        Parameters
+        ----------
+        tracers : str, (str, str), or None, default=None
+        eft_basis : str, default='eftoflss'
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return propose_params_multitracer(cls._auto_params(eft_basis), tracers, stochastic=('ce0', 'ce1', 'ce2'), cross=True)
+
+    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss', shotnoise=1e4, tracers=None, params=None, **kwargs):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        vc = type(self).propose_params(tracers=tracers, eft_basis=eft_basis)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
@@ -1499,31 +1619,30 @@ class PyBirdTracerCorrelation2Poles(Calculator):
     shotnoise : float, default=1e4
     """
 
-    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss', shotnoise=1e4, tracers=None, **kwargs):
+    @classmethod
+    def propose_params(cls, tracers=None, eft_basis='eftoflss'):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
+
+        Cross-correlations are not supported for the correlation function; use a single tracer name.
+
+        Parameters
+        ----------
+        tracers : str or None, default=None
+        eft_basis : str, default='eftoflss'
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return propose_params_multitracer(PyBirdTracerSpectrum2Poles._auto_params(eft_basis),
+                                           tracers, stochastic=('ce0', 'ce1', 'ce2'))  # no cross
+
+    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss', shotnoise=1e4, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        eft = eft_basis if eft_basis not in (None, 'velocileptors') else 'eftoflss'
-        if eft in ('eftoflss', 'velocileptors'):
-            self.b1 = Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1')
-            self.b2 = Parameter('b2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
-            self.b3 = Parameter('b3', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_3')
-            self.b4 = Parameter('b4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_4')
-        elif eft == 'westcoast':
-            self.b1 = Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1')
-            self.b2p4 = Parameter('b2p4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2+4}')
-            self.b2m4 = Parameter('b2m4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2-4}')
-            self.b3 = Parameter('b3', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_3')
-        elif eft == 'eastcoast':
-            self.b1 = Parameter('b1', value=1.6, prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1.6, scale=0.1), latex='b_1')
-            self.b2t = Parameter('b2t', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2t}')
-            self.b2g = Parameter('b2g', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{2g}')
-            self.b3g = Parameter('b3g', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_{3g}')
-        self.cct = Parameter('cct', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{ct}')
-        self.cr1 = Parameter('cr1', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r1}')
-        self.cr2 = Parameter('cr2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='c_{r2}')
-        self.ce0 = Parameter('ce0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\epsilon_0')
-        self.ce1 = Parameter('ce1', value=0., fixed=True, latex=r'\epsilon_1')
-        self.ce2 = Parameter('ce2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\epsilon_2')
-        apply_tracers(self, tracers, stochastic=('ce0', 'ce1', 'ce2'))  # correlation does not support cross
+        vc = type(self).propose_params(tracers=tracers, eft_basis=eft_basis)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
         if s is None:
             s = np.linspace(20., 200., 181)
         self.s = np.asarray(s, dtype='f8')
@@ -1603,7 +1722,7 @@ class FOLPSPTSpectrum2Poles(ExternalCalculator):
         self._rbao = float(rbao)
         self._A_full = bool(A_full)
         self._remove_DeltaP = bool(remove_DeltaP)
-        self._to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+        self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
         os.environ.setdefault('FOLPS_BACKEND', 'jax')
         import folps as folpsv2
         self._matrices = folpsv2.MatrixCalculator(A_full=A_full, use_TNS_model=remove_DeltaP).get_mmatrices()
@@ -1665,7 +1784,7 @@ class FOLPSPTSpectrum2Poles(ExternalCalculator):
         obj.ells = aux['ells']
         obj._A_full = aux['A_full']
         obj._remove_DeltaP = aux['remove_DeltaP']
-        obj._to_poles = ProjectToMultipoles.__new__(ProjectToMultipoles)
+        obj._to_poles = ProjectToPoles.__new__(ProjectToPoles)
         obj._to_poles.mu = aux['mu']
         obj._to_poles.wmu = aux['wmu']
         obj._to_poles.ells = aux['ells']
@@ -1682,44 +1801,87 @@ class FOLPSTracerSpectrum2Poles(Calculator):
     pt : FOLPSPTSpectrum2Poles, default=None
     ells : tuple of int, default=(0, 2, 4)
     template : template calculator, default=None
-    prior_basis : str, default='physical'
-        ``'physical'`` uses the physical_aap basis (default, recommended).
-        ``'standard'`` uses standard Eulerian bias parameters.
-    tracer, fsat, sigv, shotnoise : same as LPTVelocileptorsTracerSpectrum2Poles.
+    prior_basis : str, default='physical_aap'
+        Bias / counterterm / stochastic parameterization (mirrors FOLPSv2 in desilike_bak):
+
+        - ``'standard'``: standard Eulerian bias as in the FOLPS paper (arXiv:2404.07269);
+          parameters ``b1, b2, bs, b3, alpha0, alpha2, alpha4, ct, sn0, sn2, X_FoG_p``.
+        - ``'physical'``: physical (velocileptors-DR1) Lagrangian basis, **no** AP rescaling;
+          parameters carry a ``p`` suffix (``b1p, b2p, ...``).
+        - ``'physical_aap'`` (default): physical basis with AP rescaling (2pt3pt prior document).
+        - ``'tcm_chudaykin_aap'``: physical basis with AP rescaling and the class-PT counterterm
+          basis (Chudaykin et al.); uses ``bias_scheme='classpt'``.
+    fsat : float, default=None
+        Satellite fraction for the physical stochastic terms.  Defaults to
+        ``get_physical_stochastic_settings(None)['fsat']``.  Pass the output of
+        :func:`get_physical_stochastic_settings` directly for a specific tracer.
+    sigv : float, default=None
+        Velocity dispersion for the physical stochastic terms.  Defaults to
+        ``get_physical_stochastic_settings(None)['sigv']``.
+    sigma8_fid : float, default=None
+        Fiducial :math:`\sigma_8` for the amplitude rescaling :math:`A=(\sigma_8/\sigma_8^\mathrm{fid})^2`
+        (used by ``'physical'`` and ``'tcm_chudaykin_aap'``).  ``None`` sets :math:`A=1`.
+    shotnoise : float, default=1e4
     mu : int, default=6
     b3_coev : bool, default=True
     damping : str, default='lor'
     """
 
-    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical',
-                 tracer=None, fsat=None, sigv=None, shotnoise=1e4, mu=6, b3_coev=True, damping='lor', tracers=None, **kwargs):
-        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+    @classmethod
+    def propose_params(cls, tracers=None, prior_basis='physical_aap'):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
+
+        Parameters
+        ----------
+        tracers : str, (str, str), or None, default=None
+        prior_basis : str, default='physical_aap'
+            One of ``'standard'``, ``'physical'``, ``'physical_aap'``, ``'tcm_chudaykin_aap'``.
+
+        Returns
+        -------
+        VariableCollection
+        """
+        if prior_basis not in _FOLPS_PRIOR_BASES:
+            raise ValueError(f"Unknown prior_basis={prior_basis!r}; valid: {list(_FOLPS_PRIOR_BASES)}.")
         physical = (prior_basis != 'standard')
         if physical:
-            self.b1 = Parameter('b1p', value=1., prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1), latex=r"b_1'")
-            self.b2 = Parameter('b2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'")
-            self.bs = Parameter('bsp', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'")
-            self.b3 = Parameter('b3p', value=0., fixed=True, latex=r"b_3'")
-            self.alpha0 = Parameter('alpha0p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_0'")
-            self.alpha2 = Parameter('alpha2p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_2'")
-            self.alpha4 = Parameter('alpha4p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_4'")
-            self.ct = Parameter('ctp', value=0., fixed=True, latex=r"c_t'")
-            self.X_FoG_p = Parameter('X_FoG_pp', value=0., fixed=True, latex=r"X_{\rm FoG}''")
-            self.sn0 = Parameter('sn0p', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'")
-            self.sn2 = Parameter('sn2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,2}'")
+            auto_params = [
+                Parameter('b1p', value=1., prior=dict(dist='uniform', limits=[0., 3.]), ref=dict(dist='norm', loc=1., scale=0.1), latex=r"b_1'"),
+                Parameter('b2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'"),
+                Parameter('bsp', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'"),
+                Parameter('b3p', value=0., fixed=True, latex=r"b_3'"),
+                Parameter('alpha0p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_0'"),
+                Parameter('alpha2p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_2'"),
+                Parameter('alpha4p', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r"\alpha_4'"),
+                Parameter('ctp', value=0., fixed=True, latex=r"c_t'"),
+                Parameter('X_FoG_pp', value=0., fixed=True, latex=r"X_\mathrm{FoG}''"),
+                Parameter('sn0p', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'"),
+                Parameter('sn2p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,2}'"),
+            ]
         else:
-            self.b1 = Parameter('b1', value=1., prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1')
-            self.b2 = Parameter('b2', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
-            self.bs = Parameter('bs', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_s')
-            self.b3 = Parameter('b3', value=0., fixed=True, latex='b_3')
-            self.alpha0 = Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_0')
-            self.alpha2 = Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2')
-            self.alpha4 = Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4')
-            self.ct = Parameter('ct', value=0., fixed=True, latex='c_t')
-            self.X_FoG_p = Parameter('X_FoG_p', value=0., fixed=True, latex=r'X_{\rm FoG}')
-            self.sn0 = Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}')
-            self.sn2 = Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}')
-        apply_tracers(self, tracers)  # namespacing only (no cross)
+            auto_params = [
+                Parameter('b1', value=1., prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1'),
+                Parameter('b2', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
+                Parameter('bs', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_s'),
+                Parameter('b3', value=0., fixed=True, latex='b_3'),
+                Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_0'),
+                Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2'),
+                Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4'),
+                Parameter('ct', value=0., fixed=True, latex='c_t'),
+                Parameter('X_FoG_p', value=0., fixed=True, latex=r'X_\mathrm{FoG}'),
+                Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+                Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
+            ]
+        return propose_params_multitracer(auto_params, tracers)
+
+    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
+                 fsat=None, sigv=None, sigma8_fid=None, shotnoise=1e4, mu=6, b3_coev=True, damping='lor',
+                 tracers=None, params=None, **kwargs):
+        # Nodes (Parameters + Calculator deps) and their update() live in __init__.
+        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
@@ -1731,18 +1893,22 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical',
-                      tracer=None, fsat=None, sigv=None, shotnoise=1e4, mu=6, b3_coev=True, damping='lor', tracers=None, **kwargs):
+    def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
+                      fsat=None, sigv=None, sigma8_fid=None, shotnoise=1e4, mu=6, b3_coev=True, damping='lor',
+                      tracers=None, **kwargs):
         # Non-node setup only.
-        self._prior_basis = prior_basis
+        self._prior_basis = str(prior_basis)
         self._b3_coev = bool(b3_coev)
         self._damping = str(damping)
         self._nbar = 1e-4
         self._snd = float(shotnoise) * self._nbar
-        settings = get_physical_stochastic_settings(tracer)
-        self._fsat = fsat if fsat is not None else settings['fsat']
-        self._sigv = sigv if sigv is not None else settings['sigv']
-        self._to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+        # Physical stochastic settings: pass fsat/sigv directly (e.g. the output of
+        # get_physical_stochastic_settings); defaults are the generic settings.
+        settings = get_physical_stochastic_settings(None)
+        self._fsat = float(fsat) if fsat is not None else settings['fsat']
+        self._sigv = float(sigv) if sigv is not None else settings['sigv']
+        self._sigma8_fid = float(sigma8_fid) if sigma8_fid is not None else None
+        self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
 
     def __call__(self):
         import folps as folpsv2
@@ -1757,38 +1923,78 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         qper = self.pt.qper
         A_AP = 1. / (qper ** 2 * qpar)
         sqrt_A_AP = A_AP ** 0.5
+        # Amplitude rescaling (Class-PT style); A = 1 when no fiducial sigma8 is given.
+        A = (sigma8 / self._sigma8_fid) ** 2 if self._sigma8_fid is not None else 1.
 
-        if self._prior_basis == 'standard':
-            b1, b2, bs, b3 = self.b1, self.b2, self.bs, self.b3
-            alpha0, alpha2, alpha4, ct = self.alpha0, self.alpha2, self.alpha4, self.ct
-            sn0, sn2, X_FoG = self.sn0, self.sn2, self.X_FoG_p
+        pb = self._prior_basis
+        suffix = 'p' if pb != 'standard' else ''
+
+        def g(name):
+            """Bias parameter by logical name (physical modes carry a trailing 'p')."""
+            return getattr(self, name + suffix)
+
+        bias_scheme = 'folps'
+        if pb == 'standard':
+            b1, b2, bs, b3 = g('b1'), g('b2'), g('bs'), g('b3')
+            alpha0, alpha2, alpha4, ct = g('alpha0'), g('alpha2'), g('alpha4'), g('ct')
+            sn0, sn2, X_FoG = g('sn0'), g('sn2'), g('X_FoG_p')
             if self._b3_coev:
                 b3 = 32. / 315. * (b1 - 1.)
             pars = jnp.array([b1, b2, bs, b3, alpha0, alpha2, alpha4, ct, sn0, sn2, 1. / self._nbar, X_FoG])
-        else:  # physical (physical_aap)
-            b1L = self.b1 / sigma8 / sqrt_A_AP - 1.
-            b2L = self.b2 / sigma8 ** 2 / sqrt_A_AP
-            bK2 = self.bs / sigma8 ** 2 / sqrt_A_AP
+
+        elif pb == 'physical':  # physical_velocileptors (no AP rescaling)
+            b1L = g('b1') / sigma8 - 1.
+            b2L = g('b2') / sigma8 ** 2
+            bsL = g('bs') / sigma8 ** 2
+            b1E = 1. + b1L
+            b2E = b2L + 8. / 21. * b1L
+            bsE = -4. / 7. * b1L + bsL
+            b3E = g('b3') + 32. / 315. * b1L
+            alpha0, alpha2, alpha4 = (g(name) / A for name in ('alpha0', 'alpha2', 'alpha4'))
+            sn0 = g('sn0') * self._snd
+            sn2 = g('sn2') * self._snd * self._fsat * self._sigv ** 2
+            pars = jnp.array([b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, g('ct'),
+                               sn0, sn2, 1. / self._nbar, g('X_FoG_p')])
+
+        elif pb == 'physical_aap':  # physical basis with AP rescaling
+            b1L = g('b1') / sigma8 / sqrt_A_AP - 1.
+            b2L = g('b2') / sigma8 ** 2 / sqrt_A_AP
+            bK2 = g('bs') / sigma8 ** 2 / sqrt_A_AP
             b1E = 1. + b1L
             b2E = b2L
-            btd = self.b3 / A_AP / sigma8 ** 4
+            btd = g('b3') / A_AP / sigma8 ** 4
             if self._b3_coev:
                 btd = 23. / 42. * (b1E - 1.)
             bsE = 2. * bK2
             b3E = 64. / 105. * (-5. / 4. * bsE - btd)
-            a0t = self.alpha0 / A_AP / sigma8 ** 2
-            a2t = self.alpha2 / A_AP / sigma8 ** 2
-            a4t = self.alpha4 / A_AP / sigma8 ** 2
+            a0t = g('alpha0') / A_AP / sigma8 ** 2
+            a2t = g('alpha2') / A_AP / sigma8 ** 2
+            a4t = g('alpha4') / A_AP / sigma8 ** 2
             alpha0 = b1E ** 2 * a0t
             alpha2 = b1E * f * (a0t + a2t)
             alpha4 = f ** 2 * a2t + b1E * f * a4t
-            sn0 = self.sn0 / A_AP * self._snd
-            sn2 = self.sn2 / A_AP * self._snd * self._fsat * self._sigv ** 2
-            pars = jnp.array([b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, self.ct,
-                               sn0, sn2, 1. / self._nbar, self.X_FoG_p])
+            sn0 = g('sn0') / A_AP * self._snd
+            sn2 = g('sn2') / A_AP * self._snd * self._fsat * self._sigv ** 2
+            pars = jnp.array([b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, g('ct'),
+                               sn0, sn2, 1. / self._nbar, g('X_FoG_p')])
+
+        else:  # 'tcm_chudaykin_aap': physical + AP with the class-PT counterterm basis
+            bias_scheme = 'classpt'
+            b1L = g('b1') / sigma8 - 1.
+            b2L = g('b2') / sigma8 ** 2
+            bsL = g('bs') / sigma8 ** 2
+            b3 = g('b3') / A
+            c0, c2, c4 = (g(name) / (A * A_AP) for name in ('alpha0', 'alpha2', 'alpha4'))
+            ct0 = -2. / 105. * (105. * c0 - 35. * c2 * f + 9. * c4 * f ** 2)
+            ct2 = -2. / 7. * f * (7. * c2 - 6. * f * c4)
+            ct4 = -2. * f ** 2 * c4
+            sn0 = g('sn0') * self._snd
+            sn2 = g('sn2') * self._snd * self._fsat * self._sigv ** 2
+            pars = jnp.array([1. + b1L, b2L, bsL, b3, ct0, ct2, ct4, 0.,
+                               sn0, sn2, 1. / self._nbar, g('X_FoG_p')])
 
         folps_rsdmps = folpsv2.RSDMultipolesPowerSpectrumCalculator(model='FOLPSD')
-        pars = folps_rsdmps.set_bias_scheme(pars=pars, bias_scheme='folps')
+        pars = folps_rsdmps.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
         table = tuple(self.pt.table)
         table_now = tuple(self.pt.table_now)
         pkmu = self.pt.jac * folps_rsdmps.get_rsd_pkmu(
@@ -1816,11 +2022,17 @@ class FOLPSTracerCorrelation2Poles(Calculator):
     pt : FOLPSTracerSpectrum2Poles, default=None
     ells : tuple of int, default=(0, 2, 4)
     template : template calculator, default=None
-    prior_basis : str, default='physical'
-    damping : str, default='lor'
+    prior_basis : str, default='physical_aap'
+        See :class:`FOLPSTracerSpectrum2Poles`.
+    fsat, sigv, sigma8_fid : forwarded to :class:`FOLPSTracerSpectrum2Poles`.
     """
 
-    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', tracers=None, **kwargs):
+    @classmethod
+    def propose_params(cls, tracers=None, **kwargs):
+        """Delegate to :meth:`FOLPSTracerSpectrum2Poles.propose_params`."""
+        return FOLPSTracerSpectrum2Poles.propose_params(tracers=tracers, **kwargs)
+
+    def __init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap', tracers=None, **kwargs):
         # Nodes (Calculator deps) and their update() live in __init__.
         if s is None:
             s = np.linspace(20., 200., 181)
@@ -1828,13 +2040,13 @@ class FOLPSTracerCorrelation2Poles(Calculator):
         self.ells = tuple(ells)
         kin = np.geomspace(1e-4, 0.6, 300)
         if pt is None:
-            pt = FOLPSTracerSpectrum2Poles(prior_basis=prior_basis, tracers=tracers)
+            pt = FOLPSTracerSpectrum2Poles(prior_basis=prior_basis, tracers=tracers, **kwargs)
         self.pt = pt
         self.pt.update(k=kin, ells=self.ells)
         if template is not None:
             self.pt.update(template=template)
 
-    def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', tracers=None, **kwargs):
+    def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap', tracers=None, **kwargs):
         # Non-node setup only.
         self._to_correlation = SpectrumToCorrelation(s=self.s, ells=self.ells, kin=np.geomspace(1e-4, 0.6, 300))
 
@@ -1850,6 +2062,67 @@ class FOLPSTracerCorrelation2Poles(Calculator):
         obj = object.__new__(cls)
         obj.poles = children[0]
         return obj
+
+
+def _get_spectrum3poles_folps(
+    pars,
+    k1k2,
+    k_pkl_pklnw_fk,
+    f0, qpar, qper,
+    multipoles=['B000', 'B202'],
+    precision=(8, 10, 10),
+    damping='lor',
+    interpolation_size=20,
+    interpolation_method='linear',
+    bias_scheme='folps',
+    model='FOLPSD',
+    renormalized=True,
+):
+    import folps as folpsv2
+    # folpsv2.MatrixCalculator(A_full=True, use_TNS_model=False)
+    # folps_bispectrum_class = folpsv2.BispectrumCalculator_fk(model='FOLPSD')
+    f0 = jnp.asarray(f0)
+    bpars = jnp.asarray(pars)
+
+    if k1k2.ndim == 1:
+        bs = folpsv2.WindowConvolvedBispectrum(model=model)
+        results = bs.reduced_Bl1l2L(bpars, None,
+                        qpar, qper, k_pkl_pklnw_fk, k1k2, Ssize=interpolation_size,
+                        precision_full=[8, 10, 10], precision_diag=[12, 15, 15],
+                        f=f0,
+                        renormalize=renormalized,
+                        interpolation_method_full=interpolation_method,
+                        interpolation_method_diag=interpolation_method,
+                        use_full_diag=True)
+        ells = ['B000', 'B110', 'B220', 'B112', 'B202']
+        toret = []
+        for ell in multipoles:
+            if ell in ells:
+                toret.append(results[ells.index(ell)].ravel())
+            elif (ell_swap:=ell[0] + ell[2:0:-1] + ell[3:]) in ells:
+                toret.append(results[ells.index(ell_swap)].T.ravel())
+            else:
+                toret.append(np.zeros((k1k2.size,) * 2).ravel())
+        folpsv2.BispectrumCalculator._tables_cache = {}  # to avoid leak
+        return toret
+
+    bispectrum = folpsv2.BispectrumCalculator(model=model)
+    toret = bispectrum.Sugiyama_Bell(
+        f=f0,
+        bpars=bpars,
+        k_pkl_pklnw=k_pkl_pklnw_fk,
+        k1k2pairs=k1k2,
+        qpar=qpar,
+        qper=qper,
+        precision=precision,
+        damping=damping,
+        multipoles=list(multipoles),
+        bias_scheme=bias_scheme,
+        renormalize=renormalized,
+        interpolation_method=interpolation_method
+    )
+    folpsv2.BispectrumCalculator._tables_cache = {}  # to avoid leak
+    return toret
 
 
 class FOLPSTracerSpectrum3Poles(ExternalCalculator):
@@ -1894,25 +2167,42 @@ class FOLPSTracerSpectrum3Poles(ExternalCalculator):
     def install(cls, installer):
         installer.pip('git+https://github.com/cosmodesi/FolpsD')
 
-    def __init__(self, *args, template=None, tracers=None, **kwargs):
+    @classmethod
+    def propose_params(cls, tracers=None):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
+
+        Parameters
+        ----------
+        tracers : str or None, default=None
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return propose_params_multitracer([
+            Parameter('b1', value=2., prior=dict(limits=[0., 10.]),
+                      ref=dict(dist='norm', loc=2., scale=0.1), latex='b_1'),
+            Parameter('b2', value=0., prior=dict(limits=[-50., 50.]),
+                      ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
+            Parameter('bs', value=0., prior=None,
+                      ref=dict(dist='norm', loc=0., scale=1.), latex='b_s'),
+            Parameter('c1', value=0., prior=None,
+                      ref=dict(dist='norm', loc=0., scale=1.), latex='c_1'),
+            Parameter('c2', value=0., prior=None,
+                      ref=dict(dist='norm', loc=0., scale=1.), latex='c_2'),
+            Parameter('Pshot', value=0., prior=None,
+                      ref=dict(dist='norm', loc=0., scale=1.), latex='P_{shot}'),
+            Parameter('Bshot', value=0., prior=None,
+                      ref=dict(dist='norm', loc=0., scale=1.), latex='B_{shot}'),
+            Parameter('X_FoG_b', value=0., fixed=True, latex=r'X_{\rm FoG, b}'),
+        ], tracers)  # no cross (bispectra not implemented)
+
+    def __init__(self, *args, template=None, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
-        # Standard (Eulerian) FOLPS bispectrum bias parameters.
-        self.b1 = Parameter('b1', value=2., prior=dict(limits=[0., 10.]),
-                            ref=dict(dist='norm', loc=2., scale=0.1), latex='b_1')
-        self.b2 = Parameter('b2', value=0., prior=dict(limits=[-50., 50.]),
-                            ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
-        self.bs = Parameter('bs', value=0., prior=None,
-                            ref=dict(dist='norm', loc=0., scale=1.), latex='b_s')
-        self.c1 = Parameter('c1', value=0., prior=None,
-                            ref=dict(dist='norm', loc=0., scale=1.), latex='c_1')
-        self.c2 = Parameter('c2', value=0., prior=None,
-                            ref=dict(dist='norm', loc=0., scale=1.), latex='c_2')
-        self.Pshot = Parameter('Pshot', value=0., prior=None,
-                               ref=dict(dist='norm', loc=0., scale=1.), latex='P_{shot}')
-        self.Bshot = Parameter('Bshot', value=0., prior=None,
-                               ref=dict(dist='norm', loc=0., scale=1.), latex='B_{shot}')
-        self.X_FoG_b = Parameter('X_FoG_b', value=0., fixed=True, latex=r'X_{\rm FoG, b}')
-        apply_tracers(self, tracers)  # namespacing only (cross bispectra not implemented)
+        vc = type(self).propose_params(tracers=tracers)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
         if template is None:
             template = DirectSpectrum2Template()
         self.template = template
@@ -1937,7 +2227,7 @@ class FOLPSTracerSpectrum3Poles(ExternalCalculator):
                                    np.asarray(self.template.pknow_dd), np.asarray(self.template.fk)])
         pars = [self.b1, self.b2, self.bs, self.c1, self.c2, self.Pshot, self.Bshot, self.X_FoG_b]
         multipoles = tuple('B{:d}{:d}{:d}'.format(*ell) for ell in self.ells)
-        poles = _get_bispectrum_multipoles_folpsv2(
+        poles = _get_spectrum3poles_folps(
             pars, self.k, k_pkl_pklnw_fk, float(self.template.f0),
             float(self.template.qpar), float(self.template.qper),
             multipoles=multipoles, **self._options)
@@ -1960,11 +2250,10 @@ class JAXEffortTracerSpectrum2Poles(ExternalCalculator):
     r"""
     Tracer power-spectrum multipoles from a JAXEffort emulator.
 
-    Self-contained cosmology: the emulator's ``w0waCDMCosmology`` parameters
-    (``logA, n_s, h, omega_b, omega_cdm`` varied; ``m_ncdm, w0_fld, wa_fld`` fixed by
-    default) are owned directly.  Growth ``D(z)`` and Alcock-Paczynski distortion
-    (``qpar = D_H / D_H^fid``, ``qper = D_M / D_M^fid``) are computed from the same
-    JAXEffort cosmology.
+    Cosmological parameters are supplied via a :class:`~desilike.theories.primordial_cosmology.CosmoprimoCosmology`
+    dependency (``cosmo``), accessed as ``cosmo['h']``, ``cosmo['omega_cdm']``, etc.
+    Growth ``D(z)`` and Alcock-Paczynski distortion are computed from a JAXEffort
+    ``w0waCDMCosmology`` object built from those parameters.
 
     Implemented as an :class:`~desilike.base.ExternalCalculator` (finite-difference
     gradients): JAXEffort's growth ``D_z`` is a reverse-mode-only ``custom_vjp``, which
@@ -1975,6 +2264,9 @@ class JAXEffortTracerSpectrum2Poles(ExternalCalculator):
 
     Parameters
     ----------
+    cosmo : CosmoprimoCosmology or None, default=None
+        Cosmology calculator.  When ``None`` a default :class:`~desilike.theories.primordial_cosmology.CosmoprimoCosmology`
+        with ``engine='eisenstein_hu'`` is created internally.
     k : array, default=None
         Output wavenumbers [h/Mpc].  Defaults to ``np.linspace(0.01, 0.2, 101)``.
     ells : tuple of int, default=(0, 2, 4)
@@ -1995,37 +2287,48 @@ class JAXEffortTracerSpectrum2Poles(ExternalCalculator):
     def install(cls, installer):
         installer.pip('git+https://github.com/CosmologicalEmulators/jaxeffort')
 
-    def __init__(self, *args, model='velocileptors_rept_mnuw0wacdm', tracers=None, **kwargs):
-        # ── cosmology (self-contained); m_ncdm / w0 / wa fixed by default ──
-        self.logA = Parameter('logA', value=3.044, prior=dict(limits=[2., 4.]),
-                              ref=dict(dist='norm', loc=3.044, scale=0.1), latex=r'\ln(10^{10}A_s)')
-        self.n_s = Parameter('n_s', value=0.9649, prior=dict(limits=[0.8, 1.1]),
-                             ref=dict(dist='norm', loc=0.9649, scale=0.02), latex='n_s')
-        self.h = Parameter('h', value=0.6736, prior=dict(limits=[0.5, 0.9]),
-                          ref=dict(dist='norm', loc=0.6736, scale=0.02), latex='h')
-        self.omega_b = Parameter('omega_b', value=0.02237, prior=dict(limits=[0.018, 0.026]),
-                                ref=dict(dist='norm', loc=0.02237, scale=0.0005), latex=r'\omega_b')
-        self.omega_cdm = Parameter('omega_cdm', value=0.1200, prior=dict(limits=[0.08, 0.16]),
-                                  ref=dict(dist='norm', loc=0.12, scale=0.005), latex=r'\omega_{cdm}')
-        self.m_ncdm = Parameter('m_ncdm', value=0.06, fixed=True, latex=r'\sum m_\nu')
-        self.w0_fld = Parameter('w0_fld', value=-1., fixed=True, latex='w_0')
-        self.wa_fld = Parameter('wa_fld', value=0., fixed=True, latex='w_a')
+    @classmethod
+    def propose_params(cls, tracers=None):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for the bias parameters.
+
+        Cosmological parameters come from the :class:`~desilike.theories.primordial_cosmology.CosmoprimoCosmology`
+        dependency and are not included here.
+
+        Parameters
+        ----------
+        tracers : str or None, default=None
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return propose_params_multitracer([
+            Parameter('b1', value=2., prior=dict(limits=[0., 4.]),
+                      ref=dict(dist='norm', loc=2., scale=0.1), latex='b_1'),
+            Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=2.),
+                      ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
+            Parameter('bs', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_s'),
+            Parameter('b3', value=0., fixed=True, latex='b_3'),
+            Parameter('alpha0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=10.), latex=r'\alpha_0'),
+            Parameter('alpha2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=10.), latex=r'\alpha_2'),
+            Parameter('alpha4', value=0., fixed=True, latex=r'\alpha_4'),
+            Parameter('alpha6', value=0., fixed=True, latex=r'\alpha_6'),
+            Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+            Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
+            Parameter('sn4', value=0., fixed=True, latex='s_{n,4}'),
+        ], tracers)
+
+    def __init__(self, *args, cosmo=None, model='velocileptors_rept_mnuw0wacdm', tracers=None, params=None, **kwargs):
+        # ── cosmology dep (provides logA, n_s, h, omega_b, omega_cdm, m_ncdm, w0_fld, wa_fld) ──
+        from ..primordial_cosmology import CosmoprimoCosmology
+        if cosmo is None:
+            cosmo = CosmoprimoCosmology(engine='eisenstein_hu')
+        self.cosmo = cosmo  # Calculator dep; build_graph discovers it from __dict__
         # ── velocileptors bias (standard basis) ──
-        self.b1 = Parameter('b1', value=2., prior=dict(limits=[0., 4.]),
-                           ref=dict(dist='norm', loc=2., scale=0.1), latex='b_1')
-        self.b2 = Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=2.),
-                           ref=dict(dist='norm', loc=0., scale=1.), latex='b_2')
-        self.bs = Parameter('bs', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='b_s')
-        self.b3 = Parameter('b3', value=0., fixed=True, latex='b_3')
-        self.alpha0 = Parameter('alpha0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=10.), latex=r'\alpha_0')
-        self.alpha2 = Parameter('alpha2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=10.), latex=r'\alpha_2')
-        self.alpha4 = Parameter('alpha4', value=0., fixed=True, latex=r'\alpha_4')
-        self.alpha6 = Parameter('alpha6', value=0., fixed=True, latex=r'\alpha_6')
-        self.sn0 = Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}')
-        self.sn2 = Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}')
-        self.sn4 = Parameter('sn4', value=0., fixed=True, latex='s_{n,4}')
-        # Cosmological parameters are shared across tracers; only bias is namespaced.
-        apply_tracers(self, tracers, shared=('logA', 'n_s', 'h', 'omega_b', 'omega_cdm', 'm_ncdm', 'w0_fld', 'wa_fld'))
+        vc = type(self).propose_params(tracers=tracers)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
 
     def __post_init__(self, k=None, ells=(0, 2, 4), z=0.5, mu=8,
                       model='velocileptors_rept_mnuw0wacdm', **kwargs):
@@ -2035,7 +2338,7 @@ class JAXEffortTracerSpectrum2Poles(ExternalCalculator):
         self.ells = tuple(ells)
         self.z = float(z)
         self._model = str(model)
-        self._to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
+        self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
         self._mu = self._to_poles.mu
         from scipy import special
         # Legendre coefficients (highest power first, for jnp.polyval) per multipole.
@@ -2052,13 +2355,15 @@ class JAXEffortTracerSpectrum2Poles(ExternalCalculator):
 
     def __call__(self):
         import jaxeffort
-        logA = jnp.asarray(self.logA.value); ns = jnp.asarray(self.n_s.value); h = jnp.asarray(self.h.value)
-        ob = jnp.asarray(self.omega_b.value); oc = jnp.asarray(self.omega_cdm.value)
-        mnu = jnp.asarray(self.m_ncdm.value); w0 = jnp.asarray(self.w0_fld.value); wa = jnp.asarray(self.wa_fld.value)
+        # Read cosmological parameters from the CosmoprimoCosmology dep.
+        cosmo_params = self.cosmo._current_params()
+        logA = jnp.asarray(cosmo_params['logA']); ns = jnp.asarray(cosmo_params['n_s']); h = jnp.asarray(cosmo_params['h'])
+        ob = jnp.asarray(cosmo_params['omega_b']); oc = jnp.asarray(cosmo_params['omega_cdm'])
+        mnu = jnp.asarray(cosmo_params.get('m_ncdm', 0.06)); w0 = jnp.asarray(cosmo_params.get('w0_fld', -1.)); wa = jnp.asarray(cosmo_params.get('wa_fld', 0.))
         z = self.z
-        cosmo = jaxeffort.w0waCDMCosmology(ln10As=logA, ns=ns, h=h, omega_b=ob, omega_c=oc, m_nu=mnu, w0=w0, wa=wa)
+        jax_cosmo = jaxeffort.w0waCDMCosmology(ln10As=logA, ns=ns, h=h, omega_b=ob, omega_c=oc, m_nu=mnu, w0=w0, wa=wa)
         theta = jnp.array([z, logA, ns, 100. * h, ob, oc, mnu, w0, wa])
-        D = cosmo.D_z(z)
+        D = jax_cosmo.D_z(z)
 
         b1 = jnp.asarray(self.b1.value); b2 = jnp.asarray(self.b2.value)
         bs = jnp.asarray(self.bs.value); b3 = jnp.asarray(self.b3.value)
@@ -2072,8 +2377,8 @@ class JAXEffortTracerSpectrum2Poles(ExternalCalculator):
         poles = [emu.get_Pl(theta, biases, D) for emu in self._emulators]  # each on self._kgrid
 
         # Alcock-Paczynski from the JAXEffort cosmology distances (qpar = D_H/D_H_fid, qper = D_M/D_M_fid).
-        qpar = (self._h_fid * self._E_fid) / (h * cosmo.E_z(z))
-        qper = cosmo.dM_z(z) / self._dM_fid
+        qpar = (self._h_fid * self._E_fid) / (h * jax_cosmo.E_z(z))
+        qper = jax_cosmo.dM_z(z) / self._dM_fid
         jac, kap, muap = _ap_k_mu(self.k[:, None], self._mu, qpar, qper)  # (n_k, n_mu)
         pkmu = jnp.zeros_like(kap)
         for leg_coeffs, pole in zip(self._leg_coeffs, poles):

@@ -180,11 +180,13 @@ class TestLPTVelocileptors:
         assert _compile(LPTVelocileptorsTracerSpectrum2Poles(k=k, ells=(0, 2)))().shape[0] == 2
 
     def test_tracer_presets(self):
-        """LPTVelocileptorsTracerSpectrum2Poles: LRG/ELG/QSO presets run."""
+        """LPTVelocileptorsTracerSpectrum2Poles: LRG/ELG/QSO fsat/sigv settings run."""
         from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerSpectrum2Poles
+        from desilike.theories.galaxy_clustering.full_shape import get_physical_stochastic_settings
         k = np.linspace(0.02, 0.3, 60)
         for tracer in ['LRG', 'ELG', 'QSO']:
-            theory = LPTVelocileptorsTracerSpectrum2Poles(k=k, tracer=tracer)
+            settings = get_physical_stochastic_settings(tracer)
+            theory = LPTVelocileptorsTracerSpectrum2Poles(k=k, **settings)
             _check(_compile(theory)(), f'LPTVelocileptorsTracer tracer={tracer}')
 
     def test_tracer_correlation(self):
@@ -307,22 +309,38 @@ class TestFOLPS:
 
     def test_tracer_spectrum(self):
         """FOLPSTracerSpectrum2Poles: shape, parameter sensitivity and ells=(0, 2)
-        edge case in both physical and standard bases."""
+        edge case across all four prior_basis options."""
         from desilike.theories.galaxy_clustering import FOLPSTracerSpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
 
-        theory = FOLPSTracerSpectrum2Poles(k=k)  # physical basis
+        # Default physical_aap basis (p-suffix parameters).
+        theory = FOLPSTracerSpectrum2Poles(k=k)
         run = _compile(theory)
         base = run()
-        _check(base, 'FOLPSTracerSpectrum2Poles (physical)')
+        _check(base, 'FOLPSTracerSpectrum2Poles (physical_aap)')
         assert base.shape == (len(theory.ells), len(k))
-        _check_sensitivity(run, base, 'FOLPSTracerSpectrum2Poles (physical)', b1p=2.0)
+        _check_sensitivity(run, base, 'FOLPSTracerSpectrum2Poles (physical_aap)', b1p=2.0)
 
+        # Standard basis (no-suffix parameters).
         theory_std = FOLPSTracerSpectrum2Poles(k=k, prior_basis='standard')
         run_std = _compile(theory_std)
         base_std = run_std()
         _check(base_std, 'FOLPSTracerSpectrum2Poles (standard)')
         _check_sensitivity(run_std, base_std, 'FOLPSTracerSpectrum2Poles (standard)', b1=2.0)
+
+        # Remaining physical variants (all use p-suffix parameters).
+        for prior_basis in ['physical', 'tcm_chudaykin_aap']:
+            theory_pb = FOLPSTracerSpectrum2Poles(k=k, prior_basis=prior_basis)
+            run_pb = _compile(theory_pb)
+            base_pb = run_pb()
+            _check(base_pb, f'FOLPSTracerSpectrum2Poles ({prior_basis})')
+            _check_sensitivity(run_pb, base_pb, f'FOLPSTracerSpectrum2Poles ({prior_basis})', b1p=2.0)
+
+        # fsat / sigv passed directly (e.g. the output of get_physical_stochastic_settings).
+        from desilike.theories.galaxy_clustering.full_shape import get_physical_stochastic_settings
+        settings = get_physical_stochastic_settings('LRG')
+        theory_lrg = FOLPSTracerSpectrum2Poles(k=k, prior_basis='physical_aap', **settings)
+        _check(_compile(theory_lrg)(), 'FOLPSTracerSpectrum2Poles (LRG fsat/sigv)')
 
         assert _compile(FOLPSTracerSpectrum2Poles(k=k, ells=(0, 2)))().shape[0] == 2
 

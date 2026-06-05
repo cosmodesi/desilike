@@ -43,9 +43,9 @@ def likelihood():
             return super().__call__()
 
     x = Parameter('x', value=MU_X, prior=dict(dist='uniform', limits=[-1, 1]),
-                  ref=dict(dist='norm', loc=MU_X, scale=0.2), proposal=SX)
+                  ref=dict(dist='norm', loc=MU_X, scale=SX))
     y = Parameter('y', value=MU_Y, prior=dict(dist='uniform', limits=[-1, 1]),
-                  ref=dict(dist='norm', loc=MU_Y, scale=0.2), proposal=SY)
+                  ref=dict(dist='norm', loc=MU_Y, scale=SY))
     return compile(Posterior(Likelihood(x, y), Prior(x, y)))
 
 
@@ -65,10 +65,10 @@ def make_vec_likelihood():
     sig_v = np.array([0.05, 0.08])
     mu_z, sig_z = 0.1, 0.02
 
-    v_param = Parameter('v', value=mu_v, shape=(2,), proposal=0.06, fixed=False)
-    z_param = Parameter('z', value=mu_z, proposal=sig_z,
+    v_param = Parameter('v', value=mu_v, shape=(2,), fixed=False)
+    z_param = Parameter('z', value=mu_z,
                         prior=dict(dist='norm', loc=mu_z, scale=0.1),
-                        ref=dict(dist='norm', loc=mu_z, scale=0.1))
+                        ref=dict(dist='norm', loc=mu_z, scale=sig_z))
 
     class VecGaussian(BaseGaussianLikelihood):
 
@@ -123,7 +123,7 @@ def test_solved(likelihood, key):
             return super().__call__()
 
     x = Parameter('x', value=MU_X, prior=dict(dist='uniform', limits=[-1, 1]),
-                  ref=dict(dist='norm', loc=MU_X, scale=0.2), proposal=SX)
+                  ref=dict(dist='norm', loc=MU_X, scale=SX))
     y = Parameter('y', value=MU_Y, derived='best')
     p = make_profiler(key, compile(Posterior(Likelihood(x, y), Prior(x))))
     p.maximize(niterations=3)

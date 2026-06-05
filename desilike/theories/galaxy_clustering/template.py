@@ -19,8 +19,9 @@ import numpy as np
 import jax.numpy as jnp
 
 from ...base import Calculator, ExternalCalculator
-from ...parameter import Parameter
+from ...parameter import Parameter, VariableCollection
 from ..primordial_cosmology import CosmoprimoCosmology, _get_fiducial
+from ._multitracer import propose_params_multitracer, assign_params
 
 
 _kw_pk = dict(extrap_kmin=1e-7, extrap_kmax=1e2)  # cosmoprimo pk_interpolator kwargs
@@ -28,7 +29,7 @@ _kw_pk = dict(extrap_kmin=1e-7, extrap_kmax=1e2)  # cosmoprimo pk_interpolator k
 
 # ── Base class ────────────────────────────────────────────────────────────────
 
-class Spectrum2Template:
+class Spectrum2Template(Calculator):
     """Marker base class for all 2-point power-spectrum template calculators.
 
     Subclassed by :class:`BAOSpectrum2Template`, :class:`ShapeFitSpectrum2Template`,
@@ -54,9 +55,29 @@ def _ap_k_mu(k, mu, qpar, qper):
     return jac, kap, muap
 
 
+# ── shared helper ─────────────────────────────────────────────────────────────
+
+def _ap_auto_params(apmode):
+    """Return the AP Parameter list for the given *apmode*.  Raises on unknown mode."""
+    _ap_prior = dict(limits=[0.5, 2.])
+    _ap_ref = dict(dist='norm', loc=1., scale=0.05)
+    _ap_fd = 0.008
+    if apmode == 'qparqper':
+        return [Parameter('qpar', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_\parallel'),
+                Parameter('qper', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_\perp')]
+    if apmode == 'qisoqap':
+        return [Parameter('qiso', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_\mathrm{iso}'),
+                Parameter('qap', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_\mathrm{ap}')]
+    if apmode == 'qiso':
+        return [Parameter('qiso', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_\mathrm{iso}')]
+    if apmode == 'qap':
+        return [Parameter('qap', value=1., prior=_ap_prior, ref=_ap_ref, fd_eps=_ap_fd, latex=r'q_\mathrm{ap}')]
+    raise ValueError(f"apmode must be one of 'qparqper', 'qisoqap', 'qiso', 'qap'; got {apmode!r}")
+
+
 # ── BAO template ──────────────────────────────────────────────────────────────
 
-class BAOSpectrum2Template(Spectrum2Template, Calculator):
+class BAOSpectrum2Template(Spectrum2Template):
     r"""
     BAO power spectrum template based on a fixed fiducial cosmology.
 
@@ -102,35 +123,35 @@ class BAOSpectrum2Template(Spectrum2Template, Calculator):
     def install(cls, installer):
         installer.pip('git+https://github.com/cosmodesi/cosmoprimo')
 
+    @classmethod
+    def propose_params(cls, apmode='qparqper'):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this template.
+
+        Parameters
+        ----------
+        apmode : str, default='qparqper'
+            AP parameterization: one of ``'qparqper'``, ``'qisoqap'``, ``'qiso'``, ``'qap'``.
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return propose_params_multitracer(
+            _ap_auto_params(apmode) + [
+                Parameter('df', value=1., prior=dict(limits=[0., 2.]),
+                          ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta f'),
+            ], tracers=None)
+
     def __init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage',
-                 only_now=False, apmode='qparqper', eta=1. / 3.):
-        # AP parameters — created here (Option B) so they appear in __dict__ for graph scan.
-        _apmode = str(apmode)
-        _ap_prior = dict(limits=[0.5, 2.])
-        _ap_ref = dict(dist='norm', loc=1., scale=0.05)
-        if _apmode == 'qparqper':
-            self.qpar = Parameter('qpar', value=1., prior=_ap_prior, ref=_ap_ref,
-                                  latex=r'q_\parallel')
-            self.qper = Parameter('qper', value=1., prior=_ap_prior, ref=_ap_ref,
-                                  latex=r'q_\perp')
-        elif _apmode == 'qisoqap':
-            self.qiso = Parameter('qiso', value=1., prior=_ap_prior, ref=_ap_ref,
-                                  latex=r'q_\mathrm{iso}')
-            self.qap = Parameter('qap', value=1., prior=_ap_prior, ref=_ap_ref,
-                                 latex=r'q_\mathrm{ap}')
-        elif _apmode == 'qiso':
-            self.qiso = Parameter('qiso', value=1., prior=_ap_prior, ref=_ap_ref,
-                                  latex=r'q_\mathrm{iso}')
-        elif _apmode == 'qap':
-            self.qap = Parameter('qap', value=1., prior=_ap_prior, ref=_ap_ref,
-                                 latex=r'q_\mathrm{ap}')
-        else:
-            raise ValueError(f"apmode must be one of 'qparqper', 'qisoqap', 'qiso', 'qap'; got {apmode!r}")
-        self.df = Parameter('df', value=1., prior=dict(limits=[0., 2.]),
-                            ref=dict(dist='norm', loc=1., scale=0.05), latex=r'\delta f')
+                 only_now=False, apmode='qparqper', eta=1. / 3., params=None):
+        # AP parameters — created here so they appear in __dict__ for graph scan.
+        vc = type(self).propose_params(apmode=str(apmode))
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, None)
 
     def __post_init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage',
-                      only_now=False, apmode='qparqper', eta=1. / 3.):
+                      only_now=False, apmode='qparqper', eta=1. / 3., params=None):
         from cosmoprimo import PowerSpectrumBAOFilter, constants
 
         self._apmode = str(apmode)
@@ -224,7 +245,7 @@ class BAOSpectrum2Template(Spectrum2Template, Calculator):
         return obj
 
 
-class ShapeFitSpectrum2Template(Spectrum2Template, Calculator):
+class ShapeFitSpectrum2Template(Spectrum2Template):
     r"""
     ShapeFit power spectrum template.
 
@@ -264,32 +285,38 @@ class ShapeFitSpectrum2Template(Spectrum2Template, Calculator):
     def install(cls, installer):
         installer.pip('git+https://github.com/cosmodesi/cosmoprimo')
 
+    @classmethod
+    def propose_params(cls, apmode='qparqper'):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this template.
+
+        Parameters
+        ----------
+        apmode : str, default='qparqper'
+            AP parameterization: one of ``'qparqper'``, ``'qisoqap'``, ``'qiso'``, ``'qap'``.
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return propose_params_multitracer(
+            _ap_auto_params(apmode) + [
+                Parameter('df', value=1., prior=dict(limits=[0., 2.]),
+                          ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta f'),
+                Parameter('dm', value=0., prior=dict(limits=[-0.5, 0.5]),
+                          ref=dict(dist='norm', loc=0., scale=0.05), fd_eps=0.01, latex=r'\delta m'),
+                Parameter('dn', value=0., fixed=True, prior=dict(limits=[-0.5, 0.5]),
+                          ref=dict(dist='norm', loc=0., scale=0.05), fd_eps=0.01, latex=r'\delta n'),
+            ], tracers=None)
+
     def __init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage',
-                 only_now=False, apmode='qparqper', eta=1. / 3., kp=0.03, a=0.6):
-        _apmode = str(apmode)
-        _ap_prior = dict(limits=[0.5, 2.])
-        _ap_ref = dict(dist='norm', loc=1., scale=0.05)
-        if _apmode == 'qparqper':
-            self.qpar = Parameter('qpar', value=1., prior=_ap_prior, ref=_ap_ref, latex=r'q_\parallel')
-            self.qper = Parameter('qper', value=1., prior=_ap_prior, ref=_ap_ref, latex=r'q_\perp')
-        elif _apmode == 'qisoqap':
-            self.qiso = Parameter('qiso', value=1., prior=_ap_prior, ref=_ap_ref, latex=r'q_\mathrm{iso}')
-            self.qap = Parameter('qap', value=1., prior=_ap_prior, ref=_ap_ref, latex=r'q_\mathrm{ap}')
-        elif _apmode == 'qiso':
-            self.qiso = Parameter('qiso', value=1., prior=_ap_prior, ref=_ap_ref, latex=r'q_\mathrm{iso}')
-        elif _apmode == 'qap':
-            self.qap = Parameter('qap', value=1., prior=_ap_prior, ref=_ap_ref, latex=r'q_\mathrm{ap}')
-        else:
-            raise ValueError(f"apmode must be one of 'qparqper', 'qisoqap', 'qiso', 'qap'; got {apmode!r}")
-        self.df = Parameter('df', value=1., prior=dict(limits=[0., 2.]),
-                            ref=dict(dist='norm', loc=1., scale=0.05), latex=r'\delta f')
-        self.dm = Parameter('dm', value=0., prior=dict(limits=[-0.5, 0.5]),
-                            ref=dict(dist='norm', loc=0., scale=0.05), latex=r'\delta m')
-        self.dn = Parameter('dn', value=0., fixed=True, prior=dict(limits=[-0.5, 0.5]),
-                            ref=dict(dist='norm', loc=0., scale=0.05), latex=r'\delta n')
+                 only_now=False, apmode='qparqper', eta=1. / 3., kp=0.03, a=0.6, params=None):
+        vc = type(self).propose_params(apmode=str(apmode))
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, None)
 
     def __post_init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage',
-                      only_now=False, apmode='qparqper', eta=1. / 3., kp=0.03, a=0.6):
+                      only_now=False, apmode='qparqper', eta=1. / 3., kp=0.03, a=0.6, params=None):
         from cosmoprimo import PowerSpectrumBAOFilter
 
         self._apmode = str(apmode)
@@ -368,7 +395,7 @@ class ShapeFitSpectrum2Template(Spectrum2Template, Calculator):
         return obj
 
 
-class DirectSpectrum2Template(Spectrum2Template, ExternalCalculator):
+class DirectSpectrum2Template(Spectrum2Template):
     r"""
     Direct power spectrum template: power spectrum evaluated at each pipeline call from a
     :class:`CosmoprimoCosmology` dependency.
@@ -412,6 +439,23 @@ class DirectSpectrum2Template(Spectrum2Template, ExternalCalculator):
     @classmethod
     def install(cls, installer):
         installer.pip('git+https://github.com/cosmodesi/cosmoprimo')
+
+    @classmethod
+    def propose_params(cls, engine='camb', fiducial=None):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for the cosmological parameters.
+
+        Delegates to :meth:`~desilike.theories.primordial_cosmology.CosmoprimoCosmology.propose_params`.
+
+        Parameters
+        ----------
+        engine : str, default='camb'
+        fiducial : str, tuple, dict, or cosmoprimo.Cosmology, default=None
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return CosmoprimoCosmology.propose_params(engine=engine, fiducial=fiducial)
 
     def __init__(self, k=None, z=1., fiducial='DESI', engine='camb', with_now=False, only_now=False, cosmo=None):
         # Nodes: the CosmoprimoCosmology dep goes in __init__.

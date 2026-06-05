@@ -57,7 +57,7 @@ class PocoMCSampler(PopulationSampler):
 
     """
 
-    def __init__(self, posterior, rng=None, directory=None, **kwargs):
+    def __init__(self, posterior, rng=None, directory=None, rescale=False, covariance=None, **kwargs):
         """Initialize the ``PocoMC`` sampler.
 
         Parameters
@@ -76,10 +76,14 @@ class PocoMCSampler(PopulationSampler):
             raise ImportError("The 'pocomc' package is required but not "
                               "installed.")
 
-        super().__init__(posterior, rng=rng, directory=directory)
+        super().__init__(posterior, rng=rng, directory=directory,
+                         rescale=rescale, covariance=covariance)
 
         if self.mpicomm.rank == 0:
-            prior = Prior(self.varied_params, rng=self.rng)
+            # pocomc explores the sampler's rescaled working space, so its prior
+            # (sampling, bounds, logpdf) is built from the transformed parameters;
+            # compute_likelihood maps each particle back to original space.
+            prior = Prior(self._transformed_params, rng=self.rng)
 
             # pocomc maps the likelihood over particles through ``self.pool``.
             # The pool is always vectorized, so compute_likelihood is batched:

@@ -15,7 +15,7 @@ import numpy as np
 import jax.numpy as jnp
 
 from ..base import Calculator
-from ..parameter import Parameter
+from ..parameter import Parameter, VariableCollection
 
 
 # Engines that produce JAX-traceable outputs through cosmoprimo.Cosmology.clone.
@@ -44,8 +44,9 @@ def _get_fiducial(fiducial):
 
 def _make_cosmo_parameters(fiducial=None):
     """Return the default parameter values dict from *fiducial* (or Planck-2018 priors)."""
-    defaults = dict(h=0.6736, omega_b=0.02237, omega_cdm=0.1200,
-                    logA=3.044, n_s=0.9649, m_ncdm=0.06, w0_fld=-1., wa_fld=0.)
+    defaults = dict(h=0.6736, theta_MC_100=1.04092, omega_cdm=0.1200, omega_b=0.02237,
+                    logA=3.044, n_s=0.9649, tau_reio=0.0544, m_ncdm=0.06, N_eff=3.046,
+                    w0_fld=-1., wa_fld=0., Omega_k=0.)
     if fiducial is not None:
         fid = _get_fiducial(fiducial)
         defaults = {name: fid.get(_CONVERSIONS.get(name, name)) for name in defaults}
@@ -59,6 +60,10 @@ def _build_cosmo(fiducial, params):
     external engines (camb, class) always receive plain floats via _current_params().
     """
     kw = {_CONVERSIONS.get(name, name): value for name, value in params.items()}
+    # ``h`` and ``theta_MC_100`` are mutually exclusive inputs to cosmoprimo; when both
+    # are present ``h`` takes precedence (see primordial_cosmology.yaml).
+    if 'h' in kw and 'theta_MC_100' in kw:
+        kw.pop('theta_MC_100')
     return fiducial.clone(base='input', **kw)
 
 
@@ -83,6 +88,10 @@ class CosmoprimoCosmology(Calculator):
     engine : str, default='camb'
         Boltzmann solver engine.  JAX-native engines: ``'eisenstein_hu'``.
         External engines: ``'camb'``, ``'class'``, etc.
+    params : VariableCollection, optional
+        Cosmological parameters (names in ``{h, theta_MC_100, omega_cdm, omega_b, logA,
+        n_s, tau_reio, m_ncdm, N_eff, w0_fld, wa_fld, Omega_k}``).  When ``None`` they are
+        built via :meth:`propose_params`.  The chosen collection is stored as :attr:`params`.
     fiducial : str, tuple, dict, or cosmoprimo.Cosmology, default=None
         Fiducial cosmology used both to seed parameter *default values* and as the
         base for ``clone``.  When ``None`` a default ``cosmoprimo.Cosmology(engine=engine)``
@@ -93,38 +102,93 @@ class CosmoprimoCosmology(Calculator):
     def install(cls, installer):
         installer.pip('git+https://github.com/cosmodesi/cosmoprimo')
 
-    def __init__(self, engine='camb', fiducial=None):
+    @classmethod
+    def propose_params(cls, *args, engine='camb', fiducial=None, **kwargs):
+        r"""Return a proposed :class:`~desilike.parameter.VariableCollection` of cosmological Parameters.
+
+        The default values are seeded from *fiducial* (or Planck-2018 priors when ``None``).
+        The returned collection can be edited and passed back to :meth:`__init__` via ``params=...``.
+
+        Parameters
+        ----------
+        engine : str, default='camb'
+            Boltzmann engine (kept for signature symmetry with :meth:`__init__`; does
+            not affect the proposed parameters).
+        fiducial : str, tuple, dict, or cosmoprimo.Cosmology, default=None
+            Fiducial cosmology used to seed the default parameter values.
+
+        Returns
+        -------
+        VariableCollection
+        """
+        defaults = _make_cosmo_parameters(fiducial)
+        params = VariableCollection()
+        # Planck2018 (TT,TE,EE+lowE+lensing) priors, mirroring the historical
+        # primordial_cosmology.yaml.  Extra cosmological parameters (theta_MC_100, tau_reio,
+        # N_eff, w0_fld, wa_fld, Omega_k) are fixed by default; free them as needed.
+        params.set(Parameter('h', value=defaults['h'],
+                             prior=dict(limits=[0.1, 10.]),
+                             ref=dict(dist='norm', loc=0.6736, scale=0.005),
+                             fd_eps=0.03, latex='h'))
+        # When ``h`` is free it supersedes theta_MC_100 (see _build_cosmo); fixed by default.
+        params.set(Parameter('theta_MC_100', value=defaults['theta_MC_100'], fixed=True,
+                             prior=dict(limits=[0.5, 2.]),
+                             ref=dict(dist='norm', loc=1.04092, scale=0.00031),
+                             fd_eps=0.0005, latex=r'100 \theta_\mathrm{MC}'))
+        params.set(Parameter('omega_cdm', value=defaults['omega_cdm'],
+                             prior=dict(limits=[0.01, 0.99]),
+                             ref=dict(dist='norm', loc=0.12, scale=0.0012),
+                             fd_eps=0.007, latex=r'\omega_\mathrm{cdm}'))
+        params.set(Parameter('omega_b', value=defaults['omega_b'],
+                             prior=dict(limits=[0.005, 0.1]),
+                             ref=dict(dist='norm', loc=0.02237, scale=0.00015),
+                             fd_eps=0.0015, latex=r'\omega_b'))
+        params.set(Parameter('logA', value=defaults['logA'],
+                             prior=dict(limits=[1.61, 3.91]),
+                             ref=dict(dist='norm', loc=3.036394, scale=0.014),
+                             fd_eps=0.05, latex=r'\ln(10^{10} A_s)'))
+        params.set(Parameter('n_s', value=defaults['n_s'],
+                             prior=dict(limits=[0.8, 1.2]),
+                             ref=dict(dist='norm', loc=0.9649, scale=0.0042),
+                             fd_eps=0.005, latex=r'n_s'))
+        params.set(Parameter('tau_reio', value=defaults['tau_reio'], fixed=True,
+                             prior=dict(limits=[0.01, 0.8]),
+                             ref=dict(dist='norm', loc=0.0544, scale=0.01),
+                             fd_eps=0.01, latex=r'\tau'))
+        params.set(Parameter('m_ncdm', value=defaults['m_ncdm'], fixed=True,
+                             prior=dict(limits=[0., 5.]),
+                             ref=dict(dist='norm', loc=0.06, scale=0.12, limits=[0., 10.]),
+                             fd_eps=(0.31, 0.15, 0.15), latex=r'm_\mathrm{ncdm}'))
+        params.set(Parameter('N_eff', value=defaults['N_eff'], fixed=True,
+                             prior=dict(limits=[0.01, 10.]),
+                             ref=dict(dist='norm', loc=3.046, scale=0.16),
+                             fd_eps=0.2, latex=r'N_\mathrm{eff}'))
+        params.set(Parameter('w0_fld', value=defaults['w0_fld'], fixed=True,
+                             prior=dict(limits=[-3., 1.]),
+                             ref=dict(dist='norm', loc=-1., scale=0.08),
+                             fd_eps=0.1, latex=r'w_0'))
+        params.set(Parameter('wa_fld', value=defaults['wa_fld'], fixed=True,
+                             prior=dict(limits=[-3., 2.]),
+                             ref=dict(dist='norm', loc=0., scale=0.3),
+                             fd_eps=0.3, latex=r'w_a'))
+        params.set(Parameter('Omega_k', value=defaults['Omega_k'], fixed=True,
+                             prior=dict(limits=[-0.3, 0.3]),
+                             ref=dict(dist='norm', loc=0., scale=0.0065),
+                             fd_eps=0.05, latex=r'\Omega_k'))
+        return params
+
+    def __init__(self, *args, engine='camb', params=None, fiducial=None, **kwargs):
         # Per-instance flag: JAX-traceable engines run as pure JAX, others as external.
         self._is_external = str(engine) not in _JAX_ENGINES
-        defaults = _make_cosmo_parameters(fiducial)
-        self.h = Parameter('h', value=defaults['h'],
-                           prior=dict(limits=[0.3, 1.0]),
-                           ref=dict(dist='norm', loc=defaults['h'], scale=0.05),
-                           latex='h')
-        self.omega_b = Parameter('omega_b', value=defaults['omega_b'],
-                                 prior=dict(limits=[0.01, 0.04]),
-                                 ref=dict(dist='norm', loc=defaults['omega_b'], scale=0.001),
-                                 latex=r'\omega_b')
-        self.omega_cdm = Parameter('omega_cdm', value=defaults['omega_cdm'],
-                                   prior=dict(limits=[0.05, 0.3]),
-                                   ref=dict(dist='norm', loc=defaults['omega_cdm'], scale=0.005),
-                                   latex=r'\omega_\mathrm{cdm}')
-        self.logA = Parameter('logA', value=defaults['logA'],
-                              prior=dict(limits=[2., 4.]),
-                              ref=dict(dist='norm', loc=defaults['logA'], scale=0.1),
-                              latex=r'\ln(10^{10}A_s)')
-        self.n_s = Parameter('n_s', value=defaults['n_s'],
-                             prior=dict(limits=[0.7, 1.3]),
-                             ref=dict(dist='norm', loc=defaults['n_s'], scale=0.01),
-                             latex='n_s')
-        self.m_ncdm = Parameter('m_ncdm', value=defaults['m_ncdm'],
-                                fixed=True, latex=r'\sum m_\nu')
-        self.w0_fld = Parameter('w0_fld', value=defaults['w0_fld'],
-                                fixed=True, latex='w_0')
-        self.wa_fld = Parameter('wa_fld', value=defaults['wa_fld'],
-                                fixed=True, latex='w_a')
+        if params is None:
+            params = self.propose_params(*args, engine=engine, fiducial=fiducial, **kwargs)
+        elif not isinstance(params, VariableCollection):
+            params = VariableCollection(params)
+        # Stored as a public attribute so build_graph discovers the Parameters as
+        # dependencies (it descends into VariableCollection).
+        self.params = {param.basename: param for param in params}
 
-    def __post_init__(self, engine='camb', fiducial=None):
+    def __post_init__(self, *args, engine='camb', params=None, fiducial=None, **kwargs):
         self._engine = str(engine)
         # Build (or resolve) the fiducial once, forcing ``engine`` so that subsequent
         # per-call ``.clone(base='input', ...)`` use the requested engine (not the
@@ -135,16 +199,9 @@ class CosmoprimoCosmology(Calculator):
         else:
             self._fiducial = _get_fiducial(fiducial).clone(engine=self._engine)
 
-    def _current_params(self, as_float=False):
-        """Return dict of current parameter values in desilike-name form.
-
-        When ``as_float=True`` all values are cast to Python float (for external engines).
-        Otherwise JAX tracers are preserved (for JAX-native engines under jit/grad).
-        """
-        names = ('h', 'omega_b', 'omega_cdm', 'logA', 'n_s', 'm_ncdm', 'w0_fld', 'wa_fld')
-        if as_float:
-            return {name: np.asarray(getattr(self, name).value).reshape(-1)[0].item() for name in names}
-        return {name: getattr(self, name).value for name in names}
+    def __getitem__(self, name):
+        """Return the current value of cosmological parameter *name*."""
+        return self.cosmo[name]
 
     def tree_flatten(self):
         # Expose the parameter vector that defines the cosmology as the single array
@@ -152,8 +209,7 @@ class CosmoprimoCosmology(Calculator):
         # ExternalCalculator's pure_callback has a non-empty output (an empty output is
         # elided by XLA, so __call__ would never run).  Downstream calculators still read
         # the live ``self.cosmo`` object set as a side effect of __call__.
-        names = ('h', 'omega_b', 'omega_cdm', 'logA', 'n_s', 'm_ncdm', 'w0_fld', 'wa_fld')
-        marker = jnp.concatenate([jnp.ravel(jnp.asarray(getattr(self, name).value)) for name in names])
+        marker = jnp.concatenate([jnp.ravel(jnp.asarray(param.value)) for param in self.params.values()])
         return [marker], {'engine': self._engine}
 
     @classmethod
@@ -165,7 +221,7 @@ class CosmoprimoCosmology(Calculator):
 
     def __call__(self):
         # JAX engines: keep tracers (clone is differentiable). External engines: plain floats.
-        self.cosmo = _build_cosmo(self._fiducial, self._current_params(as_float=self._is_external))
+        self.cosmo = _build_cosmo(self._fiducial,  {basename: np.asarray(param.value).reshape(-1)[0].item() if as_float else param.value for basename, param in self.params.items()})
         # Return None: cosmo is a Python object exposed via self.cosmo, read directly by
         # downstream calculators; returning it would break the JAX pipeline output (and, for
         # the external path, call_kind='none' avoids the dtype-object crash).

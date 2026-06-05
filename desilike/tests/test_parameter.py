@@ -171,17 +171,14 @@ class TestParameter:
         p = Parameter('omega_m', prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.01})
         assert p.ref == p.prior
 
-    def test_proposal_from_ref(self):
+    def test_fd_eps_from_ref(self):
         p = Parameter('omega_m', prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.01})
-        assert abs(p.proposal - 0.01) < 1e-10
+        assert abs(p.fd_eps - p.ref.std()) < 1e-10
+        assert abs(p.fd_eps - 0.01) < 1e-10
 
-    def test_proposal_explicit(self):
-        p = Parameter('omega_m', prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.01}, proposal=0.05)
-        assert abs(p.proposal - 0.05) < 1e-10
-
-    def test_fd_eps_from_proposal(self):
-        p = Parameter('omega_m', prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.01})
-        assert abs(p.fd_eps - p.proposal) < 1e-10
+    def test_fd_eps_explicit(self):
+        p = Parameter('omega_m', prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.01}, fd_eps=0.05)
+        assert abs(p.fd_eps - 0.05) < 1e-10
 
     def test_derived_bool(self):
         p = Parameter('logL', derived=True)
@@ -242,7 +239,7 @@ class TestParameter:
 
     def test_getstate_setstate_roundtrip(self):
         p = Parameter('galaxy.omega_m', value=0.3, prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.01},
-                      latex=r'\Omega_m', fixed=False, derived=False, proposal=0.01)
+                      latex=r'\Omega_m', fixed=False, derived=False, fd_eps=0.01)
         state = p.__getstate__()
         q = Parameter.__new__(Parameter)
         q.__setstate__(state)

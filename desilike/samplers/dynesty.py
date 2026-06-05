@@ -20,7 +20,7 @@ class DynestySampler(PopulationSampler):
     """
 
     def __init__(self, posterior, dynamic=True, rng=None, directory=None,
-                 **kwargs):
+                 rescale=False, covariance=None, **kwargs):
         """Initialize the ``dynesty`` sampler.
 
         Parameters
@@ -43,7 +43,8 @@ class DynestySampler(PopulationSampler):
             raise ImportError("The 'dynesty' package is required but not "
                               "installed.")
 
-        super().__init__(posterior, rng=rng, directory=directory)
+        super().__init__(posterior, rng=rng, directory=directory,
+                         rescale=rescale, covariance=covariance)
 
         if not dynamic and self.directory is not None:
             raise ValueError("dynesty does not support checkpointing for the "

@@ -22,9 +22,9 @@ def _scalar_cov():
 
 
 def _param_cov():
-    """Same covariance but backed by Parameter objects (with proposal)."""
-    a = Parameter('omega_m', value=0.3,  proposal=0.01, fixed=False)
-    b = Parameter('sigma8',  value=0.8,  proposal=0.02, fixed=False)
+    """Same covariance but backed by Parameter objects (with ref)."""
+    a = Parameter('omega_m', value=0.3, ref=dict(dist='norm', loc=0.3, scale=0.01), fixed=False)
+    b = Parameter('sigma8',  value=0.8, ref=dict(dist='norm', loc=0.8, scale=0.02), fixed=False)
     arr = np.array([[0.01**2, 0.5 * 0.01 * 0.02],
                     [0.5 * 0.01 * 0.02, 0.02**2]])
     return Covariance(arr, params=[a, b]), [a, b]
@@ -130,16 +130,16 @@ class TestView:
         np.testing.assert_allclose(sub._value[0, 1], cov._value[1, 0])
         np.testing.assert_allclose(sub._value[1, 0], cov._value[0, 1])
 
-    def test_view_fill_proposal(self):
+    def test_view_fill_ref(self):
         cov, _ = _param_cov()
-        c_param = Parameter('h', value=0.7, proposal=0.1, fixed=False)
-        sub = cov.view([cov._params['omega_m'], c_param], fill='proposal')
+        c_param = Parameter('h', value=0.7, ref={'dist': 'norm', 'loc': 0.7, 'scale': 0.1}, fixed=False)
+        sub = cov.view([cov._params['omega_m'], c_param], fill='ref')
         np.testing.assert_allclose(sub._value[1, 1], 0.1**2)
 
-    def test_view_fill_proposal_no_proposal(self):
+    def test_view_fill_ref_no_ref(self):
         cov, _ = _scalar_cov()
-        # unknown param given as string → no proposal → stays NaN
-        sub = cov.view(['omega_m', 'h'], fill='proposal')
+        # unknown param given as string → no ref → stays NaN
+        sub = cov.view(['omega_m', 'h'], fill='ref')
         assert np.isnan(sub._value[1, 1])
 
     def test_select(self):

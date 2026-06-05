@@ -13,4 +13,4 @@ from .full_shape import (KaiserPTSpectrum2Poles, KaiserTracerSpectrum2Poles, Kai
                          FOLPSPTSpectrum2Poles, FOLPSTracerSpectrum2Poles, FOLPSTracerCorrelation2Poles,
                          FOLPSTracerSpectrum3Poles,
                          JAXEffortTracerSpectrum2Poles)
-from .png import PNGSpectrum2Template, PNGTracerSpectrum2Poles, PNGTracerVelocitySpectrum2Poles
+from .png import PNGTracerSpectrum2Poles, PNGTracerVelocitySpectrum2Poles

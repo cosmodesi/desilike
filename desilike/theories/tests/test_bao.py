@@ -207,7 +207,7 @@ class TestDampedBAOWigglesPoles:
         )
         k = np.linspace(0.02, 0.3, 60)
 
-        theory = DampedBAOWigglesTracerSpectrum2Poles(k=k, broadband_pows=(-2, 0, 2))
+        theory = DampedBAOWigglesTracerSpectrum2Poles(k=k, broadband="power3")
         _check(_eval(theory, 'poles'), 'DampedBAOWigglesTracerSpectrum2Poles broadband')
 
         for template in [BAOSpectrum2Template()]:
@@ -305,7 +305,7 @@ class TestDampedBAOWigglesPoles:
         from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelation2Poles
         s = np.linspace(50., 150., 50)
 
-        theory = DampedBAOWigglesTracerCorrelation2Poles(s=s, broadband_pows=(-1, 0, 1))
+        theory = DampedBAOWigglesTracerCorrelation2Poles(s=s, broadband="power3")
         _check(_eval(theory, 'poles'), 'DampedBAOWigglesTracerCorrelation2Poles broadband')
 
         theory = DampedBAOWigglesTracerCorrelation2Poles(s=s, ells=(0,))
@@ -406,7 +406,7 @@ class TestResummedBAOWigglesPoles:
         )
         k = np.linspace(0.02, 0.3, 60)
 
-        theory = ResummedBAOWigglesTracerSpectrum2Poles(k=k, broadband_pows=(-2, 0, 2))
+        theory = ResummedBAOWigglesTracerSpectrum2Poles(k=k, broadband="power3")
         _check(_eval(theory, 'poles'), 'ResummedBAOWigglesTracerSpectrum2Poles broadband')
 
         for template in [BAOSpectrum2Template()]:
@@ -486,7 +486,7 @@ class TestResummedBAOWigglesPoles:
         from desilike.theories.galaxy_clustering import ResummedBAOWigglesTracerCorrelation2Poles
         s = np.linspace(50., 150., 50)
 
-        theory = ResummedBAOWigglesTracerCorrelation2Poles(s=s, broadband_pows=(-1, 0, 1))
+        theory = ResummedBAOWigglesTracerCorrelation2Poles(s=s, broadband="power3")
         _check(_eval(theory, 'poles'), 'ResummedBAOWigglesTracerCorrelation2Poles broadband')
 
         theory = ResummedBAOWigglesTracerCorrelation2Poles(s=s, ells=(0,))

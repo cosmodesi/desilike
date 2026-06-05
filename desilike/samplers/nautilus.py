@@ -18,7 +18,7 @@ class NautilusSampler(PopulationSampler):
 
     """
 
-    def __init__(self, posterior, rng=None, directory=None, **kwargs):
+    def __init__(self, posterior, rng=None, directory=None, rescale=False, covariance=None, **kwargs):
         """Initialize the ``nautilus`` sampler.
 
         Parameters
@@ -38,12 +38,13 @@ class NautilusSampler(PopulationSampler):
             raise ImportError("The 'nautilus-sampler' package is required but "
                               "not installed.")
 
-        super().__init__(posterior, rng=rng, directory=directory)
+        super().__init__(posterior, rng=rng, directory=directory,
+                         rescale=rescale, covariance=covariance)
 
         if self.mpicomm.rank == 0:
             kwargs = update_kwargs(
                 kwargs, 'nautilus', prior=self.prior_transform,
-                posterior=self.compute_likelihood, n_dim=self.ndim,
+                likelihood=self.compute_likelihood, n_dim=self.ndim,
                 pass_dict=False,
                 filepath=None if self.directory is None else self.directory /
                 'nautilus.hdf5', pool=self.pool, seed=self.rng.integers(2**32))

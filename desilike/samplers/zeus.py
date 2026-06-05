@@ -22,15 +22,15 @@ class ZeusSampler(EnsembleSampler):
 
     """
 
-    def __init__(self, posterior, n_chains=1, chains=None, rng=None,
-                 directory=None, nwalkers=None, **kwargs):
+    def __init__(self, posterior, nchains=1, chains=None, rng=None,
+                 directory=None, nwalkers=None, rescale=False, covariance=None, **kwargs):
         """Initialize the ``zeus`` sampler.
 
         Parameters
         ----------
         posterior : CompiledGraph
             Compiled pipeline returning the log-posterior.
-        n_chains : int, optional
+        nchains : int, optional
             Number of chains. Default is 1.
         chains : list of desilike.samples.MCSamples, optional
             If given, continue the chains. In that case, we will ignore what
@@ -50,8 +50,9 @@ class ZeusSampler(EnsembleSampler):
             raise ImportError("The 'zeus-mcmc' package is required but not "
                               "installed.")
 
-        super().__init__(posterior, n_chains=n_chains, chains=chains, rng=rng,
-                         directory=directory, nwalkers=nwalkers)
+        super().__init__(posterior, nchains=nchains, chains=chains, rng=rng,
+                         directory=directory, nwalkers=nwalkers,
+                         rescale=rescale, covariance=covariance)
         if self.nwalkers is None:
             self.nwalkers = 2 * self.ndim
         if self.pool.main:

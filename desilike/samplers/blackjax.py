@@ -79,15 +79,21 @@ class BlackJAXSampler(MarkovChainSampler):
 
     """
 
-    def __init__(self, posterior, n_chains=1, chains=None, rng=None,
-                 directory=None):
+    # Gradient-based kernels need their step size (and mass matrix / L) tuned before
+    # sampling: window_adaptation for HMC/NUTS, mclmc_find_L_and_step_size for MCLMC.
+    # Without it, the default step_size barely moves the chain (especially fixed-path
+    # HMC).  Override via ``run(adaptation_steps=...)``; set 0 to disable.
+    default_adaptation_steps = 500
+
+    def __init__(self, posterior, nchains=1, chains=None, rng=None,
+                 directory=None, rescale=False, covariance=None):
         """Initialize the ``BlackJAX`` sampler.
 
         Parameters
         ----------
         posterior : CompiledGraph
             Compiled pipeline returning the log-posterior.
-        n_chains : int, optional
+        nchains : int, optional
             Number of independent chains. Default is 1.
         chains : list of desilike.samples.MCSamples, optional
             If given, continue the chains. In that case, we will ignore what
@@ -110,14 +116,14 @@ class BlackJAXSampler(MarkovChainSampler):
         if type(self) is BlackJAXSampler:
             raise TypeError("BlackJAXSampler cannot be iniated directly.")
 
-        super().__init__(posterior, n_chains, chains=chains, rng=rng,
-                         directory=directory)
+        super().__init__(posterior, nchains, chains=chains, rng=rng,
+                         directory=directory, rescale=rescale, covariance=covariance)
 
-        # compute_posterior is batched (takes an (N, ndim) batch, returns a list
-        # of N (log_post, derived) tuples); compute_derived returns just the
-        # per-sample derived arrays.
+        # compute_derived is invoked per sample through pool.map (which iterates
+        # rows), so compute_posterior receives a single (ndim,) sample and returns
+        # one (log_post, derived) tuple; keep just the derived array.
         self.compute_derived = self.pool.save_function(
-                lambda batch: [result[1] for result in self.compute_posterior(batch)], 'compute_derived')
+                lambda batch: self.compute_posterior(batch)[1], 'compute_derived')
 
         self.kernel_type = getattr(blackjax, self.kernel_type)
         self.kernel = self.kernel_type(self.compute_posterior_without_derived, **self.kernel_args)
@@ -130,7 +136,9 @@ class BlackJAXSampler(MarkovChainSampler):
         Parameters
         ----------
         sample : dict
-            Sample for which to compute the posterior.
+            Sample (in the sampler's rescaled working space) for which to compute
+            the posterior; mapped back to original parameter values via
+            :meth:`~desilike.samplers.base.BaseSampler._forward_dict`.
 
         Returns
         -------
@@ -138,7 +146,7 @@ class BlackJAXSampler(MarkovChainSampler):
             Natural logarithm of the posterior.
 
         """
-        return self.posterior(sample, return_derived=False)
+        return self.posterior(self._forward_dict(sample), return_derived=False)
 
     def run_sampler(self, n_steps):
         """Run the ``BlackJAX`` sampler.
@@ -159,7 +167,7 @@ class BlackJAXSampler(MarkovChainSampler):
                     self.blackjax_state = self.kernel.init(initial_position, rng_key)
 
             rng_keys = jax.random.split(jax.random.PRNGKey(
-                self.rng.integers(2**32)), self.n_chains)
+                self.rng.integers(2**32)), self.nchains)
             rng_key = rng_keys[self._ichain]
 
             # Make the steps
@@ -203,10 +211,17 @@ class BlackJAXSampler(MarkovChainSampler):
             self.adaptable_args}
         initial_position = _flat_to_dict(self.state[0], self.varied_params)
         rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
+        # blackjax's window_adaptation takes the non-adaptable kernel parameters
+        # (e.g. num_integration_steps) in its constructor, not in run().
         (state, parameters), _ = self.adaptation_fn(
-            self.kernel_type, self.compute_posterior_without_derived).run(
-            rng_key, initial_position, num_steps=steps, **fixed_kernel_args)
+            self.kernel_type, self.compute_posterior_without_derived, **fixed_kernel_args).run(
+            rng_key, initial_position, num_steps=steps)
         self.kernel_args.update(parameters)
+        # Rebuild the kernel so the tuned parameters (step size, mass matrix, ...) are
+        # actually used during sampling, and warm-start from the adapted state.
+        self.kernel = self.kernel_type(self.compute_posterior_without_derived, **self.kernel_args)
+        self.make_steps = make_steps_factory(self.kernel.step)
+        self.blackjax_state = state
 
 
 class HMCSampler(BlackJAXSampler):
@@ -216,16 +231,16 @@ class HMCSampler(BlackJAXSampler):
     adaptable_args = ['step_size', 'inverse_mass_matrix']
     adaptation_fn = 'window_adaptation'
 
-    def __init__(self, posterior, n_chains=1, chains=None, step_size=1e-3,
+    def __init__(self, posterior, nchains=1, chains=None, step_size=1e-3,
                  inverse_mass_matrix=None, num_integration_steps=60, rng=None,
-                 directory=None, **kwargs):
+                 directory=None, rescale=False, covariance=None, **kwargs):
         """Initialize the HMC sampler.
 
         Parameters
         ----------
         posterior : CompiledGraph
             Compiled pipeline returning the log-posterior.
-        n_chains : int, optional
+        nchains : int, optional
             Number of independent chains. Default is 1.
         chains : list of desilike.samples.MCSamples, optional
             If given, continue the chains. In that case, we will ignore what
@@ -258,8 +273,8 @@ class HMCSampler(BlackJAXSampler):
             step_size=step_size, inverse_mass_matrix=inverse_mass_matrix,
             num_integration_steps=num_integration_steps, **kwargs)
 
-        super().__init__(posterior, n_chains=n_chains, chains=chains, rng=rng,
-                         directory=directory)
+        super().__init__(posterior, nchains=nchains, chains=chains, rng=rng,
+                         directory=directory, rescale=rescale, covariance=covariance)
 
 
 class NoUTurnSampler(BlackJAXSampler):
@@ -269,15 +284,16 @@ class NoUTurnSampler(BlackJAXSampler):
     adaptable_args = ['step_size', 'inverse_mass_matrix']
     adaptation_fn = 'window_adaptation'
 
-    def __init__(self, posterior, n_chains=1, chains=None, step_size=1e-3,
-                 inverse_mass_matrix=None, rng=None, directory=None, **kwargs):
+    def __init__(self, posterior, nchains=1, chains=None, step_size=1e-3,
+                 inverse_mass_matrix=None, rng=None, directory=None,
+                 rescale=False, covariance=None, **kwargs):
         """Initialize the No-U-Turn Sampler.
 
         Parameters
         ----------
         posterior : CompiledGraph
             Compiled pipeline returning the log-posterior.
-        n_chains : int, optional
+        nchains : int, optional
             Number of independent chains. Default is 1.
         chains : list of desilike.samples.MCSamples, optional
             If given, continue the chains. In that case, we will ignore what
@@ -307,8 +323,8 @@ class NoUTurnSampler(BlackJAXSampler):
             step_size=step_size, inverse_mass_matrix=inverse_mass_matrix,
             **kwargs)
 
-        super().__init__(posterior, n_chains=n_chains, chains=chains, rng=rng,
-                         directory=directory)
+        super().__init__(posterior, nchains=nchains, chains=chains, rng=rng,
+                         directory=directory, rescale=rescale, covariance=covariance)
 
 
 class MCLMCSampler(BlackJAXSampler):
@@ -323,16 +339,19 @@ class MCLMCSampler(BlackJAXSampler):
     kernel_type = 'mclmc'
     adaptable_args = ['L', 'step_size']
     adaptation_fn = 'mclmc_find_L_and_step_size'
+    # MCLMC's adaptation (mclmc_find_L_and_step_size) uses a different API than the
+    # window_adaptation-based adapt_sampler, so it is not run by default here.
+    default_adaptation_steps = 0
 
-    def __init__(self, posterior, n_chains=1, chains=None, L=1., step_size=0.1, rng=None,
-                 directory=None, **kwargs):
+    def __init__(self, posterior, nchains=1, chains=None, L=1., step_size=0.1, rng=None,
+                 directory=None, rescale=False, covariance=None, **kwargs):
         """Initialize the Microcanonical Langevin Monte Carlo (MCLMC) sampler.
 
         Parameters
         ----------
         posterior : CompiledGraph
             Compiled pipeline returning the log-posterior.
-        n_chains : int, optional
+        nchains : int, optional
             Number of independent chains. Default is 1.
         chains : list of desilike.samples.MCSamples, optional
             If given, continue the chains. In that case, we will ignore what
@@ -352,5 +371,5 @@ class MCLMCSampler(BlackJAXSampler):
         """
         self.kernel_args = dict(L=L, step_size=step_size, **kwargs)
 
-        super().__init__(posterior, n_chains=n_chains, chains=chains, rng=rng,
-                         directory=directory)
+        super().__init__(posterior, nchains=nchains, chains=chains, rng=rng,
+                         directory=directory, rescale=rescale, covariance=covariance)

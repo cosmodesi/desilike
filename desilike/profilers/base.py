@@ -139,13 +139,13 @@ def _compute_flat_proposals(transformed_params):
     Returns
     -------
     list of float
-        One entry per flat element.
+        One entry per flat element.  The step size is each parameter's ``ref.std()``.
     """
     proposals = []
     for param in transformed_params:
         flat_size = int(np.prod(param.shape)) if param.shape else 1
-        proposal  = param.proposal
-        p_val = float(proposal) if (proposal is not None and np.isfinite(float(proposal))) else 1.0
+        std = param.ref.std()
+        p_val = float(std) if (std is not None and np.isfinite(float(std))) else 1.0
         for _ in range(flat_size):
             proposals.append(p_val)
     return proposals
@@ -200,7 +200,7 @@ class BaseProfiler:
         range is ~ unity.
     covariance : array_like, optional
         ``(flat_size, flat_size)`` covariance used to set the rescaling scale.
-        When ``None``, each parameter's ``proposal`` is used instead.
+        When ``None``, each parameter's ``ref.std()`` is used instead.
     save_fn : str or Path, optional
         If given, profiles are written here after every public method.
     mpicomm : MPI communicator, optional
@@ -283,20 +283,21 @@ class BaseProfiler:
             else:
                 scale_parts = []
                 for param in self.varied_params:
-                    proposal = param.proposal
-                    if proposal is None or not np.isfinite(proposal) or proposal <= 0.:
+                    std = param.ref.std()
+                    if std is None or not np.isfinite(std) or std <= 0.:
                         raise ValueError(
                             f'Parameter {param.name!r}: cannot determine rescale '
-                            f'scale from proposal={proposal!r}. '
-                            'Provide covariance or set a finite proposal.'
+                            f'scale from ref.std()={std!r}. '
+                            'Provide covariance or set a proper ref distribution.'
                         )
                     flat_size = self._param_slices[param.name].stop - self._param_slices[param.name].start
-                    scale_parts.append(np.full(flat_size, float(proposal), dtype='f8'))
+                    scale_parts.append(np.full(flat_size, float(std), dtype='f8'))
                 self._scale = np.concatenate(scale_parts)
         else:
             self._scale = np.ones(self._flat_size, dtype='f8')
 
-        # Build transformed VariableCollection (limits/proposals in rescaled space)
+        # Build transformed VariableCollection (limits/ref in rescaled space; the
+        # rescaled step size is recovered from the transformed ref.std()).
         self._transformed_params = VariableCollection()
         for param in self.varied_params:
             slc = self._param_slices[param.name]
@@ -308,16 +309,12 @@ class BaseProfiler:
                 loc_s, scale_s = float(loc_p[0]), float(scale_p[0])
                 param_copy.prior = param.prior.affine_transform(loc=-loc_s / scale_s, scale=1. / scale_s)
                 param_copy.ref   = param.ref.affine_transform(loc=-loc_s / scale_s, scale=1. / scale_s)
-                if param._proposal is not None:
-                    param_copy._proposal = float(param._proposal) / scale_s
             else:
                 # Vector param: element-wise array transform
                 loc_arr   = loc_p.reshape(param.shape)
                 scale_arr = scale_p.reshape(param.shape)
                 param_copy.prior = param.prior.affine_transform(loc=-loc_arr / scale_arr, scale=1. / scale_arr)
                 param_copy.ref   = param.ref.affine_transform(loc=-loc_arr / scale_arr, scale=1. / scale_arr)
-                if param._proposal is not None:
-                    param_copy._proposal = float(param._proposal) / float(scale_p.mean())
             self._transformed_params.set(param_copy)
 
         # ── existing profiles ─────────────────────────────────────────────
@@ -1331,13 +1328,13 @@ def _build_1d_grid(name, flat_pidx, grid, size, cl, argmax, profiles, varied_par
         if np.isfinite(err_val) and err_val > 0.:
             err = err_val
     if err is None:
-        param    = varied_params[name]
-        proposal = param.proposal
-        if proposal is None or not np.isfinite(proposal) or proposal <= 0.:
+        param = varied_params[name]
+        std   = param.ref.std()
+        if std is None or not np.isfinite(std) or std <= 0.:
             raise ValueError(
-                f'Cannot build grid for {name!r}: no finite error or proposal.'
+                f'Cannot build grid for {name!r}: no finite error or ref.std().'
             )
-        err = float(proposal)
+        err = float(std)
     lo, hi = best - cl * err, best + cl * err
     lim = varied_params[name].prior.limits
     if np.isfinite(lim[0]):

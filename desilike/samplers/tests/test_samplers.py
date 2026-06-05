@@ -36,15 +36,26 @@ KWARGS_INIT_FAST = dict(
 # needs a wider range to avoid truncation bias (b grid covers ±4σ around 0.6).
 _a_grid = np.linspace(0.01, 0.99, 99)
 _b_grid = np.linspace(-0.7, 1.9, 99)
+# Iterative MCMC samplers: with ref distributions close to the posterior the default
+# convergence criterion (single chain) can stop after very few steps, leaving the mean
+# under-sampled.  A min_steps floor guarantees enough effective samples for the accuracy
+# assertions, independent of how quickly the chain "looks" converged.
+_MCMC_MIN_STEPS = dict(min_steps=3000)
 KWARGS_RUN = dict(
     dynesty=dict(n_effective=0),
+    emcee=_MCMC_MIN_STEPS,
     grid=dict(grid=dict(a=_a_grid, b=_b_grid)),
+    hmc=_MCMC_MIN_STEPS,
     importance=dict(samples=MCSamples(dict(
         a=np.repeat(_a_grid, len(_b_grid)),
         b=np.tile(_b_grid, len(_a_grid))))),
+    mclmc=_MCMC_MIN_STEPS,
+    mhmcmc=_MCMC_MIN_STEPS,
     nautilus=dict(n_eff=100),
+    nuts=_MCMC_MIN_STEPS,
     pocomc=dict(n_total=100, n_evidence=100),
-    qmc=dict(size=10000))
+    qmc=dict(size=10000),
+    zeus=_MCMC_MIN_STEPS)
 KWARGS_RUN_FAST = dict(
     dynesty=dict(maxiter=10),
     importance=dict(samples=MCSamples(dict(
@@ -81,8 +92,12 @@ def likelihood():
             self.d.value = jnp.arange(3) * (self.a + self.b)
             return super().__call__()
 
-    a = Parameter('a', prior=dict(dist='norm', limits=[-10, 10.], loc=0.4, scale=0.1), proposal=0.1)
-    b = Parameter('b', prior=dict(dist='uniform', limits=[-10, 10.]), proposal=0.1)
+    # ref distributions approximate the posterior (a ~ N(0.4, 1/sqrt(200)), b ~ N(0.6, 1/sqrt(10))),
+    # so rescale=True (which uses ref.std()) whitens the problem to ~unit isotropic.
+    a = Parameter('a', prior=dict(dist='norm', limits=[-10, 10.], loc=0.4, scale=0.1),
+                  ref=dict(dist='norm', loc=0.4, scale=1. / np.sqrt(200.)))
+    b = Parameter('b', prior=dict(dist='uniform', limits=[-10, 10.]),
+                  ref=dict(dist='norm', loc=0.6, scale=1. / np.sqrt(10.)))
     like = Likelihood(a, b)
     graph = compile(Posterior(like, Prior(a, b)))
     graph.flatdata = like.flatdata.copy()
@@ -116,6 +131,29 @@ def test_accuracy(likelihood, key):
             (cov**2 + np.outer(np.diag(cov), np.diag(cov))) / 100)
         assert np.allclose(cov_samples, cov,
                            atol=3 * cov_err)
+
+
+@pytest.mark.mpi
+@pytest.mark.parametrize('key', SAMPLER_CLS.keys())
+def test_rescale(likelihood, key):
+    # Same as test_accuracy but exploring the rescaled parameter space (rescale=True):
+    # the sampler works in rescaled coordinates while the posterior is evaluated in
+    # original space, so the recovered mean/covariance must be unchanged.
+    optional_deps = dict(dynesty='dynesty', emcee='emcee', hmc='blackjax', mclmc='blackjax',
+                         nautilus='nautilus', nuts='blackjax', pocomc='pocomc', zeus='zeus')
+    if key in optional_deps:
+        pytest.importorskip(optional_deps[key])
+
+    sampler = SAMPLER_CLS[key](likelihood, rng=42, rescale=True, **KWARGS_INIT.get(key, {}))
+    results = sampler.run(**KWARGS_RUN.get(key, {}))
+
+    if sampler.mpicomm.rank == 0:
+        mean_samples = results.mean(['a', 'b'])
+        assert np.allclose(mean_samples, likelihood.flatdata, atol=0.05, rtol=0)
+        cov_samples = results.covariance(['a', 'b'])
+        cov = np.linalg.inv(likelihood.precision + np.array([[100, 0], [0, 0]]))
+        cov_err = np.sqrt((cov**2 + np.outer(np.diag(cov), np.diag(cov))) / 100)
+        assert np.allclose(cov_samples, cov, atol=3 * cov_err)
 
 
 @pytest.mark.mpi
@@ -170,7 +208,7 @@ def test_solved(likelihood, key):
             self.flattheory = jnp.array([self.a, self.b])
             return super().__call__()
 
-    a = Parameter('a', prior=dict(dist='norm', limits=[0, 1], loc=0.4, scale=0.1), proposal=0.1)
+    a = Parameter('a', prior=dict(dist='norm', limits=[0, 1], loc=0.4, scale=0.1))
     b = Parameter('b', derived='best')
     solved_likelihood = compile(Posterior(Likelihood(a, b), Prior(a)))
 
@@ -280,12 +318,12 @@ def test_multiple_chains(likelihood, key):
     if key in optional_deps:
         pytest.importorskip(optional_deps[key])
 
-    n_chains = likelihood.mpicomm.size
-    sampler = SAMPLER_CLS[key](likelihood, n_chains=n_chains, rng=42)
+    nchains = likelihood.mpicomm.size
+    sampler = SAMPLER_CLS[key](likelihood, nchains=nchains, rng=42)
     chains_10 = sampler.run(
         burn_in=0, min_steps=10, max_steps=10, concatenate=False)
     if sampler.mpicomm.rank == 0:
-        assert len(chains_10) == n_chains
+        assert len(chains_10) == nchains
     sampler = SAMPLER_CLS[key](
         likelihood, rng=43, chains=[c.copy() for c in chains_10] if sampler.mpicomm.rank == 0 else None)
     chains_20 = sampler.run(
@@ -327,8 +365,9 @@ if __name__ == '__main__':
                 self.d.value = jnp.arange(3) * (self.a + self.b)
                 return super().__call__()
 
-        a = Parameter('a', prior=dict(dist='norm', limits=[-10, 10.], loc=0.4, scale=0.1), proposal=0.1)
-        b = Parameter('b', prior=dict(dist='uniform', limits=[-10, 10.]), proposal=0.1)
+        a = Parameter('a', prior=dict(dist='norm', limits=[-10, 10.], loc=0.4, scale=0.1))
+        b = Parameter('b', prior=dict(dist='uniform', limits=[-10, 10.]),
+                      ref=dict(dist='norm', loc=0.6, scale=0.1))
         like = Likelihood(a, b)
         graph = compile(Posterior(like, Prior(a, b)))
         graph.flatdata = like.flatdata.copy()

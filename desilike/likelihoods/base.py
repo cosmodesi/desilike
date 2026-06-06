@@ -44,48 +44,65 @@ class ObservablesGaussianLikelihood(GaussianLikelihood):
 
     def __init__(self, observables, covariance=None, scale_covariance=1.,
                  correct_covariance=None, precision=None):
+
+        correct_covariance = {'correction': '', 'nobs': None} if correct_covariance is None else correct_covariance
+        assert isinstance(correct_covariance, dict) , "correct_covariance should be a dict with keys 'correction' and 'nobs' or None"
+
         # Nodes (the observable dependencies) and all derived data/covariance live in __init__.
         if not isinstance(observables, (list, tuple)):
             observables = [observables]
         self.observables = list(observables)
 
-        # Build joint lsstypes data tree so covariance matching works.
-        obs_data = [obs.data for obs in self.observables]
-        obs_names = [obs.name for obs in self.observables]
-        self._data = types.ObservableTree(obs_data, observables=obs_names)
-        self.flatdata = self._data.value()
-
-        # Resolve covariance from observable if not provided.
-        if covariance is None and precision is None:
+        if covariance is None:
             if len(self.observables) == 1 and getattr(self.observables[0], 'covariance', None) is not None:
-                obs_cov = self.observables[0].covariance
-                # Wrap in named tree so matching works.
-                covariance = obs_cov.clone(
-                    observable=types.ObservableTree([obs_cov.observable],
-                                                    observables=[self.observables[0].name]))
-            else:
-                raise ValueError('provide covariance or precision')
+                covariance = self.observables[0].covariance
+                if correct_covariance['correction']:
+                    correct_covariance.setdefault('nobs', getattr(covariance, 'nobs', None))
+                covariance = covariance.clone(observable=types.ObservableTree([covariance.observable], observables=[self.observables[0].name]))
+            elif precision is None:
+                raise ValueError('Observables must have their own covariance if global covariance or precision matrix not provided')
+        data = [observable.data for observable in self.observables]
+        # Build joint lsstypes data tree so covariance matching works.
+        data = [observable.data for observable in self.observables]
+        self.data = types.ObservableTree(data, observables=[observable.name for observable in self.observables])
+        self.flatdata = self.data.value()
 
-        if precision is not None:
-            self.precision = np.atleast_2d(np.asarray(precision, dtype='f8'))
-        else:
-            if isinstance(covariance, types.CovarianceMatrix):
-                try:
-                    cov_arr = covariance.at.observable.match(self._data).value()
-                except (AssertionError, KeyError, IndexError):
-                    cov_arr = covariance.value()
-            else:
-                cov_arr = np.atleast_2d(np.asarray(covariance, dtype='f8'))
-            self.precision = np.linalg.inv(cov_arr) / float(scale_covariance)
+        def check_matrix(matrix, name):
+            matrix = np.atleast_2d(matrix).copy()
+            if matrix.shape != (matrix.shape[0],) * 2:
+                raise ValueError('{} must be a square matrix, but found shape {}'.format(name, matrix.shape))
+            mshape = '({0}, {0})'.format(matrix.shape[0])
+            shape = '({0}, {0})'.format(self.flatdata.size)
+            shape_obs = '({0}, {0})'.format(' + '.join([str(obs.flatdata.size) for obs in self.observables]))
+            if matrix.shape[0] != self.flatdata.size:
+                raise ValueError('based on provided observables, {} expected to be a matrix of shape {} = {}, but found {}'.format(name, shape, shape_obs, mshape))
+            return matrix
 
-        if correct_covariance is not None:
-            correction = correct_covariance.get('correction', '')
-            if 'hartlap' in correction:
-                nobs = int(correct_covariance['nobs'])
-                nbins = self.precision.shape[0]
-                self.precision = self.precision * (nobs - nbins - 2.) / (nobs - 1.)
+        self.precision = check_matrix(precision, 'precision') if precision is not None else None
 
-        self.covariance = np.linalg.inv(self.precision)
+        self.covariance = None
+        if isinstance(covariance, types.CovarianceMatrix):
+            self.covariance = covariance.at.observable.match(self.data)
+        elif covariance is not None:
+            covariance = check_matrix(covariance, 'covariance')
+            self.covariance = types.CovarianceMatrix(observable=self.data.clone(value=0. * self.data.value()), value=covariance)
+        for observable in self.observables:
+            observable.covariance = self.covariance.at.observable.get(observables=observable.name)
+
+        if self.precision is None:
+            if self.covariance is None:
+                raise ValueError('if precision is not provided, provide covariance')
+            self.precision = self.covariance.inv(level=1) / scale_covariance
+        self.correct_covariance = correct_covariance
+        if self.correct_covariance['correction'] and self.correct_covariance['nobs'] is None:
+            raise ValueError(f'provide nobs to apply correction {self.correct_covariance["correction"]}')
+        if 'hartlap' in self.correct_covariance['correction']:
+            nbins = self.precision.shape[0]
+            nobs = self.correct_covariance['nobs']
+            hartlap2007_factor = (nobs - nbins - 2.) / (nobs - 1.)
+            self.logger.info(f'Covariance matrix with {nbins:d} points built from {nobs:d} observations.')
+            self.logger.info(f'...resulting in a Hartlap 2007 factor of {hartlap2007_factor:.4f}.')
+            self.precision *= hartlap2007_factor
 
     def __call__(self):
         self.flattheory = jnp.concatenate([obs.flattheory for obs in self.observables])

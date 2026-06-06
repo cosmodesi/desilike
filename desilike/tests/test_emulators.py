@@ -108,6 +108,57 @@ class PowerLaw(Calculator):
         return obj
 
 
+class MultiOutNoReturn(Calculator):
+    """__call__ returns None; outputs (array, scalar, tuple-of-arrays) live in attrs.
+
+    Mirrors the shape of FOLPSPTSpectrum2Poles: a side-effect-only __call__ whose
+    parameter-dependent state is exposed entirely via tree_flatten children.
+    """
+
+    _K = jnp.linspace(0.1, 1.0, 5)
+
+    def __init__(self, a, b):
+        self.a = a
+        self.b = b
+
+    def __call__(self):
+        self.arr = self.a.value * self._K + self.b.value          # linear in a, b
+        self.scal = self.a.value ** 2                              # quadratic in a
+        self.tup = (self.a.value * self._K, self.b.value + self._K)
+        # no return → None
+
+    def tree_flatten(self):
+        children = [self.arr, self.scal, self.tup[0], self.tup[1]]
+        return children, None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.arr, obj.scal = children[0], children[1]
+        obj.tup = (children[2], children[3])
+        return obj
+
+
+class SumMultiOut(Calculator):
+    """Downstream node reading the (None-returning) MultiOutNoReturn attributes."""
+
+    def __init__(self, src):
+        self.src = src
+
+    def __call__(self):
+        self.out = self.src.arr + self.src.scal + self.src.tup[0] + self.src.tup[1]
+        return self.out
+
+    def tree_flatten(self):
+        return [self.out], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.out = children[0]
+        return obj
+
+
 # ── test helpers ──────────────────────────────────────────────────────────────
 
 def _make_quadratic_graph():
@@ -224,6 +275,72 @@ def test_taylor_custom_write_read():
     calc = emu2.to_calculator()
     pipe2 = compile(calc)
     assert abs(float(pipe2(params)) - pred_orig) < 1e-12
+
+
+# ── None-returning, multi-child calculator (FOLPS-shaped) ─────────────────────
+
+def _make_multiout_graph():
+    a = Parameter('a', value=1.3)
+    b = Parameter('b', value=0.4)
+    return compile(MultiOutNoReturn(a=a, b=b))
+
+
+def test_taylor_none_return_predict():
+    """A None-returning root emulates its tree children; predict returns (None, {})."""
+    pipe = _make_multiout_graph()
+    emu = TaylorEmulator(pipe, order=2)
+    emu.fit()
+    assert emu._return_kind == 'none'
+    assert emu._n_children == 4
+    rv, derived = emu.predict({'a': 1.3, 'b': 0.4})
+    assert rv is None
+    assert derived == {}
+
+
+def test_taylor_none_return_children_exact():
+    """Children are Taylor-expanded (exact at order 2 here) and vary with params."""
+    pipe = _make_multiout_graph()
+    emu = TaylorEmulator(pipe, order=2)
+    emu.fit()
+    for a, b in [(1.3, 0.4), (2.0, -0.5), (0.7, 1.1)]:
+        _, children, _ = emu._predict_children({'a': a, 'b': b})
+        K = np.asarray(MultiOutNoReturn._K)
+        np.testing.assert_allclose(np.asarray(children[0]), a * K + b, atol=1e-10)
+        np.testing.assert_allclose(np.asarray(children[1]), a ** 2, atol=1e-10)
+        np.testing.assert_allclose(np.asarray(children[2]), a * K, atol=1e-10)
+        np.testing.assert_allclose(np.asarray(children[3]), b + K, atol=1e-10)
+
+
+def test_taylor_none_return_in_pipeline():
+    """to_calculator() drop-in feeds a downstream node that reads the emulated attrs."""
+    pipe = _make_multiout_graph()
+    emu = TaylorEmulator(pipe, order=2)
+    emu.fit()
+    emulated = emu.to_calculator()
+    pipe2 = compile(SumMultiOut(src=emulated))
+    assert set(pipe2.params.names()) == {'a', 'b'}
+    for a, b in [(1.3, 0.4), (1.8, -0.2)]:
+        K = np.asarray(MultiOutNoReturn._K)
+        expected = (a * K + b) + a ** 2 + (a * K) + (b + K)
+        np.testing.assert_allclose(np.asarray(pipe2({'a': a, 'b': b})), expected, atol=1e-9)
+
+
+def test_taylor_none_return_write_read():
+    """write/read round-trip preserves the per-child emulation and None return."""
+    pipe = _make_multiout_graph()
+    emu = TaylorEmulator(pipe, order=2)
+    emu.fit()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fn = os.path.join(tmpdir, 'multiout_emu.h5')
+        emu.write(fn)
+        emu2 = TaylorEmulator.read(fn)
+    assert emu2._return_kind == 'none'
+    rv, _ = emu2.predict({'a': 1.6, 'b': 0.2})
+    assert rv is None
+    _, ch1, _ = emu._predict_children({'a': 1.6, 'b': 0.2})
+    _, ch2, _ = emu2._predict_children({'a': 1.6, 'b': 0.2})
+    for c1, c2 in zip(ch1, ch2):
+        np.testing.assert_allclose(np.asarray(c1), np.asarray(c2), atol=1e-12)
 
 
 # ── Kaiser model tests ────────────────────────────────────────────────────────

@@ -32,6 +32,7 @@ from ...base import Calculator, ExternalCalculator
 from ...parameter import Parameter, VariableCollection
 from .template import BAOSpectrum2Template
 from ._multitracer import propose_params_multitracer, assign_params
+from .fftlog import PowerToCorrelation as _PowerToCorrelation
 
 
 # ── interpolation ─────────────────────────────────────────────────────────────
@@ -482,7 +483,7 @@ def _kernel_func(x, kernel='pcs'):
     raise ValueError(f'Unknown broadband kernel {kernel!r}; choose ngp/cic/tsc/pcs.')
 
 
-def _bb_pk_auto_params(ells, broadband):
+def _bb_spectrum_auto_params(ells, broadband):
     """Return the ``Parameter`` list for Pk broadband of the given mode."""
     auto_params = []
     ells = tuple(ells)
@@ -503,7 +504,7 @@ def _bb_pk_auto_params(ells, broadband):
     return auto_params
 
 
-def _bb_xi_auto_params(ells, broadband):
+def _bb_correlation_auto_params(ells, broadband):
     """Return the ``Parameter`` list for xi broadband of the given mode."""
     auto_params = []
     ells = tuple(ells)
@@ -575,7 +576,7 @@ class _BAOWigglesTracerSpectrum2Poles(Calculator):
         """
         if broadband not in _BB_POWER_MODES + _BB_KERNEL_MODES:
             raise ValueError(f'Unknown broadband mode {broadband!r}.')
-        return propose_params_multitracer(_bb_pk_auto_params(ells, broadband), tracers)
+        return propose_params_multitracer(_bb_spectrum_auto_params(ells, broadband), tracers)
 
     def __init__(self, k=None, pt=None, ells=(0, 2), broadband='power', kp=None, tracers=None, params=None):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
@@ -691,7 +692,6 @@ class SpectrumToCorrelation:
     """
 
     def __init__(self, s, ells, kin):
-        from cosmoprimo import PowerToCorrelation
         self.s = np.asarray(s, dtype='f8')
         self.ells = tuple(ells)
         self.kin = np.asarray(kin, dtype='f8')
@@ -700,7 +700,7 @@ class SpectrumToCorrelation:
         self.k_mid = k_fftlog[~mask_high]
         self.logk_high = np.log10(k_fftlog[mask_high] / kin[-1])
         self.damp_high = np.exp(-(k_fftlog[mask_high] / kin[-1] - 1.) ** 2 / 200.)
-        self.fftlog = PowerToCorrelation(k_fftlog, ell=self.ells, q=0, lowring=True)
+        self.fftlog = _PowerToCorrelation(k_fftlog, ell=self.ells, q=0, lowring=True)
 
     def __call__(self, poles):
         r"""Transform pk multipoles to xi multipoles.
@@ -726,7 +726,7 @@ class SpectrumToCorrelation:
 
 # ── bare correlation function multipoles ─────────────────────────────────────
 
-class _BAOWigglesPTCorrelation2Poles(ExternalCalculator):
+class _BAOWigglesPTCorrelation2Poles(Calculator):
     """Base for BAO correlation function theories (FFTLog from spectrum to xi multipoles).
 
     Subclasses set ``_default_pt_cls`` to the spectrum theory class.
@@ -801,7 +801,7 @@ class ResummedBAOWigglesPTCorrelation2Poles(_BAOWigglesPTCorrelation2Poles):
 
 # ── tracer correlation function multipoles ────────────────────────────────────
 
-class _BAOWigglesTracerCorrelation2Poles(ExternalCalculator):
+class _BAOWigglesTracerCorrelation2Poles(Calculator):
     r"""Base for BAO tracer correlation function theories.
 
     Supports the same ``broadband=`` modes as :class:`_BAOWigglesTracerSpectrum2Poles`:
@@ -841,7 +841,7 @@ class _BAOWigglesTracerCorrelation2Poles(ExternalCalculator):
         """
         if broadband not in _BB_POWER_MODES + ('even-power',) + _BB_KERNEL_MODES:
             raise ValueError(f'Unknown broadband mode {broadband!r}.')
-        return propose_params_multitracer(_bb_xi_auto_params(ells, broadband), tracers)
+        return propose_params_multitracer(_bb_correlation_auto_params(ells, broadband), tracers)
 
     def __init__(self, s=None, pt=None, ells=(0, 2), broadband='power', sp=None, tracers=None, params=None):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
@@ -897,11 +897,12 @@ class _BAOWigglesTracerCorrelation2Poles(ExternalCalculator):
 
     def __call__(self):
         xi_bare = self._to_correlation(self.pt.poles)
-        broadband = np.zeros((len(self.ells), len(self.s)))
-        # _bb_params_flat and _bb_matrix are set up in __post_init__ for both modes.
-        for row_idx, param in enumerate(self._bb_params_flat):
-            ill = row_idx // self._bb_n
-            broadband[ill] += float(param.value) * self._bb_matrix[row_idx]
+        # Broadband: linear combination of fixed basis functions (_bb_matrix), one block
+        # of _bb_n rows per multipole.  Computed in JAX so derivatives w.r.t. the broadband
+        # parameters are exact (no finite differences) — they enter linearly here.
+        amplitudes = jnp.stack([param.value for param in self._bb_params_flat])
+        broadband = (amplitudes[:, None] * self._bb_matrix).reshape(
+            len(self.ells), self._bb_n, len(self.s)).sum(axis=1)
         self.poles = xi_bare + broadband
         return self.poles
 

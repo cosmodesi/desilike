@@ -235,7 +235,7 @@ class BaseProfiler:
         self.mpicomm    = mpicomm if mpicomm is not None else get_mpicomm()
 
         # ── collect varied parameters ─────────────────────────────────────
-        self.varied_params = likelihood.params.select(fixed=False)
+        self.varied_params = likelihood.params.select(varied=True)
         if not self.varied_params:
             raise ValueError('No varied parameters found in the likelihood.')
         self.logger.info('Varied parameters: %s', self.varied_params.names())
@@ -478,7 +478,17 @@ class BaseProfiler:
         The likelihood is called *eagerly* (not JIT) once per run.
         """
         derived_params = [p for p in self.likelihood.params if p.derived is True]
-        if not derived_params or profiles is None or profiles.best is None:
+        if profiles is None:
+            return profiles
+        # Attach parameter metadata (priors, latex, …) so downstream consumers
+        # (to_stats, select, plotting) have access to it.
+        profiles.params = self.likelihood.params
+        # Carry likelihood bookkeeping (ndata, nvaried, ndof) into the result.
+        ndata = getattr(self.likelihood.root, 'ndata', None)
+        if ndata is not None:
+            nvaried = sum(int(np.prod(param.shape, dtype='intp')) for param in self.likelihood.params.select(input=True))
+            profiles.attrs.update(ndata=ndata, ndof=ndata - nvaried)
+        if not derived_params or profiles.best is None:
             return profiles
         names   = self.varied_params.names()
         nruns   = profiles.nruns

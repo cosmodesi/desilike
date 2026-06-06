@@ -35,6 +35,8 @@ Pipeline:
 """
 
 import functools
+import logging
+
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -87,6 +89,7 @@ class Calculator(Node):
             lambda node: node.tree_flatten(),
             cls.tree_unflatten,
         )
+        cls.logger = logging.getLogger(cls.__name__)
         if '__init__' in cls.__dict__:
             _orig_init = cls.__dict__['__init__']
             @functools.wraps(_orig_init)
@@ -169,6 +172,9 @@ class Likelihood(Calculator):
     Subclasses implement __post_init__() and __call__(). __call__() must set self.logpdf.
     tree_flatten/tree_unflatten are provided here; subclasses need not repeat them.
     """
+    @property
+    def ndata(self):
+        return None
 
     def tree_flatten(self):
         return [self.logpdf], None
@@ -193,6 +199,10 @@ class GaussianLikelihood(Likelihood):
     tree_flatten exposes [logpdf, flattheory, precision] so downstream nodes can
     access them as dep outputs.
     """
+
+    @property
+    def ndata(self):
+        return self.flatdata.size
 
     def __call__(self):
         r = self.flatdata - self.flattheory
@@ -223,6 +233,13 @@ class SumLikelihood(Likelihood):
         if len(likelihoods) == 1 and isinstance(likelihoods[0], (list, tuple)):
             likelihoods = likelihoods[0]
         self.likelihoods = list(likelihoods)
+
+    @property
+    def ndata(self):
+        ndata = [getattr(like, 'ndata', None) for like in self.likelihoods]
+        if all(n is not None for n in ndata):
+            return sum(ndata)
+        return None
 
     def __call__(self):
         self.logpdf = sum(like.logpdf for like in self.likelihoods)
@@ -290,7 +307,7 @@ class Prior(Calculator):
     def __call__(self):
         logprior = jnp.zeros(())
         for p in self.params:
-            if not p.fixed:
+            if (not p.fixed) and (not p.solved):
                 # Sum over all elements for vector params (independent joint prior).
                 logprior = logprior + jnp.sum(p.prior.logpdf(p))
         self.logpdf = logprior
@@ -377,14 +394,12 @@ class Posterior(Calculator):
             marg_global = {i for i, p in enumerate(self._solved_params) if p.derived == 'marg'}
             best_global = {i for i, p in enumerate(self._solved_params) if p.derived == 'best'}
 
-            # Validate 'marg' prior scales and collect them.
-            marg_scales = {}
+            # Prior inverse-scale (1/std) per solved parameter; 0 for an improper prior.
+            # Used as prior precision in the linear solve for both 'best' and 'marg' params.
+            inv_scales = {}
             for i, p in enumerate(self._solved_params):
-                if p.derived == 'marg':
-                    s = p.prior.std() if p.prior is not None else None
-                    if s is None:
-                        raise ValueError(f'Parameter {p.name!r} has derived="marg" but its prior has no finite std')
-                    marg_scales[i] = s
+                std = p.prior.std() if p.prior is not None else None
+                inv_scales[i] = (1. / std) if (std is not None and np.isfinite(std)) else 0.
 
             # Build per-gaussian-component list: (theory_pipe, precision, flatdata, alpha_idx).
             components = []
@@ -436,9 +451,10 @@ class Posterior(Calculator):
                 comps = root_comps[root]
                 marg_local = np.array([j for j, g in enumerate(global_idx) if g in marg_global], dtype=int)
                 best_local = np.array([j for j, g in enumerate(global_idx) if g in best_global], dtype=int)
-                pp_g = jnp.diag(jnp.array([1.0 / marg_scales[global_idx[j]] ** 2 for j in marg_local])) if marg_local.size else None
+                # Prior precision (1/std²) for every solved param in the group (best or marg).
+                prior_prec = jnp.array([inv_scales[g] ** 2 for g in global_idx])
                 group_alpha_names = [alpha_names[g] for g in global_idx]
-                self._groups.append((group_alpha_names, comps, marg_local, best_local, pp_g))
+                self._groups.append((group_alpha_names, comps, marg_local, best_local, prior_prec))
 
             prior.update(self._likelihood.params.select(solved=False))
         else:
@@ -454,6 +470,9 @@ class Posterior(Calculator):
         # Posterior's own deps and the pipeline tracks best-fit values as derived outputs.
         # The originals stay hidden in _likelihood_params (underscore → not scanned).
         self.solved_params = [sp.clone(derived=True) for sp in self._solved_params]
+        # Number of data points (None when the likelihood does not expose it), surfaced
+        # for ndof bookkeeping downstream (e.g. the profiler / Profiles.to_stats).
+        self.ndata = getattr(likelihood, 'ndata', None)
 
     def _marg_loglik(self, params):
         """Profile/marginalize over solved params, one independent group at a time.
@@ -479,7 +498,7 @@ class Posterior(Calculator):
             logL = logL - 0.5 * r @ (precision @ r)
 
         # Per-group: independent block solve of size n_g × n_g.
-        for group_alpha_names, comps, marg_local, best_local, pp_g in self._groups:
+        for group_alpha_names, comps, marg_local, best_local, prior_prec in self._groups:
             n_g = len(group_alpha_names)
             F_g = jnp.zeros((n_g, n_g))
             b_g = jnp.zeros(n_g)
@@ -504,9 +523,8 @@ class Posterior(Calculator):
                 b_g = b_g.at[ix].add(BtP @ r)
                 logL = logL - 0.5 * r @ (precision @ r)
 
-            # Add prior precision for 'marg' params in this group.
-            if marg_local.size:
-                F_g = F_g.at[marg_local[:, None], marg_local[None, :]].add(pp_g)
+            # Add prior precision for every solved param in the group (best or marg).
+            F_g = F_g + jnp.diag(prior_prec)
 
             delta_alpha = jnp.linalg.solve(F_g, b_g)
             logL = logL + 0.5 * b_g @ delta_alpha
@@ -515,16 +533,13 @@ class Posterior(Calculator):
             for j, name in enumerate(group_alpha_names):
                 solved_values[name] = jnp.asarray(params[name]) + delta_alpha[j]
 
-            # Volume factor: only 'marg' params contribute.
-            # Mixed case uses Schur complement: + ½ log|P_α| − ½ log|F_g| + ½ log|F_g[best,best]|.
-            if marg_local.size:
-                _, logdet_Pa = jnp.linalg.slogdet(pp_g)
-                _, logdet_F = jnp.linalg.slogdet(F_g)
-                if best_local.size:
-                    _, logdet_F_bb = jnp.linalg.slogdet(F_g[best_local[:, None], best_local[None, :]])
-                    logL = logL + 0.5 * logdet_Pa - 0.5 * logdet_F + 0.5 * logdet_F_bb
-                else:
-                    logL = logL + 0.5 * logdet_Pa - 0.5 * logdet_F
+            # Volume factor: only 'marg' params contribute; the 'best' block is profiled
+            # out via the Schur complement  + ½ log|P_marg| − ½ log|F_g| + ½ log|F_g[best, best]|.
+            # Empty marg/best index sets contribute 0, so no special-casing is needed.
+            logdet_Pmarg = 0. #jnp.sum(jnp.log(prior_prec[marg_local]))
+            _, logdet_F = jnp.linalg.slogdet(F_g)
+            _, logdet_F_bb = jnp.linalg.slogdet(F_g[best_local[:, None], best_local[None, :]])
+            logL = logL + 0.5 * (logdet_Pmarg - logdet_F + logdet_F_bb)
 
         return logL, solved_values
 
@@ -613,7 +628,7 @@ def _fd_parse_eps(fd_eps_val):
                                           average is ``(eb + ea) / 2``.
                                           The ``center`` element is informational only.
     """
-    if fd_eps_val is None:
+    if fd_eps_val is None or (np.ndim(fd_eps_val) == 0 and not np.isfinite(fd_eps_val)):
         fd_eps_val = 1e-5
     if isinstance(fd_eps_val, (tuple, list)):
         _, eps_below, eps_above = fd_eps_val
@@ -1580,7 +1595,7 @@ def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None):
     for name, k in fd_items:
         param_obj = graph.params[name]
         _eps = eps_ov.get(name, param_obj.fd_eps)
-        if _eps is None:
+        if _eps is None or not np.isfinite(_eps):
             _eps = 1e-5
         _acc = acc_ov.get(name, param_obj.fd_acc)
         offsets, coeffs = _fd_stencil(k, _acc)

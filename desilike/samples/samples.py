@@ -295,9 +295,9 @@ class Samples(VariableCollection):
             dtype = [(n, v._value.dtype, v.shape) for n, v in zip(params, vars_)]
             out = np.empty(self.shape, dtype=dtype)
             for n, v in zip(params, vars_):
-                out[n] = np.asarray(v._value)
+                out[n] = np.asarray(v)
             return out
-        return np.array([np.asarray(v._value) for v in vars_])
+        return np.array([np.asarray(v) for v in vars_])
 
     def to_dict(self, params=None):
         """Return ``{name: array}`` dict.
@@ -312,7 +312,7 @@ class Samples(VariableCollection):
         else:
             params = [p if isinstance(p, str) else p.name for p in params]
         return {
-            n: np.asarray(VariableCollection.__getitem__(self, n)._value)
+            n: VariableCollection.__getitem__(self, n).value
             for n in params
         }
 

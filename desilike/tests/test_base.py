@@ -879,9 +879,11 @@ def test_mixed_marg_best():
     r = np.array(DATA) - A_val * K_np
     P = np.eye(len(K)) / sigma_d ** 2
     Bmat = np.column_stack([K_np, K_np])
+    # Prior precision is added for every solved param (here only alpha_m=index 0 has one).
     F_full = Bmat.T @ P @ Bmat + np.diag([1.0 / sigma_m ** 2, 0.0])
     b_vec = Bmat.T @ (P @ r)
     quad = float(b_vec @ np.linalg.solve(F_full, b_vec))
+    # Volume factor (Schur complement over 'best'): + ½ log|P_marg| − ½ log|F| + ½ log|F[best, best]|.
     _, logdet_F = np.linalg.slogdet(F_full)
     expected = float(-0.5 * r @ P @ r + 0.5 * quad + 0.5 * np.log(1.0 / sigma_m ** 2) - 0.5 * float(logdet_F) + 0.5 * np.log(float(F_full[1, 1])))
     assert abs(got - expected) < 1e-6, f'mixed logpdf: got {got:.8f}, expected {expected:.8f}'

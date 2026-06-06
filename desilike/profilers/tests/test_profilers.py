@@ -125,9 +125,11 @@ def test_solved(likelihood, key):
     x = Parameter('x', value=MU_X, prior=dict(dist='uniform', limits=[-1, 1]),
                   ref=dict(dist='norm', loc=MU_X, scale=SX))
     y = Parameter('y', value=MU_Y, derived='best')
-    p = make_profiler(key, compile(Posterior(Likelihood(x, y), Prior(x))))
-    p.maximize(niterations=3)
-    assert abs(float(p.profiles.best['x'][p.profiles.argmax]) - MU_X) < 0.01
+    posterior = compile(Posterior(Likelihood(x, y), Prior(x, y)))
+    p = make_profiler(key, posterior)
+    profiles = p.maximize(niterations=3)
+    assert abs(float(profiles.best['x'][profiles.argmax]) - MU_X) < 0.01
+    assert abs(float(profiles.best['y'][profiles.argmax]) - MU_Y) < 0.01
 
 
 # ── construction ──────────────────────────────────────────────────────────────
@@ -168,6 +170,9 @@ class TestMaximize:
         assert abs(float(profiles.best['x'][idx]) - MU_X) < atol_bf
         assert abs(float(profiles.best['y'][idx]) - MU_Y) < atol_bf
         assert float(profiles.best['logpdf'][idx]) > -0.5
+        # Profiler attaches parameter metadata to the result.
+        assert profiles.params is not None
+        assert {'x', 'y'}.issubset(set(profiles.params.names()))
 
     def test_maximize(self, likelihood, profiler_name):
         """Basic and rescaled maximize converge; multiple runs accumulate."""

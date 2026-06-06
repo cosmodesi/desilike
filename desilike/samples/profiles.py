@@ -11,18 +11,24 @@ from ..utils import register_type, write as _utils_write, read as _utils_read
 
 _SLOT_NAMES = ('start', 'best', 'error', 'interval', 'profile', 'grid', 'contour', 'covariance')
 
-# Slots that hold plain dicts and benefit from _ParameterDict wrapping
+# Slots that hold plain dicts and benefit from ParameterDict wrapping
 _DICT_SLOTS = frozenset(('start', 'best', 'error', 'interval', 'profile', 'grid'))
 
 
-class _ParameterDict(dict):
+class ParameterDict(dict):
     """dict subclass that accepts :class:`~desilike.parameter.Variable` or
     :class:`~desilike.parameter.Parameter` objects as keys by resolving them
     to their ``.name`` string attribute.
+
+    Tuple keys (e.g. contour pairs ``(param1, param2)``) are resolved
+    element-wise, so ``d[(param1, param2)]`` and ``d[('p1', 'p2')]`` are
+    equivalent.
     """
 
     @staticmethod
     def _key(key):
+        if isinstance(key, tuple):
+            return tuple(k.name if hasattr(k, 'name') else k for k in key)
         return key.name if hasattr(key, 'name') else key
 
     def __getitem__(self, key):
@@ -48,23 +54,23 @@ class Profiles:
         Free-form metadata (e.g. ``ndof``, ``sampler``).
     params : VariableCollection, optional
         Parameter metadata (priors, latex labels, …).
-    start : _ParameterDict[str, np.ndarray], optional
+    start : ParameterDict[str, np.ndarray], optional
         Starting points per minimiser run.
         Shape per key: ``(n_runs,) + param.shape``.
-    best : _ParameterDict[str, np.ndarray], optional
+    best : ParameterDict[str, np.ndarray], optional
         Best-fit values per run; includes the ``'logpdf'`` key.
         Shape per key: ``(n_runs,) + param.shape``.
-    error : _ParameterDict[str, np.ndarray], optional
+    error : ParameterDict[str, np.ndarray], optional
         Parabolic errors per run.
         Shape per key: ``(n_runs,) + param.shape``.
-    interval : _ParameterDict[str, tuple[np.ndarray, np.ndarray]], optional
+    interval : ParameterDict[str, tuple[np.ndarray, np.ndarray]], optional
         Confidence intervals per run.
         ``interval[p] = (lo, hi)`` — each array has shape ``(n_runs,) + param.shape``.
-    profile : _ParameterDict[str, tuple[np.ndarray, np.ndarray]], optional
+    profile : ParameterDict[str, tuple[np.ndarray, np.ndarray]], optional
         1-D profiles.
         ``profile[p] = (scan_values, lp_values)`` — shapes ``(n_scan,) + param.shape``
         and ``(n_scan,)`` respectively (scalar params only for file I/O).
-    grid : _ParameterDict[str, np.ndarray], optional
+    grid : ParameterDict[str, np.ndarray], optional
         Parameter grid.
         Shape per key: arbitrary leading dimensions + ``param.shape``; no flatness
         requirement is enforced.
@@ -82,11 +88,16 @@ class Profiles:
         if kwargs:
             self.set(**kwargs)
 
-    # ── auto-wrap dict slots with _ParameterDict ──────────────────────────────
+    # ── auto-wrap dict slots with ParameterDict ──────────────────────────────
 
     def __setattr__(self, name, value):
-        if name in _DICT_SLOTS and isinstance(value, dict) and not isinstance(value, _ParameterDict):
-            value = _ParameterDict(value)
+        if isinstance(value, dict):
+            if name in _DICT_SLOTS and not isinstance(value, ParameterDict):
+                value = ParameterDict(value)
+            elif name == 'contour':
+                # Nested dict: keep the per-cl outer dict plain, wrap each
+                # pair-dict so contour[cl][(param1, param2)] resolves Parameter keys.
+                value = {cl: ParameterDict(pairs) for cl, pairs in value.items()}
         object.__setattr__(self, name, value)
 
     # ── set / get ─────────────────────────────────────────────────────────────
@@ -157,6 +168,39 @@ class Profiles:
         if self.interval is not None:
             new.interval = {k: (lo[index], hi[index])
                             for k, (lo, hi) in self.interval.items()}
+        return new
+
+    def select(self, **kwargs):
+        """Return a new :class:`Profiles` restricted to matching parameters.
+
+        Selection criteria are forwarded to
+        :meth:`~desilike.parameter.VariableCollection.select` on :attr:`params`
+        (e.g. name wildcards, ``fixed=False``), so :attr:`params` must be set.
+        Every per-parameter slot (``start``, ``best``, ``error``, ``interval``,
+        ``profile``, ``grid``) and ``contour`` is filtered to the selected
+        names.  The special ``'logpdf'`` key in :attr:`best` is always kept.
+
+        Examples
+        --------
+        >>> profiles.select(varied=True)
+        >>> profiles.select(name='omega_*')
+        """
+        if self.params is None:
+            raise ValueError('Profiles.select requires params to be set')
+        selected = self.params.select(**kwargs)
+        names = set(selected.names())
+        new = copy.copy(self)
+        new.params = selected
+        for name in ('start', 'best', 'error', 'interval', 'profile', 'grid'):
+            d = getattr(self, name)
+            if d is None:
+                continue
+            setattr(new, name, {k: v for k, v in d.items()
+                                if k in names or (name == 'best' and k == 'logpdf')})
+        if self.contour is not None:
+            new.contour = {cl: {(p1, p2): xy for (p1, p2), xy in pairs.items()
+                                if p1 in names and p2 in names}
+                           for cl, pairs in self.contour.items()}
         return new
 
     # ── concatenation / merge ─────────────────────────────────────────────────
@@ -230,7 +274,7 @@ class Profiles:
             else:
                 for cl, pairs in other.contour.items():
                     if cl not in self.contour:
-                        self.contour[cl] = dict(pairs)
+                        self.contour[cl] = ParameterDict(pairs)
                     else:
                         for pair, xy in pairs.items():
                             self.contour[cl].setdefault(pair, xy)
@@ -277,12 +321,12 @@ class Profiles:
         object.__setattr__(new, 'params', self.params)  # shared VariableCollection reference
         for name in ('start', 'best', 'error', 'grid'):
             d = getattr(self, name, None)
-            object.__setattr__(new, name, _ParameterDict(d) if d is not None else None)
+            object.__setattr__(new, name, ParameterDict(d) if d is not None else None)
         for name in ('interval', 'profile'):
             d = getattr(self, name, None)
-            object.__setattr__(new, name, _ParameterDict(d) if d is not None else None)
+            object.__setattr__(new, name, ParameterDict(d) if d is not None else None)
         if self.contour is not None:
-            object.__setattr__(new, 'contour', {cl: dict(pairs) for cl, pairs in self.contour.items()})
+            object.__setattr__(new, 'contour', {cl: ParameterDict(pairs) for cl, pairs in self.contour.items()})
         else:
             object.__setattr__(new, 'contour', None)
         object.__setattr__(new, 'covariance', self.covariance)
@@ -370,13 +414,13 @@ class Profiles:
         # Plain per-run dicts
         for name in ('start', 'best', 'error', 'grid'):
             d = state.get(name)
-            val = _ParameterDict({k: np.asarray(v) for k, v in d.items()}) if d is not None else None
+            val = ParameterDict({k: np.asarray(v) for k, v in d.items()}) if d is not None else None
             object.__setattr__(self, name, val)
 
         # Interval: (2, n_runs, …) → (lo, hi) from file
         d = state.get('interval')
         if d is not None:
-            val = _ParameterDict({k: (arr[0], arr[1]) for k, arr in d.items()} if is_file else d)
+            val = ParameterDict({k: (arr[0], arr[1]) for k, arr in d.items()} if is_file else d)
             object.__setattr__(self, 'interval', val)
         else:
             object.__setattr__(self, 'interval', None)
@@ -384,7 +428,7 @@ class Profiles:
         # Profile: (2, n_scan, …) → (scan_vals, lp_vals) from file
         d = state.get('profile')
         if d is not None:
-            val = _ParameterDict({k: (arr[0], arr[1]) for k, arr in d.items()} if is_file else d)
+            val = ParameterDict({k: (arr[0], arr[1]) for k, arr in d.items()} if is_file else d)
             object.__setattr__(self, 'profile', val)
         else:
             object.__setattr__(self, 'profile', None)
@@ -412,14 +456,14 @@ class Profiles:
                             cl = float(cl_key)
                         except ValueError:
                             cl = cl_key
-                    contour[cl] = {}
+                    contour[cl] = ParameterDict()
                     for pair_key, arr in pairs.items():
                         p1, p2 = pair_key.split('::', 1)
                         contour[cl][(p1, p2)] = (arr[0], arr[1])
                 object.__setattr__(self, 'contour', contour)
             else:
                 object.__setattr__(self, 'contour',
-                                   {cl: dict(pairs) for cl, pairs in d.items()})
+                                   {cl: ParameterDict(pairs) for cl, pairs in d.items()})
         else:
             object.__setattr__(self, 'contour', None)
 

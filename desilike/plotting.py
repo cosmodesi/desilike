@@ -6,6 +6,7 @@ Provides the :func:`plotter` decorator used by observable plot methods.
 import os
 import logging
 from functools import wraps
+from pathlib import Path
 
 from . import utils
 
@@ -25,7 +26,7 @@ class _FakeFigure:
 def savefig(filename, fig=None, bbox_inches='tight', pad_inches=0.1, dpi=200, **kwargs):
     """Save *fig* to *filename*, creating parent directories as needed."""
     from matplotlib import pyplot as plt
-    utils.mkdir(os.path.dirname(filename))
+    Path(filename).parent.mkdir(exist_ok=True)
     logger.info('Saving figure to {}.'.format(filename))
     if fig is None:
         fig = plt.gcf()

@@ -1681,9 +1681,9 @@ class PyBirdTracerCorrelation2Poles(Calculator):
         return obj
 
 
-class FOLPSPTSpectrum2Poles(ExternalCalculator):
+class FOLPSPTSpectrum2Poles(Calculator):
     r"""
-    FOLPS matter power spectrum multipoles (ExternalCalculator).
+    FOLPS matter power spectrum multipoles.
 
     Wraps ``folps.NonLinearPowerSpectrumCalculator`` loop tables.
     Exposes ``kap``, ``muap``, ``jac``, ``table``, ``table_now``,
@@ -1729,29 +1729,29 @@ class FOLPSPTSpectrum2Poles(ExternalCalculator):
 
     def __call__(self):
         import folps as folpsv2
-        cosmo_params = {'pkttlin': np.asarray(self.template.pk_dd) * np.asarray(self.template.fk) ** 2,
-                        'f0': float(self.template.f0)}
+        cosmo_params = {'pkttlin': self.template.pk_dd * self.template.fk ** 2,
+                        'f0': self.template.f0}
         folps_nlps = folpsv2.NonLinearPowerSpectrumCalculator(
             mmatrices=self._matrices, kernels=self._kernels, rbao=self._rbao, **cosmo_params)
         table, table_now = folps_nlps.calculate_loop_table(
-            k=np.asarray(self.template.k), pklin=np.asarray(self.template.pk_dd),
-            pknow=np.asarray(self.template.pknow_dd), **cosmo_params)
+            k=self.template.k, pklin=self.template.pk_dd,
+            pknow=self.template.pknow_dd, **cosmo_params)
         jac, kap, muap = self.template.ap_k_mu(self.k[:, None], self._to_poles.mu)
-        self.kap = np.asarray(kap)
-        self.muap = np.asarray(muap)
-        self.jac = np.asarray(jac)
+        self.kap = kap
+        self.muap = muap
+        self.jac = jac
         # FOLPS returns mixed shapes: most loop terms are (nk_table,) arrays but the
         # trailing entries (sigma2w, f0, and the NW sigma2/delta_sigma2) are scalars,
         # which interp_table passes through unchanged.  Keep them as a tuple of
         # per-element arrays (0-d for scalars) rather than a single rectangular array.
         self.table = tuple(jnp.asarray(t) for t in table)
         self.table_now = tuple(jnp.asarray(t) for t in table_now)
-        self.f = float(self.template.f)
-        self.f0 = float(self.template.f0)
-        self.qpar = float(self.template.qpar)
-        self.qper = float(self.template.qper)
-        self.sigma8 = float(self.template.sigma8)
-        self.fsigma8 = float(self.template.fsigma8)
+        self.f = self.template.f
+        self.f0 = self.template.f0
+        self.qpar = self.template.qpar
+        self.qper = self.template.qper
+        self.sigma8 = self.template.sigma8
+        self.fsigma8 = self.template.fsigma8
 
     def tree_flatten(self):
         # table / table_now are tuples of per-element arrays; flatten each element

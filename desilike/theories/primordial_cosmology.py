@@ -130,11 +130,6 @@ class CosmoprimoCosmology(Calculator):
                              prior=dict(limits=[0.1, 10.]),
                              ref=dict(dist='norm', loc=0.6736, scale=0.005),
                              fd_eps=0.03, latex='h'))
-        # When ``h`` is free it supersedes theta_MC_100 (see _build_cosmo); fixed by default.
-        params.set(Parameter('theta_MC_100', value=defaults['theta_MC_100'], fixed=True,
-                             prior=dict(limits=[0.5, 2.]),
-                             ref=dict(dist='norm', loc=1.04092, scale=0.00031),
-                             fd_eps=0.0005, latex=r'100 \theta_\mathrm{MC}'))
         params.set(Parameter('omega_cdm', value=defaults['omega_cdm'],
                              prior=dict(limits=[0.01, 0.99]),
                              ref=dict(dist='norm', loc=0.12, scale=0.0012),
@@ -221,7 +216,8 @@ class CosmoprimoCosmology(Calculator):
 
     def __call__(self):
         # JAX engines: keep tracers (clone is differentiable). External engines: plain floats.
-        self.cosmo = _build_cosmo(self._fiducial,  {basename: np.asarray(param.value).reshape(-1)[0].item() if as_float else param.value for basename, param in self.params.items()})
+        params = {basename: np.asarray(param.value).reshape(-1)[0].item() if self._is_external else param.value for basename, param in self.params.items()}
+        self.cosmo = _build_cosmo(self._fiducial,  params)
         # Return None: cosmo is a Python object exposed via self.cosmo, read directly by
         # downstream calculators; returning it would break the JAX pipeline output (and, for
         # the external path, call_kind='none' avoids the dtype-object crash).

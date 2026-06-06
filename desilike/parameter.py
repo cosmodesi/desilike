@@ -486,7 +486,7 @@ class ParameterPrior:
                 self._ppf_fn = None
                 finite = [l for l in (lo, hi) if np.isfinite(l)]
                 self._center = float(np.mean(finite)) if finite else 0.
-                self._std = None
+                self._std = np.inf
             else:
                 lo_, hi_ = lo, hi
                 def _logpdf(x):
@@ -590,7 +590,7 @@ class ParameterPrior:
                 rv_m = rv_sp
             m, s = float(rv_m.mean()), float(rv_m.std())
             self._center = m if np.isfinite(m) else 0.
-            self._std = s if np.isfinite(s) else None
+            self._std = s
         except Exception:
             self._center, self._std = 0., None
         self._logpdf_center_val = float(self._logpdf_fn(jnp.asarray(self._center)))
@@ -613,10 +613,7 @@ class ParameterPrior:
         """
         if self._sample_fn is None:
             raise ValueError('Cannot sample from improper prior')
-        if shape is None:
-            shape = self.shape if self.shape is not None else ()
-        if isinstance(shape, int):
-            shape = (shape,)
+        shape = tuple(np.atleast_1d(shape)) + (self.shape or ()) if shape is not None else self.shape
         return self._sample_fn(key, shape)
 
     def ppf(self, u):
@@ -885,11 +882,17 @@ class Parameter(Variable):
 
     @property
     def varied(self):
-        return not self.fixed
+        # Truly varied: not fixed, and neither derived (True/expression) nor solved.
+        return (not self.fixed) and (not self.derived)
 
     @property
     def solved(self):
         return self._derived in self._solved_values
+
+    @property
+    def input(self):
+        """Whether parameter should be fed as input to calculator."""
+        return ((self._derived is False) or isinstance(self._derived, str)) and not self.depends
 
     # latex() is inherited from Variable.
 

@@ -101,7 +101,7 @@ def test_get_default():
     assert p.get('_nonexistent_', 'default') == 'default'
 
 
-# ── _ParameterDict indexing ───────────────────────────────────────────────────
+# ── ParameterDict indexing ────────────────────────────────────────────────────
 
 def test_parameter_dict_str_key():
     p = _make_profiles(n_runs=2)
@@ -277,6 +277,39 @@ def test_contour_pair_access():
     p = _make_profiles(n_runs=1)
     x, y = p.contour[1][('p1', 'p0')]
     assert x.shape == y.shape
+
+
+def test_contour_pair_access_parameter_tuple():
+    p = _make_profiles(n_runs=1)
+    param1 = Parameter('p1', value=0.)
+    param0 = Parameter('p0', value=0.)
+    x, y = p.contour[1][(param1, param0)]
+    sx, sy = p.contour[1][('p1', 'p0')]
+    np.testing.assert_array_equal(x, sx)
+    np.testing.assert_array_equal(y, sy)
+
+
+# ── select ────────────────────────────────────────────────────────────────────
+
+def test_select_filters_slots():
+    p = _make_profiles(n_runs=2)
+    sub = p.select(name=['p0', 'p1'])
+    assert set(sub.params.names()) == {'p0', 'p1'}
+    assert set(k for k in sub.best if k != 'logpdf') == {'p0', 'p1'}
+    assert 'logpdf' in sub.best  # always kept
+    assert set(sub.error) == {'p0', 'p1'}
+    # contour pairs restricted to selected names
+    for cl, pairs in sub.contour.items():
+        for p1, p2 in pairs:
+            assert p1 in {'p0', 'p1'} and p2 in {'p0', 'p1'}
+    # original is untouched
+    assert set(k for k in p.best if k != 'logpdf') == {'p0', 'p1', 'p2', 'p3'}
+
+
+def test_select_requires_params():
+    p = Profiles(best={'p0': np.zeros(2), 'logpdf': np.zeros(2)})
+    with pytest.raises(ValueError):
+        p.select(name='p0')
 
 
 # ── items ─────────────────────────────────────────────────────────────────────

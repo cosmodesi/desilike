@@ -506,17 +506,17 @@ class DirectSpectrum2Template(Spectrum2Template):
         if self._only_now:
             self.pk_dd = self.pknow_dd
 
-        sigma8  = float(fo.sigma8_z(self.z, of='delta_cb'))
-        fsigma8 = float(fo.sigma8_z(self.z, of='theta_cb'))
+        sigma8  = fo.sigma8_z(self.z, of='delta_cb')
+        fsigma8 = fo.sigma8_z(self.z, of='theta_cb')
         self.sigma8  = sigma8
         self.fsigma8 = fsigma8
         self.f = fsigma8 / sigma8
         k0 = 1e-3
-        self.f0 = float(np.sqrt(ptt_interp(k0) / pk_interp(k0)))
-        self.fk = np.sqrt(ptt_interp(self.k) / pk_interp(self.k))
+        self.f0 = jnp.sqrt(ptt_interp(k0) / pk_interp(k0))
+        self.fk = jnp.sqrt(ptt_interp(self.k) / pk_interp(self.k))
 
-        DH = float(constants.c / 1e3 / (100. * cosmo.efunc(self.z)))
-        DM = float(cosmo.comoving_angular_distance(self.z))
+        DH = constants.c / 1e3 / (100. * cosmo.efunc(self.z))
+        DM = cosmo.comoving_angular_distance(self.z)
         self.qpar = DH / self._DH_fid
         self.qper = DM / self._DM_fid
         return self.pk_dd

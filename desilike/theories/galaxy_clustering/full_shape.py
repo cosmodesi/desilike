@@ -1837,9 +1837,6 @@ class FOLPSPTSpectrum2Poles(Calculator):
         # For emulator
         os.environ.setdefault('FOLPS_BACKEND', 'jax')
         k_pkl_pklnw_fk = jnp.array([self.table[0], self.table[1], self.table_now[1], self.table[2] * self.f0])
-        full = not np.allclose(k1k2[..., 1], k1k2[..., 0])
-        if full:
-            k1k2 = np.unique(k1k2[..., 0])
         return _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk, self.f0, self.qpar, self.qper, multipoles=multipoles, **options)
 
 
@@ -1978,7 +1975,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
 
         def g(name):
             """Bias parameter by logical name (physical modes carry a trailing 'p')."""
-            return getattr(self, name + suffix)
+            return getattr(self, name + suffix).value
 
         bias_scheme = 'folps'
         if pb == 'standard':
@@ -1987,7 +1984,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             sn0, sn2, X_FoG = g('sn0'), g('sn2'), g('X_FoG_p')
             if self._b3_coev:
                 b3 = 32. / 315. * (b1 - 1.)
-            pars = jnp.array([b1, b2, bs, b3, alpha0, alpha2, alpha4, ct, sn0, sn2, 1. / self._nbar, X_FoG])
+            pars = [b1, b2, bs, b3, alpha0, alpha2, alpha4, ct, sn0, sn2, 1. / self._nbar, X_FoG]
 
         elif pb == 'physical':  # physical_velocileptors (no AP rescaling)
             b1L = g('b1') / sigma8 - 1.
@@ -2000,8 +1997,8 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             alpha0, alpha2, alpha4 = (g(name) / A for name in ('alpha0', 'alpha2', 'alpha4'))
             sn0 = g('sn0') * self._snd
             sn2 = g('sn2') * self._snd * self._fsat * self._sigv ** 2
-            pars = jnp.array([b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, g('ct'),
-                               sn0, sn2, 1. / self._nbar, g('X_FoG_p')])
+            pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, g('ct'),
+                               sn0, sn2, 1. / self._nbar, g('X_FoG_p')]
 
         elif pb == 'physical_aap':  # physical basis with AP rescaling
             b1L = g('b1') / sigma8 / sqrt_A_AP - 1.
@@ -2022,8 +2019,8 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             alpha4 = f ** 2 * a2t + b1E * f * a4t
             sn0 = g('sn0') / A_AP * self._snd
             sn2 = g('sn2') / A_AP * self._snd * self._fsat * self._sigv ** 2
-            pars = jnp.array([b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, g('ct'),
-                               sn0, sn2, 1. / self._nbar, g('X_FoG_p')])
+            pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, g('ct'),
+                               sn0, sn2, 1. / self._nbar, g('X_FoG_p')]
 
         else:  # 'tcm_chudaykin_aap': physical + AP with the class-PT counterterm basis
             bias_scheme = 'classpt'
@@ -2037,8 +2034,8 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             ct4 = -2. * f ** 2 * c4
             sn0 = g('sn0') * self._snd
             sn2 = g('sn2') * self._snd * self._fsat * self._sigv ** 2
-            pars = jnp.array([1. + b1L, b2L, bsL, b3, ct0, ct2, ct4, 0.,
-                               sn0, sn2, 1. / self._nbar, g('X_FoG_p')])
+            pars = [1. + b1L, b2L, bsL, b3, ct0, ct2, ct4, 0.,
+                               sn0, sn2, 1. / self._nbar, g('X_FoG_p')]
 
         self.poles = self.pt.combine_bias_terms_spectrum2_poles(pars, bias_scheme, self._damping)
         return self.poles
@@ -2104,51 +2101,33 @@ class FOLPSTracerCorrelation2Poles(Calculator):
         obj.poles = children[0]
         return obj
 
-
-def _get_spectrum3poles_folps(
-    pars,
-    k1k2,
-    k_pkl_pklnw_fk,
-    f0, qpar, qper,
-    multipoles=['B000', 'B202'],
-    precision=(8, 10, 10),
-    damping='lor',
-    interpolation_size=20,
-    interpolation_method='linear',
-    bias_scheme='folps',
-    model='FOLPSD',
-    renormalized=True,
-):
+@jax.jit(static_argnames=['multipoles', 'precision', 'damping', 'interpolation_method', 'bias_scheme', 'model', 'renormalized'])
+def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
+                              f0, qpar, qper, multipoles=['B000', 'B202'],
+                              precision=(8, 10, 10), damping='lor',
+                              interpolation_method='linear',
+                              bias_scheme='folps', model='FOLPSD', renormalized=True):
     import folps as folpsv2
     # folpsv2.MatrixCalculator(A_full=True, use_TNS_model=False)
     # folps_bispectrum_class = folpsv2.BispectrumCalculator_fk(model='FOLPSD')
     f0 = jnp.asarray(f0)
     bpars = jnp.asarray(pars)
 
-    if k1k2.ndim == 1:  # square
-        bs = folpsv2.WindowConvolvedBispectrum(model=model)
-        results = bs.reduced_Bl1l2L(bpars, None,
-                        qpar, qper, k_pkl_pklnw_fk, k1k2, Ssize=interpolation_size,
-                        precision_full=[8, 10, 10], precision_diag=[12, 15, 15],
-                        f=f0,
-                        renormalize=renormalized,
-                        interpolation_method_full=interpolation_method,
-                        interpolation_method_diag=interpolation_method,
-                        use_full_diag=True)
-        ells = ['B000', 'B110', 'B220', 'B112', 'B202']
-        toret = []
-        for ell in multipoles:
-            if ell in ells:
-                toret.append(results[ells.index(ell)].ravel())
-            elif (ell_swap:=ell[0] + ell[2:0:-1] + ell[3:]) in ells:
-                toret.append(results[ells.index(ell_swap)].T.ravel())
-            else:
-                toret.append(np.zeros((k1k2.size,) * 2).ravel())
-        folpsv2.BispectrumCalculator._tables_cache = {}  # to avoid leak
-        return toret
+    ells = []
+    _ells = ['B000', 'B110', 'B220', 'B112', 'B202']
+    provided = []
+    for ell in multipoles:
+        if ell in _ells:
+            ells.append(ell)
+            provided.append((ell, False))
+        elif (ell_swap:=ell[0] + ell[2:0:-1] + ell[3:]) in _ells:
+            ells.append(ell_swap)
+            provided.append((ell_swap, True))
+        else:
+            provided.append((False, False))
 
     bispectrum = folpsv2.BispectrumCalculator(model=model)
-    toret = bispectrum.Sugiyama_Bell(
+    result = bispectrum.Sugiyama_Bell(
         f=f0,
         bpars=bpars,
         k_pkl_pklnw=k_pkl_pklnw_fk,
@@ -2157,13 +2136,22 @@ def _get_spectrum3poles_folps(
         qper=qper,
         precision=precision,
         damping=damping,
-        multipoles=list(multipoles),
+        multipoles=ells,
         bias_scheme=bias_scheme,
         renormalize=renormalized,
         interpolation_method=interpolation_method
     )
+
+    toret = []
+    for ell, (_ell, swap) in zip(multipoles, provided):
+        if _ell:
+            tmp = result[ells.index(_ell)]
+            if swap: tmp = tmp.T
+            toret.append(tmp)
+        else:
+            toret.append(jnp.zeros(len(k1k2)))
     folpsv2.BispectrumCalculator._tables_cache = {}  # to avoid leak
-    return toret
+    return jnp.array(toret)
 
 
 class FOLPSTracerSpectrum3Poles(ExternalCalculator):
@@ -2309,7 +2297,7 @@ class FOLPSTracerSpectrum3Poles(ExternalCalculator):
         suffix = 'p' if pb != 'standard' else ''
 
         def g(name):
-            return getattr(self, name + suffix)
+            return getattr(self, name + suffix).value
 
         bias_scheme = 'folps'
         if pb == 'standard':
@@ -2350,8 +2338,7 @@ class FOLPSTracerSpectrum3Poles(ExternalCalculator):
                     g('Pshot') * self._snd, g('Bshot') * self._snd, g('X_FoG_b')]
 
         multipoles = tuple('B{:d}{:d}{:d}'.format(*ell) for ell in self.ells)
-        self.poles = jnp.asarray(self.pt.combine_bias_terms_spectrum3_poles(
-            pars, self.k, multipoles, bias_scheme=bias_scheme, **self._options))
+        self.poles = self.pt.combine_bias_terms_spectrum3_poles(pars, self.k, multipoles, bias_scheme=bias_scheme, **self._options)
         return self.poles
 
     def tree_flatten(self):

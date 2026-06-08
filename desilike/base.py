@@ -1787,8 +1787,10 @@ def pmap(fn, backend='mpi_and_jax', mpicomm=None):
 
     try:  # jax >= 0.8.0
         from jax import shard_map
+        _shard_map_kwargs = {'check_vma': False}
     except ImportError:  # older jax
         from jax.experimental.shard_map import shard_map
+        _shard_map_kwargs = {'check_rep': False}
     from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
     from jax import tree_util as jtu
 
@@ -1813,7 +1815,7 @@ def pmap(fn, backend='mpi_and_jax', mpicomm=None):
             out_struct = jax.eval_shape(vfn, *dummy_args)
             in_specs  = jtu.tree_unflatten(treedef, [P('batch')] * len(leafsig))
             out_specs = jtu.tree_map(lambda _: P('batch'), out_struct)
-            sharded = jax.jit(shard_map(vfn, mesh=mesh, in_specs=in_specs, out_specs=out_specs, check_rep=False))
+            sharded = jax.jit(shard_map(vfn, mesh=mesh, in_specs=in_specs, out_specs=out_specs, **_shard_map_kwargs))
             _sharded_cache[sig] = (sharded, jtu.tree_structure(out_struct))
         return _sharded_cache[sig]
 

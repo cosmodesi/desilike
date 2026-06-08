@@ -249,6 +249,27 @@ def test_folps_correlation_emulated():
     _check(pipe_exact, pipe_emu, shift_param='b1p')
 
 
+def test_folps_spectrum3_poles_prior_bases():
+    """FOLPSTracerSpectrum3Poles: each prior_basis compiles and produces the right output shape.
+
+    Uses a TaylorEmulator on the PT sub-graph to avoid the memory-intensive
+    combine_bias_terms_spectrum3_poles call while still exercising the full
+    bias-parameter conversion path for every prior_basis variant.
+    """
+    pytest.importorskip('folps')
+    from desilike.theories.galaxy_clustering.full_shape import FOLPSPTSpectrum2Poles, FOLPSTracerSpectrum3Poles
+
+    _K3 = np.column_stack([np.linspace(0.02, 0.1, 5)] * 2)
+    _ELLS3 = ((0, 0, 0), (2, 0, 2))
+
+    for prior_basis in ('standard', 'physical', 'physical_aap', 'tcm_chudaykin_aap'):
+        theory = FOLPSTracerSpectrum3Poles(k=_K3, ells=_ELLS3, prior_basis=prior_basis,
+                                           pt=FOLPSPTSpectrum2Poles())
+        pipe = _emulate(theory)
+        out = np.asarray(pipe())
+        assert out.shape == (len(_ELLS3), len(_K3)), f'unexpected shape {out.shape} for prior_basis={prior_basis!r}'
+
+
 def test_folps_spectrum3_poles_emulated():
     """FOLPSPTSpectrum2Poles emulated as pt= in FOLPSTracerSpectrum3Poles."""
     pytest.importorskip('folps')
@@ -267,6 +288,5 @@ if __name__ == '__main__':
     #test_kaiser_correlation_emulated()
     #test_tns_spectrum_emulated()
     #test_tns_correlation_emulated()
-    test_folps_spectrum_emulated()
+    #test_folps_spectrum_emulated()
     test_folps_spectrum3_poles_emulated()
-    print('Kaiser + TNS emulator tests passed.')

@@ -9,7 +9,7 @@ from ..parameter import VariableCollection
 from ..utils import register_type, write as _utils_write, read as _utils_read
 
 
-_SLOT_NAMES = ('start', 'best', 'error', 'interval', 'profile', 'grid', 'contour', 'covariance')
+_SLOT_NAMES = ('start', 'best', 'logpdf', 'error', 'interval', 'profile', 'grid', 'contour', 'covariance')
 
 # Slots that hold plain dicts and benefit from ParameterDict wrapping
 _DICT_SLOTS = frozenset(('start', 'best', 'error', 'interval', 'profile', 'grid'))
@@ -58,8 +58,10 @@ class Profiles:
         Starting points per minimiser run.
         Shape per key: ``(n_runs,) + param.shape``.
     best : ParameterDict[str, np.ndarray], optional
-        Best-fit values per run; includes the ``'logpdf'`` key.
+        Best-fit values per run.
         Shape per key: ``(n_runs,) + param.shape``.
+    logpdf : np.ndarray, shape ``(n_runs,)``, optional
+        Log-posterior value at each run's best-fit point.
     error : ParameterDict[str, np.ndarray], optional
         Parabolic errors per run.
         Shape per key: ``(n_runs,) + param.shape``.
@@ -129,45 +131,59 @@ class Profiles:
     @property
     def chi2min(self):
         r"""Minimum :math:`\chi^2 = -2 \times \max(\text{logpdf})`."""
-        return float(-2. * np.max(self.best['logpdf']))
+        return float(-2. * np.max(self.logpdf))
 
     @property
     def argmax(self):
         """Index of the run with the highest log-posterior."""
-        return int(np.argmax(self.best['logpdf']))
+        return int(np.argmax(self.logpdf))
 
     @property
     def nruns(self):
         """Number of minimiser runs stored in :attr:`best`."""
-        if self.best is None:
-            return 0
-        lp = self.best.get('logpdf')
-        return len(lp) if lp is not None else 0
+        if self.logpdf is not None:
+            return len(self.logpdf)
+        return 0
 
-    def choice(self, index='argmax'):
+    def choice(self, index='argmax', squeeze=False):
         """Return a new :class:`Profiles` sliced to one or more runs.
 
-        ``start``, ``best``, ``error``, and ``interval`` are sliced along
-        axis 0.  ``profile``, ``grid``, and ``contour`` are copied unchanged.
+        ``start``, ``best``, ``logpdf``, ``error``, and ``interval`` are sliced
+        along axis 0.  ``profile``, ``grid``, and ``contour`` are copied unchanged.
         A scalar *index* is wrapped in a list so the leading axis is always
-        preserved (result shape ``(1,) + …``).
+        preserved (result shape ``(1,) + …``), unless *squeeze* is ``True``.
 
         Parameters
         ----------
         index : 'argmax' or int or array-like
+        squeeze : bool, default=False
+            When ``True`` and *index* was a scalar, drop the leading axis of every
+            sliced array so shapes are ``param.shape`` rather than ``(1,) + param.shape``.
         """
         if isinstance(index, str) and index == 'argmax':
             index = self.argmax
-        if np.ndim(index) == 0:
+        was_scalar = np.ndim(index) == 0
+        if was_scalar:
             index = [index]
         new = copy.copy(self)
         for name in ('start', 'best', 'error'):
             d = getattr(self, name)
             if d is not None:
                 setattr(new, name, {k: v[index] for k, v in d.items()})
+        if self.logpdf is not None:
+            new.logpdf = self.logpdf[index]
         if self.interval is not None:
             new.interval = {k: (lo[index], hi[index])
                             for k, (lo, hi) in self.interval.items()}
+        if squeeze and was_scalar:
+            for name in ('start', 'best', 'error'):
+                d = getattr(new, name)
+                if d is not None:
+                    setattr(new, name, {k: v[0] for k, v in d.items()})
+            if new.logpdf is not None:
+                new.logpdf = new.logpdf[0]
+            if new.interval is not None:
+                new.interval = {k: (lo[0], hi[0]) for k, (lo, hi) in new.interval.items()}
         return new
 
     def select(self, **kwargs):
@@ -177,8 +193,8 @@ class Profiles:
         :meth:`~desilike.parameter.VariableCollection.select` on :attr:`params`
         (e.g. name wildcards, ``fixed=False``), so :attr:`params` must be set.
         Every per-parameter slot (``start``, ``best``, ``error``, ``interval``,
-        ``profile``, ``grid``) and ``contour`` is filtered to the selected
-        names.  The special ``'logpdf'`` key in :attr:`best` is always kept.
+        ``profile``, ``grid``) and ``contour`` is filtered to the selected names.
+        :attr:`logpdf` is not per-parameter and is always carried over unchanged.
 
         Examples
         --------
@@ -195,8 +211,7 @@ class Profiles:
             d = getattr(self, name)
             if d is None:
                 continue
-            setattr(new, name, {k: v for k, v in d.items()
-                                if k in names or (name == 'best' and k == 'logpdf')})
+            setattr(new, name, {k: v for k, v in d.items() if k in names})
         if self.contour is not None:
             new.contour = {cl: {(p1, p2): xy for (p1, p2), xy in pairs.items()
                                 if p1 in names and p2 in names}
@@ -217,6 +232,11 @@ class Profiles:
         if other.params is not None:
             self.params = (other.params if self.params is None
                            else self.params + other.params)
+
+        # Concatenate logpdf along axis 0
+        if other.logpdf is not None:
+            self.logpdf = (other.logpdf.copy() if self.logpdf is None
+                           else np.concatenate([self.logpdf, other.logpdf], axis=0))
 
         # Concatenate per-run plain dicts along axis 0
         for name in ('start', 'best', 'error'):
@@ -322,6 +342,8 @@ class Profiles:
         for name in ('start', 'best', 'error', 'grid'):
             d = getattr(self, name, None)
             object.__setattr__(new, name, ParameterDict(d) if d is not None else None)
+        lp = getattr(self, 'logpdf', None)
+        object.__setattr__(new, 'logpdf', lp.copy() if lp is not None else None)
         for name in ('interval', 'profile'):
             d = getattr(self, name, None)
             object.__setattr__(new, name, ParameterDict(d) if d is not None else None)
@@ -354,6 +376,11 @@ class Profiles:
             d = getattr(self, name, None)
             if d is not None:
                 state[name] = {k: np.asarray(v) for k, v in d.items()}
+
+        # logpdf: plain 1-D array
+        lp = getattr(self, 'logpdf', None)
+        if lp is not None:
+            state['logpdf'] = np.asarray(lp)
 
         # Interval: (lo, hi) → (2, n_runs, …) when to_file
         if self.interval is not None:
@@ -416,6 +443,16 @@ class Profiles:
             d = state.get(name)
             val = ParameterDict({k: np.asarray(v) for k, v in d.items()}) if d is not None else None
             object.__setattr__(self, name, val)
+
+        # logpdf: dedicated 1-D array; fall back to best['logpdf'] for old files
+        if 'logpdf' in state:
+            object.__setattr__(self, 'logpdf', np.asarray(state['logpdf']))
+        else:
+            best_d = getattr(self, 'best', None)
+            if best_d is not None and 'logpdf' in best_d:
+                object.__setattr__(self, 'logpdf', best_d.pop('logpdf'))
+            else:
+                object.__setattr__(self, 'logpdf', None)
 
         # Interval: (2, n_runs, …) → (lo, hi) from file
         d = state.get('interval')
@@ -485,6 +522,10 @@ class Profiles:
     def __eq__(self, other):
         if not isinstance(other, Profiles):
             return NotImplemented
+        if (self.logpdf is None) != (other.logpdf is None):
+            return False
+        if self.logpdf is not None and not np.array_equal(self.logpdf, other.logpdf):
+            return False
         for name in ('start', 'best', 'error', 'grid'):
             sd, od = getattr(self, name), getattr(other, name)
             if (sd is None) != (od is None):
@@ -557,7 +598,7 @@ class Profiles:
             if self.params is not None:
                 params = self.params.select(fixed=False).names()
             else:
-                params = [k for k in self.best if k != 'logpdf']
+                params = list(self.best.keys())
 
         allowed = ['best', 'error', 'interval']
         if quantities is None:

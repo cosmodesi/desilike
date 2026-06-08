@@ -66,6 +66,7 @@ class ScipyProfiler(BaseProfiler):
         logpost  = float(-0.5 * result.fun)
         profiles = Profiles()
         profiles.best = _build_best_from_x(result.x, logpost, state.varied_params)
+        profiles.logpdf = np.array([logpost])
 
         # Covariance from inverse Hessian (L-BFGS-B / BFGS provide this)
         hess_inv = getattr(result, 'hess_inv', None)

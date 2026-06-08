@@ -882,8 +882,7 @@ class Parameter(Variable):
 
     @property
     def varied(self):
-        # Truly varied: not fixed, and neither derived (True/expression) nor solved.
-        return (not self.fixed) and (not self.derived)
+        return not self.fixed
 
     @property
     def solved(self):
@@ -994,7 +993,7 @@ class VariableCollection:
         if isinstance(data, list):
             for item in data:
                 if isinstance(item, Variable):
-                    self.set(copy.copy(item))
+                    self.set(item)
                 elif isinstance(item, dict):
                     self.set(Parameter(**item))
                 else:
@@ -1003,7 +1002,7 @@ class VariableCollection:
         if isinstance(data, dict):
             for name, conf in data.items():
                 if isinstance(conf, Variable):
-                    self.set(copy.copy(conf))
+                    self.set(conf)
                 elif isinstance(conf, dict):
                     self.set(Parameter(name=name, **conf))
                 else:
@@ -1093,7 +1092,7 @@ class VariableCollection:
         """Merge two collections; variables in other override those with the same name."""
         result = VariableCollection(self)
         for p in VariableCollection(other):
-            result.set(copy.copy(p))
+            result.set(p)
         return result
 
     def __sub__(self, other):

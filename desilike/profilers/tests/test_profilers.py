@@ -169,7 +169,7 @@ class TestMaximize:
         idx = profiles.argmax
         assert abs(float(profiles.best['x'][idx]) - MU_X) < atol_bf
         assert abs(float(profiles.best['y'][idx]) - MU_Y) < atol_bf
-        assert float(profiles.best['logpdf'][idx]) > -0.5
+        assert float(profiles.logpdf[idx]) > -0.5
         # Profiler attaches parameter metadata to the result.
         assert profiles.params is not None
         assert {'x', 'y'}.issubset(set(profiles.params.names()))
@@ -424,4 +424,4 @@ class TestIO:
         p.maximize(niterations=2)
         loaded = Profiles.read(fn)
         assert loaded.best is not None and 'x' in loaded.best
-        np.testing.assert_allclose(loaded.best['logpdf'], p.profiles.best['logpdf'])
+        np.testing.assert_allclose(loaded.logpdf, p.profiles.logpdf)

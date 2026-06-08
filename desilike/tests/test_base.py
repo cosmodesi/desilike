@@ -498,8 +498,12 @@ def test_internal_init():
     assert jnp.allclose(pipe(omega_m=0.3, z=0.5, A=1.0, ns=0.96), jnp.array(1.0 * np.array(K) ** 0.96 * D ** 2), atol=1e-8)
 
 
-def test_duplicate_param_name_raises():
-    """Two distinct Parameter objects with the same name raise ValueError at compile time."""
+def test_duplicate_param_name_auto_shared():
+    """Two distinct Parameter objects with the same name are auto-unified by build_graph.
+
+    build_graph (and compile) no longer raise — same-named Parameters are merged
+    automatically (first-seen wins), equivalent to an implicit share_params() call.
+    """
 
     class DupCosmology(ExternalCalculator):
         def __init__(self):
@@ -536,8 +540,13 @@ def test_duplicate_param_name_raises():
             obj.pk = children[0]
             return obj
 
-    with pytest.raises(ValueError, match='omega_m'):
-        compile(DupSpectrum(cosmo=DupCosmology()))
+    # Should NOT raise — auto-shared instead
+    pipe = compile(DupSpectrum(cosmo=DupCosmology()))
+    # Only one 'omega_m' in the compiled graph
+    assert pipe.params.names() == ['omega_m']
+    result = float(pipe({'omega_m': 0.3}))
+    expected = 0.3 * 0.3 ** 0.55
+    assert abs(result - expected) < 1e-8
 
 
 def test_fd_acc():
@@ -811,7 +820,7 @@ def test_analytic_marginalization():
     P_alpha = np.array([[1.0 / sigma_alpha ** 2]])
     F = B.T @ P @ B + P_alpha
     b = B.T @ (P @ r)
-    expected = float(-0.5 * r @ P @ r + 0.5 * float(b @ np.linalg.solve(F, b)) + 0.5 * np.log(1.0 / sigma_alpha ** 2) - 0.5 * np.log(float(F.flat[0])))
+    expected = float(-0.5 * r @ P @ r + 0.5 * float(b @ np.linalg.solve(F, b)) - 0.5 * np.log(float(F.flat[0])))
     assert abs(got - expected) < 1e-6, f'marg logpdf: got {got:.8f}, expected {expected:.8f}'
 
     grad = jax.grad(pipe)(params)
@@ -885,7 +894,7 @@ def test_mixed_marg_best():
     quad = float(b_vec @ np.linalg.solve(F_full, b_vec))
     # Volume factor (Schur complement over 'best'): + ½ log|P_marg| − ½ log|F| + ½ log|F[best, best]|.
     _, logdet_F = np.linalg.slogdet(F_full)
-    expected = float(-0.5 * r @ P @ r + 0.5 * quad + 0.5 * np.log(1.0 / sigma_m ** 2) - 0.5 * float(logdet_F) + 0.5 * np.log(float(F_full[1, 1])))
+    expected = float(-0.5 * r @ P @ r + 0.5 * quad - 0.5 * float(logdet_F) + 0.5 * np.log(float(F_full[1, 1])))
     assert abs(got - expected) < 1e-6, f'mixed logpdf: got {got:.8f}, expected {expected:.8f}'
 
     assert 'A' in jax.grad(pipe)(params)
@@ -936,7 +945,7 @@ def test_custom_jvp_linear_theory():
     P_alpha = np.array([[1.0 / sigma_alpha ** 2]])
     F = B.T @ P @ B + P_alpha
     b = B.T @ (P @ r)
-    expected = float(-0.5 * r @ P @ r + 0.5 * float(b @ np.linalg.solve(F, b)) + 0.5 * np.log(float(P_alpha.flat[0])) - 0.5 * np.log(float(F.flat[0])))
+    expected = float(-0.5 * r @ P @ r + 0.5 * float(b @ np.linalg.solve(F, b)) - 0.5 * np.log(float(F.flat[0])))
     assert abs(got - expected) < 1e-6
 
     grad = jax.grad(pipe)(params)
@@ -997,7 +1006,7 @@ def test_sum_likelihood():
     P_alpha = np.array([[1.0 / sigma_alpha ** 2]])
     F = B_mat.T @ P1 @ B_mat + P_alpha
     b_vec = B_mat.T @ (P1 @ r1)
-    logL1_marg = float(-0.5 * r1 @ P1 @ r1 + 0.5 * float(b_vec @ np.linalg.solve(F, b_vec)) + 0.5 * np.log(float(P_alpha.flat[0])) - 0.5 * np.log(float(F.flat[0])))
+    logL1_marg = float(-0.5 * r1 @ P1 @ r1 + 0.5 * float(b_vec @ np.linalg.solve(F, b_vec)) - 0.5 * np.log(float(F.flat[0])))
     r2 = np.array(data2) - B_val * K2_np
     logL2 = float(-0.5 * r2 @ np.eye(len(K2)) / sigma2 ** 2 @ r2)
     assert abs(got - (logL1_marg + logL2)) < 1e-6
@@ -1248,6 +1257,59 @@ def test_pmap_compiled_graph(pipeline):
     ref = jax.vmap(pipeline)(batch)
     assert out.shape == (n,)
     assert np.allclose(out, ref)
+
+
+def test_build_graph_auto_share_params():
+    """build_graph unifies same-named Parameters that are distinct objects across nodes.
+
+    Two calculators constructed independently with a Parameter('omega_m', ...) should be
+    compiled together without requiring an explicit share_params() call.
+    """
+    from desilike.base import build_graph, compile
+
+    omega_m_1 = Parameter('omega_m', value=0.3)
+    z_1 = Parameter('z', value=0.5)
+    omega_m_2 = Parameter('omega_m', value=0.3)  # distinct object, same name
+    z_2 = Parameter('z', value=0.5)              # distinct object, same name
+    A = Parameter('A', value=1.0)
+    ns = Parameter('ns', value=0.96)
+
+    cosmo1 = Cosmology(omega_m=omega_m_1, z=z_1)
+    cosmo2 = Cosmology(omega_m=omega_m_2, z=z_2)
+    spec1 = PowerSpectrum(cosmo=cosmo1, A=A, ns=ns)
+    spec2 = PowerSpectrum(cosmo=cosmo2, A=A, ns=ns)
+
+    class SumSpectrum(Calculator):
+        def __init__(self, s1, s2):
+            self.s1 = s1
+            self.s2 = s2
+        def __call__(self):
+            self.pk = self.s1.pk + self.s2.pk
+            return self.pk
+        def tree_flatten(self):
+            return [self.pk], None
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.pk = children[0]
+            return obj
+
+    root = SumSpectrum(spec1, spec2)
+
+    # build_graph should auto-share omega_m_1/omega_m_2 and z_1/z_2, not raise
+    ctx = build_graph(root)
+
+    # compile should succeed and produce a graph with only 4 unique params
+    pipe = compile(root)
+    assert set(pipe.params.names()) == {'omega_m', 'z', 'A', 'ns'}
+    assert len(pipe.params) == 4
+
+    # Both branches should see the same canonical omega_m after sharing
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    result = pipe(params)
+    D = 0.3 ** 0.55 / 1.5
+    expected = 2.0 * np.array(K) ** 0.96 * D ** 2
+    assert jnp.allclose(result, jnp.array(expected), atol=1e-8)
 
 
 if __name__ == '__main__':

@@ -401,17 +401,18 @@ class Posterior(Calculator):
                 std = p.prior.std() if p.prior is not None else None
                 inv_scales[i] = (1. / std) if (std is not None and np.isfinite(std)) else 0.
 
-            # Build per-gaussian-component list: (theory_pipe, precision, flatdata, alpha_idx).
+            # Build per-gaussian-component list: (gauss, theory_pipe, precision, flatdata, alpha_idx).
+            # theory_pipe is compiled per-component only to discover which alpha params each depends on.
             components = []
             for g in gaussians:
                 theory = compile(g, output=lambda g=g: g.flattheory)
                 comp_param_names = set(theory.params.names())
                 alpha_idx = [i for i, p in enumerate(self._solved_params) if p.name in comp_param_names]
-                components.append((theory, g.precision, g.flatdata, alpha_idx))
+                components.append((g, theory, g.precision, g.flatdata, alpha_idx))
 
-            # Components with no solved-param dependence are handled separately.
-            self._no_alpha_components = [(t, p, d) for t, p, d, ai in components if not ai]
-            alpha_components = [(t, p, d, ai) for t, p, d, ai in components if ai]
+            # Components with no solved-param dependence: keep the per-component pipe for evaluation.
+            self._no_alpha_components = [(theory, precision, flatdata) for g, theory, precision, flatdata, ai in components if not ai]
+            alpha_components = [(g, precision, flatdata, ai) for g, theory, precision, flatdata, ai in components if ai]
 
             # Union-find: group alpha indices that appear together in any component.
             parent = list(range(n_alpha))
@@ -439,22 +440,40 @@ class Posterior(Calculator):
 
             # Remap each component's alpha_idx to local (group-relative) indices.
             root_comps = defaultdict(list)
-            for theory_pipe, precision, flatdata, alpha_idx in alpha_components:
+            for gauss, precision, flatdata, alpha_idx in alpha_components:
                 root = find(alpha_idx[0])
                 global_idx = root_sorted[root]
-                g_to_l = {g: l for l, g in enumerate(global_idx)}
-                root_comps[root].append((theory_pipe, precision, flatdata, [g_to_l[g] for g in alpha_idx]))
+                g_to_l = {gi: li for li, gi in enumerate(global_idx)}
+                root_comps[root].append((gauss, precision, flatdata, [g_to_l[g] for g in alpha_idx]))
 
             # Build one descriptor per independent group.
+            # Issue 1 fix: compile ONE combined theory pipe per group, rooted at likelihood,
+            # so shared upstream Calculators (cosmo, template, PT) are evaluated only once per group call
+            # instead of once per component.
             self._groups = []
             for root, global_idx in root_sorted.items():
                 comps = root_comps[root]
+                group_gaussians = [gauss for gauss, _, _, _ in comps]
+
+                def make_group_output(gaussians):
+                    return lambda: jnp.concatenate([jnp.ravel(jnp.asarray(g.flattheory)) for g in gaussians])
+
+                group_theory_pipe = compile(likelihood, output=make_group_output(group_gaussians))
+
+                # Per-component metadata for splitting the concatenated theories/Jacobians.
+                comp_meta = []
+                data_offset = 0
+                for gauss, precision, flatdata, local_idx in comps:
+                    flat_data = np.ravel(np.asarray(flatdata))
+                    n_i = flat_data.size
+                    comp_meta.append((precision, flat_data, local_idx, data_offset, n_i))
+                    data_offset += n_i
+
                 marg_local = np.array([j for j, g in enumerate(global_idx) if g in marg_global], dtype=int)
                 best_local = np.array([j for j, g in enumerate(global_idx) if g in best_global], dtype=int)
-                # Prior precision (1/std²) for every solved param in the group (best or marg).
                 prior_prec = jnp.array([inv_scales[g] ** 2 for g in global_idx])
                 group_alpha_names = [alpha_names[g] for g in global_idx]
-                self._groups.append((group_alpha_names, comps, marg_local, best_local, prior_prec))
+                self._groups.append((group_alpha_names, group_theory_pipe, comp_meta, marg_local, best_local, prior_prec))
 
             prior.update(self._likelihood.params.select(solved=False))
         else:
@@ -498,30 +517,44 @@ class Posterior(Calculator):
             logL = logL - 0.5 * r @ (precision @ r)
 
         # Per-group: independent block solve of size n_g × n_g.
-        for group_alpha_names, comps, marg_local, best_local, prior_prec in self._groups:
+        for group_alpha_names, group_theory_pipe, comp_meta, marg_local, best_local, prior_prec in self._groups:
             n_g = len(group_alpha_names)
+
+            # All params needed by the combined group pipe (includes both alpha and non-alpha params).
+            group_params = {p.name: jnp.asarray(params[p.name]) for p in group_theory_pipe.params}
+            alpha_vec = jnp.stack([group_params[name] for name in group_alpha_names])
+
+            # Issue 1 fix: one call to group_theory_pipe evaluates all group components,
+            # with shared upstream Calculators computed only once.
+            def group_fn(alpha_vec, _pipe=group_theory_pipe, _params=group_params, _names=group_alpha_names):
+                p = {**_params, **{name: alpha_vec[alpha_i] for alpha_i, name in enumerate(_names)}}
+                return _pipe(p)
+
+            # Issue 2 fix: jax.linearize computes the primal in one full forward pass, then
+            # each jvp_fn(e_i) call runs only the alpha-dependent (linear) layer — not the
+            # full pre-alpha subgraph (cosmo/template/PT).  Total cost: 1 full pass + n_g
+            # cheap tangent passes, versus n_g full passes with jacfwd.
+            theories_concat, jvp_fn = jax.linearize(group_fn, alpha_vec)
+            # jvp_fn(e_i) = i-th column of the Jacobian; vmap → shape (n_g, total_n_data).
+            B_rows = jax.vmap(jvp_fn)(jnp.eye(n_g))
+
             F_g = jnp.zeros((n_g, n_g))
             b_g = jnp.zeros(n_g)
+            logL_g = jnp.zeros(())
 
-            for theory_pipe, precision, flatdata, local_idx in comps:
-                comp_params = {p.name: jnp.asarray(params[p.name]) for p in theory_pipe.params}
-                comp_alpha_names = [group_alpha_names[j] for j in local_idx]
-                comp_alpha_vals = jnp.stack([comp_params[name] for name in comp_alpha_names])
-
-                def theory_fn(alpha_vec, _pipe=theory_pipe, _cp=comp_params, _names=comp_alpha_names):
-                    p = {**_cp, **{name: alpha_vec[i] for i, name in enumerate(_names)}}
-                    return _pipe(p)
-
-                # Jacobian first — forward-mode leaves JVP-augmented internal state.
-                B = jax.jacfwd(theory_fn)(comp_alpha_vals)      # (n_data, len(local_idx))
-                # Standard (primal) pass second — authoritative values for residuals.
-                theory = theory_fn(comp_alpha_vals)
-                r = flatdata - theory
-                BtP = B.T @ precision
+            for precision, flat_data, local_idx, data_offset, n_i in comp_meta:
+                theory_i = theories_concat[data_offset:data_offset + n_i]
+                # B_rows[alpha_j, data_k] = Jacobian element; transpose to (n_i, n_g),
+                # then select the columns for this component's local alpha indices.
+                B_i = B_rows[:, data_offset:data_offset + n_i].T[:, local_idx]  # (n_i, n_local)
+                r_i = flat_data - theory_i
+                BtP = B_i.T @ precision
                 ix = np.array(local_idx)
-                F_g = F_g.at[ix[:, None], ix[None, :]].add(BtP @ B)
-                b_g = b_g.at[ix].add(BtP @ r)
-                logL = logL - 0.5 * r @ (precision @ r)
+                F_g = F_g.at[ix[:, None], ix[None, :]].add(BtP @ B_i)
+                b_g = b_g.at[ix].add(BtP @ r_i)
+                logL_g = logL_g - 0.5 * r_i @ (precision @ r_i)
+
+            logL = logL + logL_g
 
             # Add prior precision for every solved param in the group (best or marg).
             F_g = F_g + jnp.diag(prior_prec)
@@ -536,7 +569,7 @@ class Posterior(Calculator):
             # Volume factor: only 'marg' params contribute; the 'best' block is profiled
             # out via the Schur complement  + ½ log|P_marg| − ½ log|F_g| + ½ log|F_g[best, best]|.
             # Empty marg/best index sets contribute 0, so no special-casing is needed.
-            logdet_Pmarg = 0. #jnp.sum(jnp.log(prior_prec[marg_local]))
+            logdet_Pmarg = 0.  # jnp.sum(jnp.log(prior_prec[marg_local])) — omitted: prior_prec can be 0 (improper prior)
             _, logdet_F = jnp.linalg.slogdet(F_g)
             _, logdet_F_bb = jnp.linalg.slogdet(F_g[best_local[:, None], best_local[None, :]])
             logL = logL + 0.5 * (logdet_Pmarg - logdet_F + logdet_F_bb)
@@ -1399,29 +1432,72 @@ def build_graph(root: Calculator) -> _CompileContext:
     dependencies (Variable, Parameter, Calculator) by scanning public attributes — without
     running __post_init__ or any __call__.
     Use params() or inspect ctx.node_deps / ctx.node_order to examine the graph.
+
+    Same-named :class:`Variable` objects that appear as distinct instances across different
+    nodes are automatically unified (first-seen identity wins), equivalent to calling
+    :func:`share_params` before compilation.
     """
     outer_ctx = getattr(_compile_context, 'ctx', None)
-    ctx = _CompileContext()
-    _compile_context.ctx = ctx
-    try:
-        _trace_node(root, ctx)
-    finally:
-        _compile_context.ctx = outer_ctx
+
+    def _trace(r):
+        c = _CompileContext()
+        _compile_context.ctx = c
+        try:
+            _trace_node(r, c)
+        finally:
+            _compile_context.ctx = outer_ctx
+        return c
+
+    ctx = _trace(root)
+
+    # Auto-share: if the same Variable name appears as distinct objects across nodes,
+    # unify them (first-seen wins) so callers don't need to call share_params manually.
+    canonical = {}
+    needs_sharing = False
+    for node in ctx.node_order:
+        for dep in ctx.node_deps.get(id(node), []):
+            if not isinstance(dep, Variable):
+                continue
+            if dep.name not in canonical:
+                canonical[dep.name] = dep
+            elif dep is not canonical[dep.name]:
+                needs_sharing = True
+
+    if needs_sharing:
+        for name, canon_var in canonical.items():
+            replace(root, lambda node, _c=canon_var: isinstance(node, Variable) and node.name == _c.name and node is not _c, canon_var)
+        ctx = _trace(root)
+
     return ctx
 
 
-def params(node_or_graph) -> VariableCollection:
+def get_params(node_or_graph, level=None) -> VariableCollection:
     """Return the Variable/Parameter collection for a Calculator or CompiledGraph.
 
-    For a CompiledGraph, returns the already-collected params. For a Calculator,
-    traverses the constructed graph (no __call__) and collects Variable deps.
+    For a :class:`CompiledGraph`, returns the already-collected params (*level* is ignored).
+    For a :class:`Calculator`, traverses the constructed graph (no ``__call__``) and collects
+    Variable deps up to depth *level* (``None`` = unlimited, ``1`` = root + direct deps only).
+
+    Parameters
+    ----------
+    node_or_graph : Calculator or CompiledGraph
+    level : int or None, default=None
+        Maximum Calculator dependency depth to traverse.  Mirrors the *level* argument of
+        :func:`copy` and :func:`replace`.  ``None`` collects from the full tree.
+
+    Returns
+    -------
+    VariableCollection
     """
     if isinstance(node_or_graph, CompiledGraph):
         return node_or_graph.params
     ctx = build_graph(node_or_graph)
+    nodes_in_scope = set(id(n) for n in _iter_calculators(node_or_graph, maxlevel=level))
     result = VariableCollection()
     seen_ids = set()
     for node in ctx.node_order:
+        if id(node) not in nodes_in_scope:
+            continue
         for dep in ctx.node_deps.get(id(node), []):
             if isinstance(dep, Variable) and id(dep) not in seen_ids:
                 if dep.name in result:
@@ -1429,6 +1505,10 @@ def params(node_or_graph) -> VariableCollection:
                 seen_ids.add(id(dep))
                 result.set(dep)
     return result
+
+
+# backward-compat alias
+params = get_params
 
 
 def compile(root: Calculator, output=None) -> CompiledGraph:
@@ -1733,7 +1813,7 @@ def pmap(fn, backend='mpi_and_jax', mpicomm=None):
             out_struct = jax.eval_shape(vfn, *dummy_args)
             in_specs  = jtu.tree_unflatten(treedef, [P('batch')] * len(leafsig))
             out_specs = jtu.tree_map(lambda _: P('batch'), out_struct)
-            sharded = jax.jit(shard_map(vfn, mesh=mesh, in_specs=in_specs, out_specs=out_specs))
+            sharded = jax.jit(shard_map(vfn, mesh=mesh, in_specs=in_specs, out_specs=out_specs, check_rep=False))
             _sharded_cache[sig] = (sharded, jtu.tree_structure(out_struct))
         return _sharded_cache[sig]
 

@@ -162,15 +162,15 @@ class SumMultiOut(Calculator):
 # ── test helpers ──────────────────────────────────────────────────────────────
 
 def _make_quadratic_graph():
-    a = Parameter('a', value=1.0)
-    b = Parameter('b', value=0.5)
+    a = Parameter('a', value=1.0, fixed=False)
+    b = Parameter('b', value=0.5, fixed=False)
     return compile(QuadraticModel(a=a, b=b))
 
 
 def _make_powerlaw_graph():
-    omega_m = Parameter('omega_m', value=0.3)
-    A = Parameter('A', value=1.0)
-    ns = Parameter('ns', value=0.96)
+    omega_m = Parameter('omega_m', value=0.3, fixed=False)
+    A = Parameter('A', value=1.0, fixed=False)
+    ns = Parameter('ns', value=0.96, fixed=False)
     cosmo = GrowthCalculator(omega_m=omega_m)
     return compile(PowerLaw(cosmo=cosmo, A=A, ns=ns))
 
@@ -280,8 +280,8 @@ def test_taylor_custom_write_read():
 # ── None-returning, multi-child calculator (FOLPS-shaped) ─────────────────────
 
 def _make_multiout_graph():
-    a = Parameter('a', value=1.3)
-    b = Parameter('b', value=0.4)
+    a = Parameter('a', value=1.3, fixed=False)
+    b = Parameter('b', value=0.4, fixed=False)
     return compile(MultiOutNoReturn(a=a, b=b))
 
 

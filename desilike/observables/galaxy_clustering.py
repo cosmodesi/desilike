@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import lsstypes as types
 from matplotlib import pyplot as plt
 
-from ..base import Calculator, compile, copy, replace, params as _get_params
+from ..base import Calculator, compile, copy, replace, get_params as _get_params
 from ..base import _iter_calculators
 from ..theories.galaxy_clustering.template import Spectrum2Template
 from .. import plotting

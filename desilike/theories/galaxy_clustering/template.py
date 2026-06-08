@@ -336,6 +336,8 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         fo = fid.get_fourier()
         sigma8 = fo.sigma8_z(z, of='delta_cb')
         fsigma8 = fo.sigma8_z(z, of='theta_cb')
+        self._sigma8_fid = float(sigma8)
+        self._fsigma8_fid = float(fsigma8)
         self._f_fid = float(fsigma8 / sigma8)
 
         pk_interp = fo.pk_interpolator(of='delta_cb', **_kw_pk).to_1d(z=z)
@@ -382,15 +384,18 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         self.f = self._f_fid * df
         self.f0 = self._f0_fid * df
         self.fk = self._fk_fid * df
+        self.sigma8 = self._sigma8_fid
+        self.fsigma8 = self._fsigma8_fid * df
         return self.pk_dd
 
     def tree_flatten(self):
-        return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk], {'k': self.k})
+        return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk,
+                 self.sigma8, self.fsigma8], {'k': self.k})
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk = children
+        obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.sigma8, obj.fsigma8 = children
         obj.k = aux['k']
         return obj
 

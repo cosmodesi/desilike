@@ -63,6 +63,14 @@ class NumpyEncoder(json.JSONEncoder):
             return float(obj)
         if isinstance(obj, np.complexfloating):
             return complex(obj)
+        if isinstance(obj, np.ndarray) and obj.ndim == 0:
+            return self.default(obj[()])
+        try:
+            import jax
+            if isinstance(obj, jax.Array):
+                return self.default(np.asarray(obj))
+        except ImportError:
+            pass
         return super().default(obj)
 
 

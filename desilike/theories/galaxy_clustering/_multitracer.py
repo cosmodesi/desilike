@@ -50,6 +50,9 @@ def propose_params_multitracer(auto_params, tracers, stochastic=(), shared=(), c
             vc.set(param.clone())
         return vc
 
+    if not isinstance(tracers, str) and len(tracers) == 1:
+        tracers = tracers[0]
+
     if isinstance(tracers, str):
         for param in auto_params:
             if param.basename in shared_set:

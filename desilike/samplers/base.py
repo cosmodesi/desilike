@@ -165,8 +165,7 @@ class BaseSampler(ABC):
             When ``None``, each parameter's ``ref.std()`` is used instead.
         """
         # ── parameter sets ────────────────────────────────────────────────────
-        # Varied = free non-derived, non-fixed parameters
-        self.varied_params   = posterior.params.select(varied=True)
+        self.varied_params   = posterior.params.select(varied=True, solved=False)
         # Derived = all derived params (including solved)
         self.derived_params  = posterior.params.select(derived=True)
         # Flat count of derived scalar values (for array_to_samples bookkeeping)

@@ -6,10 +6,14 @@ BAO correlation function:
     DampedBAOWigglesTracerCorrelation2Poles → Correlation2PolesObservable
     → ObservablesGaussianLikelihood → Posterior.
 
-Full-shape (velocileptors REPT):
+FOLPS full-shape:
     CosmoprimoCosmology + DirectSpectrum2Template
-    → REPTVelocileptorsTracerSpectrum2Poles → Spectrum2PolesObservable
+    → FOLPSTracerSpectrum2Poles → Spectrum2PolesObservable
     → ObservablesGaussianLikelihood → Posterior.
+
+FOLPS full-shape with TaylorEmulator on FOLPSPTSpectrum2Poles:
+    Same as above but the PT sub-graph is replaced by a degree-3 Taylor emulator
+    fitted once before timing.
 
 Run directly::
 
@@ -22,7 +26,8 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-from desilike.base import compile, params as get_params, Posterior
+from desilike.base import compile, get_params, Posterior, replace, SumLikelihood
+from desilike import TaylorEmulator
 from desilike.theories.galaxy_clustering import (BAOSpectrum2Template,
                                                  DampedBAOWigglesPTSpectrum2Poles,
                                                  DampedBAOWigglesTracerCorrelation2Poles,
@@ -50,7 +55,7 @@ def build_posterior_bao(s=S, ells=ELLS_BAO, marginalize=False):
     from cosmoprimo.fiducial import BOSS
     fiducial = BOSS(engine='eisenstein_hu')
     template = BAOSpectrum2Template(z=0.5, fiducial=fiducial)
-    pt = DampedBAOWigglesPTSpectrum2Poles(template=template, ells=ells)
+    pt = DampedBAOWigglesPTSpectrum2Poles(template=template)
     theory = DampedBAOWigglesTracerCorrelation2Poles(s=s, pt=pt, ells=ells, broadband=BROADBAND)
 
     window = np.eye(n)
@@ -63,7 +68,7 @@ def build_posterior_bao(s=S, ells=ELLS_BAO, marginalize=False):
                                              covariance=covariance)
     likelihood = ObservablesGaussianLikelihood(observables=observable)
     if marginalize:
-        for param in get_params(likelihood).select(basename='bl*'):
+        for param in get_params(likelihood).select(basename='*l*', fixed=False):
             param.update(derived='best')
     return Posterior(likelihood)
 
@@ -74,17 +79,27 @@ ELLS_FOLPS = (0, 2, 4)
 K = np.linspace(0.02, 0.2, 101)
 
 
-def build_posterior_folps(k=K, ells=ELLS_FOLPS, marginalize=False):
+def build_posterior_folps(k=K, ells=ELLS_FOLPS, marginalize=False, emulator_order=None):
     """FOLPS full-shape pipeline (no window matrix).
 
     With ``marginalize=True`` the counter-term (alpha*) and stochastic (sn*)
     parameters are solved analytically (``derived='best'``).
+    With ``emulator_order`` not None, the PT sub-graph is replaced by a Taylor
+    emulator of that polynomial order before building the observable.
     """
     n = len(ells) * len(k)
 
-    cosmo = CosmoprimoCosmology(engine='eisenstein_hu')
-    template = DirectSpectrum2Template(z=0.8, cosmo=cosmo, engine='eisenstein_hu')
+    cosmo = CosmoprimoCosmology(engine='camb')
+    template = DirectSpectrum2Template(z=0.8, cosmo=cosmo)
     theory = FOLPSTracerSpectrum2Poles(k=k, template=template, ells=ells)
+
+    if emulator_order is not None:
+        print(f'  fitting TaylorEmulator (order={emulator_order}) on PT sub-graph …', end=' ', flush=True)
+        t0 = time.perf_counter()
+        pt_emulator = TaylorEmulator(compile(theory.pt), order=emulator_order)
+        pt_emulator.fit()
+        print(f'done ({(time.perf_counter() - t0) * 1e3:.0f} ms)')
+        replace(theory, theory.pt, pt_emulator.to_calculator())
 
     rng = np.random.default_rng(42)
     data = rng.normal(scale=1e2, size=n)
@@ -98,6 +113,57 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, marginalize=False):
             param.update(derived='best')
         for param in get_params(likelihood).select(basename='sn*'):
             param.update(derived='best')
+    return Posterior(likelihood)
+
+
+# ── FOLPS multi-tracer pipeline ──────────────────────────────────────────────
+
+TRACERS_FOLPS = ['LRG', 'ELG']
+Z_TRACERS = {'LRG': 0.8, 'ELG': 1.1}
+
+
+def build_posterior_folps_multitracer(k=K, ells=ELLS_FOLPS, tracers=TRACERS_FOLPS, marginalize=False, emulator_order=None):
+    """FOLPS SumLikelihood over independent per-tracer pipelines.
+
+    Each tracer gets its own CosmoprimoCosmology + DirectSpectrum2Template +
+    FOLPSTracerSpectrum2Poles.  All parameters (including cosmological) are
+    namespaced under the tracer name so they are sampled independently.
+
+    With ``marginalize=True`` the alpha* and sn* parameters of every tracer
+    are solved analytically.
+    With ``emulator_order`` not None, each tracer's PT sub-graph is replaced by
+    a Taylor emulator of that polynomial order.
+    """
+    n = len(ells) * len(k)
+    rng = np.random.default_rng(42)
+
+    likelihoods = []
+    for tracer in tracers:
+        cosmo = CosmoprimoCosmology(engine='camb')
+        template = DirectSpectrum2Template(z=Z_TRACERS.get(tracer, 0.8), cosmo=cosmo)
+        theory = FOLPSTracerSpectrum2Poles(k=k, template=template, ells=ells, tracers=(tracer,))
+        params = get_params(theory, level=1)
+        theory.update(params=params)
+
+        if emulator_order is not None:
+            pt_emulator = TaylorEmulator(compile(theory.pt), order=emulator_order)
+            pt_emulator.fit()
+            replace(theory, theory.pt, pt_emulator.to_calculator())
+
+        data = rng.normal(scale=1e2, size=n)
+        covariance = np.diag(np.full(n, 1e4))
+        observable = Spectrum2PolesObservable(data=data, theory=theory, k=k, ells=ells,
+                                              covariance=covariance)
+
+        lik = ObservablesGaussianLikelihood(observables=observable)
+        if marginalize:
+            for param in get_params(lik).select(basename='alpha*'):
+                param.update(derived='best')
+            for param in get_params(lik).select(basename='sn*'):
+                param.update(derived='best')
+        likelihoods.append(lik)
+
+    likelihood = SumLikelihood(likelihoods)
     return Posterior(likelihood)
 
 
@@ -119,12 +185,12 @@ def _bench(label, fn, number=5, warmup=3):
     return dt
 
 
-def run(label, build_fn, vary_param=None, batch_size=8, run=('eager', 'jit', 'grad', 'vmap'), **kwargs):
+def run(label, build_fn, vary_param=None, batch_size=8, run=('eager', 'jit', 'grad', 'vmap', 'profile'), **kwargs):
     """Compile and benchmark one pipeline variant."""
     print(f'\n=== {label} ===')
     pipe = compile(build_fn())
 
-    params = {p.name: float(p.value) for p in pipe.params if not p.derived}
+    params = {p.name: float(p.value) for p in pipe.params.select(fixed=False, derived=False)}
     print(f'  sampled parameters ({len(params)}): {", ".join(params)}')
     print(f'  logpdf at center: {float(pipe(params)):.4f}\n')
 
@@ -149,9 +215,15 @@ def run(label, build_fn, vary_param=None, batch_size=8, run=('eager', 'jit', 'gr
         vpipe = jax.jit(jax.vmap(pipe))
         dt = _bench(f'jit vmap call (n={batch_size})', lambda bench_idx: vpipe(batch(bench_idx)), **kwargs)
         print(f'  {"→ per-sample":<26s} {dt / batch_size:9.4f} ms/sample')
+    if 'profile' in run:
+        from desilike.profilers import MinuitProfiler
+        profiler = MinuitProfiler(pipe, seed=42)
+        profiler.maximize()
+        profiles = profiler.profiles
+        print(profiles.to_stats(tablefmt='pretty'))
 
 
-def main(test=('folps',)):
+def main(test=('folps_multi', 'folps_multi_emu')):
     if 'bao' in test:
         print(f'\n{"─" * 60}')
         print(f'BAO correlation: ells={ELLS_BAO}, s=arange(20, 180, 4) ({len(S)} points), '
@@ -168,6 +240,39 @@ def main(test=('folps',)):
         run('without analytic marg.', lambda: build_posterior_folps(marginalize=False), vary_param='logA', warmup=2, number=2, run=('eager', 'jit'))
         run('with analytic marg. (alpha*+sn* → best)', lambda: build_posterior_folps(marginalize=True), vary_param='logA', warmup=2, number=2, run=('eager', 'jit'))
 
+    if 'folps_multi' in test:
+        tracers = TRACERS_FOLPS
+        print(f'\n{"─" * 60}')
+        print(f'FOLPS multi-tracer ({"+".join(tracers)}): ells={ELLS_FOLPS}, '
+            f'k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
+            f'data size per tracer={len(ELLS_FOLPS) * len(K)}')
+        print(f'{"─" * 60}')
+        run('without analytic marg.', lambda: build_posterior_folps_multitracer(marginalize=False),
+            vary_param=f'{tracers[0]}::logA', warmup=2, number=2, run=('eager', 'jit'))
+        run('with analytic marg. (alpha*+sn* → best)', lambda: build_posterior_folps_multitracer(marginalize=True),
+            vary_param=f'{tracers[0]}::logA', warmup=2, number=2, run=('eager', 'jit'))
+
+    if 'folps_emu' in test:
+        print(f'\n{"─" * 60}')
+        print(f'FOLPS + TaylorEmulator(order=1) on PT: ells={ELLS_FOLPS}, '
+            f'k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
+            f'data size={len(ELLS_FOLPS) * len(K)}')
+        print(f'{"─" * 60}')
+        run('without analytic marg.', lambda: build_posterior_folps(marginalize=False, emulator_order=1), vary_param='logA', warmup=2, number=10)
+        run('with analytic marg. (alpha*+sn* → best)', lambda: build_posterior_folps(marginalize=True, emulator_order=1), vary_param='logA', warmup=2, number=10)
+
+    if 'folps_multi_emu' in test:
+        tracers = TRACERS_FOLPS
+        print(f'\n{"─" * 60}')
+        print(f'FOLPS multi-tracer ({"+".join(tracers)}) + TaylorEmulator(order=1) on PT: '
+            f'ells={ELLS_FOLPS}, k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
+            f'data size per tracer={len(ELLS_FOLPS) * len(K)}')
+        print(f'{"─" * 60}')
+        run('without analytic marg.', lambda: build_posterior_folps_multitracer(marginalize=False, emulator_order=1),
+            vary_param=f'{tracers[0]}::logA', warmup=2, number=10, run=('eager', 'jit', 'grad', 'vmap'))
+        run('with analytic marg. (alpha*+sn* → best)', lambda: build_posterior_folps_multitracer(marginalize=True, emulator_order=1),
+            vary_param=f'{tracers[0]}::logA', warmup=2, number=10, run=('eager', 'jit', 'grad'))
+
 
 if __name__ == '__main__':
-    main()
+    main(test=('bao',))

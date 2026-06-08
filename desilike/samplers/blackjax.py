@@ -266,7 +266,7 @@ class HMCSampler(BlackJAXSampler):
 
         """
         if inverse_mass_matrix is None:
-            ndim = len(posterior.params.select(varied=True))
+            ndim = len(posterior.params.select(varied=True, solved=False))
             inverse_mass_matrix = np.ones(ndim)
 
         self.kernel_args = dict(
@@ -316,7 +316,7 @@ class NoUTurnSampler(BlackJAXSampler):
 
         """
         if inverse_mass_matrix is None:
-            ndim = len(posterior.params.select(varied=True))
+            ndim = len(posterior.params.select(varied=True, solved=False))
             inverse_mass_matrix = np.ones(ndim)
 
         self.kernel_args = dict(

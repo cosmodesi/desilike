@@ -60,6 +60,7 @@ class BOBYQAProfiler(BaseProfiler):
 
         logpost = float(-0.5 * result.f)
         profiles.best = _build_best_from_x(result.x, logpost, state.varied_params)
+        profiles.logpdf = np.array([logpost])
 
         # Covariance from Hessian approximation
         try:

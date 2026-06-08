@@ -136,9 +136,9 @@ class DampedBAOWigglesPTSpectrum2Poles(Calculator):
                       ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta\beta'),
             Parameter('sigmas', value=0., prior=dict(limits=[-1., 10.]),
                       ref=dict(dist='norm', loc=0., scale=1.), latex=r'\Sigma_s'),
-            Parameter('sigmapar', value=9., prior=dict(limits=[0., 25.]),
+            Parameter('sigmapar', value=9., fixed=True, prior=dict(limits=[0., 25.]),
                       ref=dict(dist='norm', loc=9., scale=1.), latex=r'\Sigma_\parallel'),
-            Parameter('sigmaper', value=6., prior=dict(limits=[0., 20.]),
+            Parameter('sigmaper', value=6., fixed=True, prior=dict(limits=[0., 20.]),
                       ref=dict(dist='norm', loc=6., scale=1.), latex=r'\Sigma_\perp'),
         ], tracers)
 
@@ -307,7 +307,7 @@ class ResummedBAOWigglesPTSpectrum2Poles(Calculator):
                       ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta\beta'),
             Parameter('sigmas', value=0., prior=dict(limits=[-1., 10.]),
                       ref=dict(dist='norm', loc=0., scale=1.), latex=r'\Sigma_s'),
-            Parameter('d', value=1., prior=dict(limits=[0., 3.]),
+            Parameter('d', value=1., fixed=True, prior=dict(limits=[0., 3.]),
                       ref=dict(dist='norm', loc=1., scale=0.05), latex='d'),
         ], tracers)
 
@@ -448,7 +448,7 @@ _BB_CORRELATION_POWER_POWS = (-2, -1, 0, 1, 2)
 _BB_SPECTRUM_KERNEL_IKS = tuple(range(-2, 10))
 _BB_CORRELATION_KERNEL_IKS = tuple(range(-2, 3))
 #: Real-space (bl) correction powers for kernel xi broadband.
-_BB_XI_BL_POWS = (0, 2)
+_BB_CORRELATION_BL_POWS = (0, 2)
 
 _BB_POWER_MODES = ('power', 'power3', 'even-power')
 _BB_KERNEL_MODES = ('ngp', 'cic', 'tsc', 'pcs', 'pcs2')
@@ -524,7 +524,7 @@ def _bb_correlation_auto_params(ells, broadband):
                                              prior=None, ref=dict(dist='norm', loc=0., scale=1e2),
                                              fd_eps=0.005, latex=f'a_{{{ell},{ik}}}'))
         for ell in ells:
-            for pow in _BB_XI_BL_POWS:
+            for pow in _BB_CORRELATION_BL_POWS:
                 auto_params.append(Parameter(f'bl{ell}_{pow}', value=0.,
                                              prior=None, ref=dict(dist='norm', loc=0., scale=1e-3),
                                              fd_eps=0.005, latex=f'b_{{{ell},{pow}}}'))
@@ -576,55 +576,63 @@ class _BAOWigglesTracerSpectrum2Poles(Calculator):
         """
         if broadband not in _BB_POWER_MODES + _BB_KERNEL_MODES:
             raise ValueError(f'Unknown broadband mode {broadband!r}.')
-        return propose_params_multitracer(_bb_spectrum_auto_params(ells, broadband), tracers)
+        pt_vc = cls._default_pt_cls.propose_params(tracers=tracers) if cls._default_pt_cls is not None else VariableCollection()
+        bb_vc = propose_params_multitracer(_bb_spectrum_auto_params(ells, broadband), tracers)
+        return pt_vc + bb_vc
 
-    def __init__(self, k=None, pt=None, ells=(0, 2), broadband='power', kp=None, tracers=None, params=None):
+    def __init__(self, k=None, pt=None, ells=(0, 2), broadband='power', kp=None, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         _ells = tuple(ells)
         vc = type(self).propose_params(tracers=tracers, ells=_ells, broadband=broadband)
         if params is not None:
-            vc = vc + VariableCollection(params)
-        # Store all broadband params as a flat ordered list; build_graph discovers them via self.bb_params.
-        # We bypass assign_params because some basenames (e.g. al0_0) are valid identifiers and would
-        # be split out of the list, breaking the matrix row-index correspondence.
-        self.bb_params = list(vc)
+            vc = VariableCollection(params)
+        # Separate broadband params (al*) from PT params; route each to the right owner.
+        # We bypass assign_params for bb_params because some basenames (e.g. al0_0) are valid
+        # identifiers and would be split out of the list, breaking matrix row-index correspondence.
+        bb_basenames = {p.basename for p in _bb_spectrum_auto_params(_ells, broadband)}
+        bb_vc = VariableCollection([p for p in vc if p.basename in bb_basenames])
+        pt_vc = VariableCollection([p for p in vc if p.basename not in bb_basenames])
+        self.bb_params = list(bb_vc)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
         self.ells = _ells
         if pt is None:
-            pt = self._default_pt_cls(tracers=tracers)
+            pt = self._default_pt_cls(tracers=tracers, params=pt_vc if len(pt_vc) else None, **kwargs)
         self.pt = pt
         self.pt.update(k=self.k, ells=self.ells)
 
-    def __post_init__(self, k=None, pt=None, ells=(0, 2), broadband='power', kp=None, tracers=None, params=None):
-        # Non-node setup: build the broadband basis matrix.
+    def __post_init__(self, k=None, pt=None, ells=(0, 2), broadband='power', kp=None, tracers=None, params=None, **kwargs):
+        # Non-node setup: build the broadband basis matrix keyed on each param's basename.
         _ells = tuple(ells)
         kp_val = float(kp) if kp is not None else 2. * np.pi / self.pt.template._fiducial.rs_drag
-        if 'power' in broadband:
-            # shape (n_ells * n_pows, n_k) — rows ordered as self._bb_ell_idx
-            self._bb_matrix = np.stack(
-                [(self.k / kp_val) ** pow for ell in _ells for pow in _BB_SPECTRUM_POWER_POWS])
-        else:
-            kernel = broadband[:3]  # 'pcs2' -> 'pcs', 'ngp' -> 'ngp', etc.
-            pk_now_interp = lambda ki: float(np.interp(ki, self.pt.template.k,
-                                                        self.pt.template._pknow_dd_fid))
-            rows = []
-            for ell in _ells:
-                for ik in _BB_SPECTRUM_KERNEL_IKS:
-                    w = _kernel_func(np.abs(self.k / kp_val - ik), kernel=kernel)
-                    rows.append(w * pk_now_interp(float(np.clip(ik * kp_val, self.k[0], self.k[-1]))))
-            self._bb_matrix = np.stack(rows)  # (n_ells * n_iks, n_k)
-        self._bb_n = len(_BB_SPECTRUM_POWER_POWS if 'power' in broadband else _BB_SPECTRUM_KERNEL_IKS)
+        kernel = None if 'power' in broadband else broadband[:3]  # 'pcs2' -> 'pcs'
+        if kernel is not None:
+            pk_now_at = lambda ki: float(np.interp(ki, self.pt.template.k, self.pt.template._pknow_dd_fid))
+        # Build one matrix row per param, grouped by ell.
+        # Basename format: 'al{ell}_{pow_or_ik}' (e.g. 'al0_-2', 'al2_1').
+        rows_per_ell = [[] for _ in _ells]
+        param_indices_per_ell = [[] for _ in _ells]
+        for param_idx, param in enumerate(self.bb_params):
+            parts = param.basename.split('_', 1)
+            ell = int(parts[0][2:])
+            val = int(parts[1])
+            ill = _ells.index(ell)
+            param_indices_per_ell[ill].append(param_idx)
+            if kernel is None:
+                rows_per_ell[ill].append((self.k / kp_val) ** val)
+            else:
+                w = _kernel_func(np.abs(self.k / kp_val - val), kernel=kernel)
+                rows_per_ell[ill].append(w * pk_now_at(float(np.clip(val * kp_val, self.k[0], self.k[-1]))))
+        self._bb_ell_matrices = [np.stack(rows) if rows else np.zeros((0, len(self.k))) for rows in rows_per_ell]
+        self._bb_ell_param_indices = param_indices_per_ell
 
     def __call__(self):
         broadband = jnp.zeros((len(self.ells), len(self.k)))
-        n = self._bb_n
-        for ill in range(len(self.ells)):
-            params_ell = self.bb_params[ill * n:(ill + 1) * n]
-            matrix_ell = jnp.asarray(self._bb_matrix[ill * n:(ill + 1) * n])  # (n, n_k)
-            bb_vals = jnp.stack([p.value for p in params_ell])  # (n,)
-            broadband = broadband.at[ill].add(bb_vals.dot(matrix_ell))
+        for ill, (indices, mat_ell) in enumerate(zip(self._bb_ell_param_indices, self._bb_ell_matrices)):
+            if indices:
+                bb_vals = jnp.stack([self.bb_params[idx].value for idx in indices])
+                broadband = broadband.at[ill].add(bb_vals.dot(jnp.asarray(mat_ell)))
         self.poles = self.pt.poles + broadband
         return self.poles
 
@@ -841,30 +849,36 @@ class _BAOWigglesTracerCorrelation2Poles(Calculator):
         """
         if broadband not in _BB_POWER_MODES + ('even-power',) + _BB_KERNEL_MODES:
             raise ValueError(f'Unknown broadband mode {broadband!r}.')
-        return propose_params_multitracer(_bb_correlation_auto_params(ells, broadband), tracers)
+        pt_vc = cls._default_pt_cls.propose_params(tracers=tracers) if cls._default_pt_cls is not None else VariableCollection()
+        bb_vc = propose_params_multitracer(_bb_correlation_auto_params(ells, broadband), tracers)
+        return pt_vc + bb_vc
 
-    def __init__(self, s=None, pt=None, ells=(0, 2), broadband='power', sp=None, tracers=None, params=None):
+    def __init__(self, s=None, pt=None, ells=(0, 2), broadband='power', sp=None, tracers=None, params=None, **kwargs):
         # Nodes (Parameters + Calculator deps) and their update() live in __init__.
         _ells = tuple(ells)
         vc = type(self).propose_params(tracers=tracers, ells=_ells, broadband=broadband)
         if params is not None:
-            vc = vc + VariableCollection(params)
+            vc = VariableCollection(params)
+
+        # Separate broadband params from PT params; route each to the right owner.
+        bb_basenames = {p.basename for p in _bb_correlation_auto_params(_ells, broadband)}
+        pt_vc = VariableCollection([p for p in vc if p.basename not in bb_basenames])
 
         if 'power' in broadband or broadband == 'even-power':
             # Power-law: al params live on this class; pt is a bare PT.
             # Store as ordered list; build_graph discovers them via self.bb_params.
-            self.bb_params = list(vc)
+            bb_vc = VariableCollection([p for p in vc if p.basename in bb_basenames])
+            self.bb_params = list(bb_vc)
             if pt is None:
-                pt = self._default_pt_cls(tracers=tracers)
+                pt = self._default_pt_cls(tracers=tracers, params=pt_vc if len(pt_vc) else None, **kwargs)
             self.pt = pt
             self.pt.update(k=np.geomspace(1e-4, 0.6, 300), ells=_ells)
         else:
-            # Kernel: al params go to the inner tracer spectrum dep; bl params stay here.
-            al_vc = vc.select(basename='al*')
-            bl_vc = vc.select(basename='bl*')
-            if pt is None:
-                pt = self._default_tracer_cls(broadband=broadband, tracers=tracers, params=al_vc)
-            self.pt = pt  # tracer spectrum dep (owns al params)
+            # Kernel: al params + PT params go to the inner tracer spectrum dep; bl params stay here.
+            # pt (if provided) is a bare PT, forwarded to the tracer spectrum — matching bak.
+            al_vc = VariableCollection([p for p in vc if p.basename in bb_basenames and p.basename.startswith('al') and not p.fixed])
+            bl_vc = VariableCollection([p for p in vc if p.basename in bb_basenames and p.basename.startswith('bl')])
+            self.pt = self._default_tracer_cls(broadband=broadband, tracers=tracers, pt=pt, params=al_vc + pt_vc, **kwargs)
             self.pt.update(k=np.geomspace(1e-4, 0.6, 300), ells=_ells)
             # bl params: real-space correction; stored as list so build_graph discovers them.
             self.bl_params = list(bl_vc)
@@ -874,35 +888,34 @@ class _BAOWigglesTracerCorrelation2Poles(Calculator):
         self.s = np.asarray(s, dtype='f8')
         self.ells = _ells
 
-    def __post_init__(self, s=None, pt=None, ells=(0, 2), broadband='power', sp=None, tracers=None, params=None):
-        # Non-node setup: FFTLog transformer + broadband basis matrix.
+    def __post_init__(self, s=None, pt=None, ells=(0, 2), broadband='power', sp=None, tracers=None, params=None, **kwargs):
+        # Non-node setup: FFTLog transformer + broadband basis matrix keyed on each param's basename.
         _ells = tuple(ells)
         self._to_correlation = SpectrumToCorrelation(s=self.s, ells=_ells, kin=np.geomspace(1e-4, 0.6, 300))
         sp_val = float(sp) if sp is not None else 2. * np.pi / 0.02
-        if 'power' in broadband or broadband == 'even-power':
-            pows = _BB_CORRELATION_POWER_POWS
-            n = len(pows)
-            self._bb_matrix = np.stack(
-                [(self.s / sp_val) ** pow for ell in _ells for pow in pows])
-            self._bb_n = n
-            # Flat ordered list of Parameter objects matching _bb_matrix rows.
-            self._bb_params_flat = self.bb_params  # set by assign_params in __init__
-        else:
-            # Kernel mode: al params are in self.pt; bl params are self.bl_params.
-            n = len(_BB_XI_BL_POWS)
-            self._bb_matrix = np.stack(
-                [(self.s / sp_val) ** pow for ell in _ells for pow in _BB_XI_BL_POWS])
-            self._bb_n = n
-            self._bb_params_flat = self.bl_params
+        # Power modes: al* params live on this class; kernel mode: bl* params live here, al* are in self.pt.
+        bb_params_flat = self.bb_params if 'power' in broadband or broadband == 'even-power' else self.bl_params
+        # Build one matrix row per param from its 'al/bl{ell}_{pow}' basename.
+        rows_per_ell = [[] for _ in _ells]
+        param_indices_per_ell = [[] for _ in _ells]
+        for param_idx, param in enumerate(bb_params_flat):
+            parts = param.basename.split('_', 1)
+            ell = int(parts[0][2:])
+            val = int(parts[1])
+            ill = _ells.index(ell)
+            param_indices_per_ell[ill].append(param_idx)
+            rows_per_ell[ill].append((self.s / sp_val) ** val)
+        self._bb_ell_matrices = [np.stack(rows) if rows else np.zeros((0, len(self.s))) for rows in rows_per_ell]
+        self._bb_ell_param_indices = param_indices_per_ell
+        self._bb_params_flat = bb_params_flat
 
     def __call__(self):
         xi_bare = self._to_correlation(self.pt.poles)
-        # Broadband: linear combination of fixed basis functions (_bb_matrix), one block
-        # of _bb_n rows per multipole.  Computed in JAX so derivatives w.r.t. the broadband
-        # parameters are exact (no finite differences) — they enter linearly here.
-        amplitudes = jnp.stack([param.value for param in self._bb_params_flat])
-        broadband = (amplitudes[:, None] * self._bb_matrix).reshape(
-            len(self.ells), self._bb_n, len(self.s)).sum(axis=1)
+        broadband = jnp.zeros((len(self.ells), len(self.s)))
+        for ill, (indices, mat_ell) in enumerate(zip(self._bb_ell_param_indices, self._bb_ell_matrices)):
+            if indices:
+                bb_vals = jnp.stack([self._bb_params_flat[idx].value for idx in indices])
+                broadband = broadband.at[ill].add(bb_vals.dot(jnp.asarray(mat_ell)))
         self.poles = xi_bare + broadband
         return self.poles
 

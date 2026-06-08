@@ -4,6 +4,7 @@ import copy
 import functools
 import itertools
 import math
+import logging
 import pickle
 
 import numpy as np
@@ -73,14 +74,14 @@ class TaylorEmulator:
 
     _name = 'TaylorEmulator'
 
+    logger = logging.getLogger('TaylorEmulator')
+
     # ── construction ─────────────────────────────────────────────────────────
 
     def __init__(self, graph: CompiledGraph, order, fd_acc=None, fd_eps=None):
         self._graph = graph
 
-        # Split params into inputs (non-derived) and outputs (derived Variables).
-        all_param_names = list(graph.params.names())
-        input_param_names = [n for n in all_param_names if not graph.params[n].derived]
+        input_param_names = graph.params.select(varied=True).names()
 
         # Normalise *order* to a per-input-parameter dict.
         if isinstance(order, int):
@@ -138,6 +139,8 @@ class TaylorEmulator:
         if graph is None:
             raise RuntimeError('The graph is not available (loaded from file?); cannot refit')
 
+        self.logger.info('Varied parameters: %s', self._input_param_names)
+
         # Resolve expansion center (input params only; derived handled separately).
         p0 = {p.name: p._value for p in graph.params}
         if center is not None:
@@ -149,7 +152,7 @@ class TaylorEmulator:
         def _primal(g):
             fd_t = tuple(jnp.asarray(p0[n]) for n in g._fd_names)
             jax_t = tuple(jnp.asarray(p0[n]) for n in g._jax_names)
-            input_saved = {p.name: p._value for p in g.params if not g.params[p.name].derived}
+            input_saved = {p.name: p._value for p in g.params if g.params[p.name].varied}
             try:
                 return g._call_fn(fd_t, jax_t)
             finally:
@@ -294,7 +297,7 @@ class TaylorEmulator:
         input_param_names = self._input_param_names
         derived_names = self._derived_names or []
 
-        class TaylorEmulatedCalculator(Calculator):
+        class TaylorEmulatedCalculator(root_cls):
 
             def __init__(self, *args, **kwargs):
                 # Register the same Variable/Parameter objects as the original graph,
@@ -306,17 +309,23 @@ class TaylorEmulator:
                 for param in emulator._params_vc:
                     setattr(self, param.name, copy.copy(param))
 
+            def __post_init__(self, *args, **kwargs):
+                # Skip root_cls.__post_init__ — emulator needs no heavy setup.
+                # Data (table, kap, …) is populated by __call__ via tree_unflatten.
+                pass
+
             def __call__(self):
                 # Collect input parameter values and reconstruct the full child state.
                 p = {n: getattr(self, n).value for n in input_param_names}
                 monomials, children, derived = emulator._predict_children(p)
 
                 # Reconstruct the root's attribute state via tree_unflatten so
-                # downstream calculators can access e.g. self.theory.table.
+                # downstream calculators can access e.g. self.theory.table or
+                # underscore-prefixed config attrs like self.pt._A_full.
+                # The proxy is a bare object.__new__ instance with no Node lifecycle
+                # attributes, so copying its entire __dict__ is safe.
                 proxy = root_cls.tree_unflatten(tree_aux, children)
-                for k, v in proxy.__dict__.items():
-                    if not k.startswith('_'):
-                        setattr(self, k, v)
+                self.__dict__.update(proxy.__dict__)
 
                 # For derived-Variable attributes, update the Variable's value
                 # *in-place* rather than replacing the object, so that the

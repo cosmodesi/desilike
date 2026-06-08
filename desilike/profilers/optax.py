@@ -127,4 +127,5 @@ class OptaxProfiler(BaseProfiler):
 
         profiles = Profiles()
         profiles.best = _build_best_from_x(best_params, logpost, state.varied_params)
+        profiles.logpdf = np.array([logpost])
         return profiles

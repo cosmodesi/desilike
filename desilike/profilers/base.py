@@ -70,7 +70,6 @@ def _build_best_from_x(x_rescaled, logpost, varied_params):
         else:
             best[param.name] = np.array([float(val_flat[0])])
         offset += flat_size
-    best['logpdf'] = np.array([float(logpost)])
     return best
 
 
@@ -235,7 +234,7 @@ class BaseProfiler:
         self.mpicomm    = mpicomm if mpicomm is not None else get_mpicomm()
 
         # ── collect varied parameters ─────────────────────────────────────
-        self.varied_params = likelihood.params.select(varied=True)
+        self.varied_params = likelihood.params.select(varied=True, solved=False)
         if not self.varied_params:
             raise ValueError('No varied parameters found in the likelihood.')
         self.logger.info('Varied parameters: %s', self.varied_params.names())
@@ -432,7 +431,7 @@ class BaseProfiler:
             if data is None:
                 continue
             for name, arr in data.items():
-                if name == 'logpdf' or name not in names:
+                if name not in names:
                     continue
                 slc     = self._param_slices[name]
                 scale_p = self._scale[slc]
@@ -581,7 +580,7 @@ class BaseProfiler:
         if self.profiles is None or self.profiles.best is None:
             self.maximize()
 
-        argmax = int(np.argmax(self.profiles.best['logpdf']))
+        argmax = int(np.argmax(self.profiles.logpdf))
         # Build best_orig as a flat vector of shape (flat_size,)
         best_orig = np.concatenate([
             np.asarray(self.profiles.best[name][argmax]).ravel()
@@ -671,8 +670,8 @@ class BaseProfiler:
         if self.profiles.covariance is None:
             self.covariance()
 
-        argmax = int(np.argmax(self.profiles.best['logpdf']))
-        lp_max = float(self.profiles.best['logpdf'][argmax])
+        argmax = int(np.argmax(self.profiles.logpdf))
+        lp_max = float(self.profiles.logpdf[argmax])
 
         # Best-fit in rescaled space (needed by _interval_one)
         best_orig = np.concatenate([
@@ -782,8 +781,8 @@ class BaseProfiler:
         if self.profiles.covariance is None:
             self.covariance()
 
-        argmax = int(np.argmax(self.profiles.best['logpdf']))
-        lp_max = float(self.profiles.best['logpdf'][argmax])
+        argmax = int(np.argmax(self.profiles.logpdf))
+        lp_max = float(self.profiles.logpdf[argmax])
 
         best_orig = np.concatenate([
             np.asarray(self.profiles.best[name][argmax]).ravel()
@@ -859,7 +858,7 @@ class BaseProfiler:
                     f'{pname!r} has shape {param.shape}.'
                 )
 
-        argmax    = int(np.argmax(self.profiles.best['logpdf']))
+        argmax    = int(np.argmax(self.profiles.logpdf))
         profile_results = {}
 
         for pname, grid_vals, npoints, cl_val in zip(param_names, grids, sizes, cls_):
@@ -911,7 +910,7 @@ class BaseProfiler:
                 )
 
         flat_grid_idx = [self._param_slices[name].start for name in param_names]
-        argmax        = int(np.argmax(self.profiles.best['logpdf']))
+        argmax        = int(np.argmax(self.profiles.logpdf))
         grids1d = [
             _build_1d_grid(pname, flat_pidx, grid_vals, npoints, cl_val, argmax, self.profiles, self.varied_params)
             for pname, flat_pidx, grid_vals, npoints, cl_val
@@ -1052,12 +1051,12 @@ class BaseProfiler:
         for start in starts_free:
             state = dataclasses.replace(state_tmpl, start=start)
             raw   = self._maximize_one(state, **kwargs)
-            if raw is not None and raw.best is not None:
-                lp = float(np.max(raw.best.get('logpdf', [-np.inf])))
+            if raw is not None and raw.logpdf is not None:
+                lp = float(np.max(raw.logpdf))
                 if lp > best_lp:
                     best_lp = lp
                     if scan_ctx['free_params']:
-                        idx_best  = int(np.argmax(raw.best['logpdf']))
+                        idx_best  = int(np.argmax(raw.logpdf))
                         best_free = np.concatenate([
                             np.asarray(raw.best[param.name][idx_best]).ravel()
                             for param in scan_ctx['free_params']

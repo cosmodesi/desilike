@@ -96,6 +96,7 @@ class MinuitProfiler(BaseProfiler):
         logpost = float(-0.5 * minuit.fval)
         result_x = np.array([float(minuit.values[name]) for name in names])
         profiles.best = _build_best_from_x(result_x, logpost, state.varied_params)
+        profiles.logpdf = np.array([logpost])
 
         if not state.fast:
             if minuit.covariance is not None:
@@ -105,5 +106,4 @@ class MinuitProfiler(BaseProfiler):
                 profiles.error = {
                     name: np.array([float(minuit.errors[name])]) for name in names
                 }
-
         return profiles

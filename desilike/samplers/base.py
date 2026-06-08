@@ -166,8 +166,8 @@ class BaseSampler(ABC):
         """
         # ── parameter sets ────────────────────────────────────────────────────
         self.varied_params   = posterior.params.select(varied=True, solved=False)
-        # Derived = all derived params (including solved)
-        self.derived_params  = posterior.params.select(derived=True)
+        # Derived = pure derived outputs (logposterior etc.) + analytically solved params.
+        self.derived_params  = posterior.params.select(derived=True) + posterior.params.select(solved=True)
         # Flat count of derived scalar values (for array_to_samples bookkeeping)
         self.n_derived = int(sum(
             int(np.prod(p.shape)) if p.shape else 1

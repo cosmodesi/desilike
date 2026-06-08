@@ -113,8 +113,11 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False,
         template = DirectSpectrum2Template(z=z, cosmo=cosmo)
         tracer_arg = (tracer,) if tracer is not None else None
         theory = FOLPSTracerSpectrum2Poles(k=k, template=template, ells=ells, tracers=tracer_arg)
-        if tracer is not None:
-            theory.update(params=get_params(theory, level=1))
+        params = get_params(theory, level=1)
+        if marginalize:
+            for param in params.select(basename=['alpha*', 'sn*']):
+                param.update(derived='best')
+        theory.update(params=params)
 
         if emulator_order is not None:
             print(f'  fitting TaylorEmulator (order={emulator_order}) on PT sub-graph …', end=' ', flush=True)
@@ -138,7 +141,7 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False,
 
         from scipy.linalg import block_diag
         like = ObservablesGaussianLikelihood(observables=observables, covariance=block_diag(*covariances))
-        if marginalize:
+        if False: #marginalize:
             for param in get_params(like).select(basename='alpha*'):
                 param.update(derived='best')
             for param in get_params(like).select(basename='sn*'):
@@ -240,7 +243,7 @@ def main(test=('folps_multi', 'folps_multi_emu')):
             f'k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
             f'data size={len(ELLS_FOLPS) * len(K)}')
         print(f'{"─" * 60}')
-        run('without analytic marg.', lambda: build_posterior_folps(marginalize=False, emulator_order=1), vary_param='logA', warmup=2, number=10)
+        #run('without analytic marg.', lambda: build_posterior_folps(marginalize=False, emulator_order=1), vary_param='logA', warmup=2, number=10)
         run('with analytic marg. (alpha*+sn* → best)', lambda: build_posterior_folps(marginalize=True, emulator_order=1), vary_param='logA', warmup=2, number=10)
 
     if 'folps_emu_3poles' in test:
@@ -280,4 +283,4 @@ def main(test=('folps_multi', 'folps_multi_emu')):
 
 if __name__ == '__main__':
 
-    main(test=('folps_emu_3poles',))
+    main(test=('bao',))

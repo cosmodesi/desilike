@@ -476,9 +476,9 @@ class BaseProfiler:
 
         The likelihood is called *eagerly* (not JIT) once per run.
         """
-        derived_params = [p for p in self.likelihood.params if p.derived is True]
         if profiles is None:
             return profiles
+        derived_params = [p for p in self.likelihood.params if p.derived]
         # Attach parameter metadata (priors, latex, …) so downstream consumers
         # (to_stats, select, plotting) have access to it.
         profiles.params = self.likelihood.params

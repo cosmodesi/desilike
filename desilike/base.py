@@ -363,7 +363,7 @@ class Posterior(Calculator):
 
         # Public (scanned by build_graph) so non-solved likelihood params are in Posterior's
         # deps and get their values set before each __call__.  Solved params are excluded here
-        # to avoid a name collision with the derived-True clone in self.solved_params.
+        # because they are exposed separately via self.solved_params below.
         self.likelihood_params = [p for p in self._likelihood.params if not getattr(p, 'solved', False)]
 
         if self._solved_params:
@@ -485,10 +485,10 @@ class Posterior(Calculator):
         self.logposterior = Variable(basename='logposterior', value=0., derived=True, latex=r'\ln\mathcal{P}')
         self.logprior = Variable(basename='logprior', value=0., derived=True, latex=r'\ln\Pi')
         self.loglikelihood = Variable(basename='loglikelihood', value=0., derived=True, latex=r'\ln\mathcal{L}')
-        # Deep copies of solved params with derived=True so build_graph discovers them as
-        # Posterior's own deps and the pipeline tracks best-fit values as derived outputs.
-        # The originals stay hidden in _likelihood_params (underscore → not scanned).
-        self.solved_params = [sp.clone(derived=True) for sp in self._solved_params]
+        # Expose originals (derived='marg'/'best') as a public attribute so build_graph
+        # discovers them as Posterior's deps and the pipeline tracks their best-fit values.
+        # _derived_params uses a truthy check on derived, so solved params are included.
+        self.solved_params = list(self._solved_params)
         # Number of data points (None when the likelihood does not expose it), surfaced
         # for ndof bookkeeping downstream (e.g. the profiler / Profiles.to_stats).
         self.ndata = getattr(likelihood, 'ndata', None)
@@ -1117,7 +1117,7 @@ class CompiledGraph:
                     seen_ids.add(id(param))
                     self.params.set(param)
 
-        self._derived_params = [p for p in self.params if p.derived is True]
+        self._derived_params = [p for p in self.params if p.derived]  # True, 'marg', 'best'
 
         # Per-node cache state for all nodes (keyed by node id).
         self._node_states = {id(node): {'last_params': None, 'was_called': False, 'last_result': None, 'dep_result': None, 'call_result': None}

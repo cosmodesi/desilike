@@ -514,14 +514,12 @@ class PopulationSampler(BaseSampler):
         pass
 
     def run(self, **kwargs):
+        output = self.run_sampler(**kwargs)
         if self.pool.main:
-            samples, derived, extras = self.run_sampler(**kwargs)
-            result = self.array_to_samples(samples, derived, **extras)
-            self.pool.stop_wait()
+            samples, derived, extras = output
+            self.samples = self.array_to_samples(samples, derived, **extras)
         else:
-            result = None
-            self.pool.wait()
-        self.samples = result
+            self.samples = None
         if self.directory is not None:
             self.write()
         return self.samples

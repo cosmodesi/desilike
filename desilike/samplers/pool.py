@@ -140,7 +140,12 @@ class MPIPool:
 
     On the main rank (rank 0) call :meth:`map`; on worker ranks call
     :meth:`wait` to enter the task-receive loop.
+
+    Each pool instance is assigned a unique MPI tag so that multiple pools
+    sharing the same communicator can coexist without message interference.
     """
+
+    _next_tag = 1
 
     def __init__(self, comm=None, batch_size=0):
         try:
@@ -154,6 +159,8 @@ class MPIPool:
         self.rank = self.comm.Get_rank()
         self.size = self.comm.Get_size()
         self.batch_size = batch_size
+        self.tag = MPIPool._next_tag
+        MPIPool._next_tag += 1
         self.function = _error_function
         self.registry = {}
 
@@ -184,28 +191,27 @@ class MPIPool:
         return self.rank == 0
 
     def wait(self):
-        """Worker loop: receive tasks, execute, return results."""
+        """Worker loop: receive and process tasks until a stop message arrives."""
         if self.main:
             raise RuntimeError('Main node told to await jobs')
         status = self.MPI.Status()
         while True:
-            task = self.comm.recv(source=0, tag=self.MPI.ANY_TAG, status=status)
+            task = self.comm.recv(source=0, tag=self.tag, status=status)
             if isinstance(task, _stop_wait_message):
                 return
             elif callable(task):
                 self.load_function(task)
                 self.function = task
-                continue
             else:
                 self.load_function(task)
                 results = _apply_batched(self.function, task, self.batch_size)
-                self.comm.send(results, dest=0, tag=status.tag)
+                self.comm.send(results, dest=0, tag=self.tag)
 
     def stop_wait(self):
         """Signal all workers to exit their :meth:`wait` loop."""
         if self.main:
             for worker_rank in range(1, self.size):
-                self.comm.isend(_stop_wait_message(), dest=worker_rank)
+                self.comm.isend(_stop_wait_message(), dest=worker_rank, tag=self.tag)
 
     def map(self, function, tasks):
         """Apply *function* to every element of *tasks* in parallel.
@@ -215,22 +221,18 @@ class MPIPool:
         ``function(np.stack(slice))`` once per rank; ``N`` calls it in
         chunks of N.
 
-        Must be called from the main rank only; workers should call
-        :meth:`wait`.
+        Must be called from the main rank only; workers must be in
+        :meth:`wait` or :func:`wait_many`.
         """
-        if not self.main:
-            self.wait()
-            return
-
         tasks = list(tasks)
         if function is not self.function:
             self.function = function
             for worker_rank in range(1, self.size):
-                self.comm.send(function, dest=worker_rank)
+                self.comm.send(function, dest=worker_rank, tag=self.tag)
 
         # Distribute tasks to workers (round-robin).
         for worker_rank in range(1, self.size):
-            self.comm.send(tasks[worker_rank::self.size], dest=worker_rank)
+            self.comm.send(tasks[worker_rank::self.size], dest=worker_rank, tag=self.tag)
 
         # Process the main rank's share.
         main_slice = tasks[::self.size]
@@ -240,9 +242,46 @@ class MPIPool:
         # Collect worker results in arrival order.
         status = self.MPI.Status()
         for _ in range(self.size - 1):
-            result = self.comm.recv(source=self.MPI.ANY_SOURCE, status=status)
+            result = self.comm.recv(source=self.MPI.ANY_SOURCE, tag=self.tag, status=status)
             results[status.source::self.size] = result
         return results
+
+
+def wait_many(pools):
+    """Combined worker loop servicing multiple :class:`MPIPool` instances.
+
+    Workers call this instead of calling each pool's :meth:`~MPIPool.wait`
+    separately. A single ``recv(ANY_TAG)`` loop routes every incoming message
+    to the correct pool by tag, so two pools on the same communicator cannot
+    interfere with each other. The loop exits once every pool has received
+    its stop message.
+
+    Parameters
+    ----------
+    pools : sequence of MPIPool
+        The pools to service. Non-MPIPool entries (e.g. serial pools) are
+        silently ignored since they need no worker involvement.
+    """
+    mpi_pools = [pool for pool in pools if isinstance(pool, MPIPool)]
+    if not mpi_pools:
+        return
+    comm = mpi_pools[0].comm
+    MPI = mpi_pools[0].MPI
+    pool_by_tag = {pool.tag: pool for pool in mpi_pools}
+    active_tags = set(pool_by_tag)
+    status = MPI.Status()
+    while active_tags:
+        task = comm.recv(source=0, tag=MPI.ANY_TAG, status=status)
+        pool = pool_by_tag[status.tag]
+        if isinstance(task, _stop_wait_message):
+            active_tags.discard(status.tag)
+        elif callable(task):
+            pool.load_function(task)
+            pool.function = task
+        else:
+            pool.load_function(task)
+            results = _apply_batched(pool.function, task, pool.batch_size)
+            comm.send(results, dest=0, tag=status.tag)
 
 
 def make_pool(mpicomm, batch_size=0):

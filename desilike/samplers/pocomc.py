@@ -173,17 +173,18 @@ class PocoMCSampler(PopulationSampler):
             kwargs, 'pocoMC', resume_state_path=None,
             save_every=1 if self.directory is not None else None)
 
-        self.sampler.run(**kwargs)
-        if self.n_derived:
-            samples, weights, logl, logp, blobs = self.sampler.posterior(
-                return_blobs=True)
-            blobs = blobs.reshape(len(samples), -1)
-        else:
-            samples, weights, logl, logp = self.sampler.posterior(
-                return_blobs=False)
-            blobs = np.empty((len(samples), 0))
-        # pocomc returns log_likelihood as ``logl`` and log_prior as ``logp``;
-        # the log-posterior is their sum.
-        extras = dict(aweight=weights, logposterior=logl + logp)
-
-        return samples, blobs, extras
+        if self.pool.main:
+            self.sampler.run(**kwargs)
+            if self.n_derived:
+                samples, weights, logl, logp, blobs = self.sampler.posterior(
+                    return_blobs=True)
+                blobs = blobs.reshape(len(samples), -1)
+            else:
+                samples, weights, logl, logp = self.sampler.posterior(
+                    return_blobs=False)
+                blobs = np.empty((len(samples), 0))
+            extras = dict(aweight=weights, logposterior=logl + logp)
+            self.pool.stop_wait()
+            return samples, blobs, extras
+        self.pool.wait()
+        return None

@@ -97,12 +97,13 @@ class DynestySampler(PopulationSampler):
         kwargs = update_kwargs(
             kwargs, 'dynesty', checkpoint_file=checkpoint_file)
 
-        self.sampler.run_nested(**kwargs)
-        results = self.sampler.results
-
-        # Compute log-prior for each posterior sample so we can store the
-        # log-posterior (log-likelihood + log-prior) in the returned MCSamples.
-        log_prior = np.array(list(self.pool.map(self.compute_prior, results.samples)))
-        return results.samples, results['blob'], dict(
-            aweight=results.importance_weights(),
-            logposterior=results.logl + log_prior)
+        if self.pool.main:
+            self.sampler.run_nested(**kwargs)
+            results = self.sampler.results
+            log_prior = np.array(list(self.pool.map(self.compute_prior, results.samples)))
+            self.pool.stop_wait()
+            return results.samples, results['blob'], dict(
+                aweight=results.importance_weights(),
+                logposterior=results.logl + log_prior)
+        self.pool.wait()
+        return None

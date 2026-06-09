@@ -7,7 +7,7 @@ except ModuleNotFoundError:
 import numpy as np
 
 from .base import update_kwargs, PopulationSampler
-from .pool import make_pool
+from .pool import _SerialPool
 
 
 class NautilusSampler(PopulationSampler):
@@ -44,9 +44,12 @@ class NautilusSampler(PopulationSampler):
                          rescale=rescale, covariance=covariance, batch_size=batch_size)
 
         # nautilus accepts pool=(pool_likelihood, pool_sampler).
-        # Use a vectorized pool for likelihood (batched vmap calls) and a
-        # plain pool for the internal sampler calculations (non-array tasks).
-        pool_sampler = make_pool(self.pool.comm, batch_size=0)
+        # pool_likelihood uses self.pool (MPI-aware, batched) for likelihood calls.
+        # pool_sampler must be a plain serial pool: using a second MPIPool on the
+        # same communicator would interfere with workers blocked in self.pool.wait(),
+        # causing them to receive nautilus's internal messages and corrupt the
+        # function registry.
+        pool_sampler = _SerialPool(batch_size=0)
         if self.pool.main:
             kwargs = update_kwargs(
                 kwargs, 'nautilus', prior=self.prior_transform,
@@ -84,6 +87,5 @@ class NautilusSampler(PopulationSampler):
         # Compute log-prior for each sample; log-posterior = log-posterior +
         # log-prior.
         log_prior = np.array(list(self.pool.map(self.compute_prior, samples)))
-        return samples, blobs.reshape(len(samples), -1), dict(
-            aweight=np.exp(log_w),
-            logposterior=log_l + log_prior)
+        self.logger.info('Finished sampling.')
+        return samples, blobs.reshape(len(samples), -1), dict(aweight=np.exp(log_w), logposterior=log_l + log_prior)

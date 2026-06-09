@@ -3616,6 +3616,26 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTPowe
         else:
             self.b1_fid = None
 
+    # Subclasses (the emulator-backed ``fkpt_pkemu_*``) set this True so that, in
+    # EAGER mode, the few JAX-array scalars coming from the PT (sigma8, f, qpar,
+    # qper) are collapsed to Python floats before the bias transforms run.  This
+    # avoids thousands of per-op XLA dispatches in the physical/APscaling
+    # branches (~5x faster eager call), while leaving the jit/vmap path
+    # untouched -- under a trace these are Tracers and are returned as-is.  The
+    # numeric result is bit-for-bit identical (IEEE-754 double arithmetic).
+    _eager_float_scalars = False
+
+    def _eager_float(self, x):
+        if not self._eager_float_scalars:
+            return x
+        import jax
+        if isinstance(x, jax.core.Tracer):
+            return x
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return x
+
     def calculate(self, **params):
         super(fkptTracerPowerSpectrumMultipoles, self).calculate()
         params = {**self.required_bias_params, **params}
@@ -3638,14 +3658,15 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTPowe
             return
 
         # APscaling needs sigma8(z) / sigma8_ref(z), not sigma8(z=0) / sigma8_ref(z).
-        sigma8 = getattr(self.pt, "sigma8_z", self.pt.sigma8)
+        sigma8 = self._eager_float(getattr(self.pt, "sigma8_z", self.pt.sigma8))
         f = getattr(self.pt, "f0", None)
         if f is None:
             raise ValueError("Missing MG growth rate: expected pt.f0 (preferred) or pt.f.")
+        f = self._eager_float(f)
 
         if pb == 'APscaling':
-            qpar = self.pt.qpar
-            qper = self.pt.qper
+            qpar = self._eager_float(self.pt.qpar)
+            qper = self._eager_float(self.pt.qper)
             A_AP = 1.0 / (qper**2 * qpar)
             self.A_AP = A_AP
             sqrtA_AP = A_AP**0.5
@@ -3993,7 +4014,7 @@ def Kfuncs_to_tables(
         eftcamb_h1_interp=eftcamb_h1_interp,
         eftcamb_h3_interp=eftcamb_h3_interp,
         eftcamb_h5_interp=eftcamb_h5_interp,
-        use_numba=bool(use_numba),
+        # use_numba=bool(use_numba),
     )
 
     k_ext_np = np.asarray(k_ext, dtype=float)
@@ -5906,9 +5927,18 @@ class fkpt_pkemu_TracerPowerSpectrumMultipoles(fkptTracerPowerSpectrumMultipoles
 
     pt_cls = 'fkpt_pkemu_PowerSpectrumMultipoles'
     _params = fkptTracerPowerSpectrumMultipoles._params
+    # Collapse the PT's JAX scalars (sigma8, f, qpar, qper) to floats in eager
+    # mode so the physical/APscaling bias transforms avoid per-op XLA dispatch.
+    # jit/vmap path is unaffected (values are Tracers there).  See _eager_float.
+    _eager_float_scalars = True
 
 
 class fkpt_pkemu_TracerBispectrumMultipoles(fkptjaxTracerBispectrumMultipoles):
     """Emulator-backed tracer bispectrum multipoles, reusing the same
     emulator-backed PT calculator."""
+
+    # Drive the bispectrum from the emulator PT (fed by MgEmulatorCosmology via
+    # cosmo=), NOT the default fkptjaxPowerSpectrumMultipoles which falls back to
+    # a Boltzmann DirectPowerSpectrumTemplate.
+    _pt_cls = fkpt_pkemu_PowerSpectrumMultipoles
 

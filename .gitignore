@@ -29,3 +29,6 @@ doc/_build/
 
 # Unit test / coverage reports
 **/.coverage
+
+# Scratch bispectrum emulator-vs-ISiTGR comparison (validation only)
+emulator_comparison/compare_bispectrum.py

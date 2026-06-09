@@ -29,7 +29,7 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """
-from functools import partial
+import functools
 
 
 class FunctionWrapper:
@@ -136,7 +136,7 @@ class MPIPool(object):
             obj.function = self.registry[obj.name]
             return
 
-        if isinstance(obj, partial):
+        if isinstance(obj, functools.partial):
             self.load_function(obj.func)
 
         if isinstance(obj, dict):
@@ -269,3 +269,32 @@ class MPIPool(object):
             return obj
         else:
             return self.comm.bcast(obj)
+
+
+def from_main(func):
+    """Execute a method only from the main process."""
+
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        exception = None
+        if self.pool.main:
+            try:
+                result = func(self, *args, **kwargs)
+            except Exception as exc:
+                exception = exc
+            finally:
+                try:
+                    self.pool.stop_wait()
+                except:
+                    if self.pool.size > 1:
+                        self.pool.comm.Abort(1)
+        else:
+            self.pool.wait()
+
+        exception = self.pool.bcast(exception)
+        if exception:
+            raise exception
+
+        return self.pool.bcast(None if not self.pool.main else result)
+
+    return wrapper

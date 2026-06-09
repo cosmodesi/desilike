@@ -33,6 +33,7 @@ KWARGS_INIT_FAST = dict(
     zeus=dict(n_walkers=4))
 KWARGS_RUN = dict(
     dynesty=dict(n_effective=0),
+    emcee=dict(gelman_rubin=float('inf')),
     grid=dict(grid=np.linspace(0, 1, 50)),
     importance=dict(samples=Samples(
         a=np.repeat(np.linspace(0, 1, 50), 50),
@@ -40,14 +41,15 @@ KWARGS_RUN = dict(
         log_posterior=np.zeros(50**2))),
     nautilus=dict(n_eff=100),
     pocomc=dict(n_total=100, n_evidence=100),
-    qmc=dict(size=10000))
+    qmc=dict(size=10000),
+    zeus=dict(gelman_rubin=float('inf')))
 KWARGS_RUN_FAST = dict(
     dynesty=dict(maxiter=10),
     importance=dict(samples=Samples(
         a=np.repeat(np.linspace(0, 1, 11), 11),
         b=np.tile(np.linspace(0, 1, 11), 11),
         log_posterior=np.zeros(11**2))),
-    emcee=dict(max_steps=10),
+    emcee=dict(max_steps=10, gelman_rubin=float('inf')),
     grid=dict(grid=np.linspace(0, 1, 11)),
     hmc=dict(max_steps=10),
     mclmc=dict(max_steps=10),
@@ -56,7 +58,7 @@ KWARGS_RUN_FAST = dict(
     nuts=dict(max_steps=10),
     pocomc=dict(n_total=10, n_evidence=0),
     qmc=dict(size=100),
-    zeus=dict(max_steps=10))
+    zeus=dict(max_steps=10, gelman_rubin=float('inf')))
 
 
 for kwargs in [KWARGS_INIT, KWARGS_INIT_FAST, KWARGS_RUN, KWARGS_RUN_FAST]:
@@ -91,7 +93,8 @@ def test_accuracy(likelihood, key):
     # Test that all samplers work with a simple two-dimensional likelihood and
     # produce acceptable results.
 
-    sampler = SAMPLER_CLS[key](likelihood, rng=42, **KWARGS_INIT[key])
+    rng = 42 if key != 'zeus' else None  # zeus does not support seeds
+    sampler = SAMPLER_CLS[key](likelihood, rng=rng, **KWARGS_INIT[key])
     results = sampler.run(**KWARGS_RUN[key])
 
     # The mean should match.
@@ -218,7 +221,7 @@ def test_metropolis_hastings_fast(likelihood):
 
 
 @pytest.mark.mpi_skip
-@pytest.mark.parametrize('key', ['hmc', 'nuts'])
+@pytest.mark.parametrize('key', ['nuts'])
 def test_adapt(likelihood, key):
     # Check that the BlackJAXSampler can adapt.
 

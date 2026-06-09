@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from desilike import Samples
-from desilike.pool import MPIPool
+from desilike.pool import from_main, MPIPool
 from desilike.utils import BaseClass
 from .optimizers import scipy_dual_annealing
 
@@ -297,6 +297,7 @@ class Profiler(BaseClass):
             return x_0, cost_function(x_0), True
         return optimizer(cost_function, x_0, rng, **kwargs)
 
+    @from_main
     def run(self, n_per_iter=10, max_iter=10, tol=1e-3, warm_start=False,
             max_init_attempts=100, optimizer=scipy_dual_annealing,
             optimizer_kwargs=None):
@@ -326,51 +327,44 @@ class Profiler(BaseClass):
             Optional keyword arguments passed to the optimizer. Default is
             ``None``.
 
-        Raises
-        ------
-        ValueError
-            If trying to run the profiler without having added samples.
-
         Returns
         -------
         samples : desilike.statistics.samples.Samples
             Maxima found by the profiler.
 
+        Raises
+        ------
+        ValueError
+            If trying to run the profiler without having added samples.
+
         """
         if len(self.samples) == 0:
-            raise ValueError("Cannot run profiler without samples.")
+            msg = "Cannot run profiler without samples."
+            raise ValueError(msg)
 
-        if optimizer_kwargs is None:
-            optimizer_kwargs = {}
-
+        optimizer_kwargs = {} if optimizer_kwargs is None else optimizer_kwargs
         run_optimizer = partial(self._run_optimizer, optimizer,
                                 **optimizer_kwargs)
 
-        if self.pool.main:
+        for _ in range(max_iter):
+            index, x_0 = self._get_start(
+                n_per_iter, max_init_attempts=max_init_attempts)
+            result = self.pool.map(
+                run_optimizer, zip(index, x_0, self.rng.spawn(len(x_0))))
 
-            for _ in range(max_iter):
-                index, x_0 = self._get_start(
-                    n_per_iter, max_init_attempts=max_init_attempts)
-                result = self.pool.map(
-                    run_optimizer, zip(index, x_0, self.rng.spawn(len(x_0))))
+            impr = np.zeros(len(self.samples))
+            for i, (x_min, f_min, success) in zip(index, result):
+                if f_min < -self.samples[self.neg_cost_key][i]:
+                    impr[i] = -self.samples[self.neg_cost_key][i] - f_min
+                    params = self.samples[i]
+                    params.update(self._vector_to_params(x_min, i))
+                    params[self.neg_cost_key] = -f_min
+                    self.samples[i] = params
 
-                impr = np.zeros(len(self.samples))
-                for i, (x_min, f_min, success) in zip(index, result):
-                    if f_min < -self.samples[self.neg_cost_key][i]:
-                        impr[i] = -self.samples[self.neg_cost_key][i] - f_min
-                        params = self.samples[i]
-                        params.update(self._vector_to_params(x_min, i))
-                        params[self.neg_cost_key] = -f_min
-                        self.samples[i] = params
+            if self.directory is not None:
+                self._save()
 
-                if self.directory is not None:
-                    self._save()
+            if np.amax(impr) < tol:
+                break
 
-                if np.amax(impr) < tol:
-                    break
-
-            self.pool.stop_wait()
-        else:
-            self.pool.wait()
-
-        return self.pool.bcast(self.samples)
+        return self.samples

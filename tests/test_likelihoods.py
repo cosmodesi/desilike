@@ -1,9 +1,11 @@
 import numpy as np
+import pytest
 
 from desilike.likelihoods.bbn import Schoneberg2024BBNLikelihood
 from desilike.likelihoods.hubble import Riess2020H0Likelihood
 
 
+@pytest.mark.mpi_skip
 def test_bbn():
     # Test that the BBN likelihood behaves correctly, i.e., gives results
     # consistent with Schoneberg (2024).
@@ -32,6 +34,7 @@ def test_bbn():
                           atol=5 * mean[i] / np.sqrt(n_eff), rtol=0)
 
 
+@pytest.mark.mpi_skip
 def test_hubble():
     # Test that the Hubble likelihoods behaves correctly, i.e., give results
     # consistent with the published papers.

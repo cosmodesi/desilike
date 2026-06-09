@@ -24,7 +24,15 @@ dependencies = [
 [project.optional-dependencies]
 tests = [
     "emcee",
-    "pyclass @ git+https://github.com/adematti/pyclass"]
+    "dynesty",
+    "nautilus-sampler",
+    "pocomc",
+    "zeus-mcmc",
+    "h5py",
+    "pyclass @ git+https://github.com/adematti/pyclass",
+    "jax",
+    "interpax",
+    "blackjax"]
 plotting = [
     "matplotlib",
     "tabulate",

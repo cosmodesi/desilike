@@ -1,58 +1,59 @@
 Samplers
 ========
 
-emcee
------
-.. automodule:: desilike.samplers.emcee
-  :members:
-  :inherited-members:
-  :show-inheritance:
+Base Classes
+------------
 
-zeus
-----
-.. automodule:: desilike.samplers.zeus
+.. autoclass:: desilike.samplers.base.StaticSampler
   :members:
-  :inherited-members:
-  :show-inheritance:
 
-pocomc
-------
-.. automodule:: desilike.samplers.pocomc
+.. autoclass:: desilike.samplers.base.PopulationSampler
   :members:
-  :inherited-members:
-  :show-inheritance:
 
-dynesty
--------
-.. automodule:: desilike.samplers.dynesty
+.. autoclass:: desilike.samplers.base.MarkovChainSampler
   :members:
-  :inherited-members:
-  :show-inheritance:
 
-polychord
----------
-.. automodule:: desilike.samplers.polychord
-  :members:
-  :inherited-members:
-  :show-inheritance:
+Static Samplers
+---------------
 
-mcmc
-----
-.. automodule:: desilike.samplers.mcmc
+.. autoclass:: desilike.samplers.GridSampler
   :members:
-  :inherited-members:
-  :show-inheritance:
 
-grid
-----
-.. automodule:: desilike.samplers.grid
+.. autoclass:: desilike.samplers.ImportanceSampler
   :members:
-  :inherited-members:
-  :show-inheritance:
 
-qmc
----
-.. automodule:: desilike.samplers.qmc
+.. autoclass:: desilike.samplers.QMCSampler
   :members:
-  :inherited-members:
-  :show-inheritance:
+
+Population Samplers
+-------------------
+
+.. autoclass:: desilike.samplers.DynestySampler
+  :members:
+
+.. autoclass:: desilike.samplers.NautilusSampler
+  :members:
+
+.. autoclass:: desilike.samplers.PocoMCSampler
+  :members:
+
+Markov Chain Samplers
+---------------------
+
+.. autoclass:: desilike.samplers.EmceeSampler
+  :members:
+
+.. autoclass:: desilike.samplers.HMCSampler
+  :members:
+
+.. autoclass:: desilike.samplers.MCLMCSampler
+  :members:
+
+.. autoclass:: desilike.samplers.MetropolisHastingsSampler
+  :members:
+
+.. autoclass:: desilike.samplers.NoUTurnSampler
+  :members:
+
+.. autoclass:: desilike.samplers.ZeusSampler
+  :members:

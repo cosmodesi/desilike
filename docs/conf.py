@@ -19,17 +19,19 @@ from _version import __version__
 # -- General configuration ------------------------------------------------
 
 # If your documentation needs a minimal Sphinx version, state it here.
-#needs_sphinx = '1.0'
+# needs_sphinx = '1.0'
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
-    'sphinx.ext.autodoc',
     'sphinx.ext.intersphinx',
     'sphinx.ext.extlinks',
-    'sphinx.ext.napoleon'
+    'sphinx.ext.napoleon',
+    'sphinx.ext.viewcode'
 ]
+
+napoleon_use_param = False
 
 # -- Project information -----------------------------------------------------
 
@@ -42,7 +44,7 @@ release = __version__
 
 html_theme = 'furo'
 
-autodoc_mock_imports = ['cosmoprimo', 'mpi4py']
+autodoc_mock_imports = ['cosmoprimo', 'mpi4py', 'lsstypes', 'fitsio']
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -71,45 +73,4 @@ intersphinx_mapping = {
     'numpy': ('https://docs.scipy.org/doc/numpy/', None)
 }
 
-# Thanks to: https://github.com/sphinx-doc/sphinx/issues/4054#issuecomment-329097229
-def _replace(app, docname, source):
-    result = source[0]
-    for key in app.config.ultimate_replacements:
-        result = result.replace(key, app.config.ultimate_replacements[key])
-    source[0] = result
-
-
-ultimate_replacements = {
-    '{gitrepo}': git_repo
-}
-
-
-def skip_some_classes(app, what, name, obj, skip, options):
-    # Skip those objects that are not imported at top-level
-    import inspect
-    try:
-        fn = sys.modules[getattr(obj, '__module__')].__file__
-    except (KeyError, AttributeError):
-        return skip
-    init_fn = os.path.join(os.path.dirname(fn), '__init__.py')
-    try:
-        with open(init_fn, 'r') as file:
-            if name not in file.read():
-                # If a 'BaseClass' subclass and not imported in '__init__.py', skip
-                try:
-                    return any('BaseClass' in cls.__name__ for cls in inspect.getmro(obj))
-                except AttributeError:
-                    return skip
-    except FileNotFoundError:
-        return skip
-    return skip
-
-
-def setup(app):
-    app.add_config_value('ultimate_replacements', {}, True)
-    app.connect('source-read', _replace)
-    app.connect('autodoc-skip-member', skip_some_classes)
-
-
 autoclass_content = 'both'
-

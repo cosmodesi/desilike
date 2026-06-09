@@ -7,6 +7,7 @@ except ModuleNotFoundError:
 import numpy as np
 
 from .base import update_kwargs, PopulationSampler
+from .pool import make_pool
 
 
 class NautilusSampler(PopulationSampler):
@@ -18,7 +19,8 @@ class NautilusSampler(PopulationSampler):
 
     """
 
-    def __init__(self, posterior, rng=None, directory=None, rescale=False, covariance=None, **kwargs):
+    def __init__(self, posterior, rng=None, directory=None, rescale=False, covariance=None,
+                 batch_size=None, **kwargs):
         """Initialize the ``nautilus`` sampler.
 
         Parameters
@@ -39,15 +41,20 @@ class NautilusSampler(PopulationSampler):
                               "not installed.")
 
         super().__init__(posterior, rng=rng, directory=directory,
-                         rescale=rescale, covariance=covariance)
+                         rescale=rescale, covariance=covariance, batch_size=batch_size)
 
+        # nautilus accepts pool=(pool_likelihood, pool_sampler).
+        # Use a vectorized pool for likelihood (batched vmap calls) and a
+        # plain pool for the internal sampler calculations (non-array tasks).
+        pool_sampler = make_pool(self.pool.comm, batch_size=0)
         if self.pool.main:
             kwargs = update_kwargs(
                 kwargs, 'nautilus', prior=self.prior_transform,
                 likelihood=self.compute_likelihood, n_dim=self.ndim,
                 pass_dict=False,
                 filepath=None if self.directory is None else self.directory /
-                'nautilus.h5', pool=self.pool, seed=self.rng.integers(2**32))
+                'nautilus.h5', pool=(self.pool, pool_sampler),
+                seed=self.rng.integers(2**32))
             self.sampler = nautilus.Sampler(**kwargs)
             self.pool.stop_wait()
         else:

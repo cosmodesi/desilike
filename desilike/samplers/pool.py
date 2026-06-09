@@ -42,6 +42,28 @@ from functools import partial
 import numpy as np
 
 
+def _apply_batched(function, tasks, batch_size):
+    """Apply *function* to *tasks* with the given batching strategy.
+
+    Parameters
+    ----------
+    function : callable
+    tasks : list
+    batch_size : int or None
+        ``0``  — call ``function(task)`` once per element (no batching).
+        ``None`` — call ``function(np.stack(tasks))`` once for all tasks.
+        ``N > 0`` — call ``function(np.stack(chunk))`` for chunks of N.
+    """
+    if batch_size == 0:
+        return list(builtins.map(function, tasks))
+    if batch_size is None:
+        return list(function(np.stack(tasks)))
+    results = []
+    for start in range(0, len(tasks), batch_size):
+        results.extend(function(np.stack(tasks[start:start + batch_size])))
+    return results
+
+
 class FunctionWrapper:
     """Thin wrapper that avoids pickling the function across MPI processes.
 
@@ -81,11 +103,11 @@ class _SerialPool:
         rank = 0
         size = 1
 
-    def __init__(self, vectorized=False):
+    def __init__(self, batch_size=0):
         self.comm = self._SerialComm()
         self.rank = 0
         self.size = 1
-        self.vectorized = vectorized
+        self.batch_size = batch_size
         self._registry = {}
 
     @property
@@ -110,11 +132,7 @@ class _SerialPool:
         tasks = list(tasks)
         if not tasks:
             return []
-        if self.vectorized:
-            # Pass the full batch in one call; function must return an iterable
-            # of len(tasks) results.
-            return list(function(np.stack(tasks)))
-        return list(builtins.map(function, tasks))
+        return _apply_batched(function, tasks, self.batch_size)
 
 
 class MPIPool:
@@ -124,7 +142,7 @@ class MPIPool:
     :meth:`wait` to enter the task-receive loop.
     """
 
-    def __init__(self, comm=None, vectorized=False):
+    def __init__(self, comm=None, batch_size=0):
         try:
             from mpi4py import MPI
             self.MPI = MPI
@@ -135,7 +153,7 @@ class MPIPool:
         self.comm = comm
         self.rank = self.comm.Get_rank()
         self.size = self.comm.Get_size()
-        self.vectorized = vectorized
+        self.batch_size = batch_size
         self.function = _error_function
         self.registry = {}
 
@@ -180,10 +198,7 @@ class MPIPool:
                 continue
             else:
                 self.load_function(task)
-                if self.vectorized:
-                    results = list(self.function(np.stack(task)))
-                else:
-                    results = list(builtins.map(self.function, task))
+                results = _apply_batched(self.function, task, self.batch_size)
                 self.comm.send(results, dest=0, tag=status.tag)
 
     def stop_wait(self):
@@ -195,9 +210,10 @@ class MPIPool:
     def map(self, function, tasks):
         """Apply *function* to every element of *tasks* in parallel.
 
-        When ``vectorized=True`` each rank receives a contiguous sub-array and
-        calls ``function(sub_array)`` once; ``function`` must return an iterable
-        of results with the same length as its input.
+        The ``batch_size`` attribute controls batching per rank:
+        ``0`` calls ``function(task)`` per element; ``None`` calls
+        ``function(np.stack(slice))`` once per rank; ``N`` calls it in
+        chunks of N.
 
         Must be called from the main rank only; workers should call
         :meth:`wait`.
@@ -219,10 +235,7 @@ class MPIPool:
         # Process the main rank's share.
         main_slice = tasks[::self.size]
         results = [None] * len(tasks)
-        if self.vectorized:
-            results[::self.size] = list(self.function(np.stack(main_slice)))
-        else:
-            results[::self.size] = list(builtins.map(self.function, main_slice))
+        results[::self.size] = _apply_batched(self.function, main_slice, self.batch_size)
 
         # Collect worker results in arrival order.
         status = self.MPI.Status()
@@ -232,15 +245,22 @@ class MPIPool:
         return results
 
 
-def make_pool(mpicomm, vectorized=False):
+def make_pool(mpicomm, batch_size=0):
     """Return the appropriate pool for *mpicomm*.
+
+    Parameters
+    ----------
+    batch_size : int or None
+        ``0`` (default) — evaluate one task at a time (no batching).
+        ``None`` — pass all tasks as a single stacked array per rank.
+        ``N > 0`` — group tasks into chunks of N per rank.
 
     Returns a :class:`_SerialPool` when *mpicomm* has only one rank or when
     ``mpi4py`` is unavailable; otherwise returns an :class:`MPIPool`.
     """
     if mpicomm.size == 1:
-        return _SerialPool(vectorized=vectorized)
+        return _SerialPool(batch_size=batch_size)
     try:
-        return MPIPool(comm=mpicomm, vectorized=vectorized)
+        return MPIPool(comm=mpicomm, batch_size=batch_size)
     except RuntimeError:
-        return _SerialPool(vectorized=vectorized)
+        return _SerialPool(batch_size=batch_size)

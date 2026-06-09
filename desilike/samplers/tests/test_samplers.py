@@ -240,8 +240,6 @@ def test_write(likelihood, key, tmp_path):
                          nautilus='nautilus', nuts='blackjax', pocomc='pocomc', zeus='zeus')
     if key in optional_deps:
         pytest.importorskip(optional_deps[key])
-    if key == 'pocomc':
-        pytest.xfail("pocomc state serialisation has a dill/tqdm compatibility issue")
 
     sampler_1 = SAMPLER_CLS[key](
         likelihood, rng=42, directory=tmp_path,
@@ -347,7 +345,11 @@ def test_metropolis_hastings_fast(likelihood):
 
 if __name__ == '__main__':
 
-    def get_likelihood():
+    from desilike import setup_logging
+
+    setup_logging()
+
+    def likelihood():
 
         class Likelihood(BaseGaussianLikelihood):
 
@@ -365,9 +367,12 @@ if __name__ == '__main__':
                 self.d.value = jnp.arange(3) * (self.a + self.b)
                 return super().__call__()
 
-        a = Parameter('a', prior=dict(dist='norm', limits=[-10, 10.], loc=0.4, scale=0.1))
+        # ref distributions approximate the posterior (a ~ N(0.4, 1/sqrt(200)), b ~ N(0.6, 1/sqrt(10))),
+        # so rescale=True (which uses ref.std()) whitens the problem to ~unit isotropic.
+        a = Parameter('a', prior=dict(dist='norm', limits=[-10, 10.], loc=0.4, scale=0.1),
+                    ref=dict(dist='norm', loc=0.4, scale=1. / np.sqrt(200.)))
         b = Parameter('b', prior=dict(dist='uniform', limits=[-10, 10.]),
-                      ref=dict(dist='norm', loc=0.6, scale=0.1))
+                    ref=dict(dist='norm', loc=0.6, scale=1. / np.sqrt(10.)))
         like = Likelihood(a, b)
         graph = compile(Posterior(like, Prior(a, b)))
         graph.flatdata = like.flatdata.copy()
@@ -375,22 +380,5 @@ if __name__ == '__main__':
         graph.mpicomm = get_mpicomm()
         return graph
 
-    import jax
-    import time
-    likelihood = get_likelihood()
-    likelihood = jax.jit(jax.vmap(likelihood))
-    grid = np.linspace(0.01, 0.99, 100)
-    jax.block_until_ready(likelihood(a=grid[:1]))
-    t0 = time.time()
-    for val in grid:
-        jax.block_until_ready(likelihood(a=np.atleast_1d(val)))
-    print(time.time() - t0)
-
-    jax.block_until_ready(likelihood(a=grid))
-    t0 = time.time()
-    jax.block_until_ready(likelihood(a=grid))
-    print(time.time() - t0)
-    exit()
-    sampler = samplers.GridSampler(likelihood)
-    results = sampler.run(grid=np.linspace(0.01, 0.99, 99))
-    print(time.time() - t0)
+    posterior = likelihood()
+    test_accuracy(posterior, 'zeus')

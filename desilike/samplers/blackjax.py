@@ -2,13 +2,14 @@
 
 from functools import partial
 
+import numpy as np
+import jax
+import jax.numpy as jnp
 try:
-    import jax
     import blackjax
     BLACKJAX_INSTALLED = True
 except ModuleNotFoundError:
     BLACKJAX_INSTALLED = False
-import numpy as np
 
 from .base import MarkovChainSampler, _flat_to_dict
 
@@ -41,12 +42,12 @@ def make_steps_factory(step):
         -------
         state : NamedTuple
             New state of the sampler.
-        state : NamedTuple
-            Returned again for use in `jax.lax.scan`.
+        (state, info) : tuple
+            State and kernel info, accumulated by `jax.lax.scan`.
 
         """
-        state, _ = step(rng_key, state)
-        return state, state
+        state, info = step(rng_key, state)
+        return state, (state, info)
 
     def make_steps(args):
         """Advance the state by several steps.
@@ -61,8 +62,8 @@ def make_steps_factory(step):
         -------
         final_state : NamedTuple
             Final state after all steps.
-        states : NamedTuple
-            All sampled states.
+        (states, infos) : tuple
+            All sampled states and per-step kernel info.
 
         """
         state, rng_keys = args
@@ -119,12 +120,13 @@ class BlackJAXSampler(MarkovChainSampler):
         super().__init__(posterior, nchains, chains=chains, rng=rng,
                          directory=directory, rescale=rescale, covariance=covariance)
 
-        # compute_derived is invoked per sample through pool.map (which iterates
-        # rows), so compute_posterior receives a single (ndim,) sample and returns
-        # one (log_post, derived) tuple; keep just the derived array.
-        self.compute_derived = self.pool.save_function(
-                lambda batch: self.compute_posterior(batch)[1], 'compute_derived')
+        _vfn = jax.jit(jax.vmap(self._compute_posterior_one))
 
+        def _compute_derived(batch):
+            _, derived = _vfn(jnp.asarray(batch))
+            return np.asarray(derived)
+
+        self.compute_derived = self.pool.save_function(_compute_derived, 'compute_derived')
         self.kernel_type = getattr(blackjax, self.kernel_type)
         self.kernel = self.kernel_type(self.compute_posterior_without_derived, **self.kernel_args)
         self.adaptation_fn = getattr(blackjax, self.adaptation_fn)
@@ -172,20 +174,23 @@ class BlackJAXSampler(MarkovChainSampler):
 
             # Make the steps
             inputs = (self.blackjax_state, jax.random.split(rng_key, n_steps))
-            results = self.make_steps(inputs)
+            self.blackjax_state, (all_states, last_info) = self.make_steps(inputs)
 
-            # Update the blackjax state
-            self.blackjax_state = results[0]
+            # Log last-step diagnostics when available (e.g. NUTS/HMC).
+            parts = []
+            if hasattr(last_info, 'num_integration_steps'):
+                parts.append('num_integration_steps: %d' % int(np.asarray(last_info.num_integration_steps).ravel()[-1]))
+            if hasattr(last_info, 'acceptance_rate'):
+                parts.append('acceptance_rate: %.3f' % float(np.asarray(last_info.acceptance_rate).ravel()[-1]))
+            if parts:
+                self.logger.info(', '.join(parts))
 
             # Update the chains.
-            samples = np.column_stack([results[1].position[key] for key in self.varied_params.names()])
-            log_post = results[1].logdensity
+            samples = np.column_stack([all_states.position[key] for key in self.varied_params.names()])
+            log_post = all_states.logdensity
 
             if len(self.derived_params):
-                # Recompute the derived parameters since they couldn't be saved
-                # during the sampling.
-                derived = self.pool.map(self.compute_derived, np.column_stack([results[1].position[key] for key in self.varied_params.names()]))
-                derived = np.array(derived)
+                derived = np.array(self.pool.map(self.compute_derived, samples))
             else:
                 derived = np.zeros((n_steps, 0))
 
@@ -227,7 +232,7 @@ class BlackJAXSampler(MarkovChainSampler):
         else:
             self.pool.wait()
         if self.mpicomm.rank == 0:
-            self.logger.info('Adaption done.')
+            self.logger.info('Adaptation done.')
 
 
 class HMCSampler(BlackJAXSampler):

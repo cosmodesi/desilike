@@ -20,7 +20,8 @@ class EmceeSampler(EnsembleSampler):
     """
 
     def __init__(self, posterior, nchains=1, chains=None, rng=None,
-                 directory=None, nwalkers=None, rescale=False, covariance=None, **kwargs):
+                 directory=None, nwalkers=None, rescale=False, covariance=None,
+                 batch_size=None, **kwargs):
         """Initialize the ``emcee`` sampler.
 
         Parameters
@@ -49,7 +50,7 @@ class EmceeSampler(EnsembleSampler):
 
         super().__init__(posterior, nchains=nchains, chains=chains, rng=rng,
                          directory=directory, nwalkers=nwalkers,
-                         rescale=rescale, covariance=covariance)
+                         rescale=rescale, covariance=covariance, batch_size=batch_size)
         if self.nwalkers is None:
             self.nwalkers = 2 * max((int(2.5 * self.ndim) + 1) // 2, 2)
         if self.pool.main:
@@ -63,6 +64,7 @@ class EmceeSampler(EnsembleSampler):
                 log_prob_fn = self.compute_posterior
             else:
                 log_prob_fn = lambda batch: [result[0] for result in self.compute_posterior(batch)]
+            # likelihood is called through map with a list of constant nwalkers // 2 points
             kwargs = update_kwargs(
                 kwargs, 'emcee', ndim=self.ndim,
                 log_prob_fn=log_prob_fn, pool=self.pool, args=None,

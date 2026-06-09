@@ -439,12 +439,12 @@ class MetropolisHastingsSampler(MarkovChainSampler):
         else:
             self.pool.wait()
 
-        if any(self.mpicomm.allgather(len(self._samples) < self.adaptation_steps if self.pool.main else False)):
+        if any(self.mpicomm.allgather(len(self._chain) < self.adaptation_steps if self.pool.main else False)):
             cov = None
             if self.pool.main:
                 # Stored samples are in original space; whiten to the working space the
                 # proposer operates in: cov_working = cov_orig / (scale ⊗ scale).
-                cov = np.asarray(self._samples.covariance(self.varied_params.names()))
+                cov = np.asarray(self._chain.covariance(self.varied_params.names()))
                 cov = cov / np.outer(self._scale, self._scale)
             cov = np.mean([c for c in self.mpicomm.allgather(cov) if c is not None], axis=0)
             try:

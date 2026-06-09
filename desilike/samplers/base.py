@@ -55,7 +55,7 @@ def _param_sizes(varied_params):
 
 
 
-def _normalize_samples_ids(nchains):
+def _normalize_chain_ids(nchains):
     """Return explicit chain ids from an integer count or an iterable of ids.
 
     Parameters
@@ -74,12 +74,12 @@ def _normalize_samples_ids(nchains):
             raise ValueError('nchains must be >= 1.')
         return list(range(1, int(nchains) + 1))
 
-    samples_ids = list(nchains)
-    if not samples_ids:
+    chain_ids = list(nchains)
+    if not chain_ids:
         raise ValueError('nchains cannot be an empty list.')
-    if len(set(samples_ids)) != len(samples_ids):
-        raise ValueError(f'Duplicate chain ids in nchains={samples_ids}.')
-    return samples_ids
+    if len(set(chain_ids)) != len(chain_ids):
+        raise ValueError(f'Duplicate chain ids in nchains={chain_ids}.')
+    return chain_ids
 
 
 def _flat_to_dict(sample, varied_params):
@@ -142,7 +142,7 @@ class BaseSampler(ABC):
 
     @default_mpicomm
     def __init__(self, posterior, rng=None, mpicomm=None, directory=None,
-                 rescale=False, covariance=None):
+                 rescale=False, covariance=None, batch_size=None):
         """
         Parameters
         ----------
@@ -163,6 +163,11 @@ class BaseSampler(ABC):
         covariance : array_like, optional
             ``(ndim, ndim)`` covariance whose diagonal sets the rescaling scale.
             When ``None``, each parameter's ``ref.std()`` is used instead.
+        batch_size : int or None, optional
+            Controls how the pool batches likelihood/posterior calls.
+            ``None`` (default) — pass all tasks as one stacked array per rank.
+            ``0`` — evaluate one task at a time (no batching).
+            ``N > 0`` — group tasks into chunks of N.
         """
         # ── parameter sets ────────────────────────────────────────────────────
         self.varied_params = posterior.params.select(varied=True, solved=False)
@@ -191,7 +196,7 @@ class BaseSampler(ABC):
         # jax.jit(jax.vmap(...)) so the pool always receives a batched function.
         self.posterior = posterior
 
-        self.set_pool(mpicomm=self.mpicomm)
+        self.set_pool(mpicomm=self.mpicomm, batch_size=batch_size)
 
         # ── directory ────────────────────────────────────────────────────────
         if directory is not None:
@@ -206,6 +211,8 @@ class BaseSampler(ABC):
             self.logger.info('Varied parameters: %s', self.varied_params.names())
             if self.directory is not None:
                 self.logger.info('Samples will be written to: %s', self.directory)
+
+        self.samples = None
 
         if self.directory is not None:
             try:
@@ -314,16 +321,14 @@ class BaseSampler(ABC):
             for param in self.varied_params
         ))
 
-    def set_pool(self, mpicomm):
-        """Create the (always vectorized) pool and register the batched evaluators.
+    def set_pool(self, mpicomm, batch_size=None):
+        """Create the pool and register the batched evaluators.
 
         ``prior_transform``, ``compute_prior``, ``compute_posterior`` and
         ``compute_likelihood`` are built from JAX-pure single-sample cores
-        (``_*_one``) wrapped in ``jax.jit(jax.vmap(...))``.  Because the pool is
-        always ``vectorized=True`` it hands each function a full ``(N, ndim)``
-        batch in one call; the wrapper returns ``N`` per-sample results.
+        (``_*_one``) wrapped in ``jax.jit(jax.vmap(...))``.
         """
-        self.pool = make_pool(mpicomm, vectorized=False)
+        self.pool = make_pool(mpicomm, batch_size=batch_size)
         specs = [('prior_transform',    self._prior_transform_one,    False),
                  ('compute_prior',      self._compute_prior_one,      False),
                  ('compute_posterior',  self._compute_posterior_one,  True),
@@ -436,10 +441,10 @@ class BaseSampler(ABC):
             data.append(param.clone(value=slice_arr))
             col += size
 
-        chain = MCSamples(data)
+        new_samples = MCSamples(data)
         for key, value in kwargs.items():
-            setattr(chain, key, value)
-        return chain
+            setattr(new_samples, key, value)
+        return new_samples
 
     def write(self):
         """Write sampler state to disk."""
@@ -533,7 +538,8 @@ class MarkovChainSampler(BaseSampler):
 
     @default_mpicomm
     def __init__(self, posterior, nchains=1, chains=None, rng=None,
-                 mpicomm=None, directory=None, rescale=False, covariance=None):
+                 mpicomm=None, directory=None, rescale=False, covariance=None,
+                 batch_size=None):
         """
         Parameters
         ----------
@@ -553,41 +559,43 @@ class MarkovChainSampler(BaseSampler):
             Normalise parameters to ~ unit variation range (see :class:`BaseSampler`).
         covariance : array_like, optional
             ``(ndim, ndim)`` covariance setting the rescaling scale.
+        batch_size : int or None, optional
+            Pool batching (see :class:`BaseSampler`).
         """
         self.mpicomm = mpicomm
 
         if not hasattr(self, '_samples'):
-            self._samples = None
+            self._chain = None
 
         # Broadcast explicit chain ids and whether input chains were supplied.
         input_chains = False
         if self.mpicomm.rank == 0:
             input_chains = chains is not None
-            samples_ids = _normalize_samples_ids(nchains)
+            chain_ids = _normalize_chain_ids(nchains)
             if input_chains:
                 if not isinstance(chains, (tuple, list)):
                     chains = [chains]
-                if len(chains) != len(samples_ids):
+                if len(chains) != len(chain_ids):
                     raise ValueError(
-                        f'Expected {len(samples_ids)} input chains, got {len(chains)}.'
+                        f'Expected {len(chain_ids)} input chains, got {len(chains)}.'
                     )
         else:
-            samples_ids = None
+            chain_ids = None
 
-        input_chains, self.samples_ids = self.mpicomm.bcast((input_chains, samples_ids), root=0)
-        self.nchains = len(self.samples_ids)
+        input_chains, self.chain_ids = self.mpicomm.bcast((input_chains, chain_ids), root=0)
+        self.nchains = len(self.chain_ids)
 
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, directory=directory,
-                         rescale=rescale, covariance=covariance)
+                         rescale=rescale, covariance=covariance, batch_size=batch_size)
 
         # Distribute pre-supplied chains to the owning ranks.
         if input_chains:
-            for samples_idx, dest_rank in enumerate(self._pool_mains):
+            for chain_idx, dest_rank in enumerate(self._pool_mains):
                 samples = MCSamples.sendrecv(
-                    chains[samples_idx] if self.mpicomm.rank == 0 else None,
+                    chains[chain_idx] if self.mpicomm.rank == 0 else None,
                     source=0, dest=dest_rank, mpicomm=self.mpicomm)
                 if self.mpicomm.rank == dest_rank:
-                    self._samples = samples
+                    self._chain = samples
 
         self.checks = []
 
@@ -600,7 +608,7 @@ class MarkovChainSampler(BaseSampler):
             seed_seq = np.random.SeedSequence(rng.integers(0, 2**63, size=4))
             self.rng = [np.random.default_rng(seed) for seed in seed_seq.spawn(self.nchains)][self._ichain]
 
-    def set_pool(self, mpicomm):
+    def set_pool(self, mpicomm, batch_size=None):
         if self.nchains > mpicomm.size:
             raise ValueError(f'nchains={self.nchains} cannot exceed MPI size={mpicomm.size}')
         color = mpicomm.rank * self.nchains // mpicomm.size
@@ -609,7 +617,7 @@ class MarkovChainSampler(BaseSampler):
             sub_comm = mpicomm.Split(color=color, key=mpicomm.rank)
         else:
             sub_comm = mpicomm
-        super().set_pool(mpicomm=sub_comm)
+        super().set_pool(mpicomm=sub_comm, batch_size=batch_size)
         # Collect the rank-0 process of each chain's sub-communicator.
         mains = self.mpicomm.allgather(self.mpicomm.rank if self.pool.main else None)
         self._pool_mains = [rank for rank in mains if rank is not None]
@@ -633,7 +641,7 @@ class MarkovChainSampler(BaseSampler):
         total_size = int(np.empty(shape).size) if shape else 1
 
         if self.pool.main:
-            if self._samples is None:
+            if self._chain is None:
                 all_samples, all_log_post, all_derived = [], [], []
                 for _ in range(max_init_attempts):
                     batch_shape = shape or (1,)
@@ -669,14 +677,14 @@ class MarkovChainSampler(BaseSampler):
                             final_samples  = final_samples[np.newaxis]
                             final_log_post = final_log_post[np.newaxis]
                             final_derived  = final_derived[np.newaxis]
-                        self._samples = self.array_to_samples(
+                        self._chain = self.array_to_samples(
                             final_samples, final_derived, logposterior=final_log_post)
                         break
             self.pool.stop_wait()
         else:
             self.pool.wait()
 
-        if any(np.array(self.mpicomm.allgather(self._samples is None))[self._pool_mains]):
+        if any(np.array(self.mpicomm.allgather(self._chain is None))[self._pool_mains]):
             raise ValueError(
                 f'Could not find finite posterior after {max_init_attempts} attempts.')
 
@@ -686,13 +694,13 @@ class MarkovChainSampler(BaseSampler):
         gathered = []
         for source_rank in self._pool_mains:
             gathered.append(MCSamples.sendrecv(
-                self._samples, source=source_rank, dest=0, mpicomm=self.mpicomm))
+                self._chain, source=source_rank, dest=0, mpicomm=self.mpicomm))
         return gathered if self.mpicomm.rank == 0 else None
 
     @property
-    def samples_id(self):
+    def chain_id(self):
         """Explicit id of the chain handled by this sampler rank."""
-        return self.samples_ids[self._ichain]
+        return self.chain_ids[self._ichain]
 
     @property
     def state(self):
@@ -701,21 +709,21 @@ class MarkovChainSampler(BaseSampler):
         ``samples`` is returned in the sampler's rescaled working space (stored
         parameter values are in original space and mapped via :meth:`_backward`).
         """
-        # self._samples[name] returns a Variable; use ._value to get the raw array.
-        walker_shape = self._samples.shape[1:]
+        # self._chain[name] returns a Variable; use ._value to get the raw array.
+        walker_shape = self._chain.shape[1:]
         samples  = np.concatenate([
-            np.asarray(self._samples[param.name])[-1].reshape(walker_shape + (-1,))
+            np.asarray(self._chain[param.name])[-1].reshape(walker_shape + (-1,))
             for param in self.varied_params], axis=-1)
         derived  = np.concatenate([
-            np.asarray(self._samples[param.name])[-1].reshape(walker_shape + (-1,))
+            np.asarray(self._chain[param.name])[-1].reshape(walker_shape + (-1,))
             for param in self.derived_params], axis=-1) if self.n_derived else np.empty(0)
-        log_post = np.asarray(self._samples.logposterior)[-1]
+        log_post = np.asarray(self._chain.logposterior)[-1]
         return np.asarray(self._backward(samples)), np.array(derived), np.array(log_post)
 
     def extend(self, samples, derived, log_post):
         """Append new steps to the local chain."""
         new_samples = self.array_to_samples(samples, derived, logposterior=log_post)
-        self._samples = MCSamples.concatenate(self._samples, new_samples)
+        self._chain = MCSamples.concatenate(self._chain, new_samples)
 
     def check(self, burn_in=0.2, gelman_rubin=1.1, geweke=None, ess=None, quiet=False):
         """Run convergence diagnostics; return True if all checks pass."""
@@ -733,7 +741,7 @@ class MarkovChainSampler(BaseSampler):
             except ValueError:
                 geweke_value = float('inf')
             iact = diagnostics.integrated_autocorrelation_time(trimmed, check_valid='ignore')
-            ess_value = float(np.mean([len(chain) for chain in trimmed]) / np.max(iact))
+            ess_value = float(np.mean([chain.size for chain in trimmed]) / np.max(iact))
 
             for stat_name, threshold, is_upper_bound, value in [
                 ('Gelman-Rubin',          gelman_rubin, True,  gr_value),
@@ -756,8 +764,8 @@ class MarkovChainSampler(BaseSampler):
         converged = True
         if self.pool.main:
             converged = (
-                len(self._samples) >= max_steps or
-                (len(self._samples) >= min_steps and
+                len(self._chain) >= max_steps or
+                (len(self._chain) >= min_steps and
                  len(self.checks) >= checks_passed and
                  all(self.checks[-checks_passed:]))
             )
@@ -809,7 +817,7 @@ class MarkovChainSampler(BaseSampler):
 
         # Current step count across all chains.
         steps = min(self.mpicomm.allgather(
-            len(self._samples) if self.pool.main else sys.maxsize))
+            len(self._chain) if self.pool.main else sys.maxsize))
 
         if max_steps is None:
             max_steps = sys.maxsize
@@ -836,7 +844,7 @@ class MarkovChainSampler(BaseSampler):
             self.write()
 
         if self.pool.main:
-            self._samples = self._samples.remove_burnin(burn_in)
+            self._chain = self._chain.remove_burnin(burn_in)
 
         all_chains = self.chains
         if concatenate and self.mpicomm.rank == 0:
@@ -845,23 +853,23 @@ class MarkovChainSampler(BaseSampler):
 
     def write(self):
         if self.pool.main:
-            with open(self.directory / f'rng_{self.samples_id}.json', 'w') as fstream:
+            with open(self.directory / f'rng_{self.chain_id}.json', 'w') as fstream:
                 json.dump(self.rng.bit_generator.state, fstream)
-            self._samples.write(self.directory / f'samples_{self.samples_id}.h5')
+            self._chain.write(self.directory / f'samples_{self.chain_id}.h5')
         if self.mpicomm.rank == 0:
             with open(self.directory / 'checks.json', 'w') as fstream:
                 json.dump(self.checks, fstream)
 
     def read(self):
         if self.pool.main:
-            rng_path    = self.directory / f'rng_{self.samples_id}.json'
-            samples_path  = self.directory / f'samples_{self.samples_id}.h5'
+            rng_path    = self.directory / f'rng_{self.chain_id}.json'
+            samples_path  = self.directory / f'samples_{self.chain_id}.h5'
             if rng_path.exists():
                 with open(rng_path, 'r') as fstream:
                     self.rng = np.random.default_rng()
                     self.rng.bit_generator.state = json.load(fstream)
             if samples_path.exists():
-                self._samples = MCSamples.read(samples_path)
+                self._chain = MCSamples.read(samples_path)
         checks_path = self.directory / 'checks.json'
         if checks_path.exists():
             with open(self.directory / 'checks.json', 'r') as fstream:
@@ -877,12 +885,12 @@ class EnsembleSampler(MarkovChainSampler):
 
     def __init__(self, posterior, nchains=1, chains=None, rng=None,
                  mpicomm=None, directory=None, nwalkers=None,
-                 rescale=False, covariance=None):
+                 rescale=False, covariance=None, batch_size=None):
         super().__init__(posterior, nchains=nchains, chains=chains,
                          rng=rng, mpicomm=mpicomm, directory=directory,
-                         rescale=rescale, covariance=covariance)
-        if nwalkers is None and self._samples is not None:
-            nwalkers = self._samples.shape[1] if len(self._samples.shape) > 1 else None
+                         rescale=rescale, covariance=covariance, batch_size=batch_size)
+        if nwalkers is None and self._chain is not None:
+            nwalkers = self._chain.shape[1] if len(self._chain.shape) > 1 else None
         nwalkers_all = self.mpicomm.allgather(nwalkers)
         for nw in nwalkers_all:
             if nw is not None:

@@ -57,7 +57,8 @@ class PocoMCSampler(PopulationSampler):
 
     """
 
-    def __init__(self, posterior, rng=None, directory=None, rescale=False, covariance=None, **kwargs):
+    def __init__(self, posterior, rng=None, directory=None, rescale=False, covariance=None,
+                 batch_size=None, **kwargs):
         """Initialize the ``PocoMC`` sampler.
 
         Parameters
@@ -77,9 +78,9 @@ class PocoMCSampler(PopulationSampler):
                               "installed.")
 
         super().__init__(posterior, rng=rng, directory=directory,
-                         rescale=rescale, covariance=covariance)
+                         rescale=rescale, covariance=covariance, batch_size=batch_size)
 
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             # pocomc explores the sampler's rescaled working space, so its prior
             # (sampling, bounds, logpdf) is built from the transformed parameters;
             # compute_likelihood maps each particle back to original space.
@@ -102,25 +103,30 @@ class PocoMCSampler(PopulationSampler):
             kwargs = update_kwargs(
                 kwargs, 'pocoMC', prior=prior,
                 likelihood=_likelihood_fn, n_dim=self.ndim,
-                pool=self.pool, output_dir=self.directory,
+                pool=self.pool,
+                output_dir=self.directory,
                 random_state=self.rng.integers(2**32 - 1))
             self.sampler = pocomc.Sampler(**kwargs)
 
             # pocomc's save_state serialises its entire __dict__ with dill.
-            # Our likelihood function captures ``self`` (PocoMCSampler) which
-            # holds a JAX-JIT-compiled callable and MPI objects that cannot be
-            # pickled.  We monkey-patch save_state to strip ``log_likelihood``
-            # before dumping and restore it afterwards, mirroring how load_state
-            # is already handled below.
+            # Several attributes are unpicklable:
+            #   - log_likelihood: captures this sampler (JAX-JIT + MPI objects)
+            #   - pool / distribute: _SerialPool holds a _thread._local object
+            #   - save_state itself: our closure below captures this sampler
+            # We monkey-patch save_state to null all of them out before dumping
+            # and restore them in a finally block.
+            _CLEAR_BEFORE_SAVE = ('log_likelihood', 'pool', 'distribute', 'save_state')
             _original_save_state = self.sampler.save_state
 
             def _save_state_no_likelihood(path):
-                saved_log_likelihood = self.sampler.log_likelihood
-                self.sampler.log_likelihood = None
+                saved = {attr: getattr(self.sampler, attr, None) for attr in _CLEAR_BEFORE_SAVE}
+                for attr in _CLEAR_BEFORE_SAVE:
+                    setattr(self.sampler, attr, None)
                 try:
                     _original_save_state(path)
                 finally:
-                    self.sampler.log_likelihood = saved_log_likelihood
+                    for attr, val in saved.items():
+                        setattr(self.sampler, attr, val)
 
             self.sampler.save_state = _save_state_no_likelihood
 
@@ -138,13 +144,11 @@ class PocoMCSampler(PopulationSampler):
                         state_max = state
                         filepath_max = filepath
                 if filepath_max is not None:
-                    # PocoMC tries to read the pickled likelihood. However,
-                    # that's not stored on disk — restore it manually.
-                    log_likelihood = self.sampler.log_likelihood
+                    # The state file has None for all cleared attrs — restore them.
+                    saved = {attr: getattr(self.sampler, attr, None) for attr in _CLEAR_BEFORE_SAVE}
                     self.sampler.load_state(filepath_max)
-                    self.sampler.log_likelihood = log_likelihood
-                    # Re-apply our save_state patch after load_state, which
-                    # replaces the method with the one from the pickled state.
+                    for attr, val in saved.items():
+                        setattr(self.sampler, attr, val)
                     self.sampler.save_state = _save_state_no_likelihood
 
     def run_sampler(self, **kwargs):

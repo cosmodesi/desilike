@@ -77,9 +77,9 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
     """Estimate Gelman-Rubin statistics.
 
     Compares the covariance of chain means to the mean of intra-chain
-    covariances.  For 2-D chains (shape ``(nsteps, nwalkers)``), GR is computed
-    independently for each walker index across all chains and the results are
-    averaged over walkers.
+    covariances.  For 2-D chains (shape ``(nsteps, nwalkers)``), each chain is
+    first flattened to ``(nsteps * nwalkers,)`` and GR is computed across those
+    flattened chains.
 
     Parameters
     ----------
@@ -120,16 +120,7 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
         chains = [chains]
 
     if any(chain.ndim == 2 for chain in chains):
-        nwalkers = chains[0].shape[1]
-        gr_per_walker = np.array([
-            gelman_rubin(
-                [chain[:, walker_idx] for chain in chains],
-                params=params, nsplits=nsplits, statistic=statistic,
-                method=method, return_matrices=False, check_valid=check_valid,
-            )
-            for walker_idx in range(nwalkers)
-        ])
-        return gr_per_walker.mean(axis=0)
+        chains = [chain.reshape(chain.size) for chain in chains]
 
     nchains = len(chains)
     if nchains < 2:

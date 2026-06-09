@@ -206,22 +206,28 @@ class BlackJAXSampler(MarkovChainSampler):
             How steps to run for the adaptation.
 
         """
-        fixed_kernel_args = {
-            key: value for key, value in self.kernel_args.items() if key not in
-            self.adaptable_args}
-        initial_position = _flat_to_dict(self.state[0], self.varied_params)
-        rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
-        # blackjax's window_adaptation takes the non-adaptable kernel parameters
-        # (e.g. num_integration_steps) in its constructor, not in run().
-        (state, parameters), _ = self.adaptation_fn(
-            self.kernel_type, self.compute_posterior_without_derived, **fixed_kernel_args).run(
-            rng_key, initial_position, num_steps=steps)
-        self.kernel_args.update(parameters)
-        # Rebuild the kernel so the tuned parameters (step size, mass matrix, ...) are
-        # actually used during sampling, and warm-start from the adapted state.
-        self.kernel = self.kernel_type(self.compute_posterior_without_derived, **self.kernel_args)
-        self.make_steps = make_steps_factory(self.kernel.step)
-        self.blackjax_state = state
+        if self.pool.main:
+            fixed_kernel_args = {
+                key: value for key, value in self.kernel_args.items() if key not in
+                self.adaptable_args}
+            initial_position = _flat_to_dict(self.state[0], self.varied_params)
+            rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
+            # blackjax's window_adaptation takes the non-adaptable kernel parameters
+            # (e.g. num_integration_steps) in its constructor, not in run().
+            (state, parameters), _ = self.adaptation_fn(
+                self.kernel_type, self.compute_posterior_without_derived, **fixed_kernel_args).run(
+                rng_key, initial_position, num_steps=steps)
+            self.kernel_args.update(parameters)
+            # Rebuild the kernel so the tuned parameters (step size, mass matrix, ...) are
+            # actually used during sampling, and warm-start from the adapted state.
+            self.kernel = self.kernel_type(self.compute_posterior_without_derived, **self.kernel_args)
+            self.make_steps = make_steps_factory(self.kernel.step)
+            self.blackjax_state = state
+            self.pool.stop_wait()
+        else:
+            self.pool.wait()
+        if self.mpicomm.rank == 0:
+            self.logger.info('Adaption done.')
 
 
 class HMCSampler(BlackJAXSampler):

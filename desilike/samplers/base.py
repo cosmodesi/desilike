@@ -443,16 +443,18 @@ class BaseSampler(ABC):
 
     def write(self):
         """Write sampler state to disk."""
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             with open(self.directory / 'rng.json', 'w') as fstream:
                 json.dump(self.rng.bit_generator.state, fstream)
+                self.samples.write(self.directory / 'samples.h5')
 
     def read(self):
         """Read sampler state from disk."""
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             with open(self.directory / 'rng.json', 'r') as fstream:
                 self.rng = np.random.default_rng()
                 self.rng.bit_generator.state = json.load(fstream)
+                self.samples = MCSamples.read(self.directory / 'samples.h5')
 
 
 # ── Static sampler ────────────────────────────────────────────────────────────
@@ -469,8 +471,8 @@ class StaticSampler(BaseSampler):
 
     def run(self, **kwargs):
         """Evaluate the posterior on the sample grid and return a MCSamples."""
-        if not self.mpicomm.bcast(hasattr(self, 'samples'), root=0):
-            if self.mpicomm.rank == 0:
+        if self.pool.main:
+            if self.samples is None:
                 # get_samples returns original-space points; the cores and
                 # array_to_samples work in the rescaled space, so map once here.
                 grid      = np.asarray(self._backward(self.get_samples(**kwargs)))
@@ -485,21 +487,13 @@ class StaticSampler(BaseSampler):
                 )
                 self.samples['logprior'] = log_prior
                 self.pool.stop_wait()
-            else:
-                self.samples = None
-                self.pool.wait()
+        else:
+            self.samples = None
+            self.pool.wait()
 
         if self.directory is not None:
             self.write()
         return self.samples
-
-    def write(self):
-        if self.mpicomm.rank == 0:
-            self.samples.write(self.directory / 'samples.h5')
-
-    def read(self):
-        if self.mpicomm.rank == 0:
-            self.samples = MCSamples.read(self.directory / 'samples.h5')
 
 
 # ── Population sampler ────────────────────────────────────────────────────────
@@ -515,14 +509,17 @@ class PopulationSampler(BaseSampler):
         pass
 
     def run(self, **kwargs):
-        if self.pool.comm.rank == 0:
+        if self.pool.main:
             samples, derived, extras = self.run_sampler(**kwargs)
             result = self.array_to_samples(samples, derived, **extras)
             self.pool.stop_wait()
         else:
             result = None
             self.pool.wait()
-        return self.mpicomm.bcast(result, root=0)
+        self.samples = result
+        if self.directory is not None:
+            self.write()
+        return self.samples
 
 
 # ── Markov chain sampler ───────────────────────────────────────────────────────

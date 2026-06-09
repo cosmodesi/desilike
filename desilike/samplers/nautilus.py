@@ -41,14 +41,17 @@ class NautilusSampler(PopulationSampler):
         super().__init__(posterior, rng=rng, directory=directory,
                          rescale=rescale, covariance=covariance)
 
-        if self.mpicomm.rank == 0:
+        if self.pool.main:
             kwargs = update_kwargs(
                 kwargs, 'nautilus', prior=self.prior_transform,
                 likelihood=self.compute_likelihood, n_dim=self.ndim,
                 pass_dict=False,
                 filepath=None if self.directory is None else self.directory /
-                'nautilus.hdf5', pool=self.pool, seed=self.rng.integers(2**32))
+                'nautilus.h5', pool=self.pool, seed=self.rng.integers(2**32))
             self.sampler = nautilus.Sampler(**kwargs)
+            self.pool.stop_wait()
+        else:
+            self.pool.wait()
 
     def run_sampler(self, **kwargs):
         """Run the ``nautilus`` sampler.

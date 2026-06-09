@@ -24,8 +24,7 @@ class ZeusSampler(EnsembleSampler):
     """
 
     def __init__(self, posterior, nchains=1, chains=None, rng=None,
-                 directory=None, nwalkers=None, rescale=False, covariance=None,
-                 batch_size=None, **kwargs):
+                 directory=None, nwalkers=None, rescale=False, covariance=None, **kwargs):
         """Initialize the ``zeus`` sampler.
 
         Parameters
@@ -54,7 +53,7 @@ class ZeusSampler(EnsembleSampler):
 
         super().__init__(posterior, nchains=nchains, chains=chains, rng=rng,
                          directory=directory, nwalkers=nwalkers,
-                         rescale=rescale, covariance=covariance, batch_size=batch_size)
+                         rescale=rescale, covariance=covariance, batch_size=0)
         if self.nwalkers is None:
             self.nwalkers = 2 * self.ndim
         if self.pool.main:
@@ -67,7 +66,6 @@ class ZeusSampler(EnsembleSampler):
                 logprob_fn = self.compute_posterior
             else:
                 logprob_fn = lambda batch: [result[0] for result in self.compute_posterior(batch)]
-            # likelihood is called through map with a list of constant nwalkers // 2 points
             kwargs = update_kwargs(
                 kwargs, 'zeus', nwalkers=self.nwalkers, ndim=self.ndim,
                 logprob_fn=logprob_fn, pool=self.pool, args=None,

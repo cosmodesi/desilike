@@ -8,7 +8,6 @@ except ModuleNotFoundError:
 import numpy as np
 
 from .base import update_kwargs, PopulationSampler
-from .pool import make_pool
 
 
 class DynestySampler(PopulationSampler):
@@ -21,7 +20,7 @@ class DynestySampler(PopulationSampler):
     """
 
     def __init__(self, posterior, dynamic=True, rng=None, directory=None,
-                 rescale=False, covariance=None, batch_size=None, **kwargs):
+                 rescale=False, covariance=None, **kwargs):
         """Initialize the ``dynesty`` sampler.
 
         Parameters
@@ -44,13 +43,14 @@ class DynestySampler(PopulationSampler):
             raise ImportError("The 'dynesty' package is required but not "
                               "installed.")
 
+        # dynesty uses the pool for internal tasks (proposals, etc.)
+        # that are not plain arrays — needs a non-batched pool.
         super().__init__(posterior, rng=rng, directory=directory,
-                         rescale=rescale, covariance=covariance, batch_size=batch_size)
+                         rescale=rescale, covariance=covariance, batch_size=0)
 
         if not dynamic and self.directory is not None:
             raise ValueError("dynesty does not support checkpointing for the "
                              "static sampler.")
-
         if self.pool.main:
             sampler_cls = (dynesty.DynamicNestedSampler if dynamic else
                            dynesty.NestedSampler)
@@ -64,12 +64,10 @@ class DynestySampler(PopulationSampler):
                 except (FileNotFoundError, ValueError):
                     pass
             if not hasattr(self, 'sampler'):
-                # dynesty uses the pool for internal tasks (proposals, etc.)
-                # that are not plain arrays — needs a non-batched pool.
                 kwargs = update_kwargs(
                     kwargs, 'dynesty', loglikelihood=self.compute_likelihood,
                     prior_transform=self.prior_transform, ndim=self.ndim,
-                    blob=True, pool=make_pool(self.mpicomm, batch_size=0),
+                    blob=True, pool=self.pool,
                     rstate=self.rng)
                 self.sampler = sampler_cls(**kwargs)
 

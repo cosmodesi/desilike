@@ -229,10 +229,9 @@ class BlackJAXSampler(MarkovChainSampler):
             self.make_steps = make_steps_factory(self.kernel.step)
             self.blackjax_state = state
             self.pool.stop_wait()
+            self.logger.info('Adaptation done.')
         else:
             self.pool.wait()
-        if self.mpicomm.rank == 0:
-            self.logger.info('Adaptation done.')
 
 
 class HMCSampler(BlackJAXSampler):

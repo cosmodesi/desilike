@@ -50,17 +50,17 @@ def _velocileptors_default_params(prior_basis):
             Parameter('sn4p', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,4}'"),
         ]
     return [
-        Parameter('b1', value=1., prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1'),
-        Parameter('b2', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
-        Parameter('bs', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_s'),
+        Parameter('b1', value=1., prior=dict(limits=[-1., 10.]), ref=dict(limits=[0.4, 0.6]), latex='b_1'),
+        Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=10.), ref=dict(dist='norm', loc=0., scale=0.5), latex='b_2'),
+        Parameter('bs', value=0., prior=dict(dist='norm', loc=0., scale=5.), ref=dict(dist='norm', loc=0., scale=0.5), latex='b_s'),
         Parameter('b3', value=0., fixed=True, latex='b_3'),
-        Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_0'),
-        Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2'),
-        Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4'),
+        Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=30.), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_0'),
+        Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=50.), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2'),
+        Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=50.), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4'),
         Parameter('alpha6', value=0., fixed=True, latex=r'\alpha_6'),
-        Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
-        Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
-        Parameter('sn4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,4}'),
+        Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=4.), ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,0}'),
+        Parameter('sn2', value=0., prior=dict(dist='norm', loc=0., scale=100.), ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,2}'),
+        Parameter('sn4', value=0., prior=dict(dist='norm', loc=0., scale=500.), ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,4}'),
     ]
 
 
@@ -400,9 +400,9 @@ class KaiserTracerSpectrum2Poles(Calculator):
         """
         return propose_params_multitracer([
             Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
-                      ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1'),
-            Parameter('sn0', value=0., prior=None,
-                      ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+                      ref=dict(limits=[1., 2.]), latex='b_1'),
+            Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=1000.),
+                      ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,0}'),
         ], tracers, stochastic=('sn0',), cross=True)
 
     def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None, params=None, **kwargs):
@@ -652,14 +652,14 @@ class TNSTracerSpectrum2Poles(Calculator):
         """
         return propose_params_multitracer([
             Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
-                      ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1'),
-            Parameter('b2', value=0., prior=dict(limits=[-5., 5.]),
-                      ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
-            Parameter('bs', value=0., prior=dict(limits=[-5., 5.]),
-                      ref=dict(dist='norm', loc=0., scale=1.), latex='b_s'),
+                      ref=dict(limits=[1., 2.]), latex='b_1'),
+            Parameter('b2', value=0., prior=dict(dist='norm', loc=0., scale=15.),
+                      ref=dict(dist='norm', loc=0., scale=0.5), latex='b_2'),
+            Parameter('bs', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=15.),
+                      ref=dict(dist='norm', loc=0., scale=0.5), latex='b_s'),
             Parameter('b3', value=0., fixed=True, latex='b_3'),
-            Parameter('sn0', value=0., prior=None,
-                      ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
+            Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=1000.),
+                      ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,0}'),
             Parameter('sigmav', value=3., prior=dict(dist='norm', loc=0., scale=20., limits=[0., 10.]),
                       ref=dict(dist='norm', loc=0., scale=0.5), fd_eps=2., latex=r'\sigma_v'),
         ], tracers)
@@ -1909,17 +1909,17 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             ]
         else:
             auto_params = [
-                Parameter('b1', value=1., prior=dict(limits=[0., 4.]), ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1'),
-                Parameter('b2', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_2'),
-                Parameter('bs', value=0., prior=dict(limits=[-5., 5.]), ref=dict(dist='norm', loc=0., scale=1.), latex='b_s'),
+                Parameter('b1', value=1., prior=dict(limits=[0., 10.]), ref=dict(limits=[1.4, 1.6]), latex='b_1'),
+                Parameter('b2', value=0., prior=dict(limits=[-50., 50.]), ref=dict(limits=[-1., 1.]), latex='b_2'),
+                Parameter('bs', value=0., prior=None, ref=dict(limits=[-1., 1.]), latex='b_s'),
                 Parameter('b3', value=0., fixed=True, latex='b_3'),
-                Parameter('alpha0', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_0'),
-                Parameter('alpha2', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2'),
-                Parameter('alpha4', value=0., prior=dict(dist='norm', loc=0., scale=12.5), ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4'),
+                Parameter('alpha0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_0'),
+                Parameter('alpha2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_2'),
+                Parameter('alpha4', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex=r'\alpha_4'),
                 Parameter('ct', value=0., fixed=True, latex='c_t'),
                 Parameter('X_FoG_p', value=0., fixed=True, latex=r'X_\mathrm{FoG}'),
-                Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,0}'),
-                Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=1.), latex='s_{n,2}'),
+                Parameter('sn0', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,0}'),
+                Parameter('sn2', value=0., prior=None, ref=dict(dist='norm', loc=0., scale=0.1), latex='s_{n,2}'),
             ]
         return propose_params_multitracer(auto_params, tracers)
 

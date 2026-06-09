@@ -1,6 +1,7 @@
 """Module implementing the zeus sampler."""
 
 import warnings
+import logging
 
 import numpy as np
 try:
@@ -69,7 +70,13 @@ class ZeusSampler(EnsembleSampler):
                 kwargs, 'zeus', nwalkers=self.nwalkers, ndim=self.ndim,
                 logprob_fn=logprob_fn, pool=self.pool, args=None,
                 kwargs=None, vectorize=False)
+            # Zeus modifies the logging handler
+            handlers = logging.root.handlers.copy()
+            level = logging.root.level
             self.sampler = zeus.EnsembleSampler(**kwargs)
+            # Restore logging handler
+            logging.root.handlers = handlers
+            logging.root.level = level
 
             if rng is not None:
                 warnings.warn("Zeus does not support random seeds. Results "

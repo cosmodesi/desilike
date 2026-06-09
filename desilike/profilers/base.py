@@ -14,7 +14,7 @@ import jax.numpy as jnp
 
 from ..parameter import Parameter, VariableCollection
 from ..samples import Profiles
-from ..distributed import get_mpicomm
+from ..distributed import default_mpicomm, get_mpicomm
 
 
 # ── ProfilerState ─────────────────────────────────────────────────────────────
@@ -224,6 +224,7 @@ class BaseProfiler:
     #: Override in subclasses (set ``True`` to enable gradient probing).
     with_gradient: bool = False
 
+    @default_mpicomm
     def __init__(self, likelihood, rng=None, seed=None, max_tries=1000,
                  profiles=None, ref_scale=1., rescale=False, covariance=None,
                  save_fn=None, mpicomm=None):
@@ -231,13 +232,16 @@ class BaseProfiler:
         self.likelihood = likelihood
         self.max_tries  = int(max_tries)
         self.save_fn    = save_fn
-        self.mpicomm    = mpicomm if mpicomm is not None else get_mpicomm()
+        self.mpicomm    = mpicomm
 
         # ── collect varied parameters ─────────────────────────────────────
         self.varied_params = likelihood.params.select(varied=True, solved=False)
         if not self.varied_params:
             raise ValueError('No varied parameters found in the likelihood.')
-        self.logger.info('Varied parameters: %s', self.varied_params.names())
+        if self.mpicomm.rank == 0:
+            self.logger.info('Varied parameters: %s', self.varied_params.names())
+            if self.save_fn is not None:
+                self.logger.info('Profiles will be written to: %s', self.save_fn)
 
         # Apply ref_scale (copy so we don't mutate the likelihood's params)
         if ref_scale != 1.:

@@ -130,16 +130,16 @@ class DampedBAOWigglesPTSpectrum2Poles(Calculator):
         VariableCollection
         """
         return propose_params_multitracer([
-            Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
-                      ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1'),
-            Parameter('dbeta', value=1., prior=dict(limits=[0., 3.]),
-                      ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta\beta'),
-            Parameter('sigmas', value=0., prior=dict(limits=[-1., 10.]),
-                      ref=dict(dist='norm', loc=0., scale=1.), latex=r'\Sigma_s'),
-            Parameter('sigmapar', value=9., fixed=True, prior=dict(limits=[0., 25.]),
-                      ref=dict(dist='norm', loc=9., scale=1.), latex=r'\Sigma_\parallel'),
-            Parameter('sigmaper', value=6., fixed=True, prior=dict(limits=[0., 20.]),
-                      ref=dict(dist='norm', loc=6., scale=1.), latex=r'\Sigma_\perp'),
+            Parameter('b1', value=1., prior=dict(limits=[0.2, 4.]),
+                      ref=dict(limits=[1.5, 2.5]), latex='b_1'),
+            Parameter('dbeta', value=1., prior=dict(limits=[0.7, 1.3]),
+                      ref=dict(limits=[0.8, 1.2]), fd_eps=0.02, latex=r'\delta\beta'),
+            Parameter('sigmas', value=0., prior=dict(limits=[0., 10.]),
+                      ref=dict(limits=[0., 1.]), latex=r'\Sigma_{s}'),
+            Parameter('sigmapar', value=9., fixed=True, prior=dict(limits=[0.1, 10.]),
+                      latex=r'\Sigma_{\parallel}'),
+            Parameter('sigmaper', value=6., fixed=True, prior=dict(limits=[0.1, 10.]),
+                      latex=r'\Sigma_{\perp}'),
         ], tracers)
 
     def __init__(self, k=None, template=None, tracers=None, params=None, **kwargs):
@@ -301,14 +301,14 @@ class ResummedBAOWigglesPTSpectrum2Poles(Calculator):
         VariableCollection
         """
         return propose_params_multitracer([
-            Parameter('b1', value=1., prior=dict(limits=[0., 4.]),
-                      ref=dict(dist='norm', loc=1., scale=0.1), latex='b_1'),
-            Parameter('dbeta', value=1., prior=dict(limits=[0., 3.]),
-                      ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta\beta'),
-            Parameter('sigmas', value=0., prior=dict(limits=[-1., 10.]),
-                      ref=dict(dist='norm', loc=0., scale=1.), latex=r'\Sigma_s'),
-            Parameter('d', value=1., fixed=True, prior=dict(limits=[0., 3.]),
-                      ref=dict(dist='norm', loc=1., scale=0.05), latex='d'),
+            Parameter('b1', value=1., prior=dict(limits=[0.2, 4.]),
+                      ref=dict(limits=[1.5, 2.5]), latex='b_1'),
+            Parameter('dbeta', value=1., prior=dict(limits=[0.7, 1.3]),
+                      ref=dict(limits=[0.95, 1.05]), fd_eps=0.02, latex=r'\delta\beta'),
+            Parameter('sigmas', value=0., prior=dict(limits=[0., 10.]),
+                      ref=dict(limits=[0., 1.]), latex=r'\Sigma_{s}'),
+            Parameter('d', value=1., fixed=True, prior=dict(limits=[0., 4.]),
+                      ref=dict(limits=[0.8, 1.2]), latex='d'),
         ], tracers)
 
     def __init__(self, k=None, template=None, tracers=None, params=None, **kwargs):

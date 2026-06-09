@@ -77,7 +77,9 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
     """Estimate Gelman-Rubin statistics.
 
     Compares the covariance of chain means to the mean of intra-chain
-    covariances.
+    covariances.  For 2-D chains (shape ``(nsteps, nwalkers)``), GR is computed
+    independently for each walker index across all chains and the results are
+    averaged over walkers.
 
     Parameters
     ----------
@@ -116,6 +118,18 @@ def gelman_rubin(chains, params=None, nsplits=None, statistic='mean', method='ei
     """
     if not _is_chain_sequence(chains):
         chains = [chains]
+
+    if any(chain.ndim == 2 for chain in chains):
+        nwalkers = chains[0].shape[1]
+        gr_per_walker = np.array([
+            gelman_rubin(
+                [chain[:, walker_idx] for chain in chains],
+                params=params, nsplits=nsplits, statistic=statistic,
+                method=method, return_matrices=False, check_valid=check_valid,
+            )
+            for walker_idx in range(nwalkers)
+        ])
+        return gr_per_walker.mean(axis=0)
 
     nchains = len(chains)
     if nchains < 2:
@@ -225,7 +239,8 @@ def autocorrelation(chains, params=None):
 def integrated_autocorrelation_time(chains, params=None, criterion='sokal', reliable=50, check_valid='warn', **kwargs):
     r"""Estimate the integrated autocorrelation time (IAT).
 
-    Averaged over all chains.
+    Averaged over all chains.  2-D chains (shape ``(nsteps, nwalkers)``) are
+    automatically expanded into ``nwalkers`` independent 1-D chains.
     Adapted from https://github.com/dfm/emcee/blob/main/src/emcee/autocorr.py
     and https://github.com/blackjax-devs/blackjax/blob/main/blackjax/diagnostics.py
 
@@ -265,6 +280,15 @@ def integrated_autocorrelation_time(chains, params=None, criterion='sokal', reli
     """
     if not _is_chain_sequence(chains):
         chains = [chains]
+
+    flat_chains = []
+    for chain in chains:
+        if chain.ndim == 2:
+            for walker_idx in range(chain.shape[1]):
+                flat_chains.append(chain[:, walker_idx])
+        else:
+            flat_chains.append(chain)
+    chains = flat_chains
 
     if params is None:
         params = _varied_names(chains[0])

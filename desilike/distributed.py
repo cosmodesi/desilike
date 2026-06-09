@@ -102,7 +102,7 @@ def default_mpicomm(func: Callable):
     return wrapper
 
 
-def initialize(mpicomm=None, nshards: int = 1):
+def initialize(mpicomm=None, nshards: int=None):
     """Configure the global MPI communicator and JAX device setup.
 
     **Must be called before any JAX computation** (i.e. before calling
@@ -116,7 +116,7 @@ def initialize(mpicomm=None, nshards: int = 1):
         The communicator to use as the process-wide default.  When ``None``
         (the default) the existing result of :func:`get_mpicomm` is kept.
     nshards : int, optional
-        Number of JAX CPU devices visible to *this* MPI rank.  Default is 1.
+        If provided, number of JAX CPU devices visible to *this* MPI rank.
 
         When greater than 1 the function performs two actions so that each
         MPI rank has its own private set of physical CPU cores:
@@ -178,14 +178,14 @@ def initialize(mpicomm=None, nshards: int = 1):
 
     import jax
 
-    if nshards > 1:
+    if nshards is not None:
         jax.config.update('jax_num_cpu_devices', nshards)
 
     # CPU affinity: bind this rank to a disjoint slice of physical cores so
     # that MPI ranks do not compete for the same CPUs.
     # Skip when the MPI launcher has already performed binding (the affinity
     # mask is already narrow) or when the OS does not expose sched_setaffinity.
-    if nshards > 1 and hasattr(os, 'sched_getaffinity') and hasattr(os, 'sched_setaffinity'):
+    if nshards is not None and hasattr(os, 'sched_getaffinity') and hasattr(os, 'sched_setaffinity'):
         available_cpus = sorted(os.sched_getaffinity(0))
         if len(available_cpus) >= nshards * size:
             cpu_slice = available_cpus[rank * nshards:(rank + 1) * nshards]

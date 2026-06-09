@@ -55,7 +55,7 @@ def _param_sizes(varied_params):
 
 
 
-def _normalize_chain_ids(nchains):
+def _normalize_samples_ids(nchains):
     """Return explicit chain ids from an integer count or an iterable of ids.
 
     Parameters
@@ -67,19 +67,19 @@ def _normalize_chain_ids(nchains):
     Returns
     -------
     list
-        Explicit chain ids, suitable for filenames such as ``chain_<id>.h5``.
+        Explicit chain ids, suitable for filenames such as ``samples_<id>.h5``.
     """
     if isinstance(nchains, (int, np.integer)):
         if nchains < 1:
             raise ValueError('nchains must be >= 1.')
         return list(range(1, int(nchains) + 1))
 
-    chain_ids = list(nchains)
-    if not chain_ids:
+    samples_ids = list(nchains)
+    if not samples_ids:
         raise ValueError('nchains cannot be an empty list.')
-    if len(set(chain_ids)) != len(chain_ids):
-        raise ValueError(f'Duplicate chain ids in nchains={chain_ids}.')
-    return chain_ids
+    if len(set(samples_ids)) != len(samples_ids):
+        raise ValueError(f'Duplicate chain ids in nchains={samples_ids}.')
+    return samples_ids
 
 
 def _flat_to_dict(sample, varied_params):
@@ -165,9 +165,11 @@ class BaseSampler(ABC):
             When ``None``, each parameter's ``ref.std()`` is used instead.
         """
         # ── parameter sets ────────────────────────────────────────────────────
-        self.varied_params   = posterior.params.select(varied=True, solved=False)
+        self.varied_params = posterior.params.select(varied=True, solved=False)
+        if not self.varied_params:
+            raise ValueError('No varied parameters found in the posterior.')
         # Derived = pure derived outputs (logposterior etc.) + analytically solved params.
-        self.derived_params  = posterior.params.select(derived=True) + posterior.params.select(solved=True)
+        self.derived_params = posterior.params.select(derived=True) + posterior.params.select(solved=True)
         # Flat count of derived scalar values (for array_to_samples bookkeeping)
         self.n_derived = int(sum(
             int(np.prod(p.shape)) if p.shape else 1
@@ -199,6 +201,11 @@ class BaseSampler(ABC):
             if self.mpicomm.rank == 0:
                 directory.mkdir(parents=True, exist_ok=True)
         self.directory = directory
+
+        if self.mpicomm.rank == 0:
+            self.logger.info('Varied parameters: %s', self.varied_params.names())
+            if self.directory is not None:
+                self.logger.info('Samples will be written to: %s', self.directory)
 
         if self.directory is not None:
             try:
@@ -539,7 +546,7 @@ class MarkovChainSampler(BaseSampler):
             Number of independent chains, or explicit chain ids.  If an integer,
             ids are ``1, ..., nchains``.  If a sequence, ids are taken from it
             and used in checkpoint filenames, e.g. ``[4, 5, 6, 7]`` writes
-            ``chain_4.h5`` through ``chain_7.h5``.  Default is 1.
+            ``samples_4.h5`` through ``samples_7.h5``.  Default is 1.
         chains : list of MCSamples, optional
             If provided (at least on rank 0), continue from these chains.
         rng : numpy.random.Generator, int, or None
@@ -559,28 +566,28 @@ class MarkovChainSampler(BaseSampler):
         input_chains = False
         if self.mpicomm.rank == 0:
             input_chains = chains is not None
-            chain_ids = _normalize_chain_ids(nchains)
+            samples_ids = _normalize_samples_ids(nchains)
             if input_chains:
                 if not isinstance(chains, (tuple, list)):
                     chains = [chains]
-                if len(chains) != len(chain_ids):
+                if len(chains) != len(samples_ids):
                     raise ValueError(
-                        f'Expected {len(chain_ids)} input chains, got {len(chains)}.'
+                        f'Expected {len(samples_ids)} input chains, got {len(chains)}.'
                     )
         else:
-            chain_ids = None
+            samples_ids = None
 
-        input_chains, self.chain_ids = self.mpicomm.bcast((input_chains, chain_ids), root=0)
-        self.nchains = len(self.chain_ids)
+        input_chains, self.samples_ids = self.mpicomm.bcast((input_chains, samples_ids), root=0)
+        self.nchains = len(self.samples_ids)
 
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, directory=directory,
                          rescale=rescale, covariance=covariance)
 
         # Distribute pre-supplied chains to the owning ranks.
         if input_chains:
-            for chain_idx, dest_rank in enumerate(self._pool_mains):
+            for samples_idx, dest_rank in enumerate(self._pool_mains):
                 samples = MCSamples.sendrecv(
-                    chains[chain_idx] if self.mpicomm.rank == 0 else None,
+                    chains[samples_idx] if self.mpicomm.rank == 0 else None,
                     source=0, dest=dest_rank, mpicomm=self.mpicomm)
                 if self.mpicomm.rank == dest_rank:
                     self._samples = samples
@@ -686,9 +693,9 @@ class MarkovChainSampler(BaseSampler):
         return gathered if self.mpicomm.rank == 0 else None
 
     @property
-    def chain_id(self):
+    def samples_id(self):
         """Explicit id of the chain handled by this sampler rank."""
-        return self.chain_ids[self._ichain]
+        return self.samples_ids[self._ichain]
 
     @property
     def state(self):
@@ -841,23 +848,23 @@ class MarkovChainSampler(BaseSampler):
 
     def write(self):
         if self.pool.main:
-            with open(self.directory / f'rng_{self.chain_id}.json', 'w') as fstream:
+            with open(self.directory / f'rng_{self.samples_id}.json', 'w') as fstream:
                 json.dump(self.rng.bit_generator.state, fstream)
-            self._samples.write(self.directory / f'chain_{self.chain_id}.h5')
+            self._samples.write(self.directory / f'samples_{self.samples_id}.h5')
         if self.mpicomm.rank == 0:
             with open(self.directory / 'checks.json', 'w') as fstream:
                 json.dump(self.checks, fstream)
 
     def read(self):
         if self.pool.main:
-            rng_path    = self.directory / f'rng_{self.chain_id}.json'
-            chain_path  = self.directory / f'chain_{self.chain_id}.h5'
+            rng_path    = self.directory / f'rng_{self.samples_id}.json'
+            samples_path  = self.directory / f'samples_{self.samples_id}.h5'
             if rng_path.exists():
                 with open(rng_path, 'r') as fstream:
                     self.rng = np.random.default_rng()
                     self.rng.bit_generator.state = json.load(fstream)
-            if chain_path.exists():
-                self._samples = MCSamples.read(chain_path)
+            if samples_path.exists():
+                self._samples = MCSamples.read(samples_path)
         checks_path = self.directory / 'checks.json'
         if checks_path.exists():
             with open(self.directory / 'checks.json', 'r') as fstream:

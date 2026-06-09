@@ -158,29 +158,29 @@ class PNGTracerSpectrum2Poles(Calculator):
         if mode not in ('b-p', 'bphi', 'bfnl'):
             raise ValueError(f"mode must be one of 'b-p', 'bphi', 'bfnl'; got {mode!r}")
         auto_params = [
-            Parameter('b1', value=2., prior=dict(limits=[0., 5.]),
-                      ref=dict(dist='norm', loc=2., scale=0.2), fd_eps=0.1, latex='b_1'),
-            Parameter('sigmas', value=0., prior=dict(limits=[0., 20.]),
-                      ref=dict(dist='norm', loc=0., scale=1.), fd_eps=0.2, latex=r'\sigma_s'),
-            Parameter('sn0', value=0., prior=None,
-                      ref=dict(dist='norm', loc=0., scale=1.), fd_eps=0.05, latex='s_{n,0}'),
+            Parameter('b1', value=2., prior=dict(limits=[0.1, 10.]),
+                      ref=dict(limits=[1.5, 2.5]), fd_eps=0.1, latex='b_1'),
+            Parameter('sigmas', value=0., prior=dict(limits=[0., 10.]),
+                      ref=dict(limits=[1., 4.]), fd_eps=0.2, latex=r'\Sigma_{s}'),
+            Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=1000.),
+                      ref=dict(dist='norm', loc=0., scale=0.1), fd_eps=0.05, latex='s_{n,0}'),
         ]
         if mode == 'b-p':
             auto_params += [
-                Parameter('fnl_loc', value=0., prior=dict(dist='norm', loc=0., scale=50.),
-                          ref=dict(dist='norm', loc=0., scale=5.), fd_eps=1., latex=r'f_\mathrm{NL}'),
-                Parameter('p', value=1., prior=None, ref=dict(dist='norm', loc=1., scale=0.1), fd_eps=0.1, latex='p'),
+                Parameter('fnl_loc', value=0., prior=dict(limits=[-300., 300.]),
+                          ref=dict(limits=[-10., 10.]), fd_eps=1., latex=r'f_{\mathrm{NL}}^{\mathrm{loc}}'),
+                Parameter('p', value=1., prior=dict(limits=[0., 3.]), ref=dict(limits=[0.5, 1.5]), fd_eps=0.1, latex='p'),
             ]
         elif mode == 'bphi':
             auto_params += [
-                Parameter('fnl_loc', value=0., prior=dict(dist='norm', loc=0., scale=50.),
-                          ref=dict(dist='norm', loc=0., scale=5.), fd_eps=1., latex=r'f_\mathrm{NL}'),
-                Parameter('bphi', value=1., prior=None, ref=dict(dist='norm', loc=1., scale=0.5), fd_eps=0.1, latex=r'b_\phi'),
+                Parameter('fnl_loc', value=0., prior=dict(limits=[-300., 300.]),
+                          ref=dict(limits=[-10., 10.]), fd_eps=1., latex=r'f_{\mathrm{NL}}^{\mathrm{loc}}'),
+                Parameter('bphi', value=1., prior=dict(limits=[-10., 10.]), ref=dict(limits=[3., 4.]), fd_eps=0.1, latex=r'b_{\phi}'),
             ]
         else:
             auto_params += [
-                Parameter('bfnl_loc', value=0., prior=dict(dist='norm', loc=0., scale=100.),
-                          ref=dict(dist='norm', loc=0., scale=10.), fd_eps=1., latex=r'b_{f_\mathrm{NL}}'),
+                Parameter('bfnl_loc', value=0., prior=dict(limits=[-1e3, 1e3]),
+                          ref=dict(limits=[-50., 50.]), fd_eps=1., latex=r'b_{\phi}f_{\mathrm{NL}}^{\mathrm{loc}}'),
             ]
         return propose_params_multitracer(auto_params, tracers, stochastic=('sn0',), shared=('fnl_loc',), cross=True)
 
@@ -289,27 +289,27 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
     def __init__(self, k=None, ells=(1, 3), z=1., fiducial='DESI', engine='eisenstein_hu',
                  method='prim', mu=10, mode='b-p'):
         # Nodes (Parameters) live in __init__.
-        self.b1 = Parameter('b1', value=2., prior=dict(limits=[0., 5.]),
-                            ref=dict(dist='norm', loc=2., scale=0.2), fd_eps=0.1, latex='b_1')
-        self.bv = Parameter('bv', value=1., prior=None,
-                            ref=dict(dist='norm', loc=1., scale=0.1), fd_eps=0.1, latex='b_v')
-        self.sigmas = Parameter('sigmas', value=0., prior=dict(limits=[0., 20.]),
-                                ref=dict(dist='norm', loc=0., scale=1.), fd_eps=0.2, latex=r'\sigma_s')
+        self.b1 = Parameter('b1', value=2., prior=dict(limits=[0.1, 10.]),
+                            ref=dict(limits=[1.5, 2.5]), fd_eps=0.1, latex='b_1')
+        self.bv = Parameter('bv', value=1., prior=dict(limits=[0.1, 10.]),
+                            ref=dict(limits=[0.5, 1.5]), fd_eps=0.1, latex='b_v')
+        self.sigmas = Parameter('sigmas', value=0., prior=dict(limits=[0., 10.]),
+                                ref=dict(limits=[1., 4.]), fd_eps=0.2, latex=r'\Sigma_{s}')
         self.sigmau = Parameter('sigmau', value=0., prior=dict(limits=[0., 50.]),
-                                ref=dict(dist='norm', loc=0., scale=1.), fd_eps=0.2, latex=r'\sigma_u')
+                                ref=dict(limits=[0., 20.]), fd_eps=0.2, latex=r'\Sigma_{u}')
         if mode == 'b-p':
-            self.fnl_loc = Parameter('fnl_loc', value=0., prior=dict(dist='norm', loc=0., scale=50.),
-                                     ref=dict(dist='norm', loc=0., scale=5.), fd_eps=1., latex=r'f_\mathrm{NL}')
-            self.p = Parameter('p', value=1., prior=None,
-                               ref=dict(dist='norm', loc=1., scale=0.1), fd_eps=0.1, latex='p')
+            self.fnl_loc = Parameter('fnl_loc', value=0., prior=dict(limits=[-300., 300.]),
+                                     ref=dict(limits=[-10., 10.]), fd_eps=1., latex=r'f_{\mathrm{NL}}^{\mathrm{loc}}')
+            self.p = Parameter('p', value=1., prior=dict(limits=[0., 3.]),
+                               ref=dict(limits=[0.5, 1.5]), fd_eps=0.1, latex='p')
         elif mode == 'bphi':
-            self.fnl_loc = Parameter('fnl_loc', value=0., prior=dict(dist='norm', loc=0., scale=50.),
-                                     ref=dict(dist='norm', loc=0., scale=5.), fd_eps=1., latex=r'f_\mathrm{NL}')
-            self.bphi = Parameter('bphi', value=1., prior=None,
-                                  ref=dict(dist='norm', loc=1., scale=0.5), fd_eps=0.1, latex=r'b_\phi')
+            self.fnl_loc = Parameter('fnl_loc', value=0., prior=dict(limits=[-300., 300.]),
+                                     ref=dict(limits=[-10., 10.]), fd_eps=1., latex=r'f_{\mathrm{NL}}^{\mathrm{loc}}')
+            self.bphi = Parameter('bphi', value=1., prior=dict(limits=[-10., 10.]),
+                                  ref=dict(limits=[3., 4.]), fd_eps=0.1, latex=r'b_{\phi}')
         elif mode == 'bfnl':
-            self.bfnl_loc = Parameter('bfnl_loc', value=0., prior=dict(dist='norm', loc=0., scale=100.),
-                                      ref=dict(dist='norm', loc=0., scale=10.), fd_eps=1., latex=r'b_{f_\mathrm{NL}}')
+            self.bfnl_loc = Parameter('bfnl_loc', value=0., prior=dict(limits=[-1e3, 1e3]),
+                                      ref=dict(limits=[-50., 50.]), fd_eps=1., latex=r'b_{\phi}f_{\mathrm{NL}}^{\mathrm{loc}}')
         else:
             raise ValueError(f"mode must be one of 'b-p', 'bphi', 'bfnl'; got {mode!r}")
 

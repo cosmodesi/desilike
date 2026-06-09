@@ -6,7 +6,6 @@ specialized classes implementing specific samplers such as ``emcee`` or
 ``dynesty``.
 """
 
-import functools
 import json
 import sys
 import warnings
@@ -16,37 +15,9 @@ from pathlib import Path
 import numpy as np
 
 from desilike import Samples
-from desilike.pool import MPIPool
+from desilike.pool import from_main, MPIPool
 from desilike.statistics import diagnostics
 from desilike.utils import BaseClass
-
-
-def _main(func):
-    """Execute function only from the main process."""
-
-    @functools.wraps(func)
-    def wrapper(self, *args, **kwargs):
-        exception = None
-        if self.pool.main:
-            try:
-                result = func(self, *args, **kwargs)
-            except Exception as exc:
-                exception = exc
-            finally:
-                try:
-                    self.pool.stop_wait()
-                except:
-                    self.mpicomm.Abort(1)
-        else:
-            self.pool.wait()
-
-        exception = self.mpicomm.bcast(exception)
-        if exception:
-            raise exception
-
-        return self.mpicomm.bcast(None if not self.pool.main else result)
-
-    return wrapper
 
 
 def _update_parameters(user_kwargs, sampler, **desilike_kwargs):
@@ -322,7 +293,7 @@ class StaticSampler(BaseSampler):
         """
         pass
 
-    @_main
+    @from_main
     def run(self, **kwargs):
         """Run the sampler.
 
@@ -389,7 +360,7 @@ class PopulationSampler(BaseSampler):
         """
         pass
 
-    @_main
+    @from_main
     def run(self, **kwargs):
         """Run the sampler.
 
@@ -595,6 +566,7 @@ class MarkovChainSampler(BaseSampler):
 
         self.log_info('Diagnostics:')
 
+        # TODO: Do something with it.
         if len(chains) == 1:
             nsplits = 4
         elif len(chains) < 4:
@@ -628,7 +600,7 @@ class MarkovChainSampler(BaseSampler):
 
         return passed_all
 
-    @_main
+    @from_main
     def run(self, burn_in=0.2, min_steps=0, max_steps=None,
             adaptation_steps=None, check_every=300, checks_passed=2,
             gelman_rubin=1.1, ess=None, concatenate=True, save_every=300,

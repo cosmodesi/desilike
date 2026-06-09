@@ -777,7 +777,7 @@ class MarkovChainSampler(BaseSampler):
         Parameters
         ----------
         burn_in : float or int
-            Fraction (or number) of steps to remove as burn-in.  Default is 0.2.
+            Fraction (or number) of steps to remove as burn-in for the checks. Default is 0.2.
         min_steps : int
             Minimum number of steps.  Default is 0.
         max_steps : int or None
@@ -840,9 +840,6 @@ class MarkovChainSampler(BaseSampler):
 
         if self.directory is not None and steps % save_every != 0:
             self.write()
-
-        if self.pool.main:
-            self._chain = self._chain.remove_burnin(burn_in)
 
         all_chains = self.chains
         if concatenate and self.mpicomm.rank == 0:

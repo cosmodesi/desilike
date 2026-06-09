@@ -185,6 +185,7 @@ class PocoMCSampler(PopulationSampler):
                 blobs = np.empty((len(samples), 0))
             extras = dict(aweight=weights, logposterior=logl + logp)
             self.pool.stop_wait()
+            self.logger.info('Finished sampling.')
             return samples, blobs, extras
         self.pool.wait()
         return None

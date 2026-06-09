@@ -10,6 +10,7 @@ from matplotlib import pyplot as plt
 from matplotlib import gridspec, transforms
 
 from ..parameter import Variable, VariableCollection
+from ..plotting import plotter
 from .samples import _vals, _normalise_params
 from . import diagnostics
 
@@ -23,27 +24,6 @@ def _nsigmas_to_deltachi2(nsigmas, ddof=1):
         return float(nsigmas) ** 2
     quantile = stats.norm.cdf(nsigmas) - stats.norm.cdf(-nsigmas)
     return stats.chi2.ppf(quantile, ddof)
-
-
-# ── plotter decorator ─────────────────────────────────────────────────────────
-
-def plotter(func):
-    """Decorator that adds ``fn``, ``kw_save``, and ``show`` keyword arguments.
-
-    When ``fn`` is provided the figure is saved after the decorated function
-    returns.  When ``show`` is ``True`` it is displayed via
-    :func:`matplotlib.pyplot.show`.
-    """
-    @functools.wraps(func)
-    def wrapper(*args, fn=None, kw_save=None, show=False, **kwargs):
-        result = func(*args, **kwargs)
-        fig = result if isinstance(result, plt.Figure) else None
-        if fig is not None and fn is not None:
-            fig.savefig(fn, **(kw_save or {}))
-        if show:
-            plt.show()
-        return result
-    return wrapper
 
 
 # ── list helpers ──────────────────────────────────────────────────────────────

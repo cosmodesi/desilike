@@ -47,6 +47,8 @@ class NautilusSampler(PopulationSampler):
         # Each pool gets a unique MPI tag so their messages never interfere.
         # Workers call wait_many([self.pool, self._pool_sampler]) in run_sampler
         # to service both pools through a single ANY_TAG loop.
+        # batch_size can be anything for likelihood pool; it is called through
+        # likelihood is called through pool.map with a list of constant size n_batch >= 100
         self._pool_sampler = make_pool(self.pool.comm, batch_size=0)
         if self.pool.main:
             kwargs = update_kwargs(

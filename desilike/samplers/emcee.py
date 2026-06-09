@@ -48,11 +48,14 @@ class EmceeSampler(EnsembleSampler):
             raise ImportError("The 'emcee' package is required but not "
                               "installed.")
 
+        # posterior is called through loop.map with a list of constant size = nwalkers // 2 points
         super().__init__(posterior, nchains=nchains, chains=chains, rng=rng,
                          directory=directory, nwalkers=nwalkers,
                          rescale=rescale, covariance=covariance, batch_size=batch_size)
         if self.nwalkers is None:
-            self.nwalkers = 2 * max((int(2.5 * self.ndim) + 1) // 2, 2)
+            # Minimum is 2 * max((int(2.5 * self.ndim) + 1) // 2, 2)
+            # Recommended is probably more >= 4 * self.ndim
+            self.nwalkers = 4 * self.ndim
         if self.pool.main:
             # emcee treats tuple returns as (log_prob, blobs).  When there are
             # no derived parameters, return plain scalars so emcee never
@@ -64,7 +67,6 @@ class EmceeSampler(EnsembleSampler):
                 log_prob_fn = self.compute_posterior
             else:
                 log_prob_fn = lambda batch: [result[0] for result in self.compute_posterior(batch)]
-            # likelihood is called through map with a list of constant nwalkers // 2 points
             kwargs = update_kwargs(
                 kwargs, 'emcee', ndim=self.ndim,
                 log_prob_fn=log_prob_fn, pool=self.pool, args=None,

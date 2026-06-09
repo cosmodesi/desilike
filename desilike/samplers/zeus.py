@@ -55,7 +55,9 @@ class ZeusSampler(EnsembleSampler):
                          directory=directory, nwalkers=nwalkers,
                          rescale=rescale, covariance=covariance, batch_size=0)
         if self.nwalkers is None:
-            self.nwalkers = 2 * self.ndim
+            # Minimum is 2 * self.ndim;
+            # 4 * ndim is recommended for a reasonably smooth posterior
+            self.nwalkers = 4 * self.ndim
         if self.pool.main:
             # zeus treats tuple returns as (log_prob, blobs).  When there are
             # no derived parameters, return plain scalars to avoid a zero-size

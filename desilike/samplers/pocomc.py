@@ -77,6 +77,7 @@ class PocoMCSampler(PopulationSampler):
             raise ImportError("The 'pocomc' package is required but not "
                               "installed.")
 
+        # likelihood is called through pool.map with a list of constant size n_active (= 256 typically)
         super().__init__(posterior, rng=rng, directory=directory,
                          rescale=rescale, covariance=covariance, batch_size=batch_size)
 
@@ -111,7 +112,6 @@ class PocoMCSampler(PopulationSampler):
             # pocomc's save_state serialises its entire __dict__ with dill.
             # Several attributes are unpicklable:
             #   - log_likelihood: captures this sampler (JAX-JIT + MPI objects)
-            #   - pool / distribute: _SerialPool holds a _thread._local object
             #   - save_state itself: our closure below captures this sampler
             # We monkey-patch save_state to null all of them out before dumping
             # and restore them in a finally block.

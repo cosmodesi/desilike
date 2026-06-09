@@ -381,4 +381,4 @@ if __name__ == '__main__':
         return graph
 
     posterior = likelihood()
-    test_accuracy(posterior, 'zeus')
+    test_accuracy(posterior, 'pocomc')

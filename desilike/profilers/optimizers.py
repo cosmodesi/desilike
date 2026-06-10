@@ -1,6 +1,16 @@
 """Collection of wrappers for commonly used optimizers."""
 # TODO: implement other optimizers
 try:
+    import pybobyqa
+    BOBYQA_INSTALLED = True
+except ModuleNotFoundError:
+    BOBYQA_INSTALLED = False
+try:
+    from iminuit import Minuit
+    MINUIT_INSTALLED = True
+except ModuleNotFoundError:
+    MINUIT_INSTALLED = False
+try:
     import jax
     JAX_INSTALLED = True
 except ModuleNotFoundError:
@@ -8,19 +18,17 @@ except ModuleNotFoundError:
 import numpy as np
 from scipy.optimize import minimize
 from scipy.optimize import dual_annealing as scipy_dual_annealing
-try:
-    from iminuit import Minuit
-    MINUIT_INSTALLED = True
-except ModuleNotFoundError:
-    MINUIT_INSTALLED = False
 
 
-def scipy(f, x_0, rng, **kwargs):
-    """Optimize using :func:`scipy.minimize`.
+def bobyqa(f, x_0, rng, **kwargs):
+    """Optimize using :meth:`pybobyqa.solve`.
 
-    - `scipy repo <https://github.com/scipy/scipy>`_
-    - `scipy docs <https://docs.scipy.org/doc/scipy/index.html>`_
-    - `scipy paper <https://doi.org/10.1038/s41592-019-0686-2>`_
+    .. rubric:: References
+
+    - `pybobyqa repo <https://github.com/numericalalgorithmsgroup/pybobyqa>`_
+    - `pybobyqa docs <https://numericalalgorithmsgroup.github.io/pybobyqa/>`_
+    - `bobyqa paper A <https://doi.org/10.1145/3338517>`_
+    - `bobyqa paper B <https://doi.org/10.1080/02331934.2021.1883015>`_
 
     Parameters
     ----------
@@ -31,7 +39,7 @@ def scipy(f, x_0, rng, **kwargs):
     rng : numpy.random.Generator
         Unused. Present for API consistency.
     **kwargs
-        Additional keyword arguments passed to ``scipy.minimize``.
+        Additional keyword arguments passed to ``pybobyqa.solve``.
 
     Returns
     -------
@@ -42,9 +50,19 @@ def scipy(f, x_0, rng, **kwargs):
     success : bool
         Whether the optimizer finished successfully.
 
+    Raises
+    ------
+    ImportError
+        If ``Py-BOBYQA`` is not installed.
+
     """
-    res = minimize(f, x_0, bounds=[(0, 1)] * len(x_0), **kwargs)
-    return res.x, res.fun, res.success
+    if not BOBYQA_INSTALLED:
+        msg = "The 'Py-BOBYQA' package is required but not installed."
+        raise ImportError(msg)
+
+    soln = pybobyqa.solve(
+        f, x_0, bounds=(np.zeros(len(x_0)), np.ones(len(x_0))), **kwargs)
+    return soln.x, soln.f, soln.flag == 0
 
 
 def dual_annealing(f, x_0, rng, **kwargs):
@@ -53,7 +71,7 @@ def dual_annealing(f, x_0, rng, **kwargs):
     Parameters
     ----------
     f : callable
-        Function to optimize.
+        Objective function.
     x_0 : array-like
         Starting point.
     rng : numpy.random.Generator
@@ -89,7 +107,7 @@ def minuit(f, x_0, rng):
     Parameters
     ----------
     f : callable
-        Function to optimize.
+        Objective function.
     x_0 : array-like
         Starting point.
     rng : numpy.random.Generator
@@ -107,7 +125,7 @@ def minuit(f, x_0, rng):
     Raises
     ------
     ImportError
-        If `minuit` is not installed.
+        If ``iminuit`` is not installed.
 
     """
     if not MINUIT_INSTALLED:
@@ -125,3 +143,35 @@ def minuit(f, x_0, rng):
     m.errordef = Minuit.LIKELIHOOD
     m.migrad()
     return np.array([m.values[f'x{i}'] for i in range(n_dim)]), m.fval, m.valid
+
+
+def scipy(f, x_0, rng, **kwargs):
+    """Optimize using :func:`scipy.minimize`.
+
+    - `scipy repo <https://github.com/scipy/scipy>`_
+    - `scipy docs <https://docs.scipy.org/doc/scipy/index.html>`_
+    - `scipy paper <https://doi.org/10.1038/s41592-019-0686-2>`_
+
+    Parameters
+    ----------
+    f : callable
+        Objective function.
+    x_0 : array-like
+        Starting point.
+    rng : numpy.random.Generator
+        Unused. Present for API consistency.
+    **kwargs
+        Additional keyword arguments passed to ``scipy.minimize``.
+
+    Returns
+    -------
+    x_min : numpy.ndarray
+        Coordinates of the minimum.
+    f_min : float
+        Value of the objective function at the minimum.
+    success : bool
+        Whether the optimizer finished successfully.
+
+    """
+    res = minimize(f, x_0, bounds=[(0, 1)] * len(x_0), **kwargs)
+    return res.x, res.fun, res.success

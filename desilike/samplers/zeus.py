@@ -50,7 +50,7 @@ class ZeusSampler(MarkovChainSampler):
         Raises
         ------
         ImportError
-            If ``zeus`` is not installed.
+            If ``zeus-mcmc`` is not installed.
 
         """
         if not ZEUS_INSTALLED:

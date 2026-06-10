@@ -19,10 +19,12 @@ MEAN_POSTERIOR = COV_POSTERIOR @ (
     np.linalg.inv(COV_LIKELIHOOD) @ MEAN_LIKELIHOOD)
 
 OPTIMIZERS = dict(
+    bobyqa=optimizers.bobyqa,
     dual_annealing=optimizers.dual_annealing,
     minuit=optimizers.minuit,
     scipy=optimizers.scipy)
 OPTIMIZERS_KWARGS = dict(
+    bobyqa=None,
     dual_annealing=dict(maxiter=10),
     minuit=None,
     scipy=None)

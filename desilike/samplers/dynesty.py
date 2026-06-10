@@ -41,13 +41,15 @@ class DynestySampler(PopulationSampler):
 
         Raises
         ------
+        ImportError
+            If ``dynesty`` is not installed.
         ValueError
             If ``directory`` is not ``None`` but ``dynamic`` is Flalse.
 
         """
         if not DYNESTY_INSTALLED:
-            raise ImportError("The 'dynesty' package is required but not "
-                              "installed.")
+            msg = "The 'dynesty' package is required but not installed."
+            raise ImportError(msg)
 
         super().__init__(likelihood, rng=rng, directory=directory)
 

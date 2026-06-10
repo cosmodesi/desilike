@@ -47,10 +47,15 @@ class ZeusSampler(MarkovChainSampler):
         **kwargs
             Extra keyword arguments passed to ``zeus`` during initialization.
 
+        Raises
+        ------
+        ImportError
+            If ``zeus`` is not installed.
+
         """
         if not ZEUS_INSTALLED:
-            raise ImportError("The 'zeus-mcmc' package is required but not "
-                              "installed.")
+            msg = "The 'zeus-mcmc' package is required but not installed."
+            raise ImportError(msg)
 
         super().__init__(likelihood, n_chains=n_walkers, chains=chains,
                          rng=rng, directory=directory)

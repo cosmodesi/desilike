@@ -98,16 +98,19 @@ class BlackJAXSampler(MarkovChainSampler):
 
         Raises
         ------
+        ImportError
+            If ``blackjax`` is not installed.
         TypeError
             If called by this class.
 
         """
         if not BLACKJAX_INSTALLED:
-            raise ImportError("The 'blackjax' package is required but not "
-                              "installed.")
+            msg = "The 'blackjax' package is required but not installed."
+            raise ImportError(msg)
 
         if type(self) is BlackJAXSampler:
-            raise TypeError("BlackJAXSampler cannot be iniated directly.")
+            msg = "BlackJAXSampler cannot be iniated directly."
+            raise TypeError(msg)
 
         super().__init__(likelihood, n_chains, chains=chains, rng=rng,
                          directory=directory)

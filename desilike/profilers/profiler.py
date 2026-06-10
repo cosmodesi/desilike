@@ -1,5 +1,6 @@
 """Base class for profilers."""
 # TODO: expand functionality such as warm starts
+# TODO: should fail if points added are outside limits
 
 import json
 from functools import partial
@@ -198,17 +199,17 @@ class Profiler(BaseClass):
             If ``vector`` has the wrong length.
 
         """
+        print(vector)
         if len(vector) != len(self.params) - len(self.fixed_params[index]):
             msg = "Incorrect number of parameters."
             raise ValueError(msg)
 
         varied_params = [p for p in self.params if p not in
                          self.fixed_params[index].keys()]
-        vector = vector.copy()
-        for i, key in enumerate(varied_params):
-            vector[i] = (
-                vector[i] * (self.limits[key][1] - self.limits[key][0]) +
-                self.limits[key][0])
+        a = np.array([self.limits[key][0] for key in varied_params])
+        b = np.array([self.limits[key][1] - self.limits[key][0] for key in
+                      varied_params])
+        vector = a + b * vector
         return dict(zip(varied_params, vector)) | self.fixed_params[index]
 
     def _cost_function(self, params, index=0):

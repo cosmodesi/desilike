@@ -34,10 +34,16 @@ class NautilusSampler(PopulationSampler):
             Extra keyword arguments passed to ``nautilus`` during
             initialization.
 
+        Raises
+        ------
+        ImportError
+            If ``nautilus`` is not installed.
+
         """
         if not NAUTILUS_INSTALLED:
-            raise ImportError("The 'nautilus-sampler' package is required but "
-                              "not installed.")
+            msg = ("The 'nautilus-sampler' package is required but not "
+                   "installed.")
+            raise ImportError(msg)
 
         super().__init__(likelihood, rng=rng, directory=directory)
 

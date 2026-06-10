@@ -72,10 +72,15 @@ class PocoMCSampler(PopulationSampler):
         **kwargs
             Extra keyword arguments passed to pocoMC during initialization.
 
+        Raises
+        ------
+        ImportError
+            If ``PocoMC`` is not installed.
+
         """
         if not POCOMC_INSTALLED:
-            raise ImportError("The 'pocomc' package is required but not "
-                              "installed.")
+            msg = "The 'pocomc' package is required but not installed."
+            raise ImportError(msg)
 
         super().__init__(likelihood, rng=rng, directory=directory)
 

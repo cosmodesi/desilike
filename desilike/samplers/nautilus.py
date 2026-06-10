@@ -37,7 +37,7 @@ class NautilusSampler(PopulationSampler):
         Raises
         ------
         ImportError
-            If ``nautilus`` is not installed.
+            If ``nautilus-sampler`` is not installed.
 
         """
         if not NAUTILUS_INSTALLED:

@@ -75,7 +75,7 @@ class PocoMCSampler(PopulationSampler):
         Raises
         ------
         ImportError
-            If ``PocoMC`` is not installed.
+            If ``pocomc`` is not installed.
 
         """
         if not POCOMC_INSTALLED:

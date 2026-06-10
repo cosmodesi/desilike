@@ -19,11 +19,14 @@ MEAN_POSTERIOR = COV_POSTERIOR @ (
     np.linalg.inv(COV_LIKELIHOOD) @ MEAN_LIKELIHOOD)
 
 OPTIMIZERS = dict(
-    dual_annealing=optimizers.scipy_dual_annealing,
-    scipy_minimize=optimizers.scipy_minimize)
+    dual_annealing=optimizers.dual_annealing,
+    minuit=optimizers.minuit,
+    scipy=optimizers.scipy)
 OPTIMIZERS_KWARGS = dict(
     dual_annealing=dict(maxiter=10),
-    scipy_minimize=None)
+    minuit=None,
+    scipy=None)
+
 
 @pytest.fixture
 def likelihood():

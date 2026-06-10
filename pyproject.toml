@@ -36,7 +36,8 @@ tests = [
     "blackjax",
     "arviz",
     "matplotlib",
-    "getdist"]
+    "getdist",
+    "iminuit"]
 plotting = [
     "matplotlib",
     "tabulate",

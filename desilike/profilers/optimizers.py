@@ -1,11 +1,26 @@
 """Collection of wrappers for commonly used optimizers."""
 # TODO: implement other optimizers
+try:
+    import jax
+    JAX_INSTALLED = True
+except ModuleNotFoundError:
+    JAX_INSTALLED = False
+import numpy as np
+from scipy.optimize import minimize
+from scipy.optimize import dual_annealing as scipy_dual_annealing
+try:
+    from iminuit import Minuit
+    MINUIT_INSTALLED = True
+except ModuleNotFoundError:
+    MINUIT_INSTALLED = False
 
-from scipy.optimize import dual_annealing, minimize
 
-
-def scipy_minimize(f, x_0, rng, **kwargs):
+def scipy(f, x_0, rng, **kwargs):
     """Optimize using :func:`scipy.minimize`.
+
+    - `scipy repo <https://github.com/scipy/scipy>`_
+    - `scipy docs <https://docs.scipy.org/doc/scipy/index.html>`_
+    - `scipy paper <https://doi.org/10.1038/s41592-019-0686-2>`_
 
     Parameters
     ----------
@@ -32,7 +47,7 @@ def scipy_minimize(f, x_0, rng, **kwargs):
     return res.x, res.fun, res.success
 
 
-def scipy_dual_annealing(f, x_0, rng, **kwargs):
+def dual_annealing(f, x_0, rng, **kwargs):
     """Optimize using :func:`scipy.dual_annealing`.
 
     Parameters
@@ -57,6 +72,56 @@ def scipy_dual_annealing(f, x_0, rng, **kwargs):
 
     """
     kwargs = kwargs | dict(maxiter=1)
-    res = dual_annealing(
+    res = scipy_dual_annealing(
         f, [(0, 1)] * len(x_0), x0=x_0, rng=rng, **kwargs)
     return res.x, res.fun, res.success
+
+
+def minuit(f, x_0, rng):
+    """Optimize using :meth:`iminuit.Minuit.migrad`.
+
+    .. rubric:: References
+
+    - `minuit repo <https://github.com/scikit-hep/iminuit>`_
+    - `minuit docs <https://scikit-hep.org/iminuit/>`_
+    - `minuit paper <https://doi.org/10.1016/0010-4655(75)90039-9>`_
+
+    Parameters
+    ----------
+    f : callable
+        Function to optimize.
+    x_0 : array-like
+        Starting point.
+    rng : numpy.random.Generator
+        Random number generator. Ignored and only used for API consistency.
+
+    Returns
+    -------
+    x_min : numpy.ndarray
+        Coordinates of the minimum.
+    f_min : float
+        Value of the objective function at the minimum.
+    success : bool
+        Whether the optimizer finished successfully.
+
+    Raises
+    ------
+    ImportError
+        If `minuit` is not installed.
+
+    """
+    if not MINUIT_INSTALLED:
+        msg = "The 'iminuit' package is required but not installed."
+        raise ImportError(msg)
+
+    n_dim = len(x_0)
+
+    try:
+        assert JAX_INSTALLED
+        grad = jax.grad(f)
+    except (AssertionError, jax.errors.TracerArrayConversionError):
+        grad = None
+    m = Minuit(f, x_0, grad=grad)
+    m.errordef = Minuit.LIKELIHOOD
+    m.migrad()
+    return np.array([m.values[f'x{i}'] for i in range(n_dim)]), m.fval, m.valid

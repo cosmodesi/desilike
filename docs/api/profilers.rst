@@ -4,7 +4,7 @@ Profilers
 Profiler
 --------
 
-.. autoclass:: desilike.profilers.base.Profiler
+.. autoclass:: desilike.profilers.profiler.Profiler
   :members:
 
 Optimizers

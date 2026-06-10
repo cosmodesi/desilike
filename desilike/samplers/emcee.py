@@ -44,10 +44,15 @@ class EmceeSampler(MarkovChainSampler):
         **kwargs
             Extra keyword arguments passed to ``emcee`` during initialization.
 
+        Raises
+        ------
+        ImportError
+            If ``dynesty`` is not installed.
+
         """
         if not EMCEE_INSTALLED:
-            raise ImportError("The 'emcee' package is required but not "
-                              "installed.")
+            msg = "The 'emcee' package is required but not installed."
+            raise ImportError(msg)
 
         super().__init__(likelihood, n_chains=n_walkers, chains=chains,
                          rng=rng, directory=directory)

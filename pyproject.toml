@@ -37,7 +37,8 @@ tests = [
     "arviz",
     "matplotlib",
     "getdist",
-    "iminuit"]
+    "iminuit",
+    "py-bobyqa"]
 plotting = [
     "matplotlib",
     "tabulate",

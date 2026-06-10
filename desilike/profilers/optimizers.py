@@ -62,7 +62,7 @@ def bobyqa(f, x_0, rng, **kwargs):
 
     soln = pybobyqa.solve(
         f, x_0, bounds=(np.zeros(len(x_0)), np.ones(len(x_0))), **kwargs)
-    return soln.x, soln.f, soln.flag == 0
+    return soln.x, soln.f, soln.flag == soln.EXIT_SUCCESS
 
 
 def dual_annealing(f, x_0, rng, **kwargs):

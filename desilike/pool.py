@@ -216,14 +216,12 @@ class MPIPool(object):
         # Send function if necessary.
         if function is not self.function:
             self.function = function
-            requests = [self.comm.send(function, dest=i) for i in
-                        range(1, self.size)]
+            for i in range(1, self.size):
+                self.comm.send(function, dest=i)
 
         # Distribute tasks to workers.
-        requests = []
         for i in range(1, self.size):
-            req = self.comm.send(tasks[i::self.size], dest=i)
-            requests.append(req)
+            self.comm.send(tasks[i::self.size], dest=i)
 
         # Process local work.
         results = [None] * len(tasks)
@@ -238,37 +236,21 @@ class MPIPool(object):
 
         return results
 
-    def split(self, n_groups):
-        """Create new independent groups of pools.
-
-        Parameters
-        ----------
-        n_groups: int
-            The number of independent groups.
-
-        Returns
-        -------
-        subpool : MPIPool
-            A new pool that only communicates with other pools in its group.
-            The new pool inherits the functions previously cached.
-
-        """
-        subpool = MPIPool(comm=self.comm.Split(
-            (self.rank * n_groups // self.size), self.rank))
-        subpool.registry = self.registry
-        return subpool
-
-    def bcast(self, obj):
+    def bcast(self, obj, rank=0):
         """Broadcast an object from the main process.
+
         Parameters
         ----------
         obj : object
             Object to broadcast.
+        rank : int, optional
+            Rank from which to broadcast. Default is 0.
+
         """
         if self.size == 1:
             return obj
         else:
-            return self.comm.bcast(obj)
+            return self.comm.bcast(obj, root=rank)
 
 
 def from_main(func):
@@ -276,6 +258,7 @@ def from_main(func):
 
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
+
         exception = None
         if self.pool.main:
             try:
@@ -283,17 +266,17 @@ def from_main(func):
             except Exception as exc:
                 exception = exc
             finally:
-                try:
-                    self.pool.stop_wait()
-                except:
-                    if self.pool.size > 1:
-                        self.pool.comm.Abort(1)
+                self.pool.stop_wait()
         else:
-            self.pool.wait()
+            try:
+                self.pool.wait()
+            except Exception as exc:
+                exception = exc
 
-        exception = self.pool.bcast(exception)
-        if exception:
-            raise exception
+        for rank in range(self.pool.size):
+            exception = self.pool.bcast(exception, rank=rank)
+            if exception:
+                raise exception
 
         return self.pool.bcast(None if not self.pool.main else result)
 

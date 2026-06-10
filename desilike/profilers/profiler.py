@@ -11,7 +11,7 @@ import numpy as np
 from desilike import Samples
 from desilike.pool import from_main, MPIPool
 from desilike.utils import BaseClass
-from .optimizers import scipy_dual_annealing
+from . import optimizers
 
 
 class Profiler(BaseClass):
@@ -199,7 +199,6 @@ class Profiler(BaseClass):
             If ``vector`` has the wrong length.
 
         """
-        print(vector)
         if len(vector) != len(self.params) - len(self.fixed_params[index]):
             msg = "Incorrect number of parameters."
             raise ValueError(msg)
@@ -300,7 +299,7 @@ class Profiler(BaseClass):
 
     @from_main
     def run(self, n_per_iter=10, max_iter=10, tol=1e-3, warm_start=False,
-            max_init_attempts=100, optimizer=scipy_dual_annealing,
+            max_init_attempts=100, optimizer=optimizers.dual_annealing,
             optimizer_kwargs=None):
         """Run the profiler.
 
@@ -323,7 +322,7 @@ class Profiler(BaseClass):
             100.
         optimizer : callable, optional
             Optimizer function from ``desilike.profilers.optimizers``. Default
-            is ``desilike.profilers.scipy_dual_annealing``.
+            is ``desilike.profilers.optimizers.dual_annealing``.
         optimizer_kwargs : dict, optional
             Optional keyword arguments passed to the optimizer. Default is
             ``None``.

@@ -138,7 +138,7 @@ class BAOSpectrum2Template(Spectrum2Template):
         """
         return propose_params_multitracer(
             _ap_auto_params(apmode) + [
-                Parameter('df', value=1., prior=dict(limits=[0., 2.]),
+                Parameter('df', value=1., fixed=True, prior=dict(limits=[0., 2.]),
                           ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta f'),
             ], tracers=None)
 

@@ -130,16 +130,16 @@ class DampedBAOWigglesPTSpectrum2Poles(Calculator):
         VariableCollection
         """
         return propose_params_multitracer([
-            Parameter('b1', value=1., prior=dict(limits=[0.2, 4.]),
-                      ref=dict(limits=[1.5, 2.5]), latex='b_1'),
+            Parameter('b1', value=1.5, prior=dict(limits=[0.2, 4.]),
+                      ref=dict(limits=[1.4, 1.6]), latex='b_1'),
             Parameter('dbeta', value=1., prior=dict(limits=[0.7, 1.3]),
-                      ref=dict(limits=[0.8, 1.2]), fd_eps=0.02, latex=r'\delta\beta'),
+                      ref=dict(limits=[0.9, 1.1]), fd_eps=0.02, latex=r'\delta\beta'),
             Parameter('sigmas', value=0., prior=dict(limits=[0., 10.]),
                       ref=dict(limits=[0., 1.]), latex=r'\Sigma_{s}'),
             Parameter('sigmapar', value=9., fixed=True, prior=dict(limits=[0.1, 10.]),
-                      latex=r'\Sigma_{\parallel}'),
+                      ref=dict(limits=[8., 10.]), latex=r'\Sigma_{\parallel}'),
             Parameter('sigmaper', value=6., fixed=True, prior=dict(limits=[0.1, 10.]),
-                      latex=r'\Sigma_{\perp}'),
+                      ref=dict(limits=[5., 7.]), latex=r'\Sigma_{\perp}'),
         ], tracers)
 
     def __init__(self, k=None, template=None, tracers=None, params=None, **kwargs):
@@ -302,7 +302,7 @@ class ResummedBAOWigglesPTSpectrum2Poles(Calculator):
         """
         return propose_params_multitracer([
             Parameter('b1', value=1., prior=dict(limits=[0.2, 4.]),
-                      ref=dict(limits=[1.5, 2.5]), latex='b_1'),
+                      ref=dict(limits=[1.5, 2.]), latex='b_1'),
             Parameter('dbeta', value=1., prior=dict(limits=[0.7, 1.3]),
                       ref=dict(limits=[0.95, 1.05]), fd_eps=0.02, latex=r'\delta\beta'),
             Parameter('sigmas', value=0., prior=dict(limits=[0., 10.]),
@@ -521,7 +521,7 @@ def _bb_correlation_auto_params(ells, broadband):
             for ik in _BB_CORRELATION_KERNEL_IKS:
                 fixed = (broadband == 'pcs2') and (ell != 0 or ik not in (0, 1))
                 auto_params.append(Parameter(f'al{ell}_{ik}', value=0., fixed=fixed,
-                                             prior=None, ref=dict(dist='norm', loc=0., scale=1e2),
+                                             prior=None, ref=dict(dist='norm', loc=0., scale=1e-1),
                                              fd_eps=0.005, latex=f'a_{{{ell},{ik}}}'))
         for ell in ells:
             for pow in _BB_CORRELATION_BL_POWS:

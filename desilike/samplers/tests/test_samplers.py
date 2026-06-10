@@ -1,3 +1,4 @@
+import sys
 import numpy as np
 import pytest
 from jax import numpy as jnp
@@ -41,18 +42,19 @@ _b_grid = np.linspace(-0.7, 1.9, 99)
 # under-sampled.  A min_steps floor guarantees enough effective samples for the accuracy
 # assertions, independent of how quickly the chain "looks" converged.
 _MCMC_MIN_STEPS = dict(min_steps=3000)
+_BLACKJAX_ADAPTATION = dict(adaptation=dict(steps=500))
 KWARGS_RUN = dict(
     dynesty=dict(n_effective=0),
     emcee=_MCMC_MIN_STEPS,
     grid=dict(grid=dict(a=_a_grid, b=_b_grid)),
-    hmc=_MCMC_MIN_STEPS,
+    hmc=dict(**_MCMC_MIN_STEPS, **_BLACKJAX_ADAPTATION),
     importance=dict(samples=MCSamples(dict(
         a=np.repeat(_a_grid, len(_b_grid)),
         b=np.tile(_b_grid, len(_a_grid))))),
     mclmc=_MCMC_MIN_STEPS,
-    mhmcmc=_MCMC_MIN_STEPS,
+    mhmcmc=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=sys.maxsize)),
     nautilus=dict(n_eff=100),
-    nuts=_MCMC_MIN_STEPS,
+    nuts=dict(**_MCMC_MIN_STEPS, **_BLACKJAX_ADAPTATION),
     pocomc=dict(n_total=100, n_evidence=100),
     qmc=dict(size=10000),
     zeus=_MCMC_MIN_STEPS)
@@ -63,11 +65,11 @@ KWARGS_RUN_FAST = dict(
         b=np.tile(np.linspace(0.05, 0.95, 11), 11)))),
     emcee=dict(max_steps=10),
     grid=dict(grid=np.linspace(0.05, 0.95, 11)),
-    hmc=dict(max_steps=10),
+    hmc=dict(max_steps=10, **_BLACKJAX_ADAPTATION),
     mclmc=dict(max_steps=10),
-    mhmcmc=dict(max_steps=10),
+    mhmcmc=dict(max_steps=10, adaptation=dict(steps=sys.maxsize)),
     nautilus=dict(n_eff=0, n_like_max=100),
-    nuts=dict(max_steps=10),
+    nuts=dict(max_steps=10, **_BLACKJAX_ADAPTATION),
     pocomc=dict(n_total=10, n_evidence=0),
     qmc=dict(size=100),
     zeus=dict(max_steps=10))

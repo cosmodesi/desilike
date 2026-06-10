@@ -14,7 +14,7 @@ import numpy as np
 from scipy.special import logsumexp
 
 from desilike.parameter import VariableCollection
-from desilike.samples import MCSamples, diagnostics
+from desilike.samples import MCSamples, Covariance, diagnostics
 from desilike.distributed import default_mpicomm, get_mpicomm
 from .pool import make_pool
 
@@ -242,8 +242,38 @@ class BaseSampler(ABC):
         self._loc = np.concatenate(loc_parts) if loc_parts else np.array([], dtype='f8')
 
         flat_size = self._loc.size
+        self._L = self._L_inv = None
         if rescale:
-            if covariance is not None:
+            if isinstance(covariance, Covariance):
+                param_sizes_list = list(_param_sizes(self.varied_params))
+                C_full = np.zeros((flat_size, flat_size), dtype='f8')
+                # Fill the joint block from the Covariance for all known params at once.
+                in_cov_indices = []
+                params_in_cov = []
+                for param, size, col in param_sizes_list:
+                    if param.name in covariance:
+                        in_cov_indices.extend(range(col, col + size))
+                        params_in_cov.append(param)
+                if params_in_cov:
+                    sub = covariance.view(params_in_cov, return_type='nparray')
+                    ix = np.ix_(in_cov_indices, in_cov_indices)
+                    C_full[ix] = sub
+                # Fill diagonal for params absent from the Covariance.
+                for param, size, col in param_sizes_list:
+                    if param.name not in covariance:
+                        std = param.ref.std()
+                        if std is None or not np.isfinite(std) or std <= 0.:
+                            raise ValueError(
+                                f'Parameter {param.name!r}: cannot determine rescale scale from '
+                                f'ref.std()={std!r}. Provide covariance or set a proper ref distribution.')
+                        for k in range(size):
+                            C_full[col + k, col + k] = float(std) ** 2
+                self._scale = np.sqrt(np.diag(C_full))
+                if np.any(C_full != np.diag(np.diag(C_full))):
+                    _L = np.linalg.cholesky(C_full)
+                    self._L = jnp.array(_L)
+                    self._L_inv = jnp.array(np.linalg.inv(_L))
+            elif covariance is not None:
                 self._scale = np.sqrt(np.diag(np.asarray(covariance)))
             else:
                 scale_parts = []
@@ -277,17 +307,25 @@ class BaseSampler(ABC):
             self._transformed_params.set(param_copy)
 
     def _forward(self, x):
-        """Rescaled → original space along the last axis: ``x * scale + loc``.
+        """Rescaled → original space along the last axis.
 
+        Diagonal: ``x * scale + loc``.
+        Full Cholesky: ``x @ L.T + loc``.
         JAX-safe (used inside jitted/vmapped cores); broadcasts over leading axes.
         """
+        if self._L is not None:
+            return jnp.asarray(x) @ self._L.T + self._loc
         return jnp.asarray(x) * self._scale + self._loc
 
     def _backward(self, x):
-        """Original → rescaled space along the last axis: ``(x - loc) / scale``.
+        """Original → rescaled space along the last axis.
 
+        Diagonal: ``(x - loc) / scale``.
+        Full Cholesky: ``(x - loc) @ L_inv.T``.
         JAX-safe; broadcasts over leading axes.
         """
+        if self._L is not None:
+            return (jnp.asarray(x) - self._loc) @ self._L_inv.T
         return (jnp.asarray(x) - self._loc) / self._scale
 
     def _forward_dict(self, sample):
@@ -296,6 +334,17 @@ class BaseSampler(ABC):
         For samplers (e.g. blackjax) that carry positions as per-name dicts in the
         rescaled working space rather than as a flat vector.  JAX-safe.
         """
+        if self._L is not None:
+            flat_rescaled = jnp.concatenate([
+                jnp.atleast_1d(jnp.ravel(jnp.asarray(sample[param.name])))
+                for param, size, col in _param_sizes(self.varied_params)
+            ])
+            flat_original = flat_rescaled @ self._L.T + self._loc
+            result = {}
+            for param, size, col in _param_sizes(self.varied_params):
+                value = flat_original[col:col + size]
+                result[param.name] = value.reshape(param.shape) if param.shape else value[0]
+            return result
         result = {}
         for param, size, col in _param_sizes(self.varied_params):
             scale = self._scale[col:col + size]
@@ -532,8 +581,6 @@ class MarkovChainSampler(BaseSampler):
 
     logger = logging.getLogger('MarkovChainSampler')
 
-    default_adaptation_steps = 0
-
     @default_mpicomm
     def __init__(self, posterior, nchains=1, chains=None, rng=None,
                  mpicomm=None, directory=None, rescale=False, covariance=None,
@@ -626,7 +673,7 @@ class MarkovChainSampler(BaseSampler):
         pass
 
     @abstractmethod
-    def adapt_sampler(self, steps):
+    def adapt_sampler(self, **kwargs):
         pass
 
     def initialize_samples(self, max_init_attempts=100, shape=None):
@@ -769,7 +816,7 @@ class MarkovChainSampler(BaseSampler):
             )
         return all(self.mpicomm.allgather(converged))
 
-    def run(self, burn_in=0.2, min_steps=0, max_steps=None, adaptation_steps=None,
+    def run(self, burn_in=0.2, min_steps=0, max_steps=None, adaptation=None,
             check_every=300, checks_passed=2, gelman_rubin=1.1, geweke=None, ess=None,
             save_every=300, max_init_attempts=100, concatenate=True):
         """Run the sampler until convergence and return the chains.
@@ -782,8 +829,11 @@ class MarkovChainSampler(BaseSampler):
             Minimum number of steps.  Default is 0.
         max_steps : int or None
             Hard step limit.  Default is no limit.
-        adaptation_steps : int or None
-            Steps used for online adaptation.  ``None`` uses the sampler default.
+        adaptation : dict or None
+            Keyword arguments forwarded to :meth:`adapt_sampler`, e.g.
+            ``{'steps': 500}`` for BlackJAX samplers or
+            ``{'steps': 500, 'is_mass_matrix_diagonal': False}`` to also tune
+            the full mass matrix.  ``None`` skips adaptation.
         check_every : int
             How often (in steps) to run diagnostics.  Default is 300.
         checks_passed : int
@@ -806,12 +856,8 @@ class MarkovChainSampler(BaseSampler):
         if self.directory is None:
             save_every = check_every  # skip intermediate saves
 
-        if adaptation_steps is None:
-            adaptation_steps = self.default_adaptation_steps
-        self.adaptation_steps = adaptation_steps
-
-        if adaptation_steps > 0:
-            self.adapt_sampler(adaptation_steps)
+        if adaptation is not None:
+            self.adapt_sampler(**adaptation)
 
         # Current step count across all chains.
         steps = min(self.mpicomm.allgather(

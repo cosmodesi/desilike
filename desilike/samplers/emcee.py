@@ -56,6 +56,7 @@ class EmceeSampler(EnsembleSampler):
             # Minimum is 2 * max((int(2.5 * self.ndim) + 1) // 2, 2)
             # Recommended is probably more >= 4 * self.ndim
             self.nwalkers = 4 * self.ndim
+        self._total_likelihood_evaluations = 0
         if self.pool.main:
             # emcee treats tuple returns as (log_prob, blobs).  When there are
             # no derived parameters, return plain scalars so emcee never
@@ -73,7 +74,7 @@ class EmceeSampler(EnsembleSampler):
                 kwargs=None, vectorize=False, nwalkers=self.nwalkers)
             self.sampler = emcee.EnsembleSampler(**kwargs)
 
-    def adapt_sampler(self, steps):
+    def adapt_sampler(self, **kwargs):
         """No-op: emcee does not support explicit adaptation."""
 
     def run_sampler(self, n_steps):
@@ -105,6 +106,8 @@ class EmceeSampler(EnsembleSampler):
                     derived[i, :, :] = np.asarray(state.blobs).reshape(self.nwalkers, -1)
                 log_post[i, :] = state.log_prob
 
+            self._total_likelihood_evaluations += n_steps * self.nwalkers
+            self.logger.info('total likelihood evaluations: %d', self._total_likelihood_evaluations)
             self.extend(samples, derived, log_post)
             self.pool.stop_wait()
         else:

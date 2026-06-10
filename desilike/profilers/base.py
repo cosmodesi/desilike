@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 
 from ..parameter import Parameter, VariableCollection
-from ..samples import Profiles
+from ..samples import Profiles, Covariance
 from ..distributed import default_mpicomm, get_mpicomm
 
 
@@ -461,6 +461,10 @@ class BaseProfiler:
                 else:
                     scale_p = float(scale_p[0])
                 error[name] = np.asarray(arr) * scale_p
+        covariance = getattr(profiles, 'covariance', None)
+        if covariance is not None:
+            cov_array = np.asarray(covariance) * self._scale[:, None] * self._scale[None, :]
+            profiles.covariance = Covariance(cov_array, list(self.varied_params))
         return profiles
 
     def _merge_and_transform(self, raw_list):

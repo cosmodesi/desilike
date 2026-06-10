@@ -84,7 +84,7 @@ class ZeusSampler(EnsembleSampler):
                 warnings.warn("Zeus does not support random seeds. Results "
                               "are not deterministic.")
 
-    def adapt_sampler(self, steps):
+    def adapt_sampler(self, **kwargs):
         """No-op: zeus does not support explicit adaptation."""
 
     def run_sampler(self, n_steps):

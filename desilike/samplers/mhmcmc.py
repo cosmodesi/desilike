@@ -351,7 +351,6 @@ class MetropolisHastingsSampler(MarkovChainSampler):
 
     """
 
-    default_adaptation_steps = sys.maxsize
 
     def __init__(self, posterior, nchains=1, f_fast=1, f_drag=0,
                  fast=[], chains=None, rng=None, directory=None,
@@ -393,7 +392,7 @@ class MetropolisHastingsSampler(MarkovChainSampler):
             directory=directory, rescale=rescale, covariance=covariance)
 
         for i in range(len(fast)):
-            fast[i] = self.varied_params.names().index(fast[i])
+            fast[i] = self.varied_params.names().index(str(fast[i]))
 
         # each MH sampler runs independently on its own process.  It operates in the
         # sampler's rescaled working space (compute_posterior maps positions back to
@@ -415,8 +414,9 @@ class MetropolisHastingsSampler(MarkovChainSampler):
             cov = np.asarray(covariance) / np.outer(self._scale, self._scale)
         self.sampler.update(cov=cov)
 
-    def adapt_sampler(self, steps):
-        """No-op: MH adapts the proposal covariance inline during run_sampler."""
+    def adapt_sampler(self, **kwargs):
+        """Store the adaptation horizon; MH adapts its proposal covariance inline during run_sampler."""
+        self.adaptation_steps = kwargs.get('steps', 0)
 
     def run_sampler(self, n_steps):
         """Run the Metropolis-Hastings sampler.

@@ -100,8 +100,10 @@ class MinuitProfiler(BaseProfiler):
 
         if not state.fast:
             if minuit.covariance is not None:
+                from ..samples import Covariance
                 cov = np.asarray(minuit.covariance)
                 profiles.error = _build_error_from_cov(cov, state.varied_params)
+                profiles.covariance = Covariance(cov, list(state.varied_params))
             else:
                 profiles.error = {
                     name: np.array([float(minuit.errors[name])]) for name in names

@@ -83,8 +83,7 @@ class BlackJAXSampler(MarkovChainSampler):
     # Gradient-based kernels need their step size (and mass matrix / L) tuned before
     # sampling: window_adaptation for HMC/NUTS, mclmc_find_L_and_step_size for MCLMC.
     # Without it, the default step_size barely moves the chain (especially fixed-path
-    # HMC).  Override via ``run(adaptation_steps=...)``; set 0 to disable.
-    default_adaptation_steps = 500
+    # HMC).  Enable via ``run(adaptation={'steps': 500})``.
 
     def __init__(self, posterior, nchains=1, chains=None, rng=None,
                  directory=None, rescale=False, covariance=None):
@@ -120,6 +119,8 @@ class BlackJAXSampler(MarkovChainSampler):
         super().__init__(posterior, nchains, chains=chains, rng=rng,
                          directory=directory, rescale=rescale, covariance=covariance)
 
+        self._total_likelihood_evaluations = 0
+
         _vfn = jax.jit(jax.vmap(self._compute_posterior_one))
 
         def _compute_derived(batch):
@@ -128,7 +129,9 @@ class BlackJAXSampler(MarkovChainSampler):
 
         self.compute_derived = self.pool.save_function(_compute_derived, 'compute_derived')
         self.kernel_type = getattr(blackjax, self.kernel_type)
-        self.kernel = self.kernel_type(self.compute_posterior_without_derived, **self.kernel_args)
+        if not hasattr(self, 'fixed_kernel_args'):
+            self.fixed_kernel_args = {}
+        self.kernel = self.kernel_type(self.compute_posterior_without_derived, **self.kernel_args, **self.fixed_kernel_args)
         self.adaptation_fn = getattr(blackjax, self.adaptation_fn)
         self.make_steps = make_steps_factory(self.kernel.step)
 
@@ -177,13 +180,16 @@ class BlackJAXSampler(MarkovChainSampler):
             self.blackjax_state, (all_states, last_info) = self.make_steps(inputs)
 
             # Log last-step diagnostics when available (e.g. NUTS/HMC).
-            parts = []
             if hasattr(last_info, 'num_integration_steps'):
-                parts.append('num_integration_steps: %d' % int(np.asarray(last_info.num_integration_steps).ravel()[-1]))
+                nsteps = np.asarray(last_info.num_integration_steps).ravel()
+                self._total_likelihood_evaluations += int(nsteps.sum())
+                self.logger.info('number of integration steps: mean %.1f, max %d'
+                             % (nsteps.mean(), nsteps.max()))
             if hasattr(last_info, 'acceptance_rate'):
-                parts.append('acceptance_rate: %.3f' % float(np.asarray(last_info.acceptance_rate).ravel()[-1]))
-            if parts:
-                self.logger.info(', '.join(parts))
+                arate = np.asarray(last_info.acceptance_rate).ravel()
+                self.logger.info('acceptance rate: mean %.3f' % arate.mean())
+            if self._total_likelihood_evaluations:
+                self.logger.info('total likelihood evaluations(~): %d', self._total_likelihood_evaluations)
 
             # Update the chains.
             samples = np.column_stack([all_states.position[key] for key in self.varied_params.names()])
@@ -202,34 +208,56 @@ class BlackJAXSampler(MarkovChainSampler):
         else:
             self.pool.wait()
 
-    def adapt_sampler(self, steps):
-        """Adapt the step size and mass matrix.
+    def adapt_sampler(self, **kwargs):
+        """Adapt the step size and mass matrix via ``blackjax.window_adaptation``.
 
         Parameters
         ----------
         steps : int
-            How steps to run for the adaptation.
+            Number of steps to run for the adaptation.
+        is_mass_matrix_diagonal : bool, optional
+            Adapt a diagonal mass matrix; set to ``False`` for a full dense matrix.  Default is ``True``.
+        initial_step_size : float, optional
+            Starting step size.  Default is ``1.0``.
+        target_acceptance_rate : float, optional
+            Target acceptance rate for the dual-averaging step-size tuner.  Default is ``0.8``.
+        progress_bar : bool, optional
+            Show a progress bar.  Default is ``False``.
+        adaptation_info_fn : callable, optional
+            Controls which adaptation diagnostics are stored; defaults to saving everything.
+        integrator : callable, optional
+            Trajectory integrator; defaults to the standard Euclidean leapfrog.
 
         """
         if self.pool.main:
-            fixed_kernel_args = {
-                key: value for key, value in self.kernel_args.items() if key not in
-                self.adaptable_args}
+            steps = kwargs.pop('steps')
             initial_position = _flat_to_dict(self.state[0], self.varied_params)
             rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
-            # blackjax's window_adaptation takes the non-adaptable kernel parameters
+            # blackjax's window_adaptation takes the fixed kernel parameters
             # (e.g. num_integration_steps) in its constructor, not in run().
             (state, parameters), _ = self.adaptation_fn(
-                self.kernel_type, self.compute_posterior_without_derived, **fixed_kernel_args).run(
+                self.kernel_type, self.compute_posterior_without_derived,
+                **self.fixed_kernel_args, **kwargs).run(
                 rng_key, initial_position, num_steps=steps)
             self.kernel_args.update(parameters)
             # Rebuild the kernel so the tuned parameters (step size, mass matrix, ...) are
             # actually used during sampling, and warm-start from the adapted state.
-            self.kernel = self.kernel_type(self.compute_posterior_without_derived, **self.kernel_args)
+            self.kernel = self.kernel_type(self.compute_posterior_without_derived, **self.kernel_args, **self.fixed_kernel_args)
             self.make_steps = make_steps_factory(self.kernel.step)
             self.blackjax_state = state
             self.pool.stop_wait()
             self.logger.info('Adaptation done.')
+            if 'step_size' in self.kernel_args:
+                self.logger.info('step_size: %.3g' % float(self.kernel_args['step_size']))
+            if 'inverse_mass_matrix' in self.kernel_args:
+                imm = np.asarray(self.kernel_args['inverse_mass_matrix'])
+                if imm.ndim == 2:
+                    eig = np.linalg.eigvalsh(imm)
+                    self.logger.info('inverse_mass_matrix eigenvalues: min %.3g, max %.3g, cond %.3g'
+                                 % (eig.min(), eig.max(), eig.max() / eig.min()))
+                else:
+                    imm = imm.ravel()
+                    self.logger.info('inverse_mass_matrix: min %.3g, max %.3g' % (imm.min(), imm.max()))
         else:
             self.pool.wait()
 
@@ -238,7 +266,7 @@ class HMCSampler(BlackJAXSampler):
     """Wrapper for Hamiltonian Monte-Carlo (HMC)."""
 
     kernel_type = 'hmc'
-    adaptable_args = ['step_size', 'inverse_mass_matrix']
+
     adaptation_fn = 'window_adaptation'
 
     def __init__(self, posterior, nchains=1, chains=None, step_size=1e-3,
@@ -271,17 +299,18 @@ class HMCSampler(BlackJAXSampler):
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
         **kwargs: dict, optional
-            Extra keyword arguments passed to ``blackjax.hmc`` during
-            initialization.
+            Extra fixed keyword arguments passed to ``blackjax.hmc``
+            (e.g. custom integrator).  Window adaptation options
+            (``is_mass_matrix_diagonal``, ``target_acceptance_rate``, etc.)
+            should instead be passed via ``adaptation`` in :meth:`run`.
 
         """
         if inverse_mass_matrix is None:
             ndim = len(posterior.params.select(varied=True, solved=False))
             inverse_mass_matrix = np.ones(ndim)
 
-        self.kernel_args = dict(
-            step_size=step_size, inverse_mass_matrix=inverse_mass_matrix,
-            num_integration_steps=num_integration_steps, **kwargs)
+        self.kernel_args = dict(step_size=step_size, inverse_mass_matrix=inverse_mass_matrix)
+        self.fixed_kernel_args = dict(num_integration_steps=num_integration_steps, **kwargs)
 
         super().__init__(posterior, nchains=nchains, chains=chains, rng=rng,
                          directory=directory, rescale=rescale, covariance=covariance)
@@ -291,7 +320,7 @@ class NoUTurnSampler(BlackJAXSampler):
     """Wrapper for No-U-Turn Sampler (NUTS)."""
 
     kernel_type = 'nuts'
-    adaptable_args = ['step_size', 'inverse_mass_matrix']
+
     adaptation_fn = 'window_adaptation'
 
     def __init__(self, posterior, nchains=1, chains=None, step_size=1e-3,
@@ -321,17 +350,18 @@ class NoUTurnSampler(BlackJAXSampler):
         directory : str, Path, or None, optional
             Save samples to this location. Default is ``None``.
         **kwargs: dict, optional
-            Extra keyword arguments passed to ``blackjax.nuts`` during
-            initialization.
+            Extra fixed keyword arguments passed to ``blackjax.nuts``
+            (e.g. custom integrator).  Window adaptation options
+            (``is_mass_matrix_diagonal``, ``target_acceptance_rate``, etc.)
+            should instead be passed via ``adaptation`` in :meth:`run`.
 
         """
         if inverse_mass_matrix is None:
             ndim = len(posterior.params.select(varied=True, solved=False))
             inverse_mass_matrix = np.ones(ndim)
 
-        self.kernel_args = dict(
-            step_size=step_size, inverse_mass_matrix=inverse_mass_matrix,
-            **kwargs)
+        self.kernel_args = dict(step_size=step_size, inverse_mass_matrix=inverse_mass_matrix)
+        self.fixed_kernel_args = dict(**kwargs)
 
         super().__init__(posterior, nchains=nchains, chains=chains, rng=rng,
                          directory=directory, rescale=rescale, covariance=covariance)
@@ -347,11 +377,7 @@ class MCLMCSampler(BlackJAXSampler):
     """
 
     kernel_type = 'mclmc'
-    adaptable_args = ['L', 'step_size']
     adaptation_fn = 'mclmc_find_L_and_step_size'
-    # MCLMC's adaptation (mclmc_find_L_and_step_size) uses a different API than the
-    # window_adaptation-based adapt_sampler, so it is not run by default here.
-    default_adaptation_steps = 0
 
     def __init__(self, posterior, nchains=1, chains=None, L=1., step_size=0.1, rng=None,
                  directory=None, rescale=False, covariance=None, **kwargs):
@@ -379,7 +405,8 @@ class MCLMCSampler(BlackJAXSampler):
             initialization.
 
         """
-        self.kernel_args = dict(L=L, step_size=step_size, **kwargs)
+        self.kernel_args = dict(L=L, step_size=step_size)
+        self.fixed_kernel_args = dict(**kwargs)
 
         super().__init__(posterior, nchains=nchains, chains=chains, rng=rng,
                          directory=directory, rescale=rescale, covariance=covariance)

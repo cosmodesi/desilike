@@ -601,7 +601,8 @@ class Posterior(Calculator):
                 loglik, inner_derived = self._likelihood(params, return_derived=True)
             for p in self._likelihood._derived_params:
                 p._value = inner_derived[p.name]
-            self.logpdf = logprior + loglik
+            logpdf = logprior + loglik
+            self.logpdf = jnp.where(jnp.isnan(logpdf), -jnp.inf, logpdf)
         else:
             loglik = jnp.full((), -jnp.inf)
             self.logpdf = jnp.full((), -jnp.inf)

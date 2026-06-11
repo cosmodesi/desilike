@@ -150,6 +150,7 @@ def build_posterior_gaussian(ndim=20, condition_number=1e4, seed=42):
     Q, _ = np.linalg.qr(rng.standard_normal((ndim, ndim)))
     eigenvalues = np.geomspace(1., condition_number, ndim)
     precision = (Q * (1. / eigenvalues)) @ Q.T   # Q @ diag(1/λ) @ Q.T
+    #precision = np.diag(1. / eigenvalues)
 
     class _IllConditionedGaussian(BaseGaussianLikelihood):
 
@@ -177,7 +178,7 @@ def build_posterior_gaussian(ndim=20, condition_number=1e4, seed=42):
 
 # ── sampler configuration ────────────────────────────────────────────────────
 
-def _sampler_config(ndim):
+def _sampler_config(ndim=1):
     """Return (SamplerClass, init_kwargs, run_kwargs) per sampler name."""
     return {
         'emcee': (
@@ -202,9 +203,10 @@ def _sampler_config(ndim):
         ),
         'nuts': (
             samplers.NoUTurnSampler,
-            dict(rescale=True, step_size=1e-2, rng=42),
-            dict(adaptation=dict(initial_step_size=0.1, target_acceptance_rate=0.8, steps=1000, is_mass_matrix_diagonal=False), gelman_rubin=1.1, min_steps=200),
+            dict(rescale=True, step_size=0.05, rng=42),
+            dict(adaptation=dict(initial_step_size=0.01, target_acceptance_rate=0.8, steps=1000, is_mass_matrix_diagonal=False), gelman_rubin=1.1, min_steps=200),
             #dict(adaptation=dict(steps=500), gelman_rubin=1.1, min_steps=50),
+            #dict(adaptation=None, gelman_rubin=1.1, min_steps=50),
         ),
     }
 
@@ -246,28 +248,16 @@ PROFILER_CLS = {
 }
 
 
-def _build_posterior(posterior, marginalize):
+def _build_posterior(posterior, marginalize=True):
     if callable(posterior):
         build_fn = posterior
-        posterior_label = getattr(posterior, '__name__', str(posterior))
         kwargs = {}
     else:
         if posterior not in POSTERIORS:
             raise ValueError(f'Unknown posterior {posterior!r}; choose from {list(POSTERIORS)}')
         build_fn = POSTERIORS[posterior]
-        posterior_label = posterior
         kwargs = dict(marginalize=marginalize) if posterior == 'bao' else {}
-    setup_logging()
-    print(f'\nBuilding {posterior_label} posterior …', end=' ', flush=True)
-    t0 = time.perf_counter()
-    posterior_obj = compile(build_fn(**kwargs))
-    print(f'done ({(time.perf_counter() - t0) * 1e3:.0f} ms)')
-    varied_params = posterior_obj.params.select(fixed=False, derived=False)
-    print_priors(varied_params)
-    ndim = len(varied_params)
-    print(f'ndim    : {ndim}  ({", ".join(p.name for p in varied_params)})')
-    print()
-    return posterior_obj, ndim
+    return build_fn(**kwargs)
 
 
 def print_priors(params):
@@ -293,8 +283,8 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', dire
     directory : str or None
         Root directory for sampler checkpoints.  ``None`` disables checkpointing.
     """
-    posterior_obj, ndim = _build_posterior(posterior, marginalize=False)
 
+    profiler_posterior = compile(_build_posterior(posterior))
     # ── profilers ─────────────────────────────────────────────────────────────
     profiler_results = {}
     if profiler_names:
@@ -305,13 +295,14 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', dire
             cls = PROFILER_CLS[name]
             print(f'─── {name} {"─" * (50 - len(name))}')
             try:
-                profiler_obj = cls(posterior_obj, seed=42)
+                profiler = cls(profiler_posterior, seed=42)
                 t_start = time.perf_counter()
-                profiler_obj.maximize()
+                profiler.maximize()
                 elapsed = time.perf_counter() - t_start
                 print(f'  time    : {elapsed:.1f} s')
-                print(profiler_obj.profiles.to_stats(tablefmt='pretty'))
+                print(profiler.profiles.to_stats(tablefmt='pretty'))
                 profiler_results[name] = dict(time=elapsed)
+                #profiler.covariance()
             except Exception as exc:
                 import traceback
                 print(f'  ERROR: {exc}')
@@ -336,16 +327,21 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', dire
     # ── samplers ──────────────────────────────────────────────────────────────
     sampler_results = {}
     if sampler_names is None:
-        sampler_names = list(_sampler_config(ndim))
+        sampler_names = list(_sampler_config())
     if sampler_names:
-        config = _sampler_config(ndim)
+        config = _sampler_config()
         for name in sampler_names:
             if name not in config:
                 print(f'[{name}] unknown sampler — skipping')
                 continue
+
+            if name in ['hmc', 'nuts', 'mclmc'][:0]:
+                sampler_posterior = _build_posterior(posterior, marginalize=False)
+            else:
+                sampler_posterior = _build_posterior(posterior)
+
+            config = _sampler_config(ndim=len(get_params(sampler_posterior).names(varied=True, derived=False)))
             cls, init_kwargs, run_kwargs = config[name]
-            if name in ['nuts', 'hmc', 'mclmc']:
-                posterior_obj, ndim = _build_posterior(posterior, marginalize=False)
 
             sampler_dir = None
             if directory is not None:
@@ -355,11 +351,19 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', dire
             try:
                 init_kwargs = dict(init_kwargs)
                 if init_kwargs.get('rescale', False):
-                    init_kwargs['covariance'] = profiler_obj.profiles.covariance
+                    profiles = profiler.profiles.choice(index='argmax', squeeze=True)
+                    best, error, covariance = profiles.best, profiles.error, profiles.covariance
+                    init_kwargs['covariance'] = covariance
+                    print(covariance._value)
+                    error = {param: covariance.std(param) for param in covariance.names()}
+                    for param in get_params(sampler_posterior):
+                        if param.name in profiles.covariance.names():
+                            param.update(ref=dict(dist='norm', loc=best[param.name], scale=error[param.name]))
+                            print(param, param.ref)
 
-                sampler_obj = cls(posterior_obj, directory=sampler_dir, **init_kwargs)
+                sampler = cls(compile(sampler_posterior), directory=sampler_dir, **init_kwargs)
                 t_start = time.perf_counter()
-                chain = sampler_obj.run(**run_kwargs)
+                chain = sampler.run(**run_kwargs)
                 elapsed = time.perf_counter() - t_start
 
                 nsamples = chain.size if chain is not None else 0
@@ -415,6 +419,7 @@ if __name__ == '__main__':
                         choices=list(PROFILER_CLS), default=[],
                         help='Profilers to run (default: none)')
     args = parser.parse_args()
+    setup_logging()
     with tempfile.TemporaryDirectory() as tmpdir:
         run_benchmark(sampler_names=args.samplers,
                       profiler_names=args.profilers,

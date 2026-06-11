@@ -253,11 +253,12 @@ class BlackJAXSampler(MarkovChainSampler):
                 imm = np.asarray(self.kernel_args['inverse_mass_matrix'])
                 if imm.ndim == 2:
                     eig = np.linalg.eigvalsh(imm)
-                    self.logger.info('inverse_mass_matrix eigenvalues: min %.3g, max %.3g, cond %.3g'
-                                 % (eig.min(), eig.max(), eig.max() / eig.min()))
+                    self.logger.info('inverse_mass_matrix eigenvalues: min %.3g, max %.3g, cond %.3g, det^{1/n} %.3g'
+                                 % (eig.min(), eig.max(), eig.max() / eig.min(), eig.prod()**(1. / len(eig))))
                 else:
                     imm = imm.ravel()
-                    self.logger.info('inverse_mass_matrix: min %.3g, max %.3g' % (imm.min(), imm.max()))
+                    self.logger.info('inverse_mass_matrix: min %.3g, max %.3g, det^{1/n} %.3g'
+                                 % (imm.min(), imm.max(), imm.prod()**(1. / len(imm))))
         else:
             self.pool.wait()
 

@@ -1,1394 +1,512 @@
-import os
-import tempfile
-import glob
+"""Tests for galaxy clustering observables and ObservablesGaussianLikelihood."""
 
 import numpy as np
+import pytest
+import scipy as sp
 
-from desilike import setup_logging
-from desilike.likelihoods import ObservablesGaussianLikelihood
 
+def _make_fiducial():
+    import cosmoprimo.fiducial as fid
+    return fid.BOSS(engine='eisenstein_hu')
 
-def test_power_spectrum():
 
-    from cosmoprimo.fiducial import DESI
-    from desilike.theories.galaxy_clustering import ResummedBAOWigglesTracerPowerSpectrumMultipoles, DampedBAOWigglesTracerPowerSpectrumMultipoles, KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TopHatFiberCollisionsPowerSpectrumMultipoles, BoxFootprint, ObservablesCovarianceMatrix
+def _make_spectrum_theory(k, ells=(0, 2)):
+    from desilike.theories.galaxy_clustering import (DampedBAOWigglesPTSpectrum2Poles,
+                                                      DampedBAOWigglesTracerSpectrum2Poles,
+                                                      BAOSpectrum2Template)
+    fiducial = _make_fiducial()
+    tmpl = BAOSpectrum2Template(k=k, z=0.5, fiducial=fiducial)
+    pt = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=ells)
+    return DampedBAOWigglesTracerSpectrum2Poles(k=k, pt=pt, ells=ells)
 
-    template = ShapeFitPowerSpectrumTemplate(z=0.5, fiducial=DESI())
-    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
 
-    from lsstypes import Mesh2SpectrumPole, Mesh2SpectrumPoles, WindowMatrix, CovarianceMatrix
+def _make_correlation_theory(s, ells=(0, 2)):
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelation2Poles, DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
+    fiducial = _make_fiducial()
+    kin = np.geomspace(1e-4, 0.6, 300)
+    tmpl = BAOSpectrum2Template(k=kin, z=0.5, fiducial=fiducial)
+    pt = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=ells)
+    theory = DampedBAOWigglesTracerCorrelation2Poles(s=s, pt=pt, ells=ells)
+    return theory
 
-    def get_observable(size):
-        edges = np.linspace(0., 0.2, size + 1)
-        edges = np.column_stack([edges[:-1], edges[1:]])
-        k = np.mean(edges, axis=-1)
-        value = np.zeros_like(k)
-        ells = [0, 2, 4]
-        data = [Mesh2SpectrumPole(k=k, num_raw=value, k_edges=edges, ell=ell) for ell in ells]
-        return Mesh2SpectrumPoles(data)
 
-    data = get_observable(40)
-    covariance = CovarianceMatrix(value=np.eye(data.size), observable=data)
+# ── Spectrum2PolesObservable ────────────────────────────────────────────────
 
-    _theory = get_observable(80)
-    window = WindowMatrix(value=np.ones((data.size, _theory.size)), observable=data, theory=_theory)
+def test_spectrum2poles_no_window():
+    """Spectrum2PolesObservable: no window, flattheory matches theory.poles.ravel()."""
+    from desilike.observables import Spectrum2PolesObservable
+    from desilike.base import compile
 
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
-                                                         data=data,
-                                                         covariance=covariance,
-                                                         wmatrix=window,
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
-    likelihood()
-    observable.plot_covariance_matrix(show=True)
-
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
-                                                         data=data,
-                                                         covariance=covariance,
-                                                         kin=_theory.get(ells=0).coords('k'),
-                                                         wmatrix=dict(resolution=2),
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
-    likelihood()
-
-    from desilike.observables import ObservableArray, ObservableCovariance
-
-    edges = np.linspace(0., 0.4, 81)
-    data = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
-                                                         data=data,
-                                                         covariance=ObservableCovariance(np.eye(data.flatx.size), observables=[data]),
-                                                         #data=PowerSpectrumMultipoles.load('../../tests/_pk/data.npy'),
-                                                         #covariance=[PowerSpectrumMultipoles.load(fn) for fn in glob.glob('../../tests/_pk/mock_*.npy')],
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
-    print(likelihood())
-
-
-    edges = np.linspace(0., 0.4, 81)
-    data = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.1, 0.02], 2: [0.05, 0.1, 0.01]},
-                                                         data=data,
-                                                         covariance=ObservableCovariance(np.eye(data.flatx.size), observables=[data]),
-                                                         #data=PowerSpectrumMultipoles.load('../../tests/_pk/data.npy'),
-                                                         #covariance=[PowerSpectrumMultipoles.load(fn) for fn in glob.glob('../../tests/_pk/mock_*.npy')],
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
-    print(likelihood())
-
-    assert np.allclose(likelihood.covariance, observable.covariance)
-    #print(len(observable.flatdata))
-    observable.plot(show=True)
-
-    from pypower import PowerSpectrumMultipoles
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.02], 2: [0.05, 0.2, 0.01]},
-                                                         #data='../../tests/_pk/data.npy',
-                                                         #covariance='../../tests/_pk/mock_*.npy',
-                                                         data=PowerSpectrumMultipoles.load('../../tests/_pk/data.npy'),
-                                                         covariance=[PowerSpectrumMultipoles.load(fn) for fn in glob.glob('../../tests/_pk/mock_*.npy')],
-                                                         wmatrix='../../tests/_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
-    print(likelihood())
-    #exit()
-    assert np.allclose(likelihood.covariance, observable.covariance)
-    #print(len(observable.flatdata))
-    observable.plot(show=True)
-
-    size = 10
-    ells = (2,)
-    observable = TracerPowerSpectrumMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * len(ells)),
-                                                         k=np.linspace(0.01, 0.1, size),
-                                                         ells=ells,
-                                                         covariance=np.eye(size * len(ells)),
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    assert observable.ells == ells
-
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='../../tests/_pk/data.npy',
-                                                         covariance=glob.glob('../../tests/_pk/mock_*.npy'),
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    assert observable.wmatrix.theory.ells == (0, 2)
-    assert np.allclose(observable.theory, observable.wmatrix.theory.power)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={2: [0.05, 0.2, 0.01]}, #klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='../../tests/_pk/data.npy',
-                                                         covariance=glob.glob('../../tests/_pk/mock_*.npy'),
-                                                         wmatrix='../../tests/_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    assert observable.wmatrix.theory.ells == (0, 2, 4)
-    assert observable.ells == (2,)
-    assert np.allclose(theory.nd, 1e-4)
-    assert np.allclose(likelihood.flatdiff, observable.wmatrix.flatpower - observable.flatdata)
-    theory()
-
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='../../tests/_pk/data.npy',
-                                                         covariance=glob.glob('../../tests/_pk/mock_*.npy'),
-                                                         wmatrix='../../tests/_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    print(observable.wmatrix.shotnoiseout)
-    assert not np.allclose(observable.wmatrix.shotnoiseout, 0.)
-
-    from pypower import BaseMatrix
-    wmatrix = BaseMatrix.load('../../tests/_pk/window.npy')
-    wmatrix.vectorout = [(proj.ell == 0) * np.ones_like(xx) for proj, xx in zip(wmatrix.projsout, wmatrix.xout)]
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='../../tests/_pk/data.npy',
-                                                         covariance=glob.glob('../../tests/_pk/mock_*.npy'),
-                                                         wmatrix=wmatrix,
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    print(observable.wmatrix.shotnoiseout)
-    assert np.allclose(observable.wmatrix.shotnoiseout, 0.)
-
-    observable = TracerPowerSpectrumMultipolesObservable(klim={2: [0.05, 0.2, 0.01]}, #klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='../../tests/_pk/data.npy',
-                                                         covariance=glob.glob('../../tests/_pk/mock_*.npy'),
-                                                         wmatrix='../../tests/_pk/window.npy',
-                                                         theory=LPTVelocileptorsTracerPowerSpectrumMultipoles())
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    assert np.allclose(observable.wmatrix.theory.nd, 1e-4)
-    print(observable.wmatrix.theory.snd)
-    assert not np.allclose(observable.wmatrix.theory.snd, 1.)
-    theory()
-
-    observable = TracerPowerSpectrumMultipolesObservable(klim=None,#klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='../../tests/_pk/data.npy',
-                                                         covariance=glob.glob('../../tests/_pk/mock_*.npy'),
-                                                         wmatrix='../../tests/_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    assert np.allclose(theory.nd, 1e-4)
-    assert np.allclose(likelihood.flatdiff, observable.wmatrix.flatpower - observable.flatdata, equal_nan=True)
-    theory()
-
-    from pypower import PowerSpectrumMultipoles
-    power = PowerSpectrumMultipoles.load('../../tests/_pk/data.npy').select((0., 1., 0.01))
-
-    observable = TracerPowerSpectrumMultipolesObservable(k=power.k,
-                                                         data=power.power.ravel(),
-                                                         ells=(0, 2, 4),
-                                                         klim={0: [0.05, 0.2], 2: [0.05, 0.2]},
-                                                         wmatrix='../../tests/_pk/window.npy',
-                                                         theory=theory)
-    observable()
-    assert np.all((observable.k[0] >= 0.05) & (observable.k[0] <= 0.2)) and len(observable.k[0]) == 15 and observable.ells == (0, 2)
-    observable = TracerPowerSpectrumMultipolesObservable(k=power.k,
-                                                         data=power.power.ravel(),
-                                                         klim={0: [0.05, 0.2, 0.02], 2: [0.05, 0.2, 0.02], 4: [-1., -1., 0.02]},  # no check on step
-                                                         wmatrix='../../tests/_pk/window.npy',
-                                                         theory=theory)
-    observable()
-    assert np.all((observable.k[0] >= 0.05) & (observable.k[0] <= 0.2)) and len(observable.k[0]) == 15 and observable.ells == (0, 2)
-
-    def get_template(ell, x):
-        return float(ell + 1.) * x**2
-
-    theory = ResummedBAOWigglesTracerPowerSpectrumMultipoles()
-    fiber_collisions = TopHatFiberCollisionsPowerSpectrumMultipoles(fs=0.5, Dfc=1.)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='../../tests/_pk/data.npy',
-                                                         covariance='../../tests/_pk/mock_*.npy',
-                                                         wmatrix='../../tests/_pk/window.npy',
-                                                         shotnoise=2e4,
-                                                         theory=theory,
-                                                         fiber_collisions=fiber_collisions,
-                                                         systematic_templates=[get_template] * 2,
-                                                         kinlim=(0., 0.24),
-                                                         transform='cubic')
-
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    assert likelihood.all_params.names(basename=['syst_0', 'syst_1']) == ['syst_0', 'syst_1']
-    likelihood.all_params['syst_0'].update(derived='.prec')
-    likelihood(syst_0=1e6)
-    observable.plot(show=True)
-    assert np.allclose(theory.pt.wiggles.shotnoise, 2e4)
-    likelihood.params['pk.loglikelihood'] = {}
-    likelihood.params['pk.logprior'] = {}
-    likelihood()
-    #observable.plot(show=True)
-    observable()
-    #observable.wmatrix.plot(show=True)
-    theory.template.init.update(z=1.)
-    observable()
-    #print(observable.runtime_info.pipeline.varied_params)
-    assert theory.template.z == 1.
-    likelihood()
-    assert np.allclose((likelihood + likelihood)(), 2. * likelihood() - likelihood.logprior)
-    assert np.allclose(likelihood.flatdiff, 3. * observable.flatdata * (np.cbrt(observable.wmatrix.flatpower.real / observable.flatdata.real) - 1.))
-
-    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-    kin = np.linspace(0.01, 0.3, 90)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='../../tests/_pk/data.npy',
-                                                         covariance='../../tests/_pk/mock_*.npy',
-                                                         wmatrix='../../tests/_pk/window.npy',
-                                                         shotnoise=2e4,
-                                                         theory=theory,
-                                                         fiber_collisions=fiber_collisions,
-                                                         kin=kin)
-    observable()
-    assert np.allclose(observable.wmatrix.theory.k, kin)
-    observable.__getstate__()
-
-    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-    kin = np.linspace(0.01, 0.3, 90)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='../../tests/_pk/data.npy',
-                                                         covariance='../../tests/_pk/mock_*.npy',
-                                                         wmatrix=np.zeros((15 * 2, kin.size * 3)),
-                                                         shotnoise=2e4,
-                                                         theory=theory,
-                                                         kin=kin,
-                                                         ellsin=(0, 2, 4))
-    observable()
-    assert np.allclose(observable.wmatrix.theory.k, kin)
-
-    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles()
-    params = {'al0_1': 100., 'al0_-1': 100., 'al2_1': 100., 'b1': 1.5}
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data=params,
-                                                         wmatrix=dict(resolution=2),
-                                                         theory=theory,
-                                                         shotnoise=3e4)  # BAO theory doesn't take shot noise
-    footprint = BoxFootprint(volume=1e10, nbar=1e-3)
-    observable()
-
-    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)(**params)
-
-    likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
-    print(likelihood(**params))
-    observable.plot(show=True)
-    observable.wmatrix.plot(show=True)
-    observable.plot_wiggles(show=True)
-    observable.plot_bao(show=True)
-
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data=params,
-                                                         wmatrix=dict(resolution=2),
-                                                         fiber_collisions=fiber_collisions,
-                                                         theory=theory)
-    footprint = BoxFootprint(volume=1e10, nbar=1e-3)
-    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)(**params)
-    likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
-    print(likelihood(**params))
-
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data=params,
-                                                         wmatrix='../../tests/_pk/window.npy',
-                                                         theory=theory)
-    footprint = BoxFootprint(volume=1e10, nbar=1e-3)
-    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)(**params)
-    likelihood = ObservablesGaussianLikelihood(observables=observable, covariance=cov)
-    print(likelihood(**params))
-    #observable.plot_wiggles(show=True)
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        fn = os.path.join(tmp_dir, 'tmp.npy')
-        observable.save(fn)
-        # And reload the result
-        tmp = TracerPowerSpectrumMultipolesObservable.load(fn)
-        tmp.k, tmp.ells, tmp.flatdata, tmp.shotnoise, tmp.flattheory
-
-
-def test_correlation_function():
-
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerCorrelationFunctionMultipoles, KaiserTracerCorrelationFunctionMultipoles, ShapeFitPowerSpectrumTemplate
-    from desilike.observables.galaxy_clustering import TracerCorrelationFunctionMultipolesObservable, TopHatFiberCollisionsCorrelationFunctionMultipoles, BoxFootprint, ObservablesCovarianceMatrix
-    from desilike.observables import ObservableArray, ObservableCovariance
-
-    template = ShapeFitPowerSpectrumTemplate(z=0.5)
-    theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
-
-
-    from lsstypes import Count2, Count2Correlation, Count2CorrelationPole, Count2CorrelationPoles, WindowMatrix, CovarianceMatrix
-
-    def get_count(mode='smu', seed=42):
-        rng = np.random.RandomState(seed=seed)
-        if mode == 'smu':
-            coords = ['s', 'mu']
-            edges = [np.linspace(0., 200., 201), np.linspace(-1., 1., 101)]
-        if mode == 'rppi':
-            coords = ['rp', 'pi']
-            edges = [np.linspace(0., 200., 51), np.linspace(-20., 20., 101)]
-
-        edges = [np.column_stack([edge[:-1], edge[1:]]) for edge in edges]
-        coords_values = [np.mean(edge, axis=-1) for edge in edges]
-
-        counts = 1. + rng.uniform(size=tuple(v.size for v in coords_values))
-        return Count2(counts=counts, norm=np.ones_like(counts), **{coord: value for coord, value in zip(coords, coords_values)},
-                      **{f'{coord}_edges': value for coord, value in zip(coords, edges)}, coords=coords, attrs=dict(los='x'))
-
-    def get_count2_correlation(mode='smu', seed=42):
-        counts = {label: get_count(mode=mode, seed=seed + i) for i, label in enumerate(['DD', 'DR', 'RD', 'RR'])}
-        return Count2Correlation(**counts)
-
-    def get_observable(size):
-        edges = np.linspace(0., 200., size + 1)
-        edges = np.column_stack([edges[:-1], edges[1:]])
-        s = np.mean(edges, axis=-1)
-        value = np.zeros_like(s)
-        ells = [0, 2, 4]
-        data = [Count2CorrelationPole(s=s, value=value, s_edges=edges, ell=ell) for ell in ells]
-        return Count2CorrelationPoles(data)
-
-    data = get_observable(40)
-    covariance = CovarianceMatrix(value=np.eye(data.size), observable=data)
-
-    _theory = get_observable(80)
-    window = WindowMatrix(value=np.ones((data.size, _theory.size)), observable=data, theory=_theory)
-
-    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [0.05, 180., 4.], 2: [0.05, 180., 4.]},
-                                                            data=data,
-                                                            covariance=covariance,
-                                                            #wmatrix=window,
-                                                            theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 50.)
-    likelihood()
-    #observable.plot_covariance_matrix(show=True)
-
-    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [0.05, 180., 4.], 2: [0.05, 180., 4.]},
-                                                                data=data,
-                                                                covariance=covariance,
-                                                                sin=_theory.get(ells=0).coords('s'),
-                                                                wmatrix=dict(resolution=2),
-                                                                theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
-    likelihood()
-
-    data = get_count2_correlation()
-    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [0.05, 180., 4.], 2: [0.05, 180., 8.]},
-                                                            data=data,
-                                                            wmatrix=dict(resolution=2),
-                                                            theory=theory)
-    observable()
-    print(observable.wmatrix.matrix_full)
-
-
-    edges = np.linspace(0., 200, 201)
-    data = ObservableArray(edges=[edges] * 3, value=[edges[:-1]] * 3, projs=[0, 2, 4])
-    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20, 150, 4], 2: [30, 150, 5]},
-                                                               data=data,
-                                                               covariance=ObservableCovariance(np.eye(data.flatx.size), observables=[data]),
-                                                               #data=PowerSpectrumMultipoles.load('../../tests/_pk/data.npy'),
-                                                               #covariance=[PowerSpectrumMultipoles.load(fn) for fn in glob.glob('../../tests/_pk/mock_*.npy')],
-                                                               theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=1 / 500.)
-    print(likelihood())
-
-    #theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template, ells=(0, 2))
-    size = 5
-    ells = (2,)
-    observable = TracerCorrelationFunctionMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * len(ells)),
-                                                               s=np.linspace(20., 150., size),
-                                                               slim={ell: (10, 160) for ell in ells},
-                                                               covariance=np.eye(size * len(ells)),
-                                                               theory=theory,
-                                                               wmatrix={'resolution': 2})
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    observable.__getstate__()
-    assert np.all((observable.s[0] >= 10.) & (observable.s[0] <= 160.)) and len(observable.s[0]) == 5 and observable.ells == ells
-
-    observable = TracerCorrelationFunctionMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * 3),
-                                                               s=np.linspace(20., 150., size),
-                                                               ells=(0, 2, 4),
-                                                               slim={ell: (10, 160) for ell in [0, 2]},
-                                                               covariance=np.eye(size * 2),
-                                                               theory=theory,
-                                                               wmatrix={'resolution': 2})
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    assert np.all((observable.s[0] >= 10.) & (observable.s[0] <= 160.)) and len(observable.s[0]) == 5 and observable.ells == (0, 2)
-
-    observable = TracerCorrelationFunctionMultipolesObservable(data=np.ravel([np.linspace(0., 1., size)] * 3),
-                                                               s=np.linspace(20., 150., size),
-                                                               slim={0: (10, 160), 2: (10, 160), 4: (-1., 1.)},
-                                                               covariance=np.eye(size * 2),
-                                                               theory=theory,
-                                                               wmatrix={'resolution': 2})
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    assert np.all((observable.s[0] >= 10.) & (observable.s[0] <= 160.)) and observable.ells == (0, 2)
-
-    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
-                                                               data='../../tests/_xi/data.npy',
-                                                               covariance=glob.glob('../../tests/_xi/mock_*.npy'),
-                                                               theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    theory()
-
-    def get_template(ell, x):
-        return float(ell + 1.) * x**2
-
-    fiber_collisions = TopHatFiberCollisionsCorrelationFunctionMultipoles(fs=0.5, Dfc=1.)
-    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
-                                                               data='../../tests/_xi_fft/data.npy',
-                                                               covariance='../../tests/_xi_fft/mock_*.npy',
-                                                               theory=theory,
-                                                               systematic_templates=get_template,
-                                                               fiber_collisions=fiber_collisions)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood.all_params['syst_0'].update(derived='.prec')
-    observable(syst_0=1.)
-    observable.plot(show=True)
-    sin = np.linspace(15., 160., 90)
-    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
-                                                               data='../../tests/_xi/data.npy',
-                                                               covariance='../../tests/_xi/mock_*.npy',
-                                                               wmatrix=np.zeros((sin.size * 2, 12 * 2)),
-                                                               theory=theory,
-                                                               sin=sin)
-    observable()
-    assert np.allclose(observable.wmatrix.theory.s, sin)
-
-    fiber_collisions = TopHatFiberCollisionsCorrelationFunctionMultipoles(fs=0.5, Dfc=1.)
-    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
-                                                               data={}, #'../../tests/_xi/data.npy',
-                                                               covariance='../../tests/_xi/mock_*.npy',
-                                                               theory=theory,
-                                                               fiber_collisions=fiber_collisions)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    theory.power.template.init.update(z=1.)
-    observable()
-    observable.plot(show=True)
-
-    print(observable.runtime_info.pipeline.varied_params)
-    assert theory.power.template.z == 1.
-
-    theory = DampedBAOWigglesTracerCorrelationFunctionMultipoles()
-    params = {'b1': 1.5}
-    footprint = BoxFootprint(volume=1e10, nbar=1e-4)
-    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [50., 150., 5.]},
-                                                               data=params, #'../../tests/_xi/data.npy',
-                                                               theory=theory,
-                                                               wmatrix={'resolution': 2})
-    observable()
-    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)()
-    observable.init.update(covariance=cov)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    observable.wmatrix.plot(show=True)
-    observable.plot_bao(show=True)
-
-    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 4.], 2: [20., 150., 4.]},
-                                                               data={}, #'../../tests/_xi/data.npy',
-                                                               covariance='../../tests/_xi/mock_*.npy',
-                                                               theory=theory,
-                                                               wmatrix={'resolution': 5})
-                                                               #fiber_collisions=fiber_collisions)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    observable.wmatrix.plot(show=True)
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        fn = os.path.join(tmp_dir, 'tmp.npy')
-        observable.save(fn)
-        # And reload the result
-        tmp = TracerCorrelationFunctionMultipolesObservable.load(fn)
-        tmp.s, tmp.ells, tmp.flatdata, tmp.flattheory
-
-
-def test_bispectrum():
-
-    from cosmoprimo.fiducial import DESI
-    from desilike.theories.galaxy_clustering import FOLPSv2TracerBispectrumMultipoles, ShapeFitPowerSpectrumTemplate
-    from desilike.observables.galaxy_clustering import TracerBispectrumMultipolesObservable
-
-    template = ShapeFitPowerSpectrumTemplate(z=0.5, fiducial=DESI())
-    theory = FOLPSv2TracerBispectrumMultipoles(template=template)
-
-    from lsstypes import Mesh3SpectrumPole, Mesh3SpectrumPoles, WindowMatrix, CovarianceMatrix
-
-    def get_data(size):
-        edges = np.linspace(0., 0.2, size + 1)
-        edges = np.column_stack([edges[:-1], edges[1:]])
-        edges = np.concatenate([edges[:, None, :]] * 2, axis=1)
-        k = np.mean(edges, axis=-1)
-        value = np.zeros_like(k[..., 0])
-        ells = [(0, 0, 0), (2, 0, 2)]
-        data = [Mesh3SpectrumPole(k=k, num_raw=value, k_edges=edges, basis='sugiyama-diagonal', ell=ell) for ell in ells]
-        return Mesh3SpectrumPoles(data)
-
-    def get_window(observable, size):
-        edges = np.linspace(0., 0.2, size + 1)
-        edges = np.column_stack([edges[:-1], edges[1:]])
-        k = np.mean(edges, axis=-1)
-
-        def get_grid(*arrays):
-            arrays = np.meshgrid(*arrays, indexing='ij')
-            return np.column_stack([array.ravel() for array in arrays])
-
-        edges = np.column_stack([get_grid(edges[..., axis], edges[..., axis])[:, None, :] for axis in range(2)])
-        k = get_grid(k, k)
-        ells = [(0, 0, 0), (2, 0, 2), (1, 1, 0)]
-        theory = [Mesh3SpectrumPole(k=k, num_raw=np.zeros_like(k[..., 0]), k_edges=edges, basis='sugiyama', ell=ell) for ell in ells]
-        theory = Mesh3SpectrumPoles(theory)
-        window = np.zeros((observable.size, theory.size))
-        return WindowMatrix(observable=observable, theory=theory, value=window)
-
-    def get_covariance(observable):
-        covariance = np.eye(observable.size)
-        return CovarianceMatrix(observable=observable, value=covariance)
-
-    data = get_data(size=20)
-    window = get_window(data, 40)
-    covariance = get_covariance(data)
-
-    observable = TracerBispectrumMultipolesObservable(data=data, covariance=covariance, theory=theory)
-    observable()
-    observable = TracerBispectrumMultipolesObservable(data=data.value(),  # nparray
-                                                      covariance=covariance.value(),  # nparray
-                                                      ells=data.ells, # list of tuples
-                                                      k=[pole.coords('k') for pole in data],  # list of nparrays
-                                                      theory=theory)
-    observable()
-    observable.plot(show=True)
-    observable = TracerBispectrumMultipolesObservable(data=data.select(k=(0., 0.1)), covariance=covariance.at.observable.select(k=(0., 0.1)), theory=theory)
-    observable()
-
-    observable = TracerBispectrumMultipolesObservable(data=data, window=window, covariance=covariance, theory=theory)
-    observable()
-    #observable.plot(show=True)
-    observable = TracerBispectrumMultipolesObservable(data=data.select(k=(0., 0.1)), window=window.at.observable.select(k=(0., 0.1)),
-                                                      covariance=covariance.at.observable.select(k=(0., 0.1)), theory=theory)
-    observable()
-    #observable.plot(show=True)
-    observable = TracerBispectrumMultipolesObservable(data=data.value(),  # nparray
-                                                      window=window.value(),  # nparray
-                                                      covariance=covariance.value(),  # nparray
-                                                      ells=data.ells, # list of tuples
-                                                      k=[pole.coords('k') for pole in data],  # list of nparrays
-                                                      kin=window.theory.get(ells=(0, 0, 0)).coords('k'),  # single k (nk, 2)
-                                                      ellsin=window.theory.ells,  # list of tuples
-                                                      theory=theory)
-    observable()
-    from desilike.likelihoods import ObservablesGaussianLikelihood
-    likelihood = ObservablesGaussianLikelihood(observables=observable)
-    assert np.isfinite(likelihood())
-    assert 'c1p' in likelihood.all_params
-
-
-def test_bao():
-
-    from cosmoprimo.fiducial import DESI
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, BAOPowerSpectrumTemplate
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
-
-    template = BAOPowerSpectrumTemplate(z=0.38, fiducial=DESI())
-    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
-    theory.init.params = theory.init.params.select(basename='al0_*')
-    theory.init.params.set(theory.init.params['al0_0'].clone(name='al0_6'))
-    observable = TracerPowerSpectrumMultipolesObservable(data='../../tests/_pk/data.npy',
-                                                         covariance='../../tests/_pk/mock_*.npy',
-                                                         klim={0: [0.01, 0.3]},
-                                                         wmatrix='../../tests/_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-
-    setup_logging()
-    print(likelihood.all_params)
-
-
-def test_footprint():
-    from desilike.observables.galaxy_clustering import BoxFootprint, CutskyFootprint
-    from cosmoprimo.fiducial import DESI
-    fn = '_tests/footprint.npy'
-    footprint = BoxFootprint(volume=1e10, nbar=1e-3)
-    footprint.save(fn)
-    footprint = BoxFootprint.load(fn)
-    footprint = CutskyFootprint(nbar=2500., area=14000., zrange=(0.8, 1.6), cosmo=DESI())
-    footprint.save(fn)
-    footprint = CutskyFootprint.load(fn)
-    print(footprint.zavg, footprint.zeff, footprint.size / 1e6, footprint.shotnoise, footprint.volume / 1e9)
-    footprint & footprint
-
-    footprint = CutskyFootprint(nbar=[1e-3, 1e-3, 2e-3], area=14000., zrange=(0.8, 1.2, 1.6), cosmo=DESI())
-    footprint & footprint
-
-
-def test_covariance_matrix():
-
-    from desilike.theories.galaxy_clustering import (ShapeFitPowerSpectrumTemplate,
-                                                     KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles,
-                                                     LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles)
-    from desilike.observables.galaxy_clustering import TracerCorrelationFunctionMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
-
-    template = ShapeFitPowerSpectrumTemplate(z=1.1)
-    #theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template)
-    theory =  KaiserTracerCorrelationFunctionMultipoles(template=template)
-    footprint = BoxFootprint(volume=1e10, nbar=1e-4)
-    observable = TracerCorrelationFunctionMultipolesObservable(slim={0: [30., 150., 4.], 2: [30., 150., 4.], 4: [30., 150., 4.]},
-                                                               data={},  #'../../tests/_xi/data.npy',
-                                                               theory=theory)
-
-    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov())
-    print(likelihood())
-    #observable.plot(show=True)
-    observable.plot_covariance_matrix(show=True, corrcoef=True)
-
-    #theory_pk = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
-    theory_pk = KaiserTracerPowerSpectrumMultipoles(template=template)
-    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, theories=theory_pk, resolution=3)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov())
-    print(likelihood())
-    #observable.plot(show=True)
-    observable.plot_covariance_matrix(show=True, corrcoef=True)
-
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
-
-    template = ShapeFitPowerSpectrumTemplate(z=0.5)
-    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-    footprint = BoxFootprint(volume=1e10, nbar=1e-5)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01], 4: [0.05, 0.2, 0.01]},
-                                                         data={},  #'../../tests/_xi/data.npy',
-                                                         theory=theory)
-    cov = ObservablesCovarianceMatrix(observable, footprints=footprint, resolution=3)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov())
-    print(likelihood())
-    #observable.plot(show=True)
-    observable.plot_covariance_matrix(show=True, corrcoef=True)
-
-    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, LPTVelocileptorsTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerCorrelationFunctionMultipoles
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TracerCorrelationFunctionMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
-
-    template = ShapeFitPowerSpectrumTemplate(z=0.5)
-    footprint = BoxFootprint(volume=1e10, nbar=1e-5)
-    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=template)
-    observable1 = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                          data={},  #'../../tests/_xi/data.npy',
-                                                          theory=theory)
-    theory = LPTVelocileptorsTracerCorrelationFunctionMultipoles(template=template)
-    observable2 = TracerCorrelationFunctionMultipolesObservable(slim={0: [20., 150., 5.], 2: [20., 150., 5.]},
-                                                                data={},  #'../../tests/_xi/data.npy',
-                                                                theory=theory)
-    observables = [observable1, observable2]
-    cov = ObservablesCovarianceMatrix(observables, footprints=footprint, resolution=3)()
-    likelihood = ObservablesGaussianLikelihood(observables=observables, covariance=cov)
-    print(likelihood())
-    #observable.plot(show=True)
-    likelihood.plot_covariance_matrix(show=True, corrcoef=True)
-
-
-def test_covariance_matrix_mocks():
-
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, KaiserTracerCorrelationFunctionMultipoles, ShapeFitPowerSpectrumTemplate
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, TracerCorrelationFunctionMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
-
-    template = ShapeFitPowerSpectrumTemplate(z=0.5)
-    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-
-    pk_mocks, xi_mocks = '../../tests/_pk/mock_*.npy', '../../tests/_xi/mock_*.npy'
-    data = {'b1': 2.}
-
-    #pk_mocks, xi_mocks = '../../tests/_pk_shotnoise/mock_*.npy', '../../tests/_xi_shotnoise/mock_*.npy'
-    #data = {'b1': 0., 'df': 0.}
-
-    klim = {0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01], 4: [0.05, 0.2, 0.01]}
-    #klim = {0: [0.05, 0.2, 0.02], 2: [0.05, 0.2, 0.02], 4: [0.05, 0.2, 0.02]}
-    observable_pk_mocks = TracerPowerSpectrumMultipolesObservable(klim=klim, data=pk_mocks, covariance=pk_mocks, theory=theory)
-
-    observable_pk_mocks(**data)
-    shotnoise = observable_pk_mocks.shotnoise[0]
-    footprint = BoxFootprint(volume=500**3, nbar=1. / shotnoise)
-
-    observable_pk = TracerPowerSpectrumMultipolesObservable(klim=klim, data=data, theory=theory)
-
-    covariance = ObservablesCovarianceMatrix(observable_pk, footprints=footprint, resolution=3)(**data)
-    observable_pk.init.update(covariance=covariance)
-    observable_pk(**data)
-
-    #observable_pk_mocks.plot(show=True)
-    from matplotlib import pyplot as plt
-    ax = plt.gca()
-    for ill, ell in enumerate(observable_pk.ells):
-        ax.plot(observable_pk.k[ill], observable_pk_mocks.std[ill] / observable_pk.std[ill], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
-    ax.legend()
-    plt.show()
-
-    theory = KaiserTracerCorrelationFunctionMultipoles(template=template)
-    slim = {0: [20., 80., 4.], 2: [20., 80., 4.], 4: [20., 80., 4.]}
-    #slim = {0: [20., 80., 2.], 2: [20., 80., 2.], 4: [20., 80., 2.]}
-    observable_xi_mocks = TracerCorrelationFunctionMultipolesObservable(slim=slim, data=xi_mocks, covariance=xi_mocks, theory=theory)
-
-    observable_xi_mocks(**data)
-    observable_xi = TracerCorrelationFunctionMultipolesObservable(slim=slim, data=data, theory=theory)
-    covariance = ObservablesCovarianceMatrix(observable_xi, footprints=footprint, resolution=3)(**data)
-    observable_xi.init.update(covariance=covariance)
-    observable_xi(**data)
-
-    #observable_xi_mocks.plot(show=True)
-    from matplotlib import pyplot as plt
-    ax = plt.gca()
-    for ill, ell in enumerate(observable_xi.ells):
-        ax.plot(observable_xi.s[ill], observable_xi_mocks.std[ill] / observable_xi.std[ill], color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
-    ax.legend()
-    plt.show()
-
-    ax = plt.gca()
-    index = np.arange(observable_xi_mocks.covariance.shape[0])
-    for offset in range(1, 5):
-        indices = (index[:-offset], index[offset:])
-        ax.plot(observable_xi_mocks.covariance[indices] / observable_xi.covariance[indices])
-    ax.set_ylim(0., 3.)
-    plt.show()
-
-    covariance = ObservablesCovarianceMatrix([observable_pk, observable_xi], footprints=footprint, resolution=3)(**data)
-    likelihood_mocks = ObservablesGaussianLikelihood([observable_pk_mocks, observable_xi_mocks])
-    likelihood = ObservablesGaussianLikelihood([observable_pk, observable_xi], covariance=covariance)
-
-    ax = plt.gca()
-    index = np.arange(likelihood_mocks.covariance.shape[0])
-    for offset in [1, observable_pk.covariance.shape[0], observable_pk.covariance.shape[0] + 1]:
-        indices = (index[:-offset], index[offset:])
-        ax.plot(likelihood_mocks.covariance[indices] / likelihood.covariance[indices])
-    ax.set_ylim(0., 3.)
-    plt.show()
-
-    likelihood_mocks.plot_covariance_matrix(show=True)
-    likelihood.plot_covariance_matrix(show=True)
-
-
-def test_compression():
-
-    from desilike import LikelihoodFisher
-
-    from desilike.observables.galaxy_clustering import BAOCompressionObservable, BAOPhaseShiftCompressionObservable, StandardCompressionObservable, ShapeFitCompressionObservable, WiggleSplitCompressionObservable, BandVelocityCompressionObservable, TurnOverCompressionObservable
-    from desilike.emulators import Emulator, TaylorEmulatorEngine
-
-    def test(likelihood, emulate=True, test_zero=False):
-        print(likelihood.varied_params)
-        likelihood_bak = likelihood()
-        if test_zero:
-            assert np.allclose(likelihood.loglikelihood, 0.)
-        print(likelihood_bak)
-        if emulate:
-            emulator = Emulator(likelihood.observables, engine=TaylorEmulatorEngine(order=1))
-            emulator.set_samples()
-            emulator.fit()
-            likelihood.init.update(observables=emulator.to_calculator())
-            assert np.allclose(likelihood(), likelihood_bak)
-
-    observable = BAOCompressionObservable(data=[1., 1.], covariance=np.diag([0.01, 0.01]), quantities=['qpar', 'qper'], z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    test(likelihood)
-
-    observable = BAOCompressionObservable(data=[1., 1.], covariance=np.diag([0.01, 0.01]), quantities=['qpar', 'qper'], z=2., rs_drag_varied=True)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    assert 'rs_drag' in likelihood.varied_params
-    test(likelihood)
-    print(likelihood(rs_drag=50.), likelihood(rs_drag=150.))
-
-    observable = BAOCompressionObservable(data=[1., 1.], quantities=['DM_over_rd', 'DH_over_rd'], z=2.)
-    observable2 = BAOCompressionObservable(data=[1., 1.], quantities=['DM_over_rd', 'DH_over_rd'], z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable, observable2], covariance=np.diag([0.01, 0.01, 0.01, 0.01]))
-    test(likelihood)
-
-    observable = BAOCompressionObservable(data=[1.], covariance=np.diag([0.01]), quantities=['DV_over_rd'], z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    test(likelihood)
-
-    fisher = LikelihoodFisher(center=[0.], params=['qiso'], offset=0., hessian=[[1.]], with_prior=True)
-    observable = BAOCompressionObservable(data=fisher, covariance=fisher, z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    test(likelihood)
-
-    observable = BAOCompressionObservable(data=np.array([1.]), covariance=np.diag([0.01]), quantities=['qiso'], z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=observable)
-    test(likelihood)
-
-    observable = BAOPhaseShiftCompressionObservable(data=np.array([1., 0.]), covariance=np.diag([0.01, 0.01]), quantities=['qiso', 'baoshift'], z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=observable)
-    test(likelihood)
-
-    observable = StandardCompressionObservable(data=[1., 1., 1.], covariance=np.diag([0.01, 0.01, 0.01]), quantities=['qpar', 'qper', 'df'], z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    test(likelihood)
-
-    observable = ShapeFitCompressionObservable(data=[1., 1., 0., 0.8], covariance=np.diag([0.01, 0.01, 0.0001, 0.01]), quantities=['qpar', 'qper', 'm', 'f_sqrt_Ap'], z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    test(likelihood)
-
-    observable = ShapeFitCompressionObservable(data=[1., 1., 0., 1.], covariance=np.diag([0.01, 0.01, 0.0001, 0.01]), quantities=['qiso', 'qap', 'dm', 'df'], z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    test(likelihood)
-
-    #rng = np.random.RandomState(seed=42)
-    #observable = ShapeFitCompressionObservable(data=[1., 1., 0., 1.], covariance=rng.uniform(0., 1., (100, 4)), quantities=['qiso', 'qap', 'dm', 'df'], z=2.)
-    #likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    #assert likelihood.covariance.shape == (4,) * 2
-    #assert not np.allclose(likelihood.hartlap2007_factor, 1.)
-    #test(likelihood)
-
-    observable = WiggleSplitCompressionObservable(data=[1., 1., 1., 0.], covariance=np.diag([0.01, 0.01, 0.01, 0.01]), quantities=['qap', 'qbao', 'df', 'dm'], z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    test(likelihood)
-
-    observable = BandVelocityCompressionObservable(data=[1., 1., 1.], covariance=np.diag([0.01, 0.01, 0.01]), kp=[0.01, 0.1], quantities=['dptt0', 'dptt1', 'qap'], z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    test(likelihood)
-
-    observable = TurnOverCompressionObservable(data=[1.], covariance=np.diag([0.01]), quantities=['qto'], z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    test(likelihood, test_zero=True)
-
-    observable = TurnOverCompressionObservable(data=[1.], covariance=[[0.01]], quantities=['qto'], z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    test(likelihood, test_zero=True)
-
-    # Define cosmo, to be shared by the observables
-    from desilike.theories import Cosmoprimo
-    cosmo = Cosmoprimo(fiducial='DESI', engine='class')
-    cosmo.init.params = {'h': {'prior': {'limits': [0.1, 1.]}, 'ref': {'dist': 'norm', 'loc': 0.6736, 'scale': 0.005}, 'delta': 0.03, 'latex': 'h'},
-                        'Omega_m': {'prior': {'limits': [0.01, 1.]}, 'ref': {'dist': 'norm', 'loc': 0.3153, 'scale': 0.0073}, 'delta': 0.02, 'latex': '\Omega_{m}'}}
-    observables = [TurnOverCompressionObservable(data=[0.911], quantities=['qto'], z=0.732, cosmo=cosmo), TurnOverCompressionObservable(data=[0.967], quantities=['qto'], z=1.4936707295213962, cosmo=cosmo)]
-    likelihood = ObservablesGaussianLikelihood(observables=observables, covariance=[[0.087**2, 0.], [0., 0.079**2]])
-    test(likelihood)
-
-    from desilike import ParameterCovariance
-    covariance = ParameterCovariance(value=np.diag([0.01, 0.01, 0.01]), params=['qpar', 'qper', 'df'])
-    observable = StandardCompressionObservable(data={}, covariance=covariance, quantities=['qpar', 'qper', 'df'], z=2.)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    test(likelihood)
-
-
-def test_integral_cosn():
-
-    from desilike.utils import numpy_trapz
-    from desilike.observables.galaxy_clustering.window import integral_cosn
-
-    for n in np.arange(6):
-        limits = (-0.3, 0.8)
-        x = np.linspace(*limits, num=1000)
-        ref = numpy_trapz(np.cos(x)**n, x=x)
-        test = integral_cosn(n=n, range=limits)
-        assert np.abs(test / ref - 1.) < 1e-6
-
-
-def test_fiber_collisions():
-
-    from matplotlib import pyplot as plt
-    from desilike.observables.galaxy_clustering import (FiberCollisionsPowerSpectrumMultipoles, FiberCollisionsCorrelationFunctionMultipoles,
-                                                        TopHatFiberCollisionsPowerSpectrumMultipoles, TopHatFiberCollisionsCorrelationFunctionMultipoles)
-    from desilike.observables.galaxy_clustering import WindowedCorrelationFunctionMultipoles, WindowedPowerSpectrumMultipoles
-
-    fs, Dfc = 0.5, 3.
-    ells = (0, 2, 4)
-
-    fiber_collisions = TopHatFiberCollisionsPowerSpectrumMultipoles(fs=fs, Dfc=Dfc, ells=ells)
-    fiber_collisions()
-    ax = fiber_collisions.plot()
-
-    n = 10
-    sep = np.linspace(0., Dfc, n)
-    kernel = np.linspace(fs, 0., n)
-    fiber_collisions = FiberCollisionsPowerSpectrumMultipoles(sep=sep, kernel=kernel, ells=ells)
-    fiber_collisions()
-
-    for ill, ell in enumerate(fiber_collisions.ells):
-        color = 'C{:d}'.format(ill)
-        ax.plot(fiber_collisions.k, fiber_collisions.k * fiber_collisions.power[ill], color=color, linestyle=':', label=r'$\ell = {:d}$'.format(ell))
-    ax.legend()
-    plt.show()
-
-    s = np.linspace(1., 200., 200)
-    fiber_collisions = TopHatFiberCollisionsCorrelationFunctionMultipoles(s=s, fs=fs, Dfc=Dfc, ells=ells)
-    fiber_collisions()
-    ax = fiber_collisions.plot()
-    # ax.get_legend().remove()
-
-    n = 10
-    sep = np.linspace(0., Dfc, n)
-    kernel = np.linspace(fs, 0., n)
-    fiber_collisions = FiberCollisionsCorrelationFunctionMultipoles(s=s, sep=sep, kernel=kernel, ells=ells)
-    fiber_collisions()
-    for ill, ell in enumerate(fiber_collisions.ells):
-        color = 'C{:d}'.format(ill)
-        ax.plot(fiber_collisions.s, fiber_collisions.s**2 * fiber_collisions.corr[ill], color=color, linestyle=':')
-    ax.legend()
-    plt.show()
-
-    fs, Dfc = 0.5, 3.
-    ells = (0, 2, 4)
-    fiber_collisions = TopHatFiberCollisionsPowerSpectrumMultipoles(fs=fs, Dfc=Dfc, ells=ells)
-    window = WindowedPowerSpectrumMultipoles(k=np.linspace(0.01, 0.2, 50), fiber_collisions=fiber_collisions)
-    window()
-    window.plot(show=True)
-
-    fs, Dfc = 0.5, 3.
-    ells = (0, 2, 4)
-    fiber_collisions = TopHatFiberCollisionsCorrelationFunctionMultipoles(fs=fs, Dfc=Dfc, ells=ells, with_uncorrelated=False, mu_range_cut=True)
-    window = WindowedCorrelationFunctionMultipoles(s=np.linspace(20, 150, 50), fiber_collisions=fiber_collisions)
-    window()
-    window.plot(show=True)
-
-
-def test_systematic_templates():
-
-    from desilike.observables.galaxy_clustering import (SystematicTemplatePowerSpectrumMultipoles, SystematicTemplateCorrelationFunctionMultipoles)
-
-    def get_callable_template(i):
-
-        def callable_template(ell, x):
-            return float(ell + 1) * x ** i
-
-        return callable_template
-
-    templates = [get_callable_template(i) for i in range(4)]
-    systematics = SystematicTemplatePowerSpectrumMultipoles(templates=templates[:2])
-    systematics(syst_0=10, syst_1=20)
-    systematics.plot(show=True)
-    systematics = SystematicTemplateCorrelationFunctionMultipoles(templates=templates)
-    systematics(syst_0=10, syst_1=20, syst_3=5)
-    systematics.plot(show=True)
-
+    k = np.linspace(0.01, 0.3, 30)
     ells = (0, 2)
-    x = np.linspace(20., 200, 100)
-    templates = []
-    for i in range(4):
-        templates.append(np.concatenate([float(ell + 1) * x ** i for ell in ells]))
-    systematics = SystematicTemplatePowerSpectrumMultipoles(templates=templates[:2], k=x, ells=ells)
-    systematics(syst_0=10, syst_1=20)
-    systematics.plot(show=True)
-    systematics = SystematicTemplateCorrelationFunctionMultipoles(templates=templates, s=x, ells=ells)
-    systematics(syst_0=10, syst_1=20, syst_3=5)
-    systematics.plot(show=True)
+    theory = _make_spectrum_theory(k, ells)
+    obs = Spectrum2PolesObservable(data=None, theory=theory, k=k, ells=ells)
+
+    pipe = compile(obs)
+    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe(pipe_params)
+
+    assert obs.flattheory.shape == (len(ells) * len(k),)
+    assert obs.flatdata.shape == (len(ells) * len(k),)
+    np.testing.assert_allclose(np.asarray(obs.flattheory), np.ravel(theory.poles), rtol=1e-10)
 
 
-from desilike.base import BaseCalculator
+def test_spectrum2poles_with_data():
+    """Spectrum2PolesObservable: data provided, flatdata set correctly."""
+    from desilike.observables import Spectrum2PolesObservable
+    from desilike.base import compile
+
+    k = np.linspace(0.01, 0.3, 20)
+    ells = (0, 2)
+    theory = _make_spectrum_theory(k, ells)
+    rng = np.random.default_rng(0)
+    data = rng.normal(size=len(ells) * len(k))
+    cov = np.diag(np.ones(len(ells) * len(k)) * 0.1)
+    obs = Spectrum2PolesObservable(data=data, theory=theory, k=k, ells=ells, covariance=cov)
+
+    pipe = compile(obs)
+    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe(pipe_params)
+
+    np.testing.assert_array_equal(obs.flatdata, data)
+    assert obs.covariance.shape == (len(ells) * len(k), len(ells) * len(k))
 
 
-class CompressionWindow(BaseCalculator):
+def test_spectrum2poles_with_window():
+    """Spectrum2PolesObservable: window matrix applied correctly."""
+    from desilike.observables import Spectrum2PolesObservable
+    from desilike.base import compile
 
-    def initialize(self, likelihood, observable, quantities):
-        self.likelihood = likelihood
-        self.observable = observable
-        self.quantities = [str(name) for name in quantities]
-        self.runtime_info.requires = [self.observable]
+    k_data = np.linspace(0.02, 0.25, 15)
+    kin = np.linspace(0.01, 0.3, 30)
+    ells = (0, 2)
+    theory = _make_spectrum_theory(kin, ells)
 
-    def calculate(self):
-        self.likelihood.flatdata = self.observable.flattheory.copy()
-        for i in range(3):
-            self.likelihood()  # find parameter best fit (iteratively in case order > 1)
-        #self.likelihood.observables[0].plot(show=True)
-        self.values = {}
-        for quantity in self.quantities:
-            self.values[quantity] = self.likelihood.runtime_info.pipeline.input_values[quantity]
+    n_data = len(ells) * len(k_data)
+    n_theory = len(ells) * len(kin)
+    rng = np.random.default_rng(1)
+    window = rng.normal(size=(n_data, n_theory))
 
-    def get(self):
-        return self.values
+    obs = Spectrum2PolesObservable(data=None, theory=theory, k=k_data, ells=ells,
+                                   window=window, kin=kin)
 
-    def __getstate__(self):
-        state = {'compression_{}'.format(quantity): value for quantity, value in self.values.items()}
-        for name in ['quantities']: state[name] = getattr(self, name)
-        return state
+    pipe = compile(obs)
+    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe(pipe_params)
 
-    def __setstate__(self, state):
-        for name in ['quantities']: setattr(self, name, state[name])
-        self.values = {quantity: state['compression_{}'.format(quantity)] for quantity in self.quantities}
+    assert obs.flattheory.shape == (n_data,)
+    expected = window @ np.ravel(theory.poles)
+    np.testing.assert_allclose(np.asarray(obs.flattheory), expected, rtol=1e-6)
 
 
-def test_compression_window():
+# ── Correlation2PolesObservable ─────────────────────────────────────────────
 
-    from desilike.theories.galaxy_clustering import StandardPowerSpectrumTemplate, DirectPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
+def test_correlation2poles_no_window():
+    """Correlation2PolesObservable: no window, flattheory matches theory.poles.ravel()."""
+    from desilike.observables import Correlation2PolesObservable
+    from desilike.base import compile
 
-    z, b1 = 1., 2.
-    order = 2
-    kwargs_template = {'only_now': 'peakaverage', 'z': z, 'fiducial': 'DESI'}
-    theory_compression = KaiserTracerPowerSpectrumMultipoles(template=StandardPowerSpectrumTemplate(**kwargs_template, apmode='qap'))
-    theory_compression.params['b1'].update(fixed=False, value=b1)
-    #theory_compression.params['sn0'].update(fixed=True, value=0.)
-    observable_compression = TracerPowerSpectrumMultipolesObservable(klim={0: [0.01, 0.15, 0.01], 2: [0.01, 0.15, 0.01], 4: [0.01, 0.15, 0.01]},
-                                                                     data={},
-                                                                     theory=theory_compression)
+    s = np.linspace(20., 180., 20)
+    ells = (0, 2)
+    theory = _make_correlation_theory(s, ells)
+    obs = Correlation2PolesObservable(data=None, theory=theory, s=s, ells=ells)
 
-    footprint = BoxFootprint(volume=1e10, nbar=1e-3)
-    cov = ObservablesCovarianceMatrix(observable_compression, footprints=footprint)()
-    likelihood_compression = ObservablesGaussianLikelihood(observables=observable_compression, covariance=cov)
-    #likelihood_compression.all_params['df'].update(fixed=True)
-    #likelihood_compression.all_params['qap'].update(fixed=True)
-    #for param in likelihood_compression.all_params.select(basename='q*'):
-    #    param.update(fixed=True)
-    from desilike.emulators import Emulator, TaylorEmulatorEngine
-    emulator = Emulator(theory_compression, engine=TaylorEmulatorEngine(order=order))
-    emulator.set_samples()
-    emulator.fit()
+    pipe = compile(obs)
+    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe(pipe_params)
 
-    observable_compression.init.update(theory=emulator.to_calculator())
-    for param in likelihood_compression.varied_params:
-        param.update(prior=None, derived='.best')
-
-    # Theory is band power + AP
-    template_band = BandVelocityPowerSpectrumTemplate(**kwargs_template)
-    theory_band = KaiserTracerPowerSpectrumMultipoles(template=template_band)
-    theory_band.params['b1'].update(fixed=False, value=b1)
-    for param in theory_band.params: param.update(fixed=True)
-
-    observable_band = observable_compression.deepcopy()
-    kp = np.unique(np.concatenate(observable_compression.k))
-    template_band.init.update(kp=kp)
-    observable_band.init.update(theory=theory_band)
-    compression_window = CompressionWindow(likelihood=likelihood_compression, observable=observable_band, quantities=theory_compression.template.varied_params)
-    #compression_window.all_params['qap'].update(fixed=True)
-
-    from desilike.emulators import Emulator, TaylorEmulatorEngine
-    emulator = Emulator(compression_window, engine=TaylorEmulatorEngine(order=order))
-    emulator.set_samples()
-    #print(emulator.samples['compression_df']['compression_df'], emulator.samples['compression_df']['compression_df'].derivs)
-    #print(emulator.samples['compression_qap']['compression_qap'], emulator.samples['compression_qap']['compression_qap'].derivs)
-    emulator.fit()
-    emulated_compression_window = emulator.to_calculator()
-    #emulated_compression_window()
-
-    observable_compression.init.update(theory=theory_compression)
-    observable_direct = observable_compression.deepcopy()
-    template_direct = DirectPowerSpectrumTemplate(**kwargs_template)
-    theory_direct = KaiserTracerPowerSpectrumMultipoles(template=template_direct)
-    theory_direct.params['b1'].update(fixed=False, value=b1)
-    #theory_direct.params['sn0'].update(fixed=True, value=0.)
-    observable_direct.init.update(theory=theory_direct)
-    #observable_direct.wmatrix.theory.init.update(template=template_direct)
-    #print(observable_direct.all_params, print(observable_direct.wmatrix.theory.template))
-
-    from desilike.profilers import MinuitProfiler
-
-    #likelihood_compression.all_params['qap'].update(fixed=True)
-    profiler = MinuitProfiler(likelihood_compression, seed=42)
-    bestfits, expected_no_window, expected_no_window_grid, expected_with_window = [], [], [], []
-
-    def get_expected_no_window(grid_coordinates=False):
-        cosmo, fiducial = template_direct.cosmo, template_direct.fiducial
-        fo = fiducial.get_fourier()
-        r = 8.
-        fsigma8_fid = fo.sigma_rz(r, template_direct.z, of='theta_cb')
-        qper, qpar = cosmo.comoving_angular_distance(template_direct.z) / fiducial.comoving_angular_distance(template_direct.z), fiducial.efunc(template_direct.z) / cosmo.efunc(template_direct.z)
-        qiso = qpar**(1. / 3.) * qper**(2. / 3.)
-        qap = qpar / qper
-        fo = cosmo.get_fourier()
-        if grid_coordinates: r *= qiso
-        df = fo.sigma_rz(r, template_direct.z, of='theta_cb') / fsigma8_fid
-        return {'qiso': qiso, 'qap': qap, 'df': df}
-
-    def get_expected_with_window():
-        cosmo, fiducial = template_direct.cosmo, template_direct.fiducial
-        qper, qpar = cosmo.comoving_angular_distance(template_direct.z) / fiducial.comoving_angular_distance(template_direct.z), fiducial.efunc(template_direct.z) / cosmo.efunc(template_direct.z)
-        qiso = qpar**(1. / 3.) * qper**(2. / 3.)
-        qap = qpar / qper
-        # Move pk_tt to grid coordinates
-        pk_tt = 1. / qiso**3 * cosmo.get_fourier().pk_interpolator(of='theta_cb')(kp / qiso, z=template_direct.z)
-        #pk_tt = cosmo.get_fourier().pk_interpolator(of='theta_cb')(kp, z=template_direct.z)
-        # Compare to fiducial
-        pk_tt /= fiducial.get_fourier().pk_interpolator(of='theta_cb')(kp, z=template_direct.z)
-        '''
-        pk_tt = 1. / qiso**3 * cosmo.get_fourier().pk_interpolator(of='delta_cb')(kp / qiso, z=template_direct.z)
-        pk_tt /= fiducial.get_fourier().pk_interpolator(of='delta_cb')(kp, z=template_direct.z)
-        fo = fiducial.get_fourier()
-        f_fid = fo.sigma8_z(template_direct.z, of='theta_cb') / fo.sigma8_z(template_direct.z, of='delta_cb')
-        fo = cosmo.get_fourier()
-        r = 8. * qiso
-        f = fo.sigma_rz(r, template_direct.z, of='theta_cb') / fo.sigma_rz(r, template_direct.z, of='delta_cb')
-        pk_tt *= f**2 / f_fid**2
-        '''
-        params = {'qap': qap, **{'ptt{:d}'.format(ik): ptt for ik, ptt in enumerate(pk_tt)}}
-        return emulated_compression_window(**params)
-
-    params = {}
-    #params['w0_fld'] = [-1.2, -1., -0.8]
-    #params['wa_fld'] = [-0.3, 0., 0.3]
-    #params['Omega_m'] = [0.27, 0.3, 0.33]
-    params['Omega_m'] = [0.2, 0.3, 0.4]
-    params['h'] = [0.65, 0.7, 0.75]
-    import itertools
-    grid_params = [dict(zip(params.keys(), values)) for values in itertools.product(*params.values())]
-    for param in params:
-        template_direct.params[param].update(fixed=False)
-
-    theories = []
-    for params in grid_params:
-        likelihood_compression.flatdata = observable_direct(**params).flattheory
-        theories.append(observable_direct.theory)
-        profiles = profiler.maximize(niterations=5)
-        profiler.profiles = None
-        index = profiles.bestfit.logposterior.argmax()
-        bestfits.append({param.name: (profiles.bestfit[param][index], profiles.error[param][index]) for param in profiles.bestfit.params(varied=True)})
-        expected_no_window.append(get_expected_no_window(grid_coordinates=False))
-        expected_no_window_grid.append(get_expected_no_window(grid_coordinates=True))
-        expected_with_window.append(get_expected_with_window())
-        print('besfit', bestfits[-1])
-        print('no window', expected_no_window[-1])
-        print('no window grid', expected_no_window_grid[-1])
-        print('with window', expected_with_window[-1])
-
-    params_compression = emulated_compression_window.quantities
-
-    from matplotlib import pyplot as plt
-    fig, lax = plt.subplots(1, len(params_compression), sharex=False, sharey=False, figsize=(len(params_compression) * 5, 5), squeeze=False)
-    lax = lax.flatten()
-    fig.subplots_adjust(hspace=0)
-    for iparam, param in enumerate(params_compression):
-        ax = lax[iparam]
-        '''
-        ax.scatter([bestfit[param][0] for bestfit in bestfits], [expected[param] for expected in expected_no_window], color='C0', label='standard interpretation')
-        ax.scatter([bestfit[param][0] for bestfit in bestfits], [expected[param] for expected in expected_no_window_grid], color='C1', label='standard interpretation in grid coordinates')
-        #ax.scatter([bestfit[param][0] for bestfit in bestfits], [expected[param] for expected in expected_with_window], color='C1', label='window')
-        ax.errorbar([bestfit[param][0] for bestfit in bestfits], [expected[param] for expected in expected_with_window], yerr=[bestfit[param][1] for bestfit in bestfits], color='C2', label='window', marker='o', linestyle='')
-        ax.plot(ax.get_xlim(), ax.get_xlim(), linestyle='--', color='k')
-        ax.set_xlabel('best fit')
-        ax.set_ylabel('expected')
-        '''
-        ax.scatter([expected[param] for expected in expected_no_window], [bestfit[param][0] for bestfit in bestfits], color='C0', label='standard interpretation')
-        ax.scatter([expected[param] for expected in expected_no_window_grid], [bestfit[param][0] for bestfit in bestfits], color='C1', label='standard interpretation in grid coordinates')
-        ax.errorbar([expected[param] for expected in expected_with_window], [bestfit[param][0] for bestfit in bestfits], yerr=[bestfit[param][1] for bestfit in bestfits], color='C2', label='window', marker='o', linestyle='')
-        ax.plot(ax.get_xlim(), ax.get_xlim(), linestyle='--', color='k')
-        ax.set_xlabel('expected')
-        ax.set_ylabel('best fit')
-        ax.set_title(param)
-    lax[0].legend()
-    plt.show()
-
-    ax = plt.gca()
-    for ill, ell in enumerate(observable_direct.ells):
-        for theory in theories:
-            ax.plot(observable_direct.k[ill], observable_direct.k[ill] * theory[ill], color='C{:d}'.format(ill), alpha=0.3)
-        ax.plot([], [], linestyle='-', color='C{:d}'.format(ill), label=r'$\ell = {:d}$'.format(ell))
-    ax.legend()
-    ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-    ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
-    plt.show()
+    assert obs.flattheory.shape == (len(ells) * len(s),)
+    np.testing.assert_allclose(np.asarray(obs.flattheory), np.ravel(theory.poles), rtol=1e-10)
 
 
-def test_shapefit(run=True, plot=True):
-    from cosmoprimo.fiducial import DESI
+def test_correlation2poles_with_data():
+    """Correlation2PolesObservable: data and covariance stored correctly."""
+    from desilike.observables import Correlation2PolesObservable
+    from desilike.base import compile
 
-    from desilike.samples import Chain
-    from desilike.observables.galaxy_clustering import ShapeFitCompressionObservable
-    from desilike.emulators import Emulator, TaylorEmulatorEngine
+    s = np.linspace(20., 180., 15)
+    ells = (0, 2)
+    theory = _make_correlation_theory(s, ells)
+    rng = np.random.default_rng(2)
+    n = len(ells) * len(s)
+    data = rng.normal(size=n)
+    cov_diag = np.ones(n) * 1e-4
+    obs = Correlation2PolesObservable(data=data, theory=theory, s=s, ells=ells, covariance=cov_diag)
 
-    z = 0.8
+    pipe = compile(obs)
+    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe(pipe_params)
 
-    if run:
-        chain_shapefit = np.loadtxt('_tests/shapefit_chains_test.txt', unpack=True)
-        chain_shapefit = Chain(chain_shapefit, params=['fsigma8', 'qpar', 'qper', 'dm'])
-
-        cosmo = DESI(A_s=np.exp(3.0364) / 1e10)
-        chain_shapefit['df'] = chain_shapefit['fsigma8'] / cosmo.get_fourier().sigma_rz(8., z, of='theta_m')
-        #print(cosmo.growth_rate(z) * cosmo.get_fourier().sigma_rz(8., z, of='delta_cb') / cosmo.get_fourier().sigma_rz(8., z, of='theta_cb'))
-        #print(cosmo.n_s, cosmo['ln10^10A_s'], cosmo.h, cosmo.Omega0_b * cosmo.h**2, cosmo.Omega0_cdm * cosmo.h**2, cosmo.N_ur, cosmo.m_ncdm)
-
-        from desilike.theories import Cosmoprimo
-        cosmo = Cosmoprimo(fiducial='DESI')
-        for param in cosmo.params:
-            param.update(fixed=param.basename not in ['h', 'omega_cdm', 'omega_b', 'logA'])
-        cosmo.params['omega_b'].update(fixed=False, prior={'dist': 'norm', 'loc': 0.02237, 'scale': 0.00037})
-        observable = ShapeFitCompressionObservable(cosmo=cosmo, data=chain_shapefit, covariance=chain_shapefit, quantities=['qpar', 'qper', 'dm', 'df'], z=z)
-        emulator = Emulator(observable, engine=TaylorEmulatorEngine(method='finite', order=2))
-        emulator.set_samples()
-        emulator.fit()
-        likelihood = ObservablesGaussianLikelihood(observables=[emulator.to_calculator()])
-
-        from desilike.samplers import EmceeSampler
-        sampler = EmceeSampler(likelihood, chains=4, seed=42, save_fn='_tests/SF_desilike_m_*.npy')
-        sampler.run(min_iterations=2000, check={'max_eigen_gr': 0.03})
-
-    if plot:
-        chain = Chain.concatenate([Chain.load('_tests/SF_desilike_m_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
-        chain2 = Chain.concatenate([Chain.load('_tests/SF_desilike_Appk_m_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
-        #chain3 = Chain.concatenate([Chain.load('_tests/SF_desilike_Appkh_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
-        #chain4 = Chain.concatenate([Chain.load('_tests/SF_desilike_Appkh_cAs_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])
-        chain_ref = Chain(np.loadtxt('_tests/SF_Markresult_convert-2.txt', unpack=True), params=['h', 'omega_cdm', 'omega_b', 'logA'])
-        chain_ref_new = Chain(np.loadtxt('_tests/SF_convert_Mark_new.txt', unpack=True), params=['H0', 'omega_b', 'omega_cdm', 'logA'])
-        chain_ref_new['h'] = chain_ref_new['H0'] / 100.
-        from desilike.samples import plotting
-        plotting.plot_triangle([chain, chain_ref, chain_ref_new], params=['h', 'omega_cdm', 'omega_b', 'logA'], labels=['desilike', 'Mark old code', 'Mark new code'], fn='_tests/comparison.png')
+    np.testing.assert_array_equal(obs.flatdata, data)
+    # 1-D covariance should be expanded to diagonal matrix
+    assert obs.covariance.shape == (n, n)
+    np.testing.assert_allclose(np.diag(obs.covariance), cov_diag)
 
 
-def test_observable_covariance():
-    from desilike.observables import ObservableArray, ObservableCovariance
+# ── ObservablesGaussianLikelihood ────────────────────────────────────────────
 
-    observable = ObservableArray(x=[np.linspace(0., 9., 10), np.linspace(0., 9., 10)], projs=[0, 2])
-    observable2 = observable.select(projs=2, rebin=2, xlim=(3., 7.))
-    observable3 = observable.xmatch(observable2.x(), projs=observable2.projs)
-    #print(observable2.x())
-    #print(observable3.x())
-    assert np.all(observable3.flatx == observable2.flatx)
-    assert observable.edges(projs=0).size == 11
+def test_gaussian_likelihood_basic():
+    """ObservablesGaussianLikelihood: logpdf is finite, theory() shape matches flatdata."""
+    from desilike.observables import Spectrum2PolesObservable
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike.base import compile
 
-    covariance = ObservableCovariance(np.diag(observable.flatx**2), observables=observable)
-    observable3 = observable2.select(projs=2, select_projs=True)
-    covariance3 = covariance.xmatch(observable3.x(), projs=observable3.projs, select_projs=True)
-    assert np.all(covariance3.observables()[0].flatx == observable3.flatx)
+    k = np.linspace(0.01, 0.3, 20)
+    ells = (0, 2)
+    theory = _make_spectrum_theory(k, ells)
+    n = len(ells) * len(k)
+    rng = np.random.default_rng(3)
+    data = rng.normal(size=n)
+    cov = np.diag(np.ones(n) * 0.1)
+    obs = Spectrum2PolesObservable(data=data, theory=theory, k=k, ells=ells)
+    like = ObservablesGaussianLikelihood(observables=obs, covariance=cov)
 
-    observable = ObservableArray(x=[np.arange(10)] * 2, projs=[0, 2])
-    covariance = ObservableCovariance(np.diag(observable.flatx**2), observables=observable)
-    assert np.allclose(covariance.std(), observable.flatx)
-    covariance2 = covariance.select(xlim=(0, 5))
-    for proj in observable.projs:
-        assert np.allclose(covariance.std(projs=proj), observable.x(projs=proj))
+    pipe = compile(like)
+    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe(pipe_params)
 
-    observable = ObservableArray(value=[1., 1.], projs=['qpar', 'qper'])
-    assert observable.view(projs='qpar').size == 1
-    assert observable.size == 2
-    observable_bao = observable
+    assert np.isfinite(float(like.logpdf))
+    assert like.flattheory.shape == (n,)
 
-    observable = ObservableArray(x=np.linspace(0.01, 0.2, 10), value=np.linspace(0.01, 0.2, 10))
-    assert observable.size == 10
-    observable = observable.select(xlim=(0., 0.15))
-    assert observable.view(xlim=(0., 0.011)).size == 1
-    observable_1d = observable
 
-    covariance = ObservableCovariance(np.eye(32), observables=[{'name': 'PowerSpectrumMultipoles', 'x': [np.linspace(0.01, 0.2, 10)] * 3, 'projs': [0, 2, 4]}, {'name': 'BAO', 'projs': ['qpar', 'qper']}])
-    covariance2 = covariance.select(observables='PowerSpectrumMultipoles', xlim=(0., 0.15))
-    assert covariance2.shape[0] < covariance.shape[0]
+def test_gaussian_likelihood_obs_covariance():
+    """ObservablesGaussianLikelihood: uses observable's covariance when none provided."""
+    from desilike.observables import Spectrum2PolesObservable
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike.base import compile
 
+    k = np.linspace(0.01, 0.3, 20)
+    ells = (0, 2)
+    theory = _make_spectrum_theory(k, ells)
+    n = len(ells) * len(k)
+    rng = np.random.default_rng(4)
+    data = rng.normal(size=n)
+    cov = np.diag(np.ones(n) * 0.05)
+    obs = Spectrum2PolesObservable(data=data, theory=theory, k=k, ells=ells, covariance=cov)
+    like = ObservablesGaussianLikelihood(observables=obs)
+
+    pipe = compile(like)
+    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe(pipe_params)
+
+    np.testing.assert_allclose(like.precision, np.linalg.inv(cov), rtol=1e-10)
+    assert np.isfinite(float(like.logpdf))
+
+
+def test_gaussian_likelihood_scale_covariance():
+    """ObservablesGaussianLikelihood: scale_covariance rescales precision."""
+    from desilike.observables import Spectrum2PolesObservable
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike.base import compile
+
+    k = np.linspace(0.01, 0.3, 20)
+    ells = (0, 2)
+    theory = _make_spectrum_theory(k, ells)
+    n = len(ells) * len(k)
+    rng = np.random.default_rng(5)
+    data = rng.normal(size=n)
+    cov = np.diag(np.ones(n) * 0.1)
+
+    obs1 = Spectrum2PolesObservable(data=data, theory=theory, k=k, ells=ells)
+    like1 = ObservablesGaussianLikelihood(observables=obs1, covariance=cov, scale_covariance=1.)
+
+    from desilike.theories.galaxy_clustering import (DampedBAOWigglesPTSpectrum2Poles,
+                                                      DampedBAOWigglesTracerSpectrum2Poles,
+                                                      BAOSpectrum2Template)
+    fiducial = _make_fiducial()
+    tmpl2 = BAOSpectrum2Template(k=k, z=0.5, fiducial=fiducial)
+    pt2 = DampedBAOWigglesPTSpectrum2Poles(template=tmpl2, ells=ells)
+    theory2 = DampedBAOWigglesTracerSpectrum2Poles(k=k, pt=pt2, ells=ells)
+    obs2 = Spectrum2PolesObservable(data=data, theory=theory2, k=k, ells=ells)
+    like2 = ObservablesGaussianLikelihood(observables=obs2, covariance=cov, scale_covariance=2.)
+
+    pipe1 = compile(like1)
+    p1 = {p.name: float(p.value) for p in pipe1.params}
+    pipe1(p1)
+
+    pipe2 = compile(like2)
+    p2 = {p.name: float(p.value) for p in pipe2.params}
+    pipe2(p2)
+
+    np.testing.assert_allclose(like2.precision * 2., like1.precision, rtol=1e-10)
+
+
+def test_gaussian_likelihood_multi_observable():
+    """ObservablesGaussianLikelihood: two observables sharing a template are concatenated correctly."""
+    from desilike.observables import Spectrum2PolesObservable
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike.base import compile
+    from desilike.theories.galaxy_clustering import (DampedBAOWigglesPTSpectrum2Poles,
+                                                      BAOSpectrum2Template)
+
+    k = np.linspace(0.01, 0.3, 15)
+    ells = (0, 2)
+    n = len(ells) * len(k)
+    fiducial = _make_fiducial()
+
+    # Use the same theory object for both observables so all parameters are shared.
+    tmpl = BAOSpectrum2Template(k=k, z=0.5, fiducial=fiducial)
+    theory1 = theory2 = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=ells)
+
+    rng = np.random.default_rng(6)
+    data1 = rng.normal(size=n)
+    data2 = rng.normal(size=n)
+    obs1 = Spectrum2PolesObservable(data=data1, theory=theory1, k=k, ells=ells, name='tracer1')
+    obs2 = Spectrum2PolesObservable(data=data2, theory=theory2, k=k, ells=ells, name='tracer2')
+
+    cov = np.diag(np.ones(2 * n) * 0.1)
+    like = ObservablesGaussianLikelihood(observables=[obs1, obs2], covariance=cov)
+
+    pipe = compile(like)
+    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe(pipe_params)
+
+    assert like.flatdata.shape == (2 * n,)
+    assert like.flattheory.shape == (2 * n,)
+    assert np.isfinite(float(like.logpdf))
+    np.testing.assert_array_equal(like.flatdata[:n], data1)
+    np.testing.assert_array_equal(like.flatdata[n:], data2)
+
+
+def test_gaussian_likelihood_hartlap():
+    """ObservablesGaussianLikelihood: Hartlap correction scales precision correctly."""
+    from desilike.observables import Spectrum2PolesObservable
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike.base import compile
+
+    k = np.linspace(0.01, 0.3, 10)
+    ells = (0, 2)
+    n = len(ells) * len(k)
+    theory = _make_spectrum_theory(k, ells)
+    rng = np.random.default_rng(7)
+    data = rng.normal(size=n)
+    cov = np.diag(np.ones(n) * 0.1)
     nobs = 500
-    covariance = ObservableCovariance.from_observations({'power': [{'x': [np.linspace(0.01, 0.2, 10)] * 3, 'value': [np.random.uniform(0., 1., 10) for i in range(3)], 'projs': [0, 2, 4]} for i in range(nobs)],
-                                                         'correlation': [{'x': [np.linspace(0.01, 0.2, 10)] * 3, 'value': [np.random.uniform(0., 1., 10) for i in range(3)], 'projs': [0, 2, 4]} for i in range(nobs)]})
-    assert covariance.hartlap2007_factor() < 1.
-    covariance.percival2014_factor(nparams=10)
-    print(covariance.shape, [observable.name for observable in covariance.observables()])
 
-    assert covariance.observables('power') == covariance.observables()[0]
-    assert covariance.observables('pow*') == covariance.observables()[0]
-    assert covariance.observables('*o*') == covariance.observables()
-    covariance.plot(show=True)
+    obs = Spectrum2PolesObservable(data=data, theory=theory, k=k, ells=ells)
+    like = ObservablesGaussianLikelihood(observables=obs, covariance=cov,
+                                         correct_covariance=dict(correction='hartlap', nobs=nobs))
 
-    observable = ObservableArray(x=[np.linspace(0.01, 0.2, 10), np.linspace(0.01, 0.2, 10)], projs=[0, 2])
-    assert observable.view(projs=[0]).size == 10
-    observable = observable.select(projs=2, xlim=(0., 0.15))
-    assert observable.size < 20
-    observable.x()
-    observable.weights()
-    assert np.array(observable).shape == (observable.size,)
-    assert observable == observable
-    value = np.eye(observable.size)
-    covariance = ObservableCovariance(value, observables=observable)
-    covariance = covariance.select(projs=0, xlim=(0., 0.12), rebin=2)
-    assert covariance.shape[0] < observable.size
-    assert observable.view(projs=0).size == observable.view(projs=0).size
-    assert np.array(covariance).shape == covariance.shape
-    assert covariance.inv().shape == covariance.shape
-    templates = np.array([np.ones(observable.view(projs=0).size), np.arange(observable.view(projs=0).size)])
-    prior = np.array([[2., 1.], [1., 2.]])
+    pipe = compile(like)
+    pipe_params = {p.name: float(p.value) for p in pipe.params}
+    pipe(pipe_params)
 
-    def marginalize_inv(self, templates, prior=1., **kwargs):
-        # https://en.wikipedia.org/wiki/Woodbury_matrix_identity
-        from desilike import utils
-        index = self._index(**kwargs, concatenate=True)
-        templates = np.atleast_2d(np.asarray(templates, dtype='f8'))  # adds first dimension
-        deriv = np.zeros(templates.shape[:1] + self.shape[:1], dtype='f8')
-        deriv[..., index] = templates
-        invcov = self.inv()
-        fisher = deriv.dot(invcov).dot(deriv.T)
-        derivp = deriv.dot(invcov)
-        prior = np.array(prior)
-        if prior.ndim == 2:
-            iprior = utils.inv(prior)
-        else:
-            iprior = np.ones(templates.shape[:1], dtype='f8')
-            iprior[...] = prior
-            iprior = np.diag(1. / iprior)
-        fisher += iprior
-        invcov = invcov - derivp.T.dot(np.linalg.solve(fisher, derivp))
-        indices = [self._index(observables=observable, concatenate=True) for observable in self._observables]
-        value = utils.blockinv([[invcov[np.ix_(index1, index2)] for index2 in indices] for index1 in indices])
-        return self.clone(value=value)
-
-    cov = covariance.marginalize(templates, prior=prior).view()
-    cov2 = marginalize_inv(covariance, templates, prior=prior)
-    assert np.allclose(cov, cov2)
-    assert covariance == covariance
-
-    covariance = ObservableCovariance(np.eye(observable.size + observable_1d.size), observables=[observable, observable_1d])
-    covariance2 = covariance.select(observables=observable_1d, xlim=(0., 0.1))
-    assert covariance2.shape[0] < covariance.shape[0]
-
-    covariance = ObservableCovariance(np.eye(observable.size + observable_bao.size), observables=[observable, observable_bao])
-    covariance2 = covariance.select(observables=observable, xlim=(0., 0.1))
-    assert covariance2.shape[0] < covariance.shape[0]
-
-    x = [np.linspace(0.01, 0.2, 10), np.linspace(0.01, 0.2, 10)]
-    observable = ObservableArray(x=x, value=x, projs=[0, 2])
-    fn = '_tests/obs.npy'
-    observable.save(fn)
-    observable = ObservableArray.load(fn)
-    covariance.save(fn)
-    covariance = ObservableCovariance.load(fn)
-    observable.plot(show=True)
-    covariance.plot(show=True)
-    covariance.view(observables=1, return_type=None).plot(show=True)
+    hartlap = (nobs - n - 2.) / (nobs - 1.)
+    prec_ref = np.linalg.inv(cov) * hartlap
+    np.testing.assert_allclose(like.precision, prec_ref, rtol=1e-10)
 
 
-def test_hartlap():
-    rng = np.random.RandomState(seed=42)
-    shape = (10, 10)
-    A = rng.uniform(0., 1., shape)
-    X = A.T.dot(A)
-    A = rng.uniform(0., 1., shape)
-    Ce = A.T.dot(A)
-    C = X + Ce
-    Cinv = np.linalg.inv(C)
-    nobs = 100.
-    I = np.eye(*X.shape)
-    D = 1. / (nobs - 1.) * Cinv.dot(X).dot(np.sum(Cinv.dot(X)) * I + Cinv.dot(X))
-    Psi = (I - D).dot(Cinv)
+# ── lsstypes tests ───────────────────────────────────────────────────────────
 
-    nbins = I.shape[0]
-    D2 = (nbins + 1) / (nobs - 1.)
-    Psi2 = np.linalg.inv(1. / (1 - D2) * X + Ce)
-    print(Psi, Psi2 - Psi)
+def _make_spectrum2_lsstypes(size=10):
+    import lsstypes as types
+    edges = np.linspace(0., 0.2, size + 1)
+    edges = np.column_stack([edges[:-1], edges[1:]])
+    k = np.mean(edges, axis=-1)
+    ells = [0, 2]
+    poles = [types.Mesh2SpectrumPole(k=k, num_raw=np.zeros_like(k), k_edges=edges, ell=ell) for ell in ells]
+    return types.Mesh2SpectrumPoles(poles)
 
 
-def test_hartlap2():
-    rng = np.random.RandomState(seed=42)
-    shape = (10, 10)
-    A = rng.uniform(0., 1., shape)
-    X = A.T.dot(A)
-    A = rng.uniform(0., 1., shape)
-    Ce = A.T.dot(A)
-    C = X + Ce
-    Cinv = np.linalg.inv(C)
-    nobs = 100.
-    I = np.eye(*X.shape)
-    D = 1. / (nobs - 1.) * Cinv.dot(X).dot(np.sum(Cinv.dot(X)) * I + Cinv.dot(X))
-    Psi = np.linalg.inv(I + D).dot(Cinv)
-
-    nbins = I.shape[0]
-    D2 = (nbins + 1) / (nobs - 1.)
-    Psi2 = np.linalg.inv((1 + D2) * X + Ce)
-    print(Cinv, Psi, Psi2)
+def _make_spectrum2_window(data, size=20):
+    import lsstypes as types
+    edges = np.linspace(0., 0.2, size + 1)
+    edges = np.column_stack([edges[:-1], edges[1:]])
+    k = np.mean(edges, axis=-1)
+    ells = data.ells
+    theory_poles = [types.Mesh2SpectrumPole(k=k, num_raw=np.zeros_like(k), k_edges=edges, ell=ell) for ell in ells]
+    theory = types.ObservableTree(theory_poles, ells=ells, wa_orders=[0] * len(ells))
+    window = np.zeros((data.size, theory.size))
+    return types.WindowMatrix(observable=data, theory=theory, value=window)
 
 
-if __name__ == '__main__':
+def _make_spectrum3_lsstypes(size=10):
+    import lsstypes as types
+    edges = np.linspace(0., 0.2, size + 1)
+    edges = np.column_stack([edges[:-1], edges[1:]])
+    edges = np.concatenate([edges[:, None, :]] * 2, axis=1)
+    k = np.mean(edges, axis=-1)
+    ells = [(0, 0, 0), (2, 0, 2)]
+    poles = [types.Mesh3SpectrumPole(k=k, num_raw=np.zeros_like(k[..., 0]), k_edges=edges, basis='sugiyama-diagonal', ell=ell) for ell in ells]
+    return types.Mesh3SpectrumPoles(poles)
 
-    setup_logging()
 
-    test_bispectrum()
-    # test_systematic_templates()
-    # test_bao()
-    # test_power_spectrum()
-    # test_correlation_function()
-    # test_footprint()
-    # test_covariance_matrix()
-    # test_covariance_matrix_mocks()
-    # test_compression()
-    # test_integral_cosn()
-    # test_fiber_collisions()
-    # test_compression_window()
-    # test_shapefit(run=False)
-    # test_observable_covariance()
-    # test_hartlap()
+def _make_spectrum3_window(data, size=15):
+    import lsstypes as types
+
+    def get_grid(*arrays):
+        arrays = np.meshgrid(*arrays, indexing='ij')
+        return np.column_stack([array.ravel() for array in arrays])
+
+    edges1d = np.linspace(0., 0.2, size + 1)
+    edges1d = np.column_stack([edges1d[:-1], edges1d[1:]])
+    k1d = np.mean(edges1d, axis=-1)
+    edges2d = np.column_stack([get_grid(edges1d[..., axis], edges1d[..., axis])[:, None, :] for axis in range(2)])
+    k2d = get_grid(k1d, k1d)
+    ells = [(0, 0, 0), (2, 0, 2)]
+    theory_poles = [types.Mesh3SpectrumPole(k=k2d, num_raw=np.zeros_like(k2d[..., 0]), k_edges=edges2d, basis='sugiyama', ell=ell) for ell in ells]
+    theory = types.Mesh3SpectrumPoles(theory_poles)
+    window = np.zeros((data.size, theory.size))
+    return types.WindowMatrix(observable=data, theory=theory, value=window)
+
+
+def _make_correlation2_lsstypes():
+    import lsstypes as types
+
+    def get_count(seed=42):
+        rng = np.random.RandomState(seed=seed)
+        coords = ['s', 'mu']
+        edges = [np.linspace(0., 200., 21), np.linspace(-1., 1., 11)]
+        edges = [np.column_stack([e[:-1], e[1:]]) for e in edges]
+        coords_values = [np.mean(e, axis=-1) for e in edges]
+        counts = 1. + rng.uniform(size=tuple(v.size for v in coords_values))
+        return types.Count2(counts=counts, norm=np.ones_like(counts),
+                            **{coord: val for coord, val in zip(coords, coords_values)},
+                            **{f'{coord}_edges': val for coord, val in zip(coords, edges)},
+                            coords=coords, attrs=dict(los='x'))
+
+    counts = {label: get_count(seed=i) for i, label in enumerate(['DD', 'DR', 'RD', 'RR'])}
+    correlation = types.Count2Correlation(**counts)
+    return correlation.project(ells=[0, 2], kw_window=dict(RR=correlation.get('RR')))
+
+
+def test_spectrum2poles_lsstypes():
+    """Spectrum2PolesObservable: lsstypes input gives same flatdata as numpy input."""
+    import lsstypes as types
+    from desilike.observables import Spectrum2PolesObservable
+    from desilike.base import compile
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
+
+    data = _make_spectrum2_lsstypes(size=8)
+    window = _make_spectrum2_window(data, size=12)
+    covariance = types.CovarianceMatrix(observable=data, value=np.eye(data.size))
+
+    fiducial = _make_fiducial()
+    tmpl = BAOSpectrum2Template(k=np.linspace(0.01, 0.2, 12), z=0.5, fiducial=fiducial)
+    theory = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=[0, 2])
+
+    # lsstypes path
+    obs = Spectrum2PolesObservable(data=data, theory=theory, window=window, covariance=covariance, name='obs1')
+    assert obs.flatdata.shape == (data.size,)
+    assert obs.covariance.shape == (data.size, data.size)
+
+    # numpy path — must give same flatdata
+    obs2 = Spectrum2PolesObservable(
+        data=data.value(), theory=theory,
+        k=[pole.coords('k') for pole in data], ells=data.ells,
+        window=window.value(), kin=next(iter(window.theory)).coords('k'),
+        ellsin=window.theory.ells, covariance=covariance.value(), name='obs2')
+    np.testing.assert_array_equal(obs2.flatdata, obs.flatdata)
+
+    # both paths compile and produce finite logpdf
+    like = Spectrum2PolesObservable(data=data, theory=theory, window=window, covariance=covariance, name='obs1')
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    likelihood = ObservablesGaussianLikelihood(observables=[like], covariance=covariance)
+    pipe = compile(likelihood)
+    pipe({p.name: float(p.value) for p in pipe.params})
+    assert np.isfinite(float(likelihood.logpdf))
+
+
+def test_spectrum3poles_lsstypes():
+    """Spectrum3PolesObservable: lsstypes input gives same flatdata as numpy input."""
+    import lsstypes as types
+    from desilike.observables import Spectrum3PolesObservable
+    from desilike.base import compile
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
+
+    data = _make_spectrum3_lsstypes(size=5)
+    window = _make_spectrum3_window(data, size=4)
+    covariance = types.CovarianceMatrix(observable=data, value=np.eye(data.size))
+
+    # Use a simple theory that has a 'spectrum' attribute (reuse 2-pole with flat k)
+    fiducial = _make_fiducial()
+    kin = next(iter(window.theory)).coords('k')
+    tmpl = BAOSpectrum2Template(k=kin[..., 0], z=0.5, fiducial=fiducial)
+    theory = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=[(0, 0, 0), (2, 0, 2)])
+
+    obs = Spectrum3PolesObservable(data=data, theory=theory, window=window, covariance=covariance, name='obs1')
+    assert obs.flatdata.shape == (data.size,)
+
+    obs2 = Spectrum3PolesObservable(
+        data=data.value(), theory=theory,
+        k=[pole.coords('k') for pole in data],
+        ells=data.ells, window=window.value(),
+        kin=next(iter(window.theory)).coords('k'), ellsin=window.theory.ells,
+        covariance=covariance.value(), name='obs2')
+    np.testing.assert_array_equal(obs2.flatdata, obs.flatdata)
+
+
+def test_correlation2poles_lsstypes():
+    """Correlation2PolesObservable: lsstypes input gives same flatdata as numpy input."""
+    import lsstypes as types
+    from desilike.observables import Correlation2PolesObservable
+    from desilike.base import compile
+    from desilike.theories.galaxy_clustering import (DampedBAOWigglesTracerCorrelation2Poles,
+                                                      DampedBAOWigglesPTSpectrum2Poles,
+                                                      BAOSpectrum2Template)
+
+    data, window = _make_correlation2_lsstypes()
+    covariance = types.CovarianceMatrix(observable=data, value=np.eye(data.size))
+
+    fiducial = _make_fiducial()
+    kin = np.geomspace(1e-4, 0.6, 300)
+    sin = next(iter(window.theory)).coords('s')
+    tmpl = BAOSpectrum2Template(k=kin, z=0.5, fiducial=fiducial)
+    pt = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=window.theory.ells)
+    theory = DampedBAOWigglesTracerCorrelation2Poles(s=sin, pt=pt, ells=window.theory.ells)
+
+    obs = Correlation2PolesObservable(data=data, theory=theory, window=window, covariance=covariance, name='obs1')
+    assert obs.flatdata.shape == (data.size,)
+    assert obs.covariance.shape == (data.size, data.size)
+
+    # numpy path: use obs.window (already matched to data ells) so row count matches
+    obs2 = Correlation2PolesObservable(
+        data=data.value(), theory=theory,
+        s=[pole.coords('s') for pole in data], ells=data.ells,
+        window=obs.window.value(), sin=next(iter(obs.window.theory)).coords('s'),
+        ellsin=obs.window.theory.ells, covariance=covariance.value(), name='obs2')
+    np.testing.assert_array_equal(obs2.flatdata, obs.flatdata)
+
+    like = Correlation2PolesObservable(data=data, theory=theory, window=window, covariance=covariance, name='obs1')
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    likelihood = ObservablesGaussianLikelihood(observables=[like], covariance=covariance)
+    pipe = compile(likelihood)
+    pipe({p.name: float(p.value) for p in pipe.params})
+    assert np.isfinite(float(likelihood.logpdf))
+
+
+def test_gaussian_likelihood_lsstypes_covariance():
+    """ObservablesGaussianLikelihood: lsstypes CovarianceMatrix accepted for multi-observable case."""
+    import lsstypes as types
+    from desilike.observables import Spectrum2PolesObservable
+    from desilike.likelihoods import ObservablesGaussianLikelihood
+    from desilike.base import compile
+    from desilike.theories.galaxy_clustering import DampedBAOWigglesPTSpectrum2Poles, BAOSpectrum2Template
+
+    data = _make_spectrum2_lsstypes(size=8)
+    covariance = types.CovarianceMatrix(observable=data, value=np.eye(data.size))
+
+    fiducial = _make_fiducial()
+    tmpl = BAOSpectrum2Template(k=np.linspace(0.01, 0.2, 8), z=0.5, fiducial=fiducial)
+    theory = DampedBAOWigglesPTSpectrum2Poles(template=tmpl, ells=[0, 2])
+
+    obs1 = Spectrum2PolesObservable(data=data, theory=theory, name='obs1')
+    obs2 = Spectrum2PolesObservable(data=data, theory=theory, name='obs2')
+
+    # Single-observable likelihood with lsstypes covariance
+    like_single = ObservablesGaussianLikelihood(observables=[obs1], covariance=covariance)
+    pipe_single = compile(like_single)
+    pipe_single({p.name: float(p.value) for p in pipe_single.params})
+
+    # Multi-observable likelihood with lsstypes block-diagonal covariance
+    cov_joint = types.CovarianceMatrix(
+        observable=types.ObservableTree([data] * 2, observables=['obs1', 'obs2']),
+        value=sp.linalg.block_diag(covariance.value(), covariance.value()))
+    like_joint = ObservablesGaussianLikelihood(observables=[obs1, obs2], covariance=cov_joint)
+    pipe_joint = compile(like_joint)
+    pipe_joint({p.name: float(p.value) for p in pipe_joint.params})
+
+    assert np.isfinite(float(like_single.logpdf))
+    assert np.isfinite(float(like_joint.logpdf))
+    # Joint logpdf = 2 × single because data=zeros, theory≈signal → residuals same for both obs
+    np.testing.assert_allclose(float(like_joint.logpdf), 2. * float(like_single.logpdf), rtol=1e-10)

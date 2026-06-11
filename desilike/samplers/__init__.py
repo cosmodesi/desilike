@@ -1,14 +1,27 @@
-from .grid import GridSampler
-from .qmc import QMCSampler
+"""desilike.samplers — wrappers for commonly used posterior samplers."""
+
+from .blackjax import HMCSampler, MCLMCSampler, NoUTurnSampler
+from .dynesty import DynestySampler
 from .emcee import EmceeSampler
-from .zeus import ZeusSampler
-from .pocomc import PocoMCSampler
-from .dynesty import StaticDynestySampler, DynamicDynestySampler
-from .polychord import PolychordSampler
-from .nautilus import NautilusSampler
-from .hmc import HMCSampler
-from .nuts import NUTSSampler
-from .mclmc import MCLMCSampler
+from .grid import GridSampler
 from .importance import ImportanceSampler
-try: from .mcmc import MCMCSampler
-except ImportError: pass
+from .mhmcmc import MetropolisHastingsSampler
+from .nautilus import NautilusSampler
+from .pocomc import PocoMCSampler
+from .qmc import QMCSampler
+from .zeus import ZeusSampler
+
+__all__ = [
+    'DynestySampler',
+    'EmceeSampler',
+    'GridSampler',
+    'HMCSampler',
+    'ImportanceSampler',
+    'MCLMCSampler',
+    'MetropolisHastingsSampler',
+    'NautilusSampler',
+    'NoUTurnSampler',
+    'PocoMCSampler',
+    'QMCSampler',
+    'ZeusSampler',
+]

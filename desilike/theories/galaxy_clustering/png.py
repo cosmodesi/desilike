@@ -1,319 +1,359 @@
+"""
+Primordial Non-Gaussianity (PNG) power spectrum multipoles.
+
+Classes
+-------
+PNGTracerSpectrum2Poles
+    Kaiser tracer density power spectrum multipoles with local PNG scale-dependent bias.
+PNGTracerVelocitySpectrum2Poles
+    Kaiser tracer-velocity cross power spectrum multipoles with local PNG scale-dependent bias.
+
+The scale-dependent function :math:`\\alpha(k)` and the matter power spectrum are computed
+once at compile time from a fixed fiducial cosmology (mirroring desilike_bak's
+``FixedPowerSpectrumTemplate``); only the bias / :math:`f_\\mathrm{NL}` parameters vary.
+"""
+
 import numpy as np
-from scipy import constants
+import jax.numpy as jnp
 
-from desilike import plotting, utils
-from desilike.jax import interp1d
-from desilike.jax import numpy as jnp
-from .power_template import FixedPowerSpectrumTemplate
-from .base import ProjectToMultipoles
-from .full_shape import BasePTPowerSpectrumMultipoles, BaseTracerPowerSpectrumMultipoles, MultitracerBiasParameters
+from ...base import Calculator
+from ...parameter import Parameter, VariableCollection
+from .bao import ProjectToPoles
+from .template import _get_fiducial, _kw_pk
+from ._multitracer import propose_params_multitracer, assign_params
 
 
-class PNGTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
+_delta_c = 1.686  # linear collapse threshold
+
+
+def _png_cosmo(fiducial, k, z, method, engine):
+    r"""Compute the PNG ingredients at wavenumbers *k* for a fixed fiducial cosmology.
+
+    Parameters
+    ----------
+    fiducial : str, tuple, dict, or cosmoprimo.Cosmology
+        Fiducial cosmology.
+    k : array
+        Output wavenumbers [h/Mpc].
+    z : float
+        Effective redshift.
+    method : str
+        How to compute :math:`\alpha(k)`:
+
+        - ``'prim'``: :math:`\alpha = \sqrt{P_\phi^\mathrm{prim}(k) / P_\delta(k)}`.
+        - ``'transfer'``: from the transfer function normalized in the matter-dominated
+          era at :math:`z_\mathrm{norm}=10`; see eq. 2.3 of arXiv:1904.08859.
+    engine : str
+        cosmoprimo Boltzmann engine.
+
+    Returns
+    -------
+    pk_dd : ndarray, shape (n_k,)
+        Matter power spectrum.
+    alpha : ndarray, shape (n_k,)
+        Scale-dependent function linking primordial potential to density contrast.
+    f : float
+        Growth rate :math:`f = d\ln D / d\ln a`.
+
+    References
+    ----------
+    Dalal et al. 2008  https://arxiv.org/abs/0710.4560
+    Slosar et al. 2008  https://arxiv.org/abs/0805.3580
+    Barreira 2020  https://arxiv.org/pdf/1904.08859.pdf
+    """
+    from cosmoprimo import constants
+    k = np.asarray(k, dtype='f8')
+    cosmo = _get_fiducial(fiducial).clone(engine=engine)
+    fo = cosmo.get_fourier()
+
+    # Prepend k=1e-4 for transfer-function normalization in the 'transfer' method.
+    kin = np.concatenate([[1e-4], k])
+    pk_interp = fo.pk_interpolator(of='delta_cb', **_kw_pk).to_1d(z=z)
+    pk_dd_full = pk_interp(kin)
+    # Primordial power spectrum P_prim(k) ~ k^(n_s - 1).
+    pk_prim = cosmo.get_primordial(mode='scalar').pk_interpolator()(kin)
+
+    if method == 'prim':
+        # alpha = sqrt(P_phi_prim / P_delta);
+        # P_phi_prim = (9/25) (2 pi^2 / k^3) P_prim / h^3   [Mpc^3 -> (h/Mpc)^3].
+        pphi_prim = 9. / 25. * 2. * np.pi**2 / kin**3 * pk_prim / cosmo.h**3
+        alpha_full = 1. / np.sqrt(pk_dd_full / pphi_prim)
+    else:
+        # Transfer-function method, normalized at z=10 (matter-dominated). arXiv:1904.08859 eq. 2.3.
+        tk = np.sqrt(pk_dd_full / pk_prim / kin / (pk_dd_full[0] / pk_prim[0] / kin[0]))
+        znorm = 10.
+        growth_ratio = float(cosmo.growth_factor(z) / cosmo.growth_factor(znorm) / (1. + znorm))
+        c_kms = float(constants.c / 1e3)
+        alpha_full = 3. * float(cosmo.Omega0_m) * 100.**2 / (2. * c_kms**2 * kin**2 * tk * growth_ratio)
+
+    # Strip the normalization point so arrays align with k.
+    pk_dd = pk_dd_full[1:]
+    alpha = alpha_full[1:]
+    sigma8 = float(fo.sigma8_z(z, of='delta_cb'))
+    fsigma8 = float(fo.sigma8_z(z, of='theta_cb'))
+    f = fsigma8 / sigma8
+    return pk_dd, alpha, f
+
+
+class PNGTracerSpectrum2Poles(Calculator):
     r"""
-    Kaiser tracer power spectrum multipoles, with scale dependent bias sourced by local primordial non-Gaussianities.
+    Kaiser tracer power spectrum multipoles with local PNG scale-dependent bias.
+
+    The scale-dependent bias is :math:`b_\mathrm{eff}(k) = b_1 + b_{f_\mathrm{NL}} \alpha(k)`,
+    where :math:`b_{f_\mathrm{NL}} = b_\phi f_\mathrm{NL}` and :math:`b_\phi = 2 \delta_c (b_1 - p)`
+    in the universal mass function approximation.
+
+    The fiducial cosmology is fixed: :math:`\alpha(k)`, the matter power spectrum and the
+    growth rate are computed once at compile time, and only the bias / :math:`f_\mathrm{NL}`
+    parameters vary.
+
+    For cross-spectra between two tracers :math:`X` and :math:`Y`, the power spectrum is
+    :math:`\mathrm{FoG}_X \mathrm{FoG}_Y (b^\mathrm{eff}_X + f\mu^2)(b^\mathrm{eff}_Y + f\mu^2) P_{dd}`.
 
     Parameters
     ----------
     k : array, default=None
-        Theory wavenumbers where to evaluate multipoles.
-    ells : tuple, default=(0, 2)
-        Multipoles to compute.
-    mu : int, default=8
-        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
+        Output wavenumbers [h/Mpc]. Defaults to ``np.linspace(0.01, 0.2, 101)``.
+    ells : tuple of int, default=(0, 2)
+        Multipole orders.
+    z : float, default=1.
+        Effective redshift.
+    fiducial : str, tuple, dict, or cosmoprimo.Cosmology, default='DESI'
+        Fixed fiducial cosmology used to compute :math:`\alpha(k)` and :math:`P_{dd}`.
+    engine : str, default='eisenstein_hu'
+        cosmoprimo Boltzmann engine.
     method : str, default='prim'
-        Method to compute :math:`\alpha`, which relates primordial potential to current density contrast.
-        - "prim": :math:`\alpha` is the square root of the primordial power spectrum to the current density power spectrum
-        - else: :math:`\alpha` is the transfer function, rescaled by the factor in the Poisson equation, and the growth rate,
-          normalized to :math:`1 / (1 + z)` at :math:`z = 10` (in the matter dominated era).
+        How to compute :math:`\alpha(k)` (``'prim'`` or ``'transfer'``); see :func:`_png_cosmo`.
+    mu : int, default=10
+        Number of Gauss-Legendre mu-bins in [0, 1].
     mode : str, default='b-p'
-        fnl_loc is degenerate with PNG bias bphi.
+        Parameterization of the PNG bias:
 
-        - "b-p": ``bphi = 2 * 1.686 * (b1 - p)``, p as a parameter
-        - "bphi": ``bphi`` as a parameter
-        - "bfnl_loc": ``bfnl_loc = bphi * fnl_loc`` as a parameter
-    template : BasePowerSpectrumTemplate
-        Power spectrum template. Defaults to :class:`FixedPowerSpectrumTemplate`.
+        - ``'b-p'``: :math:`b_{f_\mathrm{NL}} = 2\delta_c(b_1 - p) f_\mathrm{NL}`;
+          free params ``b1``, ``p``, ``fnl_loc``.
+        - ``'bphi'``: :math:`b_{f_\mathrm{NL}} = b_\phi f_\mathrm{NL}`;
+          free params ``b1``, ``bphi``, ``fnl_loc``.
+        - ``'bfnl'``: :math:`b_{f_\mathrm{NL}}` directly; free params ``b1``, ``bfnl_loc``.
+    tracers : str, (str, str), or None, default=None
+        Tracer namespacing of the bias parameters (auto, namespaced auto, or cross).
+        ``fnl_loc`` stays unnamespaced (shared); ``sn0`` is stochastic.
     shotnoise : float, default=1e4
-        Shot noise (which is usually marginalized over).
-
-    Reference
-    ---------
-    https://arxiv.org/pdf/1904.08859.pdf
+        Shot-noise scale [(h/Mpc)\ :sup:`3`]. The ``sn0`` parameter is in units of this.
     """
-    config_fn = 'png.yaml'
 
     @classmethod
-    def _get_multitracer(cls, tracers=None):
-        return MultitracerBiasParameters(tracers=tracers, deterministic=['b1', 'sigmas', 'bphi', 'p', 'bfnl_loc'], stochastic=['sn0'], ntracers=2)
-
-    @classmethod
-    def _params(cls, params, tracers=None, mode='b-p'):
-        keep_params = ['b1', 'sigmas', 'sn0']
-        if mode == 'bphi':
-            keep_params += ['fnl_loc', 'bphi']
-        elif mode == 'b-p':
-            keep_params += ['fnl_loc', 'p']
-        elif mode == 'bfnl':
-            keep_params += ['bfnl_loc']
-        else:
-            raise ValueError('Unknown mode {}; it must be one of ["bphi", "b-p", "bfnl"]'.format(mode))
-        params = params.select(basename=keep_params)
-        params = cls._get_multitracer(tracers=tracers)._params(params)
-        return params
-
-    def initialize(self, k=None, ells=(0, 2), mu=10, tracers=None, z=None, method='prim', mode='b-p', template=None):
-        self._set_options(k=k, ells=ells, tracers=tracers)
-        if template is None:
-            template = FixedPowerSpectrumTemplate()
-        BasePTPowerSpectrumMultipoles._set_template(self, template=template, z=z)
-        kin = np.geomspace(min(1e-3, self.k[0] / 2, self.template.init.get('k', [1.])[0]), max(1., self.k[-1] * 2, self.template.init.get('k', [0.])[0]), 1000)
-        kin = np.insert(kin, 0, 1e-4)
-        self.template.init.update(k=kin)
-        self.method = str(method)
-        self.mode = str(mode)
-        self.z = self.template.z
-        self.to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
-        self.mu = self.to_poles.mu
-        self.decode_params = self._get_multitracer(tracers=tracers)
-
-    def calculate(self, **params):
-        params = self.decode_params(params, defaults=dict(b1=1., sigmas=0., sn0=0., bphi=1., p=1., bfnl_loc=0.))
-        (b1X, b1Y), (sigmasX, sigmasY), sn0 = [params[name] for name in ['b1', 'sigmas', 'sn0']]
-        self.z = self.template.z
-        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        pk_dd = self.template.pk_dd
-        kin = self.template.k
-        cosmo = self.template.cosmo
-        f = self.template.f
-        pk_prim = cosmo.get_primordial(mode='scalar').pk_interpolator()(kin)  # power_prim is ~ k^(n_s - 1)
-        if self.method == 'prim':
-            pphi_prim = 9 / 25 * 2 * np.pi**2 / kin**3 * pk_prim / cosmo.h**3
-            alpha = 1. / (pk_dd / pphi_prim)**0.5
-        else:
-            # Normalization in the matter dominated era
-            # https://arxiv.org/pdf/1904.08859.pdf eq. 2.3
-            tk = (pk_dd / pk_prim / kin / (pk_dd[0] / pk_prim[0] / kin[0]))**0.5
-            znorm = 10.
-            normalized_growth_factor = cosmo.growth_factor(self.template.z) / cosmo.growth_factor(znorm) / (1 + znorm)
-            alpha = 3. * cosmo.Omega0_m * 100**2 / (2. * (constants.c / 1e3)**2 * kin**2 * tk * normalized_growth_factor)
-        # Remove first k, used to normalize tk
-        kin, pk_dd, alpha = kin[1:], pk_dd[1:], alpha[1:]
-        alpha = interp1d(jnp.log10(kap), np.log10(kin), alpha)
-        if self.mode == 'bphi':
-            fnl_loc = params['fnl_loc']
-            bphiX, bphiY = params['bphi']
-            bfnl_locX, bfnl_locY = bphiX * fnl_loc, bphiY * fnl_loc
-        elif self.mode == 'b-p':
-            fnl_loc = params['fnl_loc']
-            pX, pY = params['p']
-            bfnl_locX, bfnl_locY = [2. * 1.686 * (b1 - p) * fnl_loc for b1, p in [(b1X, pX), (b1Y, pY)]]
-        else:
-            bfnl_locX = bfnl_locY = params['bfnl_loc']
-        # bfnl_loc is typically 2 * delta_c * (b1 - p)
-        bX, bY = b1X + bfnl_locX * alpha, b1Y + bfnl_locY * alpha
-        fog = 1. / ((1. + sigmasX**2 * kap**2 * muap**2 / 2.) * (1. + sigmasY**2 * kap**2 * muap**2 / 2.))
-        pkmu = jac * fog * (bX + f * muap**2) * (bY + f * muap**2) * interp1d(jnp.log10(kap), np.log10(kin), pk_dd) + sn0 / self.nbar
-        self.power = self.to_poles(pkmu)
-
-    def get(self):
-        return self.power
-
-    @plotting.plotter
-    def plot(self, fig=None, scaling='loglog'):
-        """
-        Plot power spectrum multipoles.
+    def propose_params(cls, tracers=None, mode='b-p'):
+        """Return a proposed :class:`~desilike.parameter.VariableCollection` for this theory.
 
         Parameters
         ----------
-        fig : matplotlib.figure.Figure, default=None
-            Optionally, a figure with at least 1 axis.
-        scaling : str, default='loglog'
-            Either 'kpk' or 'loglog'.
-        fn : str, Path, default=None
-            Optionally, path where to save figure.
-            If not provided, figure is not saved.
-        kw_save : dict, default=None
-            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
-        show : bool, default=False
-            If ``True``, show figure.
+        tracers : str, (str, str), or None, default=None
+        mode : str, default='b-p'
+            One of ``'b-p'``, ``'bphi'``, ``'bfnl'``.
 
         Returns
         -------
-        fig : matplotlib.figure.Figure
+        VariableCollection
         """
-        from matplotlib import pyplot as plt
-        if fig is None:
-            fig, ax = plt.subplots()
+        if mode not in ('b-p', 'bphi', 'bfnl'):
+            raise ValueError(f"mode must be one of 'b-p', 'bphi', 'bfnl'; got {mode!r}")
+        auto_params = [
+            Parameter('b1', value=2., prior=dict(limits=[0.1, 10.]),
+                      ref=dict(limits=[1.5, 2.5]), fd_eps=0.1, latex='b_1'),
+            Parameter('sigmas', value=0., prior=dict(limits=[0., 10.]),
+                      ref=dict(limits=[1., 4.]), fd_eps=0.2, latex=r'\Sigma_{s}'),
+            Parameter('sn0', value=0., prior=dict(dist='norm', loc=0., scale=1000.),
+                      ref=dict(dist='norm', loc=0., scale=0.1), fd_eps=0.05, latex='s_{n,0}'),
+        ]
+        if mode == 'b-p':
+            auto_params += [
+                Parameter('fnl_loc', value=0., prior=dict(limits=[-300., 300.]),
+                          ref=dict(limits=[-10., 10.]), fd_eps=1., latex=r'f_{\mathrm{NL}}^{\mathrm{loc}}'),
+                Parameter('p', value=1., prior=dict(limits=[0., 3.]), ref=dict(limits=[0.5, 1.5]), fd_eps=0.1, latex='p'),
+            ]
+        elif mode == 'bphi':
+            auto_params += [
+                Parameter('fnl_loc', value=0., prior=dict(limits=[-300., 300.]),
+                          ref=dict(limits=[-10., 10.]), fd_eps=1., latex=r'f_{\mathrm{NL}}^{\mathrm{loc}}'),
+                Parameter('bphi', value=1., prior=dict(limits=[-10., 10.]), ref=dict(limits=[3., 4.]), fd_eps=0.1, latex=r'b_{\phi}'),
+            ]
         else:
-            ax = fig.axes[0]
-        k_exp = 1 if scaling == 'kpk' else 0
-        for ill, ell in enumerate(self.ells):
-            ax.plot(self.k, self.k**k_exp * self.power[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
-        ax.grid(True)
-        ax.legend()
-        if scaling == 'kpk':
-            ax.set_ylabel(r'$k P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}$]')
-        if scaling == 'loglog':
-            ax.set_ylabel(r'$P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{3}$]')
-            ax.set_yscale('log')
-            ax.set_xscale('log')
-        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        return fig
+            auto_params += [
+                Parameter('bfnl_loc', value=0., prior=dict(limits=[-1e3, 1e3]),
+                          ref=dict(limits=[-50., 50.]), fd_eps=1., latex=r'b_{\phi}f_{\mathrm{NL}}^{\mathrm{loc}}'),
+            ]
+        return propose_params_multitracer(auto_params, tracers, stochastic=('sn0',), shared=('fnl_loc',), cross=True)
 
-class PNGTracerVelocityPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
+    def __init__(self, k=None, ells=(0, 2), z=1., fiducial='DESI', engine='eisenstein_hu',
+                 method='prim', mu=10, mode='b-p', tracers=None, shotnoise=1e4, params=None):
+        # Nodes (Parameters) live in __init__.
+        if mode not in ('b-p', 'bphi', 'bfnl'):
+            raise ValueError(f"mode must be one of 'b-p', 'bphi', 'bfnl'; got {mode!r}")
+        vc = type(self).propose_params(tracers=tracers, mode=mode)
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, tracers)
+
+    def __post_init__(self, k=None, ells=(0, 2), z=1., fiducial='DESI', engine='eisenstein_hu',
+                      method='prim', mu=10, mode='b-p', tracers=None, shotnoise=1e4, params=None):
+        # Non-node setup: precompute fixed-fiducial cosmo ingredients (numpy, once at compile).
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        self._mode = str(mode)
+        self._nbar = 1. / float(shotnoise)
+        self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
+        self._pk_dd, self._alpha, self._f = _png_cosmo(fiducial, self.k, float(z), str(method), str(engine))
+
+    def __call__(self):
+        k = self.k[:, None]            # (n_k, 1)
+        mu = self._to_poles.mu          # (n_mu,)
+        pk_dd = jnp.asarray(self._pk_dd)[:, None]   # (n_k, 1)
+        alpha = jnp.asarray(self._alpha)[:, None]   # (n_k, 1)
+        f = self._f
+
+        if isinstance(self.b1, tuple):  # cross-spectrum
+            b1_X, b1_Y = self.b1
+            sigmas_X, sigmas_Y = self.sigmas
+            if self._mode == 'b-p':
+                p_X, p_Y = self.p
+                bfnl_loc_X = 2. * _delta_c * (b1_X - p_X) * self.fnl_loc
+                bfnl_loc_Y = 2. * _delta_c * (b1_Y - p_Y) * self.fnl_loc
+            elif self._mode == 'bphi':
+                bphi_X, bphi_Y = self.bphi
+                bfnl_loc_X = bphi_X * self.fnl_loc
+                bfnl_loc_Y = bphi_Y * self.fnl_loc
+            else:  # 'bfnl'
+                bfnl_loc_X, bfnl_loc_Y = self.bfnl_loc
+            b_eff_X = b1_X + bfnl_loc_X * alpha
+            b_eff_Y = b1_Y + bfnl_loc_Y * alpha
+            fog_X = 1. / (1. + sigmas_X**2 * k**2 * mu**2 / 2.)
+            fog_Y = 1. / (1. + sigmas_Y**2 * k**2 * mu**2 / 2.)
+            pkmu = fog_X * fog_Y * (b_eff_X + f * mu**2) * (b_eff_Y + f * mu**2) * pk_dd
+        else:
+            if self._mode == 'b-p':
+                bfnl_loc = 2. * _delta_c * (self.b1 - self.p) * self.fnl_loc
+            elif self._mode == 'bphi':
+                bfnl_loc = self.bphi * self.fnl_loc
+            else:  # 'bfnl'
+                bfnl_loc = self.bfnl_loc
+            b_eff = self.b1 + bfnl_loc * alpha
+            fog = 1. / (1. + self.sigmas**2 * k**2 * mu**2 / 2.)**2
+            pkmu = fog * (b_eff + f * mu**2)**2 * pk_dd
+
+        sn = np.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0 / self._nbar
+        self.poles = self._to_poles(pkmu) + sn
+        return self.poles
+
+    def tree_flatten(self):
+        return [self.poles], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        return obj
+
+
+class PNGTracerVelocitySpectrum2Poles(Calculator):
     r"""
-    Kaiser tracer-velocity power spectrum multipoles, with scale dependent bias sourced by local primordial non-Gaussianities.
+    Kaiser tracer-velocity cross power spectrum multipoles with local PNG scale-dependent bias.
 
-    **Warning:** We model infact -iP(k) in order to avoid any trouble if complex. Need to take the abs value of the power spectrum estimator.
+    Models :math:`-i P_{gv}(k, \mu)` (the imaginary prefactor is dropped so all outputs are real;
+    the data estimator must be adjusted accordingly).  Computes odd multipoles :math:`\ell = 1, 3`.
+
+    The velocity bias reads :math:`v(k, \mu) = b_v f \mu H_0 / [(1+z) k]`.  The fiducial cosmology
+    is fixed (see :class:`PNGTracerSpectrum2Poles`).
 
     Parameters
     ----------
     k : array, default=None
-        Theory wavenumbers where to evaluate multipoles.
-
-    ells : tuple, default=(1, 3)
-        Multipoles to compute.
-
-    mu : int, default=200
-        Number of :math:`\mu`-bins to use (in :math:`[0, 1]`).
-
+        Output wavenumbers [h/Mpc]. Defaults to ``np.linspace(0.01, 0.2, 101)``.
+    ells : tuple of int, default=(1, 3)
+        Multipole orders (should be odd).
+    z : float, default=1.
+        Effective redshift.
+    fiducial : str, tuple, dict, or cosmoprimo.Cosmology, default='DESI'
+        Fixed fiducial cosmology.
+    engine : str, default='eisenstein_hu'
+        cosmoprimo Boltzmann engine.
     method : str, default='prim'
-        Method to compute :math:`\alpha`, which relates primordial potential to current density contrast.
-
-        - "prim": :math:`\alpha` is the square root of the primordial power spectrum to the current density power spectrum
-        - else: :math:`\alpha` is the transfer function, rescaled by the factor in the Poisson equation, and the growth rate,
-          normalized to :math:`1 / (1 + z)` at :math:`z = 10` (in the matter dominated era).
-
+        How to compute :math:`\alpha(k)`; see :func:`_png_cosmo`.
+    mu : int, default=10
+        Number of Gauss-Legendre mu-bins in [0, 1].
     mode : str, default='b-p'
-        fnl_loc is degenerate with PNG bias bphi.
-
-        - "b-p": ``bphi = 2 * 1.686 * (b1 - p)``, p as a parameter
-        - "bphi": ``bphi`` as a parameter
-        - "bfnl_loc": ``bfnl_loc = bphi * fnl_loc`` as a parameter
-
-    template : BasePowerSpectrumTemplate
-        Power spectrum template. Defaults to :class:`FixedPowerSpectrumTemplate`.
-
-    Reference
-    ---------
-    To be added... 
+        PNG bias parameterization; same options as :class:`PNGTracerSpectrum2Poles`.
     """
-    config_fn = 'png.yaml'
 
-    def initialize(self, *args, ells=(1, 3), method='prim', mode='b-p', template=None, **kwargs):
-        super(PNGTracerVelocityPowerSpectrumMultipoles, self).initialize(*args, ells=ells,  **kwargs)
-        self.to_poles = ProjectToMultipoles(mu=np.linspace(-1, 1, 81), method='trapz', ells=self.ells)
-        self.mu = self.to_poles.mu
-        if template is None:
-            template = FixedPowerSpectrumTemplate()
-        self.template = template
-        kin = np.geomspace(min(1e-3, self.k[0] / 2, self.template.init.get('k', [1.])[0]), max(1., self.k[-1] * 2, self.template.init.get('k', [0.])[0]), 1000)
-        kin = np.insert(kin, 0, 1e-4)
-        self.template.init.update(k=kin)
-        self.method = str(method)
-        self.mode = str(mode)
-        keep_params = ['b1', 'bv', 'sigmas', 'sigmau']
-        if self.mode == 'bphi':
-            keep_params += ['fnl_loc', 'bphi']
-        elif self.mode == 'b-p':
-            keep_params += ['fnl_loc', 'p']
-        elif self.mode == 'bfnl':
-            keep_params += ['bfnl_loc']
+    def __init__(self, k=None, ells=(1, 3), z=1., fiducial='DESI', engine='eisenstein_hu',
+                 method='prim', mu=10, mode='b-p'):
+        # Nodes (Parameters) live in __init__.
+        self.b1 = Parameter('b1', value=2., prior=dict(limits=[0.1, 10.]),
+                            ref=dict(limits=[1.5, 2.5]), fd_eps=0.1, latex='b_1')
+        self.bv = Parameter('bv', value=1., prior=dict(limits=[0.1, 10.]),
+                            ref=dict(limits=[0.5, 1.5]), fd_eps=0.1, latex='b_v')
+        self.sigmas = Parameter('sigmas', value=0., prior=dict(limits=[0., 10.]),
+                                ref=dict(limits=[1., 4.]), fd_eps=0.2, latex=r'\Sigma_{s}')
+        self.sigmau = Parameter('sigmau', value=0., prior=dict(limits=[0., 50.]),
+                                ref=dict(limits=[0., 20.]), fd_eps=0.2, latex=r'\Sigma_{u}')
+        if mode == 'b-p':
+            self.fnl_loc = Parameter('fnl_loc', value=0., prior=dict(limits=[-300., 300.]),
+                                     ref=dict(limits=[-10., 10.]), fd_eps=1., latex=r'f_{\mathrm{NL}}^{\mathrm{loc}}')
+            self.p = Parameter('p', value=1., prior=dict(limits=[0., 3.]),
+                               ref=dict(limits=[0.5, 1.5]), fd_eps=0.1, latex='p')
+        elif mode == 'bphi':
+            self.fnl_loc = Parameter('fnl_loc', value=0., prior=dict(limits=[-300., 300.]),
+                                     ref=dict(limits=[-10., 10.]), fd_eps=1., latex=r'f_{\mathrm{NL}}^{\mathrm{loc}}')
+            self.bphi = Parameter('bphi', value=1., prior=dict(limits=[-10., 10.]),
+                                  ref=dict(limits=[3., 4.]), fd_eps=0.1, latex=r'b_{\phi}')
+        elif mode == 'bfnl':
+            self.bfnl_loc = Parameter('bfnl_loc', value=0., prior=dict(limits=[-1e3, 1e3]),
+                                      ref=dict(limits=[-50., 50.]), fd_eps=1., latex=r'b_{\phi}f_{\mathrm{NL}}^{\mathrm{loc}}')
         else:
-            raise ValueError('Unknown mode {}; it must be one of ["bphi", "b-p", "bfnl"]'.format(self.mode))
-        self.z = self.template.z
-        self.params = self.params.select(basename=keep_params)
+            raise ValueError(f"mode must be one of 'b-p', 'bphi', 'bfnl'; got {mode!r}")
 
-    def calculate(self, b1=2., bv=1., sigmas=0., sigmau=0., **params):
-        self.z = self.template.z
-        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-        pk_dd = self.template.pk_dd
-        kin = self.template.k
-        cosmo = self.template.cosmo
-        f = self.template.f
-        pk_prim = cosmo.get_primordial(mode='scalar').pk_interpolator()(kin)  # power_prim is ~ k^(n_s - 1)
-        if self.method == 'prim':
-            pphi_prim = 9 / 25 * 2 * np.pi**2 / kin**3 * pk_prim / cosmo.h**3
-            alpha = 1. / (pk_dd / pphi_prim)**0.5
-        else:
-            # Normalization in the matter dominated era
-            # https://arxiv.org/pdf/1904.08859.pdf eq. 2.3
-            tk = (pk_dd / pk_prim / kin / (pk_dd[0] / pk_prim[0] / kin[0]))**0.5
-            znorm = 10.
-            normalized_growth_factor = cosmo.growth_factor(self.template.z) / cosmo.growth_factor(znorm) / (1 + znorm)
-            alpha = 3. * cosmo.Omega0_m * 100**2 / (2. * (constants.c / 1e3)**2 * kin**2 * tk * normalized_growth_factor)
-        # Remove first k, used to normalize tk
-        kin, pk_dd, alpha = kin[1:], pk_dd[1:], alpha[1:]
-        if self.mode == 'bphi':
-            fnl_loc = params['fnl_loc']
-            bphi = params['bphi']
-            bfnl_loc = bphi * fnl_loc
-        elif self.mode == 'b-p':
-            fnl_loc = params['fnl_loc']
-            p = params.get('p', 1.)
-            bfnl_loc = 2. * 1.686 * (b1 - p) * fnl_loc
-        else:
-            bfnl_loc = params['bfnl_loc']
-        # bfnl_loc is typically 2 * delta_c * (b1 - p)
-        bias = b1 + bfnl_loc * interp1d(jnp.log10(kap), np.log10(kin), alpha)
-        # Velocity term: We do not include the 1j --> will remove it in the data as well.
-        vel_bias = bv * f * muap * 100 / (1 + self.z) / kap
-        # Finger of God terms:
-        fog = 1. / (1. + sigmas**2 * kap**2 * muap**2 / 2.) * np.sinc(sigmau * kap)
-        # Power spectrum:
-        pkmu = jac * fog * (bias + f * muap**2) * vel_bias * interp1d(jnp.log10(kap), np.log10(kin), pk_dd) 
-        self.power = self.to_poles(pkmu)
+    def __post_init__(self, k=None, ells=(1, 3), z=1., fiducial='DESI', engine='eisenstein_hu',
+                      method='prim', mu=10, mode='b-p'):
+        # Non-node setup: precompute fixed-fiducial cosmo ingredients.
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        self._mode = str(mode)
+        self._z = float(z)
+        self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
+        self._pk_dd, self._alpha, self._f = _png_cosmo(fiducial, self.k, self._z, str(method), str(engine))
 
-    def get(self):
-        return self.power
+    def __call__(self):
+        k = self.k[:, None]            # (n_k, 1)
+        mu = self._to_poles.mu          # (n_mu,)
+        pk_dd = jnp.asarray(self._pk_dd)[:, None]
+        alpha = jnp.asarray(self._alpha)[:, None]
+        f = self._f
+        z = self._z
 
-    @plotting.plotter
-    def plot(self, fig=None, scaling='loglog', figsize=None):
-        """
-        Plot power spectrum multipoles.
+        if self._mode == 'b-p':
+            bfnl_loc = 2. * _delta_c * (self.b1 - self.p) * self.fnl_loc
+        elif self._mode == 'bphi':
+            bfnl_loc = self.bphi * self.fnl_loc
+        else:  # 'bfnl'
+            bfnl_loc = self.bfnl_loc
 
-        Parameters
-        ----------
-        fig : matplotlib.figure.Figure, default=None
-            Optionally, a figure with at least 1 axis.
+        b_eff = self.b1 + bfnl_loc * alpha
+        # FoG: density side (Lorentzian) x velocity side (sinc damping).
+        fog = 1. / (1. + self.sigmas**2 * k**2 * mu**2 / 2.) * jnp.sinc(self.sigmau * k)
+        # Velocity bias: -i bv f mu H0 / [(1+z) k]; the -i convention is dropped.
+        vel_bias = self.bv * f * mu * 100. / (1. + z) / k
+        pkmu = fog * (b_eff + f * mu**2) * vel_bias * pk_dd
+        self.poles = self._to_poles(pkmu)
+        return self.poles
 
-        scaling : str, default='loglog'
-            Either 'kpk' or 'loglog'.
-        
-        figsize : (width, height), default=None
-            If not figure is passed, fix the size of the created figure.
+    def tree_flatten(self):
+        return [self.poles], None
 
-        fn : str, Path, default=None
-            Optionally, path where to save figure.
-            If not provided, figure is not saved.
-
-        kw_save : dict, default=None
-            Optionally, arguments for :meth:`matplotlib.figure.Figure.savefig`.
-
-        show : bool, default=False
-            If ``True``, show figure.
-
-        Returns
-        -------
-        fig : matplotlib.figure.Figure
-        """
-        from matplotlib import pyplot as plt
-        if fig is None:
-            fig, ax = plt.subplots(figsize=figsize)
-        else:
-            ax = fig.axes[0]
-        k_exp = 1 if scaling == 'kpk' else 1
-        for ill, ell in enumerate(self.ells):
-            ax.plot(self.k, self.k**k_exp * self.power[ill], color='C{:d}'.format(ill), linestyle='-', label=r'$\ell = {:d}$'.format(ell))
-        ax.grid(True)
-        ax.legend()
-        if scaling == 'kpk':
-            ax.set_ylabel(r'$-ik P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}\mathrm{km}/s$]')
-        if scaling == 'loglog':
-            ax.set_ylabel(r'$-ik P_{\ell}(k)$ [$(\mathrm{Mpc}/h)^{2}\mathrm{km}/s$]')
-            ax.set_yscale('log')
-            ax.set_xscale('log')
-        ax.set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
-        return fig
-
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.poles = children[0]
+        return obj

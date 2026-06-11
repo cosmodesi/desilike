@@ -1,123 +1,114 @@
+"""Module implementing the ``emcee`` sampler."""
+
+try:
+    import emcee
+    EMCEE_INSTALLED = True
+except ModuleNotFoundError:
+    EMCEE_INSTALLED = False
 import numpy as np
 
-from desilike.samples import Chain
-from desilike import utils
-from .base import BaseBatchPosteriorSampler
+from .base import update_kwargs, EnsembleSampler
 
 
-class EmceeSampler(BaseBatchPosteriorSampler):
-    """
-    Wrapper for the affine-invariant ensemble sampler for Markov chain Monte Carlo (MCMC) proposed by Goodman & Weare (2010).
+class EmceeSampler(EnsembleSampler):
+    """Wrapper for the affine-invariant ensemble sampler ``emcee``.
 
-    Reference
-    ---------
+    .. rubric:: References
     - https://github.com/dfm/emcee
     - https://arxiv.org/abs/1202.3665
+
     """
-    name = 'emcee'
 
-    def __init__(self, *args, nwalkers=None, **kwargs):
-        """
-        Initialize emcee sampler.
+    def __init__(self, posterior, nchains=1, chains=None, rng=None,
+                 directory=None, nwalkers=None, rescale=False, covariance=None,
+                 batch_size=None, **kwargs):
+        """Initialize the ``emcee`` sampler.
 
         Parameters
         ----------
-        likelihood : BaseLikelihood
-            Input likelihood.
-
-        nwalkers : int, str, default=None
-            Number of walkers, defaults to :attr:`Chain.shape[1]` of input chains, if any,
+        posterior : CompiledGraph
+            Compiled pipeline returning the log-posterior.
+        nchains : int, optional
+            Number of independent chains. Default is 1.
+        chains : list of desilike.samples.MCSamples, optional
+            If given, continue the chains. In that case, we will ignore what
+            was read from disk. Default is ``None``.
+        rng : numpy.random.Generator, int, or None, optional
+            Random number generator. Default is ``None``.
+        directory : str, Path, or None, optional
+            Save samples to this location. Default is ``None``.
+        nwalkers : int, optional
+            Number of walkers, defaults to :attr:`MCSamples.shape[1]` of input chains, if any,
             else ``2 * max((int(2.5 * ndim) + 1) // 2, 2)``.
-            Can be given in dimension units, e.g. ``'3 * ndim'``.
+        **kwargs: dict, optional
+            Extra keyword arguments passed to ``emcee`` during initialization.
 
-        rng : np.random.RandomState, default=None
-            Random state. If ``None``, ``seed`` is used to set random state.
-
-        seed : int, default=None
-            Random seed.
-
-        max_tries : int, default=1000
-            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
-
-        chains : str, Path, Chain
-            Path to or chains to resume from.
-
-        ref_scale : float, default=1.
-            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor.
-
-        save_fn : str, Path, default=None
-            If not ``None``, save samples to this location.
-
-        mpicomm : mpi.COMM_WORLD, default=None
-            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
         """
-        super(EmceeSampler, self).__init__(*args, **kwargs)
-        ndim = len(self.varied_params)
-        if nwalkers is None:
-            shapes = self.mpicomm.bcast([chain.shape if chain is not None else None for chain in self.chains], root=0)
-            if any(shape is not None for shape in shapes):
-                try:
-                    nwalkers = shapes[0][1]
-                    assert all(shape[1] == nwalkers for shape in shapes)
-                except (IndexError, AssertionError) as exc:
-                    raise ValueError('Impossible to find number of walkers from input chains of shapes {}'.format(shapes)) from exc
+        if not EMCEE_INSTALLED:
+            raise ImportError("The 'emcee' package is required but not "
+                              "installed.")
+
+        # posterior is called through loop.map with a list of constant size = nwalkers // 2 points
+        super().__init__(posterior, nchains=nchains, chains=chains, rng=rng,
+                         directory=directory, nwalkers=nwalkers,
+                         rescale=rescale, covariance=covariance, batch_size=batch_size)
+        if self.nwalkers is None:
+            # Minimum is 2 * max((int(2.5 * self.ndim) + 1) // 2, 2)
+            # Recommended is probably more >= 4 * self.ndim
+            self.nwalkers = 4 * self.ndim
+        self._total_likelihood_evaluations = 0
+        if self.pool.main:
+            # emcee treats tuple returns as (log_prob, blobs).  When there are
+            # no derived parameters, return plain scalars so emcee never
+            # allocates a blob array (mixing scalar and tuple returns within
+            # one run causes an internal boolean-index mismatch in emcee).
+            # compute_posterior is batched: it takes an (N, ndim) batch and
+            # returns a list of N (log_post, derived) tuples.
+            if self.n_derived:
+                log_prob_fn = self.compute_posterior
             else:
-                nwalkers = 2 * max((int(2.5 * ndim) + 1) // 2, 2)
-        self.nwalkers = utils.evaluate(nwalkers, type=int, locals={'ndim': len(self.varied_params)})
-        import emcee
-        self.sampler = emcee.EnsembleSampler(self.nwalkers, ndim, self.logposterior, vectorize=True)
+                log_prob_fn = lambda batch: [result[0] for result in self.compute_posterior(batch)]
+            kwargs = update_kwargs(
+                kwargs, 'emcee', ndim=self.ndim,
+                log_prob_fn=log_prob_fn, pool=self.pool, args=None,
+                kwargs=None, vectorize=False, nwalkers=self.nwalkers)
+            self.sampler = emcee.EnsembleSampler(**kwargs)
 
-    def run(self, *args, **kwargs):
-        """
-        Run chains. Sampling can be interrupted anytime, and resumed by providing the path to the saved chains in ``chains`` argument of :meth:`__init__`.
+    def adapt_sampler(self, **kwargs):
+        """No-op: emcee does not support explicit adaptation."""
 
-        One will typically run sampling on ``nchains * nprocs_per_chain`` processes,
-        with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max(mpicomm.size // nchains, 1)``
-        the number of processes per chain.
+    def run_sampler(self, n_steps):
+        """Run the ``emcee`` sampler.
 
         Parameters
         ----------
-        min_iterations : int, default=100
-            Minimum number of iterations (MCMC steps) to run (to avoid early stopping
-            if convergence criteria below are satisfied by chance at the beginning of the run).
+        n_steps: int
+            Number of steps to take.
 
-        max_iterations : int, default=sys.maxsize
-            Maximum number of iterations (MCMC steps) to run.
-
-        check_every : int, default=300
-            Samples are saved and convergence checks are run every ``check_every`` iterations.
-
-        check : bool, dict, default=None
-            If ``False``, no convergence checks are run.
-            If ``True`` or ``None``, convergence checks are run.
-            A dictionary of convergence criteria can be provided, see :meth:`check`.
-
-        thin_by : int, default=1
-            Thin samples by this factor.
         """
-        return super(EmceeSampler, self).run(*args, **kwargs)
+        if self.pool.main:
+            samples, derived, log_post = self.state
 
-    def _run_one(self, start, niterations=300, thin_by=1, progress=False):
-        self.sampler.reset()
-        self.sampler._random = self.rng
-        for _ in self.sampler.sample(initial_state=start, iterations=niterations, progress=progress, store=True, thin_by=thin_by, skip_initial_state_check=False):
-            pass
-        try:
-            chain = self.sampler.get_chain()
-        except AttributeError:
-            return None
-        data = [chain[..., iparam] for iparam, param in enumerate(self.varied_params)] + [self.sampler.get_log_prob()]
-        return Chain(data=data, params=self.varied_params + ['logposterior'])
+            initial_state = emcee.State(
+                samples,
+                blobs=derived if self.n_derived else None,
+                log_prob=log_post,
+                random_state=np.random.RandomState(
+                    self.rng.integers(2**32 - 1)).get_state())
 
-    def _add_check(self, diagnostics, quiet=False, **kwargs):
-        """Extend :meth:`BaseBatchPosteriorSampler.check` with acceptance rate."""
-        acceptance_rate = self.mpicomm.gather(self.sampler.acceptance_fraction)
-        if self.mpicomm.rank == 0:
-            acceptance_rate = np.mean(acceptance_rate)
-            diagnostics.add_test('current_acceptance_rate', 'current mean acceptance rate', acceptance_rate, quiet=quiet)
-        diagnostics.update(self.mpicomm.bcast(diagnostics))
-        return True
+            samples  = np.zeros((n_steps, self.nwalkers, self.ndim))
+            derived  = np.zeros((n_steps, self.nwalkers, self.n_derived))
+            log_post = np.zeros((n_steps, self.nwalkers))
+            for i, state in enumerate(self.sampler.sample(
+                    initial_state, iterations=n_steps, store=False)):
+                samples[i, :, :] = state.coords
+                if self.n_derived:
+                    derived[i, :, :] = np.asarray(state.blobs).reshape(self.nwalkers, -1)
+                log_post[i, :] = state.log_prob
 
-    @classmethod
-    def install(cls, config):
-        config.pip('emcee')
+            self._total_likelihood_evaluations += n_steps * self.nwalkers
+            self.logger.info('total likelihood evaluations: %d', self._total_likelihood_evaluations)
+            self.extend(samples, derived, log_post)
+            self.pool.stop_wait()
+        else:
+            self.pool.wait()

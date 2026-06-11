@@ -1,363 +1,1322 @@
+"""Tests for desilike/base.py — cosmology-inspired pipeline (Cosmology → PowerSpectrum → GaussianChi2)."""
+
 import numpy as np
+import pytest
+import jax
+import jax.numpy as jnp
 
-from desilike import setup_logging
+jax.config.update('jax_enable_x64', True)
 
-
-def test_init():
-
-    from desilike.base import BaseConfig, InitConfig
-    from desilike import ParameterCollection
-    params = ParameterCollection({'a': {'ref': {'limits': [0., 1.]}}})
-    init = InitConfig(params=params)
+from desilike.base import Calculator, ExternalCalculator, Likelihood, GaussianLikelihood, SumLikelihood, Prior, Posterior, CompiledGraph, compile, pmap
+from desilike.parameter import Parameter
 
 
-def test_observable():
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+# ── shared static data ────────────────────────────────────────────────────────
 
-    template = ShapeFitPowerSpectrumTemplate(z=0.5)
-    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
-                                                         theory=theory)
-    observable()
-    #observable.wmatrix.plot(show=True)
-    theory.template.init.update(z=1.)
-    del theory.template.params['dm']
-    observable()
-    print(observable.runtime_info.pipeline.varied_params)
-    assert theory.template.z == 1.
+K = jnp.linspace(0.01, 0.3, 30)
+DATA = jnp.array(np.random.default_rng(0).normal(1.0, 0.1, len(K)))
 
 
-def test_likelihood():
+# ── toy calculators ───────────────────────────────────────────────────────────
 
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
-    from desilike.likelihoods import ObservablesGaussianLikelihood
+class Cosmology(ExternalCalculator):
+    """Non-JAX: growth_factor = omega_m^0.55 / (1 + z), growth_rate = omega_m^0.55."""
+    _call_count = 0
 
-    from desilike.theories.galaxy_clustering import DampedBAOWigglesTracerPowerSpectrumMultipoles, BAOPowerSpectrumTemplate
-    template = BAOPowerSpectrumTemplate(z=1.)
-    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
-    for param in theory.params.select(basename=['sigma*', 'al*_-3', 'al*_-2']):
-        param.update(value=0., fixed=True)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.08, 0.2, 0.01]},
-                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    if likelihood.mpicomm.rank == 0:
-        likelihood(b1=2.)
+    def __init__(self, omega_m, z):
+        self.omega_m = omega_m
+        self.z = z
 
-    #observable.plot(show=True)
-    print(theory.pt.params)
-    print(likelihood.varied_params)
-    template = BAOPowerSpectrumTemplate(z=0.5, apmode='qiso')
-    theory.init.update(template=template)
-    likelihood()
-    print(likelihood.varied_params)
+    def __call__(self):
+        Cosmology._call_count += 1
+        self.growth_factor = np.array(self.omega_m ** 0.55 / (1.0 + self.z))
+        self.growth_rate = np.array(self.omega_m ** 0.55)
+        return self
 
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
-    template = ShapeFitPowerSpectrumTemplate(z=0.5)
-    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    print(likelihood.runtime_info.pipeline.params)
-    print(likelihood(dm=0.), likelihood(dm=0.01), likelihood(b1=2., dm=0.02))
-    theory.template.init.update(z=1.)
-    #del theory.template.params['dm']
-    print(likelihood.runtime_info.pipeline.varied_params)
-    likelihood()
-    #observable.plot(show=False)
+    def tree_flatten(self):
+        return [self.growth_factor, self.growth_rate], None
 
-    from desilike.theories.galaxy_clustering import LPTVelocileptorsTracerPowerSpectrumMultipoles
-    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
-                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=False)
-    print(likelihood.runtime_info.pipeline.params.select(solved=True))
-    print(likelihood.varied_params)
-    print(likelihood(dm=0.), likelihood(dm=0.01), likelihood(dm=0.02))
-    likelihood()
-    observable.plot(show=True)
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.growth_factor = children[0]
+        obj.growth_rate = children[1]
+        return obj
 
 
-def test_combined_likelihood():
+class PowerSpectrum(Calculator):
+    """JAX-native: P(k) = A * k^ns * D^2."""
 
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
-    from desilike.likelihoods import ObservablesGaussianLikelihood
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
+    def __init__(self, cosmo, A, ns):
+        self.cosmo = cosmo
+        self.A = A
+        self.ns = ns
 
-    template = ShapeFitPowerSpectrumTemplate(z=0.5)
-    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-    theory.params['sn0'].update(namespace='LRG')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
-                                                         theory=theory)
-    likelihood1 = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood1.all_params['LRG.sn0'].update(derived='.auto')
-    print(likelihood1.varied_params)
-    #print(theory.runtime_info.params['LRG.sn0'].derived)
-    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-    theory.params['sn0'].update(namespace='ELG')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
-                                                         theory=theory)
-    likelihood2 = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood2.all_params['ELG.sn0'].update(derived='.auto')
+    def __call__(self):
+        self.pk = self.A * K ** self.ns * self.cosmo.growth_factor ** 2
+        return self.pk
 
-    likelihood = likelihood1 + likelihood2
-    print(likelihood.varied_params)
+    def tree_flatten(self):
+        return [self.pk], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.pk = children[0]
+        return obj
 
 
-def test_params():
+class GaussianChi2(Calculator):
+    """JAX-native: logL = -0.5 * sum((theory - data)^2 / sigma^2)."""
 
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
-    from desilike.likelihoods import ObservablesGaussianLikelihood
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, ShapeFitPowerSpectrumTemplate
-    template = ShapeFitPowerSpectrumTemplate(z=0.5)
-    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    likelihood.observables[0].wmatrix.theory.params['b1'].update(value=3.)
-    print(likelihood(), likelihood.runtime_info.pipeline.input_values)
+    def __init__(self, spectrum, data, sigma=0.1):
+        self.spectrum = spectrum
+        self._data = data
+        self._sigma = sigma
 
-    print(likelihood.runtime_info.pipeline.params)
-    print(likelihood(dm=0.), likelihood(dm=0.01), likelihood(b1=2., dm=0.02))
-    print(likelihood.varied_params)
-    likelihood.all_params = {'dm': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1}}}
-    print(likelihood.varied_params)
-    assert likelihood.varied_params['dm'].prior.scale == 1.
-    import pytest
-    from desilike.base import PipelineError
-    with pytest.raises(PipelineError):
-        likelihood.all_params = {'a': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}}}
-    likelihood.all_params = 'test_params.yaml'
-    assert likelihood.varied_params['dm'].prior.scale == 2.
-    likelihood.all_params['dm'].update(prior={'dist': 'norm', 'loc': 0., 'scale': 100.})
-    assert likelihood.varied_params['dm'].prior.scale == 100.
-    likelihood.all_params = {'*': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}}}
-    assert likelihood.varied_params['dm'].prior.scale == 1.
+    def __call__(self):
+        self.loglikelihood = -0.5 * jnp.sum(((self.spectrum.pk - self._data) / self._sigma) ** 2)
+        return self.loglikelihood
 
-    theory = KaiserTracerPowerSpectrumMultipoles()
-    theory.params['b1'].update(prior={'dist': 'norm', 'loc': 0., 'scale': 1.})
-    theory.params = {'b1': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1.}}, 'sn0': {'prior': {'dist': 'norm', 'loc': 0., 'scale': 1e4}}}
-    theory.all_params['Omega_m'].update(prior={'dist': 'norm', 'loc': 0.3, 'scale': 0.5})
-    theory.all_params = {'*mega_m': {'ref': {'dist': 'norm', 'loc': 0.3, 'scale': 0.5}}}
-    assert theory.template.cosmo.params['Omega_m'].ref.scale == 0.5
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.2, 0.01]},
-                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy',# wmatrix='_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood.all_params = {'sn0': {'derived': '.marg'}}
-    likelihood(b1=1.5)
-    bak = likelihood.loglikelihood
-    print(likelihood.varied_params)
-    likelihood.all_params['b1'].update(derived='{b}**2', prior=None)
-    likelihood.all_params['b'] = {'prior': {'limits': [0., 2.]}}
-    print(likelihood.varied_params)
-    likelihood(b=1.5**0.5)
-    assert np.allclose(likelihood.loglikelihood, bak)
+    def tree_flatten(self):
+        return [self.loglikelihood], None
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.loglikelihood = children[0]
+        return obj
 
 
-def test_copy():
+# ── shared GaussianLikelihood subclass for marginalisation tests ──────────────
 
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
-    from desilike.likelihoods import ObservablesGaussianLikelihood, SumLikelihood
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, LPTVelocileptorsTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate
+class _LinearTheory(GaussianLikelihood):
+    """theory = (A + alpha) * K, linear in alpha."""
 
-    theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=0.5))
-    for param in theory.params.select(basename=['alpha*', 'sn*']): param.update(derived='.best')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
-                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable], scale_covariance=False)
-    #likelihood()
+    def __init__(self, A, alpha, data, covariance):
+        self.A = A
+        self.alpha = alpha
+        self.flatdata = jnp.asarray(data)
+        self.precision = jnp.linalg.inv(jnp.asarray(covariance))
 
-    likelihood.all_params['sn0'].update(derived=False)
-    #print(likelihood.varied_params)
-    likelihood2 = likelihood.deepcopy()
-    #for param in likelihood.all_params.select(basename=['sn*']): param.update(derived=False)
-    likelihood.all_params['sn0'].update(derived=False)
-    print(likelihood.varied_params)
-    print(likelihood2.varied_params)
-    assert np.allclose(likelihood2(), SumLikelihood(likelihoods=likelihood2)())
-
-    from desilike.theories.galaxy_clustering import BAOPowerSpectrumTemplate, DampedBAOWigglesTracerPowerSpectrumMultipoles
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
-    from desilike.likelihoods import ObservablesGaussianLikelihood
+    def __call__(self):
+        self.flattheory = (self.A + self.alpha) * K
+        return super().__call__()
 
 
-    template = BAOPowerSpectrumTemplate(z=0.5, fiducial='DESI')
-    theory = DampedBAOWigglesTracerPowerSpectrumMultipoles(template=template)
-    # Set damping sigmas to zero, as data follows linear pk
-    for param in theory.params.select(basename='sigma*'):
-        param.update(value=0., fixed=True)
-    # Fix some broadband parameters (those with k^{-3} and k^{-2}) to speed up calculation in this notebook
-    for param in theory.params.select(basename=['al*_-3', 'al*_-2']):
-        param.update(value=0., fixed=True)
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
-                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-    template = BAOPowerSpectrumTemplate(z=0.5, fiducial='DESI', apmode='qiso', only_now=False)
-    theory.init.update(template=template)
-    assert 'qiso' in likelihood.all_params
+# ── analytic reference and node factory ───────────────────────────────────────
+
+def analytic_logL(omega_m, z, A, ns, data=DATA, sigma=0.1):
+    D = omega_m ** 0.55 / (1.0 + z)
+    theory = A * np.array(K) ** ns * D ** 2
+    return -0.5 * np.sum(((theory - np.array(data)) / sigma) ** 2)
 
 
-def test_cosmo():
-
-    from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles, DirectPowerSpectrumTemplate
-
-    theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=1.4, cosmo='external'))
-    print(theory.runtime_info.pipeline.get_cosmo_requires())
-    print(theory.runtime_info.pipeline.params)
-
-    theory = KaiserTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=1.4))
-    print(theory.runtime_info.pipeline.get_cosmo_requires())
-    print(theory.runtime_info.pipeline.params)
-
-
-def test_install():
-
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
-    from desilike.likelihoods import ObservablesGaussianLikelihood
-    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, LPTVelocileptorsTracerPowerSpectrumMultipoles
-
-    theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    for param in theory.params.select(basename=['alpha*', 'sn*']):
-        param.update(derived='.best')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
-                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    from desilike import Installer
-    Installer()(likelihood)
-    from desilike.samplers import EmceeSampler
-    Installer()(EmceeSampler)
+def _make_nodes():
+    """Return (omega_m, z, A, ns, cosmo, spectrum, likelihood) with default parameter values."""
+    omega_m = Parameter('omega_m', value=0.3)
+    z = Parameter('z', value=0.5)
+    A = Parameter('A', value=1.0)
+    ns = Parameter('ns', value=0.96)
+    cosmo = Cosmology(omega_m=omega_m, z=z)
+    spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
+    likelihood = GaussianChi2(spectrum=spectrum, data=DATA)
+    return omega_m, z, A, ns, cosmo, spectrum, likelihood
 
 
-def test_vmap():
+# ── fixtures ──────────────────────────────────────────────────────────────────
 
-    from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
-    from desilike.likelihoods import ObservablesGaussianLikelihood
-    from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles
-    from desilike import vmap
-    import jax
-
-    theory = KaiserTracerPowerSpectrumMultipoles(template=ShapeFitPowerSpectrumTemplate(z=0.5))
-    for param in theory.params.select(basename=['sn*']):
-        param.update(derived='.marg')
-    observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
-                                                         data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
-                                                         theory=theory)
-    likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    likelihood()
-
-    size = (3,)
-    params = {param.name: param.ref.sample(size=size, random_state=42) if param.ref.is_proper() else np.full(param.value, size) for param in likelihood.varied_params}
-    if True:
-        vlikelihood = vmap(likelihood, errors='return')
-        toret = vlikelihood(params, return_derived=True)
-        if likelihood.mpicomm.rank == 0:
-            print(toret)
-    if True:
-        vlikelihood = vmap(likelihood, backend='jax', errors='return')
-        toret = vlikelihood(params, return_derived=True)
-        if likelihood.mpicomm.rank == 0:
-            print(toret[0][1]['loglikelihood'].derivs)
-            print(toret)
-        toret = jax.jit(vlikelihood, static_argnames=['return_derived'])(params, return_derived=True)
-        if likelihood.mpicomm.rank == 0:
-            print(toret)
-
-    if True:
-        vlikelihood = vmap(likelihood, backend='mpi', errors='return', return_derived=True)
-        toret = vlikelihood(params)
-        if likelihood.mpicomm.rank == 0:
-            print(toret)
-    if True:
-        vlikelihood = vmap(jax.jit(likelihood, static_argnames=['return_derived']), backend='mpi', errors='return')
-        toret = vlikelihood(params, return_derived=True)
-        if likelihood.mpicomm.rank == 0:
-            print(toret)
-    if True:
-        vlikelihood = vmap(jax.jit(vmap(likelihood, backend='jax', errors='return'), static_argnames=['return_derived']), backend='mpi', errors='return')
-        toret = vlikelihood(params, return_derived=True)
-        if likelihood.mpicomm.rank == 0:
-            print(toret)
+@pytest.fixture
+def pipeline():
+    return compile(_make_nodes()[-1])
 
 
-def test_cosmo():
+# ── basic correctness ─────────────────────────────────────────────────────────
 
-    from desilike.theories import Cosmoprimo
-
-    # Provides primordial cosmology computation. You can also give default, fixed, parameters here... (like m_ncdm, or class precision parameters)
-    cosmo = Cosmoprimo(engine='class', m_ncdm=[0.10])
-    cosmo.init.params['w0_fld'].update(derived='({w1} + {w2}) / 2.')  # w0_fld expressed as derived parameter
-    cosmo.init.params['wa_fld'].update(derived='({w1} - {w2}) / 2.')  # wa_fld expressed as derived parameter
-    # w1, w2 as sampled "varied" parameters
-    cosmo.init.params['w1'] = dict(value=-1., prior=dict(dist='uniform', limits=[-5., 0.]))
-    cosmo.init.params['w2'] = dict(value=0., prior=dict(dist='norm', loc=0., scale=1.))
-    print(cosmo.varied_params)  # varied parameters (also cosmo.all_params(varied=True)): ['h', 'omega_cdm', 'omega_b', 'logA', 'n_s', 'tau_reio', 'w1', 'w2']
-
-    # Example: interaction cosmology / theory
-    from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles
-    cosmo.init.params['tau_reio'].update(fixed=True)  # tau is useless
-    template = DirectPowerSpectrumTemplate(cosmo=cosmo, z=1.4)
-    theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-    print(theory.varied_params)  # varied parameters (including that of Kaiser): ['h', 'omega_cdm', 'omega_b', 'logA', 'n_s', 'tau_reio', 'w1', 'w2', 'b1', 'sn0']
-    poles = theory(w2=0.5, b1=2.)  # theory prediction
-
-    if False:
-        # For a galaxy power spectrum likelihood with the previous theory model
-        from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
-        from desilike.likelihoods import ObservablesGaussianLikelihood
-        observable = TracerPowerSpectrumMultipolesObservable(klim={0: [0.05, 0.2, 0.01], 2: [0.05, 0.18, 0.01]},
-                                                            data='_pk/data.npy', covariance='_pk/mock_*.npy', wmatrix='_pk/window.npy',
-                                                            theory=theory)
-        likelihood = ObservablesGaussianLikelihood(observables=[observable])
-    if True:
-        # With Planck likelihood
-        from desilike.likelihoods.cmb import TTTEEEHighlPlanck2018LiteLikelihood
-        # to install the likelihood
-        #from desilike import Installer
-        #Installer(user=True)(TTTEEEHighlPlanck2018LiteLikelihood)
-        cosmo.init.params['tau_reio'].update(fixed=False)
-        # Planck likelihood has its own data / covariance
-        likelihood = TTTEEEHighlPlanck2018LiteLikelihood(cosmo=cosmo)  # ['h', 'omega_cdm', 'omega_b', 'logA', 'n_s', 'tau_reio', 'w1', 'w2', 'A_planck']
-        print(likelihood.varied_params)
+def test_param_names(pipeline):
+    assert set(pipeline.params.names()) == {'omega_m', 'z', 'A', 'ns'}
 
 
-    # Posterior profiling
-    from desilike.profilers import MinuitProfiler
-    profiler = MinuitProfiler(likelihood, seed=7)
-    #profiles = profiler.maximize(niterations=2)  # profiles is an object which contains the result of the fit
-
-    # Posterior sampling
-    from desilike.samplers import MCMCSampler
-    sampler = MCMCSampler(likelihood, chains=8, seed=7)
-    samples = sampler.run(check={'max_eigen_gr': 0.01, 'stable_over': 3}, check_every=10, max_iterations=100)  # profiles is an object which contains samples
+def test_correctness(pipeline):
+    got = float(pipeline(omega_m=0.3, z=0.5, A=1.0, ns=0.96))
+    expected = analytic_logL(0.3, 0.5, 1.0, 0.96)
+    assert abs(got - expected) < 1e-8, f"got {got}, expected {expected}"
 
 
+def test_eager_attrs_updated(pipeline):
+    """After an eager call, all node attributes reflect the computed values."""
+    omega_m, z, A, ns = 0.28, 0.6, 1.1, 0.97
+    pipeline(omega_m=omega_m, z=z, A=A, ns=ns)
+    cosmo, spectrum, likelihood = pipeline.nodes
+
+    expected_gf = omega_m ** 0.55 / (1.0 + z)
+    expected_pk = A * np.array(K) ** ns * expected_gf ** 2
+
+    assert abs(float(cosmo.growth_factor) - expected_gf) < 1e-8
+    assert abs(float(cosmo.growth_rate) - omega_m ** 0.55) < 1e-8
+    assert jnp.allclose(jnp.array(spectrum.pk), jnp.array(expected_pk), atol=1e-8)
+    assert abs(float(likelihood.loglikelihood) - analytic_logL(omega_m, z, A, ns)) < 1e-8
+
+
+# ── JAX transforms ────────────────────────────────────────────────────────────
+
+def test_jit(pipeline):
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.2, 'ns': 0.98}
+    assert abs(float(jax.jit(pipeline)(params)) - analytic_logL(0.3, 0.5, 1.2, 0.98)) < 1e-8
+
+
+def test_grad(pipeline):
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    grad = jax.grad(pipeline)(params)
+    eps = 1e-5
+    for name in pipeline.params.names():
+        fd = (float(pipeline({**params, name: params[name] + eps})) - float(pipeline({**params, name: params[name] - eps}))) / (2 * eps)
+        assert abs(float(grad[name]) - fd) < 1e-4, f"grad[{name}]: got {float(grad[name]):.6f}, fd {fd:.6f}"
+
+
+def test_vmap(pipeline):
+    omega_m_vals = jnp.linspace(0.25, 0.35, 5)
+    params_batch = {'omega_m': omega_m_vals, 'z': jnp.full(5, 0.5), 'A': jnp.ones(5), 'ns': jnp.full(5, 0.96)}
+    batched = jax.vmap(pipeline)(params_batch)
+    looped = jnp.stack([pipeline({'omega_m': float(omega_m_vals[i]), 'z': 0.5, 'A': 1.0, 'ns': 0.96}) for i in range(5)])
+    assert jnp.allclose(batched, looped, atol=1e-8)
+
+
+def test_jit_grad(pipeline):
+    params = {'omega_m': 0.28, 'z': 0.6, 'A': 1.1, 'ns': 0.97}
+    grad_eager = jax.grad(pipeline)(params)
+    grad_jit = jax.jit(jax.grad(pipeline))(params)
+    assert all(jnp.allclose(grad_eager[k], grad_jit[k], atol=1e-8) for k in grad_eager)
+
+
+def test_jacrev_external():
+    """jax.jacobian (jacrev) gives correct Jacobian for ExternalCalculator pipelines."""
+    _, _, _, _, _, spectrum, likelihood = _make_nodes()
+    pipe_pk = compile(likelihood, output=lambda: spectrum.pk)
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    jac_rev = jax.jacobian(pipe_pk)(params)
+
+    for name in params:
+        assert jac_rev[name].shape == (len(K),), f"jacrev[{name}].shape = {jac_rev[name].shape}"
+    eps = 1e-5
+    for name in params:
+        fd = (np.asarray(pipe_pk({**params, name: params[name] + eps})) -
+              np.asarray(pipe_pk({**params, name: params[name] - eps}))) / (2 * eps)
+        assert np.allclose(np.asarray(jac_rev[name]), fd, atol=1e-4), \
+            f"jacrev vs FD mismatch for {name}: max err = {np.abs(np.asarray(jac_rev[name]) - fd).max():.2e}"
+
+
+def test_jacfwd_grad_external():
+    """jax.jacfwd(jax.grad(pipe)) works for ExternalCalculator pipelines via custom_jvp FD rule."""
+    pipe = compile(_make_nodes()[-1])
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    grad_fn = jax.grad(pipe)
+    hess_jacfwd = jax.jacfwd(grad_fn)(params)
+
+    eps = 1e-5
+    for p in pipe.params:
+        ref = (float(grad_fn({**params, p.name: params[p.name] + eps})[p.name]) - float(grad_fn({**params, p.name: params[p.name] - eps})[p.name])) / (2 * eps)
+        assert abs(float(hess_jacfwd[p.name][p.name]) - ref) < 1e-3, f"H[{p.name},{p.name}]: jacfwd={float(hess_jacfwd[p.name][p.name]):.6f}, FD={ref:.6f}"
+
+    hess_jax = jax.hessian(pipe)(params)
+    for p in pipe.params:
+        assert abs(float(hess_jax[p.name][p.name]) - float(hess_jacfwd[p.name][p.name])) < 1e-10
+
+
+# ── caching ───────────────────────────────────────────────────────────────────
+
+def test_external_cache():
+    """ExternalCalculator() skipped when params and deps unchanged."""
+    _call_count = [0]
+
+    class CountedCosmology(ExternalCalculator):
+        def __init__(self, omega_m, z):
+            self.omega_m = omega_m
+            self.z = z
+
+        def __call__(self):
+            _call_count[0] += 1
+            self.growth_factor = np.array(self.omega_m ** 0.55 / (1.0 + self.z))
+            self.growth_rate = np.array(self.omega_m ** 0.55)
+            return self
+
+        def tree_flatten(self):
+            return [self.growth_factor, self.growth_rate], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.growth_factor = children[0]
+            obj.growth_rate = children[1]
+            return obj
+
+    omega_m = Parameter('omega_m', value=0.3)
+    z = Parameter('z', value=0.5)
+    A = Parameter('A', value=1.0)
+    ns = Parameter('ns', value=0.96)
+    cosmo = CountedCosmology(omega_m=omega_m, z=z)
+    spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
+    pipe = compile(GaussianChi2(spectrum=spectrum, data=DATA))
+    _call_count[0] = 0
+
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    pipe(params)
+    pipe(params)
+    assert _call_count[0] == 1, f"Expected 1 (cache hit on repeat), got {_call_count[0]}"
+    pipe({'omega_m': 0.35, 'z': 0.5, 'A': 1.0, 'ns': 0.96})
+    assert _call_count[0] == 2, f"Expected 2 (new params trigger rerun), got {_call_count[0]}"
+
+
+def test_jax_cache():
+    """Calculator() skipped in eager mode when params and deps unchanged."""
+    _call_count = [0]
+
+    class CountedSpectrum(Calculator):
+        def __init__(self, cosmo, A, ns):
+            self.cosmo = cosmo
+            self.A = A
+            self.ns = ns
+
+        def __call__(self):
+            _call_count[0] += 1
+            self.pk = self.A * K ** self.ns * self.cosmo.growth_factor ** 2
+            return self.pk
+
+        def tree_flatten(self):
+            return [self.pk], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.pk = children[0]
+            return obj
+
+    omega_m = Parameter('omega_m', value=0.3)
+    z = Parameter('z', value=0.5)
+    A = Parameter('A', value=1.0)
+    ns = Parameter('ns', value=0.96)
+    cosmo = Cosmology(omega_m=omega_m, z=z)
+    spectrum = CountedSpectrum(cosmo=cosmo, A=A, ns=ns)
+    pipe = compile(GaussianChi2(spectrum=spectrum, data=DATA))
+    _call_count[0] = 0
+
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    pipe(params)
+    pipe(params)
+    assert _call_count[0] == 1, f"Expected 1 (cache hit on repeat), got {_call_count[0]}"
+    pipe({'omega_m': 0.3, 'z': 0.5, 'A': 1.2, 'ns': 0.96})
+    assert _call_count[0] == 2, f"Expected 2 (own param changed), got {_call_count[0]}"
+    pipe({'omega_m': 0.35, 'z': 0.5, 'A': 1.2, 'ns': 0.96})
+    assert _call_count[0] == 3, f"Expected 3 (dep rerun), got {_call_count[0]}"
+
+
+# ── output / pytree ───────────────────────────────────────────────────────────
+
+def test_custom_output():
+    """output= lambda reads any pytree of calculator attrs; grad flows through it."""
+    _, _, _, _, _, spectrum, likelihood = _make_nodes()
+    pipe_pk = compile(likelihood, output=lambda: spectrum.pk)
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    D = 0.3 ** 0.55 / 1.5
+    expected_pk = 1.0 * np.array(K) ** 0.96 * D ** 2
+    assert jnp.allclose(pipe_pk(params), jnp.array(expected_pk), atol=1e-8)
+
+    _, _, _, _, _, spectrum2, likelihood2 = _make_nodes()
+    pipe_tuple = compile(likelihood2, output=lambda: (likelihood2.loglikelihood, spectrum2.pk))
+    logL, pk = pipe_tuple(params)
+    assert abs(float(logL) - analytic_logL(0.3, 0.5, 1.0, 0.96)) < 1e-8
+    assert jnp.allclose(pk, jnp.array(expected_pk), atol=1e-8)
+    grad = jax.grad(lambda p: jnp.sum(pipe_pk(p)))(params)
+    assert set(grad.keys()) == {'omega_m', 'z', 'A', 'ns'}
+
+
+def test_pytree_registration():
+    """Calculators are registered JAX pytrees: tree_leaves, tree_map, and jit work natively."""
+    _, _, _, _, _, spectrum, _ = _make_nodes()
+    pipe = compile(spectrum)
+    pipe(omega_m=0.3, z=0.5, A=1.0, ns=0.96)
+
+    leaves = jax.tree_util.tree_leaves(spectrum)
+    assert any(isinstance(l, (np.ndarray, jnp.ndarray)) for l in leaves)
+
+    doubled = jax.tree_util.tree_map(lambda x: x * 2, spectrum)
+    assert jnp.allclose(doubled.pk, spectrum.pk * 2)
+
+    children, aux = spectrum.tree_flatten()
+    reconstructed = PowerSpectrum.tree_unflatten(aux, children)
+    assert jnp.allclose(reconstructed.pk, spectrum.pk)
+
+
+# ── array-valued parameters ───────────────────────────────────────────────────
+
+def test_array_param_jax():
+    """Calculator: array-valued weight parameter flows correctly through pipeline."""
+
+    class WeightedLikelihood(Calculator):
+        def __init__(self, spectrum, data, w):
+            self.spectrum = spectrum
+            self._data = data
+            self.w = w
+
+        def __call__(self):
+            self.loglikelihood = -0.5 * jnp.sum(self.w * (self.spectrum.pk - self._data) ** 2)
+            return self.loglikelihood
+
+        def tree_flatten(self):
+            return [self.loglikelihood], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.loglikelihood = children[0]
+            return obj
+
+    omega_m = Parameter('omega_m', value=0.3)
+    z = Parameter('z', value=0.5)
+    A = Parameter('A', value=1.0)
+    ns = Parameter('ns', value=0.96)
+    w_param = Parameter('w', value=np.ones(len(K)))
+    cosmo = Cosmology(omega_m=omega_m, z=z)
+    spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
+    pipe = compile(WeightedLikelihood(spectrum=spectrum, data=DATA, w=w_param))
+
+    w = np.ones(len(K))
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96, 'w': jnp.array(w)}
+    got = float(pipe(params))
+    D = 0.3 ** 0.55 / 1.5
+    expected = -0.5 * np.sum(w * (1.0 * np.array(K) ** 0.96 * D ** 2 - np.array(DATA)) ** 2)
+    assert abs(got - expected) < 1e-8
+
+    grad = jax.grad(pipe)(params)
+    assert grad['w'].shape == (len(K),)
+    assert 'omega_m' in grad
+
+
+def test_array_param_external():
+    """ExternalCalculator: array-valued parameter (k-weights) FD grad is correct."""
+
+    class WeightedCosmology(ExternalCalculator):
+        def __init__(self, omega_m, k_weights):
+            self.omega_m = omega_m
+            self.k_weights = k_weights
+
+        def __call__(self):
+            self.weighted_D = np.asarray(self.k_weights) * np.array(self.omega_m ** 0.55)
+            return self
+
+        def tree_flatten(self):
+            return [self.weighted_D], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.weighted_D = children[0]
+            return obj
+
+    class WeightedChi2(Calculator):
+        def __init__(self, wcos):
+            self.wcos = wcos
+
+        def __call__(self):
+            self.loglikelihood = -0.5 * jnp.sum(self.wcos.weighted_D ** 2)
+            return self.loglikelihood
+
+        def tree_flatten(self):
+            return [self.loglikelihood], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.loglikelihood = children[0]
+            return obj
+
+    omega_m = Parameter('omega_m', value=0.3)
+    k_weights_param = Parameter('k_weights', value=np.ones(len(K)))
+    wcos = WeightedCosmology(omega_m=omega_m, k_weights=k_weights_param)
+    pipe = compile(WeightedChi2(wcos=wcos))
+
+    k_weights = np.ones(len(K))
+    params = {'omega_m': 0.3, 'k_weights': jnp.array(k_weights)}
+    got = float(pipe(params))
+    D = 0.3 ** 0.55
+    assert abs(got - (-0.5 * np.sum((k_weights * D) ** 2))) < 1e-8
+
+    grad = jax.grad(pipe)(params)
+    assert grad['k_weights'].shape == (len(K),)
+    assert jnp.allclose(grad['k_weights'], jnp.array(-D ** 2 * k_weights), atol=1e-4)
+    fd_om = (float(pipe({**params, 'omega_m': jnp.array(0.3 + 1e-5)})) - float(pipe({**params, 'omega_m': jnp.array(0.3 - 1e-5)}))) / 2e-5
+    assert abs(float(grad['omega_m']) - fd_om) < 1e-4
+
+
+# ── compilation edge cases ────────────────────────────────────────────────────
+
+def test_internal_init():
+    """Calculator and Parameter objects created inside init() are auto-discovered."""
+
+    class InternalCosmology(ExternalCalculator):
+        def __init__(self):
+            self.omega_m = Parameter('omega_m', value=0.3)
+            self.z = Parameter('z', value=0.5)
+
+        def __call__(self):
+            self.growth_factor = np.array(self.omega_m ** 0.55 / (1.0 + self.z))
+            self.growth_rate = np.array(self.omega_m ** 0.55)
+            return self
+
+        def tree_flatten(self):
+            return [self.growth_factor, self.growth_rate], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.growth_factor = children[0]
+            obj.growth_rate = children[1]
+            return obj
+
+    class InternalSpectrum(Calculator):
+        def __init__(self):
+            self.cosmo = InternalCosmology()
+            self.A = Parameter('A', value=1.0)
+            self.ns = Parameter('ns', value=0.96)
+
+        def __call__(self):
+            self.pk = self.A * K ** self.ns * self.cosmo.growth_factor ** 2
+            return self.pk
+
+        def tree_flatten(self):
+            return [self.pk], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.pk = children[0]
+            return obj
+
+    pipe = compile(InternalSpectrum())
+    assert set(pipe.params.names()) == {'omega_m', 'z', 'A', 'ns'}
+    D = 0.3 ** 0.55 / 1.5
+    assert jnp.allclose(pipe(omega_m=0.3, z=0.5, A=1.0, ns=0.96), jnp.array(1.0 * np.array(K) ** 0.96 * D ** 2), atol=1e-8)
+
+
+def test_duplicate_param_name_auto_shared():
+    """Two distinct Parameter objects with the same name are auto-unified by build_graph.
+
+    build_graph (and compile) no longer raise — same-named Parameters are merged
+    automatically (first-seen wins), equivalent to an implicit share_params() call.
+    """
+
+    class DupCosmology(ExternalCalculator):
+        def __init__(self):
+            self.omega_m = Parameter('omega_m', value=0.3)
+
+        def __call__(self):
+            self.growth_factor = np.array(self.omega_m ** 0.55)
+            return self
+
+        def tree_flatten(self):
+            return [self.growth_factor], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.growth_factor = children[0]
+            return obj
+
+    class DupSpectrum(Calculator):
+        def __init__(self, cosmo):
+            self.cosmo = cosmo
+            self.omega_m = Parameter('omega_m', value=0.3)  # different object, same name
+
+        def __call__(self):
+            self.pk = self.omega_m * self.cosmo.growth_factor
+            return self.pk
+
+        def tree_flatten(self):
+            return [self.pk], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.pk = children[0]
+            return obj
+
+    # Should NOT raise — auto-shared instead
+    pipe = compile(DupSpectrum(cosmo=DupCosmology()))
+    # Only one 'omega_m' in the compiled graph
+    assert pipe.params.names() == ['omega_m']
+    result = float(pipe({'omega_m': 0.3}))
+    expected = 0.3 * 0.3 ** 0.55
+    assert abs(result - expected) < 1e-8
+
+
+def test_fd_acc():
+    """param.fd_acc=4 gives smaller gradient error than fd_acc=2 at the same large step size."""
+
+    class SinCosmology(ExternalCalculator):
+        def __init__(self, omega_m):
+            self.omega_m = omega_m
+
+        def __call__(self):
+            x = float(self.omega_m)
+            self.val = np.array(np.sin(x) + x ** 3)
+            return self
+
+        def tree_flatten(self):
+            return [self.val], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.val = children[0]
+            return obj
+
+    class TrivialLikelihood(Calculator):
+        def __init__(self, cosmo):
+            self.cosmo = cosmo
+
+        def __call__(self):
+            self.out = jnp.sum(self.cosmo.val)
+            return self.out
+
+        def tree_flatten(self):
+            return [self.out], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.out = children[0]
+            return obj
+
+    x0 = 0.3
+    analytic_grad = float(np.cos(x0) + 3 * x0 ** 2)
+    large_eps = 1e-2
+
+    for acc, tol in [(2, 2e-4), (4, 1e-8)]:
+        om = Parameter('omega_m', value=x0, fd_eps=large_eps, fd_acc=acc)
+        pipe = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om)))
+        g = float(jax.grad(pipe)({'omega_m': jnp.array(x0)})['omega_m'])
+        assert abs(g - analytic_grad) < tol, f'fd_acc={acc}: grad error {abs(g - analytic_grad):.2e} >= tol {tol:.2e}'
+
+    om2 = Parameter('omega_m', value=x0, fd_eps=large_eps, fd_acc=2)
+    om4 = Parameter('omega_m', value=x0, fd_eps=large_eps, fd_acc=4)
+    pipe2 = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om2)))
+    pipe4 = compile(TrivialLikelihood(cosmo=SinCosmology(omega_m=om4)))
+    err2 = abs(float(jax.grad(pipe2)({'omega_m': jnp.array(x0)})['omega_m']) - analytic_grad)
+    err4 = abs(float(jax.grad(pipe4)({'omega_m': jnp.array(x0)})['omega_m']) - analytic_grad)
+    assert err4 < err2, f'fd_acc=4 error {err4:.2e} should be smaller than fd_acc=2 error {err2:.2e}'
+
+
+# ── tracer safety / parameter mutation ────────────────────────────────────────
+
+def test_no_tracer_leakage_after_jit(pipeline):
+    """After jax.jit(pipe)(params), node attrs and param values are concrete, not stale tracers."""
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    jax.jit(pipeline)(params)
+    cosmo, spectrum, likelihood = pipeline.nodes
+
+    for p in pipeline.params:
+        assert not isinstance(p._value, jax.core.Tracer), f'{p.name}.value is a stale tracer'
+        assert isinstance(np.asarray(p.value), np.ndarray)
+    assert not isinstance(cosmo.growth_factor, jax.core.Tracer)
+    assert not isinstance(spectrum.pk, jax.core.Tracer)
+    assert not isinstance(likelihood.loglikelihood, jax.core.Tracer)
+    assert np.isfinite(float(pipeline()))
+
+
+def test_inplace_mutation_after_compile():
+    """param.value changed in place after compile: pipeline uses the new value as default."""
+    _, _, A, _, _, _, likelihood = _make_nodes()
+    pipe = compile(likelihood)
+
+    assert abs(float(pipe()) - analytic_logL(0.3, 0.5, 1.0, 0.96)) < 1e-8
+    A.value = 1.5
+    assert abs(float(pipe()) - analytic_logL(0.3, 0.5, 1.5, 0.96)) < 1e-8
+    jax.jit(pipe)({'omega_m': 0.3, 'z': 0.5, 'A': 1.5, 'ns': 0.96})
+    assert abs(float(pipe()) - analytic_logL(0.3, 0.5, 1.5, 0.96)) < 1e-8
+
+
+# ── prior / posterior ─────────────────────────────────────────────────────────
+
+def test_prior_standalone():
+    """Prior alone: sums logpdf over non-fixed params, skips fixed ones."""
+    omega_m = Parameter('omega_m', value=0.3, prior=dict(dist='norm', loc=0.3, scale=0.01))
+    A = Parameter('A', value=1.0, prior=dict(dist='uniform', limits=(0.5, 2.0)))
+    ns = Parameter('ns', value=0.96, fixed=True)
+    pipe = compile(Prior(omega_m=omega_m, A=A, ns=ns))
+
+    # ParameterPrior.logpdf is zero-lag: it subtracts the logpdf at the
+    # distribution centre, so each term is 0 at the centre and < 0 elsewhere.
+    # omega_m is evaluated off-centre (0.32) to exercise a non-trivial value;
+    # A sits in the interior of its uniform prior, contributing 0.
+    params = {'omega_m': 0.32, 'A': 1.0}
+    got = float(pipe(params))
+    norm_lp = lambda x: float(jax.scipy.stats.norm.logpdf(x, loc=0.3, scale=0.01))
+    expected = norm_lp(0.32) - norm_lp(0.3)
+    assert abs(got - expected) < 1e-8
+    assert float(pipe({'omega_m': 0.3, 'A': 0.3})) == float(-jnp.inf)
+
+    grad = jax.grad(pipe)(params)
+    assert 'omega_m' in grad and 'A' in grad
+    fd_om = (float(pipe({'omega_m': 0.32 + 1e-5, 'A': 1.0})) - float(pipe({'omega_m': 0.32 - 1e-5, 'A': 1.0}))) / 2e-5
+    assert abs(float(grad['omega_m']) - fd_om) < 1e-6
+
+
+def test_prior_in_posterior():
+    """Prior combined with likelihood via a hand-rolled posterior node."""
+
+    class LogPosterior(Calculator):
+        def __init__(self, likelihood, prior):
+            self.likelihood = likelihood
+            self.prior = prior
+
+        def __call__(self):
+            self.logposterior = self.likelihood.loglikelihood + self.prior.logpdf
+            return self.logposterior
+
+        def tree_flatten(self):
+            return [self.logposterior], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.logposterior = children[0]
+            return obj
+
+    omega_m = Parameter('omega_m', value=0.3, prior=dict(dist='norm', loc=0.3, scale=0.01))
+    z = Parameter('z', value=0.5)
+    A = Parameter('A', value=1.0)
+    ns = Parameter('ns', value=0.96)
+
+    prior = Prior(omega_m=omega_m, z=z, A=A, ns=ns)
+    cosmo = Cosmology(omega_m=omega_m, z=z)
+    spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
+    likelihood = GaussianChi2(spectrum=spectrum, data=DATA)
+    pipe = compile(LogPosterior(likelihood=likelihood, prior=prior))
+
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    got = float(pipe(params))
+    # Zero-lag prior: omega_m is evaluated at its centre (loc=0.3), so the prior
+    # contributes 0; z/A/ns have no (proper) prior and also contribute 0.
+    logP = 0.
+    assert abs(got - (analytic_logL(0.3, 0.5, 1.0, 0.96) + logP)) < 1e-8
+    assert set(jax.grad(pipe)(params).keys()) == {'omega_m', 'z', 'A', 'ns'}
+    assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
+
+
+def test_posterior_value_and_grad():
+    """Posterior = logL + logPrior; grad flows through both."""
+    omega_m = Parameter('omega_m', value=0.3, prior=dict(dist='norm', loc=0.3, scale=0.01))
+    z = Parameter('z', value=0.5)
+    A = Parameter('A', value=1.0)
+    ns = Parameter('ns', value=0.96)
+
+    prior = Prior(omega_m=omega_m, z=z, A=A, ns=ns)
+    cosmo = Cosmology(omega_m=omega_m, z=z)
+    spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
+    likelihood = GaussianChi2(spectrum=spectrum, data=DATA)
+    pipe = compile(Posterior(likelihood, prior))
+
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    got = float(pipe(params))
+    # Zero-lag prior: omega_m evaluated at its centre (loc=0.3) → prior contributes 0.
+    logP = 0.
+    assert abs(got - (analytic_logL(0.3, 0.5, 1.0, 0.96) + logP)) < 1e-8
+    assert set(jax.grad(pipe)(params).keys()) == {'omega_m', 'z', 'A', 'ns'}
+    assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
+
+
+def test_posterior_early_exit():
+    """Likelihood is not called when logprior == -inf (eager mode)."""
+    _call_count = [0]
+
+    class CountedLikelihood(Calculator):
+        def __init__(self, spectrum, data, sigma=0.1):
+            self.spectrum = spectrum
+            self._data = data
+            self._sigma = sigma
+
+        def __call__(self):
+            _call_count[0] += 1
+            self.loglikelihood = -0.5 * jnp.sum(((self.spectrum.pk - self._data) / self._sigma) ** 2)
+            return self.loglikelihood
+
+        def tree_flatten(self):
+            return [self.loglikelihood], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.loglikelihood = children[0]
+            return obj
+
+    omega_m = Parameter('omega_m', value=0.3, prior=dict(dist='uniform', limits=(0.2, 0.5)))
+    z = Parameter('z', value=0.5)
+    A = Parameter('A', value=1.0)
+    ns = Parameter('ns', value=0.96)
+
+    prior = Prior(omega_m=omega_m, z=z, A=A, ns=ns)
+    cosmo = Cosmology(omega_m=omega_m, z=z)
+    spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
+    likelihood = CountedLikelihood(spectrum=spectrum, data=DATA)
+    pipe = compile(Posterior(likelihood, prior))
+    _call_count[0] = 0
+
+    pipe({'omega_m': 0.35, 'z': 0.5, 'A': 1.0, 'ns': 0.96})
+    assert _call_count[0] == 1, f"Expected 1 call, got {_call_count[0]}"
+    assert float(pipe({'omega_m': 0.1, 'z': 0.5, 'A': 1.0, 'ns': 0.96})) == float(-jnp.inf)
+    assert _call_count[0] == 1, f"Expected still 1 call (no likelihood), got {_call_count[0]}"
+    jax.jit(pipe)({'omega_m': 0.1, 'z': 0.5, 'A': 1.0, 'ns': 0.96})
+    assert _call_count[0] == 2, f"Expected 2 calls (jit always traces), got {_call_count[0]}"
+
+
+# ── GaussianLikelihood / analytic marginalisation ─────────────────────────────
+
+def test_gaussian_likelihood_base():
+    """GaussianLikelihood: logpdf, tree_flatten, and grad flow through theory."""
+
+    class SpectrumLikelihood(GaussianLikelihood):
+        def __init__(self, spectrum, data, covariance):
+            self.spectrum = spectrum
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.linalg.inv(jnp.asarray(covariance))
+
+        def __call__(self):
+            self.flattheory = self.spectrum.pk
+            return super().__call__()
+
+    sigma = 0.1
+    _, _, _, _, _, spectrum, _ = _make_nodes()
+    lik = SpectrumLikelihood(spectrum=spectrum, data=DATA, covariance=np.eye(len(K)) * sigma ** 2)
+    pipe = compile(lik)
+
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    assert abs(float(pipe(params)) - analytic_logL(0.3, 0.5, 1.0, 0.96)) < 1e-8
+
+    lik()
+    children, aux = lik.tree_flatten()
+    assert len(children) == 3
+    recon = SpectrumLikelihood.tree_unflatten(aux, children)
+    assert jnp.allclose(recon.flattheory, lik.flattheory)
+    assert jnp.allclose(recon.precision, lik.precision)
+    assert set(jax.grad(pipe)(params).keys()) == {'omega_m', 'z', 'A', 'ns'}
+
+
+def test_analytic_marginalization():
+    """AnalyticMarginalization: logpdf matches analytical formula; grad flows through theta."""
+    sigma_d, sigma_alpha = 0.1, 2.0
+    A_val, alpha_0 = 1.0, 0.0
+
+    A = Parameter('A', value=A_val)
+    alpha = Parameter('alpha', value=alpha_0, derived='marg', prior=dict(dist='norm', loc=0., scale=sigma_alpha))
+    pipe = compile(Posterior(_LinearTheory(A=A, alpha=alpha, data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2), Prior()))
+
+    params = {'A': A_val, 'alpha': alpha_0}
+    got = float(pipe(params))
+
+    K_np = np.array(K)
+    r = np.array(DATA) - A_val * K_np
+    B = K_np[:, None]
+    P = np.eye(len(K)) / sigma_d ** 2
+    P_alpha = np.array([[1.0 / sigma_alpha ** 2]])
+    F = B.T @ P @ B + P_alpha
+    b = B.T @ (P @ r)
+    expected = float(-0.5 * r @ P @ r + 0.5 * float(b @ np.linalg.solve(F, b)) - 0.5 * np.log(float(F.flat[0])))
+    assert abs(got - expected) < 1e-6, f'marg logpdf: got {got:.8f}, expected {expected:.8f}'
+
+    grad = jax.grad(pipe)(params)
+    eps = 1e-5
+    fd = (float(pipe({'A': A_val + eps, 'alpha': alpha_0})) - float(pipe({'A': A_val - eps, 'alpha': alpha_0}))) / (2 * eps)
+    assert abs(float(grad['A']) - fd) < 1e-4
+    assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
+
+
+def test_best_fit_solved():
+    """derived='best': profile likelihood — parameter at MLE, no volume factor."""
+    sigma_d = 0.1
+    A_val, alpha_0 = 1.0, 0.0
+
+    A = Parameter('A', value=A_val)
+    alpha = Parameter('alpha', value=alpha_0, derived='best')
+    pipe = compile(Posterior(_LinearTheory(A=A, alpha=alpha, data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2), Prior()))
+
+    params = {'A': A_val, 'alpha': alpha_0}
+    got = float(pipe(params))
+
+    K_np = np.array(K)
+    r = np.array(DATA) - A_val * K_np
+    B = K_np[:, None]
+    P = np.eye(len(K)) / sigma_d ** 2
+    F = B.T @ P @ B
+    b = B.T @ (P @ r)
+    expected = float(-0.5 * r @ P @ r + 0.5 * float(b @ np.linalg.solve(F, b)))
+    assert abs(got - expected) < 1e-6
+
+    eps = 1e-5
+    fd = (float(pipe({'A': A_val + eps, 'alpha': alpha_0})) - float(pipe({'A': A_val - eps, 'alpha': alpha_0}))) / (2 * eps)
+    assert abs(float(jax.grad(pipe)(params)['A']) - fd) < 1e-4
+    assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
+
+
+def test_mixed_marg_best():
+    """Mixed derived='marg' and derived='best': volume factor only for 'marg' param."""
+
+    class TwoParamTheory(GaussianLikelihood):
+        def __init__(self, A, alpha_m, alpha_b, data, covariance):
+            self.A = A
+            self.alpha_m = alpha_m
+            self.alpha_b = alpha_b
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.linalg.inv(jnp.asarray(covariance))
+
+        def __call__(self):
+            self.flattheory = (self.A + self.alpha_m + self.alpha_b) * K
+            return super().__call__()
+
+    sigma_d, sigma_m = 0.1, 2.0
+    A_val = 1.0
+
+    A = Parameter('A', value=A_val)
+    alpha_m = Parameter('alpha_m', value=0.0, derived='marg', prior=dict(dist='norm', loc=0., scale=sigma_m))
+    alpha_b = Parameter('alpha_b', value=0.0, derived='best')
+    lik = TwoParamTheory(A=A, alpha_m=alpha_m, alpha_b=alpha_b, data=DATA, covariance=np.eye(len(K)) * sigma_d ** 2)
+    pipe = compile(Posterior(lik, Prior()))
+
+    params = {'A': A_val, 'alpha_m': 0.0, 'alpha_b': 0.0}
+    got = float(pipe(params))
+
+    K_np = np.array(K)
+    r = np.array(DATA) - A_val * K_np
+    P = np.eye(len(K)) / sigma_d ** 2
+    Bmat = np.column_stack([K_np, K_np])
+    # Prior precision is added for every solved param (here only alpha_m=index 0 has one).
+    F_full = Bmat.T @ P @ Bmat + np.diag([1.0 / sigma_m ** 2, 0.0])
+    b_vec = Bmat.T @ (P @ r)
+    quad = float(b_vec @ np.linalg.solve(F_full, b_vec))
+    # Volume factor (Schur complement over 'best'): + ½ log|P_marg| − ½ log|F| + ½ log|F[best, best]|.
+    _, logdet_F = np.linalg.slogdet(F_full)
+    expected = float(-0.5 * r @ P @ r + 0.5 * quad - 0.5 * float(logdet_F) + 0.5 * np.log(float(F_full[1, 1])))
+    assert abs(got - expected) < 1e-6, f'mixed logpdf: got {got:.8f}, expected {expected:.8f}'
+
+    assert 'A' in jax.grad(pipe)(params)
+    assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
+
+
+def test_custom_jvp_linear_theory():
+    """custom_jvp on the linear-alpha term: jacfwd uses the analytic rule; grad(posterior) works correctly."""
+
+    @jax.custom_jvp
+    def linear_term(alpha, template):
+        return alpha * template
+
+    @linear_term.defjvp
+    def _(primals, tangents):
+        alpha, template = primals
+        dalpha, _ = tangents
+        return alpha * template, dalpha * template
+
+    class MixedTheory(GaussianLikelihood):
+        def __init__(self, A, ns, alpha, data, cov):
+            self.A = A
+            self.ns = ns
+            self.alpha = alpha
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.linalg.inv(jnp.asarray(cov))
+
+        def __call__(self):
+            self.flattheory = self.A * K ** self.ns + linear_term(self.alpha.value, K)
+            return super().__call__()
+
+    sigma_d, sigma_alpha = 0.1, 2.0
+    A_val, ns_val, alpha_0 = 1.0, 0.96, 0.0
+
+    A = Parameter('A', value=A_val)
+    ns = Parameter('ns', value=ns_val)
+    alpha = Parameter('alpha', value=alpha_0, derived='marg', prior=dict(dist='norm', loc=0., scale=sigma_alpha))
+    lik = MixedTheory(A=A, ns=ns, alpha=alpha, data=DATA, cov=np.eye(len(K)) * sigma_d ** 2)
+    pipe = compile(Posterior(lik, Prior()))
+
+    params = {'A': A_val, 'ns': ns_val, 'alpha': alpha_0}
+    got = float(pipe(params))
+
+    K_np = np.array(K)
+    r = np.array(DATA) - A_val * K_np ** ns_val
+    B = K_np[:, None]
+    P = np.eye(len(K)) / sigma_d ** 2
+    P_alpha = np.array([[1.0 / sigma_alpha ** 2]])
+    F = B.T @ P @ B + P_alpha
+    b = B.T @ (P @ r)
+    expected = float(-0.5 * r @ P @ r + 0.5 * float(b @ np.linalg.solve(F, b)) - 0.5 * np.log(float(F.flat[0])))
+    assert abs(got - expected) < 1e-6
+
+    grad = jax.grad(pipe)(params)
+    eps = 1e-5
+    for name in ('A', 'ns'):
+        fd = (float(pipe({**params, name: params[name] + eps})) - float(pipe({**params, name: params[name] - eps}))) / (2 * eps)
+        assert abs(float(grad[name]) - fd) < 1e-4
+    assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
+
+
+def test_sum_likelihood():
+    """SumLikelihood: logpdf is the sum of components; Posterior marginalizes only components that depend on solved params."""
+
+    K1 = jnp.linspace(0.01, 0.2, 20)
+    K2 = jnp.linspace(0.1, 0.3, 15)
+    rng = np.random.default_rng(42)
+    data1 = jnp.array(rng.normal(1.0, 0.1, len(K1)))
+    data2 = jnp.array(rng.normal(0.5, 0.2, len(K2)))
+    sigma1, sigma2, sigma_alpha = 0.1, 0.2, 1.5
+
+    class Theory1(GaussianLikelihood):
+        def __init__(self, A, alpha, data, cov):
+            self.A = A
+            self.alpha = alpha
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.linalg.inv(jnp.asarray(cov))
+
+        def __call__(self):
+            self.flattheory = (self.A + self.alpha) * K1
+            return super().__call__()
+
+    class Theory2(GaussianLikelihood):
+        def __init__(self, B, data, cov):
+            self.B = B
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.linalg.inv(jnp.asarray(cov))
+
+        def __call__(self):
+            self.flattheory = self.B * K2
+            return super().__call__()
+
+    A = Parameter('A', value=1.0)
+    B = Parameter('B', value=0.5)
+    alpha = Parameter('alpha', value=0.0, derived='marg', prior=dict(dist='norm', loc=0., scale=sigma_alpha))
+
+    lik1 = Theory1(A=A, alpha=alpha, data=data1, cov=np.eye(len(K1)) * sigma1 ** 2)
+    lik2 = Theory2(B=B, data=data2, cov=np.eye(len(K2)) * sigma2 ** 2)
+    pipe = compile(Posterior(SumLikelihood(lik1, lik2), Prior()))
+
+    A_val, B_val, alpha_val = 1.0, 0.5, 0.0
+    params = {'A': A_val, 'B': B_val, 'alpha': alpha_val}
+    got = float(pipe(params))
+
+    K1_np, K2_np = np.array(K1), np.array(K2)
+    r1 = np.array(data1) - A_val * K1_np
+    P1 = np.eye(len(K1)) / sigma1 ** 2
+    B_mat = K1_np[:, None]
+    P_alpha = np.array([[1.0 / sigma_alpha ** 2]])
+    F = B_mat.T @ P1 @ B_mat + P_alpha
+    b_vec = B_mat.T @ (P1 @ r1)
+    logL1_marg = float(-0.5 * r1 @ P1 @ r1 + 0.5 * float(b_vec @ np.linalg.solve(F, b_vec)) - 0.5 * np.log(float(F.flat[0])))
+    r2 = np.array(data2) - B_val * K2_np
+    logL2 = float(-0.5 * r2 @ np.eye(len(K2)) / sigma2 ** 2 @ r2)
+    assert abs(got - (logL1_marg + logL2)) < 1e-6
+
+    grad = jax.grad(pipe)(params)
+    assert 'A' in grad and 'B' in grad
+    assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
+
+
+# ── derived params ────────────────────────────────────────────────────────────
+
+def test_derived_param_export():
+    """Derived params (param.derived is True) set by a node's __call__ are readable after eager and JIT pipeline calls."""
+    K_loc = jnp.linspace(0.01, 0.3, 20)
+    sigma = 0.1
+    rng = np.random.default_rng(17)
+    data = jnp.array(rng.normal(1.0, sigma, 20))
+
+    class TheoryWithDerived(GaussianLikelihood):
+        def __init__(self, A, ns, data, sigma=0.1):
+            self.A = A
+            self.ns = ns
+            self._sigma = sigma
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.eye(len(data)) / sigma ** 2
+            self.chi2 = Parameter('chi2', value=0.0, derived=True)
+
+        def __call__(self):
+            self.flattheory = self.A * K_loc ** self.ns
+            result = GaussianLikelihood.__call__(self)
+            r = self.flatdata - self.flattheory
+            self.chi2.value = jnp.sum(r ** 2) / self._sigma ** 2
+            return result
+
+    A = Parameter('A', value=1.0)
+    ns = Parameter('ns', value=0.96)
+    lik = TheoryWithDerived(A=A, ns=ns, data=data, sigma=sigma)
+    pipe = compile(lik)
+
+    def expected_chi2(A_val, ns_val):
+        r = np.array(data) - A_val * np.array(K_loc) ** ns_val
+        return float(np.sum(r ** 2) / sigma ** 2)
+
+    params1 = {'A': 1.2, 'ns': 0.95}
+    params2 = {'A': 0.9, 'ns': 0.98}
+
+    _, deriveds = pipe(params1, return_derived=True)
+    assert abs(float(pipe.params['chi2'].value) - expected_chi2(1.2, 0.95)) < 1e-6
+    assert abs(float(deriveds['chi2']) - expected_chi2(1.2, 0.95)) < 1e-6
+
+    # jit: wrap in a lambda so that return_derived=True is a Python constant
+    # (jit cannot trace through a Python bool kwarg directly).
+    pipe_rd = lambda p: pipe(p, return_derived=True)
+    _, deriveds = jax.jit(pipe_rd)(params2)
+    for p in pipe._derived_params:
+        p._value = np.asarray(deriveds[p.name])
+    assert abs(float(pipe.params['chi2'].value) - expected_chi2(0.9, 0.98)) < 1e-6
+
+    n = 4
+    A_batch = jnp.linspace(0.8, 1.2, n)
+    ns_batch = jnp.full(n, 0.96)
+    expected_batch = jnp.array([expected_chi2(float(A_batch[i]), 0.96) for i in range(n)])
+    _, deriveds = jax.jit(jax.vmap(pipe_rd))({'A': A_batch, 'ns': ns_batch})
+    for p in pipe._derived_params:
+        p._value = np.asarray(deriveds[p.name])
+    assert jnp.allclose(pipe.params['chi2'].value, expected_batch, atol=1e-6)
+
+
+def test_init_params_immediate():
+    """Parameters declared in __init__ are available before compile(), and the pipeline still works."""
+    K_loc = jnp.linspace(0.01, 0.3, 20)
+    data = jnp.array(np.random.default_rng(7).normal(0., 0.1, len(K_loc)))
+
+    class QuickLikelihood(GaussianLikelihood):
+        def __init__(self, A, ns, data, sigma=0.1):
+            self.A = A
+            self.ns = ns
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.eye(len(data)) / sigma ** 2
+
+        def __call__(self):
+            self.flattheory = self.A * K_loc ** self.ns
+            return super().__call__()
+
+    A = Parameter('A', value=1.2, prior=dict(dist='norm', loc=1.0, scale=0.5))
+    ns = Parameter('ns', value=0.95)
+    lik = QuickLikelihood(A=A, ns=ns, data=data)
+
+    assert lik.A is A
+    assert lik.ns is ns
+
+    pipe = compile(lik)
+    got = float(pipe({'A': 1.2, 'ns': 0.95}))
+    r = np.array(data) - 1.2 * np.array(K_loc) ** 0.95
+    assert abs(got - float(-0.5 * r @ r / 0.1 ** 2)) < 1e-6
+
+
+# ── Calculator.clone() ────────────────────────────────────────────────────────
+
+def test_clone_same_result():
+    """clone() produces a graph that returns the same value as the original."""
+    _, _, _, _, _, spectrum, _ = _make_nodes()
+    spec2 = spectrum.clone()
+    pipe1 = compile(spectrum)
+    pipe2 = compile(spec2)
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    assert jnp.allclose(pipe1(params), pipe2(params), atol=1e-8)
+
+
+def test_clone_shares_init_params():
+    """clone() reuses the original's constructor-arg objects (shallow): params are shared.
+
+    Independence is obtained by passing freshly constructed nodes via clone(**kwargs),
+    not automatically — see test_clone_override_kwarg.
+    """
+    _, _, _, _, _, spectrum, likelihood = _make_nodes()
+    spec2 = spectrum.clone()
+    pipe1 = compile(likelihood)
+    pipe2 = compile(spec2)
+    for name in pipe2.params.names():
+        assert pipe1.params[name] is pipe2.params[name], \
+            f"param {name!r} should be shared between original and shallow clone"
+
+
+def test_clone_mutation_independence():
+    """Mutating a param value in the clone does not affect the original pipeline."""
+    _, _, A, _, _, spectrum, likelihood = _make_nodes()
+    spec2 = spectrum.clone()
+    pipe1 = compile(likelihood)
+    pipe2 = compile(spec2)
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    val1_before = float(pipe1(params))
+
+    # Mutate the clone's A param (find it from pipe2.params)
+    pipe2.params['A'].value = 3.0
+    val1_after = float(pipe1(params))
+    assert abs(val1_before - val1_after) < 1e-8, \
+        "Mutating the clone's param changed the original pipeline"
+
+
+def test_clone_override_kwarg():
+    """clone(A=...) overrides the init argument and produces the expected result."""
+    _, _, _, _, _, spectrum, _ = _make_nodes()
+    new_A = Parameter('A', value=2.0)
+    spec2 = spectrum.clone(A=new_A)
+    pipe2 = compile(spec2)
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 2.0, 'ns': 0.96}
+    D = 0.3 ** 0.55 / 1.5
+    expected_pk = 2.0 * np.array(K) ** 0.96 * D ** 2
+    assert jnp.allclose(pipe2(params), jnp.array(expected_pk), atol=1e-8)
+
+
+def test_clone_with_external_dep():
+    """clone() shares dependency objects (shallow); pipelines called with explicit
+    params are unaffected by mutations to the shared defaults' stored values."""
+    omega_m = Parameter('omega_m', value=0.3)
+    z = Parameter('z', value=0.5)
+    A = Parameter('A', value=1.0)
+    ns = Parameter('ns', value=0.96)
+    cosmo = Cosmology(omega_m=omega_m, z=z)
+    spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
+    spec2 = spectrum.clone()
+    pipe1 = compile(spectrum)
+    pipe2 = compile(spec2)
+
+    params = {'omega_m': 0.28, 'z': 0.6, 'A': 1.1, 'ns': 0.97}
+    assert jnp.allclose(pipe1(params), pipe2(params), atol=1e-8)
+
+    # Mutate the shared omega_m's stored value; pipe1 called with explicit params
+    # overrides the stored value and so stays consistent.
+    pipe2.params['omega_m'].value = 0.5
+    ref = jnp.array(pipe1(params))
+    assert jnp.allclose(ref, pipe1(params), atol=1e-8)  # explicit-param call unaffected
+    # pipe2() (no explicit params) uses the mutated default; z, A, ns stay at construction defaults (0.5, 1.0, 0.96)
+    D2 = 0.5 ** 0.55 / (1.0 + 0.5)
+    expected_pk2 = 1.0 * np.array(K) ** 0.96 * D2 ** 2
+    assert jnp.allclose(pipe2(), jnp.array(expected_pk2), atol=1e-8)
+
+
+def test_derived_expression_param():
+    """Parameter(derived='a * b**2') evaluates and sets value via __call__."""
+    omega_m = Parameter('omega_m', value=0.3)
+    h = Parameter('h', value=0.67)
+
+    # depends stores actual Parameter refs → __call__() reads their .value
+    omega_cdm = Parameter('omega_cdm', derived='omega_m * h**2', depends={'omega_m': omega_m, 'h': h})
+    assert omega_cdm._derived == 'omega_m * h**2'
+
+    result = omega_cdm()
+    assert abs(result - 0.3 * 0.67 ** 2) < 1e-12
+
+    # updating a dep param propagates to the next __call__
+    omega_m.value = 0.4
+    result2 = omega_cdm()
+    assert abs(result2 - 0.4 * 0.67 ** 2) < 1e-12
+    assert abs(omega_cdm.value - 0.4 * 0.67 ** 2) < 1e-12
+
+    # non-expression derived (e.g. derived=True) falls through to return value unchanged
+    chi2 = Parameter('chi2', value=3.0, derived=True)
+    assert chi2() == 3.0
+
+
+@pytest.mark.parametrize('backend', ['jax', 'mpi', 'mpi_and_jax'])
+def test_pmap_generic(backend):
+    """pmap(fn) batches an arbitrary function over pytree args/outputs like jax.vmap."""
+    # scalar-leaf input, pytree (dict) output
+    fn = lambda x: {'sq': x ** 2, 'neg': -x}
+    x = jnp.linspace(0., 1., 13)            # odd size -> exercises device padding
+    out = pmap(fn, backend=backend)(x)
+    ref = jax.vmap(fn)(x)
+    assert set(out) == set(ref)
+    for key in ref:
+        assert out[key].shape == ref[key].shape
+        assert np.allclose(out[key], ref[key])
+
+    # multiple positional args
+    g = lambda a, b: a * b + 1.
+    a, b = jnp.arange(7.), jnp.arange(7.) * 2.
+    assert np.allclose(pmap(g, backend=backend)(a, b), jax.vmap(g)(a, b))
+
+    # vector-leaf input, scalar output; and tuple output
+    h = lambda v: (jnp.sum(v ** 2), v[0] - v[1])
+    vb = jnp.arange(12.).reshape(6, 2)
+    o0, o1 = pmap(h, backend=backend)(vb)
+    r0, r1 = jax.vmap(h)(vb)
+    assert np.allclose(o0, r0) and np.allclose(o1, r1)
+    assert o0.shape == (6,) and o1.shape == (6,)
+
+    # nested pytree input (dict of arrays)
+    k = lambda d: d['a'] + 2. * d['b']
+    d = {'a': jnp.arange(5.), 'b': jnp.arange(5.) + 10.}
+    assert np.allclose(pmap(k, backend=backend)(d), jax.vmap(k)(d))
+
+
+def test_pmap_mismatched_batch_raises():
+    """pmap requires all batched leaves to share the leading axis size."""
+    fn = lambda a, b: a + b
+    with pytest.raises(ValueError):
+        pmap(fn)(jnp.arange(4.), jnp.arange(5.))
+
+
+def test_pmap_compiled_graph(pipeline):
+    """pmap over a compiled pipeline matches jax.vmap of the same graph."""
+    n = 9
+    batch = {'omega_m': jnp.linspace(0.25, 0.35, n), 'z': jnp.full(n, 0.5),
+             'A': jnp.ones(n), 'ns': jnp.full(n, 0.96)}
+    out = pmap(pipeline, backend='mpi_and_jax')(batch)
+    ref = jax.vmap(pipeline)(batch)
+    assert out.shape == (n,)
+    assert np.allclose(out, ref)
+
+
+def test_build_graph_auto_share_params():
+    """build_graph unifies same-named Parameters that are distinct objects across nodes.
+
+    Two calculators constructed independently with a Parameter('omega_m', ...) should be
+    compiled together without requiring an explicit share_params() call.
+    """
+    from desilike.base import build_graph, compile
+
+    omega_m_1 = Parameter('omega_m', value=0.3)
+    z_1 = Parameter('z', value=0.5)
+    omega_m_2 = Parameter('omega_m', value=0.3)  # distinct object, same name
+    z_2 = Parameter('z', value=0.5)              # distinct object, same name
+    A = Parameter('A', value=1.0)
+    ns = Parameter('ns', value=0.96)
+
+    cosmo1 = Cosmology(omega_m=omega_m_1, z=z_1)
+    cosmo2 = Cosmology(omega_m=omega_m_2, z=z_2)
+    spec1 = PowerSpectrum(cosmo=cosmo1, A=A, ns=ns)
+    spec2 = PowerSpectrum(cosmo=cosmo2, A=A, ns=ns)
+
+    class SumSpectrum(Calculator):
+        def __init__(self, s1, s2):
+            self.s1 = s1
+            self.s2 = s2
+        def __call__(self):
+            self.pk = self.s1.pk + self.s2.pk
+            return self.pk
+        def tree_flatten(self):
+            return [self.pk], None
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.pk = children[0]
+            return obj
+
+    root = SumSpectrum(spec1, spec2)
+
+    # build_graph should auto-share omega_m_1/omega_m_2 and z_1/z_2, not raise
+    ctx = build_graph(root)
+
+    # compile should succeed and produce a graph with only 4 unique params
+    pipe = compile(root)
+    assert set(pipe.params.names()) == {'omega_m', 'z', 'A', 'ns'}
+    assert len(pipe.params) == 4
+
+    # Both branches should see the same canonical omega_m after sharing
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    result = pipe(params)
+    D = 0.3 ** 0.55 / 1.5
+    expected = 2.0 * np.array(K) ** 0.96 * D ** 2
+    assert jnp.allclose(result, jnp.array(expected), atol=1e-8)
 
 
 if __name__ == '__main__':
-
-    setup_logging()
-    #test_init()
-    #test_observable()
-    #test_likelihood()
-    #test_combined_likelihood()
-    #test_params()
-    #test_copy()
-    #test_cosmo()
-    #test_install()
-    #test_vmap()
-    test_cosmo()
+    _, _, _, _, _, _, likelihood = _make_nodes()
+    pipe = compile(likelihood)
+    params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    print('logL =', float(pipe(params)))
+    print('grad =', jax.grad(pipe)(params))
+    batch = {'omega_m': jnp.linspace(0.25, 0.35, 4), 'z': jnp.full(4, 0.5), 'A': jnp.ones(4), 'ns': jnp.full(4, 0.96)}
+    print('vmap logL =', jax.vmap(pipe)(batch))

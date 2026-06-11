@@ -2,17 +2,15 @@ import os
 import sys
 import logging
 
-from .io import BaseConfig
-from .utils import BaseClass
-from . import utils
+from pathlib import Path
+import yaml
 
 
 logger = logging.getLogger('Install')
 
 
 class InstallError(Exception):
-
-    pass
+    """Error raised at installation."""
 
 
 def download(url, target, size=None):
@@ -23,10 +21,8 @@ def download(url, target, size=None):
     ----------
     url : str, Path
         url to download file from.
-
     target : str, Path
         Path where to save the file, on disk.
-
     size : int, default=None
         Expected file size, in bytes, used to show progression bar.
         If not provided, taken from header (if the file is larger than a couple of GBs,
@@ -36,7 +32,8 @@ def download(url, target, size=None):
     # Adapted from https://stackoverflow.com/questions/15644964/python-progress-bar-and-downloads
     logger.info('Downloading {} to {}.'.format(url, target))
     import requests
-    utils.mkdir(os.path.dirname(target))
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
     # See https://stackoverflow.com/questions/61991164/python-requests-missing-content-length-response
     if size is None:
         size = requests.head(url, headers={'Accept-Encoding': None}).headers.get('content-length')
@@ -69,31 +66,29 @@ def extract(in_fn, out_fn, remove=True):
     ----------
     in_fn : str, Path
         Path to input, compressed, filename.
-
     out_fn : str, Path
         Path to output file / directory.
-
     remove : bool, default=True
         If ``True``, remove input file ``in_fn``.
     """
-    in_fn, out_fn = (os.path.normpath(fn) for fn in [in_fn, out_fn])
-    if any(in_fn.endswith(ext) and not in_fn.endswith('tar' + ext) for ext in ['.gz']):
+    in_fn, out_fn = Path(in_fn), Path(out_fn)
+    is_tar = in_fn.suffixes[-2:-1] == ['.tar']
+    if in_fn.suffix == '.gz' and not is_tar:
         import gzip
-        with open(out_fn, 'wb') as out:
-            with gzip.open(in_fn, 'r') as gz:
-                out.write(gz.read())
-    elif any(in_fn.endswith(ext) and not in_fn.endswith('tar' + ext) for ext in ['.zip']):
+        with open(out_fn, 'wb') as out, gzip.open(in_fn, 'r') as gz:
+            out.write(gz.read())
+    elif in_fn.suffix == '.zip' and not is_tar:
         from zipfile import ZipFile
         with ZipFile(in_fn, 'r') as zip:
             zip.extractall(out_fn)
     else:
         import tarfile
-        ext = os.path.splitext(in_fn)[-1][1:]
+        ext = in_fn.suffix[1:]
         if ext == 'tgz': ext = 'gz'
         with tarfile.open(in_fn, 'r:' + ext) as tar:
             tar.extractall(out_fn)
     if remove and out_fn != in_fn:
-        os.remove(in_fn)
+        in_fn.unlink()
 
 
 def exists_package(pkgname):
@@ -102,14 +97,14 @@ def exists_package(pkgname):
         pkg = __import__(pkgname)
     except ImportError:
         return False
-    logger.info('Requirement already satisfied: {} in {}'.format(pkgname, os.path.dirname(os.path.dirname(pkg.__file__))))
+    logger.info('Requirement already satisfied: {} in {}'.format(pkgname, Path(pkg.__file__).parent.parent))
     del pkg
     return True
 
 
 def exists_path(path):
     """Check whether this ``path`` exists on disk."""
-    return os.path.exists(path)
+    return Path(path).exists()
 
 
 def pip(pkgindex, pkgname=None, install_dir=None, no_deps=False, force_reinstall=False, ignore_installed=False):
@@ -122,21 +117,16 @@ def pip(pkgindex, pkgname=None, install_dir=None, no_deps=False, force_reinstall
         Where to find the package.
         A package name (if registered on pypi), or a url, if on github;
         e.g. git+https://github.com/cosmodesi/desilike.
-
     pkgname : str, default=None
         Package name, to check whether the package is already installed.
         If ``None``, defaults to ``pkgindex``, or the end of ``pkgindex``,
         if 'https://' is found in it.
-
     install_dir : str, Path, default=None
         Installation directory. Defaults to PIP's default.
-
     no_deps : bool, default=False
         Does not install package's dependencies.
-
     force_reinstall : bool, default=False
         Force package's installation.
-
     ignore_installed : bool, default=False
         Ignore all (including e.g. package dependencies) previously installed packages.
     """
@@ -201,7 +191,7 @@ def source(fn):
             pass
 
 
-class Installer(BaseClass):
+class Installer(object):
     """
     Installer. desilike's configuration ('config.yaml' and 'profile.sh') is saved
     under 'DESILIKE_CONFIG_DIR' environment variable if defined, else '~/.desilike'.
@@ -211,14 +201,11 @@ class Installer(BaseClass):
     >>> installer = Installer(user=True)
     >>> installer(calculator)
 
-    To install a profiler (e.g. :class:`MinuitProfiler`), a sampler (e.g. :class:`EmceeSampler`),
-    or an emulator (e.g. :class:`MLPEmulatorEngine`):
+    To install a profiler (e.g. :class:`MinuitProfiler`):
 
     >>> installer(MinuitProfiler)
-    >>> installer(EmceeSampler)
-    >>> installer(MLPEmulatorEngine)
     """
-    home_dir = os.path.expanduser('~')
+    home_dir = str(Path.home())
 
     def __init__(self, install_dir=None, user=False, no_deps=False, force_reinstall=False, ignore_installed=False, **kwargs):
         """
@@ -229,16 +216,12 @@ class Installer(BaseClass):
         install_dir : str, Path, default=None
             Installation directory. Defaults to directory in :attr:`config_fn` if provided,
             else 'DESILIKE_INSTALL_DIR' environment variable if defined, else PIP's default.
-
         user : bool, default=False
             If ``True``, installation directory is home directory.
-
         no_deps : bool, default=False
             Does not install package's dependencies.
-
         force_reinstall : bool, default=False
             Force package's installation.
-
         ignore_installed : bool, default=False
             Ignore all (including e.g. package dependencies) previously installed packages.
         """
@@ -249,24 +232,25 @@ class Installer(BaseClass):
             install_dir = os.getenv('PYTHONUSERBASE', site.getuserbase())
         default_install_dir = os.getenv('DESILIKE_INSTALL_DIR', '')
         if not default_install_dir:
-            default_install_dir = os.path.dirname(os.path.dirname(os.path.dirname(site.getsitepackages()[0])))
+            default_install_dir = str(Path(site.getsitepackages()[0]).parents[2])
+        # os.path.relpath: Path has no lexical equivalent (relative_to does not walk up before 3.12)
         lib_rel_install_dir = os.path.relpath(site.getsitepackages()[0], default_install_dir)
         if install_dir is not None:
             install_dir = str(install_dir)
 
         self.config_dir = os.getenv('DESILIKE_CONFIG_DIR', '')
-        default_config_dir = os.path.join(self.home_dir, '.desilike')
+        default_config_dir = str(Path(self.home_dir) / '.desilike')
         if not self.config_dir:
             self.config_dir = default_config_dir
 
-        config_fn = {}
-        if os.path.isfile(self.config_fn):
-            config_fn = self.config_fn
+        config_source = {}
+        if Path(self.config_fn).is_file():
+            config_source = self.config_fn
             try:
                 with open(self.config_fn, 'a'): pass
             except PermissionError:  # from now on, write to home
                 self.config_dir = default_config_dir
-        config = BaseConfig(config_fn)
+        config = self._load_config(config_source)
 
         if 'install_dir' not in config:
             config['install_dir'] = default_install_dir
@@ -280,24 +264,39 @@ class Installer(BaseClass):
         self.no_deps = bool(no_deps)
         self.force_reinstall = bool(force_reinstall)
         self.ignore_installed = bool(ignore_installed)
-        default = {'pylib_dir': os.path.normpath(os.path.join(self.install_dir, lib_rel_install_dir)),
-                   'bin_dir': os.path.join(self.install_dir, 'bin'),
-                   'include_dir': os.path.join(self.install_dir, 'include'),
-                   'dylib_dir': os.path.join(self.install_dir, 'lib')}
+        install_dir_path = Path(self.install_dir)
+        # os.path.normpath: collapses any '..' from lib_rel_install_dir lexically (Path keeps them)
+        default = {'pylib_dir': os.path.normpath(install_dir_path / lib_rel_install_dir),
+                   'bin_dir': str(install_dir_path / 'bin'),
+                   'include_dir': str(install_dir_path / 'include'),
+                   'dylib_dir': str(install_dir_path / 'lib')}
         for name, value in default.items():
             setattr(self, name, kwargs.pop(name, value))
         if kwargs:
             raise ValueError('Did not understand {}'.format(kwargs))
 
+    @staticmethod
+    def _load_config(source):
+        """Load configuration from a dict or a .yaml file path; return a plain dict."""
+        if isinstance(source, dict):
+            return dict(source)
+        if source and Path(source).is_file():
+            with open(source, 'r') as file:
+                return yaml.safe_load(file) or {}
+        return {}
+
     @property
     def config_fn(self):
         """Path to .yaml configuration file."""
-        return os.path.join(self.config_dir, 'config.yaml')
+        return str(Path(self.config_dir) / 'config.yaml')
 
     @property
     def profile_fn(self):
         """Path to .sh profile to be sourced to set all paths."""
-        return os.path.join(self.config_dir, 'profile.sh')
+        return str(Path(self.config_dir) / 'profile.sh')
+
+    def log_info(self, msg, *args, **kwargs):
+        logger.info(msg, *args, **kwargs)
 
     def get(self, *args, **kwargs):
         """Get config option, e.g. ``install_dir``."""
@@ -317,29 +316,26 @@ class Installer(BaseClass):
         """
         Install input object ``obj``, which can be:
 
-        - a calculator instance
-        - a Sampler, Profiler, Emulator class
+        - a calculator instance (all calculators in its dependency tree are installed)
+        - a Profiler / Sampler class
 
-        More generally, whatever has an :meth:`install` method.
+        More generally, whatever exposes an :meth:`install` classmethod.
         """
         self.log_info('Installation directory is {}.'.format(self.install_dir))
 
-        def install(obj):
-            try:
-                func = obj.install
-            except AttributeError:
+        def install(cls):
+            func = getattr(cls, 'install', None)
+            if func is None:
                 return
             func(self)
+            self.setenv()
 
-        from .base import BaseCalculator
-        if isinstance(obj, BaseCalculator):
-            from .base import RuntimeInfo
-            installer_bak = RuntimeInfo.installer
-            RuntimeInfo.installer = self
-            obj.runtime_info.pipeline
-            RuntimeInfo.installer = installer_bak
+        from .base import Calculator, _iter_calculators
+        if isinstance(obj, Calculator):
+            for calculator in _iter_calculators(obj):
+                install(type(calculator))
         else:
-            install(obj)
+            install(obj if isinstance(obj, type) else type(obj))
 
     @property
     def reinstall(self):
@@ -373,7 +369,6 @@ class Installer(BaseClass):
         ----------
         section : str, default=None
             Section; typically this will be calculator's name.
-
         ro : bool, default=None
             Read-only?
 
@@ -382,13 +377,14 @@ class Installer(BaseClass):
         data_dir : str
             Path to data directory.
         """
-        base_dir = os.path.join(self.install_dir, 'data')
+        base_dir = Path(self.install_dir) / 'data'
         if section is None:
-            toret = base_dir
-        try:
-            toret = self[section]['data_dir']
-        except KeyError:
-            toret = os.path.join(base_dir, section)
+            toret = str(base_dir)
+        else:
+            try:
+                toret = self[section]['data_dir']
+            except KeyError:
+                toret = str(base_dir / section)
         if ro:
             ro = self.get('ro', None)
             if ro is not None:
@@ -403,28 +399,29 @@ class Installer(BaseClass):
         ----------
         config : dict
             Configuration.
-
         update : bool, default=True
             If ``True``, insert new 'pylib_dir', 'bin_dir', 'dylib_dir', 'source' entries
             on top of previous ones.
             If ``False``, such entries are overriden.
         """
         def _make_list(li):
-            if not utils.is_sequence(li): li = [li]
+            if not isinstance(li, (list, tuple, set, frozenset)): li = [li]
             return list(li)
 
-        config = BaseConfig(config).copy()
+        config = dict(config)
         dirs = ['pylib_dir', 'bin_dir', 'dylib_dir']
         for key in dirs + ['source']:
             if key in config: config[key] = _make_list(config[key])
-        if update and os.path.isfile(self.config_fn):
-            base_config = BaseConfig(self.config_fn)
-            config = base_config.clone(config)
+        if update and Path(self.config_fn).is_file():
+            base_config = self._load_config(self.config_fn)
+            config = {**base_config, **config}
             for key in dirs + ['source']:
                 paths = _make_list(config.get(key, []))
                 config[key] = paths + [path for path in _make_list(base_config.get(key, [])) if path not in paths]
-        config.write(self.config_fn)
-        utils.mkdir(os.path.dirname(self.profile_fn))
+        Path(self.config_fn).parent.mkdir(parents=True, exist_ok=True)
+        with open(self.config_fn, 'w') as file:
+            yaml.safe_dump(config, file, default_flow_style=False, sort_keys=False)
+        Path(self.profile_fn).parent.mkdir(parents=True, exist_ok=True)
         with open(self.profile_fn, 'w') as file:
             file.write('#!/bin/bash\n')
             for key, keybash in zip(dirs, ['PYTHONPATH', 'PATH', 'LD_LIBRARY_PATH']):
@@ -434,5 +431,5 @@ class Installer(BaseClass):
 
     def setenv(self):
         """Set environment (i.e. set paths). Called in desilike's __init__.py."""
-        if os.path.isfile(self.profile_fn):
+        if Path(self.profile_fn).is_file():
             source(self.profile_fn)

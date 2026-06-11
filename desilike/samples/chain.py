@@ -1,998 +1,548 @@
+"""MCSamples — Samples subclass that adds weights, log-posterior, and statistics."""
+
 import os
 import re
-import glob
 
 import numpy as np
+from scipy import stats as _scipy_stats
 
-from desilike.parameter import ParameterCollection, Parameter, ParameterPrior, ParameterArray, Samples, ParameterCovariance, _reshape, is_parameter_sequence
-from desilike import LikelihoodFisher
-
-from . import utils
-
-
-def vectorize(func):
-    """Vectorize input function ``func`` for input parameters."""
-    from functools import wraps
-
-    @wraps(func)
-    def wrapper(self, params=None, *args, **kwargs):
-        if params is None:
-            params = self.params()
-
-        def _reshape(result, pshape):
-
-            def __reshape(array):
-                try:
-                    array.shape = array.shape[:array.ndim - len(pshape)] + pshape
-                except AttributeError:
-                    pass
-                return array
-
-            if isinstance(result, tuple):  # for :meth:`Chain.interval`
-                for res in result:
-                    __reshape(res)
-            else:
-                __reshape(result)
-            return result
-
-        if is_parameter_sequence(params):
-            params = [self[param].param for param in params]
-            return [_reshape(func(self, param, *args, **kwargs), param.shape) for param in params]
-        return _reshape(func(self, params, *args, **kwargs), self[params].param.shape)
-
-    return wrapper
+from ..parameter import Variable, VariableCollection
+from ..utils import register_type, round_measurement
+from .samples import Samples, _vals, _normalise_params
 
 
-def _get_solved_covariance(chain, params=None, return_hessian=False):
-    logposterior = chain[chain._loglikelihood] + chain[chain._logprior]
-    if params is None:
-        params = chain.params(solved=True)
-    params = [str(param) for param in params]
-    solved_params = []
-    for param in params:
-        if logposterior.isin((param, param)):
-            solved_params.append(param)
-    if set(solved_params) != set(params):
-        import warnings
-        warnings.warn('You need the covariance of analytically marginalized ("solved") parameters, but it has not been computed / saved for {}. Assuming zero covariance.'.format([param for param in params if param not in solved_params]))
-    all_solved_params = [str(param) for param in chain.params(solved=True) if logposterior.isin((param, param))]
-    hessian = np.array([[logposterior[param1, param2].ravel() for param2 in all_solved_params] for param1 in all_solved_params])
-    hessian = np.moveaxis(hessian, -1, 0).reshape(chain.shape + (len(all_solved_params),) * 2)
-    covariance = np.linalg.inv(-hessian)
-    # symmetrizing helps for numerical errors
-    covariance = (np.moveaxis(covariance, chain.ndim + 1, chain.ndim) + covariance) / 2.
-    toret_covariance = np.zeros(chain.shape + (len(params),) * 2, dtype='f8')
-    toret_hessian = toret_covariance.copy()
-    for iparam1, param1 in enumerate(all_solved_params):
-        if param1 not in params: continue
-        index1 = params.index(param1)
-        for iparam2, param2 in enumerate(all_solved_params):
-            if param2 not in params: continue
-            index2 = params.index(param2)
-            toret_covariance[..., index1, index2] = covariance[..., iparam1, iparam2]
-            toret_hessian[..., index1, index2] = hessian[..., iparam1, iparam2]
-    if return_hessian:
-        return toret_covariance, toret_hessian
-    return toret_covariance
+# ── weighted-statistics helpers ───────────────────────────────────────────────
+
+def _nsigmas_to_quantiles_1d(nsigmas):
+    """Fraction of a Gaussian contained within ±nsigmas (e.g. ≈0.68 for 1σ)."""
+    return (_scipy_stats.norm.cdf(nsigmas) - _scipy_stats.norm.cdf(-nsigmas))
 
 
-class Chain(Samples):
+def _nsigmas_to_quantiles_1d_sym(nsigmas):
+    """Lower and upper quantile bounds for a symmetric nsigmas interval."""
+    total = _nsigmas_to_quantiles_1d(nsigmas)
+    lo = (1. - total) / 2.
+    return lo, 1. - lo
+
+
+def _weighted_quantile(x, q, weights=None, axis=0, method='linear'):
+    """Weighted quantile of *x* along *axis*.
+
+    Adapted from https://github.com/minaskar/cronus/blob/master/cronus/plot.py.
     """
-    Class that holds samples drawn from posterior (in practice, :class:`Samples` with a log-posterior and optional weights).
+    if weights is None:
+        return np.quantile(x, q, axis=axis, method=method)
 
-    Parameter arrays can be accessed (and updated) as for a dictionary:
+    x = np.asarray(x, dtype=float)
+    isscalar = np.ndim(q) == 0
+    q = np.atleast_1d(q)
+    if np.any(q < 0.) or np.any(q > 1.):
+        raise ValueError('Quantiles must be between 0 and 1.')
 
-    .. code-block:: python
+    ax = (axis,) if np.ndim(axis) == 0 else tuple(axis)
+    x = np.moveaxis(x, ax, range(x.ndim - len(ax), x.ndim))
+    x = x.reshape(x.shape[:-len(ax)] + (-1,))
 
-        chain = Chain([np.ones(100), np.zeros(100)], params=['a', 'b'])
-        chain['a'] += 1.
-        print(chain['a'].mean())
+    weights = np.asarray(weights, dtype=float)
+    if weights.ndim == 1:
+        reps = x.shape[:-1] + (1,)
+        weights = np.tile(weights, reps)
+    else:
+        weights = np.moveaxis(weights, ax, range(weights.ndim - len(ax), weights.ndim))
+        weights = weights.reshape(weights.shape[:-len(ax)] + (-1,))
 
-        chain['c'] = chain['b'] + 1
-        chain['c'].param.update(latex='c')
+    idx = np.argsort(x, axis=-1)
+    x = np.take_along_axis(x, idx, axis=-1)
+    sw = np.take_along_axis(weights, idx, axis=-1)
+    cdf = np.cumsum(sw, axis=-1)
+    cdf = cdf[..., :-1] / cdf[..., -1:]
+    cdf = np.concatenate([np.zeros_like(cdf[..., :1]), cdf], axis=-1)
 
+    idx0 = np.apply_along_axis(np.searchsorted, -1, cdf, q, side='right') - 1
+    idx1 = np.clip(idx0 + 1, None, x.shape[-1] - 1)
+    # Use take_along_axis so multi-dim x (e.g. shape (15, 200)) is handled correctly.
+    q0 = np.take_along_axis(x, idx0, axis=-1)
+    q1 = np.take_along_axis(x, idx1, axis=-1)
+    cdf0 = np.take_along_axis(cdf, idx0, axis=-1)
+    cdf1 = np.take_along_axis(cdf, idx1, axis=-1)
+
+    if method == 'lower':
+        quantiles = q0
+    elif method == 'higher':
+        quantiles = q1
+    elif method == 'nearest':
+        quantiles = np.where(q - cdf0 < cdf1 - q, q0, q1)
+    elif method == 'midpoint':
+        quantiles = (q0 + q1) / 2.
+    elif method == 'linear':
+        step = cdf1 - cdf0
+        frac = np.where(step == 0, 0., (q - cdf0) / np.where(step == 0, 1., step))
+        quantiles = q0 + frac * (q1 - q0)
+    else:
+        raise ValueError(f'Unknown method {method!r}')
+
+    quantiles = np.moveaxis(quantiles, -1, 0)
+    return quantiles[0] if isscalar else quantiles
+
+
+def _interval(x, weights=None, nsigmas=1.):
+    """Shortest interval containing the nsigmas probability mass (1D)."""
+    x = np.asarray(x, dtype=float).ravel()
+    if weights is None:
+        weights = np.ones(len(x))
+    else:
+        weights = np.asarray(weights, dtype=float).ravel()
+    idx = np.argsort(x)
+    x = x[idx]
+    weights = weights[idx]
+    nquantile = _nsigmas_to_quantiles_1d(nsigmas)
+    cdf = np.cumsum(weights)
+    cdf /= cdf[-1]
+    cdfpq = cdf + nquantile
+    ixmaxup = np.searchsorted(cdf, cdfpq, side='left')
+    mask = ixmaxup < len(x)
+    if not mask.any():
+        raise ValueError(f'Not enough samples ({x.size}) for interval estimation')
+    lo = x[np.flatnonzero(mask)]
+    hi = x[ixmaxup[mask]]
+    argmin = np.argmin(hi - lo)
+    return float(lo[argmin]), float(hi[argmin])
+
+
+def _var_impl(chain, params_list, ddof):
+    """Core weighted variance — always takes a list, always returns a list."""
+    w     = chain.weight.ravel().astype(float)
+    W     = w.sum()
+    W2    = (w ** 2).sum()
+    denom = W - ddof * W2 / W
+    results = []
+    for p in params_list:
+        vals = _vals(chain, p)
+        mu   = np.average(vals, weights=w, axis=0)
+        results.append(np.average((vals - mu) ** 2, weights=w, axis=0) * W / denom)
+    return results
+
+
+# ── MCSamples ─────────────────────────────────────────────────────────────────────
+
+@register_type
+class MCSamples(Samples):
+    """Samples subclass that adds log-posterior, weights, and statistical methods.
+
+    Every Variable's ``_value`` is stored as a NumPy array of shape
+    ``chain.shape + variable.shape``.  ``chain.shape`` is the leading
+    batch of sample dimensions (e.g. ``(n_steps,)`` for a flat chain,
+    ``(n_chains, n_steps)`` for a 2-D chain).  ``variable.shape`` is the
+    intrinsic per-sample shape (``()`` for scalar parameters, ``(15,)`` for a
+    power-spectrum vector, etc.).
+
+    Structure, I/O, and export are inherited from :class:`~desilike.samples.samples.Samples`.
+
+    Examples
+    --------
+    Building from a dict of arrays::
+
+        c = MCSamples({'omega_m': rng.normal(0.3, 0.01, 1000),
+                   'sigma8':  rng.normal(0.8, 0.02, 1000)})
+        c.logposterior = -0.5 * rng.chisquare(2, 1000)
+
+    Non-scalar variable (must pass a Variable key so the shape is unambiguous)::
+
+        pk_var = Variable('pk', value=np.zeros(50))   # shape=(50,)
+        c[pk_var] = rng.normal(1., 0.1, (1000, 50))
+
+    Slicing, concatenation::
+
+        c_burned = c.remove_burnin(0.2)
+        c_all    = MCSamples.concatenate(c1, c2)
+
+    I/O::
+
+        c.write('chain.h5')
+        c2 = MCSamples.read('chain.h5')
     """
 
-    _type = ParameterArray
-    _attrs = Samples._attrs + ['_logposterior', '_loglikelihood', '_logprior', '_aweight', '_fweight', '_weight']
+    _name = 'MCSamples'
 
-    def __init__(self, data=None, params=None, logposterior=None, loglikelihood=None, logprior=None, aweight=None, fweight=None, weight=None, attrs=None):
-        """
-        Initialize :class:`Chain`.
+    # Names of the special "bookkeeping" variables.
+    _logposterior = 'logposterior'
+    _logprior = 'logprior'
+    _aweight = 'aweight'
+    _fweight = 'fweight'
+    _weight = 'weight'   # virtual — never stored in _data
 
-        Parameters
-        ----------
-        data : list, dict, Samples
-            Can be:
-
-            - list of :class:`ParameterArray`, or :class:`np.ndarray` if list of parameters
-              (or :class:`ParameterCollection`) is provided in ``params``
-            - dictionary mapping parameter to array
-
-        params : list, ParameterCollection
-            Optionally, list of parameters.
-
-        logposterior : str, default='logposterior'
-            Name of log-posterior in ``data``.
-
-        loglikelihood : str, default='loglikelihood'
-            Name of log-likelihood in ``data``.
-
-        logprior : str, default='logprior'
-            Name of log-prior in ``data``.
-
-        aweight : str, default='aweight'
-            Name of sample weights (which default to 1. if not provided in ``data``).
-
-        fweight : str, default='fweight'
-            Name of sample frequency weights (which default to 1 if not provided in ``data``).
-
-        weight : str, default='weight'
-            Name of sample total weight. It is defined as the product of :attr:`aweight` and :attr:`fweight`,
-            hence should not provided in ``data``.
-
-        attrs : dict, default=None
-            Optionally, other attributes, stored in :attr:`attrs`.
-        """
-        super(Chain, self).__init__(data=data, params=params, attrs=attrs)
-        for _name in self._attrs[-6:]:
-            name = _name[1:]
-            value = locals()[name]
-            if getattr(self, _name, None) is None or value is not None:  # set only if not previously set, or new value are provided
-                setattr(self, _name, name if value is None else str(value))
-            value = getattr(self, _name)
-            if value in self:
-                self[value].param.update(derived=True)
-
-    def __setstate__(self, state):
-        # Backward-compatibility
-        for name in ['_logposterior', '_loglikelihood', '_logprior', '_aweight', '_fweight', '_weight']:
-            state.setdefault(name, name[1:])
-        super(Chain, self).__setstate__(state)
-
-    @property
-    def aweight(self):
-        """Sample weights (floats)."""
-        if self._aweight not in self:
-            self[Parameter(self._aweight, derived=True, latex=utils.outputs_to_latex(self._aweight))] = np.ones(self.shape, dtype='f8')
-        return self[self._aweight]
-
-    @property
-    def fweight(self):
-        """Sample frequency weights (integers)."""
-        if self._fweight not in self:
-            self[Parameter(self._fweight, derived=True, latex=utils.outputs_to_latex(self._fweight))] = np.ones(self.shape, dtype='i8')
-        return self[self._fweight]
+    # ── special attributes ────────────────────────────────────────────────────
 
     @property
     def logposterior(self):
-        """Log-posterior."""
-        if self._logposterior not in self:
-            self[Parameter(self._logposterior, derived=True, latex=utils.outputs_to_latex(self._logposterior))] = np.zeros(self.shape, dtype='f8')
-        return self[self._logposterior]
-
-    @aweight.setter
-    def aweight(self, item):
-        """Set weights (floats)."""
-        self[Parameter(self._aweight, derived=True, latex=utils.outputs_to_latex(self._aweight))] = item
-
-    @fweight.setter
-    def fweight(self, item):
-        """Set frequency weights (integers)."""
-        self[Parameter(self._fweight, derived=True, latex=utils.outputs_to_latex(self._fweight))] = item
+        """Log-posterior array of shape ``self.shape``, or zeros if not set."""
+        if VariableCollection.__contains__(self, self._logposterior):
+            return np.asarray(VariableCollection.__getitem__(self, self._logposterior)._value)
+        return np.zeros(self.shape)
 
     @logposterior.setter
     def logposterior(self, item):
-        """Set log-posterior."""
-        self[Parameter(self._logposterior, derived=True, latex=utils.outputs_to_latex(self._logposterior))] = item
+        v = Variable(self._logposterior, derived=True)
+        self.set(v, np.asarray(item))
+
+    @property
+    def logprior(self):
+        """Log-prior array of shape ``self.shape``, or zeros if not set."""
+        if VariableCollection.__contains__(self, self._logprior):
+            return np.asarray(VariableCollection.__getitem__(self, self._logprior)._value)
+        return np.zeros(self.shape)
+
+    @logprior.setter
+    def logprior(self, item):
+        v = Variable(self._logprior, derived=True)
+        self.set(v, np.asarray(item))
+
+    @property
+    def aweight(self):
+        """Analytic weight array of shape ``self.shape``, or ones if not set."""
+        if VariableCollection.__contains__(self, self._aweight):
+            return np.asarray(VariableCollection.__getitem__(self, self._aweight)._value)
+        return np.ones(self.shape)
+
+    @aweight.setter
+    def aweight(self, item):
+        v = Variable(self._aweight, derived=True)
+        self.set(v, np.asarray(item))
+
+    @property
+    def fweight(self):
+        """Frequency (integer) weight array of shape ``self.shape``, or ones if not set."""
+        if VariableCollection.__contains__(self, self._fweight):
+            return np.asarray(VariableCollection.__getitem__(self, self._fweight)._value)
+        return np.ones(self.shape, dtype='i8')
+
+    @fweight.setter
+    def fweight(self, item):
+        v = Variable(self._fweight, derived=True)
+        self.set(v, np.asarray(item))
 
     @property
     def weight(self):
-        """Return total weight, as the product of :attr:`aweight` and :attr:`fweight`."""
-        return ParameterArray(self.aweight * self.fweight, Parameter(self._weight, derived=True, latex=utils.outputs_to_latex(self._weight)))
+        """Total weight = ``aweight * fweight``, shape ``self.shape``."""
+        return self.aweight * self.fweight
 
-    def set_derived(self, basename, array, **kwargs):
-        """
-        Set derived parameter.
-
-        Parameters
-        ----------
-        array : np.array
-            Numpy array.
-
-        kwargs : dict
-            Arguments for :class:`Parameter`.
-        """
-        kwargs['basename'] = basename
-        kwargs.setdefault('derived', True)
-        self.set(ParameterArray(array, Parameter(kwargs)))
+    # ── statistics ────────────────────────────────────────────────────────────
 
     def remove_burnin(self, burnin=0):
-        """
-        Return new samples with burn-in removed.
+        """Return a new MCSamples with the first *burnin* steps removed.
 
         Parameters
         ----------
-        burnin : float, int
-            If ``burnin`` between 0 and 1, remove that fraction of samples.
-            Else, remove ``burnin`` (integer) first points.
+        burnin : int or float
+            If in ``(0, 1)`` remove that fraction of the total length.
+            Otherwise remove the first *burnin* integer samples (axis 0).
+        """
+        if 0. < burnin < 1.:
+            burnin = int(burnin * len(self) + 0.5)
+        return self[int(burnin):]
+
+    def mean(self, params=None):
+        """Weighted mean.
+
+        Parameters
+        ----------
+        params : str, Variable, list, or None
+            Parameter(s) to average.  ``None`` → all variables.
 
         Returns
         -------
-        samples : Chain
+        array or list of arrays
+            Shape ``variable.shape`` per parameter.
         """
-        if 0 < burnin < 1:
-            burnin = burnin * len(self)
-        burnin = int(burnin + 0.5)
-        return self[burnin:]
-
-    def sample_solved(self, size=1, seed=42):
-        """Sample parameters that have been analytic marginalized over (``solved``)."""
-        new = self.deepcopy()
-        all_solved_params = self.params(solved=True)
-        solved_params = []
-        for param in all_solved_params:
-            if self[self._loglikelihood].isin((param, param)) and self[self._logprior].isin((param, param)):
-                solved_params.append(param)
-        if set(solved_params) != set(all_solved_params):
-            import warnings
-            warnings.warn('sample over parameters {}, derivatives for {} are not saved'.format(solved_params, [param for param in all_solved_params if param not in solved_params]))
-        if not solved_params: return new
-        covariance, hessian = _get_solved_covariance(self, params=solved_params, return_hessian=True)
-        L = np.moveaxis(np.linalg.cholesky(covariance), (-2, -1), (0, 1))
-        new.data = []
-        for array in self:
-            new.set(array.clone(value=np.repeat(array, size, axis=self.ndim - 1)))
-        rng = np.random.RandomState(seed=seed)
-        noise = rng.standard_normal((len(solved_params),) + self.shape + (size,))
-        values = np.sum(noise[None, ...] * L[..., None], axis=1)
-        for param, value in zip(solved_params, values):
-            new[param] = new[param].clone(value=new[param] + value.reshape(new.shape), param=param.clone(derived=False))
-        dlogposterior = 0.
-        for param in [self._loglikelihood, self._logprior]:
-            hess = np.array([[self[param][param1, param2] for param2 in solved_params] for param1 in solved_params])
-            log = 1. / 2. * np.sum(values[None, ...] * hess[..., None] * values[:, None, ...], axis=(0, 1)).reshape(new.shape)
-            new[param] = self[param].clone(value=new[param][()] + log, derivs=None)
-            dlogposterior += log
-        marg_indices = np.array([iparam for iparam, param in enumerate(solved_params) if 'auto' in param.derived or 'marg' in param.derived])
-        if marg_indices.size:
-            log = 1. / 2. * np.linalg.slogdet(- hessian[(Ellipsis,) + np.ix_(marg_indices, marg_indices)])[1]
-            new[self._loglikelihood] += log
-            dlogposterior += log
-        new.logposterior[...] += dlogposterior
-        return new
-
-    def select(self, **kwargs):
-        # Keep weight columns
-        toret = self._select(name=[self._aweight, self._fweight])
-        toret.update(self._select(**kwargs))
-        return toret
-
-    def __getitem__(self, name):
-        """
-        Return item corresponding to parameter ``name``.
-
-        Parameters
-        ----------
-        name : Parameter, str, int
-            Parameter name.
-            If :class:`Parameter` instance, search for parameter with same name.
-        """
-        try:
-            return super().__getitem__(name)
-        except KeyError:
-            if name == self._weight:
-                return self.weight
-            else:
-                raise
-
-    @classmethod
-    def from_getdist(cls, samples, concatenate=None):
-        """
-        Turn getdist.MCSamples into a :class:`Chain` instance.
-
-        Note
-        ----
-        GetDist package is required.
-        """
-        params = ParameterCollection()
-        for param in samples.paramNames.names:
-            params.set(Parameter(param.name, latex=param.label, derived=param.isDerived, fixed=False))
-        param_indices = samples._getParamIndices()
-        for param in params:
-            limits = [samples.ranges.lower.get(param.name, -np.inf), samples.ranges.upper.get(param.name, np.inf)]
-            param.update(prior=ParameterPrior(limits=limits))
-        isscalar = True
-        try:
-            chains = samples.getSeparateChains()
-            isscalar = False
-        except:
-            chains = [samples]
-        toret = []
-        for chain in chains:
-            new = cls()
-            fweight, new.logposterior = chain.weights, -chain.loglikes
-            iweight = np.rint(fweight)
-            if np.allclose(fweight, iweight, atol=0., rtol=1e-9):
-                new.fweight = iweight.astype('i4')
-            else:
-                new.aweight = fweight
-            for param in params:
-                new.set(ParameterArray(chain[param_indices[param.name]], param=param))
-            for param in new.params(basename='chi2_*'):
-                namespace = re.match('chi2_[_]*(.*)$', param.name).groups()[0]
-                if namespace == 'prior':
-                    new_param = param.clone(basename=new._logprior, derived=True)
-                else:
-                    new_param = param.clone(basename=new._loglikelihood, namespace=namespace, derived=True)
-                new[new_param] = -0.5 * new[param]
-            toret.append(new)
-        if isscalar:
-            if concatenate or concatenate is None:
-                toret = toret[0]
-        elif concatenate:
-            toret = cls.concatenate(toret)
-        return toret
-
-    @utils.hybridmethod
-    def to_getdist(cls, chain, params=None, label=None, **kwargs):
-        """
-        Return GetDist hook to samples.
-
-        Note
-        ----
-        GetDist package is required.
-
-        Parameters
-        ----------
-        params : list, ParameterCollection, default=None
-            Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
-
-        label : str, default=None
-            Name for  GetDist to use for these samples.
-
-        **kwargs : dict
-            Optional arguments for :class:`getdist.MCSamples`.
-
-        Returns
-        -------
-        samples : getdist.MCSamples
-        """
-        from getdist import MCSamples
-        isscalar = not utils.is_sequence(chain)
-        if isscalar: chain = [chain]
-        chains = list(chain)
-        toret = None
-        if params is None: params = chains[0].params(varied=True)
-        else: params = [chains[0][param].param for param in params]
-        if any(param.solved for param in params):
-            for ichain, chain in enumerate(chains):
-                chains[ichain] = chain.sample_solved()
-        chain = chains[0]
-        params = [param for param in params if param.name not in [chain._weight, chain._logposterior]]
-        labels = [param.latex() for param in params]
-        names = [str(param) for param in params]
-        ranges = {str(param): tuple('N' if limit is None or not np.isfinite(limit) else limit for limit in param.prior.limits) for param in params}
-        samples, weights, loglikes = [], [], []
-        for chain in chains:
-            samples.append(chain.to_array(params=params, struct=False, derivs=()).reshape(-1, chain.size).T)
-            weights.append(chain.weight.ravel())
-            loglikes.append(-np.asarray(chain.logposterior.ravel()))
-        if isscalar:
-            samples, weights, loglikes = samples[0], weights[0], loglikes[0]
-        toret = MCSamples(samples=samples, weights=weights, loglikes=loglikes, names=names, labels=labels, label=label, ranges=ranges, **kwargs)
-        return toret
-
-    @to_getdist.instancemethod
-    def to_getdist(self, *args, **kwargs):
-        return self.__class__.to_getdist(self, *args, **kwargs)
-
-    @classmethod
-    def read_getdist(cls, base_fn, ichains=None, concatenate=False):
-        """
-        Load samples in *CosmoMC* format, i.e.:
-
-        - '_{ichain}.txt' files for sample values
-        - '.paramnames' files for parameter names / latex
-        - '.ranges' for parameter ranges
-
-        Note
-        ----
-        GetDist package *is not* required.
-
-        Parameters
-        ----------
-        base_fn : str, Path
-            Base *CosmoMC* file name. Will be appended by '_{ichain}.txt' for sample values,
-            '.paramnames' for parameter names and '.ranges' for parameter ranges.
-
-        ichains : int, tuple, list, default=None
-            Chain numbers to load. Defaults to all chains matching pattern '{base_fn}*.txt'.
-            If a single number is provided, return a unique chain.
-            If multiple numbers are provided, or is ``None``, return a list of chains (see ``concatenate``).
-
-        concatenate : bool, default=False
-            If ``True``, concatenate all chains in one.
-
-        Returns
-        -------
-        samples : list, Chain
-            Chain or list of chains.
-        """
-        params_fn = '{}.paramnames'.format(base_fn)
-        cls.log_info('Loading params file: {}.'.format(params_fn))
-        params = ParameterCollection()
-        with open(params_fn) as file:
-            for line in file:
-                line = [item.strip() for item in line.split(maxsplit=1)]
-                if line:
-                    name, latex = line
-                    derived = name.endswith('*')
-                    if derived: name = name[:-1]
-                    params.set(Parameter(basename=name, latex=latex.replace('\n', ''), fixed=False, derived=derived))
-
-            ranges_fn = '{}.ranges'.format(base_fn)
-            if os.path.exists(ranges_fn):
-                cls.log_info('Loading parameter ranges from {}.'.format(ranges_fn))
-                with open(ranges_fn) as file:
-                    for line in file:
-                        name, low, high = [item.strip() for item in line.split()]
-                        latex = latex.replace('\n', '')
-                        limits = []
-                        for lh, li in zip([low, high], [-np.inf, np.inf]):
-                            if lh == 'N': lh = li
-                            else: lh = float(lh)
-                            limits.append(lh)
-                        if name in params:
-                            params[name].update(prior=ParameterPrior(limits=limits))
-            else:
-                cls.log_info('Parameter ranges file {} does not exist.'.format(ranges_fn))
-
-        chain_fn = '{}_{{}}.txt'.format(base_fn)
-        isscalar = False
-        chain_fns = []
-        if ichains is not None:
-            isscalar = np.ndim(ichains) == 0
-            if isscalar:
-                ichains = [ichains]
-            for ichain in ichains:
-                chain_fns.append(chain_fn.format('{:d}'.format(ichain)))
-        else:
-            chain_fns = glob.glob(chain_fn.format('[0-9]*'))
-
-        toret = []
-        for chain_fn in chain_fns:
-            cls.log_info('Loading chain file: {}.'.format(chain_fn))
-            array = np.loadtxt(chain_fn, unpack=True)
-            new = cls()
-            fweight, new.logposterior = array[0], -array[1]
-            iweight = np.rint(fweight)
-            if np.allclose(fweight, iweight, atol=0., rtol=1e-9):
-                new.fweight = iweight.astype('i4')
-            else:
-                new.aweight = fweight
-            for param, values in zip(params, array[2:]):
-                new.set(ParameterArray(values, param))
-            toret.append(new)
-        for new in toret:
-            for param in new.params(basename='chi2_*'):
-                namespace = re.match('chi2_[_]*(.*)$', param.name).groups()[0]
-                if namespace == 'prior':
-                    new_param = param.clone(basename=new._logprior, derived=True)
-                else:
-                    new_param = param.clone(basename=new._loglikelihood, namespace=namespace, derived=True)
-                new[new_param] = -0.5 * new[param]
-        if isscalar:
-            return toret[0]
-        if concatenate:
-            return cls.concatenate(toret)
-        return toret
-
-    @utils.hybridmethod
-    def write_getdist(cls, chain, base_fn, params=None, ichain=None, fmt='%.18e', delimiter=' ', **kwargs):
-        """
-        Save samples to disk in *CosmoMC* format.
-
-        Note
-        ----
-        GetDist package *is not* required.
-
-        Parameters
-        ----------
-        base_fn : str, Path
-            Base *CosmoMC* file name. Will be prepended by '_{ichain}.txt' for sample values,
-            '.paramnames' for parameter names and '.ranges' for parameter ranges.
-
-        params : list, ParameterCollection, default=None
-            Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
-
-        ichain : int, default=None
-            Chain number to append to file name, i.e. sample values will be saved as '{base_fn}_{ichain}.txt'.
-            If ``None``, does not append any number, sample values will be saved as '{base_fn}.txt'.
-
-        fmt : str, default='%.18e'
-            How to format floats.
-
-        delimiter : str, default=' '
-            String or character separating columns.
-
-        kwargs : dict
-            Optional arguments for :func:`numpy.savetxt`.
-        """
-        isscalar = not utils.is_sequence(chain)
-        if isscalar: chain = [chain]
-        chains = list(chain)
-        if params is None: params = chains[0].params()
-        else: params = [chains[0][param].param for param in params]
-        if any(param.solved for param in params):
-            for ichain, chain in enumerate(chains):
-                chains[ichain] = chain.sample_solved()
-
-        chain = chains[0]
-        columns = [str(param) for param in params]
-        outputs_columns = [chain._weight, chain._logposterior]
-        shape = chain.shape
-        outputs = [array.param.name for array in chain if array.shape != shape]
-        for column in outputs:
-            if column in columns: del columns[columns.index(column)]
-
-        if ichain is None:
-            if isscalar:
-                ichain = [None] * len(chains)
-            else:
-                ichain = list(range(len(chains)))
-        if not utils.is_sequence(ichain):
-            ichain = [ichain]
-        assert len(ichain) == len(chains)
-
-        utils.mkdir(os.path.dirname(base_fn))
-
-        output = ''
-        params = chain.params(name=columns)
-        for param in params:
-            tmp = '{}* {}\n' if getattr(param, 'derived', getattr(param, 'fixed')) else '{} {}\n'
-            output += tmp.format(param.name, param.latex())
-        params_fn = '{}.paramnames'.format(base_fn)
-        cls.log_info('Saving parameter names to {}.'.format(params_fn))
-        with open(params_fn, 'w') as file:
-            file.write(output)
-
-        output = ''
-        for param in params:
-            limits = param.prior.limits
-            limits = tuple('N' if limit is None or np.abs(limit) == np.inf else limit for limit in limits)
-            output += '{} {} {}\n'.format(param.name, limits[0], limits[1])
-        ranges_fn = '{}.ranges'.format(base_fn)
-        cls.log_info('Saving parameter ranges to {}.'.format(ranges_fn))
-        with open(ranges_fn, 'w') as file:
-            file.write(output)
-
-        for chain, ichain in zip(chains, ichain):
-            data = chain.to_array(params=outputs_columns + columns, struct=False, derivs=()).reshape(-1, chain.size)
-            data[1] *= -1
-            data = data.T
-            chain_fn = '{}.txt'.format(base_fn) if ichain is None else '{}_{:d}.txt'.format(base_fn, ichain)
-            cls.log_info('Saving chain to {}.'.format(chain_fn))
-            np.savetxt(chain_fn, data, header='', fmt=fmt, delimiter=delimiter, **kwargs)
-
-    @write_getdist.instancemethod
-    def write_getdist(self, *args, **kwargs):
-        return self.__class__.write_getdist(self, *args, **kwargs)
-
-    def to_anesthetic(self, params=None, label=None, **kwargs):
-        """
-        Return anesthetic hook to samples.
-
-        Note
-        ----
-         anesthetic package *is* required.
-
-        Parameters
-        ----------
-        params : list, ParameterCollection, default=None
-            Parameters to save samples of (weight and log-posterior are added anyway). Defaults to all parameters.
-
-        label : str, default=None
-            Name for  anesthetic to use for these samples.
-
-        **kwargs : dict
-            Optional arguments for :class:`anesthetic.MCMCSamples`.
-
-        Returns
-        -------
-        samples : anesthetic.MCMCSamples
-        """
-        from anesthetic import MCMCSamples
-        toret = None
-        if params is None: params = self.params(varied=True)
-        else: params = [self[param].param for param in params]
-        if any(param.solved for param in params):
-            self = self.sample_solved()
-        labels = [param.latex() for param in params]
-        samples = self.to_array(params=params, struct=False, derivs=()).reshape(-1, self.size)
-        names = [str(param) for param in params]
-        limits = {param.name: tuple('N' if limit is None or np.abs(limit) == np.inf else limit for limit in param.prior.limits) for param in params}
-        toret = MCMCSamples(samples=samples.T, columns=names, weights=np.asarray(self.weight.ravel()), logL=-np.asarray(self.logposterior.ravel()), labels=labels, label=label, logzero=-np.inf, limits=limits, **kwargs)
-        return toret
-
-    def choice(self, index='mean', params=None, return_type='dict', **kwargs):
-        """
-        Return parameter mean(s) or best fit(s).
-
-        Parameters
-        ----------
-        index : str, default='mean'
-            'argmax' to return "best fit" (as defined by the point with maximum log-posterior in the chain).
-            'mean' to return mean of parameters (weighted by :attr:`weight`).
-
-        params : list, ParameterCollection, default=None
-            Parameters to compute mean / best fit for. Defaults to all parameters.
-
-        return_type : default='dict'
-            'dict' to return a dictionary mapping parameter names to mean / best fit;
-            'nparray' to return an array of parameter mean / best fit;
-            ``None`` to return a :class:`Chain` instance with a single value.
-
-        **kwargs : dict
-            Optional arguments passed to :meth:`params` to select params to return, e.g. ``varied=True, derived=False``.
-
-        Returns
-        -------
-        toret : dict, array, Chain
-        """
-        if params is None:
-            params = self.params(**kwargs)
-        if isinstance(index, str) and index == 'mean':
-            di = {str(param): self.mean(param) for param in params}
-            index = (0,) # just for test below
-        else:
-            if isinstance(index, str) and index == 'argmax':
-                index = np.unravel_index(self.logposterior.argmax(), self.shape)
-            if not isinstance(index, tuple):
-                index = (index,)
-            di = {str(param): self[param][index] for param in params}
-        if return_type == 'dict':
-            return di
-        if return_type == 'nparray':
-            return np.array(list(di.values()))
-        toret = self.copy()
-        isscalar = all(np.ndim(ii) == 0 for ii in index)
-        toret.data = []
-        for param, value in di.items():
-            value = np.asarray(value)
-            toret.data.append(self[param].clone(value=value[None, ...] if isscalar else value))
-        return toret
-
-    def covariance(self, params=None, return_type='nparray', ddof=1):
-        """
-        Return parameter covariance computed from (weighted) samples.
-
-        Parameters
-        ----------
-        params : list, ParameterCollection, default=None
-            Parameters to compute covariance for. Defaults to all parameters.
-            If a single parameter is provided, this parameter is a scalar, and ``return_type`` is 'nparray', return a scalar.
-
-        return_type : str, default='nparray'
-            'nparray' to return matrix array;
-            ``None`` to return :class:`ParameterCovariance` instance.
-
-        ddof : int, default=1
-            Number of degrees of freedom.
-
-        Returns
-        -------
-        covariance : array, float, ParameterCovariance
-        """
-        if params is None: params = self.params()
-        if not is_parameter_sequence(params): params = [params]
-        params = ParameterCollection([self[param].param for param in params])  # eliminates duplicates
-        values = [self[param][()].reshape(self.size, -1) for param in params]  # [()] to take order 0 derivatives
-        values = np.concatenate(values, axis=-1)
-        covariance = np.atleast_2d(np.cov(values, rowvar=False, fweights=self.fweight.ravel(), aweights=self.aweight.ravel(), ddof=ddof))
-        solved_params = [param for param in params if param.solved]
-        if solved_params:
-            solved_indices = [params.index(param) for param in solved_params]
-            covariance[np.ix_(solved_indices, solved_indices)] += np.average(_get_solved_covariance(self, params=solved_params).reshape(-1, len(solved_params), len(solved_params)), weights=self.weight.ravel(), axis=0)
-        return ParameterCovariance(covariance, params=params).view(return_type=return_type)
-
-    def precision(self, params=None, return_type='nparray', ddof=1):
-        """
-        Return inverse parameter covariance computed from (weighted) samples.
-
-        Parameters
-        ----------
-        params :  list, ParameterCollection, default=None
-            Parameters to compute covariance for. Defaults to all parameters.
-            If a single parameter is provided, this parameter is a scalar, and ``return_type`` is 'nparray', return a scalar.
-
-        return_type : str, default='nparray'
-            'nparray' to return matrix array.
-            ``None`` to return a :class:`ParameterPrecision` instance.
-
-        ddof : int, default=1
-            Number of degrees of freedom.
-
-        Returns
-        -------
-        precision : array, float, ParameterPrecision
-        """
-        return self.covariance(params=params, ddof=ddof, return_type=None).to_precision(return_type=return_type)
-
-    def corrcoef(self, params=None):
-        """Return correlation matrix array computed from (weighted) samples (optionally restricted to input parameters)."""
-        return self.covariance(params=params, return_type=None).corrcoef()
+        scalar, params = _normalise_params(self, params)
+        w = self.weight.ravel().astype(float)
+        results = [np.average(_vals(self, p), weights=w, axis=0) for p in params]
+        return results[0] if scalar else results
 
     def var(self, params=None, ddof=1):
+        """Weighted variance (reliability-weights formula), shape ``variable.shape``.
+
+        Parameters
+        ----------
+        params : str, Variable, list, or None
+        ddof : int, default 1
         """
-        Return variance computed from (weighted) samples (optionally restricted to input parameters).
-        If a single parameter is given as input and this parameter is a scalar, return a scalar.
-        ``ddof`` is the number of degrees of freedom.
-        """
-        isscalar = not is_parameter_sequence(params)
-        cov = self.covariance(params, ddof=ddof, return_type='nparray')
-        if isscalar: return cov.flat[0]  # single param
-        return np.diag(cov)
+        scalar, params_list = _normalise_params(self, params)
+        results = _var_impl(self, params_list, ddof)
+        return results[0] if scalar else results
 
     def std(self, params=None, ddof=1):
-        """
-        Return standard deviation computed from (weighted) samples (optionally restricted to input parameters).
-        If a single parameter is given as input and this parameter is a scalar, return a scalar.
-        ``ddof`` is the number of degrees of freedom.
-        """
-        return self.var(params=params, ddof=ddof)**0.5
-
-    @vectorize
-    def mean(self, params=None):
-        """
-        Return mean computed from (weighted) samples (optionally restricted to input parameters).
-        If a single parameter is given as input and this parameter is a scalar, return a scalar.
-        """
-        return np.average(_reshape(self[params], self.size), weights=self.weight.ravel(), axis=0)
-
-    @vectorize
-    def argmax(self, params=None):
-        """
-        Return parameter values for maximum of log-posterior (optionally restricted to input parameters).
-        If a single parameter is given as input and this parameter is a scalar, return a scalar.
-        """
-        return _reshape(self[params], self.size)[np.argmax(self.logposterior.ravel())]
+        """Weighted standard deviation, shape ``variable.shape``."""
+        scalar, params_list = _normalise_params(self, params)
+        results = [np.sqrt(r) for r in _var_impl(self, params_list, ddof)]
+        return results[0] if scalar else results
 
     def median(self, params=None, method='linear'):
-        """
-        Return parameter median of weighted parameter samples (optionally restricted to input parameters).
-        If a single parameter is given as input and this parameter is a scalar, return a scalar.
-        """
-        return self.quantile(params, q=0.5, method=method)
+        """Weighted median."""
+        return self.quantile(params=params, q=0.5, method=method)
 
-    @vectorize
     def quantile(self, params=None, q=(0.1587, 0.8413), method='linear'):
-        """
-        Compute the q-th quantile of the weighted parameter samples.
-        If a single parameter is given as input this parameter is a scalar, and a ``q`` is a scalar, return a scalar.
-
-        Note
-        ----
-        Adapted from https://github.com/minaskar/cronus/blob/master/cronus/plot.py.
+        """Weighted quantile(s).
 
         Parameters
         ----------
-        params :  list, ParameterCollection, default=None
-            Parameters to compute quantiles for. Defaults to all parameters.
-
-        q : tuple, list, array
-            Quantile or sequence of quantiles to compute, which must be between
-            0 and 1 inclusive.
-
-        method : {'linear', 'lower', 'higher', 'midpoint', 'nearest'}, default='linear'
-            This optional parameter specifies the method method to
-            use when the desired quantile lies between two data points
-            ``i < j``:
-
-            - linear: ``i + (j - i) * fraction``, where ``fraction``
-              is the fractional part of the index surrounded by ``i``
-              and ``j``.
-            - lower: ``i``.
-            - higher: ``j``.
-            - nearest: ``i`` or ``j``, whichever is nearest.
-            - midpoint: ``(i + j) / 2``.
+        params : str, Variable, list, or None
+        q : float or sequence of floats
+            Quantile(s) in [0, 1].
+        method : str
+            Interpolation method (see ``numpy.quantile``).
 
         Returns
         -------
-        quantiles : list, scalar, array
+        array or list of arrays
+            Shape ``(len(q), *variable.shape)`` if *q* is a sequence,
+            otherwise ``variable.shape``.
         """
-        value = _reshape(self[params], self.size)
-        weight = self.weight.ravel()
-        weight /= np.sum(weight)
+        scalar, params = _normalise_params(self, params)
+        w = self.weight.ravel().astype(float)
+        results = [_weighted_quantile(_vals(self, p), q, weights=w, axis=0, method=method)
+                   for p in params]
+        return results[0] if scalar else results
 
-        if value.param.solved:
-            from scipy import stats
-
-            locs = value
-            scales = _get_solved_covariance(self, [params])[..., 0, 0].ravel()**0.5
-            if np.all(scales == 0.):
-                return utils.weighted_quantile(value, q=q, weights=weight, axis=0, method=method)
-
-            isscalar = np.ndim(q) == 0
-            q = np.atleast_1d(q)
-            quantiles = np.array(q)
-
-            for iq, qq in enumerate(q.flat):
-
-                from scipy import special
-
-                def cdf(x):
-                    toret = np.empty_like(x)
-                    nx = len(x)
-                    nslabs = max(nx * len(locs) // int(1e8), 1)
-                    for islab in range(nslabs):
-                        start, stop = islab * nx // nslabs, (islab + 1) * nx // nslabs
-                        toret[start:stop] = np.sum(weight / 2. * (1. + special.erf((x[start:stop, None] - locs) / (2**0.5 * scales))), axis=-1)
-                    return toret
-
-                nsigmas = 100
-                limits = np.min(locs - nsigmas * scales), np.max(locs + nsigmas * scales)
-                if qq <= limits[0]:
-                    res = limits[0]
-                elif qq >= limits[1]:
-                    res = limits[1]
-                else:
-                    x = np.linspace(*limits, num=10000)
-                    cdf = cdf(x) - qq
-                    idx = np.searchsorted(cdf, 0., side='right') - 1
-                    res = (x[idx + 1] - x[idx]) / (cdf[idx + 1] - cdf[idx]) * cdf[idx + 1] + x[idx]
-                    #print(cdf(x[idx]), cdf(x[idx + 1]))
-                    #res = optimize.bisect(cdf, x[idx], x[idx + 1], xtol=1e-6 * np.mean(scales), disp=True)
-                quantiles.flat[iq] = res
-
-            if isscalar:
-                return quantiles[0]
-            return quantiles
-
-        return utils.weighted_quantile(value, q=q, weights=weight, axis=0, method=method)
-
-    @vectorize
     def interval(self, params=None, nsigmas=1.):
-        """
-        Return n-sigma confidence interval(s).
+        """Shortest n-sigma credible interval(s).
+
+        For vector variables the interval is computed element-wise, returning
+        two arrays of shape ``variable.shape`` (lower, upper).
 
         Parameters
         ----------
-        params : list, ParameterCollection, default=None
-            Parameters to compute confidence interval for. Defaults to all parameters.
-
-        nsigmas : int
-            Return interval for this number of sigmas.
+        params : str, Variable, list, or None
+        nsigmas : float
 
         Returns
         -------
-        interval : tuple, list
+        tuple of arrays ``(low, high)`` or list thereof.
         """
-        value = self[params].ravel()
-        weight = self.weight.ravel()
-        weight /= np.sum(weight)
+        scalar, params = _normalise_params(self, params)
+        w = self.weight.ravel().astype(float)
+        results = []
+        for p in params:
+            vals = _vals(self, p)          # (size, *var.shape)
+            vshape = vals.shape[1:]
+            if not vshape:
+                lo, hi = _interval(vals, weights=w, nsigmas=nsigmas)
+                results.append((lo, hi))
+            else:
+                los = np.empty(vshape)
+                his = np.empty(vshape)
+                for idx in np.ndindex(*vshape):
+                    lo, hi = _interval(vals[(slice(None),) + idx], weights=w, nsigmas=nsigmas)
+                    los[idx] = lo
+                    his[idx] = hi
+                results.append((los, his))
+        return results[0] if scalar else results
 
-        if value.param.solved:
-
-            from scipy import stats
-
-            locs = value
-            scales = _get_solved_covariance(self, [params])[..., 0, 0].ravel()**0.5
-
-            if not np.all(scales == 0.):
-
-                from scipy import special
-
-                def cdf(x):
-                    toret = np.empty_like(x)
-                    nx = len(x)
-                    nslabs = max(nx * len(locs) // int(1e8), 1)
-                    for islab in range(nslabs):
-                        start, stop = islab * nx // nslabs, (islab + 1) * nx // nslabs
-                        toret[start:stop] = np.sum(weight / 2. * (1. + special.erf((x[start:stop, None] - locs) / (2**0.5 * scales))), axis=-1)
-                    return toret
-
-                limits = np.min(locs - 2 * nsigmas * scales), np.max(locs + 2 * nsigmas * scales)
-                value = np.linspace(*limits, num=10000)
-                weight = cdf(value)
-                weight = np.concatenate([[weight[0]], np.diff(weight)[:-1], [1. - weight[-2]]])
-
-        return utils.interval(value, weights=weight, nsigmas=nsigmas)
-
-    def to_fisher(self, params=None, ddof=1, **kwargs):
-        """
-        Return Fisher from (weighted) samples.
+    def argmax(self, params=None):
+        """Parameter value(s) at the sample with the highest log-posterior.
 
         Parameters
         ----------
-        params :  list, ParameterCollection, default=None
-            Parameters to return Fisher for. Defaults to all parameters.
-
-        ddof : int, default=1
-            Number of degrees of freedom.
-
-        **kwargs : dict
-            Arguments for :meth:`choice`, giving the mean of the output Fisher likelihood.
+        params : str, Variable, list, or None
 
         Returns
         -------
-        fisher : LikelihoodFisher
+        array or list of arrays, shape ``variable.shape``.
         """
-        precision = self.precision(params=params, ddof=ddof, return_type=None)
-        params = precision._params
-        mean = self.choice(params=params, return_type='nparray', **kwargs)
-        return LikelihoodFisher(center=mean, params=params, offset=self.logposterior.max(), hessian=-precision.view(return_type='nparray'), with_prior=True)
+        scalar, params = _normalise_params(self, params)
+        flat_idx = np.argmax(self.logposterior.ravel())
+        results = []
+        for p in params:
+            vals = _vals(self, p)          # (size, *var.shape)
+            results.append(vals[flat_idx])
+        return results[0] if scalar else results
 
-    def to_stats(self, params=None, quantities=None, sigfigs=2, tablefmt='latex_raw', fn=None):
-        """
-        Export summary sampling quantities.
+    def to_stats(self, params=None, quantities=None, sigfigs=2,
+                 tablefmt='latex_raw', fn=None):
+        r"""Export a summary table of sampling statistics.
 
         Parameters
         ----------
-        params : list, ParameterCollection, default=None
-            Parameters to export quantities for. Defaults to all parameters.
+        params : list[str or Variable], optional
+            Parameters to include.  Defaults to all varied (non-derived) params.
+        quantities : list[str], optional
+            Quantities to compute per parameter.  Each entry is one of:
 
-        quantities : list, default=None
-            Quantities to export. Defaults to ``['argmax', 'mean', 'median', 'std', 'quantile:1sigma', 'interval:1sigma']``.
+            * ``'argmax'`` — value at the highest-posterior sample
+            * ``'mean'`` — weighted mean
+            * ``'median'`` — weighted median
+            * ``'std'`` — weighted standard deviation
+            * ``'quantile:Nsigma'`` — symmetric quantile interval,
+              e.g. ``'quantile:1sigma'``
+            * ``'interval:Nsigma'`` — shortest credible interval,
+              e.g. ``'interval:1sigma'``
 
+            Defaults to ``['argmax', 'mean', 'median', 'std', 'quantile:1sigma', 'interval:1sigma']``.
         sigfigs : int, default=2
-            Number of significant digits.
-            See :func:`utils.round_measurement`.
-
+            Number of significant figures (passed to :func:`~desilike.utils.round_measurement`).
         tablefmt : str, default='latex_raw'
-            Format for summary table.
-            See :func:`tabulate.tabulate`.
-            If 'list', return table as list of list of strings, and headers.
-            If 'list_latex', return table as list of list of latex strings, and headers.
-
-        fn : str, default=None
-            If not ``None``, file name where to save summary table.
+            ``tabulate`` format string.  Use ``'list'`` to return
+            ``(rows, headers)`` instead of a formatted string.
+        fn : str, optional
+            If given, write the table to this file path.
 
         Returns
         -------
-        tab : str
-            Summary table.
+        str or tuple[list, list]
+            Formatted table, or ``(rows, headers)`` when ``tablefmt='list'``.
         """
-        import tabulate
-        if params is None: params = self.params(varied=True)
-        else: params = [self[param].param for param in params]
-        if quantities is None: quantities = ['argmax', 'mean', 'median', 'std', 'quantile:1sigma', 'interval:1sigma']
+        import tabulate as _tabulate
+
+        if params is None:
+            # Default: non-derived variables only (exclude logposterior, weights, …)
+            varied_params = [v.name for v in self._data if not v.derived]
+        else:
+            _, varied_params = _normalise_params(self, params)
+        if quantities is None:
+            quantities = ['argmax', 'mean', 'median', 'std',
+                          'quantile:1sigma', 'interval:1sigma']
         is_latex = 'latex' in tablefmt
 
-        def round_errors(low, up):
-            low, up = utils.round_measurement(0.0, low, up, sigfigs=sigfigs, positive_sign='u')[1:]
-            if is_latex: return '${{}}_{{{}}}^{{{}}}$'.format(low, up)
-            return '{}/{}'.format(low, up)
-
-        data = []
-        for param in params:
+        rows = []
+        for p in varied_params:
             row = []
-            row.append(param.latex(inline=True) if is_latex else str(param))
-            ref_center = self.mean(param)
-            ref_error = self.var(param)**0.5
+            if is_latex and hasattr(p, 'latex'):
+                row.append(p.latex(inline=True))
+            else:
+                row.append(str(p.name) if hasattr(p, 'name') else str(p))
+
+            ref_center = float(np.ravel(self.mean(p))[0])
+            ref_error  = float(np.ravel(self.std(p))[0])
+
+            def _fmt_val(val):
+                xr, _ = round_measurement(val, ref_error, sigfigs=sigfigs)
+                return f'${xr}$' if is_latex else xr
+
+            def _fmt_errs(lo_offset, hi_offset):
+                _, lo_r, hi_r = round_measurement(
+                    0.0, hi_offset, lo_offset,
+                    sigfigs=sigfigs, positive_sign='u',
+                )
+                if is_latex:
+                    return '${{}}_{{{lo}}}^{{{hi}}}$'.format(lo=lo_r, hi=hi_r)
+                return f'{lo_r}/{hi_r}'
+
             for quantity in quantities:
-                if quantity in ['argmax', 'mean', 'median', 'std']:
-                    value = getattr(self, quantity)(param)
-                    value = utils.round_measurement(value, ref_error, sigfigs=sigfigs)[0]
-                    if is_latex: value = '${}$'.format(value)
-                    row.append(value)
-                elif quantity.startswith('quantile'):
-                    nsigmas = int(re.match('quantile:(.*)sigma', quantity).group(1))
-                    low, up = self.quantile(param, q=utils.nsigmas_to_quantiles_1d_sym(nsigmas))
-                    row.append(round_errors(low - ref_center, up - ref_center))
-                elif quantity.startswith('interval'):
-                    nsigmas = int(re.match('interval:(.*)sigma', quantity).group(1))
-                    low, up = self.interval(param, nsigmas=nsigmas)
-                    row.append(round_errors(low - ref_center, up - ref_center))
+                if quantity in ('argmax', 'mean', 'median', 'std'):
+                    val = float(np.ravel(getattr(self, quantity)(p))[0])
+                    row.append(_fmt_val(val))
+                elif quantity.startswith('quantile:'):
+                    match = re.match(r'quantile:(\d+)sigma', quantity)
+                    if match is None:
+                        raise ValueError(f'Cannot parse quantity {quantity!r}; expected e.g. quantile:1sigma')
+                    nsigmas = int(match.group(1))
+                    q_lo, q_hi = _nsigmas_to_quantiles_1d_sym(nsigmas)
+                    lo, hi = (float(np.ravel(v)[0])
+                               for v in self.quantile(p, q=(q_lo, q_hi)))
+                    row.append(_fmt_errs(lo - ref_center, hi - ref_center))
+                elif quantity.startswith('interval:'):
+                    match = re.match(r'interval:(\d+)sigma', quantity)
+                    if match is None:
+                        raise ValueError(f'Cannot parse quantity {quantity!r}; expected e.g. interval:1sigma')
+                    nsigmas = int(match.group(1))
+                    lo, hi = (float(v) for v in self.interval(p, nsigmas=nsigmas))
+                    row.append(_fmt_errs(lo - ref_center, hi - ref_center))
                 else:
-                    raise RuntimeError('Unknown quantity {}.'.format(quantity))
-            data.append(row)
+                    raise ValueError(f'Unknown quantity {quantity!r}')
+            rows.append(row)
+
+        headers = quantities
         if 'list' in tablefmt:
-            return data, quantities
-        tab = tabulate.tabulate(data, headers=quantities, tablefmt=tablefmt)
+            return rows, headers
+
+        tab = _tabulate.tabulate(rows, headers=headers, tablefmt=tablefmt)
         if fn is not None:
-            utils.mkdir(os.path.dirname(fn))
-            self.log_info('Saving to {}.'.format(fn))
-            with open(fn, 'w') as file:
-                file.write(tab)
+            os.makedirs(os.path.dirname(fn) or '.', exist_ok=True)
+            with open(fn, 'w') as fh:
+                fh.write(tab)
         return tab
+
+    def covariance(self, params=None):
+        """Weighted parameter covariance matrix.
+
+        Uses the reliability-weights formula (same denominator as :meth:`var`).
+
+        Parameters
+        ----------
+        params : str, Variable, list, or None
+            Parameters to include.  ``None`` → all non-derived variables.
+            Only scalar parameters (``shape == ()``) are supported; vector
+            params are flattened to multiple columns in the output.
+
+        Returns
+        -------
+        Covariance
+            Named covariance matrix.  ``np.asarray(result)`` returns the
+            plain ``(flat_size, flat_size)`` NumPy array.
+        """
+        from .covariance import Covariance
+        if params is None:
+            names = [v.name for v in self._data if not v.derived]
+        else:
+            _, names = _normalise_params(self, params)
+        w = self.weight.ravel().astype(float)
+        W = w.sum()
+        W2 = (w ** 2).sum()
+        denom = W ** 2 - W2   # reliability-weights denominator
+        # Stack columns: (size, total_flat_size)
+        cols = []
+        for name in names:
+            v = _vals(self, name)               # (size, *var.shape)
+            cols.append(v.reshape(self.size, -1))
+        X   = np.concatenate(cols, axis=1)      # (size, total_flat_size)
+        mu  = np.average(X, weights=w, axis=0)
+        D   = (X - mu) * w[:, None]             # weighted deviations
+        cov_arr = (D.T @ (X - mu)) * W / denom  # (total_flat_size, total_flat_size)
+        params_objs = [VariableCollection.__getitem__(self, name) for name in names]
+        return Covariance(cov_arr, params=params_objs)
+
+    def to_getdist(self, params=None, label=None, **kwargs):
+        """Return a :class:`getdist.MCSamples` object from this chain.
+
+        Requires the ``getdist`` package.
+
+        Parameters
+        ----------
+        params : list or None
+            Parameters to include.  ``None`` → all non-derived scalar variables.
+        label : str, optional
+            Name for GetDist to use for this set of samples.
+        **kwargs
+            Extra keyword arguments forwarded to :class:`getdist.MCSamples`.
+
+        Returns
+        -------
+        getdist.MCSamples
+        """
+        from getdist import MCSamples
+
+        if params is None:
+            params_objs = [v for v in self._data if not v.derived]
+        else:
+            _, names = _normalise_params(self, params)
+            params_objs = [VariableCollection.__getitem__(self, name) for name in names]
+
+        names   = [p.name for p in params_objs]
+        labels  = [p.latex() for p in params_objs]   # without $ delimiters
+        ranges  = {}
+        for param in params_objs:
+            if hasattr(param, 'prior') and param.prior is not None:
+                lo, hi = param.prior.limits
+                ranges[param.name] = (
+                    'N' if lo is None or not np.isfinite(float(lo)) else float(lo),
+                    'N' if hi is None or not np.isfinite(float(hi)) else float(hi),
+                )
+
+        # Build (n_samples, n_params) array — scalar params only; vector params flattened
+        samples  = np.column_stack([_vals(self, name).reshape(self.size, -1) for name in names])
+        weights  = self.weight.ravel()
+        loglikes = -self.logposterior.ravel()
+
+        return MCSamples(samples=samples, weights=weights, loglikes=loglikes,
+                         names=names, labels=labels, ranges=ranges,
+                         label=label, **kwargs)

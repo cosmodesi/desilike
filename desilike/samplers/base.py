@@ -1,727 +1,943 @@
+"""Base classes for posterior samplers."""
+
+import copy
+import json
 import sys
-import numbers
-import functools
 import logging
 import warnings
-import traceback
+from abc import ABC, abstractmethod
+from pathlib import Path
 
+import jax
+import jax.numpy as jnp
 import numpy as np
+from scipy.special import logsumexp
 
-from desilike import utils, mpi, PipelineError
-from desilike.utils import BaseClass, TaskManager, is_path
-from desilike.samples import Chain, Samples, load_source
-from desilike.samples import diagnostics as sample_diagnostics
-from desilike.parameter import ParameterPriorError
-from desilike.jax import jit
-
-
-class RegisteredSampler(type(BaseClass)):
-
-    _registry = {}
-
-    def __new__(meta, name, bases, class_dict):
-        cls = super().__new__(meta, name, bases, class_dict)
-        meta._registry[cls.name] = cls
-        return cls
+from desilike.parameter import VariableCollection
+from desilike.samples import MCSamples, Covariance, diagnostics
+from desilike.distributed import default_mpicomm, get_mpicomm
+from .pool import make_pool
 
 
-def batch_iterate(func, min_iterations=0, max_iterations=sys.maxsize, check_every=200, **kwargs):
-    count_iterations = 0
-    is_converged = False
-    if max_iterations < 0:
-        raise ValueError('max_iterations must be positive')
-    if check_every < 1:
-        raise ValueError('check_every must be >= 1, found {:d}'.format(check_every))
-    while not is_converged:
-        niter = min(max_iterations - count_iterations, check_every)
-        count_iterations += niter
-        is_converged = func(niterations=niter, **kwargs)
-        if count_iterations < min_iterations:
-            is_converged = False
-        if count_iterations >= max_iterations:
-            is_converged = True
+# ── module-level helpers ──────────────────────────────────────────────────────
+
+def update_kwargs(user_kwargs, sampler_name, **desilike_kwargs):
+    """Return *user_kwargs* updated with *desilike_kwargs*, warning on conflicts."""
+    kwargs = user_kwargs.copy()
+    for key, value in desilike_kwargs.items():
+        if key in user_kwargs:
+            warnings.warn(f"Keyword argument '{key}' passed to {sampler_name} is overwritten.")
+        kwargs[key] = value
+    return kwargs
 
 
-def bcast_values(func):
+def _param_sizes(varied_params):
+    """Return a list of ``(param, size, col_start)`` for each varied parameter.
 
-    @functools.wraps(func)
-    def wrapper(self, values):
-        values = np.asarray(values)
-        if self._check_same_input:
-            all_values = self.mpicomm.allgather(values)
-            if not all(np.allclose(values, all_values[0], atol=0., rtol=1e-7, equal_nan=True) for values in all_values if values is not None):
-                raise ValueError('Input values different on all ranks: {}'.format(all_values))
-        values = self.mpicomm.bcast(values, root=0)
-        isscalar = values.ndim == 1
-        values = np.atleast_2d(values)
-        mask = ~np.isnan(values).any(axis=1)
-        toret = np.full(values.shape[0], -np.inf)
-        values = values[mask]
-        if values.size:
-            toret[mask] = func(self, values)
-        if isscalar and toret.size:
-            toret = toret[0]
-        return toret
+    Parameters
+    ----------
+    varied_params : VariableCollection
 
-    return wrapper
+    Returns
+    -------
+    list of (Parameter, int, int)
+        Each tuple contains the parameter, its flat scalar size, and its
+        starting column index in the flat parameter vector.
+    """
+    result = []
+    col = 0
+    for param in varied_params:
+        size = int(np.prod(param.shape)) if param.shape else 1
+        result.append((param, size, col))
+        col += size
+    return result
 
 
-class BasePosteriorSampler(BaseClass, metaclass=RegisteredSampler):
 
-    name = 'base'
-    nwalkers = 1
-    _check_same_input = False
 
-    def __init__(self, likelihood, rng=None, seed=None, max_tries=1000, chains=None, ref_scale=1., save_fn=None, mpicomm=None):
+def _normalize_chain_ids(nchains):
+    """Return explicit chain ids from an integer count or an iterable of ids.
+
+    Parameters
+    ----------
+    nchains : int or iterable
+        If an integer, use chain ids ``1, ..., nchains``.  Otherwise, use the
+        provided values as explicit chain ids, e.g. ``[4, 5, 6, 7]``.
+
+    Returns
+    -------
+    list
+        Explicit chain ids, suitable for filenames such as ``samples_<id>.h5``.
+    """
+    if isinstance(nchains, (int, np.integer)):
+        if nchains < 1:
+            raise ValueError('nchains must be >= 1.')
+        return list(range(1, int(nchains) + 1))
+
+    chain_ids = list(nchains)
+    if not chain_ids:
+        raise ValueError('nchains cannot be an empty list.')
+    if len(set(chain_ids)) != len(chain_ids):
+        raise ValueError(f'Duplicate chain ids in nchains={chain_ids}.')
+    return chain_ids
+
+
+def _flat_to_dict(sample, varied_params):
+    """Convert a flat ``(ndim,)`` array to a ``{name: shaped_array}`` dict.
+
+    Parameters
+    ----------
+    sample : numpy.ndarray, shape (ndim,)
+    varied_params : VariableCollection
+
+    Returns
+    -------
+    dict
+        Maps each parameter name to an array of shape ``param.shape``, or a
+        scalar when ``param.shape`` is empty.  The values keep the dtype of
+        *sample* (so this stays JAX-traceable when *sample* is a tracer).
+    """
+    result = {}
+    for param, size, col in _param_sizes(varied_params):
+        chunk = sample[col:col + size]
+        result[param.name] = chunk.reshape(param.shape) if param.shape else chunk[0]
+    return result
+
+
+def _batched(core, returns_tuple):
+    """Wrap a single-sample core into a batched evaluator.
+
+    The vectorized pool calls the returned function once on a stacked
+    ``(N, ndim)`` batch and iterates the result, so it yields ``N``
+    per-sample results: an ``(N, ...)`` array for the array-returning cores,
+    or a list of ``N`` ``(log, derived)`` tuples for the posterior/likelihood
+    cores.  A single ``(ndim,)`` sample is also accepted (promoted to a batch
+    of one, leading axis squeezed on return) so callers that evaluate one
+    point at a time outside the pool — e.g. mhmcmc's standalone sampler —
+    still work.
+    """
+    vfn = jax.jit(jax.vmap(core))
+    if returns_tuple:
+        def batched(batch):
+            batch = jnp.asarray(batch)
+            single = batch.ndim == 1
+            log, derived = vfn(batch[None] if single else batch)
+            results = list(zip(np.asarray(log), np.asarray(derived)))
+            return results[0] if single else results
+        return batched
+    def batched_array(batch):
+        batch = jnp.asarray(batch)
+        single = batch.ndim == 1
+        out = np.asarray(vfn(batch[None] if single else batch))
+        return out[0] if single else out
+    return batched_array
+
+
+# ── BaseSampler ───────────────────────────────────────────────────────────────
+
+class BaseSampler(ABC):
+    """Abstract base class for all samplers."""
+
+    logger = logging.getLogger('BaseSampler')
+
+    @default_mpicomm
+    def __init__(self, posterior, rng=None, mpicomm=None, directory=None,
+                 rescale=False, covariance=None, batch_size=None):
         """
-        Initialize posterior sampler.
-
         Parameters
         ----------
-        likelihood : BaseLikelihood
-            Input likelihood.
-
-        rng : np.random.RandomState, default=None
-            Random state. If ``None``, ``seed`` is used to set random state.
-
-        seed : int, default=None
-            Random seed.
-
-        max_tries : int, default=1000
-            A :class:`ValueError` is raised after this number of likelihood (+ prior) calls without finite posterior.
-
-        chains : str, Path, Chain, default=None
-            Path to or chains to resume from.
-
-        ref_scale : float, default=1.
-            If no chains to resume from are provided, initial points are sampled from parameters' :attr:`Parameter.ref` reference distributions.
-            Rescale parameters' :attr:`Parameter.ref` reference distribution by this factor.
-
-        save_fn : str, Path, default=None
-            If not ``None``, save samples to this location.
-
-        mpicomm : mpi.COMM_WORLD, default=None
-            MPI communicator. If ``None``, defaults to ``likelihood``'s :attr:`BaseLikelihood.mpicomm`.
+        posterior : CompiledGraph
+            Compiled pipeline returning the log-posterior.
+        rng : numpy.random.Generator, int, or None
+            Random number generator.  Default is ``None``.
+        mpicomm : MPI communicator, optional
+            Communicator for pool parallelism.  Defaults to
+            ``desilike.mpi.COMM_WORLD``.
+        directory : str, Path, or None
+            Save samples to this folder.  Default is ``None``.
+        rescale : bool
+            Internally normalise parameters so that their expected variation
+            range is ~ unity (mirrors :class:`~desilike.profilers.base.BaseProfiler`).
+            The sampler then explores the rescaled space while the posterior is
+            evaluated in original space.  Default is ``False``.
+        covariance : array_like, optional
+            ``(ndim, ndim)`` covariance whose diagonal sets the rescaling scale.
+            When ``None``, each parameter's ``ref.std()`` is used instead.
+        batch_size : int or None, optional
+            Controls how the pool batches likelihood/posterior calls.
+            ``None`` (default) — pass all tasks as one stacked array per rank.
+            ``0`` — evaluate one task at a time (no batching).
+            ``N > 0`` — group tasks into chunks of N.
         """
-        if mpicomm is None:
-            mpicomm = likelihood.mpicomm
-        self.likelihood = likelihood
-        #self.pipeline = self.likelihood.runtime_info.pipeline
-        self.mpicomm = mpicomm
-        self.likelihood.solved_default = '.marg'
-        self.varied_params = self.likelihood.varied_params.deepcopy()
-        for param in self.varied_params: param.update(ref=param.ref.affine_transform(scale=ref_scale))
-        if self.mpicomm.rank == 0:
-            self.log_info('Varied parameters: {}.'.format(self.varied_params.names()))
+        # ── parameter sets ────────────────────────────────────────────────────
+        self.varied_params = posterior.params.select(varied=True, solved=False)
         if not self.varied_params:
-            raise ValueError('no parameters to be varied!')
+            raise ValueError('No varied parameters found in the posterior.')
+        # Derived = pure derived outputs (logposterior etc.) + analytically solved params.
+        self.derived_params = posterior.params.select(derived=True) + posterior.params.select(solved=True)
+        # Flat count of derived scalar values (for array_to_samples bookkeeping)
+        self.n_derived = int(sum(
+            int(np.prod(p.shape)) if p.shape else 1
+            for p in self.derived_params
+        ))
+
+        # ── rescaling transform ───────────────────────────────────────────────
+        # Build _loc/_scale (flat, per scalar dimension) and a _transformed_params
+        # collection whose priors/refs/proposals live in rescaled space.  The
+        # sampler works in rescaled coordinates; _forward/_backward convert to and
+        # from original parameter values at the posterior / storage boundaries.
+        self._build_rescaling(rescale=rescale, covariance=covariance)
+
+        # ── MPI communicator ─────────────────────────────────────────────────
+        self.mpicomm = mpicomm
+
+        # Compiled posterior graph.  The pooled evaluators below are built from
+        # JAX-pure single-sample cores that call it; set_pool wraps each core in
+        # jax.jit(jax.vmap(...)) so the pool always receives a batched function.
+        self.posterior = posterior
+
+        self.set_pool(mpicomm=self.mpicomm, batch_size=batch_size)
+
+        # ── directory ────────────────────────────────────────────────────────
+        if directory is not None:
+            directory = Path(directory)
+            if directory.suffix:
+                raise ValueError('directory cannot have a suffix (must be a folder).')
+            if self.mpicomm.rank == 0:
+                directory.mkdir(parents=True, exist_ok=True)
+        self.directory = directory
+
         if self.mpicomm.rank == 0:
-            if chains is None:
-                if save_fn is not None and not is_path(save_fn):
-                    chains = len(save_fn)
-                else:
-                    chains = 1
-            if isinstance(chains, numbers.Number):
-                self.chains = [None] * int(chains)
-            else:
-                self.chains = load_source(chains)
-            print(self.chains)
+            self.logger.info('Varied parameters: %s', self.varied_params.names())
+            if self.directory is not None:
+                self.logger.info('Samples will be written to: %s', self.directory)
 
-        nchains = self.mpicomm.bcast(len(self.chains) if self.mpicomm.rank == 0 else None, root=0)
-        # print(len(self.chains))
-        if self.mpicomm.rank != 0:
-            self.chains = [None] * nchains
-        self.save_fn = save_fn
-        if save_fn is not None:
-            if is_path(save_fn):
-                self.save_fn = [str(save_fn).replace('*', '{}').format(i) for i in range(self.nchains)]
-            else:
-                if len(save_fn) != self.nchains:
-                    raise ValueError('Provide {:d} chain file names'.format(self.nchains))
-        self.max_tries = int(max_tries)
-        self._set_rng(rng=rng, seed=seed)
-        self.diagnostics = {}
-        self.derived = None
+        self.samples = None
 
-    @bcast_values
-    def logposterior(self, values):
-        logprior = self.logprior(values)
-        mask_finite_prior = ~np.isinf(logprior)
-        if not mask_finite_prior.any():
-            return logprior
-        points = Samples(values[mask_finite_prior].T, params=self.varied_params)
-        results = self._vlikelihood(points.to_dict())
-        #print(self.mpicomm.size, self.mpicomm.rank)
-
-        logposterior, raise_error = None, None
-        if self.mpicomm.rank == 0:
-            results, errors = results
-            logposterior, derived = results if results else (None, {})
-            update_derived = True
-            di = {}
+        if self.directory is not None:
             try:
-                di = {'loglikelihood': derived[self.likelihood._param_loglikelihood],
-                      'logprior': derived[self.likelihood._param_logprior]}
-            except KeyError:
-                di['loglikelihood'] = di['logprior'] = np.full(points.shape, -np.inf)
-                update_derived = False
-            if errors:
-                for ipoint, error in errors.items():
-                    if isinstance(error[0], self.likelihood.catch_errors):
-                        self.log_debug('Error "{}" raised with parameters {} is caught up with -inf loglikelihood. Full stack trace\n{}:'.format(repr(error[0]),
-                                       {k: v.flat[ipoint] for k, v in points.items()}, error[1]))
-                        for values in di.values():
-                            values[ipoint, ...] = -np.inf  # should be not be required, as no step with -inf loglikelihood should be kept
-                    else:
-                        raise_error = error
-                        update_derived = False
-                    if raise_error is None and not self.logger.isEnabledFor(logging.DEBUG):
-                        warnings.warn('Error "{}" raised is caught up with -inf loglikelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.'.format(repr(error[0])))
+                self.read()
+            except FileNotFoundError:
+                pass
 
-            if update_derived:
-                if self.derived is None:
-                    self.derived = [points, derived]
-                else:
-                    self.derived = [Samples.concatenate([self.derived[0], points], intersection=True),
-                                    Samples.concatenate([self.derived[1], derived], intersection=True)]
-            logposterior = logprior.copy()
-            logposterior[mask_finite_prior] = 0.
-            for name, values in di.items():
-                values = values[()]
-                mask = np.isnan(values)
-                values[mask] = -np.inf
-                logposterior[mask_finite_prior] += values
-                if mask.any() and self.mpicomm.rank == 0:
-                    warnings.warn('{} is NaN for {}'.format(name, {k: v[mask].tolist() for k, v in points.items()}))
+        self.set_rng(rng=rng)
+
+    def _build_rescaling(self, rescale=False, covariance=None):
+        """Build the ``_loc``/``_scale`` flat vectors and ``_transformed_params``.
+
+        ``_loc[k]`` and ``_scale[k]`` are the centre and step of flat scalar element
+        ``k`` (mirrors :class:`~desilike.profilers.base.BaseProfiler`).  ``_loc`` is the
+        parameter centre (``value`` or ``ref.center()``); ``_scale`` is ``sqrt(diag(covariance))``
+        when *covariance* is given, each parameter's ``ref.std()`` when *rescale* is set,
+        or all-ones otherwise (no rescaling).
+        """
+        # Flat per-scalar layout: shape () → 1 element, shape (n,) → n elements.
+        loc_parts = []
+        for param, size, col in _param_sizes(self.varied_params):
+            center = np.asarray(
+                param.value if param.value is not None else param.ref.center()).ravel()
+            if center.size == 1 and size > 1:
+                center = np.full(size, float(center[0]))
+            loc_parts.append(center.astype('f8'))
+        self._loc = np.concatenate(loc_parts) if loc_parts else np.array([], dtype='f8')
+
+        flat_size = self._loc.size
+        self._L = self._L_inv = None
+        if rescale:
+            if isinstance(covariance, Covariance):
+                param_sizes_list = list(_param_sizes(self.varied_params))
+                C_full = np.zeros((flat_size, flat_size), dtype='f8')
+                # Fill the joint block from the Covariance for all known params at once.
+                in_cov_indices = []
+                params_in_cov = []
+                for param, size, col in param_sizes_list:
+                    if param.name in covariance:
+                        in_cov_indices.extend(range(col, col + size))
+                        params_in_cov.append(param)
+                if params_in_cov:
+                    sub = covariance.view(params_in_cov, return_type='nparray')
+                    ix = np.ix_(in_cov_indices, in_cov_indices)
+                    C_full[ix] = sub
+                # Fill diagonal for params absent from the Covariance.
+                for param, size, col in param_sizes_list:
+                    if param.name not in covariance:
+                        std = param.ref.std()
+                        if std is None or not np.isfinite(std) or std <= 0.:
+                            raise ValueError(
+                                f'Parameter {param.name!r}: cannot determine rescale scale from '
+                                f'ref.std()={std!r}. Provide covariance or set a proper ref distribution.')
+                        for k in range(size):
+                            C_full[col + k, col + k] = float(std) ** 2
+                self._scale = np.sqrt(np.diag(C_full))
+                if np.any(C_full != np.diag(np.diag(C_full))):
+                    _L = np.linalg.cholesky(C_full)
+                    self._L = jnp.array(_L)
+                    self._L_inv = jnp.array(np.linalg.inv(_L))
+            elif covariance is not None:
+                self._scale = np.sqrt(np.diag(np.asarray(covariance)))
+            else:
+                scale_parts = []
+                for param, size, col in _param_sizes(self.varied_params):
+                    std = param.ref.std()
+                    if std is None or not np.isfinite(std) or std <= 0.:
+                        raise ValueError(
+                            f'Parameter {param.name!r}: cannot determine rescale scale from '
+                            f'ref.std()={std!r}. Provide covariance or set a proper ref distribution.')
+                    scale_parts.append(np.full(size, float(std), dtype='f8'))
+                self._scale = np.concatenate(scale_parts) if scale_parts else np.array([], dtype='f8')
         else:
-            self.derived = None
-        raise_error = self.mpicomm.bcast(raise_error, root=0)
-        if raise_error:
-            raise PipelineError('Error "{}" occured with stack trace:\n{}'.format(*raise_error))
+            self._scale = np.ones(flat_size, dtype='f8')
 
-        return self.mpicomm.bcast(logposterior, root=0)
+        # Transformed collection: priors/refs expressed in rescaled space (the rescaled
+        # step size is recovered from the transformed ref.std()).
+        self._transformed_params = VariableCollection()
+        for param, size, col in _param_sizes(self.varied_params):
+            loc_p   = self._loc[col:col + size]
+            scale_p = self._scale[col:col + size]
+            param_copy = copy.copy(param)
+            if not param.shape:
+                loc_s, scale_s = float(loc_p[0]), float(scale_p[0])
+                param_copy.prior = param.prior.affine_transform(loc=-loc_s / scale_s, scale=1. / scale_s)
+                param_copy.ref   = param.ref.affine_transform(loc=-loc_s / scale_s, scale=1. / scale_s)
+            else:
+                loc_arr   = loc_p.reshape(param.shape)
+                scale_arr = scale_p.reshape(param.shape)
+                param_copy.prior = param.prior.affine_transform(loc=-loc_arr / scale_arr, scale=1. / scale_arr)
+                param_copy.ref   = param.ref.affine_transform(loc=-loc_arr / scale_arr, scale=1. / scale_arr)
+            self._transformed_params.set(param_copy)
 
-    @bcast_values
-    @jit(static_argnums=[0])
-    def logprior(self, values):
-        return self.likelihood.all_params.prior(**dict(zip(self.varied_params.names(), values.T)))
+    def _forward(self, x):
+        """Rescaled → original space along the last axis.
 
-    def __getstate__(self):
-        state = {}
-        for name in ['max_tries', 'diagnostics']:
-            state[name] = getattr(self, name)
-        return state
+        Diagonal: ``x * scale + loc``.
+        Full Cholesky: ``x @ L.T + loc``.
+        JAX-safe (used inside jitted/vmapped cores); broadcasts over leading axes.
+        """
+        if self._L is not None:
+            return jnp.asarray(x) @ self._L.T + self._loc
+        return jnp.asarray(x) * self._scale + self._loc
 
-    def _set_rng(self, rng=None, seed=None):
-        self.rng = self.mpicomm.bcast(rng, root=0)
-        if self.rng is None:
-            seed = mpi.bcast_seed(seed=seed, mpicomm=self.mpicomm, size=None)
-            self.rng = np.random.RandomState(seed=seed)
+    def _backward(self, x):
+        """Original → rescaled space along the last axis.
 
-    def _set_vlikelihood(self):
-        """Vectorize the likelihood."""
+        Diagonal: ``(x - loc) / scale``.
+        Full Cholesky: ``(x - loc) @ L_inv.T``.
+        JAX-safe; broadcasts over leading axes.
+        """
+        if self._L is not None:
+            return (jnp.asarray(x) - self._loc) @ self._L_inv.T
+        return (jnp.asarray(x) - self._loc) / self._scale
 
-        def get_start(size=1):
-            toret = {}
-            for param in self.varied_params:
-                if param.ref.is_proper():
-                    value = param.ref.sample(size=size, random_state=self.rng)
-                else:
-                    value = np.full(size, param.value)
-                toret[param.name] = value
-            return toret
+    def _forward_dict(self, sample):
+        """Map a ``{name: rescaled_value}`` dict to original parameter values.
 
-        #self.likelihood.mpicomm = mpi.COMM_SELF
-        self.likelihood()  # initialize before jit
-        vlikelihood = self.likelihood
-        from desilike import vmap
-        try:
-            import jax
-            _vlikelihood = vmap(vlikelihood, backend='jax', errors='return', return_derived=True)
-            _vlikelihood(get_start())
-            #raise ValueError
-        except:
-            if self.mpicomm.rank == 0:
-                self.log_info('Could *not* vmap input likelihood. Set logging level to debug (setup_logging("debug")) to get full stack trace.')
-                self.log_debug('Error was {}.'.format(traceback.format_exc()))
-            vlikelihood = vmap(vlikelihood, backend=None, errors='return', return_derived=True)
+        For samplers (e.g. blackjax) that carry positions as per-name dicts in the
+        rescaled working space rather than as a flat vector.  JAX-safe.
+        """
+        if self._L is not None:
+            flat_rescaled = jnp.concatenate([
+                jnp.atleast_1d(jnp.ravel(jnp.asarray(sample[param.name])))
+                for param, size, col in _param_sizes(self.varied_params)
+            ])
+            flat_original = flat_rescaled @ self._L.T + self._loc
+            result = {}
+            for param, size, col in _param_sizes(self.varied_params):
+                value = flat_original[col:col + size]
+                result[param.name] = value.reshape(param.shape) if param.shape else value[0]
+            return result
+        result = {}
+        for param, size, col in _param_sizes(self.varied_params):
+            scale = self._scale[col:col + size]
+            loc   = self._loc[col:col + size]
+            value = jnp.ravel(jnp.asarray(sample[param.name])) * scale + loc
+            result[param.name] = value.reshape(param.shape) if param.shape else value[0]
+        return result
+
+    def set_rng(self, rng):
+        """Set the random number generator."""
+        if hasattr(self, 'rng') and rng is None:
+            pass
         else:
-            if self.mpicomm.rank == 0:
-                self.log_info('Successfully vmap input likelihood.')
-            vlikelihood = _vlikelihood
-        try:
-            import jax
-            _vlikelihood = jax.jit(vlikelihood)
-            _vlikelihood(get_start())
-            #raise ValueError
-        except:
-            if self.mpicomm.rank == 0:
-                self.log_info('Could *not* jit input likelihood.')
-        else:
-            if self.mpicomm.rank == 0:
-                self.log_info('Successfully jit input likelihood.')
-            vlikelihood = _vlikelihood
-        vlikelihood = vmap(vlikelihood, backend='mpi', errors='return')
-        def _vlikelihood(*args, **kwargs):
-            return vlikelihood(*args, **kwargs, mpicomm=self.mpicomm)
-        self._vlikelihood = _vlikelihood
-
-    def _prepare(self):
-        pass
+            if isinstance(rng, int) or rng is None:
+                rng = np.random.default_rng(seed=rng)
+            self.rng = rng
 
     @property
-    def nchains(self):
-        return len(self.chains)
+    def ndim(self):
+        """Total number of scalar dimensions across all varied parameters."""
+        return int(sum(
+            int(np.prod(param.shape)) if param.shape else 1
+            for param in self.varied_params
+        ))
 
-    def _get_start(self, start=None, max_tries=None):
-        if max_tries is None:
-            max_tries = self.max_tries
+    def set_pool(self, mpicomm, batch_size=None):
+        """Create the pool and register the batched evaluators.
 
-        self._set_rng(rng=self.rng)  # to make sure all processes have the same rng
-
-        def get_start(size=1):
-            toret = []
-            for param in self.varied_params:
-                if param.ref.is_proper():
-                    value = param.ref.sample(size=size, random_state=self.rng)
-                else:
-                    value = np.full(size, param.value)
-                toret.append(value)
-            return np.column_stack(toret)
-
-        if getattr(self, '_vlikelihood', None) is None:
-            self._set_vlikelihood()
-
-        shape = (self.nchains, self.nwalkers, len(self.varied_params))
-        if start is not None:
-            start = np.asarray(start)
-            if start.shape != shape:
-                raise ValueError('Provide start with shape {}'.format(shape))
-            return start
-
-        start = np.full(shape, np.nan)
-        logposterior = np.full(shape[:2], -np.inf)
-        for ichain, chain in enumerate(self.chains):
-            if self.mpicomm.bcast(chain is not None and chain.size, root=0):
-                start[ichain] = self.mpicomm.bcast(np.array([chain[param][-1] for param in self.varied_params]).T if self.mpicomm.rank == 0 else None, root=0)
-                logposterior[ichain] = self.logposterior(start[ichain])
-
-        start.shape = (shape[0] * shape[1], -1)
-        logposterior.shape = -1
-
-        for itry in range(max_tries):
-            mask = np.isfinite(logposterior)
-            if mask.all(): break
-            mask = ~mask
-            values = get_start(size=mask.sum())
-            start[mask] = values
-            logposterior[mask] = self.logposterior(values)
-
-        if not np.isfinite(logposterior).all():
-            raise ValueError('Could not find finite log posterior after {:d} tries'.format(max_tries))
-
-        start.shape = shape
-
-        return start
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, exc_traceback):
-        pass
-
-    @property
-    def mpicomm(self):
-        return self._mpicomm
-
-    @mpicomm.setter
-    def mpicomm(self, mpicomm):
-        #self._mpicomm = self.likelihood.mpicomm = mpicomm
-        self._mpicomm = mpicomm
-
-    def _set_derived(self, chain):
-        chain = Chain(chain, loglikelihood=self.likelihood._param_loglikelihood, logprior=self.likelihood._param_logprior)
-        for param in self.likelihood.all_params.select(fixed=True, derived=False):
-            chain[param] = np.full(chain.shape, param.value, dtype='f8')
-        if self.derived is not None:
-            indices_in_chain, indices = self.derived[0].match(chain, params=self.varied_params)
-            assert indices_in_chain[0].size == chain.size, '{:d} != {:d}, {}, {}'.format(indices_in_chain[0].size, chain.size, indices_in_chain, indices)
-            for array in self.derived[1]:
-                chain.set(array[indices].reshape(chain.shape + array.shape[1:]))
-        if chain._logposterior not in chain:
-            chain.logposterior = chain[chain._loglikelihood][()] + chain[chain._logprior][()]
-        chain.logposterior.param.update(derived=True, latex=utils.outputs_to_latex(chain._logposterior))
-        return chain
-
-    def run(self, start=None, **kwargs):
+        ``prior_transform``, ``compute_prior``, ``compute_posterior`` and
+        ``compute_likelihood`` are built from JAX-pure single-sample cores
+        (``_*_one``) wrapped in ``jax.jit(jax.vmap(...))``.
         """
-        Run chains. Sampling can be interrupted anytime, and resumed by providing
-        the path to the saved chains in ``chains`` argument of :meth:`__init__`.
+        self.pool = make_pool(mpicomm, batch_size=batch_size)
+        specs = [('prior_transform',    self._prior_transform_one,    False),
+                 ('compute_prior',      self._compute_prior_one,      False),
+                 ('compute_posterior',  self._compute_posterior_one,  True),
+                 ('compute_likelihood', self._compute_likelihood_one, True)]
+        for name, core, returns_tuple in specs:
+            setattr(self, name, self.pool.save_function(_batched(core, returns_tuple), name))
 
-        One will typically run sampling on ``nchains * nprocs_per_chain`` processes,
-        with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max(mpicomm.size // nchains, 1)``
-        the number of processes per chain.
+    def _prior_transform_one(self, sample):
+        """Map a unit-cube sample ``(ndim,)`` to *rescaled* parameter space via each prior's PPF.
+
+        The transformed priors' PPF already returns rescaled-space values, so the result
+        is the sampler's working-space vector (``_forward`` maps it back to original).
         """
-        #self.derived = None
-        nprocs_per_chain = max(self.mpicomm.size  // self.nchains, 1)
-        chains, ncalls = [[None] * self.nchains for i in range(2)]
-        start = self._get_start(start=start)
+        result = []
+        for param, size, col in _param_sizes(self._transformed_params):
+            u_chunk = sample[col:col + size]
+            result.append(jnp.atleast_1d(param.prior.ppf(u_chunk)))
+        return jnp.concatenate(result)
 
-        mpicomm_bak = self.mpicomm
-        self._prepare()
+    def _compute_prior_one(self, sample):
+        """Return the log-prior for a single rescaled-space ``(ndim,)`` sample (Parameter priors only).
 
-        with TaskManager(nprocs_per_task=nprocs_per_chain, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
-            self.mpicomm = tm.mpicomm
-            for ichain in tm.iterate(range(self.nchains)):
-                self._set_rng(rng=self.rng)
-                self._ichain = ichain
-                chain = self._run_one(start[ichain], **kwargs)
-                if self.mpicomm.rank == 0:
-                    ncalls[ichain] = self.derived[1].size if self.derived is not None else 0
-                    if chain is not None:
-                        chains[ichain] = self._set_derived(chain)
-                self.derived = None
-        self.mpicomm = mpicomm_bak
-        for ichain, chain in enumerate(chains):
-            mpiroot_worker = self.mpicomm.rank if ncalls[ichain] is not None else None
-            for mpiroot_worker in self.mpicomm.allgather(mpiroot_worker):
-                if mpiroot_worker is not None: break
-            assert mpiroot_worker is not None
-            ncalls[ichain] = self.mpicomm.bcast(ncalls[ichain], root=mpiroot_worker)
-            if self.mpicomm.bcast(chain is not None, root=mpiroot_worker):
-                chains[ichain] = Chain.sendrecv(chain, source=mpiroot_worker, dest=0, mpicomm=self.mpicomm)
+        The sample is mapped back to original space before evaluating the original priors,
+        so the log-prior is consistent with the posterior's internal prior.
 
-        self.diagnostics['ncall'] = ncalls
-        self.diagnostics['naccepted'] = [chain.size if chain is not None else 0 for chain in chains]
-        if self.mpicomm.rank == 0:
-            for ichain, (chain, new_chain) in enumerate(zip(self.chains, chains)):
-                if new_chain is not None:
-                    if chain is None:
-                        self.chains[ichain] = new_chain.deepcopy()
-                    else:
-                        self.chains[ichain] = Chain.concatenate(chain, new_chain)
-                    attrs = {name: getattr(self.likelihood, name, None) for name in ['size', 'nvaried', 'ndof', 'hartlap2007_factor', 'percival2014_factor']}
-                    self.chains[ichain].attrs.update(attrs)
-            if self.save_fn is not None:
-                for ichain, chain in enumerate(self.chains):
-                    if chain is not None: chain.save(self.save_fn[ichain])
-        return self.chains
-
-
-class BaseBatchPosteriorSampler(BasePosteriorSampler):
-
-    """Base class for samplers which can run independent chains in parallel."""
-
-    def run(self, min_iterations=0, max_iterations=sys.maxsize, check_every=300, check=None, **kwargs):
+        Warning
+        -------
+        This is *not* necessarily the real prior, which may be more complex.
         """
-        Run chains. Sampling can be interrupted anytime, and resumed by providing
-        the path to the saved chains in ``chains`` argument of :meth:`__init__`.
+        sample = _flat_to_dict(self._forward(sample), self.varied_params)
+        return sum((param.prior.logpdf(sample[param.name])
+                    for param in self.varied_params if param.prior is not None),
+                   jnp.array(0.))
 
-        One will typically run sampling on ``nchains * nprocs_per_chain + 1`` processes,
-        with ``nchains >= 1`` the number of chains and ``nprocs_per_chain = max((mpicomm.size - 1) // nchains, 1)``
-        the number of processes per chain --- plus 1 root process to distribute the work.
+    def _compute_posterior_one(self, sample):
+        """Return ``(log_posterior, derived_flat)`` for a single rescaled-space ``(ndim,)`` sample."""
+        sample = _flat_to_dict(self._forward(sample), self.varied_params)
+        if self.n_derived:
+            log_post, derived_dict = self.posterior(sample, return_derived=True)
+            derived_flat = jnp.concatenate([
+                jnp.ravel(jnp.asarray(derived_dict.get(param.name, jnp.zeros(param.shape))))
+                for param in self.derived_params])
+        else:
+            log_post = self.posterior(sample, return_derived=False)
+            derived_flat = jnp.zeros(0)
+        return log_post, derived_flat
+
+    def _compute_likelihood_one(self, sample):
+        """Return ``(log_likelihood, derived_flat)`` for a single ``(ndim,)`` sample.
+
+        The log-likelihood is ``log_posterior − log_prior``.
+        """
+        log_prior = self._compute_prior_one(sample)
+        log_post, derived = self._compute_posterior_one(sample)
+        return log_post - log_prior, derived
+
+    def _get_start(self, size=1):
+        """Return a dict ``{name: array}`` sampled from each parameter's ref.
 
         Parameters
         ----------
-        min_iterations : int, default=100
-            Minimum number of iterations (MCMC steps) to run (to avoid early stopping
-            if convergence criteria below are satisfied by chance at the beginning of the run).
-
-        max_iterations : int, default=sys.maxsize
-            Maximum number of iterations (MCMC steps) to run.
-
-        check_every : int, default=300
-            Samples are saved and convergence checks are run every ``check_every`` iterations.
-
-        check : bool, dict, default=None
-            If ``False``, no convergence checks are run.
-            If ``True`` or ``None``, convergence checks are run.
-            A dictionary of convergence criteria can be provided, see :meth:`check`.
-
-        **kwargs : dict
-            Optional sampler-specific arguments.
-        """
-        #self.derived = None
-        # print(self.nchains)
-        nprocs_per_chain = max(self.mpicomm.size // self.nchains, 1)
-
-        run_check = bool(check) or isinstance(check, dict)
-        if run_check and not isinstance(check, dict):
-            check = {}
-
-        def _run_batch(niterations):
-            chains, ncalls = [[None] * self.nchains for i in range(2)]
-            start = self._get_start()
-            mpicomm_bak = self.mpicomm
-
-            self._prepare()
-
-            with TaskManager(nprocs_per_task=nprocs_per_chain, use_all_nprocs=True, mpicomm=self.mpicomm) as tm:
-
-                self.mpicomm = tm.mpicomm
-
-                for ichain in tm.iterate(range(self.nchains)):
-                    self._set_rng(rng=self.rng)
-                    self._ichain = ichain
-                    chain = self._run_one(start[ichain], niterations=niterations, **kwargs)
-                    if self.mpicomm.rank == 0:
-                        ncalls[ichain] = self.derived[1][self.likelihood._param_loglikelihood].size if self.derived is not None else 0
-                        if chain is not None:
-                            chains[ichain] = self._set_derived(chain)
-                    self.derived = None
-            self.mpicomm = mpicomm_bak
-
-            for ichain, chain in enumerate(chains):
-                mpiroot_worker = self.mpicomm.rank if ncalls[ichain] is not None else None
-                for mpiroot_worker in self.mpicomm.allgather(mpiroot_worker):
-                    if mpiroot_worker is not None: break
-                assert mpiroot_worker is not None
-                ncalls[ichain] = self.mpicomm.bcast(ncalls[ichain], root=mpiroot_worker)
-                if self.mpicomm.bcast(chain is not None, root=mpiroot_worker):
-                    chains[ichain] = Chain.sendrecv(chain, source=mpiroot_worker, dest=0, mpicomm=self.mpicomm)
-
-            self.diagnostics['ncall'] = ncalls
-            self.diagnostics['naccepted'] = [chain.size if chain is not None else 0 for chain in chains]
-
-            if self.mpicomm.rank == 0:
-                for ichain, (chain, new_chain) in enumerate(zip(self.chains, chains)):
-                    if new_chain is not None:
-                        if chain is None:
-                            self.chains[ichain] = new_chain.deepcopy()
-                        else:
-                            self.chains[ichain] = Chain.concatenate(chain, new_chain)
-                        attrs = {name: getattr(self.likelihood, name, None) for name in ['size', 'nvaried', 'ndof', 'hartlap2007_factor', 'percival2014_factor']}
-                        self.chains[ichain].attrs.update(attrs)
-                if self.save_fn is not None:
-                    for ichain, chain in enumerate(self.chains):
-                        if chain is not None: chain.save(self.save_fn[ichain])
-
-            is_converged = False
-            if run_check:
-                is_converged = self.check(**check)
-            return is_converged
-
-        batch_iterate(_run_batch, min_iterations=min_iterations, max_iterations=max_iterations, check_every=check_every)
-        return self.chains
-
-    def check(self, nsplits=4, burnin=0.5, stable_over=2,
-              max_eigen_gr=0.03, max_diag_gr=None, max_cl_diag_gr=None, nsigmas_cl_diag_gr=1., max_geweke=None, max_geweke_pvalue=None,
-              min_ess=None, reliable_ess=50, max_dact=None,
-              min_eigen_gr=None, min_diag_gr=None, min_cl_diag_gr=None, min_geweke=None, min_geweke_pvalue=None,
-              max_ess=None, min_dact=None, diagnostics=None, quiet=False, **kwargs):
-        """
-        Run convergence checks.
-
-        Parameters
-        ----------
-        nsplits : int, default=4
-            Chains are divided into ``nsplits`` to run convergence tests.
-
-        burnin : float, int, default=0.5
-            Fraction of samples to remove from each chain for convergence tests.
-            If an integer, number of iterations (steps) to remove.
-
-        stable_over : int, default=2
-            Each criterion must be fulfilled for ``stable_over`` calls to :meth:`check` for convergence tests to pass.
-
-        max_eigen_gr : float, default=0.03
-            Gelman-Rubin criterion (on eigenvalues of the parameter covariance matrix) < ``max_eigen_gr``
-
-        max_diag_gr : float, default=None
-            Gelman-Rubin criterion (on diagonal of the parameter covariance matrix) < ``max_eigen_gr``
-
-        max_cl_diag_gr : float, default=None
-            Gelman-Rubin criterion on variance of ``nsigmas_cl_diag_gr``-sigma interval limits < ``max_cl_diag_gr``
-
-        nsigmas_cl_diag_gr : int, default=1
-            Number of sigmas for the interval of ``max_cl_diag_gr`` test.
-
-        min_ess : int, default=None
-            Minimal number of iterations over integrated auto-correlation time (~ # of independent samples). Typically of order ~ 1e3.
-
-        reliable_ess : int, default=50
-            After ``reliable_ess`` auto-correlation time estimation is considered reliable.
-
-        diagnostics : dict, default=None
-            Dictionary where computed statistics are added.
-            Default is :attr:`diagnostics`.
-
-        quiet : bool, default=False
-            If ``True``, no logging.
-
-        Note
-        ----
-        All max_* have a min_* counterpart, and vice-versa.
+        size : int
+            Number of draws.  When 1 the batch axis is squeezed away.
 
         Returns
         -------
-        convergence : bool
-            ``True`` if current chains pass convergence tests.
+        dict
         """
-        toret = None
-        has_input_diagnostics = diagnostics is not None
-        diagnostics_bak = diagnostics if has_input_diagnostics else self.diagnostics
-        diagnostics = Diagnostics(diagnostics_bak)
-        assert nsplits > 1
-
-        if self.mpicomm.bcast(any(chain is None for chain in self.chains), root=0):
-            toret = False
-
-        elif self.mpicomm.rank == 0:
-
-            if 0 < burnin < 1:
-                burnin = int(burnin * self.chains[0].shape[0] + 0.5)
-
-            nsplits = int((nsplits + len(self.chains) - 1) / len(self.chains))
-            lensplits = (self.chains[0].shape[0] - burnin) // nsplits
-
-            split_samples = [chain[burnin + islab * lensplits:burnin + (islab + 1) * lensplits] for islab in range(nsplits) for chain in self.chains]
-
-            if any(samples.size < 1 for samples in split_samples):
-                toret = False
+        key = jax.random.PRNGKey(int(np.random.default_rng().integers(2**32)))
+        start = {}
+        for param in self.varied_params:
+            if param.ref is not None and param.ref.is_proper():
+                subkey, key = jax.random.split(key)
+                value = np.asarray(param.ref.sample(subkey, shape=(size,) + param.shape))
             else:
-                kw = dict(stable_over=stable_over, quiet=quiet)
-                if not quiet: self.log_info('Diagnostics:')
-                toret = True
+                value = np.broadcast_to(np.asarray(param.value), (size,) + param.shape)
+            start[param.name] = value.squeeze(0) if size == 1 else value
+        return start
 
-                try:
-                    eigen_gr = sample_diagnostics.gelman_rubin(split_samples, self.varied_params, method='eigen', check_valid='ignore').max() - 1
-                except ValueError:
-                    eigen_gr = np.nan
-                toret &= diagnostics.add_test('eigen_gr', 'max eigen Gelman-Rubin - 1', eigen_gr, limits=(min_eigen_gr, max_eigen_gr), **kw)
+    def array_to_samples(self, samples, derived, **kwargs):
+        """Convert parameter arrays to a :class:`~desilike.samples.MCSamples`.
 
-                try:
-                    diag_gr = sample_diagnostics.gelman_rubin(split_samples, self.varied_params, method='diag').max() - 1
-                except ValueError:
-                    diag_gr = np.nan
-                toret &= diagnostics.add_test('diag_gr', 'max diag Gelman-Rubin - 1', diag_gr, limits=(min_diag_gr, max_diag_gr), **kw)
+        Parameters
+        ----------
+        samples : numpy.ndarray, shape (..., ndim)
+            Values of varied parameters.  The last axis indexes parameters in
+            the order of ``self.varied_params``.
+        derived : numpy.ndarray, shape (..., n_derived)
+            Flat derived-parameter values (same ordering as ``self.derived_params``).
+        **kwargs
+            Extra attributes to set on the returned samples (e.g.
+            ``logposterior``, ``aweight``).
 
-                def cl_lower(samples, params):
-                    return np.array([samples.interval(param, nsigmas=nsigmas_cl_diag_gr)[0] for param in params])
+        Notes
+        -----
+        *samples* is in the sampler's rescaled working space; it is mapped back to
+        original parameter values via :meth:`_forward` before being stored.
+        """
+        samples = np.asarray(self._forward(samples))
+        data = []
+        # ── varied params ─────────────────────────────────────────────────────
+        for param, size, col in _param_sizes(self.varied_params):
+            slice_arr  = samples[..., col:col + size].reshape(samples.shape[:-1] + param.shape)
+            data.append(param.clone(value=slice_arr))
+        # ── derived params ────────────────────────────────────────────────────
+        col = 0
+        for param in self.derived_params:
+            size = int(np.prod(param.shape)) if param.shape else 1
+            slice_arr  = derived[..., col:col + size].reshape(derived.shape[:-1] + param.shape)
+            data.append(param.clone(value=slice_arr))
+            col += size
 
-                def cl_upper(samples, params):
-                    return np.array([samples.interval(param, nsigmas=nsigmas_cl_diag_gr)[1] for param in params])
+        new_samples = MCSamples(data)
+        for key, value in kwargs.items():
+            setattr(new_samples, key, value)
+        return new_samples
 
-                try:
-                    cl_diag_gr = np.max([sample_diagnostics.gelman_rubin(split_samples, self.varied_params, statistic=cl_lower, method='diag'),
-                                         sample_diagnostics.gelman_rubin(split_samples, self.varied_params, statistic=cl_upper, method='diag')]) - 1
-                except ValueError:
-                    cl_diag_gr = np.nan
-                toret &= diagnostics.add_test('cl_diag_gr', 'max diag Gelman-Rubin - 1 at {:.1f} sigmas'.format(nsigmas_cl_diag_gr), cl_diag_gr, limits=(min_cl_diag_gr, max_cl_diag_gr), **kw)
+    def write(self):
+        """Write sampler state to disk."""
+        if self.pool.main:
+            with open(self.directory / 'rng.json', 'w') as fstream:
+                json.dump(self.rng.bit_generator.state, fstream)
+                self.samples.write(self.directory / 'samples.h5')
 
-                try:
-                    # Source: https://github.com/JohannesBuchner/autoemcee/blob/38feff48ae524280c8ea235def1f29e1649bb1b6/autoemcee.py#L337
-                    all_geweke = sample_diagnostics.geweke(split_samples, self.varied_params, first=0.1, last=0.5)
-                except ValueError:
-                    all_geweke = np.nan
-                geweke = np.max(all_geweke)
-                toret &= diagnostics.add_test('geweke', 'max Geweke', geweke, limits=(min_geweke, max_geweke), **kw)
-
-                from scipy import stats
-                try:
-                    geweke_pvalue = stats.normaltest(all_geweke, axis=None).pvalue
-                except ValueError:
-                    geweke_pvalue = np.nan
-                toret &= diagnostics.add_test('geweke_pvalue', 'Geweke p-value', geweke_pvalue, limits=(min_geweke_pvalue, max_geweke_pvalue), **kw)
-
-                split_samples = []
-                for chain in self.chains:
-                    chain = chain[burnin:]
-                    chain = chain.reshape(len(chain), -1)
-                    for iwalker in range(chain.shape[1]):
-                        split_samples.append(chain[:, iwalker])
-                try:
-                    iact = sample_diagnostics.integrated_autocorrelation_time(split_samples, self.varied_params, check_valid='ignore')
-                except ValueError:
-                    iact = np.full(len(self.varied_params), np.nan, dtype='f8')
-                diagnostics.add('iact', iact)
-                niterations = len(split_samples[0])
-                iact = iact.max()
-                name = 'effective sample size = ({:d} iterations / integrated autocorrelation time)'.format(niterations)
-                if reliable_ess * iact < niterations:
-                    name = '{} (reliable)'.format(name)
-                toret &= diagnostics.add_test('iterations_over_iact', name, niterations / iact, limits=(min_ess, max_ess), **kw)
-
-                iact = diagnostics['iact']
-                if len(iact) >= 2:
-                    rel = np.abs(iact[-2] / iact[-1] - 1).max()
-                    toret &= diagnostics.add_test('dact', 'max variation of integrated autocorrelation time', rel, limits=(min_dact, max_dact), **kw)
-
-        toret = self.mpicomm.bcast(toret, root=0)
-        diagnostics = self.mpicomm.bcast(diagnostics, root=0)
-        toret &= self._add_check(diagnostics, quiet=quiet, stable_over=stable_over, **kwargs)
-
-        diagnostics_bak.update(self.mpicomm.bcast(diagnostics, root=0))
-
-        toret = self.mpicomm.bcast(toret, root=0)
-        if has_input_diagnostics:
-            return toret, diagnostics
-        return toret
-
-    def _add_check(self, diagnostics, quiet=False, stable_over=2, **kwargs):
-        """Implement sampler-specific checks."""
-        return True
+    def read(self):
+        """Read sampler state from disk."""
+        if self.pool.main:
+            with open(self.directory / 'rng.json', 'r') as fstream:
+                self.rng = np.random.default_rng()
+                self.rng.bit_generator.state = json.load(fstream)
+                self.samples = MCSamples.read(self.directory / 'samples.h5')
 
 
+# ── Static sampler ────────────────────────────────────────────────────────────
 
-from desilike.utils import UserDict, BaseClass
+class StaticSampler(BaseSampler):
+    """Base for samplers that pre-determine all sample points (grid, QMC, …)."""
 
-class MetaClass(type(BaseClass), type(UserDict)):
+    logger = logging.getLogger('StaticSampler')
 
-    pass
+    @abstractmethod
+    def get_samples(self, **kwargs):
+        """Return an ``(n_samples, ndim)`` array of points to evaluate."""
+        pass
 
-
-class Diagnostics(UserDict, BaseClass, metaclass=MetaClass):
-
-    def add(self, key, value):
-        if key not in self:
-            self[key] = [value]
+    def run(self, **kwargs):
+        """Evaluate the posterior on the sample grid and return a MCSamples."""
+        if self.pool.main:
+            if self.samples is None:
+                # get_samples returns original-space points; the cores and
+                # array_to_samples work in the rescaled space, so map once here.
+                grid      = np.asarray(self._backward(self.get_samples(**kwargs)))
+                log_prior = np.array(self.pool.map(self.compute_prior, grid))
+                results   = self.pool.map(self.compute_posterior, grid)
+                log_post  = np.array([result[0] for result in results])
+                derived   = np.array([result[1] for result in results])
+                self.samples = self.array_to_samples(
+                    grid, derived,
+                    logposterior=log_post,
+                    aweight=np.exp(log_post - logsumexp(log_post)),
+                )
+                self.samples['logprior'] = log_prior
+                self.pool.stop_wait()
         else:
-            self[key].append(value)
-        return value
+            self.samples = None
+            self.pool.wait()
 
-    def is_stable(self, key, stable_over=2):
-        if len(self[key]) < stable_over:
-            return False
-        return all(self[key][-stable_over:])
+        if self.directory is not None:
+            self.write()
+        return self.samples
 
-    def add_test(self, key, name, value, limits=None, stable_over=2, quiet=False):
-        item = '- '
-        self.add(key, value)
-        key = '{}_test'.format(key)
-        msg = '{}{} is {:.3g}'.format(item, name, value)
-        if limits is None: limits = [None] * 2
 
-        def bool_test(value, low=None, up=None):
-            test = True
-            if low is not None:
-                test &= value > low
-            if up is not None:
-                test &= value < up
-            return test
+# ── Population sampler ────────────────────────────────────────────────────────
 
-        def log_test(msg, test, low=None, up=None):
-            if low is None: low = ''
-            else: low = '{:.3g}'.format(low)
-            if up is None: up = ''
-            else: up = '{:.3g}'.format(up)
-            isnot = '' if test else 'not '
-            if not (low or up):
-                msg = '{}.'.format(msg)
-            elif (low and up):
-                msg = '{}; {}in [{}, {}].'.format(msg, isnot, low, up)
-            elif low:
-                msg = '{}; {}> {}.'.format(msg, isnot, low)
-            elif up:
-                msg = '{}; {}< {}.'.format(msg, isnot, up)
-            self.log_info(msg)
+class PopulationSampler(BaseSampler):
+    """Base for population-based samplers (dynesty, nautilus, …)."""
 
-        if any(li is not None for li in limits):
-            test = bool_test(value, *limits)
-            if not quiet: log_test(msg, test, *limits)
-            self.add(key, test)
-            return self.is_stable(key, stable_over=stable_over)
+    logger = logging.getLogger('PopulationSampler')
 
-        if not quiet:
-            self.log_info('{}.'.format(msg))
-        return True
+    @abstractmethod
+    def run_sampler(self, **kwargs):
+        """Run the sampler; return ``(samples, derived, extras_dict)``."""
+        pass
+
+    def run(self, **kwargs):
+        output = self.run_sampler(**kwargs)
+        if self.pool.main:
+            samples, derived, extras = output
+            self.samples = self.array_to_samples(samples, derived, **extras)
+        else:
+            self.samples = None
+        if self.directory is not None:
+            self.write()
+        return self.samples
+
+
+# ── Markov chain sampler ───────────────────────────────────────────────────────
+
+class MarkovChainSampler(BaseSampler):
+    """Base for MCMC samplers running one or more independent chains."""
+
+    logger = logging.getLogger('MarkovChainSampler')
+
+    @default_mpicomm
+    def __init__(self, posterior, nchains=1, chains=None, rng=None,
+                 mpicomm=None, directory=None, rescale=False, covariance=None,
+                 batch_size=None):
+        """
+        Parameters
+        ----------
+        posterior : CompiledGraph
+            Compiled pipeline returning the log-posterior.
+        nchains : int or sequence
+            Number of independent chains, or explicit chain ids.  If an integer,
+            ids are ``1, ..., nchains``.  If a sequence, ids are taken from it
+            and used in checkpoint filenames, e.g. ``[4, 5, 6, 7]`` writes
+            ``samples_4.h5`` through ``samples_7.h5``.  Default is 1.
+        chains : list of MCSamples, optional
+            If provided (at least on rank 0), continue from these chains.
+        rng : numpy.random.Generator, int, or None
+        mpicomm : MPI communicator, optional
+        directory : str, Path, or None
+        rescale : bool
+            Normalise parameters to ~ unit variation range (see :class:`BaseSampler`).
+        covariance : array_like, optional
+            ``(ndim, ndim)`` covariance setting the rescaling scale.
+        batch_size : int or None, optional
+            Pool batching (see :class:`BaseSampler`).
+        """
+        self.mpicomm = mpicomm
+
+        if not hasattr(self, '_samples'):
+            self._chain = None
+
+        # Broadcast explicit chain ids and whether input chains were supplied.
+        input_chains = False
+        if self.mpicomm.rank == 0:
+            input_chains = chains is not None
+            chain_ids = _normalize_chain_ids(nchains)
+            if input_chains:
+                if not isinstance(chains, (tuple, list)):
+                    chains = [chains]
+                if len(chains) != len(chain_ids):
+                    raise ValueError(
+                        f'Expected {len(chain_ids)} input chains, got {len(chains)}.'
+                    )
+        else:
+            chain_ids = None
+
+        input_chains, self.chain_ids = self.mpicomm.bcast((input_chains, chain_ids), root=0)
+        self.nchains = len(self.chain_ids)
+
+        super().__init__(posterior, rng=rng, mpicomm=mpicomm, directory=directory,
+                         rescale=rescale, covariance=covariance, batch_size=batch_size)
+
+        # Distribute pre-supplied chains to the owning ranks.
+        if input_chains:
+            for chain_idx, dest_rank in enumerate(self._pool_mains):
+                samples = MCSamples.sendrecv(
+                    chains[chain_idx] if self.mpicomm.rank == 0 else None,
+                    source=0, dest=dest_rank, mpicomm=self.mpicomm)
+                if self.mpicomm.rank == dest_rank:
+                    self._chain = samples
+
+        self.checks = []
+
+    def set_rng(self, rng):
+        if hasattr(self, 'rng') and rng is None:
+            pass
+        else:
+            if isinstance(rng, int) or rng is None:
+                rng = np.random.default_rng(seed=rng)
+            seed_seq = np.random.SeedSequence(rng.integers(0, 2**63, size=4))
+            self.rng = [np.random.default_rng(seed) for seed in seed_seq.spawn(self.nchains)][self._ichain]
+
+    def set_pool(self, mpicomm, batch_size=None):
+        if self.nchains > mpicomm.size:
+            raise ValueError(f'nchains={self.nchains} cannot exceed MPI size={mpicomm.size}')
+        color = mpicomm.rank * self.nchains // mpicomm.size
+        # Split communicator so each chain gets its own sub-communicator.
+        if mpicomm.size > 1:
+            sub_comm = mpicomm.Split(color=color, key=mpicomm.rank)
+        else:
+            sub_comm = mpicomm
+        super().set_pool(mpicomm=sub_comm, batch_size=batch_size)
+        # Collect the rank-0 process of each chain's sub-communicator.
+        mains = self.mpicomm.allgather(self.mpicomm.rank if self.pool.main else None)
+        self._pool_mains = [rank for rank in mains if rank is not None]
+        self._ichain = color
+
+    @abstractmethod
+    def run_sampler(self, n_steps):
+        pass
+
+    @abstractmethod
+    def adapt_sampler(self, **kwargs):
+        pass
+
+    def initialize_samples(self, max_init_attempts=100, shape=None):
+        """Draw initial chain states with finite log-posterior."""
+        if max_init_attempts is None:
+            max_init_attempts = sys.maxsize
+        if shape is None:
+            shape = ()
+        shape = tuple(shape)
+        total_size = int(np.empty(shape).size) if shape else 1
+
+        if self.pool.main:
+            if self._chain is None:
+                all_samples, all_log_post, all_derived = [], [], []
+                for _ in range(max_init_attempts):
+                    batch_shape = shape or (1,)
+                    batch_samples = np.zeros(batch_shape + (self.ndim,))
+                    key = jax.random.PRNGKey(int(self.rng.integers(2**32)))
+                    for param, size, col in _param_sizes(self.varied_params):
+                        if param.ref is not None and param.ref.is_proper():
+                            key, subkey = jax.random.split(key)
+                            drawn = np.asarray(param.ref.sample(subkey, shape=batch_shape))
+                            batch_samples[..., col:col + size] = drawn.reshape(batch_shape + (size,))
+                        else:
+                            batch_samples[..., col:col + size] = np.asarray(param.value).ravel()
+
+                    # Drawn in original space; map to the sampler's rescaled working space.
+                    batch_samples = np.asarray(self._backward(batch_samples))
+
+                    results = self.pool.map(
+                        self.compute_posterior,
+                        batch_samples.reshape(total_size, self.ndim))
+                    batch_log_post = np.array([result[0] for result in results])
+                    batch_derived  = np.array([result[1] for result in results])
+
+                    finite_mask = np.isfinite(batch_log_post)
+                    all_samples  += batch_samples.reshape(total_size, self.ndim)[finite_mask].tolist()
+                    all_log_post += batch_log_post[finite_mask].tolist()
+                    all_derived  += batch_derived[finite_mask].tolist()
+
+                    if len(all_samples) >= total_size:
+                        final_samples  = np.array(all_samples[:total_size])
+                        final_log_post = np.array(all_log_post[:total_size])
+                        final_derived  = np.array(all_derived[:total_size])
+                        if shape:
+                            final_samples  = final_samples[np.newaxis]
+                            final_log_post = final_log_post[np.newaxis]
+                            final_derived  = final_derived[np.newaxis]
+                        self._chain = self.array_to_samples(
+                            final_samples, final_derived, logposterior=final_log_post)
+                        break
+            self.pool.stop_wait()
+        else:
+            self.pool.wait()
+
+        if any(np.array(self.mpicomm.allgather(self._chain is None))[self._pool_mains]):
+            raise ValueError(
+                f'Could not find finite posterior after {max_init_attempts} attempts.')
+
+    @property
+    def chains(self):
+        """Gather all local chains on rank 0 and return as a list."""
+        gathered = []
+        for source_rank in self._pool_mains:
+            gathered.append(MCSamples.sendrecv(
+                self._chain, source=source_rank, dest=0, mpicomm=self.mpicomm))
+        return gathered if self.mpicomm.rank == 0 else None
+
+    @property
+    def chain_id(self):
+        """Explicit id of the chain handled by this sampler rank."""
+        return self.chain_ids[self._ichain]
+
+    @property
+    def state(self):
+        """Return current chain position as ``(samples, derived, log_post)``.
+
+        ``samples`` is returned in the sampler's rescaled working space (stored
+        parameter values are in original space and mapped via :meth:`_backward`).
+        """
+        # self._chain[name] returns a Variable; use ._value to get the raw array.
+        walker_shape = self._chain.shape[1:]
+        samples  = np.concatenate([
+            np.asarray(self._chain[param.name])[-1].reshape(walker_shape + (-1,))
+            for param in self.varied_params], axis=-1)
+        derived  = np.concatenate([
+            np.asarray(self._chain[param.name])[-1].reshape(walker_shape + (-1,))
+            for param in self.derived_params], axis=-1) if self.n_derived else np.empty(0)
+        log_post = np.asarray(self._chain.logposterior)[-1]
+        return np.asarray(self._backward(samples)), np.array(derived), np.array(log_post)
+
+    def extend(self, samples, derived, log_post):
+        """Append new steps to the local chain."""
+        new_samples = self.array_to_samples(samples, derived, logposterior=log_post)
+        self._chain = MCSamples.concatenate(self._chain, new_samples)
+
+    def check(self, burn_in=0.2, gelman_rubin=1.1, geweke=None, ess=None, quiet=False):
+        """Run convergence diagnostics; return True if all checks pass."""
+        passed_all = True
+        all_chains = self.chains
+        if self.mpicomm.rank == 0:
+            trimmed = [chain.remove_burnin(burn_in) for chain in all_chains]
+            if not quiet:
+                self.logger.info('Diagnostics:')
+
+            nsplits = 4 // len(trimmed)
+            gr_value = float(np.max(diagnostics.gelman_rubin(trimmed, method='diag', nsplits=nsplits)))
+            try:
+                geweke_value = float(np.max(diagnostics.geweke(trimmed, first=0.1, last=0.5)))
+            except ValueError:
+                geweke_value = float('inf')
+            iact = diagnostics.integrated_autocorrelation_time(trimmed, check_valid='ignore')
+            ess_value = float(np.mean([chain.size for chain in trimmed]) / np.max(iact))
+
+            for stat_name, threshold, is_upper_bound, value in [
+                ('Gelman-Rubin',          gelman_rubin, True,  gr_value),
+                ('Geweke',                geweke,       True,  geweke_value),
+                ('Effective Sample Size', ess,          False, ess_value),
+            ]:
+                if not quiet:
+                    self.logger.info(f'{stat_name}: {value:.3g}')
+                if threshold is not None:
+                    passed = value < threshold if is_upper_bound else value >= threshold
+                    passed_all = passed_all and passed
+                    if not quiet:
+                        self.logger.info(
+                            f'{value:.3g} {"<" if value < threshold else ">="} '
+                            f'{threshold:.3g} ({"" if passed else "not "}passed)')
+        return self.mpicomm.bcast(passed_all, root=0)
+
+    def is_converged(self, min_steps=0, max_steps=sys.maxsize, checks_passed=10):
+        """Return True when sampling should stop."""
+        converged = True
+        if self.pool.main:
+            converged = (
+                len(self._chain) >= max_steps or
+                (len(self._chain) >= min_steps and
+                 len(self.checks) >= checks_passed and
+                 all(self.checks[-checks_passed:]))
+            )
+        return all(self.mpicomm.allgather(converged))
+
+    def run(self, burn_in=0.2, min_steps=0, max_steps=None, adaptation=None,
+            check_every=300, checks_passed=2, gelman_rubin=1.1, geweke=None, ess=None,
+            save_every=300, max_init_attempts=100, concatenate=True):
+        """Run the sampler until convergence and return the chains.
+
+        Parameters
+        ----------
+        burn_in : float or int
+            Fraction (or number) of steps to remove as burn-in for the checks. Default is 0.2.
+        min_steps : int
+            Minimum number of steps.  Default is 0.
+        max_steps : int or None
+            Hard step limit.  Default is no limit.
+        adaptation : dict or None
+            Keyword arguments forwarded to :meth:`adapt_sampler`, e.g.
+            ``{'steps': 500}`` for BlackJAX samplers or
+            ``{'steps': 500, 'is_mass_matrix_diagonal': False}`` to also tune
+            the full mass matrix.  ``None`` skips adaptation.
+        check_every : int
+            How often (in steps) to run diagnostics.  Default is 300.
+        checks_passed : int
+            Number of consecutive passed checks required to stop.  Default is 2.
+        gelman_rubin : float or None
+            Gelman-Rubin threshold for convergence.  Default is 1.1.
+        geweke : float or None
+            Geweke threshold.  Default is ``None`` (not checked).
+        ess : float or None
+            ESS threshold.  Default is ``None`` (not checked).
+        save_every : int
+            Save checkpoint every this many steps.  Default is 300.
+        max_init_attempts : int
+            Maximum initialisation attempts per chain.  Default is 100.
+        concatenate : bool
+            Concatenate all chains before returning.  Default is ``True``.
+        """
+        self.initialize_samples(max_init_attempts=max_init_attempts)
+
+        if self.directory is None:
+            save_every = check_every  # skip intermediate saves
+
+        if adaptation is not None:
+            self.adapt_sampler(**adaptation)
+
+        # Current step count across all chains.
+        steps = min(self.mpicomm.allgather(
+            len(self._chain) if self.pool.main else sys.maxsize))
+
+        if max_steps is None:
+            max_steps = sys.maxsize
+
+        while not self.is_converged(min_steps=min_steps, max_steps=max_steps,
+                                    checks_passed=checks_passed):
+            steps_to_take = min(
+                check_every - (steps % check_every),
+                save_every  - (steps % save_every),
+                max_steps   - steps,
+            )
+            steps += steps_to_take
+            self.run_sampler(steps_to_take)
+
+            if steps % check_every == 0:
+                self.checks.append(self.check(
+                    burn_in=burn_in, gelman_rubin=gelman_rubin,
+                    geweke=geweke, ess=ess))
+
+            if self.directory is not None and steps % save_every == 0:
+                self.write()
+
+        if self.directory is not None and steps % save_every != 0:
+            self.write()
+
+        all_chains = self.chains
+        if concatenate and self.mpicomm.rank == 0:
+            all_chains = MCSamples.concatenate(all_chains)
+        return all_chains
+
+    def write(self):
+        if self.pool.main:
+            with open(self.directory / f'rng_{self.chain_id}.json', 'w') as fstream:
+                json.dump(self.rng.bit_generator.state, fstream)
+            self._chain.write(self.directory / f'samples_{self.chain_id}.h5')
+        if self.mpicomm.rank == 0:
+            with open(self.directory / 'checks.json', 'w') as fstream:
+                json.dump(self.checks, fstream)
+
+    def read(self):
+        if self.pool.main:
+            rng_path    = self.directory / f'rng_{self.chain_id}.json'
+            samples_path  = self.directory / f'samples_{self.chain_id}.h5'
+            if rng_path.exists():
+                with open(rng_path, 'r') as fstream:
+                    self.rng = np.random.default_rng()
+                    self.rng.bit_generator.state = json.load(fstream)
+            if samples_path.exists():
+                self._chain = MCSamples.read(samples_path)
+        checks_path = self.directory / 'checks.json'
+        if checks_path.exists():
+            with open(self.directory / 'checks.json', 'r') as fstream:
+                self.checks = json.load(fstream)
+
+
+# ── Ensemble sampler ──────────────────────────────────────────────────────────
+
+class EnsembleSampler(MarkovChainSampler):
+    """Base for ensemble samplers (emcee, zeus) that run ``nwalkers`` in parallel."""
+
+    logger = logging.getLogger('EnsembleSampler')
+
+    def __init__(self, posterior, nchains=1, chains=None, rng=None,
+                 mpicomm=None, directory=None, nwalkers=None,
+                 rescale=False, covariance=None, batch_size=None):
+        super().__init__(posterior, nchains=nchains, chains=chains,
+                         rng=rng, mpicomm=mpicomm, directory=directory,
+                         rescale=rescale, covariance=covariance, batch_size=batch_size)
+        if nwalkers is None and self._chain is not None:
+            nwalkers = self._chain.shape[1] if len(self._chain.shape) > 1 else None
+        nwalkers_all = self.mpicomm.allgather(nwalkers)
+        for nw in nwalkers_all:
+            if nw is not None:
+                nwalkers = nw
+                break
+        self.nwalkers = int(nwalkers) if nwalkers is not None else None
+
+    def initialize_samples(self, max_init_attempts=100):
+        super().initialize_samples(max_init_attempts=max_init_attempts, shape=(self.nwalkers,))

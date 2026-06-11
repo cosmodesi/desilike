@@ -10,11 +10,15 @@ broadband polynomials) are namespaced under the tracer label.
 
 Samplers benchmarked
 --------------------
-- emcee   (ensemble MCMC)
-- nautilus (learned importance)
-- pocomc  (preconditioned Monte Carlo)
-- hmc     (Hamiltonian Monte Carlo via BlackJAX)
-- nuts    (No-U-Turn Sampler via BlackJAX)
+- emcee        (ensemble MCMC)
+- nautilus     (learned importance)
+- pocomc       (preconditioned Monte Carlo)
+- hmc          (Hamiltonian Monte Carlo via BlackJAX)
+- nuts         (No-U-Turn Sampler via BlackJAX)
+- numpyro_nuts (No-U-Turn Sampler via NumPyro)
+- numpyro_hmc  (HMC via NumPyro)
+- numpyro_barker (Barker MH via NumPyro)
+- numpyro_sa   (Sample Adaptive MCMC via NumPyro)
 
 Run directly::
 
@@ -22,7 +26,7 @@ Run directly::
 
 or with specific samplers::
 
-    python -m desilike.samplers.tests.benchmark_samplers emcee nuts
+    python -m desilike.samplers.tests.benchmark_samplers --samplers emcee nuts numpyro_nuts
 """
 
 import time
@@ -201,12 +205,37 @@ def _sampler_config(ndim=1):
             dict(rng=42),
             dict(adaptation=dict(steps=500), gelman_rubin=1.1, min_steps=50, max_steps=2000),
         ),
+        'mclmc': (
+            samplers.MCLMCSampler,
+            dict(rescale=True, rng=42),
+            dict(adaptation=dict(steps=1000, diagonal_preconditioning=False), gelman_rubin=1.1, min_steps=50, max_steps=2000),
+        ),
         'nuts': (
             samplers.NoUTurnSampler,
             dict(rescale=True, step_size=0.05, rng=42),
-            dict(adaptation=dict(initial_step_size=0.01, target_acceptance_rate=0.8, steps=1000, is_mass_matrix_diagonal=False), gelman_rubin=1.1, min_steps=200),
+            dict(adaptation=dict(initial_step_size=0.1, target_acceptance_rate=0.8, steps=500, is_mass_matrix_diagonal=False), gelman_rubin=1.1, min_steps=200),
             #dict(adaptation=dict(steps=500), gelman_rubin=1.1, min_steps=50),
             #dict(adaptation=None, gelman_rubin=1.1, min_steps=50),
+        ),
+        'numpyro_nuts': (
+            samplers.NumpyroNUTSSampler,
+            dict(rescale=True, rng=42),
+            dict(adaptation=dict(steps=500, dense_mass=True), gelman_rubin=1.1, min_steps=50, max_steps=2000),
+        ),
+        'numpyro_hmc': (
+            samplers.NumpyroHMCSampler,
+            dict(rng=42),
+            dict(adaptation=dict(steps=500), gelman_rubin=1.1, min_steps=50, max_steps=2000),
+        ),
+        'numpyro_barker': (
+            samplers.NumpyroBarkerMHSampler,
+            dict(rescale=True, rng=42),
+            dict(adaptation=dict(steps=500, dense_mass=True), gelman_rubin=1.1, min_steps=50, max_steps=5000),
+        ),
+        'numpyro_sa': (
+            samplers.NumpyroSASampler,
+            dict(rng=42),
+            dict(adaptation=dict(steps=500, dense_mass=True), gelman_rubin=1.1, min_steps=50, max_steps=2000),
         ),
     }
 

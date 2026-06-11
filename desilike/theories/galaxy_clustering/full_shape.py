@@ -128,7 +128,7 @@ def _velocileptors_params_physical(b1p, b2p, bsp, b3p, alpha0p, alpha2p, alpha4p
     return jnp.array(bias + alphas + stoch)
 
 
-def tablevel_combine_bias_terms_poles(pktable, pars, nd=1e-4):
+def _velocileptors_combine_bias_terms_spectrum2_poles(pktable, pars, nd=1e-4):
     """Contract a velocileptors bias table ``(n_ells, n_k, 19)`` with the 11 bias parameters."""
     b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4 = pars
     bias_monomials = jnp.array([1., b1, b1**2, b2, b1 * b2, b2**2, bs, b1 * bs, b2 * bs, bs**2, b3, b1 * b3,
@@ -424,10 +424,10 @@ class KaiserTracerSpectrum2Poles(Calculator):
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None, params=None, **kwargs):
         # Non-node setup only.
-        self._nbar = 1. / float(shotnoise)
+        self._shotnoise = float(shotnoise)
 
     def __call__(self):
-        sn = jnp.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0.value / self._nbar
+        sn = jnp.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0.value * self._shotnoise
         pk_dd, pk_dt, pk_tt = self.pt.table['pk_dd'], self.pt.table['pk_dt'], self.pt.table['pk_tt']
         if isinstance(self.b1, tuple):
             b1_X, b1_Y = self.b1
@@ -685,13 +685,13 @@ class TNSTracerSpectrum2Poles(Calculator):
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, shotnoise=1e4, tracers=None, params=None, **kwargs):
         # Non-node setup only.
-        self._nbar = 1. / float(shotnoise)
+        self._shotnoise = float(shotnoise)
 
     def __call__(self):
         b1, b2, bs, b3 = self.b1, self.b2, self.bs, self.b3
         bs2 = bs - 4. / 7. * (b1 - 1.)
         b3nl = b3 + 32. / 315. * (b1 - 1.)
-        sn = jnp.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0.value / self._nbar
+        sn = jnp.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0.value * self._shotnoise
         self.poles = (b1**2 * self.pt.table['pk_dd'] + 2. * b1 * self.pt.table['pk_dt']
                       + self.pt.table['pk_tt'] + sn)
         self.poles += (2 * b1 * b2 * self.pt.table['pk_b2d'] + 2. * b1 * bs2 * self.pt.table['pk_bs2d']
@@ -898,8 +898,7 @@ class LPTVelocileptorsTracerSpectrum2Poles(Calculator):
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', fsat=None, sigv=None, shotnoise=1e4, tracers=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = prior_basis
-        self._nbar = 1e-4
-        self._snd = float(shotnoise) * self._nbar
+        self._shotnoise = float(shotnoise)
         settings = get_physical_stochastic_settings(None)
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
@@ -912,12 +911,12 @@ class LPTVelocileptorsTracerSpectrum2Poles(Calculator):
             pars = _velocileptors_params_physical(g('b1'), g('b2'), g('bs'), g('b3'),
                                                   g('alpha0'), g('alpha2'), g('alpha4'), g('alpha6'),
                                                   g('sn0'), g('sn2'), g('sn4'),
-                                                  self.pt.sigma8, self.pt.fsigma8, self._fsat, self._sigv, self._snd, rept=False)
+                                                  self.pt.sigma8, self.pt.fsigma8, self._fsat, self._sigv, self._shotnoise, rept=False)
         else:
             pars = jnp.array([g('b1'), g('b2'), g('bs'), g('b3'),
                                g('alpha0'), g('alpha2'), g('alpha4'), g('alpha6'),
                                g('sn0'), g('sn2'), g('sn4')])
-        raw = tablevel_combine_bias_terms_poles(self.pt.table, pars, nd=self._nbar)  # (n_ells, n_k_pt)
+        raw = _velocileptors_combine_bias_terms_spectrum2_poles(self.pt.table, pars, nd=1.)  # (n_ells, n_k_pt)
         self.poles = interpax.interp1d(self.k, self.pt.k, raw.T, method='cubic', extrap=True).T
         return self.poles
 
@@ -1105,8 +1104,7 @@ class REPTVelocileptorsTracerSpectrum2Poles(Calculator):
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical', fsat=None, sigv=None, shotnoise=1e4, tracers=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = prior_basis
-        self._nbar = 1e-4
-        self._snd = float(shotnoise) * self._nbar
+        self._shotnoise = float(shotnoise)
         settings = get_physical_stochastic_settings(None)
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
@@ -1119,13 +1117,13 @@ class REPTVelocileptorsTracerSpectrum2Poles(Calculator):
             pars = _velocileptors_params_physical(g('b1'), g('b2'), g('bs'), g('b3'),
                                                   g('alpha0'), g('alpha2'), g('alpha4'), g('alpha6'),
                                                   g('sn0'), g('sn2'), g('sn4'),
-                                                  self.pt.sigma8, self.pt.fsigma8, self._fsat, self._sigv, self._snd, rept=True)
+                                                  self.pt.sigma8, self.pt.fsigma8, self._fsat, self._sigv, self._shotnoise, rept=True)
         else:
             b1 = g('b1')
             pars = jnp.array([b1, g('b2'), g('bs') - (2./7.)*(b1 - 1.), 3.*g('b3') + (b1 - 1.),
                                g('alpha0'), g('alpha2'), g('alpha4'), g('alpha6'),
                                g('sn0'), g('sn2'), g('sn4')])
-        raw = tablevel_combine_bias_terms_poles(self.pt.table, pars, nd=self._nbar)
+        raw = _velocileptors_combine_bias_terms_spectrum2_poles(self.pt.table, pars, nd=1.)
         self.poles = interpax.interp1d(self.k, self.pt.k, raw.T, method='cubic', extrap=True).T
         return self.poles
 
@@ -1400,7 +1398,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
 
     def __post_init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss', shotnoise=1e4, tracers=None, **kwargs):
         # Non-node setup only.
-        self._nbar = 1. / float(shotnoise)
+        self._shotnoise = float(shotnoise)
 
     def _build_params(self, idx=None):
         """Bias dict for pybird, with **raw** counterterms.
@@ -1485,7 +1483,7 @@ class PyBirdTracerSpectrum2Poles(Calculator):
             import pybird.bird as bird_module
             bird_module.np = jnp
             self._pt = bird
-            bird.co.nbar = self._nbar
+            bird.co.nbar = 1. / self._shotnoise
             bird.setreducePslb(self._build_params(), what='full')
             bird_module.np = np
             self.poles = jnp.nan_to_num(bird.fullPs, nan=0., posinf=jnp.inf, neginf=-jnp.inf)
@@ -1676,7 +1674,7 @@ class PyBirdTracerCorrelation2Poles(Calculator):
 
     def __post_init__(self, s=None, pt=None, ells=(0, 2, 4), template=None, eft_basis='eftoflss', shotnoise=1e4, tracers=None, **kwargs):
         # Non-node setup only.
-        self._nbar = 1. / float(shotnoise)
+        self._shotnoise = float(shotnoise)
 
     _build_params = PyBirdTracerSpectrum2Poles._build_params
 
@@ -1684,7 +1682,7 @@ class PyBirdTracerCorrelation2Poles(Calculator):
         import pybird.bird as bird_module
         bird_module.np = jnp
         self._pt = self.pt._pt  # underlying pybird Bird (self.pt is the External wrapper)
-        self._pt.co.nbar = self._nbar
+        self._pt.co.nbar = 1. / self._shotnoise
         self._pt.setreduceCflb(self._build_params(), what='full')
         bird_module.np = np
         self.poles = self._pt.fullCf
@@ -1949,8 +1947,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         self._prior_basis = str(prior_basis)
         self._b3_coev = bool(b3_coev)
         self._damping = str(damping)
-        self._nbar = 1e-4
-        self._snd = float(shotnoise) * self._nbar
+        self._shotnoise = float(shotnoise)
         # Physical stochastic settings: pass fsat/sigv directly (e.g. the output of
         # get_physical_stochastic_settings); defaults are the generic settings.
         settings = get_physical_stochastic_settings(None)
@@ -1984,7 +1981,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             sn0, sn2, X_FoG = g('sn0'), g('sn2'), g('X_FoG_p')
             if self._b3_coev:
                 b3 = 32. / 315. * (b1 - 1.)
-            pars = [b1, b2, bs, b3, alpha0, alpha2, alpha4, ct, sn0, sn2, 1. / self._nbar, X_FoG]
+            pars = [b1, b2, bs, b3, alpha0, alpha2, alpha4, ct, sn0, sn2, self._shotnoise, X_FoG]
 
         elif pb == 'physical':  # physical_velocileptors (no AP rescaling)
             b1L = g('b1') / sigma8 - 1.
@@ -1995,10 +1992,10 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             bsE = -4. / 7. * b1L + bsL
             b3E = g('b3') + 32. / 315. * b1L
             alpha0, alpha2, alpha4 = (g(name) / A for name in ('alpha0', 'alpha2', 'alpha4'))
-            sn0 = g('sn0') * self._snd
-            sn2 = g('sn2') * self._snd * self._fsat * self._sigv ** 2
+            sn0 = g('sn0') * self._shotnoise
+            sn2 = g('sn2') * self._shotnoise * self._fsat * self._sigv ** 2
             pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, g('ct'),
-                               sn0, sn2, 1. / self._nbar, g('X_FoG_p')]
+                               sn0, sn2, 1., g('X_FoG_p')]
 
         elif pb == 'physical_aap':  # physical basis with AP rescaling
             b1L = g('b1') / sigma8 / sqrt_A_AP - 1.
@@ -2017,10 +2014,10 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             alpha0 = b1E ** 2 * a0t
             alpha2 = b1E * f * (a0t + a2t)
             alpha4 = f ** 2 * a2t + b1E * f * a4t
-            sn0 = g('sn0') / A_AP * self._snd
-            sn2 = g('sn2') / A_AP * self._snd * self._fsat * self._sigv ** 2
+            sn0 = g('sn0') / A_AP * self._shotnoise
+            sn2 = g('sn2') / A_AP * self._shotnoise * self._fsat * self._sigv ** 2
             pars = [b1E, b2E, bsE, b3E, alpha0, alpha2, alpha4, g('ct'),
-                               sn0, sn2, 1. / self._nbar, g('X_FoG_p')]
+                               sn0, sn2, 1., g('X_FoG_p')]
 
         else:  # 'tcm_chudaykin_aap': physical + AP with the class-PT counterterm basis
             bias_scheme = 'classpt'
@@ -2032,10 +2029,10 @@ class FOLPSTracerSpectrum2Poles(Calculator):
             ct0 = -2. / 105. * (105. * c0 - 35. * c2 * f + 9. * c4 * f ** 2)
             ct2 = -2. / 7. * f * (7. * c2 - 6. * f * c4)
             ct4 = -2. * f ** 2 * c4
-            sn0 = g('sn0') * self._snd
-            sn2 = g('sn2') * self._snd * self._fsat * self._sigv ** 2
+            sn0 = g('sn0') * self._shotnoise
+            sn2 = g('sn2') * self._shotnoise * self._fsat * self._sigv ** 2
             pars = [1. + b1L, b2L, bsL, b3, ct0, ct2, ct4, 0.,
-                               sn0, sn2, 1. / self._nbar, g('X_FoG_p')]
+                               sn0, sn2, 1., g('X_FoG_p')]
 
         self.poles = self.pt.combine_bias_terms_spectrum2_poles(pars, bias_scheme, self._damping)
         return self.poles
@@ -2273,8 +2270,7 @@ class FOLPSTracerSpectrum3Poles(ExternalCalculator):
                       renormalized=True, interpolation_method='linear', tracers=None, **kwargs):
         # Non-node setup only.
         self._prior_basis = str(prior_basis)
-        self._nbar = 1e-4
-        self._snd = float(shotnoise) * self._nbar
+        self._shotnoise = float(shotnoise)
         settings = get_physical_stochastic_settings(None)
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
@@ -2313,7 +2309,7 @@ class FOLPSTracerSpectrum3Poles(ExternalCalculator):
             c1 = g('c1') / kNL ** 2 / sigma8 ** 2
             c2 = g('c2') / kNL ** 2 / sigma8 ** 2
             pars = [b1E, b2E, bsE, c1, c2,
-                    g('Pshot') * self._snd, g('Bshot') * self._snd, g('X_FoG_b')]
+                    g('Pshot') * self._shotnoise, g('Bshot') * self._shotnoise, g('X_FoG_b')]
 
         elif pb == 'physical_aap':
             b1L = g('b1') / sigma8 / sqrt_A_AP - 1.
@@ -2324,7 +2320,7 @@ class FOLPSTracerSpectrum3Poles(ExternalCalculator):
             c1 = g('c1') / kNL ** 2 / (A_AP * sigma8 ** 2)
             c2 = g('c2') / kNL ** 2 / (A_AP * sigma8 ** 2)
             pars = [b1E, b2E, bsE, c1, c2,
-                    g('Pshot') / A_AP * self._snd, g('Bshot') / A_AP * self._snd, g('X_FoG_b')]
+                    g('Pshot') / A_AP * self._shotnoise, g('Bshot') / A_AP * self._shotnoise, g('X_FoG_b')]
 
         else:  # 'tcm_chudaykin_aap'
             bias_scheme = 'classpt'
@@ -2335,7 +2331,7 @@ class FOLPSTracerSpectrum3Poles(ExternalCalculator):
             c1 = g('c1') / kNL ** 2 / (A * A_AP * sigma8 ** 2)
             c2 = g('c2') / kNL ** 2 / (A * A_AP * sigma8 ** 2)
             pars = [1. + b1L, b2L, bsL, c1, c2,
-                    g('Pshot') * self._snd, g('Bshot') * self._snd, g('X_FoG_b')]
+                    g('Pshot') * self._shotnoise, g('Bshot') * self._shotnoise, g('X_FoG_b')]
 
         multipoles = tuple('B{:d}{:d}{:d}'.format(*ell) for ell in self.ells)
         self.poles = self.pt.combine_bias_terms_spectrum3_poles(pars, self.k, multipoles, bias_scheme=bias_scheme, **self._options)

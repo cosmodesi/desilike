@@ -345,6 +345,98 @@ def test_metropolis_hastings_fast(likelihood):
     sampler.run(max_steps=100)
 
 
+# ── New kernel-based API tests ────────────────────────────────────────────────
+
+KERNEL_SAMPLER = dict(
+    emcee=lambda: samplers.Emcee(nwalkers=8),
+    zeus=lambda: samplers.Zeus(nwalkers=8),
+    mhmcmc=lambda: samplers.MetropolisHastings(),
+    hmc=lambda: samplers.HMC(),
+    nuts=lambda: samplers.NUTS(),
+    mclmc=lambda: samplers.MCLMC(),
+    numpyro_nuts=lambda: samplers.NumpyroNUTS(),
+    numpyro_hmc=lambda: samplers.NumpyroHMC(),
+    numpyro_barker=lambda: samplers.NumpyroBarkerMH(),
+)
+# SA is a gradient-free adaptive sampler; its covariance is inaccurate at low sample counts
+# (same behavior as the legacy NumpyroSASampler, which is not in test_accuracy).
+KERNEL_SAMPLER_RUNS = dict(numpyro_sa=lambda: samplers.NumpyroSA())
+KERNEL_OPTIONAL_DEPS = dict(
+    emcee='emcee', zeus='zeus', hmc='blackjax', nuts='blackjax', mclmc='blackjax',
+    numpyro_nuts='numpyro', numpyro_hmc='numpyro', numpyro_barker='numpyro',
+    numpyro_sa='numpyro',
+)
+KERNEL_KWARGS_RUN = dict(
+    emcee=_MCMC_MIN_STEPS,
+    zeus=_MCMC_MIN_STEPS,
+    mhmcmc=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=sys.maxsize)),
+    hmc=dict(min_steps=10000, **_BLACKJAX_ADAPTATION),
+    nuts=dict(**_MCMC_MIN_STEPS, **_BLACKJAX_ADAPTATION),
+    mclmc=_MCMC_MIN_STEPS,
+    numpyro_nuts=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=500)),
+    numpyro_hmc=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=500)),
+    numpyro_barker=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=500)),
+)
+KERNEL_KWARGS_RUN_FAST = dict(
+    emcee=dict(max_steps=10),
+    zeus=dict(max_steps=10),
+    mhmcmc=dict(max_steps=10, adaptation=dict(steps=sys.maxsize)),
+    hmc=dict(max_steps=10, **_BLACKJAX_ADAPTATION),
+    nuts=dict(max_steps=10, **_BLACKJAX_ADAPTATION),
+    mclmc=dict(max_steps=10),
+    numpyro_nuts=dict(max_steps=10, adaptation=dict(steps=100)),
+    numpyro_hmc=dict(max_steps=10, adaptation=dict(steps=100)),
+    numpyro_barker=dict(max_steps=10, adaptation=dict(steps=100)),
+    numpyro_sa=dict(max_steps=10, adaptation=dict(steps=100)),
+)
+
+
+@pytest.mark.mpi
+@pytest.mark.parametrize('key', KERNEL_SAMPLER.keys())
+def test_kernel_accuracy(likelihood, key):
+    """Kernel-based Sampler factory produces accurate results."""
+    if key in KERNEL_OPTIONAL_DEPS:
+        pytest.importorskip(KERNEL_OPTIONAL_DEPS[key])
+
+    sampler = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER[key](), rng=42)
+    results = sampler.run(**KERNEL_KWARGS_RUN.get(key, {}))
+
+    if sampler.mpicomm.rank == 0:
+        mean_samples = results.mean(['a', 'b'])
+        assert np.allclose(mean_samples, likelihood.flatdata, atol=0.05, rtol=0)
+        cov_samples = results.covariance(['a', 'b'])
+        cov = np.linalg.inv(likelihood.precision + np.array([[100, 0], [0, 0]]))
+        cov_err = np.sqrt(
+            (cov**2 + np.outer(np.diag(cov), np.diag(cov))) / 100)
+        assert np.allclose(cov_samples, cov, atol=3 * cov_err)
+
+
+@pytest.mark.mpi_skip
+@pytest.mark.parametrize('key', KERNEL_SAMPLER_RUNS.keys())
+def test_kernel_runs(likelihood, key):
+    """Kernel-based Sampler factory runs without error (no accuracy check)."""
+    if key in KERNEL_OPTIONAL_DEPS:
+        pytest.importorskip(KERNEL_OPTIONAL_DEPS[key])
+    sampler = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER_RUNS[key](), rng=42)
+    sampler.run(**KERNEL_KWARGS_RUN_FAST.get(key, {}))
+
+
+@pytest.mark.mpi_skip
+@pytest.mark.parametrize('key', ['emcee'])
+def test_kernel_derived(likelihood, key):
+    """Kernel-based Sampler correctly computes derived parameters."""
+    if key in KERNEL_OPTIONAL_DEPS:
+        pytest.importorskip(KERNEL_OPTIONAL_DEPS[key])
+
+    sampler = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER[key](), rng=42)
+    results = sampler.run(**KERNEL_KWARGS_RUN_FAST.get(key, {}))
+    if sampler.mpicomm.rank == 0:
+        a, b, c, d = (np.asarray(results[n]) for n in ('a', 'b', 'c', 'd'))
+        assert np.allclose(a + b, c)
+        for i in range(3):
+            assert np.allclose((a + b) * i, d[..., i])
+
+
 if __name__ == '__main__':
 
     from desilike import setup_logging

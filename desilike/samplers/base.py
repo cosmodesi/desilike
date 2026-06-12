@@ -948,3 +948,153 @@ class EnsembleSampler(MarkovChainSampler):
 
     def initialize_samples(self, max_init_attempts=100):
         super().initialize_samples(max_init_attempts=max_init_attempts, shape=(self.nwalkers,))
+
+
+# ── Kernel-based infrastructure (new API) ─────────────────────────────────────
+
+class MCMCSampler(MarkovChainSampler):
+    """Kernel-based MCMC infrastructure — delegates the algorithm to a :class:`~desilike.samplers.kernels.Kernel`.
+
+    Instantiate via the :func:`Sampler` factory rather than directly.
+    """
+
+    logger = logging.getLogger('MCMCSampler')
+
+    def __init__(self, posterior, kernel, nparallel=1, chains=None, rng=None,
+                 mpicomm=None, directory=None, rescale=False, covariance=None,
+                 batch_size=None):
+        self.kernel = kernel
+        self._kernel_initialized = False
+        super().__init__(posterior, nchains=nparallel, chains=chains, rng=rng,
+                         mpicomm=mpicomm, directory=directory, rescale=rescale,
+                         covariance=covariance, batch_size=batch_size)
+
+    def _make_logposterior(self):
+        """Return a JAX-compatible ``{name: array} → float`` log-posterior in rescaled space."""
+        def logposterior(position_dict):
+            return self.posterior(self._forward_dict(position_dict), return_derived=False)
+        return logposterior
+
+    def _compute_derived_batch(self, samples):
+        """Compute derived parameters for a ``(n, ndim)`` batch of rescaled-space samples."""
+        if not self.n_derived:
+            return np.zeros((len(samples), 0))
+        if not hasattr(self, '_derived_fn'):
+            self._derived_fn = jax.jit(jax.vmap(self._compute_posterior_one))
+        _, derived = self._derived_fn(jnp.asarray(samples))
+        return np.asarray(derived)
+
+    def _init_kernel(self):
+        """Build the log-posterior callable and initialise the kernel (called lazily before first step)."""
+        logposterior = self._make_logposterior()
+        samples, _, _ = self.state   # (ndim,) in rescaled space
+        initial_position = _flat_to_dict(samples, self.varied_params)
+        context = dict(
+            ndim=self.ndim,
+            param_shapes={param.name: param.shape for param in self.varied_params},
+            initial_position=initial_position,
+        )
+        self.kernel.init(logposterior, None, None,
+                         self.varied_params.names(), self.rng, **context)
+        self._kernel_initialized = True
+
+    def run_sampler(self, n_steps):
+        if self.pool.main:
+            if not self._kernel_initialized:
+                self._init_kernel()
+            samples, log_post = self.kernel.run(n_steps)
+            derived = self._compute_derived_batch(samples)
+            self.extend(samples, derived, log_post)
+            self.pool.stop_wait()
+        else:
+            self.pool.wait()
+
+    def adapt_sampler(self, **kwargs):
+        if self.pool.main:
+            if not self._kernel_initialized:
+                self._init_kernel()
+            self.kernel.adapt(**kwargs)
+            self.pool.stop_wait()
+        else:
+            self.pool.wait()
+
+
+class EnsembleKernelSampler(MCMCSampler):
+    """Kernel-based ensemble MCMC infrastructure — delegates to a multi-walker :class:`~desilike.samplers.kernels.Kernel`.
+
+    Instantiate via the :func:`Sampler` factory rather than directly.
+    """
+
+    logger = logging.getLogger('EnsembleKernelSampler')
+
+    def initialize_samples(self, max_init_attempts=100):
+        if self.kernel.nwalkers is None:
+            self.kernel.nwalkers = 4 * self.ndim
+        nwalkers_all = self.mpicomm.allgather(
+            self.kernel.nwalkers if self.pool.main else None)
+        for nw in nwalkers_all:
+            if nw is not None:
+                self.kernel.nwalkers = nw
+                break
+        super().initialize_samples(max_init_attempts=max_init_attempts,
+                                    shape=(self.kernel.nwalkers,))
+
+    def _init_kernel(self):
+        logposterior = self._make_logposterior()
+        samples, _, _ = self.state   # (nwalkers, ndim) in rescaled space
+        nwalkers = samples.shape[0]
+        initial_position = {}
+        for param, size, col in _param_sizes(self.varied_params):
+            vals = samples[:, col:col + size]
+            initial_position[param.name] = vals.reshape(nwalkers, *(param.shape or ()))
+        context = dict(
+            ndim=self.ndim,
+            param_shapes={param.name: param.shape for param in self.varied_params},
+            initial_position=initial_position,
+        )
+        self.kernel.init(logposterior, None, None,
+                         self.varied_params.names(), self.rng, **context)
+        self._kernel_initialized = True
+
+    def run_sampler(self, n_steps):
+        if self.pool.main:
+            if not self._kernel_initialized:
+                self._init_kernel()
+            samples, log_post = self.kernel.run(n_steps)
+            # samples: (n_steps, nwalkers, ndim); log_post: (n_steps, nwalkers)
+            nwalkers = self.kernel.nwalkers
+            derived = self._compute_derived_batch(
+                samples.reshape(-1, self.ndim)).reshape(n_steps, nwalkers, -1)
+            self.extend(samples, derived, log_post)
+            self.pool.stop_wait()
+        else:
+            self.pool.wait()
+
+
+def Sampler(posterior, kernel, nparallel=1, rng=None, directory=None,
+            rescale=False, covariance=None):
+    """Factory creating the appropriate infrastructure class for *kernel*.
+
+    Parameters
+    ----------
+    posterior : CompiledGraph
+    kernel : Kernel
+        Algorithm instance, e.g. ``HMC(step_size=1e-3)`` or ``Emcee(nwalkers=32)``.
+    nparallel : int
+        Number of independent chains (point MCMC) or independent ensemble runs (multi-walker).
+        Default is 1.
+    rng : int or numpy.random.Generator or None
+    directory : str or Path or None
+    rescale : bool
+    covariance : array_like or None
+    """
+    from .kernels.base import _SAMPLER_REGISTRY
+    cls = _SAMPLER_REGISTRY[kernel._sampler_cls]
+    return cls(posterior, kernel=kernel, nparallel=nparallel,
+               rng=rng, directory=directory, rescale=rescale, covariance=covariance)
+
+
+# Register here so kernel modules can look up these classes without a circular import.
+from .kernels.base import _SAMPLER_REGISTRY as _KERNEL_REGISTRY
+_KERNEL_REGISTRY['MCMCSampler'] = MCMCSampler
+_KERNEL_REGISTRY['EnsembleKernelSampler'] = EnsembleKernelSampler

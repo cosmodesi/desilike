@@ -1,5 +1,6 @@
 """desilike.samplers — wrappers for commonly used posterior samplers."""
 
+from .base import Sampler, MCMCSampler, EnsembleKernelSampler
 from .blackjax import HMCSampler, MCLMCSampler, NoUTurnSampler
 from .dynesty import DynestySampler
 from .emcee import EmceeSampler
@@ -11,8 +12,24 @@ from .numpyro import NumpyroBarkerMHSampler, NumpyroHMCSampler, NumpyroNUTSSampl
 from .pocomc import PocoMCSampler
 from .qmc import QMCSampler
 from .zeus import ZeusSampler
+from .kernels import Kernel, Emcee, Zeus, MetropolisHastings, HMC, NUTS, MCLMC, NumpyroNUTS, NumpyroHMC, NumpyroBarkerMH, NumpyroSA
 
 __all__ = [
+    'Sampler',
+    'MCMCSampler',
+    'EnsembleKernelSampler',
+    'Kernel',
+    'Emcee',
+    'Zeus',
+    'MetropolisHastings',
+    'HMC',
+    'NUTS',
+    'MCLMC',
+    'NumpyroNUTS',
+    'NumpyroHMC',
+    'NumpyroBarkerMH',
+    'NumpyroSA',
+    # Legacy class names kept for backward compatibility
     'DynestySampler',
     'EmceeSampler',
     'GridSampler',

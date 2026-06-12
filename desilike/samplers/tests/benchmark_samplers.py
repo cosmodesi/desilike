@@ -313,7 +313,7 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', dire
         Root directory for sampler checkpoints.  ``None`` disables checkpointing.
     """
 
-    profiler_posterior = compile(_build_posterior(posterior))
+    profiler_posterior = compile(_build_posterior(posterior, marginalize=True))
     # ── profilers ─────────────────────────────────────────────────────────────
     profiler_results = {}
     if profiler_names:

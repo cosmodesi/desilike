@@ -639,6 +639,7 @@ class MarkovChainSampler(BaseSampler):
                     self._chain = samples
 
         self.checks = []
+        self._thinning = 1
 
     def set_rng(self, rng):
         if hasattr(self, 'rng') and rng is None:
@@ -763,6 +764,10 @@ class MarkovChainSampler(BaseSampler):
 
     def extend(self, samples, derived, log_post):
         """Append new steps to the local chain."""
+        if self._thinning > 1:
+            samples  = samples[::self._thinning]
+            derived  = derived[::self._thinning]
+            log_post = log_post[::self._thinning]
         new_samples = self.array_to_samples(samples, derived, logposterior=log_post)
         self._chain = MCSamples.concatenate(self._chain, new_samples)
 
@@ -804,9 +809,10 @@ class MarkovChainSampler(BaseSampler):
         """Return True when sampling should stop."""
         converged = True
         if self.pool.main:
+            raw_steps = len(self._chain) * self._thinning
             converged = (
-                len(self._chain) >= max_steps or
-                (len(self._chain) >= min_steps and
+                raw_steps >= max_steps or
+                (raw_steps >= min_steps and
                  len(self.checks) >= checks_passed and
                  all(self.checks[-checks_passed:]))
             )
@@ -814,7 +820,7 @@ class MarkovChainSampler(BaseSampler):
 
     def run(self, burn_in=0.2, min_steps=0, max_steps=None, adaptation=None,
             check_every=300, checks_passed=2, gelman_rubin=1.1, geweke=None, ess=None,
-            save_every=300, max_init_attempts=100, concatenate=True):
+            save_every=300, max_init_attempts=100, concatenate=True, thinning=1):
         """Run the sampler until convergence and return the chains.
 
         Parameters
@@ -846,8 +852,13 @@ class MarkovChainSampler(BaseSampler):
             Maximum initialisation attempts per chain.  Default is 100.
         concatenate : bool
             Concatenate all chains before returning.  Default is ``True``.
+        thinning : int
+            Keep every *thinning*-th sample in the returned chain.  All steps are
+            still taken and used for convergence diagnostics; thinning is applied
+            only to the output.  Default is 1 (no thinning).
         """
         self.initialize_samples(max_init_attempts=max_init_attempts)
+        self._thinning = int(thinning)
 
         if self.directory is None:
             save_every = check_every  # skip intermediate saves
@@ -855,9 +866,9 @@ class MarkovChainSampler(BaseSampler):
         if adaptation is not None:
             self.adapt_sampler(**adaptation)
 
-        # Current step count across all chains.
+        # Current raw step count across all chains (accounting for thinning on resume).
         steps = min(self.mpicomm.allgather(
-            len(self._chain) if self.pool.main else sys.maxsize))
+            len(self._chain) * self._thinning if self.pool.main else sys.maxsize))
 
         if max_steps is None:
             max_steps = sys.maxsize

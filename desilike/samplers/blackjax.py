@@ -239,7 +239,7 @@ class BlackJAXSampler(MarkovChainSampler):
                 self.kernel_type, self.compute_posterior_without_derived,
                 **self.fixed_kernel_args, **kwargs).run(
                 rng_key, initial_position, num_steps=steps)
-            self.kernel_args.update(parameters)
+            self.kernel_args.update({k: v for k, v in parameters.items() if k not in self.fixed_kernel_args})
             # Rebuild the kernel so the tuned parameters (step size, mass matrix, ...) are
             # actually used during sampling, and warm-start from the adapted state.
             self.kernel = self.kernel_type(self.compute_posterior_without_derived, **self.kernel_args, **self.fixed_kernel_args)

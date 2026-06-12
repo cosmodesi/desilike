@@ -47,7 +47,7 @@ KWARGS_RUN = dict(
     dynesty=dict(n_effective=0),
     emcee=_MCMC_MIN_STEPS,
     grid=dict(grid=dict(a=_a_grid, b=_b_grid)),
-    hmc=dict(**_MCMC_MIN_STEPS, **_BLACKJAX_ADAPTATION),
+    hmc=dict(min_steps=10000, **_BLACKJAX_ADAPTATION),
     importance=dict(samples=MCSamples(dict(
         a=np.repeat(_a_grid, len(_b_grid)),
         b=np.tile(_b_grid, len(_a_grid))))),

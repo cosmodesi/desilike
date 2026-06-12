@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import logging
 import dataclasses
 import functools
@@ -247,12 +246,11 @@ class BaseProfiler:
         if ref_scale != 1.:
             ref_scaled_params = VariableCollection()
             for param in self.varied_params:
-                param_copy = copy.copy(param)
-                param_copy.ref = param.ref.affine_transform(
+                ref = param.ref.affine_transform(
                     loc=(1. - ref_scale) * param.ref.center(),
                     scale=ref_scale,
                 )
-                ref_scaled_params.set(param_copy)
+                ref_scaled_params.set(param.clone(ref=ref))
             self.varied_params = ref_scaled_params
 
         # ── flat parameter layout ─────────────────────────────────────────
@@ -304,21 +302,11 @@ class BaseProfiler:
         self._transformed_params = VariableCollection()
         for param in self.varied_params:
             slc = self._param_slices[param.name]
-            loc_p   = self._loc[slc]    # shape (flat_size_of_param,)
-            scale_p = self._scale[slc]  # shape (flat_size_of_param,)
-            param_copy = copy.copy(param)
-            if not param.shape:
-                # Scalar param: element-wise scalars for prior/ref transform
-                loc_s, scale_s = float(loc_p[0]), float(scale_p[0])
-                param_copy.prior = param.prior.affine_transform(loc=-loc_s / scale_s, scale=1. / scale_s)
-                param_copy.ref   = param.ref.affine_transform(loc=-loc_s / scale_s, scale=1. / scale_s)
-            else:
-                # Vector param: element-wise array transform
-                loc_arr   = loc_p.reshape(param.shape)
-                scale_arr = scale_p.reshape(param.shape)
-                param_copy.prior = param.prior.affine_transform(loc=-loc_arr / scale_arr, scale=1. / scale_arr)
-                param_copy.ref   = param.ref.affine_transform(loc=-loc_arr / scale_arr, scale=1. / scale_arr)
-            self._transformed_params.set(param_copy)
+            loc_p   = self._loc[slc].reshape(param.shape or ())
+            scale_p = self._scale[slc].reshape(param.shape or ())
+            prior = param.prior.affine_transform(loc=-loc_p / scale_p, scale=1. / scale_p)
+            ref   = param.ref.affine_transform(loc=-loc_p / scale_p, scale=1. / scale_p)
+            self._transformed_params.set(param.clone(prior=prior, ref=ref))
 
         # ── existing profiles ─────────────────────────────────────────────
         if profiles is not None and not isinstance(profiles, Profiles):

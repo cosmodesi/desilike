@@ -414,6 +414,8 @@ class MetropolisHastingsSampler(MarkovChainSampler):
             cov = np.asarray(covariance) / np.outer(self._scale, self._scale)
         self.sampler.update(cov=cov)
 
+    adaptation_steps = 0
+
     def adapt_sampler(self, **kwargs):
         """Store the adaptation horizon; MH adapts its proposal covariance inline during run_sampler."""
         self.adaptation_steps = kwargs.get('steps', 0)

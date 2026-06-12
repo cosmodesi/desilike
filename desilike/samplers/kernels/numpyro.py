@@ -41,7 +41,7 @@ class _NumpyroKernel(Kernel):
     _numpyro_cls = None
     _extra_fields = ('accept_prob', 'potential_energy')
 
-    def init(self, logposterior, loglikelihood, logprior, params, rng, **context):
+    def init(self, logposterior, params, rng, **context):
         if not NUMPYRO_INSTALLED:
             raise ImportError("The 'numpyro' package is required but not installed.")
 

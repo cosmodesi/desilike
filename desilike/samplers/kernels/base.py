@@ -1,4 +1,4 @@
-"""Abstract Kernel base class and sampler-class registry."""
+"""Abstract Kernel base classes and sampler-class registry."""
 
 import logging
 
@@ -8,7 +8,7 @@ class Kernel:
 
     A kernel encapsulates the sampling algorithm.  The surrounding
     :class:`~desilike.samplers.base.MCMCSampler` (or
-    :class:`~desilike.samplers.base.PopulationSampler`) owns all
+    :class:`~desilike.samplers.base.EnsembleKernelSampler`) owns all
     infrastructure: chain accumulation, convergence checks, MPI, rescaling
     and directory I/O.
 
@@ -24,10 +24,10 @@ class Kernel:
     logger = logging.getLogger('Kernel')
 
     # Infrastructure class to use when wrapped by the Sampler factory.
-    # Override to 'PopulationSampler' for ensemble/multi-walker kernels.
+    # Override to 'EnsembleKernelSampler' for ensemble/multi-walker kernels.
     _sampler_cls = 'MCMCSampler'
 
-    def init(self, logposterior, loglikelihood, logprior, params, rng, **context):
+    def init(self, logposterior, params, rng, **context):
         """Initialise the kernel before sampling.
 
         Parameters
@@ -35,10 +35,6 @@ class Kernel:
         logposterior : callable
             JAX-compatible function ``{name: jax_array} -> float`` returning the
             log-posterior in *rescaled* space.
-        loglikelihood : callable or None
-            Same signature; may be ``None`` for pure MCMC kernels.
-        logprior : callable or None
-            Same signature; may be ``None``.
         params : list of str
             Varied parameter names, in the order they appear in the flat array.
         rng : numpy.random.Generator
@@ -100,6 +96,66 @@ class Kernel:
         return ()
 
 
+class NestedKernel:
+    """Abstract base class for nested / population sampling kernels.
+
+    Unlike :class:`Kernel` (MCMC), these kernels receive the sampling
+    callables at *run time* rather than at :meth:`init` time, so that
+    the infrastructure class can materialise batched / pool-aware versions
+    before each run.
+
+    A :class:`NestedKernel` subclass should override :meth:`run` and set
+    ``_sampler_cls = 'NestedSampler'`` (the default).
+    """
+
+    logger = logging.getLogger('NestedKernel')
+    _sampler_cls = 'NestedSampler'
+
+    def run(self, loglikelihood, logprior, prior_transform, **kwargs):
+        """Run the sampler and return all posterior samples.
+
+        Called on **all** MPI processes (both main and workers).  The
+        implementation is responsible for the main/worker split, including
+        calling ``pool.stop_wait()`` on the main process and
+        ``pool.wait()`` (or ``wait_many``) on workers before returning.
+
+        Parameters
+        ----------
+        loglikelihood : callable
+            Batched log-likelihood ``(N, ndim) → list[(log_l, derived)]`` or
+            ``(N, ndim) → list[log_l]`` depending on whether derived
+            parameters are present.  Pool-aware (already wrapped).
+        logprior : callable
+            Batched log-prior ``(N, ndim) → list[log_prior]``.  Pool-aware.
+        prior_transform : callable
+            Unit-hypercube to parameter-space transform ``(N, ndim) → (N, ndim)``.
+            Pool-aware.
+        pool : Pool
+            MPI pool for distributing evaluations.
+        rng : numpy.random.Generator
+            Random-number generator for the main process.
+        ndim : int
+            Dimensionality of the parameter space.
+        directory : Path or None
+            Checkpoint directory.
+        **kwargs : dict
+            Run-time options forwarded to the underlying sampler's ``run``
+            method.
+
+        Returns
+        -------
+        samples : numpy.ndarray, shape ``(n_samples, ndim)``
+            Samples in rescaled parameter space.  **Main process only**;
+            workers return ``None``.
+        derived : numpy.ndarray, shape ``(n_samples, n_derived)``
+            Derived-parameter values stacked column-wise.
+        extras : dict
+            At minimum ``aweight`` (importance weights) and ``logposterior``.
+
+        """
+        raise NotImplementedError
+
+
 # Registry mapping _sampler_cls strings to the actual sampler classes.
-# Populated by base.py when MCMCSampler / PopulationSampler are defined.
+# Populated by base.py when MCMCSampler / EnsembleKernelSampler / NestedSampler are defined.
 _SAMPLER_REGISTRY = {}

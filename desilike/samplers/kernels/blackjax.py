@@ -42,7 +42,7 @@ class _BlackJAXKernel(Kernel):
         if not BLACKJAX_INSTALLED:
             raise ImportError("The 'blackjax' package is required but not installed.")
 
-    def init(self, logposterior, loglikelihood, logprior, params, rng, **context):
+    def init(self, logposterior, params, rng, **context):
         self._check_installed()
         self._logposterior = logposterior
         self._params = params
@@ -121,12 +121,12 @@ class HMC(_BlackJAXKernel):
         self._imm_init = inverse_mass_matrix
         self.fixed_kernel_args = dict(num_integration_steps=num_integration_steps, **kwargs)
 
-    def init(self, logposterior, loglikelihood, logprior, params, rng, **context):
+    def init(self, logposterior, params, rng, **context):
         if self._imm_init is None:
             self.kernel_args['inverse_mass_matrix'] = np.ones(context['ndim'])
         else:
             self.kernel_args['inverse_mass_matrix'] = np.asarray(self._imm_init)
-        super().init(logposterior, loglikelihood, logprior, params, rng, **context)
+        super().init(logposterior, params, rng, **context)
 
     def adapt(self, **kwargs):
         """Adapt step size and mass matrix via ``blackjax.window_adaptation``."""
@@ -171,12 +171,12 @@ class NUTS(_BlackJAXKernel):
         self._imm_init = inverse_mass_matrix
         self.fixed_kernel_args = dict(**kwargs)
 
-    def init(self, logposterior, loglikelihood, logprior, params, rng, **context):
+    def init(self, logposterior, params, rng, **context):
         if self._imm_init is None:
             self.kernel_args['inverse_mass_matrix'] = np.ones(context['ndim'])
         else:
             self.kernel_args['inverse_mass_matrix'] = np.asarray(self._imm_init)
-        super().init(logposterior, loglikelihood, logprior, params, rng, **context)
+        super().init(logposterior, params, rng, **context)
 
     def adapt(self, **kwargs):
         """Adapt step size and mass matrix via ``blackjax.window_adaptation``."""

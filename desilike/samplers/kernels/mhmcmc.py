@@ -38,7 +38,7 @@ class MetropolisHastings(Kernel):
         self.fast = list(fast) if fast is not None else []
         self.covariance = covariance
 
-    def init(self, logposterior, loglikelihood, logprior, params, rng, **context):
+    def init(self, logposterior, params, rng, **context):
         from desilike.samplers.mhmcmc import StandAloneMetropolisHastingsSampler
 
         ndim = context['ndim']

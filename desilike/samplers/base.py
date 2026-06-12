@@ -994,7 +994,7 @@ class MCMCSampler(MarkovChainSampler):
             param_shapes={param.name: param.shape for param in self.varied_params},
             initial_position=initial_position,
         )
-        self.kernel.init(logposterior, None, None,
+        self.kernel.init(logposterior,
                          self.varied_params.names(), self.rng, **context)
         self._kernel_initialized = True
 
@@ -1052,7 +1052,7 @@ class EnsembleKernelSampler(MCMCSampler):
             param_shapes={param.name: param.shape for param in self.varied_params},
             initial_position=initial_position,
         )
-        self.kernel.init(logposterior, None, None,
+        self.kernel.init(logposterior,
                          self.varied_params.names(), self.rng, **context)
         self._kernel_initialized = True
 
@@ -1071,25 +1071,59 @@ class EnsembleKernelSampler(MCMCSampler):
             self.pool.wait()
 
 
+class NestedSampler(PopulationSampler):
+    """Kernel-based infrastructure for nested / population samplers (dynesty, nautilus, pocomc, …).
+
+    Delegates entirely to a :class:`~desilike.samplers.kernels.base.NestedKernel`; the kernel
+    receives batched, pool-aware callables at run time.
+
+    Instantiate via the :func:`Sampler` factory rather than directly.
+    """
+
+    logger = logging.getLogger('NestedSampler')
+
+    def __init__(self, posterior, kernel, rng=None, directory=None,
+                 rescale=False, covariance=None, batch_size=None):
+        self.kernel = kernel
+        if batch_size is None:
+            batch_size = getattr(kernel, '_batch_size', None)
+        super().__init__(posterior, rng=rng, directory=directory,
+                         rescale=rescale, covariance=covariance, batch_size=batch_size)
+
+    def run_sampler(self, **kwargs):
+        """Delegate to ``kernel.run()``, which handles both main and worker paths."""
+        return self.kernel.run(
+            self.compute_likelihood, self.compute_prior, self.prior_transform,
+            pool=self.pool, rng=self.rng, ndim=self.ndim, directory=self.directory,
+            n_derived=self.n_derived, params=self._transformed_params,
+            **kwargs,
+        )
+
+
 def Sampler(posterior, kernel, nparallel=1, rng=None, directory=None,
-            rescale=False, covariance=None):
+            rescale=False, covariance=None, batch_size=None):
     """Factory creating the appropriate infrastructure class for *kernel*.
 
     Parameters
     ----------
     posterior : CompiledGraph
-    kernel : Kernel
-        Algorithm instance, e.g. ``HMC(step_size=1e-3)`` or ``Emcee(nwalkers=32)``.
+    kernel : Kernel or NestedKernel
+        Algorithm instance, e.g. ``HMC(step_size=1e-3)``, ``Emcee(nwalkers=32)``,
+        ``Dynesty(dynamic=True)``.
     nparallel : int
         Number of independent chains (point MCMC) or independent ensemble runs (multi-walker).
-        Default is 1.
+        Ignored for :class:`NestedSampler`.  Default is 1.
     rng : int or numpy.random.Generator or None
     directory : str or Path or None
     rescale : bool
     covariance : array_like or None
+    batch_size : int or None
     """
     from .kernels.base import _SAMPLER_REGISTRY
     cls = _SAMPLER_REGISTRY[kernel._sampler_cls]
+    if cls is NestedSampler:
+        return cls(posterior, kernel=kernel, rng=rng, directory=directory,
+                   rescale=rescale, covariance=covariance, batch_size=batch_size)
     return cls(posterior, kernel=kernel, nparallel=nparallel,
                rng=rng, directory=directory, rescale=rescale, covariance=covariance)
 
@@ -1098,3 +1132,4 @@ def Sampler(posterior, kernel, nparallel=1, rng=None, directory=None,
 from .kernels.base import _SAMPLER_REGISTRY as _KERNEL_REGISTRY
 _KERNEL_REGISTRY['MCMCSampler'] = MCMCSampler
 _KERNEL_REGISTRY['EnsembleKernelSampler'] = EnsembleKernelSampler
+_KERNEL_REGISTRY['NestedSampler'] = NestedSampler

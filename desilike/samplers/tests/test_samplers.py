@@ -437,6 +437,31 @@ def test_kernel_derived(likelihood, key):
             assert np.allclose((a + b) * i, d[..., i])
 
 
+NESTED_KERNEL_SAMPLER = dict(
+    dynesty=lambda: samplers.Dynesty(dynamic=True),
+    nautilus=lambda: samplers.Nautilus(),
+    pocomc=lambda: samplers.PocoMC(),
+)
+NESTED_KERNEL_OPTIONAL_DEPS = dict(
+    dynesty='dynesty', nautilus='nautilus', pocomc='pocomc',
+)
+NESTED_KERNEL_KWARGS_RUN = dict(
+    dynesty=dict(maxiter=10),
+    nautilus=dict(n_eff=0, n_like_max=100),
+    pocomc=dict(n_total=10, n_evidence=0),
+)
+
+
+@pytest.mark.mpi
+@pytest.mark.parametrize('key', NESTED_KERNEL_SAMPLER.keys())
+def test_nested_kernel_runs(likelihood, key):
+    """Nested-kernel Sampler factory runs without error (smoke test)."""
+    if key in NESTED_KERNEL_OPTIONAL_DEPS:
+        pytest.importorskip(NESTED_KERNEL_OPTIONAL_DEPS[key])
+    sampler = samplers.Sampler(likelihood, kernel=NESTED_KERNEL_SAMPLER[key](), rng=42)
+    sampler.run(**NESTED_KERNEL_KWARGS_RUN.get(key, {}))
+
+
 if __name__ == '__main__':
 
     from desilike import setup_logging

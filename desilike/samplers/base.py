@@ -1108,7 +1108,7 @@ def Sampler(posterior, kernel, nparallel=1, rng=None, directory=None,
     ----------
     posterior : CompiledGraph
     kernel : Kernel or NestedKernel
-        Algorithm instance, e.g. ``HMC(step_size=1e-3)``, ``Emcee(nwalkers=32)``,
+        Algorithm instance, e.g. ``BlackjaxHMC(step_size=1e-3)``, ``Emcee(nwalkers=32)``,
         ``Dynesty(dynamic=True)``.
     nparallel : int
         Number of independent chains (point MCMC) or independent ensemble runs (multi-walker).

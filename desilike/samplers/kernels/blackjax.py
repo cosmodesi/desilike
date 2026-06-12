@@ -95,14 +95,14 @@ class _BlackJAXKernel(Kernel):
         return samples, log_post
 
 
-class HMC(_BlackJAXKernel):
+class BlackjaxHMC(_BlackJAXKernel):
     """Hamiltonian Monte Carlo (HMC) kernel via BlackJAX.
 
     .. rubric:: References
     - https://github.com/blackjax-devs/blackjax
     """
 
-    logger = logging.getLogger('HMC')
+    logger = logging.getLogger('BlackjaxHMC')
     _kernel_type_name = 'hmc'
     _adaptation_fn_name = 'window_adaptation'
 
@@ -147,14 +147,14 @@ class HMC(_BlackJAXKernel):
         _log_adaptation(self.logger, self.kernel_args)
 
 
-class NUTS(_BlackJAXKernel):
+class BlackjaxNUTS(_BlackJAXKernel):
     """No-U-Turn Sampler (NUTS) kernel via BlackJAX.
 
     .. rubric:: References
     - https://github.com/blackjax-devs/blackjax
     """
 
-    logger = logging.getLogger('NUTS')
+    logger = logging.getLogger('BlackjaxNUTS')
     _kernel_type_name = 'nuts'
     _adaptation_fn_name = 'window_adaptation'
 
@@ -197,7 +197,7 @@ class NUTS(_BlackJAXKernel):
         _log_adaptation(self.logger, self.kernel_args)
 
 
-class MCLMC(_BlackJAXKernel):
+class BlackjaxMCLMC(_BlackJAXKernel):
     """Microcanonical Langevin Monte Carlo (MCLMC) kernel via BlackJAX.
 
     .. rubric:: References
@@ -205,7 +205,7 @@ class MCLMC(_BlackJAXKernel):
     - https://arxiv.org/abs/2212.08549
     """
 
-    logger = logging.getLogger('MCLMC')
+    logger = logging.getLogger('BlackjaxMCLMC')
     _kernel_type_name = 'mclmc'
     _adaptation_fn_name = 'mclmc_find_L_and_step_size'
 

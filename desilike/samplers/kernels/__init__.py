@@ -4,7 +4,7 @@ from .base import Kernel, NestedKernel
 from .emcee import Emcee
 from .zeus import Zeus
 from .mhmcmc import MetropolisHastings
-from .blackjax import HMC, NUTS, MCLMC
+from .blackjax import BlackjaxHMC, BlackjaxNUTS, BlackjaxMCLMC
 from .numpyro import NumpyroNUTS, NumpyroHMC, NumpyroBarkerMH, NumpyroSA
 from .dynesty import Dynesty
 from .nautilus import Nautilus

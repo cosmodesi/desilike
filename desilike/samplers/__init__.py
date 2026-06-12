@@ -14,7 +14,7 @@ from .qmc import QMCSampler
 from .zeus import ZeusSampler
 from .kernels import (Kernel, NestedKernel,
                       Emcee, Zeus, MetropolisHastings,
-                      HMC, NUTS, MCLMC,
+                      BlackjaxHMC, BlackjaxNUTS, BlackjaxMCLMC,
                       NumpyroNUTS, NumpyroHMC, NumpyroBarkerMH, NumpyroSA,
                       Dynesty, Nautilus, PocoMC)
 
@@ -28,9 +28,9 @@ __all__ = [
     'Emcee',
     'Zeus',
     'MetropolisHastings',
-    'HMC',
-    'NUTS',
-    'MCLMC',
+    'BlackjaxHMC',
+    'BlackjaxNUTS',
+    'BlackjaxMCLMC',
     'NumpyroNUTS',
     'NumpyroHMC',
     'NumpyroBarkerMH',

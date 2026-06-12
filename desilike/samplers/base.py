@@ -292,19 +292,11 @@ class BaseSampler(ABC):
         # step size is recovered from the transformed ref.std()).
         self._transformed_params = VariableCollection()
         for param, size, col in _param_sizes(self.varied_params):
-            loc_p   = self._loc[col:col + size]
-            scale_p = self._scale[col:col + size]
-            param_copy = copy.copy(param)
-            if not param.shape:
-                loc_s, scale_s = float(loc_p[0]), float(scale_p[0])
-                param_copy.prior = param.prior.affine_transform(loc=-loc_s / scale_s, scale=1. / scale_s)
-                param_copy.ref   = param.ref.affine_transform(loc=-loc_s / scale_s, scale=1. / scale_s)
-            else:
-                loc_arr   = loc_p.reshape(param.shape)
-                scale_arr = scale_p.reshape(param.shape)
-                param_copy.prior = param.prior.affine_transform(loc=-loc_arr / scale_arr, scale=1. / scale_arr)
-                param_copy.ref   = param.ref.affine_transform(loc=-loc_arr / scale_arr, scale=1. / scale_arr)
-            self._transformed_params.set(param_copy)
+            loc_p   = self._loc[col:col + size].reshape(param.shape or ())
+            scale_p = self._scale[col:col + size].reshape(param.shape or ())
+            prior = param.prior.affine_transform(loc=-loc_p / scale_p, scale=1. / scale_p)
+            ref   = param.ref.affine_transform(loc=-loc_p / scale_p, scale=1. / scale_p)
+            self._transformed_params.set(param.clone(prior=prior, ref=ref))
 
     def _forward(self, x):
         """Rescaled → original space along the last axis.
@@ -398,19 +390,23 @@ class BaseSampler(ABC):
         return jnp.concatenate(result)
 
     def _compute_prior_one(self, sample):
-        """Return the log-prior for a single rescaled-space ``(ndim,)`` sample (Parameter priors only).
+        """Return the log-prior for a single rescaled-space ``(ndim,)`` sample.
 
-        The sample is mapped back to original space before evaluating the original priors,
-        so the log-prior is consistent with the posterior's internal prior.
+        Evaluates ``_transformed_params`` priors directly in rescaled space, matching
+        the density implied by :meth:`_prior_transform_one` (exact inverse pair).
 
         Warning
         -------
         This is *not* necessarily the real prior, which may be more complex.
         """
-        sample = _flat_to_dict(self._forward(sample), self.varied_params)
-        return sum((param.prior.logpdf(sample[param.name])
-                    for param in self.varied_params if param.prior is not None),
-                   jnp.array(0.))
+        result = jnp.array(0.)
+        for param, size, col in _param_sizes(self._transformed_params):
+            if param.prior is None:
+                continue
+            chunk = sample[col:col + size]
+            chunk = chunk.reshape(param.shape) if param.shape else chunk[0]
+            result = result + param.prior.logpdf(chunk)
+        return result
 
     def _compute_posterior_one(self, sample):
         """Return ``(log_posterior, derived_flat)`` for a single rescaled-space ``(ndim,)`` sample."""

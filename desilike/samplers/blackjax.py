@@ -253,11 +253,12 @@ class BlackJAXSampler(MarkovChainSampler):
                 imm = np.asarray(self.kernel_args['inverse_mass_matrix'])
                 if imm.ndim == 2:
                     eig = np.linalg.eigvalsh(imm)
-                    self.logger.info('inverse_mass_matrix eigenvalues: min %.3g, max %.3g, cond %.3g'
-                                 % (eig.min(), eig.max(), eig.max() / eig.min()))
+                    self.logger.info('inverse_mass_matrix eigenvalues: min %.3g, max %.3g, cond %.3g, det^{1/n} %.3g'
+                                 % (eig.min(), eig.max(), eig.max() / eig.min(), eig.prod()**(1. / len(eig))))
                 else:
                     imm = imm.ravel()
-                    self.logger.info('inverse_mass_matrix: min %.3g, max %.3g' % (imm.min(), imm.max()))
+                    self.logger.info('inverse_mass_matrix: min %.3g, max %.3g, det^{1/n} %.3g'
+                                 % (imm.min(), imm.max(), imm.prod()**(1. / len(imm))))
         else:
             self.pool.wait()
 
@@ -410,3 +411,76 @@ class MCLMCSampler(BlackJAXSampler):
 
         super().__init__(posterior, nchains=nchains, chains=chains, rng=rng,
                          directory=directory, rescale=rescale, covariance=covariance)
+
+    def adapt_sampler(self, **kwargs):
+        """Adapt ``L`` and ``step_size`` via ``blackjax.mclmc_find_L_and_step_size``.
+
+        Parameters
+        ----------
+        steps : int
+            Number of steps to use for the adaptation.
+        frac_tune1 : float, optional
+            Fraction of steps for the first tuning phase. Default is 0.1.
+        frac_tune2 : float, optional
+            Fraction of steps for the second tuning phase. Default is 0.1.
+        frac_tune3 : float, optional
+            Fraction of steps for the third (L-only) tuning phase. Default is 0.1.
+        desired_energy_var : float, optional
+            Target energy variance. Default is 5e-4.
+        trust_in_estimate : float, optional
+            Trust factor for the step-size heuristic. Default is 1.5.
+        num_effective_samples : int, optional
+            Number of effective samples used in the estimation. Default is 150.
+        diagonal_preconditioning : bool, optional
+            Adapt a diagonal preconditioning matrix. Default is ``True``.
+
+        """
+        if self.pool.main:
+            import inspect
+            import blackjax.mcmc.mclmc as mclmc_mod
+            steps = kwargs.pop('steps')
+
+            if not hasattr(self, 'blackjax_state'):
+                initial_position = _flat_to_dict(self.state[0], self.varied_params)
+                rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
+                self.blackjax_state = self.kernel.init(initial_position, rng_key)
+
+            rng_key = jax.random.PRNGKey(self.rng.integers(2**32))
+
+            # The mass-matrix kwarg of build_kernel/as_top_level_api changed between
+            # blackjax versions: 'sqrt_diag_cov' (< 1.3) vs 'inverse_mass_matrix' (>= 1.3).
+            # Pass the mass matrix positionally to build_kernel to stay version-agnostic.
+            _mass_matrix_kwarg = (
+                'inverse_mass_matrix'
+                if 'inverse_mass_matrix' in inspect.signature(mclmc_mod.as_top_level_api).parameters
+                else 'sqrt_diag_cov'
+            )
+
+            def mclmc_kernel_factory(mass_matrix):
+                return mclmc_mod.build_kernel(
+                    self.compute_posterior_without_derived,
+                    mass_matrix,   # positional — field name differs across blackjax versions
+                    mclmc_mod.isokinetic_mclachlan,
+                )
+
+            # blackjax < 1.3 returns (state, params); >= 1.3 returns (state, params, extra).
+            state, params, *_ = self.adaptation_fn(
+                mclmc_kernel_factory, num_steps=steps,
+                state=self.blackjax_state, rng_key=rng_key, **kwargs)
+
+            self.kernel_args.update(dict(L=float(params.L), step_size=float(params.step_size)))
+            adapted_mass_matrix = np.asarray(getattr(params, _mass_matrix_kwarg))
+            self.kernel = self.kernel_type(
+                self.compute_posterior_without_derived,
+                **self.kernel_args, **self.fixed_kernel_args,
+                **{_mass_matrix_kwarg: adapted_mass_matrix})
+            self.make_steps = make_steps_factory(self.kernel.step)
+            self.blackjax_state = state
+            self.pool.stop_wait()
+            self.logger.info('Adaptation done.')
+            self.logger.info('L: %.3g  step_size: %.3g', self.kernel_args['L'], self.kernel_args['step_size'])
+            imm = adapted_mass_matrix.ravel()
+            self.logger.info('mass_matrix (%s): min %.3g, max %.3g, det^{1/n} %.3g'
+                             % (_mass_matrix_kwarg, imm.min(), imm.max(), imm.prod() ** (1. / len(imm))))
+        else:
+            self.pool.wait()

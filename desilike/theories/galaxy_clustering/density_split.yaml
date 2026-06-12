@@ -1,0 +1,80 @@
+class: DensitySplitTracerPowerSpectrumMultipoles
+
+params:
+  b1:
+    value: 2.0
+    prior:
+      limits: [0.1, 4.]
+    ref:
+      limits: [1.5, 2.5]
+    latex: b_{1}
+  bq1:
+    value: -1.6
+    prior:
+      limits: [-4., 4.]
+    ref:
+      limits: [-1.8, -1.4]
+    latex: b_{q,1}
+  bq2:
+    value: -0.8
+    prior:
+      limits: [-4., 4.]
+    ref:
+      limits: [-1., -0.6]
+    latex: b_{q,2}
+  bq3:
+    value: 0.0
+    prior:
+      limits: [-4., 4.]
+    ref:
+      limits: [-0.2, 0.2]
+    latex: b_{q,3}
+  bq4:
+    value: 0.8
+    prior:
+      limits: [-4., 4.]
+    ref:
+      limits: [0.6, 1.]
+    latex: b_{q,4}
+  bq5:
+    value: 1.6
+    prior:
+      limits: [-4., 4.]
+    ref:
+      limits: [1.4, 1.8]
+    latex: b_{q,5}
+  beta1:
+    value: -0.8
+    prior:
+      limits: [-3., 3.]
+    ref:
+      limits: [-1., -0.6]
+    latex: \beta_{1}
+  beta2:
+    value: -0.4
+    prior:
+      limits: [-3., 3.]
+    ref:
+      limits: [-0.6, -0.2]
+    latex: \beta_{2}
+  beta3:
+    value: 0.0
+    prior:
+      limits: [-3., 3.]
+    ref:
+      limits: [-0.2, 0.2]
+    latex: \beta_{3}
+  beta4:
+    value: 0.4
+    prior:
+      limits: [-3., 3.]
+    ref:
+      limits: [0.2, 0.6]
+    latex: \beta_{4}
+  beta5:
+    value: 0.8
+    prior:
+      limits: [-3., 3.]
+    ref:
+      limits: [0.6, 1.]
+    latex: \beta_{5}

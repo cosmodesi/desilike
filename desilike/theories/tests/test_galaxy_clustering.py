@@ -134,6 +134,47 @@ def test_templates():
         extractor()
 
 
+def test_density_split():
+    from desilike import BaseCalculator
+    from desilike.theories.galaxy_clustering.base import ap_k_mu
+    from desilike.theories.galaxy_clustering import DensitySplitTracerPowerSpectrumMultipoles
+
+    class LinearPowerTemplate(BaseCalculator):
+
+        config_fn = None
+
+        def initialize(self, k=None, z=1.):
+            if k is None:
+                k = np.geomspace(1e-3, 1., 128)
+            self.k = np.array(k, dtype='f8')
+            self.z = np.asarray(z, dtype='f8')
+
+        def calculate(self):
+            self.pk_dd = 1e4 * (self.k / 0.1)**-1
+            self.f = 0.8
+
+        def ap_k_mu(self, k, mu):
+            return ap_k_mu(k, mu)
+
+    k = np.linspace(0.02, 0.2, 16)
+    theory = DensitySplitTracerPowerSpectrumMultipoles(k=k, template=LinearPowerTemplate())
+    power = theory()
+    assert power.shape == (5, 3, len(k))
+    assert np.isfinite(power).all()
+
+    theory = DensitySplitTracerPowerSpectrumMultipoles(k=k, ells=(0, 2), quantiles=(1, 3, 5), template=LinearPowerTemplate())
+    power = theory()
+    assert power.shape == (3, 2, len(k))
+    basenames = set(theory.runtime_info.params.basenames())
+    assert {'b1', 'bq1', 'bq3', 'bq5', 'beta1', 'beta3', 'beta5'} <= basenames
+    assert 'bq2' not in basenames
+    assert 'beta2' not in basenames
+
+    unsmoothed = DensitySplitTracerPowerSpectrumMultipoles(k=k, quantiles=(5,), smoothing_radius=1e-9, template=LinearPowerTemplate())()
+    smoothed = DensitySplitTracerPowerSpectrumMultipoles(k=k, quantiles=(5,), smoothing_radius=10., template=LinearPowerTemplate())()
+    assert np.all(np.abs(smoothed[0, :, -1]) < np.abs(unsmoothed[0, :, -1]))
+
+
 def test_wiggle_split_template():
 
     from matplotlib import pyplot as plt

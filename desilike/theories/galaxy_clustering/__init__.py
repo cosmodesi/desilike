@@ -10,6 +10,7 @@ from .full_shape import (SimpleTracerPowerSpectrumMultipoles, KaiserTracerPowerS
                          FOLPSTracerPowerSpectrumMultipoles, FOLPSTracerCorrelationFunctionMultipoles,
                          FOLPSv2TracerPowerSpectrumMultipoles, FOLPSv2TracerBispectrumMultipoles,
                          GeoFPTAXTracerBispectrumMultipoles, JAXEffortTracerPowerSpectrumMultipoles)
+from .density_split import DensitySplitTracerPowerSpectrumMultipoles
 from .png import PNGTracerPowerSpectrumMultipoles, PNGTracerVelocityPowerSpectrumMultipoles
 from .power_template import (FixedPowerSpectrumTemplate, DirectPowerSpectrumTemplate,
                              BAOPowerSpectrumTemplate, BAOPhaseShiftPowerSpectrumTemplate, StandardPowerSpectrumTemplate, ShapeFitPowerSpectrumTemplate, WiggleSplitPowerSpectrumTemplate, BandVelocityPowerSpectrumTemplate, TurnOverPowerSpectrumTemplate, DirectWiggleSplitPowerSpectrumTemplate,

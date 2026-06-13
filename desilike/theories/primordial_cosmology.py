@@ -201,7 +201,7 @@ class CosmoprimoCosmology(Calculator):
     def tree_flatten(self):
         # Expose the parameter vector that defines the cosmology as the single array
         # output.  This is what actually changes between calls; it also guarantees the
-        # ExternalCalculator's pure_callback has a non-empty output (an empty output is
+        # pure_callback has a non-empty output (an empty output is
         # elided by XLA, so __call__ would never run).  Downstream calculators still read
         # the live ``self.cosmo`` object set as a side effect of __call__.
         marker = jnp.concatenate([jnp.ravel(jnp.asarray(param.value)) for param in self.params.values()])

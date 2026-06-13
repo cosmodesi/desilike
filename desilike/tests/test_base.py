@@ -7,7 +7,7 @@ import jax.numpy as jnp
 
 jax.config.update('jax_enable_x64', True)
 
-from desilike.base import Calculator, ExternalCalculator, Likelihood, GaussianLikelihood, SumLikelihood, Prior, Posterior, CompiledGraph, compile, pmap
+from desilike.base import Calculator, Likelihood, GaussianLikelihood, SumLikelihood, Prior, Posterior, CompiledGraph, compile, pmap
 from desilike.parameter import Parameter
 
 
@@ -19,8 +19,9 @@ DATA = jnp.array(np.random.default_rng(0).normal(1.0, 0.1, len(K)))
 
 # ── toy calculators ───────────────────────────────────────────────────────────
 
-class Cosmology(ExternalCalculator):
+class Cosmology(Calculator):
     """Non-JAX: growth_factor = omega_m^0.55 / (1 + z), growth_rate = omega_m^0.55."""
+    _is_external = True
     _call_count = 0
 
     def __init__(self, omega_m, z):
@@ -190,7 +191,7 @@ def test_jit_grad(pipeline):
 
 
 def test_jacrev_external():
-    """jax.jacobian (jacrev) gives correct Jacobian for ExternalCalculator pipelines."""
+    """jax.jacobian (jacrev) gives correct Jacobian for external (_is_external=True) pipelines."""
     _, _, _, _, _, spectrum, likelihood = _make_nodes()
     pipe_pk = compile(likelihood, output=lambda: spectrum.pk)
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
@@ -207,7 +208,7 @@ def test_jacrev_external():
 
 
 def test_jacfwd_grad_external():
-    """jax.jacfwd(jax.grad(pipe)) works for ExternalCalculator pipelines via custom_jvp FD rule."""
+    """jax.jacfwd(jax.grad(pipe)) works for external (_is_external=True) pipelines via custom_jvp FD rule."""
     pipe = compile(_make_nodes()[-1])
     params = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
     grad_fn = jax.grad(pipe)
@@ -226,10 +227,12 @@ def test_jacfwd_grad_external():
 # ── caching ───────────────────────────────────────────────────────────────────
 
 def test_external_cache():
-    """ExternalCalculator() skipped when params and deps unchanged."""
+    """external (_is_external=True)() skipped when params and deps unchanged."""
     _call_count = [0]
 
-    class CountedCosmology(ExternalCalculator):
+    class CountedCosmology(Calculator):
+        _is_external = True
+
         def __init__(self, omega_m, z):
             self.omega_m = omega_m
             self.z = z
@@ -393,9 +396,11 @@ def test_array_param_jax():
 
 
 def test_array_param_external():
-    """ExternalCalculator: array-valued parameter (k-weights) FD grad is correct."""
+    """external (_is_external=True): array-valued parameter (k-weights) FD grad is correct."""
 
-    class WeightedCosmology(ExternalCalculator):
+    class WeightedCosmology(Calculator):
+        _is_external = True
+
         def __init__(self, omega_m, k_weights):
             self.omega_m = omega_m
             self.k_weights = k_weights
@@ -453,7 +458,9 @@ def test_array_param_external():
 def test_internal_init():
     """Calculator and Parameter objects created inside init() are auto-discovered."""
 
-    class InternalCosmology(ExternalCalculator):
+    class InternalCosmology(Calculator):
+        _is_external = True
+
         def __init__(self):
             self.omega_m = Parameter('omega_m', value=0.3)
             self.z = Parameter('z', value=0.5)
@@ -505,7 +512,9 @@ def test_duplicate_param_name_auto_shared():
     automatically (first-seen wins), equivalent to an implicit share_params() call.
     """
 
-    class DupCosmology(ExternalCalculator):
+    class DupCosmology(Calculator):
+        _is_external = True
+
         def __init__(self):
             self.omega_m = Parameter('omega_m', value=0.3)
 
@@ -552,7 +561,9 @@ def test_duplicate_param_name_auto_shared():
 def test_fd_acc():
     """param.fd_acc=4 gives smaller gradient error than fd_acc=2 at the same large step size."""
 
-    class SinCosmology(ExternalCalculator):
+    class SinCosmology(Calculator):
+        _is_external = True
+
         def __init__(self, omega_m):
             self.omega_m = omega_m
 

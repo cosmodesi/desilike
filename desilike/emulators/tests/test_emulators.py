@@ -18,7 +18,7 @@ import jax.numpy as jnp
 jax.config.update('jax_enable_x64', True)
 
 from desilike import compile, TaylorEmulator
-from desilike.base import Calculator, ExternalCalculator
+from desilike.base import Calculator
 from desilike.parameter import Parameter
 
 
@@ -64,8 +64,9 @@ class QuadraticModel(Calculator):
                 + c[3] * a ** 2 + c[4] * a * b + c[5] * b ** 2)
 
 
-class GrowthCalculator(ExternalCalculator):
-    """Simulates an external (non-JAX) cosmology code: D(omega_m) = omega_m**0.55."""
+class GrowthCalculator(Calculator):
+    """Simulates a non-JAX cosmology code: D(omega_m) = omega_m**0.55."""
+    _is_external = True
 
     def __init__(self, omega_m):
         self.omega_m = omega_m
@@ -241,7 +242,7 @@ def test_taylor_custom_to_calculator():
 
 
 def test_taylor_custom_external():
-    """TaylorEmulator works with ExternalCalculator (FD path) upstream."""
+    """TaylorEmulator works with external (_is_external=True, FD path) upstream."""
     pipe = _make_powerlaw_graph()
     center = {p.name: p.value for p in pipe.params}
     emu = TaylorEmulator(pipe, order=2)

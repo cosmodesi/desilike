@@ -1,41 +1,66 @@
 Samplers
 ========
 
-Static Samplers
----------------
+The unified entry point is the :func:`~desilike.samplers.Sampler` factory, which
+selects the right infrastructure class based on the kernel passed to it.  Kernels
+are plain configuration objects; the sampler base classes handle MPI, chain I/O,
+and convergence checking.
+
+Factory
+-------
+
+.. autosummary::
+  :toctree: _autosummary
+
+  desilike.samplers.Sampler
+
+Static Kernels
+--------------
 
 .. autosummary::
   :toctree: _autosummary
   :template: class.rst
 
-  desilike.samplers.GridSampler
-  desilike.samplers.ImportanceSampler
-  desilike.samplers.QMCSampler
+  desilike.samplers.Grid
+  desilike.samplers.QMC
+  desilike.samplers.Importance
 
-Population Samplers
--------------------
-
-.. autosummary::
-  :toctree: _autosummary
-  :template: class.rst
-
-  desilike.samplers.DynestySampler
-  desilike.samplers.NautilusSampler
-  desilike.samplers.PocoMCSampler
-
-MCMC Samplers
--------------
+Population Kernels
+------------------
 
 .. autosummary::
   :toctree: _autosummary
   :template: class.rst
 
-  desilike.samplers.EmceeSampler
-  desilike.samplers.HMCSampler
-  desilike.samplers.MCLMCSampler
-  desilike.samplers.MetropolisHastingsSampler
-  desilike.samplers.NoUTurnSampler
-  desilike.samplers.ZeusSampler
+  desilike.samplers.Dynesty
+  desilike.samplers.Nautilus
+  desilike.samplers.PocoMC
+
+MCMC Kernels
+------------
+
+.. autosummary::
+  :toctree: _autosummary
+  :template: class.rst
+
+  desilike.samplers.MH
+  desilike.samplers.BlackjaxHMC
+  desilike.samplers.BlackjaxNUTS
+  desilike.samplers.BlackjaxMCLMC
+  desilike.samplers.NumpyroNUTS
+  desilike.samplers.NumpyroHMC
+  desilike.samplers.NumpyroBarkerMH
+  desilike.samplers.NumpyroSA
+
+Ensemble Kernels
+----------------
+
+.. autosummary::
+  :toctree: _autosummary
+  :template: class.rst
+
+  desilike.samplers.Emcee
+  desilike.samplers.Zeus
 
 Base Classes
 ------------
@@ -44,8 +69,10 @@ Base Classes
   :toctree: _autosummary
   :template: class.rst
 
-  desilike.samplers.base.BaseSampler
-  desilike.samplers.blackjax.BlackJAXSampler
-  desilike.samplers.base.MarkovChainSampler
+  desilike.samplers.base.MCMCSampler
+  desilike.samplers.base.EnsembleSampler
   desilike.samplers.base.PopulationSampler
   desilike.samplers.base.StaticSampler
+  desilike.samplers.base.Kernel
+  desilike.samplers.base.PopulationKernel
+  desilike.samplers.base.StaticKernel

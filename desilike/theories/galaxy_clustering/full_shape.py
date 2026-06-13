@@ -24,7 +24,7 @@ import interpax
 
 import os
 
-from ...base import Calculator, ExternalCalculator
+from ...base import Calculator
 from ...parameter import Parameter, VariableCollection
 from .bao import ProjectToPoles, SpectrumToCorrelation
 from .template import DirectSpectrum2Template, _ap_k_mu
@@ -769,9 +769,9 @@ class TNSTracerCorrelation2Poles(Calculator):
         return obj
 
 
-class LPTVelocileptorsPTSpectrum2Poles(ExternalCalculator):
+class LPTVelocileptorsPTSpectrum2Poles(Calculator):
     r"""
-    Velocileptors LPT matter power spectrum multipoles (ExternalCalculator).
+    Velocileptors LPT matter power spectrum multipoles (non-JAX).
 
     Wraps ``velocileptors.LPT.lpt_rsd_fftw.LPT_RSD``.
     Exposes ``table`` (shape ``(n_ells, n_k, 19)``), ``sigma8``, ``fsigma8``.
@@ -788,6 +788,7 @@ class LPTVelocileptorsPTSpectrum2Poles(ExternalCalculator):
         Velocileptors options: ``use_Pzel``, ``kIR``, ``cutoff``, ``extrap_min``, ``extrap_max``, ``N``, ``jn``, ``nthreads``.
     """
 
+    _is_external = True
     _lpt_defaults = dict(use_Pzel=False, kIR=0.2, cutoff=10, extrap_min=-5, extrap_max=3, N=4000, jn=5)
 
     @classmethod
@@ -981,9 +982,9 @@ class LPTVelocileptorsTracerCorrelation2Poles(Calculator):
         return obj
 
 
-class REPTVelocileptorsPTSpectrum2Poles(ExternalCalculator):
+class REPTVelocileptorsPTSpectrum2Poles(Calculator):
     r"""
-    Velocileptors REPT matter power spectrum multipoles (ExternalCalculator).
+    Velocileptors REPT matter power spectrum multipoles (non-JAX).
 
     Wraps ``velocileptors.EPT.ept_fullresum_varyDz_nu_fftw.REPT``.
     Exposes ``table`` (shape ``(n_ells, n_k, 19)``), ``sigma8``, ``fsigma8``.
@@ -999,6 +1000,7 @@ class REPTVelocileptorsPTSpectrum2Poles(ExternalCalculator):
         REPT options: ``rbao``, ``sbao``, ``beyond_gauss``, ``one_loop``, ``shear``, ``cutoff``, ``jn``, ``N``, ``extrap_min``, ``extrap_max``, ``import_wisdom``, ``nthreads``.
     """
 
+    _is_external = True
     _rept_defaults = dict(rbao=110, sbao=None, beyond_gauss=True, one_loop=True, shear=True, cutoff=20, jn=5, N=4000, extrap_min=-4, extrap_max=3, import_wisdom=False)
 
     @classmethod
@@ -1187,9 +1189,9 @@ class REPTVelocileptorsTracerCorrelation2Poles(Calculator):
         return obj
 
 
-class PyBirdPTSpectrum2Poles(ExternalCalculator):
+class PyBirdPTSpectrum2Poles(Calculator):
     r"""
-    PyBird matter power spectrum multipoles (ExternalCalculator).
+    PyBird matter power spectrum multipoles (non-JAX).
 
     Wraps ``pybird.bird.Bird`` + pybird loop integrals.
     Exposes ``P11l``, ``Ploopl``, ``Pctl``, ``Pstl``, ``Pnnlol`` arrays and metadata.
@@ -1208,6 +1210,8 @@ class PyBirdPTSpectrum2Poles(ExternalCalculator):
     with_ap : bool, default=True
     eft_basis : str, default='eftoflss'
     """
+
+    _is_external = True
 
     @classmethod
     def install(cls, installer):
@@ -1499,9 +1503,9 @@ class PyBirdTracerSpectrum2Poles(Calculator):
         return obj
 
 
-class PyBirdPTCorrelation2Poles(ExternalCalculator):
+class PyBirdPTCorrelation2Poles(Calculator):
     r"""
-    PyBird matter correlation function multipoles (ExternalCalculator).
+    PyBird matter correlation function multipoles (non-JAX).
 
     Parameters
     ----------
@@ -1510,6 +1514,8 @@ class PyBirdPTCorrelation2Poles(ExternalCalculator):
     ells : tuple of int, default=(0, 2, 4)
     km, kr, accboost, fftaccboost, fftbias, with_nnlo_counterterm, with_stoch, with_resum, with_ap, eft_basis : same as PyBirdPTSpectrum2Poles.
     """
+
+    _is_external = True
 
     @classmethod
     def install(cls, installer):
@@ -2151,7 +2157,7 @@ def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
     return jnp.array(toret)
 
 
-class FOLPSTracerSpectrum3Poles(ExternalCalculator):
+class FOLPSTracerSpectrum3Poles(Calculator):
     r"""
     FOLPS tracer bispectrum multipoles.
 
@@ -2349,7 +2355,7 @@ class FOLPSTracerSpectrum3Poles(ExternalCalculator):
         return obj
 
 
-class JAXEffortTracerSpectrum2Poles(ExternalCalculator):
+class JAXEffortTracerSpectrum2Poles(Calculator):
     r"""
     Tracer power-spectrum multipoles from a JAXEffort emulator.
 
@@ -2358,9 +2364,9 @@ class JAXEffortTracerSpectrum2Poles(ExternalCalculator):
     Growth ``D(z)`` and Alcock-Paczynski distortion are computed from a JAXEffort
     ``w0waCDMCosmology`` object built from those parameters.
 
-    Implemented as an :class:`~desilike.base.ExternalCalculator` (finite-difference
-    gradients): JAXEffort's growth ``D_z`` is a reverse-mode-only ``custom_vjp``, which
-    is incompatible with the pipeline's forward-mode AD for JAX calculators.
+    Uses ``_is_external = True`` (finite-difference gradients): JAXEffort's growth ``D_z``
+    is a reverse-mode-only ``custom_vjp``, which is incompatible with the pipeline's
+    forward-mode AD for JAX calculators.
 
     Bias parameters use the velocileptors (rept/lpt) standard basis
     ``[b1, b2, bs, b3, alpha0, alpha2, alpha4, alpha6, sn0, sn2, sn4]``.

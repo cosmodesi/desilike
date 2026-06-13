@@ -140,7 +140,7 @@ class Kernel:
     A kernel encapsulates the sampling algorithm.  The surrounding
     :class:`MCMCSampler` (or :class:`EnsembleSampler`) owns all
     infrastructure: chain accumulation, convergence checks, MPI, rescaling
-    and directory I/O.
+    and output_dir I/O.
 
     Kernels are stateful: :meth:`init` must be called once before any
     :meth:`run` call, and the kernel retains its internal state (current
@@ -220,7 +220,7 @@ class Kernel:
         """
 
 
-class NestedKernel:
+class PopulationKernel:
     """Abstract base class for nested / population sampling kernels.
 
     Unlike :class:`Kernel` (MCMC), these kernels receive the sampling
@@ -228,11 +228,11 @@ class NestedKernel:
     the infrastructure class can materialise batched / pool-aware versions
     before each run.
 
-    A :class:`NestedKernel` subclass should override :meth:`run` and set
+    A :class:`PopulationKernel` subclass should override :meth:`run` and set
     ``_sampler_cls = 'PopulationSampler'`` (the default).
     """
 
-    logger = logging.getLogger('NestedKernel')
+    logger = logging.getLogger('PopulationKernel')
     _sampler_cls = 'PopulationSampler'
 
     def run(self, likelihood_logpdf, prior, **kwargs):
@@ -259,8 +259,8 @@ class NestedKernel:
             Random-number generator for the main process.
         ndim : int
             Dimensionality of the parameter space.
-        directory : Path or None
-            Checkpoint directory.
+        output_dir : Path or None
+            Checkpoint output_dir.
         **kwargs : dict
             Run-time options forwarded to the underlying sampler's ``run``
             method.
@@ -344,7 +344,7 @@ class BaseSampler(ABC):
     logger = logging.getLogger('BaseSampler')
 
     @default_mpicomm
-    def __init__(self, posterior, rng=None, mpicomm=None, directory=None,
+    def __init__(self, posterior, rng=None, mpicomm=None, output_dir=None,
                  rescale=False, covariance=None, batch_size=None):
         """
         Parameters
@@ -356,7 +356,7 @@ class BaseSampler(ABC):
         mpicomm : MPI communicator, optional
             Communicator for pool parallelism.  Defaults to
             ``desilike.mpi.COMM_WORLD``.
-        directory : str, Path, or None
+        output_dir : str, Path, or None
             Save samples to this folder.  Default is ``None``.
         rescale : bool
             Internally normalise parameters so that their expected variation
@@ -401,23 +401,23 @@ class BaseSampler(ABC):
 
         self.set_pool(mpicomm=self.mpicomm, batch_size=batch_size)
 
-        # ── directory ────────────────────────────────────────────────────────
-        if directory is not None:
-            directory = Path(directory)
-            if directory.suffix:
-                raise ValueError('directory cannot have a suffix (must be a folder).')
+        # ── output_dir ────────────────────────────────────────────────────────
+        if output_dir is not None:
+            output_dir = Path(output_dir)
+            if output_dir.suffix:
+                raise ValueError('output_dir cannot have a suffix (must be a folder).')
             if self.mpicomm.rank == 0:
-                directory.mkdir(parents=True, exist_ok=True)
-        self.directory = directory
+                output_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir = output_dir
 
         if self.mpicomm.rank == 0:
             self.logger.info('Varied parameters: %s', self.varied_params.names())
-            if self.directory is not None:
-                self.logger.info('Samples will be written to: %s', self.directory)
+            if self.output_dir is not None:
+                self.logger.info('Samples will be written to: %s', self.output_dir)
 
         self.samples = None
 
-        if self.directory is not None:
+        if self.output_dir is not None:
             try:
                 self.read()
             except FileNotFoundError:
@@ -709,17 +709,17 @@ class BaseSampler(ABC):
     def write(self):
         """Write sampler state to disk."""
         if self.pool.main:
-            with open(self.directory / 'rng.json', 'w') as fstream:
+            with open(self.output_dir / 'rng.json', 'w') as fstream:
                 json.dump(self.rng.bit_generator.state, fstream)
-                self.samples.write(self.directory / 'samples.h5')
+                self.samples.write(self.output_dir / 'samples.h5')
 
     def read(self):
         """Read sampler state from disk."""
         if self.pool.main:
-            with open(self.directory / 'rng.json', 'r') as fstream:
+            with open(self.output_dir / 'rng.json', 'r') as fstream:
                 self.rng = np.random.default_rng()
                 self.rng.bit_generator.state = json.load(fstream)
-                self.samples = MCSamples.read(self.directory / 'samples.h5')
+                self.samples = MCSamples.read(self.output_dir / 'samples.h5')
 
 
 # ── Static sampler ────────────────────────────────────────────────────────────
@@ -736,9 +736,9 @@ class StaticSampler(BaseSampler):
 
     @default_mpicomm
     def __init__(self, posterior, kernel=None, rng=None, mpicomm=None,
-                 directory=None, rescale=False, covariance=None, batch_size=None):
+                 output_dir=None, rescale=False, covariance=None, batch_size=None):
         self.kernel = kernel
-        super().__init__(posterior, rng=rng, mpicomm=mpicomm, directory=directory,
+        super().__init__(posterior, rng=rng, mpicomm=mpicomm, output_dir=output_dir,
                          rescale=rescale, covariance=covariance, batch_size=batch_size)
 
     def get_samples(self, **kwargs):
@@ -771,7 +771,7 @@ class StaticSampler(BaseSampler):
 
         if self.samples is not None and self.kernel is not None:
             self.samples = self.kernel.post_process(self.samples, **kwargs)
-        if self.directory is not None:
+        if self.output_dir is not None:
             self.write()
         return self.samples
 
@@ -791,7 +791,7 @@ class MCMCSampler(BaseSampler):
 
     @default_mpicomm
     def __init__(self, posterior, kernel, nparallel=1, chains=None, rng=None,
-                 mpicomm=None, directory=None, rescale=False, covariance=None,
+                 mpicomm=None, output_dir=None, rescale=False, covariance=None,
                  batch_size=None):
         """
         Parameters
@@ -808,7 +808,7 @@ class MCMCSampler(BaseSampler):
             Pre-existing chains to resume from.  Default is ``None``.
         rng : numpy.random.Generator, int, or None
         mpicomm : MPI communicator, optional
-        directory : str, Path, or None
+        output_dir : str, Path, or None
         rescale : bool
         covariance : array_like, optional
         batch_size : int or None, optional
@@ -833,7 +833,7 @@ class MCMCSampler(BaseSampler):
         input_chains, self.chain_ids = self.mpicomm.bcast((input_chains, chain_ids), root=0)
         self.nchains = len(self.chain_ids)
 
-        super().__init__(posterior, rng=rng, mpicomm=mpicomm, directory=directory,
+        super().__init__(posterior, rng=rng, mpicomm=mpicomm, output_dir=output_dir,
                          rescale=rescale, covariance=covariance, batch_size=batch_size)
 
         if input_chains:
@@ -1063,7 +1063,7 @@ class MCMCSampler(BaseSampler):
         initial_position = self.initialize_samples(max_init_attempts=max_init_attempts)
         self._thinning = int(thinning)
 
-        if self.directory is None:
+        if self.output_dir is None:
             save_every = check_every
 
         if adaptation is not None:
@@ -1102,10 +1102,10 @@ class MCMCSampler(BaseSampler):
                     burn_in=burn_in, gelman_rubin=gelman_rubin,
                     geweke=geweke, ess=ess))
 
-            if self.directory is not None and steps % save_every == 0:
+            if self.output_dir is not None and steps % save_every == 0:
                 self.write()
 
-        if self.directory is not None and steps % save_every != 0:
+        if self.output_dir is not None and steps % save_every != 0:
             self.write()
 
         all_chains = self.chains
@@ -1115,24 +1115,24 @@ class MCMCSampler(BaseSampler):
 
     def write(self):
         if self.pool.main:
-            with open(self.directory / f'rng_{self.chain_id}.json', 'w') as fstream:
+            with open(self.output_dir / f'rng_{self.chain_id}.json', 'w') as fstream:
                 json.dump(self.rng.bit_generator.state, fstream)
-            self._chain.write(self.directory / f'samples_{self.chain_id}.h5')
+            self._chain.write(self.output_dir / f'samples_{self.chain_id}.h5')
         if self.mpicomm.rank == 0:
-            with open(self.directory / 'checks.json', 'w') as fstream:
+            with open(self.output_dir / 'checks.json', 'w') as fstream:
                 json.dump(self.checks, fstream)
 
     def read(self):
         if self.pool.main:
-            rng_path     = self.directory / f'rng_{self.chain_id}.json'
-            samples_path = self.directory / f'samples_{self.chain_id}.h5'
+            rng_path     = self.output_dir / f'rng_{self.chain_id}.json'
+            samples_path = self.output_dir / f'samples_{self.chain_id}.h5'
             if rng_path.exists():
                 with open(rng_path, 'r') as fstream:
                     self.rng = np.random.default_rng()
                     self.rng.bit_generator.state = json.load(fstream)
             if samples_path.exists():
                 self._chain = MCSamples.read(samples_path)
-        checks_path = self.directory / 'checks.json'
+        checks_path = self.output_dir / 'checks.json'
         if checks_path.exists():
             with open(checks_path, 'r') as fstream:
                 self.checks = json.load(fstream)
@@ -1154,7 +1154,7 @@ class EnsembleSampler(MCMCSampler):
 class PopulationSampler(BaseSampler):
     """Kernel-based infrastructure for nested / population samplers (dynesty, nautilus, pocomc, …).
 
-    Delegates entirely to a :class:`~desilike.samplers.kernels.base.NestedKernel`; the kernel
+    Delegates entirely to a :class:`~desilike.samplers.kernels.base.PopulationKernel`; the kernel
     receives batched, pool-aware callables at run time.
 
     Instantiate via the :func:`Sampler` factory rather than directly.
@@ -1162,19 +1162,19 @@ class PopulationSampler(BaseSampler):
 
     logger = logging.getLogger('PopulationSampler')
 
-    def __init__(self, posterior, kernel, rng=None, directory=None,
+    def __init__(self, posterior, kernel, rng=None, output_dir=None,
                  rescale=False, covariance=None, batch_size=None):
         self.kernel = kernel
         if batch_size is None:
             batch_size = getattr(kernel, '_batch_size', None)
-        super().__init__(posterior, rng=rng, directory=directory,
+        super().__init__(posterior, rng=rng, output_dir=output_dir,
                          rescale=rescale, covariance=covariance, batch_size=batch_size)
 
     def run(self, **kwargs):
         output = self.kernel.run(
             likelihood_logpdf=self.likelihood_logpdf,
             prior=(self.prior_logpdf, self.prior_rvs, self.prior_ppf),
-            pool=self.pool, rng=self.rng, ndim=self.ndim, directory=self.directory,
+            pool=self.pool, rng=self.rng, ndim=self.ndim, output_dir=self.output_dir,
             n_derived=self.n_derived, params=self._transformed_params,
             **kwargs,
         )
@@ -1183,19 +1183,19 @@ class PopulationSampler(BaseSampler):
             self.samples = self.array_to_samples(samples, derived, **extras)
         else:
             self.samples = None
-        if self.directory is not None:
+        if self.output_dir is not None:
             self.write()
         return self.samples
 
 
-def Sampler(posterior, kernel, nparallel=1, chains=None, rng=None, directory=None,
+def Sampler(posterior, kernel, nparallel=1, chains=None, rng=None, output_dir=None,
             rescale=False, covariance=None, batch_size=None):
     """Factory creating the appropriate infrastructure class for *kernel*.
 
     Parameters
     ----------
     posterior : CompiledGraph
-    kernel : Kernel, NestedKernel, or StaticKernel
+    kernel : Kernel, PopulationKernel, or StaticKernel
         Algorithm instance, e.g. ``BlackjaxHMC(step_size=1e-3)``, ``Emcee(nwalkers=32)``,
         ``Dynesty(dynamic=True)``, ``Grid()``, ``QMC()``, ``Importance()``.
     nparallel : int
@@ -1205,20 +1205,20 @@ def Sampler(posterior, kernel, nparallel=1, chains=None, rng=None, directory=Non
         Pre-existing chains to resume from.  Ignored for :class:`PopulationSampler`
         and :class:`StaticSampler`.  Default is ``None``.
     rng : int or numpy.random.Generator or None
-    directory : str or Path or None
+    output_dir : str or Path or None
     rescale : bool
     covariance : array_like or None
     batch_size : int or None
     """
     cls = _SAMPLER_REGISTRY[kernel._sampler_cls]
     if cls is PopulationSampler:
-        return cls(posterior, kernel=kernel, rng=rng, directory=directory,
+        return cls(posterior, kernel=kernel, rng=rng, output_dir=output_dir,
                    rescale=rescale, covariance=covariance, batch_size=batch_size)
     if cls is StaticSampler:
-        return cls(posterior, kernel=kernel, rng=rng, directory=directory,
+        return cls(posterior, kernel=kernel, rng=rng, output_dir=output_dir,
                    rescale=rescale, covariance=covariance)
     return cls(posterior, kernel=kernel, nparallel=nparallel, chains=chains,
-               rng=rng, directory=directory, rescale=rescale, covariance=covariance)
+               rng=rng, output_dir=output_dir, rescale=rescale, covariance=covariance)
 
 
 # Register here so kernel modules can look up these classes without a circular import.

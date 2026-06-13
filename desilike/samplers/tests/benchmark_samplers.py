@@ -293,7 +293,7 @@ def print_priors(params):
         print(f"{p.name:20} {str(p.prior):50} {str(p.ref):50} {p.derived}")
 
 
-def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', directory=None):
+def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', output_dir=None):
     """Build the posterior and run each requested sampler and profiler.
 
     Parameters
@@ -307,8 +307,8 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', dire
         ill-conditioned Gaussian, or a callable returning a ``Posterior``.
     marginalize : bool
         Analytically marginalize broadband parameters (BAO only).
-    directory : str or None
-        Root directory for sampler checkpoints.  ``None`` disables checkpointing.
+    output_dir : str or None
+        Root output_dir for sampler checkpoints.  ``None`` disables checkpointing.
     """
 
     profiler_posterior = compile(_build_posterior(posterior, marginalize=True))
@@ -370,8 +370,8 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', dire
             kernel, sampler_kwargs, run_kwargs = config[name]
 
             sampler_dir = None
-            if directory is not None:
-                sampler_dir = Path(directory) / name
+            if output_dir is not None:
+                sampler_dir = Path(output_dir) / name
 
             print(f'─── {name} {"─" * (50 - len(name))}')
             try:
@@ -387,7 +387,7 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', dire
                             param.update(ref=dict(dist='norm', loc=best[param.name], scale=error[param.name]))
                             print(param, param.ref)
 
-                sampler = samplers.Sampler(compile(sampler_posterior), kernel=kernel, directory=sampler_dir, **sampler_kwargs)
+                sampler = samplers.Sampler(compile(sampler_posterior), kernel=kernel, output_dir=sampler_dir, **sampler_kwargs)
                 t_start = time.perf_counter()
                 chain = sampler.run(**run_kwargs)
                 elapsed = time.perf_counter() - t_start
@@ -450,4 +450,4 @@ if __name__ == '__main__':
         run_benchmark(sampler_names=args.samplers,
                       profiler_names=args.profilers,
                       posterior=args.posterior,
-                      directory=tmpdir)
+                      output_dir=tmpdir)

@@ -256,7 +256,7 @@ class Profiler:
     covariance : array_like, optional
         ``(flat_size, flat_size)`` covariance used to set the rescaling scale.
         When ``None``, each parameter's ``ref.std()`` is used instead.
-    save_fn : str or Path, optional
+    output_fn : str or Path, optional
         If given, profiles are written here after every public method.
     mpicomm : MPI communicator, optional
         Communicator over which independent ``maximize`` runs are distributed,
@@ -272,7 +272,7 @@ class Profiler:
     Distribution is SPMD over ``mpicomm``: every rank runs ``maximize`` and its
     own slice of the starts (no pickling/dispatch — each rank already holds the
     function), then results are ``allgather``-ed so every rank holds the full,
-    identical result; only rank 0 writes ``save_fn``.
+    identical result; only rank 0 writes ``output_fn``.
     """
 
     logger = logging.getLogger('Profiler')
@@ -280,12 +280,12 @@ class Profiler:
     @default_mpicomm
     def __init__(self, likelihood, kernel, rng=None, max_tries=1000,
                  profiles=None, rescale=False, covariance=None,
-                 save_fn=None, mpicomm=None):
+                 output_fn=None, mpicomm=None):
 
         self.likelihood = likelihood
         self.kernel     = kernel
         self.max_tries  = int(max_tries)
-        self.save_fn    = save_fn
+        self.output_fn    = output_fn
         self.mpicomm    = mpicomm
 
         # ── collect varied parameters ─────────────────────────────────────
@@ -294,8 +294,8 @@ class Profiler:
             raise ValueError('No varied parameters found in the likelihood.')
         if self.mpicomm.rank == 0:
             self.logger.info('Varied parameters: %s', self.varied_params.names())
-            if self.save_fn is not None:
-                self.logger.info('Profiles will be written to: %s', self.save_fn)
+            if self.output_fn is not None:
+                self.logger.info('Profiles will be written to: %s', self.output_fn)
 
         # ── flat parameter layout ─────────────────────────────────────────
         # Every parameter is flattened: shape () → 1 element, shape (n,) → n
@@ -606,8 +606,8 @@ class Profiler:
 
         self.profiles = (profiles if self.profiles is None
                          else Profiles.concatenate([self.profiles, profiles]))
-        if self.save_fn is not None and self.mpicomm.rank == 0:
-            self.profiles.write(self.save_fn)
+        if self.output_fn is not None and self.mpicomm.rank == 0:
+            self.profiles.write(self.output_fn)
         return self.profiles
 
     def covariance(self, **kwargs):
@@ -652,8 +652,8 @@ class Profiler:
         from ..samples import Covariance
         self.profiles.covariance = Covariance(cov_orig, params=list(self.varied_params))
 
-        if self.save_fn is not None and self.mpicomm.rank == 0:
-            self.profiles.write(self.save_fn)
+        if self.output_fn is not None and self.mpicomm.rank == 0:
+            self.profiles.write(self.output_fn)
         return self.profiles
 
     def interval(self, params=None, cl=1, niterations=1, xtol=1e-3, **kwargs):
@@ -741,8 +741,8 @@ class Profiler:
         else:
             self.profiles.interval.update(interval_dict)
 
-        if self.save_fn is not None and self.mpicomm.rank == 0:
-            self.profiles.write(self.save_fn)
+        if self.output_fn is not None and self.mpicomm.rank == 0:
+            self.profiles.write(self.output_fn)
         return self.profiles
 
     def contour(self, params=None, cl=1, niterations=1, size=50, xtol=1e-3, **kwargs):
@@ -855,8 +855,8 @@ class Profiler:
         else:
             self.profiles.contour[cl].update(contour_pairs)
 
-        if self.save_fn is not None and self.mpicomm.rank == 0:
-            self.profiles.write(self.save_fn)
+        if self.output_fn is not None and self.mpicomm.rank == 0:
+            self.profiles.write(self.output_fn)
         return self.profiles
 
     def profile(self, params=None, grid=None, size=30, cl=2, niterations=1, **kwargs):
@@ -913,8 +913,8 @@ class Profiler:
             self.profiles.profile = {}
         self.profiles.profile.update(profile_results)
 
-        if self.save_fn is not None and self.mpicomm.rank == 0:
-            self.profiles.write(self.save_fn)
+        if self.output_fn is not None and self.mpicomm.rank == 0:
+            self.profiles.write(self.output_fn)
         return self.profiles
 
     def grid(self, params=None, grid=None, size=10, cl=2, niterations=1, **kwargs):
@@ -974,8 +974,8 @@ class Profiler:
             'logpdf':  lp_grid,
         })
 
-        if self.save_fn is not None and self.mpicomm.rank == 0:
-            self.profiles.write(self.save_fn)
+        if self.output_fn is not None and self.mpicomm.rank == 0:
+            self.profiles.write(self.output_fn)
         return self.profiles
 
     # ── helpers ───────────────────────────────────────────────────────────────

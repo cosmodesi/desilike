@@ -1,7 +1,7 @@
 """desilike.samplers — wrappers for commonly used posterior samplers."""
 
 from .base import (Sampler, MCMCSampler, EnsembleSampler, PopulationSampler, StaticSampler,
-                   Kernel, NestedKernel, StaticKernel)
+                   Kernel, PopulationKernel, StaticKernel)
 from .emcee import Emcee
 from .zeus import Zeus
 from .mhmcmc import MetropolisHastings
@@ -21,7 +21,7 @@ __all__ = [
     'PopulationSampler',
     'StaticSampler',
     'Kernel',
-    'NestedKernel',
+    'PopulationKernel',
     'StaticKernel',
     'Emcee',
     'Zeus',

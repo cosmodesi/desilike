@@ -10,10 +10,10 @@ try:
 except ModuleNotFoundError:
     NAUTILUS_INSTALLED = False
 
-from .base import NestedKernel, update_kwargs
+from .base import PopulationKernel, update_kwargs
 
 
-class Nautilus(NestedKernel):
+class Nautilus(PopulationKernel):
     """Importance nested sampler via ``nautilus``.
 
     Requires two MPI pools: one for likelihood evaluations and one for
@@ -40,7 +40,7 @@ class Nautilus(NestedKernel):
         self._initialized = False
 
     def run(self, likelihood_logpdf, prior,
-            pool, rng, ndim, directory=None, n_derived=0, params=None, **kwargs):
+            pool, rng, ndim, output_dir=None, n_derived=0, params=None, **kwargs):
         if not NAUTILUS_INSTALLED:
             raise ImportError("The 'nautilus-sampler' package is required but not installed.")
 
@@ -58,7 +58,7 @@ class Nautilus(NestedKernel):
                     dict(**self._kwargs), 'nautilus',
                     prior=prior_ppf, likelihood=likelihood_logpdf, n_dim=ndim,
                     pass_dict=False,
-                    filepath=None if directory is None else directory / 'nautilus.h5',
+                    filepath=None if output_dir is None else output_dir / 'nautilus.h5',
                     pool=(pool, self._pool_sampler),
                     seed=rng.integers(2**32))
                 self._sampler = _nautilus.Sampler(**init_kwargs)

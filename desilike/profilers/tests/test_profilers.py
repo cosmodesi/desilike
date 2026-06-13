@@ -421,7 +421,7 @@ class TestIO:
 
     def test_save_and_reload(self, likelihood, profiler_name, tmp_path):
         fn  = str(tmp_path / 'profiles.h5')
-        p   = make_profiler(profiler_name, likelihood, save_fn=fn)
+        p   = make_profiler(profiler_name, likelihood, output_fn=fn)
         p.maximize(niterations=2)
         loaded = Profiles.read(fn)
         assert loaded.best is not None and 'x' in loaded.best

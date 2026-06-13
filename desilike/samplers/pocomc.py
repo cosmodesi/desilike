@@ -10,7 +10,7 @@ try:
 except ModuleNotFoundError:
     POCOMC_INSTALLED = False
 
-from .base import NestedKernel, update_kwargs
+from .base import PopulationKernel, update_kwargs
 
 
 class _Prior:
@@ -60,7 +60,7 @@ def _patch_save_state(pocomc_sampler):
     return _save_state_no_likelihood
 
 
-class PocoMC(NestedKernel):
+class PocoMC(PopulationKernel):
     """Preconditioned Monte Carlo sampler via ``pocomc``.
 
     .. rubric:: References
@@ -82,7 +82,7 @@ class PocoMC(NestedKernel):
         self._sampler = None
 
     def run(self, likelihood_logpdf, prior,
-            pool, rng, ndim, directory=None, n_derived=0, params=None, **kwargs):
+            pool, rng, ndim, output_dir=None, n_derived=0, params=None, **kwargs):
         if not POCOMC_INSTALLED:
             raise ImportError("The 'pocomc' package is required but not installed.")
 
@@ -104,17 +104,17 @@ class PocoMC(NestedKernel):
                     dict(**self._kwargs), 'pocoMC',
                     prior=prior_obj, likelihood=_likelihood_fn, n_dim=ndim,
                     pool=pool,
-                    output_dir=directory,
+                    output_dir=output_dir,
                     random_state=rng.integers(2**32 - 1))
                 self._sampler = _pocomc.Sampler(**init_kwargs)
 
                 _patch_save_state(self._sampler)
 
                 # Restore checkpoint if available.
-                if directory is not None:
+                if output_dir is not None:
                     filepath_max = None
                     state_max = -1
-                    for filepath in directory.glob('pmc_*.state'):
+                    for filepath in output_dir.glob('pmc_*.state'):
                         state = str(filepath.stem).split('_')[1]
                         if state == 'final':
                             filepath_max = filepath
@@ -134,7 +134,7 @@ class PocoMC(NestedKernel):
             run_kwargs = update_kwargs(
                 kwargs, 'pocoMC',
                 resume_state_path=None,
-                save_every=1 if directory is not None else None)
+                save_every=1 if output_dir is not None else None)
             self._sampler.run(**run_kwargs)
 
             if has_derived:

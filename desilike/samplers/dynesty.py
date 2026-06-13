@@ -10,10 +10,10 @@ try:
 except ModuleNotFoundError:
     DYNESTY_INSTALLED = False
 
-from .base import NestedKernel, update_kwargs
+from .base import PopulationKernel, update_kwargs
 
 
-class Dynesty(NestedKernel):
+class Dynesty(PopulationKernel):
     """Nested sampler via ``dynesty``.
 
     .. rubric:: References
@@ -40,11 +40,11 @@ class Dynesty(NestedKernel):
         self._sampler = None
 
     def run(self, likelihood_logpdf, prior,
-            pool, rng, ndim, directory=None, n_derived=0, params=None, **kwargs):
+            pool, rng, ndim, output_dir=None, n_derived=0, params=None, **kwargs):
         if not DYNESTY_INSTALLED:
             raise ImportError("The 'dynesty' package is required but not installed.")
 
-        if not self.dynamic and directory is not None:
+        if not self.dynamic and output_dir is not None:
             raise ValueError("dynesty does not support checkpointing for the static sampler.")
 
         prior_logpdf, prior_rvs, prior_ppf = prior
@@ -53,9 +53,9 @@ class Dynesty(NestedKernel):
             if self._sampler is None:
                 sampler_cls = (_dynesty.DynamicNestedSampler if self.dynamic
                                else _dynesty.NestedSampler)
-                if directory is not None:
+                if output_dir is not None:
                     try:
-                        self._sampler = sampler_cls.restore(str(directory / 'dynesty.pkl'))
+                        self._sampler = sampler_cls.restore(str(output_dir / 'dynesty.pkl'))
                         self._sampler.loglikelihood.loglikelihood = likelihood_logpdf
                         self._sampler.prior_transform = prior_ppf
                     except (FileNotFoundError, ValueError):
@@ -67,7 +67,7 @@ class Dynesty(NestedKernel):
                         ndim=ndim, blob=True, pool=pool, rstate=rng)
                     self._sampler = sampler_cls(**init_kwargs)
 
-            checkpoint_file = None if directory is None else str(directory / 'dynesty.pkl')
+            checkpoint_file = None if output_dir is None else str(output_dir / 'dynesty.pkl')
             run_kwargs = update_kwargs(kwargs, 'dynesty', checkpoint_file=checkpoint_file)
             self._sampler.run_nested(**run_kwargs)
             results = self._sampler.results

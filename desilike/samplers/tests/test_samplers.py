@@ -230,11 +230,11 @@ def test_kernel_write(likelihood, key, tmp_path):
         pytest.importorskip(KERNEL_OPTIONAL_DEPS[key])
 
     sampler_1 = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER[key](),
-                                  rng=42, directory=tmp_path)
+                                  rng=42, output_dir=tmp_path)
     results_1 = sampler_1.run(**KERNEL_KWARGS_RUN_FAST.get(key, {}))
 
     sampler_2 = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER[key](),
-                                  rng=43, directory=tmp_path)
+                                  rng=43, output_dir=tmp_path)
     results_2 = sampler_2.run(**KERNEL_KWARGS_RUN_FAST.get(key, {}))
 
     if sampler_1.mpicomm.rank == 0:

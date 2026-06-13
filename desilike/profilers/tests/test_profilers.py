@@ -17,12 +17,15 @@ from desilike.parameter import Parameter
 MU_X, MU_Y = 0.3, -0.7
 SX, SY     = 0.05, 0.1
 
-PROFILER_CLS = dict(
-    scipy=profilers.ScipyProfiler,
-    minuit=profilers.MinuitProfiler,
-    bobyqa=profilers.BOBYQAProfiler,
-    optax=profilers.OptaxProfiler)
+KERNEL_NAMES = ['scipy', 'minuit', 'bobyqa', 'optax']
 _VECTOR_PROFILER_NAMES = ['scipy', 'bobyqa']
+
+KERNELS = dict(
+    scipy  = lambda: profilers.Scipy(),
+    minuit = lambda: profilers.Minuit(),
+    bobyqa = lambda: profilers.BOBYQA(),
+    optax  = lambda: profilers.Optax(method='adam'),
+)
 
 
 @pytest.fixture
@@ -49,14 +52,12 @@ def likelihood():
     return compile(Posterior(Likelihood(x, y), Prior(x, y)))
 
 
-def make_profiler(key, likelihood, seed=42, **kwargs):
+def make_profiler(key, likelihood, rng=42, **kwargs):
     """Instantiate the named profiler, skipping the test if the backend is absent."""
     optional_deps = dict(minuit='iminuit', bobyqa='pybobyqa', optax='optax')
     if key in optional_deps:
         pytest.importorskip(optional_deps[key])
-    if key == 'optax':
-        return PROFILER_CLS[key](likelihood, seed=seed, method='adam', **kwargs)
-    return PROFILER_CLS[key](likelihood, seed=seed, **kwargs)
+    return profilers.Profiler(likelihood, kernel=KERNELS[key](), rng=rng, **kwargs)
 
 
 def make_vec_likelihood():
@@ -93,7 +94,7 @@ def vec_likelihood():
 
 # ── accuracy / solved / derived ───────────────────────────────────────────────
 
-@pytest.mark.parametrize('key', PROFILER_CLS.keys())
+@pytest.mark.parametrize('key', KERNEL_NAMES)
 def test_accuracy_and_derived(likelihood, key):
     """All profilers find the correct best-fit, errors, and derived parameter z."""
     p = make_profiler(key, likelihood)
@@ -134,15 +135,15 @@ def test_solved(likelihood, key):
 
 # ── construction ──────────────────────────────────────────────────────────────
 
-class TestBaseProfiler:
+class TestProfiler:
 
     def test_varied_params(self, likelihood):
-        assert profilers.ScipyProfiler(likelihood, seed=42).varied_params.names() == ['x', 'y']
+        assert profilers.Profiler(likelihood, kernel=profilers.Scipy(), rng=42).varied_params.names() == ['x', 'y']
 
     def test_transforms(self, likelihood):
         """Forward/backward transforms are inverses; rescale changes the scale."""
-        p_flat = profilers.ScipyProfiler(likelihood, seed=42)
-        p_resc = profilers.ScipyProfiler(likelihood, seed=42, rescale=True)
+        p_flat = profilers.Profiler(likelihood, kernel=profilers.Scipy(), rng=42)
+        p_resc = profilers.Profiler(likelihood, kernel=profilers.Scipy(), rng=42, rescale=True)
         x = np.array([0.5, -0.3])
         np.testing.assert_allclose(p_flat._forward(p_flat._backward(x)), x)
         np.testing.assert_allclose(p_flat._backward(p_flat._forward(x)), x)
@@ -151,7 +152,7 @@ class TestBaseProfiler:
 
     def test_chi2_and_starts(self, likelihood):
         """chi2 is zero at truth; _get_starts produces finite starting points."""
-        p = profilers.ScipyProfiler(likelihood, seed=42)
+        p = profilers.Profiler(likelihood, kernel=profilers.Scipy(), rng=42)
         truth_rescaled = p._backward(np.array([MU_X, MU_Y]))
         np.testing.assert_allclose(float(p._chi2_rescaled(truth_rescaled)), 0., atol=1e-12)
         assert p._jit_chi2 is not None and p._jit_chi2 is not p._chi2_rescaled
@@ -162,7 +163,7 @@ class TestBaseProfiler:
 
 # ── maximize ──────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize('profiler_name', PROFILER_CLS.keys())
+@pytest.mark.parametrize('profiler_name', KERNEL_NAMES)
 class TestMaximize:
 
     def _check(self, profiles, atol_bf=0.01):
@@ -188,14 +189,14 @@ class TestMaximize:
         assert profiles.nruns == 1
 
     def test_scipy_gradient(self, likelihood, profiler_name):
-        """Gradient-based L-BFGS-B maximisation (ScipyProfiler only)."""
-        p = profilers.ScipyProfiler(likelihood, seed=42, gradient=True, method='L-BFGS-B')
+        """Gradient-based L-BFGS-B maximisation (Scipy kernel only)."""
+        p = profilers.Profiler(likelihood, kernel=profilers.Scipy(method='L-BFGS-B', gradient=True), rng=42)
         self._check(p.maximize(niterations=2))
 
 
 # ── covariance ────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize('profiler_name', PROFILER_CLS.keys())
+@pytest.mark.parametrize('profiler_name', KERNEL_NAMES)
 class TestCovariance:
 
     def test_covariance(self, likelihood, profiler_name):
@@ -221,7 +222,7 @@ class TestCovariance:
 
 # ── interval ──────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize('profiler_name', PROFILER_CLS.keys())
+@pytest.mark.parametrize('profiler_name', KERNEL_NAMES)
 class TestInterval:
 
     def test_interval(self, likelihood, profiler_name):
@@ -260,7 +261,7 @@ class TestInterval:
         assert p.profiles.best is not None and p.profiles.interval is not None
 
     def test_interval_vector_param_raises(self, vec_likelihood, profiler_name):
-        p = profilers.ScipyProfiler(vec_likelihood, seed=0)
+        p = profilers.Profiler(vec_likelihood, kernel=profilers.Scipy(), rng=0)
         p.maximize(niterations=1)
         p.covariance()
         with pytest.raises(ValueError, match='scalar'):
@@ -269,7 +270,7 @@ class TestInterval:
 
 # ── contour ───────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize('profiler_name', PROFILER_CLS.keys())
+@pytest.mark.parametrize('profiler_name', KERNEL_NAMES)
 class TestContour:
 
     def test_contour(self, likelihood, profiler_name):
@@ -304,7 +305,7 @@ class TestContour:
         assert p.profiles.best is not None and p.profiles.contour is not None
 
     def test_contour_vector_param_raises(self, vec_likelihood, profiler_name):
-        p = profilers.ScipyProfiler(vec_likelihood, seed=0)
+        p = profilers.Profiler(vec_likelihood, kernel=profilers.Scipy(), rng=0)
         p.maximize(niterations=1)
         p.covariance()
         with pytest.raises(ValueError, match='scalar'):
@@ -313,7 +314,7 @@ class TestContour:
 
 # ── profile ───────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize('profiler_name', PROFILER_CLS.keys())
+@pytest.mark.parametrize('profiler_name', KERNEL_NAMES)
 class TestProfile:
 
     def test_profile(self, likelihood, profiler_name):
@@ -336,7 +337,7 @@ class TestProfile:
 
 # ── grid ──────────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize('profiler_name', PROFILER_CLS.keys())
+@pytest.mark.parametrize('profiler_name', KERNEL_NAMES)
 class TestGrid:
 
     def test_grid(self, likelihood, profiler_name):
@@ -355,7 +356,7 @@ class TestGrid:
 
 # ── Profiles.start ────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize('profiler_name', PROFILER_CLS.keys())
+@pytest.mark.parametrize('profiler_name', KERNEL_NAMES)
 class TestStart:
 
     def test_start(self, likelihood, profiler_name):
@@ -386,14 +387,14 @@ class TestVectorParams:
         return make_vec_likelihood()
 
     def test_flat_layout(self, vec_likelihood, profiler_name):
-        p = make_profiler(profiler_name, vec_likelihood, seed=0)
+        p = make_profiler(profiler_name, vec_likelihood, rng=0)
         assert p._flat_size == 3
         assert p._param_slices['v'] == slice(0, 2)
         assert p._param_slices['z'] == slice(2, 3)
 
     def test_maximize_and_start(self, vec_likelihood, profiler_name):
         """maximize() converges for vector param; start dict has the right shapes."""
-        p = make_profiler(profiler_name, vec_likelihood, seed=0)
+        p = make_profiler(profiler_name, vec_likelihood, rng=0)
         profiles = p.maximize(niterations=2)
         idx = profiles.argmax
         assert profiles.best['v'].shape == (profiles.nruns, 2)
@@ -404,7 +405,7 @@ class TestVectorParams:
 
     def test_profile_with_vector(self, vec_likelihood, profiler_name):
         """profile() raises for vector param; works for scalar param alongside vector."""
-        p = make_profiler(profiler_name, vec_likelihood, seed=0)
+        p = make_profiler(profiler_name, vec_likelihood, rng=0)
         p.maximize(niterations=2)
         p.covariance()
         with pytest.raises(ValueError, match='scalar'):
@@ -415,7 +416,7 @@ class TestVectorParams:
 
 # ── I/O roundtrip ─────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize('profiler_name', PROFILER_CLS.keys())
+@pytest.mark.parametrize('profiler_name', KERNEL_NAMES)
 class TestIO:
 
     def test_save_and_reload(self, likelihood, profiler_name, tmp_path):

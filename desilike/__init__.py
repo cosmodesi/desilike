@@ -6,7 +6,10 @@ from .base import Calculator, ExternalCalculator, CompiledGraph, Likelihood, Sum
 from .utils import read, write, setup_logging, round_measurement
 from .emulators import TaylorEmulator
 from .samples import Samples, MCSamples, Profiles, Covariance, Precision
-from .profilers import ScipyProfiler, MinuitProfiler, OptaxProfiler, BOBYQAProfiler
-from .samplers import (DynestySampler, EmceeSampler, GridSampler, HMCSampler,
-                       ImportanceSampler, MCLMCSampler, MetropolisHastingsSampler,
-                       NautilusSampler, NoUTurnSampler, PocoMCSampler, QMCSampler, ZeusSampler)
+from .profilers import Profiler, Scipy, Minuit, Optax, BOBYQA
+from .samplers import (Sampler,
+                       Emcee, Zeus, MetropolisHastings,
+                       BlackjaxHMC, BlackjaxNUTS, BlackjaxMCLMC,
+                       NumpyroNUTS, NumpyroHMC, NumpyroBarkerMH, NumpyroSA,
+                       Dynesty, Nautilus, PocoMC,
+                       Grid, QMC, Importance)

@@ -1,13 +1,12 @@
-"""Module implementing a Metropolis-Hastings sampler.
-
-Note that the implemenation here is independent of the one in cobaya.
-"""
+"""Metropolis-Hastings kernel and utilities."""
 
 import sys
+import logging
 
 import numpy as np
+import jax
 
-from .base import MarkovChainSampler
+from .base import Kernel
 
 
 class FastSlowProposer:
@@ -341,115 +340,95 @@ class StandAloneMetropolisHastingsSampler:
         return chains, blobs, log_p
 
 
-class MetropolisHastingsSampler(MarkovChainSampler):
-    """A Metropolis-Hastings sampler with fast-slow decomposition.
-
-    Note that this is a from-scratch reimplementation of this algorithm.
+class MetropolisHastings(Kernel):
+    """Metropolis-Hastings sampler with fast-slow decomposition.
 
     .. rubric:: References
     - https://arxiv.org/abs/1304.4473
-
     """
 
+    logger = logging.getLogger('MetropolisHastings')
+    _sampler_cls = 'MCMCSampler'
 
-    def __init__(self, posterior, nchains=1, f_fast=1, f_drag=0,
-                 fast=[], chains=None, rng=None, directory=None,
-                 rescale=False, covariance=None):
-        """Initialize the Metropolis-Hastings sampler.
-
+    def __init__(self, f_fast=1, f_drag=0, fast=None, covariance=None):
+        """
         Parameters
         ----------
-        posterior : CompiledGraph
-            Compiled pipeline returning the log-posterior.
-        nchains : int, optional
-            Number of chains. Default is 1.
-        f_fast : int, optional
-            Oversampling factor of fast parameters. The default is 1 which
-            implies not oversampling.
-        f_drag : int, optional
-            Factor for dragging of fast parameters. The default is 0, i.e., no
-            dragging.
-        fast : list of str, optional
-            List of dimensions that are considered fast.
-        chains : list of desilike.samples.MCSamples, optional
-            If given, continue the chains. In that case, we will ignore what
-            was read from disk. Default is ``None``.
-        rng : numpy.random.Generator, int, or None, optional
-            Random number generator. Default is ``None``.
-        directory : str, Path, or None, optional
-            Save samples to this location. Default is ``None``.
-        rescale : bool, optional
-            Normalise parameters to ~ unit variation range (see :class:`BaseSampler`).
-        covariance : numpy.ndarray or None, optional
-            Covariance matrix estimate (original parameter space). Used both as the
-            initial Metropolis-Hastings proposal covariance and, when ``rescale=True``,
-            to set the rescaling scale. If ``None``, each parameter's ``ref.std()`` is
-            used instead.
-
+        f_fast : int
+            Fast-parameter oversampling factor.  Default is 1 (no oversampling).
+        f_drag : int
+            Dragging factor for fast parameters.  Default is 0 (no dragging).
+        fast : list of str or None
+            Names of parameters considered "fast".  Default is ``None`` (none).
+        covariance : array_like or None
+            Initial proposal covariance in *rescaled* parameter space.  When
+            ``None``, the identity matrix is used (suitable when the sampler
+            uses ``rescale=True`` or the posterior is already ~unit-variance).
         """
-        super().__init__(
-            posterior, nchains=nchains, chains=chains, rng=rng,
-            directory=directory, rescale=rescale, covariance=covariance)
+        self.f_fast = f_fast
+        self.f_drag = f_drag
+        self.fast = list(fast) if fast is not None else []
+        self.covariance = covariance
 
-        for i in range(len(fast)):
-            fast[i] = self.varied_params.names().index(str(fast[i]))
+    def init(self, posterior_logpdf, rng, **context):
+        ndim = context['ndim']
+        param_shapes = context['param_shapes']
 
-        # each MH sampler runs independently on its own process.  It operates in the
-        # sampler's rescaled working space (compute_posterior maps positions back to
-        # original space), so the proposal covariance is built from the transformed
-        # proposals.  An explicit *covariance* is in original space → whiten it.
-        self.sampler = StandAloneMetropolisHastingsSampler(self.compute_posterior,
-                                                           fast=fast, f_fast=f_fast, f_drag=f_drag, rng=self.rng)
-        if covariance is None:
-            ndim = self.ndim
-            cov = np.zeros((ndim, ndim))
-            col = 0
-            for param in self._transformed_params:
-                size = int(np.prod(param.shape)) if param.shape else 1
-                std = float(param.ref.std())
-                for offset in range(size):
-                    cov[col + offset, col + offset] = std**2
-                col += size
-        else:
-            cov = np.asarray(covariance) / np.outer(self._scale, self._scale)
-        self.sampler.update(cov=cov)
+        # Map fast parameter names to flat column indices.
+        flat_fast_indices = []
+        col = 0
+        for name, shape in param_shapes.items():
+            size = int(np.prod(shape)) if shape else 1
+            if name in self.fast:
+                flat_fast_indices.extend(range(col, col + size))
+            col += size
 
-    adaptation_steps = 0
+        def _posterior(flat):
+            return float(posterior_logpdf(jax.numpy.asarray(flat)[None])[0])
 
-    def adapt_sampler(self, **kwargs):
-        """Store the adaptation horizon; MH adapts its proposal covariance inline during run_sampler."""
-        self.adaptation_steps = kwargs.get('steps', 0)
+        self._standalone = StandAloneMetropolisHastingsSampler(
+            _posterior, fast=flat_fast_indices,
+            f_fast=self.f_fast, f_drag=self.f_drag, rng=rng)
 
-    def run_sampler(self, n_steps):
-        """Run the Metropolis-Hastings sampler.
+        self._posterior = _posterior
+        self._ndim = ndim
+        self._cov = np.asarray(self.covariance) if self.covariance is not None else np.eye(ndim)
+        self._initialized = False
+        self._adaptation_steps = 0
+        self._accumulated_samples = []
+        self._total_steps = 0
 
-        Parameters
-        ----------
-        n_steps: int
-            Number of steps to take.
+    def adapt(self, initial_position=None, **kwargs):
+        """Store the adaptation horizon; proposal covariance is updated inline during :meth:`run`."""
+        self._adaptation_steps = int(kwargs.get('steps', 0))
 
-        """
-        if self.pool.main:
-            if not hasattr(self.sampler, 'pos'):
-                samples, derived, log_post = self.state
-                # sampler is vectorized, first dimension is the number of chains
-                self.sampler.update(pos=samples[None, ...], log_p=log_post[None, ...], blobs=derived[None, ...])
+    def run(self, n_steps, initial_position=None):
+        if not self._initialized:
+            # initial_position is a flat (ndim,) array in rescaled space
+            initial_flat = np.asarray(initial_position).ravel()
+            initial_log_p = self._posterior(initial_flat)
+            self._standalone.update(
+                pos=initial_flat[None, :],
+                log_p=np.array([initial_log_p]),
+                blobs=np.zeros((1, 0)),
+                cov=self._cov)
+            self._initialized = True
+        chains, _blobs, log_p = self._standalone.make_n_steps(n_steps)
+        # chains: (1, n_steps, ndim); log_p: (1, n_steps)
+        samples  = chains[0]    # (n_steps, ndim)
+        log_post = log_p[0]     # (n_steps,)
 
-            samples, derived, log_post = self.sampler.make_n_steps(n_steps)
-            self.extend(samples[0], derived[0], log_post[0])
-            self.pool.stop_wait()
-        else:
-            self.pool.wait()
+        self._total_steps += n_steps
 
-        if any(self.mpicomm.allgather(len(self._chain) < self.adaptation_steps if self.pool.main else False)):
-            cov = None
-            if self.pool.main:
-                # Stored samples are in original space; whiten to the working space the
-                # proposer operates in: cov_working = cov_orig / (scale ⊗ scale).
-                cov = np.asarray(self._chain.covariance(self.varied_params.names()))
-                cov = cov / np.outer(self._scale, self._scale)
-            cov = np.mean([c for c in self.mpicomm.allgather(cov) if c is not None], axis=0)
-            try:
-                self.sampler.update(cov=cov)
-            except np.linalg.LinAlgError:
-                pass  # matrix was not positive definite
+        # Adapt the proposal covariance from accumulated samples while within
+        # the adaptation window.
+        if self._total_steps < self._adaptation_steps:
+            self._accumulated_samples.append(samples)
+            all_samps = np.concatenate(self._accumulated_samples, axis=0)
+            if len(all_samps) > self._ndim:
+                try:
+                    self._standalone.update(cov=np.cov(all_samps.T))
+                except np.linalg.LinAlgError:
+                    pass
+
+        return samples, log_post

@@ -1,61 +1,65 @@
-"""Module implementing an importance sampler."""
+"""Importance sampling kernel."""
+
+import logging
 
 import numpy as np
 from scipy.special import logsumexp
 
-from .base import StaticSampler
+from .base import StaticKernel
 
 
-class ImportanceSampler(StaticSampler):
-    """An importance sampler.
+class Importance(StaticKernel):
+    """Reweight an existing sample under a new posterior via importance sampling.
 
-    This class can be used to transform samples from one posterior to another.
-    Alternatively, it can also be used to combine likelihoods from two
-    experiments.
+    Pass an :class:`~desilike.samples.MCSamples` object as the ``samples``
+    keyword argument to :meth:`~desilike.samplers.base.StaticSampler.run`:
+
+    .. code-block:: python
+
+        sampler = Sampler(new_posterior, kernel=Importance())
+        new_samples = sampler.run(samples=old_samples, resample=True)
     """
 
-    def get_samples(self, samples=None):
-        """Get samples on the grid.
+    logger = logging.getLogger('Importance')
+
+    def get_samples(self, varied_params, samples=None, **kwargs):
+        """Extract parameter columns from the input samples.
 
         Parameters
         ----------
-        chain : desilike.samples.MCSamples, optional
-            Input chain that defines the samples.
+        varied_params : VariableCollection
+        samples : MCSamples
+            Input samples from the old posterior.
 
         Returns
         -------
-        numpy.ndarray of shape (n_samples, n_dim)
-            Grid to be evaluated.
-
+        numpy.ndarray, shape ``(n_samples, ndim)``
         """
-        return np.column_stack([samples[key].value for key in self.varied_params])
+        return np.column_stack([samples[key].value for key in varied_params])
 
-    def run(self, samples, resample=True):
-        """Reweight a sample using importance sampling.
+    def post_process(self, results, samples=None, resample=True, **kwargs):
+        """Reweight ``results`` relative to the original ``samples``.
 
         Parameters
         ----------
-        samples : desilike.samples.MCSamples
-            Input samples with a corresponding posterior.
+        results : MCSamples or None
+            Newly evaluated samples on the main rank; ``None`` on workers.
+        samples : MCSamples
+            Original samples carrying the old log-posterior.
         resample : bool, optional
-            If True, the new weights for the chain will be the ratio of the new
-            and old posterior. Effectively, the new chain will sample the new
-            posterior. If False, the new weights are the product of the old
-            posterior and the new likelihood. Default is True.
+            If ``True`` (default), weights are ``exp(new_log_post - old_log_post)``.
+            If ``False``, weights are ``exp(new_log_post - new_log_prior + old_log_post)``,
+            combining the old posterior with the new likelihood.
 
         Returns
         -------
-        desilike.samples.MCSamples
-            Sampler results, returned on rank 0.
-
+        MCSamples or None
         """
-        results = super().run(samples=samples)
-        if results is not None:  # rank 0
-            if resample:
-                log_w = results.logposterior - samples.logposterior
-            else:
-                log_w = (results.logposterior - results.logprior +
-                        samples.logposterior)
-            results.aweight = np.exp(log_w - logsumexp(log_w))
-
+        if results is None:
+            return None
+        if resample:
+            log_w = results.logposterior - samples.logposterior
+        else:
+            log_w = results.logposterior - results.logprior + samples.logposterior
+        results.aweight = np.exp(log_w - logsumexp(log_w))
         return results

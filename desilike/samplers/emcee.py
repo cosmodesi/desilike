@@ -1,114 +1,80 @@
-"""Module implementing the ``emcee`` sampler."""
+"""Emcee ensemble MCMC kernel."""
+
+import logging
+
+import numpy as np
+import jax.numpy as jnp
 
 try:
-    import emcee
+    import emcee as _emcee
     EMCEE_INSTALLED = True
 except ModuleNotFoundError:
     EMCEE_INSTALLED = False
-import numpy as np
 
-from .base import update_kwargs, EnsembleSampler
+from .base import Kernel
 
 
-class EmceeSampler(EnsembleSampler):
-    """Wrapper for the affine-invariant ensemble sampler ``emcee``.
+class Emcee(Kernel):
+    """Affine-invariant ensemble sampler (``emcee``).
 
     .. rubric:: References
     - https://github.com/dfm/emcee
     - https://arxiv.org/abs/1202.3665
-
     """
 
-    def __init__(self, posterior, nchains=1, chains=None, rng=None,
-                 directory=None, nwalkers=None, rescale=False, covariance=None,
-                 batch_size=None, **kwargs):
-        """Initialize the ``emcee`` sampler.
+    logger = logging.getLogger('Emcee')
+    _sampler_cls = 'EnsembleSampler'
 
+    def __init__(self, nwalkers=None, **kwargs):
+        """
         Parameters
         ----------
-        posterior : CompiledGraph
-            Compiled pipeline returning the log-posterior.
-        nchains : int, optional
-            Number of independent chains. Default is 1.
-        chains : list of desilike.samples.MCSamples, optional
-            If given, continue the chains. In that case, we will ignore what
-            was read from disk. Default is ``None``.
-        rng : numpy.random.Generator, int, or None, optional
-            Random number generator. Default is ``None``.
-        directory : str, Path, or None, optional
-            Save samples to this location. Default is ``None``.
-        nwalkers : int, optional
-            Number of walkers, defaults to :attr:`MCSamples.shape[1]` of input chains, if any,
-            else ``2 * max((int(2.5 * ndim) + 1) // 2, 2)``.
-        **kwargs: dict, optional
-            Extra keyword arguments passed to ``emcee`` during initialization.
-
+        nwalkers : int or None
+            Number of walkers.  ``None`` defers to ``4 * ndim`` (set by
+            :class:`~desilike.samplers.base.EnsembleKernelSampler` before :meth:`init`
+            is called).
+        **kwargs
+            Extra keyword arguments forwarded to ``emcee.EnsembleSampler``.
         """
+        self.nwalkers = nwalkers
+        self._kwargs = kwargs
+
+    def init(self, posterior_logpdf, rng, **context):
         if not EMCEE_INSTALLED:
-            raise ImportError("The 'emcee' package is required but not "
-                              "installed.")
+            raise ImportError("The 'emcee' package is required but not installed.")
 
-        # posterior is called through loop.map with a list of constant size = nwalkers // 2 points
-        super().__init__(posterior, nchains=nchains, chains=chains, rng=rng,
-                         directory=directory, nwalkers=nwalkers,
-                         rescale=rescale, covariance=covariance, batch_size=batch_size)
         if self.nwalkers is None:
-            # Minimum is 2 * max((int(2.5 * self.ndim) + 1) // 2, 2)
-            # Recommended is probably more >= 4 * self.ndim
-            self.nwalkers = 4 * self.ndim
+            self.nwalkers = 4 * context['ndim']
+
+        def log_prob_fn(positions):
+            return np.asarray(posterior_logpdf(jnp.asarray(positions)))
+
+        self._log_prob_fn = log_prob_fn
+        self._rng = rng
+        self._ndim = context['ndim']
+        self._sampler = None
+        self._emcee_state = None
         self._total_likelihood_evaluations = 0
-        if self.pool.main:
-            # emcee treats tuple returns as (log_prob, blobs).  When there are
-            # no derived parameters, return plain scalars so emcee never
-            # allocates a blob array (mixing scalar and tuple returns within
-            # one run causes an internal boolean-index mismatch in emcee).
-            # compute_posterior is batched: it takes an (N, ndim) batch and
-            # returns a list of N (log_post, derived) tuples.
-            if self.n_derived:
-                log_prob_fn = self.compute_posterior
-            else:
-                log_prob_fn = lambda batch: [result[0] for result in self.compute_posterior(batch)]
-            kwargs = update_kwargs(
-                kwargs, 'emcee', ndim=self.ndim,
-                log_prob_fn=log_prob_fn, pool=self.pool, args=None,
-                kwargs=None, vectorize=False, nwalkers=self.nwalkers)
-            self.sampler = emcee.EnsembleSampler(**kwargs)
 
-    def adapt_sampler(self, **kwargs):
-        """No-op: emcee does not support explicit adaptation."""
+    def run(self, n_steps, initial_position=None):
+        if self._sampler is None:
+            self._sampler = _emcee.EnsembleSampler(
+                nwalkers=self.nwalkers, ndim=self._ndim,
+                log_prob_fn=self._log_prob_fn, vectorize=True,
+                **self._kwargs)
+            # initial_position is (nwalkers, ndim)
+            log_post_init = self._log_prob_fn(initial_position)
+            rng_state = np.random.RandomState(int(self._rng.integers(2**32 - 1))).get_state()
+            self._emcee_state = _emcee.State(initial_position, log_prob=log_post_init,
+                                             random_state=rng_state)
 
-    def run_sampler(self, n_steps):
-        """Run the ``emcee`` sampler.
-
-        Parameters
-        ----------
-        n_steps: int
-            Number of steps to take.
-
-        """
-        if self.pool.main:
-            samples, derived, log_post = self.state
-
-            initial_state = emcee.State(
-                samples,
-                blobs=derived if self.n_derived else None,
-                log_prob=log_post,
-                random_state=np.random.RandomState(
-                    self.rng.integers(2**32 - 1)).get_state())
-
-            samples  = np.zeros((n_steps, self.nwalkers, self.ndim))
-            derived  = np.zeros((n_steps, self.nwalkers, self.n_derived))
-            log_post = np.zeros((n_steps, self.nwalkers))
-            for i, state in enumerate(self.sampler.sample(
-                    initial_state, iterations=n_steps, store=False)):
-                samples[i, :, :] = state.coords
-                if self.n_derived:
-                    derived[i, :, :] = np.asarray(state.blobs).reshape(self.nwalkers, -1)
-                log_post[i, :] = state.log_prob
-
-            self._total_likelihood_evaluations += n_steps * self.nwalkers
-            self.logger.info('total likelihood evaluations: %d', self._total_likelihood_evaluations)
-            self.extend(samples, derived, log_post)
-            self.pool.stop_wait()
-        else:
-            self.pool.wait()
+        samples  = np.zeros((n_steps, self.nwalkers, self._ndim))
+        log_post = np.zeros((n_steps, self.nwalkers))
+        for step_idx, state in enumerate(self._sampler.sample(
+                self._emcee_state, iterations=n_steps, store=False)):
+            samples[step_idx, :, :] = state.coords
+            log_post[step_idx, :] = state.log_prob
+        self._emcee_state = state
+        self._total_likelihood_evaluations += n_steps * self.nwalkers
+        self.logger.info('total likelihood evaluations: %d', self._total_likelihood_evaluations)
+        return samples, log_post

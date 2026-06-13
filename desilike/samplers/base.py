@@ -53,8 +53,6 @@ def _param_sizes(varied_params):
     return result
 
 
-
-
 def _normalize_chain_ids(nchains):
     """Return explicit chain ids from an integer count or an iterable of ids.
 
@@ -133,6 +131,211 @@ def _batched(core, returns_tuple):
     return batched_array
 
 
+# ── Kernel ABCs ───────────────────────────────────────────────────────────────
+
+
+class Kernel:
+    """Abstract base class for MCMC kernels.
+
+    A kernel encapsulates the sampling algorithm.  The surrounding
+    :class:`MCMCSampler` (or :class:`EnsembleSampler`) owns all
+    infrastructure: chain accumulation, convergence checks, MPI, rescaling
+    and directory I/O.
+
+    Kernels are stateful: :meth:`init` must be called once before any
+    :meth:`run` call, and the kernel retains its internal state (current
+    position, adapted parameters, etc.) across subsequent :meth:`run` calls.
+
+    Kernels operate entirely in *rescaled* space (the space defined by
+    :attr:`BaseSampler._loc` and :attr:`BaseSampler._scale`).
+    """
+
+    logger = logging.getLogger('Kernel')
+
+    # Infrastructure class to use when wrapped by the Sampler factory.
+    # Override to 'EnsembleSampler' for ensemble/multi-walker kernels.
+    _sampler_cls = 'MCMCSampler'
+
+    def init(self, posterior_logpdf, rng, **context):
+        """Initialise the kernel before sampling.
+
+        Parameters
+        ----------
+        posterior_logpdf : callable
+            JAX-pure function ``(n, ndim) → (n,)`` returning log-posterior values
+            in *rescaled* space.  JAX-differentiable (built via ``jax.jit(jax.vmap(...))``)
+            so gradient-based kernels can differentiate through it.
+        rng : numpy.random.Generator
+            Per-chain random-number generator.
+        **context : dict
+            Extra information provided by the sampler:
+
+            ``ndim`` : int
+                Total flat size of the parameter vector.
+            ``param_shapes`` : dict[str, tuple]
+                Shape of each parameter (scalar → ``()``).
+
+        """
+        raise NotImplementedError
+
+    def run(self, n_steps, initial_position=None):
+        """Draw ``n_steps`` posterior samples.
+
+        The kernel updates its own internal state on every call so that
+        consecutive calls continue from where the previous one left off.
+
+        Parameters
+        ----------
+        n_steps : int
+            Number of steps to take.
+        initial_position : numpy.ndarray or None
+            Starting position array in rescaled space — shape ``(ndim,)`` for
+            point kernels, ``(nwalkers, ndim)`` for ensemble kernels.  Used only
+            on the first call to initialise the kernel's internal state; ignored
+            on subsequent calls (the kernel tracks its own state internally).
+
+        Returns
+        -------
+        samples : numpy.ndarray, shape ``(n_steps, ndim)`` or ``(n_steps, nwalkers, ndim)``
+            Posterior samples in rescaled space.
+        log_post : numpy.ndarray, shape ``(n_steps,)`` or ``(n_steps, nwalkers)``
+            Log-posterior values.
+
+        """
+        raise NotImplementedError
+
+    def adapt(self, initial_position=None, **kwargs):
+        """Run warmup / adaptation.  No-op by default.
+
+        Parameters
+        ----------
+        initial_position : numpy.ndarray or None
+            Starting position array in rescaled space.  Used only before the
+            first step; ignored if the kernel already has an initialised state.
+        steps : int
+            Number of warmup steps (required by most adaptive kernels).
+        **kwargs : dict
+            Kernel-specific adaptation options.
+
+        """
+
+
+class NestedKernel:
+    """Abstract base class for nested / population sampling kernels.
+
+    Unlike :class:`Kernel` (MCMC), these kernels receive the sampling
+    callables at *run time* rather than at :meth:`init` time, so that
+    the infrastructure class can materialise batched / pool-aware versions
+    before each run.
+
+    A :class:`NestedKernel` subclass should override :meth:`run` and set
+    ``_sampler_cls = 'PopulationSampler'`` (the default).
+    """
+
+    logger = logging.getLogger('NestedKernel')
+    _sampler_cls = 'PopulationSampler'
+
+    def run(self, likelihood_logpdf, prior, **kwargs):
+        """Run the sampler and return all posterior samples.
+
+        Called on **all** MPI processes (both main and workers).  The
+        implementation is responsible for the main/worker split, including
+        calling ``pool.stop_wait()`` on the main process and
+        ``pool.wait()`` (or ``wait_many``) on workers before returning.
+
+        Parameters
+        ----------
+        likelihood_logpdf : callable
+            Batched log-likelihood ``(N, ndim) → list[(log_l, derived)]`` or
+            ``(N, ndim) → list[log_l]`` depending on whether derived
+            parameters are present.  Pool-aware (already wrapped).
+        prior : tuple of (prior_logpdf, prior_rvs, prior_ppf)
+            ``prior_logpdf``: batched log-prior ``(N, ndim) → list[log_prior]``.  Pool-aware.
+            ``prior_rvs``: draw ``size`` samples from the prior: ``size → (size, ndim)``.
+            ``prior_ppf``: unit-hypercube to parameter-space transform ``(N, ndim) → (N, ndim)``.  Pool-aware.
+        pool : Pool
+            MPI pool for distributing evaluations.
+        rng : numpy.random.Generator
+            Random-number generator for the main process.
+        ndim : int
+            Dimensionality of the parameter space.
+        directory : Path or None
+            Checkpoint directory.
+        **kwargs : dict
+            Run-time options forwarded to the underlying sampler's ``run``
+            method.
+
+        Returns
+        -------
+        samples : numpy.ndarray, shape ``(n_samples, ndim)``
+            Samples in rescaled parameter space.  **Main process only**;
+            workers return ``None``.
+        derived : numpy.ndarray, shape ``(n_samples, n_derived)``
+            Derived-parameter values stacked column-wise.
+        extras : dict
+            At minimum ``aweight`` (importance weights) and ``logposterior``.
+
+        """
+        raise NotImplementedError
+
+
+class StaticKernel:
+    """Abstract base class for static (grid / QMC / importance) kernels.
+
+    A static kernel pre-determines all sample points in the original parameter
+    space *before* any posterior evaluations are made.  The surrounding
+    :class:`StaticSampler` handles the pool evaluation, rescaling, and
+    :class:`~desilike.samples.MCSamples` assembly.
+
+    Subclasses must override :meth:`get_samples`.  Optionally override
+    :meth:`post_process` to adjust the assembled samples after evaluation
+    (e.g. importance-weight reweighting).
+    """
+
+    logger = logging.getLogger('StaticKernel')
+    _sampler_cls = 'StaticSampler'
+
+    def get_samples(self, varied_params, **kwargs):
+        """Return an ``(n_samples, ndim)`` array of points in **original** parameter space.
+
+        Parameters
+        ----------
+        varied_params : VariableCollection
+            Varied parameters with prior information.
+        **kwargs : dict
+            Run-time options (e.g. ``grid``, ``size``, ``engine``).
+
+        Returns
+        -------
+        numpy.ndarray, shape ``(n_samples, ndim)``
+        """
+        raise NotImplementedError
+
+    def post_process(self, results, **kwargs):
+        """Optional post-processing of the assembled :class:`~desilike.samples.MCSamples`.
+
+        Called on all MPI ranks after the pool evaluation completes.
+        The default implementation is a no-op identity.
+
+        Parameters
+        ----------
+        results : MCSamples or None
+            Assembled samples on the main rank; ``None`` on workers.
+        **kwargs : dict
+            Same keyword arguments that were passed to :meth:`get_samples`.
+
+        Returns
+        -------
+        MCSamples or None
+        """
+        return results
+
+
+# Registry mapping _sampler_cls strings to the actual sampler classes.
+# Populated at the bottom of this module when the infrastructure classes are defined.
+_SAMPLER_REGISTRY = {}
+
+
 # ── BaseSampler ───────────────────────────────────────────────────────────────
 
 class BaseSampler(ABC):
@@ -186,7 +389,7 @@ class BaseSampler(ABC):
         # collection whose priors/refs/proposals live in rescaled space.  The
         # sampler works in rescaled coordinates; _forward/_backward convert to and
         # from original parameter values at the posterior / storage boundaries.
-        self._build_rescaling(rescale=rescale, covariance=covariance)
+        self._set_rescaling(rescale=rescale, covariance=covariance)
 
         # ── MPI communicator ─────────────────────────────────────────────────
         self.mpicomm = mpicomm
@@ -222,7 +425,7 @@ class BaseSampler(ABC):
 
         self.set_rng(rng=rng)
 
-    def _build_rescaling(self, rescale=False, covariance=None):
+    def _set_rescaling(self, rescale=False, covariance=None):
         """Build the ``_loc``/``_scale`` flat vectors and ``_transformed_params``.
 
         ``_loc[k]`` and ``_scale[k]`` are the centre and step of flat scalar element
@@ -365,19 +568,27 @@ class BaseSampler(ABC):
     def set_pool(self, mpicomm, batch_size=None):
         """Create the pool and register the batched evaluators.
 
-        ``prior_transform``, ``compute_prior``, ``compute_posterior`` and
-        ``compute_likelihood`` are built from JAX-pure single-sample cores
-        (``_*_one``) wrapped in ``jax.jit(jax.vmap(...))``.
+        Pool-dispatched attributes set here:
+        ``prior_ppf``, ``prior_logpdf``, ``compute_posterior``, ``likelihood_logpdf``.
+
+        Non-pool JAX attribute: ``posterior_logpdf`` — a ``jax.jit(jax.vmap(...))``
+        function ``(n, ndim) → (n,)`` suitable for direct use by MCMC kernels.
         """
         self.pool = make_pool(mpicomm, batch_size=batch_size)
-        specs = [('prior_transform',    self._prior_transform_one,    False),
-                 ('compute_prior',      self._compute_prior_one,      False),
-                 ('compute_posterior',  self._compute_posterior_one,  True),
-                 ('compute_likelihood', self._compute_likelihood_one, True)]
+        specs = [('prior_ppf',             self._prior_ppf_one,           False),
+                 ('prior_logpdf',          self._prior_logpdf_one,        False),
+                 ('compute_posterior',     self._compute_posterior_one,   True),
+                 ('likelihood_logpdf', self._likelihood_logpdf_one, True)]
         for name, core, returns_tuple in specs:
             setattr(self, name, self.pool.save_function(_batched(core, returns_tuple), name))
+        self.posterior_logpdf = jax.jit(jax.vmap(self._posterior_logpdf_one))
 
-    def _prior_transform_one(self, sample):
+    def prior_rvs(self, size=1):
+        """Return ``(size, ndim)`` samples drawn from the prior in rescaled space."""
+        u = np.random.default_rng().uniform(size=(size, self.ndim)).astype('f4')
+        return np.asarray(jax.jit(jax.vmap(self._prior_ppf_one))(jnp.asarray(u)))
+
+    def _prior_ppf_one(self, sample):
         """Map a unit-cube sample ``(ndim,)`` to *rescaled* parameter space via each prior's PPF.
 
         The transformed priors' PPF already returns rescaled-space values, so the result
@@ -389,11 +600,11 @@ class BaseSampler(ABC):
             result.append(jnp.atleast_1d(param.prior.ppf(u_chunk)))
         return jnp.concatenate(result)
 
-    def _compute_prior_one(self, sample):
+    def _prior_logpdf_one(self, sample):
         """Return the log-prior for a single rescaled-space ``(ndim,)`` sample.
 
         Evaluates ``_transformed_params`` priors directly in rescaled space, matching
-        the density implied by :meth:`_prior_transform_one` (exact inverse pair).
+        the density implied by :meth:`_prior_ppf_one` (exact inverse pair).
 
         Warning
         -------
@@ -408,6 +619,10 @@ class BaseSampler(ABC):
             result = result + param.prior.logpdf(chunk)
         return result
 
+    def _posterior_logpdf_one(self, sample):
+        """Return ``log_posterior`` for a single rescaled-space ``(ndim,)`` sample."""
+        return self.posterior(_flat_to_dict(self._forward(sample), self.varied_params), return_derived=False)
+
     def _compute_posterior_one(self, sample):
         """Return ``(log_posterior, derived_flat)`` for a single rescaled-space ``(ndim,)`` sample."""
         sample = _flat_to_dict(self._forward(sample), self.varied_params)
@@ -421,12 +636,12 @@ class BaseSampler(ABC):
             derived_flat = jnp.zeros(0)
         return log_post, derived_flat
 
-    def _compute_likelihood_one(self, sample):
+    def _likelihood_logpdf_one(self, sample):
         """Return ``(log_likelihood, derived_flat)`` for a single ``(ndim,)`` sample.
 
         The log-likelihood is ``log_posterior − log_prior``.
         """
-        log_prior = self._compute_prior_one(sample)
+        log_prior = self._prior_logpdf_one(sample)
         log_post, derived = self._compute_posterior_one(sample)
         return log_post - log_prior, derived
 
@@ -510,14 +725,27 @@ class BaseSampler(ABC):
 # ── Static sampler ────────────────────────────────────────────────────────────
 
 class StaticSampler(BaseSampler):
-    """Base for samplers that pre-determine all sample points (grid, QMC, …)."""
+    """Base for samplers that pre-determine all sample points (grid, QMC, …).
+
+    Can be used directly by passing a :class:`~desilike.samplers.kernels.StaticKernel`
+    instance (via the :func:`Sampler` factory), or subclassed with a concrete
+    :meth:`get_samples` implementation (legacy pattern).
+    """
 
     logger = logging.getLogger('StaticSampler')
 
-    @abstractmethod
+    @default_mpicomm
+    def __init__(self, posterior, kernel=None, rng=None, mpicomm=None,
+                 directory=None, rescale=False, covariance=None, batch_size=None):
+        self.kernel = kernel
+        super().__init__(posterior, rng=rng, mpicomm=mpicomm, directory=directory,
+                         rescale=rescale, covariance=covariance, batch_size=batch_size)
+
     def get_samples(self, **kwargs):
-        """Return an ``(n_samples, ndim)`` array of points to evaluate."""
-        pass
+        """Return an ``(n_samples, ndim)`` array of points in original parameter space."""
+        if self.kernel is not None:
+            return self.kernel.get_samples(self.varied_params, **kwargs)
+        raise NotImplementedError('Subclasses must implement get_samples() or provide a kernel.')
 
     def run(self, **kwargs):
         """Evaluate the posterior on the sample grid and return a MCSamples."""
@@ -526,7 +754,7 @@ class StaticSampler(BaseSampler):
                 # get_samples returns original-space points; the cores and
                 # array_to_samples work in the rescaled space, so map once here.
                 grid      = np.asarray(self._backward(self.get_samples(**kwargs)))
-                log_prior = np.array(self.pool.map(self.compute_prior, grid))
+                log_prior = np.array(self.pool.map(self.prior_logpdf, grid))
                 results   = self.pool.map(self.compute_posterior, grid)
                 log_post  = np.array([result[0] for result in results])
                 derived   = np.array([result[1] for result in results])
@@ -541,44 +769,28 @@ class StaticSampler(BaseSampler):
             self.samples = None
             self.pool.wait()
 
+        if self.samples is not None and self.kernel is not None:
+            self.samples = self.kernel.post_process(self.samples, **kwargs)
         if self.directory is not None:
             self.write()
         return self.samples
 
 
-# ── Population sampler ────────────────────────────────────────────────────────
+# ── Kernel-based infrastructure ───────────────────────────────────────────────
 
-class PopulationSampler(BaseSampler):
-    """Base for population-based samplers (dynesty, nautilus, …)."""
+class MCMCSampler(BaseSampler):
+    """Kernel-based MCMC sampler running one or more independent chains.
 
-    logger = logging.getLogger('PopulationSampler')
+    Delegates the sampling algorithm to a :class:`~desilike.samplers.kernels.Kernel`
+    and handles chain management, convergence diagnostics, MPI, rescaling, and I/O.
 
-    @abstractmethod
-    def run_sampler(self, **kwargs):
-        """Run the sampler; return ``(samples, derived, extras_dict)``."""
-        pass
+    Instantiate via the :func:`Sampler` factory rather than directly.
+    """
 
-    def run(self, **kwargs):
-        output = self.run_sampler(**kwargs)
-        if self.pool.main:
-            samples, derived, extras = output
-            self.samples = self.array_to_samples(samples, derived, **extras)
-        else:
-            self.samples = None
-        if self.directory is not None:
-            self.write()
-        return self.samples
-
-
-# ── Markov chain sampler ───────────────────────────────────────────────────────
-
-class MarkovChainSampler(BaseSampler):
-    """Base for MCMC samplers running one or more independent chains."""
-
-    logger = logging.getLogger('MarkovChainSampler')
+    logger = logging.getLogger('MCMCSampler')
 
     @default_mpicomm
-    def __init__(self, posterior, nchains=1, chains=None, rng=None,
+    def __init__(self, posterior, kernel, nparallel=1, chains=None, rng=None,
                  mpicomm=None, directory=None, rescale=False, covariance=None,
                  batch_size=None):
         """
@@ -586,40 +798,35 @@ class MarkovChainSampler(BaseSampler):
         ----------
         posterior : CompiledGraph
             Compiled pipeline returning the log-posterior.
-        nchains : int or sequence
+        kernel : Kernel
+            Algorithm kernel, e.g. ``BlackjaxHMC()``, ``Emcee()``.
+        nparallel : int or sequence
             Number of independent chains, or explicit chain ids.  If an integer,
-            ids are ``1, ..., nchains``.  If a sequence, ids are taken from it
-            and used in checkpoint filenames, e.g. ``[4, 5, 6, 7]`` writes
-            ``samples_4.h5`` through ``samples_7.h5``.  Default is 1.
+            ids are ``1, ..., nparallel``.  If a sequence, the values are used
+            directly as chain ids in checkpoint filenames.  Default is 1.
         chains : list of MCSamples, optional
-            If provided (at least on rank 0), continue from these chains.
+            Pre-existing chains to resume from.  Default is ``None``.
         rng : numpy.random.Generator, int, or None
         mpicomm : MPI communicator, optional
         directory : str, Path, or None
         rescale : bool
-            Normalise parameters to ~ unit variation range (see :class:`BaseSampler`).
         covariance : array_like, optional
-            ``(ndim, ndim)`` covariance setting the rescaling scale.
         batch_size : int or None, optional
-            Pool batching (see :class:`BaseSampler`).
         """
+        self.kernel = kernel
         self.mpicomm = mpicomm
+        self._chain = None
 
-        if not hasattr(self, '_samples'):
-            self._chain = None
-
-        # Broadcast explicit chain ids and whether input chains were supplied.
         input_chains = False
         if self.mpicomm.rank == 0:
             input_chains = chains is not None
-            chain_ids = _normalize_chain_ids(nchains)
+            chain_ids = _normalize_chain_ids(nparallel)
             if input_chains:
                 if not isinstance(chains, (tuple, list)):
                     chains = [chains]
                 if len(chains) != len(chain_ids):
                     raise ValueError(
-                        f'Expected {len(chain_ids)} input chains, got {len(chains)}.'
-                    )
+                        f'Expected {len(chain_ids)} input chains, got {len(chains)}.')
         else:
             chain_ids = None
 
@@ -629,7 +836,6 @@ class MarkovChainSampler(BaseSampler):
         super().__init__(posterior, rng=rng, mpicomm=mpicomm, directory=directory,
                          rescale=rescale, covariance=covariance, batch_size=batch_size)
 
-        # Distribute pre-supplied chains to the owning ranks.
         if input_chains:
             for chain_idx, dest_rank in enumerate(self._pool_mains):
                 samples = MCSamples.sendrecv(
@@ -640,6 +846,11 @@ class MarkovChainSampler(BaseSampler):
 
         self.checks = []
         self._thinning = 1
+        self.kernel.init(
+            self.posterior_logpdf, self.rng,
+            ndim=self.ndim,
+            param_shapes={param.name: param.shape for param in self.varied_params},
+        )
 
     def set_rng(self, rng):
         if hasattr(self, 'rng') and rng is None:
@@ -654,24 +865,23 @@ class MarkovChainSampler(BaseSampler):
         if self.nchains > mpicomm.size:
             raise ValueError(f'nchains={self.nchains} cannot exceed MPI size={mpicomm.size}')
         color = mpicomm.rank * self.nchains // mpicomm.size
-        # Split communicator so each chain gets its own sub-communicator.
         if mpicomm.size > 1:
             sub_comm = mpicomm.Split(color=color, key=mpicomm.rank)
         else:
             sub_comm = mpicomm
         super().set_pool(mpicomm=sub_comm, batch_size=batch_size)
-        # Collect the rank-0 process of each chain's sub-communicator.
         mains = self.mpicomm.allgather(self.mpicomm.rank if self.pool.main else None)
         self._pool_mains = [rank for rank in mains if rank is not None]
         self._ichain = color
 
-    @abstractmethod
-    def run_sampler(self, n_steps):
-        pass
-
-    @abstractmethod
-    def adapt_sampler(self, **kwargs):
-        pass
+    def _compute_derived(self, samples):
+        """Compute derived parameters for a ``(n, ndim)`` batch of rescaled-space samples."""
+        if not self.n_derived:
+            return np.zeros((len(samples), 0))
+        if not hasattr(self, '_derived_fn'):
+            self._derived_fn = jax.jit(jax.vmap(self._compute_posterior_one))
+        _, derived = self._derived_fn(jnp.asarray(samples))
+        return np.asarray(derived)
 
     def initialize_samples(self, max_init_attempts=100, shape=None):
         """Draw initial chain states with finite log-posterior."""
@@ -697,7 +907,6 @@ class MarkovChainSampler(BaseSampler):
                         else:
                             batch_samples[..., col:col + size] = np.asarray(param.value).ravel()
 
-                    # Drawn in original space; map to the sampler's rescaled working space.
                     batch_samples = np.asarray(self._backward(batch_samples))
 
                     results = self.pool.map(
@@ -729,6 +938,9 @@ class MarkovChainSampler(BaseSampler):
         if any(np.array(self.mpicomm.allgather(self._chain is None))[self._pool_mains]):
             raise ValueError(
                 f'Could not find finite posterior after {max_init_attempts} attempts.')
+        if self.pool.main:
+            return self.state[0]
+        return None
 
     @property
     def chains(self):
@@ -746,12 +958,7 @@ class MarkovChainSampler(BaseSampler):
 
     @property
     def state(self):
-        """Return current chain position as ``(samples, derived, log_post)``.
-
-        ``samples`` is returned in the sampler's rescaled working space (stored
-        parameter values are in original space and mapped via :meth:`_backward`).
-        """
-        # self._chain[name] returns a Variable; use ._value to get the raw array.
+        """Current chain position as ``(samples, derived, log_post)`` in rescaled space."""
         walker_shape = self._chain.shape[1:]
         samples  = np.concatenate([
             np.asarray(self._chain[param.name])[-1].reshape(walker_shape + (-1,))
@@ -826,47 +1033,46 @@ class MarkovChainSampler(BaseSampler):
         Parameters
         ----------
         burn_in : float or int
-            Fraction (or number) of steps to remove as burn-in for the checks. Default is 0.2.
+            Fraction (or number) of steps to discard as burn-in.  Default is 0.2.
         min_steps : int
-            Minimum number of steps.  Default is 0.
+            Minimum number of steps before stopping.  Default is 0.
         max_steps : int or None
             Hard step limit.  Default is no limit.
         adaptation : dict or None
-            Keyword arguments forwarded to :meth:`adapt_sampler`, e.g.
-            ``{'steps': 500}`` for BlackJAX samplers or
-            ``{'steps': 500, 'is_mass_matrix_diagonal': False}`` to also tune
-            the full mass matrix.  ``None`` skips adaptation.
+            Kwargs forwarded to :meth:`adapt_sampler` (e.g. ``{'steps': 500}``).
+            ``None`` skips adaptation.
         check_every : int
-            How often (in steps) to run diagnostics.  Default is 300.
+            Steps between convergence checks.  Default is 300.
         checks_passed : int
-            Number of consecutive passed checks required to stop.  Default is 2.
+            Consecutive passed checks required to stop.  Default is 2.
         gelman_rubin : float or None
-            Gelman-Rubin threshold for convergence.  Default is 1.1.
+            Gelman-Rubin threshold.  Default is 1.1.
         geweke : float or None
             Geweke threshold.  Default is ``None`` (not checked).
         ess : float or None
-            ESS threshold.  Default is ``None`` (not checked).
+            Effective sample size threshold.  Default is ``None`` (not checked).
         save_every : int
-            Save checkpoint every this many steps.  Default is 300.
+            Checkpoint interval in steps.  Default is 300.
         max_init_attempts : int
             Maximum initialisation attempts per chain.  Default is 100.
         concatenate : bool
             Concatenate all chains before returning.  Default is ``True``.
         thinning : int
-            Keep every *thinning*-th sample in the returned chain.  All steps are
-            still taken and used for convergence diagnostics; thinning is applied
-            only to the output.  Default is 1 (no thinning).
+            Keep every *thinning*-th sample in the output.  Default is 1.
         """
-        self.initialize_samples(max_init_attempts=max_init_attempts)
+        initial_position = self.initialize_samples(max_init_attempts=max_init_attempts)
         self._thinning = int(thinning)
 
         if self.directory is None:
-            save_every = check_every  # skip intermediate saves
+            save_every = check_every
 
         if adaptation is not None:
-            self.adapt_sampler(**adaptation)
+            if self.pool.main:
+                self.kernel.adapt(initial_position=initial_position, **adaptation)
+                self.pool.stop_wait()
+            else:
+                self.pool.wait()
 
-        # Current raw step count across all chains (accounting for thinning on resume).
         steps = min(self.mpicomm.allgather(
             len(self._chain) * self._thinning if self.pool.main else sys.maxsize))
 
@@ -881,7 +1087,15 @@ class MarkovChainSampler(BaseSampler):
                 max_steps   - steps,
             )
             steps += steps_to_take
-            self.run_sampler(steps_to_take)
+            if self.pool.main:
+                samples, log_post = self.kernel.run(steps_to_take, initial_position=initial_position)
+                initial_position = None
+                derived = self._compute_derived(
+                    samples.reshape(-1, self.ndim)).reshape(samples.shape[:-1] + (-1,))
+                self.extend(samples, derived, log_post)
+                self.pool.stop_wait()
+            else:
+                self.pool.wait()
 
             if steps % check_every == 0:
                 self.checks.append(self.check(
@@ -910,8 +1124,8 @@ class MarkovChainSampler(BaseSampler):
 
     def read(self):
         if self.pool.main:
-            rng_path    = self.directory / f'rng_{self.chain_id}.json'
-            samples_path  = self.directory / f'samples_{self.chain_id}.h5'
+            rng_path     = self.directory / f'rng_{self.chain_id}.json'
+            samples_path = self.directory / f'samples_{self.chain_id}.h5'
             if rng_path.exists():
                 with open(rng_path, 'r') as fstream:
                     self.rng = np.random.default_rng()
@@ -920,158 +1134,24 @@ class MarkovChainSampler(BaseSampler):
                 self._chain = MCSamples.read(samples_path)
         checks_path = self.directory / 'checks.json'
         if checks_path.exists():
-            with open(self.directory / 'checks.json', 'r') as fstream:
+            with open(checks_path, 'r') as fstream:
                 self.checks = json.load(fstream)
 
 
-# ── Ensemble sampler ──────────────────────────────────────────────────────────
-
-class EnsembleSampler(MarkovChainSampler):
-    """Base for ensemble samplers (emcee, zeus) that run ``nwalkers`` in parallel."""
-
-    logger = logging.getLogger('EnsembleSampler')
-
-    def __init__(self, posterior, nchains=1, chains=None, rng=None,
-                 mpicomm=None, directory=None, nwalkers=None,
-                 rescale=False, covariance=None, batch_size=None):
-        super().__init__(posterior, nchains=nchains, chains=chains,
-                         rng=rng, mpicomm=mpicomm, directory=directory,
-                         rescale=rescale, covariance=covariance, batch_size=batch_size)
-        if nwalkers is None and self._chain is not None:
-            nwalkers = self._chain.shape[1] if len(self._chain.shape) > 1 else None
-        nwalkers_all = self.mpicomm.allgather(nwalkers)
-        for nw in nwalkers_all:
-            if nw is not None:
-                nwalkers = nw
-                break
-        self.nwalkers = int(nwalkers) if nwalkers is not None else None
-
-    def initialize_samples(self, max_init_attempts=100):
-        super().initialize_samples(max_init_attempts=max_init_attempts, shape=(self.nwalkers,))
-
-
-# ── Kernel-based infrastructure (new API) ─────────────────────────────────────
-
-class MCMCSampler(MarkovChainSampler):
-    """Kernel-based MCMC infrastructure — delegates the algorithm to a :class:`~desilike.samplers.kernels.Kernel`.
-
-    Instantiate via the :func:`Sampler` factory rather than directly.
-    """
-
-    logger = logging.getLogger('MCMCSampler')
-
-    def __init__(self, posterior, kernel, nparallel=1, chains=None, rng=None,
-                 mpicomm=None, directory=None, rescale=False, covariance=None,
-                 batch_size=None):
-        self.kernel = kernel
-        self._kernel_initialized = False
-        super().__init__(posterior, nchains=nparallel, chains=chains, rng=rng,
-                         mpicomm=mpicomm, directory=directory, rescale=rescale,
-                         covariance=covariance, batch_size=batch_size)
-
-    def _make_logposterior(self):
-        """Return a JAX-compatible ``{name: array} → float`` log-posterior in rescaled space."""
-        def logposterior(position_dict):
-            return self.posterior(self._forward_dict(position_dict), return_derived=False)
-        return logposterior
-
-    def _compute_derived_batch(self, samples):
-        """Compute derived parameters for a ``(n, ndim)`` batch of rescaled-space samples."""
-        if not self.n_derived:
-            return np.zeros((len(samples), 0))
-        if not hasattr(self, '_derived_fn'):
-            self._derived_fn = jax.jit(jax.vmap(self._compute_posterior_one))
-        _, derived = self._derived_fn(jnp.asarray(samples))
-        return np.asarray(derived)
-
-    def _init_kernel(self):
-        """Build the log-posterior callable and initialise the kernel (called lazily before first step)."""
-        logposterior = self._make_logposterior()
-        samples, _, _ = self.state   # (ndim,) in rescaled space
-        initial_position = _flat_to_dict(samples, self.varied_params)
-        context = dict(
-            ndim=self.ndim,
-            param_shapes={param.name: param.shape for param in self.varied_params},
-            initial_position=initial_position,
-        )
-        self.kernel.init(logposterior,
-                         self.varied_params.names(), self.rng, **context)
-        self._kernel_initialized = True
-
-    def run_sampler(self, n_steps):
-        if self.pool.main:
-            if not self._kernel_initialized:
-                self._init_kernel()
-            samples, log_post = self.kernel.run(n_steps)
-            derived = self._compute_derived_batch(samples)
-            self.extend(samples, derived, log_post)
-            self.pool.stop_wait()
-        else:
-            self.pool.wait()
-
-    def adapt_sampler(self, **kwargs):
-        if self.pool.main:
-            if not self._kernel_initialized:
-                self._init_kernel()
-            self.kernel.adapt(**kwargs)
-            self.pool.stop_wait()
-        else:
-            self.pool.wait()
-
-
-class EnsembleKernelSampler(MCMCSampler):
+class EnsembleSampler(MCMCSampler):
     """Kernel-based ensemble MCMC infrastructure — delegates to a multi-walker :class:`~desilike.samplers.kernels.Kernel`.
 
     Instantiate via the :func:`Sampler` factory rather than directly.
     """
 
-    logger = logging.getLogger('EnsembleKernelSampler')
+    logger = logging.getLogger('EnsembleSampler')
 
     def initialize_samples(self, max_init_attempts=100):
-        if self.kernel.nwalkers is None:
-            self.kernel.nwalkers = 4 * self.ndim
-        nwalkers_all = self.mpicomm.allgather(
-            self.kernel.nwalkers if self.pool.main else None)
-        for nw in nwalkers_all:
-            if nw is not None:
-                self.kernel.nwalkers = nw
-                break
-        super().initialize_samples(max_init_attempts=max_init_attempts,
-                                    shape=(self.kernel.nwalkers,))
-
-    def _init_kernel(self):
-        logposterior = self._make_logposterior()
-        samples, _, _ = self.state   # (nwalkers, ndim) in rescaled space
-        nwalkers = samples.shape[0]
-        initial_position = {}
-        for param, size, col in _param_sizes(self.varied_params):
-            vals = samples[:, col:col + size]
-            initial_position[param.name] = vals.reshape(nwalkers, *(param.shape or ()))
-        context = dict(
-            ndim=self.ndim,
-            param_shapes={param.name: param.shape for param in self.varied_params},
-            initial_position=initial_position,
-        )
-        self.kernel.init(logposterior,
-                         self.varied_params.names(), self.rng, **context)
-        self._kernel_initialized = True
-
-    def run_sampler(self, n_steps):
-        if self.pool.main:
-            if not self._kernel_initialized:
-                self._init_kernel()
-            samples, log_post = self.kernel.run(n_steps)
-            # samples: (n_steps, nwalkers, ndim); log_post: (n_steps, nwalkers)
-            nwalkers = self.kernel.nwalkers
-            derived = self._compute_derived_batch(
-                samples.reshape(-1, self.ndim)).reshape(n_steps, nwalkers, -1)
-            self.extend(samples, derived, log_post)
-            self.pool.stop_wait()
-        else:
-            self.pool.wait()
+        return super().initialize_samples(max_init_attempts=max_init_attempts,
+                                          shape=(self.kernel.nwalkers,))
 
 
-class NestedSampler(PopulationSampler):
+class PopulationSampler(BaseSampler):
     """Kernel-based infrastructure for nested / population samplers (dynesty, nautilus, pocomc, …).
 
     Delegates entirely to a :class:`~desilike.samplers.kernels.base.NestedKernel`; the kernel
@@ -1080,7 +1160,7 @@ class NestedSampler(PopulationSampler):
     Instantiate via the :func:`Sampler` factory rather than directly.
     """
 
-    logger = logging.getLogger('NestedSampler')
+    logger = logging.getLogger('PopulationSampler')
 
     def __init__(self, posterior, kernel, rng=None, directory=None,
                  rescale=False, covariance=None, batch_size=None):
@@ -1090,46 +1170,59 @@ class NestedSampler(PopulationSampler):
         super().__init__(posterior, rng=rng, directory=directory,
                          rescale=rescale, covariance=covariance, batch_size=batch_size)
 
-    def run_sampler(self, **kwargs):
-        """Delegate to ``kernel.run()``, which handles both main and worker paths."""
-        return self.kernel.run(
-            self.compute_likelihood, self.compute_prior, self.prior_transform,
+    def run(self, **kwargs):
+        output = self.kernel.run(
+            likelihood_logpdf=self.likelihood_logpdf,
+            prior=(self.prior_logpdf, self.prior_rvs, self.prior_ppf),
             pool=self.pool, rng=self.rng, ndim=self.ndim, directory=self.directory,
             n_derived=self.n_derived, params=self._transformed_params,
             **kwargs,
         )
+        if self.pool.main:
+            samples, derived, extras = output
+            self.samples = self.array_to_samples(samples, derived, **extras)
+        else:
+            self.samples = None
+        if self.directory is not None:
+            self.write()
+        return self.samples
 
 
-def Sampler(posterior, kernel, nparallel=1, rng=None, directory=None,
+def Sampler(posterior, kernel, nparallel=1, chains=None, rng=None, directory=None,
             rescale=False, covariance=None, batch_size=None):
     """Factory creating the appropriate infrastructure class for *kernel*.
 
     Parameters
     ----------
     posterior : CompiledGraph
-    kernel : Kernel or NestedKernel
+    kernel : Kernel, NestedKernel, or StaticKernel
         Algorithm instance, e.g. ``BlackjaxHMC(step_size=1e-3)``, ``Emcee(nwalkers=32)``,
-        ``Dynesty(dynamic=True)``.
+        ``Dynesty(dynamic=True)``, ``Grid()``, ``QMC()``, ``Importance()``.
     nparallel : int
         Number of independent chains (point MCMC) or independent ensemble runs (multi-walker).
-        Ignored for :class:`NestedSampler`.  Default is 1.
+        Ignored for :class:`PopulationSampler` and :class:`StaticSampler`.  Default is 1.
+    chains : list of MCSamples or None
+        Pre-existing chains to resume from.  Ignored for :class:`PopulationSampler`
+        and :class:`StaticSampler`.  Default is ``None``.
     rng : int or numpy.random.Generator or None
     directory : str or Path or None
     rescale : bool
     covariance : array_like or None
     batch_size : int or None
     """
-    from .kernels.base import _SAMPLER_REGISTRY
     cls = _SAMPLER_REGISTRY[kernel._sampler_cls]
-    if cls is NestedSampler:
+    if cls is PopulationSampler:
         return cls(posterior, kernel=kernel, rng=rng, directory=directory,
                    rescale=rescale, covariance=covariance, batch_size=batch_size)
-    return cls(posterior, kernel=kernel, nparallel=nparallel,
+    if cls is StaticSampler:
+        return cls(posterior, kernel=kernel, rng=rng, directory=directory,
+                   rescale=rescale, covariance=covariance)
+    return cls(posterior, kernel=kernel, nparallel=nparallel, chains=chains,
                rng=rng, directory=directory, rescale=rescale, covariance=covariance)
 
 
 # Register here so kernel modules can look up these classes without a circular import.
-from .kernels.base import _SAMPLER_REGISTRY as _KERNEL_REGISTRY
-_KERNEL_REGISTRY['MCMCSampler'] = MCMCSampler
-_KERNEL_REGISTRY['EnsembleKernelSampler'] = EnsembleKernelSampler
-_KERNEL_REGISTRY['NestedSampler'] = NestedSampler
+_SAMPLER_REGISTRY['MCMCSampler'] = MCMCSampler
+_SAMPLER_REGISTRY['EnsembleSampler'] = EnsembleSampler
+_SAMPLER_REGISTRY['PopulationSampler'] = PopulationSampler
+_SAMPLER_REGISTRY['StaticSampler'] = StaticSampler

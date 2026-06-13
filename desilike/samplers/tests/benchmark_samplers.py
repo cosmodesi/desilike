@@ -183,57 +183,55 @@ def build_posterior_gaussian(ndim=20, condition_number=1e4, seed=42):
 # ── sampler configuration ────────────────────────────────────────────────────
 
 def _sampler_config(ndim=1):
-    """Return (SamplerClass, init_kwargs, run_kwargs) per sampler name."""
+    """Return (kernel, sampler_kwargs, run_kwargs) per sampler name."""
     return {
         'emcee': (
-            samplers.EmceeSampler,
-            dict(nwalkers=4 * ndim, rng=42),
+            samplers.Emcee(nwalkers=4 * ndim),
+            dict(rng=42),
             dict(gelman_rubin=1.1, min_steps=50, max_steps=2000),
         ),
         'nautilus': (
-            samplers.NautilusSampler,
-            dict(n_networks=2, n_live=300, rng=42),
+            samplers.Nautilus(n_networks=2, n_live=300),
+            dict(rng=42),
             dict(n_eff=200),
         ),
         'pocomc': (
-            samplers.PocoMCSampler,
-            dict(n_effective=500, n_active=200),
+            samplers.PocoMC(n_effective=500, n_active=200),
+            dict(),
             dict(),
         ),
         'hmc': (
-            samplers.HMCSampler,
+            samplers.BlackjaxHMC(),
             dict(rng=42),
             dict(adaptation=dict(steps=500), gelman_rubin=1.1, min_steps=50, max_steps=2000),
         ),
         'mclmc': (
-            samplers.MCLMCSampler,
+            samplers.BlackjaxMCLMC(),
             dict(rescale=True, rng=42),
             dict(adaptation=dict(steps=1000, diagonal_preconditioning=False), gelman_rubin=1.1, min_steps=50, max_steps=2000),
         ),
         'nuts': (
-            samplers.NoUTurnSampler,
-            dict(rescale=True, step_size=0.05, rng=42),
+            samplers.BlackjaxNUTS(step_size=0.05),
+            dict(rescale=True, rng=42),
             dict(adaptation=dict(initial_step_size=0.1, target_acceptance_rate=0.8, steps=500, is_mass_matrix_diagonal=False), gelman_rubin=1.1, min_steps=200),
-            #dict(adaptation=dict(steps=500), gelman_rubin=1.1, min_steps=50),
-            #dict(adaptation=None, gelman_rubin=1.1, min_steps=50),
         ),
         'numpyro_nuts': (
-            samplers.NumpyroNUTSSampler,
+            samplers.NumpyroNUTS(),
             dict(rescale=True, rng=42),
             dict(adaptation=dict(steps=500, dense_mass=True), gelman_rubin=1.1, min_steps=50, max_steps=2000),
         ),
         'numpyro_hmc': (
-            samplers.NumpyroHMCSampler,
+            samplers.NumpyroHMC(),
             dict(rng=42),
             dict(adaptation=dict(steps=500), gelman_rubin=1.1, min_steps=50, max_steps=2000),
         ),
         'numpyro_barker': (
-            samplers.NumpyroBarkerMHSampler,
+            samplers.NumpyroBarkerMH(),
             dict(rescale=True, rng=42),
             dict(adaptation=dict(steps=500, dense_mass=True), gelman_rubin=1.1, min_steps=50, max_steps=5000),
         ),
         'numpyro_sa': (
-            samplers.NumpyroSASampler,
+            samplers.NumpyroSA(),
             dict(rng=42),
             dict(adaptation=dict(steps=500, dense_mass=True), gelman_rubin=1.1, min_steps=50, max_steps=2000),
         ),
@@ -269,11 +267,11 @@ POSTERIORS = {
     'gaussian': build_posterior_gaussian,
 }
 
-PROFILER_CLS = {
-    'minuit': profilers.MinuitProfiler,
-    'scipy': profilers.ScipyProfiler,
-    'bobyqa': profilers.BOBYQAProfiler,
-    'optax': profilers.OptaxProfiler,
+PROFILER_KERNELS = {
+    'minuit': lambda: profilers.Minuit(),
+    'scipy':  lambda: profilers.Scipy(),
+    'bobyqa': lambda: profilers.BOBYQA(),
+    'optax':  lambda: profilers.Optax(),
 }
 
 
@@ -318,13 +316,12 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', dire
     profiler_results = {}
     if profiler_names:
         for name in profiler_names:
-            if name not in PROFILER_CLS:
+            if name not in PROFILER_KERNELS:
                 print(f'[{name}] unknown profiler — skipping')
                 continue
-            cls = PROFILER_CLS[name]
             print(f'─── {name} {"─" * (50 - len(name))}')
             try:
-                profiler = cls(profiler_posterior, seed=42)
+                profiler = profilers.Profiler(profiler_posterior, kernel=PROFILER_KERNELS[name](), rng=42)
                 t_start = time.perf_counter()
                 profiler.maximize()
                 elapsed = time.perf_counter() - t_start
@@ -370,7 +367,7 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', dire
                 sampler_posterior = _build_posterior(posterior)
 
             config = _sampler_config(ndim=len(get_params(sampler_posterior).names(varied=True, derived=False)))
-            cls, init_kwargs, run_kwargs = config[name]
+            kernel, sampler_kwargs, run_kwargs = config[name]
 
             sampler_dir = None
             if directory is not None:
@@ -378,11 +375,11 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', dire
 
             print(f'─── {name} {"─" * (50 - len(name))}')
             try:
-                init_kwargs = dict(init_kwargs)
-                if init_kwargs.get('rescale', False):
+                sampler_kwargs = dict(sampler_kwargs)
+                if sampler_kwargs.get('rescale', False):
                     profiles = profiler.profiles.choice(index='argmax', squeeze=True)
                     best, error, covariance = profiles.best, profiles.error, profiles.covariance
-                    init_kwargs['covariance'] = covariance
+                    sampler_kwargs['covariance'] = covariance
                     print(covariance._value)
                     error = {param: covariance.std(param) for param in covariance.names()}
                     for param in get_params(sampler_posterior):
@@ -390,7 +387,7 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', dire
                             param.update(ref=dict(dist='norm', loc=best[param.name], scale=error[param.name]))
                             print(param, param.ref)
 
-                sampler = cls(compile(sampler_posterior), directory=sampler_dir, **init_kwargs)
+                sampler = samplers.Sampler(compile(sampler_posterior), kernel=kernel, directory=sampler_dir, **sampler_kwargs)
                 t_start = time.perf_counter()
                 chain = sampler.run(**run_kwargs)
                 elapsed = time.perf_counter() - t_start
@@ -445,7 +442,7 @@ if __name__ == '__main__':
     parser.add_argument('--samplers', nargs='*', metavar='SAMPLER', default=[],
                         help='Samplers to run (default: none)')
     parser.add_argument('--profilers', nargs='*', metavar='PROFILER',
-                        choices=list(PROFILER_CLS), default=[],
+                        choices=list(PROFILER_KERNELS), default=[],
                         help='Profilers to run (default: none)')
     args = parser.parse_args()
     setup_logging()

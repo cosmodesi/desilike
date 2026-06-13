@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import dataclasses
 import functools
-from typing import Callable
 
 import numpy as np
 import jax
@@ -16,25 +15,75 @@ from ..samples import Profiles, Covariance
 from ..distributed import default_mpicomm, get_mpicomm
 
 
+# ── Kernel ────────────────────────────────────────────────────────────────────
+
+class Kernel:
+    """Abstract base class for profiler kernels.
+
+    A kernel encapsulates an optimisation algorithm.  It knows nothing about
+    MPI, rescaling, or parameter bookkeeping — those live in :class:`Profiler`.
+    """
+
+    logger = logging.getLogger('Kernel')
+
+    #: Set ``True`` for gradient-based kernels; the profiler will then compile
+    #: ``jax.grad(chi2)`` and pass it to :meth:`run`.
+    with_gradient: bool = False
+
+    def init(self):
+        """Lightweight one-time setup (e.g. dependency check).
+
+        Called eagerly in :meth:`Profiler.__init__` before any chi2 is
+        available.  The default implementation does nothing.
+        """
+
+    def run(self, state: 'ProfilerState', chi2, grad=None, **kwargs) -> 'ProfilerState':
+        """Run one optimisation.
+
+        Parameters
+        ----------
+        state : ProfilerState
+            Input state: ``start`` (flat rescaled vector), ``bounds``,
+            ``proposals``, ``fast``.  The result fields
+            (``best``, ``logpdf``, ``cov``) are ``None`` on entry.
+        chi2 : callable
+            JIT-compiled ``chi2(x_rescaled) → scalar``.
+        grad : callable or None
+            JIT-compiled gradient of ``chi2``, or ``None`` for derivative-free
+            kernels.
+        **kwargs
+            Algorithm-specific keyword arguments (e.g. ``max_iterations``).
+
+        Returns
+        -------
+        ProfilerState
+            Same object, with ``best``, ``logpdf``, and optionally ``cov``
+            filled in (or left ``None`` when the optimisation failed).
+        """
+        raise NotImplementedError
+
+
 # ── ProfilerState ─────────────────────────────────────────────────────────────
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
 class ProfilerState:
-    """Immutable snapshot of one optimisation problem in *rescaled* space.
+    """Mutable snapshot of one optimisation problem in *rescaled* space.
 
-    Use ``dataclasses.replace(state, start=x0)`` to vary the starting point.
+    ``start``, ``bounds``, and ``proposals`` use the *flat* parameter layout:
+    a vector param of shape ``(n,)`` occupies ``n`` consecutive elements.
+    Scalar params occupy one element each.
 
-    ``start``, ``flat_bounds``, and ``flat_proposals`` all use the *flat*
-    parameter layout: a vector param of shape ``(n,)`` occupies ``n``
-    consecutive elements.  Scalar params occupy one element each.
+    The result fields (``best``, ``logpdf``, ``cov``) are ``None`` before
+    :meth:`Kernel.run` fills them in.
     """
-    chi2_fn:        Callable            # chi2(x_rescaled) → scalar
-    grad_fn:        Callable | None     # grad_chi2, or None
-    start:          np.ndarray          # shape (flat_size,) in rescaled space
-    varied_params:  VariableCollection  # per-param metadata (names, shapes, …)
-    flat_bounds:    list                # [(lo, hi), …] per flat element, rescaled
-    flat_proposals: list                # [proposal, …]  per flat element, rescaled
-    fast:           bool                # True → skip hesse / covariance
+    start:     np.ndarray          # shape (flat_size,) in rescaled space
+    bounds:    list                # [(lo, hi), …] per flat element, rescaled
+    proposals: list                # [proposal, …]  per flat element, rescaled
+    fast:      bool                # True → skip hesse / covariance
+    # Results (filled by Kernel.run)
+    best:   np.ndarray | None = None
+    logpdf: float | None = None
+    cov:    np.ndarray | None = None   # (flat_size, flat_size) or None
 
 
 # ── flat-layout helpers ───────────────────────────────────────────────────────
@@ -169,30 +218,38 @@ def _pool_map(mpicomm, fn, items):
     return results
 
 
-# ── BaseProfiler ──────────────────────────────────────────────────────────────
+def _state_to_profiles(state: ProfilerState, varied_params) -> 'Profiles | None':
+    """Convert a completed ProfilerState to a Profiles object (rescaled space)."""
+    if state.best is None:
+        return None
+    profiles = Profiles()
+    profiles.best = _build_best_from_x(state.best, state.logpdf, varied_params)
+    profiles.logpdf = np.array([state.logpdf])
+    if state.cov is not None and not state.fast:
+        profiles.error = _build_error_from_cov(state.cov, varied_params)
+        profiles.covariance = Covariance(state.cov, list(varied_params))
+    return profiles
 
-class BaseProfiler:
-    """Base class for likelihood profilers.
 
-    Subclasses implement ``_maximize_one(state, **kwargs) -> Profiles``
-    working entirely in *rescaled* parameter space.
+# ── Profiler ──────────────────────────────────────────────────────────────────
+
+class Profiler:
+    """Likelihood profiler: maximize, profile, grid, covariance, interval, contour.
 
     Parameters
     ----------
     likelihood : CompiledGraph
         Compiled pipeline whose ``__call__(params_dict)`` returns the
         log-posterior scalar.
-    rng : np.random.Generator, optional
-        Random number generator.  If ``None``, built from *seed*.
-    seed : int, optional
-        Seed for ``np.random.default_rng``.
+    kernel : Kernel
+        Optimisation kernel (e.g. ``Minuit()``, ``Scipy()``, ``BOBYQA()``).
+    rng : np.random.Generator or int, optional
+        Random number generator or integer seed.  When ``None`` a fresh
+        unseeded generator is used.
     max_tries : int
         Maximum candidate draws when searching for a finite starting point.
     profiles : Profiles or path, optional
         Existing profiles to append new results to.
-    ref_scale : float
-        Rescale each parameter's reference distribution by this factor
-        before sampling starting points.
     rescale : bool
         Internally normalise parameters so that their expected variation
         range is ~ unity.
@@ -218,17 +275,15 @@ class BaseProfiler:
     identical result; only rank 0 writes ``save_fn``.
     """
 
-    logger = logging.getLogger('BaseProfiler')
-
-    #: Override in subclasses (set ``True`` to enable gradient probing).
-    with_gradient: bool = False
+    logger = logging.getLogger('Profiler')
 
     @default_mpicomm
-    def __init__(self, likelihood, rng=None, seed=None, max_tries=1000,
-                 profiles=None, ref_scale=1., rescale=False, covariance=None,
+    def __init__(self, likelihood, kernel, rng=None, max_tries=1000,
+                 profiles=None, rescale=False, covariance=None,
                  save_fn=None, mpicomm=None):
 
         self.likelihood = likelihood
+        self.kernel     = kernel
         self.max_tries  = int(max_tries)
         self.save_fn    = save_fn
         self.mpicomm    = mpicomm
@@ -241,17 +296,6 @@ class BaseProfiler:
             self.logger.info('Varied parameters: %s', self.varied_params.names())
             if self.save_fn is not None:
                 self.logger.info('Profiles will be written to: %s', self.save_fn)
-
-        # Apply ref_scale (copy so we don't mutate the likelihood's params)
-        if ref_scale != 1.:
-            ref_scaled_params = VariableCollection()
-            for param in self.varied_params:
-                ref = param.ref.affine_transform(
-                    loc=(1. - ref_scale) * param.ref.center(),
-                    scale=ref_scale,
-                )
-                ref_scaled_params.set(param.clone(ref=ref))
-            self.varied_params = ref_scaled_params
 
         # ── flat parameter layout ─────────────────────────────────────────
         # Every parameter is flattened: shape () → 1 element, shape (n,) → n
@@ -314,10 +358,13 @@ class BaseProfiler:
         self.profiles = profiles
 
         # ── random state ──────────────────────────────────────────────────
-        self.rng = rng if rng is not None else np.random.default_rng(seed)
+        self.rng = np.random.default_rng(rng)
 
         # ── JAX compilation ───────────────────────────────────────────────
-        self._jit_chi2, self._grad_chi2 = _jit_and_grad(self._chi2_rescaled, with_gradient=self.with_gradient)
+        self._jit_chi2, self._grad_chi2 = _jit_and_grad(self._chi2_rescaled, with_gradient=kernel.with_gradient)
+
+        # ── kernel setup ──────────────────────────────────────────────────
+        kernel.init()
 
     # ── coordinate transforms ─────────────────────────────────────────────────
 
@@ -522,32 +569,28 @@ class BaseProfiler:
             niterations     = niterations or 1
             starts_rescaled = self._get_starts(niterations)
 
-        flat_bounds   = _compute_flat_bounds(self._transformed_params)
-        flat_proposals = _compute_flat_proposals(self._transformed_params)
+        bounds   = _compute_flat_bounds(self._transformed_params)
+        proposals = _compute_flat_proposals(self._transformed_params)
 
         state_tmpl = ProfilerState(
-            chi2_fn=self._jit_chi2,
-            grad_fn=self._grad_chi2,
-            start=starts_rescaled[0],      # placeholder; replaced per-run
-            varied_params=self._transformed_params,
-            flat_bounds=flat_bounds,
-            flat_proposals=flat_proposals,
+            start=starts_rescaled[0],      # placeholder; replaced per run
+            bounds=bounds,
+            proposals=proposals,
             fast=False,
         )
 
-        # Bind kwargs into the function so the per-start map gets a 1-arg callable
-        run_one = functools.partial(_maximize_one_worker, self, state_tmpl, kwargs)
+        run_one = functools.partial(_run_one_worker, self.kernel, state_tmpl, self._jit_chi2, self._grad_chi2, kwargs)
         raw = _pool_map(self.mpicomm, run_one, list(starts_rescaled))
 
-        profiles = self._merge_and_transform(raw)
+        profiles = self._merge_and_transform([_state_to_profiles(state, self._transformed_params) for state in raw])
         self._add_derived(profiles)
 
         # Populate profiles.start with starting points in original space.
         # Only include starts for runs that produced a best-fit result.
         if profiles is not None and profiles.best is not None:
             successful_starts = np.array([
-                s for r, s in zip(raw, starts_rescaled)
-                if r is not None and r.best is not None
+                s for state, s in zip(raw, starts_rescaled)
+                if state.best is not None
             ])
             if successful_starts.size > 0:
                 starts_orig = successful_starts * self._scale + self._loc
@@ -980,7 +1023,7 @@ class BaseProfiler:
             def chi2_2arg(x_free, point_r):
                 full = jnp.zeros(flat_size).at[free_idx_arr].set(x_free).at[fixed_idx_arr].set(point_r)
                 return self._chi2_rescaled(full)
-            jit_chi2_fixed, grad_chi2_fixed = _jit_and_grad(chi2_2arg, with_gradient=self.with_gradient)
+            jit_chi2_fixed, grad_chi2_fixed = _jit_and_grad(chi2_2arg, with_gradient=self.kernel.with_gradient)
 
         return dict(
             free_params=free_params,
@@ -1033,12 +1076,9 @@ class BaseProfiler:
             starts_free = spread + last_free[None, :]
 
         state_tmpl = ProfilerState(
-            chi2_fn=chi2_fn,
-            grad_fn=grad_fn,
-            start=starts_free[0],
-            varied_params=scan_ctx['free_params'],
-            flat_bounds=scan_ctx['flat_bounds_free'],
-            flat_proposals=scan_ctx['flat_proposals_free'],
+            start=starts_free[0],  # placeholder; replaced per start
+            bounds=scan_ctx['flat_bounds_free'],
+            proposals=scan_ctx['flat_proposals_free'],
             fast=True,
         )
 
@@ -1046,17 +1086,12 @@ class BaseProfiler:
         best_free = None
         for start in starts_free:
             state = dataclasses.replace(state_tmpl, start=start)
-            raw   = self._maximize_one(state, **kwargs)
-            if raw is not None and raw.logpdf is not None:
-                lp = float(np.max(raw.logpdf))
+            state = self.kernel.run(state, chi2_fn, grad=grad_fn, **kwargs)
+            if state.logpdf is not None:
+                lp = float(state.logpdf)
                 if lp > best_lp:
                     best_lp = lp
-                    if scan_ctx['free_params']:
-                        idx_best  = int(np.argmax(raw.logpdf))
-                        best_free = np.concatenate([
-                            np.asarray(raw.best[param.name][idx_best]).ravel()
-                            for param in scan_ctx['free_params']
-                        ])
+                    best_free = state.best
 
         return best_lp, best_free
 
@@ -1296,13 +1331,6 @@ class BaseProfiler:
         arr = np.array(contour_points).T   # shape (2, size + 1)
         return arr[0], arr[1]
 
-    # ── abstract interface ────────────────────────────────────────────────────
-
-    def _maximize_one(self, state: ProfilerState, **kwargs) -> Profiles:
-        """One optimisation run in rescaled space.  Subclasses implement this."""
-        raise NotImplementedError
-
-
 # ── module-level helpers (picklable) ──────────────────────────────────────────
 
 def _parse_profile_args(params, grid, size, cl, all_names):
@@ -1372,7 +1400,7 @@ def _jit_and_grad(fn, with_gradient=False):
     return jit_fn, grad_fn
 
 
-def _maximize_one_worker(profiler, state_tmpl, kwargs, x0):
-    """Top-level (picklable) worker for pool.map in maximize()."""
+def _run_one_worker(kernel, state_tmpl, chi2, grad, kwargs, x0):
+    """Top-level (picklable) worker for _pool_map in Profiler.maximize()."""
     state = dataclasses.replace(state_tmpl, start=x0)
-    return profiler._maximize_one(state, **kwargs)
+    return kernel.run(state, chi2, grad=grad, **kwargs)

@@ -299,7 +299,7 @@ class Variable(Node):
         force_namespace = namespace is True
         provided_namespace = False
         if force_namespace or auto_namespace:
-            namespace = str(self._namespace)
+            namespace = str(self.namespace)
         elif namespace is not False:
             namespace = str(namespace)
             provided_namespace = force_namespace = True

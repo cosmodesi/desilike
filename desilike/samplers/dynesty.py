@@ -40,7 +40,7 @@ class Dynesty(PopulationKernel):
         self._sampler = None
 
     def run(self, likelihood_logpdf, prior,
-            pool, rng, ndim, output_dir=None, n_derived=0, params=None, **kwargs):
+            pool, rng, ndim, output_dir=None, nderived=0, params=None, **kwargs):
         if not DYNESTY_INSTALLED:
             raise ImportError("The 'dynesty' package is required but not installed.")
 

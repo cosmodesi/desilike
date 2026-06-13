@@ -431,4 +431,4 @@ class MetropolisHastings(Kernel):
                 except np.linalg.LinAlgError:
                     pass
 
-        return samples, log_post
+        return samples, None, {'logposterior': log_post}

@@ -116,7 +116,7 @@ class _BlackJAXKernel(Kernel):
 
         samples  = np.asarray(all_states.position).reshape(n_steps, -1)
         log_post = np.asarray(all_states.logdensity).reshape(n_steps)
-        return samples, log_post
+        return samples, None, {'logposterior': log_post}
 
 
 class BlackjaxHMC(_BlackJAXKernel):

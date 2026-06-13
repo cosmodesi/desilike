@@ -138,7 +138,7 @@ class _NumpyroKernel(Kernel):
         self.logger.info('total likelihood evaluations(~): %d',
                          self._total_likelihood_evaluations)
 
-        return samples, log_post
+        return samples, None, {'logposterior': log_post}
 
 
 class NumpyroNUTS(_NumpyroKernel):

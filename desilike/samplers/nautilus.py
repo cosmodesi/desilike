@@ -40,7 +40,7 @@ class Nautilus(PopulationKernel):
         self._initialized = False
 
     def run(self, likelihood_logpdf, prior,
-            pool, rng, ndim, output_dir=None, n_derived=0, params=None, **kwargs):
+            pool, rng, ndim, output_dir=None, nderived=0, params=None, **kwargs):
         if not NAUTILUS_INSTALLED:
             raise ImportError("The 'nautilus-sampler' package is required but not installed.")
 

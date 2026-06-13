@@ -82,11 +82,11 @@ class PocoMC(PopulationKernel):
         self._sampler = None
 
     def run(self, likelihood_logpdf, prior,
-            pool, rng, ndim, output_dir=None, n_derived=0, params=None, **kwargs):
+            pool, rng, ndim, output_dir=None, nderived=0, params=None, **kwargs):
         if not POCOMC_INSTALLED:
             raise ImportError("The 'pocomc' package is required but not installed.")
 
-        has_derived = bool(n_derived)
+        has_derived = bool(nderived)
         prior_logpdf, prior_rvs, prior_ppf = prior
 
         if pool.main:

@@ -379,7 +379,7 @@ class BaseSampler(ABC):
         # Derived = pure derived outputs (logposterior etc.) + analytically solved params.
         self.derived_params = posterior.params.select(derived=True) + posterior.params.select(solved=True)
         # Flat count of derived scalar values (for array_to_samples bookkeeping)
-        self.n_derived = int(sum(
+        self.nderived = int(sum(
             int(np.prod(p.shape)) if p.shape else 1
             for p in self.derived_params
         ))
@@ -626,7 +626,7 @@ class BaseSampler(ABC):
     def _compute_posterior_one(self, sample):
         """Return ``(log_posterior, derived_flat)`` for a single rescaled-space ``(ndim,)`` sample."""
         sample = _flat_to_dict(self._forward(sample), self.varied_params)
-        if self.n_derived:
+        if self.nderived:
             log_post, derived_dict = self.posterior(sample, return_derived=True)
             derived_flat = jnp.concatenate([
                 jnp.ravel(jnp.asarray(derived_dict.get(param.name, jnp.zeros(param.shape))))
@@ -849,6 +849,8 @@ class MCMCSampler(BaseSampler):
         self.kernel.init(
             self.posterior_logpdf, self.rng,
             ndim=self.ndim,
+            nderived=self.nderived,
+            posterior_with_derived=jax.jit(jax.vmap(self._compute_posterior_one)) if self.nderived else None,
             param_shapes={param.name: param.shape for param in self.varied_params},
         )
 
@@ -876,12 +878,10 @@ class MCMCSampler(BaseSampler):
 
     def _compute_derived(self, samples):
         """Compute derived parameters for a ``(n, ndim)`` batch of rescaled-space samples."""
-        if not self.n_derived:
+        if not self.nderived:
             return np.zeros((len(samples), 0))
-        if not hasattr(self, '_derived_fn'):
-            self._derived_fn = jax.jit(jax.vmap(self._compute_posterior_one))
-        _, derived = self._derived_fn(jnp.asarray(samples))
-        return np.asarray(derived)
+        results = self.pool.map(self.compute_posterior, samples)
+        return np.array([result[1] for result in results])
 
     def initialize_samples(self, max_init_attempts=100, shape=None):
         """Draw initial chain states with finite log-posterior."""
@@ -965,7 +965,7 @@ class MCMCSampler(BaseSampler):
             for param in self.varied_params], axis=-1)
         derived  = np.concatenate([
             np.asarray(self._chain[param.name])[-1].reshape(walker_shape + (-1,))
-            for param in self.derived_params], axis=-1) if self.n_derived else np.empty(0)
+            for param in self.derived_params], axis=-1) if self.nderived else np.empty(0)
         log_post = np.asarray(self._chain.logposterior)[-1]
         return np.asarray(self._backward(samples)), np.array(derived), np.array(log_post)
 
@@ -1088,11 +1088,12 @@ class MCMCSampler(BaseSampler):
             )
             steps += steps_to_take
             if self.pool.main:
-                samples, log_post = self.kernel.run(steps_to_take, initial_position=initial_position)
+                samples, derived, extras = self.kernel.run(steps_to_take, initial_position=initial_position)
                 initial_position = None
-                derived = self._compute_derived(
-                    samples.reshape(-1, self.ndim)).reshape(samples.shape[:-1] + (-1,))
-                self.extend(samples, derived, log_post)
+                if derived is None:
+                    derived = self._compute_derived(
+                        samples.reshape(-1, self.ndim)).reshape(samples.shape[:-1] + (-1,))
+                self.extend(samples, derived, extras['logposterior'])
                 self.pool.stop_wait()
             else:
                 self.pool.wait()
@@ -1175,7 +1176,7 @@ class PopulationSampler(BaseSampler):
             likelihood_logpdf=self.likelihood_logpdf,
             prior=(self.prior_logpdf, self.prior_rvs, self.prior_ppf),
             pool=self.pool, rng=self.rng, ndim=self.ndim, output_dir=self.output_dir,
-            n_derived=self.n_derived, params=self._transformed_params,
+            nderived=self.nderived, params=self._transformed_params,
             **kwargs,
         )
         if self.pool.main:

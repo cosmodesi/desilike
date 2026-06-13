@@ -24,7 +24,7 @@ _BLACKJAX_ADAPTATION = dict(adaptation=dict(steps=500))
 KERNEL_SAMPLER = dict(
     emcee=lambda: samplers.Emcee(nwalkers=8),
     zeus=lambda: samplers.Zeus(nwalkers=8),
-    mhmcmc=lambda: samplers.MetropolisHastings(),
+    mhmcmc=lambda: samplers.MH(),
     hmc=lambda: samplers.BlackjaxHMC(),
     nuts=lambda: samplers.BlackjaxNUTS(),
     mclmc=lambda: samplers.BlackjaxMCLMC(),
@@ -312,13 +312,13 @@ def test_kernel_multiple_chains(likelihood, key):
             assert np.allclose(np.asarray(chain_10['a']), np.asarray(chain_20['a'])[:10])
 
 
-# ── MetropolisHastings fast-slow decomposition ────────────────────────────────
+# ── MH fast-slow decomposition ────────────────────────────────
 
 @pytest.mark.mpi_skip
 def test_mh_fast_slow(likelihood):
-    """MetropolisHastings kernel accepts fast parameters."""
+    """MH kernel accepts fast parameters."""
     sampler = samplers.Sampler(
-        likelihood, kernel=samplers.MetropolisHastings(fast=['a'], f_fast=1), rng=42)
+        likelihood, kernel=samplers.MH(fast=['a'], f_fast=1), rng=42)
     sampler.run(max_steps=100)
 
 
@@ -419,4 +419,3 @@ if __name__ == '__main__':
     likelihood = likelihood()
     sampler = samplers.Sampler(likelihood, kernel=samplers.Emcee(nwalkers=8), rng=42)
     results = sampler.run(**_MCMC_MIN_STEPS)
-    print(results.mean(['a', 'b']))

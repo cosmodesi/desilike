@@ -81,40 +81,36 @@ class PocoMC(PopulationKernel):
         self._kwargs = kwargs
         self._sampler = None
 
-    def run(self, likelihood_logpdf, prior,
-            pool, rng, ndim, output_dir=None, nderived=0, params=None, **kwargs):
+    def init(self, likelihood, prior, rng, **context):
+        _, self._likelihood_logpdf_with_derived = likelihood
+        self._prior_logpdf, self._prior_rvs, self._prior_ppf = prior
+        self._rng = rng
+        self._pool = context['pool']
+        self._ndim = context['ndim']
+        self._output_dir = context.get('output_dir')
+
+    def run(self, **kwargs):
         if not POCOMC_INSTALLED:
             raise ImportError("The 'pocomc' package is required but not installed.")
 
-        has_derived = bool(nderived)
-        prior_logpdf, prior_rvs, prior_ppf = prior
-
-        if pool.main:
+        if self._pool.main:
             if self._sampler is None:
-                prior_obj = _Prior(prior_logpdf, prior_rvs, prior_ppf, ndim)
-
-                # When there are derived parameters, keep (log_l, derived) tuples so
-                # pocomc stores blobs; otherwise return plain scalars.
-                if has_derived:
-                    _likelihood_fn = likelihood_logpdf
-                else:
-                    _likelihood_fn = lambda batch: [result[0] for result in likelihood_logpdf(batch)]
-
+                prior_obj = _Prior(self._prior_logpdf, self._prior_rvs, self._prior_ppf, self._ndim)
                 init_kwargs = update_kwargs(
                     dict(**self._kwargs), 'pocoMC',
-                    prior=prior_obj, likelihood=_likelihood_fn, n_dim=ndim,
-                    pool=pool,
-                    output_dir=output_dir,
-                    random_state=rng.integers(2**32 - 1))
+                    prior=prior_obj, likelihood=self._likelihood_logpdf_with_derived,
+                    n_dim=self._ndim, pool=self._pool,
+                    output_dir=self._output_dir,
+                    random_state=self._rng.integers(2**32 - 1))
                 self._sampler = _pocomc.Sampler(**init_kwargs)
 
                 _patch_save_state(self._sampler)
 
                 # Restore checkpoint if available.
-                if output_dir is not None:
+                if self._output_dir is not None:
                     filepath_max = None
                     state_max = -1
-                    for filepath in output_dir.glob('pmc_*.state'):
+                    for filepath in self._output_dir.glob('pmc_*.state'):
                         state = str(filepath.stem).split('_')[1]
                         if state == 'final':
                             filepath_max = filepath
@@ -134,18 +130,14 @@ class PocoMC(PopulationKernel):
             run_kwargs = update_kwargs(
                 kwargs, 'pocoMC',
                 resume_state_path=None,
-                save_every=1 if output_dir is not None else None)
+                save_every=1 if self._output_dir is not None else None)
             self._sampler.run(**run_kwargs)
 
-            if has_derived:
-                samples, weights, logl, logp, blobs = self._sampler.posterior(return_blobs=True)
-                blobs = blobs.reshape(len(samples), -1)
-            else:
-                samples, weights, logl, logp = self._sampler.posterior(return_blobs=False)
-                blobs = np.empty((len(samples), 0))
+            samples, weights, logl, logp, blobs = self._sampler.posterior(return_blobs=True)
+            blobs = blobs.reshape(len(samples), -1)
 
-            pool.stop_wait()
+            self._pool.stop_wait()
             self.logger.info('Finished sampling.')
             return samples, blobs, dict(aweight=weights, logposterior=logl + logp)
-        pool.wait()
+        self._pool.wait()
         return None

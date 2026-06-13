@@ -41,9 +41,11 @@ class _NumpyroKernel(Kernel):
     _numpyro_cls = None
     _extra_fields = ('accept_prob', 'potential_energy')
 
-    def init(self, posterior_logpdf, rng, **context):
+    def init(self, posterior, rng, **context):
         if not NUMPYRO_INSTALLED:
             raise ImportError("The 'numpyro' package is required but not installed.")
+
+        posterior_logpdf, _ = posterior
 
         self._rng = rng
         self._ndim = context['ndim']
@@ -59,14 +61,13 @@ class _NumpyroKernel(Kernel):
         self._current_position = None
         self._total_likelihood_evaluations = 0
 
-    def adapt(self, initial_position=None, **kwargs):
+    def adapt(self, state, **kwargs):
         """Run NumPyro warmup and rebuild the kernel with adapted parameters.
 
         Parameters
         ----------
-        initial_position : dict or None
-            Starting position ``{name: array}`` in rescaled space.  Used only on the
-            first call; ignored if the sampler already has a current position.
+        state : tuple
+            ``(position, derived, logposterior)`` in rescaled space.
         steps : int
             Number of warmup steps.
         adapt_step_size : bool, optional
@@ -77,8 +78,9 @@ class _NumpyroKernel(Kernel):
         **kwargs
             Extra keyword arguments forwarded to the warmup kernel constructor.
         """
+        position, _, _ = state
         if self._current_position is None:
-            self._current_position = initial_position
+            self._current_position = position
         steps = kwargs.pop('steps')
 
         warmup_kernel = getattr(numpyro.infer, self._numpyro_cls)(
@@ -111,9 +113,10 @@ class _NumpyroKernel(Kernel):
         self.logger.info('Adaptation done.')
         _log_adaptation(self.logger, self.kernel_kwargs)
 
-    def run(self, n_steps, initial_position=None):
+    def run(self, n_steps, state):
+        position, _, _ = state
         if self._current_position is None:
-            self._current_position = initial_position
+            self._current_position = position
         rng_key = jax.random.PRNGKey(int(self._rng.integers(2**32)))
         mcmc = numpyro.infer.MCMC(
             self._numpyro_kernel, num_warmup=0, num_samples=n_steps, progress_bar=False)

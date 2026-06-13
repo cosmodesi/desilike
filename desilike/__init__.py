@@ -8,7 +8,7 @@ from .emulators import TaylorEmulator
 from .samples import Samples, MCSamples, Profiles, Covariance, Precision
 from .profilers import Profiler, Scipy, Minuit, Optax, BOBYQA
 from .samplers import (Sampler,
-                       Emcee, Zeus, MetropolisHastings,
+                       Emcee, Zeus, MH,
                        BlackjaxHMC, BlackjaxNUTS, BlackjaxMCLMC,
                        NumpyroNUTS, NumpyroHMC, NumpyroBarkerMH, NumpyroSA,
                        Dynesty, Nautilus, PocoMC,

@@ -104,7 +104,7 @@ class FastSlowProposer:
         return (m_slow @ self.L.T)[:, :, self.unsort]
 
 
-class StandAloneMetropolisHastingsSampler:
+class StandAloneMHSampler:
     """A Metropolis-Hastings sampler with fast-slow decomposition.
 
     Note that this is a from-scratch reimplementation of this algorithm. Also,
@@ -340,14 +340,14 @@ class StandAloneMetropolisHastingsSampler:
         return chains, blobs, log_p
 
 
-class MetropolisHastings(Kernel):
+class MH(Kernel):
     """Metropolis-Hastings sampler with fast-slow decomposition.
 
     .. rubric:: References
     - https://arxiv.org/abs/1304.4473
     """
 
-    logger = logging.getLogger('MetropolisHastings')
+    logger = logging.getLogger('MH')
     _sampler_cls = 'MCMCSampler'
 
     def __init__(self, f_fast=1, f_drag=0, fast=None, covariance=None):
@@ -370,7 +370,8 @@ class MetropolisHastings(Kernel):
         self.fast = list(fast) if fast is not None else []
         self.covariance = covariance
 
-    def init(self, posterior_logpdf, rng, **context):
+    def init(self, posterior, rng, **context):
+        posterior_logpdf, _ = posterior
         ndim = context['ndim']
         param_shapes = context['param_shapes']
 
@@ -386,7 +387,7 @@ class MetropolisHastings(Kernel):
         def _posterior(flat):
             return float(posterior_logpdf(jax.numpy.asarray(flat)[None])[0])
 
-        self._standalone = StandAloneMetropolisHastingsSampler(
+        self._standalone = StandAloneMHSampler(
             _posterior, fast=flat_fast_indices,
             f_fast=self.f_fast, f_drag=self.f_drag, rng=rng)
 
@@ -398,14 +399,14 @@ class MetropolisHastings(Kernel):
         self._accumulated_samples = []
         self._total_steps = 0
 
-    def adapt(self, initial_position=None, **kwargs):
+    def adapt(self, state, **kwargs):
         """Store the adaptation horizon; proposal covariance is updated inline during :meth:`run`."""
         self._adaptation_steps = int(kwargs.get('steps', 0))
 
-    def run(self, n_steps, initial_position=None):
+    def run(self, n_steps, state):
+        position, _, _ = state
         if not self._initialized:
-            # initial_position is a flat (ndim,) array in rescaled space
-            initial_flat = np.asarray(initial_position).ravel()
+            initial_flat = np.asarray(position).ravel()
             initial_log_p = self._posterior(initial_flat)
             self._standalone.update(
                 pos=initial_flat[None, :],

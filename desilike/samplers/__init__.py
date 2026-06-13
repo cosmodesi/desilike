@@ -4,7 +4,7 @@ from .base import (Sampler, MCMCSampler, EnsembleSampler, PopulationSampler, Sta
                    Kernel, PopulationKernel, StaticKernel)
 from .emcee import Emcee
 from .zeus import Zeus
-from .mhmcmc import MetropolisHastings
+from .mhmcmc import MH
 from .blackjax import BlackjaxHMC, BlackjaxNUTS, BlackjaxMCLMC
 from .numpyro import NumpyroNUTS, NumpyroHMC, NumpyroBarkerMH, NumpyroSA
 from .dynesty import Dynesty
@@ -25,7 +25,7 @@ __all__ = [
     'StaticKernel',
     'Emcee',
     'Zeus',
-    'MetropolisHastings',
+    'MH',
     'BlackjaxHMC',
     'BlackjaxNUTS',
     'BlackjaxMCLMC',

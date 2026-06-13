@@ -223,19 +223,41 @@ class Kernel:
 class PopulationKernel:
     """Abstract base class for nested / population sampling kernels.
 
-    Unlike :class:`Kernel` (MCMC), these kernels receive the sampling
-    callables at *run time* rather than at :meth:`init` time, so that
-    the infrastructure class can materialise batched / pool-aware versions
-    before each run.
+    Subclasses receive the sampling callables once at :meth:`init` time and
+    implement the sampling loop in :meth:`run`.
 
-    A :class:`PopulationKernel` subclass should override :meth:`run` and set
-    ``_sampler_cls = 'PopulationSampler'`` (the default).
+    A :class:`PopulationKernel` subclass should override :meth:`init` and
+    :meth:`run`, and set ``_sampler_cls = 'PopulationSampler'`` (the default).
     """
 
     logger = logging.getLogger('PopulationKernel')
     _sampler_cls = 'PopulationSampler'
 
-    def run(self, likelihood_logpdf, prior, **kwargs):
+    def init(self, likelihood, prior, rng, **context):
+        """Store callables and context for use in :meth:`run`.
+
+        Called once on **all** MPI processes during
+        :class:`~desilike.samplers.base.PopulationSampler` construction.
+
+        Parameters
+        ----------
+        likelihood : tuple of (likelihood_logpdf, likelihood_logpdf_with_derived)
+            Pool-saved callables returning ``log_l`` and ``(log_l, derived)``
+            respectively for a single rescaled-space ``(ndim,)`` sample.
+        prior : tuple of (prior_logpdf, prior_rvs, prior_ppf)
+            ``prior_logpdf``: pool-aware log-prior callable.
+            ``prior_rvs``: draw ``size`` samples from the prior.
+            ``prior_ppf``: unit-hypercube → parameter-space transform.
+        rng : numpy.random.Generator
+            Random-number generator (main process).
+        **context : dict
+            ``pool`` : Pool — MPI pool for distributing evaluations.
+            ``ndim`` : int — dimensionality of the parameter space.
+            ``output_dir`` : Path or None — checkpoint directory.
+            ``params`` : VariableCollection — transformed parameter collection.
+        """
+
+    def run(self, **kwargs):
         """Run the sampler and return all posterior samples.
 
         Called on **all** MPI processes (both main and workers).  The
@@ -245,22 +267,6 @@ class PopulationKernel:
 
         Parameters
         ----------
-        likelihood_logpdf : callable
-            Batched log-likelihood ``(N, ndim) → list[(log_l, derived)]`` or
-            ``(N, ndim) → list[log_l]`` depending on whether derived
-            parameters are present.  Pool-aware (already wrapped).
-        prior : tuple of (prior_logpdf, prior_rvs, prior_ppf)
-            ``prior_logpdf``: batched log-prior ``(N, ndim) → list[log_prior]``.  Pool-aware.
-            ``prior_rvs``: draw ``size`` samples from the prior: ``size → (size, ndim)``.
-            ``prior_ppf``: unit-hypercube to parameter-space transform ``(N, ndim) → (N, ndim)``.  Pool-aware.
-        pool : Pool
-            MPI pool for distributing evaluations.
-        rng : numpy.random.Generator
-            Random-number generator for the main process.
-        ndim : int
-            Dimensionality of the parameter space.
-        output_dir : Path or None
-            Checkpoint output_dir.
         **kwargs : dict
             Run-time options forwarded to the underlying sampler's ``run``
             method.
@@ -569,16 +575,18 @@ class BaseSampler(ABC):
         """Create the pool and register the batched evaluators.
 
         Pool-dispatched attributes set here:
-        ``prior_ppf``, ``prior_logpdf``, ``compute_posterior``, ``likelihood_logpdf``.
+        ``prior_ppf``, ``prior_logpdf``, ``posterior_logpdf_with_derived``,
+        ``likelihood_logpdf``, ``likelihood_logpdf_with_derived``.
 
         Non-pool JAX attribute: ``posterior_logpdf`` — a ``jax.jit(jax.vmap(...))``
         function ``(n, ndim) → (n,)`` suitable for direct use by MCMC kernels.
         """
         self.pool = make_pool(mpicomm, batch_size=batch_size)
-        specs = [('prior_ppf',             self._prior_ppf_one,           False),
-                 ('prior_logpdf',          self._prior_logpdf_one,        False),
-                 ('compute_posterior',     self._compute_posterior_one,   True),
-                 ('likelihood_logpdf', self._likelihood_logpdf_one, True)]
+        specs = [('prior_ppf',                     self._prior_ppf_one,                     False),
+                 ('prior_logpdf',                   self._prior_logpdf_one,                  False),
+                 ('posterior_logpdf_with_derived',  self._posterior_logpdf_with_derived_one, True),
+                 ('likelihood_logpdf',              self._likelihood_logpdf_only_one,        False),
+                 ('likelihood_logpdf_with_derived', self._likelihood_logpdf_one,             True)]
         for name, core, returns_tuple in specs:
             setattr(self, name, self.pool.save_function(_batched(core, returns_tuple), name))
         self.posterior_logpdf = jax.jit(jax.vmap(self._posterior_logpdf_one))
@@ -623,7 +631,7 @@ class BaseSampler(ABC):
         """Return ``log_posterior`` for a single rescaled-space ``(ndim,)`` sample."""
         return self.posterior(_flat_to_dict(self._forward(sample), self.varied_params), return_derived=False)
 
-    def _compute_posterior_one(self, sample):
+    def _posterior_logpdf_with_derived_one(self, sample):
         """Return ``(log_posterior, derived_flat)`` for a single rescaled-space ``(ndim,)`` sample."""
         sample = _flat_to_dict(self._forward(sample), self.varied_params)
         if self.nderived:
@@ -636,13 +644,14 @@ class BaseSampler(ABC):
             derived_flat = jnp.zeros(0)
         return log_post, derived_flat
 
-    def _likelihood_logpdf_one(self, sample):
-        """Return ``(log_likelihood, derived_flat)`` for a single ``(ndim,)`` sample.
+    def _likelihood_logpdf_only_one(self, sample):
+        """Return ``log_likelihood`` for a single ``(ndim,)`` sample (no derived)."""
+        return self._posterior_logpdf_one(sample) - self._prior_logpdf_one(sample)
 
-        The log-likelihood is ``log_posterior − log_prior``.
-        """
+    def _likelihood_logpdf_one(self, sample):
+        """Return ``(log_likelihood, derived_flat)`` for a single ``(ndim,)`` sample."""
         log_prior = self._prior_logpdf_one(sample)
-        log_post, derived = self._compute_posterior_one(sample)
+        log_post, derived = self._posterior_logpdf_with_derived_one(sample)
         return log_post - log_prior, derived
 
     def _get_start(self, size=1):
@@ -755,7 +764,7 @@ class StaticSampler(BaseSampler):
                 # array_to_samples work in the rescaled space, so map once here.
                 grid      = np.asarray(self._backward(self.get_samples(**kwargs)))
                 log_prior = np.array(self.pool.map(self.prior_logpdf, grid))
-                results   = self.pool.map(self.compute_posterior, grid)
+                results   = self.pool.map(self.posterior_logpdf_with_derived, grid)
                 log_post  = np.array([result[0] for result in results])
                 derived   = np.array([result[1] for result in results])
                 self.samples = self.array_to_samples(
@@ -847,10 +856,10 @@ class MCMCSampler(BaseSampler):
         self.checks = []
         self._thinning = 1
         self.kernel.init(
-            self.posterior_logpdf, self.rng,
+            (self.posterior_logpdf, self.posterior_logpdf_with_derived),
+            self.rng,
             ndim=self.ndim,
-            nderived=self.nderived,
-            posterior_with_derived=jax.jit(jax.vmap(self._compute_posterior_one)) if self.nderived else None,
+            pool=self.pool,
             param_shapes={param.name: param.shape for param in self.varied_params},
         )
 
@@ -880,7 +889,7 @@ class MCMCSampler(BaseSampler):
         """Compute derived parameters for a ``(n, ndim)`` batch of rescaled-space samples."""
         if not self.nderived:
             return np.zeros((len(samples), 0))
-        results = self.pool.map(self.compute_posterior, samples)
+        results = self.pool.map(self.posterior_logpdf_with_derived, samples)
         return np.array([result[1] for result in results])
 
     def initialize_samples(self, max_init_attempts=100, shape=None):
@@ -910,7 +919,7 @@ class MCMCSampler(BaseSampler):
                     batch_samples = np.asarray(self._backward(batch_samples))
 
                     results = self.pool.map(
-                        self.compute_posterior,
+                        self.posterior_logpdf_with_derived,
                         batch_samples.reshape(total_size, self.ndim))
                     batch_log_post = np.array([result[0] for result in results])
                     batch_derived  = np.array([result[1] for result in results])
@@ -938,9 +947,6 @@ class MCMCSampler(BaseSampler):
         if any(np.array(self.mpicomm.allgather(self._chain is None))[self._pool_mains]):
             raise ValueError(
                 f'Could not find finite posterior after {max_init_attempts} attempts.')
-        if self.pool.main:
-            return self.state[0]
-        return None
 
     @property
     def chains(self):
@@ -965,7 +971,7 @@ class MCMCSampler(BaseSampler):
             for param in self.varied_params], axis=-1)
         derived  = np.concatenate([
             np.asarray(self._chain[param.name])[-1].reshape(walker_shape + (-1,))
-            for param in self.derived_params], axis=-1) if self.nderived else np.empty(0)
+            for param in self.derived_params], axis=-1) if self.nderived else np.empty(walker_shape + (0,))
         log_post = np.asarray(self._chain.logposterior)[-1]
         return np.asarray(self._backward(samples)), np.array(derived), np.array(log_post)
 
@@ -1060,7 +1066,7 @@ class MCMCSampler(BaseSampler):
         thinning : int
             Keep every *thinning*-th sample in the output.  Default is 1.
         """
-        initial_position = self.initialize_samples(max_init_attempts=max_init_attempts)
+        self.initialize_samples(max_init_attempts=max_init_attempts)
         self._thinning = int(thinning)
 
         if self.output_dir is None:
@@ -1068,7 +1074,7 @@ class MCMCSampler(BaseSampler):
 
         if adaptation is not None:
             if self.pool.main:
-                self.kernel.adapt(initial_position=initial_position, **adaptation)
+                self.kernel.adapt(self.state, **adaptation)
                 self.pool.stop_wait()
             else:
                 self.pool.wait()
@@ -1088,8 +1094,7 @@ class MCMCSampler(BaseSampler):
             )
             steps += steps_to_take
             if self.pool.main:
-                samples, derived, extras = self.kernel.run(steps_to_take, initial_position=initial_position)
-                initial_position = None
+                samples, derived, extras = self.kernel.run(steps_to_take, self.state)
                 if derived is None:
                     derived = self._compute_derived(
                         samples.reshape(-1, self.ndim)).reshape(samples.shape[:-1] + (-1,))
@@ -1170,15 +1175,16 @@ class PopulationSampler(BaseSampler):
             batch_size = getattr(kernel, '_batch_size', None)
         super().__init__(posterior, rng=rng, output_dir=output_dir,
                          rescale=rescale, covariance=covariance, batch_size=batch_size)
+        self.kernel.init(
+            (self.likelihood_logpdf, self.likelihood_logpdf_with_derived),
+            (self.prior_logpdf, self.prior_rvs, self.prior_ppf),
+            self.rng,
+            pool=self.pool, ndim=self.ndim, output_dir=self.output_dir,
+            params=self._transformed_params,
+        )
 
     def run(self, **kwargs):
-        output = self.kernel.run(
-            likelihood_logpdf=self.likelihood_logpdf,
-            prior=(self.prior_logpdf, self.prior_rvs, self.prior_ppf),
-            pool=self.pool, rng=self.rng, ndim=self.ndim, output_dir=self.output_dir,
-            nderived=self.nderived, params=self._transformed_params,
-            **kwargs,
-        )
+        output = self.kernel.run(**kwargs)
         if self.pool.main:
             samples, derived, extras = output
             self.samples = self.array_to_samples(samples, derived, **extras)

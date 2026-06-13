@@ -207,7 +207,7 @@ class TestParameter:
 
     def test_latex_with_namespace(self):
         p = Parameter('galaxy.omega_m', latex=r'\Omega_m')
-        assert p.latex(namespace=True) == r'\Omega_{m,\mathrm{galaxy}}'
+        assert p.latex(namespace=True) == r'\Omega_{m, \mathrm{galaxy}}'
 
     def test_latex_fallback(self):
         p = Parameter('omega_m', value=0.3)

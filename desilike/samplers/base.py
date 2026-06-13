@@ -1225,7 +1225,7 @@ def Sampler(posterior, kernel, nparallel=1, chains=None, rng=None, output_dir=No
         return cls(posterior, kernel=kernel, rng=rng, output_dir=output_dir,
                    rescale=rescale, covariance=covariance)
     return cls(posterior, kernel=kernel, nparallel=nparallel, chains=chains,
-               rng=rng, output_dir=output_dir, rescale=rescale, covariance=covariance)
+               rng=rng, output_dir=output_dir, rescale=rescale, covariance=covariance, batch_size=batch_size)
 
 
 # Register here so kernel modules can look up these classes without a circular import.

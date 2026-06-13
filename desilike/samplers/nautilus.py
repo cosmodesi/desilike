@@ -1,93 +1,81 @@
-"""Module implementing the nautilus sampler."""
+"""Nautilus importance nested sampling kernel."""
+
+import logging
+
+import numpy as np
+
 try:
-    import nautilus
+    import nautilus as _nautilus
     NAUTILUS_INSTALLED = True
 except ModuleNotFoundError:
     NAUTILUS_INSTALLED = False
-import numpy as np
 
-from .base import update_kwargs, PopulationSampler
-from .pool import make_pool, wait_many
+from .base import PopulationKernel, update_kwargs
 
 
-class NautilusSampler(PopulationSampler):
-    """Wrapper for ``nautilus`` importance nested sampling.
+class Nautilus(PopulationKernel):
+    """Importance nested sampler via ``nautilus``.
+
+    Requires two MPI pools: one for likelihood evaluations and one for
+    internal sampler tasks.  The secondary pool is created lazily on the
+    first :meth:`run` call.
 
     .. rubric:: References
     - https://github.com/johannesulf/nautilus
     - https://doi.org/10.1093/mnras/stad2441
-
     """
 
-    def __init__(self, posterior, rng=None, directory=None, rescale=False, covariance=None,
-                 batch_size=None, **kwargs):
-        """Initialize the ``nautilus`` sampler.
+    logger = logging.getLogger('Nautilus')
 
+    def __init__(self, **kwargs):
+        """
         Parameters
         ----------
-        posterior : CompiledGraph
-            Compiled pipeline returning the log-posterior.
-        rng : numpy.random.Generator, int or None, optional
-            Random number generator. Default is ``None``.
-        directory : str, Path, optional
-            Save samples to this location. Default is ``None``.
-        **kwargs: dict, optional
-            Extra keyword arguments passed to ``nautilus`` during
-            initialization.
-
+        **kwargs
+            Extra keyword arguments forwarded to ``nautilus.Sampler``.
         """
+        self._kwargs = kwargs
+        self._sampler = None
+        self._pool_sampler = None
+        self._initialized = False
+
+    def run(self, likelihood_logpdf, prior,
+            pool, rng, ndim, output_dir=None, n_derived=0, params=None, **kwargs):
         if not NAUTILUS_INSTALLED:
-            raise ImportError("The 'nautilus-sampler' package is required but "
-                              "not installed.")
+            raise ImportError("The 'nautilus-sampler' package is required but not installed.")
 
-        super().__init__(posterior, rng=rng, directory=directory,
-                         rescale=rescale, covariance=covariance, batch_size=batch_size)
+        from desilike.samplers.pool import make_pool, wait_many
 
-        # nautilus accepts pool=(pool_likelihood, pool_sampler).
-        # Each pool gets a unique MPI tag so their messages never interfere.
-        # Workers call wait_many([self.pool, self._pool_sampler]) in run_sampler
-        # to service both pools through a single ANY_TAG loop.
-        # batch_size can be anything for likelihood pool; it is called through
-        # likelihood is called through pool.map with a list of constant size n_batch >= 100
-        self._pool_sampler = make_pool(self.pool.comm, batch_size=0)
-        if self.pool.main:
-            kwargs = update_kwargs(
-                kwargs, 'nautilus', prior=self.prior_transform,
-                likelihood=self.compute_likelihood, n_dim=self.ndim,
-                pass_dict=False,
-                filepath=None if self.directory is None else self.directory /
-                'nautilus.h5', pool=(self.pool, self._pool_sampler),
-                seed=self.rng.integers(2**32))
-            self.sampler = nautilus.Sampler(**kwargs)
-            self.pool.stop_wait()
-        else:
-            self.pool.wait()
+        # Create the secondary pool on all MPI ranks (needed for wait_many on workers).
+        if self._pool_sampler is None:
+            self._pool_sampler = make_pool(pool.comm, batch_size=0)
 
-    def run_sampler(self, **kwargs):
-        """Run the ``nautilus`` sampler.
+        prior_logpdf, prior_rvs, prior_ppf = prior
 
-        Parameters
-        ----------
-        **kwargs: dict, optional
-            Extra keyword arguments passed to ``nautilus``'s ``run`` method.
+        if pool.main:
+            if not self._initialized:
+                init_kwargs = update_kwargs(
+                    dict(**self._kwargs), 'nautilus',
+                    prior=prior_ppf, likelihood=likelihood_logpdf, n_dim=ndim,
+                    pass_dict=False,
+                    filepath=None if output_dir is None else output_dir / 'nautilus.h5',
+                    pool=(pool, self._pool_sampler),
+                    seed=rng.integers(2**32))
+                self._sampler = _nautilus.Sampler(**init_kwargs)
+                pool.stop_wait()   # release workers from init-time pool.wait()
+                self._initialized = True
 
-        Returns
-        -------
-        samples : numpy.ndarray of shape (n_samples, ndim)
-            Samples of varied parameters.
-        derived : numpy.ndarray
-            Samples of derived parameters.
-        extras : dict
-            Extra parameters such as weights.
-
-        """
-        if self.pool.main:
-            self.sampler.run(**kwargs)
-            samples, log_w, log_l, blobs = self.sampler.posterior(return_blobs=True)
-            log_prior = np.array(list(self.pool.map(self.compute_prior, samples)))
-            self.pool.stop_wait()
+            self._sampler.run(**kwargs)
+            samples, log_w, log_l, blobs = self._sampler.posterior(return_blobs=True)
+            log_prior = np.array(list(pool.map(prior_logpdf, samples)))
+            pool.stop_wait()
             self._pool_sampler.stop_wait()
             self.logger.info('Finished sampling.')
-            return samples, blobs.reshape(len(samples), -1), dict(aweight=np.exp(log_w), logposterior=log_l + log_prior)
-        wait_many([self.pool, self._pool_sampler])
-        return None
+            return samples, blobs.reshape(len(samples), -1), dict(
+                aweight=np.exp(log_w), logposterior=log_l + log_prior)
+        else:
+            if not self._initialized:
+                self._initialized = True
+                pool.wait()   # serve during nautilus.Sampler.__init__
+            wait_many([pool, self._pool_sampler])
+            return None

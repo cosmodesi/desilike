@@ -1,107 +1,81 @@
-"""Module implementing the dynesty samplers."""
+"""Dynesty nested sampling kernel."""
+
+import logging
+
+import numpy as np
 
 try:
-    import dynesty
+    import dynesty as _dynesty
     DYNESTY_INSTALLED = True
 except ModuleNotFoundError:
     DYNESTY_INSTALLED = False
-import numpy as np
 
-from .base import update_kwargs, PopulationSampler
+from .base import PopulationKernel, update_kwargs
 
 
-class DynestySampler(PopulationSampler):
-    """Wrapper for ``dynesty`` nested samplers.
+class Dynesty(PopulationKernel):
+    """Nested sampler via ``dynesty``.
 
     .. rubric:: References
     - https://github.com/joshspeagle/dynesty
     - https://doi.org/10.1093/mnras/staa278
-
     """
 
-    def __init__(self, posterior, dynamic=True, rng=None, directory=None,
-                 rescale=False, covariance=None, **kwargs):
-        """Initialize the ``dynesty`` sampler.
+    logger = logging.getLogger('Dynesty')
+    # dynesty is not vectorized; the pool must call loglikelihood once per particle.
+    _batch_size = 0
 
+    def __init__(self, dynamic=True, **kwargs):
+        """
         Parameters
         ----------
-        posterior : CompiledGraph
-            Compiled pipeline returning the log-posterior.
-        dynamic : boolean, optional
-            If True, use ``dynesty.DynamicPopulationSampler`` instead of
-            ``dynesty.PopulationSampler``. Default is True.
-        rng : numpy.random.Generator, int or None, optional
-            Random number generator. Default is ``None``.
-        directory : str, Path, optional
-            Save samples to this location. Default is ``None``.
-        **kwargs: dict, optional
-            Extra keyword arguments passed to ``dynesty`` during
-            initialization.
-
+        dynamic : bool
+            If ``True`` (default), use ``dynesty.DynamicNestedSampler``;
+            otherwise use the static ``dynesty.NestedSampler``.
+        **kwargs
+            Extra keyword arguments forwarded to the dynesty sampler constructor.
         """
+        self.dynamic = dynamic
+        self._kwargs = kwargs
+        self._sampler = None
+
+    def run(self, likelihood_logpdf, prior,
+            pool, rng, ndim, output_dir=None, n_derived=0, params=None, **kwargs):
         if not DYNESTY_INSTALLED:
-            raise ImportError("The 'dynesty' package is required but not "
-                              "installed.")
+            raise ImportError("The 'dynesty' package is required but not installed.")
 
-        # dynesty uses the pool for internal tasks (proposals, etc.)
-        # that are not plain arrays — needs a non-batched pool.
-        super().__init__(posterior, rng=rng, directory=directory,
-                         rescale=rescale, covariance=covariance, batch_size=0)
+        if not self.dynamic and output_dir is not None:
+            raise ValueError("dynesty does not support checkpointing for the static sampler.")
 
-        if not dynamic and self.directory is not None:
-            raise ValueError("dynesty does not support checkpointing for the "
-                             "static sampler.")
-        if self.pool.main:
-            sampler_cls = (dynesty.DynamicNestedSampler if dynamic else
-                           dynesty.NestedSampler)
-            if self.directory is not None:
-                try:
-                    self.sampler = sampler_cls.restore(str(
-                        self.directory / 'dynesty.pkl'))
-                    self.sampler.loglikelihood.loglikelihood =\
-                        self.compute_likelihood
-                    self.sampler.prior_transform = self.prior_transform
-                except (FileNotFoundError, ValueError):
-                    pass
-            if not hasattr(self, 'sampler'):
-                kwargs = update_kwargs(
-                    kwargs, 'dynesty', loglikelihood=self.compute_likelihood,
-                    prior_transform=self.prior_transform, ndim=self.ndim,
-                    blob=True, pool=self.pool,
-                    rstate=self.rng)
-                self.sampler = sampler_cls(**kwargs)
+        prior_logpdf, prior_rvs, prior_ppf = prior
 
-    def run_sampler(self, **kwargs):
-        """Run the ``dynesty`` sampler.
+        if pool.main:
+            if self._sampler is None:
+                sampler_cls = (_dynesty.DynamicNestedSampler if self.dynamic
+                               else _dynesty.NestedSampler)
+                if output_dir is not None:
+                    try:
+                        self._sampler = sampler_cls.restore(str(output_dir / 'dynesty.pkl'))
+                        self._sampler.loglikelihood.loglikelihood = likelihood_logpdf
+                        self._sampler.prior_transform = prior_ppf
+                    except (FileNotFoundError, ValueError):
+                        pass
+                if self._sampler is None:
+                    init_kwargs = update_kwargs(
+                        dict(**self._kwargs), 'dynesty',
+                        loglikelihood=likelihood_logpdf, prior_transform=prior_ppf,
+                        ndim=ndim, blob=True, pool=pool, rstate=rng)
+                    self._sampler = sampler_cls(**init_kwargs)
 
-        Parameters
-        ----------
-        **kwargs: dict, optional
-            Extra keyword arguments passed to ``dynesty``'s ``run_nested``
-            method.
-
-        Returns
-        -------
-        samples : numpy.ndarray of shape (n_samples, ndim)
-            Samples of varied parameters.
-        derived : numpy.ndarray
-            Samples of derived parameters.
-        weights : numpy.ndarray
-            Weights for the samples.
-
-        """
-        checkpoint_file = None if self.directory is None else str(
-            self.directory / 'dynesty.pkl')
-        kwargs = update_kwargs(
-            kwargs, 'dynesty', checkpoint_file=checkpoint_file)
-
-        if self.pool.main:
-            self.sampler.run_nested(**kwargs)
-            results = self.sampler.results
-            log_prior = np.array(list(self.pool.map(self.compute_prior, results.samples)))
-            self.pool.stop_wait()
+            checkpoint_file = None if output_dir is None else str(output_dir / 'dynesty.pkl')
+            run_kwargs = update_kwargs(kwargs, 'dynesty', checkpoint_file=checkpoint_file)
+            self._sampler.run_nested(**run_kwargs)
+            results = self._sampler.results
+            log_prior = np.array(list(pool.map(prior_logpdf, results.samples)))
+            pool.stop_wait()
+            self.logger.info('Finished sampling.')
             return results.samples, results['blob'], dict(
                 aweight=results.importance_weights(),
                 logposterior=results.logl + log_prior)
-        self.pool.wait()
+        pool.wait()
         return None

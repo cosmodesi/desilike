@@ -201,8 +201,8 @@ def run(label, build_fn, vary_param=None, batch_size=8, run=('eager', 'jit', 'gr
         dt = _bench(f'jit vmap call (n={batch_size})', lambda bench_idx: vpipe(batch(bench_idx)), **kwargs)
         print(f'  {"→ per-sample":<26s} {dt / batch_size:9.4f} ms/sample')
     if 'profile' in run:
-        from desilike.profilers import MinuitProfiler
-        profiler = MinuitProfiler(pipe, seed=42)
+        from desilike import profilers
+        profiler = profilers.Profiler(pipe, kernel=profilers.Minuit(), rng=42)
         profiler.maximize()
         profiles = profiler.profiles
         print(profiles.to_stats(tablefmt='pretty'))

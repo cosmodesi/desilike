@@ -1,7 +1,7 @@
 """desilike.profilers — likelihood profiling (maximize, profile, grid, covariance)."""
 
-from .base import BaseProfiler
-from .scipy import ScipyProfiler
-from .minuit import MinuitProfiler
-from .optax import OptaxProfiler
-from .bobyqa import BOBYQAProfiler
+from .base import Profiler, Kernel
+from .minuit import Minuit
+from .scipy import Scipy
+from .bobyqa import BOBYQA
+from .optax import Optax

@@ -1,15 +1,14 @@
-"""ScipyProfiler — wraps scipy.optimize.minimize."""
+"""Scipy profiler kernel — wraps scipy.optimize.minimize."""
 
 import logging
 
 import numpy as np
 
-from ..samples import Profiles
-from .base import BaseProfiler, ProfilerState, _build_best_from_x, _build_error_from_cov
+from .base import Kernel, ProfilerState
 
 
-class ScipyProfiler(BaseProfiler):
-    """Profiler backed by :func:`scipy.optimize.minimize`.
+class Scipy(Kernel):
+    """Optimisation kernel backed by :func:`scipy.optimize.minimize`.
 
     Supports all scipy methods; gradient-based methods benefit from setting
     ``gradient=True`` (requires a JAX-traceable likelihood).
@@ -22,33 +21,28 @@ class ScipyProfiler(BaseProfiler):
     gradient : bool
         If ``True``, pass the JAX-computed gradient to scipy (only
         effective for gradient-supporting methods).
-    *args, **kwargs
-        Forwarded to :class:`BaseProfiler`.
     """
 
-    logger = logging.getLogger('ScipyProfiler')
+    logger = logging.getLogger('Scipy')
 
-    name = 'scipy'
-
-    def __init__(self, *args, method=None, gradient=False, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, method=None, gradient=False):
         self.method = method
         self.with_gradient = bool(gradient)
 
-    def _maximize_one(self, state: ProfilerState, max_iterations=int(1e5), tol=None, **kwargs):
+    def run(self, state: ProfilerState, chi2, grad=None, max_iterations=int(1e5), tol=None, **kwargs) -> ProfilerState:
         from scipy import optimize
 
         bounds = [
             (None if np.isinf(lo) else lo, None if np.isinf(hi) else hi)
-            for lo, hi in state.flat_bounds
+            for lo, hi in state.bounds
         ]
         call_kw = {}
-        if state.grad_fn is not None:
-            call_kw['jac'] = state.grad_fn
+        if grad is not None:
+            call_kw['jac'] = grad
 
         try:
             result = optimize.minimize(
-                fun=state.chi2_fn,
+                fun=chi2,
                 x0=state.start,
                 method=self.method,
                 bounds=bounds,
@@ -58,23 +52,19 @@ class ScipyProfiler(BaseProfiler):
             )
         except Exception as exc:
             self.logger.warning('scipy.minimize raised %r', exc)
-            return Profiles()
+            return state
 
         if not result.success:
             self.logger.warning('scipy.minimize: %s', result.message)
 
-        logpost  = float(-0.5 * result.fun)
-        profiles = Profiles()
-        profiles.best = _build_best_from_x(result.x, logpost, state.varied_params)
-        profiles.logpdf = np.array([logpost])
+        state.logpdf = np.asarray(-0.5 * result.fun)
+        state.best = np.asarray(result.x)
 
-        # Covariance from inverse Hessian (L-BFGS-B / BFGS provide this)
         hess_inv = getattr(result, 'hess_inv', None)
         if hess_inv is not None and not state.fast:
             try:
-                cov = np.asarray(getattr(hess_inv, 'todense', lambda: hess_inv)())
-                profiles.error = _build_error_from_cov(cov, state.varied_params)
+                state.cov = np.asarray(getattr(hess_inv, 'todense', lambda: hess_inv)())
             except Exception:
                 pass
 
-        return profiles
+        return state

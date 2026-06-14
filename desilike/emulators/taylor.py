@@ -351,6 +351,7 @@ class TaylorEmulator:
                 obj.__dict__.update(proxy.__dict__)
                 return obj
 
+        TaylorEmulatedCalculator._is_external = False
         TaylorEmulatedCalculator.__name__ = root_cls.__name__
         TaylorEmulatedCalculator.__qualname__ = root_cls.__qualname__
         TaylorEmulatedCalculator.__module__ = root_cls.__module__

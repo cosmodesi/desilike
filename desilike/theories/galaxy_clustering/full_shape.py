@@ -2104,7 +2104,6 @@ class FOLPSTracerCorrelation2Poles(Calculator):
         obj.poles = children[0]
         return obj
 
-@jax.jit(static_argnames=['multipoles', 'precision', 'damping', 'interpolation_method', 'bias_scheme', 'model', 'renormalized'])
 def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
                               f0, qpar, qper, multipoles=['B000', 'B202'],
                               precision=(8, 10, 10), damping='lor',

@@ -40,11 +40,11 @@ class PrimordialCosmology(Calculator):
     -----------------
     Concrete subclasses must:
 
-    * Initialize ``self.params`` (a ``dict[str, Parameter]``), ``self._req_specs = {}``,
+    * Initialize ``self.params`` (a ``dict[str, Parameter]``), ``self._requirements = {}``,
       and ``self._results = {}`` in their ``__init__``.
     * Set ``self._engine`` (a string identifier for the provider) in ``__post_init__``.
     * Override :meth:`propose_params` to return the provider's cosmological parameters.
-    * Implement ``__call__`` to build the cosmology, loop over ``self._req_specs``, and
+    * Implement ``__call__`` to build the cosmology, loop over ``self._requirements``, and
       populate ``self._results[spec_key]`` for every registered spec.
     """
 
@@ -60,6 +60,23 @@ class PrimordialCosmology(Calculator):
         VariableCollection
         """
         return VariableCollection()
+
+    def __init__(self, *args, params=None, fiducial=None, **kwargs):
+        # Per-instance flag: JAX-traceable engines run as pure JAX, others as external.
+        if params is None:
+            params = self.propose_params(*args, fiducial=fiducial, **kwargs)
+        elif not isinstance(params, VariableCollection):
+            params = VariableCollection(params)
+        # Stored as a public attribute so build_graph discovers the Parameters as
+        # dependencies (it descends into VariableCollection).
+        self.params = {param.basename: param for param in params}
+        # Requirement registry: filled by downstream calculators via add_requirements().
+        # _requirements: spec_key → {'static': dict, 'z': np.array, 'k': np.array|None}
+        # _results:   spec_key → jnp.array   (populated in __call__)
+        self._requirements = {}
+        self._results = {}
+        # Default engine identifier; overridden by concrete subclasses in __post_init__.
+        self._engine = None
 
     # ── requirements API ──────────────────────────────────────────────────────
 
@@ -98,14 +115,14 @@ class PrimordialCosmology(Calculator):
                 static = {key: val for key, val in kwargs.items() if key not in ('z', 'k')}
                 spec_key = (method_key, tuple(sorted(static.items())))
 
-                if spec_key not in self._req_specs:
-                    self._req_specs[spec_key] = {
+                if spec_key not in self._requirements:
+                    self._requirements[spec_key] = {
                         'static': static,
                         'z': np.array([z]),
                         'k': np.sort(np.asarray(k, dtype='f8')) if k is not None else None,
                     }
                 else:
-                    spec = self._req_specs[spec_key]
+                    spec = self._requirements[spec_key]
                     spec['z'] = np.unique(np.append(spec['z'], z))
                     if k is not None:
                         spec['k'] = np.unique(np.concatenate([spec['k'], np.asarray(k, dtype='f8')]))
@@ -132,7 +149,7 @@ class PrimordialCosmology(Calculator):
         static = {key: val for key, val in kwargs.items() if key not in ('z', 'k')}
         spec_key = (method_key, tuple(sorted(static.items())))
         result = self._results[spec_key]
-        spec   = self._req_specs[spec_key]
+        spec   = self._requirements[spec_key]
         if z is not None:
             iz = int(np.searchsorted(spec['z'], z))
             result = result[iz]       # (nk,) for pk, scalar for sigma8/efunc/DA
@@ -143,9 +160,22 @@ class PrimordialCosmology(Calculator):
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
+    def __call__(self):
+        """Proxy implementation: populate _results with zero placeholders if not already set.
+
+        Concrete subclasses (e.g. CosmoprimoCosmology) override this with a real solver.
+        When used as a pre-loaded proxy (results injected externally via compile's ``input``
+        callable before the graph runs), this is a no-op because _results is already populated.
+        """
+        for spec_key, spec in self._requirements.items():
+            if spec_key not in self._results:
+                nz = len(spec['z'])
+                nk = len(spec['k']) if spec['k'] is not None else 0
+                self._results[spec_key] = jnp.zeros((nz, nk) if nk else (nz,))
+
     def tree_flatten(self):
         param_marker = jnp.concatenate([jnp.ravel(jnp.asarray(param.value)) for param in self.params.values()])
-        ordered = list(self._req_specs.items())
+        ordered = list(self._requirements.items())
         leaves = [param_marker]
         for spec_key, spec in ordered:
             if spec_key in self._results:
@@ -162,7 +192,7 @@ class PrimordialCosmology(Calculator):
         obj = object.__new__(cls)
         obj._engine = aux['engine']
         obj._param_vector = children[0]
-        obj._req_specs = {sk: spec for sk, spec in aux['ordered_specs']}
+        obj._requirements = {sk: spec for sk, spec in aux['ordered_specs']}
         obj._results   = {sk: arr  for (sk, _), arr in zip(aux['ordered_specs'], children[1:])}
         return obj
 
@@ -329,24 +359,9 @@ class CosmoprimoCosmology(PrimordialCosmology):
                              fd_eps=0.05, latex=r'\Omega_k'))
         return params
 
-    def __init__(self, *args, engine='camb', params=None, fiducial=None, **kwargs):
-        # Per-instance flag: JAX-traceable engines run as pure JAX, others as external.
-        self._is_external = str(engine) not in _JAX_ENGINES
-        if params is None:
-            params = self.propose_params(*args, engine=engine, fiducial=fiducial, **kwargs)
-        elif not isinstance(params, VariableCollection):
-            params = VariableCollection(params)
-        # Stored as a public attribute so build_graph discovers the Parameters as
-        # dependencies (it descends into VariableCollection).
-        self.params = {param.basename: param for param in params}
-        # Requirement registry: filled by downstream calculators via add_requirements().
-        # _req_specs: spec_key → {'static': dict, 'z': np.array, 'k': np.array|None}
-        # _results:   spec_key → jnp.array   (populated in __call__)
-        self._req_specs = {}
-        self._results = {}
-
     def __post_init__(self, *args, engine='camb', params=None, fiducial=None, **kwargs):
         self._engine = str(engine)
+        self._is_external = self._engine not in _JAX_ENGINES
         # Build (or resolve) the fiducial once, forcing ``engine`` so that subsequent
         # per-call ``.clone(base='input', ...)`` use the requested engine (not the
         # fiducial's default, e.g. CLASS for the named 'DESI'/'Planck2018' fiducials).
@@ -364,7 +379,7 @@ class CosmoprimoCosmology(PrimordialCosmology):
                   for basename, param in self.params.items()}
         self.cosmo = _build_cosmo(self._fiducial, params)
         cosmo = self.cosmo
-        for spec_key, spec in self._req_specs.items():
+        for spec_key, spec in self._requirements.items():
             method_key = spec_key[0]
             static = spec['static']
             z_grid = spec['z']

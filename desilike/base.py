@@ -37,6 +37,7 @@ Pipeline:
 
 import functools
 import logging
+from collections.abc import Callable
 
 import numpy as np
 import jax
@@ -1077,9 +1078,10 @@ class CompiledGraph:
     jax.jit, jax.vmap, and jax.grad.
     """
 
-    def __init__(self, root: Calculator, ctx: _CompileContext, output=None):
+    def __init__(self, root: Calculator, ctx: _CompileContext, output=None, input=None):
         self.root = root
         self.output = output
+        self.input = input
         self.nodes = ctx.node_order
 
         # Per-node dep lists split by type.
@@ -1153,19 +1155,39 @@ class CompiledGraph:
 
         self._call_fn = _build_graph_call_fn(self)
 
-    def __call__(self, params=None, return_derived=False, **kwargs):
+    def __call__(self, *args, return_derived=False, **kwargs):
         """
-        Pure function: dict of params → return_val, or ``(return_val, derived_dict)``
-        when *return_derived* is ``True``.
+        Pure function: params → return_val, or ``(return_val, derived_dict)``
+        when *return_derived* is ``True`` (keyword-only).
         Compatible with jax.jit, jax.vmap, jax.grad (dict form only for JAX transforms;
-        pass ``return_derived`` via a lambda/partial rather than as a kwarg to jit/vmap).
-        Kwargs form (pipeline(omega_m=0.3, ...)) is a convenience for eager calls;
-        missing params are filled from the parameters' current values.
+        wrap in a lambda/partial to fix ``return_derived`` before passing to jit/vmap).
+
+        Calling conventions
+        -------------------
+        When no *input* callable was supplied to :func:`compile`:
+
+            pipe(params_dict)          # explicit {name: value} dict
+            pipe(**overrides)          # override specific params; rest from defaults
+            pipe()                     # all params from their current default values
+
+        When an *input* callable was supplied:
+
+            pipe(pytree)               # input(pytree) for side-effects; params from defaults + kwargs
+            pipe(pytree, params_dict)  # input(pytree) for side-effects; explicit param dict
+            pipe(pytree, **overrides)  # input(pytree) for side-effects; override specific params
+
+        The *input* callable is invoked for its side-effects only (return value ignored).
+        Kwargs form is a convenience for eager calls; missing params are filled from defaults.
 
         After each eager call the parameters' ``.value`` attributes are restored
         to whatever they were on entry, so that finite-difference mutations
         inside ``pure_callback`` do not corrupt subsequent default-argument calls.
         """
+        if self.input is not None:
+            self.input(args[0] if args else None)
+            params = args[1] if len(args) > 1 else None
+        else:
+            params = args[0] if args else None
         # Snapshot current values; used as defaults and for post-call restoration.
         # Only non-derived params are restored: derived Variables are computed
         # *outputs* whose values the caller reads after the call.  Input params
@@ -1178,8 +1200,9 @@ class CompiledGraph:
             params.update(kwargs)
         else:
             missing = {n: v for n, v in all_saved.items() if n not in params}
-            if missing:
-                params = {**params, **missing}
+            params = {**params, **missing}
+            if kwargs:
+                params.update(kwargs)
         fd_params_tuple = tuple(jnp.asarray(params[n]) for n in self._fd_names)
         jax_params_tuple = tuple(jnp.asarray(params[n]) for n in self._jax_names)
         try:
@@ -1496,7 +1519,7 @@ def get_params(node_or_graph, level=None) -> VariableCollection:
 params = get_params
 
 
-def compile(root: Calculator, output=None) -> CompiledGraph:
+def compile(root: Calculator, output: Callable=None, input: Callable=None) -> CompiledGraph:
     """Trace root's dependency graph and return a CompiledGraph.
 
     Phase 1 (build_graph): discovers deps by scanning the constructed nodes' public attributes.
@@ -1507,9 +1530,16 @@ def compile(root: Calculator, output=None) -> CompiledGraph:
     Parameters
     ----------
     root : Calculator
-    output : callable, optional
+    output : Callable, optional
         Custom output extractor called after the root node to produce the
         pipeline's return value.
+    input : Callable, optional
+        Side-effect callable invoked with the first positional argument of the compiled
+        graph's ``__call__`` before the graph runs.  Its return value is ignored; it is
+        called purely for side-effects (e.g. injecting pre-computed arrays into a shared
+        Calculator).  When provided, the parameter dict is taken from the *second*
+        positional argument (or defaults + kwargs when omitted).
+        When ``None`` (default) the first positional argument is the parameter dict.
 
     Notes
     -----
@@ -1549,7 +1579,7 @@ def compile(root: Calculator, output=None) -> CompiledGraph:
             ctx.node_deps[nid] = [d for d in ctx.node_deps[nid] if not isinstance(d, Calculator) or id(d) in ctx.call_activated]
     finally:
         _compile_context.ctx = outer_ctx
-    return CompiledGraph(root, ctx, output=output)
+    return CompiledGraph(root, ctx, output=output, input=input)
 
 
 def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None):

@@ -2104,6 +2104,7 @@ class FOLPSTracerCorrelation2Poles(Calculator):
         obj.poles = children[0]
         return obj
 
+#@jax.jit(static_argnames=['multipoles', 'precision', 'damping', 'interpolation_method', 'bias_scheme', 'model', 'renormalized'])
 def _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk,
                               f0, qpar, qper, multipoles=['B000', 'B202'],
                               precision=(8, 10, 10), damping='lor',
@@ -2206,7 +2207,6 @@ class FOLPSTracerSpectrum3Poles(Calculator):
     ---------
     arXiv:2404.07269
     """
-
     @classmethod
     def install(cls, installer):
         installer.pip('git+https://github.com/cosmodesi/FolpsD')
@@ -2285,11 +2285,11 @@ class FOLPSTracerSpectrum3Poles(Calculator):
                              interpolation_method=str(interpolation_method))
 
     def __call__(self):
-        sigma8 = float(self.pt.sigma8)
-        fsigma8 = float(self.pt.fsigma8)
+        sigma8 = self.pt.sigma8
+        fsigma8 = self.pt.fsigma8
         f0 = fsigma8 / sigma8
-        qpar = float(self.pt.qpar)
-        qper = float(self.pt.qper)
+        qpar = self.pt.qpar
+        qper = self.pt.qper
         A_AP = 1. / (qper ** 2 * qpar)
         sqrt_A_AP = A_AP ** 0.5
         A = (sigma8 / self._sigma8_fid) ** 2 if self._sigma8_fid is not None else 1.

@@ -648,9 +648,14 @@ class Profiler:
             for name, err in error_dict.items():
                 self.profiles.error[name] = np.tile(err, (nruns,) + (1,) * (err.ndim - 1))
 
-        # Store full covariance as a Covariance object in the dedicated slot
+        # Store full covariance as a Covariance object in the dedicated slot.
+        # Clone params with value = best-fit so that Covariance.center returns the best-fit point.
         from ..samples import Covariance
-        self.profiles.covariance = Covariance(cov_orig, params=list(self.varied_params))
+        best_params = []
+        for param in self.varied_params:
+            best_val = self.profiles.best[param.name][argmax]
+            best_params.append(param.clone(value=best_val))
+        self.profiles.covariance = Covariance(cov_orig, params=best_params)
 
         if self.output_fn is not None and self.mpicomm.rank == 0:
             self.profiles.write(self.output_fn)

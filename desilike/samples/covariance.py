@@ -369,6 +369,20 @@ class Covariance(BaseMatrix):
             return new._value.squeeze() if scalar else new._value
         return new
 
+    # ── center ───────────────────────────────────────────────────────────────
+
+    @property
+    def center(self):
+        """Flat vector of parameter values (center of the Gaussian), in ``_params`` order."""
+        parts = []
+        for param in self._params:
+            val = np.asarray(param.value).ravel()
+            size = max(1, int(np.prod(param.shape)))
+            if val.size == 1 and size > 1:
+                val = np.full(size, float(val[0]))
+            parts.append(val.astype('f8'))
+        return np.concatenate(parts) if parts else np.array([], dtype='f8')
+
     # ── statistics ────────────────────────────────────────────────────────────
 
     def var(self, params=None):

@@ -21,7 +21,7 @@ _b_grid = np.linspace(-0.7, 1.9, 99)
 _MCMC_MIN_STEPS = dict(min_steps=3000)
 _BLACKJAX_ADAPTATION = dict(adaptation=dict(steps=500))
 
-KERNEL_SAMPLER = dict(
+SAMPLER = dict(
     emcee=lambda: samplers.Emcee(nwalkers=8),
     zeus=lambda: samplers.Zeus(nwalkers=8),
     mhmcmc=lambda: samplers.MH(),
@@ -31,16 +31,20 @@ KERNEL_SAMPLER = dict(
     numpyro_nuts=lambda: samplers.NumpyroNUTS(),
     numpyro_hmc=lambda: samplers.NumpyroHMC(),
     numpyro_barker=lambda: samplers.NumpyroBarkerMH(),
+    dynesty=lambda: samplers.Dynesty(dynamic=True, nlive=100),
+    nautilus=lambda: samplers.Nautilus(n_networks=1, n_live=300),
+    pocomc=lambda: samplers.PocoMC(n_effective=200, n_active=100),
 )
 # SA is a gradient-free adaptive sampler; its covariance is inaccurate at low sample counts
 # (same behavior as the legacy NumpyroSASampler, which is not in test_accuracy).
-KERNEL_SAMPLER_RUNS = dict(numpyro_sa=lambda: samplers.NumpyroSA())
-KERNEL_OPTIONAL_DEPS = dict(
+SAMPLER_RUNS = dict(numpyro_sa=lambda: samplers.NumpyroSA())
+OPTIONAL_DEPS = dict(
     emcee='emcee', zeus='zeus', hmc='blackjax', nuts='blackjax', mclmc='blackjax',
     numpyro_nuts='numpyro', numpyro_hmc='numpyro', numpyro_barker='numpyro',
     numpyro_sa='numpyro',
+    dynesty='dynesty', nautilus='nautilus', pocomc='pocomc',
 )
-KERNEL_KWARGS_RUN = dict(
+KWARGS_RUN = dict(
     emcee=_MCMC_MIN_STEPS,
     zeus=_MCMC_MIN_STEPS,
     mhmcmc=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=sys.maxsize)),
@@ -50,8 +54,11 @@ KERNEL_KWARGS_RUN = dict(
     numpyro_nuts=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=500)),
     numpyro_hmc=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=500)),
     numpyro_barker=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=500)),
+    dynesty=dict(n_effective=0),
+    nautilus=dict(n_eff=100),
+    pocomc=dict(n_total=100, n_evidence=100),
 )
-KERNEL_KWARGS_RUN_FAST = dict(
+KWARGS_RUN_FAST = dict(
     emcee=dict(max_steps=10),
     zeus=dict(max_steps=10),
     mhmcmc=dict(max_steps=10, adaptation=dict(steps=sys.maxsize)),
@@ -62,17 +69,6 @@ KERNEL_KWARGS_RUN_FAST = dict(
     numpyro_hmc=dict(max_steps=10, adaptation=dict(steps=100)),
     numpyro_barker=dict(max_steps=10, adaptation=dict(steps=100)),
     numpyro_sa=dict(max_steps=10, adaptation=dict(steps=100)),
-)
-
-NESTED_KERNEL_SAMPLER = dict(
-    dynesty=lambda: samplers.Dynesty(dynamic=True),
-    nautilus=lambda: samplers.Nautilus(),
-    pocomc=lambda: samplers.PocoMC(),
-)
-NESTED_KERNEL_OPTIONAL_DEPS = dict(
-    dynesty='dynesty', nautilus='nautilus', pocomc='pocomc',
-)
-NESTED_KERNEL_KWARGS_RUN = dict(
     dynesty=dict(maxiter=10),
     nautilus=dict(n_eff=0, n_like_max=100),
     pocomc=dict(n_total=10, n_evidence=0),
@@ -115,14 +111,14 @@ def likelihood():
 # ── Accuracy ──────────────────────────────────────────────────────────────────
 
 @pytest.mark.mpi
-@pytest.mark.parametrize('key', KERNEL_SAMPLER.keys())
+@pytest.mark.parametrize('key', SAMPLER.keys())
 def test_kernel_accuracy(likelihood, key):
     """Kernel-based Sampler factory produces accurate results."""
-    if key in KERNEL_OPTIONAL_DEPS:
-        pytest.importorskip(KERNEL_OPTIONAL_DEPS[key])
+    if key in OPTIONAL_DEPS:
+        pytest.importorskip(OPTIONAL_DEPS[key])
 
-    sampler = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER[key](), rng=42)
-    results = sampler.run(**KERNEL_KWARGS_RUN.get(key, {}))
+    sampler = samplers.Sampler(likelihood, kernel=SAMPLER[key](), rng=42)
+    results = sampler.run(**KWARGS_RUN.get(key, {}))
 
     if sampler.mpicomm.rank == 0:
         mean_samples = results.mean(['a', 'b'])
@@ -135,24 +131,24 @@ def test_kernel_accuracy(likelihood, key):
 
 
 @pytest.mark.mpi_skip
-@pytest.mark.parametrize('key', KERNEL_SAMPLER_RUNS.keys())
+@pytest.mark.parametrize('key', SAMPLER_RUNS.keys())
 def test_kernel_runs(likelihood, key):
     """Kernel-based Sampler factory runs without error (no accuracy check)."""
-    if key in KERNEL_OPTIONAL_DEPS:
-        pytest.importorskip(KERNEL_OPTIONAL_DEPS[key])
-    sampler = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER_RUNS[key](), rng=42)
-    sampler.run(**KERNEL_KWARGS_RUN_FAST.get(key, {}))
+    if key in OPTIONAL_DEPS:
+        pytest.importorskip(OPTIONAL_DEPS[key])
+    sampler = samplers.Sampler(likelihood, kernel=SAMPLER_RUNS[key](), rng=42)
+    sampler.run(**KWARGS_RUN_FAST.get(key, {}))
 
 
 @pytest.mark.mpi
-@pytest.mark.parametrize('key', KERNEL_SAMPLER.keys())
+@pytest.mark.parametrize('key', SAMPLER.keys())
 def test_kernel_rescale(likelihood, key):
     """Rescaling the parameter space does not change the recovered posterior."""
-    if key in KERNEL_OPTIONAL_DEPS:
-        pytest.importorskip(KERNEL_OPTIONAL_DEPS[key])
+    if key in OPTIONAL_DEPS:
+        pytest.importorskip(OPTIONAL_DEPS[key])
 
-    sampler = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER[key](), rng=42, rescale=True)
-    results = sampler.run(**KERNEL_KWARGS_RUN.get(key, {}))
+    sampler = samplers.Sampler(likelihood, kernel=SAMPLER[key](), rng=42, rescale=True)
+    results = sampler.run(**KWARGS_RUN.get(key, {}))
 
     if sampler.mpicomm.rank == 0:
         mean_samples = results.mean(['a', 'b'])
@@ -169,11 +165,11 @@ def test_kernel_rescale(likelihood, key):
 @pytest.mark.parametrize('key', ['emcee'])
 def test_kernel_derived(likelihood, key):
     """Kernel-based Sampler correctly computes derived parameters."""
-    if key in KERNEL_OPTIONAL_DEPS:
-        pytest.importorskip(KERNEL_OPTIONAL_DEPS[key])
+    if key in OPTIONAL_DEPS:
+        pytest.importorskip(OPTIONAL_DEPS[key])
 
-    sampler = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER[key](), rng=42)
-    results = sampler.run(**KERNEL_KWARGS_RUN_FAST.get(key, {}))
+    sampler = samplers.Sampler(likelihood, kernel=SAMPLER[key](), rng=42)
+    results = sampler.run(**KWARGS_RUN_FAST.get(key, {}))
     if sampler.mpicomm.rank == 0:
         a, b, c, d = (np.asarray(results[n]) for n in ('a', 'b', 'c', 'd'))
         assert np.allclose(a + b, c)
@@ -185,8 +181,8 @@ def test_kernel_derived(likelihood, key):
 @pytest.mark.parametrize('key', ['emcee'])
 def test_kernel_solved(likelihood, key):
     """Kernel-based Sampler correctly computes analytically-solved parameters."""
-    if key in KERNEL_OPTIONAL_DEPS:
-        pytest.importorskip(KERNEL_OPTIONAL_DEPS[key])
+    if key in OPTIONAL_DEPS:
+        pytest.importorskip(OPTIONAL_DEPS[key])
 
     class Likelihood(BaseGaussianLikelihood):
 
@@ -211,8 +207,8 @@ def test_kernel_solved(likelihood, key):
         p11 = precision[1, 1]
         return data[1] - (p10 / p11) * (a - data[0])
 
-    sampler = samplers.Sampler(solved_likelihood, kernel=KERNEL_SAMPLER[key](), rng=42)
-    results = sampler.run(**KERNEL_KWARGS_RUN_FAST.get(key, {}))
+    sampler = samplers.Sampler(solved_likelihood, kernel=SAMPLER[key](), rng=42)
+    results = sampler.run(**KWARGS_RUN_FAST.get(key, {}))
     if sampler.mpicomm.rank == 0:
         a_arr = np.asarray(results['a']).ravel()
         b_arr = np.asarray(results['b']).ravel()
@@ -223,19 +219,19 @@ def test_kernel_solved(likelihood, key):
 # ── Checkpointing / determinism / chain continuation ─────────────────────────
 
 @pytest.mark.mpi_skip
-@pytest.mark.parametrize('key', KERNEL_SAMPLER.keys())
+@pytest.mark.parametrize('key', SAMPLER.keys())
 def test_kernel_write(likelihood, key, tmp_path):
     """Second sampler reading a saved checkpoint returns identical results."""
-    if key in KERNEL_OPTIONAL_DEPS:
-        pytest.importorskip(KERNEL_OPTIONAL_DEPS[key])
+    if key in OPTIONAL_DEPS:
+        pytest.importorskip(OPTIONAL_DEPS[key])
 
-    sampler_1 = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER[key](),
+    sampler_1 = samplers.Sampler(likelihood, kernel=SAMPLER[key](),
                                   rng=42, output_dir=tmp_path)
-    results_1 = sampler_1.run(**KERNEL_KWARGS_RUN_FAST.get(key, {}))
+    results_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
 
-    sampler_2 = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER[key](),
+    sampler_2 = samplers.Sampler(likelihood, kernel=SAMPLER[key](),
                                   rng=43, output_dir=tmp_path)
-    results_2 = sampler_2.run(**KERNEL_KWARGS_RUN_FAST.get(key, {}))
+    results_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
 
     if sampler_1.mpicomm.rank == 0:
         assert len(results_1) == len(results_2)
@@ -243,19 +239,21 @@ def test_kernel_write(likelihood, key, tmp_path):
 
 
 @pytest.mark.mpi_skip
-@pytest.mark.parametrize('key', KERNEL_SAMPLER.keys())
+@pytest.mark.parametrize('key', SAMPLER.keys())
 def test_kernel_rng(likelihood, key):
     """Fixing the random seed leads to reproducible results."""
-    if key in KERNEL_OPTIONAL_DEPS:
-        pytest.importorskip(KERNEL_OPTIONAL_DEPS[key])
+    if key in OPTIONAL_DEPS:
+        pytest.importorskip(OPTIONAL_DEPS[key])
     if key == 'zeus':
         pytest.skip('Zeus does not support specifying a random seed.')
+    if key == 'pocomc':
+        pytest.skip('pocoMC adaptive beta schedule is not deterministic across runs.')
 
-    sampler_1 = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER[key](), rng=42)
-    results_1 = sampler_1.run(**KERNEL_KWARGS_RUN_FAST.get(key, {}))
+    sampler_1 = samplers.Sampler(likelihood, kernel=SAMPLER[key](), rng=42)
+    results_1 = sampler_1.run(**KWARGS_RUN_FAST.get(key, {}))
 
-    sampler_2 = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER[key](), rng=42)
-    results_2 = sampler_2.run(**KERNEL_KWARGS_RUN_FAST.get(key, {}))
+    sampler_2 = samplers.Sampler(likelihood, kernel=SAMPLER[key](), rng=42)
+    results_2 = sampler_2.run(**KWARGS_RUN_FAST.get(key, {}))
 
     if sampler_1.mpicomm.rank == 0:
         assert len(results_1) == len(results_2)
@@ -266,14 +264,14 @@ def test_kernel_rng(likelihood, key):
 @pytest.mark.parametrize('key', ['emcee', 'hmc', 'mhmcmc', 'zeus'])
 def test_kernel_continue_chain(likelihood, key):
     """A chain can be continued from a checkpoint."""
-    if key in KERNEL_OPTIONAL_DEPS:
-        pytest.importorskip(KERNEL_OPTIONAL_DEPS[key])
+    if key in OPTIONAL_DEPS:
+        pytest.importorskip(OPTIONAL_DEPS[key])
 
-    sampler = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER[key](), rng=42)
+    sampler = samplers.Sampler(likelihood, kernel=SAMPLER[key](), rng=42)
     chains_10 = sampler.run(
         burn_in=0, min_steps=10, max_steps=10, concatenate=False)
     sampler = samplers.Sampler(
-        likelihood, kernel=KERNEL_SAMPLER[key](), rng=43,
+        likelihood, kernel=SAMPLER[key](), rng=43,
         chains=[c.copy() for c in chains_10] if sampler.mpicomm.rank == 0 else None)
     chains_20 = sampler.run(
         burn_in=0, min_steps=20, max_steps=20, concatenate=False)
@@ -289,18 +287,18 @@ def test_kernel_continue_chain(likelihood, key):
 @pytest.mark.parametrize('key', ['emcee', 'hmc', 'mhmcmc', 'zeus'])
 def test_kernel_multiple_chains(likelihood, key):
     """Multiple chains can be run in parallel across MPI ranks."""
-    if key in KERNEL_OPTIONAL_DEPS:
-        pytest.importorskip(KERNEL_OPTIONAL_DEPS[key])
+    if key in OPTIONAL_DEPS:
+        pytest.importorskip(OPTIONAL_DEPS[key])
 
     nchains = likelihood.mpicomm.size
-    sampler = samplers.Sampler(likelihood, kernel=KERNEL_SAMPLER[key](),
+    sampler = samplers.Sampler(likelihood, kernel=SAMPLER[key](),
                                 nparallel=nchains, rng=42)
     chains_10 = sampler.run(
         burn_in=0, min_steps=10, max_steps=10, concatenate=False)
     if sampler.mpicomm.rank == 0:
         assert len(chains_10) == nchains
     sampler = samplers.Sampler(
-        likelihood, kernel=KERNEL_SAMPLER[key](), rng=43,
+        likelihood, kernel=SAMPLER[key](), rng=43,
         chains=[c.copy() for c in chains_10] if sampler.mpicomm.rank == 0 else None)
     chains_20 = sampler.run(
         burn_in=0, min_steps=20, max_steps=20, concatenate=False)
@@ -320,18 +318,6 @@ def test_mh_fast_slow(likelihood):
     sampler = samplers.Sampler(
         likelihood, kernel=samplers.MH(fast=['a'], f_fast=1), rng=42)
     sampler.run(max_steps=100)
-
-
-# ── Nested kernels ─────────────────────────────────────────────────────────────
-
-@pytest.mark.mpi
-@pytest.mark.parametrize('key', NESTED_KERNEL_SAMPLER.keys())
-def test_nested_kernel_runs(likelihood, key):
-    """Nested-kernel Sampler factory runs without error (smoke test)."""
-    if key in NESTED_KERNEL_OPTIONAL_DEPS:
-        pytest.importorskip(NESTED_KERNEL_OPTIONAL_DEPS[key])
-    sampler = samplers.Sampler(likelihood, kernel=NESTED_KERNEL_SAMPLER[key](), rng=42)
-    sampler.run(**NESTED_KERNEL_KWARGS_RUN.get(key, {}))
 
 
 # ── Static kernels ─────────────────────────────────────────────────────────────

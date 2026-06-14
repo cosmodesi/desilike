@@ -39,7 +39,7 @@ class _Prior:
         return self._ndim
 
 
-_CLEAR_BEFORE_SAVE = ('log_likelihood', 'pool', 'distribute', 'save_state')
+_CLEAR_BEFORE_SAVE = ('log_likelihood', 'log_prior', 'sample_prior', 'prior', 'pool', 'distribute', 'save_state')
 
 
 def _patch_save_state(pocomc_sampler):

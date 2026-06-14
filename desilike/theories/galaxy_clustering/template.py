@@ -467,6 +467,8 @@ class DirectSpectrum2Template(Spectrum2Template):
         if cosmo is None:
             cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial)
         self.cosmo = cosmo
+        # Inherit external from cosmo
+        self._is_external = self.cosmo._is_external
 
     def __post_init__(self, k=None, z=1., fiducial='DESI', engine='camb', with_now=False, only_now=False, cosmo=None):
         # Non-node setup: fiducial distances and fiducial PK (fixed at compile time).

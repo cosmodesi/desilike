@@ -529,3 +529,28 @@ class TestFOLPS:
         pipe_exact = compile(FOLPSTracerCorrelation2Poles(s=s, ells=ells))
         theory_emu = FOLPSTracerCorrelation2Poles(s=s, ells=ells)
         _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1p')
+
+
+def test_jit():
+
+    from desilike import compile, get_params
+    from desilike.theories import CosmoprimoCosmology
+    from desilike.theories.galaxy_clustering import DirectSpectrum2Template, FOLPSTracerSpectrum2Poles
+    k = np.linspace(0.02, 0.3, 20)
+    ells = (0, 2)
+    cosmo = CosmoprimoCosmology(engine='camb')
+    template = DirectSpectrum2Template(cosmo=cosmo, z=1.)
+    pipe = compile(FOLPSTracerSpectrum2Poles(k=k, ells=ells, template=template))
+
+    pipe_jit = jax.jit(pipe)
+    for i in range(3):
+        params = {param.name: param.prior.sample(key=jax.random.key(42 + i)) for param in get_params(cosmo).select(varied=True)}
+        poles = pipe(params)
+        poles_jit = pipe_jit(params)
+        assert np.allclose(poles_jit, poles)
+
+
+
+if __name__ == '__main__':
+
+    test_jit()

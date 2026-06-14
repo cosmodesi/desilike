@@ -2493,14 +2493,14 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
             pole_at_kap = jnp.interp(kap.ravel(), self._kgrid, pole).reshape(kap.shape)
             pkmu = pkmu + pole_at_kap * jnp.polyval(leg_coeffs, muap)
         pkmu = jac * pkmu
-        self.power = self._to_poles(pkmu)
-        return self.power
+        self.poles = self._to_poles(pkmu)
+        return self.poles
 
     def tree_flatten(self):
-        return [self.power], None
+        return [self.poles], None
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.power = children[0]
+        obj.poles = children[0]
         return obj

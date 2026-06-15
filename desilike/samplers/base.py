@@ -126,7 +126,7 @@ def _batched(core, returns_tuple):
     def batched_array(batch):
         batch = jnp.asarray(batch)
         single = batch.ndim == 1
-        out = np.asarray(vfn(batch[None] if single else batch))
+        out = vfn(batch[None] if single else batch)
         return out[0] if single else out
     return batched_array
 
@@ -244,10 +244,10 @@ class PopulationKernel:
         likelihood : tuple of (likelihood_logpdf, likelihood_logpdf_with_derived)
             Pool-saved callables returning ``log_l`` and ``(log_l, derived)``
             respectively for a single rescaled-space ``(ndim,)`` sample.
-        prior : tuple of (prior_logpdf, prior_rvs, prior_ppf)
+        prior : tuple of (prior_logpdf, prior_ppf, prior_bounds)
             ``prior_logpdf``: pool-aware log-prior callable.
-            ``prior_rvs``: draw ``size`` samples from the prior.
             ``prior_ppf``: unit-hypercube → parameter-space transform.
+            ``prior_bounds``: ``(ndim, 2)`` array of lower/upper bounds in rescaled space.
         rng : numpy.random.Generator
             Random-number generator (main process).
         **context : dict
@@ -364,13 +364,17 @@ class BaseSampler(ABC):
             ``desilike.mpi.COMM_WORLD``.
         output_dir : str, Path, or None
             Save samples to this folder.  Default is ``None``.
-        rescale : bool
+        rescale : bool or {'diag', 'full'}
             Internally normalise parameters so that their expected variation
             range is ~ unity (mirrors :class:`~desilike.profilers.base.BaseProfiler`).
-            The sampler then explores the rescaled space while the posterior is
-            evaluated in original space.  Default is ``False``.
-        covariance : array_like, optional
-            ``(ndim, ndim)`` covariance whose diagonal sets the rescaling scale.
+            The sampler explores the rescaled space while the posterior is evaluated
+            in original space.  ``False`` (default) disables rescaling.
+            ``True`` or ``'full'``: use the full covariance when *covariance* is a
+            dense :class:`~desilike.parameter.Covariance` (Cholesky whitening), else
+            its diagonal.  ``'diag'``: always use only the diagonal of *covariance*,
+            even when *covariance* is dense.
+        covariance : array_like or Covariance, optional
+            Covariance used to set the rescaling scale.
             When ``None``, each parameter's ``ref.std()`` is used instead.
         batch_size : int or None, optional
             Controls how the pool batches likelihood/posterior calls.
@@ -438,7 +442,10 @@ class BaseSampler(ABC):
         ``k`` (mirrors :class:`~desilike.profilers.base.BaseProfiler`).  ``_loc`` is the
         parameter centre (``value`` or ``ref.center()``); ``_scale`` is ``sqrt(diag(covariance))``
         when *covariance* is given, each parameter's ``ref.std()`` when *rescale* is set,
-        or all-ones otherwise (no rescaling).
+        or all-ones otherwise (no rescaling).  When ``rescale`` is ``True`` or ``'full'``
+        and *covariance* is a dense :class:`~desilike.parameter.Covariance`, Cholesky
+        whitening is applied (``_L``/``_L_inv``).  ``rescale='diag'`` skips the Cholesky
+        and always uses only the diagonal.
         """
         # Flat per-scalar layout: shape () → 1 element, shape (n,) → n elements.
         loc_parts = []
@@ -453,6 +460,7 @@ class BaseSampler(ABC):
         flat_size = self._loc.size
         self._L = self._L_inv = None
         if rescale:
+            C_full = None
             if isinstance(covariance, Covariance):
                 param_sizes_list = list(_param_sizes(self.varied_params))
                 C_full = np.zeros((flat_size, flat_size), dtype='f8')
@@ -464,7 +472,7 @@ class BaseSampler(ABC):
                         in_cov_indices.extend(range(col, col + size))
                         params_in_cov.append(param)
                 if params_in_cov:
-                    sub = covariance.view(params_in_cov, return_type='nparray')
+                    sub = covariance.select(params_in_cov).value
                     ix = np.ix_(in_cov_indices, in_cov_indices)
                     C_full[ix] = sub
                 # Fill diagonal for params absent from the Covariance.
@@ -477,13 +485,14 @@ class BaseSampler(ABC):
                                 f'ref.std()={std!r}. Provide covariance or set a proper ref distribution.')
                         for k in range(size):
                             C_full[col + k, col + k] = float(std) ** 2
+            elif covariance is not None:
+                C_full = covariance
+            if C_full is not None:
                 self._scale = np.sqrt(np.diag(C_full))
-                if np.any(C_full != np.diag(np.diag(C_full))):
+                if rescale != 'diag' and np.any(C_full != np.diag(np.diag(C_full))):
                     _L = np.linalg.cholesky(C_full)
                     self._L = jnp.array(_L)
                     self._L_inv = jnp.array(np.linalg.inv(_L))
-            elif covariance is not None:
-                self._scale = np.sqrt(np.diag(np.asarray(covariance)))
             else:
                 scale_parts = []
                 for param, size, col in _param_sizes(self.varied_params):
@@ -497,6 +506,8 @@ class BaseSampler(ABC):
         else:
             self._scale = np.ones(flat_size, dtype='f8')
 
+        self._gauss_mu_orig = None  # sentinel: no Gaussian prior
+
         # Transformed collection: priors/refs expressed in rescaled space (the rescaled
         # step size is recovered from the transformed ref.std()).
         self._transformed_params = VariableCollection()
@@ -506,6 +517,69 @@ class BaseSampler(ABC):
             prior = param.prior.affine_transform(loc=-loc_p / scale_p, scale=1. / scale_p)
             ref   = param.ref.affine_transform(loc=-loc_p / scale_p, scale=1. / scale_p)
             self._transformed_params.set(param.clone(prior=prior, ref=ref))
+
+    def _set_gaussian_prior(self, prior):
+        """Build a Gaussian prior from a :class:`~desilike.samples.Covariance` object.
+
+        Parameters present in *prior* get a joint multivariate-Gaussian prior centred on
+        ``prior.center`` with covariance ``prior.value``.  Parameters absent from *prior*
+        keep their existing per-parameter prior (uniform / normal / …).
+
+        Hard prior limits from each parameter's prior distribution are always enforced:
+        the prior logpdf returns ``-inf`` outside those limits, and the PPF clips to them
+        so that ``ppf(0)`` / ``ppf(1)`` return finite hard bounds (used by PocoMC and
+        Dynesty to set the sampling volume).
+
+        Must be called *after* :meth:`_set_rescaling` (depends on ``_loc`` and ``_scale``/
+        ``_L``).  Stores the Gaussian parameters in original (pre-rescaling) space so that
+        ``_prior_logpdf_one`` and ``_prior_ppf_one`` need only call ``_forward`` once.
+        """
+        from ..samples import Covariance as _Covariance
+        if not isinstance(prior, _Covariance):
+            raise TypeError(f'prior must be a Covariance instance, got {type(prior)}')
+
+        param_sizes_list = list(_param_sizes(self.varied_params))
+
+        # ── split varied params into Gaussian group and individual group ──────
+        gauss_param_sizes = []   # (param, size, col) for params in prior
+        indiv_param_sizes = []   # (param, size, col) for params not in prior
+        for param, size, col in param_sizes_list:
+            if param.name in prior:
+                gauss_param_sizes.append((param, size, col))
+            else:
+                indiv_param_sizes.append((param, size, col))
+
+        if not gauss_param_sizes:
+            raise ValueError('None of the varied parameters are present in the prior Covariance.')
+
+        # ── covariance and mean in original space ──────────────────────────────────────
+        gauss_params_list = [param for param, size, col in gauss_param_sizes]
+        gauss_prior = prior.select(gauss_params_list)
+        C_gauss_orig = gauss_prior.value  # (n_gauss, n_gauss)
+        mu_gauss_orig = gauss_prior.center  # n_gauss
+
+        # ── Cholesky of C_gauss_orig ──────────────────────────────────────────
+        try:
+            L_gauss = np.linalg.cholesky(C_gauss_orig)
+        except np.linalg.LinAlgError as exc:
+            raise ValueError('prior covariance is not positive-definite.') from exc
+        L_gauss_inv = np.linalg.inv(L_gauss)
+        precision = L_gauss_inv.T @ L_gauss_inv  # (n_gauss, n_gauss)
+        n_gauss = mu_gauss_orig.size
+        # log det = 2 * sum(log(diag(L)))
+        log_norm = 0.5 * n_gauss * np.log(2. * np.pi) + np.sum(np.log(np.diag(L_gauss)))
+
+        # ── flat column indices in the ndim vector for Gaussian params ────────
+        gauss_flat_cols = np.concatenate([np.arange(col, col + size)
+                                          for param, size, col in gauss_param_sizes]).astype('i4')
+
+        # ── store ─────────────────────────────────────────────────────────────
+        self._gauss_mu_orig      = jnp.array(mu_gauss_orig)
+        self._gauss_L_orig       = jnp.array(L_gauss)
+        self._gauss_precision    = jnp.array(precision)
+        self._gauss_log_norm     = float(log_norm)
+        self._gauss_flat_cols    = gauss_flat_cols
+        self._indiv_param_sizes  = indiv_param_sizes
 
     def _forward(self, x):
         """Rescaled → original space along the last axis.
@@ -575,54 +649,114 @@ class BaseSampler(ABC):
         """Create the pool and register the batched evaluators.
 
         Pool-dispatched attributes set here:
-        ``prior_ppf``, ``prior_logpdf``, ``posterior_logpdf_with_derived``,
+        ``prior_ppf``, ``prior_logpdf``, ``posterior_logpdf``, ``posterior_logpdf_with_derived``,
         ``likelihood_logpdf``, ``likelihood_logpdf_with_derived``.
-
-        Non-pool JAX attribute: ``posterior_logpdf`` — a ``jax.jit(jax.vmap(...))``
-        function ``(n, ndim) → (n,)`` suitable for direct use by MCMC kernels.
         """
         self.pool = make_pool(mpicomm, batch_size=batch_size)
-        specs = [('prior_ppf',                     self._prior_ppf_one,                     False),
-                 ('prior_logpdf',                   self._prior_logpdf_one,                  False),
-                 ('posterior_logpdf_with_derived',  self._posterior_logpdf_with_derived_one, True),
-                 ('likelihood_logpdf',              self._likelihood_logpdf_only_one,        False),
-                 ('likelihood_logpdf_with_derived', self._likelihood_logpdf_one,             True)]
+        specs = [('prior_ppf',                     self._prior_ppf_one,                       False),
+                 ('prior_logpdf',                   self._prior_logpdf_one,                   False),
+                 ('posterior_logpdf',               self._posterior_logpdf_one,               False),
+                 ('posterior_logpdf_with_derived',  self._posterior_logpdf_with_derived_one,  True),
+                 ('likelihood_logpdf',              self._likelihood_logpdf_one,              False),
+                 ('likelihood_logpdf_with_derived', self._likelihood_logpdf_with_derived_one, True)]
         for name, core, returns_tuple in specs:
             setattr(self, name, self.pool.save_function(_batched(core, returns_tuple), name))
-        self.posterior_logpdf = jax.jit(jax.vmap(self._posterior_logpdf_one))
 
-    def prior_rvs(self, size=1):
-        """Return ``(size, ndim)`` samples drawn from the prior in rescaled space."""
-        u = np.random.default_rng().uniform(size=(size, self.ndim)).astype('f4')
-        return np.asarray(jax.jit(jax.vmap(self._prior_ppf_one))(jnp.asarray(u)))
+    @property
+    def prior_bounds(self):
+        """Axis-aligned bounding box of the prior support in whitened (rescaled) parameter space.
+
+        Returns an ``(ndim, 2)`` array; column 0 is lower bounds, column 1 is upper bounds.
+        Exact for diagonal (or no) rescaling.  For full Cholesky whitening, computed
+        analytically as the linear image of the original-space parameter bounding box —
+        O(ndim^2), no sampling required.
+        """
+        lo_orig = np.full(self.ndim, -np.inf)
+        hi_orig = np.full(self.ndim, np.inf)
+        for param, size, col in _param_sizes(self.varied_params):
+            if param.prior is not None:
+                lo_val, hi_val = param.prior.limits
+                lo_orig[col:col + size] = lo_val
+                hi_orig[col:col + size] = hi_val
+
+        if self._L_inv is None:
+            # Diagonal (or unit) scaling: y = (x - loc) / scale — exact, component-wise.
+            lo_white = (lo_orig - self._loc) / self._scale
+            hi_white = (hi_orig - self._loc) / self._scale
+        else:
+            # Full Cholesky: y = (x - loc) @ L_inv.T, so y_j = sum_k L_inv[j,k] (x_k - loc_k).
+            # The bounding box of a linear image of the box [lo_orig, hi_orig] is:
+            #   lo_white[j] = sum_k max(B[j,k], 0) * delta_lo[k] + min(B[j,k], 0) * delta_hi[k]
+            # where B = L_inv and delta = (orig - loc).  np.where guards against 0 * ±inf = nan.
+            delta_lo = lo_orig - self._loc
+            delta_hi = hi_orig - self._loc
+            B_pos = np.maximum(self._L_inv, 0.)
+            B_neg = np.minimum(self._L_inv, 0.)
+            lo_white = (np.where(B_pos == 0., 0., B_pos * delta_lo) + np.where(B_neg == 0., 0., B_neg * delta_hi)).sum(axis=-1)
+            hi_white = (np.where(B_pos == 0., 0., B_pos * delta_hi) + np.where(B_neg == 0., 0., B_neg * delta_lo)).sum(axis=-1)
+
+        return np.column_stack([lo_white, hi_white])
 
     def _prior_ppf_one(self, sample):
         """Map a unit-cube sample ``(ndim,)`` to *rescaled* parameter space via each prior's PPF.
 
-        The transformed priors' PPF already returns rescaled-space values, so the result
-        is the sampler's working-space vector (``_forward`` maps it back to original).
+        When a Gaussian prior is set (via :meth:`_set_gaussian_prior`), the first
+        ``n_gauss`` unit-cube dimensions are mapped through the unconstrained joint
+        Cholesky PPF of the Gaussian, and the remaining dimensions map each non-Gaussian
+        param through its individual prior PPF.  Without a Gaussian prior, every param
+        uses its individual prior PPF.  Either way the result is transformed to the
+        sampler's rescaled working space via :meth:`_backward`.
         """
-        result = []
-        for param, size, col in _param_sizes(self._transformed_params):
+        if self._gauss_mu_orig is not None:
+            n_gauss = self._gauss_flat_cols.size
+            # Gaussian group: Cholesky PPF in original space (unconstrained).
+            # Clip z to a large finite range before the matmul to avoid 0*inf=NaN when
+            # L has zero entries (diagonal L) and u=0/1 gives z=±inf.
+            z = jnp.clip(jax.scipy.stats.norm.ppf(sample[:n_gauss]), -1e38, 1e38)
+            x_gauss = self._gauss_mu_orig + self._gauss_L_orig @ z
+            x_orig = jnp.zeros(self.ndim).at[self._gauss_flat_cols].set(x_gauss)
+            # Individual group: per-param PPF
+            u_col = n_gauss
+            for param, size, col in self._indiv_param_sizes:
+                u_chunk = sample[u_col:u_col + size]
+                x_orig = x_orig.at[col:col + size].set(jnp.atleast_1d(param.prior.ppf(u_chunk)))
+                u_col += size
+            return self._backward(x_orig)
+        parts = []
+        for param, size, col in _param_sizes(self.varied_params):
             u_chunk = sample[col:col + size]
-            result.append(jnp.atleast_1d(param.prior.ppf(u_chunk)))
-        return jnp.concatenate(result)
+            parts.append(jnp.atleast_1d(param.prior.ppf(u_chunk)))
+        return self._backward(jnp.concatenate(parts))
 
     def _prior_logpdf_one(self, sample):
         """Return the log-prior for a single rescaled-space ``(ndim,)`` sample.
 
-        Evaluates ``_transformed_params`` priors directly in rescaled space, matching
-        the density implied by :meth:`_prior_ppf_one` (exact inverse pair).
-
-        Warning
-        -------
-        This is *not* necessarily the real prior, which may be more complex.
+        When a Gaussian prior is set, evaluates the unconstrained multivariate-Gaussian
+        logpdf for the Gaussian-group params and sums the individual per-param logpdfs
+        for the remaining params.
+        Without a Gaussian prior, evaluates each original prior's logpdf after mapping
+        to original space via :meth:`_forward`.
         """
+        x_orig = self._forward(sample)
+        if self._gauss_mu_orig is not None:
+            # Gaussian group: unconstrained multivariate Gaussian logpdf
+            x_gauss = x_orig[self._gauss_flat_cols]
+            d = x_gauss - self._gauss_mu_orig
+            log_gauss = -0.5 * (d @ self._gauss_precision @ d) - self._gauss_log_norm
+            # Individual group
+            result = log_gauss
+            for param, size, col in self._indiv_param_sizes:
+                if param.prior is None:
+                    continue
+                chunk = x_orig[col:col + size]
+                chunk = chunk.reshape(param.shape) if param.shape else chunk[0]
+                result = result + param.prior.logpdf(chunk)
+            return result
         result = jnp.array(0.)
-        for param, size, col in _param_sizes(self._transformed_params):
+        for param, size, col in _param_sizes(self.varied_params):
             if param.prior is None:
                 continue
-            chunk = sample[col:col + size]
+            chunk = x_orig[col:col + size]
             chunk = chunk.reshape(param.shape) if param.shape else chunk[0]
             result = result + param.prior.logpdf(chunk)
         return result
@@ -644,11 +778,11 @@ class BaseSampler(ABC):
             derived_flat = jnp.zeros(0)
         return log_post, derived_flat
 
-    def _likelihood_logpdf_only_one(self, sample):
+    def _likelihood_logpdf_one(self, sample):
         """Return ``log_likelihood`` for a single ``(ndim,)`` sample (no derived)."""
         return self._posterior_logpdf_one(sample) - self._prior_logpdf_one(sample)
 
-    def _likelihood_logpdf_one(self, sample):
+    def _likelihood_logpdf_with_derived_one(self, sample):
         """Return ``(log_likelihood, derived_flat)`` for a single ``(ndim,)`` sample."""
         log_prior = self._prior_logpdf_one(sample)
         log_post, derived = self._posterior_logpdf_with_derived_one(sample)
@@ -818,8 +952,8 @@ class MCMCSampler(BaseSampler):
         rng : numpy.random.Generator, int, or None
         mpicomm : MPI communicator, optional
         output_dir : str, Path, or None
-        rescale : bool
-        covariance : array_like, optional
+        rescale : bool or {'diag', 'full'}
+        covariance : array_like or Covariance, optional
         batch_size : int or None, optional
         """
         self.kernel = kernel
@@ -1169,15 +1303,17 @@ class PopulationSampler(BaseSampler):
     logger = logging.getLogger('PopulationSampler')
 
     def __init__(self, posterior, kernel, rng=None, output_dir=None,
-                 rescale=False, covariance=None, batch_size=None):
+                 rescale=False, covariance=None, batch_size=None, prior=None):
         self.kernel = kernel
         if batch_size is None:
             batch_size = getattr(kernel, '_batch_size', None)
         super().__init__(posterior, rng=rng, output_dir=output_dir,
                          rescale=rescale, covariance=covariance, batch_size=batch_size)
+        if prior is not None:
+            self._set_gaussian_prior(prior)
         self.kernel.init(
             (self.likelihood_logpdf, self.likelihood_logpdf_with_derived),
-            (self.prior_logpdf, self.prior_rvs, self.prior_ppf),
+            (self.prior_logpdf, self.prior_ppf, self.prior_bounds),
             self.rng,
             pool=self.pool, ndim=self.ndim, output_dir=self.output_dir,
             params=self._transformed_params,
@@ -1196,7 +1332,7 @@ class PopulationSampler(BaseSampler):
 
 
 def Sampler(posterior, kernel, nparallel=1, chains=None, rng=None, output_dir=None,
-            rescale=False, covariance=None, batch_size=None):
+            rescale=False, covariance=None, batch_size=None, prior=None):
     """Factory creating the appropriate infrastructure class for *kernel*.
 
     Parameters
@@ -1213,14 +1349,20 @@ def Sampler(posterior, kernel, nparallel=1, chains=None, rng=None, output_dir=No
         and :class:`StaticSampler`.  Default is ``None``.
     rng : int or numpy.random.Generator or None
     output_dir : str or Path or None
-    rescale : bool
-    covariance : array_like or None
+    rescale : bool or {'diag', 'full'}
+    covariance : array_like or Covariance or None
     batch_size : int or None
+    prior : Covariance or None
+        Optional Gaussian prior for :class:`PopulationSampler` kernels (PocoMC, Dynesty,
+        Nautilus, …).  The prior is a multivariate Gaussian centred on ``prior.center``
+        with covariance ``prior.value``, automatically rescaled to the sampler's working
+        space.  Hard bounds from each parameter's prior distribution are always enforced.
+        Ignored for non-:class:`PopulationSampler` kernels.
     """
     cls = _SAMPLER_REGISTRY[kernel._sampler_cls]
     if cls is PopulationSampler:
         return cls(posterior, kernel=kernel, rng=rng, output_dir=output_dir,
-                   rescale=rescale, covariance=covariance, batch_size=batch_size)
+                   rescale=rescale, covariance=covariance, batch_size=batch_size, prior=prior)
     if cls is StaticSampler:
         return cls(posterior, kernel=kernel, rng=rng, output_dir=output_dir,
                    rescale=rescale, covariance=covariance)

@@ -3,8 +3,6 @@ BAO power spectrum template for galaxy clustering.
 
 Classes
 -------
-CosmoprimoCosmology
-    Calculator wrapping a cosmoprimo Boltzmann call with free cosmological parameters.
 BAOSpectrum2Template
     Fiducial-cosmology BAO template: power spectra and AP distances computed once from
     cosmoprimo at compile time; scaled at evaluation time by free AP and growth-rate params.
@@ -13,6 +11,18 @@ ShapeFitSpectrum2Template
 DirectSpectrum2Template
     Direct template: power spectrum computed at every evaluation from a
     :class:`CosmoprimoCosmology` dependency.
+BAOPhaseShiftSpectrum2Template
+    BAO template with Baumann et al. 2018 N_eff-induced phase shift parameterisation.
+TurnOverSpectrum2Template
+    Template based on the matter power-spectrum turn-over scale.
+DirectWiggleSplitSpectrum2Template
+    Direct template with explicit wiggle/no-wiggle split and BAO dilation.
+BAOExtractor
+    Extracts BAO distance parameters (DH/rd, DM/rd, DV/rd, qpar, qper, qiso, qap) from a cosmology.
+BAOPhaseShiftExtractor
+    BAO extractor extended with the neutrino-driven BAO phase shift (N_eff, baoshift).
+TurnOverExtractor
+    Extracts turn-over observables (kTO, DV*kTO, DH/DM, qto, qap) from a cosmology.
 """
 
 import numpy as np
@@ -467,8 +477,29 @@ class DirectSpectrum2Template(Spectrum2Template):
         if cosmo is None:
             cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial)
         self.cosmo = cosmo
-        # Inherit external from cosmo
-        self._is_external = self.cosmo._is_external
+        # Register required cosmo outputs; CosmoprimoCosmology computes them on merged
+        # grids and exposes them as JAX leaves — this calc is pure JAX regardless of engine.
+        k_req = np.logspace(-3., 1., 400) if k is None else np.asarray(k, dtype='f8')
+        # Prepend k0 = 1e-3 so get_result(...)[0] gives pk at k0 for f0 = sqrt(ptt/pk)|_{k→0}.
+        self._k_with_k0 = np.concatenate([[1e-3], k_req])
+        z_req = float(z)
+        reqs = {
+            'fourier.pk': [
+                {'of': 'delta_cb', 'z': z_req, 'k': self._k_with_k0},
+                {'of': 'theta_cb', 'z': z_req, 'k': self._k_with_k0},
+            ],
+            'fourier.sigma8_z': [
+                {'of': 'delta_cb', 'z': z_req},
+                {'of': 'theta_cb', 'z': z_req},
+            ],
+            'background.efunc':                          [{'z': z_req}],
+            'background.transverse_comoving_distance':   [{'z': z_req}],
+        }
+        if with_now:
+            reqs['fourier.pk_now'] = [
+                {'of': 'delta_cb', 'engine': str(with_now), 'z': z_req, 'k': k_req},
+            ]
+        cosmo.add_requirements(reqs)
 
     def __post_init__(self, k=None, z=1., fiducial='DESI', engine='camb', with_now=False, only_now=False, cosmo=None):
         # Non-node setup: fiducial distances and fiducial PK (fixed at compile time).
@@ -496,34 +527,23 @@ class DirectSpectrum2Template(Spectrum2Template):
             self._pknow_dd_fid = self._pk_dd_fid
 
     def __call__(self):
-        from cosmoprimo import PowerSpectrumBAOFilter, constants
-        # self.cosmo.cosmo is the populated cosmoprimo.Cosmology from the dep's __call__.
-        cosmo = self.cosmo.cosmo
-        fo = cosmo.get_fourier()
-        pk_interp  = fo.pk_interpolator(of='delta_cb', **_kw_pk).to_1d(z=self.z)
-        ptt_interp = fo.pk_interpolator(of='theta_cb', **_kw_pk).to_1d(z=self.z)
-
-        self.pk_dd = pk_interp(self.k)
-        if self._with_now:
-            bao_filter = PowerSpectrumBAOFilter(pk_interp, engine=self._with_now,
-                                                cosmo=cosmo, cosmo_fid=self._fiducial)
-            self.pknow_dd = bao_filter.smooth_pk_interpolator()(self.k)
-        else:
-            self.pknow_dd = self.pk_dd.copy()
+        from cosmoprimo import constants
+        # All cosmoprimo work happened in CosmoprimoCosmology.__call__; retrieve JAX arrays.
+        pk_full  = self.cosmo.get('fourier.pk', of='delta_cb', z=self.z, k=self._k_with_k0)
+        ptt_full = self.cosmo.get('fourier.pk', of='theta_cb', z=self.z, k=self._k_with_k0)
+        self.pk_dd = pk_full[1:]
+        self.pknow_dd = (self.cosmo.get('fourier.pk_now', of='delta_cb',
+                              engine=self._with_now, z=self.z, k=self.k)
+                         if self._with_now else self.pk_dd)
         if self._only_now:
             self.pk_dd = self.pknow_dd
-
-        sigma8  = fo.sigma8_z(self.z, of='delta_cb')
-        fsigma8 = fo.sigma8_z(self.z, of='theta_cb')
-        self.sigma8  = sigma8
-        self.fsigma8 = fsigma8
-        self.f = fsigma8 / sigma8
-        k0 = 1e-3
-        self.f0 = jnp.sqrt(ptt_interp(k0) / pk_interp(k0))
-        self.fk = jnp.sqrt(ptt_interp(self.k) / pk_interp(self.k))
-
-        DH = constants.c / 1e3 / (100. * cosmo.efunc(self.z))
-        DM = cosmo.comoving_angular_distance(self.z)
+        self.sigma8  = self.cosmo.get('fourier.sigma8_z', of='delta_cb', z=self.z)
+        self.fsigma8 = self.cosmo.get('fourier.sigma8_z', of='theta_cb', z=self.z)
+        self.f  = self.fsigma8 / self.sigma8
+        self.f0 = jnp.sqrt(ptt_full[0] / pk_full[0])   # k0 = 1e-3 is index 0
+        self.fk = jnp.sqrt(ptt_full[1:] / pk_full[1:])
+        DH = constants.c / 1e3 / (100. * self.cosmo.get('background.efunc', z=self.z))
+        DM = self.cosmo.get('background.transverse_comoving_distance', z=self.z)
         self.qpar = DH / self._DH_fid
         self.qper = DM / self._DM_fid
         return self.pk_dd
@@ -542,4 +562,574 @@ class DirectSpectrum2Template(Spectrum2Template):
         obj = object.__new__(cls)
         obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.qpar, obj.qper, obj.sigma8, obj.fsigma8 = children
         obj.k = aux['k']
+        return obj
+
+
+# ── BAO phase shift template ──────────────────────────────────────────────────
+
+class BAOPhaseShiftSpectrum2Template(BAOSpectrum2Template):
+    r"""
+    BAO power spectrum template with an :math:`N_\mathrm{eff}`-induced phase shift.
+
+    Extends :class:`BAOSpectrum2Template` by applying a scale-dependent phase shift to
+    the BAO wiggles, following Baumann et al. 2018 (https://arxiv.org/pdf/1803.10741).
+    The shift amplitude profile is
+
+    .. math::
+        k_\mathrm{shift}(k) = \frac{\phi_\infty}{1 + (k_*/k)^\epsilon} \, / \, r_\mathrm{drag}
+
+    and the wiggles at each :math:`k` are evaluated at the shifted position
+    :math:`k + (\texttt{baoshift} - 1) \cdot k_\mathrm{shift}(k)`.
+
+    Parameters
+    ----------
+    phiinf : float, default=0.227
+    kstar : float, default=0.0324
+    epsilon : float, default=0.872
+        Phase-shift profile parameters (best-fit from Baumann et al. 2018).
+    (All other parameters as in :class:`BAOSpectrum2Template`.)
+
+    Additional free parameter
+    -------------------------
+    baoshift : float, default=1.
+        BAO phase-shift amplitude.  ``baoshift = 1`` is no shift.
+    """
+
+    @classmethod
+    def propose_params(cls, apmode='qparqper'):
+        """Return a proposed parameter collection including ``baoshift``."""
+        return super().propose_params(apmode=apmode) + VariableCollection([
+            Parameter('baoshift', value=1., prior=dict(limits=[0., 2.]),
+                      ref=dict(dist='norm', loc=1., scale=0.1),
+                      fd_eps=0.01, latex=r'\phi_\mathrm{BAO}'),
+        ])
+
+    def __init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage',
+                 only_now=False, apmode='qparqper', eta=1. / 3.,
+                 phiinf=0.227, kstar=0.0324, epsilon=0.872, params=None):
+        vc = type(self).propose_params(apmode=str(apmode))
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, None)
+
+    def __post_init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage',
+                      only_now=False, apmode='qparqper', eta=1. / 3.,
+                      phiinf=0.227, kstar=0.0324, epsilon=0.872, params=None):
+        from cosmoprimo import PowerSpectrumBAOFilter
+        super().__post_init__(k=k, z=z, fiducial=fiducial, with_now=with_now,
+                              only_now=only_now, apmode=apmode, eta=eta, params=params)
+        self._phiinf = float(phiinf)
+        self._kstar = float(kstar)
+        self._epsilon = float(epsilon)
+        # Dense k grid for wiggle (pk - pknow) interpolation under the BAO shift.
+        k_fine = np.geomspace(_kw_pk['extrap_kmin'], _kw_pk['extrap_kmax'], 2000)
+        fid = self._fiducial
+        fo = fid.get_fourier()
+        pk1d = fo.pk_interpolator(of='delta_cb', **_kw_pk).to_1d(z=float(z))
+        bao_filter = PowerSpectrumBAOFilter(pk1d, engine=str(with_now), cosmo=fid, cosmo_fid=fid)
+        self._k_fine = k_fine
+        self._wiggles_fine = pk1d(k_fine) - bao_filter.smooth_pk_interpolator()(k_fine)
+
+    def __call__(self):
+        super().__call__()  # sets pk_dd, pknow_dd, f, f0, fk, DH_over_rd, etc.
+        baoshift = self.baoshift.value
+        kshift = self._phiinf / (1. + (self._kstar / self.k) ** self._epsilon) / self._fiducial.rs_drag
+        k_shifted = jnp.clip(self.k + (baoshift - 1.) * kshift, self._k_fine[0], self._k_fine[-1])
+        wiggles = jnp.interp(jnp.log10(k_shifted), jnp.log10(self._k_fine), self._wiggles_fine)
+        self.pk_dd = self._pknow_dd_fid + wiggles
+        if self._only_now:
+            self.pk_dd = self.pknow_dd
+        return self.pk_dd
+
+
+# ── Turn-over template ────────────────────────────────────────────────────────
+
+def _find_turn_over(k, pk):
+    """Locate the turn-over of *pk* on grid *k* using parabolic interpolation."""
+    imax = int(np.argmax(pk))
+    logk = np.log10(k[imax - 1:imax + 2])
+    logpk = np.log10(pk[imax - 1:imax + 2])
+    c0 = logpk[0] / ((logk[0] - logk[1]) * (logk[0] - logk[2]))
+    c1 = logpk[1] / ((logk[1] - logk[0]) * (logk[1] - logk[2]))
+    c2 = logpk[2] / ((logk[2] - logk[0]) * (logk[2] - logk[1]))
+    a = c0 + c1 + c2
+    logk0 = (c0 * (logk[1] + logk[2]) + c1 * (logk[0] + logk[2]) + c2 * (logk[0] + logk[1])) / (2. * a)
+    return float(10. ** logk0)
+
+
+class TurnOverSpectrum2Template(Spectrum2Template):
+    r"""
+    Power spectrum template parameterized around the matter turn-over scale.
+
+    The power spectrum shape is modelled as a scale-free parabola in log-log space
+    centered on the turn-over wavenumber :math:`k_\mathrm{TO}` (Brieden et al. 2022,
+    https://arxiv.org/pdf/2302.07484):
+
+    .. math::
+        P(k) = P(k_\mathrm{TO})^{1 - s(k) \cdot x^2}, \quad
+        x = \frac{\log_{10}(k)}{\log_{10}(k_\mathrm{TO})} - 1
+
+    where :math:`s = m` for :math:`x > 0` (high-:math:`k` side) and :math:`s = n`
+    otherwise.
+
+    AP distortion is parameterized by ``apmode`` (default ``'qap'``).  The
+    observables :attr:`DV_times_kTO` and :attr:`DH_over_DM` are set at every call.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Wavenumbers [h/Mpc]. Defaults to ``np.logspace(-3, 1, 400)``.
+    z : float, default=1.
+        Effective redshift.
+    fiducial : str, tuple, dict, or cosmoprimo.Cosmology, default='DESI'
+        Fiducial cosmology used to seed the turn-over scale and growth rate.
+    apmode : str, default='qap'
+        AP parameterization.  With ``'qap'`` only the anisotropy ratio is free;
+        add ``'qisoqap'`` to also free the isotropic dilation.
+    eta : float, default=1./3.
+        Exponent in :math:`q_\mathrm{iso} = q_\parallel^\eta \, q_\perp^{1-\eta}`.
+
+    Attributes set by ``__call__``
+    --------------------------------
+    pk_dd, pknow_dd : ndarray
+    f, f0, fk : float or ndarray
+    DV_times_kTO, DH_over_DM : float
+    """
+
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/cosmodesi/cosmoprimo')
+
+    @classmethod
+    def propose_params(cls, apmode='qap'):
+        """Return a proposed parameter collection for this template."""
+        _prior_pos = dict(limits=[0.5, 1.5])
+        _ref_tight = dict(dist='norm', loc=1., scale=0.01)
+        return propose_params_multitracer(
+            _ap_auto_params(apmode) + [
+                Parameter('df', value=1., prior=dict(limits=[0., 2.]),
+                          ref=dict(dist='norm', loc=1., scale=0.05), fd_eps=0.02, latex=r'\delta f'),
+                Parameter('m', value=0.6, prior=dict(limits=[0., 3.]),
+                          ref=dict(dist='norm', loc=0.6, scale=0.1), fd_eps=0.05, latex=r'm'),
+                Parameter('n', value=0.9, prior=dict(limits=[0., 3.]),
+                          ref=dict(dist='norm', loc=0.9, scale=0.1), fd_eps=0.05, latex=r'n'),
+                Parameter('qto', value=1., prior=_prior_pos, ref=_ref_tight, fd_eps=0.005,
+                          latex=r'q_\mathrm{TO}'),
+                Parameter('dpto', value=1., prior=_prior_pos, ref=_ref_tight, fd_eps=0.005,
+                          latex=r'\delta P_\mathrm{TO}'),
+            ], tracers=None)
+
+    def __init__(self, k=None, z=1., fiducial='DESI', apmode='qap', eta=1. / 3., params=None):
+        vc = type(self).propose_params(apmode=str(apmode))
+        if params is not None:
+            vc = vc + VariableCollection(params)
+        assign_params(self, vc, None)
+
+    def __post_init__(self, k=None, z=1., fiducial='DESI', apmode='qap', eta=1. / 3., params=None):
+        from cosmoprimo import constants
+        self._apmode = str(apmode)
+        self._eta = float(eta)
+
+        if k is None:
+            k = np.logspace(-3., 1., 400)
+        self.k = np.asarray(k, dtype='f8')
+        self.z = float(z)
+
+        fid = _get_fiducial(fiducial)
+        self._fiducial = fid
+
+        fo = fid.get_fourier()
+        sigma8 = fo.sigma8_z(self.z, of='delta_cb')
+        fsigma8 = fo.sigma8_z(self.z, of='theta_cb')
+        self._f_fid = float(fsigma8 / sigma8)
+
+        pk_interp = fo.pk_interpolator(of='delta_cb', **_kw_pk)
+        k0 = 1e-3
+        pk1d = pk_interp.to_1d(z=self.z)
+        self._f0_fid = float(np.sqrt(fo.pk_interpolator(of='theta_cb', **_kw_pk).to_1d(z=self.z)(k0) / pk1d(k0)))
+        self._fk_fid = np.sqrt(fo.pk_interpolator(of='theta_cb', **_kw_pk).to_1d(z=self.z)(self.k) / pk1d(self.k))
+
+        # Turn-over scale from fiducial PK.
+        k_grid = pk_interp.k
+        pk_grid = pk_interp(k_grid, z=self.z)
+        self._kTO_fid = _find_turn_over(k_grid, pk_grid)
+        self._pkTO_dd_fid = float(pk1d(self._kTO_fid))
+
+        # Fiducial distance combinations used for observable outputs.
+        DH_fid = float(constants.c / 1e3 / (100. * fid.efunc(self.z)))
+        DM_fid = float(fid.comoving_angular_distance(self.z))
+        DV_fid = DH_fid ** eta * DM_fid ** (1. - eta) * self.z ** (1. / 3.)
+        self._DV_times_kTO_fid = DV_fid * self._kTO_fid
+        self._DH_over_DM_fid = DH_fid / DM_fid
+
+    def _qpar_qper(self):
+        if self._apmode == 'qparqper':
+            return self.qpar.value, self.qper.value
+        if self._apmode == 'qiso':
+            q = self.qiso.value
+            return q, q
+        if self._apmode == 'qap':
+            qap = self.qap.value
+            return qap ** (1. - self._eta), qap ** (-self._eta)
+        qiso, qap = self.qiso.value, self.qap.value
+        return qiso * qap ** (1. - self._eta), qiso * qap ** (-self._eta)
+
+    def ap_k_mu(self, k, mu):
+        """Apply AP distortion to a (k, mu) grid; returns (jac, kap, muap)."""
+        qpar, qper = self._qpar_qper()
+        return _ap_k_mu(k, mu, qpar, qper)
+
+    def __call__(self):
+        qto = self.qto.value
+        dpto = self.dpto.value
+        df = self.df.value
+        m = self.m.value
+        n = self.n.value
+        kTO = self._kTO_fid * qto
+        pkTO = self._pkTO_dd_fid * dpto
+        x = jnp.log10(self.k) / jnp.log10(kTO) - 1.
+        self.pk_dd = jnp.where(x > 0., pkTO ** (1. - m * x ** 2.), pkTO ** (1. - n * x ** 2.))
+        self.pknow_dd = self.pk_dd
+        self.f = self._f_fid * df
+        self.f0 = self._f0_fid * df
+        self.fk = self._fk_fid * df
+        qpar, qper = self._qpar_qper()
+        qiso = qpar ** self._eta * qper ** (1. - self._eta)
+        self.DV_times_kTO = qiso * self._DV_times_kTO_fid
+        self.DH_over_DM = (qpar / qper) * self._DH_over_DM_fid
+        return self.pk_dd
+
+    def tree_flatten(self):
+        return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk], {'k': self.k})
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk = children
+        obj.k = aux['k']
+        return obj
+
+
+# ── Direct wiggle-split template ──────────────────────────────────────────────
+
+class DirectWiggleSplitSpectrum2Template(DirectSpectrum2Template):
+    r"""
+    Direct power spectrum template with independent BAO wiggle rescaling.
+
+    Identical to :class:`DirectSpectrum2Template` but the BAO wiggles are shifted in
+    k-space by ``qbao`` (marginalizing over the sound horizon scale) and optionally
+    damped by a Gaussian envelope controlled by ``sigmabao`` (Brieden et al. 2021,
+    https://arxiv.org/abs/2112.10749).
+
+    The wiggles are computed from the current cosmology as
+    ``pk(k / qbao) - pknow(k / qbao)`` using the cosmo requirements registered on
+    a fine internal k grid, then damped by :math:`\exp(-(k\,\sigma_\mathrm{BAO})^2)`.
+
+    Parameters
+    ----------
+    with_now : str, default='peakaverage'
+        No-wiggle filter engine.  Unlike the base class, this defaults to
+        ``'peakaverage'`` because the wiggle split is always needed.
+    (All other parameters as in :class:`DirectSpectrum2Template`.)
+
+    Additional free parameters
+    --------------------------
+    qbao : float, default=1.
+        BAO scale dilation (shifts wiggles in k).  ``qbao = 1`` is no shift.
+    sigmabao : float, default=0. (fixed)
+        Gaussian damping scale [h/Mpc]\ :sup:`-1`.
+    """
+
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/cosmodesi/cosmoprimo')
+
+    @classmethod
+    def propose_params(cls, engine='camb', fiducial=None):
+        """Return ``qbao`` and ``sigmabao`` parameters (cosmo params live in the dep)."""
+        return VariableCollection([
+            Parameter('qbao', value=1., prior=dict(limits=[0.5, 1.5]),
+                      ref=dict(dist='norm', loc=1., scale=0.01),
+                      fd_eps=0.005, latex=r'q_\mathrm{BAO}'),
+            Parameter('sigmabao', value=0., fixed=True, prior=dict(limits=[0., 30.]),
+                      ref=dict(dist='norm', loc=0., scale=10.),
+                      fd_eps=1., latex=r'\Sigma_\mathrm{BAO}'),
+        ])
+
+    def __init__(self, k=None, z=1., fiducial='DESI', engine='camb',
+                 with_now='peakaverage', only_now=False, cosmo=None):
+        super().__init__(k=k, z=z, fiducial=fiducial, engine=engine,
+                         with_now=with_now, only_now=only_now, cosmo=cosmo)
+        # Fine k grid for wiggle interpolation at shifted positions (k / qbao).
+        k_fine = np.logspace(-3., 1., 2000)
+        self._k_fine = k_fine
+        self.cosmo.add_requirements({
+            'fourier.pk': [{'of': 'delta_cb', 'z': float(z), 'k': k_fine}],
+            'fourier.pk_now': [{'of': 'delta_cb', 'engine': str(with_now), 'z': float(z), 'k': k_fine}],
+        })
+        assign_params(self, type(self).propose_params(), None)
+
+    def __call__(self):
+        super().__call__()  # sets pk_dd, pknow_dd, f, sigma8, qpar, qper, etc.
+        qbao = self.qbao.value
+        sigmabao = self.sigmabao.value
+        # Evaluate pk and pknow on the fine grid for shifted-wiggle interpolation.
+        pk_fine = self.cosmo.get('fourier.pk', of='delta_cb', z=self.z, k=self._k_fine)
+        pknow_fine = self.cosmo.get('fourier.pk_now', of='delta_cb',
+                                    engine=self._with_now, z=self.z, k=self._k_fine)
+        k_query = jnp.clip(self.k / qbao, self._k_fine[0], self._k_fine[-1])
+        wiggles = jnp.interp(jnp.log10(k_query), jnp.log10(self._k_fine), pk_fine - pknow_fine)
+        wiggles = wiggles * jnp.exp(-(self.k * sigmabao) ** 2.)
+        self.pk_dd = self.pknow_dd + wiggles
+        if self._only_now:
+            self.pk_dd = self.pknow_dd
+        return self.pk_dd
+
+
+# ── BAO extractors ─────────────────────────────────────────────────────────────
+
+class BAOExtractor(Calculator):
+    r"""Extract BAO distance parameters from a cosmology provider.
+
+    At each call, retrieves :math:`E(z) = H(z)/H_0`, the comoving transverse distance
+    :math:`D_M(z)`, and the sound horizon :math:`r_d` from the registered cosmology and
+    computes the standard BAO observables, plus their ratios relative to a fixed fiducial:
+
+    .. math::
+
+        q_\parallel = \frac{D_H/r_d}{(D_H/r_d)_{\rm fid}}, \quad
+        q_\perp    = \frac{D_M/r_d}{(D_M/r_d)_{\rm fid}}, \quad
+        q_{\rm iso} = \frac{D_V/r_d}{(D_V/r_d)_{\rm fid}}, \quad
+        q_{\rm ap}  = \frac{D_H/D_M}{(D_H/D_M)_{\rm fid}}
+
+    where :math:`D_H = c/H(z)` and :math:`D_V = D_H^\eta D_M^{1-\eta} z^{1/3}`.
+
+    Parameters
+    ----------
+    z : float, default=1.
+        Effective redshift.
+    eta : float, default=1./3.
+        Exponent defining the DV combination.
+    fiducial : str or cosmoprimo.Cosmology, default='DESI'
+        Fiducial cosmology used to normalise the AP ratios.
+    cosmo : PrimordialCosmology, optional
+        Cosmology provider; a :class:`CosmoprimoCosmology` is created if not given.
+
+    Attributes
+    ----------
+    DH_over_rd, DM_over_rd, DH_over_DM, DV_over_rd : JAX scalar
+        Measured distance combinations.
+    qpar, qper, qiso, qap : JAX scalar
+        AP ratios relative to fiducial.
+    """
+
+    def __init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
+        if cosmo is None:
+            cosmo = CosmoprimoCosmology(fiducial=fiducial)
+        self.cosmo = cosmo
+        self.cosmo.add_requirements({
+            'background.efunc':                        [{'z': float(z)}],
+            'background.transverse_comoving_distance': [{'z': float(z)}],
+            'thermodynamics.rs_drag':                  [{'z': 0.}],
+        })
+
+    def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
+        from cosmoprimo import constants
+        self.z = float(z)
+        self._eta = float(eta)
+        fid = _get_fiducial(fiducial)
+        self._fiducial = fid
+        rd_fid = fid.rs_drag
+        DH_fid = constants.c / 1e3 / (100. * fid.efunc(self.z))
+        DM_fid = fid.comoving_angular_distance(self.z)
+        DV_fid = DH_fid ** self._eta * DM_fid ** (1. - self._eta) * self.z ** (1. / 3.)
+        self._DH_over_rd_fid = DH_fid / rd_fid
+        self._DM_over_rd_fid = DM_fid / rd_fid
+        self._DH_over_DM_fid = DH_fid / DM_fid
+        self._DV_over_rd_fid = DV_fid / rd_fid
+
+    def __call__(self):
+        from cosmoprimo import constants
+        efunc = self.cosmo.get('background.efunc', z=self.z)
+        DM = self.cosmo.get('background.transverse_comoving_distance', z=self.z)
+        rd = self.cosmo.get('thermodynamics.rs_drag', z=0.)
+        DH = constants.c / 1e3 / (100. * efunc)
+        DV = DH ** self._eta * DM ** (1. - self._eta) * self.z ** (1. / 3.)
+        self.DH_over_rd = DH / rd
+        self.DM_over_rd = DM / rd
+        self.DH_over_DM = DH / DM
+        self.DV_over_rd = DV / rd
+        self.qpar = self.DH_over_rd / self._DH_over_rd_fid
+        self.qper = self.DM_over_rd / self._DM_over_rd_fid
+        self.qiso = self.DV_over_rd / self._DV_over_rd_fid
+        self.qap  = self.DH_over_DM / self._DH_over_DM_fid
+        return self
+
+    def tree_flatten(self):
+        return ([self.DH_over_rd, self.DM_over_rd, self.DH_over_DM, self.DV_over_rd,
+                 self.qpar, self.qper, self.qiso, self.qap], {'z': self.z})
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        (obj.DH_over_rd, obj.DM_over_rd, obj.DH_over_DM, obj.DV_over_rd,
+         obj.qpar, obj.qper, obj.qiso, obj.qap) = children
+        obj.z = aux['z']
+        return obj
+
+
+class BAOPhaseShiftExtractor(BAOExtractor):
+    r"""BAO extractor extended with the neutrino-induced BAO phase shift.
+
+    Adds :attr:`N_eff` (effective number of relativistic species from the cosmology) and
+    the derived :attr:`baoshift` parameter
+
+    .. math::
+
+        \phi_{\rm BAO} = \frac{N_{\rm eff} \,(N_{\rm eff,fid} + a_\nu)}{N_{\rm eff,fid}\,(N_{\rm eff} + a_\nu)},
+        \quad a_\nu = \tfrac{8}{7}\!\left(\tfrac{11}{4}\right)^{4/3}
+
+    following Baumann et al. 2018 (https://arxiv.org/abs/1803.10741).
+
+    Parameters
+    ----------
+    Same as :class:`BAOExtractor`.
+
+    Attributes
+    ----------
+    N_eff : JAX scalar
+        Effective number of relativistic species from the cosmology.
+    baoshift : JAX scalar
+        BAO phase-shift amplitude relative to fiducial.
+    """
+
+    def __init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
+        super().__init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo)
+        self.cosmo.add_requirements({'background.N_eff': [{'z': 0.}]})
+
+    def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
+        super().__post_init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo)
+        self._N_eff_fid = float(self._fiducial.N_eff)
+
+    def __call__(self):
+        super().__call__()
+        a_nu = 8.0 / 7.0 * (11.0 / 4.0) ** (4.0 / 3.0)
+        self.N_eff = self.cosmo.get('background.N_eff', z=0.)
+        self.baoshift = (self.N_eff * (self._N_eff_fid + a_nu)) / (self._N_eff_fid * (self.N_eff + a_nu))
+        return self
+
+    def tree_flatten(self):
+        leaves, aux = super().tree_flatten()
+        return leaves + [self.N_eff, self.baoshift], aux
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        (obj.DH_over_rd, obj.DM_over_rd, obj.DH_over_DM, obj.DV_over_rd,
+         obj.qpar, obj.qper, obj.qiso, obj.qap,
+         obj.N_eff, obj.baoshift) = children
+        obj.z = aux['z']
+        return obj
+
+
+class TurnOverExtractor(Calculator):
+    r"""Extract turn-over observables from a cosmology provider.
+
+    Evaluates the matter power spectrum on a fine internal k grid, locates the
+    turn-over wavenumber :math:`k_{\rm TO}` with ``jnp.argmax``, and computes
+
+    .. math::
+
+        D_V \cdot k_{\rm TO}, \quad D_H / D_M
+
+    together with the dimensionless ratios relative to a fixed fiducial:
+
+    .. math::
+
+        q_{\rm to} = \frac{D_V \cdot k_{\rm TO}}{(D_V \cdot k_{\rm TO})_{\rm fid}}, \quad
+        q_{\rm ap} = \frac{D_H/D_M}{(D_H/D_M)_{\rm fid}}
+
+    Gradient information is obtained via finite differences on the cosmology
+    (``jnp.argmax`` has zero gradient), which is consistent with the external-code
+    use-case these extractors are designed for.
+
+    Parameters
+    ----------
+    z : float, default=1.
+        Effective redshift.
+    eta : float, default=1./3.
+        Exponent defining the DV combination.
+    fiducial : str or cosmoprimo.Cosmology, default='DESI'
+        Fiducial cosmology used to compute fiducial distances and kTO.
+    cosmo : PrimordialCosmology, optional
+        Cosmology provider; a :class:`CosmoprimoCosmology` is created if not given.
+
+    Attributes
+    ----------
+    kTO, pkTO_dd : JAX scalar
+        Turn-over wavenumber and power at the turn-over.
+    DH_over_DM, DV_times_kTO : JAX scalar
+        Distance combinations.
+    qap, qto : JAX scalar
+        AP and turn-over ratios relative to fiducial.
+
+    Reference
+    ---------
+    https://arxiv.org/abs/2302.07484
+    """
+
+    def __init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
+        if cosmo is None:
+            cosmo = CosmoprimoCosmology(fiducial=fiducial)
+        self.cosmo = cosmo
+        self._k_fine = np.logspace(-3., 0., 2000)
+        self.cosmo.add_requirements({
+            'fourier.pk':                              [{'of': 'delta_cb', 'z': float(z), 'k': self._k_fine}],
+            'background.efunc':                        [{'z': float(z)}],
+            'background.transverse_comoving_distance': [{'z': float(z)}],
+        })
+
+    def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
+        from cosmoprimo import constants
+        self.z = float(z)
+        self._eta = float(eta)
+        fid = _get_fiducial(fiducial)
+        # Fiducial turn-over from the full interpolation grid.
+        fo = fid.get_fourier()
+        pk_interp = fo.pk_interpolator(of='delta_cb', **_kw_pk)
+        self._kTO_fid = _find_turn_over(pk_interp.k, pk_interp(pk_interp.k, z=self.z))
+        self._pkTO_dd_fid = float(pk_interp.to_1d(z=self.z)(self._kTO_fid))
+        # Fiducial distance combinations.
+        DH_fid = float(constants.c / 1e3 / (100. * fid.efunc(self.z)))
+        DM_fid = float(fid.comoving_angular_distance(self.z))
+        DV_fid = DH_fid ** self._eta * DM_fid ** (1. - self._eta) * self.z ** (1. / 3.)
+        self._DH_over_DM_fid = DH_fid / DM_fid
+        self._DV_times_kTO_fid = DV_fid * self._kTO_fid
+
+    def __call__(self):
+        from cosmoprimo import constants
+        pk_fine = self.cosmo.get('fourier.pk', of='delta_cb', z=self.z, k=self._k_fine)
+        imax = jnp.argmax(pk_fine)
+        k_jnp = jnp.asarray(self._k_fine)
+        self.kTO = k_jnp[imax]
+        self.pkTO_dd = pk_fine[imax]
+        efunc = self.cosmo.get('background.efunc', z=self.z)
+        DM = self.cosmo.get('background.transverse_comoving_distance', z=self.z)
+        DH = constants.c / 1e3 / (100. * efunc)
+        DV = DH ** self._eta * DM ** (1. - self._eta) * self.z ** (1. / 3.)
+        self.DH_over_DM = DH / DM
+        self.DV_times_kTO = DV * self.kTO
+        self.qap = self.DH_over_DM / self._DH_over_DM_fid
+        self.qto = self.DV_times_kTO / self._DV_times_kTO_fid
+        return self
+
+    def tree_flatten(self):
+        return ([self.DH_over_DM, self.DV_times_kTO, self.kTO, self.pkTO_dd,
+                 self.qap, self.qto], {'z': self.z})
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.DH_over_DM, obj.DV_times_kTO, obj.kTO, obj.pkTO_dd, obj.qap, obj.qto = children
+        obj.z = aux['z']
         return obj

@@ -41,7 +41,7 @@ class Dynesty(PopulationKernel):
 
     def init(self, likelihood, prior, rng, **context):
         _, self._likelihood_logpdf_with_derived = likelihood
-        self._prior_logpdf, _, self._prior_ppf = prior
+        self._prior_logpdf, self._prior_ppf, _ = prior
         self._rng = rng
         self._pool = context['pool']
         self._ndim = context['ndim']

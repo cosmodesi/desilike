@@ -1,1 +1,1 @@
-from .primordial_cosmology import CosmoprimoCosmology
+from .primordial_cosmology import PrimordialCosmology, CosmoprimoCosmology

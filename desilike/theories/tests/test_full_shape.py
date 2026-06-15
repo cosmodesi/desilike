@@ -551,6 +551,102 @@ def test_jit():
 
 
 
+def test_compile_input():
+    """
+    Demonstrates ``compile(root, input=fn)``: feed pre-computed cosmological results
+    from an external pipeline into a theory pipeline via the ``input`` callable.
+
+    Design
+    ------
+    ``cosmo_ext`` (CosmoprimoCosmology) runs the real solver and exposes its
+    computed arrays as JAX leaves via ``tree_flatten``.
+
+    ``cosmo`` (PrimordialCosmology) is a lightweight proxy in the theory graph: its
+    ``__call__`` is a no-op when ``_results`` is already populated, so it acts as a
+    pass-through holder for externally provided results.
+
+    ``pipe_ext`` compiles ``cosmo_ext`` and returns its leaves on each call.
+    ``pipe`` compiles the theory with an ``input`` callable that injects the
+    pre-computed cosmo results into the proxy for side-effects only.
+    The parameter dict is passed as the second positional argument::
+
+        cosmo_leaves = pipe_ext(cosmo_params)          # run external cosmo
+        poles = pipe(cosmo_leaves, bias_params)        # inject + theory params
+    """
+    from desilike.base import compile, get_params
+    from desilike.theories import PrimordialCosmology, CosmoprimoCosmology
+    from desilike.theories.galaxy_clustering import DirectSpectrum2Template, KaiserTracerSpectrum2Poles
+
+    k = np.linspace(0.02, 0.3, 20)
+
+    # cosmo_ext: the real solver (eisenstein_hu is JAX-native, not truly external,
+    # but the pattern works identically for camb/class).
+    cosmo_ext = CosmoprimoCosmology(engine='eisenstein_hu')
+
+    # cosmo: a lightweight proxy that holds results but does not run a solver.
+    # Uses the same Parameter objects as cosmo_ext so naming is consistent.
+    cosmo = PrimordialCosmology(params=get_params(cosmo_ext))
+
+    template = DirectSpectrum2Template(cosmo=cosmo, z=1.)
+    theory = KaiserTracerSpectrum2Poles(k=k, template=template)
+
+    # Register on cosmo_ext the requirements that the template registered on cosmo.
+    # Conversion: cosmo._requirements format  →  add_requirements dict format.
+    ext_reqs = {}
+    for (method_key, static_items), spec in cosmo._requirements.items():
+        if method_key not in ext_reqs:
+            ext_reqs[method_key] = []
+        for z_val in spec['z']:
+            kw = dict(static_items)
+            kw['z'] = float(z_val)
+            if spec['k'] is not None:
+                kw['k'] = spec['k']
+            ext_reqs[method_key].append(kw)
+    cosmo_ext.add_requirements(ext_reqs)
+
+    # Compile cosmo_ext: output is the flat list of JAX leaves
+    # [param_marker, results_0, results_1, ...].
+    pipe_ext = compile(cosmo_ext, output=lambda: cosmo_ext.tree_flatten()[0])
+    # Capture aux (engine + ordered_specs) after compile so __post_init__ has run.
+    _, cosmo_ext_aux = cosmo_ext.tree_flatten()
+
+    # input callable: pure side-effect — injects pre-computed cosmo results into
+    # the proxy.  The parameter dict is passed separately as the second arg to pipe.
+    def input_fn(cosmo_leaves):
+        proxy = PrimordialCosmology.tree_unflatten(cosmo_ext_aux, cosmo_leaves)
+        cosmo._results = proxy._results
+
+    pipe = compile(theory, input=input_fn)
+
+    # Separate the compiled params into cosmo vs bias sets.
+    ext_param_names = {p.name for p in pipe_ext.params}
+    all_defaults = {p.name: p.value for p in pipe.params}
+    cosmo_defaults = {name: val for name, val in all_defaults.items() if name in ext_param_names}
+    bias_defaults = {name: val for name, val in all_defaults.items() if name not in ext_param_names}
+
+    # Run external cosmo pipeline to get pre-computed leaves.
+    cosmo_leaves = pipe_ext(cosmo_defaults)
+
+    # Feed pre-computed cosmo results into the theory pipeline.
+    poles = pipe(cosmo_leaves, bias_defaults)
+    _check(poles, 'test_compile_input')
+
+    # jax.jit(pipe): input_fn runs as a Python side-effect at trace time; the JAX
+    # computation graph then includes the full data-flow from cosmo_leaves to poles.
+    poles_jit = jax.jit(pipe)(cosmo_leaves, bias_defaults)
+    np.testing.assert_allclose(np.asarray(poles_jit), np.asarray(poles), rtol=1e-5)
+
+    # Cross-check: the same result should come from the monolithic pipeline.
+    cosmo_full = CosmoprimoCosmology(engine='eisenstein_hu')
+    template_full = DirectSpectrum2Template(cosmo=cosmo_full, z=1.)
+    theory_full = KaiserTracerSpectrum2Poles(k=k, template=template_full)
+    pipe_full = compile(theory_full)
+    ref = np.asarray(pipe_full(all_defaults))
+    np.testing.assert_allclose(np.asarray(poles), ref, rtol=1e-5)
+    np.testing.assert_allclose(np.asarray(poles_jit), ref, rtol=1e-5)
+
+
 if __name__ == '__main__':
 
     test_jit()
+    test_compile_input()

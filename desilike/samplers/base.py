@@ -460,6 +460,7 @@ class BaseSampler(ABC):
         flat_size = self._loc.size
         self._L = self._L_inv = None
         if rescale:
+            C_full = None
             if isinstance(covariance, Covariance):
                 param_sizes_list = list(_param_sizes(self.varied_params))
                 C_full = np.zeros((flat_size, flat_size), dtype='f8')
@@ -484,13 +485,14 @@ class BaseSampler(ABC):
                                 f'ref.std()={std!r}. Provide covariance or set a proper ref distribution.')
                         for k in range(size):
                             C_full[col + k, col + k] = float(std) ** 2
+            elif covariance is not None:
+                C_full = covariance
+            if C_full is not None:
                 self._scale = np.sqrt(np.diag(C_full))
                 if rescale != 'diag' and np.any(C_full != np.diag(np.diag(C_full))):
                     _L = np.linalg.cholesky(C_full)
                     self._L = jnp.array(_L)
                     self._L_inv = jnp.array(np.linalg.inv(_L))
-            elif covariance is not None:
-                self._scale = np.sqrt(np.diag(np.asarray(covariance)))
             else:
                 scale_parts = []
                 for param, size, col in _param_sizes(self.varied_params):
@@ -673,11 +675,8 @@ class BaseSampler(ABC):
         """Create the pool and register the batched evaluators.
 
         Pool-dispatched attributes set here:
-        ``prior_ppf``, ``prior_logpdf``, ``posterior_logpdf_with_derived``,
+        ``prior_ppf``, ``prior_logpdf``, ``posterior_logpdf``, ``posterior_logpdf_with_derived``,
         ``likelihood_logpdf``, ``likelihood_logpdf_with_derived``.
-
-        Non-pool JAX attribute: ``posterior_logpdf`` — a ``jax.jit(jax.vmap(...))``
-        function ``(n, ndim) → (n,)`` suitable for direct use by MCMC kernels.
         """
         self.pool = make_pool(mpicomm, batch_size=batch_size)
         specs = [('prior_ppf',                     self._prior_ppf_one,                       False),

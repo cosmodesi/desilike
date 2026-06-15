@@ -19,8 +19,8 @@ class _Prior:
     def __init__(self, prior_logpdf, prior_rvs, prior_ppf, ndim):
         self._logpdf = prior_logpdf
         self._rvs = prior_rvs
-        lo = prior_ppf(np.zeros((1, ndim), dtype='f4')).ravel()
-        hi = prior_ppf(np.ones((1, ndim), dtype='f4')).ravel()
+        lo = prior_ppf(np.zeros((1, ndim), dtype='f8')).ravel()
+        hi = prior_ppf(np.ones((1, ndim), dtype='f8')).ravel()
         self._bounds = np.column_stack([lo, hi])   # (ndim, 2)
         self._ndim = ndim
 

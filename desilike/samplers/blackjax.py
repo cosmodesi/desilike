@@ -66,9 +66,11 @@ class _BlackJAXKernel(Kernel):
         if not BLACKJAX_INSTALLED:
             raise ImportError("The 'blackjax' package is required but not installed.")
 
-    def init(self, posterior_logpdf, rng, **context):
+    def init(self, posterior, rng, **context):
         self._check_installed()
         self._rng = rng
+
+        posterior_logpdf, _ = posterior
 
         def _logpost_flat(flat):
             return posterior_logpdf(flat[None])[0]
@@ -96,8 +98,9 @@ class _BlackJAXKernel(Kernel):
                 self._state = self._kernel.init(initial_position, rng_key)
         return self._state
 
-    def run(self, n_steps, initial_position=None):
-        state = self._get_or_init_state(initial_position=initial_position)
+    def run(self, n_steps, state):
+        position, _, _ = state
+        state = self._get_or_init_state(initial_position=position)
         rng_key = jax.random.PRNGKey(int(self._rng.integers(2**32)))
         rng_keys = jax.random.split(rng_key, n_steps)
 
@@ -116,7 +119,7 @@ class _BlackJAXKernel(Kernel):
 
         samples  = np.asarray(all_states.position).reshape(n_steps, -1)
         log_post = np.asarray(all_states.logdensity).reshape(n_steps)
-        return samples, log_post
+        return samples, None, {'logposterior': log_post}
 
 
 class BlackjaxHMC(_BlackJAXKernel):
@@ -145,18 +148,19 @@ class BlackjaxHMC(_BlackJAXKernel):
         self._imm_init = inverse_mass_matrix
         self.fixed_kernel_args = dict(num_integration_steps=num_integration_steps, **kwargs)
 
-    def init(self, posterior_logpdf, rng, **context):
+    def init(self, posterior, rng, **context):
         if self._imm_init is None:
             self.kernel_args['inverse_mass_matrix'] = np.ones(context['ndim'])
         else:
             self.kernel_args['inverse_mass_matrix'] = np.asarray(self._imm_init)
-        super().init(posterior_logpdf, rng, **context)
+        super().init(posterior, rng, **context)
 
-    def adapt(self, initial_position=None, **kwargs):
+    def adapt(self, state, **kwargs):
         """Adapt step size and mass matrix via ``blackjax.window_adaptation``."""
+        position, _, _ = state
         steps = kwargs.pop('steps')
         rng_key = jax.random.PRNGKey(int(self._rng.integers(2**32)))
-        state = self._get_or_init_state(initial_position=initial_position)
+        state = self._get_or_init_state(initial_position=position)
         (state, parameters), _ = self._adaptation_fn(
             self._kernel_cls, self._logposterior,
             **self.fixed_kernel_args, **kwargs).run(
@@ -195,18 +199,19 @@ class BlackjaxNUTS(_BlackJAXKernel):
         self._imm_init = inverse_mass_matrix
         self.fixed_kernel_args = dict(**kwargs)
 
-    def init(self, posterior_logpdf, rng, **context):
+    def init(self, posterior, rng, **context):
         if self._imm_init is None:
             self.kernel_args['inverse_mass_matrix'] = np.ones(context['ndim'])
         else:
             self.kernel_args['inverse_mass_matrix'] = np.asarray(self._imm_init)
-        super().init(posterior_logpdf, rng, **context)
+        super().init(posterior, rng, **context)
 
-    def adapt(self, initial_position=None, **kwargs):
+    def adapt(self, state, **kwargs):
         """Adapt step size and mass matrix via ``blackjax.window_adaptation``."""
+        position, _, _ = state
         steps = kwargs.pop('steps')
         rng_key = jax.random.PRNGKey(int(self._rng.integers(2**32)))
-        state = self._get_or_init_state(initial_position=initial_position)
+        state = self._get_or_init_state(initial_position=position)
         (state, parameters), _ = self._adaptation_fn(
             self._kernel_cls, self._logposterior,
             **self.fixed_kernel_args, **kwargs).run(
@@ -237,14 +242,15 @@ class BlackjaxMCLMC(_BlackJAXKernel):
         self.kernel_args = dict(L=L, step_size=step_size)
         self.fixed_kernel_args = dict(**kwargs)
 
-    def adapt(self, initial_position=None, **kwargs):
+    def adapt(self, state, **kwargs):
         """Adapt ``L`` and ``step_size`` via ``blackjax.mclmc_find_L_and_step_size``."""
         import inspect
         import blackjax.mcmc.mclmc as mclmc_mod
 
+        position, _, _ = state
         steps = kwargs.pop('steps')
 
-        state = self._get_or_init_state(initial_position=initial_position)
+        state = self._get_or_init_state(initial_position=position)
         rng_key = jax.random.PRNGKey(int(self._rng.integers(2**32)))
 
         _mass_matrix_kwarg = (

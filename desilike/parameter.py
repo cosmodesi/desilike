@@ -387,7 +387,7 @@ class Variable(Node):
             if 'shape' in state:
                 self.shape = tuple(state['shape'])
 
-    # Minimal FD defaults so ExternalCalculator works when Variable is a dep.
+    # Minimal FD defaults so external (_is_external=True) calculators work when Variable is a dep.
     @property
     def fd_eps(self):
         return None
@@ -603,7 +603,7 @@ class ParameterPrior:
             return jnp.asarray(_rv.ppf(np.asarray(u)), dtype=jnp.float64)
         # jax.scipy.stats has no generic ppf; keep scipy's inverse CDF but expose it
         # through jax.pure_callback so it stays traceable under jit/vmap (same pattern
-        # as ExternalCalculator in base.py).
+        # as _is_external=True calculators in base.py).
         def _ppf(u, _rv=rv_sp, _plo=p_lo_, _phi=p_hi_):
             u = jnp.asarray(u, dtype=jnp.float64)
             def _scipy_ppf(uu):

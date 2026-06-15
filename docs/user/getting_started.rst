@@ -4,382 +4,459 @@
 Getting started
 ===============
 
-In this page we will describe **desilike**'s basics' with a practical example,
-but further examples can be found in the provided `notebooks <https://github.com/cosmodesi/desilike/blob/main/nb>`_.
+In this page we describe **desilike**'s basics with a practical example.
+Further examples can be found in the provided `notebooks <https://github.com/cosmodesi/desilike/blob/main/nb>`_.
 
-**desilike** provides a framework to specify DESI likelihoods.
+**desilike** provides a framework to specify DESI likelihoods and connect them to
+profilers, samplers, and external codes.
+
+Pipeline basics
+---------------
+
+**desilike** builds pipelines of *calculators* — Python objects whose
+``__init__`` defines parameters and dependencies, and whose ``__call__`` runs the
+computation.  Once the graph of calculators is assembled, :func:`~desilike.base.compile`
+traces the dependencies, assigns a topological evaluation order, and returns an
+executable :class:`~desilike.base.CompiledGraph`:
+
+.. code-block:: python
+
+  from desilike.base import compile
+
+  pipe = compile(likelihood)       # compile the calculator graph
+  params = {p.name: p.value for p in pipe.params}  # collect default values
+  pipe(params)                     # evaluate the pipeline at these parameters
+
+The compiled graph exposes ``pipe.params`` (a :class:`~desilike.parameter.VariableCollection`
+of all parameters), and calling it with a ``dict`` re-evaluates the full graph.
+
+
+JAX transforms and derived parameters
+--------------------------------------
+
+The compiled graph is a plain callable compatible with all JAX transforms.
+
+**JIT compilation**:
+
+.. code-block:: python
+
+  import jax
+
+  logL = jax.jit(pipe)(params)
+
+The first call traces and compiles the graph; subsequent calls with the same
+parameter shapes hit the compiled kernel directly.
+
+**Gradient**:
+
+.. code-block:: python
+
+  grad = jax.grad(pipe)(params)   # dict of partial derivatives
+
+For parameters that feed only JAX calculators the gradient is exact (forward-mode AD).
+For parameters that feed a non-JAX (``_is_external = True``) calculator, the gradient
+uses finite differences; step size and accuracy order are set per-parameter via
+``param.fd_eps`` and ``param.fd_acc``.
+
+**Vectorised map (vmap)**:
+
+.. code-block:: python
+
+  n = 200
+  batch = {**params,
+           'b1': jnp.linspace(1., 3., n),
+           'sn0': jnp.zeros(n)}
+  logL_batch = jax.vmap(pipe)(batch)   # shape (n,)
+
+Every parameter in the batch dict must have a leading axis of the same size ``n``;
+scalar parameters must be broadcast to ``jnp.full(n, value)`` first.
+
+**Derived parameters**:
+
+Some parameters are declared as derived (``derived=True``) and written by
+``__call__`` rather than read as inputs (e.g. a chi-squared diagnostic set
+inside a likelihood).  To retrieve their values alongside the return value,
+pass ``return_derived=True``:
+
+.. code-block:: python
+
+  logL, derived = pipe(params, return_derived=True)
+  # derived: dict mapping derived parameter name → value
+  print(derived['chi2'])
+
+Under ``jax.jit`` or ``jax.vmap``, pass ``return_derived`` as a closed-over
+constant (not a traced kwarg):
+
+.. code-block:: python
+
+  logL, derived = jax.jit(lambda p: pipe(p, return_derived=True))(params)
+
 
 Clustering likelihood
 ---------------------
-Let's describe how to specify the likelihood for power spectrum multipoles.
 
-First, we specify a template, i.e. how the linear power spectrum as input of the theory codes is parameterized.
-Several options are possible:
+We now build a complete galaxy-clustering likelihood step by step.
 
-- standard (as in BOSS/eBOSS) parameterization, in terms of :math:`q_{\parallel}`, :math:`q_{\perp}` (scaling parameters),
-  :math:`df` (variation in the growth rate of structure: :math:`f / f^{\mathrm{fid}}`) with :class:`~desilike.theories.galaxy_clustering.power_template.StandardPowerSpectrumTemplate`;
-- `ShapeFit <https://arxiv.org/abs/2106.07641>`_ parameterization, in terms of :math:`q_{\parallel}`, :math:`q_{\perp}` (scaling parameters),
-  :math:`df` (variation in the growth rate of structure: :math:`f / f^{\mathrm{fid}}`), :math:`dm` (ShapeFit tilt parameter) with :class:`~desilike.theories.galaxy_clustering.power_template.ShapeFitPowerSpectrumTemplate`;
-- parameterization in terms of base cosmological parameters, with :class:`~desilike.theories.galaxy_clustering.power_template.DirectPowerSpectrumTemplate`
+Template
+~~~~~~~~
 
-See :mod:`~desilike.theories.galaxy_clustering.power_template` for all templates.
+First choose a power-spectrum template — i.e. how the linear matter power
+spectrum is parameterized.  Several options are available:
+
+- :class:`~desilike.theories.galaxy_clustering.ShapeFitSpectrum2Template`:
+  ShapeFit parameterization (:math:`q_\parallel`, :math:`q_\perp`, :math:`df`, :math:`dm`).
+- :class:`~desilike.theories.galaxy_clustering.BAOSpectrum2Template`:
+  BAO-specific parameterization with a fiducial cosmology.
+- :class:`~desilike.theories.galaxy_clustering.DirectSpectrum2Template`:
+  Direct base cosmological parameters.
 
 .. code-block:: python
 
-  from desilike.theories.galaxy_clustering import ShapeFitPowerSpectrumTemplate
+  from desilike.theories.galaxy_clustering import ShapeFitSpectrum2Template
 
-  # Or StandardPowerSpectrumTemplate, DirectPowerSpectrumTemplate
-  template = ShapeFitPowerSpectrumTemplate(z=0.8)  # effective redshift
+  template = ShapeFitSpectrum2Template(z=0.8)  # effective redshift
 
 .. note::
 
-  In python, ``help(Calculator)``, for any Calculator, like :class:`~desilike.theories.galaxy_clustering.power_template.ShapeFitPowerSpectrumTemplate`,
-  will provide useful information, in particular the possible arguments.
+  ``help(calculator)`` for any calculator provides useful information,
+  in particular the constructor arguments.
 
   Any calculator, profiler, sampler, etc. can be installed with :class:`~desilike.install.Installer`.
 
-Next, let's specify the theory model.
-Several options are possible, with the most notable one being:
+Theory
+~~~~~~
 
-- simple Kaiser model, with :class:`~desilike.theories.galaxy_clustering.full_shape.KaiserTracerPowerSpectrumMultipoles`,
-  or :class:`~desilike.theories.galaxy_clustering.full_shape.KaiserTracerCorrelationFunctionMultipoles`
-- `velocileptors <https://github.com/sfschen/velocileptors>`_ model (LPT_RSD), with :class:`~desilike.theories.galaxy_clustering.full_shape.LPTVelocileptorsTracerPowerSpectrumMultipoles`,
-  or :class:`~desilike.theories.galaxy_clustering.full_shape.LPTVelocileptorsTracerCorrelationFunctionMultipoles`
-- `pybird <https://github.com/pierrexyz/pybird>`_ model, with :class:`~desilike.theories.galaxy_clustering.full_shape.PyBirdTracerPowerSpectrumMultipoles`,
-  or :class:`~desilike.theories.galaxy_clustering.full_shape.PyBirdTracerCorrelationFunctionMultipoles`
-- `folps-nu <https://github.com/henoriega/FOLPS-nu>`_ model, with :class:`~desilike.theories.galaxy_clustering.full_shape.FOLPSTracerPowerSpectrumMultipoles`,
-  or :class:`~desilike.theories.galaxy_clustering.full_shape.FOLPSTracerCorrelationFunctionMultipoles`
-- empirical BAO model, with :class:`~desilike.theories.galaxy_clustering.bao.DampedBAOWigglesPowerSpectrumMultipoles`,
-  or :class:`~desilike.theories.galaxy_clustering.bao.ResummedBAOWigglesPowerSpectrumMultipoles`
-- power spectrum with scale-dependent bias (primordial non-gaussianity), with :class:`~desilike.theories.galaxy_clustering.primordial_non_gaussianity.PNGTracerPowerSpectrumMultipoles`
+Next, specify the theory model.  The most notable options are:
 
-See :mod:`~desilike.theories.galaxy_clustering.full_shape` for all full shape models, and :mod:`~desilike.theories.galaxy_clustering.bao` for all BAO models.
+- Kaiser model: :class:`~desilike.theories.galaxy_clustering.KaiserTracerSpectrum2Poles`
+  or :class:`~desilike.theories.galaxy_clustering.KaiserTracerCorrelation2Poles`
+- `velocileptors <https://github.com/sfschen/velocileptors>`_ (LPT_RSD):
+  :class:`~desilike.theories.galaxy_clustering.LPTVelocileptorsTracerSpectrum2Poles`
+  or :class:`~desilike.theories.galaxy_clustering.LPTVelocileptorsTracerCorrelation2Poles`
+- `pybird <https://github.com/pierrexyz/pybird>`_:
+  :class:`~desilike.theories.galaxy_clustering.PyBirdTracerSpectrum2Poles`
+  or :class:`~desilike.theories.galaxy_clustering.PyBirdTracerCorrelation2Poles`
+- `FOLPS-D <https://github.com/cosmodesi/FolpsD>`_:
+  :class:`~desilike.theories.galaxy_clustering.FOLPSTracerSpectrum2Poles`
+  or :class:`~desilike.theories.galaxy_clustering.FOLPSTracerCorrelation2Poles`
+- Empirical BAO model:
+  :class:`~desilike.theories.galaxy_clustering.DampedBAOWigglesTracerSpectrum2Poles`
+  or :class:`~desilike.theories.galaxy_clustering.ResummedBAOWigglesTracerSpectrum2Poles`
+- Primordial non-Gaussianity:
+  :class:`~desilike.theories.galaxy_clustering.PNGTracerSpectrum2Poles`
 
-.. code-block:: python
-
-  from desilike.theories.galaxy_clustering import KaiserTracerPowerSpectrumMultipoles
-
-  # Or LPTVelocileptorsTracerPowerSpectrumMultipoles, PyBirdTracerPowerSpectrumMultipoles, etc.
-  theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-
-One can update the template (or any relevant calculator's options passed at initialization) with ``calculator.init.update(...)``:
-
-.. code-block:: python
-
-  theory.init.update(template=ShapeFitPowerSpectrumTemplate(z=1.))
-
-Then, we want to compare the theory to data (an *observable*), typically:
-
-- power spectrum multipoles, with :class:`~desilike.observables.galaxy_clustering.power_spectrum.TracerPowerSpectrumMultipolesObservable`,
-- correlation function multipoles, with :class:`~desilike.observables.galaxy_clustering.correlation_function.TracerCorrelationFunctionMultipolesObservable`
+See :mod:`~desilike.theories.galaxy_clustering.full_shape` for all full-shape
+models and :mod:`~desilike.theories.galaxy_clustering.bao` for all BAO models.
 
 .. code-block:: python
 
-  from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable
+  import numpy as np
+  from desilike.theories.galaxy_clustering import KaiserTracerSpectrum2Poles
 
-  # Or TracerCorrelationFunctionMultipolesObservable
-  observable = TracerPowerSpectrumMultipolesObservable(data={'b1': 1.2},  # a (list of) (path to) *pypower* power spectrum measurement, flat array, or dictionary of parameters where to evaluate the theory to take as a mock data vector
-                                                       covariance=None,  # a (list of) (path to) mocks, array (covariance matrix), or None
-                                                       klim={0: [0.01, 0.2, 0.005], 2: [0.01, 0.2, 0.005]},  # k-limits, between 0.01 and 0.2 h/Mpc with 0.005 h/Mpc step size for ell = 0, 2
-                                                       theory=theory)  # previously defined theory
+  k = np.linspace(0.01, 0.2, 101)
+  ells = (0, 2)
+  # Or LPTVelocileptorsTracerSpectrum2Poles, PyBirdTracerSpectrum2Poles, etc.
+  theory = KaiserTracerSpectrum2Poles(k=k, ells=ells, template=template)
 
-In this (runnable!) example, we do not have a covariance yet; let's estimate it on-the-fly (Gaussian approximation).
+One can update the template (or any constructor argument) with ``calculator.init.update(...)``:
 
 .. code-block:: python
 
-  from desilike.observables.galaxy_clustering import BoxFootprint, ObservablesCovarianceMatrix
+  theory.update(template=ShapeFitSpectrum2Template(z=1.))
 
-  footprint = BoxFootprint(volume=1e9, nbar=1e-3)  # box with volume of 1e9 (Mpc/h)^3 and density of 1e-3 (h/Mpc)^3
-  covariance = ObservablesCovarianceMatrix(observables=[observable], footprints=[footprint])
-  cov = covariance(b1=1.2)   # evaluate covariance matrix at this parameter
+Observable
+~~~~~~~~~~
 
-Now we can define the likelihood:
+Wrap the theory in an observable that compares it to data:
+
+- Power spectrum multipoles: :class:`~desilike.observables.Spectrum2PolesObservable`
+- Correlation function multipoles: :class:`~desilike.observables.Correlation2PolesObservable`
+
+.. code-block:: python
+
+  from desilike.observables import Spectrum2PolesObservable
+
+  # data: flat array, dict of params (to evaluate the theory as mock data), or None
+  # covariance: 2-D array, 1-D diagonal, or None
+  obs = Spectrum2PolesObservable(data={'b1': 1.2},
+                                 covariance=None,
+                                 theory=theory,
+                                 k=k,
+                                 ells=ells)
+
+Likelihood
+~~~~~~~~~~
+
+Now define the likelihood.  The covariance can be provided to the observable,
+to the likelihood, or estimated on-the-fly from mocks:
 
 .. code-block:: python
 
   from desilike.likelihoods import ObservablesGaussianLikelihood
 
-  # No need to specify covariance if already given to the observable (TracerPowerSpectrumMultipolesObservable)
-  # If mocks are given to each observable, the likelihood covariance matrix is computed on-the-fly, using mocks from each observable (taking into account correlations)
-  likelihood = ObservablesGaussianLikelihood(observables=[observable], covariance=cov)
+  n = len(ells) * len(k)
+  cov = np.diag(np.full(n, 1e4))   # diagonal covariance for illustration
 
-To sum several independent likelihoods:
+  likelihood = ObservablesGaussianLikelihood(observables=[obs], covariance=cov)
+
+To sum independent likelihoods:
 
 .. code-block:: python
 
   from desilike.likelihoods import SumLikelihood
 
-  likelihood = SumLikelihood(likelihoods=[likelihood1, likelihood2])
+  combined = SumLikelihood(likelihoods=[likelihood1, likelihood2])
 
+Compile and evaluate
+~~~~~~~~~~~~~~~~~~~~
 
-The likelihood (and any other calculator) can be called at any point with:
+Compile the graph and call it with a parameter dict:
 
 .. code-block:: python
 
-  likelihood(b1=1., sn0=1000.)  # update linear bias b1, and shot noise sn0
-  likelihood(qpar=0.99)  # update scaling parameter qpar; b1 and sn0 are kept to 1. and 1000.
-  likelihood(sn0=100.)  # update shot noise, the template is to re-calculated
+  from desilike.base import compile
 
-  theory.power  # contains multipoles of the power spectrum, evaluated at b1=1., qpar=0.99 and sn0=100.
-  theory(sn0=1000.)  # recomputes the theory at sn0=1000.
+  pipe = compile(likelihood)
+
+  # Evaluate at default parameter values
+  params = {p.name: p.value for p in pipe.params}
+  pipe(params)
+
+  # Access theory outputs after evaluation
+  theory.poles   # multipoles of the power spectrum
 
 
 Parameters
 ----------
 
-Parameters of all calculators in the pipeline can be accessed e.g. with:
+All parameters in the pipeline are accessible through ``pipe.params``:
 
 .. code-block:: python
 
-  likelihood.all_params  # b1, sn0, df, qpar, qper, dm
-  template.all_params  # df, qpar, qper, dm
-  template.all_params.select(basename='q*')  # restrict to parameters with base name starting with q*: qpar, qper
+  pipe.params                          # all parameters
+  pipe.params.select(varied=True)      # only varied parameters
+  pipe.params.select(basename='q*')    # glob-filter on basename
 
-To get only the parameters of the calculator:
-
-.. code-block:: python
-
-  theory.init.params  # b1, sn0
-
-Above objects are :class:`~desilike.parameter.ParameterCollection`.
-
-Main parameter's attributes are (see :class:`~desilike.parameter.Parameter`):
-
-- its (base) name (basename)
-- its default value (value)
-- its prior (prior)
-- its reference distribution (ref), to randomly sample initial points for sampling / profiling
-- variation range to use when performing finite differentiation (delta); see :ref:`user-getting-started-fisher`
-- whether the parameter is fixed (fixed)
-- latex string (latex)
-
-They can be all updated with :meth:`~desilike.parameter.Parameter.update`. This can be done at the calculator level:
+To access parameters of a single calculator before compilation:
 
 .. code-block:: python
 
-  from desilike.theories import Cosmoprimo
-  from desilike.galaxy_clustering import DirectPowerSpectrumTemplate
+  from desilike import get_params
+  params = get_params(theory)          # b1, sn0 (declared by this calculator)
 
-  cosmo = Cosmoprimo()
-  cosmo.init.params = {'Omega_m': {'value': 0.3}, 'h': {'value': 0.7}, 'sigma8': {'value': 0.8}}
-  cosmo.init.params['n_s'].update(value=0.96)
+Parameters are :class:`~desilike.parameter.Parameter` objects; their main attributes are:
 
-  template = DirectPowerSpectrumTemplate(cosmo=cosmo, z=1.)
+- ``basename``, ``name`` — short and fully-qualified name
+- ``value`` — default value
+- ``prior`` — prior distribution
+- ``ref`` — reference distribution (used for initial samples)
+- ``delta`` — finite-difference step
+- ``fixed`` — whether the parameter is fixed
+- ``latex`` — LaTeX string
 
-Or at the pipeline level:
-
-.. code-block:: python
-
-  # Update parameter dm's reference distribution with uniform distribution in [-0.01, 0.01]
-  likelihood.all_params['dm'].update(ref={'limits': [-0.01, 0.01]})
-  # Update parameter df's prior distribution with normal distribution centered on 1 and with standard deviation 2
-  likelihood.all_params['df'].update(prior={'dist': 'norm', 'loc': 1., 'scale': 2.})
-  # Set b1=2. and fix it
-  likelihood.all_params['b1'].update(value=2., fixed=True)
-  # Now varied likelihood parameters are:
-  likelihood.varied_params  # dm, df, sn0, qpar, qper
-
-.. note::
-
-  Changes to parameters at the calculator level (``calculator.init.params``) will be shared by all pipelines using this calculator instance;
-  e.g. if above ``cosmo`` is used by multiple templates ``template1``, ``template2``, etc.,
-  ``template1.all_params`` and ``template2.all_params`` would share the same Omega_m, h, sigma8 parameters.
-  However, updating parameters at the pipeline level, e.g. ``template1.all_params['n_s']`` leaves ``template2.all_params['n_s']`` untouched.
-  Also, if ``template1`` needs to be reinitialized, e.g. because it is passed to a theory or ``template1.init.params`` is updated,
-  then changes to ``template1.all_params['n_s']`` will be lost.
-  Therefore, updates to ``calculator.all_params`` are only useful for the final calculator of the pipeline, typically the likelihood as illustrated above.
-
-
-The likelihood can be analytically marginalized over linear parameters (here ``sn0``):
+They can be updated on the compiled pipeline:
 
 .. code-block:: python
 
-  # '.best': set sn0 at best fit
-  # '.marg': marginalization, assuming Gaussian likelihood
-  # '.auto': automatically choose between '.best' (likelihood profiling) and '.marg' (likelihood sampling)
-  likelihood.all_params['sn0'].update(derived='.auto')
-  # Now the likelihood has for varied parameters (no sn0)
-  likelihood.varied_params  # b1, df, dm, qiso, qap
+  # Tighten the prior on df
+  params['df'].update(prior={'dist': 'norm', 'loc': 1., 'scale': 2.})
+  # Fix b1 = 2
+  params['b1'].update(value=2., fixed=True)
 
-One can reparameterize the whole likelihood as:
+Parameters can be analytically marginalized (useful for linear nuisance parameters):
 
 .. code-block:: python
 
-  likelihood.all_params['qpar'].update(derived='{qiso} * {qap}**(2. / 3.)')
-  likelihood.all_params['qper'].update(derived='{qiso} * {qap}**(- 1. / 3.)')
-  # Then add qiso, qap to the parameter collection
-  likelihood.all_params['qiso'] = {'prior': {'limits': [0.9, 1.1]}, 'latex': 'q_{\mathrm{iso}}'}
-  likelihood.all_params['qap'] = {'prior': {'limits': [0.9, 1.1]}, 'latex': 'q_{\mathrm{ap}}'}
-  # Now the likelihood has for varied parameters
-  likelihood.varied_params  # b1, sn0, df, dm, qiso, qap
+  # '.marg': Gaussian marginalization; '.best': set at best-fit; '.auto': choose based on context
+  params['sn0'].update(derived='.auto')
 
-(a reparameterization we could have achieved in this particular case by passing ``apmode='qparqper'`` to ``ShapeFitPowerSpectrumTemplate``)
-
-
-Bindings
---------
-
-Now we have our likelihood, we can bind it to external cosmological inference codes (montepython, cosmosis, cobaya).
+Or reparameterized via expressions:
 
 .. code-block:: python
 
-    # Let's recap the likelihood definition in this function
-    def MyLikelihood():
-
-      from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, KaiserTracerPowerSpectrumMultipoles
-      from desilike.observables.galaxy_clustering import TracerPowerSpectrumMultipolesObservable, BoxFootprint, ObservablesCovarianceMatrix
-      from desilike.likelihoods import ObservablesGaussianLikelihood
-
-      # 'external' means "get primordial quantities from external source, e.g. cobaya
-      template = DirectPowerSpectrumTemplate(z=1.1, cosmo='external')
-      theory = KaiserTracerPowerSpectrumMultipoles(template=template)
-      observable = TracerPowerSpectrumMultipolesObservable(data={'b1': 1.2}, covariance=None,
-                                                           klim={0: [0.01, 0.2, 0.005], 2: [0.01, 0.2, 0.005]}, theory=theory)
-      footprint = BoxFootprint(volume=1e9, nbar=1e-3)
-      covariance = ObservablesCovarianceMatrix(observables=observable, footprints=footprint)
-      cov = covariance(b1=1.2)
-      return ObservablesGaussianLikelihood(observables=observable, covariance=cov)
-
-
-    from desilike import setup_logging
-    from desilike.bindings import CobayaLikelihoodGenerator, CosmoSISLikelihoodGenerator, MontePythonLikelihoodGenerator
-
-    setup_logging('info')
-    # Pass the function above to the generators, that will write the necessary files to import it as an external likelihood
-    # in cobaya, cosmosis, montepython
-    CobayaLikelihoodGenerator()(MyLikelihood)
-    CosmoSISLikelihoodGenerator()(MyLikelihood)
-    MontePythonLikelihoodGenerator()(MyLikelihood)
-
-
-.. note::
-
-  All the calculation below (emulation, profiling, sampling) benefits from MPI parallelization;
-  just run the code with multiple MPI processes.
+  params['qpar'].update(derived='{qiso} * {qap}**(2. / 3.)')
+  params['qper'].update(derived='{qiso} * {qap}**(-1. / 3.)')
+  params['qiso'].update(prior={'limits': [0.9, 1.1]}, latex=r'q_{\mathrm{iso}}')
+  params['qap'].update(prior={'limits': [0.9, 1.1]}, latex=r'q_{\mathrm{ap}}')
 
 
 Emulators
 ---------
 
-Had we chosen a slower theory model, e.g. :class:`~desilike.theories.galaxy_clustering.full_shape.LPTVelocileptorsTracerPowerSpectrumMultipoles`,
-we would probably have wanted to emulate it, with:
-
-- Taylor expansion, up to a given order, with :class:`~desilike.emulators.TaylorEmulatorEngine`
-- Neural net (multilayer perceptron), with :class:`~desilike.emulators.MLPEmulatorEngine`
-
-See also the base emulator class, :class:`~desilike.emulators.Emulator`.
+For slower theory models, such as :class:`~desilike.theories.galaxy_clustering.LPTVelocileptorsTracerSpectrum2Poles`,
+the perturbation-theory (PT) sub-calculator can be emulated with a Taylor
+expansion using :class:`~desilike.TaylorEmulator`:
 
 .. code-block:: python
 
-  from desilike.theories.galaxy_clustering import DirectPowerSpectrumTemplate, LPTVelocileptorsTracerPowerSpectrumMultipoles
+  from desilike import compile, TaylorEmulator
+  from desilike.theories.galaxy_clustering import (
+      ShapeFitSpectrum2Template, KaiserPTSpectrum2Poles, KaiserTracerSpectrum2Poles)
 
-  theory = LPTVelocileptorsTracerPowerSpectrumMultipoles(template=DirectPowerSpectrumTemplate(z=0.8))
+  k = np.linspace(0.01, 0.2, 101)
+  ells = (0, 2)
+  template = ShapeFitSpectrum2Template(z=0.8)
+  pt = KaiserPTSpectrum2Poles(k=k, ells=ells)
+  pt.update(template=template)
 
-  from desilike.emulators import Emulator, TaylorEmulatorEngine, EmulatedCalculator
+  # Compile just the PT sub-graph, then emulate it
+  pt_pipe = compile(pt)
+  emulator = TaylorEmulator(pt_pipe, order=3)
+  emulator.fit()          # compute Taylor coefficients (uses JAX auto-differentiation where possible)
+  emulated_pt = emulator.to_calculator()
 
-  # Let's emulate the perturbation theory part (.pt) by performing a Taylor expansion of order 3
-  emulator = Emulator(theory.pt, engine=TaylorEmulatorEngine(order=3))
-  emulator.set_samples()  # evaluate the theory derivatives (with jax auto-differentiation if possible, else finite differentiation)
-  emulator.fit()  # set Taylor expansion
+  # Emulator can be saved and reloaded
+  emulator.write('emulator.h5')
+  emulator2 = TaylorEmulator.read('emulator.h5')
 
-  # Emulator can be saved with:
-  emulator.save('emulator.npy')
-  # And reloaded with:
-  pt = EmulatedCalculator.load('emulator.npy')
-
-  theory.init.update(pt=pt)
-  # Now the theory will run much faster!
-  theory(logA=3.)
+  # Drop the emulated PT into the full tracer pipeline
+  theory = KaiserTracerSpectrum2Poles(k=k, ells=ells, pt=emulated_pt)
+  pipe = compile(theory)   # now runs much faster!
 
 
-.. _user-getting-started-fisher:
+Derivatives
+-----------
 
-Fisher
-------
-
-We provide a routine for Fisher estimation.
+:func:`~desilike.base.differentiate` builds an arbitrary-order partial derivative
+of a compiled graph, mixing exact JAX forward-mode AD (for JAX-native nodes) with
+direct finite-difference stencils (for non-JAX nodes) at linear cost in the
+derivative order:
 
 .. code-block:: python
 
-  from desilike import Fisher
+  from desilike.base import differentiate
 
-  fisher = Fisher(likelihood)
-  # Estimate Fisher (precision) matrix at b1=2, using jax auto-differentiation where possible, else finite differentiation (with step :attr:`Parameter.delta`)
-  fish = fisher(b1=2.)
-  # To sum independent likelihood's Fisher matrices:
-  # fish1 + fish2
-  # To get covariance matrix
-  covariance = fish.covariance()
+  pipe = compile(likelihood)
 
-See :class:`~desilike.parameter.ParameterPrecision` and :class:`~desilike.parameter.ParameterCovariance` to know more about precision and covariance
-data classes.
+  # First derivative w.r.t. b1
+  grad_fn = differentiate(pipe, {'b1': 1})
+  g = grad_fn()                          # evaluate at default param values
+  g = grad_fn({'b1': 1.5})              # evaluate at a specific point
+
+  # Second derivative w.r.t. qpar
+  d2_fn = differentiate(pipe, {'qpar': 2})
+
+  # Mixed partial ∂²/(∂b1 ∂sn0)
+  cross_fn = differentiate(pipe, {'b1': 1, 'sn0': 1})
+
+  # Override FD step and accuracy for non-JAX parameters
+  d_fn = differentiate(pipe, {'omega_m': 1}, fd_eps=1e-4, fd_acc=4)
+
+  # Retrieve derived parameters simultaneously
+  dval, d_derived = differentiate(pipe, {'b1': 1})(return_derived=True)
+
+The returned callable accepts the same ``params`` dict and ``**kwargs`` as
+``pipe``, and is compatible with ``jax.jit``.
+
+
+Parallel map
+------------
+
+:func:`~desilike.base.pmap` is a distributed ``vmap``: it maps a function over
+the leading batch axis of its inputs, distributing the work across MPI ranks and/or
+local JAX devices.
+
+.. code-block:: python
+
+  from desilike.base import compile, pmap
+
+  pipe = compile(likelihood)
+
+  n = 1000
+  batch = {p.name: jnp.full(n, p.value) for p in pipe.params}
+  batch['b1'] = jnp.linspace(0.5, 3., n)
+
+  logL_batch = pmap(pipe)(batch)          # shape (n,), distributed across ranks/devices
+
+Three backends are available via the ``backend`` keyword:
+
+- ``'jax'`` — shard across local JAX devices only.
+- ``'mpi'`` — split across MPI ranks; each rank uses a single device.
+- ``'mpi_and_jax'`` *(default)* — MPI outer split + JAX inner sharding.
+
+On a single-device, single-rank machine all three reduce to ``jax.vmap``.
+
+``pmap`` wraps any callable, not just compiled graphs:
+
+.. code-block:: python
+
+  grad_batch = pmap(jax.grad(pipe))(batch)   # batch of gradients
+
 
 Profilers
 ---------
 
-Because we may want to test cosmological inference in-place (without resorting to montepython, cosmosis or cobaya),
-we provide wrapping for some profilers and samplers.
+In-place profiling without an external code.  Available kernels:
 
-Profilers currently available are:
-- `minuit <https://github.com/scikit-hep/iminuit>`_, used by the high-energy physics community, with :class:`~desilike.profilers.MinuitProfiler`
-- `bobyqa <https://github.com/numericalalgorithmsgroup/pybobyqa>`_, with :class:`~desilike.profilers.BOBYQAProfiler`
-- `scipy <https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html#scipy.optimize.minimize>`_, with :class:`~desilike.profilers.ScipyProfiler`
-
-
-These can be used with e.g.:
+- `iminuit <https://github.com/scikit-hep/iminuit>`_: :class:`~desilike.profilers.Minuit`
+- `pybobyqa <https://github.com/numericalalgorithmsgroup/pybobyqa>`_: :class:`~desilike.profilers.BOBYQA`
+- `scipy.optimize.minimize <https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html>`_: :class:`~desilike.profilers.Scipy`
+- `optax <https://github.com/google-deepmind/optax>`_ (JAX gradient-based): :class:`~desilike.profilers.Optax`
 
 .. code-block:: python
 
-  from desilike.profilers import MinuitProfiler
+  from desilike.profilers import Profiler, Minuit
 
-  profiler = MinuitProfiler(likelihood)  # optinally, provide save_fn = 'profiles.npy' to save profiles to save_fn
-  profiles = profiler.maximize(niterations=5)
-  profiles = profiler.interval(params=['b1'])
-  # To print relevant information
+  pipe = compile(likelihood)
+  profiler = Profiler(pipe, kernel=Minuit(), output_dir='profiles/')
+
+  profiler.maximize(niterations=5)
+  profiler.interval(params=['b1'])
+
   if profiler.mpicomm.rank == 0:
-    print(profiles.to_stats(tablefmt='pretty'))
-    # If you saved profiles to 'profiles.npy', you can load the object with:
+    print(profiler.profiles.to_stats(tablefmt='pretty'))
+    # profiles saved in output_dir; reload with:
     # from desilike.samples import Profiles
-    # profiles = Profiles.load('profiles.npy')
+    # profiles = Profiles.read('profiles/profiles.h5')
 
-See :class:`~desilike.samples.profiles.Profiles` to know more about this data class.
+See :class:`~desilike.samples.profiles.Profiles` for this data class.
 
 
 Samplers
 --------
 
-Samplers currently available are:
-- `Antony Lewis <https://github.com/CobayaSampler/cobaya/tree/master/cobaya/samplers/mcmc>`_ MCMC sampler, with :class:`~desilike.samplers.MCMCSampler`
-- `emcee <https://github.com/dfm/emcee>`_ ensemble sampler, with :class:`~desilike.samplers.EmceeSampler`
-- `zeus <https://github.com/minaskar/zeus>`_ ensemble slicing sampler, with :class:`~desilike.samplers.ZeusSampler`
-- `pocomc <https://github.com/minaskar/pocomc>`_ pre-conditioned Monte-Carlo sampler, with :class:`~desilike.samplers.PocoMCSampler`
-- `dynesty <https://github.com/joshspeagle/dynesty>`_ nested sampler, with :class:`~desilike.samplers.DynamicDynestySampler`
-- `polychord <https://github.com/PolyChord/PolyChordLite>`_ nested sampler, with :class:`~desilike.samplers.NestedSampler`
+In-place sampling.  Pass a kernel to :func:`~desilike.samplers.Sampler`:
 
-
-These can be used with e.g.:
+- Metropolis-Hastings: :class:`~desilike.samplers.MH`
+- emcee: :class:`~desilike.samplers.Emcee`
+- zeus: :class:`~desilike.samplers.Zeus`
+- blackjax (HMC/NUTS/MCLMC): :class:`~desilike.samplers.BlackjaxHMC`, :class:`~desilike.samplers.BlackjaxNUTS`, :class:`~desilike.samplers.BlackjaxMCLMC`
+- numpyro (NUTS/HMC/BarkerMH): :class:`~desilike.samplers.NumpyroNUTS`, :class:`~desilike.samplers.NumpyroHMC`, :class:`~desilike.samplers.NumpyroBarkerMH`
+- dynesty (nested): :class:`~desilike.samplers.Dynesty`
+- nautilus (importance nested): :class:`~desilike.samplers.Nautilus`
+- pocomc (SMC): :class:`~desilike.samplers.PocoMC`
 
 .. code-block:: python
 
-  from desilike.samplers import EmceeSampler
+  from desilike.samplers import Sampler, Emcee
 
-  sampler = EmceeSampler(likelihood, chains=4)  # optinally, provide save_fn = 'chain_*.npy' to save chains to save_fn
-  chains = sampler.run(check={'max_eigen_gr': 0.05})  # run until Gelman-Rubin criterion < 0.05
-  # To print relevant information
+  pipe = compile(likelihood)
+  sampler = Sampler(pipe, kernel=Emcee(nwalkers=32), nparallel=4, output_dir='chains/')
+
+  chains = sampler.run(gelman_rubin=1.05)  # run until Gelman-Rubin < 1.05
+
   if sampler.mpicomm.rank == 0:  # chains only available on rank 0
-    chain = chains[0].concatenate([chain.remove_burnin(0.5)[::10] for chain in chains])  # removing burnin and thinning
+    chain = chains[0].concatenate([c.remove_burnin(0.5)[::10] for c in chains])
     print(chain.to_stats(tablefmt='pretty'))
-    # If you saved chains to 'chain_*.npy', you can load them with:
-    # from desilike.samples import Chain
-    # chain = Chain.concatenate([Chain.load('chain_{:d}.npy'.format(i)).remove_burnin(0.5)[::10] for i in range(4)])  # remove burnin and thin by a factor 10
+    # chains saved in output_dir can be reloaded; see MCSamples.read()
 
-See :class:`~desilike.samples.chain.Chain` to know more about this data class.
+See :class:`~desilike.samples.chain.MCSamples` for this data class.
 
 
 MPI
 ---
-All costly operations, e.g. emulation, Fisher (computation of numerical derivatives), profiling, sampling, are MPI-parallelized.
-Look at the emulator, profiler and sampler documentation for more information.
-In a nutshell, the code in the above sections (Emulators, Fisher, Profilers, Samplers) can be run without any change on several MPI processes;
-if written in a script ``yourscript.py``, it can be launched with e.g. 8 processes (or more, depending on your setup): ``mpiexec -np 8 yourscript.py``.
-On supercomputers using Slurm workload manager, one may have to use ``srun -n`` instead of ``mpiexec -np``.
+Just add the top of your script:
+
+.. code-block:: python
+
+  import desilike
+  desilike.distributed.initialize()
+
+All costly operations (profiling, sampling) are MPI-parallelized.
+To run across multiple processes:
+
+.. code-block:: bash
+
+  mpiexec -np 8 yourscript.py
+
+On Slurm clusters, use ``srun -n`` instead of ``mpiexec -np``.

@@ -48,3 +48,4 @@ Table of Contents
   dev/introduction
   dev/documentation
   dev/tests
+  dev/calculator

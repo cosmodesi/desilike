@@ -39,8 +39,15 @@ class Nautilus(PopulationKernel):
         self._pool_sampler = None
         self._initialized = False
 
-    def run(self, likelihood_logpdf, prior,
-            pool, rng, ndim, output_dir=None, n_derived=0, params=None, **kwargs):
+    def init(self, likelihood, prior, rng, **context):
+        _, self._likelihood_logpdf_with_derived = likelihood
+        self._prior_logpdf, _, self._prior_ppf = prior
+        self._rng = rng
+        self._pool = context['pool']
+        self._ndim = context['ndim']
+        self._output_dir = context.get('output_dir')
+
+    def run(self, **kwargs):
         if not NAUTILUS_INSTALLED:
             raise ImportError("The 'nautilus-sampler' package is required but not installed.")
 
@@ -48,34 +55,32 @@ class Nautilus(PopulationKernel):
 
         # Create the secondary pool on all MPI ranks (needed for wait_many on workers).
         if self._pool_sampler is None:
-            self._pool_sampler = make_pool(pool.comm, batch_size=0)
+            self._pool_sampler = make_pool(self._pool.comm, batch_size=0)
 
-        prior_logpdf, prior_rvs, prior_ppf = prior
-
-        if pool.main:
+        if self._pool.main:
             if not self._initialized:
                 init_kwargs = update_kwargs(
                     dict(**self._kwargs), 'nautilus',
-                    prior=prior_ppf, likelihood=likelihood_logpdf, n_dim=ndim,
-                    pass_dict=False,
-                    filepath=None if output_dir is None else output_dir / 'nautilus.h5',
-                    pool=(pool, self._pool_sampler),
-                    seed=rng.integers(2**32))
+                    prior=self._prior_ppf, likelihood=self._likelihood_logpdf_with_derived,
+                    n_dim=self._ndim, pass_dict=False,
+                    filepath=None if self._output_dir is None else self._output_dir / 'nautilus.h5',
+                    pool=(self._pool, self._pool_sampler),
+                    seed=self._rng.integers(2**32))
                 self._sampler = _nautilus.Sampler(**init_kwargs)
-                pool.stop_wait()   # release workers from init-time pool.wait()
+                self._pool.stop_wait()   # release workers from init-time pool.wait()
                 self._initialized = True
 
             self._sampler.run(**kwargs)
             samples, log_w, log_l, blobs = self._sampler.posterior(return_blobs=True)
-            log_prior = np.array(list(pool.map(prior_logpdf, samples)))
-            pool.stop_wait()
+            blobs = blobs.reshape(len(samples), -1)
+            log_prior = np.array(list(self._pool.map(self._prior_logpdf, samples)))
+            self._pool.stop_wait()
             self._pool_sampler.stop_wait()
             self.logger.info('Finished sampling.')
-            return samples, blobs.reshape(len(samples), -1), dict(
-                aweight=np.exp(log_w), logposterior=log_l + log_prior)
+            return samples, blobs, dict(aweight=np.exp(log_w), logposterior=log_l + log_prior)
         else:
             if not self._initialized:
                 self._initialized = True
-                pool.wait()   # serve during nautilus.Sampler.__init__
-            wait_many([pool, self._pool_sampler])
+                self._pool.wait()   # serve during nautilus.Sampler.__init__
+            wait_many([self._pool, self._pool_sampler])
             return None

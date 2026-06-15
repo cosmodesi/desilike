@@ -23,10 +23,8 @@ def _make_profiles(n_runs=3, n_params=4, n_scan=101, n_contour=21):
     lp = -0.5 * RNG.chisquare(n_params, n_runs)
 
     start = {n: RNG.normal(0., 0.3, n_runs) for n in pnames}
-    start['logpdf'] = lp - 1.
 
     best = {n: RNG.normal(0., 0.1, n_runs) for n in pnames}
-    best['logpdf'] = lp
 
     error = {n: np.abs(RNG.normal(0.5, 0.05, n_runs)) for n in pnames}
 
@@ -54,6 +52,7 @@ def _make_profiles(n_runs=3, n_params=4, n_scan=101, n_contour=21):
         params=params,
         start=start,
         best=best,
+        logpdf=lp,
         error=error,
         interval=interval,
         profile=profile,
@@ -133,13 +132,13 @@ def test_nruns():
 
 def test_argmax():
     p = _make_profiles(n_runs=4)
-    expected = int(np.argmax(p.best['logpdf']))
+    expected = int(np.argmax(p.logpdf))
     assert p.argmax == expected
 
 
 def test_chi2min():
     p = _make_profiles(n_runs=4)
-    expected = float(-2. * np.max(p.best['logpdf']))
+    expected = float(-2. * np.max(p.logpdf))
     assert abs(p.chi2min - expected) < 1e-12
 
 
@@ -148,7 +147,7 @@ def test_chi2min():
 def test_choice_argmax_preserves_axis():
     p = _make_profiles(n_runs=5)
     c = p.choice()
-    assert len(c.best['logpdf']) == 1
+    assert len(c.logpdf) == 1
     assert len(c.start['p0']) == 1
     assert len(c.error['p0']) == 1
     lo, hi = c.interval['p0']
@@ -158,15 +157,14 @@ def test_choice_argmax_preserves_axis():
 def test_choice_int_index():
     p = _make_profiles(n_runs=5)
     c = p.choice(index=2)
-    assert len(c.best['logpdf']) == 1
-    np.testing.assert_array_equal(c.best['logpdf'],
-                                  p.best['logpdf'][[2]])
+    assert len(c.logpdf) == 1
+    np.testing.assert_array_equal(c.logpdf, p.logpdf[[2]])
 
 
 def test_choice_list_index():
     p = _make_profiles(n_runs=5)
     c = p.choice(index=[0, 1])
-    assert len(c.best['logpdf']) == 2
+    assert len(c.logpdf) == 2
 
 
 def test_choice_copies_profile_contour_unchanged():
@@ -182,7 +180,7 @@ def test_choice_copies_profile_contour_unchanged():
 def test_choice_best_is_best():
     p = _make_profiles(n_runs=5)
     c = p.choice()
-    assert c.best['logpdf'][0] == np.max(p.best['logpdf'])
+    assert c.logpdf[0] == np.max(p.logpdf)
 
 
 # ── concatenate / update ──────────────────────────────────────────────────────
@@ -243,10 +241,10 @@ def test_extend():
 
 def test_original_unchanged_after_concatenate():
     p1 = _make_profiles(n_runs=2)
-    orig_lp = p1.best['logpdf'].copy()
+    orig_lp = p1.logpdf.copy()
     p2 = _make_profiles(n_runs=3)
     _ = Profiles.concatenate(p1, p2)
-    np.testing.assert_array_equal(p1.best['logpdf'], orig_lp)
+    np.testing.assert_array_equal(p1.logpdf, orig_lp)
 
 
 # ── copy ──────────────────────────────────────────────────────────────────────
@@ -295,15 +293,15 @@ def test_select_filters_slots():
     p = _make_profiles(n_runs=2)
     sub = p.select(name=['p0', 'p1'])
     assert set(sub.params.names()) == {'p0', 'p1'}
-    assert set(k for k in sub.best if k != 'logpdf') == {'p0', 'p1'}
-    assert 'logpdf' in sub.best  # always kept
+    assert set(sub.best.keys()) == {'p0', 'p1'}
+    assert sub.logpdf is not None  # always carried over unchanged
     assert set(sub.error) == {'p0', 'p1'}
     # contour pairs restricted to selected names
     for cl, pairs in sub.contour.items():
         for p1, p2 in pairs:
             assert p1 in {'p0', 'p1'} and p2 in {'p0', 'p1'}
     # original is untouched
-    assert set(k for k in p.best if k != 'logpdf') == {'p0', 'p1', 'p2', 'p3'}
+    assert set(p.best.keys()) == {'p0', 'p1', 'p2', 'p3'}
 
 
 def test_select_requires_params():

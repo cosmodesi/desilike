@@ -1,10 +1,11 @@
 """
 JAX-friendly calculator pipeline for desilike.
 
-Two base classes:
-- Calculator: pure JAX ops, fully traceable by jit/vmap/grad.
-- ExternalCalculator: arbitrary Python/numpy, wrapped via pure_callback +
-  custom_vjp (finite-difference backward pass) so that jit/vmap/grad all work.
+Base class:
+- Calculator: JAX-native by default (_is_external = False).
+  Set _is_external = True on a subclass (or per-instance) to switch to
+  arbitrary Python/numpy mode: __call__() is wrapped via pure_callback +
+  custom_jvp (finite-difference backward pass) so that jit/vmap/grad all work.
 
 Lifecycle:
 - Calculator(*args, **kwargs) saves args and runs __init__ (inside a construction context).
@@ -27,7 +28,7 @@ tree_flatten / tree_unflatten:
 - Each calculator must define tree_flatten(self) -> (children, aux) and
   tree_unflatten(cls, aux, children) -> instance. children are the output
   arrays produced by __call__(). The framework uses these to pass outputs between
-  calculators and to define the ExternalCalculator dep-passing interface.
+  calculators.
 
 Pipeline:
 - CompiledGraph: builds a static DAG once, exposes a pure
@@ -146,23 +147,6 @@ class Calculator(Node):
     @classmethod
     def tree_unflatten(cls, aux, children):
         raise NotImplementedError
-
-
-class ExternalCalculator(Calculator):
-    """
-    Base class for non-JAX calculators.
-    __call__() may use arbitrary Python/numpy, accessing dep outputs as self.dep.attr
-    (concrete numpy arrays when the callback executes).
-
-    Wrapped via jax.pure_callback (for jit/vmap) + jax.custom_jvp
-    (finite-difference JVP for grad/jacfwd/hessian).
-
-    Per-parameter FD step and accuracy are taken from param.fd_eps and param.fd_acc.
-    param.fd_eps falls back through: explicit → param.ref.std() → 1e-5.
-    param.fd_acc defaults to 2; set to 4, 6, ... for higher-accuracy stencils.
-    """
-
-    _is_external = True
 
 
 class Likelihood(Calculator):
@@ -779,7 +763,7 @@ def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=None):
 
 # ── external function factory ─────────────────────────────────────────────────
 
-def _make_external_fn(node: ExternalCalculator, params_list: list, calc_deps: list, call_return, node_state: dict, dep_states: list):
+def _make_external_fn(node: Calculator, params_list: list, calc_deps: list, call_return, node_state: dict, dep_states: list):
     """
     Return (fn_dep, fn_call, call_kind).
 
@@ -870,10 +854,10 @@ def _build_graph_call_fn(pipeline):
     (return_val, derived_dict, ext_outputs_flat).
 
     JVP strategy:
-      fd_params (feed any ExternalCalculator directly or transitively): finite differences
+      fd_params (feed any external node directly or transitively): finite differences
         over the full graph — O(n_fd_params × n_stencil) full-graph evaluations.
-      jax_params (only feed JAX calculators): exact forward-mode AD through the JAX
-        sub-graph, with External outputs frozen at their primal values.
+      jax_params (only feed JAX nodes): exact forward-mode AD through the JAX
+        sub-graph, with external outputs frozen at their primal values.
     """
     nodes = pipeline.nodes
     node_var_deps = pipeline._node_var_deps
@@ -1124,7 +1108,7 @@ class CompiledGraph:
         self._node_states = {id(node): {'last_params': None, 'was_called': False, 'last_result': None, 'dep_result': None, 'call_result': None}
                              for node in self.nodes}
 
-        # Build ExternalCalculator callables; record tree_flatten child counts.
+        # Build external (_is_external=True) callables; record tree_flatten child counts.
         self._tree_own_aux = []
         self._fn_dep = []
         self._fn_call = []
@@ -1147,7 +1131,7 @@ class CompiledGraph:
                 self._fn_dep.append(None)
                 self._fn_call.append(None)
 
-        # Compute which params must be FD-differentiated (feed any ExternalCalculator
+        # Compute which params must be FD-differentiated (feed any external node
         # directly or transitively) vs which can use exact JAX auto-diff.
         downstream_of = defaultdict(list)
         for node in self.nodes:
@@ -1578,7 +1562,7 @@ def differentiate(graph: CompiledGraph, order, fd_acc=None, fd_eps=None):
 
     Uses JAX forward-mode AD for parameters that feed only JAX calculators and
     *direct* finite-difference stencils for parameters that feed
-    ``ExternalCalculator`` nodes.  The FD stencil for order *k* and accuracy
+    external (``_is_external=True``) nodes.  The FD stencil for order *k* and accuracy
     *fd_acc* costs ``k + fd_acc - 1`` graph evaluations — linear in *k* —
     versus the ``fd_acc^k`` cost of nested JVP calls.
 

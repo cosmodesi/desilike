@@ -237,9 +237,9 @@ class Spectrum2PolesObservable(Calculator):
         labels = self.data.labels()
         if len(kw_theory) != len(labels):
             kw_theory = [{key: value for key, value in kw_theory[0].items()
-                          if key != 'label' or ell_idx == 0}
-                         for ell_idx in range(len(labels))]
-        kw_theory = [{'color': f'C{ell_idx:d}', **kw} for ell_idx, kw in enumerate(kw_theory)]
+                          if key != 'label' or ill == 0}
+                         for ill in range(len(labels))]
+        kw_theory = [{'color': f'C{ill:d}', **kw} for ill, kw in enumerate(kw_theory)]
 
         if fig is None:
             height_ratios = [max(len(labels), 3)] + [1] * len(labels)
@@ -254,7 +254,7 @@ class Spectrum2PolesObservable(Calculator):
             show_legend = False
 
         wtheory = self.data.clone(value=np.asarray(self.flattheory))
-        for ell_idx, label in enumerate(labels):
+        for ill, label in enumerate(labels):
             ell = label['ells']
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
@@ -271,19 +271,19 @@ class Spectrum2PolesObservable(Calculator):
                 lax[0].set_xscale('log')
             std = self.covariance.at.observable.get(**label).std()
             lax[0].errorbar(x, scale * data_pole.value(), yerr=scale * std,
-                            color=kw_theory[ell_idx]['color'], linestyle='none', marker='o',
+                            color=kw_theory[ill]['color'], linestyle='none', marker='o',
                             label=rf'$\ell = {ell}$')
-            lax[0].plot(x, scale * wtheory_pole.value(), **kw_theory[ell_idx])
-        for ell_idx, label in enumerate(labels):
+            lax[0].plot(x, scale * wtheory_pole.value(), **kw_theory[ill])
+        for ill, label in enumerate(labels):
             ell = label['ells']
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
             std = self.covariance.at.observable.get(**label).std()
-            lax[ell_idx + 1].plot(x, (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ell_idx])
-            lax[ell_idx + 1].set_ylim(-4, 4)
+            lax[ill + 1].plot(x, (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ill])
+            lax[ill + 1].set_ylim(-4, 4)
             for offset in [-2., 2.]:
-                lax[ell_idx + 1].axhline(offset, color='k', linestyle='--')
-            lax[ell_idx + 1].set_ylabel(rf'$\Delta P_{{{ell}}} / \sigma_{{P_{{{ell}}}}}$')
+                lax[ill + 1].axhline(offset, color='k', linestyle='--')
+            lax[ill + 1].set_ylabel(rf'$\Delta P_{{{ell}}} / \sigma_{{P_{{{ell}}}}}$')
 
         for ax in lax:
             ax.grid(True)
@@ -329,19 +329,19 @@ class Spectrum2PolesObservable(Calculator):
         wtheory = self.data.clone(value=np.asarray(self.flattheory))
         wtheory_nobao = self.data.clone(value=_compute_flattheory_nobao(self))
 
-        for ell_idx, label in enumerate(labels):
+        for ill, label in enumerate(labels):
             ell = label['ells']
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
             wtheory_nobao_pole = wtheory_nobao.get(**label)
             std = self.covariance.at.observable.get(**label).std()
             x = data_pole.coords('k')
-            color = f'C{ell_idx:d}'
-            lax[ell_idx].errorbar(x, x * (data_pole.value() - wtheory_nobao_pole.value()),
+            color = f'C{ill:d}'
+            lax[ill].errorbar(x, x * (data_pole.value() - wtheory_nobao_pole.value()),
                                   yerr=x * std, color=color, linestyle='none', marker='o')
-            lax[ell_idx].plot(x, x * (wtheory_pole.value() - wtheory_nobao_pole.value()), color=color)
-            lax[ell_idx].set_ylabel(rf'$k \Delta P_{{{ell:d}}}(k)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]')
-            lax[ell_idx].grid(True)
+            lax[ill].plot(x, x * (wtheory_pole.value() - wtheory_nobao_pole.value()), color=color)
+            lax[ill].set_ylabel(rf'$k \Delta P_{{{ell:d}}}(k)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]')
+            lax[ill].grid(True)
         lax[-1].set_xlabel(r'$k$ [$h/\mathrm{Mpc}$]')
         return fig
 
@@ -441,9 +441,9 @@ class Correlation2PolesObservable(Calculator):
         labels = self.data.labels()
         if len(kw_theory) != len(labels):
             kw_theory = [{key: value for key, value in kw_theory[0].items()
-                          if key != 'label' or ell_idx == 0}
-                         for ell_idx in range(len(labels))]
-        kw_theory = [{'color': f'C{ell_idx:d}', **kw} for ell_idx, kw in enumerate(kw_theory)]
+                          if key != 'label' or ill == 0}
+                         for ill in range(len(labels))]
+        kw_theory = [{'color': f'C{ill:d}', **kw} for ill, kw in enumerate(kw_theory)]
 
         if fig is None:
             height_ratios = [max(len(labels), 3)] + [1] * len(labels)
@@ -458,7 +458,7 @@ class Correlation2PolesObservable(Calculator):
             show_legend = False
 
         wtheory = self.data.clone(value=np.asarray(self.flattheory))
-        for ell_idx, label in enumerate(labels):
+        for ill, label in enumerate(labels):
             ell = label['ells']
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
@@ -466,19 +466,19 @@ class Correlation2PolesObservable(Calculator):
             std = self.covariance.at.observable.get(**label).std()
             scale = x ** 2
             lax[0].errorbar(x, scale * data_pole.value(), yerr=scale * std,
-                            color=f'C{ell_idx:d}', linestyle='none', marker='o',
+                            color=f'C{ill:d}', linestyle='none', marker='o',
                             label=rf'$\ell = {ell}$')
-            lax[0].plot(x, scale * wtheory_pole.value(), **kw_theory[ell_idx])
-        for ell_idx, label in enumerate(labels):
+            lax[0].plot(x, scale * wtheory_pole.value(), **kw_theory[ill])
+        for ill, label in enumerate(labels):
             ell = label['ells']
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
             std = self.covariance.at.observable.get(**label).std()
-            lax[ell_idx + 1].plot(x, (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ell_idx])
-            lax[ell_idx + 1].set_ylim(-4, 4)
+            lax[ill + 1].plot(x, (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ill])
+            lax[ill + 1].set_ylim(-4, 4)
             for offset in [-2., 2.]:
-                lax[ell_idx + 1].axhline(offset, color='k', linestyle='--')
-            lax[ell_idx + 1].set_ylabel(rf'$\Delta \xi_{{{ell}}} / \sigma_{{\xi_{{{ell}}}}}$')
+                lax[ill + 1].axhline(offset, color='k', linestyle='--')
+            lax[ill + 1].set_ylabel(rf'$\Delta \xi_{{{ell}}} / \sigma_{{\xi_{{{ell}}}}}$')
 
         for ax in lax:
             ax.grid(True)
@@ -524,7 +524,7 @@ class Correlation2PolesObservable(Calculator):
         wtheory = self.data.clone(value=np.asarray(self.flattheory))
         wtheory_nobao = self.data.clone(value=_compute_flattheory_nobao(self))
 
-        for ell_idx, label in enumerate(labels):
+        for ill, label in enumerate(labels):
             ell = label['ells']
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
@@ -532,12 +532,12 @@ class Correlation2PolesObservable(Calculator):
             std = self.covariance.at.observable.get(**label).std()
             x = data_pole.coords('s')
             scale = x ** 2
-            color = f'C{ell_idx:d}'
-            lax[ell_idx].errorbar(x, scale * (data_pole.value() - wtheory_nobao_pole.value()),
+            color = f'C{ill:d}'
+            lax[ill].errorbar(x, scale * (data_pole.value() - wtheory_nobao_pole.value()),
                                   yerr=scale * std, color=color, linestyle='none', marker='o')
-            lax[ell_idx].plot(x, scale * (wtheory_pole.value() - wtheory_nobao_pole.value()), color=color)
-            lax[ell_idx].set_ylabel(rf'$s^2 \Delta \xi_{{{ell:d}}}(s)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]')
-            lax[ell_idx].grid(True)
+            lax[ill].plot(x, scale * (wtheory_pole.value() - wtheory_nobao_pole.value()), color=color)
+            lax[ill].set_ylabel(rf'$s^2 \Delta \xi_{{{ell:d}}}(s)$ [$(\mathrm{{Mpc}}/h)^{{2}}$]')
+            lax[ill].grid(True)
         lax[-1].set_xlabel(r'$s$ [$\mathrm{Mpc}/h$]')
         return fig
 
@@ -639,9 +639,9 @@ class Spectrum3PolesObservable(Calculator):
         labels = self.data.labels()
         if len(kw_theory) != len(labels):
             kw_theory = [{key: value for key, value in kw_theory[0].items()
-                          if key != 'label' or ell_idx == 0}
-                         for ell_idx in range(len(labels))]
-        kw_theory = [{'color': f'C{ell_idx:d}', **kw} for ell_idx, kw in enumerate(kw_theory)]
+                          if key != 'label' or ill == 0}
+                         for ill in range(len(labels))]
+        kw_theory = [{'color': f'C{ill:d}', **kw} for ill, kw in enumerate(kw_theory)]
 
         if fig is None:
             height_ratios = [max(len(labels), 3)] + [1] * len(labels)
@@ -657,7 +657,8 @@ class Spectrum3PolesObservable(Calculator):
 
         wtheory = self.data.clone(value=np.asarray(self.flattheory))
         xlabel = ylabel = None
-        for ell_idx, label in enumerate(labels):
+        xx = []
+        for ill, label in enumerate(labels):
             ell = label['ells']
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
@@ -676,21 +677,22 @@ class Spectrum3PolesObservable(Calculator):
                     x = np.arange(data_pole.size)
                     xlabel = r'triangle index'
                 ylabel = r'$k^2 B_{\ell}(k, k)$ [$(\mathrm{Mpc}/h)^4$]'
+            xx.append(x)
             std = self.covariance.at.observable.get(**label).std()
             lax[0].errorbar(x, scale * data_pole.value(), yerr=scale * std,
-                            color=kw_theory[ell_idx]['color'], linestyle='none', marker='o',
+                            color=kw_theory[ill]['color'], linestyle='none', marker='o',
                             label=rf'$\ell = {ell}$')
-            lax[0].plot(x, scale * wtheory_pole.value(), **kw_theory[ell_idx])
-        for ell_idx, label in enumerate(labels):
+            lax[0].plot(x, scale * wtheory_pole.value(), **kw_theory[ill])
+        for ill, label in enumerate(labels):
             ell = label['ells']
             data_pole = self.data.get(**label)
             wtheory_pole = wtheory.get(**label)
             std = self.covariance.at.observable.get(**label).std()
-            lax[ell_idx + 1].plot(x, (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ell_idx])
-            lax[ell_idx + 1].set_ylim(-4, 4)
+            lax[ill + 1].plot(xx[ill], (data_pole.value() - wtheory_pole.value()) / std, **kw_theory[ill])
+            lax[ill + 1].set_ylim(-4, 4)
             for offset in [-2., 2.]:
-                lax[ell_idx + 1].axhline(offset, color='k', linestyle='--')
-            lax[ell_idx + 1].set_ylabel(rf'$\Delta B_{{{ell}}} / \sigma_{{B_{{{ell}}}}}$')
+                lax[ill + 1].axhline(offset, color='k', linestyle='--')
+            lax[ill + 1].set_ylabel(rf'$\Delta B_{{{ell}}} / \sigma_{{B_{{{ell}}}}}$')
 
         for ax in lax:
             ax.grid(True)

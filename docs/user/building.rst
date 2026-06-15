@@ -11,16 +11,12 @@ Only strict requirements are:
   - scipy
   - pyyaml
   - mpi4py
+  - jax
   - cosmoprimo (currently with pyclass to compute DESI fiducial cosmology)
-
-Should be made optional in the future:
-  - mpi4py
-  - pyclass (by extending TabulatedDESI to power spectra)
 
 Extra requirements are:
 
   * plotting: tabulate for nice tables; getdist, anesthetic to make nice contour plots
-  * jax: for automatic differentiation
 
 pip
 ---
@@ -30,7 +26,7 @@ To install **desilike**, simply run::
 
 If you want to install extra requirements, run::
 
-  python -m pip install git+https://github.com/cosmodesi/desilike#egg=desilike[plotting,jax]
+  python -m pip install git+https://github.com/cosmodesi/desilike#egg=desilike[plotting]
 
 git
 ---

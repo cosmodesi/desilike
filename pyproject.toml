@@ -18,6 +18,8 @@ dependencies = [
     "scipy",
     "pyyaml",
     "mpi4py",
+    "jax",
+    "interpax",
     "cosmoprimo @ git+https://github.com/cosmodesi/cosmoprimo",
     "lsstypes @ git+https://github.com/adematti/lsstypes"]
 
@@ -43,13 +45,12 @@ plotting = [
     "tabulate",
     "getdist",
     "anesthetic"]
-jax = [
-    "numpy>=1.25",
-    "jax",
-    "interpax"]
 
 [project.urls]
 Home = "https://desilike.readthedocs.io/en/latest/"
+
+[tool.pytest.ini_options]
+testpaths = ["desilike"]
 
 [tool.flit]
 sdist.exclude = ["doc", ".gitignore", ".github", ".readthedocs.yaml"]

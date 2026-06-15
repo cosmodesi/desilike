@@ -4,7 +4,7 @@ BAO power spectrum template for galaxy clustering.
 Classes
 -------
 CosmoprimoCosmology
-    ExternalCalculator wrapping a cosmoprimo Boltzmann call with free cosmological parameters.
+    Calculator wrapping a cosmoprimo Boltzmann call with free cosmological parameters.
 BAOSpectrum2Template
     Fiducial-cosmology BAO template: power spectra and AP distances computed once from
     cosmoprimo at compile time; scaled at evaluation time by free AP and growth-rate params.
@@ -18,7 +18,7 @@ DirectSpectrum2Template
 import numpy as np
 import jax.numpy as jnp
 
-from ...base import Calculator, ExternalCalculator
+from ...base import Calculator
 from ...parameter import Parameter, VariableCollection
 from ..primordial_cosmology import CosmoprimoCosmology, _get_fiducial
 from ._multitracer import propose_params_multitracer, assign_params
@@ -467,6 +467,8 @@ class DirectSpectrum2Template(Spectrum2Template):
         if cosmo is None:
             cosmo = CosmoprimoCosmology(engine=engine, fiducial=fiducial)
         self.cosmo = cosmo
+        # Inherit external from cosmo
+        self._is_external = self.cosmo._is_external
 
     def __post_init__(self, k=None, z=1., fiducial='DESI', engine='camb', with_now=False, only_now=False, cosmo=None):
         # Non-node setup: fiducial distances and fiducial PK (fixed at compile time).

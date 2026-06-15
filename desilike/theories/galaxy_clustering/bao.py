@@ -28,7 +28,7 @@ import jax.numpy as jnp
 import interpax
 from scipy import special, integrate
 
-from ...base import Calculator, ExternalCalculator
+from ...base import Calculator
 from ...parameter import Parameter, VariableCollection
 from .template import BAOSpectrum2Template
 from ._multitracer import propose_params_multitracer, assign_params

@@ -19,8 +19,27 @@ class _Prior:
     def __init__(self, prior_logpdf, prior_rvs, prior_ppf, ndim):
         self._logpdf = prior_logpdf
         self._rvs = prior_rvs
-        lo = prior_ppf(np.zeros((1, ndim), dtype='f8')).ravel()
-        hi = prior_ppf(np.ones((1, ndim), dtype='f8')).ravel()
+        # Compute the axis-aligned bounding box by evaluating prior_ppf at all corners
+        # of the unit cube.  ppf(zeros) and ppf(ones) only cover two corners, which
+        # is incorrect when Cholesky whitening is active (off-diagonal terms tilt the
+        # parameter box so the extremes occur at mixed corners).
+        # For large ndim fall back to random corner sampling.
+        NDIM = 15
+        if ndim <= NDIM:
+            import itertools
+            eps = 1e-6
+            corners = np.array(list(itertools.product(*([[eps, 1. - eps]] * ndim))), dtype='f8')
+        else:
+            rng_tmp = np.random.default_rng(0)
+            corners = np.vstack([rng_tmp.random((10000, ndim)),
+                                 np.zeros((1, ndim)), np.ones((1, ndim))]).astype('f8')
+        images = prior_ppf(corners)    # (n_corners, ndim)
+        lo = images.min(axis=0)
+        hi = images.max(axis=0)
+        if ndim > NDIM:
+            margin = 0.1 * np.abs(hi - lo)
+            lo -= margin
+            hi += margin
         self._bounds = np.column_stack([lo, hi])   # (ndim, 2)
         self._ndim = ndim
 

@@ -310,6 +310,64 @@ def test_kernel_multiple_chains(likelihood, key):
             assert np.allclose(np.asarray(chain_10['a']), np.asarray(chain_20['a'])[:10])
 
 
+# ── PocoMC Gaussian prior ─────────────────────────────────────────────────────
+
+@pytest.mark.mpi_skip
+@pytest.mark.parametrize('rescale,use_prior', [
+    (False, False),
+    (True,  False),
+    ('diag', False),
+    ('full', False),
+    (False, True),
+    (True,  True),
+    ('diag', True),
+    ('full', True),
+])
+def test_pocomc_gaussian_prior(rescale, use_prior):
+    """PocoMC runs without error under all rescale × prior combinations.
+
+    Parameters have Gaussian priors with hard bounds to exercise both the
+    Gaussian-prior branch and the per-parameter bound clipping.
+    """
+    pytest.importorskip('pocomc')
+    from desilike.samples import Covariance
+
+    # Two parameters: both Gaussian with hard bounds (exercises clipping in the PPF).
+    a = Parameter('a', prior=dict(dist='norm', limits=[-1., 2.], loc=0.4, scale=0.1),
+                  ref=dict(dist='norm', loc=0.4, scale=0.05), value=0.4)
+    b = Parameter('b', prior=dict(dist='norm', limits=[-5., 5.], loc=0.6, scale=0.4),
+                  ref=dict(dist='norm', loc=0.6, scale=0.1), value=0.6)
+
+    class Likelihood(BaseGaussianLikelihood):
+        def __init__(self, a, b):
+            self.a = a
+            self.b = b
+            self.flatdata = jnp.array([0.4, 0.6])
+            self.precision = jnp.diag(jnp.array([1., 1.]))
+
+        def __call__(self):
+            self.flattheory = jnp.array([self.a, self.b])
+            return super().__call__()
+
+    graph = compile(Posterior(Likelihood(a, b), Prior(a, b)))
+
+    prior_cov = None
+    if use_prior:
+        prior_cov = Covariance(np.diag([0.15**2, 0.5**2]), params=[a, b])
+
+    covariance = None
+    if rescale in ('diag', 'full'):
+        # Off-diagonal entry triggers the Cholesky path for 'full'.
+        cov_arr = np.array([[0.08**2, 0.5 * 0.08 * 0.35],
+                            [0.5 * 0.08 * 0.35, 0.35**2]])
+        covariance = Covariance(cov_arr, params=[a, b])
+
+    sampler = samplers.Sampler(
+        graph, kernel=samplers.PocoMC(n_effective=100, n_active=50),
+        rng=42, rescale=rescale, covariance=covariance, prior=prior_cov)
+    sampler.run(n_total=50, n_evidence=0)
+
+
 # ── MH fast-slow decomposition ────────────────────────────────
 
 @pytest.mark.mpi_skip

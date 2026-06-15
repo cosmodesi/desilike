@@ -244,9 +244,10 @@ class PopulationKernel:
         likelihood : tuple of (likelihood_logpdf, likelihood_logpdf_with_derived)
             Pool-saved callables returning ``log_l`` and ``(log_l, derived)``
             respectively for a single rescaled-space ``(ndim,)`` sample.
-        prior : tuple of (prior_logpdf, prior_ppf)
+        prior : tuple of (prior_logpdf, prior_ppf, prior_bounds)
             ``prior_logpdf``: pool-aware log-prior callable.
             ``prior_ppf``: unit-hypercube → parameter-space transform.
+            ``prior_bounds``: ``(ndim, 2)`` array of lower/upper bounds in rescaled space.
         rng : numpy.random.Generator
             Random-number generator (main process).
         **context : dict
@@ -568,18 +569,6 @@ class BaseSampler(ABC):
         # log det = 2 * sum(log(diag(L)))
         log_norm = 0.5 * n_gauss * np.log(2. * np.pi) + np.sum(np.log(np.diag(L_gauss)))
 
-        # ── hard bounds in original space ─────────────────────────────────────
-        lo_parts, hi_parts = [], []
-        for param, size, col in gauss_param_sizes:
-            if param.prior is not None:
-                lo_val, hi_val = param.prior.limits
-            else:
-                lo_val, hi_val = -np.inf, np.inf
-            lo_parts.append(np.full(size, lo_val))
-            hi_parts.append(np.full(size, hi_val))
-        gauss_lo_orig = jnp.array(np.concatenate(lo_parts))
-        gauss_hi_orig = jnp.array(np.concatenate(hi_parts))
-
         # ── flat column indices in the ndim vector for Gaussian params ────────
         gauss_flat_cols = np.concatenate([np.arange(col, col + size)
                                           for param, size, col in gauss_param_sizes]).astype('i4')
@@ -589,8 +578,6 @@ class BaseSampler(ABC):
         self._gauss_L_orig       = jnp.array(L_gauss)
         self._gauss_precision    = jnp.array(precision)
         self._gauss_log_norm     = float(log_norm)
-        self._gauss_lo_orig      = gauss_lo_orig
-        self._gauss_hi_orig      = gauss_hi_orig
         self._gauss_flat_cols    = gauss_flat_cols
         self._indiv_param_sizes  = indiv_param_sizes
 
@@ -675,27 +662,58 @@ class BaseSampler(ABC):
         for name, core, returns_tuple in specs:
             setattr(self, name, self.pool.save_function(_batched(core, returns_tuple), name))
 
+    @property
+    def prior_bounds(self):
+        """Axis-aligned bounding box of the prior support in whitened (rescaled) parameter space.
+
+        Returns an ``(ndim, 2)`` array; column 0 is lower bounds, column 1 is upper bounds.
+        Exact for diagonal (or no) rescaling.  For full Cholesky whitening, computed
+        analytically as the linear image of the original-space parameter bounding box —
+        O(ndim^2), no sampling required.
+        """
+        lo_orig = np.full(self.ndim, -1e38)
+        hi_orig = np.full(self.ndim, 1e38)
+        for param, size, col in _param_sizes(self.varied_params):
+            if param.prior is not None:
+                lo_val, hi_val = param.prior.limits
+                lo_orig[col:col + size] = np.clip(lo_val, -1e38, 1e38)
+                hi_orig[col:col + size] = np.clip(hi_val, -1e38, 1e38)
+
+        if self._L_inv is None:
+            # Diagonal (or unit) scaling: y = (x - loc) / scale — exact, component-wise.
+            lo_white = (lo_orig - self._loc) / self._scale
+            hi_white = (hi_orig - self._loc) / self._scale
+        else:
+            # Full Cholesky: y = (x - loc) @ L_inv.T, so y_j = sum_k L_inv[j,k] (x_k - loc_k).
+            # The bounding box of a linear image of the box [lo_orig, hi_orig] is:
+            #   lo_white[j] = sum_k max(B[j,k], 0) * delta_lo[k] + min(B[j,k], 0) * delta_hi[k]
+            # where B = L_inv and delta = (orig - loc).  Clipping to ±1e38 above keeps finite.
+            delta_lo = lo_orig - self._loc
+            delta_hi = hi_orig - self._loc
+            B_pos = np.maximum(self._L_inv, 0.)
+            B_neg = np.minimum(self._L_inv, 0.)
+            lo_white = B_pos @ delta_lo + B_neg @ delta_hi
+            hi_white = B_pos @ delta_hi + B_neg @ delta_lo
+
+        return np.column_stack([lo_white, hi_white])
+
     def _prior_ppf_one(self, sample):
         """Map a unit-cube sample ``(ndim,)`` to *rescaled* parameter space via each prior's PPF.
 
         When a Gaussian prior is set (via :meth:`_set_gaussian_prior`), the first
-        ``n_gauss`` unit-cube dimensions are mapped through the joint Cholesky PPF of
-        the Gaussian (clipped to hard bounds), and the remaining dimensions map each
-        non-Gaussian param through its individual prior PPF.  Without a Gaussian prior,
-        every param uses its individual prior PPF.  Either way the result is transformed
-        to the sampler's rescaled working space via :meth:`_backward`.
-
-        Clipping at u=0/1 produces finite hard-bound values, which PocoMC and Dynesty
-        use to determine the valid sampling volume.
+        ``n_gauss`` unit-cube dimensions are mapped through the unconstrained joint
+        Cholesky PPF of the Gaussian, and the remaining dimensions map each non-Gaussian
+        param through its individual prior PPF.  Without a Gaussian prior, every param
+        uses its individual prior PPF.  Either way the result is transformed to the
+        sampler's rescaled working space via :meth:`_backward`.
         """
         if self._gauss_mu_orig is not None:
             n_gauss = self._gauss_flat_cols.size
-            # Gaussian group: Cholesky PPF in original space, clipped to hard bounds.
+            # Gaussian group: Cholesky PPF in original space (unconstrained).
             # Clip z to a large finite range before the matmul to avoid 0*inf=NaN when
             # L has zero entries (diagonal L) and u=0/1 gives z=±inf.
             z = jnp.clip(jax.scipy.stats.norm.ppf(sample[:n_gauss]), -1e38, 1e38)
             x_gauss = self._gauss_mu_orig + self._gauss_L_orig @ z
-            x_gauss = jnp.clip(x_gauss, self._gauss_lo_orig, self._gauss_hi_orig)
             x_orig = jnp.zeros(self.ndim).at[self._gauss_flat_cols].set(x_gauss)
             # Individual group: per-param PPF
             u_col = n_gauss
@@ -713,20 +731,18 @@ class BaseSampler(ABC):
     def _prior_logpdf_one(self, sample):
         """Return the log-prior for a single rescaled-space ``(ndim,)`` sample.
 
-        When a Gaussian prior is set, evaluates the multivariate-Gaussian logpdf for
-        the Gaussian-group params (returning ``-inf`` if any hard bound is violated)
-        and sums the individual per-param logpdfs for the remaining params.
+        When a Gaussian prior is set, evaluates the unconstrained multivariate-Gaussian
+        logpdf for the Gaussian-group params and sums the individual per-param logpdfs
+        for the remaining params.
         Without a Gaussian prior, evaluates each original prior's logpdf after mapping
         to original space via :meth:`_forward`.
         """
         x_orig = self._forward(sample)
         if self._gauss_mu_orig is not None:
-            # Gaussian group
+            # Gaussian group: unconstrained multivariate Gaussian logpdf
             x_gauss = x_orig[self._gauss_flat_cols]
-            in_bounds = jnp.all((x_gauss >= self._gauss_lo_orig) & (x_gauss <= self._gauss_hi_orig))
             d = x_gauss - self._gauss_mu_orig
             log_gauss = -0.5 * (d @ self._gauss_precision @ d) - self._gauss_log_norm
-            log_gauss = jnp.where(in_bounds, log_gauss, -jnp.inf)
             # Individual group
             result = log_gauss
             for param, size, col in self._indiv_param_sizes:
@@ -1297,7 +1313,7 @@ class PopulationSampler(BaseSampler):
             self._set_gaussian_prior(prior)
         self.kernel.init(
             (self.likelihood_logpdf, self.likelihood_logpdf_with_derived),
-            (self.prior_logpdf, self.prior_ppf),
+            (self.prior_logpdf, self.prior_ppf, self.prior_bounds),
             self.rng,
             pool=self.pool, ndim=self.ndim, output_dir=self.output_dir,
             params=self._transformed_params,

@@ -16,40 +16,36 @@ from .base import PopulationKernel, update_kwargs
 class _Prior:
     """Prior wrapper for ``pocoMC`` built from prior callables."""
 
-    def __init__(self, prior_logpdf, prior_ppf, ndim, rng):
+    def __init__(self, prior_logpdf, prior_ppf, prior_bounds, ndim, rng):
         self._logpdf = prior_logpdf
         self._ppf = prior_ppf
         self._rng = rng
-        # Compute the axis-aligned bounding box by evaluating prior_ppf at all corners
-        # of the unit cube.  ppf(zeros) and ppf(ones) only cover two corners, which
-        # is incorrect when Cholesky whitening is active (off-diagonal terms tilt the
-        # parameter box so the extremes occur at mixed corners).
-        # For large ndim fall back to random corner sampling.
-        NDIM = 15
-        if ndim <= NDIM:
-            import itertools
-            eps = 1e-6
-            corners = np.array(list(itertools.product(*([[eps, 1. - eps]] * ndim))), dtype='f8')
-        else:
-            rng_tmp = np.random.default_rng(0)
-            corners = np.vstack([rng_tmp.random((10000, ndim)),
-                                 np.zeros((1, ndim)), np.ones((1, ndim))]).astype('f8')
-        images = self._ppf(corners)    # (n_corners, ndim)
-        lo = images.min(axis=0)
-        hi = images.max(axis=0)
-        if ndim > NDIM:
-            margin = 0.1 * np.abs(hi - lo)
-            lo -= margin
-            hi += margin
-        self._bounds = np.column_stack([lo, hi])   # (ndim, 2)
+        self._bounds = prior_bounds   # (ndim, 2)
         self._ndim = ndim
 
     def logpdf(self, x):
-        return np.asarray([result for result in self._logpdf(x)])
+        x = np.asarray(x)
+        log_p = np.asarray([result for result in self._logpdf(x)])
+        in_bounds = np.all((x >= self._bounds[:, 0]) & (x <= self._bounds[:, 1]), axis=1)
+        log_p[~in_bounds] = -np.inf
+        return log_p
 
     def rvs(self, size=1):
-        u = self._rng.random((size, self._ndim))
-        return self._ppf(u)
+        lo = self._bounds[:, 0]
+        hi = self._bounds[:, 1]
+        accepted = []
+        max_tries = 100
+        for _ in range(max_tries):
+            u = self._rng.random((size * 2, self._ndim))
+            candidates = np.asarray(self._ppf(u))
+            mask = np.all((candidates >= lo) & (candidates <= hi), axis=1)
+            accepted.extend(candidates[mask])
+            if len(accepted) >= size:
+                return np.array(accepted[:size])
+        raise RuntimeError(
+            f'_Prior.rvs: failed to collect {size} in-bounds samples after {max_tries} attempts '
+            f'(collected {len(accepted)} so far).'
+        )
 
     @property
     def bounds(self):
@@ -104,7 +100,7 @@ class PocoMC(PopulationKernel):
 
     def init(self, likelihood, prior, rng, **context):
         _, self._likelihood_logpdf_with_derived = likelihood
-        self._prior_logpdf, self._prior_ppf = prior
+        self._prior_logpdf, self._prior_ppf, self._prior_bounds = prior
         self._rng = rng
         self._pool = context['pool']
         self._ndim = context['ndim']
@@ -116,7 +112,7 @@ class PocoMC(PopulationKernel):
 
         if self._pool.main:
             if self._sampler is None:
-                prior_obj = _Prior(self._prior_logpdf, self._prior_ppf, self._ndim, self._rng)
+                prior_obj = _Prior(self._prior_logpdf, self._prior_ppf, self._prior_bounds, self._ndim, self._rng)
                 init_kwargs = update_kwargs(
                     dict(**self._kwargs), 'pocoMC',
                     prior=prior_obj, likelihood=self._likelihood_logpdf_with_derived,

@@ -461,5 +461,5 @@ if __name__ == '__main__':
         return graph
 
     likelihood = likelihood()
-    sampler = samplers.Sampler(likelihood, kernel=samplers.Emcee(nwalkers=8), rng=42)
-    results = sampler.run(**_MCMC_MIN_STEPS)
+    sampler = samplers.Sampler(likelihood, kernel=samplers.PocoMC(n_effective=200, n_active=100), rng=42)
+    results = sampler.run(n_total=100, n_evidence=100)

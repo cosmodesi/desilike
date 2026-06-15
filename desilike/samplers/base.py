@@ -244,9 +244,8 @@ class PopulationKernel:
         likelihood : tuple of (likelihood_logpdf, likelihood_logpdf_with_derived)
             Pool-saved callables returning ``log_l`` and ``(log_l, derived)``
             respectively for a single rescaled-space ``(ndim,)`` sample.
-        prior : tuple of (prior_logpdf, prior_rvs, prior_ppf)
+        prior : tuple of (prior_logpdf, prior_ppf)
             ``prior_logpdf``: pool-aware log-prior callable.
-            ``prior_rvs``: draw ``size`` samples from the prior.
             ``prior_ppf``: unit-hypercube → parameter-space transform.
         rng : numpy.random.Generator
             Random-number generator (main process).
@@ -552,23 +551,11 @@ class BaseSampler(ABC):
         if not gauss_param_sizes:
             raise ValueError('None of the varied parameters are present in the prior Covariance.')
 
-        # ── mean in original space ────────────────────────────────────────────
-        # Map param names to their flat position in prior.center
-        prior_cumsizes = np.cumsum([0] + [max(1, int(np.prod(p.shape))) for p in prior.params])
-        prior_name_to_slice = {p.name: slice(int(prior_cumsizes[idx]), int(prior_cumsizes[idx + 1]))
-                                for idx, p in enumerate(prior.params)}
-        prior_center = prior.center
-        mu_parts = []
-        for param, size, col in gauss_param_sizes:
-            val = prior_center[prior_name_to_slice[param.name]]
-            if val.size == 1 and size > 1:
-                val = np.full(size, float(val[0]))
-            mu_parts.append(val)
-        mu_gauss_orig = np.concatenate(mu_parts)   # (n_gauss,)
-
-        # ── covariance in original space ──────────────────────────────────────
+        # ── covariance and mean in original space ──────────────────────────────────────
         gauss_params_list = [param for param, size, col in gauss_param_sizes]
-        C_gauss_orig = prior.select(gauss_params_list).value  # (n_gauss, n_gauss)
+        gauss_prior = prior.select(gauss_params_list)
+        C_gauss_orig = gauss_prior.value  # (n_gauss, n_gauss)
+        mu_gauss_orig = gauss_prior.center  # n_gauss
 
         # ── Cholesky of C_gauss_orig ──────────────────────────────────────────
         try:
@@ -687,11 +674,6 @@ class BaseSampler(ABC):
                  ('likelihood_logpdf_with_derived', self._likelihood_logpdf_with_derived_one, True)]
         for name, core, returns_tuple in specs:
             setattr(self, name, self.pool.save_function(_batched(core, returns_tuple), name))
-
-    def prior_rvs(self, size=1):
-        """Return ``(size, ndim)`` samples drawn from the prior in rescaled space."""
-        u = self.rng.uniform(size=(size, self.ndim))
-        return jax.jit(jax.vmap(self._prior_ppf_one))(u)
 
     def _prior_ppf_one(self, sample):
         """Map a unit-cube sample ``(ndim,)`` to *rescaled* parameter space via each prior's PPF.
@@ -1315,7 +1297,7 @@ class PopulationSampler(BaseSampler):
             self._set_gaussian_prior(prior)
         self.kernel.init(
             (self.likelihood_logpdf, self.likelihood_logpdf_with_derived),
-            (self.prior_logpdf, self.prior_rvs, self.prior_ppf),
+            (self.prior_logpdf, self.prior_ppf),
             self.rng,
             pool=self.pool, ndim=self.ndim, output_dir=self.output_dir,
             params=self._transformed_params,

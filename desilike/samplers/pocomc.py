@@ -16,9 +16,10 @@ from .base import PopulationKernel, update_kwargs
 class _Prior:
     """Prior wrapper for ``pocoMC`` built from prior callables."""
 
-    def __init__(self, prior_logpdf, prior_rvs, prior_ppf, ndim):
+    def __init__(self, prior_logpdf, prior_ppf, ndim, rng):
         self._logpdf = prior_logpdf
-        self._rvs = prior_rvs
+        self._ppf = prior_ppf
+        self._rng = rng
         # Compute the axis-aligned bounding box by evaluating prior_ppf at all corners
         # of the unit cube.  ppf(zeros) and ppf(ones) only cover two corners, which
         # is incorrect when Cholesky whitening is active (off-diagonal terms tilt the
@@ -33,7 +34,7 @@ class _Prior:
             rng_tmp = np.random.default_rng(0)
             corners = np.vstack([rng_tmp.random((10000, ndim)),
                                  np.zeros((1, ndim)), np.ones((1, ndim))]).astype('f8')
-        images = prior_ppf(corners)    # (n_corners, ndim)
+        images = self._ppf(corners)    # (n_corners, ndim)
         lo = images.min(axis=0)
         hi = images.max(axis=0)
         if ndim > NDIM:
@@ -47,7 +48,8 @@ class _Prior:
         return np.asarray([result for result in self._logpdf(x)])
 
     def rvs(self, size=1):
-        return self._rvs(size)
+        u = self._rng.random((size, self._ndim))
+        return self._ppf(u)
 
     @property
     def bounds(self):
@@ -102,7 +104,7 @@ class PocoMC(PopulationKernel):
 
     def init(self, likelihood, prior, rng, **context):
         _, self._likelihood_logpdf_with_derived = likelihood
-        self._prior_logpdf, self._prior_rvs, self._prior_ppf = prior
+        self._prior_logpdf, self._prior_ppf = prior
         self._rng = rng
         self._pool = context['pool']
         self._ndim = context['ndim']
@@ -114,7 +116,7 @@ class PocoMC(PopulationKernel):
 
         if self._pool.main:
             if self._sampler is None:
-                prior_obj = _Prior(self._prior_logpdf, self._prior_rvs, self._prior_ppf, self._ndim)
+                prior_obj = _Prior(self._prior_logpdf, self._prior_ppf, self._ndim, self._rng)
                 init_kwargs = update_kwargs(
                     dict(**self._kwargs), 'pocoMC',
                     prior=prior_obj, likelihood=self._likelihood_logpdf_with_derived,

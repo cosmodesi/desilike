@@ -671,13 +671,13 @@ class BaseSampler(ABC):
         analytically as the linear image of the original-space parameter bounding box —
         O(ndim^2), no sampling required.
         """
-        lo_orig = np.full(self.ndim, -1e38)
-        hi_orig = np.full(self.ndim, 1e38)
+        lo_orig = np.full(self.ndim, -np.inf)
+        hi_orig = np.full(self.ndim, np.inf)
         for param, size, col in _param_sizes(self.varied_params):
             if param.prior is not None:
                 lo_val, hi_val = param.prior.limits
-                lo_orig[col:col + size] = np.clip(lo_val, -1e38, 1e38)
-                hi_orig[col:col + size] = np.clip(hi_val, -1e38, 1e38)
+                lo_orig[col:col + size] = lo_val
+                hi_orig[col:col + size] = hi_val
 
         if self._L_inv is None:
             # Diagonal (or unit) scaling: y = (x - loc) / scale — exact, component-wise.
@@ -687,13 +687,13 @@ class BaseSampler(ABC):
             # Full Cholesky: y = (x - loc) @ L_inv.T, so y_j = sum_k L_inv[j,k] (x_k - loc_k).
             # The bounding box of a linear image of the box [lo_orig, hi_orig] is:
             #   lo_white[j] = sum_k max(B[j,k], 0) * delta_lo[k] + min(B[j,k], 0) * delta_hi[k]
-            # where B = L_inv and delta = (orig - loc).  Clipping to ±1e38 above keeps finite.
+            # where B = L_inv and delta = (orig - loc).  np.where guards against 0 * ±inf = nan.
             delta_lo = lo_orig - self._loc
             delta_hi = hi_orig - self._loc
             B_pos = np.maximum(self._L_inv, 0.)
             B_neg = np.minimum(self._L_inv, 0.)
-            lo_white = B_pos @ delta_lo + B_neg @ delta_hi
-            hi_white = B_pos @ delta_hi + B_neg @ delta_lo
+            lo_white = (np.where(B_pos == 0., 0., B_pos * delta_lo) + np.where(B_neg == 0., 0., B_neg * delta_hi)).sum(axis=-1)
+            hi_white = (np.where(B_pos == 0., 0., B_pos * delta_hi) + np.where(B_neg == 0., 0., B_neg * delta_lo)).sum(axis=-1)
 
         return np.column_stack([lo_white, hi_white])
 

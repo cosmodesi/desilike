@@ -456,7 +456,7 @@ def add_1d_profile(profiles, param, ax=None, **kwargs):
     if err is not None and name in err:
         std_val = float(np.asarray(err[name]).ravel()[argmax])
     elif cov is not None and name in cov:
-        std_val = float(cov.view([name]).std()[0])
+        std_val = float(cov.select([name]).std()[0])
     else:
         return
 
@@ -538,7 +538,7 @@ def add_2d_contour(profiles, param1, param2, ax=None, cl=(1, 2), color='C0', fil
                 float(np.asarray(best[name1]).ravel()[argmax]),
                 float(np.asarray(best[name2]).ravel()[argmax]),
             ])
-            cov_2x2  = np.asarray(cov.view([name1, name2]))
+            cov_2x2  = np.asarray(cov.select([name1, name2]))
             x1, x2   = _gaussian_2d_ellipse(mean_vec, cov_2x2, nsigma)
 
         if filled:

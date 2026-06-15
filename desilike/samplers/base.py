@@ -471,7 +471,7 @@ class BaseSampler(ABC):
                         in_cov_indices.extend(range(col, col + size))
                         params_in_cov.append(param)
                 if params_in_cov:
-                    sub = covariance.view(params_in_cov, return_type='nparray')
+                    sub = covariance.select(params_in_cov).value
                     ix = np.ix_(in_cov_indices, in_cov_indices)
                     C_full[ix] = sub
                 # Fill diagonal for params absent from the Covariance.
@@ -520,7 +520,7 @@ class BaseSampler(ABC):
         """Build a Gaussian prior from a :class:`~desilike.samples.Covariance` object.
 
         Parameters present in *prior* get a joint multivariate-Gaussian prior centred on
-        ``prior.center`` with covariance ``prior._value``.  Parameters absent from *prior*
+        ``prior.center`` with covariance ``prior.value``.  Parameters absent from *prior*
         keep their existing per-parameter prior (uniform / normal / …).
 
         Hard prior limits from each parameter's prior distribution are always enforced:
@@ -552,9 +552,9 @@ class BaseSampler(ABC):
 
         # ── mean in original space ────────────────────────────────────────────
         # Map param names to their flat position in prior.center
-        prior_cumsizes = np.cumsum([0] + [max(1, int(np.prod(p.shape))) for p in prior._params])
+        prior_cumsizes = np.cumsum([0] + [max(1, int(np.prod(p.shape))) for p in prior.params])
         prior_name_to_slice = {p.name: slice(int(prior_cumsizes[idx]), int(prior_cumsizes[idx + 1]))
-                                for idx, p in enumerate(prior._params)}
+                                for idx, p in enumerate(prior.params)}
         prior_center = prior.center
         mu_parts = []
         for param, size, col in gauss_param_sizes:
@@ -566,7 +566,7 @@ class BaseSampler(ABC):
 
         # ── covariance in original space ──────────────────────────────────────
         gauss_params_list = [param for param, size, col in gauss_param_sizes]
-        C_gauss_orig = prior.view(gauss_params_list, return_type='nparray')  # (n_gauss, n_gauss)
+        C_gauss_orig = prior.select(gauss_params_list).value  # (n_gauss, n_gauss)
 
         # ── Cholesky of C_gauss_orig ──────────────────────────────────────────
         try:
@@ -1358,7 +1358,7 @@ def Sampler(posterior, kernel, nparallel=1, chains=None, rng=None, output_dir=No
     prior : Covariance or None
         Optional Gaussian prior for :class:`PopulationSampler` kernels (PocoMC, Dynesty,
         Nautilus, …).  The prior is a multivariate Gaussian centred on ``prior.center``
-        with covariance ``prior._value``, automatically rescaled to the sampler's working
+        with covariance ``prior.value``, automatically rescaled to the sampler's working
         space.  Hard bounds from each parameter's prior distribution are always enforced.
         Ignored for non-:class:`PopulationSampler` kernels.
     """

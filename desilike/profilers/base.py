@@ -724,7 +724,7 @@ class Profiler:
         ])
         center_r = self._backward(best_orig)
 
-        cov_orig = np.asarray(self.profiles.covariance._value)
+        cov_orig = np.asarray(self.profiles.covariance.value)
         interval_dict = {}
 
         for name in param_names:
@@ -833,7 +833,7 @@ class Profiler:
             for name in self.varied_params.names()
         ])
         center_r = self._backward(best_orig)
-        cov_orig = np.asarray(self.profiles.covariance._value)
+        cov_orig = np.asarray(self.profiles.covariance.value)
 
         contour_pairs = {}
         for name1, name2 in param_pairs:

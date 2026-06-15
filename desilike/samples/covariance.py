@@ -35,40 +35,16 @@ def _name_to_pos(params):
     return {param.name: pos for pos, param in enumerate(params)}
 
 
-def _index(matrix_params, subset):
-    """Return flat row/column indices for *subset* within *matrix_params*.
-
-    Parameters
-    ----------
-    matrix_params : VariableCollection
-        The full ordered parameter collection of the matrix.
-    subset : iterable of str or Variable
-        Parameters whose flat indices are requested.
-
-    Returns
-    -------
-    np.ndarray of int32
-    """
-    name_to_pos = _name_to_pos(matrix_params)
-    cumsizes    = np.cumsum([0] + _param_sizes(matrix_params))
-    indices     = []
-    for param in subset:
-        name = param.name if isinstance(param, Variable) else param
-        pos  = name_to_pos[name]
-        indices.append(np.arange(cumsizes[pos], cumsizes[pos + 1], dtype='i4'))
-    return np.concatenate(indices, dtype='i4') if indices else np.array([], dtype='i4')
-
-
 class BaseMatrix:
     """Base class for a named parameter matrix.
 
-    The matrix ``_value`` has shape ``(flat_size, flat_size)`` where
+    The matrix :attr:`value` has shape ``(flat_size, flat_size)`` where
     ``flat_size = sum(max(1, prod(param.shape)) for param in params)``.
     A scalar parameter occupies one row/column; a parameter of shape ``(n,)``
     occupies ``n`` consecutive rows/columns.
 
     Subclasses set ``_fill_value`` to control what is written into the
-    diagonal block when a missing parameter is added via :meth:`view`.
+    diagonal block when a missing parameter is added via :meth:`select`.
     """
 
     _fill_value = np.nan
@@ -86,18 +62,17 @@ class BaseMatrix:
             Free-form metadata.
         """
         if isinstance(params, VariableCollection):
-            self._params = params
+            self.params = params
         else:
-            # Accept plain strings by converting them to Variable objects
             params_list = list(params)
             converted = [Variable(p) if isinstance(p, str) else p for p in params_list]
-            self._params = VariableCollection(converted)
+            self.params = VariableCollection(converted)
         self._value = np.atleast_2d(np.asarray(value, dtype='f8'))
         if self._value.ndim != 2:
             raise ValueError('Matrix value must be 2D')
         if self._value.shape[0] != self._value.shape[1]:
             raise ValueError('Matrix must be square')
-        flat_size = _flat_size(self._params)
+        flat_size = _flat_size(self.params)
         if self._value.shape[0] != flat_size:
             raise ValueError(
                 f'Matrix size ({self._value.shape[0]}) does not match '
@@ -107,82 +82,69 @@ class BaseMatrix:
 
     # ── param access ──────────────────────────────────────────────────────────
 
-    def names(self):
-        """Return parameter names."""
-        return self._params.names()
-
     def __contains__(self, key):
         """Test whether a parameter (name or Variable) is in the matrix."""
-        return key in self._params
+        return key in self.params
 
-    def __len__(self):
-        return len(self._params)
+    # ── select ────────────────────────────────────────────────────────────────
 
-    # ── view / select ─────────────────────────────────────────────────────────
-
-    def view(self, params=None, return_type=None):
+    def select(self, params=None, **kwargs):
         """Return the sub-matrix for *params*.
 
         Parameters
         ----------
         params : str, Variable, list, or None
-            Parameters to include.  ``None`` → all.  A single str/Variable
-            (scalar param) with ``return_type='nparray'`` returns a scalar.
+            Parameters to include.  ``None`` → all (optionally filtered by
+            ``**kwargs`` forwarded to
+            :meth:`~desilike.parameter.VariableCollection.select`).
             Unknown parameters are added as zero off-diagonal blocks with
             :attr:`_fill_value` on the diagonal.
-        return_type : {None, 'nparray'}
-            ``None`` → return a new instance of the same class.
-            ``'nparray'`` → return a plain ``np.ndarray``.
 
         Returns
         -------
-        array or instance of the same class
+        instance of the same class
         """
-        scalar = isinstance(params, (str, Variable))
         if params is None:
-            params = list(self._params)
-        elif scalar:
+            params = self.params.select(**kwargs)
+        if isinstance(params, (str, Variable)):
             params = [params]
         else:
             params = list(params)
 
         # Resolve each requested param to a Variable object.
-        # Params present in self._params keep the stored object (with all attrs);
+        # Params present in self.params keep the stored object (with all attrs);
         # unknown params keep the caller-supplied object if it is a Variable/Parameter
         # (so that .ref, .prior, etc. are preserved), or fall back to a bare
         # Variable(name) placeholder when only a string was given.
         resolved = []
         for p in params:
             name = p.name if isinstance(p, Variable) else p
-            if name in self._params:
-                resolved.append(self._params[name])
+            if name in self.params:
+                resolved.append(self.params[name])
             elif isinstance(p, Variable):
-                resolved.append(p)   # keep caller's Parameter/Variable (has .ref etc.)
+                resolved.append(p)
             else:
                 resolved.append(Variable(name))
 
-        resolved_names   = [p.name for p in resolved]
-        params_in_self   = [p for p in resolved if p.name in self._params]
-        params_not_in_self = [p for p in resolved if p.name not in self._params]
+        resolved_names     = [p.name for p in resolved]
+        params_in_self     = [p for p in resolved if p.name in self.params]
+        params_not_in_self = [p for p in resolved if p.name not in self.params]
 
-        # Name → position helpers (use list index for resolved, dict for self._params)
         resolved_name_to_pos = {name: pos for pos, name in enumerate(resolved_names)}
-        self_name_to_pos     = _name_to_pos(self._params)
+        self_name_to_pos     = _name_to_pos(self.params)
 
-        resolved_sizes   = [max(1, int(np.prod(p.shape))) for p in resolved]
-        cumsizes_new     = np.cumsum([0] + resolved_sizes)
-        cumsizes_self    = np.cumsum([0] + _param_sizes(self._params))
+        resolved_sizes = [max(1, int(np.prod(p.shape))) for p in resolved]
+        cumsizes_new   = np.cumsum([0] + resolved_sizes)
+        cumsizes_self  = np.cumsum([0] + _param_sizes(self.params))
 
         total     = int(cumsizes_new[-1])
         new_value = np.zeros((total, total), dtype='f8')
 
-        # Fill diagonal blocks for unknown params with _fill_value
         for p in params_not_in_self:
             param_pos = resolved_name_to_pos[p.name]
             for flat_idx in range(cumsizes_new[param_pos], cumsizes_new[param_pos + 1]):
                 new_value[flat_idx, flat_idx] = self._fill_value
 
-        # Copy known blocks (row-param × col-param block copy)
         for param in params_in_self:
             param_pos_new  = resolved_name_to_pos[param.name]
             param_pos_self = self_name_to_pos[param.name]
@@ -196,24 +158,17 @@ class BaseMatrix:
                 new_value[np.ix_(row_new, col_new)] = self._value[np.ix_(row_self, col_self)]
 
         new = self.__class__.__new__(self.__class__)
-        new._params = VariableCollection(resolved)
-        new._value  = new_value
-        new.attrs   = dict(self.attrs)
-
-        if return_type == 'nparray':
-            if scalar:
-                # For a single scalar param return a scalar (0-d array)
-                return new_value.squeeze()
-            return new_value
+        new.params = VariableCollection(resolved)
+        new._value = new_value
+        new.attrs  = dict(self.attrs)
         return new
 
-    def select(self, params=None, **kwargs):
-        """Return a sub-matrix restricted to *params* (or ``select(**kwargs)`` of params)."""
-        if params is None:
-            params = self._params.select(**kwargs)
-        return self.view(params=params, return_type=None)
-
     # ── numpy interface ───────────────────────────────────────────────────────
+
+    @property
+    def value(self):
+        """The underlying 2-D numpy matrix array."""
+        return self._value
 
     def __array__(self, dtype=None):
         return np.asarray(self._value, dtype=dtype)
@@ -245,11 +200,11 @@ class BaseMatrix:
 
     def det(self, params=None):
         """Determinant of the matrix (optionally for a sub-set of *params*)."""
-        return float(np.linalg.det(self.view(params=params, return_type='nparray')))
+        return float(np.linalg.det(self.select(params).value))
 
     def clone(self, value=None, params=None, attrs=None):
         """Return a copy, optionally replacing *value*, *params*, or *attrs*."""
-        new = copy.deepcopy(self.view(params=params, return_type=None))
+        new = copy.deepcopy(self.select(params))
         if value is not None:
             new._value[...] = value
         if attrs is not None:
@@ -265,7 +220,7 @@ class BaseMatrix:
     def __getstate__(self, to_file=False):
         state = {
             'value':  self._value,
-            'params': self._params.__getstate__(to_file=to_file),
+            'params': self.params.__getstate__(to_file=to_file),
         }
         if to_file:
             state['attrs'] = {'__class__': self._name,
@@ -275,13 +230,12 @@ class BaseMatrix:
         return state
 
     def __setstate__(self, state):
-        is_file = '__class__' in state.get('attrs', {})
         vc = VariableCollection.__new__(VariableCollection)
         vc.__setstate__(state['params'])
-        self._params = vc
-        self._value  = np.asarray(state['value'])
-        self.attrs   = {k: v for k, v in state.get('attrs', {}).items()
-                        if k != '__class__'}
+        self.params = vc
+        self._value = np.asarray(state['value'])
+        self.attrs  = {k: v for k, v in state.get('attrs', {}).items()
+                       if k != '__class__'}
 
     def write(self, filename):
         """Write to an HDF5 or text file."""
@@ -295,12 +249,12 @@ class BaseMatrix:
     # ── repr / eq ─────────────────────────────────────────────────────────────
 
     def __repr__(self):
-        return f'{type(self).__name__}(params={self.names()})'
+        return f'{type(self).__name__}(params={self.params.names()})'
 
     def __eq__(self, other):
         if not isinstance(other, self.__class__):
             return NotImplemented
-        return (self.names() == other.names()
+        return (self.params.names() == other.params.names()
                 and np.array_equal(self._value, other._value))
 
 
@@ -310,7 +264,7 @@ class BaseMatrix:
 class Covariance(BaseMatrix):
     """Named parameter covariance matrix.
 
-    Missing parameters added via :meth:`view` get ``NaN`` on the diagonal
+    Missing parameters added via :meth:`select` get ``NaN`` on the diagonal
     (indicating unknown variance).
 
     Examples
@@ -322,8 +276,8 @@ class Covariance(BaseMatrix):
 
     Extracting a sub-matrix and getting errors::
 
-        sub = cov.view(['omega_m'])
-        print(cov.std('omega_m'))   # → 0.01
+        sub = cov.select(['omega_m'])
+        print(cov.std('omega_m'))   # → [0.01]
 
     Converting to precision::
 
@@ -333,28 +287,27 @@ class Covariance(BaseMatrix):
     _name = 'Covariance'
     _fill_value = np.nan
 
-    # ── covariance-specific view: fill with ref.std()^2 ──────────────────────
+    # ── covariance-specific select: fill with ref.std()^2 ────────────────────
 
-    def view(self, params=None, return_type=None, fill=None):
+    def select(self, params=None, fill=None, **kwargs):
         """Return the sub-matrix for *params*.
 
         Parameters
         ----------
         params : str, Variable, list, or None
-        return_type : {None, 'nparray'}
         fill : {'ref', None}
             When ``'ref'``, unknown params whose ``ref.std()`` is finite get
             ``ref.std()**2`` on the diagonal instead of ``NaN``.
 
         Returns
         -------
-        array or Covariance
+        Covariance
         """
-        new = super().view(params=params, return_type=None)
+        new = super().select(params=params, **kwargs)
         if fill == 'ref':
-            cumsizes = np.cumsum([0] + _param_sizes(new._params))
-            for param_idx, param in enumerate(new._params):
-                if param.name not in self._params:
+            cumsizes = np.cumsum([0] + _param_sizes(new.params))
+            for param_idx, param in enumerate(new.params):
+                if param.name not in self.params:
                     ref = getattr(param, 'ref', None)
                     std = ref.std() if ref is not None else None
                     if std is not None and np.isfinite(float(std)):
@@ -364,18 +317,15 @@ class Covariance(BaseMatrix):
                         new._value[diag_start:diag_end, diag_start:diag_end] = (
                             np.eye(flat_size) * float(std) ** 2
                         )
-        if return_type == 'nparray':
-            scalar = isinstance(params, (str, Variable))
-            return new._value.squeeze() if scalar else new._value
         return new
 
     # ── center ───────────────────────────────────────────────────────────────
 
     @property
     def center(self):
-        """Flat vector of parameter values (center of the Gaussian), in ``_params`` order."""
+        """Flat vector of parameter values (center of the Gaussian), in ``params`` order."""
         parts = []
-        for param in self._params:
+        for param in self.params:
             val = np.asarray(param.value).ravel()
             size = max(1, int(np.prod(param.shape)))
             if val.size == 1 and size > 1:
@@ -387,10 +337,7 @@ class Covariance(BaseMatrix):
 
     def var(self, params=None):
         """Variance vector (diagonal of the covariance sub-matrix for *params*)."""
-        mat = self.view(params=params, return_type='nparray')
-        if mat.ndim == 0:
-            return mat
-        return np.diag(mat)
+        return np.diag(self.select(params).value)
 
     def std(self, params=None):
         """Standard deviation (square root of :meth:`var`)."""
@@ -398,7 +345,7 @@ class Covariance(BaseMatrix):
 
     def corrcoef(self, params=None):
         """Correlation matrix for *params* (or all params)."""
-        return _cov_to_corrcoef(self.view(params=params, return_type='nparray'))
+        return _cov_to_corrcoef(self.select(params).value)
 
     def fom(self, params=None):
         """Figure-of-merit: ``det(C)^{-1/2}``."""
@@ -417,8 +364,8 @@ class Covariance(BaseMatrix):
         -------
         Precision
         """
-        sub = self.view(params=params, return_type=None)
-        return Precision(np.linalg.inv(sub._value), params=sub._params, attrs=sub.attrs)
+        sub = self.select(params)
+        return Precision(np.linalg.inv(sub.value), params=sub.params, attrs=sub.attrs)
 
     # ── export ────────────────────────────────────────────────────────────────
 
@@ -440,7 +387,7 @@ class Covariance(BaseMatrix):
         """
         import tabulate as _tabulate
 
-        sub      = self.view(params=params, return_type=None)
+        sub      = self.select(params)
         is_latex = 'latex' in tablefmt
 
         def _label(param):
@@ -448,9 +395,9 @@ class Covariance(BaseMatrix):
                 return param.latex(inline=True)
             return str(param.name)
 
-        headers = [''] + [_label(p) for p in sub._params]
+        headers = [''] + [_label(p) for p in sub.params]
         rows = []
-        for param, row in zip(sub._params, sub._value):
+        for param, row in zip(sub.params, sub.value):
             row_str = [_label(param)]
             for val in row:
                 xr, = round_measurement(val, val, sigfigs=sigfigs)[:1]
@@ -483,13 +430,13 @@ class Covariance(BaseMatrix):
         """
         from getdist.gaussian_mixtures import MixtureND
 
-        sub    = self.view(params=params, return_type=None)
-        names  = [p.name for p in sub._params]
-        labels = [p.latex(inline=False) if hasattr(p, 'latex') else p.name for p in sub._params]
+        sub    = self.select(params)
+        names  = [p.name for p in sub.params]
+        labels = [p.latex(inline=False) if hasattr(p, 'latex') else p.name for p in sub.params]
         if center is None:
             center = np.array([float(np.asarray(p.value).ravel()[0])
                                if p.value is not None else 0.
-                               for p in sub._params])
+                               for p in sub.params])
         else:
             center = np.asarray(center)
         ranges = None
@@ -497,9 +444,9 @@ class Covariance(BaseMatrix):
             ranges = [
                 tuple(None if not np.isfinite(lim) else float(lim)
                       for lim in p.prior.limits)
-                for p in sub._params
+                for p in sub.params
             ]
-        return MixtureND([center], [sub._value],
+        return MixtureND([center], [sub.value],
                          lims=ranges, names=names, labels=labels, label=label)
 
     @classmethod
@@ -539,7 +486,7 @@ class Covariance(BaseMatrix):
 class Precision(BaseMatrix):
     """Named parameter precision (inverse-covariance) matrix.
 
-    Missing parameters added via :meth:`view` get ``0`` on the diagonal
+    Missing parameters added via :meth:`select` get ``0`` on the diagonal
     (zero precision = infinite variance = parameter unconstrained).
 
     Precision matrices are additive under independent experiments:
@@ -568,8 +515,8 @@ class Precision(BaseMatrix):
         -------
         Covariance
         """
-        sub = self.view(params=params, return_type=None)
-        return Covariance(np.linalg.inv(sub._value), params=sub._params, attrs=sub.attrs)
+        sub = self.select(params)
+        return Covariance(np.linalg.inv(sub.value), params=sub.params, attrs=sub.attrs)
 
     def fom(self, params=None):
         """Figure-of-merit delegated to the covariance: ``det(C)^{-1/2}``."""
@@ -586,15 +533,14 @@ class Precision(BaseMatrix):
         """
         if len(others) == 1 and isinstance(others[0], (list, tuple)):
             others = list(others[0])
-        # Union of params preserving order
-        seen   = {}
+        seen = {}
         for other in others:
-            for param in other._params:
+            for param in other.params:
                 seen.setdefault(param.name, param)
         all_params = list(seen.values())
-        result = others[0].view(all_params, return_type=None)
+        result = others[0].select(all_params)
         for other in others[1:]:
-            other_view = other.view(all_params, return_type=None)
+            other_view = other.select(all_params)
             result._value += other_view._value
             result.attrs.update(other_view.attrs)
         return result

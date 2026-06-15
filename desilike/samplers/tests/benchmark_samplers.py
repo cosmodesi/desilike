@@ -380,10 +380,10 @@ def run_benchmark(sampler_names=None, profiler_names=None, posterior='bao', outp
                     profiles = profiler.profiles.choice(index='argmax', squeeze=True)
                     best, error, covariance = profiles.best, profiles.error, profiles.covariance
                     sampler_kwargs['covariance'] = covariance
-                    print(covariance._value)
-                    error = {param: covariance.std(param) for param in covariance.names()}
+                    print(covariance.value)
+                    error = {param: covariance.std(param) for param in covariance.params.names()}
                     for param in get_params(sampler_posterior):
-                        if param.name in profiles.covariance.names():
+                        if param.name in profiles.covariance.params.names():
                             param.update(ref=dict(dist='norm', loc=best[param.name], scale=error[param.name]))
                             print(param, param.ref)
 

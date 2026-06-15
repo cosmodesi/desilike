@@ -2655,7 +2655,7 @@ class COMETPTSpectrum2Poles(Calculator):
 
         engine = self.engine
         ell_for_recon = [0, 2, 4, 6]
-        params = engine.comet_cosmo
+        params = engine.comet_cosmo.copy()
         if 'VDG' in engine.model:
             params['avir'] = self.avir.value
         params = {k: np.asarray(v).reshape(-1)[0].item() for k, v in params.items()}
@@ -2782,7 +2782,8 @@ class COMETTracerSpectrum2Poles(Calculator):
         self.bias_basis = bias_basis
 
     def __post_init__(self, z=1.0, k=None, pt=None, ells=None, tracers=None, engine=None, model='VDG_infty', bias_basis='EggScoSmi+Comet', params=None):
-        pass
+        self.k = self.pt.k
+        self.ells = self.pt.ells
 
     def __call__(self):
         f = self.pt.f

@@ -2528,7 +2528,7 @@ class COMETEngine(Calculator):
 
     def __call__(self):
         cosmo = self.cosmo
-        self.comet_cosmo = self.cosmoprimo_to_comet(cosmo)
+        self.comet_cosmo = self.cosmoprimo_to_comet(cosmo.cosmo)
         w0_fixed, wa_fixed = cosmo.params['w0_fld'].fixed, cosmo.params['wa_fld'].fixed
         if (w0_fixed, wa_fixed) == (True, True):
             de_model = 'lambda'
@@ -2849,7 +2849,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             raise ValueError(f'Unknown counterterm_basis: {counterterm_basis!r}')
 
         if not self.pt.engine.use_Mpc:
-            h = self.pt.engine.cosmo['h']
+            h = self.pt.engine.cosmo.cosmo['h']
             c0, c2, c4 = c0 / h**2, c2 / h**2, c4 / h**2
             cnlo = cnlo / h**4
         # TODO: normalize NP* by shotnoise

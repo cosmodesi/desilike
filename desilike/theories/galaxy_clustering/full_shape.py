@@ -2766,7 +2766,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             raise NotImplementedError(counterterm_basis)
         return propose_params_multitracer(params, tracers)
 
-    def __init__(self, z=1.0, k=None, pt=None, ells=None, tracers=None, engine=None, model='VDG_infty', bias_basis='EggScoSmi+Comet', params=None):
+    def __init__(self, z=1.0, k=None, pt=None, ells=None, tracers=None, engine=None, model='VDG_infty', bias_basis='EggScoSmi+Comet', shotnoise=1e4, params=None):
         vc = self.propose_params(tracers=tracers, bias_basis=bias_basis)
         if params is not None:
             vc = vc + VariableCollection(params)
@@ -2782,9 +2782,10 @@ class COMETTracerSpectrum2Poles(Calculator):
         self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model, engine=engine)
         self.bias_basis = bias_basis
 
-    def __post_init__(self, z=1.0, k=None, pt=None, ells=None, tracers=None, engine=None, model='VDG_infty', bias_basis='EggScoSmi+Comet', params=None):
+    def __post_init__(self, z=1.0, k=None, pt=None, ells=None, tracers=None, engine=None, model='VDG_infty', bias_basis='EggScoSmi+Comet', shotnoise=1e4, params=None):
         self.k = self.pt.k
         self.ells = self.pt.ells
+        self._shotnoise = float(shotnoise)
 
     def __call__(self):
         f = self.pt.f
@@ -2859,7 +2860,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             # for the same reason, NP* should be rescaled to compensate the h^3 factor
             NP0 = NP0 / h**3
             NP20, NP22 = NP20 / h**5, NP22 / h**5
-        # TODO: normalize NP* by shotnoise
+        NP0, NP20, NP22 = NP0 * self._shotnoise, NP20 * self._shotnoise, NP22 * self._shotnoise
 
         coeff = jnp.array([
             b1**2, b1, 1.0, c0, c2, c4, b1**2 * cnlo, b1 * cnlo, cnlo,

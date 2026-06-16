@@ -2774,8 +2774,14 @@ class FOLPSv2PowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
     def combine_bias_terms_spectrum_poles(self, pars, nd=1e-4, **kwargs):
         import folps as folpsv2
-        table = (self.kt, *self.pt.table, *self.pt.scalars)
-        table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
+        # Rescaling branch stores PT state directly on self to avoid creating
+        # self.pt = Namespace(...) inside the traced rescaling branch path.  Legacy
+        # paths keep the old Namespace state.  Select the appropriate state
+        # container without changing any physics.
+        state = self if (bool(self.options.get("rescale_PS", False)) and hasattr(self, "table")) else self.pt
+
+        table = (state.kt, *state.table, *state.scalars)
+        table_now = (state.kt, *state.table_now, *state.scalars_now)
         # Inject shot noise at correct position
         pars = list(pars[:-1]) + [1. / nd, pars[-1]]  #1. / nd
         ncols = len(table)
@@ -3590,7 +3596,15 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTPowe
             if self.mpicomm.rank == 0:
                 self.log_debug('Using fsat, sigv = {:.3f}, {:.3f}.'.format(self.options['fsat'], self.options['sigv']))
 
-        #super().set_params(pt_params=[])
+        # Move FKPT/PT-owned MG parameters (e.g. rescaling branch mu0) out of the
+        # tracer/nuisance layer and into self.pt.  Without this, desilike may
+        # either drop mu0 from the varied list or see inconsistent duplicate
+        # definitions between the template and PT calculators.
+        BaseTracerPTPowerSpectrumMultipoles._set_params(
+            self,
+            pt_params=['mu0', 'beta_1', 'lambda_1', 'exp_s', 'fR0_HS', 'r_c']
+        )
+
 
         fix = []
         suffix = 'p' if self.is_physical_prior else ''
@@ -4383,6 +4397,597 @@ def Kfuncs_to_tables_jax(
         return table_w, table_nw, (A, ApOverf0 * f0, CFD3, CFD3p)
     return table_w, table_nw
 
+def _dp_first_order_rescale_jax(
+    k_arr,
+    *,
+    Om,
+    xnow,
+    xstop,
+    model="HDKI",
+    mg_variant="mu_OmDE",
+    mu0=0.0,
+    beta_1=1.0,
+    lambda_1=0.0,
+    exp_s=0.0,
+    rtol=1e-6,
+    atol=1e-8,
+    max_steps=4096,
+):
+    """
+    First-order JAX growth solver for rescaling branch.
+
+    This is deliberately smaller than the full FKPT/beyond-EdS JAX machinery:
+    it solves only
+
+        D'' + (2 - f1) D' - f1 * mu(k, eta) * D = 0
+
+    and returns [D(k), D'(k)] on k_arr.
+
+    Supported here:
+      - LCDM / GR
+      - HDKI + mu_OmDE
+      - HDKI + BZ
+
+    PHENOM/binning should use the existing Kfuncs_to_tables_jax path.
+    """
+    import jax
+    import jax.numpy as jnp
+    import diffrax
+
+    k_arr = jnp.asarray(k_arr, dtype=jnp.float64)
+    Om = jnp.asarray(Om, dtype=jnp.float64)
+    Ol = 1.0 - Om
+
+    model_u = str(model).strip().upper()
+    variant_l = str(mg_variant).strip().lower() if mg_variant is not None else ""
+
+    if model_u in ("LCDM", "GR"):
+        kind = "gr"
+    elif model_u == "HDKI" and variant_l in ("mu_omde", "muomde"):
+        kind = "hdk_muomde"
+    elif model_u == "HDKI" and variant_l == "bz":
+        kind = "hdk_bz"
+    else:
+        raise NotImplementedError(
+            "Kfuncs_to_tables_rescale_jax currently supports only "
+            "LCDM/GR, HDKI+mu_OmDE, and HDKI+BZ. "
+            "Use the existing Kfuncs_to_tables_jax for PHENOM/binning."
+        )
+
+    mu0 = jnp.asarray(mu0, dtype=jnp.float64)
+    beta_1 = jnp.asarray(beta_1, dtype=jnp.float64)
+    lambda_1 = jnp.asarray(lambda_1, dtype=jnp.float64)
+    exp_s = jnp.asarray(exp_s, dtype=jnp.float64)
+
+    def f1_eta(eta):
+        return 3.0 / (2.0 * (1.0 + Ol / Om * jnp.exp(3.0 * eta)))
+
+    def mu_eta_k(eta, k):
+        a = jnp.exp(eta)
+        k2 = k * k
+
+        if kind == "gr":
+            return jnp.ones_like(k)
+
+        if kind == "hdk_muomde":
+            OmDE_over_OmL = 1.0 / (Ol + Om * a**(-3.0))
+            return 1.0 + mu0 * OmDE_over_OmL * jnp.ones_like(k)
+
+        if kind == "hdk_bz":
+            x = lambda_1**2 * k2 * a**exp_s
+            return (1.0 + beta_1 * x) / (1.0 + x)
+
+        # Should never be reached because kind is checked above.
+        return jnp.ones_like(k)
+
+    def rhs(eta, y, k):
+        D, Dp = y[0], y[1]
+        f1 = f1_eta(eta)
+        mu = mu_eta_k(eta, k)
+        return jnp.stack([
+            Dp,
+            f1 * mu * D - (2.0 - f1) * Dp,
+        ])
+
+    term = diffrax.ODETerm(rhs)
+    solver = diffrax.Tsit5()
+    stepsize_controller = diffrax.PIDController(rtol=rtol, atol=atol)
+
+    xnow = float(xnow)
+    xstop = float(xstop)
+    dt0 = (xstop - xnow) / 128.0
+
+    y0 = jnp.exp(jnp.asarray(xnow, dtype=jnp.float64)) * jnp.ones(2, dtype=jnp.float64)
+    saveat = diffrax.SaveAt(ts=jnp.asarray([xstop], dtype=jnp.float64))
+
+    def solve_one(k):
+        sol = diffrax.diffeqsolve(
+            term,
+            solver,
+            t0=xnow,
+            t1=xstop,
+            dt0=dt0,
+            y0=y0,
+            args=k,
+            saveat=saveat,
+            stepsize_controller=stepsize_controller,
+            max_steps=max_steps,
+        )
+        return sol.ys[0]
+
+    Y = jax.vmap(solve_one)(k_arr)  # shape: (nk, 2)
+    return jnp.moveaxis(Y, 0, 1)     # shape: (2, nk)
+
+
+
+class FKPTKernelConstantsCalculator(BaseCalculator):
+    """Small calculator for the beyond-EdS FKPT kernel constants.
+
+    This is intended for rescaling branch:
+      * emulate this calculator over LCDM parameters + MG parameters;
+      * pass the emulated A, Ap, CFD3, CFD3p to Kfuncs_to_tables_rescale_jax;
+      * keep the FKPT table construction live/JAX-friendly.
+
+    The calculator itself is deliberately small: it calls the legacy
+    fkptjax.ode kernel_constants during emulator training, but once emulated
+    the chain only sees the cheap EmulatedCalculator outputs.
+    """
+
+    _params = {
+        # LCDM parameters.  The runner synchronizes these definitions with the
+        # DirectPowerSpectrumTemplate cosmology so desilike sees shared params.
+        "h": {"value": 0.6736, "fixed": False, "delta": 0.01},
+        "omega_b": {"value": 0.02237, "fixed": False, "delta": 0.0003},
+        "omega_cdm": {"value": 0.1200, "fixed": False, "delta": 0.002},
+        "logA": {"value": 3.036, "fixed": False, "delta": 0.02},
+        "n_s": {"value": 0.965, "fixed": False, "delta": 0.01},
+
+        # MG parameters owned by the FKPT rescaling branch layer.
+        "mu0": {
+            "value": 0.0,
+            # Rescaling branch HDKI/mu_OmDE owns mu0 at the FKPT PT level.
+            # Keep it varied by default; the runner can still set fixed=True
+            # explicitly with --force-gr.  If this is True here, desilike keeps
+            # the PT-side mu0 fixed and drops the shared sampled mu0 even when
+            # the kernel-constants emulator has mu0 varied.
+            "fixed": False,
+            "prior": {"dist": "uniform", "limits": [-3.0, 1.0]},
+            "ref": {"dist": "norm", "loc": 0.0, "scale": 0.05},
+            "delta": 0.65,
+        },
+        "beta_1": {"value": 1.0, "fixed": True, "delta": 0.05},
+        "lambda_1": {"value": 0.0, "fixed": True, "delta": 0.05},
+        "exp_s": {"value": 0.0, "fixed": True, "delta": 0.05},
+        "fR0_HS": {"value": 1e-15, "fixed": True, "delta": 1e-6},
+        "r_c": {"value": 1e30, "fixed": True, "delta": 1.0},
+    }
+
+    def initialize(
+        self,
+        z=0.0,
+        Om=None,
+        model="HDKI",
+        mg_variant="mu_OmDE",
+        beyond_eds=True,
+        xnow=-3.912023,
+        ode_method="RKQS",
+        f0_kmax=1e-3,
+        N_eff=3.046,
+        m_ncdm=0.06,
+        # HS / f(R)
+        n_HS=1.0,
+        beta2=1.0 / 6.0,
+        screening=1,
+        omegaBD=0.0,
+        # PHENOM/binning/growth-index controls, kept for ModelDerivatives compatibility
+        mu1=1.0,
+        mu2=1.0,
+        mu3=1.0,
+        mu4=1.0,
+        z_div=1.0,
+        z_TGR=2.0,
+        z_tw=0.05,
+        scale_bins=False,
+        k_TGR=0.001,
+        k_S=0.5,
+        k_c=0.1,
+        k_tw=0.01,
+        gamma_0=0.545454,
+        gamma_a=0.0,
+        t_k=100.0,
+        d_s=1e-4,
+        eftcamb_h1_interp=None,
+        eftcamb_h3_interp=None,
+        eftcamb_h5_interp=None,
+    ):
+        self.z = float(z)
+        self.Om = None if Om is None else float(Om)
+        self.model = str(model)
+        self.mg_variant = None if mg_variant is None else str(mg_variant)
+        self.beyond_eds = bool(beyond_eds)
+        self.xnow = float(xnow)
+        self.ode_method = str(ode_method)
+        self.f0_kmax = float(f0_kmax)
+        self.N_eff = float(N_eff)
+        if np.ndim(m_ncdm) == 0:
+            self.m_ncdm = (float(m_ncdm),)
+        else:
+            self.m_ncdm = tuple(float(x) for x in m_ncdm)
+
+        self.n_HS = float(n_HS)
+        self.beta2 = float(beta2)
+        self.screening = int(screening)
+        self.omegaBD = float(omegaBD)
+
+        self.mu1, self.mu2, self.mu3, self.mu4 = map(float, (mu1, mu2, mu3, mu4))
+        self.z_div, self.z_TGR, self.z_tw = map(float, (z_div, z_TGR, z_tw))
+        self.scale_bins = bool(scale_bins)
+        self.k_TGR, self.k_S, self.k_c, self.k_tw = map(float, (k_TGR, k_S, k_c, k_tw))
+        self.gamma_0, self.gamma_a = float(gamma_0), float(gamma_a)
+        self.t_k, self.d_s = float(t_k), float(d_s)
+        self.eftcamb_h1_interp = eftcamb_h1_interp
+        self.eftcamb_h3_interp = eftcamb_h3_interp
+        self.eftcamb_h5_interp = eftcamb_h5_interp
+
+    def _omega_ncdm(self):
+        # Standard non-relativistic approximation, enough for deriving Om from
+        # sampled physical densities in rescaling branch tests.
+        try:
+            return float(np.sum(self.m_ncdm)) / 93.14
+        except Exception:
+            return 0.0
+
+    def _derived_Om(self, h, omega_b, omega_cdm):
+        if self.Om is not None:
+            return float(self.Om)
+        return float((omega_b + omega_cdm + self._omega_ncdm()) / h**2)
+
+    def calculate(
+        self,
+        h=0.6736,
+        omega_b=0.02237,
+        omega_cdm=0.1200,
+        logA=3.036,
+        n_s=0.965,
+        mu0=0.0,
+        beta_1=1.0,
+        lambda_1=0.0,
+        exp_s=0.0,
+        fR0_HS=1e-15,
+        r_c=1.0e30,
+    ):
+        # EdS constants.  Expose all attributes with scalar JAX arrays so this
+        # calculator has a stable emulatable state even when beyond_eds=False.
+        if not self.beyond_eds:
+            self.A = jnp.asarray(1.0, dtype=jnp.float64)
+            self.Ap = jnp.asarray(0.0, dtype=jnp.float64)
+            self.ApOverf0 = jnp.asarray(0.0, dtype=jnp.float64)
+            self.CFD3 = jnp.asarray(1.0, dtype=jnp.float64)
+            self.CFD3p = jnp.asarray(1.0, dtype=jnp.float64)
+            self.f0 = jnp.asarray(1.0, dtype=jnp.float64)
+            return
+
+        from fkptjax.ode import ModelDerivatives, ODESolver, DP, kernel_constants
+
+        Om = self._derived_Om(h=h, omega_b=omega_b, omega_cdm=omega_cdm)
+        model_u = str(self.model).upper()
+        mg_variant = self.mg_variant
+        if model_u in ("HS", "NDGP", "LCDM", "GR"):
+            mg_variant = "mu_OmDE"
+
+        solver = ODESolver(zout=float(self.z), xnow=float(self.xnow), method=str(self.ode_method))
+        derivs = ModelDerivatives(
+            om=float(Om), ol=float(1.0 - Om),
+            fR0_HS=float(fR0_HS), beta2=float(self.beta2), n_HS=float(self.n_HS),
+            screening=int(self.screening), omegaBD=float(self.omegaBD),
+            r_c=float(r_c),
+            model=str(self.model), mg_variant=str(mg_variant),
+            mu0=float(mu0),
+            beta_1=float(beta_1), lambda_1=float(lambda_1), exp_s=float(exp_s),
+            mu1=float(self.mu1), mu2=float(self.mu2), mu3=float(self.mu3), mu4=float(self.mu4),
+            z_div=float(self.z_div), z_TGR=float(self.z_TGR), z_tw=float(self.z_tw),
+            scale_bins=bool(self.scale_bins),
+            k_TGR=float(self.k_TGR), k_S=float(self.k_S), k_c=float(self.k_c), k_tw=float(self.k_tw),
+            gamma_0=float(self.gamma_0), gamma_a=float(self.gamma_a),
+            t_k=float(self.t_k), d_s=float(self.d_s),
+            eftcamb_h1_interp=self.eftcamb_h1_interp,
+            eftcamb_h3_interp=self.eftcamb_h3_interp,
+            eftcamb_h5_interp=self.eftcamb_h5_interp,
+        )
+
+        # Kernel constants need f0.  Use the same low-k convention as the FKPT
+        # table builder: f0 is the low-k growth rate around f0_kmax.
+        k0 = float(max(self.f0_kmax, 1e-5))
+        k_eval = np.geomspace(max(1e-5, 0.2 * k0), max(k0, 1e-5), 5)
+        Y = DP(k_eval, derivs, solver)
+        f0 = float(np.mean(np.asarray(Y[1]) / np.asarray(Y[0])))
+
+        KA, KAp, KR1, KR1p = kernel_constants(f0=f0, derivs=derivs, solver=solver)
+        self.A = jnp.asarray(float(KA), dtype=jnp.float64)
+        self.Ap = jnp.asarray(float(KAp), dtype=jnp.float64)
+        self.ApOverf0 = jnp.asarray(float(KAp) / float(f0), dtype=jnp.float64)
+        self.CFD3 = jnp.asarray(float(KR1), dtype=jnp.float64)
+        self.CFD3p = jnp.asarray(float(KR1p), dtype=jnp.float64)
+        self.f0 = jnp.asarray(float(f0), dtype=jnp.float64)
+
+    def __getstate__(self):
+        return {name: getattr(self, name) for name in ["A", "Ap", "ApOverf0", "CFD3", "CFD3p", "f0"] if hasattr(self, name)}
+
+def Kfuncs_to_tables_rescale_jax(
+    k,
+    pk,
+    pk_now,
+    *,
+    z,
+    Om,
+    model="HDKI",
+    mg_variant="mu_OmDE",
+    beyond_eds=False,
+    rescale_PS=True,
+    kmin=None,
+    kmax=None,
+    Nk_kernel=120,
+    nquadSteps=300,
+    NQ=10,
+    NR=10,
+    xnow=-3.912023,
+    ode_method=None,
+    f0_kmax=None,
+    mu0=0.0,
+    beta_1=1.0,
+    lambda_1=0.0,
+    exp_s=0.0,
+    rbao=104.0,
+    pmax_bao=0.4,
+    Np_bao=100,
+    return_kernel_constants=True,
+    static_ctx=None,
+    kernel_constants=None,
+    **kwargs,
+):
+    """
+    Rescaling branch JAX FKPT table builder.
+
+    This is the rescale-PS sister of Kfuncs_to_tables_jax:
+
+      emulated GR/LCDM pk, pk_now
+          -> extrapolate
+          -> solve first-order GR and MG growth with JAX/diffrax
+          -> rescale pk and pk_now by (D_MG / D_GR)^2
+          -> feed rescaled pk, pk_now, f_MG(k) to JaxCalculator.evaluate_jax
+          -> return FOLPS-format tables
+
+    Important:
+      - This is NOT the PHENOM/binning full-JAX route.
+      - The existing Kfuncs_to_tables_jax remains the PHENOM/binning route.
+      - This first version supports HDKI+mu_OmDE and HDKI+BZ.
+      - beyond_eds=True is not implemented here yet, because that would require
+        model-matched JAX second/third-order kernel constants.
+    """
+    import numpy as np
+    import jax.numpy as jnp
+    from folps.tools_jax import extrapolate_pklin, simpson, interp
+
+    k = jnp.asarray(k, dtype=jnp.float64)
+    pk = jnp.asarray(pk, dtype=jnp.float64)
+    pk_now = jnp.asarray(pk_now, dtype=jnp.float64)
+
+    # beyond_eds=True is supported in the rescaling branch live/JAX path only when
+    # model-matched kernel constants are provided by a small calculator or
+    # emulator.  This keeps this function traceable: no legacy Python ODE /
+    # kernel_constants(...) calls are made here.
+
+    # ------------------------------------------------------------------
+    # 1. Extrapolate input linear spectra.
+    # ------------------------------------------------------------------
+    k_ext, pk_ext = extrapolate_pklin(k, pk)
+    _, pk_now_ext = extrapolate_pklin(k, pk_now)
+
+    xstop = float(np.log(1.0 / (1.0 + float(z))))
+    xnow_f = float(xnow)
+
+    # ------------------------------------------------------------------
+    # 2. First-order GR and MG growth.
+    # ------------------------------------------------------------------
+    Y_gr = _dp_first_order_rescale_jax(
+        k_ext,
+        Om=Om,
+        xnow=xnow_f,
+        xstop=xstop,
+        model="GR",
+        mg_variant=None,
+        mu0=0.0,
+        beta_1=1.0,
+        lambda_1=0.0,
+        exp_s=0.0,
+    )
+    D_gr = Y_gr[0]
+
+    Y_mg = _dp_first_order_rescale_jax(
+        k_ext,
+        Om=Om,
+        xnow=xnow_f,
+        xstop=xstop,
+        model=model,
+        mg_variant=mg_variant,
+        mu0=mu0,
+        beta_1=beta_1,
+        lambda_1=lambda_1,
+        exp_s=exp_s,
+    )
+    D_mg, Dp_mg = Y_mg[0], Y_mg[1]
+
+    growth_scale = (D_mg / D_gr) ** 2
+
+    pk_ext = pk_ext * growth_scale
+    pk_now_ext = pk_now_ext * growth_scale
+
+    fk_ext = Dp_mg / D_mg
+
+    # ------------------------------------------------------------------
+    # 3. f0 and static FKPT context.
+    # ------------------------------------------------------------------
+    if kmin is None:
+        kmin = float(jnp.minimum(1e-3, jnp.min(k)))
+    if kmax is None:
+        kmax = float(jnp.maximum(0.5, jnp.max(k)))
+    if f0_kmax is None:
+        f0_kmax = float(kmin)
+
+    mask0 = k_ext <= float(f0_kmax)
+    nhead = int(min(5, int(k_ext.shape[0])))
+
+    f0 = jnp.where(
+        jnp.any(mask0),
+        jnp.sum(jnp.where(mask0, fk_ext, 0.0)) / jnp.maximum(jnp.sum(mask0), 1),
+        jnp.mean(fk_ext[:nhead]),
+    )
+
+    if static_ctx is None:
+        static_ctx = build_jax_static_ctx(
+            k,
+            kmin=kmin,
+            kmax=kmax,
+            Nk_kernel=Nk_kernel,
+            nquadSteps=nquadSteps,
+            NQ=NQ,
+            NR=NR,
+            rbao=rbao,
+            pmax_bao=pmax_bao,
+            Np_bao=Np_bao,
+        )
+
+    calculator = static_ctx["calculator"]
+    kout = static_ctx["kout"]
+    p = static_ctx["p"]
+    j0 = static_ctx["j0"]
+    j2 = static_ctx["j2"]
+
+    fk_out = interp(kout, k_ext, fk_ext)
+    fk_norm_out = fk_out / f0
+
+    # ------------------------------------------------------------------
+    # 4. IR/BAO sigma integrals.
+    # ------------------------------------------------------------------
+    ff = fk_ext / f0
+
+    sigma2w = 1.0 / (6.0 * jnp.pi**2) * simpson(pk_ext * ff**2, x=k_ext)
+    sigma2w_NW = 1.0 / (6.0 * jnp.pi**2) * simpson(pk_now_ext * ff**2, x=k_ext)
+
+    PSL_NW = interp(p, k_ext, pk_now_ext)
+
+    sigma2_NW = (
+        1.0 / (6.0 * jnp.pi**2)
+        * simpson(PSL_NW * (1.0 - j0 + 2.0 * j2), x=p)
+    )
+    delta_sigma2_NW = (
+        1.0 / (2.0 * jnp.pi**2)
+        * simpson(PSL_NW * j2, x=p)
+    )
+
+    # ------------------------------------------------------------------
+    # 5. beyond-EdS constants.
+    #    For rescaling branch, these must be provided by an ingredient calculator or
+    #    its emulator; do not call legacy kernel_constants(...) here.
+    # ------------------------------------------------------------------
+    if bool(beyond_eds):
+        if kernel_constants is None:
+            raise ValueError(
+                "rescale_PS=True with beyond_eds=True requires provided/emulated "
+                "kernel constants. Attach FKPTKernelConstantsCalculator or its "
+                "EmulatedCalculator as kernel_constants."
+            )
+
+        def _get_kc(obj, names, default=None):
+            if isinstance(names, str):
+                names = (names,)
+            if isinstance(obj, dict):
+                for name in names:
+                    if name in obj:
+                        return obj[name]
+            if isinstance(obj, (tuple, list)):
+                mapping = {"A": 0, "Ap": 1, "KAp": 1, "CFD3": 2, "KR1": 2, "CFD3p": 3, "KR1p": 3}
+                for name in names:
+                    if name in mapping and len(obj) > mapping[name]:
+                        return obj[mapping[name]]
+            for name in names:
+                if hasattr(obj, name):
+                    return getattr(obj, name)
+            return default
+
+        A = jnp.asarray(_get_kc(kernel_constants, ("A", "KA")), dtype=jnp.float64)
+        CFD3 = jnp.asarray(_get_kc(kernel_constants, ("CFD3", "KR1")), dtype=jnp.float64)
+        CFD3p = jnp.asarray(_get_kc(kernel_constants, ("CFD3p", "KR1p")), dtype=jnp.float64)
+
+        ap_over = _get_kc(kernel_constants, "ApOverf0", default=None)
+        if ap_over is None:
+            Ap = jnp.asarray(_get_kc(kernel_constants, ("Ap", "KAp")), dtype=jnp.float64)
+            ApOverf0 = Ap / f0
+        else:
+            ApOverf0 = jnp.asarray(ap_over, dtype=jnp.float64)
+    else:
+        A = jnp.asarray(1.0, dtype=jnp.float64)
+        ApOverf0 = jnp.asarray(0.0, dtype=jnp.float64)
+        CFD3 = jnp.asarray(1.0, dtype=jnp.float64)
+        CFD3p = jnp.asarray(1.0, dtype=jnp.float64)
+
+    # ------------------------------------------------------------------
+    # 6. FKPT JAX calculator.
+    # ------------------------------------------------------------------
+    kfuncs = calculator.evaluate_jax(
+        Pk_in=pk_ext,
+        Pk_nw_in=pk_now_ext,
+        fk_in=fk_ext,
+        A=A,
+        ApOverf0=ApOverf0,
+        CFD3=CFD3,
+        CFD3p=CFD3p,
+        sigma2v=0.0,
+        f0=f0,
+    )
+
+    zeros = jnp.zeros_like(jnp.asarray(kout))
+
+    def _tab(i, tail):
+        return (
+            kout,
+            kfuncs.pkl[i],
+            fk_norm_out,
+            kfuncs.P22dd[i] + kfuncs.P13dd[i],
+            kfuncs.P22du[i] + kfuncs.P13du[i],
+            kfuncs.P22uu[i] + kfuncs.P13uu[i],
+            kfuncs.Pb1b2[i],
+            kfuncs.Pb1bs2[i],
+            kfuncs.Pb22[i],
+            kfuncs.Pb2s2[i],
+            kfuncs.Ps22[i],
+            kfuncs.sigma32PSL[i],
+            kfuncs.Pb2theta[i],
+            kfuncs.Pbs2theta[i],
+            kfuncs.I1udd1A[i],
+            kfuncs.I2uud1A[i],
+            kfuncs.I2uud2A[i],
+            kfuncs.I3uuu2A[i],
+            kfuncs.I3uuu3A[i],
+            kfuncs.I2uudd1BpC[i],
+            kfuncs.I2uudd2BpC[i],
+            kfuncs.I3uuud2BpC[i],
+            kfuncs.I3uuud3BpC[i],
+            kfuncs.I4uuuu2BpC[i],
+            kfuncs.I4uuuu3BpC[i],
+            kfuncs.I4uuuu4BpC[i],
+            zeros,
+            zeros,
+        ) + tail
+
+    table_w = _tab(0, (sigma2w, f0))
+    table_nw = _tab(1, (sigma2w_NW, sigma2_NW, delta_sigma2_NW, f0))
+
+    if return_kernel_constants:
+        return table_w, table_nw, (A, ApOverf0 * f0, CFD3, CFD3p)
+
+    return table_w, table_nw
+
 
 # ============================================================================
 # Bk multipoles via FOLPS (JIT-ed)
@@ -4480,6 +5085,11 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         mg_variant="mu_OmDE",
         rescale_PS=False,
         beyond_eds=False,
+        # Optional rescaling branch ingredient calculator/emulator for beyond-EdS
+        # constants A, Ap, CFD3, CFD3p.  When provided,
+        # Kfuncs_to_tables_rescale_jax stays live/JAX-friendly and does not call
+        # the legacy Python kernel_constants(...) path during MCMC.
+        kernel_constants=None,
         # Allow passing MG params even if the template cosmology (e.g. CAMB) does not define them.
         # Example: th.init.update(mg_params_override={"mu0": 0.5})
         mg_params_override=None,
@@ -4509,6 +5119,24 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         # (fkptjax_muMG numba-binning-rhs branch); only active for binning.
         use_numba=False,
     )
+
+    _params = {
+        "mu0": {
+            "value": 0.0,
+            # Rescaling branch HDKI/mu_OmDE owns mu0 at the FKPT PT level.
+            # Keep it varied by default; the runner can still force GR by
+            # explicitly updating this parameter to fixed=True.
+            "fixed": False,
+            "prior": {"dist": "uniform", "limits": [-3.0, 1.0]},
+            "ref": {"dist": "norm", "loc": 0.0, "scale": 0.05},
+            "delta": 0.65,
+        },
+        "beta_1": {"value": 1.0, "fixed": True},
+        "lambda_1": {"value": 0.0, "fixed": True},
+        "exp_s": {"value": 0.0, "fixed": True},
+        "fR0_HS": {"value": 1e-15, "fixed": True},
+        "r_c": {"value": 1e30, "fixed": True},
+    }
 
     _pt_attrs = [
         "jac", "kap", "muap",
@@ -4544,10 +5172,19 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         self.to_poles = ProjectToMultipoles(mu=mu, ells=self.ells)
         self.mu = self.to_poles.mu
 
+        # Static FKPT loop grid constants.
+        # These depend only on the fixed theory/output k-grid, not on sampled params.
+        # Keep them concrete so desilike's outer jax.jit does not trace self.k and
+        # then hit Python float(...) conversions inside calculate().
+        self._fkpt_kmin = float(min(1e-3, float(np.min(np.asarray(self.k)))))
+        self._fkpt_kmax = float(max(1.0, float(np.max(np.asarray(self.k)))))
+        self._fkpt_Nk_kernel = int(min(len(self.k), 120))
+
         self.backend = self.options.get("backend", "jax")
         self.bias_scheme = self.options.get("bias_scheme", "folps")
         self.damping = self.options.get("damping", None)
         self.IR_resummation = self.options.get("IR_resummation", True)
+        self.kernel_constants = self.options.get("kernel_constants", None)
 
         os.environ.setdefault("FOLPS_BACKEND", self.backend)
         
@@ -4569,21 +5206,21 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             # 1) cosmology object
             if cosmo is not None:
                 try:
-                    return float(cosmo[name])
+                    return cosmo[name]
                 except Exception:
                     pass
                 try:
-                    return float(getattr(cosmo, name))
+                    return getattr(cosmo, name)
                 except Exception:
                     pass
 
             # 2) explicit option
             value = self.options.get(name, None)
             if value is not None:
-                return float(value)
+                return value
 
             # 3) default
-            return float(default)
+            return default
 
         # --------------------------------------------------
         # HS / f(R)
@@ -4596,7 +5233,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                 screening=int(_get("screening", 1)),
                 omegaBD=_get("omegaBD", 0.0),
             )
-            out.update({k: float(v) for k, v in override.items()})
+            out.update(override)
             return out
 
         # --------------------------------------------------
@@ -4606,7 +5243,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             out = dict(
                 r_c=_get("r_c", 1.0e30),
             )
-            out.update({k: float(v) for k, v in override.items()})
+            out.update(override)
             return out
 
         # --------------------------------------------------
@@ -4614,7 +5251,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         # --------------------------------------------------
         if model_u in ("LCDM", "GR"):
             out = {}
-            out.update({k: float(v) for k, v in override.items()})
+            out.update(override)
             return out
 
         # --------------------------------------------------
@@ -4625,7 +5262,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                 out = dict(
                     mu0=_get("mu0", 0.0),
                 )
-                out.update({k: float(v) for k, v in override.items()})
+                out.update(override)
                 return out
 
             if variant_u == "BZ":
@@ -4634,7 +5271,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                     lambda_1=_get("lambda_1", 0.0),
                     exp_s=_get("exp_s", 0.0),
                 )
-                out.update({k: float(v) for k, v in override.items()})
+                out.update(override)
                 return out
 
             if variant_u in ("EFT_DE", "EFTDE"):
@@ -4692,44 +5329,295 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                     "Expected 'binning', 'growth_index', or 'growth_index_yukawa'."
                 )
 
-            out.update({k: float(v) for k, v in override.items()})
+            out.update(override)
             return out
 
         raise ValueError(
             f"Unknown model={self.options.get('model')!r}. "
             "Expected 'LCDM'/'GR', 'HS', 'NDGP', 'HDKI', or 'PHENOM'."
         )
+
+    def _template_get(self, *names, default=None, required=False):
+        """
+        Read a quantity from the template/emulated template without calling raw
+        cosmoprimo/Fourier methods.  Rescaling branch relies on these quantities being
+        exposed by the linear emulator/template itself.
+        """
+        for name in names:
+            if hasattr(self.template, name):
+                value = getattr(self.template, name)
+                if value is not None:
+                    return value
+        if required:
+            raise AttributeError(
+                "Rescaling branch FKPT rescale requires the template/emulator to expose "
+                f"one of {names}, but none was found."
+            )
+        return default
+
+    def _template_pknow(self):
+        """
+        Non-wiggle linear power.  Support both names because different templates
+        expose this as pknow_dd or pknow.
+        """
+        return self._template_get("pknow_dd", "pknow", required=True)
+
+    def _template_omega_m(self, cosmo=None):
+        """
+        Omega_m needed by FKPT.
+
+        Rescaling branch may replace the raw DirectPowerSpectrumTemplate by an
+        EmulatedCalculator.  In that case the emulator is a linear-template
+        provider, not a full cosmology object, so ``template.cosmo`` and
+        ``template.Omega_m`` are not guaranteed to exist.  Derive Omega_m from
+        the current LCDM input parameters whenever possible:
+
+            Omega_m = (omega_b + omega_cdm + omega_ncdm) / h**2.
+
+        The parameter lookup intentionally checks desilike runtime input values
+        before any attached legacy cosmology, so Omega_m remains dynamic in
+        MCMC when the linear emulator supplies h, omega_b, omega_cdm.
+        """
+        import jax.numpy as jnp
+
+        # 1) Direct attribute/output on template/emulator.  This is safe when
+        # the emulator explicitly provides Omega_m as an output.
+        for attr in ("Omega_m", "Om"):
+            val = getattr(self.template, attr, None)
+            if val is not None:
+                return val
+
+        def _lookup_in_mapping(mapping, name):
+            try:
+                if mapping is not None and name in mapping:
+                    return mapping[name]
+            except Exception:
+                pass
+            return None
+
+        def _get_runtime_param(name, default=None):
+            # Current sampled inputs propagated by desilike runtime.
+            for owner in (self.template, getattr(self.template, "runtime_info", None)):
+                if owner is None:
+                    continue
+                val = _lookup_in_mapping(getattr(owner, "input_values", None), name)
+                if val is not None:
+                    return val
+
+            # Plain runtime attribute on calculator/emulator.
+            val = getattr(self.template, name, None)
+            if val is not None:
+                return val
+
+            # Parameter definitions / current calculator values.
+            for owner in (self.template, getattr(self.template, "init", None)):
+                try:
+                    params = owner.params
+                    if name in params:
+                        return params[name].value
+                except Exception:
+                    pass
+
+            return default
+
+        h = _get_runtime_param("h")
+        omega_b = _get_runtime_param("omega_b")
+        omega_cdm = _get_runtime_param("omega_cdm")
+        omega_ncdm = _get_runtime_param("omega_ncdm", default=None)
+
+        if omega_ncdm is None:
+            # In this synthetic setup m_ncdm is fixed to 0.06 eV unless the
+            # template/cosmology provides something else.  The conversion gives
+            # omega_ncdm = Omega_nu h^2 for one non-relativistic species.
+            m_ncdm = _get_runtime_param("m_ncdm", default=0.06)
+            omega_ncdm = jnp.asarray(m_ncdm) / 93.14
+
+        if h is not None and omega_b is not None and omega_cdm is not None:
+            return (
+                jnp.asarray(omega_b)
+                + jnp.asarray(omega_cdm)
+                + jnp.asarray(omega_ncdm)
+            ) / jnp.asarray(h) ** 2
+
+        # 2) Legacy cosmology fallback for non-emulated paths or older objects.
+        if cosmo is None:
+            cosmo = getattr(self.template, "cosmo", None)
+
+        if cosmo is not None:
+            try:
+                return cosmo["Omega_m"]
+            except Exception:
+                pass
+            try:
+                return getattr(cosmo, "Omega_m")
+            except Exception:
+                pass
+            try:
+                h = cosmo.init.params["h"].value
+                omega_b = cosmo.init.params["omega_b"].value
+                omega_cdm = cosmo.init.params["omega_cdm"].value
+                if "omega_ncdm" in cosmo.init.params:
+                    omega_ncdm = cosmo.init.params["omega_ncdm"].value
+                else:
+                    m_ncdm = cosmo.init.params["m_ncdm"].value if "m_ncdm" in cosmo.init.params else 0.06
+                    omega_ncdm = jnp.asarray(m_ncdm) / 93.14
+                return (jnp.asarray(omega_b) + jnp.asarray(omega_cdm) + jnp.asarray(omega_ncdm)) / jnp.asarray(h) ** 2
+            except Exception:
+                pass
+
+        # Diagnostic payload without dumping huge arrays.
+        try:
+            template_attrs = [a for a in dir(self.template) if not a.startswith("_")]
+        except Exception:
+            template_attrs = []
+        raise AttributeError(
+            "FKPT route requires Omega_m. Could not get template.Omega_m/Om, "
+            "or derive it from h, omega_b, omega_cdm. "
+            f"Template type: {type(self.template).__name__}; "
+            f"available attrs include: {template_attrs[:80]}"
+        )
+
+    def _ap_k_mu_from_q(self, qpar, qper):
+        """
+        Pure-JAX AP mapping.  This replaces self.template.ap_k_mu(...) in the
+        rescaling branch path, so AP can come from emulated qpar/qper.
+        """
+        import jax.numpy as jnp
+        k = jnp.asarray(self.k)[:, None]
+        mu = jnp.asarray(self.mu)[None, :]
+        qpar = jnp.asarray(qpar)
+        qper = jnp.asarray(qper)
+
+        jac = 1.0 / (qpar * qper**2)
+        kap = k / qper * jnp.sqrt(1.0 + mu**2 * (qper**2 / qpar**2 - 1.0))
+        muap = mu / qpar / jnp.sqrt((1.0 - mu**2) / qper**2 + mu**2 / qpar**2)
+        return jac, kap, muap
         
-    def calculate(self):
+    def calculate(
+        self,
+        mu0=0.0,
+        beta_1=1.0,
+        lambda_1=1.0,
+        exp_s=1.0,
+        fR0_HS=1e-15,
+        r_c=1.0e30,
+    ):
         """
         Build FKPT tables, then store them in the same structural style as FOLPS.
+    
+        Branching logic:
+          - rescale_PS=False:
+              keep the legacy/template behavior, including self.template.ap_k_mu(...)
+              and template.cosmo.get_fourier().sigma8_z(...).
+    
+          - rescale_PS=True:
+              rescaling branch.  All dynamic linear-template quantities should come from the
+              emulated linear template itself: k, pk_dd, pknow_dd/pknow, qpar, qper,
+              Omega_m/Om, sigma8, sigma8_z.  Do not call raw cosmoprimo/Fourier.
         """
         import numpy as np
         import jax.numpy as jnp
-
+    
         self.z = self.template.z
-
-        jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
         cosmo = getattr(self.template, "cosmo", None)
-
+    
         model = str(self.options.get("model", "HDKI")).strip()
         model_u = model.upper()
         rescale_PS = bool(self.options.get("rescale_PS", False))
-
-        # mg_variant matters only for HDKI / PHENOM
+    
+        # mg_variant matters only for HDKI / PHENOM.
         if model_u in ("HDKI", "PHENOM"):
             mg_variant = str(self.options.get("mg_variant", "mu_OmDE")).strip()
         else:
             mg_variant = None
-
+    
         mg_params = self._collect_mg_params(cosmo)
 
+        # In rescaling branch the linear template/emulator is intentionally LCDM/GR-only.
+        # The MG parameters are therefore owned by this FKPT PT calculator, not
+        # by template.cosmo.  Making them explicit calculate inputs ensures
+        # desilike sees them as live parameters and the sampler can vary them.
+        if model_u == "HDKI" and mg_variant is not None:
+            variant_u = str(mg_variant).strip().upper()
+            if variant_u in ("MU_OMDE", "MUOMDE"):
+                mg_params["mu0"] = mu0
+            elif variant_u == "BZ":
+                mg_params["beta_1"] = beta_1
+                mg_params["lambda_1"] = lambda_1
+                mg_params["exp_s"] = exp_s
+        elif model_u == "HS":
+            mg_params["fR0_HS"] = fR0_HS
+        elif model_u == "NDGP":
+            mg_params["r_c"] = r_c
+    
+        # ------------------------------------------------------------------
+        # Route-dependent template quantities.
+        # ------------------------------------------------------------------
+        if rescale_PS:
+            # Rescaling branch:
+            # Use only quantities exposed by the emulated linear template.
+            # This avoids raw self.template.ap_k_mu(...) and raw cosmoprimo Fourier calls.
+            qpar = self._template_get("qpar", required=True)
+            qper = self._template_get("qper", required=True)
+            jac, kap, muap = self._ap_k_mu_from_q(qpar=qpar, qper=qper)
+    
+            k_lin = self._template_get("k", required=True)
+            pk_lin = self._template_get("pk_dd", required=True)
+            pk_now_lin = self._template_pknow()
+    
+            Om = self._template_omega_m(cosmo=cosmo)
+    
+            sigma8 = self._template_get("sigma8", default=None)
+            sigma8_z = self._template_get("sigma8_z", default=None)
+
+            # Some emulated templates expose fsigma8 and f rather than sigma8_z.
+            if sigma8_z is None:
+                fsigma8 = self._template_get("fsigma8", default=None)
+                f_template = self._template_get("f", default=None)
+                if fsigma8 is not None and f_template is not None:
+                    sigma8_z = jnp.asarray(fsigma8) / jnp.asarray(f_template)
+    
+            if sigma8 is None:
+                sigma8 = sigma8_z
+    
+            if sigma8_z is None:
+                raise AttributeError(
+                    "rescale_PS=True requires the linear emulator/template to expose "
+                    "sigma8_z or (fsigma8 and f). Do not call "
+                    "template.cosmo.get_fourier().sigma8_z(...) inside rescaling branch."
+                )
+    
+        else:
+            # Legacy / route 1 / non-rescaled behavior:
+            # Keep the old template AP machinery.
+            jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
+    
+            qpar = self.template.qpar
+            qper = self.template.qper
+    
+            k_lin = self.template.k
+            pk_lin = self.template.pk_dd
+            pk_now_lin = getattr(self.template, "pknow_dd", getattr(self.template, "pknow", None))
+            if pk_now_lin is None:
+                raise AttributeError("Template must expose pknow_dd or pknow.")
+    
+            if cosmo is None:
+                raise AttributeError("rescale_PS=False legacy path requires template.cosmo.")
+    
+            Om = cosmo["Omega_m"]
+    
+            sigma8 = self.template.sigma8
+            sigma8_z = float(self.template.cosmo.get_fourier().sigma8_z(z=self.z))
+    
+        # ------------------------------------------------------------------
+        # FKPT table construction.
+        # ------------------------------------------------------------------
         fkpt_params = dict(
             z=float(self.z),
-            Om=float(cosmo["Omega_m"]),
-            kmin=float(min(1e-3, float(jnp.min(self.k)))),
-            kmax=float(max(1.0, float(jnp.max(self.k)))),
-            Nk_kernel=int(min(len(self.k), 120)),
+            Om=Om,
+            kmin=self._fkpt_kmin,
+            kmax=self._fkpt_kmax,
+            Nk_kernel=self._fkpt_Nk_kernel,
             nquadSteps=300,
             NQ=10,
             NR=10,
@@ -4743,22 +5631,190 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             **mg_params,
         )
 
-        table, table_now, kcs = Kfuncs_to_tables(
-            k=self.template.k,
-            pk=self.template.pk_dd,
-            pk_now=self.template.pknow_dd,
-            **fkpt_params,
-            return_kernel_constants=True,
-        )
+        kernel_constants_input = None
+        if rescale_PS and bool(fkpt_params.get("beyond_eds", False)):
+            # Preferred combined-ingredient route: the template itself is an
+            # EmulatedCalculator carrying A, ApOverf0, CFD3, CFD3p.  This keeps
+            # FKPTKernelConstantsCalculator out of the chain-time pipeline.
+            if all(hasattr(self.template, name) for name in ["A", "ApOverf0", "CFD3", "CFD3p"]):
+                kernel_constants_input = self.template
+            else:
+                # Backward-compatible route: separate kernel_constants emulator.
+                kc_calc = getattr(self, "kernel_constants", None)
+                if kc_calc is None:
+                    raise ValueError(
+                        "Rescaling branch rescale_PS=True and beyond_eds=True requires "
+                        "either a combined ingredient template exposing "
+                        "A, ApOverf0, CFD3, CFD3p, or a kernel_constants "
+                        "calculator/emulator attached to fkptjaxPowerSpectrumMultipoles."
+                    )
+                kernel_constants_input = kc_calc
 
+        if rescale_PS and getattr(self, "_rescale_static_ctx", None) is None:
+            # Build the cosmology-independent FKPT static context once, outside
+            # the repeatedly traced/evaluated rescaling branch table loop.  This keeps
+            # Kfuncs_to_tables_rescale_jax focused on JAX-array operations.
+            self._rescale_static_ctx = build_jax_static_ctx(
+                k_lin,
+                kmin=fkpt_params["kmin"],
+                kmax=fkpt_params["kmax"],
+                Nk_kernel=fkpt_params["Nk_kernel"],
+                nquadSteps=fkpt_params["nquadSteps"],
+                NQ=fkpt_params["NQ"],
+                NR=fkpt_params["NR"],
+            )
+
+        if rescale_PS:
+            # ------------------------------------------------------------------
+            # Rescaling branch ingredient mode: keep FKPT table construction live, but
+            # compile the expensive JAX-only table builder once per calculator.
+            #
+            # The whole desilike likelihood can still fail its global jit check
+            # because calculators update Python state, but this makes the actual
+            # rescaling branch FKPT kernel evaluation jit/vmap friendly and avoids paying
+            # Python/diffrax tracing overhead every MCMC point.
+            # ------------------------------------------------------------------
+            if getattr(self, "_rescale_table_eval", None) is None:
+                import jax as _rescaling_branch_jax
+
+                static_ctx_local = getattr(self, "_rescale_static_ctx", None)
+
+                # Capture all truly static configuration in the closure.  Only
+                # arrays/scalars that vary in the sampler are dynamic arguments.
+                static_kwargs = dict(
+                    z=float(self.z),
+                    model=model,
+                    mg_variant=mg_variant,
+                    beyond_eds=bool(fkpt_params.get("beyond_eds", False)),
+                    rescale_PS=True,
+                    kmin=float(fkpt_params["kmin"]),
+                    kmax=float(fkpt_params["kmax"]),
+                    Nk_kernel=int(fkpt_params["Nk_kernel"]),
+                    nquadSteps=int(fkpt_params["nquadSteps"]),
+                    NQ=int(fkpt_params["NQ"]),
+                    NR=int(fkpt_params["NR"]),
+                    xnow=float(fkpt_params["xnow"]),
+                    ode_method=fkpt_params.get("ode_method", "RKQS"),
+                    f0_kmax=float(fkpt_params.get("f0_kmax", 1e-3)),
+                    return_kernel_constants=True,
+                    static_ctx=static_ctx_local,
+                )
+
+                def _eval_rescaling_branch_rescale(
+                    k_in, pk_in, pk_now_in, Om_in,
+                    mu0_in, beta1_in, lambda1_in, exps_in,
+                    A_in, ApOverf0_in, CFD3_in, CFD3p_in,
+                ):
+                    kc = dict(
+                        A=A_in,
+                        ApOverf0=ApOverf0_in,
+                        CFD3=CFD3_in,
+                        CFD3p=CFD3p_in,
+                    )
+                    return Kfuncs_to_tables_rescale_jax(
+                        k=k_in,
+                        pk=pk_in,
+                        pk_now=pk_now_in,
+                        Om=Om_in,
+                        mu0=mu0_in,
+                        beta_1=beta1_in,
+                        lambda_1=lambda1_in,
+                        exp_s=exps_in,
+                        kernel_constants=kc,
+                        **static_kwargs,
+                    )
+
+                self._rescale_table_eval = _rescaling_branch_jax.jit(_eval_rescaling_branch_rescale)
+
+            if bool(fkpt_params.get("beyond_eds", False)):
+                kc = kernel_constants_input
+                A_in = getattr(kc, "A")
+                CFD3_in = getattr(kc, "CFD3")
+                CFD3p_in = getattr(kc, "CFD3p")
+                if hasattr(kc, "ApOverf0"):
+                    ApOverf0_in = getattr(kc, "ApOverf0")
+                else:
+                    ApOverf0_in = getattr(kc, "Ap") / getattr(kc, "f0")
+            else:
+                A_in = jnp.asarray(1.0, dtype=jnp.float64)
+                ApOverf0_in = jnp.asarray(0.0, dtype=jnp.float64)
+                CFD3_in = jnp.asarray(1.0, dtype=jnp.float64)
+                CFD3p_in = jnp.asarray(1.0, dtype=jnp.float64)
+
+            table, table_now, kcs = self._rescale_table_eval(
+                k_lin,
+                pk_lin,
+                pk_now_lin,
+                Om,
+                mg_params.get("mu0", 0.0),
+                mg_params.get("beta_1", 1.0),
+                mg_params.get("lambda_1", 0.0),
+                mg_params.get("exp_s", 0.0),
+                A_in,
+                ApOverf0_in,
+                CFD3_in,
+                CFD3p_in,
+            )
+        else:
+            table, table_now, kcs = Kfuncs_to_tables(
+                k=k_lin,
+                pk=pk_lin,
+                pk_now=pk_now_lin,
+                **fkpt_params,
+                return_kernel_constants=True,
+            )
+    
         extra = 0
-
-        kt = np.asarray(table[0])
-        fk_norm = np.asarray(table[2])
-        f0_mg = float(table[-1])
+    
+        # For rescaling branch, keep these as jnp arrays/scalars as much as possible.
+        # For legacy route, preserving the previous numpy/float behavior is fine.
+        if rescale_PS:
+            kt = jnp.asarray(table[0])
+            fk_norm = jnp.asarray(table[2])
+            f0_mg = jnp.asarray(table[-1])
+        else:
+            kt = np.asarray(table[0])
+            fk_norm = np.asarray(table[2])
+            f0_mg = float(table[-1])
+    
         fk_mg = fk_norm * f0_mg
-
+    
         calA, calAp, CFD3, CFD3p = kcs
+
+        # ------------------------------------------------------------------
+        # Rescaling branch state-light path.
+        #
+        # For rescale_PS=True the live JAX table builder is already wrapped in
+        # self._rescale_table_eval.  Do not create a fresh Namespace object for
+        # the PT state here: the tracer layer will consume these direct attrs and
+        # the final multipoles are produced by the cached pure-JAX pole function
+        # in combine_bias_terms_poles().  The legacy/route1/route2 path below is
+        # intentionally left unchanged and still uses self.pt = Namespace(...).
+        # ------------------------------------------------------------------
+        if rescale_PS:
+            self.jac = jac
+            self.kap = kap
+            self.muap = muap
+            self.table = table[1:28 + extra]
+            self.table_now = table_now[1:28 + extra]
+            self.scalars = table[28 + extra:]
+            self.scalars_now = table_now[28 + extra:]
+            self.A_full = False
+            self.remove_DeltaP = False
+            self.kt = kt
+            self.fk_norm = fk_norm
+            self.fk = fk_mg
+            self.f0 = f0_mg
+            self.qpar = qpar
+            self.qper = qper
+            self.sigma8 = sigma8
+            self.sigma8_z = sigma8_z
+            self.fsigma8 = f0_mg * sigma8_z
+            self.calA = calA
+            self.calAp = calAp
+            self.CFD3 = CFD3
+            self.CFD3p = CFD3p
+            return
 
         self.pt = Namespace(
             jac=jac,
@@ -4774,21 +5830,21 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             fk_norm=fk_norm,
             fk=fk_mg,
             f0=f0_mg,
-            qpar=self.template.qpar,
-            qper=self.template.qper,
-            sigma8=self.template.sigma8,
-            sigma8_z=float(self.template.cosmo.get_fourier().sigma8_z(z=self.z)),
+            qpar=qpar,
+            qper=qper,
+            sigma8=sigma8,
+            sigma8_z=sigma8_z,
             calA=calA,
             calAp=calAp,
             CFD3=CFD3,
             CFD3p=CFD3p,
         )
-
+    
         self.kt = kt
-        self.qpar = self.template.qpar
-        self.qper = self.template.qper
-        self.sigma8 = self.template.sigma8
-        self.sigma8_z = self.pt.sigma8_z
+        self.qpar = qpar
+        self.qper = qper
+        self.sigma8 = sigma8
+        self.sigma8_z = sigma8_z
         self.fsigma8 = self.pt.f0 * self.sigma8_z
         self.f0 = self.pt.f0
         self.fk = self.pt.fk
@@ -4797,23 +5853,35 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
     def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
         """
         Reuse FOLPS RSD multipole machinery, exactly like the original FKPT wrapper intended.
+
+        For rescaling branch (rescale_PS=True), calculate() stores the PT state directly
+        on ``self`` rather than creating ``self.pt = Namespace(...)``.  For the
+        legacy/non-rescaled routes, keep using the original ``self.pt`` state.
+        This changes only where the already-computed state is read from; the
+        FOLPS/RSD physics and bias parameter mapping are unchanged.
         """
         import folps as folpsv2
         import jax.numpy as jnp
         from jax import jit
 
-        table = (self.kt, *self.pt.table, *self.pt.scalars)
-        table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
+        use_direct_state = bool(self.options.get("rescale_PS", False)) and hasattr(self, "table")
+        state = self if use_direct_state else self.pt
 
-        params["PshotP"] = 1.0 / nd
-        params["X_FoG_p"] = 0.0
+        table = (state.kt, *state.table, *state.scalars)
+        table_now = (state.kt, *state.table_now, *state.scalars_now)
+
+        # Keep the same derived values as before, but do not mutate the input
+        # dictionary in-place inside the likelihood path.
+        local_params = dict(params)
+        local_params["PshotP"] = 1.0 / nd
+        local_params["X_FoG_p"] = 0.0
 
         required_bias_params = [
             "b1", "b2", "bs2", "b3nl",
             "alpha0", "alpha2", "alpha4",
             "ctilde", "alpha0shot", "alpha2shot", "PshotP", "X_FoG_p",
         ]
-        pars = [params[p] for p in required_bias_params]
+        pars = [local_params[p] for p in required_bias_params]
 
         ncols = len(table)
         if getattr(self, "_get_poles", None) is None:
@@ -4834,9 +5902,9 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             self._get_poles = _get_poles
 
         poles = self._get_poles(
-            self.pt.jac,
-            self.pt.kap,
-            self.pt.muap,
+            state.jac,
+            state.kap,
+            state.muap,
             jnp.array(pars),
             self.bias_scheme,
             self.damping,
@@ -4898,9 +5966,14 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                 state[name] = getattr(self, name)
 
         if varied:
-            for name in self._pt_attrs:
-                if hasattr(self.pt, name):
-                    state[name] = getattr(self.pt, name)
+            if bool(getattr(self, "options", {}).get("rescale_PS", False)) and hasattr(self, "table"):
+                source = self
+            else:
+                source = getattr(self, "pt", None)
+            if source is not None:
+                for name in self._pt_attrs:
+                    if hasattr(source, name):
+                        state[name] = getattr(source, name)
         return state
 
     def __setstate__(self, state):
@@ -4912,6 +5985,12 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         if not hasattr(self, 'pt'):
             self.pt = Namespace()
         self.pt.update(**state)
+
+        # Also expose restored state directly on self.  This is harmless for
+        # legacy paths and lets rescaling branch state-light objects be consumed without
+        # relying on self.pt = Namespace(...) during calculation.
+        for name, value in state.items():
+            setattr(self, name, value)
 
         for name in ['kt', 'fk_norm', 'fk', 'f0', 'qpar', 'qper']:
             if hasattr(self.pt, name):
@@ -5745,8 +6824,8 @@ class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
         self.runtime_info._requires = None  # rescan -> cosmo becomes the dependency
 
         # Loop-grid params (concrete, from the data k-grid) -- shared by both paths.
-        self._loop_kmin = float(min(1e-3, float(jnp.min(self.k))))
-        self._loop_kmax = float(max(1.0, float(jnp.max(self.k))))
+        self._loop_kmin = float(min(1e-3, float(np.min(np.asarray(self.k)))))
+        self._loop_kmax = float(max(1.0, float(np.max(np.asarray(self.k)))))
         self._loop_Nk = int(min(len(self.k), 120))
         self.ode_backend = self.options.get("ode_backend", "eager")
         # The static kernel grid (built from the emulator k-grid) is precomputed
@@ -5779,9 +6858,9 @@ class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
             z=float(self.z),
             Om=float(emu['Omega_m']),
             # match the parent fkptjaxPowerSpectrumMultipoles.calculate kernel grid
-            kmin=float(min(1e-3, float(jnp.min(self.k)))),
-            kmax=float(max(1.0, float(jnp.max(self.k)))),
-            Nk_kernel=int(min(len(self.k), 120)),
+            kmin=self._loop_kmin,
+            kmax=self._loop_kmax,
+            Nk_kernel=self._loop_Nk,
             nquadSteps=300,
             NQ=10,
             NR=10,

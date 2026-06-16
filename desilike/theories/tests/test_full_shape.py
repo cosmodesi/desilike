@@ -4,7 +4,6 @@ import numpy as np
 import jax
 import pytest
 
-jax.config.update('jax_enable_x64', True)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -531,6 +530,54 @@ class TestFOLPS:
         _check_emulator(pipe_exact, _emulate(theory_emu, inner_pt=theory_emu.pt.pt), shift_param='b1p')
 
 
+# ── JAXEffort ────────────────────────────────────────────────────────────────
+
+class TestJAXEffort:
+
+    @pytest.fixture(autouse=True)
+    def skip_if_missing(self):
+        pytest.importorskip('jaxeffort')
+
+    def test_tracer_spectrum_standard(self):
+        """JAXEffortTracerSpectrum2Poles standard basis: shape, finite output, b1 sensitivity."""
+        from desilike.theories.galaxy_clustering.full_shape import JAXEffortTracerSpectrum2Poles
+        k = np.linspace(0.01, 0.2, 20)
+        theory = JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2, 4))
+        run = _compile(theory)
+        base = run()
+        _check(base, 'JAXEffortTracerSpectrum2Poles (standard)')
+        assert base.shape == (3, len(k))
+        _check_sensitivity(run, base, 'JAXEffortTracerSpectrum2Poles (standard)', b1=3.0)
+
+    def test_tracer_spectrum_physical(self):
+        """JAXEffortTracerSpectrum2Poles physical basis: shape, finite output, b1p sensitivity."""
+        from desilike.theories.galaxy_clustering.full_shape import JAXEffortTracerSpectrum2Poles
+        k = np.linspace(0.01, 0.2, 20)
+        theory = JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2, 4), prior_basis='physical')
+        run = _compile(theory)
+        base = run()
+        _check(base, 'JAXEffortTracerSpectrum2Poles (physical)')
+        assert base.shape == (3, len(k))
+        _check_sensitivity(run, base, 'JAXEffortTracerSpectrum2Poles (physical)', b1p=3.0)
+
+    def test_tracer_presets(self):
+        """JAXEffortTracerSpectrum2Poles: LRG/ELG/QSO fsat/sigv settings run without error."""
+        from desilike.theories.galaxy_clustering.full_shape import (
+            JAXEffortTracerSpectrum2Poles, get_physical_stochastic_settings,
+        )
+        k = np.linspace(0.01, 0.2, 20)
+        for tracer in ['LRG', 'ELG', 'QSO']:
+            settings = get_physical_stochastic_settings(tracer)
+            theory = JAXEffortTracerSpectrum2Poles(k=k, **settings)
+            _check(_compile(theory)(), f'JAXEffortTracerSpectrum2Poles tracer={tracer}')
+
+    def test_ells_subset(self):
+        """JAXEffortTracerSpectrum2Poles: ells=(0, 2) gives the right output shape."""
+        from desilike.theories.galaxy_clustering.full_shape import JAXEffortTracerSpectrum2Poles
+        k = np.linspace(0.01, 0.2, 20)
+        assert _compile(JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2)))().shape[0] == 2
+
+
 def test_jit():
 
     from desilike import compile, get_params
@@ -538,16 +585,17 @@ def test_jit():
     from desilike.theories.galaxy_clustering import DirectSpectrum2Template, FOLPSTracerSpectrum2Poles
     k = np.linspace(0.02, 0.3, 20)
     ells = (0, 2)
-    cosmo = CosmoprimoCosmology(engine='camb')
-    template = DirectSpectrum2Template(cosmo=cosmo, z=1.)
-    pipe = compile(FOLPSTracerSpectrum2Poles(k=k, ells=ells, template=template))
+    for engine in ['camb', 'eisenstein_hu']:
+        cosmo = CosmoprimoCosmology(engine=engine)
+        template = DirectSpectrum2Template(cosmo=cosmo, z=1.)
+        pipe = compile(FOLPSTracerSpectrum2Poles(k=k, ells=ells, template=template))
 
-    pipe_jit = jax.jit(pipe)
-    for i in range(3):
-        params = {param.name: param.prior.sample(key=jax.random.key(42 + i)) for param in get_params(cosmo).select(varied=True)}
-        poles = pipe(params)
-        poles_jit = pipe_jit(params)
-        assert np.allclose(poles_jit, poles)
+        pipe_jit = jax.jit(pipe)
+        for i in range(3):
+            params = {param.name: param.prior.sample(key=jax.random.key(42 + i)) for param in get_params(cosmo).select(varied=True)}
+            poles = pipe(params)
+            poles_jit = pipe_jit(params)
+            assert np.allclose(poles_jit, poles)
 
 
 

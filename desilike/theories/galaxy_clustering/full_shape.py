@@ -2502,7 +2502,7 @@ class COMETEngine(Calculator):
             cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial=fiducial)
         self.cosmo = self.narrow_cosmo_range(cosmo)
         self.model = model
-        self._is_external = False  # __call__ is jax compatible
+        self._is_external = False  # __call__ should be jax compatible
 
     def __post_init__(self, cosmo=None, fiducial='DESI', model='VDG_infty', use_Mpc=False, **kwargs):
         self._fiducial = self.cosmo._fiducial
@@ -2517,7 +2517,7 @@ class COMETEngine(Calculator):
 
     def __call__(self):
         cosmo = self.cosmo
-        self.comet_cosmo = self.cosmoprimo_to_comet(cosmo.cosmo)
+        self.comet_cosmo = self.cosmoprimo_to_comet(cosmo)
         w0_fixed, wa_fixed = cosmo.params['w0_fld'].fixed, cosmo.params['wa_fld'].fixed
         if (w0_fixed, wa_fixed) == (True, True):
             de_model = 'lambda'
@@ -2547,7 +2547,10 @@ class COMETEngine(Calculator):
     def emulator_params_range(cls):
         # XXX: better to read it from comet
         # https://comet-emu.readthedocs.io/en/latest/spaceparams.html#ranges-of-emulated-parameters
-        return dict(omega_cdm=(0.08, 0.16), omega_b=(0.01930, 0.02535), n_s=(0.90, 1.03), mnu=(0.0, 1.0), A_s=(1e-9, 3.5e-9))
+        params = dict(omega_cdm=(0.08, 0.16), omega_b=(0.01930, 0.02535), n_s=(0.90, 1.03), m_ncdm=(0.0, 1.0), A_s=(1e-9, 3.5e-9))
+        lo, hi = params['A_s']
+        params['logA'] = np.log(lo * 1e10), np.log(hi * 1e10)
+        return params
 
     @classmethod
     def narrow_cosmo_range(cls, cosmo):
@@ -2568,9 +2571,9 @@ class COMETEngine(Calculator):
         comet_cosmo['wb'] = cosmo['omega_b']
         comet_cosmo['h'] = cosmo['h']
         comet_cosmo['ns'] = cosmo['n_s']
-        comet_cosmo['As'] = cosmo['A_s'] * 1e9  # comet uses As in units of 1e-9
+        comet_cosmo['As'] = jnp.exp(cosmo['logA']) * 1e-10 * 1e9  # comet uses As in units of 1e-9
         if self.with_massive_neutrino:
-            comet_cosmo['Mnu'] = cosmo['m_ncdm_tot']
+            comet_cosmo['Mnu'] = cosmo['m_ncdm']
         comet_cosmo['w0'] = cosmo['w0_fld']
         comet_cosmo['wa'] = cosmo['wa_fld']
         comet_cosmo['Ok'] = cosmo['Omega_k']
@@ -2579,7 +2582,7 @@ class COMETEngine(Calculator):
     @property
     def in_realspace(self):
         return 'RS' in self.model
-    
+
     @property
     def with_massive_neutrino(self):
         return 'nonu' not in self.model
@@ -2856,7 +2859,7 @@ class COMETTracerSpectrum2Poles(Calculator):
         if not self.pt.engine.use_Mpc:
             # comet emulator evalutes in Mpc unit, and then spline interpolation converts (k, diagram) to (h/Mpc, Mpc^3/h^3) unit,
             # however, counterterm diagram evaluates ~k^2 P_L or ~k^4 P_L so we need additionally convert k from 1/Mpc to h/Mpc unit here
-            h = self.pt.engine.cosmo.cosmo['h']
+            h = self.pt.engine.cosmo['h']
             c0, c2, c4 = c0 / h**2, c2 / h**2, c4 / h**2
             cnlo = cnlo / h**4
             # for the same reason, NP* should be rescaled to compensate the h^3 factor

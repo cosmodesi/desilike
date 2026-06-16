@@ -3029,9 +3029,10 @@ class COMETTracerSpectrum3Poles(Calculator):
     def _set_canonical_params(self):
         COMETTracerSpectrum2Poles._set_canonical_params(self)  # type: ignore
         cnloB = self.pt.cnloB.value
+        NP0 = self.NP0.value  # there's no need to normalize it by h**3 here
         NB0 = self.NB0.value
         MB0 = self.MB0.value
-        self.canonical_params |= dict(cnloB=cnloB, NB0=NB0, MB0=MB0)
+        self.canonical_params |= dict(cnloB=cnloB, NP0=NP0, NB0=NB0, MB0=MB0)
 
     def tree_flatten(self):
         return [self.poles], None

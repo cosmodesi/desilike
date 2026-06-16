@@ -26,7 +26,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-from desilike.base import compile, get_params, Posterior, replace, SumLikelihood
+from desilike.base import compile, get_params, Posterior, Prior, replace, SumLikelihood
 from desilike import TaylorEmulator
 from desilike.theories.galaxy_clustering import (BAOSpectrum2Template,
                                                  DampedBAOWigglesPTSpectrum2Poles,
@@ -110,6 +110,8 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False,
     for tracer in tracer_list:
         z = Z_TRACERS.get(tracer, 0.8)
         cosmo = CosmoprimoCosmology(engine='camb')
+        for param in get_params(cosmo).select(basename=['w0_fld', 'wa_fld']):
+            param.update(fixed=False)
         template = DirectSpectrum2Template(z=z, cosmo=cosmo)
         tracer_arg = (tracer,) if tracer is not None else None
         theory = FOLPSTracerSpectrum2Poles(k=k, template=template, ells=ells, tracers=tracer_arg)
@@ -141,7 +143,7 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False,
 
         from scipy.linalg import block_diag
         like = ObservablesGaussianLikelihood(observables=observables, covariance=block_diag(*covariances))
-        if False: #marginalize:
+        if marginalize:
             for param in get_params(like).select(basename='alpha*'):
                 param.update(derived='best')
             for param in get_params(like).select(basename='sn*'):
@@ -149,7 +151,15 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False,
         likelihoods.append(like)
 
     likelihood = SumLikelihood(likelihoods)
-    return Posterior(likelihood)
+
+    def CustomPrior(Prior):
+
+        def __call__(self):
+            self.logpdf = super().__call__()
+            self.logpdf = jnp.where(self.params['w0_fld'].value + self.params['wa_fld'].value < 0, self.logpdf, -jnp.inf)
+            return self.logpdf
+
+    return Posterior(likelihood, prior=CustomPrior(get_params(likelihood)))
 
 
 # ── timing harness ───────────────────────────────────────────────────────────
@@ -246,6 +256,13 @@ def main(test=('folps_multi', 'folps_multi_emu')):
         #run('without analytic marg.', lambda: build_posterior_folps(marginalize=False, emulator_order=1), vary_param='logA', warmup=2, number=10)
         run('with analytic marg. (alpha*+sn* → best)', lambda: build_posterior_folps(marginalize=True, emulator_order=1), vary_param='logA', warmup=2, number=10)
 
+    if 'folps_3poles' in test:
+        print(f'\n{"─" * 60}')
+        print(f'FOLPS: ells={ELLS_FOLPS}, k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
+            f'data size={len(ELLS_FOLPS) * len(K)}')
+        print(f'{"─" * 60}')
+        run('without analytic marg.', lambda: build_posterior_folps(marginalize=False, include_3poles=True), vary_param='logA', warmup=2, number=2, run=('eager', 'jit'))
+
     if 'folps_emu_3poles' in test:
         print(f'\n{"─" * 60}')
         print(f'FOLPS + TaylorEmulator(order=1) on PT: ells={ELLS_FOLPS}, '
@@ -283,4 +300,4 @@ def main(test=('folps_multi', 'folps_multi_emu')):
 
 if __name__ == '__main__':
 
-    main(test=('bao',))
+    main(test=('folps_3poles',))

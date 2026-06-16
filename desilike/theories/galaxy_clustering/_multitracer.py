@@ -77,7 +77,7 @@ def propose_params_multitracer(auto_params, tracers, stochastic=(), shared=(), c
     return vc
 
 
-def assign_params(inst, vc, tracers):
+def assign_params(inst, vc, tracers, mapping=None):
     """Set Parameter attributes on *inst* from *vc*.
 
     Groups the VC entries by basename and sets the corresponding instance attributes:
@@ -96,6 +96,11 @@ def assign_params(inst, vc, tracers):
         caller-supplied overrides via ``vc = vc + VariableCollection(params)``.
     tracers : str, (str, str), or None
         Used to resolve (X, Y) ordering for deterministic cross parameters.
+    mapping : callable or None, default=None
+        Optional ``basename -> attribute_name`` transform applied before ``setattr``.
+        Use this to give parameters a different attribute name than their basename —
+        e.g. ``lambda name: name[:-1]`` strips a trailing ``p`` so that physical-basis
+        params (``b1p``, ``b2p``, …) are stored as ``self.b1``, ``self.b2``, etc.
     """
     from collections import defaultdict
     by_basename = defaultdict(list)
@@ -109,76 +114,12 @@ def assign_params(inst, vc, tracers):
         else:
             # Deterministic cross: two params — order as (X, Y).
             name_X, name_Y = tracers
-            value = tuple(sorted(params_group, key=lambda p: 0 if p.namespace == name_X else 1))
-        if bn.isidentifier():
-            setattr(inst, bn, value)
+            value = tuple(sorted(params_group, key=lambda p: 0 if name_X in p.namespace else 1))
+        attr_name = mapping(bn) if mapping is not None else bn
+        if attr_name.isidentifier():
+            setattr(inst, attr_name, value)
         else:
             list_params.append(value)
 
     if list_params:
         inst.bb_params = list_params
-
-
-def apply_tracers(inst, tracers, stochastic=(), shared=(), cross=False):
-    """Namespace *inst*'s own bias parameters in place for a tracer spec.
-
-    Parameters
-    ----------
-    inst : Calculator
-        Instance whose own ``Parameter`` attributes (and lists of Parameters) are
-        rewritten.  Sub-calculator dependencies are left untouched.
-    tracers : str, (str, str), or None
-        Tracer spec (see module docstring).
-    stochastic : sequence of str
-        Basenames of stochastic parameters: in the cross case these take the
-        ``XxY`` namespace (a single parameter) rather than becoming a 2-tuple.
-    shared : sequence of str
-        Basenames of parameters that are *never* namespaced (e.g. cosmological
-        parameters shared across all tracers, such as ``fnl_loc``).
-    cross : bool
-        Whether the calculator's ``__call__`` handles tuple-valued (cross) bias
-        parameters.  When ``False`` a tuple *tracers* raises.
-
-    Returns
-    -------
-    inst (modified in place).
-    """
-    if tracers is None:
-        return inst
-    from ...parameter import Parameter
-    shared, stochastic = set(shared), set(stochastic)
-
-    def _param_attrs():
-        return [(key, val) for key, val in list(inst.__dict__.items()) if isinstance(val, Parameter)]
-
-    def _list_attrs():
-        return [(key, val) for key, val in list(inst.__dict__.items())
-                if isinstance(val, list) and val and all(isinstance(v, Parameter) for v in val)]
-
-    if isinstance(tracers, str):
-        for key, val in _param_attrs():
-            if val.basename not in shared:
-                setattr(inst, key, val.clone(namespace=tracers))
-        for key, val in _list_attrs():
-            setattr(inst, key, [v.clone(namespace=tracers) if v.basename not in shared else v for v in val])
-        return inst
-
-    # cross spectrum: tracers is a (X, Y) pair
-    if not cross:
-        raise NotImplementedError(f'{type(inst).__name__} does not support cross-correlations '
-                                  f'(got {tracers!r}); pass a single tracer name.')
-    name_X, name_Y = tracers
-    cross_ns = f'{name_X}x{name_Y}'
-    for key, val in _param_attrs():
-        bn = val.basename
-        if bn in shared:
-            continue
-        if bn in stochastic:
-            setattr(inst, key, val.clone(namespace=cross_ns))
-        else:  # deterministic: one parameter per tracer
-            setattr(inst, key, (val.clone(namespace=name_X), val.clone(namespace=name_Y)))
-    for key, val in _list_attrs():
-        if all(v.basename in shared for v in val):
-            continue
-        setattr(inst, key, [(v.clone(namespace=name_X), v.clone(namespace=name_Y)) for v in val])
-    return inst

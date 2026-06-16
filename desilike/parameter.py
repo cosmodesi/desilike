@@ -217,6 +217,14 @@ class Node:
 
     _is_calculator = False
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        jax.tree_util.register_pytree_node(
+            cls,
+            lambda node: node.tree_flatten(),
+            cls.tree_unflatten,
+        )
+
     def __getattribute__(self, name):
         value = object.__getattribute__(self, name)
         if not name.startswith('_'):
@@ -444,6 +452,16 @@ class Variable(Node):
         state = self.__getstate__()
         state.update(kwargs)
         return Variable(**state)
+
+    def tree_flatten(self):
+        return [self._value], (self._name, self._derived, self._latex, self.shape)
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj._name, obj._derived, obj._latex, obj.shape = aux
+        obj._value = children[0]
+        return obj
 
     def __repr__(self):
         return f'Variable({self._name!r})'
@@ -750,7 +768,7 @@ class ParameterPrior:
 class Parameter(Variable):
     """A single named parameter with prior, value, and metadata.
 
-    Names may embed a namespace using NAMESPACE_SEP ('.'): e.g. 'galaxy.omega_m'.
+    Names may embed a namespace using NAMESPACE_SEP ('.'): e.g. 'galaxy.b1'.
     An optional ``namespace`` keyword prepends to whatever is parsed from ``name``.
     """
 
@@ -763,7 +781,7 @@ class Parameter(Variable):
         Parameters
         ----------
         name : str or Parameter
-            Parameter name, optionally namespace-prefixed (e.g. 'galaxy.omega_m').
+            Parameter name, optionally namespace-prefixed (e.g. 'galaxy.b1').
             If a Parameter, copy-construct from it (all other args ignored).
         value : float, optional
             Default value. Inferred from prior center when omitted and prior is proper.
@@ -1003,6 +1021,17 @@ class Parameter(Variable):
             # in-memory format: feed directly to __init__
             self.__init__(**state)
 
+    def tree_flatten(self):
+        # aux = self (minus _value); hash/eq based on name so same-named params share a trace.
+        return [self._value], self
+
+    @classmethod
+    def tree_unflatten(cls, param, children):
+        obj = cls.__new__(cls)
+        obj.__dict__.update(param.__dict__)
+        obj._value = children[0]
+        return obj
+
     def __repr__(self):
         return f'Parameter({self._name!r}, {"fixed" if self.fixed else "varied"})'
 
@@ -1214,6 +1243,20 @@ class VariableCollection:
 
         self._data = [params_by_name[n] for n in names if n in params_by_name]
 
+    def tree_flatten(self):
+        return [p._value for p in self._data], tuple(self._data)
+
+    @classmethod
+    def tree_unflatten(cls, params, children):
+        obj = cls.__new__(cls)
+        obj._data = []
+        for param, val in zip(params, children):
+            new_param = param.__class__.__new__(param.__class__)
+            new_param.__dict__.update(param.__dict__)
+            new_param._value = val
+            obj._data.append(new_param)
+        return obj
+
     def write(self, filename):
         """Write to an HDF5 or text file.
 
@@ -1243,6 +1286,10 @@ class VariableCollection:
         VariableCollection
         """
         return _utils_read(filename)
+
+
+# VariableCollection is not a Node, so it does not auto-register via Node.__init_subclass__.
+jax.tree_util.register_pytree_node(VariableCollection, lambda vc: vc.tree_flatten(), VariableCollection.tree_unflatten)
 
 
 def expand_dict(di, names):

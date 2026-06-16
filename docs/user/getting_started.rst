@@ -207,6 +207,7 @@ To sum independent likelihoods:
 
   combined = SumLikelihood(likelihoods=[likelihood1, likelihood2])
 
+
 Compile and evaluate
 ~~~~~~~~~~~~~~~~~~~~
 
@@ -254,7 +255,7 @@ Parameters are :class:`~desilike.parameter.Parameter` objects; their main attrib
 - ``fixed`` — whether the parameter is fixed
 - ``latex`` — LaTeX string
 
-They can be updated on the compiled pipeline:
+They can be updated as:
 
 .. code-block:: python
 
@@ -267,17 +268,105 @@ Parameters can be analytically marginalized (useful for linear nuisance paramete
 
 .. code-block:: python
 
-  # '.marg': Gaussian marginalization; '.best': set at best-fit; '.auto': choose based on context
-  params['sn0'].update(derived='.auto')
+  # 'marg': Gaussian marginalization; 'best': set at best-fit (= Jeffreys prior)
+  params['sn0'].update(derived='marg')
 
 Or reparameterized via expressions:
 
 .. code-block:: python
 
-  params['qpar'].update(derived='{qiso} * {qap}**(2. / 3.)')
-  params['qper'].update(derived='{qiso} * {qap}**(-1. / 3.)')
-  params['qiso'].update(prior={'limits': [0.9, 1.1]}, latex=r'q_{\mathrm{iso}}')
-  params['qap'].update(prior={'limits': [0.9, 1.1]}, latex=r'q_{\mathrm{ap}}')
+  params['qpar'].update(derived='qiso * qap**(2. / 3.)')
+  params['qper'].update(derived='qiso * qap**(-1. / 3.)')
+  params['qiso'].update(prior={'limits': [0.9, 1.1]}, latex=r'q_\mathrm{iso}')
+  params['qap'].update(prior={'limits': [0.9, 1.1]}, latex=r'q_\mathrm{ap}')
+
+
+Posterior
+~~~~~~~~~
+
+To run a Bayesian analysis, combine the likelihood with a
+:class:`~desilike.base.Prior` inside a :class:`~desilike.base.Posterior`:
+
+.. code-block:: python
+
+  from desilike import get_params
+  from desilike.base import Prior, Posterior
+
+  # Prior: pass Parameter objects (keyword args) or a VariableCollection
+  # (positional arg).  Parameters with no prior distribution contribute 0.
+  prior = Prior(get_params(likelihood))
+
+  posterior = Posterior(likelihood, prior)
+  pipe = compile(posterior)
+
+  params = {p.name: p.value for p in pipe.params}
+  pipe(params)   # returns log-posterior = log-likelihood + log-prior
+
+The prior is evaluated first; if the log-prior is :math:`-\infty` (any
+parameter outside its support), the likelihood is skipped.  The scalar
+log-posterior is the return value; ``loglikelihood``, ``logprior``, and
+``logposterior`` are also available as derived parameters:
+
+.. code-block:: python
+
+  logP, derived = pipe(params, return_derived=True)
+  print(derived['loglikelihood'], derived['logprior'])
+
+**Custom prior with extra conditions**
+
+Subclass :class:`~desilike.base.Prior` to add constraints beyond standard
+per-parameter distributions.  Call ``super().__call__()`` to get the standard
+log-prior, then apply your condition:
+
+.. code-block:: python
+
+  import jax.numpy as jnp
+  from desilike.base import Prior, Posterior
+
+  class CustomPrior(Prior):
+      """Hard constraint w0 + wa < 0, on top of individual parameter priors."""
+
+      def __call__(self):
+          logpdf = super().__call__()
+          w0, wa = self.params['w0_fld'], self.params['wa_fld']
+          self.logpdf = jnp.where(w0 + wa < 0., logpdf, -jnp.inf)
+          return self.logpdf
+
+  params = get_params(likelihood)
+  posterior = Posterior(likelihood, prior=CustomPrior(params))
+  pipe = compile(posterior)
+
+
+**Reparametrization inside the prior**
+
+A custom prior can also override parameter values before the likelihood runs —
+for example to tie two parameters together.  Set the parameter's ``.value``
+inside ``__call__``; :class:`~desilike.base.Posterior` automatically picks up
+the new value and passes it to the likelihood:
+
+.. code-block:: python
+
+  class ReparPrior(Prior):
+      """Force omega_m = A at every likelihood evaluation."""
+
+      def __init__(self, *args, **kwargs):
+          super().__init__(*args, **kwargs)
+          self._omega_m = self.params['omega_m']
+          self._omega_m.update(derived=True)  # such that it isn't listed as input parameter
+          self._A = self.params['A']
+
+      def __call__(self):
+          logpdf = super().__call__()
+          self._omega_m.value = self._A.value   # override before likelihood
+          return logpdf
+
+  params = get_params(likelihood)
+  posterior = Posterior(likelihood, prior=ReparPrior(params))
+  pipe = compile(posterior)
+
+The reparametrization is fully differentiable under ``jax.jit`` and
+``jax.grad``.
+
 
 
 Emulators
@@ -397,7 +486,7 @@ In-place profiling without an external code.  Available kernels:
 
   from desilike.profilers import Profiler, Minuit
 
-  pipe = compile(likelihood)
+  pipe = compile(posterior)
   profiler = Profiler(pipe, kernel=Minuit(), output_dir='profiles/')
 
   profiler.maximize(niterations=5)
@@ -430,7 +519,7 @@ In-place sampling.  Pass a kernel to :func:`~desilike.samplers.Sampler`:
 
   from desilike.samplers import Sampler, Emcee
 
-  pipe = compile(likelihood)
+  pipe = compile(posterior)
   sampler = Sampler(pipe, kernel=Emcee(nwalkers=32), nparallel=4, output_dir='chains/')
 
   chains = sampler.run(gelman_rubin=1.05)  # run until Gelman-Rubin < 1.05

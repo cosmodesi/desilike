@@ -127,6 +127,12 @@ class PrimordialCosmology(Calculator):
                     if k is not None:
                         spec['k'] = np.unique(np.concatenate([spec['k'], np.asarray(k, dtype='f8')]))
 
+    def __getitem__(self, name):
+        # Return parameter value
+        if name in self.params:
+            return self.params[name].value
+        raise KeyError
+
     def get(self, method_key, **kwargs):
         """Return a pre-computed requirement result, selecting from the merged grid.
 
@@ -174,9 +180,8 @@ class PrimordialCosmology(Calculator):
                 self._results[spec_key] = jnp.zeros((nz, nk) if nk else (nz,))
 
     def tree_flatten(self):
-        param_marker = jnp.concatenate([jnp.ravel(jnp.asarray(param.value)) for param in self.params.values()])
         ordered = list(self._requirements.items())
-        leaves = [param_marker]
+        leaves = []
         for spec_key, spec in ordered:
             if spec_key in self._results:
                 leaves.append(self._results[spec_key])
@@ -185,15 +190,15 @@ class PrimordialCosmology(Calculator):
                 nz = len(spec['z'])
                 nk = len(spec['k']) if spec['k'] is not None else 0
                 leaves.append(jnp.zeros((nz, nk) if nk else (nz,)))
-        return leaves, {'engine': self._engine, 'ordered_specs': ordered}
+        return leaves, {'engine': self._engine, 'ordered_specs': ordered, 'params': self.params}
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
         obj._engine = aux['engine']
-        obj._param_vector = children[0]
+        obj.params = aux['params']
         obj._requirements = {sk: spec for sk, spec in aux['ordered_specs']}
-        obj._results   = {sk: arr  for (sk, _), arr in zip(aux['ordered_specs'], children[1:])}
+        obj._results   = {sk: arr  for (sk, _), arr in zip(aux['ordered_specs'], children)}
         return obj
 
 
@@ -241,7 +246,7 @@ def _build_cosmo(fiducial, params):
     """Clone *fiducial* with the given *params* dict (desilike names → values).
 
     Values are passed as-is so JAX tracers are preserved for JAX-native engines;
-    external engines (camb, class) always receive plain floats via _current_params().
+    external engines (camb, class) always receive plain floats.
     """
     kw = {_CONVERSIONS.get(name, name): value for name, value in params.items()}
     # ``h`` and ``theta_MC_100`` are mutually exclusive inputs to cosmoprimo; when both
@@ -372,6 +377,11 @@ class CosmoprimoCosmology(PrimordialCosmology):
             self._fiducial = _get_fiducial(fiducial).clone(engine=self._engine)
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
+    def __getitem__(self, name):
+        # Return parameter value
+        if name in self.params:
+            return self.params[name].value
+        return self.cosmo[name]
 
     def __call__(self):
         # JAX engines: keep tracers (clone is differentiable). External engines: plain floats.
@@ -402,9 +412,9 @@ class CosmoprimoCosmology(PrimordialCosmology):
             elif method_key == 'background.transverse_comoving_distance':
                 result = cosmo.get_background().comoving_transverse_distance(z_grid)
             elif method_key == 'thermodynamics.rs_drag':
-                result = jnp.asarray([cosmo.rs_drag])   # z_grid is a dummy; shape (1,)
+                result = cosmo.rs_drag
             elif method_key == 'background.N_eff':
-                result = jnp.asarray([cosmo.N_eff])     # z_grid is a dummy; shape (1,)
+                result = cosmo.N_eff
             else:
                 raise ValueError(f'Unknown requirement method key: {method_key!r}')
             self._results[spec_key] = result

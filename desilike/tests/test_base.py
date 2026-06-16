@@ -714,6 +714,73 @@ def test_prior_in_posterior():
     assert abs(float(jax.jit(pipe)(params)) - got) < 1e-8
 
 
+def test_custom_prior_extra_condition():
+    """CustomPrior adds a hard constraint (A + ns < 2.) on top of standard parameter priors."""
+
+    class CustomPrior(Prior):
+        """Standard logpdf, but returns -inf when A + ns >= 2."""
+
+        def __init__(self, *args, A=None, ns=None, **kwargs):
+            # *args forwarded to Prior so prior.update(vc) from Posterior.__init__ works.
+            super().__init__(*args, A=A, ns=ns, **kwargs)
+
+        def __call__(self):
+            logpdf = super().__call__()
+            A, ns = self.params['A'], self.params['ns']
+            self.logpdf = jnp.where(A.value + ns.value < 2., logpdf, -jnp.inf)
+            return self.logpdf
+
+    A = Parameter('A', value=1.0, prior=dict(dist='norm', loc=1.0, scale=0.5))
+    ns = Parameter('ns', value=0.96, prior=dict(dist='norm', loc=0.96, scale=0.05))
+    # CustomPrior also works inside a full posterior pipeline.
+    omega_m = Parameter('omega_m', value=0.3)
+    z = Parameter('z', value=0.5)
+    cosmo = Cosmology(omega_m=omega_m, z=z)
+    spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
+    likelihood = GaussianChi2(spectrum=spectrum, data=DATA)
+    custom_prior = CustomPrior(A=A, ns=ns)
+    pipe2 = compile(Posterior(likelihood, custom_prior))
+    params2 = {'omega_m': 0.3, 'z': 0.5, 'A': 1.0, 'ns': 0.96}
+    got2 = float(pipe2(params2))
+    assert abs(got2 - analytic_logL(0.3, 0.5, 1.0, 0.96)) < 1e-8
+    # Condition violated in the posterior → -inf.
+    assert float(pipe2({'omega_m': 0.3, 'z': 0.5, 'A': 1.5, 'ns': 0.96})) == float(-jnp.inf)
+
+
+def test_custom_prior_reparametrized():
+    """CustomPrior sets omega_m = A inside __call__; Posterior propagates this to the likelihood."""
+
+    class CustomPrior(Prior):
+        """Reparametrizes omega_m := A before the likelihood runs."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.params['omega_m'].update(derived=True)  # note as derived parameter
+
+        def __call__(self):
+            logpdf = super().__call__()
+            self.params['omega_m'].value = self.params['A'].value
+            return logpdf
+
+    omega_m = Parameter('omega_m', value=0.3)
+    z = Parameter('z', value=0.5)
+    A = Parameter('A', value=0.3)
+    ns = Parameter('ns', value=0.96)
+    cosmo = Cosmology(omega_m=omega_m, z=z)
+    spectrum = PowerSpectrum(cosmo=cosmo, A=A, ns=ns)
+    likelihood = GaussianChi2(spectrum=spectrum, data=DATA)
+
+    pipe = compile(Posterior(likelihood, CustomPrior(omega_m=omega_m, A=A)))
+
+    # omega_m provided as 0.99 but prior reparametrizes it to A=0.3 → likelihood sees omega_m=0.3.
+    params = {'z': 0.5, 'A': 0.3, 'ns': 0.96}
+    got = float(pipe(params))
+    expected = analytic_logL(0.3, 0.5, 0.3, 0.96)
+    assert abs(got - expected) < 1e-8, f'got {got}, expected {expected}'
+    # Confirm this differs from the naive (non-reparametrized) result.
+    assert abs(got - analytic_logL(0.99, 0.5, 0.3, 0.96)) > 1e-3
+
+
 def test_posterior_value_and_grad():
     """Posterior = logL + logPrior; grad flows through both."""
     omega_m = Parameter('omega_m', value=0.3, prior=dict(dist='norm', loc=0.3, scale=0.01))

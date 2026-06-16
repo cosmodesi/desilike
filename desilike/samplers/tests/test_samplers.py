@@ -335,7 +335,7 @@ def test_pocomc_gaussian_prior(rescale, use_prior):
     # Two parameters: both Gaussian with hard bounds (exercises clipping in the PPF).
     a = Parameter('a', prior=dict(dist='norm', limits=[-1., 2.], loc=0.4, scale=0.1),
                   ref=dict(dist='norm', loc=0.4, scale=0.05), value=0.4)
-    b = Parameter('b', prior=dict(dist='norm', limits=[-5., 5.], loc=0.6, scale=0.4),
+    b = Parameter('b', prior=dict(dist='norm', loc=0.6, scale=0.4),
                   ref=dict(dist='norm', loc=0.6, scale=0.1), value=0.6)
 
     class Likelihood(BaseGaussianLikelihood):

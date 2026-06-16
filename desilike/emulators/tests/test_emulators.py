@@ -376,7 +376,7 @@ class TestTaylorKaiser:
         center = {p.name: p.value for p in graph.params}
         grad_emu = jax.grad(lambda p: jnp.sum(emulator.predict(p)[0]))(center)
         grad_exact = jax.grad(lambda p: jnp.sum(graph(p)))(center)
-        for name in ['b1', 'qpar', 'qper', 'df']:
+        for name in emulator._input_param_names:
             g_e = float(grad_emu[name])
             g_x = float(grad_exact[name])
             scale = max(abs(g_x), 1e-6)

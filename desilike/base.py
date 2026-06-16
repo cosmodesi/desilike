@@ -85,12 +85,7 @@ class Calculator(Node):
     _is_external = False
 
     def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        jax.tree_util.register_pytree_node(
-            cls,
-            lambda node: node.tree_flatten(),
-            cls.tree_unflatten,
-        )
+        super().__init_subclass__(**kwargs)  # Node.__init_subclass__ registers the pytree
         cls.logger = logging.getLogger(cls.__name__)
         if '__init__' in cls.__dict__:
             _orig_init = cls.__dict__['__init__']
@@ -274,20 +269,16 @@ class Prior(Calculator):
 
     def __init__(self, *args, **kwargs):
         # Nodes (the collected Parameters) live in __init__.
-        seen_ids = set()
         params = []
         for arg in args:
             if isinstance(arg, VariableCollection):
                 for p in arg:
-                    if id(p) not in seen_ids:
-                        seen_ids.add(id(p))
-                        params.append(p)
-        for p in kwargs.values():
-            if isinstance(p, Parameter):
-                if id(p) not in seen_ids:
-                    seen_ids.add(id(p))
                     params.append(p)
-        self.params = params
+            else:
+                params.append(arg)
+        for p in kwargs.values():
+            params.append(p)
+        self.params = VariableCollection(params)
 
     def __call__(self):
         logprior = jnp.zeros(())
@@ -342,7 +333,7 @@ class Posterior(Calculator):
         # likelihood's Parameters (self.likelihood_params) as its node dependencies — all
         # in __init__ so they are discoverable before __post_init__/compile.
         if prior is None:
-            prior = Prior(params(likelihood))
+            prior = Prior(get_params(likelihood))
         self._likelihood = compile(likelihood)
         self._solved_params = self._likelihood.params.select(solved=True)
 
@@ -464,7 +455,10 @@ class Posterior(Calculator):
         else:
             prior.update(self._likelihood.params)
 
-        self._prior = compile(prior)
+        _prior_params = list(get_params(prior))
+        self._prior_param_names = [p.name for p in _prior_params]
+        _prior_ref = prior
+        self._prior = compile(prior, output=lambda: (_prior_ref.logpdf, [p.value for p in _prior_params]))
 
         # Derived outputs exposed to the pipeline (their .value is set in __call__).
         self.logposterior = Variable(basename='logposterior', value=0., derived=True, latex=r'\ln\mathcal{P}')
@@ -569,7 +563,8 @@ class Posterior(Calculator):
         for sp in self._solved_params:
             sp._value = jnp.zeros(sp.shape) if sp.shape else jnp.zeros(())
         params = {p.name: p.value for p in self._likelihood.params}
-        logprior = self._prior(params)
+        logprior, reparam_vals = self._prior(params)
+        params = {**params, **dict(zip(self._prior_param_names, reparam_vals))}
         is_tracing = isinstance(logprior, jax.core.Tracer)
         if is_tracing or not bool(jnp.isneginf(logprior)):
             if self._solved_params:
@@ -782,10 +777,12 @@ def _make_external_fn(node: Calculator, params_list: list, calc_deps: list, call
     """
     dep_schema = []
     for dep in calc_deps:
-        dep_children, dep_aux = dep.tree_flatten()
-        dep_schema.append((dep, len(dep_children), dep_aux))
+        dep_children_raw, dep_aux = dep.tree_flatten()
+        dep_children_flat, dep_treedef = jax.tree_util.tree_flatten(dep_children_raw)
+        dep_schema.append((dep, len(dep_children_flat), dep_treedef, dep_aux))
 
-    own_children, _ = node.tree_flatten()
+    own_children_raw, _ = node.tree_flatten()
+    own_children, own_treedef = jax.tree_util.tree_flatten(own_children_raw)
     dep_sdt = tuple(jax.ShapeDtypeStruct(np.asarray(c).shape, np.asarray(c).dtype) for c in own_children)
 
     # __call__ may return None (outputs live in attributes) or self (the populated
@@ -807,12 +804,14 @@ def _make_external_fn(node: Calculator, params_list: list, calc_deps: list, call
             for i, param in enumerate(params_list):
                 param.value = np.asarray(own_params_tuple[i])
             offset = 0
-            for dep, n_children, dep_aux in dep_schema:
-                proxy = dep.__class__.tree_unflatten(dep_aux, list(dep_args[offset:offset + n_children]))
+            for dep, n_children, dep_treedef, dep_aux in dep_schema:
+                dep_flat_slice = list(dep_args[offset:offset + n_children])
+                dep_children = jax.tree_util.tree_unflatten(dep_treedef, dep_flat_slice)
+                proxy = dep.__class__.tree_unflatten(dep_aux, dep_children)
                 dep.__dict__.update(proxy.__dict__)
                 offset += n_children
             call_result = node()
-            node_state['dep_result'] = tuple(np.asarray(c) for c in node.tree_flatten()[0])
+            node_state['dep_result'] = tuple(np.asarray(c) for c in jax.tree_util.tree_leaves(node.tree_flatten()[0]))
             node_state['call_result'] = call_result
             node_state['was_called'] = True
         else:
@@ -865,6 +864,7 @@ def _build_graph_call_fn(pipeline):
     node_calc_deps = pipeline._node_calc_deps
     node_states = pipeline._node_states
     tree_own_aux = pipeline._tree_own_aux
+    tree_own_treedef = pipeline._tree_own_treedef
     fn_dep = pipeline._fn_dep
     fn_call = pipeline._fn_call
     ext_n_children = pipeline._ext_n_children
@@ -904,16 +904,18 @@ def _build_graph_call_fn(pipeline):
                 n_ch = ext_n_children[id(node)]
                 if ext_flat is not None:
                     # JAX sub-graph mode: unpack frozen External outputs.
-                    children = list(ext_flat[ext_flat_offset:ext_flat_offset + n_ch])
+                    flat_children = list(ext_flat[ext_flat_offset:ext_flat_offset + n_ch])
+                    children = jax.tree_util.tree_unflatten(tree_own_treedef[i], flat_children)
                     proxy = node.__class__.tree_unflatten(tree_own_aux[i], children)
                     node.__dict__.update(proxy.__dict__)
-                    ext_collected.extend(children)
+                    ext_collected.extend(flat_children)
                 else:
                     own_params_tuple = tuple(jnp.asarray(params[p.name]) for p in nvd)
-                    dep_attr_flat = tuple(v for dep in ncd for v in dep.tree_flatten()[0])
+                    dep_attr_flat = tuple(v for dep in ncd for v in jax.tree_util.tree_leaves(dep.tree_flatten()[0]))
                     # Always call fn_dep to capture tree_flatten children into ext_collected.
                     raw_dep = fn_dep[i](own_params_tuple, dep_attr_flat)
-                    proxy = node.__class__.tree_unflatten(tree_own_aux[i], list(raw_dep))
+                    children = jax.tree_util.tree_unflatten(tree_own_treedef[i], list(raw_dep))
+                    proxy = node.__class__.tree_unflatten(tree_own_aux[i], children)
                     node.__dict__.update(proxy.__dict__)
                     ext_collected.extend(raw_dep)
                     if node is root and output is None:
@@ -1112,15 +1114,18 @@ class CompiledGraph:
 
         # Build external (_is_external=True) callables; record tree_flatten child counts.
         self._tree_own_aux = []
+        self._tree_own_treedef = []
         self._fn_dep = []
         self._fn_call = []
         self._ext_n_children = {}
         self._ext_call_kind = {}  # id(node) -> 'value' | 'none' | 'self' (External roots)
         for node in self.nodes:
-            children, aux = node.tree_flatten()
+            children_raw, aux = node.tree_flatten()
+            children_flat, treedef = jax.tree_util.tree_flatten(children_raw)
             self._tree_own_aux.append(aux)
+            self._tree_own_treedef.append(treedef)
             if node._is_external:
-                self._ext_n_children[id(node)] = len(children)
+                self._ext_n_children[id(node)] = len(children_flat)
                 node_state = self._node_states[id(node)]
                 calc_deps = self._node_calc_deps[id(node)]
                 dep_states = [self._node_states[id(dep)] for dep in calc_deps]
@@ -1439,7 +1444,7 @@ def build_graph(root: Calculator) -> _CompileContext:
     All nodes were created in __init__ at construction, so this only discovers node
     dependencies (Variable, Parameter, Calculator) by scanning public attributes — without
     running __post_init__ or any __call__.
-    Use params() or inspect ctx.node_deps / ctx.node_order to examine the graph.
+    Use get_params() or inspect ctx.node_deps / ctx.node_order to examine the graph.
 
     Same-named :class:`Variable` objects that appear as distinct instances across different
     nodes are automatically unified (first-seen identity wins), equivalent to calling

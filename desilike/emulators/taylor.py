@@ -7,6 +7,7 @@ import math
 import logging
 import pickle
 
+import jax
 import numpy as np
 import jax.numpy as jnp
 
@@ -110,8 +111,8 @@ class TaylorEmulator:
         self._coeffs_returned = None     # (n_terms, *rv_shape); only when return kind == 'value'
         self._derived_names = None       # output quantities tracked in derived_dict
         self._root_cls = type(graph.root)
-        self._tree_aux = None
-        self._n_children = None          # number of tree_flatten children
+        self._treedef = None
+        self._n_children = None          # number of tree_flatten leaves
         # How the root's __call__ return value relates to its tree_flatten children:
         #   'none'  → returns None (outputs live entirely in attributes/children)
         #   'self'  → returns the node itself
@@ -164,8 +165,7 @@ class TaylorEmulator:
         self._derived_names = list(derived0.keys())
 
         # After an eager graph call the root's attributes are set; capture tree structure.
-        children0, aux0 = graph.root.tree_flatten()
-        self._tree_aux = aux0
+        children0, self._treedef = jax.tree_util.tree_flatten(graph.root)
         self._n_children = len(children0)
 
         # Classify the return value w.r.t. the tree_flatten children.  Many calculators
@@ -186,7 +186,7 @@ class TaylorEmulator:
         # Build a graph whose output is the tuple of tree_flatten children, so that
         # differentiate() yields the derivative of every child (not just the return value).
         root = graph.root
-        child_graph = compile(root, output=lambda root=root: tuple(jnp.asarray(c) for c in root.tree_flatten()[0]))
+        child_graph = compile(root, output=lambda root=root: tuple(jnp.asarray(c) for c in jax.tree_util.tree_leaves(root)))
         children0_t, _, _ = _primal(child_graph)
 
         # Enumerate multi-indices once.
@@ -262,7 +262,7 @@ class TaylorEmulator:
         if kind == 'child':
             return children[self._return_index]
         if kind == 'self':
-            return self._root_cls.tree_unflatten(self._tree_aux, children)
+            return jax.tree_util.tree_unflatten(self._treedef, children)
         # 'value': return value not among the children — emulated separately.
         return jnp.tensordot(monomials, jnp.asarray(self._coeffs_returned), axes=([0], [0]))
 
@@ -293,7 +293,6 @@ class TaylorEmulator:
         """Dynamically build a Calculator subclass backed by this emulator."""
         emulator = self
         root_cls = self._root_cls
-        tree_aux = self._tree_aux
         input_param_names = self._input_param_names
         derived_names = self._derived_names or []
 
@@ -306,8 +305,7 @@ class TaylorEmulator:
                 # Extra kwargs (e.g. k=, ells=) passed by a downstream __post_init__
                 # via update() are accepted and ignored — the emulator is fixed at
                 # training time.
-                for param in emulator._params_vc:
-                    setattr(self, param.name, copy.copy(param))
+                self.params = {param.name: param.clone() for param in emulator._params_vc}
 
             def __post_init__(self, *args, **kwargs):
                 # Skip root_cls.__post_init__ — emulator needs no heavy setup.
@@ -316,7 +314,7 @@ class TaylorEmulator:
 
             def __call__(self):
                 # Collect input parameter values and reconstruct the full child state.
-                p = {n: getattr(self, n).value for n in input_param_names}
+                p = {n: self.params[n].value for n in input_param_names}
                 monomials, children, derived = emulator._predict_children(p)
 
                 # Reconstruct the root's attribute state via tree_unflatten so
@@ -324,18 +322,18 @@ class TaylorEmulator:
                 # underscore-prefixed config attrs like self.pt._A_full.
                 # The proxy is a bare object.__new__ instance with no Node lifecycle
                 # attributes, so copying its entire __dict__ is safe.
-                proxy = root_cls.tree_unflatten(tree_aux, children)
+                proxy = jax.tree_util.tree_unflatten(emulator._treedef, children)
                 self.__dict__.update(proxy.__dict__)
 
                 # For derived-Variable attributes, update the Variable's value
                 # *in-place* rather than replacing the object, so that the
                 # pipeline's reference in _node_var_deps remains valid.
-                for n in derived_names:
-                    attr = getattr(self, n, None)
-                    if attr is not None and hasattr(attr, '_value'):
-                        attr.value = derived[n]
+                for name in derived_names:
+                    attr = self.params.get(name, None)
+                    if attr is None:
+                        attr.value = derived[name]
                     else:
-                        setattr(self, n, derived[n])
+                        setattr(self, name, derived[name])
 
                 rv = emulator._return_value(monomials, children)
                 # 'self'-returning roots: mirror that by returning this instance.
@@ -410,9 +408,9 @@ class TaylorEmulator:
         if self._coeffs_returned is not None:
             state['coeffs_returned'] = self._coeffs_returned
 
-        # tree_aux: serialise with pickle → hex string stored in attrs.
-        if self._tree_aux is not None:
-            state['attrs']['tree_aux_hex'] = pickle.dumps(self._tree_aux).hex()
+        # treedef: serialise with pickle → hex string stored in attrs.
+        if self._treedef is not None:
+            state['attrs']['treedef_hex'] = pickle.dumps(self._treedef).hex()
 
         # Preserve the full VariableCollection so to_calculator() works after loading.
         state['params'] = self._params_vc.__getstate__(to_file=to_file)
@@ -454,9 +452,9 @@ class TaylorEmulator:
         mod = importlib.import_module(attrs['root_cls_module'])
         self._root_cls = getattr(mod, attrs['root_cls_name'])
 
-        # Reconstruct tree_aux (None when not serialised).
-        tree_aux_hex = attrs.get('tree_aux_hex')
-        self._tree_aux = pickle.loads(bytes.fromhex(tree_aux_hex)) if tree_aux_hex else None
+        # Reconstruct treedef (None when not serialised).
+        treedef_hex = attrs.get('treedef_hex')
+        self._treedef = pickle.loads(bytes.fromhex(treedef_hex)) if treedef_hex else None
 
     # ── convenience I/O ──────────────────────────────────────────────────────
 

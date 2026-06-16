@@ -173,12 +173,12 @@ class BAOSpectrum2Template(Spectrum2Template):
         self.k = np.asarray(k, dtype='f8')
         self.z = float(z)
 
-        fid = _get_fiducial(fiducial)
-        self._fiducial = fid  # kept so downstream can read e.g. fid.rs_drag
+        self._fiducial = _get_fiducial(fiducial)
 
-        fo = fid.get_fourier()
+        fo = self._fiducial.get_fourier()
         sigma8 = fo.sigma8_z(z, of='delta_cb')
         fsigma8 = fo.sigma8_z(z, of='theta_cb')
+        self._sigma8_fid = float(sigma8)
         self._f_fid = float(fsigma8 / sigma8)
 
         pk_interp = fo.pk_interpolator(of='delta_cb', **_kw_pk).to_1d(z=z)
@@ -190,19 +190,20 @@ class BAOSpectrum2Template(Spectrum2Template):
         self._pk_dd_fid = pk_interp(self.k)
 
         if with_now:
-            bao_filter = PowerSpectrumBAOFilter(pk_interp, engine=with_now, cosmo=fid, cosmo_fid=fid)
+            bao_filter = PowerSpectrumBAOFilter(pk_interp, engine=with_now, cosmo=self._fiducial, cosmo_fid=self._fiducial)
             self._pknow_dd_fid = bao_filter.smooth_pk_interpolator()(self.k)
         else:
             self._pknow_dd_fid = self._pk_dd_fid
 
         # Fiducial BAO distance ratios
-        rd = fid.rs_drag
-        DH_fid = constants.c / 1e3 / (100. * fid.efunc(z))
-        DM_fid = fid.comoving_angular_distance(z)
+        rd = self._fiducial.rs_drag
+        DH_fid = constants.c / 1e3 / (100. * self._fiducial.efunc(z))
+        DM_fid = self._fiducial.comoving_angular_distance(z)
         DV_fid = DH_fid**eta * DM_fid**(1. - eta) * z**(1. / 3.)
         self._DH_over_rd_fid = float(DH_fid / rd)
         self._DM_over_rd_fid = float(DM_fid / rd)
         self._DV_over_rd_fid = float(DV_fid / rd)
+        self.sigma8_fid = jnp.asarray(self._sigma8_fid)
 
     def _qpar_qper(self):
         """Convert current apmode parameter values to (qpar, qper)."""
@@ -241,16 +242,17 @@ class BAOSpectrum2Template(Spectrum2Template):
         self.DH_over_rd = qpar * self._DH_over_rd_fid
         self.DM_over_rd = qper * self._DM_over_rd_fid
         self.DV_over_rd = qpar ** self._eta * qper ** (1. - self._eta) * self._DV_over_rd_fid
+        self.sigma8_fid = jnp.asarray(self._sigma8_fid)
 
         return self.pk_dd
 
     def tree_flatten(self):
-        return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk], {'k': self.k})
+        return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk, self.sigma8_fid], {'k': self.k})
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk = children
+        obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.sigma8_fid = children
         obj.k = aux['k']
         return obj
 
@@ -340,10 +342,9 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         self.k = np.asarray(k, dtype='f8')
         self.z = float(z)
 
-        fid = _get_fiducial(fiducial)
-        self._fiducial = fid
+        self._fiducial = _get_fiducial(fiducial)
 
-        fo = fid.get_fourier()
+        fo = self._fiducial.get_fourier()
         sigma8 = fo.sigma8_z(z, of='delta_cb')
         fsigma8 = fo.sigma8_z(z, of='theta_cb')
         self._sigma8_fid = float(sigma8)
@@ -359,10 +360,11 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         self._pk_dd_fid = pk_interp(self.k)
 
         if with_now:
-            bao_filter = PowerSpectrumBAOFilter(pk_interp, engine=with_now, cosmo=fid, cosmo_fid=fid)
+            bao_filter = PowerSpectrumBAOFilter(pk_interp, engine=with_now, cosmo=self._fiducial, cosmo_fid=self._fiducial)
             self._pknow_dd_fid = bao_filter.smooth_pk_interpolator()(self.k)
         else:
             self._pknow_dd_fid = self._pk_dd_fid
+        self.sigma8_fid = jnp.asarray(self._sigma8_fid)
 
     def _qpar_qper(self):
         if self._apmode == 'qparqper':
@@ -394,18 +396,19 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         self.f = self._f_fid * df
         self.f0 = self._f0_fid * df
         self.fk = self._fk_fid * df
-        self.sigma8 = self._sigma8_fid
+        self.sigma8 = jnp.asarray(self._sigma8_fid)
         self.fsigma8 = self._fsigma8_fid * df
+        self.sigma8_fid = jnp.asarray(self._sigma8_fid)
         return self.pk_dd
 
     def tree_flatten(self):
         return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk,
-                 self.sigma8, self.fsigma8], {'k': self.k})
+                 self.sigma8, self.fsigma8, self.sigma8_fid], {'k': self.k})
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.sigma8, obj.fsigma8 = children
+        obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.sigma8, obj.fsigma8, obj.sigma8_fid = children
         obj.k = aux['k']
         return obj
 
@@ -511,20 +514,21 @@ class DirectSpectrum2Template(Spectrum2Template):
         self._with_now = with_now
         self._only_now = bool(only_now)
 
-        fid = _get_fiducial(fiducial)
-        self._fiducial = fid
-        self._DH_fid = float(constants.c / 1e3 / (100. * fid.efunc(self.z)))
-        self._DM_fid = float(fid.comoving_angular_distance(self.z))
+        self._fiducial = _get_fiducial(fiducial)
+        self._DH_fid = float(constants.c / 1e3 / (100. * self._fiducial.efunc(self.z)))
+        self._DM_fid = float(self._fiducial.comoving_angular_distance(self.z))
 
         # Fiducial PK arrays (used by e.g. ResummedBAOWigglesPTSpectrum2Poles for damping scales).
-        fo = fid.get_fourier()
+        fo = self._fiducial.get_fourier()
+        self._sigma8_fid = float(fo.sigma8_z(self.z, of='delta_cb'))
         pk_interp = fo.pk_interpolator(of='delta_cb', **_kw_pk).to_1d(z=self.z)
         self._pk_dd_fid = pk_interp(self.k)
         if with_now:
-            bao_filter = PowerSpectrumBAOFilter(pk_interp, engine=with_now, cosmo=fid, cosmo_fid=fid)
+            bao_filter = PowerSpectrumBAOFilter(pk_interp, engine=with_now, cosmo=self._fiducial, cosmo_fid=self._fiducial)
             self._pknow_dd_fid = bao_filter.smooth_pk_interpolator()(self.k)
         else:
             self._pknow_dd_fid = self._pk_dd_fid
+        self.sigma8_fid = jnp.asarray(self._sigma8_fid)
 
     def __call__(self):
         from cosmoprimo import constants
@@ -546,6 +550,7 @@ class DirectSpectrum2Template(Spectrum2Template):
         DM = self.cosmo.get('background.transverse_comoving_distance', z=self.z)
         self.qpar = DH / self._DH_fid
         self.qper = DM / self._DM_fid
+        self.sigma8_fid = jnp.asarray(self._sigma8_fid)
         return self.pk_dd
 
     def ap_k_mu(self, k, mu):
@@ -554,13 +559,13 @@ class DirectSpectrum2Template(Spectrum2Template):
 
     def tree_flatten(self):
         return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk,
-                 self.qpar, self.qper, self.sigma8, self.fsigma8],
+                 self.qpar, self.qper, self.sigma8, self.fsigma8, self.sigma8_fid],
                 {'k': self.k})
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.qpar, obj.qper, obj.sigma8, obj.fsigma8 = children
+        obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.qpar, obj.qper, obj.sigma8, obj.fsigma8, obj.sigma8_fid = children
         obj.k = aux['k']
         return obj
 
@@ -623,10 +628,9 @@ class BAOPhaseShiftSpectrum2Template(BAOSpectrum2Template):
         self._epsilon = float(epsilon)
         # Dense k grid for wiggle (pk - pknow) interpolation under the BAO shift.
         k_fine = np.geomspace(_kw_pk['extrap_kmin'], _kw_pk['extrap_kmax'], 2000)
-        fid = self._fiducial
-        fo = fid.get_fourier()
+        fo = self._fiducial.get_fourier()
         pk1d = fo.pk_interpolator(of='delta_cb', **_kw_pk).to_1d(z=float(z))
-        bao_filter = PowerSpectrumBAOFilter(pk1d, engine=str(with_now), cosmo=fid, cosmo_fid=fid)
+        bao_filter = PowerSpectrumBAOFilter(pk1d, engine=str(with_now), cosmo=self._fiducial, cosmo_fid=self._fiducial)
         self._k_fine = k_fine
         self._wiggles_fine = pk1d(k_fine) - bao_filter.smooth_pk_interpolator()(k_fine)
 
@@ -735,10 +739,9 @@ class TurnOverSpectrum2Template(Spectrum2Template):
         self.k = np.asarray(k, dtype='f8')
         self.z = float(z)
 
-        fid = _get_fiducial(fiducial)
-        self._fiducial = fid
+        self._fiducial = _get_fiducial(fiducial)
 
-        fo = fid.get_fourier()
+        fo = self._fiducial.get_fourier()
         sigma8 = fo.sigma8_z(self.z, of='delta_cb')
         fsigma8 = fo.sigma8_z(self.z, of='theta_cb')
         self._f_fid = float(fsigma8 / sigma8)
@@ -756,8 +759,8 @@ class TurnOverSpectrum2Template(Spectrum2Template):
         self._pkTO_dd_fid = float(pk1d(self._kTO_fid))
 
         # Fiducial distance combinations used for observable outputs.
-        DH_fid = float(constants.c / 1e3 / (100. * fid.efunc(self.z)))
-        DM_fid = float(fid.comoving_angular_distance(self.z))
+        DH_fid = float(constants.c / 1e3 / (100. * self._fiducial.efunc(self.z)))
+        DM_fid = float(self._fiducial.comoving_angular_distance(self.z))
         DV_fid = DH_fid ** eta * DM_fid ** (1. - eta) * self.z ** (1. / 3.)
         self._DV_times_kTO_fid = DV_fid * self._kTO_fid
         self._DH_over_DM_fid = DH_fid / DM_fid
@@ -937,11 +940,10 @@ class BAOExtractor(Calculator):
         from cosmoprimo import constants
         self.z = float(z)
         self._eta = float(eta)
-        fid = _get_fiducial(fiducial)
-        self._fiducial = fid
-        rd_fid = fid.rs_drag
-        DH_fid = constants.c / 1e3 / (100. * fid.efunc(self.z))
-        DM_fid = fid.comoving_angular_distance(self.z)
+        self._fiducial = _get_fiducial(fiducial)
+        rd_fid = self._fiducial.rs_drag
+        DH_fid = constants.c / 1e3 / (100. * self._fiducial.efunc(self.z))
+        DM_fid = self._fiducial.comoving_angular_distance(self.z)
         DV_fid = DH_fid ** self._eta * DM_fid ** (1. - self._eta) * self.z ** (1. / 3.)
         self._DH_over_rd_fid = DH_fid / rd_fid
         self._DM_over_rd_fid = DM_fid / rd_fid
@@ -1093,15 +1095,15 @@ class TurnOverExtractor(Calculator):
         from cosmoprimo import constants
         self.z = float(z)
         self._eta = float(eta)
-        fid = _get_fiducial(fiducial)
+        self._fiducial = _get_fiducial(fiducial)
         # Fiducial turn-over from the full interpolation grid.
-        fo = fid.get_fourier()
+        fo = self._fiducial.get_fourier()
         pk_interp = fo.pk_interpolator(of='delta_cb', **_kw_pk)
         self._kTO_fid = _find_turn_over(pk_interp.k, pk_interp(pk_interp.k, z=self.z))
         self._pkTO_dd_fid = float(pk_interp.to_1d(z=self.z)(self._kTO_fid))
         # Fiducial distance combinations.
-        DH_fid = float(constants.c / 1e3 / (100. * fid.efunc(self.z)))
-        DM_fid = float(fid.comoving_angular_distance(self.z))
+        DH_fid = float(constants.c / 1e3 / (100. * self._fiducial.efunc(self.z)))
+        DM_fid = float(self._fiducial.comoving_angular_distance(self.z))
         DV_fid = DH_fid ** self._eta * DM_fid ** (1. - self._eta) * self.z ** (1. / 3.)
         self._DH_over_DM_fid = DH_fid / DM_fid
         self._DV_times_kTO_fid = DV_fid * self._kTO_fid

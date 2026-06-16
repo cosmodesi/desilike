@@ -1920,7 +1920,7 @@ class FOLPSTracerSpectrum2Poles(Calculator):
         physical = (prior_basis != 'standard')
         if physical:
             auto_params = [
-                Parameter('b1p', value=1., prior=dict(dist='uniform', limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=r"b_1'"),
+                Parameter('b1p', value=1.5, prior=dict(dist='uniform', limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=r"b_1'"),
                 Parameter('b2p', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'"),
                 Parameter('bsp', value=0., prior=dict(dist='norm', loc=0., scale=20.),
                           ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'"),
@@ -2218,7 +2218,7 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         physical = (prior_basis != 'standard')
         if physical:
             auto_params = [
-                Parameter('b1p', value=1., prior=dict(dist='uniform', limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=r"b_1'"),
+                Parameter('b1p', value=1.5, prior=dict(dist='uniform', limits=[0.1, 8.]), ref=dict(dist='norm', loc=1.5, scale=0.1), latex=r"b_1'"),
                 Parameter('b2p', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'"),
                 Parameter('bsp', value=0., prior=dict(dist='norm', loc=0., scale=20.),
                           ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'"),

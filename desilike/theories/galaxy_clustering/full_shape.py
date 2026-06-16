@@ -2556,6 +2556,7 @@ class COMETEngine(Calculator):
 
     @classmethod
     def emulator_params_range(cls):
+        # XXX: better to read it from comet
         # https://comet-emu.readthedocs.io/en/latest/spaceparams.html#ranges-of-emulated-parameters
         return dict(omega_cdm=(0.08, 0.16), omega_b=(0.01930, 0.02535), n_s=(0.90, 1.03), mnu=(0.0, 1.0), A_s=(1e-9, 3.5e-9))
 
@@ -2850,9 +2851,14 @@ class COMETTracerSpectrum2Poles(Calculator):
             raise ValueError(f'Unknown counterterm_basis: {counterterm_basis!r}')
 
         if not self.pt.engine.use_Mpc:
+            # comet emulator evalutes in Mpc unit, and then spline interpolation converts (k, diagram) to (h/Mpc, Mpc^3/h^3) unit,
+            # however, counterterm diagram evaluates ~k^2 P_L or ~k^4 P_L so we need additionally convert k from 1/Mpc to h/Mpc unit here
             h = self.pt.engine.cosmo.cosmo['h']
             c0, c2, c4 = c0 / h**2, c2 / h**2, c4 / h**2
             cnlo = cnlo / h**4
+            # for the same reason, NP* should be rescaled to compensate the h^3 factor
+            NP0 = NP0 / h**3
+            NP20, NP22 = NP20 / h**5, NP22 / h**5
         # TODO: normalize NP* by shotnoise
 
         coeff = jnp.array([

@@ -496,7 +496,7 @@ class DirectSpectrum2Template(Spectrum2Template):
                 {'of': 'theta_cb', 'z': z_req},
             ],
             'background.efunc':                          [{'z': z_req}],
-            'background.transverse_comoving_distance':   [{'z': z_req}],
+            'background.comoving_transverse_distance':   [{'z': z_req}],
         }
         if with_now:
             reqs['fourier.pk_now'] = [
@@ -547,7 +547,7 @@ class DirectSpectrum2Template(Spectrum2Template):
         self.f0 = jnp.sqrt(ptt_full[0] / pk_full[0])   # k0 = 1e-3 is index 0
         self.fk = jnp.sqrt(ptt_full[1:] / pk_full[1:])
         DH = constants.c / 1e3 / (100. * self.cosmo.get('background.efunc', z=self.z))
-        DM = self.cosmo.get('background.transverse_comoving_distance', z=self.z)
+        DM = self.cosmo.get('background.comoving_transverse_distance', z=self.z)
         self.qpar = DH / self._DH_fid
         self.qper = DM / self._DM_fid
         self.sigma8_fid = jnp.asarray(self._sigma8_fid)
@@ -932,7 +932,7 @@ class BAOExtractor(Calculator):
         self.cosmo = cosmo
         self.cosmo.add_requirements({
             'background.efunc':                        [{'z': float(z)}],
-            'background.transverse_comoving_distance': [{'z': float(z)}],
+            'background.comoving_transverse_distance': [{'z': float(z)}],
             'thermodynamics.rs_drag':                  [{'z': 0.}],
         })
 
@@ -953,7 +953,7 @@ class BAOExtractor(Calculator):
     def __call__(self):
         from cosmoprimo import constants
         efunc = self.cosmo.get('background.efunc', z=self.z)
-        DM = self.cosmo.get('background.transverse_comoving_distance', z=self.z)
+        DM = self.cosmo.get('background.comoving_transverse_distance', z=self.z)
         rd = self.cosmo.get('thermodynamics.rs_drag', z=0.)
         DH = constants.c / 1e3 / (100. * efunc)
         DV = DH ** self._eta * DM ** (1. - self._eta) * self.z ** (1. / 3.)
@@ -1088,7 +1088,7 @@ class TurnOverExtractor(Calculator):
         self.cosmo.add_requirements({
             'fourier.pk':                              [{'of': 'delta_cb', 'z': float(z), 'k': self._k_fine}],
             'background.efunc':                        [{'z': float(z)}],
-            'background.transverse_comoving_distance': [{'z': float(z)}],
+            'background.comoving_transverse_distance': [{'z': float(z)}],
         })
 
     def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
@@ -1116,7 +1116,7 @@ class TurnOverExtractor(Calculator):
         self.kTO = k_jnp[imax]
         self.pkTO_dd = pk_fine[imax]
         efunc = self.cosmo.get('background.efunc', z=self.z)
-        DM = self.cosmo.get('background.transverse_comoving_distance', z=self.z)
+        DM = self.cosmo.get('background.comoving_transverse_distance', z=self.z)
         DH = constants.c / 1e3 / (100. * efunc)
         DV = DH ** self._eta * DM ** (1. - self._eta) * self.z ** (1. / 3.)
         self.DH_over_DM = DH / DM

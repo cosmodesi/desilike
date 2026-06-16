@@ -208,7 +208,7 @@ class PrimordialCosmology(Calculator):
 _JAX_ENGINES = frozenset({'eisenstein_hu'})
 
 # Parameter name conversion: desilike name → cosmoprimo clone kwarg.
-_CONVERSIONS = {'logA': 'ln10^10A_s'}
+_CONVERSIONS = {}
 
 # cosmoprimo pk_interpolator extrapolation kwargs shared by CosmoprimoCosmology and template.py.
 _kw_pk = dict(extrap_kmin=1e-7, extrap_kmax=1e2)
@@ -229,17 +229,6 @@ def _get_fiducial(fiducial):
     if isinstance(fiducial, dict):
         return cosmoprimo.Cosmology(**fiducial)
     raise ValueError(f'Cannot parse fiducial cosmology: {fiducial!r}')
-
-
-def _make_cosmo_parameters(fiducial=None):
-    """Return the default parameter values dict from *fiducial* (or Planck-2018 priors)."""
-    defaults = dict(h=0.6736, theta_MC_100=1.04092, omega_cdm=0.1200, omega_b=0.02237,
-                    logA=3.044, n_s=0.9649, tau_reio=0.0544, m_ncdm=0.06, N_eff=3.046,
-                    w0_fld=-1., wa_fld=0., Omega_k=0.)
-    if fiducial is not None:
-        fid = _get_fiducial(fiducial)
-        defaults = {name: fid.get(_CONVERSIONS.get(name, name)) for name in defaults}
-    return defaults
 
 
 def _build_cosmo(fiducial, params):
@@ -313,54 +302,54 @@ class CosmoprimoCosmology(PrimordialCosmology):
         -------
         VariableCollection
         """
-        defaults = _make_cosmo_parameters(fiducial)
+        fiducial = _get_fiducial(fiducial)
         params = VariableCollection()
         # Planck2018 (TT,TE,EE+lowE+lensing) priors, mirroring the historical
         # primordial_cosmology.yaml.  Extra cosmological parameters (theta_MC_100, tau_reio,
         # N_eff, w0_fld, wa_fld, Omega_k) are fixed by default; free them as needed.
-        params.set(Parameter('h', value=defaults['h'],
+        params.set(Parameter('h', value=fiducial['h'],
                              prior=dict(limits=[0.1, 10.]),
-                             ref=dict(dist='norm', loc=0.6736, scale=0.005),
+                             ref=dict(dist='norm', loc=fiducial['h'], scale=0.005),
                              fd_eps=0.03, latex='h'))
-        params.set(Parameter('omega_cdm', value=defaults['omega_cdm'],
+        params.set(Parameter('omega_cdm', value=fiducial['omega_cdm'],
                              prior=dict(limits=[0.01, 0.99]),
-                             ref=dict(dist='norm', loc=0.12, scale=0.0012),
+                             ref=dict(dist='norm', loc=fiducial['omega_cdm'], scale=0.0012),
                              fd_eps=0.007, latex=r'\omega_\mathrm{cdm}'))
-        params.set(Parameter('omega_b', value=defaults['omega_b'],
+        params.set(Parameter('omega_b', value=fiducial['omega_b'],
                              prior=dict(limits=[0.005, 0.1]),
-                             ref=dict(dist='norm', loc=0.02237, scale=0.00015),
+                             ref=dict(dist='norm', loc=fiducial['omega_b'], scale=0.00015),
                              fd_eps=0.0015, latex=r'\omega_b'))
-        params.set(Parameter('logA', value=defaults['logA'],
+        params.set(Parameter('logA', value=fiducial['logA'],
                              prior=dict(limits=[1.61, 3.91]),
-                             ref=dict(dist='norm', loc=3.036394, scale=0.014),
+                             ref=dict(dist='norm', loc=fiducial['logA'], scale=0.014),
                              fd_eps=0.05, latex=r'\ln(10^{10} A_s)'))
-        params.set(Parameter('n_s', value=defaults['n_s'],
+        params.set(Parameter('n_s', value=fiducial['n_s'],
                              prior=dict(limits=[0.8, 1.2]),
-                             ref=dict(dist='norm', loc=0.9649, scale=0.0042),
+                             ref=dict(dist='norm', loc=fiducial['n_s'], scale=0.0042),
                              fd_eps=0.005, latex=r'n_s'))
-        params.set(Parameter('tau_reio', value=defaults['tau_reio'], fixed=True,
+        params.set(Parameter('tau_reio', value=fiducial['tau_reio'], fixed=True,
                              prior=dict(limits=[0.01, 0.8]),
-                             ref=dict(dist='norm', loc=0.0544, scale=0.01),
+                             ref=dict(dist='norm', loc=fiducial['tau_reio'], scale=0.01),
                              fd_eps=0.01, latex=r'\tau'))
-        params.set(Parameter('m_ncdm', value=defaults['m_ncdm'], fixed=True,
+        params.set(Parameter('m_ncdm', value=fiducial['m_ncdm_tot'], fixed=True,
                              prior=dict(limits=[0., 5.]),
-                             ref=dict(dist='norm', loc=0.06, scale=0.12, limits=[0., 10.]),
+                             ref=dict(dist='norm', loc=fiducial['m_ncdm_tot'], scale=0.12, limits=[0., 10.]),
                              fd_eps=(0.31, 0.15, 0.15), latex=r'm_\mathrm{ncdm}'))
-        params.set(Parameter('N_eff', value=defaults['N_eff'], fixed=True,
+        params.set(Parameter('N_eff', value=fiducial['N_eff'], fixed=True,
                              prior=dict(limits=[0.01, 10.]),
-                             ref=dict(dist='norm', loc=3.046, scale=0.16),
+                             ref=dict(dist='norm', loc=fiducial['N_eff'], scale=0.16),
                              fd_eps=0.2, latex=r'N_\mathrm{eff}'))
-        params.set(Parameter('w0_fld', value=defaults['w0_fld'], fixed=True,
+        params.set(Parameter('w0_fld', value=fiducial['w0_fld'], fixed=True,
                              prior=dict(limits=[-3., 1.]),
-                             ref=dict(dist='norm', loc=-1., scale=0.08),
+                             ref=dict(dist='norm', loc=fiducial['w0_fld'], scale=0.08),
                              fd_eps=0.1, latex=r'w_0'))
-        params.set(Parameter('wa_fld', value=defaults['wa_fld'], fixed=True,
+        params.set(Parameter('wa_fld', value=fiducial['wa_fld'], fixed=True,
                              prior=dict(limits=[-3., 2.]),
-                             ref=dict(dist='norm', loc=0., scale=0.3),
+                             ref=dict(dist='norm', loc=fiducial['wa_fld'], scale=0.3),
                              fd_eps=0.3, latex=r'w_a'))
-        params.set(Parameter('Omega_k', value=defaults['Omega_k'], fixed=True,
+        params.set(Parameter('Omega_k', value=fiducial['Omega_k'], fixed=True,
                              prior=dict(limits=[-0.3, 0.3]),
-                             ref=dict(dist='norm', loc=0., scale=0.0065),
+                             ref=dict(dist='norm', loc=fiducial['Omega_k'], scale=0.0065),
                              fd_eps=0.05, latex=r'\Omega_k'))
         return params
 
@@ -409,8 +398,8 @@ class CosmoprimoCosmology(PrimordialCosmology):
                 result = fo.sigma8_z(z_grid, of=static['of'])
             elif method_key == 'background.efunc':
                 result = cosmo.get_background().efunc(z_grid)
-            elif method_key == 'background.transverse_comoving_distance':
-                result = cosmo.get_background().comoving_transverse_distance(z_grid)
+            elif method_key == 'background.comoving_transverse_distance':
+                result = cosmo.get_background().comoving_angular_distance(z_grid)
             elif method_key == 'thermodynamics.rs_drag':
                 result = cosmo.rs_drag
             elif method_key == 'background.N_eff':

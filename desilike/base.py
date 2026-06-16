@@ -1528,8 +1528,8 @@ def compile(root: Calculator, output: Callable=None, input: Callable=None) -> Co
     """Trace root's dependency graph and return a CompiledGraph.
 
     Phase 1 (build_graph): discovers deps by scanning the constructed nodes' public attributes.
-    Phase 2: runs __post_init__ on each node in dependency order (non-node setup). Phase 3: runs
-    __call__ on each node in topological order; raises if __call__ introduces a new Calculator
+    Phase 2: runs __post_init__ on each node in dependency order (non-node setup).
+    Phase 3: runs __call__ on each node in topological order; raises if __call__ introduces a new Calculator
     not declared at construction; prunes nodes not activated during __call__.
 
     Parameters

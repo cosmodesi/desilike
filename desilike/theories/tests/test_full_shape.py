@@ -29,12 +29,22 @@ def _compile(theory):
     several features (shape, finiteness, parameter sensitivity) can be checked
     from a minimal number of evaluations. The return value is the pipeline
     output; side-effect attributes (e.g. ``theory.table``) are populated too.
+
+    Passing ``_jit=True`` runs the same call through a ``jax.jit``-compiled
+    version of the pipeline instead (built lazily, once, on first use) -- this
+    catches tracer-incompatible code (e.g. stray ``np.*`` calls on traced
+    values) that only surfaces under tracing.
     """
     from desilike.base import compile, params
     pipe = compile(theory)
     defaults = {par.name: par._value for par in params(theory)}
+    pipe_jit = {}  # lazy cache, built on first _jit=True call
 
-    def run(**overrides):
+    def run(_jit=False, **overrides):
+        if _jit:
+            if 'pipe' not in pipe_jit:
+                pipe_jit['pipe'] = jax.jit(pipe)
+            return np.asarray(pipe_jit['pipe']({**defaults, **overrides}))
         return np.asarray(pipe({**defaults, **overrides}))
 
     return run
@@ -66,9 +76,17 @@ def _check_emulator(pipe_exact, pipe_emu, shift_param, reldiff_tol=0.10):
 
 
 def _check_sensitivity(run, baseline, name, **override):
-    """Assert evaluating *run* with *override* moves away from *baseline*."""
+    """Assert evaluating *run* with *override* moves away from *baseline*.
+
+    Also re-evaluates under ``jax.jit`` (via ``run(_jit=True, **override)``) and checks
+    it agrees with the eager result, catching tracer-incompatible code paths.
+    """
     (param_name, value), = override.items()
-    assert not np.allclose(baseline, run(**override)), f"{name}: result invariant to {param_name}"
+    result = run(**override)
+    assert not np.allclose(baseline, result), f"{name}: result invariant to {param_name}"
+    jit_result = run(_jit=True, **override)
+    np.testing.assert_allclose(jit_result, result, rtol=1e-6, atol=1e-8,
+                               err_msg=f"{name}: jit result differs from eager for {param_name}")
 
 
 # ── Kaiser ────────────────────────────────────────────────────────────────────
@@ -98,6 +116,7 @@ class TestKaiserPoles:
         _check(base, 'KaiserTracerSpectrum2Poles')
         assert base.shape == (len(theory.ells), len(k))
         _check_sensitivity(run, base, 'KaiserTracerSpectrum2Poles', b1=2.0)
+        _check_sensitivity(run, base, 'KaiserTracerSpectrum2Poles', logA=2.0)
         # ells=(0,) edge case requires a fresh construction (different output shape)
         assert _compile(KaiserTracerSpectrum2Poles(k=k, ells=(0,)))().shape[0] == 1
 
@@ -576,6 +595,76 @@ class TestJAXEffort:
         from desilike.theories.galaxy_clustering.full_shape import JAXEffortTracerSpectrum2Poles
         k = np.linspace(0.01, 0.2, 20)
         assert _compile(JAXEffortTracerSpectrum2Poles(k=k, ells=(0, 2)))().shape[0] == 2
+
+
+# ── COMET ─────────────────────────────────────────────────────────────────────
+
+class TestCOMET:
+
+    @pytest.fixture(autouse=True)
+    def skip_if_missing(self):
+        pytest.importorskip('comet')
+
+    def test_matter_spectrum(self):
+        """COMETPTSpectrum2Poles: table has shape (ndiagrams, nells, nk) with finite values."""
+        from desilike.theories.galaxy_clustering.full_shape import COMETPTSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+        theory = COMETPTSpectrum2Poles(k=k)
+        _compile(theory)()
+        table = np.asarray(theory.table)
+        assert table.shape == (len(COMETPTSpectrum2Poles._diagrams), len(theory.ells), len(k)), \
+            f'table shape mismatch: {table.shape}'
+        assert np.isfinite(table).all(), 'COMETPTSpectrum2Poles: non-finite table'
+
+    def test_tracer_spectrum(self):
+        """COMETTracerSpectrum2Poles: shape, sensitivity, and all bias/counterterm basis variants."""
+        from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+
+        # Default EggScoSmi+Comet basis.
+        theory = COMETTracerSpectrum2Poles(k=k)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)')
+        assert base.shape == (len(theory.ells), len(k))
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', logA=2.5)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', b1=2.0)
+
+        # Other bias bases (each with Comet counterterms); b1t for AmiGleKok.
+        for prior_basis, sensitivity_param in [
+            ('AssBauGre+Comet', 'b1'),
+            ('AmiGleKok+Comet', 'b1t'),
+            ('DESI+Comet',      'b1'),
+            ('physical',        'b1p'),
+        ]:
+            theory_bb = COMETTracerSpectrum2Poles(k=k, prior_basis=prior_basis)
+            run_bb = _compile(theory_bb)
+            base_bb = run_bb()
+            _check(base_bb, f'COMETTracerSpectrum2Poles ({prior_basis})')
+            _check_sensitivity(run_bb, base_bb, f'COMETTracerSpectrum2Poles ({prior_basis})', **{sensitivity_param: 2.0})
+
+        # Other counterterm bases (each with EggScoSmi bias).
+        for ct_basis in ['ClassPT', 'PBJ', 'DESIct']:
+            theory_ct = COMETTracerSpectrum2Poles(k=k, prior_basis=f'EggScoSmi+{ct_basis}')
+            _check(_compile(theory_ct)(), f'COMETTracerSpectrum2Poles (EggScoSmi+{ct_basis})')
+
+        # ells subset.
+        assert _compile(COMETTracerSpectrum2Poles(k=k, ells=(0, 2)))().shape[0] == 2
+
+    def test_tracer_bispectrum(self):
+        """COMETTracerSpectrum3Poles: shape, finite output, b1 sensitivity."""
+        from desilike.theories.galaxy_clustering.full_shape import (
+            COMETTracerSpectrum3Poles, COMETPTSpectrum3Poles,
+        )
+        k = np.column_stack([np.linspace(0.02, 0.1, 11)] * 2)  # diagonal (k1, k2) pairs
+
+        theory = COMETTracerSpectrum3Poles(k=k)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)')
+        assert base.shape == (len(theory.ells), len(k))
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', logA=2.5)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', b1=2.0)
 
 
 def test_jit():

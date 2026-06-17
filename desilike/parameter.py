@@ -1095,6 +1095,13 @@ class VariableCollection:
                 return p
         raise KeyError(f'Variable {key!r} not found')
 
+    def get(self, key, default=None):
+        """Return the variable named *key*, or *default* if not found (dict-like; no int/wildcard support)."""
+        for p in self._data:
+            if p.name == key:
+                return p
+        return default
+
     def __contains__(self, item):
         name = item.name if isinstance(item, Variable) else str(item)
         return any(p.name == name for p in self._data)

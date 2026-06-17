@@ -17,13 +17,14 @@ TNSTracerCorrelation2Poles
     TNSTracerSpectrum2Poles Fourier-transformed to configuration space via FFTLog.
 """
 
+import os
 import numpy as np
+from scipy import constants
 import jax
 import jax.numpy as jnp
 import interpax
-import os
 
-from ...base import Calculator
+from ...base import Calculator, get_params
 from ...parameter import Parameter, VariableCollection
 from ..primordial_cosmology import CosmoprimoCosmology, _get_fiducial
 from .bao import ProjectToPoles, SpectrumToCorrelation
@@ -2325,6 +2326,16 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         return obj
 
 
+_CONVERSION_JAXEFFORT = {'ln10As': 'logA', 'ns': 'n_s', 'h': 'h', 'omega_b': 'omega_b', 'omega_c': 'omega_cdm',
+                         'm_nu': 'm_ncdm_tot', 'w0': 'w0_fld', 'wa': 'wa_fld'}
+
+def _cosmo_to_jaxeffort(cosmo):
+    jaxeffort_cosmo = {}
+    for comet_name, name in _CONVERSION_JAXEFFORT.items():
+        jaxeffort_cosmo[comet_name] = cosmo[name]
+    return jaxeffort_cosmo
+
+
 class JAXEffortTracerSpectrum2Poles(Calculator):
     r"""
     Tracer power-spectrum multipoles from a JAXEffort emulator.
@@ -2398,11 +2409,12 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
             Parameter('sn4', value=0., fixed=True, latex='s_{n,4}'),
         ], tracers)
 
-    def __init__(self, *args, cosmo=None, prior_basis='standard', model='velocileptors_rept_mnuw0wacdm', tracers=None, params=None, **kwargs):
+    def __init__(self, *args, cosmo=None, prior_basis='standard', model='velocileptors_rept_mnuw0wacdm', tracers=None, params=None, fiducial='DESI', **kwargs):
         # ── cosmology dep (provides logA, n_s, h, omega_b, omega_cdm, m_ncdm, w0_fld, wa_fld) ──
         if cosmo is None:
-            cosmo = CosmoprimoCosmology(engine='eisenstein_hu')
+            cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial=fiducial)
         self.cosmo = cosmo  # Calculator dep; build_graph discovers it from __dict__
+        self.cosmo.add_requirements({f'params.{name}': [{'z': 0.}] for name in _CONVERSION_JAXEFFORT.values()})
         # ── velocileptors bias ──
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
@@ -2434,10 +2446,7 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         # Fiducial distances for AP (fixed); same distance formulas as in __call__
         fiducial = _get_fiducial(fiducial)
         # Let's just use the same cosmology class, for numerical error cancellation around the fiducial
-        fiducial = jaxeffort.W0WaCDMCosmology(ln10As=fiducial['logA'], ns=fiducial['n_s'],
-                                         h=fiducial['h'], omega_b=fiducial['omega_b'],
-                                         omega_c=fiducial['omega_cdm'], m_nu=fiducial['m_ncdm_tot'],
-                                         w0=fiducial['w0_fld'], wa=fiducial['wa_fld'])
+        fiducial = jaxeffort.w0waCDMCosmology(**_cosmo_to_jaxeffort(fiducial))
         self._E_fid = fiducial.E_z(self.z)
         self._dM_fid = fiducial.r_z(self.z)
         self._D_fid, self._f_fid = fiducial.D_f_z(z)
@@ -2446,10 +2455,7 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         import jaxeffort
         # Read cosmological parameters from the CosmoprimoCosmology dep.
         z = self.z
-        jax_cosmo = jaxeffort.W0WaCDMCosmology(ln10As=self.cosmo['logA'], ns=self.cosmo['n_s'],
-                                               h=self.cosmo['h'], omega_b=self.cosmo['omega_b'],
-                                               omega_c=self.cosmo['omega_cdm'], m_nu=self.cosmo['m_ncdm_tot'],
-                                               w0=self.cosmo['w0_fld'], wa=self.cosmo['wa_fld'])
+        jax_cosmo = jaxeffort.w0waCDMCosmology(**_cosmo_to_jaxeffort(self.cosmo))
         theta = jnp.array([z, jax_cosmo.ln10As, jax_cosmo.ns, 100. * jax_cosmo.h, jax_cosmo.omega_b, jax_cosmo.omega_c, jax_cosmo.m_nu, jax_cosmo.w0, jax_cosmo.wa])
         D, f = jax_cosmo.D_f_z(z)
         # Alcock-Paczynski from the JAXEffort cosmology distances (qpar = D_H/D_H_fid, qper = D_M/D_M_fid).
@@ -2494,98 +2500,36 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         return obj
 
 
-class COMETEngine(Calculator):
-    def __init__(self, cosmo=None, fiducial='DESI', model='VDG_infty', use_Mpc=False, **kwargs):
-        from ..primordial_cosmology import CosmoprimoCosmology
+def _apply_cosmo_range_comet_emulator(params, limits=None):
 
-        if cosmo is None:
-            cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial=fiducial)
-        self.cosmo = self.narrow_cosmo_range(cosmo)
-        self.model = model
-        self._is_external = False  # __call__ should be jax compatible
+    # https://comet-emu.readthedocs.io/en/latest/spaceparams.html#ranges-of-emulated-parameters
+    if limits is None:
+        limits = dict(omega_cdm=(0.08, 0.16), omega_b=(0.01930, 0.02535), n_s=(0.90, 1.03), m_ncdm=(0.0, 1.0), A_s=(1e-9, 3.5e-9))
+        lo, hi = limits['A_s']
+        limits['logA'] = np.log(lo * 1e10), np.log(hi * 1e10)
 
-    def __post_init__(self, cosmo=None, fiducial='DESI', model='VDG_infty', use_Mpc=False, **kwargs):
-        self._fiducial = self.cosmo._fiducial
-        self.use_Mpc = use_Mpc
+    def intersect(limits1, limits2):
+        lo1, hi1 = limits1
+        lo2, hi2 = limits2
+        return (max(lo1, lo2), min(hi1, hi2))
 
-        from comet import comet as comet
-        options: dict = dict(model=self.model, use_Mpc=self.use_Mpc, **kwargs)
-        self.comet = comet(**options)
-        self.comet.BispNum.backend = 'jax'
-        # set rd_fid in comet, not actually used in calculation
-        self.comet.define_fiducial_cosmology(self.cosmoprimo_to_comet(self._fiducial) | dict(z=1.0))
+    for basename, limits in limits.items():
+        if param := params.get(basename, None):
+            prior = param.prior
+            limits = intersect(prior.limits, limits)
+            param.update(prior=dict(dist=prior.dist, limits=limits, **prior.attrs))
 
-    def __call__(self):
-        cosmo = self.cosmo
-        self.comet_cosmo = self.cosmoprimo_to_comet(cosmo)
-        w0_fixed, wa_fixed = cosmo.params['w0_fld'].fixed, cosmo.params['wa_fld'].fixed
-        if (w0_fixed, wa_fixed) == (True, True):
-            de_model = 'lambda'
-        elif (w0_fixed, wa_fixed) == (False, True):
-            de_model = 'w0'
-        else:
-            de_model = 'w0wa'
-        self.de_model = de_model
 
-    def tree_flatten(self):
-        # Expose the parameter vector that defines the cosmology as the single array
-        # output.  This is what actually changes between calls; it also guarantees the
-        # ExternalCalculator's pure_callback has a non-empty output (an empty output is
-        # elided by XLA, so __call__ would never run).  Downstream calculators still read
-        # the live ``self.comet_cosmo`` object set as a side effect of __call__.
-        marker = jnp.concatenate([jnp.ravel(jnp.asarray(param)) for param in self.comet_cosmo.values()])
-        return [marker], {'de_model': self.de_model}
+_CONVERSION_COMET = {'wc': 'omega_cdm', 'wb': 'omega_b', 'h': 'h', 'ns': 'n_s', 'As': 'A_s', 'Mnu': 'm_ncdm_tot',
+                     'w0': 'w0_fld', 'wa': 'wa_fld', 'Ok': 'Omega_k'}
 
-    @classmethod
-    def tree_unflatten(cls, aux, children):
-        obj = object.__new__(cls)
-        obj.de_model = aux['de_model']
-        obj._param_vector = children[0]  # type: ignore
-        return obj
 
-    @classmethod
-    def emulator_params_range(cls):
-        # XXX: better to read it from comet
-        # https://comet-emu.readthedocs.io/en/latest/spaceparams.html#ranges-of-emulated-parameters
-        params = dict(omega_cdm=(0.08, 0.16), omega_b=(0.01930, 0.02535), n_s=(0.90, 1.03), m_ncdm=(0.0, 1.0), A_s=(1e-9, 3.5e-9))
-        lo, hi = params['A_s']
-        params['logA'] = np.log(lo * 1e10), np.log(hi * 1e10)
-        return params
-
-    @classmethod
-    def narrow_cosmo_range(cls, cosmo):
-        def intersect(limits1, limits2):
-            lo1, hi1 = limits1
-            lo2, hi2 = limits2
-            return (max(lo1, lo2), min(hi1, hi2))
-        for basename, limits in cls.emulator_params_range().items():
-            if param := cosmo.params.get(basename, None):
-                prior = param.prior
-                limits = intersect(prior.limits, limits)
-                param.update(prior=dict(dist=prior.dist, limits=limits, **prior.attrs))
-        return cosmo
-
-    def cosmoprimo_to_comet(self, cosmo):
-        comet_cosmo = {}
-        comet_cosmo['wc'] = cosmo['omega_cdm']
-        comet_cosmo['wb'] = cosmo['omega_b']
-        comet_cosmo['h'] = cosmo['h']
-        comet_cosmo['ns'] = cosmo['n_s']
-        comet_cosmo['As'] = jnp.exp(cosmo['logA']) * 1e-10 * 1e9  # comet uses As in units of 1e-9
-        if self.with_massive_neutrino:
-            comet_cosmo['Mnu'] = cosmo['m_ncdm']
-        comet_cosmo['w0'] = cosmo['w0_fld']
-        comet_cosmo['wa'] = cosmo['wa_fld']
-        comet_cosmo['Ok'] = cosmo['Omega_k']
-        return comet_cosmo
-
-    @property
-    def in_realspace(self):
-        return 'RS' in self.model
-
-    @property
-    def with_massive_neutrino(self):
-        return 'nonu' not in self.model
+def _cosmo_to_comet(cosmo):
+    comet_cosmo = {}
+    for comet_name, name in _CONVERSION_COMET.items():
+        comet_cosmo[comet_name] = cosmo[name]
+    comet_cosmo['As'] *= 1e9  # comet uses As in units of 1e-9
+    return comet_cosmo
 
 
 class COMETPTSpectrum2Poles(Calculator):
@@ -2607,71 +2551,79 @@ class COMETPTSpectrum2Poles(Calculator):
             params += [avir]
         return propose_params_multitracer(params, tracers)
 
-    def __init__(self, z=1.0, k=None, ells=None, tracers=None, engine=None, model='VDG_infty'):
-        if engine is None:
-            engine = COMETEngine(model=model)
-        else:
-            model = engine.model  # inherit model from engine
-        self.engine = engine
-
+    def __init__(self, z=1.0, k=None, ells=(0, 2, 4), tracers=None, cosmo=None, fiducial='DESI', model='VDG_infty', params=None, **kwargs):
         vc = self.propose_params(tracers=tracers, model=model)
+        if params is not None:
+            vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
-
         self.z = float(z)
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
         if ells is None:
-            ells = (0,) if self.engine.in_realspace else (0, 2, 4)
+            ells = (0, 2, 4)
         self.ells = tuple(ells)
-
+        if cosmo is None:
+            cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial=fiducial)
+        self.cosmo = cosmo  # Calculator dep; build_graph discovers it from __dict__
+        self.cosmo.add_requirements({
+            'background.efunc':                        [{'z': float(z)}],
+            'background.comoving_transverse_distance': [{'z': float(z)}],
+            'fourier.sigma8_z': [{'of': 'delta_cb', 'z': self.z}],
+            **{f'params.{name}': [{'z': 0.}] for name in _CONVERSION_COMET.values()},
+        })
+        _apply_cosmo_range_comet_emulator(get_params(self.cosmo))
         self._is_external = True
 
-    def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, engine=None, model='VDG_infty'):
-        from cosmoprimo import constants
-
-        self._fiducial = fid = self.engine._fiducial
-        self._DH_fid = float(constants.c / 1e3 / (100. * fid.efunc(self.z)))
-        self._DM_fid = float(fid.comoving_angular_distance(self.z))
+    def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, **kwargs):
+        fiducial = _get_fiducial(fiducial)
+        self._use_mpc = False
+        params = get_params(self.cosmo)
+        w0_fixed, wa_fixed = params['w0_fld'].fixed, params['wa_fld'].fixed
+        if (w0_fixed, wa_fixed) == (True, True): de_model = 'lambda'
+        elif (w0_fixed, wa_fixed) == (False, True): de_model = 'w0'
+        else: de_model = 'w0wa'
+        self._de_model = de_model
+        self._model = model
+        from comet import comet as comet
+        self.comet = comet(model=model, use_Mpc=self._use_mpc, **kwargs)
+        # set rd_fid in comet, not actually used in calculation
+        self.comet.define_fiducial_cosmology(_cosmo_to_comet(fiducial) | dict(z=self.z))
+        ba = fiducial.get_background()
+        self._DH_fid = float(constants.c / 1e3 / (100. * ba.efunc(self.z)))
+        self._DM_fid = float(ba.comoving_transverse_distance(self.z))
+        self.sigma8_fid = fiducial.get_fourier().sigma8_z(of='delta_cb', z=self.z)
 
     def __call__(self):
-        from cosmoprimo import constants
-
-        cosmo = self.engine.cosmo.cosmo
-        DH = constants.c / 1e3 / (100. * cosmo.efunc(self.z))
-        DM = cosmo.comoving_angular_distance(self.z)
+        DH = constants.c / 1e3 / (100. * self.cosmo.get('background.efunc', z=self.z))
+        DM = self.cosmo.get('background.comoving_transverse_distance', z=self.z)
         self.qpar = DH / self._DH_fid
         self.qper = DM / self._DM_fid
-        self.Aap = 1.0 / (self.qper**2 * self.qpar)
         q_tr_lo = [self.qper, self.qpar]
-
-        engine = self.engine
-        ell_for_recon = [0, 2, 4, 6]
-        params = engine.comet_cosmo.copy()
-        if 'VDG' in engine.model:
+        params = _cosmo_to_comet(self.cosmo)
+        if 'VDG' in self._model:
             params['avir'] = self.avir.value
-        params = {k: np.asarray(v).reshape(-1)[0].item() for k, v in params.items()}
         params |= dict(z=self.z)
         # canonical basis
         params |= dict(b1=1.0, b2=0.0, g2=0.0, g21=0.0, c0=0.0, c2=0.0, c4=0.0, cnlo=0.0, NP0=0.0, NP20=0.0, NP22=0.0)
-        table = engine.comet.PX_ell(
+        table = self.comet.PX_ell(
             self.k, params, ell=list(self.ells), X_list=list(self._diagrams),
-            de_model=engine.de_model, q_tr_lo=q_tr_lo, ell_for_recon=ell_for_recon
+            de_model=self._de_model, q_tr_lo=q_tr_lo, ell_for_recon=[0, 2, 4, 6]
         )
         # table shape: (ndiagrams, nells, nk)
         self.table = jnp.moveaxis(jnp.asarray(list(table.values())), 2, 0)
-        self.f = float(np.asarray(engine.comet.params['f']).reshape(-1)[0])
-        self.sigma12 = float(np.asarray(engine.comet.params['s12']).reshape(-1)[0])
+        self.f = float(np.asarray(self.comet.params['f']).reshape(-1)[0])
+        self.sigma8 = self.cosmo.get('fourier.sigma8_z', of='delta_cb', z=self.z)
 
     def tree_flatten(self):
-        children = [self.qpar, self.qper, self.Aap, self.table, self.f, self.sigma12]
+        children = [self.qpar, self.qper, self.table, self.f, self.sigma8, self.sigma8_fid]
         auw = {'z': self.z, 'k': self.k, 'ells': self.ells}
         return children, auw
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.qpar, obj.qper, obj.Aap, obj.table, obj.f, obj.sigma12 = children
+        obj.qpar, obj.qper, obj.table, obj.f, obj.sigma8, obj.sigma8_fid = children
         obj.z = aux['z']
         obj.k = aux['k']
         obj.ells = aux['ells']
@@ -2679,10 +2631,14 @@ class COMETPTSpectrum2Poles(Calculator):
 
 
 class COMETTracerSpectrum2Poles(Calculator):
+
     @classmethod
-    def propose_params(cls, tracers=None, bias_basis='EggScoSmi+Comet', return_list=False):
+    def propose_params(cls, tracers=None, prior_basis='EggScoSmi+Comet', model='VDG_infty'):
         params = []
-        bias_basis, counterterm_basis = bias_basis.split('+')
+        if 'physical' in prior_basis:
+            bias_basis, counterterm_basis = 'DESI', 'DESIct'
+        else:
+            bias_basis, counterterm_basis = prior_basis.split('+')
         if bias_basis == 'EggScoSmi':
             params += [
                 Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0), ref=dict(dist='uniform', limits=(1.4, 1.6))), latex=R'b_1'),
@@ -2705,14 +2661,22 @@ class COMETTracerSpectrum2Poles(Calculator):
                 Parameter('b4t', value=0.0, prior=None, ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'\tilde{b}_4'),
             ]
         elif bias_basis == 'DESI':
-            params += [
-                Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0), ref=dict(dist='uniform', limits=(1.4, 1.6))), latex=R'b_1'),
-                Parameter('b2d', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_2'),
-                Parameter('bk2', value=0.0, prior=None, ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_{K^2}'),
-                Parameter('btd', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'b_{\mathrm{td}}', fixed=True),   
-            ]
+            if 'physical' in prior_basis:
+                params += [
+                    Parameter('b1p', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0), ref=dict(dist='uniform', limits=(1.4, 1.6))), latex=R'b_1'),
+                    Parameter('b2dp', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_2'),
+                    Parameter('bk2p', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_{K^2}'),
+                    Parameter('btdp', value=0.0, prior=dict(dist='norm', loc=0.0, scale=1.0), ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'b_\mathrm{td}'),
+                ]
+            else:
+                params += [
+                    Parameter('b1', value=1.5, prior=dict(dist='uniform', limits=(0.1, 8.0), ref=dict(dist='uniform', limits=(1.4, 1.6))), latex=R'b_1'),
+                    Parameter('b2d', value=0.0, prior=dict(dist='norm', loc=0.0, scale=20.0), ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_2'),
+                    Parameter('bk2', value=0.0, prior=None, ref=dict(dist='uniform', limits=(-1.0, 1.0)), latex=R'b_{K^2}'),
+                    Parameter('btd', value=0.0, fixed=True, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.5), latex=R'b_\mathrm{td}'),
+                ]
         else:
-            raise NotImplementedError(bias_basis)
+            raise NotImplementedError(prior_basis)
         if counterterm_basis == 'Comet':
             params += [
                 Parameter('c0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'c_0'),
@@ -2755,45 +2719,54 @@ class COMETTracerSpectrum2Poles(Calculator):
             ]
         else:
             raise NotImplementedError(counterterm_basis)
-        if return_list:
-            return params
+        if 'VDG' in model:
+            avir = Parameter('avir', value=0.0, prior=dict(limits=[0.0, 20.0]),
+                             ref=dict(dist='norm', loc=0.0, scale=1.0, limits=(0.0, 20.0)), latex=r'a_\mathrm{vir}')
+            params += [avir]
         return propose_params_multitracer(params, tracers)
 
-    def __init__(self, z=1.0, k=None, pt=None, ells=None, tracers=None, engine=None, model='VDG_infty', bias_basis='EggScoSmi+Comet', shotnoise=1e4, params=None):
-        vc = self.propose_params(tracers=tracers, bias_basis=bias_basis)
+    def __init__(self, z=1.0, k=None, ells=None, tracers=None, pt=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, params=None, fsat=None, sigv=None):
+        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model)
         if params is not None:
             vc = vc + VariableCollection(params)
-        assign_params(self, vc, tracers)
-
+        # avir is owned by the PT; separate it and route to PT.
+        avir_vc = vc.select(basename='avir')
+        physical = 'physical' in prior_basis
+        assign_params(self, vc - avir_vc, tracers, mapping=(lambda name: name[:-1]) if physical else None)
+        self._prior_basis = prior_basis
         if pt is None:
-            pt = COMETPTSpectrum2Poles()
-        else:
-            model = pt.engine.model  # inherit model from pt
-        if engine is not None:
-            model = engine.model  # inherit model from engine
+            pt = COMETPTSpectrum2Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None)
         self.pt = pt
-        self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model, engine=engine)
-        self.bias_basis = bias_basis
+        self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model)
 
-    def __post_init__(self, z=1.0, k=None, pt=None, ells=None, tracers=None, engine=None, model='VDG_infty', bias_basis='EggScoSmi+Comet', shotnoise=1e4, params=None):
+    def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, pt=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, fsat=None, sigv=None, params=None, **kwargs):
         self.k = self.pt.k
         self.ells = self.pt.ells
-        self._shotnoise = float(shotnoise)
+        self._nbar = float(nbar)
+        settings = get_physical_stochastic_settings()
+        self._fsat = float(fsat) if fsat is not None else settings['fsat']
+        self._sigv = float(sigv) if sigv is not None else settings['sigv']
 
     def __call__(self):
-        self._set_canonical_params()
-        b1, b2, g2, g21, c0, c2, c4, cnlo, NP0, NP20, NP22 = (self.canonical_params[name] for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22'))
-        sn = self._shotnoise
+        params = self._get_canonical_params()
+        b1, b2, g2, g21, c0, c2, c4, cnlo, NP0, NP20, NP22 = (params[name] for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22'))
         coeff = jnp.array([
             b1**2, b1, 1.0, c0, c2, c4, b1**2 * cnlo, b1 * cnlo, cnlo,
             b1**2, b1*b2, b1*g2, b1*g21, b2**2, b2*g2, g2**2, b2, g2, g21,
-            NP0 * sn, NP20 * sn, NP22 * sn,
+            NP0, NP20, NP22,
         ])
         self.poles = jnp.einsum('b,blk->lk', coeff, self.pt.table)
+        return self.poles
 
-    def _set_canonical_params(self):
+    def _get_canonical_params(self):
         f = self.pt.f
-        bias_basis, counterterm_basis = self.bias_basis.split('+')
+        if 'physical' in self._prior_basis:
+            bias_basis, counterterm_basis = 'DESI', 'DESIct'
+        else:
+            bias_basis, counterterm_basis = self._prior_basis.split('+')
+
+        A_AP = 1. / (self.pt.qper**2 * self.pt.qpar) if 'aap' in self._prior_basis else 1.
+        A = self.pt.sigma8 / self.pt.sigma8_fid
 
         def g(name):
             param = getattr(self, name, None)
@@ -2814,6 +2787,11 @@ class COMETTracerSpectrum2Poles(Calculator):
             g21 = -2.0 / 147.0 * (11 * b1t - 18 * b2t + 7 * b3t)
         elif bias_basis == 'DESI':
             b1, b2d, bk2, btd = g('b1'), g('b2d'), g('bk2'), g('btd')
+            if 'physical' in self._prior_basis:
+                b1, b2d, bk2, btd = b1 / (A * A_AP**0.5), b2d / (A**2 * A_AP**0.5), bk2 / (A**2 * A_AP**0.5), btd / (A**4 * A_AP)
+                # center on co-evoluation
+                bk2 = bk2 - 2. / 7. * (b1 - 1)
+                btd = btd + 23. / 42. * (b1 - 1)
             b2 = b2d + 4.0 / 3.0 * bk2
             g2 = bk2
             g21 = -4.0 / 7.0 * (bk2 + btd)
@@ -2823,6 +2801,7 @@ class COMETTracerSpectrum2Poles(Calculator):
         if counterterm_basis == 'Comet':
             c0, c2, c4, cnlo = g('c0'), g('c2'), g('c4'), g('cnlo')
             NP0, NP20, NP22 = g('NP0'), g('NP20'), g('NP22')
+            NP0, NP20, NP22 = NP0 / self._nbar, NP20 / self._nbar, NP22 / self._nbar
         elif counterterm_basis == 'ClassPT':
             c0s, c2s, c4s, cnlos = g('c0s'), g('c2s'), g('c4s'), g('cnlos')
             c0 = c0s
@@ -2832,6 +2811,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             NP0 = g('NP0')
             NP20 = g('NP20s') + 1.0 / 3.0 * g('NP22s')
             NP22 = 2.0 / 3.0 * g('NP22s')
+            NP0, NP20, NP22 = NP0 / self._nbar, NP20 / self._nbar, NP22 / self._nbar
         elif counterterm_basis == 'PBJ':
             c0t, c2t, c4t = g('c0t'), g('c2t'), g('c4t')
             c0 = c0t + 1.0/3.0 * f * c2t + 1.0/5.0 * f**2 * c4t
@@ -2841,9 +2821,16 @@ class COMETTracerSpectrum2Poles(Calculator):
             NP0 = g('NP0')
             NP20 = g('eps0') + 1.0/3.0 * g('eps2')
             NP22 = 2.0/3.0 * g('eps2')
+            NP0, NP20, NP22 = NP0 / self._nbar, NP20 / self._nbar, NP22 / self._nbar
         elif counterterm_basis == 'DESIct':
             a0, a2, a4 = g('a0'), g('a2'), g('a4')
             NP0, NP20, NP22 = g('NP0'), g('NP20'), g('NP22')
+            if 'physical' in self._prior_basis:
+                a0, a2, a4 = a0 / (A**2 * A_AP), a2 / (A**2 * A_AP), a4 / (A**2 * A_AP)
+                NP0 = NP0 / A_AP / self._nbar
+                NP20 = NP20 / A_AP / self._nbar * self._fsat * self._sigv**2
+                NP22 = NP22 / A_AP / self._nbar * self._fsat * self._sigv**4
+
             c0 = -0.5 * (a0 * (b1**2 + b1 * f / 3.0)
                             + a2 * (b1 * f / 3.0 + f**2 / 5.0)
                             + a4 * (b1 * f / 5.0 + f**2 / 7.0))
@@ -2856,16 +2843,17 @@ class COMETTracerSpectrum2Poles(Calculator):
         else:
             raise ValueError(f'Unknown counterterm_basis: {counterterm_basis!r}')
 
-        if not self.pt.engine.use_Mpc:
+        if not self.pt._use_mpc:
             # comet emulator evalutes in Mpc unit, and then spline interpolation converts (k, diagram) to (h/Mpc, Mpc^3/h^3) unit,
             # however, counterterm diagram evaluates ~k^2 P_L or ~k^4 P_L so we need additionally convert k from 1/Mpc to h/Mpc unit here
-            h = self.pt.engine.cosmo['h']
+            h = self.pt.cosmo['h']
             c0, c2, c4 = c0 / h**2, c2 / h**2, c4 / h**2
             cnlo = cnlo / h**4
             # for the same reason, NP* should be rescaled to compensate the h^3 factor
             NP0 = NP0 / h**3
             NP20, NP22 = NP20 / h**5, NP22 / h**5
-        self.canonical_params = dict(b1=b1, b2=b2, g2=g2, g21=g21, c0=c0, c2=c2, c4=c4, cnlo=cnlo, NP0=NP0, NP20=NP20, NP22=NP22)
+        canonical_params = dict(b1=b1, b2=b2, g2=g2, g21=g21, c0=c0, c2=c2, c4=c4, cnlo=cnlo, NP0=NP0, NP20=NP20, NP22=NP22)
+        return canonical_params
 
     def tree_flatten(self):
         return [self.poles], None
@@ -2889,83 +2877,91 @@ class COMETPTSpectrum3Poles(Calculator):
     def propose_params(cls, tracers=None, model='VDG_infty'):
         params = []
         if 'VDG' in model:
-            avirB = Parameter('avirB', value=0.0, prior=dict(limits=[0.0, 20.0]),
+            avir = Parameter('avir', value=0.0, prior=dict(limits=[0.0, 20.0]),
                              ref=dict(dist='norm', loc=0.0, scale=1.0, limits=(0.0, 20.0)), latex=R'a^B_{\mathrm{vir}}')
-            params += [avirB]
+            params += [avir]
         cnloB = Parameter('cnloB', value=0.0, prior=None,
                             ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c^B_{\mathrm{nlo}}')
         params += [cnloB]
         return propose_params_multitracer(params, tracers)
 
-    def __init__(self, z=1.0, k=None, ells=None, tracers=None, engine=None, model='VDG_infty', quad_deg=(7, 16, 5), mu12_transform='k3'):
-        if engine is None:
-            engine = COMETEngine(model=model)
-        else:
-            model = engine.model  # inherit model from engine
-        self.engine = engine
-
+    def __init__(self, z=1.0, k=None, ells=None, tracers=None, cosmo=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 16, 5), mu12_transform='k3'):
         vc = self.propose_params(tracers=tracers, model=model)
+        if params is not None:
+            vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
-
         self.z = float(z)
         if k is None:
             k = np.column_stack([np.linspace(0.01, 0.1, 11)] * 2)
         self.k = np.atleast_2d(np.asarray(k, dtype='f8'))
         if ells is None:
-            ells = ((0, 0, 0),) if self.engine.in_realspace else ((0, 0, 0), (2, 0, 2))
+            ells = ((0, 0, 0), (2, 0, 2))
         self.ells = tuple(tuple(int(e) for e in ell) for ell in ells)
-
+        if cosmo is None:
+            cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial=fiducial)
+        self.cosmo = cosmo  # Calculator dep; build_graph discovers it from __dict__
+        self.cosmo.add_requirements({
+            'background.efunc':                        [{'z': float(z)}],
+            'background.comoving_transverse_distance': [{'z': float(z)}],
+            'fourier.sigma8_z': [{'of': 'delta_cb', 'z': self.z}]
+        })
+        _apply_cosmo_range_comet_emulator(get_params(self.cosmo))
         self._is_external = True
 
-    def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, engine=None, model='VDG_infty', quad_deg=(7, 16, 5), mu12_transform='k3'):
-        from cosmoprimo import constants
-
-        self._fiducial = fid = self.engine._fiducial
-        self._DH_fid = float(constants.c / 1e3 / (100. * fid.efunc(self.z)))
-        self._DM_fid = float(fid.comoving_angular_distance(self.z))
-
+    def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 16, 5), mu12_transform='k3', **kwargs):
+        fiducial = _get_fiducial(fiducial)
+        self._use_mpc = False
+        params = get_params(self.cosmo)
+        w0_fixed, wa_fixed = params['w0_fld'].fixed, params['wa_fld'].fixed
+        if (w0_fixed, wa_fixed) == (True, True): de_model = 'lambda'
+        elif (w0_fixed, wa_fixed) == (False, True): de_model = 'w0'
+        else: de_model = 'w0wa'
+        self._de_model = de_model
+        self._model = model
+        from comet import comet as comet
+        self.comet = comet(model=model, use_Mpc=self._use_mpc, **kwargs)
+        # set rd_fid in comet, not actually used in calculation
+        self.comet.define_fiducial_cosmology(_cosmo_to_comet(fiducial) | dict(z=self.z))
+        ba = fiducial.get_background()
+        self._DH_fid = float(constants.c / 1e3 / (100. * ba.efunc(self.z)))
+        self._DM_fid = float(ba.comoving_transverse_distance(self.z))
+        self.sigma8_fid = fiducial.get_fourier().sigma8_z(of='delta_cb', z=self.z)
         self.quad_deg = tuple(quad_deg)
         self.mu12_transform = mu12_transform
 
     def __call__(self):
-        from cosmoprimo import constants
-
-        cosmo = self.engine.cosmo.cosmo
-        DH = constants.c / 1e3 / (100. * cosmo.efunc(self.z))
-        DM = cosmo.comoving_angular_distance(self.z)
+        DH = constants.c / 1e3 / (100. * self.cosmo.get('background.efunc', z=self.z))
+        DM = self.cosmo.get('background.comoving_transverse_distance', z=self.z)
         self.qpar = DH / self._DH_fid
         self.qper = DM / self._DM_fid
-        self.Aap = 1.0 / (self.qper**2 * self.qpar)
         q_tr_lo = [self.qper, self.qpar]
-
-        engine = self.engine
-        params = engine.comet_cosmo.copy()
-        if 'VDG' in engine.model:
-            params['avirB'] = self.avirB.value
+        params = _cosmo_to_comet(self.cosmo)
+        if 'VDG' in self._model:
+            params['avir'] = self.avir.value
         params['cnloB'] = self.cnloB.value
         params = {k: np.asarray(v).reshape(-1)[0].item() for k, v in params.items()}
         params |= dict(z=self.z)
         # canonical basis
         params |= dict(b1=1.0, b2=0.0, g2=0.0, g21=0.0, c0=0.0, c2=0.0, c4=0.0, cnlo=0.0, NP0=0.0, NP20=0.0, NP22=0.0)
         params |= dict(NB0=0.0, MB0=0.0, cB1=0.0, cB2=0.0)
-        table = engine.comet.BX_ell_Sugi(
+        table = self.comet.BX_ell_Sugi(
             self.k, params, ell=list(self.ells), X_list=list(self._diagrams),
-            de_model=engine.de_model, q_tr_lo=q_tr_lo, quad_deg=self.quad_deg, mu12_transform=self.mu12_transform
+            de_model=self._de_model, q_tr_lo=q_tr_lo, quad_deg=self.quad_deg, mu12_transform=self.mu12_transform
         )
         # table shape: (ndiagrams, nells, nk)
         self.table = jnp.moveaxis(jnp.asarray(list(table.values())), 2, 0)
-        self.f = float(np.asarray(engine.comet.params['f']).reshape(-1)[0])
-        self.sigma12 = float(np.asarray(engine.comet.params['s12']).reshape(-1)[0])
+        self.f = float(np.asarray(self.comet.params['f']).reshape(-1)[0])
+        self.sigma8 = self.cosmo.get('fourier.sigma8_z', of='delta_cb', z=self.z)
 
     def tree_flatten(self):
-        children = [self.qpar, self.qper, self.Aap, self.table, self.f, self.sigma12]
+        children = [self.qpar, self.qper, self.table, self.f, self.sigma8, self.sigma8_fid]
         auw = {'z': self.z, 'k': self.k, 'ells': self.ells}
         return children, auw
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.qpar, obj.qper, obj.Aap, obj.table, obj.f, obj.sigma12 = children
+        obj.qpar, obj.qper, obj.table, obj.f, obj.sigma8, obj.sigma8_fid = children
         obj.z = aux['z']
         obj.k = aux['k']
         obj.ells = aux['ells']
@@ -2973,58 +2969,61 @@ class COMETPTSpectrum3Poles(Calculator):
 
 
 class COMETTracerSpectrum3Poles(Calculator):
-    @classmethod
-    def propose_params(cls, tracers=None, bias_basis='EggScoSmi+Comet'):
-        all_params = COMETTracerSpectrum2Poles.propose_params(tracers=tracers, bias_basis=bias_basis, return_list=True)
-        relevant = {'b1', 'b2', 'g2', 'bG2', 'b1t', 'b2t', 'b4t', 'b2d', 'bk2', 'NP0'}
-        params = []
-        for param in all_params:
-            if param.basename in relevant:
-                params.append(param)
-        params += [
-            Parameter('NB0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^B_{0}'),
-            Parameter('MB0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'M^B_{0}')
-        ]
-        return propose_params_multitracer(params, tracers)
 
-    def __init__(self, z=1.0, k=None, pt=None, ells=None, tracers=None, engine=None, model='VDG_infty', bias_basis='EggScoSmi+Comet', shotnoise=1e4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3'):
-        vc = self.propose_params(tracers=tracers, bias_basis=bias_basis)
+    @classmethod
+    def propose_params(cls, tracers=None, prior_basis='EggScoSmi+Comet', model='VDG_infty'):
+        relevant = ['b1', 'b2', 'g2', 'bG2', 'b1t', 'b2t', 'b4t', 'b2d', 'bk2', 'NP0', 'avir']
+        params = COMETTracerSpectrum2Poles.propose_params(tracers=tracers, prior_basis=prior_basis, model=model).select(basename=relevant)
+        extra = propose_params_multitracer([
+            Parameter('NB0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^B_{0}'),
+            Parameter('MB0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'M^B_{0}'),
+        ], tracers)
+        return params + extra
+
+    def __init__(self, z=1.0, k=None, pt=None, ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None,nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3'):
+        vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model)
         if params is not None:
             vc = vc + VariableCollection(params)
-        assign_params(self, vc, tracers)
-
+        # avir is owned by the PT; separate it and route to PT.
+        avir_vc = vc.select(basename='avir')
+        physical = 'physical' in prior_basis
+        assign_params(self, vc - avir_vc, tracers, mapping=(lambda name: name[:-1]) if physical else None)
+        self._prior_basis = prior_basis
         if pt is None:
-            pt = COMETPTSpectrum3Poles()
-        else:
-            model = pt.engine.model  # inherit model from pt
-        if engine is not None:
-            model = engine.model  # inherit model from engine
+            pt = COMETPTSpectrum3Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None)
         self.pt = pt
-        self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model, engine=engine, quad_deg=quad_deg, mu12_transform=mu12_transform)
-        self.bias_basis = bias_basis
+        self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model, quad_deg=quad_deg, mu12_transform=mu12_transform)
 
-    def __post_init__(self, z=1.0, k=None, pt=None, ells=None, tracers=None, engine=None, model='VDG_infty', bias_basis='EggScoSmi+Comet', shotnoise=1e4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3'):
+    def __post_init__(self, z=1.0, k=None, pt=None, ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None,nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3'):
         self.k = self.pt.k
         self.ells = self.pt.ells
-        self._shotnoise = float(shotnoise)
+        self._nbar = float(nbar)
+        settings = get_physical_stochastic_settings()
+        self._fsat = float(fsat) if fsat is not None else settings['fsat']
+        self._sigv = float(sigv) if sigv is not None else settings['sigv']
 
     def __call__(self):
-        self._set_canonical_params()
-        b1, b2, g2, NP0, NB0, MB0 = (self.canonical_params[name] for name in ('b1', 'b2', 'g2', 'NP0', 'NB0', 'MB0'))
-        sn = self._shotnoise
+        params = self._get_canonical_params()
+        b1, b2, g2, NP0, NB0, MB0 = (params[name] for name in ('b1', 'b2', 'g2', 'NP0', 'NB0', 'MB0'))
         coeff = jnp.array([
             b1**3, b1**2, b1, b1**2 * b2, b1*b2, b2, b1**2 * g2, b1*g2, g2, 1.0,
-            MB0 * b1**2 * sn, (MB0+NP0) * b1 * sn, NP0 * sn, NB0 * sn**2,
+            MB0 * b1**2, (MB0+NP0) * b1, NP0, NB0,
         ])
         self.poles = jnp.einsum('b,blk->lk', coeff, self.pt.table)
+        return self.poles
 
-    def _set_canonical_params(self):
-        COMETTracerSpectrum2Poles._set_canonical_params(self)  # type: ignore
+    def _get_canonical_params(self):
+        params = COMETTracerSpectrum2Poles._get_canonical_params(self)  # type: ignore
         cnloB = self.pt.cnloB.value
         NP0 = self.NP0.value  # there's no need to normalize it by h**3 here
         NB0 = self.NB0.value
         MB0 = self.MB0.value
-        self.canonical_params |= dict(cnloB=cnloB, NP0=NP0, NB0=NB0, MB0=MB0)
+        A_AP = 1. / (self.pt.qper**2 * self.pt.qpar) if 'aap' in self._prior_basis else 1.
+        if 'physical' in self._prior_basis:
+            NP0, NB0, MB0 = NP0 / A_AP / self._nbar, NB0 / A_AP / self._nbar**2, MB0 / A_AP / self._nbar
+        else:
+            NP0, NB0, MB0 = NP0 / self._nbar, NB0 / self._nbar**2, MB0 / self._nbar
+        return params | dict(cnloB=cnloB, NP0=NP0, NB0=NB0, MB0=MB0)
 
     def tree_flatten(self):
         return [self.poles], None

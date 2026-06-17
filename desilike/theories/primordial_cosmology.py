@@ -67,14 +67,13 @@ class PrimordialCosmology(Calculator):
             params = self.propose_params(*args, fiducial=fiducial, **kwargs)
         elif not isinstance(params, VariableCollection):
             params = VariableCollection(params)
-        # Stored as a public attribute so build_graph discovers the Parameters as
-        # dependencies (it descends into VariableCollection).
-        self.params = {param.basename: param for param in params}
+        self.params = params
         # Requirement registry: filled by downstream calculators via add_requirements().
         # _requirements: spec_key → {'static': dict, 'z': np.array, 'k': np.array|None}
         # _results:   spec_key → jnp.array   (populated in __call__)
         self._requirements = {}
         self._results = {}
+        self._param_values = {}
         # Default engine identifier; overridden by concrete subclasses in __post_init__.
         self._engine = None
 
@@ -129,8 +128,8 @@ class PrimordialCosmology(Calculator):
 
     def __getitem__(self, name):
         # Return parameter value
-        if name in self.params:
-            return self.params[name].value
+        if name in self._param_values:
+            return self._param_values[name]
         raise KeyError
 
     def get(self, method_key, **kwargs):
@@ -173,6 +172,8 @@ class PrimordialCosmology(Calculator):
         When used as a pre-loaded proxy (results injected externally via compile's ``input``
         callable before the graph runs), this is a no-op because _results is already populated.
         """
+        params = {param.basename: param.value for param in self.params}
+        self._param_values = params
         for spec_key, spec in self._requirements.items():
             if spec_key not in self._results:
                 nz = len(spec['z'])
@@ -182,6 +183,7 @@ class PrimordialCosmology(Calculator):
     def tree_flatten(self):
         ordered = list(self._requirements.items())
         leaves = []
+        leaves.append(self._param_values)
         for spec_key, spec in ordered:
             if spec_key in self._results:
                 leaves.append(self._results[spec_key])
@@ -198,7 +200,8 @@ class PrimordialCosmology(Calculator):
         obj._engine = aux['engine']
         obj.params = aux['params']
         obj._requirements = {sk: spec for sk, spec in aux['ordered_specs']}
-        obj._results   = {sk: arr  for (sk, _), arr in zip(aux['ordered_specs'], children)}
+        obj._param_values = children[0]
+        obj._results   = {sk: arr  for (sk, _), arr in zip(aux['ordered_specs'], children[1:])}
         return obj
 
 
@@ -252,7 +255,7 @@ class CosmoprimoCosmology(PrimordialCosmology):
     The ``_is_external`` flag is set per instance from *engine*: JAX-native engines
     (``'eisenstein_hu'``) run as pure JAX (``grad``/``jit``/``vmap``); external Boltzmann
     codes (``'camb'``, ``'class'``, …) run via ``pure_callback`` + finite-difference
-    derivatives.  ``self.cosmo`` holds the current :class:`cosmoprimo.Cosmology` after
+    derivatives.  ``self._cosmo`` holds the current :class:`cosmoprimo.Cosmology` after
     each call; engine state is cached via ``Cosmology.clone(base='input', ...)``.
 
     Recognised method keys for :meth:`~PrimordialCosmology.add_requirements`:
@@ -264,6 +267,14 @@ class CosmoprimoCosmology(PrimordialCosmology):
     * ``'background.transverse_comoving_distance'`` — kwargs: ``z``
     * ``'thermodynamics.rs_drag'``                  — kwargs: ``z`` (dummy; result is z-independent)
     * ``'background.N_eff'``                        — kwargs: ``z`` (dummy; result is z-independent)
+    * ``'params.<name>'``                           — kwargs: ``z`` (dummy; result is z-independent).
+      A free parameter or derived quantity (e.g. ``'params.m_ncdm_tot'``), exposed as a
+      tree_flatten leaf. Register this for any name an **external** (``_is_external=True``)
+      downstream calculator reads through ``cosmo[name]`` -- without it, that read is
+      live under eager execution but goes stale under ``jax.jit`` (see ``__getitem__``).
+
+    Parameters can be accessed through cosmo[name]; free params are always jit-safe,
+    derived quantities are jit-safe only once registered as a ``'params.<name>'`` requirement.
 
     Parameters
     ----------
@@ -284,24 +295,24 @@ class CosmoprimoCosmology(PrimordialCosmology):
         installer.pip('git+https://github.com/cosmodesi/cosmoprimo')
 
     @classmethod
-    def propose_params(cls, *args, fiducial=None, **kwargs):
+    def propose_params(cls, *args, fiducial='DESI', **kwargs):
         r"""Return a proposed :class:`~desilike.parameter.VariableCollection` of cosmological Parameters.
 
-        The default values are seeded from *fiducial* (or Planck-2018 priors when ``None``).
+        The default values are seeded from *fiducial* (``'DESI'`` when ``None``, matching
+        :meth:`__post_init__`'s own default).
         The returned collection can be edited and passed back to :meth:`__init__` via ``params=...``.
 
         Parameters
         ----------
-        engine : str, default='camb'
-            Boltzmann engine (kept for signature symmetry with :meth:`__init__`; does
-            not affect the proposed parameters).
-        fiducial : str, tuple, dict, or cosmoprimo.Cosmology, default=None
+        fiducial : str, tuple, dict, or cosmoprimo.Cosmology, default='DESI'
             Fiducial cosmology used to seed the default parameter values.
 
         Returns
         -------
         VariableCollection
         """
+        if fiducial is None:
+            fiducial = 'DESI'
         fiducial = _get_fiducial(fiducial)
         params = VariableCollection()
         # Planck2018 (TT,TE,EE+lowE+lensing) priors, mirroring the historical
@@ -353,7 +364,7 @@ class CosmoprimoCosmology(PrimordialCosmology):
                              fd_eps=0.05, latex=r'\Omega_k'))
         return params
 
-    def __post_init__(self, *args, engine='camb', params=None, fiducial=None, **kwargs):
+    def __post_init__(self, *args, engine='camb', params=None, fiducial='DESI', **kwargs):
         self._engine = str(engine)
         self._is_external = self._engine not in _JAX_ENGINES
         # Build (or resolve) the fiducial once, forcing ``engine`` so that subsequent
@@ -367,17 +378,25 @@ class CosmoprimoCosmology(PrimordialCosmology):
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
     def __getitem__(self, name):
-        # Return parameter value
-        if name in self.params:
-            return self.params[name].value
-        return self.cosmo[name]
+        # Return parameter value. Free params are already live in _param_values (jit-safe).
+        # For anything else (e.g. a derived quantity like 'm_ncdm_tot'), fall back to the
+        # 'params.<name>' requirement if it was registered (jit-safe -- threaded through
+        # tree_flatten/pure_callback like any other requirement), else read self._cosmo
+        # directly (fine for same-trace, non-external consumers; stale under jit otherwise).
+        if name in self._param_values:
+            return self._param_values[name]
+        try:
+            return self.get(f'params.{name}', z=0.)
+        except KeyError:
+            return self._cosmo[name]
 
     def __call__(self):
         # JAX engines: keep tracers (clone is differentiable). External engines: plain floats.
-        params = {basename: np.asarray(param.value).reshape(-1)[0].item() if self._is_external else param.value
-                  for basename, param in self.params.items()}
-        self.cosmo = _build_cosmo(self._fiducial, params)
-        cosmo = self.cosmo
+        params = {param.basename: np.asarray(param.value).reshape(-1)[0].item() if self._is_external else param.value
+                  for param in self.params}
+        self._param_values = params
+        self._cosmo = _build_cosmo(self._fiducial, params)
+        cosmo = self._cosmo
         for spec_key, spec in self._requirements.items():
             method_key = spec_key[0]
             static = spec['static']
@@ -399,14 +418,28 @@ class CosmoprimoCosmology(PrimordialCosmology):
             elif method_key == 'background.efunc':
                 result = cosmo.get_background().efunc(z_grid)
             elif method_key == 'background.comoving_transverse_distance':
-                result = cosmo.get_background().comoving_angular_distance(z_grid)
+                result = cosmo.get_background().comoving_transverse_distance(z_grid)
             elif method_key == 'thermodynamics.rs_drag':
-                result = cosmo.rs_drag
+                result = cosmo.get_thermodynamics().rs_drag
             elif method_key == 'background.N_eff':
-                result = cosmo.N_eff
+                result = cosmo.get_background().N_eff
+            elif method_key.startswith('params.'):
+                # Raw parameter/derived-quantity value, exposed as a tree_flatten leaf so
+                # external (pure_callback) consumers see the live, per-call value instead
+                # of a stale read off self._cosmo (see __getitem__).
+                name = method_key[len('params.'):]
+                result = jnp.atleast_1d(jnp.asarray(params[name] if name in params else cosmo[name]))
             else:
                 raise ValueError(f'Unknown requirement method key: {method_key!r}')
             self._results[spec_key] = result
-        # Return None: cosmo is a Python object exposed via self.cosmo, read directly by
-        # downstream calculators; returning it would break the JAX pipeline output (and, for
-        # the external path, call_kind='none' avoids the dtype-object crash).
+
+    # tree_flatten/tree_unflatten: inherited as-is from PrimordialCosmology.
+    # self._cosmo (the live cosmoprimo.Cosmology) is deliberately *not* exposed as a
+    # leaf: it is itself a huge, cache-dependent pytree (its leaf count can change with
+    # internal caching state), and one external (pure_callback) consumer needing a
+    # *fixed* leaf count per node would silently misalign on a leaf-count mismatch.
+    # Same-trace (non-external) consumers needing a derived quantity not in params
+    # (e.g. ``self.cosmo['m_ncdm_tot']``) still get it via the __getitem__ fallback below:
+    # dep.__dict__.update(proxy.__dict__) only *adds/overwrites* keys present on the
+    # proxy, so the live ``_cosmo`` set by this node's own __call__ earlier in the same
+    # trace is left untouched.

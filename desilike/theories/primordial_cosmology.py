@@ -67,7 +67,8 @@ class PrimordialCosmology(Calculator):
             params = self.propose_params(*args, fiducial=fiducial, **kwargs)
         elif not isinstance(params, VariableCollection):
             params = VariableCollection(params)
-        self.params = params
+        self.derived_params = params.select(derived=True)
+        self.params = params - self.derived_params
         # Requirement registry: filled by downstream calculators via add_requirements().
         # _requirements: spec_key → {'static': dict, 'z': np.array, 'k': np.array|None}
         # _results:   spec_key → jnp.array   (populated in __call__)
@@ -179,6 +180,7 @@ class PrimordialCosmology(Calculator):
                 nz = len(spec['z'])
                 nk = len(spec['k']) if spec['k'] is not None else 0
                 self._results[spec_key] = jnp.zeros((nz, nk) if nk else (nz,))
+        # Here set derived_params
 
     def tree_flatten(self):
         ordered = list(self._requirements.items())
@@ -432,6 +434,9 @@ class CosmoprimoCosmology(PrimordialCosmology):
             else:
                 raise ValueError(f'Unknown requirement method key: {method_key!r}')
             self._results[spec_key] = result
+        # Set derived parameters
+        for param in self.derived_params:
+            param.value = cosmo[param.basename]
 
     # tree_flatten/tree_unflatten: inherited as-is from PrimordialCosmology.
     # self._cosmo (the live cosmoprimo.Cosmology) is deliberately *not* exposed as a

@@ -235,6 +235,39 @@ def test_folps_spectrum_emulated():
     _check(pipe_exact, pipe_emu, shift_param='b1p')
 
 
+def test_folps_derived_param_omega_m():
+    """A derived Parameter('Omega_m') on a nested cosmo dep survives PT emulation."""
+    pytest.importorskip('folps')
+    from desilike.base import get_params
+    from desilike.parameter import Parameter
+    from desilike.theories import CosmoprimoCosmology
+    from desilike.theories.galaxy_clustering import DirectSpectrum2Template
+    from desilike.theories.galaxy_clustering.full_shape import FOLPSTracerSpectrum2Poles
+
+    cosmo = CosmoprimoCosmology(engine='camb', fiducial='DESI')
+    params = get_params(cosmo)
+    params.set(Parameter('Omega_m', value=0.0, derived=True))
+    cosmo.update(params=params)
+    template = DirectSpectrum2Template(cosmo=cosmo, z=1.)
+
+    theory = FOLPSTracerSpectrum2Poles(k=_K, ells=_ELLS, template=template)
+    pipe_emu = _emulate(theory)  # emulates theory.pt by default, mirrors the test above
+
+    center = {p.name: p.value for p in pipe_emu.params}
+    _, deriveds = pipe_emu(center, return_derived=True)
+    assert 'Omega_m' in deriveds, f'Omega_m missing from derived params: {list(deriveds)}'
+    assert np.isfinite(np.asarray(deriveds['Omega_m']))
+    assert float(deriveds['Omega_m']) > 0.
+
+    # sanity: matches an independent plain-cosmoprimo computation at the same params
+    import cosmoprimo
+    fid = cosmoprimo.fiducial.DESI(engine='camb')
+    cosmo_param_names = {p.basename for p in get_params(CosmoprimoCosmology(engine='camb', fiducial='DESI'))}
+    kw = {name: value for name, value in center.items() if name in cosmo_param_names}
+    expected = fid.clone(base='input', **kw)['Omega_m']
+    assert np.isclose(float(deriveds['Omega_m']), expected, rtol=1e-6)
+
+
 def test_folps_correlation_emulated():
     """FOLPSPTSpectrum2Poles emulated inside FOLPSTracerCorrelation2Poles."""
     pytest.importorskip('folps')

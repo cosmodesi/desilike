@@ -101,7 +101,7 @@ class TaylorEmulator:
 
         # Preserve the full VariableCollection (including derived Variables) so
         # to_calculator() reconstructs the complete parameter interface.
-        self._params_vc = graph.params
+        self._params = graph.params
 
         # Populated by fit(); None until then.
         self._center = None
@@ -305,7 +305,7 @@ class TaylorEmulator:
                 # Extra kwargs (e.g. k=, ells=) passed by a downstream __post_init__
                 # via update() are accepted and ignored — the emulator is fixed at
                 # training time.
-                self.params = {param.name: param.clone() for param in emulator._params_vc}
+                self.params = {param.name: param.clone() for param in emulator._params}
 
             def __post_init__(self, *args, **kwargs):
                 # Skip root_cls.__post_init__ — emulator needs no heavy setup.
@@ -325,15 +325,13 @@ class TaylorEmulator:
                 proxy = jax.tree_util.tree_unflatten(emulator._treedef, children)
                 self.__dict__.update(proxy.__dict__)
 
-                # For derived-Variable attributes, update the Variable's value
-                # *in-place* rather than replacing the object, so that the
-                # pipeline's reference in _node_var_deps remains valid.
+                # Update derived-Variable values *in-place* rather than replacing the
+                # object, so that the pipeline's reference in _node_var_deps remains valid.
+                # derived_names is always a subset of self.params' names (both ultimately
+                # come from the same compiled graph.params at fit() time), so the lookup
+                # is guaranteed to succeed.
                 for name in derived_names:
-                    attr = self.params.get(name, None)
-                    if attr is None:
-                        attr.value = derived[name]
-                    else:
-                        setattr(self, name, derived[name])
+                    self.params[name].value = derived[name]
 
                 rv = emulator._return_value(monomials, children)
                 # 'self'-returning roots: mirror that by returning this instance.
@@ -413,7 +411,7 @@ class TaylorEmulator:
             state['attrs']['treedef_hex'] = pickle.dumps(self._treedef).hex()
 
         # Preserve the full VariableCollection so to_calculator() works after loading.
-        state['params'] = self._params_vc.__getstate__(to_file=to_file)
+        state['params'] = self._params.__getstate__(to_file=to_file)
 
         return state
 
@@ -445,7 +443,7 @@ class TaylorEmulator:
         # Reconstruct the VariableCollection.
         vc = VariableCollection.__new__(VariableCollection)
         vc.__setstate__(state['params'])
-        self._params_vc = vc
+        self._params = vc
 
         # Reconstruct the root Calculator class by module + name.
         import importlib

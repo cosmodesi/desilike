@@ -1,5 +1,7 @@
 """Tests for primordial cosmology calculators."""
 
+from pathlib import Path
+
 import numpy as np
 import jax
 import pytest
@@ -73,8 +75,8 @@ class TestCosmoprimoCosmology:
             'fourier.sigma8_z': [{'of': 'delta_cb', 'z': 1.}],
             'background.efunc': [{'z': 1.}],
             'background.comoving_transverse_distance': [{'z': 1.}],
-            'background.N_eff': [{'z': 0.}],
-            'thermodynamics.rs_drag': [{'z': 0.}],
+            'background.N_eff': None,
+            'thermodynamics.rs_drag': None,
         })
         compile(cosmo)()
 
@@ -86,20 +88,23 @@ class TestCosmoprimoCosmology:
                                     cosmo.get('background.efunc', z=1.))
         np.testing.assert_allclose(cosmo.get_background().comoving_transverse_distance(z=1.),
                                     cosmo.get('background.comoving_transverse_distance', z=1.))
-        np.testing.assert_allclose(cosmo.get_background().N_eff(z=0.),
-                                    cosmo.get('background.N_eff', z=0.))
-        np.testing.assert_allclose(cosmo.get_thermodynamics().rs_drag(z=0.),
-                                    cosmo.get('thermodynamics.rs_drag', z=0.))
+        np.testing.assert_allclose(cosmo.get_background().N_eff,
+                                    cosmo.get('background.N_eff'))
+        np.testing.assert_allclose(cosmo.get_thermodynamics().rs_drag,
+                                    cosmo.get('thermodynamics.rs_drag'))
 
 
 class TestACECosmology:
+
+    import desilike as _desilike
+    emulator_base_dir = Path(_desilike.__file__).parent.parent.parent / 'ace-emulators'
 
     def test_ace(self):
         from desilike.base import compile, get_params
         from desilike.parameter import Parameter, VariableCollection
         from desilike.theories.primordial_cosmology import ACECosmology
 
-        cosmo = ACECosmology(engine='isitgr', base_dir='./emulators_jaxmapse', fiducial='DESI')
+        cosmo = ACECosmology(engine='isitgr', base_dir=self.emulator_base_dir, fiducial='DESI')
         params = get_params(cosmo)
         for name in ['mu1', 'mu2', 'mu3', 'mu4', 'Sigma1', 'Sigma2', 'Sigma3', 'Sigma4']:
             params.set(Parameter(name, value=1.0, ref={'dist': 'norm', 'loc': 1.0, 'scale': 0.1},
@@ -119,7 +124,7 @@ class TestACECosmology:
         from desilike.parameter import Parameter
         from desilike.theories.primordial_cosmology import ACECosmology
 
-        cosmo = ACECosmology(engine='isitgr', base_dir='./emulators_jaxmapse', fiducial='DESI')
+        cosmo = ACECosmology(engine='isitgr', base_dir=self.emulator_base_dir, fiducial='DESI')
         params = get_params(cosmo)
         for name in ['mu1', 'mu2', 'mu3', 'mu4', 'Sigma1', 'Sigma2', 'Sigma3', 'Sigma4']:
             params.set(Parameter(name, value=1.0, ref={'dist': 'norm', 'loc': 1.0, 'scale': 0.1},
@@ -147,7 +152,7 @@ class TestACECosmology:
         from desilike.parameter import Parameter
         from desilike.theories.primordial_cosmology import ACECosmology, _get_fiducial
 
-        cosmo = ACECosmology(engine='isitgr', base_dir='./emulators_jaxmapse', fiducial='DESI')
+        cosmo = ACECosmology(engine='isitgr', base_dir=self.emulator_base_dir, fiducial='DESI')
         params = get_params(cosmo)
         for name in ['mu1', 'mu2', 'mu3', 'mu4', 'Sigma1', 'Sigma2', 'Sigma3', 'Sigma4']:
             params.set(Parameter(name, value=1.0, ref={'dist': 'norm', 'loc': 1.0, 'scale': 0.1},

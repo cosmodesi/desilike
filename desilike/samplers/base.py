@@ -13,9 +13,9 @@ import jax.numpy as jnp
 import numpy as np
 from scipy.special import logsumexp
 
-from desilike.parameter import VariableCollection
-from desilike.samples import MCSamples, Covariance, diagnostics
-from desilike.distributed import default_mpicomm, get_mpicomm
+from ..parameter import VariableCollection
+from ..samples import MCSamples, Covariance, diagnostics
+from ..distributed import default_mpicomm, get_mpicomm
 from .pool import make_pool
 
 

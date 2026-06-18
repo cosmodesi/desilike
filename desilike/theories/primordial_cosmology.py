@@ -42,6 +42,15 @@ class _Section:
 
     def __getattr__(self, name):
         method_key = f'{self._name}.{name}'
+        # z-independent quantities (e.g. N_eff, rs_drag) are registered with no kwargs at
+        # all, so a bare no-arg get() already resolves them: mirror cosmoprimo's own API by
+        # returning the value directly, like a property. A KeyError means the requirement
+        # needs args (z, of, k, ...), so fall back to returning a callable instead.
+        try:
+            return self._cosmo.get(method_key)
+        except KeyError:
+            pass
+
         def method(*args, **kwargs):
             # Mirror cosmoprimo's calling convention: z is the first positional argument
             # for every method in the table (efunc, comoving_transverse_distance, pk, ...).
@@ -110,6 +119,18 @@ class PrimordialCosmology(Calculator):
         self._param_values = {}
         # Default engine identifier; overridden by concrete subclasses in __post_init__.
         self._engine = None
+        self._get_derived = {}
+        for param in self.derived_params:
+            if param.basename in ['sigma8_m']:
+                req = ('fourier.sigma8_z', {'z': 0., 'of': 'delta_m'})
+            elif param.basename in ['sigma8_cb']:
+                req = ('fourier.sigma8_z', {'z': 0., 'of': 'delta_cb'})
+            elif param.basename in ['rs_drag']:
+                req = ('thermodynamics.rs_drag', {'of': 'delta_cb'})
+            else:
+                req = (f'params.{param.basename}', {})
+            self._get_derived[param.name] = req
+            self.add_requirements({req[0]: req[1]})
 
     # ── requirements API ──────────────────────────────────────────────────────
 
@@ -147,6 +168,8 @@ class PrimordialCosmology(Calculator):
         for method_key, kwargs_list in requirements.items():
             if kwargs_list is None:
                 kwargs_list = [{}]
+            if not isinstance(kwargs_list, (tuple, list)):
+                kwargs_list = [kwargs_list]
             for kwargs in kwargs_list:
                 static = {key: val for key, val in kwargs.items() if key not in _COORDS}
                 static = _normalize_static(static)
@@ -158,9 +181,10 @@ class PrimordialCosmology(Calculator):
                         if coord in kwargs:
                             spec[coord] = np.sort(np.atleast_1d(kwargs[coord]))
                 else:
+                    spec = self._requirements[spec_key]
                     for coord in _COORDS:
                         if coord in kwargs:
-                            spec[coord] = np.sort(np.concatenate([spec[coord], kwargs[coord]]))
+                            spec[coord] = np.sort(np.concatenate([spec[coord], np.atleast_1d(kwargs[coord])]))
 
     def __getitem__(self, name):
         # Return parameter value. Free params are already live in _param_values (jit-safe).
@@ -231,6 +255,8 @@ class PrimordialCosmology(Calculator):
                 shape = tuple(spec[coord].size for coord in _COORDS)
                 self._results[spec_key] = jnp.zeros(shape)
         # Here set derived_params
+        for param, getter in self._get_derived.items():
+            self.derived_params[param].value = jnp.reshape(self.get(getter[0], **getter[1]), self.derived_params[param].shape)
 
     def tree_flatten(self):
         ordered = list(self._requirements.items())
@@ -243,13 +269,14 @@ class PrimordialCosmology(Calculator):
                 # Placeholder of correct shape for compile-time structure inference.
                 shape = tuple(spec[coord].size for coord in _COORDS)
                 leaves.append(jnp.zeros(shape))
-        return leaves, {'engine': self._engine, 'ordered_specs': ordered, 'params': self.params}
+        return leaves, {'engine': self._engine, 'ordered_specs': ordered, 'params': self.params, 'get_derived': self._get_derived}
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
         obj._engine = aux['engine']
         obj.params = aux['params']
+        obj._get_derived = aux['get_derived']
         obj._requirements = {sk: spec for sk, spec in aux['ordered_specs']}
         obj._param_values = children[0]
         obj._results   = {sk: arr  for (sk, _), arr in zip(aux['ordered_specs'], children[1:])}
@@ -481,23 +508,27 @@ class CosmoprimoCosmology(PrimordialCosmology):
             elif method_key == 'background.growth_rate':
                 result = cosmo.get_background().growth_rate(**_kw_coords)
             elif method_key == 'thermodynamics.rs_drag':
-                # z-independent; broadcast to the (dummy) registered z grid so get()'s
-                # per-z searchsorted indexing below still applies cleanly.
-                result = jnp.full(spec['z'].shape, cosmo.get_thermodynamics().rs_drag)
+                result = cosmo.get_thermodynamics().rs_drag
+                if 'z' in spec:
+                    # z-independent; broadcast to the registered z grid so get()'s
+                    # per-z searchsorted indexing below still applies cleanly.
+                    result = jnp.full(spec['z'].shape, result)
             elif method_key == 'background.N_eff':
-                result = jnp.full(spec['z'].shape, cosmo.get_background().N_eff)
+                result = cosmo.get_background().N_eff
+                if 'z' in spec:
+                    result = jnp.full(spec['z'].shape, result)
             elif method_key.startswith('params.'):
                 # Raw parameter/derived-quantity value, exposed as a tree_flatten leaf so
                 # external (pure_callback) consumers see the live, per-call value instead
                 # of a stale read off self._cosmo (see __getitem__).
                 name = method_key[len('params.'):]
-                result = jnp.atleast_1d(jnp.asarray(params[name] if name in params else cosmo[name]))
+                result = jnp.asarray(params[name] if name in params else cosmo[name])
             else:
                 raise ValueError(f'Unknown requirement method key: {method_key!r}')
             self._results[spec_key] = result
-        # Set derived parameters
-        for param in self.derived_params:
-            param.value = cosmo[param.basename]
+        # Here set derived_params
+        for param, getter in self._get_derived.items():
+            self.derived_params[param].value = jnp.reshape(self.get(getter[0], **getter[1]), self.derived_params[param].shape)
 
     # tree_flatten/tree_unflatten: inherited as-is from PrimordialCosmology.
     # self._cosmo (the live cosmoprimo.Cosmology) is deliberately *not* exposed as a
@@ -552,7 +583,7 @@ class ACECosmology(PrimordialCosmology):
         if base_dir is not None:
             base_emulator_dir = Path(base_dir)
         else:
-            base_emulator_dir = Path(Installer().install_dir) / 'jaxace'
+            base_emulator_dir = Path(Installer().install_dir) / 'ace-emulators'
         _SECTIONS = ['harmonic', 'fourier']
         if isinstance(engine, str):
             engine = {section: engine for section in _SECTIONS}
@@ -613,7 +644,7 @@ class ACECosmology(PrimordialCosmology):
             self._cosmoprimo_params = frozenset(self._fiducial.get_default_params(include_conflicts=True))
 
     def __call__(self):
-        import jaxace, interpax
+        import jaxace
         self._param_values = params = {param.basename: param.value for param in self.params}
         if self._conversion == 'cosmoprimo':
             # Only forward the standard cosmological parameters to cosmoprimo: extra,
@@ -682,3 +713,6 @@ class ACECosmology(PrimordialCosmology):
                 emulator_params = jnp.stack([spec['z'] if param == 'z' else jnp.full(shape, get_param(param)) for param in emulator.inputs])
                 result = emulator.run_emulator(emulator_params)
             self._results[spec_key] = result
+        # Here set derived_params
+        for param, getter in self._get_derived.items():
+            self.derived_params[param].value = jnp.reshape(self.get(getter[0], **getter[1]), self.derived_params[param].shape)

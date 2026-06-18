@@ -5,7 +5,7 @@ import logging
 import numpy as np
 
 from .base import StaticKernel
-from desilike.parameter import expand_dict
+from ..parameter import expand_dict
 
 logger = logging.getLogger(__name__)
 

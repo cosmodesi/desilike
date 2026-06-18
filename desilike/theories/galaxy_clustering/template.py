@@ -933,7 +933,7 @@ class BAOExtractor(Calculator):
         self.cosmo.add_requirements({
             'background.efunc':                        [{'z': float(z)}],
             'background.comoving_transverse_distance': [{'z': float(z)}],
-            'thermodynamics.rs_drag':                  [{'z': 0.}],
+            'thermodynamics.rs_drag':                  None,
         })
 
     def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
@@ -954,7 +954,7 @@ class BAOExtractor(Calculator):
         from cosmoprimo import constants
         efunc = self.cosmo.get_background().efunc(z=self.z)
         DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
-        rd = self.cosmo.get_thermodynamics().rs_drag(z=0.)
+        rd = self.cosmo.get_thermodynamics().rs_drag
         DH = constants.c / 1e3 / (100. * efunc)
         DV = DH ** self._eta * DM ** (1. - self._eta) * self.z ** (1. / 3.)
         self.DH_over_rd = DH / rd
@@ -1007,7 +1007,7 @@ class BAOPhaseShiftExtractor(BAOExtractor):
 
     def __init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
         super().__init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo)
-        self.cosmo.add_requirements({'background.N_eff': [{'z': 0.}]})
+        self.cosmo.add_requirements({'background.N_eff': None})
 
     def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
         super().__post_init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo)
@@ -1016,7 +1016,7 @@ class BAOPhaseShiftExtractor(BAOExtractor):
     def __call__(self):
         super().__call__()
         a_nu = 8.0 / 7.0 * (11.0 / 4.0) ** (4.0 / 3.0)
-        self.N_eff = self.cosmo.get_background().N_eff(z=0.)
+        self.N_eff = self.cosmo.get_background().N_eff
         self.baoshift = (self.N_eff * (self._N_eff_fid + a_nu)) / (self._N_eff_fid * (self.N_eff + a_nu))
         return self
 

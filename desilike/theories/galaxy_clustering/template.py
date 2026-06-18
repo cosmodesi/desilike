@@ -533,21 +533,21 @@ class DirectSpectrum2Template(Spectrum2Template):
     def __call__(self):
         from cosmoprimo import constants
         # All cosmoprimo work happened in CosmoprimoCosmology.__call__; retrieve JAX arrays.
-        pk_full  = self.cosmo.get('fourier.pk', of='delta_cb', z=self.z, k=self._k_with_k0)
-        ptt_full = self.cosmo.get('fourier.pk', of='theta_cb', z=self.z, k=self._k_with_k0)
+        pk_full  = self.cosmo.get_fourier().pk(of='delta_cb', z=self.z, k=self._k_with_k0)
+        ptt_full = self.cosmo.get_fourier().pk(of='theta_cb', z=self.z, k=self._k_with_k0)
         self.pk_dd = pk_full[1:]
-        self.pknow_dd = (self.cosmo.get('fourier.pk_now', of='delta_cb',
+        self.pknow_dd = (self.cosmo.get_fourier().pk_now(of='delta_cb',
                               engine=self._with_now, z=self.z, k=self.k)
                          if self._with_now else self.pk_dd)
         if self._only_now:
             self.pk_dd = self.pknow_dd
-        self.sigma8  = self.cosmo.get('fourier.sigma8_z', of='delta_cb', z=self.z)
-        self.fsigma8 = self.cosmo.get('fourier.sigma8_z', of='theta_cb', z=self.z)
+        self.sigma8  = self.cosmo.get_fourier().sigma8_z(of='delta_cb', z=self.z)
+        self.fsigma8 = self.cosmo.get_fourier().sigma8_z(of='theta_cb', z=self.z)
         self.f  = self.fsigma8 / self.sigma8
         self.f0 = jnp.sqrt(ptt_full[0] / pk_full[0])   # k0 = 1e-3 is index 0
         self.fk = jnp.sqrt(ptt_full[1:] / pk_full[1:])
-        DH = constants.c / 1e3 / (100. * self.cosmo.get('background.efunc', z=self.z))
-        DM = self.cosmo.get('background.comoving_transverse_distance', z=self.z)
+        DH = constants.c / 1e3 / (100. * self.cosmo.get_background().efunc(z=self.z))
+        DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
         self.qpar = DH / self._DH_fid
         self.qper = DM / self._DM_fid
         self.sigma8_fid = jnp.asarray(self._sigma8_fid)
@@ -877,8 +877,8 @@ class DirectWiggleSplitSpectrum2Template(DirectSpectrum2Template):
         qbao = self.qbao.value
         sigmabao = self.sigmabao.value
         # Evaluate pk and pknow on the fine grid for shifted-wiggle interpolation.
-        pk_fine = self.cosmo.get('fourier.pk', of='delta_cb', z=self.z, k=self._k_fine)
-        pknow_fine = self.cosmo.get('fourier.pk_now', of='delta_cb',
+        pk_fine = self.cosmo.get_fourier().pk(of='delta_cb', z=self.z, k=self._k_fine)
+        pknow_fine = self.cosmo.get_fourier().pk_now(of='delta_cb',
                                     engine=self._with_now, z=self.z, k=self._k_fine)
         k_query = jnp.clip(self.k / qbao, self._k_fine[0], self._k_fine[-1])
         wiggles = jnp.interp(jnp.log10(k_query), jnp.log10(self._k_fine), pk_fine - pknow_fine)
@@ -952,9 +952,9 @@ class BAOExtractor(Calculator):
 
     def __call__(self):
         from cosmoprimo import constants
-        efunc = self.cosmo.get('background.efunc', z=self.z)
-        DM = self.cosmo.get('background.comoving_transverse_distance', z=self.z)
-        rd = self.cosmo.get('thermodynamics.rs_drag', z=0.)
+        efunc = self.cosmo.get_background().efunc(z=self.z)
+        DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
+        rd = self.cosmo.get_thermodynamics().rs_drag(z=0.)
         DH = constants.c / 1e3 / (100. * efunc)
         DV = DH ** self._eta * DM ** (1. - self._eta) * self.z ** (1. / 3.)
         self.DH_over_rd = DH / rd
@@ -1016,7 +1016,7 @@ class BAOPhaseShiftExtractor(BAOExtractor):
     def __call__(self):
         super().__call__()
         a_nu = 8.0 / 7.0 * (11.0 / 4.0) ** (4.0 / 3.0)
-        self.N_eff = self.cosmo.get('background.N_eff', z=0.)
+        self.N_eff = self.cosmo.get_background().N_eff(z=0.)
         self.baoshift = (self.N_eff * (self._N_eff_fid + a_nu)) / (self._N_eff_fid * (self.N_eff + a_nu))
         return self
 
@@ -1110,13 +1110,13 @@ class TurnOverExtractor(Calculator):
 
     def __call__(self):
         from cosmoprimo import constants
-        pk_fine = self.cosmo.get('fourier.pk', of='delta_cb', z=self.z, k=self._k_fine)
+        pk_fine = self.cosmo.get_fourier().pk(of='delta_cb', z=self.z, k=self._k_fine)
         imax = jnp.argmax(pk_fine)
         k_jnp = jnp.asarray(self._k_fine)
         self.kTO = k_jnp[imax]
         self.pkTO_dd = pk_fine[imax]
-        efunc = self.cosmo.get('background.efunc', z=self.z)
-        DM = self.cosmo.get('background.comoving_transverse_distance', z=self.z)
+        efunc = self.cosmo.get_background().efunc(z=self.z)
+        DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
         DH = constants.c / 1e3 / (100. * efunc)
         DV = DH ** self._eta * DM ** (1. - self._eta) * self.z ** (1. / 3.)
         self.DH_over_DM = DH / DM

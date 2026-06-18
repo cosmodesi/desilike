@@ -12,12 +12,45 @@ CosmoprimoCosmology
     (``'eisenstein_hu'``) and external Boltzmann codes (``'camb'``, ``'class'``, …).
 """
 
+from pathlib import Path
+
 import numpy as np
 import jax.numpy as jnp
 
 from ..base import Calculator
 from ..parameter import Parameter, VariableCollection
+from ..install import Installer
 
+
+_COORDS = ['z', 'k']
+
+
+def _normalize_static(static):
+    """Return static with 'of' canonicalized to a 2-tuple, matching add_requirements's spec_key."""
+    if 'of' in static:
+        static = dict(static)
+        static['of'] = (static['of'],) * 2 if isinstance(static['of'], str) else tuple(static['of'])
+    return static
+
+
+class _Section:
+    """Read-side proxy: cosmo.get_fourier().pk(**kw) forwards to cosmo.get('fourier.pk', **kw)."""
+
+    def __init__(self, cosmo, name):
+        self._cosmo = cosmo
+        self._name = name
+
+    def __getattr__(self, name):
+        method_key = f'{self._name}.{name}'
+        def method(*args, **kwargs):
+            # Mirror cosmoprimo's calling convention: z is the first positional argument
+            # for every method in the table (efunc, comoving_transverse_distance, pk, ...).
+            if args:
+                if len(args) > 1:
+                    raise TypeError(f'{method_key} only supports a single positional argument (z)')
+                kwargs = {'z': args[0], **kwargs}
+            return self._cosmo.get(method_key, **kwargs)
+        return method
 
 
 class PrimordialCosmology(Calculator):
@@ -97,6 +130,8 @@ class PrimordialCosmology(Calculator):
             with different static kwargs (e.g. ``of='delta_cb'`` vs ``of='theta_cb'``)
             are tracked and computed separately.  The recognised method keys are
             provider-specific; see the concrete subclass for the full list.
+            ``None`` is shorthand for ``[{}]``, i.e. a single registration with no kwargs
+            (e.g. for ``'params.<name>'`` keys, which need neither ``z`` nor ``k``).
 
         Examples
         --------
@@ -106,32 +141,39 @@ class PrimordialCosmology(Calculator):
         ...         {'of': 'theta_cb', 'z': 1., 'k': k_array},
         ...     ],
         ...     'background.efunc': [{'z': 1.}],
+        ...     'params.m_ncdm_tot': None,
         ... })
         """
         for method_key, kwargs_list in requirements.items():
+            if kwargs_list is None:
+                kwargs_list = [{}]
             for kwargs in kwargs_list:
-                z = float(kwargs['z'])
-                k = kwargs.get('k')
-                static = {key: val for key, val in kwargs.items() if key not in ('z', 'k')}
+                static = {key: val for key, val in kwargs.items() if key not in _COORDS}
+                static = _normalize_static(static)
                 spec_key = (method_key, tuple(sorted(static.items())))
-
                 if spec_key not in self._requirements:
-                    self._requirements[spec_key] = {
-                        'static': static,
-                        'z': np.array([z]),
-                        'k': np.sort(np.asarray(k, dtype='f8')) if k is not None else None,
-                    }
+                    spec = self._requirements[spec_key] = {}
+                    spec['static'] = static
+                    for coord in _COORDS:
+                        if coord in kwargs:
+                            spec[coord] = np.sort(np.atleast_1d(kwargs[coord]))
                 else:
-                    spec = self._requirements[spec_key]
-                    spec['z'] = np.unique(np.append(spec['z'], z))
-                    if k is not None:
-                        spec['k'] = np.unique(np.concatenate([spec['k'], np.asarray(k, dtype='f8')]))
+                    for coord in _COORDS:
+                        if coord in kwargs:
+                            spec[coord] = np.sort(np.concatenate([spec[coord], kwargs[coord]]))
 
     def __getitem__(self, name):
-        # Return parameter value
+        # Return parameter value. Free params are already live in _param_values (jit-safe).
+        # For anything else (e.g. a derived quantity like 'm_ncdm_tot'), fall back to the
+        # 'params.<name>' requirement if it was registered (jit-safe -- threaded through
+        # tree_flatten/pure_callback like any other requirement), else read self._cosmo
+        # directly (fine for same-trace, non-external consumers; stale under jit otherwise).
         if name in self._param_values:
             return self._param_values[name]
-        raise KeyError
+        try:
+            return self.get(f'params.{name}')
+        except KeyError:
+            return self._cosmo[name]
 
     def get(self, method_key, **kwargs):
         """Return a pre-computed requirement result, selecting from the merged grid.
@@ -150,19 +192,28 @@ class PrimordialCosmology(Calculator):
         jnp.array
             Scalar, 1-D, or 2-D depending on the method and whether z/k were provided.
         """
-        z = kwargs.get('z', None)
-        k = kwargs.get('k', None)
-        static = {key: val for key, val in kwargs.items() if key not in ('z', 'k')}
+        static = {key: val for key, val in kwargs.items() if key not in _COORDS}
+        static = _normalize_static(static)
         spec_key = (method_key, tuple(sorted(static.items())))
         result = self._results[spec_key]
         spec   = self._requirements[spec_key]
-        if z is not None:
-            iz = int(np.searchsorted(spec['z'], z))
-            result = result[iz]       # (nk,) for pk, scalar for sigma8/efunc/DA
-        if k is not None:
-            ik = np.searchsorted(spec['k'], np.asarray(k, dtype='f8'))
-            result = result[ik]       # subset, same ordering as k
+        for coord in _COORDS:
+            if coord in spec:
+                idx = np.searchsorted(spec[coord], kwargs[coord])
+                result = result[idx]
         return result
+
+    def get_fourier(self):
+        """Return a Fourier-section proxy: cosmo.get_fourier().pk(...) == cosmo.get('fourier.pk', ...)."""
+        return _Section(self, 'fourier')
+
+    def get_background(self):
+        """Return a Background-section proxy: cosmo.get_background().efunc(...) == cosmo.get('background.efunc', ...)."""
+        return _Section(self, 'background')
+
+    def get_thermodynamics(self):
+        """Return a Thermodynamics-section proxy: cosmo.get_thermodynamics().rs_drag(...) == cosmo.get('thermodynamics.rs_drag', ...)."""
+        return _Section(self, 'thermodynamics')
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -177,9 +228,8 @@ class PrimordialCosmology(Calculator):
         self._param_values = params
         for spec_key, spec in self._requirements.items():
             if spec_key not in self._results:
-                nz = len(spec['z'])
-                nk = len(spec['k']) if spec['k'] is not None else 0
-                self._results[spec_key] = jnp.zeros((nz, nk) if nk else (nz,))
+                shape = tuple(spec[coord].size for coord in _COORDS)
+                self._results[spec_key] = jnp.zeros(shape)
         # Here set derived_params
 
     def tree_flatten(self):
@@ -191,9 +241,8 @@ class PrimordialCosmology(Calculator):
                 leaves.append(self._results[spec_key])
             else:
                 # Placeholder of correct shape for compile-time structure inference.
-                nz = len(spec['z'])
-                nk = len(spec['k']) if spec['k'] is not None else 0
-                leaves.append(jnp.zeros((nz, nk) if nk else (nz,)))
+                shape = tuple(spec[coord].size for coord in _COORDS)
+                leaves.append(jnp.zeros(shape))
         return leaves, {'engine': self._engine, 'ordered_specs': ordered, 'params': self.params}
 
     @classmethod
@@ -219,7 +268,7 @@ _CONVERSIONS = {}
 _kw_pk = dict(extrap_kmin=1e-7, extrap_kmax=1e2)
 
 
-def _get_fiducial(fiducial):
+def _get_cosmoprimo_fiducial(fiducial):
     """Return a cosmoprimo Cosmology from a name string, (name, kwargs) tuple, dict, or Cosmology."""
     import cosmoprimo
     if fiducial is None:
@@ -236,7 +285,32 @@ def _get_fiducial(fiducial):
     raise ValueError(f'Cannot parse fiducial cosmology: {fiducial!r}')
 
 
-def _build_cosmo(fiducial, params):
+def _get_fiducial(fiducial, calculator=None):
+    """Return a cosmoprimo Cosmology, or (if calculator is given) the fiducial computed
+    through calculator's own pipeline.
+
+    Fiducial cosmology computed with input calculator: re-runs calculator's pipeline at the
+    resolved fiducial's parameter values and returns calculator itself, so its
+    get_background()/get_fourier()/etc. proxies reflect the fiducial point. Parameters not
+    recognized by the resolved fiducial (e.g. emulator-specific nuisance inputs like 'mu1',
+    'Sigma1', ...) keep their current value on calculator.
+    """
+    import cosmoprimo
+    fiducial = _get_cosmoprimo_fiducial(fiducial)
+    if calculator is not None:
+        from desilike.base import compile
+        params = {}
+        for param in calculator.params:
+            try:
+                params[param.name] = fiducial[param.basename]
+            except cosmoprimo.CosmologyError:
+                params[param.name] = param.value
+        pipe = compile(calculator, output=lambda: calculator)
+        return pipe(params)
+    return fiducial
+
+
+def _build_cosmoprimo(fiducial, params):
     """Clone *fiducial* with the given *params* dict (desilike names → values).
 
     Values are passed as-is so JAX tracers are preserved for JAX-native engines;
@@ -267,9 +341,9 @@ class CosmoprimoCosmology(PrimordialCosmology):
     * ``'fourier.sigma8_z'``                        — kwargs: ``of``, ``z``
     * ``'background.efunc'``                        — kwargs: ``z``
     * ``'background.transverse_comoving_distance'`` — kwargs: ``z``
-    * ``'thermodynamics.rs_drag'``                  — kwargs: ``z`` (dummy; result is z-independent)
-    * ``'background.N_eff'``                        — kwargs: ``z`` (dummy; result is z-independent)
-    * ``'params.<name>'``                           — kwargs: ``z`` (dummy; result is z-independent).
+    * ``'thermodynamics.rs_drag'``                  —
+    * ``'background.N_eff'``                        —
+    * ``'params.<name>'``                           — .
       A free parameter or derived quantity (e.g. ``'params.m_ncdm_tot'``), exposed as a
       tree_flatten leaf. Register this for any name an **external** (``_is_external=True``)
       downstream calculator reads through ``cosmo[name]`` -- without it, that read is
@@ -313,8 +387,6 @@ class CosmoprimoCosmology(PrimordialCosmology):
         -------
         VariableCollection
         """
-        if fiducial is None:
-            fiducial = 'DESI'
         fiducial = _get_fiducial(fiducial)
         params = VariableCollection()
         # Planck2018 (TT,TE,EE+lowE+lensing) priors, mirroring the historical
@@ -372,59 +444,48 @@ class CosmoprimoCosmology(PrimordialCosmology):
         # Build (or resolve) the fiducial once, forcing ``engine`` so that subsequent
         # per-call ``.clone(base='input', ...)`` use the requested engine (not the
         # fiducial's default, e.g. CLASS for the named 'DESI'/'Planck2018' fiducials).
-        import cosmoprimo
-        if fiducial is None:
-            self._fiducial = cosmoprimo.Cosmology(engine=self._engine)
-        else:
-            self._fiducial = _get_fiducial(fiducial).clone(engine=self._engine)
+        self._fiducial = _get_fiducial(fiducial).clone(engine=self._engine)
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
-    def __getitem__(self, name):
-        # Return parameter value. Free params are already live in _param_values (jit-safe).
-        # For anything else (e.g. a derived quantity like 'm_ncdm_tot'), fall back to the
-        # 'params.<name>' requirement if it was registered (jit-safe -- threaded through
-        # tree_flatten/pure_callback like any other requirement), else read self._cosmo
-        # directly (fine for same-trace, non-external consumers; stale under jit otherwise).
-        if name in self._param_values:
-            return self._param_values[name]
-        try:
-            return self.get(f'params.{name}', z=0.)
-        except KeyError:
-            return self._cosmo[name]
 
     def __call__(self):
         # JAX engines: keep tracers (clone is differentiable). External engines: plain floats.
         params = {param.basename: np.asarray(param.value).reshape(-1)[0].item() if self._is_external else param.value
                   for param in self.params}
         self._param_values = params
-        self._cosmo = _build_cosmo(self._fiducial, params)
+        self._cosmo = _build_cosmoprimo(self._fiducial, params)
         cosmo = self._cosmo
         for spec_key, spec in self._requirements.items():
             method_key = spec_key[0]
             static = spec['static']
-            z_grid = spec['z']
-            k_grid = spec['k']
+            _kw_coords = {coord: spec[coord] for coord in _COORDS if coord in spec}
             if method_key == 'fourier.pk':
                 fo = cosmo.get_fourier()
-                result = fo.pk_interpolator(of=static['of'], **_kw_pk)(k_grid, z=z_grid).T
+                result = fo.pk_interpolator(of=static['of'], **_kw_pk)(**_kw_coords).T
             elif method_key == 'fourier.pk_now':
                 from cosmoprimo import PowerSpectrumBAOFilter
                 fo = cosmo.get_fourier()
-                pk_interp = fo.pk_interpolator(of=static['of'], **_kw_pk).to_1d(z=z_grid)
+                pk_interp = fo.pk_interpolator(of=static['of'], **_kw_pk).to_1d(z=_kw_coords['z'])
                 bao = PowerSpectrumBAOFilter(pk_interp, engine=static['engine'],
                                              cosmo=cosmo, cosmo_fid=self._fiducial)
-                result = bao.smooth_pk_interpolator()(k_grid).T
+                result = bao.smooth_pk_interpolator()(_kw_coords['k']).T
             elif method_key == 'fourier.sigma8_z':
                 fo = cosmo.get_fourier()
-                result = fo.sigma8_z(z_grid, of=static['of'])
+                result = fo.sigma8_z(**_kw_coords, of=static['of'])
             elif method_key == 'background.efunc':
-                result = cosmo.get_background().efunc(z_grid)
+                result = cosmo.get_background().efunc(**_kw_coords)
             elif method_key == 'background.comoving_transverse_distance':
-                result = cosmo.get_background().comoving_transverse_distance(z_grid)
+                result = cosmo.get_background().comoving_transverse_distance(**_kw_coords)
+            elif method_key == 'background.growth_factor':
+                result = cosmo.get_background().growth_factor(**_kw_coords)
+            elif method_key == 'background.growth_rate':
+                result = cosmo.get_background().growth_rate(**_kw_coords)
             elif method_key == 'thermodynamics.rs_drag':
-                result = cosmo.get_thermodynamics().rs_drag
+                # z-independent; broadcast to the (dummy) registered z grid so get()'s
+                # per-z searchsorted indexing below still applies cleanly.
+                result = jnp.full(spec['z'].shape, cosmo.get_thermodynamics().rs_drag)
             elif method_key == 'background.N_eff':
-                result = cosmo.get_background().N_eff
+                result = jnp.full(spec['z'].shape, cosmo.get_background().N_eff)
             elif method_key.startswith('params.'):
                 # Raw parameter/derived-quantity value, exposed as a tree_flatten leaf so
                 # external (pure_callback) consumers see the live, per-call value instead
@@ -448,3 +509,176 @@ class CosmoprimoCosmology(PrimordialCosmology):
     # dep.__dict__.update(proxy.__dict__) only *adds/overwrites* keys present on the
     # proxy, so the live ``_cosmo`` set by this node's own __call__ earlier in the same
     # trace is left untouched.
+
+
+
+_CONVERSION_JAXACE = {'ln10As': 'logA', 'ns': 'n_s', 'h': 'h', 'omega_b': 'omega_b', 'omega_c': 'omega_cdm',
+                         'm_nu': 'm_ncdm', 'w0': 'w0_fld', 'wa': 'wa_fld'}
+
+
+def _interp_loglog(k_query, k_knots, pk_knots):
+    """Cubic spline interpolation in log10(k) space."""
+    import interpax
+    shape = jnp.shape(k_query)
+    flat = jnp.ravel(k_query)
+    result = interpax.interp1d(jnp.log10(flat), jnp.log10(k_knots), pk_knots, method='cubic', extrap=True)
+    # Preserve pk_knots's trailing axes (e.g. the z dimension); only the k_query axis is reshaped.
+    return jnp.reshape(result, shape + jnp.shape(pk_knots)[1:])
+
+
+class ACECosmology(PrimordialCosmology):
+
+    @classmethod
+    def propose_params(cls, *args, fiducial='DESI', **kwargs):
+        r"""Return a proposed :class:`~desilike.parameter.VariableCollection` of cosmological Parameters.
+
+        The default values are seeded from *fiducial* (``'DESI'`` when ``None``, matching
+        :meth:`__post_init__`'s own default).
+        The returned collection can be edited and passed back to :meth:`__init__` via ``params=...``.
+
+        Parameters
+        ----------
+        fiducial : str, tuple, dict, or cosmoprimo.Cosmology, default='DESI'
+            Fiducial cosmology used to seed the default parameter values.
+
+        Returns
+        -------
+        VariableCollection
+        """
+        return CosmoprimoCosmology.propose_params(*args, fiducial=fiducial, **kwargs)
+
+    def __post_init__(self, *args, engine='isitgr', base_dir=None, conversion='cosmoprimo', params=None, fiducial='DESI', **kwargs):
+        self._engine = str(engine)
+        if base_dir is not None:
+            base_emulator_dir = Path(base_dir)
+        else:
+            base_emulator_dir = Path(Installer().install_dir) / 'jaxace'
+        _SECTIONS = ['harmonic', 'fourier']
+        if isinstance(engine, str):
+            engine = {section: engine for section in _SECTIONS}
+
+        def _find_inputs_outputs(emulator_dir):
+            import json
+            with open(emulator_dir / "nn_setup.json") as f:
+                nn_dict = json.load(f)
+            description = nn_dict.get('emulator_description', {})
+            inputs = description.get('input')
+            outputs = description.get('output')
+            return list(inputs), list(outputs)
+
+        input_outputs = {}
+        seen_emulator_dirs = set()
+        for section in _SECTIONS:
+            emulator_dir = base_emulator_dir / engine[section]
+            if not emulator_dir.is_dir() or emulator_dir in seen_emulator_dirs:
+                continue
+            seen_emulator_dirs.add(emulator_dir)
+            # Iterate on all (leaf) emulators in emulator_dir
+            for leaf_dir in sorted(path for path in emulator_dir.iterdir() if path.is_dir()):
+                inputs, outputs = _find_inputs_outputs(leaf_dir)
+                input_outputs[str(leaf_dir)] = (inputs, outputs)
+        emulators = {}
+        for spec_key, spec in self._requirements.items():
+            method_key = spec_key[0]
+            if 'of' in spec['static']:
+                method_key = f'{method_key}.' + '.'.join(spec['static']['of'])
+            added = False
+            for emu_dir, input_output in input_outputs.items():
+                if method_key in input_output[1]:
+                    emulators.setdefault(emu_dir, [])
+                    emulators[emu_dir].append(method_key)
+                    added = True
+            if not added and method_key.split('.')[0] not in ('background', 'params'):
+                raise NotImplementedError(f"could not find {method_key} in emulators' products")
+        self._method_emulator_matching = {}
+        for emu_dir, methods in emulators.items():
+            if methods[0].startswith('fourier.pk'):
+                import jaxmapse
+                emulator = jaxmapse.load_emulator(emu_dir)
+            elif methods[0].startswith('harmonic.'):
+                import jaxcapse
+                emulator = jaxcapse.load_emulator(emu_dir)
+            else:
+                import jaxace
+                emulator = jaxace.load_trained_emulator(emu_dir)
+            emulator.inputs = input_outputs[emu_dir][0]  # monkey-patching
+            for method in methods:
+                self._method_emulator_matching[method] = emulator
+        self._conversion = conversion
+        if self._conversion == 'cosmoprimo':
+            # Build (or resolve) the fiducial once, forcing ``engine`` so that subsequent
+            # per-call ``.clone(base='input', ...)`` use the requested engine (not the
+            # fiducial's default, e.g. CLASS for the named 'DESI'/'Planck2018' fiducials).
+            self._fiducial = _get_fiducial(fiducial).clone(engine='eisenstein_hu')
+            self._cosmoprimo_params = frozenset(self._fiducial.get_default_params(include_conflicts=True))
+
+    def __call__(self):
+        import jaxace, interpax
+        self._param_values = params = {param.basename: param.value for param in self.params}
+        if self._conversion == 'cosmoprimo':
+            # Only forward the standard cosmological parameters to cosmoprimo: extra,
+            # emulator-specific nuisance inputs (e.g. 'mu1', 'Sigma1', ...) are unknown to
+            # it and must be read directly from self._param_values (see get_param below).
+            cosmo_params = {name: value for name, value in self._param_values.items() if name in self._cosmoprimo_params}
+            cosmoprimo_cosmo = _build_cosmoprimo(self._fiducial, cosmo_params)
+
+            def get_param(name):
+                if name in self._param_values and name not in self._cosmoprimo_params:
+                    return self._param_values[name]
+                if name == 'm_ncdm':
+                    name = 'm_ncdm_tot'
+                return cosmoprimo_cosmo[name]
+
+            jaxace_cosmo = {}
+            for jaxace_name, name in _CONVERSION_JAXACE.items():
+                jaxace_cosmo[jaxace_name] = get_param(name)
+
+        else:
+
+            # Basic conversion
+            def get_param(name):
+                if name in self._param_values:
+                    return self._param_values[name]
+                if name == 'H0':
+                    return 100. * self._param_values['h']
+                raise KeyError(f'cannot resolve parameter {name!r}')
+
+            jaxace_cosmo = {}
+            for jaxace_name, name in _CONVERSION_JAXACE.items():
+                jaxace_cosmo[jaxace_name] = get_param(name)
+
+        jaxace_cosmo = jaxace.w0waCDMCosmology(**jaxace_cosmo)
+        for spec_key, spec in self._requirements.items():
+            method_key = spec_key[0]
+            if 'of' in spec['static']:
+                method_key = f'{method_key}.' + '.'.join(spec['static']['of'])
+            _kw_coords = {coord: spec[coord] for coord in _COORDS if coord in spec}
+            emulator = self._method_emulator_matching.get(method_key, None)
+            if emulator is None:
+                if method_key == 'background.efunc':
+                    result = jaxace_cosmo.E_z(**_kw_coords)
+                elif method_key == 'background.comoving_transverse_distance':
+                    result = jaxace_cosmo.dM_z(**_kw_coords) * jaxace_cosmo.h
+                elif method_key == 'background.growth_factor':
+                    result = jaxace_cosmo.D_z(**_kw_coords)
+                elif method_key == 'background.growth_rate':
+                    result = jaxace_cosmo.f_z(**_kw_coords)
+                elif method_key.startswith('params.'):
+                    name = method_key[len('params.'):]
+                    result = get_param(name)
+                else:
+                    raise NotImplementedError(f'no background formula for {method_key!r}')
+            elif method_key.startswith('fourier.pk'):
+                emulator_params = jnp.array([get_param(param) for param in emulator.inputs if param != 'z'])
+                z = spec['z']
+                result = emulator.get_Pk(emulator_params, z, jaxace_cosmo.D_z(z))
+                # result is (nz, nk_emulator); interpax interpolates along the leading axis,
+                # so transpose to (nk_emulator, nz), interpolate onto spec['k'], then transpose
+                # back to the (nz, nk) convention used elsewhere (e.g. CosmoprimoCosmology.__call__).
+                result = _interp_loglog(spec['k'], emulator.k_grid, result.T).T
+            else:
+                # e.g. sigma8_z (scalar)
+                shape = jnp.shape(spec['z'])
+                emulator_params = jnp.stack([spec['z'] if param == 'z' else jnp.full(shape, get_param(param)) for param in emulator.inputs])
+                result = emulator.run_emulator(emulator_params)
+            self._results[spec_key] = result

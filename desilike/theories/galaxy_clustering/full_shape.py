@@ -26,7 +26,7 @@ import interpax
 
 from ...base import Calculator, get_params
 from ...parameter import Parameter, VariableCollection
-from ..primordial_cosmology import CosmoprimoCosmology, _get_fiducial
+from ..primordial_cosmology import CosmoprimoCosmology, ACECosmology, _get_fiducial, _interp_loglog
 from .bao import ProjectToPoles, SpectrumToCorrelation
 from .template import DirectSpectrum2Template, _ap_k_mu
 from ._multitracer import propose_params_multitracer, assign_params
@@ -145,14 +145,6 @@ def _velocileptors_combine_bias_terms_spectrum2_poles(pktable, pars, nd=1e-4):
 
 def _weights_trapz(x):
     return np.concatenate([[x[1] - x[0]], x[2:] - x[:-2], [x[-1] - x[-2]]]) / 2.
-
-
-def _interp_loglog(k_query, k_knots, pk_knots):
-    """Cubic spline interpolation in log10(k) space."""
-    shape = jnp.shape(k_query)
-    flat = jnp.ravel(k_query)
-    result = interpax.interp1d(jnp.log10(flat), jnp.log10(k_knots), pk_knots, method='cubic', extrap=True)
-    return jnp.reshape(result, shape)
 
 
 # ── TNS perturbation theory ───────────────────────────────────────────────────
@@ -2326,16 +2318,6 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         return obj
 
 
-_CONVERSION_JAXEFFORT = {'ln10As': 'logA', 'ns': 'n_s', 'h': 'h', 'omega_b': 'omega_b', 'omega_c': 'omega_cdm',
-                         'm_nu': 'm_ncdm_tot', 'w0': 'w0_fld', 'wa': 'wa_fld'}
-
-def _cosmo_to_jaxeffort(cosmo):
-    jaxeffort_cosmo = {}
-    for comet_name, name in _CONVERSION_JAXEFFORT.items():
-        jaxeffort_cosmo[comet_name] = cosmo[name]
-    return jaxeffort_cosmo
-
-
 class JAXEffortTracerSpectrum2Poles(Calculator):
     r"""
     Tracer power-spectrum multipoles from a JAXEffort emulator.
@@ -2409,12 +2391,25 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
             Parameter('sn4', value=0., fixed=True, latex='s_{n,4}'),
         ], tracers)
 
-    def __init__(self, *args, cosmo=None, prior_basis='standard', model='velocileptors_rept_mnuw0wacdm', tracers=None, params=None, fiducial='DESI', **kwargs):
+    def __init__(self,  k=None, ells=(0, 2, 4), z=0.5, cosmo=None, prior_basis='standard', model='velocileptors_rept_mnuw0wacdm', tracers=None, params=None, fiducial='DESI', **kwargs):
         # ── cosmology dep (provides logA, n_s, h, omega_b, omega_cdm, m_ncdm, w0_fld, wa_fld) ──
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        self.z = float(z)
+        self._prior_basis = str(prior_basis)
+        self._model = str(model)
         if cosmo is None:
-            cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial=fiducial)
+            cosmo = ACECosmology(fiducial=fiducial)
         self.cosmo = cosmo  # Calculator dep; build_graph discovers it from __dict__
-        self.cosmo.add_requirements({f'params.{name}': [{'z': 0.}] for name in _CONVERSION_JAXEFFORT.values()})
+        self.cosmo.add_requirements({
+            'background.efunc':                        [{'z': z}],
+            'background.comoving_transverse_distance': [{'z': z}],
+            'background.growth_factor':                [{'z': z}],
+            'background.growth_rate':                  [{'z': z}],
+            **{f'params.{name}': None for name in ['logA', 'n_s', 'H0', 'omega_b', 'omega_cdm', 'm_ncdm_tot', 'w0_fld', 'wa_fld']},
+        })
         # ── velocileptors bias ──
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis)
         if params is not None:
@@ -2425,13 +2420,6 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
     def __post_init__(self, k=None, ells=(0, 2, 4), z=0.5, mu=8, prior_basis='standard',
                       fsat=None, sigv=None, nbar=1e-4,
                       model='velocileptors_rept_mnuw0wacdm', fiducial='DESI', **kwargs):
-        if k is None:
-            k = np.linspace(0.01, 0.2, 101)
-        self.k = np.asarray(k, dtype='f8')
-        self.ells = tuple(ells)
-        self.z = float(z)
-        self._prior_basis = str(prior_basis)
-        self._model = str(model)
         settings = get_physical_stochastic_settings()
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
@@ -2444,23 +2432,25 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         self._emulators = [jaxeffort.trained_emulators[self._model][str(ell)] for ell in self.ells]
         self._kgrid = np.asarray(self._emulators[0].P11.k_grid)
         # Fiducial distances for AP (fixed); same distance formulas as in __call__
-        fiducial = _get_fiducial(fiducial)
-        # Let's just use the same cosmology class, for numerical error cancellation around the fiducial
-        fiducial = jaxeffort.w0waCDMCosmology(**_cosmo_to_jaxeffort(fiducial))
-        self._E_fid = fiducial.E_z(self.z)
-        self._dM_fid = fiducial.r_z(self.z)
-        self._D_fid, self._f_fid = fiducial.D_f_z(z)
+        fiducial = _get_fiducial(fiducial, calculator=self.cosmo)
+        ba = fiducial.get_background()
+        self._DH_fid = float(constants.c / 1e3 / (100. * ba.efunc(self.z)))
+        self._DM_fid = float(ba.comoving_transverse_distance(self.z))
+        self._D_fid, self._f_fid = ba.growth_factor(self.z), ba.growth_rate(self.z)
 
     def __call__(self):
         import jaxeffort
         # Read cosmological parameters from the CosmoprimoCosmology dep.
-        z = self.z
-        jax_cosmo = jaxeffort.w0waCDMCosmology(**_cosmo_to_jaxeffort(self.cosmo))
-        theta = jnp.array([z, jax_cosmo.ln10As, jax_cosmo.ns, 100. * jax_cosmo.h, jax_cosmo.omega_b, jax_cosmo.omega_c, jax_cosmo.m_nu, jax_cosmo.w0, jax_cosmo.wa])
-        D, f = jax_cosmo.D_f_z(z)
+        ba = self.cosmo.get_background()
+        theta = jnp.array([self.z, self.cosmo['logA'], self.cosmo['n_s'], self.cosmo['H0'], self.cosmo['omega_b'],
+                           self.cosmo['omega_cdm'], self.cosmo['m_ncdm_tot'], self.cosmo['w0_fld'], self.cosmo['wa_fld']])
+        D, f = ba.growth_factor(self.z), ba.growth_rate(self.z)
         # Alcock-Paczynski from the JAXEffort cosmology distances (qpar = D_H/D_H_fid, qper = D_M/D_M_fid).
-        qpar = (self._E_fid) / (jax_cosmo.E_z(z))
-        qper = jax_cosmo.r_z(z) / self._dM_fid
+        ba = self.cosmo.get_background()
+        DH = constants.c / 1e3 / (100. * ba.efunc(self.z))
+        DM = ba.comoving_transverse_distance(self.z)
+        qpar = DH / self._DH_fid
+        qper = DM / self._DM_fid
         A_AP = 1. / (qper**2 * qpar)
 
         if self._prior_basis in ['physical', 'physical_aap']:
@@ -2570,13 +2560,13 @@ class COMETPTSpectrum2Poles(Calculator):
             'background.efunc':                        [{'z': float(z)}],
             'background.comoving_transverse_distance': [{'z': float(z)}],
             'fourier.sigma8_z': [{'of': 'delta_cb', 'z': self.z}],
-            **{f'params.{name}': [{'z': 0.}] for name in _CONVERSION_COMET.values()},
+            **{f'params.{name}': None for name in _CONVERSION_COMET.values()},
         })
         _apply_cosmo_range_comet_emulator(get_params(self.cosmo))
         self._is_external = True
 
     def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, **kwargs):
-        fiducial = _get_fiducial(fiducial)
+        fiducial = _get_fiducial(fiducial, self.cosmo)
         self._use_mpc = False
         params = get_params(self.cosmo)
         w0_fixed, wa_fixed = params['w0_fld'].fixed, params['wa_fld'].fixed
@@ -2595,8 +2585,8 @@ class COMETPTSpectrum2Poles(Calculator):
         self.sigma8_fid = fiducial.get_fourier().sigma8_z(of='delta_cb', z=self.z)
 
     def __call__(self):
-        DH = constants.c / 1e3 / (100. * self.cosmo.get('background.efunc', z=self.z))
-        DM = self.cosmo.get('background.comoving_transverse_distance', z=self.z)
+        DH = constants.c / 1e3 / (100. * self.cosmo.get_background().efunc(z=self.z))
+        DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
         self.qpar = DH / self._DH_fid
         self.qper = DM / self._DM_fid
         q_tr_lo = [self.qper, self.qpar]
@@ -2613,7 +2603,7 @@ class COMETPTSpectrum2Poles(Calculator):
         # table shape: (ndiagrams, nells, nk)
         self.table = jnp.moveaxis(jnp.asarray(list(table.values())), 2, 0)
         self.f = float(np.asarray(self.comet.params['f']).reshape(-1)[0])
-        self.sigma8 = self.cosmo.get('fourier.sigma8_z', of='delta_cb', z=self.z)
+        self.sigma8 = self.cosmo.get_fourier().sigma8_z(of='delta_cb', z=self.z)
 
     def tree_flatten(self):
         children = [self.qpar, self.qper, self.table, self.f, self.sigma8, self.sigma8_fid]
@@ -2930,8 +2920,8 @@ class COMETPTSpectrum3Poles(Calculator):
         self.mu12_transform = mu12_transform
 
     def __call__(self):
-        DH = constants.c / 1e3 / (100. * self.cosmo.get('background.efunc', z=self.z))
-        DM = self.cosmo.get('background.comoving_transverse_distance', z=self.z)
+        DH = constants.c / 1e3 / (100. * self.cosmo.get_background().efunc(z=self.z))
+        DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
         self.qpar = DH / self._DH_fid
         self.qper = DM / self._DM_fid
         q_tr_lo = [self.qper, self.qpar]
@@ -2951,7 +2941,7 @@ class COMETPTSpectrum3Poles(Calculator):
         # table shape: (ndiagrams, nells, nk)
         self.table = jnp.moveaxis(jnp.asarray(list(table.values())), 2, 0)
         self.f = float(np.asarray(self.comet.params['f']).reshape(-1)[0])
-        self.sigma8 = self.cosmo.get('fourier.sigma8_z', of='delta_cb', z=self.z)
+        self.sigma8 = self.cosmo.get_fourier().sigma8_z(of='delta_cb', z=self.z)
 
     def tree_flatten(self):
         children = [self.qpar, self.qper, self.table, self.f, self.sigma8, self.sigma8_fid]

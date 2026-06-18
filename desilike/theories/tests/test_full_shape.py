@@ -567,6 +567,7 @@ class TestJAXEffort:
         _check(base, 'JAXEffortTracerSpectrum2Poles (standard)')
         assert base.shape == (3, len(k))
         _check_sensitivity(run, base, 'JAXEffortTracerSpectrum2Poles (standard)', b1=3.0)
+        _check_sensitivity(run, base, 'JAXEffortTracerSpectrum2Poles (standard)', logA=2.5)
 
     def test_tracer_spectrum_physical(self):
         """JAXEffortTracerSpectrum2Poles physical basis: shape, finite output, b1p sensitivity."""

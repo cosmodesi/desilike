@@ -1,3 +1,5 @@
+"""JAX-based framework for likelihood pipelines, samplers, profilers, and emulators in cosmology."""
+
 from ._version import __version__
 from .install import Installer
 Installer().setenv()

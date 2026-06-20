@@ -239,6 +239,10 @@ class PrimordialCosmology(Calculator):
         """Return a Thermodynamics-section proxy: cosmo.get_thermodynamics().rs_drag(...) == cosmo.get('thermodynamics.rs_drag', ...)."""
         return _Section(self, 'thermodynamics')
 
+    def get_harmonic(self):
+        """Return a Harmonic-section proxy: cosmo.get_harmonic().lensed_cl(...) == cosmo.get('harmonic.lensed_cl', ...)."""
+        return _Section(self, 'harmonic')
+
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def __call__(self):
@@ -367,7 +371,12 @@ class CosmoprimoCosmology(PrimordialCosmology):
     * ``'fourier.pk_now'``                          — kwargs: ``of``, ``engine``, ``z``, ``k``
     * ``'fourier.sigma8_z'``                        — kwargs: ``of``, ``z``
     * ``'background.efunc'``                        — kwargs: ``z``
-    * ``'background.transverse_comoving_distance'`` — kwargs: ``z``
+    * ``'background.comoving_transverse_distance'`` — kwargs: ``z``
+    * ``'background.luminosity_distance'``          — kwargs: ``z``
+    * ``'harmonic.lensed_cl'``                       — kwargs: ``ellmax``; returns a dict
+      keyed by ``'tt', 'ee', 'bb', 'te'`` of raw (dimensionless) :math:`C_\ell`.
+    * ``'harmonic.lens_potential_cl'``               — kwargs: ``ellmax``; returns a dict
+      keyed by ``'pp', 'tp', 'ep'`` of raw (dimensionless) :math:`C_\ell`.
     * ``'thermodynamics.rs_drag'``                  —
     * ``'background.N_eff'``                        —
     * ``'params.<name>'``                           — .
@@ -503,10 +512,20 @@ class CosmoprimoCosmology(PrimordialCosmology):
                 result = cosmo.get_background().efunc(**_kw_coords)
             elif method_key == 'background.comoving_transverse_distance':
                 result = cosmo.get_background().comoving_transverse_distance(**_kw_coords)
+            elif method_key == 'background.luminosity_distance':
+                result = cosmo.get_background().luminosity_distance(**_kw_coords)
             elif method_key == 'background.growth_factor':
                 result = cosmo.get_background().growth_factor(**_kw_coords)
             elif method_key == 'background.growth_rate':
                 result = cosmo.get_background().growth_rate(**_kw_coords)
+            elif method_key == 'harmonic.lensed_cl':
+                # Raw (dimensionless) Cl, indexed by ell from 0 to ellmax; unit conversion
+                # (e.g. to muK^2) is left to the consumer, matching e.g. background.* above.
+                cl = cosmo.get_harmonic().lensed_cl(ellmax=static['ellmax'])
+                result = {name: jnp.asarray(cl[name]) for name in ['tt', 'ee', 'bb', 'te']}
+            elif method_key == 'harmonic.lens_potential_cl':
+                cl = cosmo.get_harmonic().lens_potential_cl(ellmax=static['ellmax'])
+                result = {name: jnp.asarray(cl[name]) for name in ['pp', 'tp', 'ep']}
             elif method_key == 'thermodynamics.rs_drag':
                 result = cosmo.get_thermodynamics().rs_drag
                 if 'z' in spec:
@@ -690,6 +709,8 @@ class ACECosmology(PrimordialCosmology):
                     result = jaxace_cosmo.E_z(**_kw_coords)
                 elif method_key == 'background.comoving_transverse_distance':
                     result = jaxace_cosmo.dM_z(**_kw_coords) * jaxace_cosmo.h
+                elif method_key == 'background.luminosity_distance':
+                    result = jaxace_cosmo.dL_z(**_kw_coords) * jaxace_cosmo.h
                 elif method_key == 'background.growth_factor':
                     result = jaxace_cosmo.D_z(**_kw_coords)
                 elif method_key == 'background.growth_rate':

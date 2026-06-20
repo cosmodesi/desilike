@@ -38,6 +38,10 @@ class Zeus(Kernel):
         self.nwalkers = nwalkers
         self._kwargs = kwargs
 
+    @classmethod
+    def install(cls, installer):
+        installer.pip('zeus-mcmc')
+
     def init(self, posterior, rng, **context):
         if not ZEUS_INSTALLED:
             raise ImportError("The 'zeus-mcmc' package is required but not installed.")

@@ -62,6 +62,10 @@ class _BlackJAXKernel(Kernel):
     _kernel_type_name = None    # 'hmc', 'nuts', or 'mclmc'
     _adaptation_fn_name = None  # 'window_adaptation', 'mclmc_find_L_and_step_size'
 
+    @classmethod
+    def install(cls, installer):
+        installer.pip('blackjax')
+
     def _check_installed(self):
         if not BLACKJAX_INSTALLED:
             raise ImportError("The 'blackjax' package is required but not installed.")

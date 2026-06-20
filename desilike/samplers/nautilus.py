@@ -39,6 +39,10 @@ class Nautilus(PopulationKernel):
         self._pool_sampler = None
         self._initialized = False
 
+    @classmethod
+    def install(cls, installer):
+        installer.pip('nautilus-sampler')
+
     def init(self, likelihood, prior, rng, **context):
         _, self._likelihood_logpdf_with_derived = likelihood
         self._prior_logpdf, self._prior_ppf, _ = prior

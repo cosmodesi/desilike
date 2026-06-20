@@ -38,6 +38,10 @@ class Emcee(Kernel):
         self.nwalkers = nwalkers
         self._kwargs = kwargs
 
+    @classmethod
+    def install(cls, installer):
+        installer.pip('emcee')
+
     def init(self, posterior, rng, **context):
         if not EMCEE_INSTALLED:
             raise ImportError("The 'emcee' package is required but not installed.")

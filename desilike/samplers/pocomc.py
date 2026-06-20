@@ -98,6 +98,10 @@ class PocoMC(PopulationKernel):
         self._kwargs = kwargs
         self._sampler = None
 
+    @classmethod
+    def install(cls, installer):
+        installer.pip('pocomc')
+
     def init(self, likelihood, prior, rng, **context):
         _, self._likelihood_logpdf_with_derived = likelihood
         self._prior_logpdf, self._prior_ppf, self._prior_bounds = prior

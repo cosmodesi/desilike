@@ -41,6 +41,10 @@ class _NumpyroKernel(Kernel):
     _numpyro_cls = None
     _extra_fields = ('accept_prob', 'potential_energy')
 
+    @classmethod
+    def install(cls, installer):
+        installer.pip('numpyro')
+
     def init(self, posterior, rng, **context):
         if not NUMPYRO_INSTALLED:
             raise ImportError("The 'numpyro' package is required but not installed.")

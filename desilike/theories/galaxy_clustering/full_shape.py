@@ -3287,6 +3287,26 @@ class FOLPSv2TracerBispectrumMultipoles(BaseTracerPTBispectrumMultipoles):
 
 
 # ============================================================================
+# FKPT refactor imports / re-exports
+# ============================================================================
+# Keep the heavy FKPT/FOLPS table and RSD implementation in fkptjax.  This
+# desilike module is only a wrapper around templates, AP quantities and
+# desilike parameter plumbing.
+try:
+    from fkptjax.kfuncs_to_tables import FKPTKernelConstantsCalculator
+except Exception as _fkpt_kernel_constants_import_error:
+    class FKPTKernelConstantsCalculator(BaseCalculator):
+        """Placeholder raised only when the optional fkptjax dependency is missing."""
+        _params = {}
+
+        def initialize(self, *args, **kwargs):
+            raise ImportError(
+                "FKPTKernelConstantsCalculator lives in fkptjax.kfuncs_to_tables; "
+                "install/import fkptjax before using FKPT calculators."
+            ) from _fkpt_kernel_constants_import_error
+
+
+# ============================================================================
 # FKPT tracer class
 # ============================================================================
 
@@ -3390,6 +3410,7 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTPowe
         b3_coev=True,
         beyond_eds=True,
         rescale_PS=False,
+        include_neutrino_corrections=False,
 
         sigma8_ref=None,
         b1_fid=None,
@@ -3663,7 +3684,7 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTPowe
                 params['bs2'] = params['bs2'] - 4.0 / 7.0 * db1
                 params['b3nl'] = params['b3nl'] + 32.0 / 315.0 * db1
 
-            self.power = self.pt.combine_bias_terms_poles(
+            self.power = self.pt.combine_bias_terms_spectrum_poles(
                 params, nd=self.nd,
                 model=self.options['model'], mg_variant=self.options['mg_variant'],
                 prior_basis='standard',
@@ -3778,7 +3799,7 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTPowe
         params['alpha0shot'] = alpha0shot
         params['alpha2shot'] = alpha2shot
 
-        self.power = self.pt.combine_bias_terms_poles(
+        self.power = self.pt.combine_bias_terms_spectrum_poles(
             params, nd=self.nd,
             model=self.options['model'],
             mg_variant=self.options['mg_variant'],
@@ -3787,1207 +3808,8 @@ class fkptTracerPowerSpectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTPowe
             beyond_eds=self.options['beyond_eds'],
         )
 
-# ============================================================================
-# Helper: fkptjax k-functions -> FOLPS tables
-# ============================================================================
-
 from typing import Any, Dict, Optional, Tuple
-
 import jax.numpy as jnp
-
-def Rescaling_MG(
-    k_ext,
-    pk_ext,
-    pk_now_ext,
-    *,
-    derivs,
-    solver,
-    Om,
-    model,
-    mg_variant,
-    fR0_HS,
-    beta2,
-    n_HS,
-    screening,
-    omegaBD,
-    r_c,
-    mu0,
-    beta_1,
-    lambda_1,
-    exp_s,
-    mu1,
-    mu2,
-    mu3,
-    mu4,
-    z_div,
-    z_TGR,
-    z_tw,
-    scale_bins,
-    k_TGR,
-    k_S,
-    k_c,
-    k_tw,
-    gamma_0,
-    gamma_a,
-    t_k,
-    d_s,
-    f0_kmax=1e-3,
-):
-    """
-    Linear-spectrum-only MG rescaling.
-
-    Returns
-    -------
-    pk_ext_rescaled, pk_now_ext_rescaled
-    """
-
-    import numpy as np
-    import jax.numpy as jnp
-    from folps.tools_jax import interp
-    from fkptjax.ode import ModelDerivatives, DP
-
-    def build_k_growth(k_ext_np, k_TGR, k_c, k_S, k_tw,
-                       kmin=1e-4, kmax=None,
-                       nbase=500, nwin=160):
-        if kmax is None:
-            kmax = max(0.5, float(np.max(k_ext_np)))
-
-        base = np.geomspace(float(kmin), float(kmax), int(nbase))
-
-        local = []
-        for kc in [k_TGR, k_c, k_S]:
-            kc = float(kc)
-            if kc <= 0:
-                continue
-            w = max(float(k_tw), 1e-5)
-            lo = max(float(kmin), kc - 20.0 * w)
-            hi = min(float(kmax), kc + 20.0 * w)
-            if hi > lo:
-                local.append(np.linspace(lo, hi, int(nwin)))
-
-        k_growth = np.unique(np.concatenate([base] + local))
-        return k_growth
-
-    def make_derivs(**updates):
-        pars = dict(
-            om=float(Om), ol=float(1.0 - Om),
-            fR0_HS=float(fR0_HS), beta2=float(beta2), n_HS=float(n_HS),
-            screening=int(screening), omegaBD=float(omegaBD),
-            r_c=float(r_c),
-            model=str(model), mg_variant=str(mg_variant),
-            mu0=float(mu0),
-            beta_1=float(beta_1), lambda_1=float(lambda_1), exp_s=float(exp_s),
-            mu1=float(mu1), mu2=float(mu2), mu3=float(mu3), mu4=float(mu4),
-            z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
-            scale_bins=bool(scale_bins),
-            k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw),
-            gamma_0=float(gamma_0), gamma_a=float(gamma_a), t_k=float(t_k), d_s=float(d_s),
-        )
-        pars.update(updates)
-        return ModelDerivatives(**pars)
-
-    def make_gr_derivs():
-        return ModelDerivatives(
-            om=float(Om), ol=float(1.0 - Om),
-            fR0_HS=0.0, beta2=float(beta2), n_HS=float(n_HS),
-            screening=int(screening), omegaBD=float(omegaBD),
-            r_c=float(r_c),
-            model='HDKI', mg_variant='mu_OmDE',
-            mu0=0.0,
-            beta_1=1.0, lambda_1=0.0, exp_s=0.0,
-            mu1=1.0, mu2=1.0, mu3=1.0, mu4=1.0,
-            z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
-            scale_bins=bool(scale_bins),
-            k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw),
-            gamma_0=0.545454, gamma_a=0.0, t_k=float(t_k), d_s=float(d_s),
-        )
-
-    k_ext_np = np.asarray(k_ext, dtype=float)
-
-    k_growth = build_k_growth(
-        k_ext_np=k_ext_np,
-        k_TGR=float(k_TGR),
-        k_c=float(k_c),
-        k_S=float(k_S),
-        k_tw=float(k_tw),
-        kmin=min(1e-4, float(np.min(k_ext_np))),
-        kmax=max(0.5, float(np.max(k_ext_np))),
-        nbase=700,
-        nwin=220,
-    )
-    k_growth_jax = jnp.asarray(k_growth)
-
-    derivs_gr = make_gr_derivs()
-    Y_gr = DP(k_growth, derivs_gr, solver)
-    D_gr = jnp.asarray(Y_gr[0])
-
-    Y_mg = DP(k_growth, derivs, solver)
-    D_mg = jnp.asarray(Y_mg[0])
-    scale_growth = (D_mg / D_gr) ** 2
-
-    log_scale_growth = jnp.log(scale_growth)
-    log_scale_ext = interp(k_ext, k_growth_jax, log_scale_growth)
-    log_scale_ext = jnp.clip(log_scale_ext,
-                             jnp.min(log_scale_growth),
-                             jnp.max(log_scale_growth))
-    scale = jnp.exp(log_scale_ext)
-
-    return pk_ext * scale, pk_now_ext * scale
-
-def Kfuncs_to_tables(
-    k,
-    pk,
-    pk_now,
-    *,
-    z: float,
-    Om: float,
-    beyond_eds: bool = False,
-    rescale_PS: bool = False,
-    kmin: Optional[float] = None,
-    kmax: Optional[float] = None,
-    Nk_kernel: int = 120,
-    nquadSteps: int = 300,
-    NQ: int = 10,
-    NR: int = 10,
-    xnow: float = -3.912023,
-    ode_method: str = "RKQS",
-    f0_kmax: Optional[float] = None,
-    model: str = "HDKI",
-    mg_variant: str = "mu_OmDE",
-    fR0_HS: float = 1e-15,
-    n_HS: float = 1.0,
-    beta2: float = 1.0 / 6.0,
-    screening: int = 1,
-    omegaBD: float = 0.0,
-    r_c: float = 1.0e30,
-    mu0: float = 0.0,
-    beta_1: float = 1.0,
-    lambda_1: float = 1.0,
-    exp_s: float = 1.0,
-    mu1: float = 1.0,
-    mu2: float = 1.0,
-    mu3: float = 1.0,
-    mu4: float = 1.0,
-    z_div: float = 1.0,
-    z_TGR: float = 10.0,
-    z_tw: float = 0.5,
-    scale_bins: bool = False,
-    k_TGR: float = 0.001,
-    k_S: float = 0.5,
-    k_c: float = 0.1,
-    k_tw: float = 0.01,
-    gamma_0: float = 0.54545,
-    gamma_a: float = 0.0,
-    t_k: float = 100.0,
-    d_s: float = 0.0001,
-    eftcamb_h1_interp=None,
-    eftcamb_h3_interp=None,
-    eftcamb_h5_interp=None,
-    rbao: float = 104.0,
-    pmax_bao: float = 0.4,
-    Np_bao: int = 100,
-    return_kernel_constants=True,
-    use_numba: bool = False,
-) -> Tuple[Tuple[Any, ...], Tuple[Any, ...]]:
-    """
-    Return (table_wiggle, table_now) in the A_full=False layout expected by FOLPS.
-    Uses fkptjax internal output grid by default (init_data.logk_grid).
-    """
-
-    import folps as folpsv2
-    from folps.tools_jax import extrapolate_pklin, simpson, interp
-    from fkptjax.calculate_jax import JaxCalculator
-    from fkptjax.util import setup_kfunctions
-    from fkptjax.ode import ModelDerivatives, ODESolver, DP
-
-    model_u = str(model).upper()
-    if model_u in ("HS", "NDGP", "LCDM", "GR"):
-        mg_variant = None
-
-    k = jnp.asarray(k)
-    pk = jnp.asarray(pk)
-    pk_now = jnp.asarray(pk_now)
-
-    k_ext, pk_ext = extrapolate_pklin(k, pk)
-    _, pk_now_ext = extrapolate_pklin(k, pk_now)
-
-    solver = ODESolver(zout=float(z), xnow=float(xnow), method=str(ode_method))
-
-    derivs = ModelDerivatives(
-        om=float(Om), ol=float(1.0 - Om),
-        fR0_HS=float(fR0_HS), beta2=float(beta2), n_HS=float(n_HS),
-        screening=int(screening), omegaBD=float(omegaBD),
-        r_c=float(r_c),
-        model=str(model), mg_variant=str(mg_variant) if mg_variant is not None else "mu_OmDE",
-        mu0=float(mu0),
-        beta_1=float(beta_1), lambda_1=float(lambda_1), exp_s=float(exp_s),
-        mu1=float(mu1), mu2=float(mu2), mu3=float(mu3), mu4=float(mu4),
-        z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
-        scale_bins=bool(scale_bins), k_TGR=float(k_TGR), k_S=float(k_S), k_c=float(k_c), k_tw=float(k_tw),
-        gamma_0=float(gamma_0), gamma_a=float(gamma_a), t_k=float(t_k), d_s=float(d_s),
-        eftcamb_h1_interp=eftcamb_h1_interp,
-        eftcamb_h3_interp=eftcamb_h3_interp,
-        eftcamb_h5_interp=eftcamb_h5_interp,
-        # use_numba=bool(use_numba),
-    )
-
-    k_ext_np = np.asarray(k_ext, dtype=float)
-
-    Y = DP(k_ext_np, derivs, solver)
-    D_ext, Dp_ext = Y[0], Y[1]
-
-    fk_ext = jnp.asarray(Dp_ext / D_ext)
-
-    # Define the kernel grid range before estimating f0.
-    # If f0_kmax is not explicitly provided, use the routine's kmin.
-    if kmin is None:
-        kmin = float(jnp.minimum(1e-3, jnp.min(k)))
-    if kmax is None:
-        kmax = float(jnp.maximum(0.5, jnp.max(k)))
-
-    if f0_kmax is None:
-        f0_kmax = float(kmin)
-
-    mask0 = (k_ext <= float(f0_kmax))
-    nhead = int(min(5, int(k_ext.shape[0])))
-    f0_jax = jnp.where(
-        jnp.any(mask0),
-        jnp.sum(jnp.where(mask0, fk_ext, 0.0)) / jnp.maximum(jnp.sum(mask0), 1),
-        jnp.mean(fk_ext[:nhead]),
-    )
-    f0 = float(f0_jax)
-
-    if bool(rescale_PS):
-        pk_ext, pk_now_ext = Rescaling_MG(
-            k_ext,
-            pk_ext,
-            pk_now_ext,
-            derivs=derivs,
-            solver=solver,
-            Om=Om,
-            model=model,
-            mg_variant=mg_variant,
-            fR0_HS=fR0_HS,
-            beta2=beta2,
-            n_HS=n_HS,
-            screening=screening,
-            omegaBD=omegaBD,
-            r_c=r_c,
-            mu0=mu0,
-            beta_1=beta_1,
-            lambda_1=lambda_1,
-            exp_s=exp_s,
-            mu1=mu1,
-            mu2=mu2,
-            mu3=mu3,
-            mu4=mu4,
-            z_div=z_div,
-            z_TGR=z_TGR,
-            z_tw=z_tw,
-            scale_bins=scale_bins,
-            k_TGR=k_TGR,
-            k_S=k_S,
-            k_c=k_c,
-            k_tw=k_tw,
-            gamma_0=gamma_0,
-            gamma_a=gamma_a,
-            t_k=t_k,
-            d_s=d_s,
-            f0_kmax=f0_kmax,
-        )
-
-    init_data = setup_kfunctions(
-        k_in=k_ext,
-        kmin=float(kmin),
-        kmax=float(kmax),
-        Nk=int(Nk_kernel),
-        nquadSteps=int(nquadSteps),
-        NQ=int(NQ),
-        NR=int(NR),
-    )
-    kout = init_data.logk_grid
-
-    fk_out = interp(kout, k_ext, fk_ext)
-    fk_norm_out = fk_out / f0
-
-    # sigma^2 (wiggle / no-wiggle) and the BAO sigma^2 integrals are small 1D
-    # Simpson quadratures.  Evaluating them eagerly in jax forces a host<->device
-    # round-trip per op (device_put / apply_primitive churn ~20 ms/call); do them
-    # in numpy instead.  scipy's Simpson rule reproduces folps' jax `simpson`
-    # bit-for-bit (same composite rule), so results are unchanged.  The grid
-    # (extrapolate_pklin), the interp (interpax cubic) and folps' spherical
-    # Bessel backend stay in jax -- only the quadratures move host-side.
-    from scipy.integrate import simpson as _np_simpson
-
-    ff = fk_ext / f0
-    k_ext_h = np.asarray(k_ext)
-    ff_h = np.asarray(ff)
-    sigma2w = float(1.0 / (6.0 * np.pi**2) * _np_simpson(np.asarray(pk_ext) * ff_h**2, x=k_ext_h))
-    sigma2w_NW = float(1.0 / (6.0 * np.pi**2) * _np_simpson(np.asarray(pk_now_ext) * ff_h**2, x=k_ext_h))
-
-    p = jnp.exp(jnp.linspace(jnp.log(1e-6), jnp.log(float(pmax_bao)), int(Np_bao)))
-    PSL_NW = interp(p, k_ext, pk_now_ext)
-    p_h = np.asarray(p)
-    PSL_NW_h = np.asarray(PSL_NW)
-    j0_h = np.asarray(folpsv2.spherical_jn_backend(0, p * float(rbao)))
-    j2_h = np.asarray(folpsv2.spherical_jn_backend(2, p * float(rbao)))
-
-    sigma2_NW = float(
-        1.0 / (6.0 * np.pi**2)
-        * _np_simpson(PSL_NW_h * (1.0 - j0_h + 2.0 * j2_h), x=p_h)
-    )
-    delta_sigma2_NW = float(
-        1.0 / (2.0 * np.pi**2)
-        * _np_simpson(PSL_NW_h * j2_h, x=p_h)
-    )
-
-    if bool(beyond_eds):
-        from fkptjax.ode import kernel_constants
-        KA, KAp, KR1, KR1p = kernel_constants(f0=f0, derivs=derivs, solver=solver)
-        A = float(KA)
-        ApOverf0 = float(KAp) / float(f0)
-        CFD3 = float(KR1)
-        CFD3p = float(KR1p)
-    else:
-        A = 1.0
-        ApOverf0 = 0.0
-        CFD3 = 1.0
-        CFD3p = 1.0
-
-    calculator = JaxCalculator()
-    calculator.initialize(init_data)
-
-    kfuncs = calculator.evaluate(
-        Pk_in=pk_ext,
-        Pk_nw_in=pk_now_ext,
-        fk_in=fk_ext,
-        A=A,
-        ApOverf0=ApOverf0,
-        CFD3=CFD3,
-        CFD3p=CFD3p,
-        sigma2v=0.0,
-        f0=f0,
-    )
-
-    def _arr(x):
-        return jnp.asarray(x)
-
-    zeros = jnp.zeros_like(_arr(kout))
-
-    pkl_out_w = kfuncs.pkl[0]
-    pkl_out_nw = kfuncs.pkl[1]
-
-    table_w = (
-        kout,
-        _arr(pkl_out_w),
-        _arr(fk_norm_out),
-        _arr(kfuncs.P22dd[0] + kfuncs.P13dd[0]),
-        _arr(kfuncs.P22du[0] + kfuncs.P13du[0]),
-        _arr(kfuncs.P22uu[0] + kfuncs.P13uu[0]),
-        _arr(kfuncs.Pb1b2[0]),
-        _arr(kfuncs.Pb1bs2[0]),
-        _arr(kfuncs.Pb22[0]),
-        _arr(kfuncs.Pb2s2[0]),
-        _arr(kfuncs.Ps22[0]),
-        _arr(kfuncs.sigma32PSL[0]),
-        _arr(kfuncs.Pb2theta[0]),
-        _arr(kfuncs.Pbs2theta[0]),
-        _arr(kfuncs.I1udd1A[0]),
-        _arr(kfuncs.I2uud1A[0]),
-        _arr(kfuncs.I2uud2A[0]),
-        _arr(kfuncs.I3uuu2A[0]),
-        _arr(kfuncs.I3uuu3A[0]),
-        _arr(kfuncs.I2uudd1BpC[0]),
-        _arr(kfuncs.I2uudd2BpC[0]),
-        _arr(kfuncs.I3uuud2BpC[0]),
-        _arr(kfuncs.I3uuud3BpC[0]),
-        _arr(kfuncs.I4uuuu2BpC[0]),
-        _arr(kfuncs.I4uuuu3BpC[0]),
-        _arr(kfuncs.I4uuuu4BpC[0]),
-        zeros,
-        zeros,
-        sigma2w,
-        f0,
-    )
-
-    table_nw = (
-        kout,
-        _arr(pkl_out_nw),
-        _arr(fk_norm_out),
-        _arr(kfuncs.P22dd[1] + kfuncs.P13dd[1]),
-        _arr(kfuncs.P22du[1] + kfuncs.P13du[1]),
-        _arr(kfuncs.P22uu[1] + kfuncs.P13uu[1]),
-        _arr(kfuncs.Pb1b2[1]),
-        _arr(kfuncs.Pb1bs2[1]),
-        _arr(kfuncs.Pb22[1]),
-        _arr(kfuncs.Pb2s2[1]),
-        _arr(kfuncs.Ps22[1]),
-        _arr(kfuncs.sigma32PSL[1]),
-        _arr(kfuncs.Pb2theta[1]),
-        _arr(kfuncs.Pbs2theta[1]),
-        _arr(kfuncs.I1udd1A[1]),
-        _arr(kfuncs.I2uud1A[1]),
-        _arr(kfuncs.I2uud2A[1]),
-        _arr(kfuncs.I3uuu2A[1]),
-        _arr(kfuncs.I3uuu3A[1]),
-        _arr(kfuncs.I2uudd1BpC[1]),
-        _arr(kfuncs.I2uudd2BpC[1]),
-        _arr(kfuncs.I3uuud2BpC[1]),
-        _arr(kfuncs.I3uuud3BpC[1]),
-        _arr(kfuncs.I4uuuu2BpC[1]),
-        _arr(kfuncs.I4uuuu3BpC[1]),
-        _arr(kfuncs.I4uuuu4BpC[1]),
-        zeros,
-        zeros,
-        sigma2w_NW,
-        sigma2_NW,
-        delta_sigma2_NW,
-        f0,
-    )
-    if return_kernel_constants:
-        return table_w, table_nw, (A, ApOverf0 * f0, CFD3, CFD3p)
-    return table_w, table_nw
-
-
-def build_jax_static_ctx(k, *, kmin, kmax, Nk_kernel, nquadSteps, NQ, NR,
-                         rbao=104.0, pmax_bao=0.4, Np_bao=100):
-    """Precompute the *static* (cosmology-independent) pieces of the jax fkpt
-    loop: the kernel grid (``init_data``), the ``JaxCalculator``, ``kout``, and
-    the BAO ``p``-grid + spherical Bessel ``j0``/``j2``.
-
-    These depend only on the k-grid and fixed loop parameters (NOT on pk or the
-    cosmology), so they are built once (concretely) and reused inside the jitted
-    :func:`Kfuncs_to_tables_jax`, keeping that function fully traceable.
-    """
-    import numpy as _np
-    import folps as folpsv2
-    from folps.tools_jax import extrapolate_pklin
-    from fkptjax.calculate_jax import JaxCalculator
-    from fkptjax.util import setup_kfunctions
-    k = jnp.asarray(k)
-    # k_ext depends only on k (the extrapolation grid), not pk -> use any pk.
-    k_ext, _ = extrapolate_pklin(k, jnp.ones_like(k))
-    init_data = setup_kfunctions(
-        k_in=_np.asarray(k_ext), kmin=float(kmin), kmax=float(kmax),
-        Nk=int(Nk_kernel), nquadSteps=int(nquadSteps), NQ=int(NQ), NR=int(NR))
-    calculator = JaxCalculator()
-    calculator.initialize(init_data)
-    p = jnp.exp(jnp.linspace(jnp.log(1e-6), jnp.log(float(pmax_bao)), int(Np_bao)))
-    j0 = jnp.asarray(folpsv2.spherical_jn_backend(0, p * float(rbao)))
-    j2 = jnp.asarray(folpsv2.spherical_jn_backend(2, p * float(rbao)))
-    return dict(init_data=init_data, calculator=calculator,
-                kout=jnp.asarray(init_data.logk_grid), p=p, j0=j0, j2=j2)
-
-
-def Kfuncs_to_tables_jax(
-    k, pk, pk_now, *, z, Om, beyond_eds=True,
-    kmin=None, kmax=None, Nk_kernel=120, nquadSteps=300, NQ=10, NR=10,
-    xnow=-3.912023, f0_kmax=None,
-    mu1=1.0, mu2=1.0, mu3=1.0, mu4=1.0,
-    z_div=1.0, z_TGR=10.0, z_tw=0.5, scale_bins=False,
-    k_TGR=0.001, k_S=0.5, k_c=0.1, k_tw=0.01,
-    rbao=104.0, pmax_bao=0.4, Np_bao=100,
-    return_kernel_constants=True, static_ctx=None,
-):
-    """Fully jax-traceable (jit/vmap-able) ``Kfuncs_to_tables`` for the
-    PHENOM/binning model.
-
-    Same physics/outputs as :func:`Kfuncs_to_tables`, but the growth and
-    beyond-EdS kernel ODEs are integrated with diffrax (``fkptjax.jax_ode``) on
-    the jax RHS (``fkptjax.binning_jax``), and every scalar stays ``jnp`` (no
-    ``float()``/``np`` concretisation), so the whole fkpt loop can be ``jax.jit``
-    / ``jax.vmap``'d.  The legacy numpy/numba :func:`Kfuncs_to_tables` is
-    unchanged.  (The jax ODE is fully converged, so results match the legacy path
-    to the legacy RKQS truncation, ~1e-3 in the multipoles.)
-    """
-    import folps as folpsv2
-    from folps.tools_jax import extrapolate_pklin, simpson, interp
-    from fkptjax.calculate_jax import JaxCalculator
-    from fkptjax.util import setup_kfunctions
-    from fkptjax import binning_jax as _bj
-    from fkptjax.jax_ode import DP_jax, kernel_constants_jax
-
-    k = jnp.asarray(k); pk = jnp.asarray(pk); pk_now = jnp.asarray(pk_now)
-    k_ext, pk_ext = extrapolate_pklin(k, pk)
-    _, pk_now_ext = extrapolate_pklin(k, pk_now)
-
-    # binning constants (Om and mu* may be traced); xstop concrete (z is a float).
-    P = _bj.pack_constants_jnp(
-        om=Om, ol=1.0 - Om,
-        mu1=mu1, mu2=mu2, mu3=mu3, mu4=mu4,
-        z_div=z_div, z_TGR=z_TGR, z_tw=z_tw, scale_bins=scale_bins,
-        k_TGR=k_TGR, k_c=k_c, k_S=k_S, k_tw=k_tw)
-    xstop = float(np.log(1.0 / (1.0 + float(z))))
-
-    # growth D(k), D'(k) via diffrax
-    Y = DP_jax(k_ext, P, float(xnow), xstop)
-    D_ext, Dp_ext = Y[0], Y[1]
-    fk_ext = Dp_ext / D_ext
-
-    if kmin is None:
-        kmin = float(jnp.minimum(1e-3, jnp.min(k)))
-    if kmax is None:
-        kmax = float(jnp.maximum(0.5, jnp.max(k)))
-    if f0_kmax is None:
-        f0_kmax = float(kmin)
-
-    mask0 = (k_ext <= float(f0_kmax))
-    nhead = int(min(5, int(k_ext.shape[0])))
-    f0 = jnp.where(
-        jnp.any(mask0),
-        jnp.sum(jnp.where(mask0, fk_ext, 0.0)) / jnp.maximum(jnp.sum(mask0), 1),
-        jnp.mean(fk_ext[:nhead]),
-    )
-
-    # static (cosmology-independent) pieces: precomputed (jit path) or built here.
-    if static_ctx is None:
-        static_ctx = build_jax_static_ctx(
-            k, kmin=kmin, kmax=kmax, Nk_kernel=Nk_kernel, nquadSteps=nquadSteps,
-            NQ=NQ, NR=NR, rbao=rbao, pmax_bao=pmax_bao, Np_bao=Np_bao)
-    calculator = static_ctx['calculator']
-    kout = static_ctx['kout']
-    p = static_ctx['p']
-    j0 = static_ctx['j0']
-    j2 = static_ctx['j2']
-
-    fk_out = interp(kout, k_ext, fk_ext)
-    fk_norm_out = fk_out / f0
-
-    ff = fk_ext / f0
-    sigma2w = 1.0 / (6.0 * jnp.pi**2) * simpson(pk_ext * ff**2, x=k_ext)
-    sigma2w_NW = 1.0 / (6.0 * jnp.pi**2) * simpson(pk_now_ext * ff**2, x=k_ext)
-
-    PSL_NW = interp(p, k_ext, pk_now_ext)
-    sigma2_NW = 1.0 / (6.0 * jnp.pi**2) * simpson(PSL_NW * (1.0 - j0 + 2.0 * j2), x=p)
-    delta_sigma2_NW = 1.0 / (2.0 * jnp.pi**2) * simpson(PSL_NW * j2, x=p)
-
-    if bool(beyond_eds):
-        KA, KAp, KR1, KR1p = kernel_constants_jax(f0, P, float(xnow), xstop)
-        A = KA
-        ApOverf0 = KAp / f0
-        CFD3 = KR1
-        CFD3p = KR1p
-    else:
-        A = 1.0; ApOverf0 = 0.0; CFD3 = 1.0; CFD3p = 1.0
-
-    kfuncs = calculator.evaluate_jax(
-        Pk_in=pk_ext, Pk_nw_in=pk_now_ext, fk_in=fk_ext,
-        A=A, ApOverf0=ApOverf0, CFD3=CFD3, CFD3p=CFD3p, sigma2v=0.0, f0=f0)
-
-    zeros = jnp.zeros_like(jnp.asarray(kout))
-
-    def _tab(i, tail):
-        return (
-            kout, kfuncs.pkl[i], fk_norm_out,
-            kfuncs.P22dd[i] + kfuncs.P13dd[i],
-            kfuncs.P22du[i] + kfuncs.P13du[i],
-            kfuncs.P22uu[i] + kfuncs.P13uu[i],
-            kfuncs.Pb1b2[i], kfuncs.Pb1bs2[i], kfuncs.Pb22[i], kfuncs.Pb2s2[i],
-            kfuncs.Ps22[i], kfuncs.sigma32PSL[i], kfuncs.Pb2theta[i], kfuncs.Pbs2theta[i],
-            kfuncs.I1udd1A[i], kfuncs.I2uud1A[i], kfuncs.I2uud2A[i], kfuncs.I3uuu2A[i],
-            kfuncs.I3uuu3A[i], kfuncs.I2uudd1BpC[i], kfuncs.I2uudd2BpC[i],
-            kfuncs.I3uuud2BpC[i], kfuncs.I3uuud3BpC[i], kfuncs.I4uuuu2BpC[i],
-            kfuncs.I4uuuu3BpC[i], kfuncs.I4uuuu4BpC[i], zeros, zeros,
-        ) + tail
-
-    table_w = _tab(0, (sigma2w, f0))
-    table_nw = _tab(1, (sigma2w_NW, sigma2_NW, delta_sigma2_NW, f0))
-
-    if return_kernel_constants:
-        return table_w, table_nw, (A, ApOverf0 * f0, CFD3, CFD3p)
-    return table_w, table_nw
-
-def _dp_first_order_rescale_jax(
-    k_arr,
-    *,
-    Om,
-    xnow,
-    xstop,
-    model="HDKI",
-    mg_variant="mu_OmDE",
-    mu0=0.0,
-    beta_1=1.0,
-    lambda_1=0.0,
-    exp_s=0.0,
-    rtol=1e-6,
-    atol=1e-8,
-    max_steps=4096,
-):
-    """
-    First-order JAX growth solver for rescaling branch.
-
-    This is deliberately smaller than the full FKPT/beyond-EdS JAX machinery:
-    it solves only
-
-        D'' + (2 - f1) D' - f1 * mu(k, eta) * D = 0
-
-    and returns [D(k), D'(k)] on k_arr.
-
-    Supported here:
-      - LCDM / GR
-      - HDKI + mu_OmDE
-      - HDKI + BZ
-
-    PHENOM/binning should use the existing Kfuncs_to_tables_jax path.
-    """
-    import jax
-    import jax.numpy as jnp
-    import diffrax
-
-    k_arr = jnp.asarray(k_arr, dtype=jnp.float64)
-    Om = jnp.asarray(Om, dtype=jnp.float64)
-    Ol = 1.0 - Om
-
-    model_u = str(model).strip().upper()
-    variant_l = str(mg_variant).strip().lower() if mg_variant is not None else ""
-
-    if model_u in ("LCDM", "GR"):
-        kind = "gr"
-    elif model_u == "HDKI" and variant_l in ("mu_omde", "muomde"):
-        kind = "hdk_muomde"
-    elif model_u == "HDKI" and variant_l == "bz":
-        kind = "hdk_bz"
-    else:
-        raise NotImplementedError(
-            "Kfuncs_to_tables_rescale_jax currently supports only "
-            "LCDM/GR, HDKI+mu_OmDE, and HDKI+BZ. "
-            "Use the existing Kfuncs_to_tables_jax for PHENOM/binning."
-        )
-
-    mu0 = jnp.asarray(mu0, dtype=jnp.float64)
-    beta_1 = jnp.asarray(beta_1, dtype=jnp.float64)
-    lambda_1 = jnp.asarray(lambda_1, dtype=jnp.float64)
-    exp_s = jnp.asarray(exp_s, dtype=jnp.float64)
-
-    def f1_eta(eta):
-        return 3.0 / (2.0 * (1.0 + Ol / Om * jnp.exp(3.0 * eta)))
-
-    def mu_eta_k(eta, k):
-        a = jnp.exp(eta)
-        k2 = k * k
-
-        if kind == "gr":
-            return jnp.ones_like(k)
-
-        if kind == "hdk_muomde":
-            OmDE_over_OmL = 1.0 / (Ol + Om * a**(-3.0))
-            return 1.0 + mu0 * OmDE_over_OmL * jnp.ones_like(k)
-
-        if kind == "hdk_bz":
-            x = lambda_1**2 * k2 * a**exp_s
-            return (1.0 + beta_1 * x) / (1.0 + x)
-
-        # Should never be reached because kind is checked above.
-        return jnp.ones_like(k)
-
-    def rhs(eta, y, k):
-        D, Dp = y[0], y[1]
-        f1 = f1_eta(eta)
-        mu = mu_eta_k(eta, k)
-        return jnp.stack([
-            Dp,
-            f1 * mu * D - (2.0 - f1) * Dp,
-        ])
-
-    term = diffrax.ODETerm(rhs)
-    solver = diffrax.Tsit5()
-    stepsize_controller = diffrax.PIDController(rtol=rtol, atol=atol)
-
-    xnow = float(xnow)
-    xstop = float(xstop)
-    dt0 = (xstop - xnow) / 128.0
-
-    y0 = jnp.exp(jnp.asarray(xnow, dtype=jnp.float64)) * jnp.ones(2, dtype=jnp.float64)
-    saveat = diffrax.SaveAt(ts=jnp.asarray([xstop], dtype=jnp.float64))
-
-    def solve_one(k):
-        sol = diffrax.diffeqsolve(
-            term,
-            solver,
-            t0=xnow,
-            t1=xstop,
-            dt0=dt0,
-            y0=y0,
-            args=k,
-            saveat=saveat,
-            stepsize_controller=stepsize_controller,
-            max_steps=max_steps,
-        )
-        return sol.ys[0]
-
-    Y = jax.vmap(solve_one)(k_arr)  # shape: (nk, 2)
-    return jnp.moveaxis(Y, 0, 1)     # shape: (2, nk)
-
-
-
-class FKPTKernelConstantsCalculator(BaseCalculator):
-    """Small calculator for the beyond-EdS FKPT kernel constants.
-
-    This is intended for rescaling branch:
-      * emulate this calculator over LCDM parameters + MG parameters;
-      * pass the emulated A, Ap, CFD3, CFD3p to Kfuncs_to_tables_rescale_jax;
-      * keep the FKPT table construction live/JAX-friendly.
-
-    The calculator itself is deliberately small: it calls the legacy
-    fkptjax.ode kernel_constants during emulator training, but once emulated
-    the chain only sees the cheap EmulatedCalculator outputs.
-    """
-
-    _params = {
-        # LCDM parameters.  The runner synchronizes these definitions with the
-        # DirectPowerSpectrumTemplate cosmology so desilike sees shared params.
-        "h": {"value": 0.6736, "fixed": False, "delta": 0.01},
-        "omega_b": {"value": 0.02237, "fixed": False, "delta": 0.0003},
-        "omega_cdm": {"value": 0.1200, "fixed": False, "delta": 0.002},
-        "logA": {"value": 3.036, "fixed": False, "delta": 0.02},
-        "n_s": {"value": 0.965, "fixed": False, "delta": 0.01},
-
-        # MG parameters owned by the FKPT rescaling branch layer.
-        "mu0": {
-            "value": 0.0,
-            # Rescaling branch HDKI/mu_OmDE owns mu0 at the FKPT PT level.
-            # Keep it varied by default; the runner can still set fixed=True
-            # explicitly with --force-gr.  If this is True here, desilike keeps
-            # the PT-side mu0 fixed and drops the shared sampled mu0 even when
-            # the kernel-constants emulator has mu0 varied.
-            "fixed": False,
-            "prior": {"dist": "uniform", "limits": [-3.0, 1.0]},
-            "ref": {"dist": "norm", "loc": 0.0, "scale": 0.05},
-            "delta": 0.65,
-        },
-        "beta_1": {"value": 1.0, "fixed": True, "delta": 0.05},
-        "lambda_1": {"value": 0.0, "fixed": True, "delta": 0.05},
-        "exp_s": {"value": 0.0, "fixed": True, "delta": 0.05},
-        "fR0_HS": {"value": 1e-15, "fixed": True, "delta": 1e-6},
-        "r_c": {"value": 1e30, "fixed": True, "delta": 1.0},
-    }
-
-    def initialize(
-        self,
-        z=0.0,
-        Om=None,
-        model="HDKI",
-        mg_variant="mu_OmDE",
-        beyond_eds=True,
-        xnow=-3.912023,
-        ode_method="RKQS",
-        f0_kmax=1e-3,
-        N_eff=3.046,
-        m_ncdm=0.06,
-        # HS / f(R)
-        n_HS=1.0,
-        beta2=1.0 / 6.0,
-        screening=1,
-        omegaBD=0.0,
-        # PHENOM/binning/growth-index controls, kept for ModelDerivatives compatibility
-        mu1=1.0,
-        mu2=1.0,
-        mu3=1.0,
-        mu4=1.0,
-        z_div=1.0,
-        z_TGR=2.0,
-        z_tw=0.05,
-        scale_bins=False,
-        k_TGR=0.001,
-        k_S=0.5,
-        k_c=0.1,
-        k_tw=0.01,
-        gamma_0=0.545454,
-        gamma_a=0.0,
-        t_k=100.0,
-        d_s=1e-4,
-        eftcamb_h1_interp=None,
-        eftcamb_h3_interp=None,
-        eftcamb_h5_interp=None,
-    ):
-        self.z = float(z)
-        self.Om = None if Om is None else float(Om)
-        self.model = str(model)
-        self.mg_variant = None if mg_variant is None else str(mg_variant)
-        self.beyond_eds = bool(beyond_eds)
-        self.xnow = float(xnow)
-        self.ode_method = str(ode_method)
-        self.f0_kmax = float(f0_kmax)
-        self.N_eff = float(N_eff)
-        if np.ndim(m_ncdm) == 0:
-            self.m_ncdm = (float(m_ncdm),)
-        else:
-            self.m_ncdm = tuple(float(x) for x in m_ncdm)
-
-        self.n_HS = float(n_HS)
-        self.beta2 = float(beta2)
-        self.screening = int(screening)
-        self.omegaBD = float(omegaBD)
-
-        self.mu1, self.mu2, self.mu3, self.mu4 = map(float, (mu1, mu2, mu3, mu4))
-        self.z_div, self.z_TGR, self.z_tw = map(float, (z_div, z_TGR, z_tw))
-        self.scale_bins = bool(scale_bins)
-        self.k_TGR, self.k_S, self.k_c, self.k_tw = map(float, (k_TGR, k_S, k_c, k_tw))
-        self.gamma_0, self.gamma_a = float(gamma_0), float(gamma_a)
-        self.t_k, self.d_s = float(t_k), float(d_s)
-        self.eftcamb_h1_interp = eftcamb_h1_interp
-        self.eftcamb_h3_interp = eftcamb_h3_interp
-        self.eftcamb_h5_interp = eftcamb_h5_interp
-
-    def _omega_ncdm(self):
-        # Standard non-relativistic approximation, enough for deriving Om from
-        # sampled physical densities in rescaling branch tests.
-        try:
-            return float(np.sum(self.m_ncdm)) / 93.14
-        except Exception:
-            return 0.0
-
-    def _derived_Om(self, h, omega_b, omega_cdm):
-        if self.Om is not None:
-            return float(self.Om)
-        return float((omega_b + omega_cdm + self._omega_ncdm()) / h**2)
-
-    def calculate(
-        self,
-        h=0.6736,
-        omega_b=0.02237,
-        omega_cdm=0.1200,
-        logA=3.036,
-        n_s=0.965,
-        mu0=0.0,
-        beta_1=1.0,
-        lambda_1=0.0,
-        exp_s=0.0,
-        fR0_HS=1e-15,
-        r_c=1.0e30,
-    ):
-        # EdS constants.  Expose all attributes with scalar JAX arrays so this
-        # calculator has a stable emulatable state even when beyond_eds=False.
-        if not self.beyond_eds:
-            self.A = jnp.asarray(1.0, dtype=jnp.float64)
-            self.Ap = jnp.asarray(0.0, dtype=jnp.float64)
-            self.ApOverf0 = jnp.asarray(0.0, dtype=jnp.float64)
-            self.CFD3 = jnp.asarray(1.0, dtype=jnp.float64)
-            self.CFD3p = jnp.asarray(1.0, dtype=jnp.float64)
-            self.f0 = jnp.asarray(1.0, dtype=jnp.float64)
-            return
-
-        from fkptjax.ode import ModelDerivatives, ODESolver, DP, kernel_constants
-
-        Om = self._derived_Om(h=h, omega_b=omega_b, omega_cdm=omega_cdm)
-        model_u = str(self.model).upper()
-        mg_variant = self.mg_variant
-        if model_u in ("HS", "NDGP", "LCDM", "GR"):
-            mg_variant = "mu_OmDE"
-
-        solver = ODESolver(zout=float(self.z), xnow=float(self.xnow), method=str(self.ode_method))
-        derivs = ModelDerivatives(
-            om=float(Om), ol=float(1.0 - Om),
-            fR0_HS=float(fR0_HS), beta2=float(self.beta2), n_HS=float(self.n_HS),
-            screening=int(self.screening), omegaBD=float(self.omegaBD),
-            r_c=float(r_c),
-            model=str(self.model), mg_variant=str(mg_variant),
-            mu0=float(mu0),
-            beta_1=float(beta_1), lambda_1=float(lambda_1), exp_s=float(exp_s),
-            mu1=float(self.mu1), mu2=float(self.mu2), mu3=float(self.mu3), mu4=float(self.mu4),
-            z_div=float(self.z_div), z_TGR=float(self.z_TGR), z_tw=float(self.z_tw),
-            scale_bins=bool(self.scale_bins),
-            k_TGR=float(self.k_TGR), k_S=float(self.k_S), k_c=float(self.k_c), k_tw=float(self.k_tw),
-            gamma_0=float(self.gamma_0), gamma_a=float(self.gamma_a),
-            t_k=float(self.t_k), d_s=float(self.d_s),
-            eftcamb_h1_interp=self.eftcamb_h1_interp,
-            eftcamb_h3_interp=self.eftcamb_h3_interp,
-            eftcamb_h5_interp=self.eftcamb_h5_interp,
-        )
-
-        # Kernel constants need f0.  Use the same low-k convention as the FKPT
-        # table builder: f0 is the low-k growth rate around f0_kmax.
-        k0 = float(max(self.f0_kmax, 1e-5))
-        k_eval = np.geomspace(max(1e-5, 0.2 * k0), max(k0, 1e-5), 5)
-        Y = DP(k_eval, derivs, solver)
-        f0 = float(np.mean(np.asarray(Y[1]) / np.asarray(Y[0])))
-
-        KA, KAp, KR1, KR1p = kernel_constants(f0=f0, derivs=derivs, solver=solver)
-        self.A = jnp.asarray(float(KA), dtype=jnp.float64)
-        self.Ap = jnp.asarray(float(KAp), dtype=jnp.float64)
-        self.ApOverf0 = jnp.asarray(float(KAp) / float(f0), dtype=jnp.float64)
-        self.CFD3 = jnp.asarray(float(KR1), dtype=jnp.float64)
-        self.CFD3p = jnp.asarray(float(KR1p), dtype=jnp.float64)
-        self.f0 = jnp.asarray(float(f0), dtype=jnp.float64)
-
-    def __getstate__(self):
-        return {name: getattr(self, name) for name in ["A", "Ap", "ApOverf0", "CFD3", "CFD3p", "f0"] if hasattr(self, name)}
-
-def Kfuncs_to_tables_rescale_jax(
-    k,
-    pk,
-    pk_now,
-    *,
-    z,
-    Om,
-    model="HDKI",
-    mg_variant="mu_OmDE",
-    beyond_eds=False,
-    rescale_PS=True,
-    kmin=None,
-    kmax=None,
-    Nk_kernel=120,
-    nquadSteps=300,
-    NQ=10,
-    NR=10,
-    xnow=-3.912023,
-    ode_method=None,
-    f0_kmax=None,
-    mu0=0.0,
-    beta_1=1.0,
-    lambda_1=0.0,
-    exp_s=0.0,
-    rbao=104.0,
-    pmax_bao=0.4,
-    Np_bao=100,
-    return_kernel_constants=True,
-    static_ctx=None,
-    kernel_constants=None,
-    **kwargs,
-):
-    """
-    Rescaling branch JAX FKPT table builder.
-
-    This is the rescale-PS sister of Kfuncs_to_tables_jax:
-
-      emulated GR/LCDM pk, pk_now
-          -> extrapolate
-          -> solve first-order GR and MG growth with JAX/diffrax
-          -> rescale pk and pk_now by (D_MG / D_GR)^2
-          -> feed rescaled pk, pk_now, f_MG(k) to JaxCalculator.evaluate_jax
-          -> return FOLPS-format tables
-
-    Important:
-      - This is NOT the PHENOM/binning full-JAX route.
-      - The existing Kfuncs_to_tables_jax remains the PHENOM/binning route.
-      - This first version supports HDKI+mu_OmDE and HDKI+BZ.
-      - beyond_eds=True is not implemented here yet, because that would require
-        model-matched JAX second/third-order kernel constants.
-    """
-    import numpy as np
-    import jax.numpy as jnp
-    from folps.tools_jax import extrapolate_pklin, simpson, interp
-
-    k = jnp.asarray(k, dtype=jnp.float64)
-    pk = jnp.asarray(pk, dtype=jnp.float64)
-    pk_now = jnp.asarray(pk_now, dtype=jnp.float64)
-
-    # beyond_eds=True is supported in the rescaling branch live/JAX path only when
-    # model-matched kernel constants are provided by a small calculator or
-    # emulator.  This keeps this function traceable: no legacy Python ODE /
-    # kernel_constants(...) calls are made here.
-
-    # ------------------------------------------------------------------
-    # 1. Extrapolate input linear spectra.
-    # ------------------------------------------------------------------
-    k_ext, pk_ext = extrapolate_pklin(k, pk)
-    _, pk_now_ext = extrapolate_pklin(k, pk_now)
-
-    xstop = float(np.log(1.0 / (1.0 + float(z))))
-    xnow_f = float(xnow)
-
-    # ------------------------------------------------------------------
-    # 2. First-order GR and MG growth.
-    # ------------------------------------------------------------------
-    Y_gr = _dp_first_order_rescale_jax(
-        k_ext,
-        Om=Om,
-        xnow=xnow_f,
-        xstop=xstop,
-        model="GR",
-        mg_variant=None,
-        mu0=0.0,
-        beta_1=1.0,
-        lambda_1=0.0,
-        exp_s=0.0,
-    )
-    D_gr = Y_gr[0]
-
-    Y_mg = _dp_first_order_rescale_jax(
-        k_ext,
-        Om=Om,
-        xnow=xnow_f,
-        xstop=xstop,
-        model=model,
-        mg_variant=mg_variant,
-        mu0=mu0,
-        beta_1=beta_1,
-        lambda_1=lambda_1,
-        exp_s=exp_s,
-    )
-    D_mg, Dp_mg = Y_mg[0], Y_mg[1]
-
-    growth_scale = (D_mg / D_gr) ** 2
-
-    pk_ext = pk_ext * growth_scale
-    pk_now_ext = pk_now_ext * growth_scale
-
-    fk_ext = Dp_mg / D_mg
-
-    # ------------------------------------------------------------------
-    # 3. f0 and static FKPT context.
-    # ------------------------------------------------------------------
-    if kmin is None:
-        kmin = float(jnp.minimum(1e-3, jnp.min(k)))
-    if kmax is None:
-        kmax = float(jnp.maximum(0.5, jnp.max(k)))
-    if f0_kmax is None:
-        f0_kmax = float(kmin)
-
-    mask0 = k_ext <= float(f0_kmax)
-    nhead = int(min(5, int(k_ext.shape[0])))
-
-    f0 = jnp.where(
-        jnp.any(mask0),
-        jnp.sum(jnp.where(mask0, fk_ext, 0.0)) / jnp.maximum(jnp.sum(mask0), 1),
-        jnp.mean(fk_ext[:nhead]),
-    )
-
-    if static_ctx is None:
-        static_ctx = build_jax_static_ctx(
-            k,
-            kmin=kmin,
-            kmax=kmax,
-            Nk_kernel=Nk_kernel,
-            nquadSteps=nquadSteps,
-            NQ=NQ,
-            NR=NR,
-            rbao=rbao,
-            pmax_bao=pmax_bao,
-            Np_bao=Np_bao,
-        )
-
-    calculator = static_ctx["calculator"]
-    kout = static_ctx["kout"]
-    p = static_ctx["p"]
-    j0 = static_ctx["j0"]
-    j2 = static_ctx["j2"]
-
-    fk_out = interp(kout, k_ext, fk_ext)
-    fk_norm_out = fk_out / f0
-
-    # ------------------------------------------------------------------
-    # 4. IR/BAO sigma integrals.
-    # ------------------------------------------------------------------
-    ff = fk_ext / f0
-
-    sigma2w = 1.0 / (6.0 * jnp.pi**2) * simpson(pk_ext * ff**2, x=k_ext)
-    sigma2w_NW = 1.0 / (6.0 * jnp.pi**2) * simpson(pk_now_ext * ff**2, x=k_ext)
-
-    PSL_NW = interp(p, k_ext, pk_now_ext)
-
-    sigma2_NW = (
-        1.0 / (6.0 * jnp.pi**2)
-        * simpson(PSL_NW * (1.0 - j0 + 2.0 * j2), x=p)
-    )
-    delta_sigma2_NW = (
-        1.0 / (2.0 * jnp.pi**2)
-        * simpson(PSL_NW * j2, x=p)
-    )
-
-    # ------------------------------------------------------------------
-    # 5. beyond-EdS constants.
-    #    For rescaling branch, these must be provided by an ingredient calculator or
-    #    its emulator; do not call legacy kernel_constants(...) here.
-    # ------------------------------------------------------------------
-    if bool(beyond_eds):
-        if kernel_constants is None:
-            raise ValueError(
-                "rescale_PS=True with beyond_eds=True requires provided/emulated "
-                "kernel constants. Attach FKPTKernelConstantsCalculator or its "
-                "EmulatedCalculator as kernel_constants."
-            )
-
-        def _get_kc(obj, names, default=None):
-            if isinstance(names, str):
-                names = (names,)
-            if isinstance(obj, dict):
-                for name in names:
-                    if name in obj:
-                        return obj[name]
-            if isinstance(obj, (tuple, list)):
-                mapping = {"A": 0, "Ap": 1, "KAp": 1, "CFD3": 2, "KR1": 2, "CFD3p": 3, "KR1p": 3}
-                for name in names:
-                    if name in mapping and len(obj) > mapping[name]:
-                        return obj[mapping[name]]
-            for name in names:
-                if hasattr(obj, name):
-                    return getattr(obj, name)
-            return default
-
-        A = jnp.asarray(_get_kc(kernel_constants, ("A", "KA")), dtype=jnp.float64)
-        CFD3 = jnp.asarray(_get_kc(kernel_constants, ("CFD3", "KR1")), dtype=jnp.float64)
-        CFD3p = jnp.asarray(_get_kc(kernel_constants, ("CFD3p", "KR1p")), dtype=jnp.float64)
-
-        ap_over = _get_kc(kernel_constants, "ApOverf0", default=None)
-        if ap_over is None:
-            Ap = jnp.asarray(_get_kc(kernel_constants, ("Ap", "KAp")), dtype=jnp.float64)
-            ApOverf0 = Ap / f0
-        else:
-            ApOverf0 = jnp.asarray(ap_over, dtype=jnp.float64)
-    else:
-        A = jnp.asarray(1.0, dtype=jnp.float64)
-        ApOverf0 = jnp.asarray(0.0, dtype=jnp.float64)
-        CFD3 = jnp.asarray(1.0, dtype=jnp.float64)
-        CFD3p = jnp.asarray(1.0, dtype=jnp.float64)
-
-    # ------------------------------------------------------------------
-    # 6. FKPT JAX calculator.
-    # ------------------------------------------------------------------
-    kfuncs = calculator.evaluate_jax(
-        Pk_in=pk_ext,
-        Pk_nw_in=pk_now_ext,
-        fk_in=fk_ext,
-        A=A,
-        ApOverf0=ApOverf0,
-        CFD3=CFD3,
-        CFD3p=CFD3p,
-        sigma2v=0.0,
-        f0=f0,
-    )
-
-    zeros = jnp.zeros_like(jnp.asarray(kout))
-
-    def _tab(i, tail):
-        return (
-            kout,
-            kfuncs.pkl[i],
-            fk_norm_out,
-            kfuncs.P22dd[i] + kfuncs.P13dd[i],
-            kfuncs.P22du[i] + kfuncs.P13du[i],
-            kfuncs.P22uu[i] + kfuncs.P13uu[i],
-            kfuncs.Pb1b2[i],
-            kfuncs.Pb1bs2[i],
-            kfuncs.Pb22[i],
-            kfuncs.Pb2s2[i],
-            kfuncs.Ps22[i],
-            kfuncs.sigma32PSL[i],
-            kfuncs.Pb2theta[i],
-            kfuncs.Pbs2theta[i],
-            kfuncs.I1udd1A[i],
-            kfuncs.I2uud1A[i],
-            kfuncs.I2uud2A[i],
-            kfuncs.I3uuu2A[i],
-            kfuncs.I3uuu3A[i],
-            kfuncs.I2uudd1BpC[i],
-            kfuncs.I2uudd2BpC[i],
-            kfuncs.I3uuud2BpC[i],
-            kfuncs.I3uuud3BpC[i],
-            kfuncs.I4uuuu2BpC[i],
-            kfuncs.I4uuuu3BpC[i],
-            kfuncs.I4uuuu4BpC[i],
-            zeros,
-            zeros,
-        ) + tail
-
-    table_w = _tab(0, (sigma2w, f0))
-    table_nw = _tab(1, (sigma2w_NW, sigma2_NW, delta_sigma2_NW, f0))
-
-    if return_kernel_constants:
-        return table_w, table_nw, (A, ApOverf0 * f0, CFD3, CFD3p)
-
-    return table_w, table_nw
-
 
 # ============================================================================
 # Bk multipoles via FOLPS (JIT-ed)
@@ -5077,7 +3899,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
       - initialize projection machinery (to_poles, mu)
       - build AP-transformed k, mu grids
       - store PT state in self.pt
-      - expose combine_bias_terms_poles() using FOLPS RSD evaluator
+      - expose combine_bias_terms_spectrum_poles() using FOLPS RSD evaluator
     """
 
     _default_options = dict(
@@ -5085,6 +3907,10 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         mg_variant="mu_OmDE",
         rescale_PS=False,
         beyond_eds=False,
+        # Public switch. When True, FKPT evolves the cb component with
+        # mu_eff(k, eta) = mu_MG(k, eta) * delta_tot(k, eta) / delta_cb(k, eta).
+        # The transfer-ratio object itself is internal and never a YAML option.
+        include_neutrino_corrections=False,
         # Optional rescaling branch ingredient calculator/emulator for beyond-EdS
         # constants A, Ap, CFD3, CFD3p.  When provided,
         # Kfuncs_to_tables_rescale_jax stays live/JAX-friendly and does not call
@@ -5477,6 +4303,139 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             f"available attrs include: {template_attrs[:80]}"
         )
 
+    def _get_neutrino_correction(self, cosmo, *, xnow):
+        """Build the internal massive-neutrino source correction.
+
+        The sole public switch is ``include_neutrino_corrections``.  When that
+        switch is True, this helper constructs
+
+            mu_nu(k, eta) = delta_tot(k, eta) / delta_nonu(k, eta)
+
+        from the cosmoprimo transfer table.
+        """
+        if cosmo is None or not hasattr(cosmo, "get_transfer"):
+            raise AttributeError(
+                "include_neutrino_corrections=True requires template.cosmo "
+                "to expose get_transfer()."
+            )
+
+        from fkptjax.neutrinos import NeutrinoTransferCorrection
+
+        correction = NeutrinoTransferCorrection.from_cosmoprimo_transfer_table(
+            cosmo.get_transfer().table(),
+            numerator="delta_tot",
+            denominator="delta_nonu",
+        )
+
+        eta_start = float(xnow)
+        eta_stop = float(np.log(1.0 / (1.0 + float(self.z))))
+        eta_min = float(np.min(correction.eta))
+        eta_max = float(np.max(correction.eta))
+
+        if eta_min > eta_start + 1.0e-12 or eta_max < eta_stop - 1.0e-12:
+            z_required = float(np.exp(-eta_start) - 1.0)
+            raise ValueError(
+                "The transfer table does not cover the full FKPT ODE interval. "
+                f"With xnow={eta_start:.6f}, request transfer outputs through "
+                f"at least z={z_required:.3f}; got eta range "
+                f"[{eta_min:.6f}, {eta_max:.6f}]."
+            )
+
+        return correction
+
+    def _get_cb_linear_spectra(self, cosmo, *, k_target, pk_dd, pk_now_dd):
+        """Return P_cb and a matched smooth P_cb,no-wiggle spectrum.
+
+        When neutrino corrections are enabled, FKPT evolves the cb component,
+        so P_cb must be the loop input.  If the template does not expose an
+        explicit pknow_cb spectrum, retain its BAO smoothing convention through
+
+            P_cb,no-wiggle = P_cb * P_now,m / P_m.
+        """
+        if cosmo is None or not hasattr(cosmo, "get_fourier"):
+            raise AttributeError(
+                "include_neutrino_corrections=True requires template.cosmo "
+                "to expose get_fourier()."
+            )
+
+        values = cosmo.get_fourier().table(non_linear=False, of="delta_cb")
+        if len(values) != 3:
+            raise ValueError(
+                "Expected cosmoprimo Fourier.table(of='delta_cb') to return "
+                "(k, z, pk_cb)."
+            )
+
+        k_cb, z_cb, pk_cb = [np.asarray(value, dtype=float) for value in values]
+        k_cb = np.ravel(k_cb)
+        z_cb = np.ravel(z_cb)
+        pk_cb = np.asarray(pk_cb, dtype=float)
+
+        if pk_cb.shape == (k_cb.size, z_cb.size):
+            pass
+        elif pk_cb.shape == (z_cb.size, k_cb.size):
+            pk_cb = pk_cb.T
+        else:
+            raise ValueError(
+                "Could not interpret the P_cb table shape: "
+                f"got {pk_cb.shape}, expected {(k_cb.size, z_cb.size)}."
+            )
+
+        order_z = np.argsort(z_cb)
+        z_cb = z_cb[order_z]
+        pk_cb = pk_cb[:, order_z]
+
+        z_target = float(self.z)
+        if z_target < z_cb[0] or z_target > z_cb[-1]:
+            raise ValueError(
+                f"Requested z={z_target:.6f} is outside the P_cb table range "
+                f"[{z_cb[0]:.6f}, {z_cb[-1]:.6f}]."
+            )
+
+        if z_cb.size == 1:
+            pk_cb_at_z = pk_cb[:, 0]
+        else:
+            pk_cb_at_z = np.array(
+                [np.interp(z_target, z_cb, row) for row in pk_cb],
+                dtype=float,
+            )
+
+        order_k = np.argsort(k_cb)
+        k_cb = k_cb[order_k]
+        pk_cb_at_z = pk_cb_at_z[order_k]
+
+        k_target = np.asarray(k_target, dtype=float)
+        if np.any(k_cb <= 0.0) or np.any(k_target <= 0.0):
+            raise ValueError("P_cb interpolation requires strictly positive k.")
+
+        pk_cb_target = np.exp(
+            np.interp(
+                np.log(k_target),
+                np.log(k_cb),
+                np.log(pk_cb_at_z),
+            )
+        )
+        pk_cb_target = jnp.asarray(pk_cb_target)
+
+        pknow_cb = getattr(self.template, "pknow_cb", None)
+        if pknow_cb is not None:
+            pknow_cb = jnp.asarray(pknow_cb)
+            if pknow_cb.shape != pk_cb_target.shape:
+                raise ValueError(
+                    "template.pknow_cb has incompatible shape "
+                    f"{pknow_cb.shape}; expected {pk_cb_target.shape}."
+                )
+            return pk_cb_target, pknow_cb
+
+        pk_dd = jnp.asarray(pk_dd)
+        pk_now_dd = jnp.asarray(pk_now_dd)
+        if pk_dd.shape != pk_cb_target.shape or pk_now_dd.shape != pk_cb_target.shape:
+            raise ValueError(
+                "Template P_m and P_now,m must have the same shape as P_cb; "
+                f"got {pk_dd.shape}, {pk_now_dd.shape}, and {pk_cb_target.shape}."
+            )
+
+        return pk_cb_target, pk_cb_target * (pk_now_dd / pk_dd)
+
     def _ap_k_mu_from_q(self, qpar, qper):
         """
         Pure-JAX AP mapping.  This replaces self.template.ap_k_mu(...) in the
@@ -5517,6 +4476,12 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         """
         import numpy as np
         import jax.numpy as jnp
+        from fkptjax.kfuncs_to_tables import (
+            Kfuncs_to_tables,
+            Kfuncs_to_tables_rescale_jax,
+            build_jax_static_ctx,
+        )
+        from fkptjax.pipelines import make_table_state
     
         self.z = self.template.z
         cosmo = getattr(self.template, "cosmo", None)
@@ -5524,6 +4489,23 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         model = str(self.options.get("model", "HDKI")).strip()
         model_u = model.upper()
         rescale_PS = bool(self.options.get("rescale_PS", False))
+        include_neutrino_corrections = bool(
+            self.options.get("include_neutrino_corrections", False)
+        )
+
+        # This public option is implemented in the direct/non-rescaled FKPT path.
+        # The rescale/emulator route still needs dynamic JAX P_cb and
+        # delta_tot/delta_cb ingredients, so do not silently run P_m + mu_nu.
+        if include_neutrino_corrections and rescale_PS:
+            raise NotImplementedError(
+                "include_neutrino_corrections=True currently requires "
+                "rescale_PS=False. The rescaling/emulator route must first "
+                "provide P_cb, P_cb,no-wiggle, and a JAX-compatible "
+                "delta_tot/delta_cb transfer table."
+            )
+
+        # Internal object passed to FKPT. None means mu_nu = 1.
+        neutrino_correction = None
     
         # mg_variant matters only for HDKI / PHENOM.
         if model_u in ("HDKI", "PHENOM"):
@@ -5590,20 +4572,39 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         else:
             # Legacy / route 1 / non-rescaled behavior:
             # Keep the old template AP machinery.
-            jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
-    
+            # Keep qpar/qper explicit, like FOLPSv2PowerSpectrumMultipoles.
             qpar = self.template.qpar
             qper = self.template.qper
+            jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
     
             k_lin = self.template.k
-            pk_lin = self.template.pk_dd
-            pk_now_lin = getattr(self.template, "pknow_dd", getattr(self.template, "pknow", None))
-            if pk_now_lin is None:
+            pk_dd = self.template.pk_dd
+            pk_now_dd = getattr(
+                self.template,
+                "pknow_dd",
+                getattr(self.template, "pknow", None),
+            )
+            if pk_now_dd is None:
                 raise AttributeError("Template must expose pknow_dd or pknow.")
-    
+
             if cosmo is None:
                 raise AttributeError("rescale_PS=False legacy path requires template.cosmo.")
-    
+
+            if include_neutrino_corrections:
+                neutrino_correction = self._get_neutrino_correction(
+                    cosmo,
+                    xnow=-3.912023,
+                )
+                pk_lin, pk_now_lin = self._get_cb_linear_spectra(
+                    cosmo,
+                    k_target=k_lin,
+                    pk_dd=pk_dd,
+                    pk_now_dd=pk_now_dd,
+                )
+            else:
+                pk_lin = pk_dd
+                pk_now_lin = pk_now_dd
+
             Om = cosmo["Omega_m"]
     
             sigma8 = self.template.sigma8
@@ -5622,6 +4623,8 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             NQ=10,
             NR=10,
             beyond_eds=bool(self.options.get("beyond_eds", False)),
+            # Internal plumbing only; this is not a second user-facing option.
+            neutrino_correction=neutrino_correction,
             model=model,
             mg_variant=mg_variant,
             rescale_PS=rescale_PS,
@@ -5702,7 +4705,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
 
                 def _eval_rescaling_branch_rescale(
                     k_in, pk_in, pk_now_in, Om_in,
-                    mu0_in, beta1_in, lambda1_in, exps_in,
+                    mu0_in, beta1_in, lambda1_in, exps_in, rc_in,
                     A_in, ApOverf0_in, CFD3_in, CFD3p_in,
                 ):
                     kc = dict(
@@ -5720,6 +4723,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                         beta_1=beta1_in,
                         lambda_1=lambda1_in,
                         exp_s=exps_in,
+                        r_c=rc_in,
                         kernel_constants=kc,
                         **static_kwargs,
                     )
@@ -5750,6 +4754,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                 mg_params.get("beta_1", 1.0),
                 mg_params.get("lambda_1", 0.0),
                 mg_params.get("exp_s", 0.0),
+                mg_params.get("r_c", 1.0e30),
                 A_in,
                 ApOverf0_in,
                 CFD3_in,
@@ -5763,6 +4768,8 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                 **fkpt_params,
                 return_kernel_constants=True,
             )
+
+        fkpt_table_state = make_table_state(table, table_now, kernel_constants=kcs)
     
         extra = 0
     
@@ -5814,6 +4821,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             self.calAp = calAp
             self.CFD3 = CFD3
             self.CFD3p = CFD3p
+            self._fkpt_table_state = fkpt_table_state
             return
 
         self.pt = Namespace(
@@ -5838,6 +4846,7 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
             calAp=calAp,
             CFD3=CFD3,
             CFD3p=CFD3p,
+            _fkpt_table_state=fkpt_table_state,
         )
     
         self.kt = kt
@@ -5850,84 +4859,231 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
         self.fk = self.pt.fk
         self.fk_norm = self.pt.fk_norm
 
-    def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
+    def _fkpt_mu_weights(self):
+        """Return raw 1D Gauss-Legendre weights for FKPTJAX projection.
+    
+        Do not use self.to_poles.weights here: in some desilike versions that is
+        already an ell-by-mu projection matrix with Legendre factors included.
+        FKPTJAX project_to_poles expects only the 1D quadrature weights.
         """
-        Reuse FOLPS RSD multipole machinery, exactly like the original FKPT wrapper intended.
-
-        For rescaling branch (rescale_PS=True), calculate() stores the PT state directly
-        on ``self`` rather than creating ``self.pt = Namespace(...)``.  For the
-        legacy/non-rescaled routes, keep using the original ``self.pt`` state.
-        This changes only where the already-computed state is read from; the
-        FOLPS/RSD physics and bias parameter mapping are unchanged.
-        """
-        import folps as folpsv2
+        import numpy as np
         import jax.numpy as jnp
-        from jax import jit
+    
+        nmu = int(np.asarray(self.mu).size)
+        _, w = np.polynomial.legendre.leggauss(nmu)
+        return jnp.asarray(0.5 * w)
+    
+    @property
+    def qpar(self):
+        """Parallel AP scaling, exposed explicitly as in FOLPSv2."""
+        if "_qpar" in self.__dict__:
+            return self.__dict__["_qpar"]
+        pt = getattr(self, "pt", None)
+        if pt is not None and hasattr(pt, "qpar"):
+            return pt.qpar
+        raise AttributeError("qpar")
 
-        use_direct_state = bool(self.options.get("rescale_PS", False)) and hasattr(self, "table")
-        state = self if use_direct_state else self.pt
+    @qpar.setter
+    def qpar(self, value):
+        self.__dict__["_qpar"] = value
 
-        table = (state.kt, *state.table, *state.scalars)
-        table_now = (state.kt, *state.table_now, *state.scalars_now)
+    @property
+    def qper(self):
+        """Transverse AP scaling, exposed explicitly as in FOLPSv2."""
+        if "_qper" in self.__dict__:
+            return self.__dict__["_qper"]
+        pt = getattr(self, "pt", None)
+        if pt is not None and hasattr(pt, "qper"):
+            return pt.qper
+        raise AttributeError("qper")
 
-        # Keep the same derived values as before, but do not mutate the input
-        # dictionary in-place inside the likelihood path.
-        local_params = dict(params)
-        local_params["PshotP"] = 1.0 / nd
-        local_params["X_FoG_p"] = 0.0
+    @qper.setter
+    def qper(self, value):
+        self.__dict__["_qper"] = value
+
+    def _fkpt_state_for_projection(self):
+        """Return the object holding FKPT tables and AP-transformed grids.
+
+        This is the FKPT analogue of the ``self.pt`` state in
+        ``FOLPSv2PowerSpectrumMultipoles``.  Direct/non-rescaled paths store a
+        Namespace in ``self.pt``; rescaling and emulated paths can store the
+        FKPT arrays directly on ``self``.
+        """
+        options = getattr(self, "options", {})
+        use_direct_state = bool(options.get("rescale_PS", False)) and hasattr(self, "table")
+        return self if use_direct_state else self.pt
+
+    def _get_fkpt_state_attr(self, state, name):
+        """Fetch a FKPT state attribute from state first, then from self."""
+        if hasattr(state, name):
+            return getattr(state, name)
+        if hasattr(self, name):
+            return getattr(self, name)
+        raise AttributeError(
+            f"Emulated FKPT state is missing required attribute {name!r}. "
+            "For direct-PT, table/table_now/scalars/scalars_now are varying "
+            "emulator outputs, while kt can be a fixed emulator output."
+        )
+
+    def _fkpt_tables_for_projection(self, state):
+        """Return full FOLPS-compatible table tuples from a FKPT state."""
+        kt = self._get_fkpt_state_attr(state, "kt")
+        table = self._get_fkpt_state_attr(state, "table")
+        table_now = self._get_fkpt_state_attr(state, "table_now")
+        scalars = self._get_fkpt_state_attr(state, "scalars")
+        scalars_now = self._get_fkpt_state_attr(state, "scalars_now")
+        table = (kt, *table, *scalars)
+        table_now = (kt, *table_now, *scalars_now)
+        return table, table_now
+
+    def _pack_fkpt_folps_bias_vector(self, pars, nd=1e-4):
+        """Pack FKPT/FOLPS bias parameters in the RSD order.
+
+        Accepted inputs
+        ---------------
+        dict
+            Eulerian FKPT names:
+            b1, b2, bs2, b3nl, alpha0, alpha2, alpha4,
+            ctilde, alpha0shot, alpha2shot, plus optional PshotP/X_FoG_p.
+
+        sequence of length 11
+            FOLPS-like vector without PshotP:
+            [b1, b2, bs2, b3nl, alpha0, alpha2, alpha4,
+             ctilde, alpha0shot, alpha2shot, X_FoG_p].
+            PshotP=1/nd is inserted before X_FoG_p.
+
+        sequence of length 12
+            Full FKPT/FOLPS vector including PshotP.  For legacy desilike
+            compatibility, the PshotP entry is overwritten by 1/nd.
+        """
+        import jax.numpy as jnp
 
         required_bias_params = [
             "b1", "b2", "bs2", "b3nl",
             "alpha0", "alpha2", "alpha4",
             "ctilde", "alpha0shot", "alpha2shot", "PshotP", "X_FoG_p",
         ]
-        pars = [local_params[p] for p in required_bias_params]
 
-        ncols = len(table)
-        if getattr(self, "_get_poles", None) is None:
+        if isinstance(pars, dict):
+            local_params = dict(pars)
+            # Legacy/desilike convention: PshotP is the physical shot-noise
+            # amplitude 1/nbar, independent of any sampled nuisance value.
+            local_params["PshotP"] = 1.0 / nd
+            local_params.setdefault("X_FoG_p", 0.0)
+            return jnp.asarray([local_params[p] for p in required_bias_params])
 
-            @jit(static_argnums=(4, 5))
-            def _get_poles(jac, kap, muap, pars, bias_scheme, damping, *table_all):
-                folpsv2.MatrixCalculator(A_full=False, use_TNS_model=False)
-                calc = folpsv2.RSDMultipolesPowerSpectrumCalculator(model="EFT")
-                pars2 = calc.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
-                pkmu = calc.get_rsd_pkmu(
-                    kap, muap, pars2,
-                    table_all[:ncols], table_all[ncols:],
-                    IR_resummation=True,
-                    damping=damping,
-                )
-                return self.to_poles(jac * pkmu)
+        pars = list(pars)
+        if len(pars) == 11:
+            pars = list(pars[:-1]) + [1.0 / nd, pars[-1]]
+        elif len(pars) == 12:
+            pars = list(pars)
+            pars[-2] = 1.0 / nd
+        else:
+            raise ValueError(
+                "FKPT/FOLPS bias vector must have length 11 "
+                "(without PshotP) or 12 (with PshotP); got "
+                f"{len(pars)}."
+            )
+        return jnp.asarray(pars)
 
-            self._get_poles = _get_poles
+    def combine_bias_terms_spectrum_poles(self, pars, nd=1e-4, **kwargs):
+        """FOLPS-like spectrum-combination API backed by FKPTJAX tables.
 
-        poles = self._get_poles(
-            state.jac,
-            state.kap,
-            state.muap,
-            jnp.array(pars),
-            self.bias_scheme,
-            self.damping,
-            *table,
-            *table_now
-        )
-        return poles
+        This mirrors
+        ``FOLPSv2PowerSpectrumMultipoles.combine_bias_terms_spectrum_poles``:
 
-    def combine_bias_terms_bispectrum_poles(self, pars, k1k2, ells=None, **kwargs):
+          1. ``calculate()`` builds/stores FKPTJAX loop tables.
+          2. qpar/qper are stored explicitly on the PT state.
+          3. the AP-transformed ``jac, kap, muap`` are also stored explicitly.
+          4. this method evaluates FOLPS RSD ``P(k, mu)`` using FKPTJAX
+             FOLPS-compatible tables.
+          5. final projection uses desilike ``ProjectToMultipoles`` via
+             ``self.to_poles(jac * pkmu)``.
+
+        Therefore qpar/qper enter only through ``calculate()``/``ap_k_mu``.
+        FKPT loop-table construction never receives qpar/qper.
+        """
         import folps as folpsv2
         import jax.numpy as jnp
         from jax import jit
 
-        table = (self.kt, *self.pt.table, *self.pt.scalars)
-        table_now = (self.kt, *self.pt.table_now, *self.pt.scalars_now)
+        state = self._fkpt_state_for_projection()
+        table, table_now = self._fkpt_tables_for_projection(state)
+        ncols = len(table)
 
-        # Keep beyond-EdS information here
-        calA, calAp = self.pt.calA, self.pt.calAp
+        bpars = self._pack_fkpt_folps_bias_vector(pars, nd=nd)
+
+        bias_scheme = kwargs.get("bias_scheme", self.bias_scheme)
+        IR_resummation = kwargs.get("IR_resummation", self.IR_resummation)
+        damping = kwargs.get("damping", self.damping)
+
+        if getattr(self, "_get_fkpt_spectrum_poles", None) is None:
+
+            @jit(static_argnums=(4, 5, 6))
+            def _get_fkpt_spectrum_poles(jac, kap, muap, pars, bias_scheme, IR_resummation, damping, *table_all):
+                folpsv2.MatrixCalculator(A_full=False, use_TNS_model=False)
+                calc = folpsv2.RSDMultipolesPowerSpectrumCalculator(model="EFT")
+                pars2 = calc.set_bias_scheme(pars=pars, bias_scheme=bias_scheme)
+                pkmu = calc.get_rsd_pkmu(
+                    kap,
+                    muap,
+                    pars2,
+                    table_all[:ncols],
+                    table_all[ncols:],
+                    IR_resummation=IR_resummation,
+                    damping=damping,
+                )
+                return self.to_poles(jac * pkmu)
+
+            self._get_fkpt_spectrum_poles = _get_fkpt_spectrum_poles
+
+        return self._get_fkpt_spectrum_poles(
+            state.jac,
+            state.kap,
+            state.muap,
+            bpars,
+            bias_scheme,
+            IR_resummation,
+            damping,
+            *table,
+            *table_now,
+        )
+
+    def combine_bias_terms_poles(self, params, nd=1e-4, **kwargs):
+        """Backward-compatible alias for older FKPT tracer wrappers."""
+        return self.combine_bias_terms_spectrum_poles(params, nd=nd, **kwargs)
+
+    def combine_bias_terms_bispectrum_poles(self, pars, k1k2, ells=None, **kwargs):
+        """FOLPS-like bispectrum-combination API backed by FKPTJAX tables.
+
+        This mirrors the rescale-aware logic used by
+        ``combine_bias_terms_spectrum_poles``.  The legacy/full-PT route stores
+        FKPT tables in ``self.pt``; the rescale_PS=True route stores the live
+        FKPT table state directly on ``self``.  Use the same state helpers here
+        so PS and BS consume the same table layout.
+        """
+        import folps as folpsv2
+        import jax.numpy as jnp
+        from jax import jit
+
+        state = self._fkpt_state_for_projection()
+        table, table_now = self._fkpt_tables_for_projection(state)
+
+        # Keep beyond-EdS information here.  These attributes live on self.pt in
+        # the legacy route and directly on self in the rescale_PS=True route.
+        f0 = self._get_fkpt_state_attr(state, "f0")
+        calA = self._get_fkpt_state_attr(state, "calA")
+        calAp = self._get_fkpt_state_attr(state, "calAp")
+
         calA_arr = jnp.ones_like(table[0]) * calA
         calAp_arr = jnp.ones_like(table[0]) * calAp
         k_pkl_pklnw_fk = jnp.array([
-            table[0], table[1], table_now[1], table[2] * self.pt.f0,
-            calA_arr, calAp_arr
+            table[0],          # k
+            table[1],          # P_L(k)
+            table_now[1],      # P_L,no-wiggle(k)
+            table[2] * f0,     # f(k) = fk_norm(k) * f0
+            calA_arr,
+            calAp_arr,
         ])
         multipoles = tuple(f"B{ell1}{ell2}{ell3}" for (ell1, ell2, ell3) in ells)
 
@@ -5941,12 +5097,17 @@ class fkptjaxPowerSpectrumMultipoles(BasePTPowerSpectrumMultipoles):
                 static_argnames=['multipoles', 'precision', 'damping',
                                  'interpolation_method', 'bias_scheme', 'renormalized']
             )(_get_bispectrum_multipoles_fkpt)
-        qpar = getattr(self.pt, 'qpar', getattr(self, 'qpar', None))
-        qper = getattr(self.pt, 'qper', getattr(self, 'qper', None))
-        if qpar is None or qper is None:
-            raise AttributeError("Missing qpar/qper on both self.pt and self.")
+
+        qpar = self._get_fkpt_state_attr(state, "qpar")
+        qper = self._get_fkpt_state_attr(state, "qper")
+
         poles = get_bispectrum_multipoles_jit(
-            pars, k1k2, k_pkl_pklnw_fk, self.pt.f0, qpar, qper,
+            pars,
+            k1k2,
+            k_pkl_pklnw_fk,
+            f0,
+            qpar,
+            qper,
             multipoles=multipoles,
             **{key: kwargs[key] for key in
                ['precision', 'damping', 'interpolation_method', 'bias_scheme', 'renormalized']
@@ -6039,6 +5200,7 @@ class fkptjaxTracerBispectrumMultipoles(_FKPTTracerConfigMixin, BaseTracerPTBisp
         mg_variant='mu_OmDE',
         beyond_eds=True,
         rescale_PS=False,
+        include_neutrino_corrections=False,
         sigma8_ref=None,
         b1_fid=None,
         b3_coev=True,
@@ -6835,6 +5997,15 @@ class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
 
     def calculate(self):
         from .base import ap_k_mu
+        from fkptjax.kfuncs_to_tables import Kfuncs_to_tables
+        from fkptjax.pipelines import make_table_state
+
+        if bool(self.options.get("include_neutrino_corrections", False)):
+            raise NotImplementedError(
+                "include_neutrino_corrections=True is not yet supported by "
+                "fkpt_pkemu_PowerSpectrumMultipoles. The emulator must expose "
+                "P_cb, P_cb,no-wiggle, and the delta_tot/delta_cb transfer ratio."
+            )
 
         emu = self.cosmo.get_at_z(self.z)
 
@@ -6886,6 +6057,7 @@ class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
             **fkpt_params,
             return_kernel_constants=True,
         )
+        fkpt_table_state = make_table_state(table, table_now, kernel_constants=kcs)
 
         extra = 0  # A_full=False only
 
@@ -6909,6 +6081,7 @@ class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
             f0=f0_mg,
             qpar=qpar, qper=qper,
             calA=calA, calAp=calAp, CFD3=CFD3, CFD3p=CFD3p,
+            _fkpt_table_state=fkpt_table_state,
         )
 
         self.kt = table[0]
@@ -6929,6 +6102,7 @@ class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
         ``use_jax_emulator=True`` -- the whole theory is ``jax.jit``/``jax.vmap``.
         """
         from .base import ap_k_mu
+        from fkptjax.pipelines import make_table_state
 
         # Build (once) the static kernel grid + an internally-jit'd loop, so the
         # heavy ODE/loop is compiled even when called eagerly (e.g. desilike's
@@ -6942,6 +6116,7 @@ class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
         table, table_now, kcs = self._jit_kfuncs(
             emu['pk_dd'], emu['pknow'], emu['Omega_m'],
             emu['mu1'], emu['mu2'], emu['mu3'], emu['mu4'])
+        fkpt_table_state = make_table_state(table, table_now, kernel_constants=kcs)
 
         kt = table[0]
         fk_norm = table[2]
@@ -6956,7 +6131,8 @@ class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
             A_full=False, remove_DeltaP=False,
             kt=kt, fk_norm=fk_norm, fk=fk_mg, f0=f0_mg,
             qpar=qpar, qper=qper,
-            calA=calA, calAp=calAp, CFD3=CFD3, CFD3p=CFD3p)
+            calA=calA, calAp=calAp, CFD3=CFD3, CFD3p=CFD3p,
+            _fkpt_table_state=fkpt_table_state)
 
         self.kt = kt
         self.qpar = qpar
@@ -6977,6 +6153,7 @@ class fkpt_pkemu_PowerSpectrumMultipoles(fkptjaxPowerSpectrumMultipoles):
         jit/vmap.  Mirrors the ``_get_poles`` cached-jit pattern.
         """
         import jax
+        from fkptjax.kfuncs_to_tables import Kfuncs_to_tables_jax, build_jax_static_ctx
         B = _MG_EMU_BINNING
         self._jax_static_ctx = build_jax_static_ctx(
             kgrid, kmin=self._loop_kmin, kmax=self._loop_kmax,

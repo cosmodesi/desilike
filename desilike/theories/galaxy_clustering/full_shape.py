@@ -3287,23 +3287,207 @@ class FOLPSv2TracerBispectrumMultipoles(BaseTracerPTBispectrumMultipoles):
 
 
 # ============================================================================
-# FKPT refactor imports / re-exports
+# FKPT kernel-constants bridge
 # ============================================================================
 # Keep the heavy FKPT/FOLPS table and RSD implementation in fkptjax.  This
-# desilike module is only a wrapper around templates, AP quantities and
-# desilike parameter plumbing.
-try:
-    from fkptjax.kfuncs_to_tables import FKPTKernelConstantsCalculator
-except Exception as _fkpt_kernel_constants_import_error:
-    class FKPTKernelConstantsCalculator(BaseCalculator):
-        """Placeholder raised only when the optional fkptjax dependency is missing."""
-        _params = {}
+# downstream module owns the framework-specific calculator class used to train
+# or emulate beyond-EdS kernel constants for the FKPT rescaling branch.
 
-        def initialize(self, *args, **kwargs):
-            raise ImportError(
-                "FKPTKernelConstantsCalculator lives in fkptjax.kfuncs_to_tables; "
-                "install/import fkptjax before using FKPT calculators."
-            ) from _fkpt_kernel_constants_import_error
+class FKPTKernelConstantsCalculator(BaseCalculator):
+    """Small calculator for the beyond-EdS FKPT kernel constants.
+
+    This is intended for rescaling branch:
+      * emulate this calculator over LCDM parameters + MG parameters;
+      * pass the emulated A, Ap, CFD3, CFD3p to Kfuncs_to_tables_rescale_jax;
+      * keep the FKPT table construction live/JAX-friendly.
+
+    The calculator itself is deliberately small: it calls the legacy
+    fkptjax.ode kernel_constants during emulator training, but once emulated
+    the chain only sees the cheap EmulatedCalculator outputs.
+    """
+
+    _params = {
+        # LCDM parameters.  The runner synchronizes these definitions with the
+        # DirectPowerSpectrumTemplate cosmology so desilike sees shared params.
+        "h": {"value": 0.6736, "fixed": False, "delta": 0.01},
+        "omega_b": {"value": 0.02237, "fixed": False, "delta": 0.0003},
+        "omega_cdm": {"value": 0.1200, "fixed": False, "delta": 0.002},
+        "logA": {"value": 3.036, "fixed": False, "delta": 0.02},
+        "n_s": {"value": 0.965, "fixed": False, "delta": 0.01},
+
+        # MG parameters owned by the FKPT rescaling branch layer.
+        "mu0": {
+            "value": 0.0,
+            # Rescaling branch HDKI/mu_OmDE owns mu0 at the FKPT PT level.
+            # Keep it varied by default; the runner can still set fixed=True
+            # explicitly with --force-gr.  If this is True here, desilike keeps
+            # the PT-side mu0 fixed and drops the shared sampled mu0 even when
+            # the kernel-constants emulator has mu0 varied.
+            "fixed": False,
+            "prior": {"dist": "uniform", "limits": [-3.0, 1.0]},
+            "ref": {"dist": "norm", "loc": 0.0, "scale": 0.05},
+            "delta": 0.65,
+        },
+        "beta_1": {"value": 1.0, "fixed": True, "delta": 0.05},
+        "lambda_1": {"value": 0.0, "fixed": True, "delta": 0.05},
+        "exp_s": {"value": 0.0, "fixed": True, "delta": 0.05},
+        "fR0_HS": {"value": 1e-15, "fixed": True, "delta": 1e-6},
+        "r_c": {"value": 1e30, "fixed": True, "delta": 1.0},
+    }
+
+    def initialize(
+        self,
+        z=0.0,
+        Om=None,
+        model="HDKI",
+        mg_variant="mu_OmDE",
+        beyond_eds=True,
+        xnow=-3.912023,
+        ode_method="RKQS",
+        f0_kmax=1e-3,
+        N_eff=3.046,
+        m_ncdm=0.06,
+        # HS / f(R)
+        n_HS=1.0,
+        beta2=1.0 / 6.0,
+        screening=1,
+        omegaBD=0.0,
+        # PHENOM/binning/growth-index controls, kept for ModelDerivatives compatibility
+        mu1=1.0,
+        mu2=1.0,
+        mu3=1.0,
+        mu4=1.0,
+        z_div=1.0,
+        z_TGR=2.0,
+        z_tw=0.05,
+        scale_bins=False,
+        k_TGR=0.001,
+        k_S=0.5,
+        k_c=0.1,
+        k_tw=0.01,
+        gamma_0=0.545454,
+        gamma_a=0.0,
+        t_k=100.0,
+        d_s=1e-4,
+        eftcamb_h1_interp=None,
+        eftcamb_h3_interp=None,
+        eftcamb_h5_interp=None,
+        neutrino_correction=None,
+    ):
+        self.z = float(z)
+        self.Om = None if Om is None else float(Om)
+        self.model = str(model)
+        self.mg_variant = None if mg_variant is None else str(mg_variant)
+        self.beyond_eds = bool(beyond_eds)
+        self.xnow = float(xnow)
+        self.ode_method = str(ode_method)
+        self.f0_kmax = float(f0_kmax)
+        self.N_eff = float(N_eff)
+        if np.ndim(m_ncdm) == 0:
+            self.m_ncdm = (float(m_ncdm),)
+        else:
+            self.m_ncdm = tuple(float(x) for x in m_ncdm)
+
+        self.n_HS = float(n_HS)
+        self.beta2 = float(beta2)
+        self.screening = int(screening)
+        self.omegaBD = float(omegaBD)
+
+        self.mu1, self.mu2, self.mu3, self.mu4 = map(float, (mu1, mu2, mu3, mu4))
+        self.z_div, self.z_TGR, self.z_tw = map(float, (z_div, z_TGR, z_tw))
+        self.scale_bins = bool(scale_bins)
+        self.k_TGR, self.k_S, self.k_c, self.k_tw = map(float, (k_TGR, k_S, k_c, k_tw))
+        self.gamma_0, self.gamma_a = float(gamma_0), float(gamma_a)
+        self.t_k, self.d_s = float(t_k), float(d_s)
+        self.eftcamb_h1_interp = eftcamb_h1_interp
+        self.eftcamb_h3_interp = eftcamb_h3_interp
+        self.eftcamb_h5_interp = eftcamb_h5_interp
+        self.neutrino_correction = neutrino_correction
+
+    def _omega_ncdm(self):
+        # Standard non-relativistic approximation, enough for deriving Om from
+        # sampled physical densities in rescaling branch tests.
+        try:
+            return float(np.sum(self.m_ncdm)) / 93.14
+        except Exception:
+            return 0.0
+
+    def _derived_Om(self, h, omega_b, omega_cdm):
+        if self.Om is not None:
+            return float(self.Om)
+        return float((omega_b + omega_cdm + self._omega_ncdm()) / h**2)
+
+    def calculate(
+        self,
+        h=0.6736,
+        omega_b=0.02237,
+        omega_cdm=0.1200,
+        logA=3.036,
+        n_s=0.965,
+        mu0=0.0,
+        beta_1=1.0,
+        lambda_1=0.0,
+        exp_s=0.0,
+        fR0_HS=1e-15,
+        r_c=1.0e30,
+    ):
+        # EdS constants.  Expose all attributes with scalar JAX arrays so this
+        # calculator has a stable emulatable state even when beyond_eds=False.
+        if not self.beyond_eds:
+            self.A = jnp.asarray(1.0, dtype=jnp.float64)
+            self.Ap = jnp.asarray(0.0, dtype=jnp.float64)
+            self.ApOverf0 = jnp.asarray(0.0, dtype=jnp.float64)
+            self.CFD3 = jnp.asarray(1.0, dtype=jnp.float64)
+            self.CFD3p = jnp.asarray(1.0, dtype=jnp.float64)
+            self.f0 = jnp.asarray(1.0, dtype=jnp.float64)
+            return
+
+        from fkptjax.ode import ModelDerivatives, ODESolver, DP, kernel_constants
+
+        Om = self._derived_Om(h=h, omega_b=omega_b, omega_cdm=omega_cdm)
+        model_u = str(self.model).upper()
+        mg_variant = self.mg_variant
+        if model_u in ("HS", "NDGP", "LCDM", "GR"):
+            mg_variant = "mu_OmDE"
+
+        solver = ODESolver(zout=float(self.z), xnow=float(self.xnow), method=str(self.ode_method))
+        derivs = ModelDerivatives(
+            om=float(Om), ol=float(1.0 - Om),
+            fR0_HS=float(fR0_HS), beta2=float(self.beta2), n_HS=float(self.n_HS),
+            screening=int(self.screening), omegaBD=float(self.omegaBD),
+            r_c=float(r_c),
+            model=str(self.model), mg_variant=str(mg_variant),
+            mu0=float(mu0),
+            beta_1=float(beta_1), lambda_1=float(lambda_1), exp_s=float(exp_s),
+            mu1=float(self.mu1), mu2=float(self.mu2), mu3=float(self.mu3), mu4=float(self.mu4),
+            z_div=float(self.z_div), z_TGR=float(self.z_TGR), z_tw=float(self.z_tw),
+            scale_bins=bool(self.scale_bins),
+            k_TGR=float(self.k_TGR), k_S=float(self.k_S), k_c=float(self.k_c), k_tw=float(self.k_tw),
+            gamma_0=float(self.gamma_0), gamma_a=float(self.gamma_a),
+            t_k=float(self.t_k), d_s=float(self.d_s),
+            eftcamb_h1_interp=self.eftcamb_h1_interp,
+            eftcamb_h3_interp=self.eftcamb_h3_interp,
+            eftcamb_h5_interp=self.eftcamb_h5_interp,
+            neutrino_correction=self.neutrino_correction,
+        )
+
+        # Kernel constants need f0.  Use the same low-k convention as the FKPT
+        # table builder: f0 is the low-k growth rate around f0_kmax.
+        k0 = float(max(self.f0_kmax, 1e-5))
+        k_eval = np.geomspace(max(1e-5, 0.2 * k0), max(k0, 1e-5), 5)
+        Y = DP(k_eval, derivs, solver)
+        f0 = float(np.mean(np.asarray(Y[1]) / np.asarray(Y[0])))
+
+        KA, KAp, KR1, KR1p = kernel_constants(f0=f0, derivs=derivs, solver=solver)
+        self.A = jnp.asarray(float(KA), dtype=jnp.float64)
+        self.Ap = jnp.asarray(float(KAp), dtype=jnp.float64)
+        self.ApOverf0 = jnp.asarray(float(KAp) / float(f0), dtype=jnp.float64)
+        self.CFD3 = jnp.asarray(float(KR1), dtype=jnp.float64)
+        self.CFD3p = jnp.asarray(float(KR1p), dtype=jnp.float64)
+        self.f0 = jnp.asarray(float(f0), dtype=jnp.float64)
+
+    def __getstate__(self):
+        return {name: getattr(self, name) for name in ["A", "Ap", "ApOverf0", "CFD3", "CFD3p", "f0"] if hasattr(self, name)}
 
 
 # ============================================================================

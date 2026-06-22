@@ -306,7 +306,7 @@ class ResummedBAOWigglesPTSpectrum2Poles(Calculator):
             Parameter('dbeta', value=1., prior=dict(limits=[0.7, 1.3]),
                       ref=dict(limits=[0.95, 1.05]), fd_eps=0.02, latex=r'\delta\beta'),
             Parameter('sigmas', value=0., prior=dict(limits=[0., 10.]),
-                      ref=dict(limits=[0., 1.]), latex=r'\Sigma_{s}'),
+                      ref=dict(limits=[0., 1.]), latex=r'\Sigma_s'),
             Parameter('d', value=1., fixed=True, prior=dict(limits=[0., 4.]),
                       ref=dict(limits=[0.8, 1.2]), latex='d'),
         ], tracers)

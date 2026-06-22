@@ -759,7 +759,7 @@ def _fd_direct_wrap(fn, name, offsets, coeffs, eps, k, prior_limits=None):
 
 # ── external function factory ─────────────────────────────────────────────────
 
-def _make_external_fn(node: Calculator, params_list: list, calc_deps: list, call_return, node_state: dict, dep_states: list):
+def _make_external_fn(node: Calculator, params_list: list, calc_deps: list, call_return, node_state: dict):
     """
     Return (fn_dep, fn_call, call_kind).
 
@@ -773,7 +773,16 @@ def _make_external_fn(node: Calculator, params_list: list, calc_deps: list, call
 
     Differentiation is handled at the CompiledGraph level via _build_graph_call_fn;
     these functions carry no custom_jvp of their own.
-    node() is skipped when own params and all dep outputs are unchanged.
+
+    node() is skipped when own params and all dep outputs are unchanged from the previous
+    *actual call* of this pure_callback. This is checked by comparing concrete values
+    (own_params_tuple, dep_args) against the last-seen ones, NOT via a 'was a dep node
+    called' flag: under jax.jit, the Python graph-walk in _run_graph (which would set such
+    a flag) runs only once, at trace time, while this callback itself runs at every actual
+    execution of the compiled program (jax.pure_callback always invokes it). A flag set once
+    at trace time would stay stale forever after that, making every execution look like deps
+    changed and defeating the cache; comparing actual values, fetched at call time, gives the
+    right answer in eager mode too.
     """
     dep_schema = []
     for dep in calc_deps:
@@ -796,11 +805,14 @@ def _make_external_fn(node: Calculator, params_list: list, calc_deps: list, call
         call_kind = 'value'
 
     def _run_or_cache(own_params_tuple, dep_args):
-        dep_was_called = any(s['was_called'] for s in dep_states)
-        last = node_state['last_params']
-        params_changed = last is None or any(not np.array_equal(a, b) for a, b in zip(own_params_tuple, last))
-        if dep_was_called or params_changed:
+        last_params = node_state['last_params']
+        params_changed = last_params is None or any(not np.array_equal(a, b) for a, b in zip(own_params_tuple, last_params))
+        last_dep_args = node_state['last_dep_args']
+        dep_args_changed = (last_dep_args is None or len(dep_args) != len(last_dep_args)
+                            or any(not np.array_equal(np.asarray(a), np.asarray(b)) for a, b in zip(dep_args, last_dep_args)))
+        if params_changed or dep_args_changed:
             node_state['last_params'] = tuple(np.asarray(a) for a in own_params_tuple)
+            node_state['last_dep_args'] = tuple(np.asarray(a) for a in dep_args)
             for i, param in enumerate(params_list):
                 param.value = np.asarray(own_params_tuple[i])
             offset = 0
@@ -1109,7 +1121,8 @@ class CompiledGraph:
         self._derived_params = [p for p in self.params if p.derived]  # True, 'marg', 'best'
 
         # Per-node cache state for all nodes (keyed by node id).
-        self._node_states = {id(node): {'last_params': None, 'was_called': False, 'last_result': None, 'dep_result': None, 'call_result': None}
+        self._node_states = {id(node): {'last_params': None, 'was_called': False, 'last_result': None,
+                                        'dep_result': None, 'call_result': None, 'last_dep_args': None}
                              for node in self.nodes}
 
         # Build external (_is_external=True) callables; record tree_flatten child counts.
@@ -1128,9 +1141,8 @@ class CompiledGraph:
                 self._ext_n_children[id(node)] = len(children_flat)
                 node_state = self._node_states[id(node)]
                 calc_deps = self._node_calc_deps[id(node)]
-                dep_states = [self._node_states[id(dep)] for dep in calc_deps]
                 call_return = ctx.call_returns[id(node)]
-                fn_dep, fn_call, call_kind = _make_external_fn(node, self._node_var_deps[id(node)], calc_deps, call_return, node_state, dep_states)
+                fn_dep, fn_call, call_kind = _make_external_fn(node, self._node_var_deps[id(node)], calc_deps, call_return, node_state)
                 self._fn_dep.append(fn_dep)
                 self._fn_call.append(fn_call)
                 self._ext_call_kind[id(node)] = call_kind

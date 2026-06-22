@@ -15,6 +15,14 @@ def _check(result, name=''):
     assert np.isfinite(arr).all(), f"{name}: non-finite values"
 
 
+def _time(fn):
+    """Return the wall-clock time (seconds) to call *fn* once."""
+    import time
+    start = time.perf_counter()
+    fn()
+    return time.perf_counter() - start
+
+
 def _direct_template(**kw):
     from desilike.theories.galaxy_clustering import DirectSpectrum2Template
     return DirectSpectrum2Template(engine='eisenstein_hu', **kw)
@@ -340,6 +348,47 @@ class TestREPTVelocileptors:
         base_std = run_std()
         _check(base_std, 'REPTVelocileptorsTracer (standard)')
         _check_sensitivity(run_std, base_std, 'REPTVelocileptorsTracer (standard)', b1=2.0)
+
+    def test_fixed_template_recompute_caching(self):
+        """REPTVelocileptorsTracerSpectrum2Poles + FixedSpectrum2Template, eager: varying
+        only the bias parameter b1p must not re-run the external REPT PT calculator
+        (its own params and deps -- FixedSpectrum2Template has none free -- are
+        unchanged), only the cheap JAX bias-combination step in the Tracer.
+
+        Note this caching is an eager-only optimization (base.py's _run_graph skips a
+        node when its own params are unchanged and no dep was called): jax.jit traces
+        and re-embeds every node's pure_callback unconditionally, so a single
+        jax.jit(pipe) re-runs REPT on every call regardless of which parameter changed
+        -- this test therefore exercises the eager (non-jit) path specifically.
+        """
+        from desilike.base import compile, params
+        from desilike.theories.galaxy_clustering import REPTVelocileptorsTracerSpectrum2Poles, FixedSpectrum2Template
+
+        k = np.linspace(0.02, 0.3, 60)
+        theory = REPTVelocileptorsTracerSpectrum2Poles(k=k, template=FixedSpectrum2Template())
+        pipe = compile(theory)
+        defaults = {p.name: p._value for p in params(theory)}
+
+        base = np.asarray(pipe(defaults))  # first call: also runs REPT
+        _check(base, 'REPTVelocileptorsTracer (FixedSpectrum2Template, eager, first call)')
+        first_call_time = _time(lambda: pipe(defaults))  # repeat default call: nothing changed at all
+
+        # First time a *different* b1p is seen, the (cheap) bias-combination JAX ops get
+        # dispatched for that code path; REPT itself must still be skipped. Treat this as
+        # a second warm-up call, then check several more b1p values are all fast.
+        _time(lambda: pipe({**defaults, 'b1p': 2.0}))
+
+        times, results = [], []
+        for b1p in [1.6, 2.4, 3.2]:
+            results.append(np.asarray(pipe({**defaults, 'b1p': b1p})))
+            times.append(_time(lambda b1p=b1p: pipe({**defaults, 'b1p': b1p})))
+
+        assert not np.allclose(base, results[0]), 'result invariant to b1p'
+        assert max(times) < 0.3 * first_call_time, (
+            f'varying only b1p took {times} (max {max(times):.3f}s), not much faster than '
+            f'a repeated default-params call at {first_call_time:.3f}s -- expected the '
+            f'external REPT PT calculator (unchanged params/deps) to be skipped, not re-run'
+        )
 
     def test_tracer_correlation(self):
         """REPTVelocileptorsTracerCorrelation2Poles: shape and finite values."""
@@ -786,5 +835,5 @@ def test_compile_input():
 
 if __name__ == '__main__':
 
-    test_jit()
-    test_compile_input()
+    test = TestREPTVelocileptors()
+    test.test_fixed_template_jit_timing()

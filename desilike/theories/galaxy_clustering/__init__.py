@@ -12,5 +12,6 @@ from .full_shape import (KaiserPTSpectrum2Poles, KaiserTracerSpectrum2Poles, Kai
                          PyBirdPTCorrelation2Poles, PyBirdTracerCorrelation2Poles,
                          FOLPSPTSpectrum2Poles, FOLPSTracerSpectrum2Poles, FOLPSTracerCorrelation2Poles,
                          FOLPSTracerSpectrum3Poles,
+                         FKPTJAXPTSpectrum2Poles, FKPTJAXTracerSpectrum2Poles, FKPTJAXTracerSpectrum3Poles,
                          JAXEffortTracerSpectrum2Poles)
 from .png import PNGTracerSpectrum2Poles, PNGTracerVelocitySpectrum2Poles

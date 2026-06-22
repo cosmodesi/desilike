@@ -2214,7 +2214,7 @@ class FOLPSTracerSpectrum3Poles(Calculator):
                 Parameter('b2p', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_2'"),
                 Parameter('bsp', value=0., prior=dict(dist='norm', loc=0., scale=20.),
                           ref=dict(dist='norm', loc=0., scale=1.), latex=r"b_s'"),
-                Parameter('c1p', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"c_1'"),
+                Parameter('c1p', value=0., prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"c_1'"),
                 Parameter('c2p', value=0., fixed=True, prior=dict(dist='norm', loc=0., scale=20.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"c_2'"),
                 Parameter('sn0p', value=0., prior=dict(dist='norm', loc=0., scale=2.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{n,0}'"),
                 Parameter('snb0p', value=0., prior=dict(dist='norm', loc=0., scale=1.), ref=dict(dist='norm', loc=0., scale=1.), latex=r"s_{nb,0}'"),
@@ -2316,6 +2316,312 @@ class FOLPSTracerSpectrum3Poles(Calculator):
         obj.k = aux['k']
         obj.ells = aux['ells']
         return obj
+
+
+class FKPTJAXPTSpectrum2Poles(Calculator):
+    r"""
+    FKPT (beyond-EdS PT with optional modified-gravity kernels) matter power spectrum multipoles.
+
+    Wraps ``fkptjax.kfuncs_to_tables.Kfuncs_to_tables`` to build FOLPS-format loop tables, then
+    reuses the FOLPS RSD machinery via ``fkptjax.pipelines.poles_from_tables`` to project to
+    multipoles. Modeled on :class:`FOLPSPTSpectrum2Poles`, and deliberately exposes the same
+    output attributes (``sigma8``, ``fsigma8``, ``sigma8_fid``, ``qpar``, ``qper``, ``f0``) and
+    the same ``combine_bias_terms_spectrum2_poles(pars, bias_scheme, damping)`` /
+    ``combine_bias_terms_spectrum3_poles(pars, k1k2, multipoles, **kwargs)`` signatures, so this
+    calculator is a drop-in ``pt=`` dependency for :class:`FOLPSTracerSpectrum2Poles` and
+    :class:`FOLPSTracerSpectrum3Poles` — no separate FKPT-specific tracer class is needed; the
+    bias parametrization (and ``prior_basis`` options) are exactly FOLPS's own.
+
+    This always evaluates FKPT kernels live from ``template`` (no MG emulator/rescaling branch
+    such as ``MgEmulatorCosmology``/``fkpt_pkemu_*`` in the original fkptjax_muMG branch).
+
+    Parameters
+    ----------
+    k : array, default=None
+    template : DirectSpectrum2Template, default=None
+    ells : tuple of int, default=(0, 2, 4)
+    mu : int, default=6
+    model : str, default='HDKI'
+        One of 'LCDM'/'GR', 'HS', 'NDGP', 'HDKI', 'PHENOM'.
+    mg_variant : str, default='mu_OmDE'
+        For model='HDKI': 'mu_OmDE' or 'BZ'. For model='PHENOM': 'binning' (the only
+        supported variant; binned mu/Sigma parameterization).
+    beyond_eds : bool, default=True
+    use_numba : bool, default=False
+        Opt-in numba fast path for the PHENOM/binning MG ODE right-hand side. Only used by
+        the eager (non-jittable) path; ignored for model='PHENOM' (which always uses the
+        jax/diffrax ODE, see Notes).
+    z_div, z_TGR, z_tw, scale_bins, k_TGR, k_c, k_S, k_tw :
+        Binning constants for model='PHENOM', mg_variant='binning'. Fixed configuration
+        (not sampled); defaults match the original fkptjax_muMG desilike wrapper.
+    mg_params_override : dict, default=None
+        Explicit MG parameter overrides, applied on top of the resolved per-model parameters.
+
+    Notes
+    -----
+    ``fkptjax.kfuncs_to_tables.Kfuncs_to_tables`` (the eager table builder, used by 'LCDM'/'GR',
+    'HS', 'NDGP', 'HDKI') concretizes its MG/cosmology parameters internally to drive a
+    scipy-based ODE solve, so this calculator is **not** analytically differentiable/jittable
+    with respect to those parameters for those models (this is the original fkptjax_muMG
+    branch's "Wall 2"). ``_is_external = True`` makes desilike wrap it via ``pure_callback`` +
+    finite-difference gradients in that case.
+
+    For model='PHENOM', mg_variant='binning', ``fkptjax`` instead provides
+    ``Kfuncs_to_tables_jax``, a diffrax-based ODE solve that keeps ``mu1..mu4`` and the
+    cosmology traced — genuinely jit/vmap/grad-able. This is independent of the trained MG
+    emulator (``MgEmulatorCosmology``, out of scope here): the emulator predicts ``plin``/``pnw``
+    fast without ISiTGR, whereas ``Kfuncs_to_tables_jax`` is an alternative *live* ODE solver
+    for this one variant. ``_is_external`` is therefore set to ``False`` only in this case.
+    """
+
+    def __init__(self, k=None, template=None, ells=(0, 2, 4), mu=6,
+                 model='HDKI', mg_variant='mu_OmDE', beyond_eds=True,
+                 use_numba=False, z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
+                 k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
+                 mg_params_override=None, **kwargs):
+        # Nodes (Calculator deps, Parameters) and their update() live in __init__.
+        if k is None:
+            k = np.linspace(0.01, 0.2, 101)
+        self.k = np.asarray(k, dtype='f8')
+        self.ells = tuple(ells)
+        if template is None:
+            template = DirectSpectrum2Template()
+        self.template = template
+        self.template.update(with_now='peakaverage')
+
+        self.mu0 = Parameter('mu0', value=0., fixed=False,
+                              prior=dict(dist='uniform', limits=[-3., 1.]),
+                              ref=dict(dist='norm', loc=0., scale=0.05), latex=r'\mu_0')
+        self.beta_1 = Parameter('beta_1', value=1., fixed=True, latex=r'\beta_1')
+        self.lambda_1 = Parameter('lambda_1', value=0., fixed=True, latex=r'\lambda_1')
+        self.exp_s = Parameter('exp_s', value=0., fixed=True, latex='s')
+        self.fR0_HS = Parameter('fR0_HS', value=1e-15, fixed=True, latex=r'f_{R_0}')
+        self.r_c = Parameter('r_c', value=1.e30, fixed=True, latex='r_c')
+        # Binned mu/Sigma modified-gravity parameters (model='PHENOM', mg_variant='binning').
+        # Fixed at the GR limit (1.) by default; fixed=False sampling is opt-in.
+        self.mu1 = Parameter('mu1', value=1., fixed=True, latex=r'\mu_1')
+        self.mu2 = Parameter('mu2', value=1., fixed=True, latex=r'\mu_2')
+        self.mu3 = Parameter('mu3', value=1., fixed=True, latex=r'\mu_3')
+        self.mu4 = Parameter('mu4', value=1., fixed=True, latex=r'\mu_4')
+
+    def __post_init__(self, k=None, template=None, ells=(0, 2, 4), mu=6,
+                      model='HDKI', mg_variant='mu_OmDE', beyond_eds=True,
+                      use_numba=False, z_div=1., z_TGR=2., z_tw=0.05, scale_bins=True,
+                      k_TGR=0.01, k_c=0.1, k_S=0.2, k_tw=0.001,
+                      mg_params_override=None, **kwargs):
+        # Non-node setup only.
+        os.environ.setdefault('FOLPS_BACKEND', 'jax')
+        self._model = str(model)
+        self._mg_variant = str(mg_variant) if mg_variant is not None else None
+        self._beyond_eds = bool(beyond_eds)
+        self._use_numba = bool(use_numba)
+        self._binning_kwargs = dict(z_div=float(z_div), z_TGR=float(z_TGR), z_tw=float(z_tw),
+                                     scale_bins=bool(scale_bins), k_TGR=float(k_TGR), k_c=float(k_c),
+                                     k_S=float(k_S), k_tw=float(k_tw))
+        self._mg_params_override = dict(mg_params_override or {})
+        self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
+        self._fkpt_kmin = float(min(1e-3, float(np.min(self.k))))
+        self._fkpt_kmax = float(max(1.0, float(np.max(self.k))))
+        self._fkpt_Nk_kernel = int(min(len(self.k), 120))
+
+        self._is_binning = (self._model.upper() == 'PHENOM' and (self._mg_variant or '').upper() == 'BINNING')
+        # Only the live ODE solve for 'PHENOM'/'binning' is genuinely jax-traceable
+        # (fkptjax.kfuncs_to_tables.Kfuncs_to_tables_jax); other models/variants go through
+        # the eager, non-traceable Kfuncs_to_tables and must be wrapped via pure_callback.
+        self._is_external = not self._is_binning
+        if self._is_binning:
+            from fkptjax.kfuncs_to_tables import build_jax_static_ctx
+            self._jax_static_ctx = build_jax_static_ctx(
+                self.template.k, kmin=self._fkpt_kmin, kmax=self._fkpt_kmax,
+                Nk_kernel=self._fkpt_Nk_kernel, nquadSteps=300, NQ=10, NR=10)
+
+    def _mg_kwargs(self):
+        """FKPT MG keyword arguments relevant to the chosen model/variant.
+
+        Reads MG parameter values from ``self.<name>.value`` (set by the pipeline before
+        ``__call__``), resolves which ones the chosen model/variant actually consumes, and
+        applies ``mg_params_override`` on top.
+        """
+        model_u = self._model.upper()
+        variant_u = (self._mg_variant or '').upper()
+        if model_u == 'HS':
+            out = dict(fR0_HS=self.fR0_HS.value)
+        elif model_u == 'NDGP':
+            out = dict(r_c=self.r_c.value)
+        elif model_u in ('LCDM', 'GR'):
+            out = {}
+        elif model_u == 'HDKI':
+            if variant_u in ('MU_OMDE', 'MUOMDE'):
+                out = dict(mu0=self.mu0.value)
+            elif variant_u == 'BZ':
+                out = dict(beta_1=self.beta_1.value, lambda_1=self.lambda_1.value, exp_s=self.exp_s.value)
+            else:
+                raise ValueError(f"Unknown mg_variant={self._mg_variant!r} for model='HDKI'. Expected 'mu_OmDE' or 'BZ'.")
+        elif model_u == 'PHENOM':
+            if variant_u != 'BINNING':
+                raise ValueError(f"Unknown mg_variant={self._mg_variant!r} for model='PHENOM'. Expected 'binning'.")
+            out = dict(mu1=self.mu1.value, mu2=self.mu2.value, mu3=self.mu3.value, mu4=self.mu4.value)
+        else:
+            raise ValueError(f"Unknown or unsupported model={self._model!r}. Expected 'LCDM'/'GR', 'HS', 'NDGP', 'HDKI', or 'PHENOM'.")
+        out.update(self._mg_params_override)
+        return out
+
+    def __call__(self):
+        from fkptjax.pipelines import make_table_state
+
+        qpar = self.template.qpar
+        qper = self.template.qper
+        jac, kap, muap = self.template.ap_k_mu(self.k[:, None], self._to_poles.mu)
+
+        Om = self.template.cosmo['Omega_m']
+        if self._is_binning:
+            from fkptjax.kfuncs_to_tables import Kfuncs_to_tables_jax
+            table_w, table_now, kernel_constants = Kfuncs_to_tables_jax(
+                k=self.template.k, pk=self.template.pk_dd, pk_now=self.template.pknow_dd,
+                z=float(self.template.z), Om=Om,
+                kmin=self._fkpt_kmin, kmax=self._fkpt_kmax, Nk_kernel=self._fkpt_Nk_kernel,
+                nquadSteps=300, NQ=10, NR=10, xnow=-3.912023, f0_kmax=1e-3,
+                beyond_eds=self._beyond_eds, return_kernel_constants=True,
+                static_ctx=self._jax_static_ctx,
+                **self._binning_kwargs, **self._mg_kwargs(),
+            )
+        else:
+            from fkptjax.kfuncs_to_tables import Kfuncs_to_tables
+            table_w, table_now, kernel_constants = Kfuncs_to_tables(
+                k=self.template.k, pk=self.template.pk_dd, pk_now=self.template.pknow_dd,
+                z=float(self.template.z), Om=Om,
+                kmin=self._fkpt_kmin, kmax=self._fkpt_kmax, Nk_kernel=self._fkpt_Nk_kernel,
+                nquadSteps=300, NQ=10, NR=10,
+                xnow=-3.912023, ode_method='RKQS', f0_kmax=1e-3,
+                beyond_eds=self._beyond_eds, model=self._model, mg_variant=self._mg_variant,
+                use_numba=self._use_numba, return_kernel_constants=True,
+                **self._mg_kwargs(),
+            )
+        self._table_w = table_w
+        self._table_now = table_now
+        self._kernel_constants = kernel_constants
+        self._table_state = make_table_state(table_w, table_now, kernel_constants=kernel_constants)
+
+        self.jac = jac
+        self.kap = kap
+        self.muap = muap
+        self.qpar = qpar
+        self.qper = qper
+        self.sigma8 = self.template.sigma8
+        self.fsigma8 = self.template.fsigma8
+        self.sigma8_fid = self.template.sigma8_fid
+        self.f0 = self._table_state.f0
+        self.fk = self._table_state.fk
+
+    def combine_bias_terms_spectrum2_poles(self, pars, bias_scheme, damping):
+        """Evaluate power-spectrum multipoles for the FOLPS-ordered bias vector *pars*.
+
+        Matches :meth:`FOLPSPTSpectrum2Poles.combine_bias_terms_spectrum2_poles`'s signature
+        exactly, so a :class:`FOLPSTracerSpectrum2Poles` can take this calculator as its ``pt``
+        directly (same bias parametrization, same 12-element ordering, ``IR_resummation=True``
+        hardcoded as in FOLPS). Reads only from attributes set by ``__call__`` (or
+        ``tree_unflatten`` when emulated).
+        """
+        from fkptjax.pipelines import poles_from_tables
+
+        return poles_from_tables(
+            self._table_state, jac=self.jac, kap=self.kap, muap=self.muap,
+            pars=jnp.asarray(pars), mu=self._to_poles.mu, wmu=self._to_poles.wmu, ells=self.ells,
+            bias_scheme=bias_scheme, IR_resummation=True, damping=damping,
+            to_poles=self._to_poles,
+        )
+
+    def combine_bias_terms_spectrum3_poles(self, pars, k1k2, multipoles, **kwargs):
+        """Evaluate bispectrum multipoles for *pars* (FKPT bias vector, Sugiyama_Bell basis).
+
+        Reads only from attributes set by ``__call__`` (or ``tree_unflatten`` when emulated).
+        Includes ``calA``/``calAp`` (beyond-EdS kernel constants) in ``k_pkl_pklnw_fk``, unlike
+        the FOLPS analogue, since they matter when ``beyond_eds=True``.
+        """
+        calA, calAp = self._kernel_constants[0], self._kernel_constants[1]
+        calA_arr = jnp.ones_like(self._table_w[0]) * calA
+        calAp_arr = jnp.ones_like(self._table_w[0]) * calAp
+        k_pkl_pklnw_fk = jnp.array([
+            self._table_w[0], self._table_w[1], self._table_now[1], self._table_w[2] * self.f0,
+            calA_arr, calAp_arr,
+        ])
+        return _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk, self.f0, self.qpar, self.qper,
+                                         multipoles=multipoles, **kwargs)
+
+    def tree_flatten(self):
+        kernel_constants = self._kernel_constants
+        children = ([self.jac, self.kap, self.muap, self.qpar, self.qper, self.sigma8, self.fsigma8, self.sigma8_fid]
+                    + list(self._table_w) + list(self._table_now) + list(kernel_constants or ()))
+        aux = {'k': self.k, 'ells': self.ells, 'mu': self._to_poles.mu, 'wmu': self._to_poles.wmu,
+               'n_table_w': len(self._table_w), 'n_table_now': len(self._table_now),
+               'has_kernel_constants': kernel_constants is not None}
+        return children, aux
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        from fkptjax.pipelines import make_table_state
+
+        obj = object.__new__(cls)
+        it = iter(children)
+        obj.jac = next(it)
+        obj.kap = next(it)
+        obj.muap = next(it)
+        obj.qpar = next(it)
+        obj.qper = next(it)
+        obj.sigma8 = next(it)
+        obj.fsigma8 = next(it)
+        obj.sigma8_fid = next(it)
+        obj._table_w = tuple(next(it) for _ in range(aux['n_table_w']))
+        obj._table_now = tuple(next(it) for _ in range(aux['n_table_now']))
+        obj._kernel_constants = tuple(next(it) for _ in range(4)) if aux['has_kernel_constants'] else None
+        obj._table_state = make_table_state(obj._table_w, obj._table_now, kernel_constants=obj._kernel_constants)
+        obj.k = aux['k']
+        obj.ells = aux['ells']
+        obj.f0 = obj._table_state.f0
+        obj.fk = obj._table_state.fk
+        obj._to_poles = ProjectToPoles.__new__(ProjectToPoles)
+        obj._to_poles.mu = aux['mu']
+        obj._to_poles.wmu = aux['wmu']
+        obj._to_poles.ells = aux['ells']
+        return obj
+
+
+class FKPTJAXTracerSpectrum2Poles(FOLPSTracerSpectrum2Poles):
+    r"""
+    :class:`FOLPSTracerSpectrum2Poles` with :class:`FKPTJAXPTSpectrum2Poles` as the default
+    ``pt`` dependency (FKPT kernels instead of FOLPS), keeping FOLPS's bias parametrization and
+    ``prior_basis`` options unchanged. Equivalent to
+    ``FOLPSTracerSpectrum2Poles(pt=FKPTJAXPTSpectrum2Poles(**kwargs), ...)``; ``**kwargs`` not
+    consumed by this class's own signature (e.g. ``model``, ``mg_variant``, ``beyond_eds``) are
+    forwarded to :class:`FKPTJAXPTSpectrum2Poles` when ``pt`` is not given explicitly.
+    """
+
+    def __init__(self, k=None, pt=None, ells=(0, 2, 4), template=None, prior_basis='physical_aap',
+                 fsat=None, sigv=None, nbar=1e-4, mu=6, damping='lor',
+                 tracers=None, params=None, **kwargs):
+        if pt is None:
+            pt = FKPTJAXPTSpectrum2Poles(**kwargs)
+            kwargs = {}
+        super().__init__(k=k, pt=pt, ells=ells, template=template, prior_basis=prior_basis,
+                         fsat=fsat, sigv=sigv, nbar=nbar, mu=mu, damping=damping,
+                         tracers=tracers, params=params, **kwargs)
+
+
+class FKPTJAXTracerSpectrum3Poles(FOLPSTracerSpectrum3Poles):
+    r"""
+    :class:`FOLPSTracerSpectrum3Poles` with :class:`FKPTJAXPTSpectrum2Poles` as the default
+    ``pt`` dependency, keeping FOLPS's bias parametrization and ``prior_basis`` options
+    unchanged. ``**kwargs`` not consumed by this class's own signature are forwarded to
+    :class:`FKPTJAXPTSpectrum2Poles` when ``pt`` is not given explicitly.
+    """
+
+    def __init__(self, k=None, pt=None, ells=((0, 0, 0), (2, 0, 2)), template=None,
+                 prior_basis='physical_aap', tracers=None, params=None, **kwargs):
+        if pt is None:
+            pt = FKPTJAXPTSpectrum2Poles(**kwargs)
+            kwargs = {}
+        super().__init__(k=k, pt=pt, ells=ells, template=template, prior_basis=prior_basis,
+                         tracers=tracers, params=params, **kwargs)
 
 
 class JAXEffortTracerSpectrum2Poles(Calculator):

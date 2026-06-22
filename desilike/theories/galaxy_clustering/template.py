@@ -6,6 +6,9 @@ Classes
 BAOSpectrum2Template
     Fiducial-cosmology BAO template: power spectra and AP distances computed once from
     cosmoprimo at compile time; scaled at evaluation time by free AP and growth-rate params.
+FixedSpectrum2Template
+    Fixed template: power spectrum and growth rate pinned to a fiducial cosmology, with
+    no free parameters at all (no AP distortion, no growth-rate rescaling).
 ShapeFitSpectrum2Template
     BAO template with ShapeFit tilt parameterisation (dm, dn).
 DirectSpectrum2Template
@@ -242,6 +245,122 @@ class BAOSpectrum2Template(Spectrum2Template):
         self.DH_over_rd = qpar * self._DH_over_rd_fid
         self.DM_over_rd = qper * self._DM_over_rd_fid
         self.DV_over_rd = qpar ** self._eta * qper ** (1. - self._eta) * self._DV_over_rd_fid
+        self.sigma8_fid = jnp.asarray(self._sigma8_fid)
+
+        return self.pk_dd
+
+    def tree_flatten(self):
+        return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk, self.sigma8_fid], {'k': self.k})
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        obj = object.__new__(cls)
+        obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.sigma8_fid = children
+        obj.k = aux['k']
+        return obj
+
+
+# ── Fixed template ────────────────────────────────────────────────────────────
+
+class FixedSpectrum2Template(Spectrum2Template):
+    r"""
+    Fixed power spectrum template.
+
+    Power spectrum and growth rate are pinned to a fixed fiducial cosmology, with
+    no free parameters at all: no Alcock-Paczynski distortion (``qpar = qper = 1``)
+    and no growth-rate rescaling. Useful e.g. for forecasts/validation against a
+    fiducial cosmology, or as a placeholder template when AP/growth-rate freedom is
+    not wanted.
+
+    Parameters
+    ----------
+    k : array, default=None
+        Wavenumbers [h/Mpc]. Defaults to np.logspace(-3, 1, 400).
+    z : float, default=1.
+        Effective redshift.
+    fiducial : str, tuple, dict, or cosmoprimo.Cosmology, default='DESI'
+        Fiducial cosmology. A string is looked up as ``cosmoprimo.fiducial.<name>()``.
+    with_now : str or False, default='peakaverage'
+        Engine for the BAO-filtered smooth power spectrum ('peakaverage', 'wallish2018').
+        Set to False to skip (pknow_dd is set equal to pk_dd).
+    only_now : bool, default=False
+        Replace pk_dd with pknow_dd so wiggles are absent from the model.
+
+    Attributes set by ``__call__``
+    --------------------------------
+    pk_dd, pknow_dd : ndarray, shape (n_k,)
+        Full and smooth (no-wiggle) power spectra at ``self.k``, fixed to the fiducial cosmology.
+    f, f0, fk : float or ndarray
+        Growth rate, fixed to the fiducial cosmology.
+    qpar, qper : float
+        Always 1 (no AP distortion).
+    """
+
+    @classmethod
+    def install(cls, installer):
+        installer.pip('git+https://github.com/cosmodesi/cosmoprimo')
+
+    @classmethod
+    def propose_params(cls):
+        """No free parameters at all."""
+        return VariableCollection()
+
+    def __init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage', only_now=False):
+        pass  # no Parameters/Calculator deps: this template has no free parameters
+
+    def __post_init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage', only_now=False):
+        from cosmoprimo import PowerSpectrumBAOFilter
+
+        self._only_now = bool(only_now)
+
+        if k is None:
+            k = np.logspace(-3., 1., 400)
+        self.k = np.asarray(k, dtype='f8')
+        self.z = float(z)
+
+        self._fiducial = _get_fiducial(fiducial)
+
+        fo = self._fiducial.get_fourier()
+        sigma8 = fo.sigma8_z(z, of='delta_cb')
+        fsigma8 = fo.sigma8_z(z, of='theta_cb')
+        self._sigma8_fid = float(sigma8)
+        self._f_fid = float(fsigma8 / sigma8)
+
+        pk_interp = fo.pk_interpolator(of='delta_cb', **_kw_pk).to_1d(z=z)
+        ptt_interp = fo.pk_interpolator(of='theta_cb', **_kw_pk).to_1d(z=z)
+
+        k0 = 1e-3  # low-k limit for f0
+        self._f0_fid = float(np.sqrt(ptt_interp(k0) / pk_interp(k0)))
+        self._fk_fid = np.sqrt(ptt_interp(self.k) / pk_interp(self.k))
+        self._pk_dd_fid = pk_interp(self.k)
+
+        if with_now:
+            bao_filter = PowerSpectrumBAOFilter(pk_interp, engine=with_now, cosmo=self._fiducial, cosmo_fid=self._fiducial)
+            self._pknow_dd_fid = bao_filter.smooth_pk_interpolator()(self.k)
+        else:
+            self._pknow_dd_fid = self._pk_dd_fid
+
+    @property
+    def qpar(self):
+        return 1.
+
+    @property
+    def qper(self):
+        return 1.
+
+    def ap_k_mu(self, k, mu):
+        """No AP distortion: identity transform (jac=1, k and mu unchanged)."""
+        return _ap_k_mu(k, mu, self.qpar, self.qper)
+
+    def __call__(self):
+        self.pk_dd = self._pk_dd_fid
+        self.pknow_dd = self._pknow_dd_fid
+        if self._only_now:
+            self.pk_dd = self._pknow_dd_fid
+
+        self.f = self._f_fid
+        self.f0 = self._f0_fid
+        self.fk = self._fk_fid
         self.sigma8_fid = jnp.asarray(self._sigma8_fid)
 
         return self.pk_dd

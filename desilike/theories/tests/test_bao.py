@@ -103,6 +103,55 @@ class TestBAOSpectrum2Template:
         assert np.allclose(tmpl.pk_dd, tmpl.pknow_dd)
 
 
+# ── FixedSpectrum2Template ───────────────────────────────────────────────────
+
+class TestFixedSpectrum2Template:
+
+    def test_basic(self):
+        """No free parameters; pk_dd/pknow_dd shapes and positivity; qpar=qper=1."""
+        from desilike.theories.galaxy_clustering import FixedSpectrum2Template
+        from desilike.base import compile, params
+
+        fiducial = _make_fiducial()
+        k = np.linspace(0.01, 0.3, 50)
+        tmpl = FixedSpectrum2Template(k=k, z=1., fiducial=fiducial)
+
+        assert len(params(tmpl)) == 0
+
+        pipe = compile(tmpl)
+        pipe({})
+        assert tmpl.pk_dd.shape == (50,)
+        assert tmpl.pknow_dd.shape == (50,)
+        assert np.all(tmpl.pk_dd > 0) and np.all(tmpl.pknow_dd > 0)
+        assert tmpl.qpar == 1. and tmpl.qper == 1.
+
+        jac, kap, muap = tmpl.ap_k_mu(k, 0.5)
+        assert np.allclose(jac, 1.) and np.allclose(kap, k) and np.allclose(muap, 0.5)
+
+    def test_only_now(self):
+        """only_now replaces pk_dd with pknow_dd."""
+        from desilike.theories.galaxy_clustering import FixedSpectrum2Template
+        from desilike.base import compile
+
+        fiducial = _make_fiducial()
+        tmpl = FixedSpectrum2Template(fiducial=fiducial, only_now=True)
+        pipe = compile(tmpl)
+        pipe({})
+        assert np.allclose(tmpl.pk_dd, tmpl.pknow_dd)
+
+    def test_downstream_theory(self):
+        """Plugs into a downstream Spectrum2Poles theory like any other template."""
+        from desilike.theories.galaxy_clustering import FixedSpectrum2Template, DampedBAOWigglesPTSpectrum2Poles
+        from desilike.base import compile, params
+
+        fiducial = _make_fiducial()
+        k = np.linspace(0.01, 0.3, 50)
+        theory = DampedBAOWigglesPTSpectrum2Poles(k=k, template=FixedSpectrum2Template(fiducial=fiducial), ells=(0, 2))
+        pipe = compile(theory)
+        result = pipe({par.name: par._value for par in params(theory)})
+        _check(np.asarray(result), 'FixedSpectrum2Template downstream')
+
+
 # ── DampedBAOWigglesPoles ─────────────────────────────────────────────────────
 
 class TestDampedBAOWigglesPoles:

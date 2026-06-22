@@ -26,6 +26,30 @@ BAOPhaseShiftExtractor
     BAO extractor extended with the neutrino-driven BAO phase shift (N_eff, baoshift).
 TurnOverExtractor
     Extracts turn-over observables (kTO, DV*kTO, DH/DM, qto, qap) from a cosmology.
+
+Spectrum2Template contract
+---------------------------
+PT calculators (FOLPS, fkptjax, REPT Velocileptors, Kaiser, TNS, etc.) read template
+outputs directly off ``self.template``, not through a shared base-class accessor, so
+every concrete ``Spectrum2Template`` subclass must set the following attributes by the
+time ``__call__`` returns (and include them in ``tree_flatten``/``tree_unflatten``):
+
+    k, z            : output k-grid [h/Mpc] and effective redshift (set in __post_init__,
+                      not __call__ -- they are fixed at compile time). By existing
+                      convention ``k`` (but not ``z``) is included in ``tree_flatten``'s
+                      aux dict, so it survives a tree_flatten/tree_unflatten round trip.
+    pk_dd, pknow_dd : full and no-wiggle linear power spectra on `k`.
+    f, f0, fk       : growth rate (sigma8-based, scale-independent), its low-k limit, and
+                      its k-dependent value (from the power-spectrum ratio P_theta/P_delta).
+    qpar, qper      : Alcock-Paczynski distortion ratios (line-of-sight, transverse).
+    sigma8, fsigma8, sigma8_fid :
+                      sigma8(z) and fsigma8(z) for the current parameters, and the
+                      *fiducial* sigma8(z). Some PT classes use sigma8_fid for amplitude
+                      rescaling, e.g. A = sigma8 / sigma8_fid in FOLPSTracerSpectrum2Poles.
+                      If a template has no amplitude-rescaling parameter, sigma8 simply
+                      equals sigma8_fid and fsigma8 = f * sigma8.
+    ap_k_mu(k, mu)  : method returning (jac, kap, muap) for AP-distorting a (k, mu) grid.
+
 """
 
 import numpy as np
@@ -128,6 +152,11 @@ class BAOSpectrum2Template(Spectrum2Template):
         Full and smooth (no-wiggle) power spectra at ``self.k``.
     f, f0, fk : float or ndarray
         Growth rate f = d ln D / d ln a;  f0 is the k->0 limit, fk is k-dependent.
+    qpar, qper : float
+        AP distortion ratios, derived from the sampled apmode parameters.
+    sigma8, fsigma8, sigma8_fid : float
+        Fixed at the fiducial value (no amplitude-rescaling parameter); fsigma8 tracks
+        the df-scaled growth rate.
     DH_over_rd, DM_over_rd, DV_over_rd : float
         BAO distance ratios scaled by the AP parameters.
     """
@@ -162,6 +191,11 @@ class BAOSpectrum2Template(Spectrum2Template):
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, None)
+        # self.params keeps the apmode Parameters reachable by name, independent of the
+        # public self.qpar/self.qper attribute, which __call__ reassigns to the derived
+        # plain output value (see the module docstring contract). _qpar_qper() reads from
+        # self.params rather than self.qpar/self.qper so it survives that reassignment.
+        self.params = vc
 
     def __post_init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage',
                       only_now=False, apmode='qparqper', eta=1. / 3., params=None):
@@ -211,15 +245,15 @@ class BAOSpectrum2Template(Spectrum2Template):
     def _qpar_qper(self):
         """Convert current apmode parameter values to (qpar, qper)."""
         if self._apmode == 'qparqper':
-            return self.qpar.value, self.qper.value
+            return self.params['qpar'].value, self.params['qper'].value
         if self._apmode == 'qiso':
-            q = self.qiso.value
+            q = self.params['qiso'].value
             return q, q
         if self._apmode == 'qap':
-            qap = self.qap.value
+            qap = self.params['qap'].value
             return qap ** (1. - self._eta), qap ** (-self._eta)
         # qisoqap
-        qiso, qap = self.qiso.value, self.qap.value
+        qiso, qap = self.params['qiso'].value, self.params['qap'].value
         return qiso * qap ** (1. - self._eta), qiso * qap ** (-self._eta)
 
     def ap_k_mu(self, k, mu):
@@ -240,22 +274,31 @@ class BAOSpectrum2Template(Spectrum2Template):
         self.f0 = self._f0_fid * df
         self.fk = self._fk_fid * df
 
-        # BAO distances scaled by AP parameters.
+        # AP parameters and BAO distances, both derived from the sampled apmode params.
         qpar, qper = self._qpar_qper()
+        self.qpar = qpar
+        self.qper = qper
         self.DH_over_rd = qpar * self._DH_over_rd_fid
         self.DM_over_rd = qper * self._DM_over_rd_fid
         self.DV_over_rd = qpar ** self._eta * qper ** (1. - self._eta) * self._DV_over_rd_fid
+
+        # No amplitude-rescaling parameter: sigma8 stays at its fiducial value;
+        # fsigma8 tracks the df-scaled growth rate.
+        self.sigma8 = jnp.asarray(self._sigma8_fid)
+        self.fsigma8 = self.f * self.sigma8
         self.sigma8_fid = jnp.asarray(self._sigma8_fid)
 
         return self.pk_dd
 
     def tree_flatten(self):
-        return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk, self.sigma8_fid], {'k': self.k})
+        return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk, self.qpar, self.qper,
+                 self.sigma8, self.fsigma8, self.sigma8_fid], {'k': self.k})
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.sigma8_fid = children
+        (obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.qpar, obj.qper,
+         obj.sigma8, obj.fsigma8, obj.sigma8_fid) = children
         obj.k = aux['k']
         return obj
 
@@ -294,6 +337,8 @@ class FixedSpectrum2Template(Spectrum2Template):
         Growth rate, fixed to the fiducial cosmology.
     qpar, qper : float
         Always 1 (no AP distortion).
+    sigma8, fsigma8, sigma8_fid : float
+        Fixed at the fiducial value (no amplitude-rescaling parameter); fsigma8 = f * sigma8.
     """
 
     @classmethod
@@ -340,14 +385,6 @@ class FixedSpectrum2Template(Spectrum2Template):
         else:
             self._pknow_dd_fid = self._pk_dd_fid
 
-    @property
-    def qpar(self):
-        return 1.
-
-    @property
-    def qper(self):
-        return 1.
-
     def ap_k_mu(self, k, mu):
         """No AP distortion: identity transform (jac=1, k and mu unchanged)."""
         return _ap_k_mu(k, mu, self.qpar, self.qper)
@@ -361,17 +398,24 @@ class FixedSpectrum2Template(Spectrum2Template):
         self.f = self._f_fid
         self.f0 = self._f0_fid
         self.fk = self._fk_fid
+        self.qpar = 1.
+        self.qper = 1.
+        # No amplitude-rescaling parameter: sigma8 stays at its fiducial value.
+        self.sigma8 = jnp.asarray(self._sigma8_fid)
+        self.fsigma8 = self.f * self.sigma8
         self.sigma8_fid = jnp.asarray(self._sigma8_fid)
 
         return self.pk_dd
 
     def tree_flatten(self):
-        return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk, self.sigma8_fid], {'k': self.k})
+        return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk, self.qpar, self.qper,
+                 self.sigma8, self.fsigma8, self.sigma8_fid], {'k': self.k})
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.sigma8_fid = children
+        (obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.qpar, obj.qper,
+         obj.sigma8, obj.fsigma8, obj.sigma8_fid) = children
         obj.k = aux['k']
         return obj
 
@@ -410,6 +454,11 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         Full and smooth (no-wiggle) power spectra.
     f, f0, fk : float or ndarray
         Growth rate.
+    qpar, qper : float
+        AP distortion ratios, derived from the sampled apmode parameters.
+    sigma8, fsigma8, sigma8_fid : float
+        sigma8 stays at its fiducial value (no amplitude-rescaling parameter); fsigma8
+        tracks the df-scaled growth rate.
     """
 
     @classmethod
@@ -445,6 +494,9 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, None)
+        # See BAOSpectrum2Template.__init__: _qpar_qper() reads from self.params rather
+        # than self.qpar/self.qper, since __call__ reassigns those to the derived output.
+        self.params = vc
 
     def __post_init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage',
                       only_now=False, apmode='qparqper', eta=1. / 3., kp=0.03, a=0.6, params=None):
@@ -487,14 +539,14 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
 
     def _qpar_qper(self):
         if self._apmode == 'qparqper':
-            return self.qpar.value, self.qper.value
+            return self.params['qpar'].value, self.params['qper'].value
         if self._apmode == 'qiso':
-            q = self.qiso.value
+            q = self.params['qiso'].value
             return q, q
         if self._apmode == 'qap':
-            qap = self.qap.value
+            qap = self.params['qap'].value
             return qap ** (1. - self._eta), qap ** (-self._eta)
-        qiso, qap = self.qiso.value, self.qap.value
+        qiso, qap = self.params['qiso'].value, self.params['qap'].value
         return qiso * qap ** (1. - self._eta), qiso * qap ** (-self._eta)
 
     def ap_k_mu(self, k, mu):
@@ -515,19 +567,23 @@ class ShapeFitSpectrum2Template(Spectrum2Template):
         self.f = self._f_fid * df
         self.f0 = self._f0_fid * df
         self.fk = self._fk_fid * df
+        qpar, qper = self._qpar_qper()
+        self.qpar = qpar
+        self.qper = qper
         self.sigma8 = jnp.asarray(self._sigma8_fid)
         self.fsigma8 = self._fsigma8_fid * df
         self.sigma8_fid = jnp.asarray(self._sigma8_fid)
         return self.pk_dd
 
     def tree_flatten(self):
-        return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk,
+        return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk, self.qpar, self.qper,
                  self.sigma8, self.fsigma8, self.sigma8_fid], {'k': self.k})
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.sigma8, obj.fsigma8, obj.sigma8_fid = children
+        (obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.qpar, obj.qper,
+         obj.sigma8, obj.fsigma8, obj.sigma8_fid) = children
         obj.k = aux['k']
         return obj
 
@@ -735,6 +791,9 @@ class BAOPhaseShiftSpectrum2Template(BAOSpectrum2Template):
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, None)
+        # See BAOSpectrum2Template.__init__: _qpar_qper() reads from self.params rather
+        # than self.qpar/self.qper, since __call__ reassigns those to the derived output.
+        self.params = vc
 
     def __post_init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage',
                       only_now=False, apmode='qparqper', eta=1. / 3.,
@@ -816,6 +875,11 @@ class TurnOverSpectrum2Template(Spectrum2Template):
     --------------------------------
     pk_dd, pknow_dd : ndarray
     f, f0, fk : float or ndarray
+    qpar, qper : float
+        AP distortion ratios, derived from the sampled apmode parameters.
+    sigma8, fsigma8, sigma8_fid : float
+        sigma8 stays at its fiducial value (no amplitude-rescaling parameter); fsigma8
+        tracks the df-scaled growth rate.
     DV_times_kTO, DH_over_DM : float
     """
 
@@ -847,6 +911,9 @@ class TurnOverSpectrum2Template(Spectrum2Template):
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, None)
+        # See BAOSpectrum2Template.__init__: _qpar_qper() reads from self.params rather
+        # than self.qpar/self.qper, since __call__ reassigns those to the derived output.
+        self.params = vc
 
     def __post_init__(self, k=None, z=1., fiducial='DESI', apmode='qap', eta=1. / 3., params=None):
         from cosmoprimo import constants
@@ -863,6 +930,7 @@ class TurnOverSpectrum2Template(Spectrum2Template):
         fo = self._fiducial.get_fourier()
         sigma8 = fo.sigma8_z(self.z, of='delta_cb')
         fsigma8 = fo.sigma8_z(self.z, of='theta_cb')
+        self._sigma8_fid = float(sigma8)
         self._f_fid = float(fsigma8 / sigma8)
 
         pk_interp = fo.pk_interpolator(of='delta_cb', **_kw_pk)
@@ -886,14 +954,14 @@ class TurnOverSpectrum2Template(Spectrum2Template):
 
     def _qpar_qper(self):
         if self._apmode == 'qparqper':
-            return self.qpar.value, self.qper.value
+            return self.params['qpar'].value, self.params['qper'].value
         if self._apmode == 'qiso':
-            q = self.qiso.value
+            q = self.params['qiso'].value
             return q, q
         if self._apmode == 'qap':
-            qap = self.qap.value
+            qap = self.params['qap'].value
             return qap ** (1. - self._eta), qap ** (-self._eta)
-        qiso, qap = self.qiso.value, self.qap.value
+        qiso, qap = self.params['qiso'].value, self.params['qap'].value
         return qiso * qap ** (1. - self._eta), qiso * qap ** (-self._eta)
 
     def ap_k_mu(self, k, mu):
@@ -916,18 +984,27 @@ class TurnOverSpectrum2Template(Spectrum2Template):
         self.f0 = self._f0_fid * df
         self.fk = self._fk_fid * df
         qpar, qper = self._qpar_qper()
+        self.qpar = qpar
+        self.qper = qper
         qiso = qpar ** self._eta * qper ** (1. - self._eta)
         self.DV_times_kTO = qiso * self._DV_times_kTO_fid
         self.DH_over_DM = (qpar / qper) * self._DH_over_DM_fid
+        # No amplitude-rescaling parameter: sigma8 stays at its fiducial value;
+        # fsigma8 tracks the df-scaled growth rate.
+        self.sigma8 = jnp.asarray(self._sigma8_fid)
+        self.fsigma8 = self.f * self.sigma8
+        self.sigma8_fid = jnp.asarray(self._sigma8_fid)
         return self.pk_dd
 
     def tree_flatten(self):
-        return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk], {'k': self.k})
+        return ([self.pk_dd, self.pknow_dd, self.f, self.f0, self.fk, self.qpar, self.qper,
+                 self.sigma8, self.fsigma8, self.sigma8_fid], {'k': self.k})
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk = children
+        (obj.pk_dd, obj.pknow_dd, obj.f, obj.f0, obj.fk, obj.qpar, obj.qper,
+         obj.sigma8, obj.fsigma8, obj.sigma8_fid) = children
         obj.k = aux['k']
         return obj
 

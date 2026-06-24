@@ -8,6 +8,15 @@ params:
       limits: [-10., 10.]
     delta: 1.
     latex: f_{\mathrm{NL}}^{\mathrm{loc}}
+  tnl_loc:
+    value: 0.
+    fixed: True
+    prior:
+      limits: [-1e6, 1e6]
+    ref:
+      limits: [-1000., 1000.]
+    delta: 100.
+    latex: \tau_{\mathrm{NL}}^{\mathrm{loc}}
   bphi:
     prior:
       limits: [-10, 10]

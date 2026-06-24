@@ -50,10 +50,14 @@ class PNGTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
     @classmethod
     def _params(cls, params, tracers=None, mode='b-p'):
         keep_params = ['b1', 'sigmas', 'sn0']
+        # tnl_loc (local tauNL) is fixed to 0 by default (see png.yaml), so
+        # fNL-only analyses are unaffected; free it for tauNL / joint fits.
+        # Only the 'b-p' / 'bphi' modes expose bphi, which the tauNL term
+        # needs; 'bfnl' mode is left as-is (fNL-only).
         if mode == 'bphi':
-            keep_params += ['fnl_loc', 'bphi']
+            keep_params += ['fnl_loc', 'tnl_loc', 'bphi']
         elif mode == 'b-p':
-            keep_params += ['fnl_loc', 'p']
+            keep_params += ['fnl_loc', 'tnl_loc', 'p']
         elif mode == 'bfnl':
             keep_params += ['bfnl_loc']
         else:
@@ -78,7 +82,7 @@ class PNGTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         self.decode_params = self._get_multitracer(tracers=tracers)
 
     def calculate(self, **params):
-        params = self.decode_params(params, defaults=dict(b1=1., sigmas=0., sn0=0., bphi=1., p=1., bfnl_loc=0.))
+        params = self.decode_params(params, defaults=dict(b1=1., sigmas=0., sn0=0., bphi=1., p=1., bfnl_loc=0., tnl_loc=0.))
         (b1X, b1Y), (sigmasX, sigmasY), sn0 = [params[name] for name in ['b1', 'sigmas', 'sn0']]
         self.z = self.template.z
         jac, kap, muap = self.template.ap_k_mu(self.k, self.mu)
@@ -100,6 +104,7 @@ class PNGTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         # Remove first k, used to normalize tk
         kin, pk_dd, alpha = kin[1:], pk_dd[1:], alpha[1:]
         alpha = interp1d(jnp.log10(kap), np.log10(kin), alpha)
+        bphiX = bphiY = None  # PNG bias bphi = 2 delta_c (b1 - p); None in 'bfnl' mode (not separable)
         if self.mode == 'bphi':
             fnl_loc = params['fnl_loc']
             bphiX, bphiY = params['bphi']
@@ -107,14 +112,47 @@ class PNGTracerPowerSpectrumMultipoles(BaseTracerPowerSpectrumMultipoles):
         elif self.mode == 'b-p':
             fnl_loc = params['fnl_loc']
             pX, pY = params['p']
-            bfnl_locX, bfnl_locY = [2. * 1.686 * (b1 - p) * fnl_loc for b1, p in [(b1X, pX), (b1Y, pY)]]
+            bphiX, bphiY = [2. * 1.686 * (b1 - p) for b1, p in [(b1X, pX), (b1Y, pY)]]
+            bfnl_locX, bfnl_locY = bphiX * fnl_loc, bphiY * fnl_loc
         else:
-            
+
             bfnl_locX, bfnl_locY = params['bfnl_loc']
         # bfnl_loc is typically 2 * delta_c * (b1 - p) * fnl_loc
         bX, bY = b1X + bfnl_locX * alpha, b1Y + bfnl_locY * alpha
         fog = 1. / ((1. + sigmasX**2 * kap**2 * muap**2 / 2.) * (1. + sigmasY**2 * kap**2 * muap**2 / 2.))
-        pkmu = jac * fog * (bX + f * muap**2) * (bY + f * muap**2) * interp1d(jnp.log10(kap), np.log10(kin), pk_dd) + sn0 / self.nbar
+        pk_obs = interp1d(jnp.log10(kap), np.log10(kin), pk_dd)
+        # Deterministic (Kaiser) term: fNL is a scale-dependent bias shift
+        # bX = b1 + bfnl_loc*alpha, sitting INSIDE (b + f mu^2) -> it IS
+        # boosted by f mu^2 and contributes to all multipoles.
+        pkmu = jac * fog * (bX + f * muap**2) * (bY + f * muap**2) * pk_obs + sn0 / self.nbar
+        # tauNL (local trispectrum): stochastic scale-dependent bias
+        # contribution (Ferraro & Smith 2014, eq. 8). Added as standalone
+        # power -- NOT inside the Kaiser (b + f mu^2) factor and NOT boosted
+        # by f mu^2 (isotropic -> monopole only), with a steeper k^-4 shape
+        # (alpha^2 vs alpha for fNL). Rank-one in tracer space (bphiX bphiY).
+        # tnl_loc is fixed to 0 by default (png.yaml) -> fNL-only analyses
+        # are bit-identical. Only available in 'b-p'/'bphi' modes, where
+        # bphi is defined.
+        # TODO(future): to constrain tauNL (or tnl*bphi^2) WITHOUT assuming
+        # bphi, add a 'btnl'-style mode fitting the bphi-folded combination
+        # directly (auto-spectrum only; cannot factorize the cross-spectra).
+        # CONVENTION (important for JOINT fnl+tnl fits): the Kaiser product
+        # (bX + f mu^2)(bY + f mu^2) above already contains the deterministic
+        # Delta_b^2 = fnl^2 bphiX bphiY alpha^2 term. The correct stochastic
+        # power is proportional to the Suyama-Yamaguchi EXCESS, tnl - (6/5 fnl)^2
+        # (no stochasticity when SY is saturated). Since we add (25/36) tnl_loc
+        # bphi^2 alpha^2 on TOP of the Kaiser Delta_b^2, this parameter is the
+        # SY-excess:   tnl_loc = tauNL - (6/5 fnl_loc)^2 = tauNL - (36/25) fnl^2.
+        #   * fnl-only (tnl_loc=0): unchanged, includes the standard Delta_b^2.
+        #   * tnl-only (fnl_loc=0): tnl_loc == tauNL exactly (our validation case).
+        #   * joint: report full tauNL = tnl_loc + (36/25) fnl_loc^2, OR make
+        #     tnl_loc the FULL tauNL by using coefficient ((25/36)*tnl_loc -
+        #     fnl_loc**2) below (this then drops Delta_b^2, i.e. changes the
+        #     fnl-only model -> breaks bit-compat, so left off by default).
+        # NB: the tnl_loc >= 0 positivity prior is then exactly the SY bound.
+        tnl_loc = params['tnl_loc']
+        if bphiX is not None:
+            pkmu = pkmu + jac * fog * (25. / 36.) * tnl_loc * bphiX * bphiY * alpha**2 * pk_obs
         self.power = self.to_poles(pkmu)
 
     def get(self):

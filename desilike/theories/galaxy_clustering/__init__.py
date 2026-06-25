@@ -13,5 +13,5 @@ from .full_shape import (KaiserPTSpectrum2Poles, KaiserTracerSpectrum2Poles, Kai
                          FOLPSPTSpectrum2Poles, FOLPSTracerSpectrum2Poles, FOLPSTracerCorrelation2Poles,
                          FOLPSTracerSpectrum3Poles,
                          FKPTJAXPTSpectrum2Poles, FKPTJAXTracerSpectrum2Poles, FKPTJAXTracerSpectrum3Poles,
-                         JAXEffortTracerSpectrum2Poles)
+                         JAXEffortTracerSpectrum2Poles, COMETPTSpectrum2Poles, COMETPTSpectrum3Poles, COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles)
 from .png import PNGTracerSpectrum2Poles, PNGTracerVelocitySpectrum2Poles

@@ -8,73 +8,353 @@ params:
     ref:
       limits: [1.5, 2.5]
     latex: b_{1}
-  bq1:
-    value: -1.6
+  b1p:
+    value: 1.0
     prior:
-      limits: [-4., 4.]
+      limits: [0.1, 4.]
     ref:
-      limits: [-1.8, -1.4]
-    latex: b_{q,1}
-  bq2:
-    value: -0.8
-    prior:
-      limits: [-4., 4.]
-    ref:
-      limits: [-1., -0.6]
-    latex: b_{q,2}
-  bq3:
+      dist: norm
+      loc: 1.0
+      scale: 0.1
+    latex: b_{1,p}
+  b2:
     value: 0.0
     prior:
-      limits: [-4., 4.]
+      limits: [-50., 50.]
     ref:
-      limits: [-0.2, 0.2]
-    latex: b_{q,3}
-  bq4:
-    value: 0.8
-    prior:
-      limits: [-4., 4.]
-    ref:
-      limits: [0.6, 1.]
-    latex: b_{q,4}
-  bq5:
-    value: 1.6
-    prior:
-      limits: [-4., 4.]
-    ref:
-      limits: [1.4, 1.8]
-    latex: b_{q,5}
-  beta1:
-    value: -0.8
-    prior:
-      limits: [-3., 3.]
-    ref:
-      limits: [-1., -0.6]
-    latex: \beta_{1}
-  beta2:
-    value: -0.4
-    prior:
-      limits: [-3., 3.]
-    ref:
-      limits: [-0.6, -0.2]
-    latex: \beta_{2}
-  beta3:
+      limits: [-1., 1.]
+    latex: b_{2}
+  b2p:
     value: 0.0
     prior:
-      limits: [-3., 3.]
+      dist: norm
+      loc: 0.
+      scale: 5.
     ref:
-      limits: [-0.2, 0.2]
-    latex: \beta_{3}
-  beta4:
-    value: 0.4
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: b_{2,p}
+  bs:
+    value: 0.0
     prior:
-      limits: [-3., 3.]
+      limits: [-50., 50.]
     ref:
-      limits: [0.2, 0.6]
-    latex: \beta_{4}
-  beta5:
-    value: 0.8
+      limits: [-1., 1.]
+    latex: b_s
+  bsp:
+    value: 0.0
     prior:
-      limits: [-3., 3.]
+      dist: norm
+      loc: 0.
+      scale: 5.
     ref:
-      limits: [0.6, 1.]
-    latex: \beta_{5}
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: b_{s,p}
+  b3:
+    value: 0.0
+    fixed: True
+    latex: b_3
+  b3p:
+    value: 0.0
+    fixed: True
+    latex: b_{3,p}
+  alpha0:
+    value: 0.0
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 12.5
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_0
+  alpha0p:
+    value: 0.0
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 12.5
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{0,p}
+  alpha2:
+    value: 0.0
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 12.5
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_2
+  alpha2p:
+    value: 0.0
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 12.5
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{2,p}
+  alpha4:
+    value: 0.0
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 12.5
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_4
+  alpha4p:
+    value: 0.0
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 12.5
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: \alpha_{4,p}
+  ct:
+    value: 0.0
+    fixed: True
+    latex: c_t
+  ctp:
+    value: 0.0
+    fixed: True
+    latex: c_{t,p}
+  X_FoG_p:
+    value: 0.0
+    prior:
+      limits: [0., 10.]
+    ref:
+      dist: norm
+      loc: 1.
+      scale: 0.5
+    latex: X_{\mathrm{FoG},p}
+  X_FoG_pp:
+    value: 0.0
+    prior:
+      limits: [0., 10.]
+    ref:
+      dist: norm
+      loc: 1.
+      scale: 0.5
+    latex: X_{\mathrm{FoG},pp}
+  c1q1: &c1q
+    value: 0.0
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 2.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.25
+    latex: c_{1,1}
+  c1q2:
+    <<: *c1q
+    latex: c_{1,2}
+  c1q4:
+    <<: *c1q
+    latex: c_{1,4}
+  c1q5:
+    <<: *c1q
+    latex: c_{1,5}
+  c2q1: &c2q
+    value: 0.0
+    fixed: True
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 5.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 0.5
+    latex: c_{2,1}
+  c2q2:
+    <<: *c2q
+    latex: c_{2,2}
+  c2q4:
+    <<: *c2q
+    latex: c_{2,4}
+  c2q5:
+    <<: *c2q
+    latex: c_{2,5}
+  c3q1: &c3q
+    value: 0.0
+    fixed: True
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 10.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: c_{3,1}
+  c3q2:
+    <<: *c3q
+    latex: c_{3,2}
+  c3q4:
+    <<: *c3q
+    latex: c_{3,4}
+  c3q5:
+    <<: *c3q
+    latex: c_{3,5}
+  e0q1: &e0q
+    value: 0.0
+    fixed: True
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 5.
+    latex: e_{0,1}
+  e0q2:
+    <<: *e0q
+    latex: e_{0,2}
+  e0q4:
+    <<: *e0q
+    latex: e_{0,4}
+  e0q5:
+    <<: *e0q
+    latex: e_{0,5}
+  e2q1: &e2q
+    value: 0.0
+    fixed: True
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 5.
+    latex: e_{2,1}
+  e2q2:
+    <<: *e2q
+    latex: e_{2,2}
+  e2q4:
+    <<: *e2q
+    latex: e_{2,4}
+  e2q5:
+    <<: *e2q
+    latex: e_{2,5}
+  e4q1: &e4q
+    value: 0.0
+    fixed: True
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 5.
+    latex: e_{4,1}
+  e4q2:
+    <<: *e4q
+    latex: e_{4,2}
+  e4q4:
+    <<: *e4q
+    latex: e_{4,4}
+  e4q5:
+    <<: *e4q
+    latex: e_{4,5}
+  s0qg1: &s0qg
+    value: 0.0
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 2.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: s^{qg}_{0,1}
+  s0qg2:
+    <<: *s0qg
+    latex: s^{qg}_{0,2}
+  s0qg4:
+    <<: *s0qg
+    latex: s^{qg}_{0,4}
+  s0qg5:
+    <<: *s0qg
+    latex: s^{qg}_{0,5}
+  s0muqg1: &s0muqg
+    value: 0.0
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 2.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 1.
+    latex: s^{qg}_{0\mu,1}
+  s0muqg2:
+    <<: *s0muqg
+    latex: s^{qg}_{0\mu,2}
+  s0muqg4:
+    <<: *s0muqg
+    latex: s^{qg}_{0\mu,4}
+  s0muqg5:
+    <<: *s0muqg
+    latex: s^{qg}_{0\mu,5}
+  s2qg1: &s2qg
+    value: 0.0
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 5.
+    latex: s^{qg}_{2,1}
+  s2qg2:
+    <<: *s2qg
+    latex: s^{qg}_{2,2}
+  s2qg4:
+    <<: *s2qg
+    latex: s^{qg}_{2,4}
+  s2qg5:
+    <<: *s2qg
+    latex: s^{qg}_{2,5}
+  s2muqg1: &s2muqg
+    value: 0.0
+    prior:
+      dist: norm
+      loc: 0.
+      scale: 50.
+    ref:
+      dist: norm
+      loc: 0.
+      scale: 5.
+    latex: s^{qg}_{2\mu,1}
+  s2muqg2:
+    <<: *s2muqg
+    latex: s^{qg}_{2\mu,2}
+  s2muqg4:
+    <<: *s2muqg
+    latex: s^{qg}_{2\mu,4}
+  s2muqg5:
+    <<: *s2muqg
+    latex: s^{qg}_{2\mu,5}

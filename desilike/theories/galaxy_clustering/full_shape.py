@@ -2828,6 +2828,65 @@ def _cosmo_to_comet(cosmo):
     return comet_cosmo
 
 
+def _comet_setup_cosmo(cosmo, fiducial):
+    """Create (if needed) and configure the CosmoprimoCosmology dep shared by
+    COMETPTSpectrum2Poles/3Poles, and by COMETTracerSpectrum2Poles/3Poles themselves
+    when pt=False (direct Pell()/Bell_Sugi() evaluation, no separate PT dependency)."""
+    if cosmo is None:
+        cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial=fiducial)
+    # 'params.<name>' is needed for 'A_s'/'m_ncdm_tot' (derived quantities, not raw
+    # free Parameters of CosmoprimoCosmology) to stay jit-safe -- see CosmoprimoCosmology's
+    # docstring / __getitem__. No background/fourier requirements: qpar/qper/sigma8
+    # come entirely from comet's own JAX-native background/growth code, not
+    # cosmoprimo's Boltzmann-code background/fourier sections.
+    cosmo.add_requirements({f'params.{name}': None for name in _CONVERSION_COMET.values()})
+    return cosmo
+
+
+def _comet_setup_fiducial(cosmo, z, model, fiducial, use_mpc=False):
+    """Shared cosmology-only __post_init__ setup (de_model detection, comet model
+    loading, AP-fiducial distances), used by COMETPTSpectrum2Poles/3Poles and by
+    direct-mode (pt=False) COMETTracerSpectrum2Poles/3Poles.
+    Returns (de_model, md, fid_comet, H_fid, Dm_fid)."""
+    fiducial = _get_fiducial(fiducial, cosmo)
+    params = get_params(cosmo)
+    w0_fixed, wa_fixed = params['w0_fld'].fixed, params['wa_fld'].fixed
+    if (w0_fixed, wa_fixed) == (True, True): de_model = 'lambda'
+    elif (w0_fixed, wa_fixed) == (False, True): de_model = 'w0'
+    else: de_model = 'w0wa'
+    import comet
+    from comet.model_io import load_model_h5
+    from comet.background import define_fiducial
+    md = load_model_h5(comet.model_path(model))
+    fid_comet = _cosmo_to_comet(fiducial) | dict(z=float(z))
+    a1 = lambda x: jnp.atleast_1d(jnp.asarray(x, dtype=jnp.float64))
+    H_fid, Dm_fid = define_fiducial(
+        a1(z), a1(fid_comet['wb']), a1(fid_comet['wc']), a1(fid_comet['ns']),
+        a1(fid_comet['Mnu']), a1(fid_comet['h']), use_mpc=use_mpc)
+    return de_model, md, fid_comet, H_fid, Dm_fid
+
+
+def _comet_compute_qpar_qper_sigma8(z, params, fid, de_model, H_fid, Dm_fid, use_mpc=False, q_tr_lo=None):
+    """Shared __call__ logic: AP params (compute_ap_params) + growth-based
+    amplitude-scaling proxy for sigma8(z) (compute_growth_amplitude), squeezed to
+    plain JAX scalars (shape ()) -- see COMETPTSpectrum2Poles.__call__'s longer
+    comment for why (desilike's own scalar parameter-value convention; comet's
+    functions need at-least-1d inputs, but jnp.squeeze keeps the outputs jax-traceable
+    under jit/grad, unlike float()). Returns (qpar, qper, sigma8, sigma8_fid)."""
+    from comet.background import compute_ap_params, compute_growth_amplitude
+    a1 = lambda x: jnp.atleast_1d(jnp.asarray(x, dtype=jnp.float64))
+    qpar, qper = compute_ap_params(
+        a1(z), a1(params['wb']), a1(params['wc']), a1(params['Mnu']), a1(params['h']),
+        a1(params['Ok']), a1(params['w0']), a1(params['wa']), de_model,
+        H_fid, Dm_fid, q_tr_lo=q_tr_lo, use_mpc=use_mpc)
+    sigma8 = compute_growth_amplitude(
+        a1(z), a1(params['wb']), a1(params['wc']), a1(params['Mnu']), a1(params['As']),
+        a1(params['h']), a1(params['Ok']), a1(params['w0']), a1(params['wa']), de_model,
+        a1(fid['wb']), a1(fid['wc']), a1(fid['Mnu']), a1(fid['As']), a1(fid['h']))
+    qpar, qper, sigma8 = jnp.squeeze(qpar), jnp.squeeze(qper), jnp.squeeze(sigma8)
+    return qpar, qper, sigma8, jnp.ones_like(sigma8)
+
+
 class COMETPTSpectrum2Poles(Calculator):
     _diagrams = (
         'P0L_b1b1', 'PNL_b1', 'PNL_id',
@@ -2859,57 +2918,49 @@ class COMETPTSpectrum2Poles(Calculator):
         if ells is None:
             ells = (0, 2, 4)
         self.ells = tuple(ells)
-        if cosmo is None:
-            cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial=fiducial)
-        self.cosmo = cosmo  # Calculator dep; build_graph discovers it from __dict__
-        self.cosmo.add_requirements({
-            'background.efunc':                        [{'z': float(z)}],
-            'background.comoving_transverse_distance': [{'z': float(z)}],
-            'fourier.sigma8_z': [{'of': 'delta_cb', 'z': self.z}],
-            **{f'params.{name}': None for name in _CONVERSION_COMET.values()},
-        })
+        self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
         _apply_cosmo_range_comet_emulator(get_params(self.cosmo))
-        self._is_external = True
 
     def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, **kwargs):
-        fiducial = _get_fiducial(fiducial, self.cosmo)
         self._use_mpc = False
-        params = get_params(self.cosmo)
-        w0_fixed, wa_fixed = params['w0_fld'].fixed, params['wa_fld'].fixed
-        if (w0_fixed, wa_fixed) == (True, True): de_model = 'lambda'
-        elif (w0_fixed, wa_fixed) == (False, True): de_model = 'w0'
-        else: de_model = 'w0wa'
-        self._de_model = de_model
         self._model = model
-        from comet import comet as comet
-        self.comet = comet(model=model, use_Mpc=self._use_mpc, **kwargs)
-        # set rd_fid in comet, not actually used in calculation
-        self.comet.define_fiducial_cosmology(_cosmo_to_comet(fiducial) | dict(z=self.z))
-        ba = fiducial.get_background()
-        self._DH_fid = float(constants.c / 1e3 / (100. * ba.efunc(self.z)))
-        self._DM_fid = float(ba.comoving_transverse_distance(self.z))
-        self.sigma8_fid = fiducial.get_fourier().sigma8_z(of='delta_cb', z=self.z)
+        self._de_model, self._md, self._fid_comet, self._H_fid, self._Dm_fid = _comet_setup_fiducial(
+            self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc)
+        # 10-point Gauss-Legendre quadrature for the continuous LOS average, matching
+        # the original PTEmu's own (fixed) self.gl_x/self.gl_weights setup.
+        gl_x_raw, gl_weights = np.polynomial.legendre.leggauss(10)
+        self._gl_x = jnp.asarray(0.5 * gl_x_raw + 0.5)
+        self._gl_weights = jnp.asarray(gl_weights)
 
     def __call__(self):
-        DH = constants.c / 1e3 / (100. * self.cosmo.get_background().efunc(z=self.z))
-        DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
-        self.qpar = DH / self._DH_fid
-        self.qper = DM / self._DM_fid
-        q_tr_lo = [self.qper, self.qpar]
+        from comet.px_ell import build_decomposed_parts_from_raw_params
         params = _cosmo_to_comet(self.cosmo)
-        if 'VDG' in self._model:
-            params['avir'] = self.avir.value
-        params |= dict(z=self.z)
-        # canonical basis
-        params |= dict(b1=1.0, b2=0.0, g2=0.0, g21=0.0, c0=0.0, c2=0.0, c4=0.0, cnlo=0.0, NP0=0.0, NP20=0.0, NP22=0.0)
-        table = self.comet.PX_ell(
-            self.k, params, ell=list(self.ells), X_list=list(self._diagrams),
-            de_model=self._de_model, q_tr_lo=q_tr_lo, ell_for_recon=[0, 2, 4, 6]
-        )
-        # table shape: (ndiagrams, nells, nk)
-        self.table = jnp.moveaxis(jnp.asarray(list(table.values())), 2, 0)
-        self.f = float(np.asarray(self.comet.params['f']).reshape(-1)[0])
-        self.sigma8 = self.cosmo.get_fourier().sigma8_z(of='delta_cb', z=self.z)
+        avir = self.avir.value if 'VDG' in self._model else None
+
+        a1 = lambda x: jnp.atleast_1d(jnp.asarray(x, dtype=jnp.float64))
+        # _get_canonical_params() only ever uses the *ratio* sigma8/sigma8_fid, so
+        # sigma8_fid is fixed to 1 and sigma8 carries the full ratio (see
+        # comet.background.compute_growth_amplitude's docstring for the (very good,
+        # exact when wb/wc match between fiducial and sampled cosmology) approximation
+        # this makes relative to a true sigma8(z) ratio).
+        self.qpar, self.qper, self.sigma8, self.sigma8_fid = _comet_compute_qpar_qper_sigma8(
+            self.z, params, self._fid_comet, self._de_model, self._H_fid, self._Dm_fid, use_mpc=self._use_mpc)
+
+        md = self._md
+        diag_part, p6_part, noise_part, f, s12 = build_decomposed_parts_from_raw_params(
+            jnp.asarray(self.k), list(self.ells), md.model_shape, md.model_linear, md.model_ratios,
+            md.P6, md.k_table, self._gl_x, self._gl_weights, a1(1.0), md.nk, md.nkloop,
+            a1(params['wb']), a1(params['wc']), a1(params['ns']), a1(params['Mnu']), a1(params['As']),
+            a1(params['h']), a1(params['w0']), a1(params['wa']), a1(self.z), a1(params['Ok']),
+            self._de_model, a1(avir) if avir is not None else None,
+            self._H_fid, self._Dm_fid, md.emu_h_fid, md.emu_as_fid, md.emu_z_fid,
+            q_tr_lo=(a1(self.qper), a1(self.qpar)), use_mpc=self._use_mpc)
+        # table shape: (ndiagrams, nells, nk) -- only the 19 PT diagrams + 3 noise
+        # templates (no octopole/P6 contribution), matching the original
+        # PX_ell(X_list=self._diagrams) call's scope: P6 was never in self._diagrams,
+        # so COMETTracerSpectrum2Poles's bias-recombination coeff array never included it.
+        self.table = jnp.transpose(jnp.concatenate([diag_part, noise_part], axis=2)[..., 0], (2, 1, 0))
+        self.f = jnp.squeeze(f)
 
     def tree_flatten(self):
         children = [self.qpar, self.qper, self.table, self.f, self.sigma8, self.sigma8_fid]
@@ -3021,29 +3072,56 @@ class COMETTracerSpectrum2Poles(Calculator):
             params += [avir]
         return propose_params_multitracer(params, tracers)
 
-    def __init__(self, z=1.0, k=None, ells=None, tracers=None, pt=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, params=None, fsat=None, sigv=None):
+    def __init__(self, z=1.0, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, params=None, fsat=None, sigv=None):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model)
         if params is not None:
             vc = vc + VariableCollection(params)
-        # avir is owned by the PT; separate it and route to PT.
+        # avir is owned by the PT (or, when pt=False below, by this calculator itself).
         avir_vc = vc.select(basename='avir')
         physical = 'physical' in prior_basis
         assign_params(self, vc - avir_vc, tracers, mapping=(lambda name: name[:-1]) if physical else None)
         self._prior_basis = prior_basis
-        if pt is None:
-            pt = COMETPTSpectrum2Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None)
-        self.pt = pt
-        self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model)
+        self._direct = (pt is False)
+        if self._direct:
+            # No separate PT calculator dependency: own the cosmology dep directly
+            # and evaluate comet's Pell() (monolithic, bias-combined) in __call__,
+            # instead of sharing PX_ell()'s decomposed table + a coeff/einsum
+            # recombination -- see _call_direct(). avir is then owned by *this*
+            # calculator (there is no PT to route it to).
+            if len(avir_vc):
+                assign_params(self, avir_vc, tracers)
+            self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
+            _apply_cosmo_range_comet_emulator(get_params(self.cosmo))
+            self.pt = None
+        else:
+            if pt is None:
+                pt = COMETPTSpectrum2Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None)
+            self.pt = pt
+            self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model)
 
-    def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, pt=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, fsat=None, sigv=None, params=None, **kwargs):
-        self.k = self.pt.k
-        self.ells = self.pt.ells
+    def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, fsat=None, sigv=None, params=None, **kwargs):
         self._nbar = float(nbar)
         settings = get_physical_stochastic_settings()
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
+        if self._direct:
+            self._model = model
+            self.z = float(z)
+            self.k = np.asarray(np.linspace(0.01, 0.2, 101) if k is None else k, dtype='f8')
+            self.ells = tuple((0, 2, 4) if ells is None else ells)
+            self._use_mpc = False
+            self._de_model, self._md, self._fid_comet, self._H_fid, self._Dm_fid = _comet_setup_fiducial(
+                self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc)
+            gl_x_raw, gl_weights = np.polynomial.legendre.leggauss(10)
+            self._gl_x = jnp.asarray(0.5 * gl_x_raw + 0.5)
+            self._gl_weights = jnp.asarray(gl_weights)
+        else:
+            self.k = self.pt.k
+            self.ells = self.pt.ells
 
     def __call__(self):
+        if self._direct:
+            return self._call_direct()
         params = self._get_canonical_params()
         b1, b2, g2, g21, c0, c2, c4, cnlo, NP0, NP20, NP22 = (params[name] for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22'))
         coeff = jnp.array([
@@ -3054,15 +3132,66 @@ class COMETTracerSpectrum2Poles(Calculator):
         self.poles = jnp.einsum('b,blk->lk', coeff, self.pt.table)
         return self.poles
 
-    def _get_canonical_params(self):
-        f = self.pt.f
+    def _call_direct(self):
+        """pt=False path: comet's Pell() (monolithic, bias-combined -- no PX_ell()
+        diagram decomposition) evaluated directly from this calculator's own
+        cosmology dep, bypassing COMETPTSpectrum2Poles entirely. Use this when there
+        is no need to share the expensive cosmology-only stage across several bias
+        points/tracers (the only reason to use the default, PX_ell()-based path).
+
+        Known desilike-framework caveat (not fixed yet, see TODO in
+        desilike/base.py's _run_graph): jax.grad w.r.t. a root-owned param (e.g.
+        b1/avir) followed by a *later, separate* eager call on the same compiled
+        pipe can leak a stale tracer from self.cosmo (CosmoprimoCosmology) and raise
+        jax.errors.UnexpectedTracerError. Harmless for jit/eager-only usage (the
+        pattern this module's own tests exercise); pre-exists this pt=False path
+        (reproduces on plain COMETPTSpectrum2Poles too, differentiating avir)."""
+        from comet.pell import eval_pell_from_raw_params
+        from comet.background import compute_s12_f
+        params = _cosmo_to_comet(self.cosmo)
+        avir = self.avir.value if 'VDG' in self._model else None
+        a1 = lambda x: jnp.atleast_1d(jnp.asarray(x, dtype=jnp.float64))
+        self.qpar, self.qper, self.sigma8, self.sigma8_fid = _comet_compute_qpar_qper_sigma8(
+            self.z, params, self._fid_comet, self._de_model, self._H_fid, self._Dm_fid, use_mpc=self._use_mpc)
+        md = self._md
+        # Only the (cheap) shape GP + growth are needed for f here (get_canonical_params()
+        # needs it for the ClassPT/PBJ/DESIct counterterm-basis conversions) -- the
+        # (expensive) ratios GP is evaluated again, redundantly, inside
+        # eval_pell_from_raw_params() below; this keeps the two paths independent and
+        # simple rather than threading s12/f through eval_pell_from_raw_params's signature.
+        _, f = compute_s12_f(md.model_shape, a1(self.z), a1(params['wb']), a1(params['wc']), a1(params['ns']),
+                              a1(params['Mnu']), a1(params['As']), a1(params['h']), a1(params['Ok']),
+                              a1(params['w0']), a1(params['wa']), self._de_model,
+                              md.emu_h_fid, md.emu_as_fid, md.emu_z_fid)
+        self.f = jnp.squeeze(f)
+
+        canonical = self._get_canonical_params(rescale_counterterms=False)
+        b1, b2, g2, g21, c0, c2, c4, cnlo, NP0, NP20, NP22 = (
+            canonical[name] for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22'))
+        h_rescale = None if self._use_mpc else params['h']
+        poles = eval_pell_from_raw_params(
+            jnp.asarray(self.k), list(self.ells), (0, 2, 4),
+            md.model_shape, md.model_linear, md.model_ratios, md.P6, md.k_table,
+            self._gl_x, self._gl_weights, a1(1.0), md.nk, md.nkloop, md.s12_for_p6,
+            md.emu_h_fid, md.emu_as_fid, md.emu_z_fid, self._H_fid, self._Dm_fid,
+            a1(params['wb']), a1(params['wc']), a1(params['ns']), a1(params['Mnu']), a1(params['As']),
+            a1(params['h']), a1(params['w0']), a1(params['wa']), a1(self.z), a1(params['Ok']), self._de_model,
+            a1(b1), a1(b2), a1(g2), a1(g21), a1(c0), a1(c2), a1(c4), a1(cnlo),
+            a1(avir) if avir is not None else None, a1(NP0), a1(NP20), a1(NP22),
+            use_mpc=self._use_mpc)
+        self.poles = jnp.transpose(poles[..., 0], (1, 0))
+        return self.poles
+
+    def _get_canonical_params(self, rescale_counterterms=True):
+        pt = self.pt if self.pt is not None else self  # pt=False: read qpar/qper/f/etc. off self
+        f = pt.f
         if 'physical' in self._prior_basis:
             bias_basis, counterterm_basis = 'DESI', 'DESIct'
         else:
             bias_basis, counterterm_basis = self._prior_basis.split('+')
 
-        A_AP = 1. / (self.pt.qper**2 * self.pt.qpar) if 'aap' in self._prior_basis else 1.
-        A = self.pt.sigma8 / self.pt.sigma8_fid
+        A_AP = 1. / (pt.qper**2 * pt.qpar) if 'aap' in self._prior_basis else 1.
+        A = pt.sigma8 / pt.sigma8_fid
 
         def g(name):
             param = getattr(self, name, None)
@@ -3139,13 +3268,18 @@ class COMETTracerSpectrum2Poles(Calculator):
         else:
             raise ValueError(f'Unknown counterterm_basis: {counterterm_basis!r}')
 
-        if not self.pt._use_mpc:
-            # comet emulator evalutes in Mpc unit, and then spline interpolation converts (k, diagram) to (h/Mpc, Mpc^3/h^3) unit,
-            # however, counterterm diagram evaluates ~k^2 P_L or ~k^4 P_L so we need additionally convert k from 1/Mpc to h/Mpc unit here
-            h = self.pt.cosmo['h']
-            c0, c2, c4 = c0 / h**2, c2 / h**2, c4 / h**2
-            cnlo = cnlo / h**4
-            # for the same reason, NP* should be rescaled to compensate the h^3 factor
+        if not pt._use_mpc:
+            h = pt.cosmo['h']
+            if rescale_counterterms:
+                # comet emulator evalutes in Mpc unit, and then spline interpolation converts (k, diagram) to (h/Mpc, Mpc^3/h^3) unit,
+                # however, counterterm diagram evaluates ~k^2 P_L or ~k^4 P_L so we need additionally convert k from 1/Mpc to h/Mpc unit here.
+                # Skipped when rescale_counterterms=False (pt=False/_call_direct()): eval_pell_from_raw_params()'s
+                # get_bias_coeff(..., h=h_rescale) already applies this same h-rescaling internally -- applying it
+                # here too would double-count it.
+                c0, c2, c4 = c0 / h**2, c2 / h**2, c4 / h**2
+                cnlo = cnlo / h**4
+            # for the same reason, NP* should be rescaled to compensate the h^3 factor -- always
+            # needed (eval_pell_from_raw_params()/los_average_continuous() never rescales NP0/NP20/NP22).
             NP0 = NP0 / h**3
             NP20, NP22 = NP20 / h**5, NP22 / h**5
         canonical_params = dict(b1=b1, b2=b2, g2=g2, g21=g21, c0=c0, c2=c2, c4=c4, cnlo=cnlo, NP0=NP0, NP20=NP20, NP22=NP22)
@@ -3193,61 +3327,62 @@ class COMETPTSpectrum3Poles(Calculator):
         if ells is None:
             ells = ((0, 0, 0), (2, 0, 2))
         self.ells = tuple(tuple(int(e) for e in ell) for ell in ells)
-        if cosmo is None:
-            cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial=fiducial)
-        self.cosmo = cosmo  # Calculator dep; build_graph discovers it from __dict__
-        self.cosmo.add_requirements({
-            'background.efunc':                        [{'z': float(z)}],
-            'background.comoving_transverse_distance': [{'z': float(z)}],
-            'fourier.sigma8_z': [{'of': 'delta_cb', 'z': self.z}]
-        })
+        self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
         _apply_cosmo_range_comet_emulator(get_params(self.cosmo))
-        self._is_external = True
 
     def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 16, 5), mu12_transform='k3', **kwargs):
-        fiducial = _get_fiducial(fiducial)
         self._use_mpc = False
-        params = get_params(self.cosmo)
-        w0_fixed, wa_fixed = params['w0_fld'].fixed, params['wa_fld'].fixed
-        if (w0_fixed, wa_fixed) == (True, True): de_model = 'lambda'
-        elif (w0_fixed, wa_fixed) == (False, True): de_model = 'w0'
-        else: de_model = 'w0wa'
-        self._de_model = de_model
         self._model = model
-        from comet import comet as comet
-        self.comet = comet(model=model, use_Mpc=self._use_mpc, **kwargs)
-        # set rd_fid in comet, not actually used in calculation
-        self.comet.define_fiducial_cosmology(_cosmo_to_comet(fiducial) | dict(z=self.z))
-        ba = fiducial.get_background()
-        self._DH_fid = float(constants.c / 1e3 / (100. * ba.efunc(self.z)))
-        self._DM_fid = float(ba.comoving_transverse_distance(self.z))
-        self.sigma8_fid = fiducial.get_fourier().sigma8_z(of='delta_cb', z=self.z)
+        if mu12_transform != 'k3':
+            raise NotImplementedError("Only mu12_transform='k3' is currently supported.")
+        from comet.bispectrum import BispectrumNum
+        self._de_model, self._md, self._fid_comet, self._H_fid, self._Dm_fid = _comet_setup_fiducial(
+            self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc)
         self.quad_deg = tuple(quad_deg)
         self.mu12_transform = mu12_transform
+        # Sugiyama quadrature grids + per-pair (l1,l2,L) projection operators are
+        # cosmology-independent (only depend on self.k/self.ells/quad_deg) -- build them
+        # once here via a real BispectrumNum instance's own numpy/sympy setup methods,
+        # not at __call__ time.
+        bn = BispectrumNum(real_space=False, model=model, use_Mpc=self._use_mpc)
+        nmu1, nmu12, nphi = self.quad_deg
+        mu1_g, _, t_g, _, cphi_g, _, _ = bn._sugi_get_quadrature(nmu1, nmu12, nphi, self.mu12_transform)
+        self._mu1_g, self._t_g, self._cphi_g = jnp.asarray(mu1_g), jnp.asarray(t_g), jnp.asarray(cphi_g)
+        proj_ops_k3 = bn._sugi_get_proj_ops_k3(list(self.ells), self.k, nmu1, nmu12, nphi, self.mu12_transform)
+        self._proj_ops_k3 = {ll: jnp.asarray(arr) for ll, arr in proj_ops_k3.items()}
 
     def __call__(self):
-        DH = constants.c / 1e3 / (100. * self.cosmo.get_background().efunc(z=self.z))
-        DM = self.cosmo.get_background().comoving_transverse_distance(z=self.z)
-        self.qpar = DH / self._DH_fid
-        self.qper = DM / self._DM_fid
-        q_tr_lo = [self.qper, self.qpar]
+        from comet.bell_sugi import build_bx_ell_sugi_parts_from_raw_params
+        from comet.background import compute_s12_f
         params = _cosmo_to_comet(self.cosmo)
-        if 'VDG' in self._model:
-            params['avir'] = self.avir.value
-        params['cnloB'] = self.cnloB.value
-        params = {k: np.asarray(v).reshape(-1)[0].item() for k, v in params.items()}
-        params |= dict(z=self.z)
-        # canonical basis
-        params |= dict(b1=1.0, b2=0.0, g2=0.0, g21=0.0, c0=0.0, c2=0.0, c4=0.0, cnlo=0.0, NP0=0.0, NP20=0.0, NP22=0.0)
-        params |= dict(NB0=0.0, MB0=0.0, cB1=0.0, cB2=0.0)
-        table = self.comet.BX_ell_Sugi(
-            self.k, params, ell=list(self.ells), X_list=list(self._diagrams),
-            de_model=self._de_model, q_tr_lo=q_tr_lo, quad_deg=self.quad_deg, mu12_transform=self.mu12_transform
-        )
-        # table shape: (ndiagrams, nells, nk)
-        self.table = jnp.moveaxis(jnp.asarray(list(table.values())), 2, 0)
-        self.f = float(np.asarray(self.comet.params['f']).reshape(-1)[0])
-        self.sigma8 = self.cosmo.get_fourier().sigma8_z(of='delta_cb', z=self.z)
+        avir = self.avir.value if 'VDG' in self._model else None
+        # cnloB is currently always 0 for this estimator (see comet.bell_sugi's module
+        # docstring): comet.bispectrum.BispectrumNum._get_ctr_arrays() only activates the
+        # EFT counterterm branch for 'EFT'/'VDG_infty_ctr' models, which this estimator
+        # doesn't support, so self.cnloB has no effect here yet.
+
+        a1 = lambda x: jnp.atleast_1d(jnp.asarray(x, dtype=jnp.float64))
+        self.qpar, self.qper, self.sigma8, self.sigma8_fid = _comet_compute_qpar_qper_sigma8(
+            self.z, params, self._fid_comet, self._de_model, self._H_fid, self._Dm_fid, use_mpc=self._use_mpc)
+
+        md = self._md
+        parts = build_bx_ell_sugi_parts_from_raw_params(
+            jnp.asarray(self.k), list(self.ells), md.model_shape, md.model_linear, md.model_ratios,
+            md.P6, md.k_table, md.nk, self._mu1_g, self._t_g, self._cphi_g, self._proj_ops_k3,
+            a1(params['wb']), a1(params['wc']), a1(params['ns']), a1(params['Mnu']), a1(params['As']),
+            a1(params['h']), a1(params['w0']), a1(params['wa']), a1(self.z), a1(params['Ok']),
+            self._de_model, a1(avir) if avir is not None else None,
+            self._H_fid, self._Dm_fid, md.emu_h_fid, md.emu_as_fid, md.emu_z_fid,
+            q_tr_lo=(a1(self.qper), a1(self.qpar)), use_mpc=self._use_mpc)
+        # table shape: (ndiagrams, nells, nk); diagram order matches self._diagrams
+        # exactly (identical naming/ordering between the analytic and Sugiyama paths).
+        self.table = jnp.stack(
+            [jnp.stack([parts[ll][name][:, 0] for ll in self.ells], axis=0) for name in self._diagrams], axis=0)
+        s12, f = compute_s12_f(md.model_shape, a1(self.z), a1(params['wb']), a1(params['wc']), a1(params['ns']),
+                                a1(params['Mnu']), a1(params['As']), a1(params['h']), a1(params['Ok']),
+                                a1(params['w0']), a1(params['wa']), self._de_model,
+                                md.emu_h_fid, md.emu_as_fid, md.emu_z_fid)
+        self.f = jnp.squeeze(f)
 
     def tree_flatten(self):
         children = [self.qpar, self.qper, self.table, self.f, self.sigma8, self.sigma8_fid]
@@ -3276,29 +3411,70 @@ class COMETTracerSpectrum3Poles(Calculator):
         ], tracers)
         return params + extra
 
-    def __init__(self, z=1.0, k=None, pt=None, ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None,nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3'):
+    def __init__(self, z=1.0, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3'):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model)
         if params is not None:
             vc = vc + VariableCollection(params)
-        # avir is owned by the PT; separate it and route to PT.
+        # avir and cnloB are owned by the PT (or, when pt=False below, by this calculator itself).
         avir_vc = vc.select(basename='avir')
         physical = 'physical' in prior_basis
         assign_params(self, vc - avir_vc, tracers, mapping=(lambda name: name[:-1]) if physical else None)
         self._prior_basis = prior_basis
-        if pt is None:
-            pt = COMETPTSpectrum3Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None)
-        self.pt = pt
-        self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model, quad_deg=quad_deg, mu12_transform=mu12_transform)
+        self._direct = (pt is False)
+        if self._direct:
+            # No separate PT calculator dependency: own the cosmology dep directly
+            # and evaluate comet's Bell_Sugi() (monolithic, bias-combined) in
+            # __call__, instead of sharing BX_ell_Sugi()'s decomposed table + a
+            # coeff/einsum recombination -- see _call_direct(). avir/cnloB are then
+            # owned by *this* calculator (there is no PT to route them to); cnloB
+            # isn't in propose_params()'s output (it lives on COMETPTSpectrum3Poles
+            # only), so add it here to match.
+            if len(avir_vc):
+                assign_params(self, avir_vc, tracers)
+            cnloB_vc = propose_params_multitracer([
+                Parameter('cnloB', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c^B_{\mathrm{nlo}}'),
+            ], tracers)
+            assign_params(self, cnloB_vc, tracers)
+            self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
+            _apply_cosmo_range_comet_emulator(get_params(self.cosmo))
+            self.pt = None
+        else:
+            if pt is None:
+                pt = COMETPTSpectrum3Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None)
+            self.pt = pt
+            self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model, quad_deg=quad_deg, mu12_transform=mu12_transform)
 
-    def __post_init__(self, z=1.0, k=None, pt=None, ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None,nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3'):
-        self.k = self.pt.k
-        self.ells = self.pt.ells
+    def __post_init__(self, z=1.0, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3'):
         self._nbar = float(nbar)
         settings = get_physical_stochastic_settings()
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
+        if self._direct:
+            self._model = model
+            self.z = float(z)
+            self.k = np.atleast_2d(np.asarray(np.column_stack([np.linspace(0.01, 0.1, 11)] * 2) if k is None else k, dtype='f8'))
+            self.ells = tuple(tuple(int(e) for e in ell) for ell in (((0, 0, 0), (2, 0, 2)) if ells is None else ells))
+            self._use_mpc = False
+            if mu12_transform != 'k3':
+                raise NotImplementedError("Only mu12_transform='k3' is currently supported.")
+            from comet.bispectrum import BispectrumNum
+            self._de_model, self._md, self._fid_comet, self._H_fid, self._Dm_fid = _comet_setup_fiducial(
+                self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc)
+            self.quad_deg = tuple(quad_deg)
+            self.mu12_transform = mu12_transform
+            bn = BispectrumNum(real_space=False, model=model, use_Mpc=self._use_mpc)
+            nmu1, nmu12, nphi = self.quad_deg
+            mu1_g, _, t_g, _, cphi_g, _, _ = bn._sugi_get_quadrature(nmu1, nmu12, nphi, self.mu12_transform)
+            self._mu1_g, self._t_g, self._cphi_g = jnp.asarray(mu1_g), jnp.asarray(t_g), jnp.asarray(cphi_g)
+            proj_ops_k3 = bn._sugi_get_proj_ops_k3(list(self.ells), self.k, nmu1, nmu12, nphi, self.mu12_transform)
+            self._proj_ops_k3 = {ll: jnp.asarray(arr) for ll, arr in proj_ops_k3.items()}
+        else:
+            self.k = self.pt.k
+            self.ells = self.pt.ells
 
     def __call__(self):
+        if self._direct:
+            return self._call_direct()
         params = self._get_canonical_params()
         b1, b2, g2, NP0, NB0, MB0 = (params[name] for name in ('b1', 'b2', 'g2', 'NP0', 'NB0', 'MB0'))
         coeff = jnp.array([
@@ -3308,16 +3484,52 @@ class COMETTracerSpectrum3Poles(Calculator):
         self.poles = jnp.einsum('b,blk->lk', coeff, self.pt.table)
         return self.poles
 
-    def _get_canonical_params(self):
-        params = COMETTracerSpectrum2Poles._get_canonical_params(self)  # type: ignore
-        cnloB = self.pt.cnloB.value
+    def _call_direct(self):
+        """pt=False path: comet's Bell_Sugi() (monolithic, bias-combined -- no
+        BX_ell_Sugi() diagram decomposition) evaluated directly from this
+        calculator's own cosmology dep -- see COMETTracerSpectrum2Poles._call_direct()."""
+        from comet.bell_sugi import eval_bell_sugi_from_raw_params
+        from comet.background import compute_s12_f
+        params = _cosmo_to_comet(self.cosmo)
+        avir = self.avir.value if 'VDG' in self._model else None
+        # cnloB is currently always 0 for this estimator -- see COMETPTSpectrum3Poles.__call__'s comment.
+        a1 = lambda x: jnp.atleast_1d(jnp.asarray(x, dtype=jnp.float64))
+        self.qpar, self.qper, self.sigma8, self.sigma8_fid = _comet_compute_qpar_qper_sigma8(
+            self.z, params, self._fid_comet, self._de_model, self._H_fid, self._Dm_fid, use_mpc=self._use_mpc)
+        md = self._md
+        _, f = compute_s12_f(md.model_shape, a1(self.z), a1(params['wb']), a1(params['wc']), a1(params['ns']),
+                              a1(params['Mnu']), a1(params['As']), a1(params['h']), a1(params['Ok']),
+                              a1(params['w0']), a1(params['wa']), self._de_model,
+                              md.emu_h_fid, md.emu_as_fid, md.emu_z_fid)
+        self.f = jnp.squeeze(f)
+
+        canonical = self._get_canonical_params(rescale_counterterms=False)
+        b1, b2, g2, NP0, NB0, MB0 = (canonical[name] for name in ('b1', 'b2', 'g2', 'NP0', 'NB0', 'MB0'))
+        parts = eval_bell_sugi_from_raw_params(
+            jnp.asarray(self.k), self.ells, md.model_shape, md.model_linear, md.model_ratios,
+            md.P6, md.k_table, md.nk, self._mu1_g, self._t_g, self._cphi_g, self._proj_ops_k3,
+            a1(params['wb']), a1(params['wc']), a1(params['ns']), a1(params['Mnu']), a1(params['As']),
+            a1(params['h']), a1(params['w0']), a1(params['wa']), a1(self.z), a1(params['Ok']), self._de_model,
+            a1(b1), a1(b2), a1(g2), a1(avir) if avir is not None else None, a1(MB0), a1(NP0), a1(NB0), a1(self._nbar),
+            self._H_fid, self._Dm_fid, md.emu_h_fid, md.emu_as_fid, md.emu_z_fid, use_mpc=self._use_mpc)
+        self.poles = jnp.stack([parts[ll][:, 0] for ll in self.ells], axis=0)
+        return self.poles
+
+    def _get_canonical_params(self, rescale_counterterms=True):
+        pt = self.pt if self.pt is not None else self  # pt=False: read qper/qpar/cnloB off self
+        params = COMETTracerSpectrum2Poles._get_canonical_params(self, rescale_counterterms=rescale_counterterms)  # type: ignore
+        cnloB = pt.cnloB.value
         NP0 = self.NP0.value  # there's no need to normalize it by h**3 here
         NB0 = self.NB0.value
         MB0 = self.MB0.value
-        A_AP = 1. / (self.pt.qper**2 * self.pt.qpar) if 'aap' in self._prior_basis else 1.
+        A_AP = 1. / (pt.qper**2 * pt.qpar) if 'aap' in self._prior_basis else 1.
         if 'physical' in self._prior_basis:
-            NP0, NB0, MB0 = NP0 / A_AP / self._nbar, NB0 / A_AP / self._nbar**2, MB0 / A_AP / self._nbar
-        else:
+            NP0, NB0, MB0 = NP0 / A_AP, NB0 / A_AP, MB0 / A_AP
+        # nbar normalization is needed for the BX_ell_Sugi()-decomposed path (its diagrams
+        # are nbar-bare), but skipped for the direct/pt=False path (rescale_counterterms=False):
+        # eval_bell_sugi_from_raw_params()'s bell_sugi()/project_sugi() apply 1/nbar/1/nbar**2
+        # internally given the *raw* nbar, so applying it here too would double-count it.
+        if rescale_counterterms:
             NP0, NB0, MB0 = NP0 / self._nbar, NB0 / self._nbar**2, MB0 / self._nbar
         return params | dict(cnloB=cnloB, NP0=NP0, NB0=NB0, MB0=MB0)
 

@@ -83,17 +83,21 @@ def _check_emulator(pipe_exact, pipe_emu, shift_param, reldiff_tol=0.10):
         assert reldiff < reldiff_tol, f'[{shift_param}+5%] max reldiff={reldiff:.3f} > {reldiff_tol}'
 
 
-def _check_sensitivity(run, baseline, name, **override):
+def _check_sensitivity(run, baseline, name, rtol=1e-6, atol=1e-8, **override):
     """Assert evaluating *run* with *override* moves away from *baseline*.
 
     Also re-evaluates under ``jax.jit`` (via ``run(_jit=True, **override)``) and checks
-    it agrees with the eager result, catching tracer-incompatible code paths.
+    it agrees with the eager result, catching tracer-incompatible code paths. *rtol*/*atol*
+    default to a tight bit-for-bit-ish bound; loosen for genuinely-compiled (non
+    pure_callback) pipelines chaining many GP/spline ops, where jit's XLA fusion can
+    legitimately reorder floating-point operations relative to eager dispatch (e.g.
+    COMET's GP-emulator-based theories, ~1e-6 ULP-level noise observed).
     """
     (param_name, value), = override.items()
     result = run(**override)
     assert not np.allclose(baseline, result), f"{name}: result invariant to {param_name}"
     jit_result = run(_jit=True, **override)
-    np.testing.assert_allclose(jit_result, result, rtol=1e-6, atol=1e-8,
+    np.testing.assert_allclose(jit_result, result, rtol=rtol, atol=atol,
                                err_msg=f"{name}: jit result differs from eager for {param_name}")
 
 
@@ -677,8 +681,16 @@ class TestCOMET:
         base = run()
         _check(base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)')
         assert base.shape == (len(theory.ells), len(k))
-        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', logA=2.5)
-        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', b1=2.0)
+        # COMET is a genuinely-compiled (non pure_callback) GP-emulator pipeline: jit's XLA
+        # fusion can legitimately reorder floating-point ops relative to eager dispatch, so
+        # use a looser jit-vs-eager tolerance than the suite's default (~1e-6 ULP-level noise
+        # observed, comfortably below 1e-5).
+        comet_tol = dict(rtol=1e-4, atol=1e-6)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', logA=2.5, **comet_tol)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', b1=2.0, **comet_tol)
+        # avir (VDG_infty FoG damping): regression test for PX_ell() silently ignoring it
+        # (unlike Pell(), PX_ell() doesn't refresh RSD params from its `params` dict).
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles (EggScoSmi+Comet)', avir=10.0, **comet_tol)
 
         # Other bias bases (each with Comet counterterms); b1t for AmiGleKok.
         for prior_basis, sensitivity_param in [
@@ -691,7 +703,7 @@ class TestCOMET:
             run_bb = _compile(theory_bb)
             base_bb = run_bb()
             _check(base_bb, f'COMETTracerSpectrum2Poles ({prior_basis})')
-            _check_sensitivity(run_bb, base_bb, f'COMETTracerSpectrum2Poles ({prior_basis})', **{sensitivity_param: 2.0})
+            _check_sensitivity(run_bb, base_bb, f'COMETTracerSpectrum2Poles ({prior_basis})', **{sensitivity_param: 2.0}, **comet_tol)
 
         # Other counterterm bases (each with EggScoSmi bias).
         for ct_basis in ['ClassPT', 'PBJ', 'DESIct']:
@@ -700,6 +712,41 @@ class TestCOMET:
 
         # ells subset.
         assert _compile(COMETTracerSpectrum2Poles(k=k, ells=(0, 2)))().shape[0] == 2
+
+    def test_tracer_spectrum_direct(self):
+        """COMETTracerSpectrum2Poles(pt=False): comet's Pell() (monolithic, bias-combined,
+        no separate PT calculator) must agree with the default PX_ell()-decomposed path."""
+        from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+        comet_tol = dict(rtol=1e-4, atol=1e-6)
+
+        theory = COMETTracerSpectrum2Poles(k=k, pt=False)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'COMETTracerSpectrum2Poles direct (EggScoSmi+Comet)')
+        assert base.shape == (len(theory.ells), len(k))
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles direct (EggScoSmi+Comet)', logA=2.5, **comet_tol)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles direct (EggScoSmi+Comet)', b1=2.0, **comet_tol)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum2Poles direct (EggScoSmi+Comet)', avir=10.0, **comet_tol)
+
+        theory_shared = COMETTracerSpectrum2Poles(k=k)
+        run_shared = _compile(theory_shared)
+        for prior_basis, sensitivity_param, override in [
+            ('EggScoSmi+Comet', 'b1', dict(b1=2.0)),
+            ('AssBauGre+Comet', 'b1', dict(b1=2.0)),
+            ('AmiGleKok+Comet', 'b1t', dict(b1t=2.0)),
+            ('DESI+Comet',      'b1', dict(b1=2.0)),
+            ('physical',        'b1p', dict(b1p=2.0)),
+            ('EggScoSmi+ClassPT', None, {}),
+            ('EggScoSmi+PBJ', None, {}),
+            ('EggScoSmi+DESIct', None, {}),
+        ]:
+            theory_bb = COMETTracerSpectrum2Poles(k=k, prior_basis=prior_basis)
+            theory_bb_direct = COMETTracerSpectrum2Poles(k=k, prior_basis=prior_basis, pt=False)
+            base_shared = np.asarray(_compile(theory_bb)(**override))
+            base_direct = np.asarray(_compile(theory_bb_direct)(**override))
+            np.testing.assert_allclose(base_direct, base_shared, rtol=1e-7, atol=1e-8,
+                                       err_msg=f'COMETTracerSpectrum2Poles ({prior_basis}): pt=False disagrees with shared PT')
 
     def test_tracer_bispectrum(self):
         """COMETTracerSpectrum3Poles: shape, finite output, b1 sensitivity."""
@@ -713,8 +760,34 @@ class TestCOMET:
         base = run()
         _check(base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)')
         assert base.shape == (len(theory.ells), len(k))
-        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', logA=2.5)
-        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', b1=2.0)
+        # See test_tracer_spectrum's comment on comet_tol.
+        comet_tol = dict(rtol=1e-4, atol=1e-6)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', logA=2.5, **comet_tol)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles (EggScoSmi+Comet)', b1=2.0, **comet_tol)
+
+    def test_tracer_bispectrum_direct(self):
+        """COMETTracerSpectrum3Poles(pt=False): comet's Bell_Sugi() (monolithic,
+        bias-combined, no separate PT calculator) must agree with the default
+        BX_ell_Sugi()-decomposed path."""
+        from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum3Poles
+        k = np.column_stack([np.linspace(0.02, 0.1, 11)] * 2)
+        comet_tol = dict(rtol=1e-4, atol=1e-6)
+
+        theory = COMETTracerSpectrum3Poles(k=k, pt=False)
+        run = _compile(theory)
+        base = run()
+        _check(base, 'COMETTracerSpectrum3Poles direct (EggScoSmi+Comet)')
+        assert base.shape == (len(theory.ells), len(k))
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles direct (EggScoSmi+Comet)', logA=2.5, **comet_tol)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles direct (EggScoSmi+Comet)', b1=2.0, **comet_tol)
+        _check_sensitivity(run, base, 'COMETTracerSpectrum3Poles direct (EggScoSmi+Comet)', avir=5.0, **comet_tol)
+
+        theory_shared = COMETTracerSpectrum3Poles(k=k)
+        run_shared = _compile(theory_shared)
+        base_shared = np.asarray(run_shared(b1=2.0))
+        base_direct = np.asarray(run(b1=2.0))
+        np.testing.assert_allclose(base_direct, base_shared, rtol=1e-7, atol=1e-8,
+                                   err_msg='COMETTracerSpectrum3Poles: pt=False disagrees with shared PT')
 
 
 def test_jit():

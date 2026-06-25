@@ -948,6 +948,27 @@ def _build_graph_call_fn(pipeline):
                     result = node()
                     node_state['was_called'] = True
                 else:
+                    # TODO(known bug, not yet fixed): if this node was forcibly re-run during
+                    # a jax.jit/jax.grad trace (the `is_tracing` branch above always calls
+                    # node() unconditionally), its __dict__ (e.g. CosmoprimoCosmology's
+                    # self._cosmo/self._results) gets overwritten with values created inside
+                    # that trace -- even when this node's *own* params were plain concrete
+                    # floats throughout (e.g. a cosmology dep whose params never changed while
+                    # some *other*, unrelated root-owned parameter was being differentiated).
+                    # node_state['last_params']/['last_result'] are only updated below (the
+                    # non-tracing path), never in the `is_tracing` branch, so a later eager
+                    # call with the same own_params_np skips node() (line ~989) and silently
+                    # returns/keeps the stale, trace-escaped values -- surfacing later as
+                    # jax.errors.UnexpectedTracerError ("... wrapped in a JVPTracer/
+                    # DynamicJaxprTracer to escape the scope of the transformation") the next
+                    # time that stale attribute is read. Repro: differentiate a root-owned,
+                    # non-cosmological parameter (e.g. COMETPTSpectrum2Poles's `avir`, which
+                    # has self.cosmo as a direct dep) via jax.grad, then make a plain eager
+                    # call afterwards on the same compiled pipe. Likely fix: also invalidate/
+                    # refresh node_state after an is_tracing run (e.g. force params_changed on
+                    # the next eager call for any node that was run while tracing), or avoid
+                    # mutating node.__dict__ with trace-local values when own params didn't
+                    # actually depend on the traced leaves.
                     own_params_np = np.concatenate([np.ravel(np.asarray(params[p.name])) for p in nvd]) if nvd else np.array([])
                     dep_states_list = [node_states[id(dep)] for dep in ncd]
                     dep_was_called = any(s['was_called'] for s in dep_states_list)

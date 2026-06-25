@@ -135,44 +135,114 @@ def test_templates():
 
 
 def test_density_split():
-    from desilike import BaseCalculator
-    from desilike.theories.galaxy_clustering.base import ap_k_mu
-    from desilike.theories.galaxy_clustering import DensitySplitTracerPowerSpectrumMultipoles
+    from desilike.theories.galaxy_clustering import DensitySplitTracerPowerSpectrumMultipoles, FixedPowerSpectrumTemplate
 
-    class LinearPowerTemplate(BaseCalculator):
-
-        config_fn = None
-
-        def initialize(self, k=None, z=1.):
-            if k is None:
-                k = np.geomspace(1e-3, 1., 128)
-            self.k = np.array(k, dtype='f8')
-            self.z = np.asarray(z, dtype='f8')
-
-        def calculate(self):
-            self.pk_dd = 1e4 * (self.k / 0.1)**-1
-            self.f = 0.8
-
-        def ap_k_mu(self, k, mu):
-            return ap_k_mu(k, mu)
-
-    k = np.linspace(0.02, 0.2, 16)
-    theory = DensitySplitTracerPowerSpectrumMultipoles(k=k, template=LinearPowerTemplate())
+    template = FixedPowerSpectrumTemplate(z=0.5, fiducial='DESI')
+    k = np.linspace(0.02, 0.08, 3)
+    theory = DensitySplitTracerPowerSpectrumMultipoles(k=k, template=template, model='tree')
     power = theory()
     assert power.shape == (5, 3, len(k))
     assert np.isfinite(power).all()
 
-    theory = DensitySplitTracerPowerSpectrumMultipoles(k=k, ells=(0, 2), quantiles=(1, 3, 5), template=LinearPowerTemplate())
+    theory = DensitySplitTracerPowerSpectrumMultipoles(k=k, ells=(0, 2), quantiles=(1, 3, 5), template=template,
+                                                       model='tree')
     power = theory()
     assert power.shape == (3, 2, len(k))
     basenames = set(theory.runtime_info.params.basenames())
-    assert {'b1', 'bq1', 'bq3', 'bq5', 'beta1', 'beta3', 'beta5'} <= basenames
-    assert 'bq2' not in basenames
-    assert 'beta2' not in basenames
+    assert {'b1p', 'c1q1', 'c1q2', 'c1q4', 'c1q5', 's0qg1', 's0qg2', 's0qg4', 's0qg5'} <= basenames
+    assert not {'b2p', 'bsp', 'alpha0p', 'alpha2p', 'alpha4p', 'X_FoG_pp'} & basenames
+    assert not {'c2q1', 'c3q1', 'e0q1', 's0muqg1', 's2qg1', 's2muqg1',
+                'bq1', 'beta1', 'op00q1', 'c01', 'bqnabla1'} & basenames
 
-    unsmoothed = DensitySplitTracerPowerSpectrumMultipoles(k=k, quantiles=(5,), smoothing_radius=1e-9, template=LinearPowerTemplate())()
-    smoothed = DensitySplitTracerPowerSpectrumMultipoles(k=k, quantiles=(5,), smoothing_radius=10., template=LinearPowerTemplate())()
+    standard_tree = DensitySplitTracerPowerSpectrumMultipoles(k=k, quantiles=(5,), prior_basis='standard',
+                                                              model='tree', template=template)
+    standard_basenames = set(standard_tree.runtime_info.params.basenames())
+    assert {'b1', 'c1q5', 's0qg5'} <= standard_basenames
+    assert not {'bq5', 'beta5', 'dbq5', 'dbeta5'} & standard_basenames
+
+    from desilike import jax as desilike_jax
+    if desilike_jax.jax is not None:
+        one_loop = DensitySplitTracerPowerSpectrumMultipoles(k=k, ells=(0,), quantiles=(1, 5), template=template,
+                                                             model='1-loop', composite_loop_nq=4,
+                                                             composite_loop_nx=4, composite_loop_nphi=4)
+        one_loop_power = one_loop()
+        assert one_loop_power.shape == (2, 1, len(k))
+        assert np.isfinite(one_loop_power).all()
+        one_loop_basenames = set(one_loop.runtime_info.params.basenames())
+        assert {'b1p', 'b2p', 'bsp', 'alpha0p', 'alpha2p', 'alpha4p', 'X_FoG_pp',
+                'c1q1', 'c2q1', 'e0q1', 'e2q1', 'e4q1', 'c3q1',
+                's0qg1', 's2qg1', 's2muqg1'} <= one_loop_basenames
+        assert 'c3q1' not in one_loop.varied_params.basenames()
+        assert 's0muqg1' not in one_loop_basenames
+        assert not {'bq1', 'beta1', 'op00q1', 'c01', 'bqnabla1'} & one_loop_basenames
+
+        anisotropic = DensitySplitTracerPowerSpectrumMultipoles(k=k, ells=(0, 2), quantiles=(1, 5),
+                                                                template=template, model='1-loop',
+                                                                qg_anisotropic_stochastic=True,
+                                                                composite_loop_nq=4,
+                                                                composite_loop_nx=4,
+                                                                composite_loop_nphi=4)
+        anisotropic()
+        assert {'s0muqg1', 's0muqg5'} <= set(anisotropic.runtime_info.params.basenames())
+
+    unsmoothed = DensitySplitTracerPowerSpectrumMultipoles(k=k, quantiles=(5,), smoothing_radius=1e-9,
+                                                           model='tree', template=template)()
+    smoothed = DensitySplitTracerPowerSpectrumMultipoles(k=k, quantiles=(5,), smoothing_radius=10.,
+                                                         model='tree', template=template)()
     assert np.all(np.abs(smoothed[0, :, -1]) < np.abs(unsmoothed[0, :, -1]))
+
+    observed_smoothing = DensitySplitTracerPowerSpectrumMultipoles(k=k, quantiles=(5,), smoothing_apmode='observed',
+                                                                   model='tree', template=template)()
+    physical_smoothing = DensitySplitTracerPowerSpectrumMultipoles(k=k, quantiles=(5,), smoothing_apmode='physical',
+                                                                   model='tree', template=template)()
+    assert observed_smoothing.shape == physical_smoothing.shape
+
+    import pytest
+    from desilike.base import PipelineError
+    with pytest.raises(PipelineError) as exc:
+        DensitySplitTracerPowerSpectrumMultipoles(k=k, model='legacy', template=template)()
+    assert 'tree' in str(exc.value.__cause__)
+    assert '1-loop' in str(exc.value.__cause__)
+
+
+def test_density_split_stochastic_partition_sum_rule():
+    from desilike.theories.galaxy_clustering import DensitySplitTracerPowerSpectrumMultipoles, FixedPowerSpectrumTemplate
+
+    k = np.linspace(0.02, 0.08, 3)
+    theory = DensitySplitTracerPowerSpectrumMultipoles(k=k, ells=(0, 2), quantiles=(1, 2, 3, 4, 5),
+                                                       template=FixedPowerSpectrumTemplate(z=0.5, fiducial='DESI'),
+                                                       model='tree', qg_anisotropic_stochastic=True)
+    power = np.asarray(theory(c1q1=0., c1q2=0., c1q4=0., c1q5=0., s0qg1=0.2, s0muqg1=0.1))
+    scale = max(1., np.max(np.abs(power)))
+
+    assert np.allclose(power[0], -power[2], rtol=1e-12, atol=1e-12 * scale)
+    assert np.allclose(power[[1, 3, 4]], 0., rtol=0., atol=1e-12 * scale)
+
+
+def test_density_split_stochastic_terms_are_linear():
+    import pytest
+    from desilike import jax as desilike_jax
+    from desilike.theories.galaxy_clustering import DensitySplitTracerPowerSpectrumMultipoles, FixedPowerSpectrumTemplate
+
+    if desilike_jax.jax is None:
+        pytest.skip('jax is not available')
+
+    theory = DensitySplitTracerPowerSpectrumMultipoles(k=np.linspace(0.02, 0.08, 3), ells=(0, 2), quantiles=(1,),
+                                                       template=FixedPowerSpectrumTemplate(z=0.5, fiducial='DESI'),
+                                                       model='1-loop',
+                                                       qg_anisotropic_stochastic=True,
+                                                       composite_loop_nq=4, composite_loop_nx=4, composite_loop_nphi=4)
+    zero_stochastic = {'s0qg1': 0., 's0muqg1': 0., 's2qg1': 0., 's2muqg1': 0.}
+    base = np.asarray(theory(**zero_stochastic))
+    for name in ['s0qg1', 's0muqg1', 's2qg1', 's2muqg1']:
+        delta = 0.1
+        plus = np.asarray(theory(**{**zero_stochastic, name: delta}))
+        minus = np.asarray(theory(**{**zero_stochastic, name: -delta}))
+        second_difference = plus + minus - 2. * base
+        scale = max(1., np.max(np.abs(plus)), np.max(np.abs(minus)), np.max(np.abs(base)))
+
+        assert np.max(np.abs(plus - base)) > 1e-10
+        assert np.max(np.abs(second_difference)) < 1e-10 * scale
 
 
 def test_wiggle_split_template():
@@ -2171,6 +2241,14 @@ def test_folpsv2():
         theory()
         test(theory)
         test(theory, emulate='pt')
+
+    template = DirectPowerSpectrumTemplate()
+    theory = FOLPSv2TracerPowerSpectrumMultipoles(template=template, prior_basis='tcm_chudaykin_aap')
+    assert {'b1p', 'b2p', 'bsp', 'b3p', 'alpha0p', 'sn0p', 'X_FoG_pp'} <= set(theory.init.params.basenames())
+    theory()
+    theory = FOLPSv2TracerBispectrumMultipoles(template=template, prior_basis='tcm_chudaykin_aap')
+    assert {'b1p', 'b2p', 'bsp', 'c1p', 'c2p', 'Pshotp', 'Bshotp', 'X_FoG_bp'} <= set(theory.init.params.basenames())
+    theory()
 
 
 

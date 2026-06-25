@@ -172,6 +172,7 @@ class BaseSampler(BaseClass, ABC, metaclass=BaseSamplerMeta):
             if self.mpicomm.rank == 0:
                 self.log_info("Successfully jit input likelihood.")
         except:
+            self._likelihood = likelihood
             if self.mpicomm.rank == 0:
                 self.log_info("Could *not* jit input likelihood.")
 

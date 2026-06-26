@@ -15,6 +15,13 @@ FOLPS full-shape with TaylorEmulator on FOLPSPTSpectrum2Poles:
     Same as above but the PT sub-graph is replaced by a degree-3 Taylor emulator
     fitted once before timing.
 
+COMET full-shape (GP-emulator-based):
+    COMETTracerSpectrum2Poles (+ COMETTracerSpectrum3Poles, optionally) →
+    Spectrum2(3)PolesObservable → ObservablesGaussianLikelihood → Posterior.
+    ``direct=True`` uses the ``pt=False`` path (comet's monolithic Pell()/
+    Bell_Sugi(), no separate PT calculator) instead of the default, shared-PT
+    PX_ell()/BX_ell_Sugi()-decomposed path -- see build_posterior_comet().
+
 Run directly::
 
     python -m desilike.tests.benchmark
@@ -32,7 +39,9 @@ from desilike.theories.galaxy_clustering import (BAOSpectrum2Template,
                                                  DampedBAOWigglesPTSpectrum2Poles,
                                                  DampedBAOWigglesTracerCorrelation2Poles,
                                                  CosmoprimoCosmology, DirectSpectrum2Template,
-                                                 FOLPSTracerSpectrum2Poles, FOLPSTracerSpectrum3Poles)
+                                                 FOLPSTracerSpectrum2Poles, FOLPSTracerSpectrum3Poles,
+                                                 COMETPTSpectrum2Poles, COMETPTSpectrum3Poles,
+                                                 COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles)
 from desilike.observables import Correlation2PolesObservable, Spectrum2PolesObservable, Spectrum3PolesObservable
 from desilike.likelihoods import ObservablesGaussianLikelihood
 
@@ -162,6 +171,86 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False,
     return Posterior(likelihood, prior=CustomPrior(get_params(likelihood)))
 
 
+# ── COMET full-shape pipeline ────────────────────────────────────────────────
+
+ELLS_COMET = (0, 2, 4)
+Z_COMET = 1.0
+K_COMET = np.linspace(0.02, 0.3, 60)
+K3_COMET = np.column_stack([np.linspace(0.02, 0.1, 11)] * 2)
+ELLS3_COMET = ((0, 0, 0), (2, 0, 2))
+
+
+def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='EggScoSmi+Comet',
+                          direct=False, include_3poles=False, k3=K3_COMET, ells3=ELLS3_COMET):
+    """COMET full-shape pipeline.
+
+    With ``direct=True``, both COMETTracerSpectrum2Poles and (if requested)
+    COMETTracerSpectrum3Poles use ``pt=False`` (comet's monolithic, bias-combined
+    Pell()/Bell_Sugi(), no separate PT calculator/diagram decomposition) instead
+    of the default shared-PT path -- compare the two to see whether skipping the
+    PX_ell()/BX_ell_Sugi() decomposition is worth it for a single (non-shared)
+    tracer. With ``include_3poles=True``, COMETTracerSpectrum3Poles gets its own
+    COMETPTSpectrum3Poles (unlike FOLPS, COMET's power-spectrum and bispectrum PTs
+    are different classes -- they cannot share one PT sub-graph), but both PTs
+    share the same ``cosmo`` (so e.g. the narrowed ``h`` prior below applies to
+    both).
+    """
+    n2 = len(ells) * len(k)
+    rng = np.random.default_rng(42)
+
+    # COMET's GP emulator is only trained/valid over a finite cosmological hypercube;
+    # _apply_cosmo_range_comet_emulator() already narrows omega_cdm/omega_b/n_s/logA to
+    # it but (as of writing) leaves 'h' at CosmoprimoCosmology's generic (0.1, 10.0)
+    # prior -- low h (≲0.5) makes comet's spline interpolation (interp1d/cubic2) produce
+    # NaN (verified directly), which a profiler exploring the full prior box (e.g. Minuit)
+    # can and does hit. Narrow it here, on a cosmo built upfront and threaded through (a
+    # post-hoc get_params(theory).select('h').update(...) does *not* propagate -- the
+    # Posterior/likelihood machinery ends up reading a different copy of the parameter).
+    cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial='DESI')
+    for param in get_params(cosmo).select(basename='m_ncdm'):
+        param.update(fixed=False)
+    #get_params(cosmo).select(basename='h')[0].update(prior=dict(dist='uniform', limits=(0.55, 0.85)))
+
+    if direct:
+        theory = COMETTracerSpectrum2Poles(k=k, z=z, ells=ells, prior_basis=prior_basis, pt=False, cosmo=cosmo)
+    else:
+        pt = COMETPTSpectrum2Poles(k=k, z=z, ells=ells, cosmo=cosmo)
+        theory = COMETTracerSpectrum2Poles(k=k, z=z, ells=ells, prior_basis=prior_basis, pt=pt)
+    # Anchor the mock "data" to the theory's own prediction at its default parameters,
+    # with small *relative* noise (1%, floored) -- pure zero-mean noise at a fixed
+    # *absolute* scale (the original approach here) makes chi2 ~ sum(theory**2)/variance
+    # whenever the model amplitude (~1e3-1e4 for COMET, vs. the noise scale 1e2 used
+    # below) is far larger than the noise: the "best fit" then just minimizes the
+    # model's overall amplitude (e.g. by riding h to its prior boundary, where the
+    # model happens to be smallest) instead of recovering anything meaningful --
+    # verified directly (logpdf improves monotonically toward h's boundary purely from
+    # shrinking model amplitude, even with bias/counterterm parameters held fixed).
+    theory_pred2 = np.asarray(compile(theory)()).ravel()
+    noise_std2 = np.maximum(0.01 * np.abs(theory_pred2), 1.0)
+    data2 = theory_pred2 #+ rng.normal(scale=noise_std2)
+    observable2 = Spectrum2PolesObservable(data=data2, theory=theory, k=k, ells=ells)
+    observables = [observable2]
+    covariances = [np.diag((100. + noise_std2)**2)]
+
+    if include_3poles:
+        if direct:
+            theory3 = COMETTracerSpectrum3Poles(k=k3, z=z, ells=ells3, prior_basis=prior_basis, pt=False, cosmo=cosmo)
+        else:
+            pt3 = COMETPTSpectrum3Poles(k=k3, z=z, ells=ells3, cosmo=cosmo)
+            theory3 = COMETTracerSpectrum3Poles(k=k3, z=z, ells=ells3, prior_basis=prior_basis, pt=pt3)
+        # See the 2pt comment above -- same theory-anchored, 1%-relative-noise mock.
+        theory_pred3 = np.asarray(compile(theory3)()).ravel()
+        noise_std3 = np.maximum(0.01 * np.abs(theory_pred3), 1.0)
+        data3 = theory_pred3 #+ rng.normal(scale=noise_std3)
+        observable3 = Spectrum3PolesObservable(data=data3, theory=theory3, k=k3, ells=ells3)
+        observables.append(observable3)
+        covariances.append(np.diag((100. + noise_std3)**2))
+
+    from scipy.linalg import block_diag
+    likelihood = ObservablesGaussianLikelihood(observables=observables, covariance=block_diag(*covariances))
+    return Posterior(likelihood)
+
+
 # ── timing harness ───────────────────────────────────────────────────────────
 
 def _bench(label, fn, number=5, warmup=3):
@@ -180,7 +269,8 @@ def _bench(label, fn, number=5, warmup=3):
     return dt
 
 
-def run(label, build_fn, vary_param=None, batch_size=8, run=('eager', 'jit', 'grad', 'vmap', 'profile'), **kwargs):
+def run(label, build_fn, vary_param=None, batch_size=8, run=('eager', 'jit', 'grad', 'vmap', 'profile'),
+       profile_kwargs=None, **kwargs):
     """Compile and benchmark one pipeline variant."""
     print(f'\n=== {label} ===')
     pipe = compile(build_fn())
@@ -213,7 +303,9 @@ def run(label, build_fn, vary_param=None, batch_size=8, run=('eager', 'jit', 'gr
     if 'profile' in run:
         from desilike import profilers
         profiler = profilers.Profiler(pipe, kernel=profilers.Minuit(), rng=42)
-        profiler.maximize()
+        t0 = time.perf_counter()
+        profiler.maximize(**(profile_kwargs or {}))
+        print(f'  {"profile (maximize)":<26s} {(time.perf_counter() - t0) * 1e3:9.1f} ms total')
         profiles = profiler.profiles
         print(profiles.to_stats(tablefmt='pretty'))
 
@@ -297,7 +389,40 @@ def main(test=('folps_multi', 'folps_multi_emu')):
         run('2pt+3pt with analytic marg. (alpha*+sn* → best)', lambda: build_posterior_folps(tracers=tracers, marginalize=True, include_3poles=True),
             vary_param=f'logA', warmup=2, number=2, run=('eager', 'jit'))
 
+    if 'comet' in test:
+        print(f'\n{"─" * 60}')
+        print(f'COMET: ells={ELLS_COMET}, k=linspace(0.02, 0.3, {len(K_COMET)}) ({len(K_COMET)} points), '
+            f'data size={len(ELLS_COMET) * len(K_COMET)}')
+        print(f'{"─" * 60}')
+        # Now that the mock data is theory-anchored (see build_posterior_comet's
+        # comment), the chi2 surface has genuine structure for Minuit to climb (it no
+        # longer just rides a parameter to its prior boundary), which makes full
+        # convergence much slower; cap iterations here purely for benchmark wall-clock
+        # purposes, same reasoning as comet_3poles below.
+        profile_kwargs = dict(max_iterations=2000)
+        run('shared PT (PX_ell)', lambda: build_posterior_comet(direct=False),
+            vary_param='b1', warmup=2, number=5, run=('jit', 'grad', 'profile'), profile_kwargs=profile_kwargs)
+        run('direct (Pell, pt=False)', lambda: build_posterior_comet(direct=True),
+            vary_param='b1', warmup=2, number=5, run=('jit', 'grad', 'profile'), profile_kwargs=profile_kwargs)
+
+    if 'comet_3poles' in test:
+        print(f'\n{"─" * 60}')
+        print(f'COMET 2pt+3pt: ells2={ELLS_COMET}, ells3={ELLS3_COMET}, '
+            f'k2=linspace(0.02, 0.3, {len(K_COMET)}) ({len(K_COMET)} pts), '
+            f'k3 diagonal ({len(K3_COMET)} pts), '
+            f'data size={len(ELLS_COMET) * len(K_COMET) + len(ELLS3_COMET) * len(K3_COMET)}')
+        print(f'{"─" * 60}')
+        # 19 free params (incl. cnloB/NB0/MB0) and an expensive bispectrum evaluation per
+        # call means Minuit's default max_iterations=1e5 can take a very long time without
+        # converging; cap it here purely for benchmark wall-clock purposes (this is timing
+        # the cost-per-iteration machinery, not chasing a converged fit).
+        profile_kwargs = dict(max_iterations=500)
+        run('shared PT (PX_ell/BX_ell_Sugi)', lambda: build_posterior_comet(direct=False, include_3poles=True),
+            vary_param='b1', warmup=2, number=5, run=('jit', 'grad', 'profile'), profile_kwargs=profile_kwargs)
+        run('direct (Pell/Bell_Sugi, pt=False)', lambda: build_posterior_comet(direct=True, include_3poles=True),
+            vary_param='b1', warmup=2, number=5, run=('jit', 'grad', 'profile'), profile_kwargs=profile_kwargs)
+
 
 if __name__ == '__main__':
 
-    main(test=('folps_3poles',))
+    main(test=('comet',))

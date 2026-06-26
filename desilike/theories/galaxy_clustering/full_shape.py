@@ -2742,7 +2742,8 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         ba = fiducial.get_background()
         self._DH_fid = float(constants.c / 1e3 / (100. * ba.efunc(self.z)))
         self._DM_fid = float(ba.comoving_transverse_distance(self.z))
-        self._D_fid, self._f_fid = ba.growth_factor(self.z), ba.growth_rate(self.z)
+        self._AsD_fid = (jnp.exp(fiducial['logA']) * 10**(-10))**0.5 * ba.growth_factor(self.z)
+        self._f_fid = ba.growth_rate(self.z)
 
     def __call__(self):
         import jaxeffort
@@ -2751,6 +2752,7 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         theta = jnp.array([self.z, self.cosmo['logA'], self.cosmo['n_s'], self.cosmo['H0'], self.cosmo['omega_b'],
                            self.cosmo['omega_cdm'], self.cosmo['m_ncdm_tot'], self.cosmo['w0_fld'], self.cosmo['wa_fld']])
         D, f = ba.growth_factor(self.z), ba.growth_rate(self.z)
+        AsD = D * (jnp.exp(self.cosmo['logA']) * 10**(-10))**0.5
         # Alcock-Paczynski from the JAXEffort cosmology distances (qpar = D_H/D_H_fid, qper = D_M/D_M_fid).
         ba = self.cosmo.get_background()
         DH = constants.c / 1e3 / (100. * ba.efunc(self.z))
@@ -2764,7 +2766,7 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
                 self.b1.value, self.b2.value, self.bs.value, self.b3.value,
                 self.alpha0.value, self.alpha2.value, self.alpha4.value, self.alpha6.value,
                 self.sn0.value, self.sn2.value, self.sn4.value,
-                f, self._fsat, self._sigv, self._nbar, A=D / self._D_fid,
+                f, self._fsat, self._sigv, self._nbar, A=AsD / self._AsD_fid,
                 A_AP=A_AP if 'aap' in self._prior_basis else 1., rept='rept' in self._model)
         else:
             b1, b2 = self.b1.value, self.b2.value
@@ -2859,32 +2861,65 @@ def _comet_setup_fiducial(cosmo, z, model, fiducial, use_mpc=False):
     from comet.background import define_fiducial
     md = load_model_h5(comet.model_path(model))
     fid_comet = _cosmo_to_comet(fiducial) | dict(z=float(z))
-    a1 = lambda x: jnp.atleast_1d(jnp.asarray(x, dtype=jnp.float64))
+    # comet's background/growth functions accept 0-d arrays/python scalars directly
+    # (comet.background._a1() promotes internally) -- no need to pre-wrap with
+    # jnp.atleast_1d here.
     H_fid, Dm_fid = define_fiducial(
-        a1(z), a1(fid_comet['wb']), a1(fid_comet['wc']), a1(fid_comet['ns']),
-        a1(fid_comet['Mnu']), a1(fid_comet['h']), use_mpc=use_mpc)
+        z, fid_comet['wb'], fid_comet['wc'], fid_comet['ns'], fid_comet['Mnu'], fid_comet['h'], use_mpc=use_mpc)
     return de_model, md, fid_comet, H_fid, Dm_fid
 
 
-def _comet_compute_qpar_qper_sigma8(z, params, fid, de_model, H_fid, Dm_fid, use_mpc=False, q_tr_lo=None):
-    """Shared __call__ logic: AP params (compute_ap_params) + growth-based
-    amplitude-scaling proxy for sigma8(z) (compute_growth_amplitude), squeezed to
-    plain JAX scalars (shape ()) -- see COMETPTSpectrum2Poles.__call__'s longer
-    comment for why (desilike's own scalar parameter-value convention; comet's
-    functions need at-least-1d inputs, but jnp.squeeze keeps the outputs jax-traceable
-    under jit/grad, unlike float()). Returns (qpar, qper, sigma8, sigma8_fid)."""
-    from comet.background import compute_ap_params, compute_growth_amplitude
-    a1 = lambda x: jnp.atleast_1d(jnp.asarray(x, dtype=jnp.float64))
-    qpar, qper = compute_ap_params(
-        a1(z), a1(params['wb']), a1(params['wc']), a1(params['Mnu']), a1(params['h']),
-        a1(params['Ok']), a1(params['w0']), a1(params['wa']), de_model,
-        H_fid, Dm_fid, q_tr_lo=q_tr_lo, use_mpc=use_mpc)
-    sigma8 = compute_growth_amplitude(
-        a1(z), a1(params['wb']), a1(params['wc']), a1(params['Mnu']), a1(params['As']),
-        a1(params['h']), a1(params['Ok']), a1(params['w0']), a1(params['wa']), de_model,
-        a1(fid['wb']), a1(fid['wc']), a1(fid['Mnu']), a1(fid['As']), a1(fid['h']))
-    qpar, qper, sigma8 = jnp.squeeze(qpar), jnp.squeeze(qper), jnp.squeeze(sigma8)
-    return qpar, qper, sigma8, jnp.ones_like(sigma8)
+def _clip_and_warn_comet_ranges(wb, wc, ns, Mnu, As, s12, f):
+    """Check (wb, wc, ns, Mnu, As, s12, f) -- comet's actual GP inputs -- against
+    comet.ranges' documented trained hypercube and clip them to it. `h` (along with
+    w0/wa/Ok) is *not* a GP input (comet's GPs are trained on (wb, wc, ns, s12, f[,
+    Mnu, As]), not h -- see comet/ranges.py's module docstring), so it has no range of
+    its own to check; but it can push the *derived* s12/f out of their trained range
+    (e.g. low h), so this must run *after* deriving them (comet.background.compute_s12_f),
+    not instead of bounding h itself.
+
+    wb/wc/ns/Mnu/As are normally already within range courtesy of
+    _apply_cosmo_range_comet_emulator()'s prior-limit intersection at construction
+    time -- clipping them here too is a defensive no-op in the common case, not the
+    primary fix (which is for s12/f).
+
+    Warns (via a jax.pure_callback, so it still fires under jit/grad/vmap -- desilike
+    has no established jax.debug.callback usage, pure_callback is the codebase's one
+    trace-crossing primitive) whenever clipping changes anything: the resulting
+    prediction then describes the *clipped* point, not the one actually requested,
+    which for a sampler effectively means "treat this as ~zero-probability", not
+    "silently fine to use".
+
+    Two non-obvious bits needed to make the warning actually fire reliably:
+    - `was_clipped` is stop_gradient'd before the callback: pure_callback's JVP rule
+      unconditionally raises if it's ever asked for one, so a value that still carries
+      a differentiable dependency on the traced inputs cannot be fed to it without
+      breaking jax.grad through this theory (verified: stop_gradient avoids this
+      entirely, and the warning still fires correctly under jit/grad/vmap).
+    - the callback's *return value* is mixed (with a zero weight) into `s12`, one of
+      the function's real, used-downstream outputs: otherwise XLA's dead-code
+      elimination drops the (output-unused) pure_callback entirely under jit, and the
+      warning silently never fires (verified directly -- this is not hypothetical).
+    """
+    from comet.ranges import clip_emulator_ranges
+    wb, wc, ns, Mnu, As, s12, f, was_clipped = clip_emulator_ranges(wb, wc, ns, Mnu, As, s12, f)
+
+    def _warn(was_clipped):
+        if bool(np.any(was_clipped)):
+            import warnings
+            warnings.warn(
+                "comet emulator inputs (cosmological parameters and/or the derived "
+                "s12/f) were clipped to comet's GP-trained range (see comet.ranges) -- "
+                "the resulting prediction describes the clipped point, not the one "
+                "requested (e.g. h has no trained range of its own, but can push s12/f "
+                "out of theirs).")
+        return was_clipped
+
+    was_clipped_sg = jax.lax.stop_gradient(was_clipped)
+    warned = jax.pure_callback(_warn, jax.ShapeDtypeStruct(was_clipped.shape, was_clipped.dtype),
+                                was_clipped_sg, vmap_method='sequential')
+    s12 = s12 + 0.0 * warned.astype(s12.dtype)
+    return wb, wc, ns, Mnu, As, s12, f
 
 
 class COMETPTSpectrum2Poles(Calculator):
@@ -2934,27 +2969,50 @@ class COMETPTSpectrum2Poles(Calculator):
 
     def __call__(self):
         from comet.px_ell import build_decomposed_parts_from_raw_params
+        from comet.background import compute_ap_params, compute_growth_amplitude, compute_s12_f
         params = _cosmo_to_comet(self.cosmo)
         avir = self.avir.value if 'VDG' in self._model else None
 
-        a1 = lambda x: jnp.atleast_1d(jnp.asarray(x, dtype=jnp.float64))
-        # _get_canonical_params() only ever uses the *ratio* sigma8/sigma8_fid, so
-        # sigma8_fid is fixed to 1 and sigma8 carries the full ratio (see
+        # comet's functions accept 0-d arrays/python scalars directly (no need to
+        # pre-wrap with jnp.atleast_1d -- see comet.background._a1()'s docstring), but
+        # still return 1-d (batch-shaped) outputs, hence the jnp.squeeze (which stays
+        # jax-traceable under jit/grad, unlike float()) on the way out.
+        qpar, qper = compute_ap_params(
+            self.z, params['wb'], params['wc'], params['Mnu'], params['h'],
+            params['Ok'], params['w0'], params['wa'], self._de_model,
+            self._H_fid, self._Dm_fid, use_mpc=self._use_mpc)
+        # _get_canonical_params() only ever uses the *ratio* AsD/AsD_fid, so AsD_fid is
+        # fixed to 1 and AsD carries the full ratio (see
         # comet.background.compute_growth_amplitude's docstring for the (very good,
         # exact when wb/wc match between fiducial and sampled cosmology) approximation
-        # this makes relative to a true sigma8(z) ratio).
-        self.qpar, self.qper, self.sigma8, self.sigma8_fid = _comet_compute_qpar_qper_sigma8(
-            self.z, params, self._fid_comet, self._de_model, self._H_fid, self._Dm_fid, use_mpc=self._use_mpc)
+        # this makes relative to a true sigma8(z) ratio -- AsD ("sqrt(As)*D(z)") is
+        # *not* an actual sigma8(z), just functionally analogous, hence the name).
+        AsD = compute_growth_amplitude(
+            self.z, params['wb'], params['wc'], params['Mnu'], params['As'],
+            params['h'], params['Ok'], params['w0'], params['wa'], self._de_model,
+            self._fid_comet['wb'], self._fid_comet['wc'], self._fid_comet['Mnu'],
+            self._fid_comet['As'], self._fid_comet['h'])
+        self.qpar, self.qper, self.AsD = jnp.squeeze(qpar), jnp.squeeze(qper), jnp.squeeze(AsD)
+        self.AsD_fid = jnp.ones_like(self.AsD)
 
         md = self._md
-        diag_part, p6_part, noise_part, f, s12 = build_decomposed_parts_from_raw_params(
-            jnp.asarray(self.k), list(self.ells), md.model_shape, md.model_linear, md.model_ratios,
-            md.P6, md.k_table, self._gl_x, self._gl_weights, a1(1.0), md.nk, md.nkloop,
-            a1(params['wb']), a1(params['wc']), a1(params['ns']), a1(params['Mnu']), a1(params['As']),
-            a1(params['h']), a1(params['w0']), a1(params['wa']), a1(self.z), a1(params['Ok']),
-            self._de_model, a1(avir) if avir is not None else None,
-            self._H_fid, self._Dm_fid, md.emu_h_fid, md.emu_as_fid, md.emu_z_fid,
-            q_tr_lo=(a1(self.qper), a1(self.qpar)), use_mpc=self._use_mpc)
+        s12, f = compute_s12_f(md.model_shape, self.z, params['wb'], params['wc'], params['ns'],
+                                params['Mnu'], params['As'], params['h'], params['Ok'],
+                                params['w0'], params['wa'], self._de_model,
+                                md.emu_h_fid, md.emu_as_fid, md.emu_z_fid)
+        # h (and w0/wa/Ok) has no comet emulator range of its own (it's not a GP input
+        # -- see comet/ranges.py), but it can push the *derived* s12/f out of their
+        # trained range; clip (and warn) here, right before the GP query, rather than
+        # silently letting it extrapolate into NaN territory.
+        wb, wc, ns, Mnu, As, s12, f = _clip_and_warn_comet_ranges(
+            params['wb'], params['wc'], params['ns'], params['Mnu'], params['As'], s12, f)
+        diag_part, p6_part, noise_part = build_decomposed_parts_from_raw_params(
+            jnp.asarray(self.k), list(self.ells), md.model_linear, md.model_ratios,
+            md.P6, md.k_table, self._gl_x, self._gl_weights, 1.0, md.nk, md.nkloop,
+            wb, wc, ns, Mnu, As, params['h'], params['w0'], params['wa'], self.z, params['Ok'],
+            self._de_model, s12, f, avir,
+            self._H_fid, self._Dm_fid,
+            q_tr_lo=(self.qper, self.qpar), use_mpc=self._use_mpc)
         # table shape: (ndiagrams, nells, nk) -- only the 19 PT diagrams + 3 noise
         # templates (no octopole/P6 contribution), matching the original
         # PX_ell(X_list=self._diagrams) call's scope: P6 was never in self._diagrams,
@@ -2963,14 +3021,14 @@ class COMETPTSpectrum2Poles(Calculator):
         self.f = jnp.squeeze(f)
 
     def tree_flatten(self):
-        children = [self.qpar, self.qper, self.table, self.f, self.sigma8, self.sigma8_fid]
+        children = [self.qpar, self.qper, self.table, self.f, self.AsD, self.AsD_fid]
         auw = {'z': self.z, 'k': self.k, 'ells': self.ells}
         return children, auw
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.qpar, obj.qper, obj.table, obj.f, obj.sigma8, obj.sigma8_fid = children
+        obj.qpar, obj.qper, obj.table, obj.f, obj.AsD, obj.AsD_fid = children
         obj.z = aux['z']
         obj.k = aux['k']
         obj.ells = aux['ells']
@@ -3147,37 +3205,49 @@ class COMETTracerSpectrum2Poles(Calculator):
         pattern this module's own tests exercise); pre-exists this pt=False path
         (reproduces on plain COMETPTSpectrum2Poles too, differentiating avir)."""
         from comet.pell import eval_pell_from_raw_params
-        from comet.background import compute_s12_f
+        from comet.background import compute_ap_params, compute_growth_amplitude, compute_s12_f
         params = _cosmo_to_comet(self.cosmo)
         avir = self.avir.value if 'VDG' in self._model else None
-        a1 = lambda x: jnp.atleast_1d(jnp.asarray(x, dtype=jnp.float64))
-        self.qpar, self.qper, self.sigma8, self.sigma8_fid = _comet_compute_qpar_qper_sigma8(
-            self.z, params, self._fid_comet, self._de_model, self._H_fid, self._Dm_fid, use_mpc=self._use_mpc)
+        # comet's functions accept 0-d arrays/python scalars directly (no need to
+        # pre-wrap with jnp.atleast_1d -- see comet.background._a1()'s docstring), but
+        # still return 1-d (batch-shaped) outputs, hence the jnp.squeeze below.
+        qpar, qper = compute_ap_params(
+            self.z, params['wb'], params['wc'], params['Mnu'], params['h'],
+            params['Ok'], params['w0'], params['wa'], self._de_model,
+            self._H_fid, self._Dm_fid, use_mpc=self._use_mpc)
+        # AsD ("sqrt(As)*D(z)") is not an actual sigma8(z), just functionally
+        # analogous -- see comet.background.compute_growth_amplitude's docstring.
+        AsD = compute_growth_amplitude(
+            self.z, params['wb'], params['wc'], params['Mnu'], params['As'],
+            params['h'], params['Ok'], params['w0'], params['wa'], self._de_model,
+            self._fid_comet['wb'], self._fid_comet['wc'], self._fid_comet['Mnu'],
+            self._fid_comet['As'], self._fid_comet['h'])
+        self.qpar, self.qper, self.AsD = jnp.squeeze(qpar), jnp.squeeze(qper), jnp.squeeze(AsD)
+        self.AsD_fid = jnp.ones_like(self.AsD)
         md = self._md
-        # Only the (cheap) shape GP + growth are needed for f here (get_canonical_params()
-        # needs it for the ClassPT/PBJ/DESIct counterterm-basis conversions) -- the
-        # (expensive) ratios GP is evaluated again, redundantly, inside
-        # eval_pell_from_raw_params() below; this keeps the two paths independent and
-        # simple rather than threading s12/f through eval_pell_from_raw_params's signature.
-        _, f = compute_s12_f(md.model_shape, a1(self.z), a1(params['wb']), a1(params['wc']), a1(params['ns']),
-                              a1(params['Mnu']), a1(params['As']), a1(params['h']), a1(params['Ok']),
-                              a1(params['w0']), a1(params['wa']), self._de_model,
-                              md.emu_h_fid, md.emu_as_fid, md.emu_z_fid)
+        s12, f = compute_s12_f(md.model_shape, self.z, params['wb'], params['wc'], params['ns'],
+                                params['Mnu'], params['As'], params['h'], params['Ok'],
+                                params['w0'], params['wa'], self._de_model,
+                                md.emu_h_fid, md.emu_as_fid, md.emu_z_fid)
+        # h (and w0/wa/Ok) has no comet emulator range of its own (it's not a GP input
+        # -- see comet/ranges.py), but it can push the *derived* s12/f out of their
+        # trained range; clip (and warn) here, right before the GP query, rather than
+        # silently letting it extrapolate into NaN territory.
+        wb, wc, ns, Mnu, As, s12, f = _clip_and_warn_comet_ranges(
+            params['wb'], params['wc'], params['ns'], params['Mnu'], params['As'], s12, f)
         self.f = jnp.squeeze(f)
 
         canonical = self._get_canonical_params(rescale_counterterms=False)
         b1, b2, g2, g21, c0, c2, c4, cnlo, NP0, NP20, NP22 = (
             canonical[name] for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22'))
-        h_rescale = None if self._use_mpc else params['h']
         poles = eval_pell_from_raw_params(
             jnp.asarray(self.k), list(self.ells), (0, 2, 4),
-            md.model_shape, md.model_linear, md.model_ratios, md.P6, md.k_table,
-            self._gl_x, self._gl_weights, a1(1.0), md.nk, md.nkloop, md.s12_for_p6,
-            md.emu_h_fid, md.emu_as_fid, md.emu_z_fid, self._H_fid, self._Dm_fid,
-            a1(params['wb']), a1(params['wc']), a1(params['ns']), a1(params['Mnu']), a1(params['As']),
-            a1(params['h']), a1(params['w0']), a1(params['wa']), a1(self.z), a1(params['Ok']), self._de_model,
-            a1(b1), a1(b2), a1(g2), a1(g21), a1(c0), a1(c2), a1(c4), a1(cnlo),
-            a1(avir) if avir is not None else None, a1(NP0), a1(NP20), a1(NP22),
+            md.model_linear, md.model_ratios, md.P6, md.k_table,
+            self._gl_x, self._gl_weights, 1.0, md.nk, md.nkloop, md.s12_for_p6,
+            self._H_fid, self._Dm_fid,
+            wb, wc, ns, Mnu, As, params['h'], params['w0'], params['wa'],
+            self.z, params['Ok'], self._de_model, s12, f,
+            b1, b2, g2, g21, c0, c2, c4, cnlo, avir, NP0, NP20, NP22,
             use_mpc=self._use_mpc)
         self.poles = jnp.transpose(poles[..., 0], (1, 0))
         return self.poles
@@ -3191,7 +3261,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             bias_basis, counterterm_basis = self._prior_basis.split('+')
 
         A_AP = 1. / (pt.qper**2 * pt.qpar) if 'aap' in self._prior_basis else 1.
-        A = pt.sigma8 / pt.sigma8_fid
+        A = pt.AsD / pt.AsD_fid
 
         def g(name):
             param = getattr(self, name, None)
@@ -3353,7 +3423,7 @@ class COMETPTSpectrum3Poles(Calculator):
 
     def __call__(self):
         from comet.bell_sugi import build_bx_ell_sugi_parts_from_raw_params
-        from comet.background import compute_s12_f
+        from comet.background import compute_ap_params, compute_growth_amplitude, compute_s12_f
         params = _cosmo_to_comet(self.cosmo)
         avir = self.avir.value if 'VDG' in self._model else None
         # cnloB is currently always 0 for this estimator (see comet.bell_sugi's module
@@ -3361,38 +3431,57 @@ class COMETPTSpectrum3Poles(Calculator):
         # EFT counterterm branch for 'EFT'/'VDG_infty_ctr' models, which this estimator
         # doesn't support, so self.cnloB has no effect here yet.
 
-        a1 = lambda x: jnp.atleast_1d(jnp.asarray(x, dtype=jnp.float64))
-        self.qpar, self.qper, self.sigma8, self.sigma8_fid = _comet_compute_qpar_qper_sigma8(
-            self.z, params, self._fid_comet, self._de_model, self._H_fid, self._Dm_fid, use_mpc=self._use_mpc)
+        # comet's functions accept 0-d arrays/python scalars directly (no need to
+        # pre-wrap with jnp.atleast_1d -- see comet.background._a1()'s docstring), but
+        # still return 1-d (batch-shaped) outputs, hence the jnp.squeeze below.
+        qpar, qper = compute_ap_params(
+            self.z, params['wb'], params['wc'], params['Mnu'], params['h'],
+            params['Ok'], params['w0'], params['wa'], self._de_model,
+            self._H_fid, self._Dm_fid, use_mpc=self._use_mpc)
+        # AsD ("sqrt(As)*D(z)") is not an actual sigma8(z), just functionally
+        # analogous -- see COMETPTSpectrum2Poles.__call__'s comment /
+        # comet.background.compute_growth_amplitude's docstring.
+        AsD = compute_growth_amplitude(
+            self.z, params['wb'], params['wc'], params['Mnu'], params['As'],
+            params['h'], params['Ok'], params['w0'], params['wa'], self._de_model,
+            self._fid_comet['wb'], self._fid_comet['wc'], self._fid_comet['Mnu'],
+            self._fid_comet['As'], self._fid_comet['h'])
+        self.qpar, self.qper, self.AsD = jnp.squeeze(qpar), jnp.squeeze(qper), jnp.squeeze(AsD)
+        self.AsD_fid = jnp.ones_like(self.AsD)
 
         md = self._md
+        s12, f = compute_s12_f(md.model_shape, self.z, params['wb'], params['wc'], params['ns'],
+                                params['Mnu'], params['As'], params['h'], params['Ok'],
+                                params['w0'], params['wa'], self._de_model,
+                                md.emu_h_fid, md.emu_as_fid, md.emu_z_fid)
+        # h (and w0/wa/Ok) has no comet emulator range of its own (it's not a GP input
+        # -- see comet/ranges.py), but it can push the *derived* s12/f out of their
+        # trained range; clip (and warn) here, right before the GP query, rather than
+        # silently letting it extrapolate into NaN territory.
+        wb, wc, ns, Mnu, As, s12, f = _clip_and_warn_comet_ranges(
+            params['wb'], params['wc'], params['ns'], params['Mnu'], params['As'], s12, f)
         parts = build_bx_ell_sugi_parts_from_raw_params(
-            jnp.asarray(self.k), list(self.ells), md.model_shape, md.model_linear, md.model_ratios,
+            jnp.asarray(self.k), list(self.ells), md.model_linear, md.model_ratios,
             md.P6, md.k_table, md.nk, self._mu1_g, self._t_g, self._cphi_g, self._proj_ops_k3,
-            a1(params['wb']), a1(params['wc']), a1(params['ns']), a1(params['Mnu']), a1(params['As']),
-            a1(params['h']), a1(params['w0']), a1(params['wa']), a1(self.z), a1(params['Ok']),
-            self._de_model, a1(avir) if avir is not None else None,
-            self._H_fid, self._Dm_fid, md.emu_h_fid, md.emu_as_fid, md.emu_z_fid,
-            q_tr_lo=(a1(self.qper), a1(self.qpar)), use_mpc=self._use_mpc)
+            wb, wc, ns, Mnu, As, params['h'], params['w0'], params['wa'], self.z, params['Ok'],
+            self._de_model, s12, f, avir,
+            self._H_fid, self._Dm_fid,
+            q_tr_lo=(self.qper, self.qpar), use_mpc=self._use_mpc)
         # table shape: (ndiagrams, nells, nk); diagram order matches self._diagrams
         # exactly (identical naming/ordering between the analytic and Sugiyama paths).
         self.table = jnp.stack(
             [jnp.stack([parts[ll][name][:, 0] for ll in self.ells], axis=0) for name in self._diagrams], axis=0)
-        s12, f = compute_s12_f(md.model_shape, a1(self.z), a1(params['wb']), a1(params['wc']), a1(params['ns']),
-                                a1(params['Mnu']), a1(params['As']), a1(params['h']), a1(params['Ok']),
-                                a1(params['w0']), a1(params['wa']), self._de_model,
-                                md.emu_h_fid, md.emu_as_fid, md.emu_z_fid)
         self.f = jnp.squeeze(f)
 
     def tree_flatten(self):
-        children = [self.qpar, self.qper, self.table, self.f, self.sigma8, self.sigma8_fid]
+        children = [self.qpar, self.qper, self.table, self.f, self.AsD, self.AsD_fid]
         auw = {'z': self.z, 'k': self.k, 'ells': self.ells}
         return children, auw
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.qpar, obj.qper, obj.table, obj.f, obj.sigma8, obj.sigma8_fid = children
+        obj.qpar, obj.qper, obj.table, obj.f, obj.AsD, obj.AsD_fid = children
         obj.z = aux['z']
         obj.k = aux['k']
         obj.ells = aux['ells']
@@ -3489,29 +3578,49 @@ class COMETTracerSpectrum3Poles(Calculator):
         BX_ell_Sugi() diagram decomposition) evaluated directly from this
         calculator's own cosmology dep -- see COMETTracerSpectrum2Poles._call_direct()."""
         from comet.bell_sugi import eval_bell_sugi_from_raw_params
-        from comet.background import compute_s12_f
+        from comet.background import compute_ap_params, compute_growth_amplitude, compute_s12_f
         params = _cosmo_to_comet(self.cosmo)
         avir = self.avir.value if 'VDG' in self._model else None
         # cnloB is currently always 0 for this estimator -- see COMETPTSpectrum3Poles.__call__'s comment.
-        a1 = lambda x: jnp.atleast_1d(jnp.asarray(x, dtype=jnp.float64))
-        self.qpar, self.qper, self.sigma8, self.sigma8_fid = _comet_compute_qpar_qper_sigma8(
-            self.z, params, self._fid_comet, self._de_model, self._H_fid, self._Dm_fid, use_mpc=self._use_mpc)
+        # comet's functions accept 0-d arrays/python scalars directly (no need to
+        # pre-wrap with jnp.atleast_1d -- see comet.background._a1()'s docstring), but
+        # still return 1-d (batch-shaped) outputs, hence the jnp.squeeze below.
+        qpar, qper = compute_ap_params(
+            self.z, params['wb'], params['wc'], params['Mnu'], params['h'],
+            params['Ok'], params['w0'], params['wa'], self._de_model,
+            self._H_fid, self._Dm_fid, use_mpc=self._use_mpc)
+        # AsD ("sqrt(As)*D(z)") is not an actual sigma8(z), just functionally
+        # analogous -- see COMETPTSpectrum2Poles.__call__'s comment /
+        # comet.background.compute_growth_amplitude's docstring.
+        AsD = compute_growth_amplitude(
+            self.z, params['wb'], params['wc'], params['Mnu'], params['As'],
+            params['h'], params['Ok'], params['w0'], params['wa'], self._de_model,
+            self._fid_comet['wb'], self._fid_comet['wc'], self._fid_comet['Mnu'],
+            self._fid_comet['As'], self._fid_comet['h'])
+        self.qpar, self.qper, self.AsD = jnp.squeeze(qpar), jnp.squeeze(qper), jnp.squeeze(AsD)
+        self.AsD_fid = jnp.ones_like(self.AsD)
         md = self._md
-        _, f = compute_s12_f(md.model_shape, a1(self.z), a1(params['wb']), a1(params['wc']), a1(params['ns']),
-                              a1(params['Mnu']), a1(params['As']), a1(params['h']), a1(params['Ok']),
-                              a1(params['w0']), a1(params['wa']), self._de_model,
-                              md.emu_h_fid, md.emu_as_fid, md.emu_z_fid)
+        s12, f = compute_s12_f(md.model_shape, self.z, params['wb'], params['wc'], params['ns'],
+                                params['Mnu'], params['As'], params['h'], params['Ok'],
+                                params['w0'], params['wa'], self._de_model,
+                                md.emu_h_fid, md.emu_as_fid, md.emu_z_fid)
+        # h (and w0/wa/Ok) has no comet emulator range of its own (it's not a GP input
+        # -- see comet/ranges.py), but it can push the *derived* s12/f out of their
+        # trained range; clip (and warn) here, right before the GP query, rather than
+        # silently letting it extrapolate into NaN territory.
+        wb, wc, ns, Mnu, As, s12, f = _clip_and_warn_comet_ranges(
+            params['wb'], params['wc'], params['ns'], params['Mnu'], params['As'], s12, f)
         self.f = jnp.squeeze(f)
 
         canonical = self._get_canonical_params(rescale_counterterms=False)
         b1, b2, g2, NP0, NB0, MB0 = (canonical[name] for name in ('b1', 'b2', 'g2', 'NP0', 'NB0', 'MB0'))
         parts = eval_bell_sugi_from_raw_params(
-            jnp.asarray(self.k), self.ells, md.model_shape, md.model_linear, md.model_ratios,
+            jnp.asarray(self.k), self.ells, md.model_linear, md.model_ratios,
             md.P6, md.k_table, md.nk, self._mu1_g, self._t_g, self._cphi_g, self._proj_ops_k3,
-            a1(params['wb']), a1(params['wc']), a1(params['ns']), a1(params['Mnu']), a1(params['As']),
-            a1(params['h']), a1(params['w0']), a1(params['wa']), a1(self.z), a1(params['Ok']), self._de_model,
-            a1(b1), a1(b2), a1(g2), a1(avir) if avir is not None else None, a1(MB0), a1(NP0), a1(NB0), a1(self._nbar),
-            self._H_fid, self._Dm_fid, md.emu_h_fid, md.emu_as_fid, md.emu_z_fid, use_mpc=self._use_mpc)
+            wb, wc, ns, Mnu, As, params['h'], params['w0'], params['wa'],
+            self.z, params['Ok'], self._de_model, s12, f,
+            b1, b2, g2, avir, MB0, NP0, NB0, self._nbar,
+            self._H_fid, self._Dm_fid, use_mpc=self._use_mpc)
         self.poles = jnp.stack([parts[ll][:, 0] for ll in self.ells], axis=0)
         return self.poles
 

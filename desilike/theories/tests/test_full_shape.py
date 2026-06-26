@@ -670,6 +670,39 @@ class TestCOMET:
             f'table shape mismatch: {table.shape}'
         assert np.isfinite(table).all(), 'COMETPTSpectrum2Poles: non-finite table'
 
+    def test_cosmo_sensitivity(self):
+        """COMETTracerSpectrum2Poles/3Poles: jit-vs-eager sensitivity to *cosmological*
+        parameters (h, omega_cdm, omega_b, n_s), not just bias -- regression test for
+        comet's background/growth machinery (AP via compute_ap_params, the s12/f
+        derived via compute_s12_f) under jit. Includes h=0.3, an extreme-but-finite
+        value that pushes Om0 = (omega_cdm+omega_b+omega_nu)/h**2 above 1 (so
+        Ode0 = 1-Om0 < 0) -- comet/growth.py's growth_factor_lambda used to return NaN
+        there (Ode0<=0 breaks its closed form); see comet/ranges.py and
+        growth_factor_lambda()'s docstring for the fix."""
+        from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles, COMETTracerSpectrum3Poles
+        comet_tol = dict(rtol=1e-4, atol=1e-6)
+        cosmo_overrides = [('h', 0.7), ('h', 0.3), ('omega_cdm', 0.13), ('omega_b', 0.0235), ('n_s', 0.98)]
+
+        k = np.linspace(0.02, 0.3, 60)
+        theory = COMETTracerSpectrum2Poles(k=k)
+        run = _compile(theory)
+        base = run()
+        for param_name, value in cosmo_overrides:
+            result = run(**{param_name: value})
+            assert np.isfinite(result).all(), f'COMETTracerSpectrum2Poles ({param_name}={value}): non-finite result'
+            _check_sensitivity(run, base, f'COMETTracerSpectrum2Poles ({param_name}={value})',
+                               **{param_name: value}, **comet_tol)
+
+        k3 = np.column_stack([np.linspace(0.02, 0.1, 11)] * 2)
+        theory3 = COMETTracerSpectrum3Poles(k=k3)
+        run3 = _compile(theory3)
+        base3 = run3()
+        for param_name, value in cosmo_overrides:
+            result3 = run3(**{param_name: value})
+            assert np.isfinite(result3).all(), f'COMETTracerSpectrum3Poles ({param_name}={value}): non-finite result'
+            _check_sensitivity(run3, base3, f'COMETTracerSpectrum3Poles ({param_name}={value})',
+                               **{param_name: value}, **comet_tol)
+
     def test_tracer_spectrum(self):
         """COMETTracerSpectrum2Poles: shape, sensitivity, and all bias/counterterm basis variants."""
         from desilike.theories.galaxy_clustering.full_shape import COMETTracerSpectrum2Poles

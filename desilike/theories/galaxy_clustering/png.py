@@ -8,9 +8,10 @@ PNGTracerSpectrum2Poles
 PNGTracerVelocitySpectrum2Poles
     Kaiser tracer-velocity cross power spectrum multipoles with local PNG scale-dependent bias.
 
-The scale-dependent function :math:`\\alpha(k)` and the matter power spectrum are computed
-once at compile time from a fixed fiducial cosmology (mirroring desilike_bak's
-``FixedPowerSpectrumTemplate``); only the bias / :math:`f_\\mathrm{NL}` parameters vary.
+The scale-dependent function :math:`\\alpha(k)` is always precomputed from a fixed fiducial
+cosmology at compile time.  When no ``template`` is given, the matter power spectrum and growth
+rate are also fixed; when a ``template`` calculator is provided, those quantities and
+Alcock-Paczynski distortions are supplied by the template at each call.
 """
 
 import numpy as np
@@ -18,6 +19,7 @@ import jax.numpy as jnp
 
 from ...base import Calculator
 from ...parameter import Parameter, VariableCollection
+from ..primordial_cosmology import _interp_loglog
 from .bao import ProjectToPoles
 from .template import _get_fiducial, _kw_pk
 from ._multitracer import propose_params_multitracer, assign_params
@@ -103,9 +105,11 @@ class PNGTracerSpectrum2Poles(Calculator):
     where :math:`b_{f_\mathrm{NL}} = b_\phi f_\mathrm{NL}` and :math:`b_\phi = 2 \delta_c (b_1 - p)`
     in the universal mass function approximation.
 
-    The fiducial cosmology is fixed: :math:`\alpha(k)`, the matter power spectrum and the
-    growth rate are computed once at compile time, and only the bias / :math:`f_\mathrm{NL}`
-    parameters vary.
+    :math:`\alpha(k)` is always computed at the fiducial cosmology (once at compile time).
+    When ``template`` is ``None``, :math:`P_{dd}` and :math:`f` are also fixed to the fiducial and
+    there are no Alcock-Paczynski distortions.  When a ``template`` calculator is provided,
+    :math:`P_{dd}` and :math:`f` are taken from the template at each call, and AP distortions
+    are applied via ``template.ap_k_mu``.
 
     For cross-spectra between two tracers :math:`X` and :math:`Y`, the power spectrum is
     :math:`\mathrm{FoG}_X \mathrm{FoG}_Y (b^\mathrm{eff}_X + f\mu^2)(b^\mathrm{eff}_Y + f\mu^2) P_{dd}`.
@@ -118,10 +122,6 @@ class PNGTracerSpectrum2Poles(Calculator):
         Multipole orders.
     z : float, default=1.
         Effective redshift.
-    fiducial : str, tuple, dict, or cosmoprimo.Cosmology, default='DESI'
-        Fixed fiducial cosmology used to compute :math:`\alpha(k)` and :math:`P_{dd}`.
-    engine : str, default='eisenstein_hu'
-        cosmoprimo Boltzmann engine.
     method : str, default='prim'
         How to compute :math:`\alpha(k)` (``'prim'`` or ``'transfer'``); see :func:`_png_cosmo`.
     mu : int, default=10
@@ -139,6 +139,9 @@ class PNGTracerSpectrum2Poles(Calculator):
         ``fnl_loc`` stays unnamespaced (shared); ``sn0`` is stochastic.
     shotnoise : float, default=1e4
         Shot-noise scale [(h/Mpc)\ :sup:`3`]. The ``sn0`` parameter is in units of this.
+    template : Spectrum2Template or None, default=None
+        Power spectrum template providing :math:`P_{dd}`, :math:`f`, and AP distortions.
+        When ``None``, a fixed DESI fiducial cosmology is used (no AP distortions).
     """
 
     @classmethod
@@ -184,18 +187,23 @@ class PNGTracerSpectrum2Poles(Calculator):
             ]
         return propose_params_multitracer(auto_params, tracers, stochastic=('sn0',), shared=('fnl_loc',), cross=True)
 
-    def __init__(self, k=None, ells=(0, 2), z=1., fiducial='DESI', engine='eisenstein_hu',
-                 method='prim', mu=10, mode='b-p', tracers=None, shotnoise=1e4, params=None):
-        # Nodes (Parameters) live in __init__.
+    def __init__(self, k=None, ells=(0, 2), z=1., method='prim', mu=10, mode='b-p',
+                 tracers=None, shotnoise=1e4, params=None, template=None):
+        # Nodes (Parameters + optional Calculator dep) live in __init__.
         if mode not in ('b-p', 'bphi', 'bfnl'):
             raise ValueError(f"mode must be one of 'b-p', 'bphi', 'bfnl'; got {mode!r}")
         vc = type(self).propose_params(tracers=tracers, mode=mode)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
+        if template is not None:
+            self.template = template
+            k_arr = np.linspace(0.01, 0.2, 101) if k is None else np.asarray(k, dtype='f8')
+            kin_fine = np.geomspace(min(1e-3, k_arr[0] / 2.), max(1., k_arr[-1] * 2.), 1000)
+            self.template.update(k=kin_fine)
 
-    def __post_init__(self, k=None, ells=(0, 2), z=1., fiducial='DESI', engine='eisenstein_hu',
-                      method='prim', mu=10, mode='b-p', tracers=None, shotnoise=1e4, params=None):
+    def __post_init__(self, k=None, ells=(0, 2), z=1., method='prim', mu=10, mode='b-p',
+                      tracers=None, shotnoise=1e4, params=None, template=None):
         # Non-node setup: precompute fixed-fiducial cosmo ingredients (numpy, once at compile).
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
@@ -204,14 +212,30 @@ class PNGTracerSpectrum2Poles(Calculator):
         self._mode = str(mode)
         self._nbar = 1. / float(shotnoise)
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
-        self._pk_dd, self._alpha, self._f = _png_cosmo(fiducial, self.k, float(z), str(method), str(engine))
+        self._has_template = hasattr(self, 'template')
+        if not self._has_template:
+            self._pk_dd, self._alpha, self._f = _png_cosmo('DESI', self.k, float(z), str(method), 'eisenstein_hu')
+        else:
+            # alpha is precomputed at the fiducial cosmology on the template's fine k grid;
+            # pk_dd and f are taken from the template at each __call__.
+            fiducial = getattr(self.template, '_fiducial', 'DESI')
+            _, self._alpha_fine, _ = _png_cosmo(fiducial, self.template.k, float(z), str(method), 'eisenstein_hu')
 
     def __call__(self):
         k = self.k[:, None]            # (n_k, 1)
         mu = self._to_poles.mu          # (n_mu,)
-        pk_dd = jnp.asarray(self._pk_dd)[:, None]   # (n_k, 1)
-        alpha = jnp.asarray(self._alpha)[:, None]   # (n_k, 1)
-        f = self._f
+
+        if self._has_template:
+            jac, kap, muap = self.template.ap_k_mu(k, mu)
+            pk_dd = jac * _interp_loglog(kap, self.template.k, self.template.pk_dd)
+            alpha = _interp_loglog(kap, self.template.k, self._alpha_fine)
+            f = self.template.f
+        else:
+            kap = k
+            muap = mu
+            pk_dd = jnp.asarray(self._pk_dd)[:, None]   # (n_k, 1)
+            alpha = jnp.asarray(self._alpha)[:, None]   # (n_k, 1)
+            f = self._f
 
         if isinstance(self.b1, tuple):  # cross-spectrum
             b1_X, b1_Y = self.b1
@@ -228,9 +252,9 @@ class PNGTracerSpectrum2Poles(Calculator):
                 bfnl_loc_X, bfnl_loc_Y = self.bfnl_loc
             b_eff_X = b1_X + bfnl_loc_X * alpha
             b_eff_Y = b1_Y + bfnl_loc_Y * alpha
-            fog_X = 1. / (1. + sigmas_X**2 * k**2 * mu**2 / 2.)
-            fog_Y = 1. / (1. + sigmas_Y**2 * k**2 * mu**2 / 2.)
-            pkmu = fog_X * fog_Y * (b_eff_X + f * mu**2) * (b_eff_Y + f * mu**2) * pk_dd
+            fog_X = 1. / (1. + sigmas_X**2 * kap**2 * muap**2 / 2.)
+            fog_Y = 1. / (1. + sigmas_Y**2 * kap**2 * muap**2 / 2.)
+            pkmu = fog_X * fog_Y * (b_eff_X + f * muap**2) * (b_eff_Y + f * muap**2) * pk_dd
         else:
             if self._mode == 'b-p':
                 bfnl_loc = 2. * _delta_c * (self.b1 - self.p) * self.fnl_loc
@@ -239,8 +263,8 @@ class PNGTracerSpectrum2Poles(Calculator):
             else:  # 'bfnl'
                 bfnl_loc = self.bfnl_loc
             b_eff = self.b1 + bfnl_loc * alpha
-            fog = 1. / (1. + self.sigmas**2 * k**2 * mu**2 / 2.)**2
-            pkmu = fog * (b_eff + f * mu**2)**2 * pk_dd
+            fog = 1. / (1. + self.sigmas**2 * kap**2 * muap**2 / 2.)**2
+            pkmu = fog * (b_eff + f * muap**2)**2 * pk_dd
 
         sn = np.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0 / self._nbar
         self.poles = self._to_poles(pkmu) + sn
@@ -263,8 +287,9 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
     Models :math:`-i P_{gv}(k, \mu)` (the imaginary prefactor is dropped so all outputs are real;
     the data estimator must be adjusted accordingly).  Computes odd multipoles :math:`\ell = 1, 3`.
 
-    The velocity bias reads :math:`v(k, \mu) = b_v f \mu H_0 / [(1+z) k]`.  The fiducial cosmology
-    is fixed (see :class:`PNGTracerSpectrum2Poles`).
+    The velocity bias reads :math:`v(k, \mu) = b_v f \mu H_0 / [(1+z) k]`.  :math:`\alpha(k)` is
+    always precomputed at the fiducial cosmology; when a ``template`` is provided, :math:`P_{dd}`,
+    :math:`f`, and AP distortions are taken from it at each call.
 
     Parameters
     ----------
@@ -274,21 +299,19 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
         Multipole orders (should be odd).
     z : float, default=1.
         Effective redshift.
-    fiducial : str, tuple, dict, or cosmoprimo.Cosmology, default='DESI'
-        Fixed fiducial cosmology.
-    engine : str, default='eisenstein_hu'
-        cosmoprimo Boltzmann engine.
     method : str, default='prim'
         How to compute :math:`\alpha(k)`; see :func:`_png_cosmo`.
     mu : int, default=10
         Number of Gauss-Legendre mu-bins in [0, 1].
     mode : str, default='b-p'
         PNG bias parameterization; same options as :class:`PNGTracerSpectrum2Poles`.
+    template : Spectrum2Template or None, default=None
+        Power spectrum template providing :math:`P_{dd}`, :math:`f`, and AP distortions.
+        When ``None``, a fixed DESI fiducial cosmology is used (no AP distortions).
     """
 
-    def __init__(self, k=None, ells=(1, 3), z=1., fiducial='DESI', engine='eisenstein_hu',
-                 method='prim', mu=10, mode='b-p'):
-        # Nodes (Parameters) live in __init__.
+    def __init__(self, k=None, ells=(1, 3), z=1., method='prim', mu=10, mode='b-p', template=None):
+        # Nodes (Parameters + optional Calculator dep) live in __init__.
         self.b1 = Parameter('b1', value=2., prior=dict(limits=[0.1, 10.]),
                             ref=dict(limits=[1.5, 2.5]), fd_eps=0.1, latex='b_1')
         self.bv = Parameter('bv', value=1., prior=dict(limits=[0.1, 10.]),
@@ -312,9 +335,13 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
                                       ref=dict(limits=[-50., 50.]), fd_eps=1., latex=r'b_{\phi}f_{\mathrm{NL}}^{\mathrm{loc}}')
         else:
             raise ValueError(f"mode must be one of 'b-p', 'bphi', 'bfnl'; got {mode!r}")
+        if template is not None:
+            self.template = template
+            k_arr = np.linspace(0.01, 0.2, 101) if k is None else np.asarray(k, dtype='f8')
+            kin_fine = np.geomspace(min(1e-3, k_arr[0] / 2.), max(1., k_arr[-1] * 2.), 1000)
+            self.template.update(k=kin_fine)
 
-    def __post_init__(self, k=None, ells=(1, 3), z=1., fiducial='DESI', engine='eisenstein_hu',
-                      method='prim', mu=10, mode='b-p'):
+    def __post_init__(self, k=None, ells=(1, 3), z=1., method='prim', mu=10, mode='b-p', template=None):
         # Non-node setup: precompute fixed-fiducial cosmo ingredients.
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
@@ -323,15 +350,28 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
         self._mode = str(mode)
         self._z = float(z)
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
-        self._pk_dd, self._alpha, self._f = _png_cosmo(fiducial, self.k, self._z, str(method), str(engine))
+        self._has_template = hasattr(self, 'template')
+        if not self._has_template:
+            self._pk_dd, self._alpha, self._f = _png_cosmo('DESI', self.k, self._z, str(method), 'eisenstein_hu')
+        else:
+            fiducial = getattr(self.template, '_fiducial', 'DESI')
+            _, self._alpha_fine, _ = _png_cosmo(fiducial, self.template.k, self._z, str(method), 'eisenstein_hu')
 
     def __call__(self):
         k = self.k[:, None]            # (n_k, 1)
         mu = self._to_poles.mu          # (n_mu,)
-        pk_dd = jnp.asarray(self._pk_dd)[:, None]
-        alpha = jnp.asarray(self._alpha)[:, None]
-        f = self._f
-        z = self._z
+
+        if self._has_template:
+            jac, kap, muap = self.template.ap_k_mu(k, mu)
+            pk_dd = jac * _interp_loglog(kap, self.template.k, self.template.pk_dd)
+            alpha = _interp_loglog(kap, self.template.k, self._alpha_fine)
+            f = self.template.f
+        else:
+            kap = k
+            muap = mu
+            pk_dd = jnp.asarray(self._pk_dd)[:, None]
+            alpha = jnp.asarray(self._alpha)[:, None]
+            f = self._f
 
         if self._mode == 'b-p':
             bfnl_loc = 2. * _delta_c * (self.b1 - self.p) * self.fnl_loc
@@ -342,10 +382,10 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
 
         b_eff = self.b1 + bfnl_loc * alpha
         # FoG: density side (Lorentzian) x velocity side (sinc damping).
-        fog = 1. / (1. + self.sigmas**2 * k**2 * mu**2 / 2.) * jnp.sinc(self.sigmau * k)
+        fog = 1. / (1. + self.sigmas**2 * kap**2 * muap**2 / 2.) * jnp.sinc(self.sigmau * kap)
         # Velocity bias: -i bv f mu H0 / [(1+z) k]; the -i convention is dropped.
-        vel_bias = self.bv * f * mu * 100. / (1. + z) / k
-        pkmu = fog * (b_eff + f * mu**2) * vel_bias * pk_dd
+        vel_bias = self.bv * f * muap * 100. / (1. + self._z) / kap
+        pkmu = fog * (b_eff + f * muap**2) * vel_bias * pk_dd
         self.poles = self._to_poles(pkmu)
         return self.poles
 

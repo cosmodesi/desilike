@@ -302,6 +302,7 @@ _kw_pk = dict(extrap_kmin=1e-7, extrap_kmax=1e2)
 def _get_cosmoprimo_fiducial(fiducial):
     """Return a cosmoprimo Cosmology from a name string, (name, kwargs) tuple, dict, or Cosmology."""
     import cosmoprimo
+    import cosmoprimo.fiducial  # noqa: ensure submodule is accessible as cosmoprimo.fiducial
     if fiducial is None:
         raise ValueError('fiducial cosmology is required')
     if hasattr(fiducial, 'get_fourier'):

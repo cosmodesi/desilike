@@ -11,7 +11,7 @@ import numpy as np
 import jax.numpy as jnp
 import lsstypes as types
 
-from ..base import GaussianLikelihood
+from ..base import GaussianLikelihood, get_params
 
 
 class ObservablesGaussianLikelihood(GaussianLikelihood):
@@ -34,9 +34,13 @@ class ObservablesGaussianLikelihood(GaussianLikelihood):
     scale_covariance : float, default=1.
         The precision is divided by this factor.
     correct_covariance : dict, default=None
-        Optional Hartlap correction. Pass
-        ``dict(correction='hartlap', nobs=<int>)`` to apply
-        ``(nobs - nbins - 2) / (nobs - 1)`` to the precision.
+        Optional correction for a covariance estimated from simulations.
+        Pass ``dict(correction='hartlap', nobs=<int>)`` to apply the Hartlap
+        2007 factor ``(nobs - nbins - 2) / (nobs - 1)`` to the precision.
+        Pass ``dict(correction='percival2014', nobs=<int>)`` to apply the
+        Percival 2014 factor ``(1 + B(nbins - nparams)) / (1 + A + B(nparams + 1))``
+        where ``nparams`` is determined at compile time from ``get_params(self).select(input=True)``.
+        Corrections can be combined, e.g. ``correction='hartlap+percival2014'``.
     precision : array, default=None
         Precision matrix to use directly (mutually exclusive with
         ``covariance``).
@@ -89,20 +93,35 @@ class ObservablesGaussianLikelihood(GaussianLikelihood):
         for observable in self.observables:
             observable.covariance = self.covariance.at.observable.get(observables=observable.name)
 
-        if self.precision is None:
-            if self.covariance is None:
-                raise ValueError('if precision is not provided, provide covariance')
-            self.precision = self.covariance.inv(level=1) / scale_covariance
+        if self.precision is None and self.covariance is None:
+            raise ValueError('if precision is not provided, provide covariance')
         self.correct_covariance = correct_covariance
         if self.correct_covariance['correction'] and self.correct_covariance['nobs'] is None:
             raise ValueError(f'provide nobs to apply correction {self.correct_covariance["correction"]}')
+        self.hartlap2007_factor = 1.
+        self.percival2014_factor = 1.
+
+    def __post_init__(self, observables, covariance=None, scale_covariance=1.,
+                      correct_covariance=None, precision=None):
+        if self.precision is None:
+            self.precision = self.covariance.inv(level=1) / scale_covariance
         if 'hartlap' in self.correct_covariance['correction']:
             nbins = self.precision.shape[0]
             nobs = self.correct_covariance['nobs']
-            hartlap2007_factor = (nobs - nbins - 2.) / (nobs - 1.)
+            self.hartlap2007_factor = (nobs - nbins - 2.) / (nobs - 1.)
             self.logger.info(f'Covariance matrix with {nbins:d} points built from {nobs:d} observations.')
-            self.logger.info(f'...resulting in a Hartlap 2007 factor of {hartlap2007_factor:.4f}.')
-            self.precision *= hartlap2007_factor
+            self.logger.info(f'...resulting in a Hartlap 2007 factor of {self.hartlap2007_factor:.4f}.')
+            self.precision = self.precision * self.hartlap2007_factor
+        if 'percival2014' in self.correct_covariance['correction']:
+            nbins = self.precision.shape[0]
+            nobs = self.correct_covariance['nobs']
+            nparams = len(get_params(self).select(input=True))
+            A = 2. / ((nobs - nbins - 1.) * (nobs - nbins - 4.))
+            B = (nobs - nbins - 2.) / ((nobs - nbins - 1.) * (nobs - nbins - 4.))
+            self.percival2014_factor = (1. + B * (nbins - nparams)) / (1. + A + B * (nparams + 1.))
+            self.logger.info(f'Covariance matrix with {nbins:d} points and {nparams:d} parameters built from {nobs:d} observations.')
+            self.logger.info(f'...resulting in a Percival 2014 factor of {self.percival2014_factor:.4f}.')
+            self.precision = self.precision * self.percival2014_factor
 
     def __call__(self):
         self.flattheory = jnp.concatenate([obs.flattheory for obs in self.observables])

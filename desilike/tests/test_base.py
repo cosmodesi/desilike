@@ -1287,6 +1287,134 @@ def test_derived_expression_param():
     assert chi2() == 3.0
 
 
+def test_graph_derived_expression_param():
+    """Derived-expression params in a Calculator must not crash _run_graph.
+
+    Regression test for AttributeError raised when _run_graph called
+    `param.value = params[param.name]` on a Parameter whose _call_fn was not None.
+    """
+    SCALE = 0.9984876216336505
+
+    b1 = Parameter('b1', value=1.5, prior={'dist': 'uniform', 'limits': [0., 3.]})
+    # value= is provided so _value is set before _call_fn (which blocks the setter later)
+    b2 = Parameter('b2', value=1.5 * SCALE, derived=f'b1 * {SCALE!r}', depends={'b1': b1})
+
+    class ScaledBiasTheory(Calculator):
+        def __init__(self, b1_param, b2_param):
+            self.b1_param = b1_param
+            self.b2_param = b2_param
+
+        def __call__(self):
+            self.output = jnp.array([self.b1_param, self.b2_param])
+            return self.output
+
+        def tree_flatten(self):
+            return [self.output], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.output = children[0]
+            return obj
+
+    pipe = compile(ScaledBiasTheory(b1, b2))
+
+    # default params: b2 must be computed as b1 * SCALE
+    result = pipe()
+    assert jnp.allclose(result, jnp.array([1.5, 1.5 * SCALE]))
+
+    # changing b1 must propagate through the derived expression
+    result2 = pipe({'b1': 2.0, 'b2': 0.0})  # stale b2 in dict; framework must recompute
+    assert jnp.allclose(result2, jnp.array([2.0, 2.0 * SCALE]))
+
+
+def test_eager_after_trace_no_stale_state():
+    """Eager calls after jax.grad must not see stale trace-escaped state.
+
+    Regression test for the shallow-copy save/restore bug: in-place mutations of
+    nested mutable objects (e.g. a cache dict updated inside __call__) are not
+    undone by dict(n.__dict__). Without last_params invalidation the next eager
+    call with unchanged params skips re-running nodes and exposes stale Tracers.
+    """
+    # External node with a nested mutable cache dict — simulates cosmoprimo
+    # _cosmo/_results that get modified in-place by downstream JAX __call__.
+    class CachingCosmology(Calculator):
+        _is_external = True
+
+        def __init__(self, omega_m):
+            self.omega_m = omega_m
+            self._cache = {}  # mutable nested object — not captured by shallow copy
+
+        def __call__(self):
+            self._cache['growth'] = np.array(float(self.omega_m) ** 0.55)
+            self.growth_factor = self._cache['growth']
+            return self
+
+        def tree_flatten(self):
+            return [self.growth_factor], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.growth_factor = children[0]
+            return obj
+
+    # JAX node that reads from the cosmo node and stores a result in its own
+    # mutable dict — simulating a theory calculator with an internal cache.
+    class TheoryWithCache(Calculator):
+        def __init__(self, cosmo, scale):
+            self.cosmo = cosmo
+            self.scale = scale
+            self._theory_cache = {}
+
+        def __call__(self):
+            gf = self.cosmo.growth_factor
+            pk = self.scale * gf ** 2
+            self._theory_cache['pk'] = pk  # mutates nested mutable in-place
+            self.pk = pk
+            return self.pk
+
+        def tree_flatten(self):
+            return [self.pk], None
+
+        @classmethod
+        def tree_unflatten(cls, aux, children):
+            obj = object.__new__(cls)
+            obj.pk = children[0]
+            return obj
+
+    omega_m = Parameter('omega_m', value=0.3, prior={'dist': 'uniform', 'limits': [0.1, 0.9]})
+    scale = Parameter('scale', value=2.0, prior={'dist': 'uniform', 'limits': [0.5, 5.0]})
+    cosmo = CachingCosmology(omega_m=omega_m)
+    theory = TheoryWithCache(cosmo=cosmo, scale=scale)
+
+    pipe = compile(theory)
+
+    params_P1 = {'omega_m': 0.3, 'scale': 2.0}
+    params_P2 = {'omega_m': 0.3, 'scale': 3.0}
+
+    # First eager call establishes baseline
+    result_P1 = float(pipe(**params_P1))
+    expected_P1 = 2.0 * (0.3 ** 0.55) ** 2
+    assert abs(result_P1 - expected_P1) < 1e-8
+
+    # Differentiate w.r.t. scale (JAX param — triggers jax.jvp trace through theory,
+    # causing its _theory_cache dict to be mutated with a Tracer during the trace)
+    jax.grad(pipe)(params_P1)
+
+    # Eager call with P2 (scale changed) — must compute fresh, not serve stale P1
+    result_P2 = float(pipe(**params_P2))
+    expected_P2 = 3.0 * (0.3 ** 0.55) ** 2
+    assert abs(result_P2 - expected_P2) < 1e-8
+
+    # Eager call back to P1 — must also be correct
+    result_P1_again = float(pipe(**params_P1))
+    assert abs(result_P1_again - expected_P1) < 1e-8
+
+    # _theory_cache['pk'] must be a plain concrete value, not a stale Tracer
+    assert not isinstance(theory._theory_cache.get('pk'), jax.core.Tracer)
+
+
 @pytest.mark.parametrize('backend', ['jax', 'mpi', 'mpi_and_jax'])
 def test_pmap_generic(backend):
     """pmap(fn) batches an arbitrary function over pytree args/outputs like jax.vmap."""

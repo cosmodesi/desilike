@@ -817,8 +817,7 @@ def _make_external_fn(node: Calculator, params_list: list, calc_deps: list, call
                 if getattr(param, '_call_fn', None) is None:
                     param.value = np.asarray(own_params_tuple[i])
             for param in params_list:
-                if getattr(param, '_call_fn', None) is not None:
-                    param._value = param._call_fn()
+                param()
             offset = 0
             for dep, n_children, dep_treedef, dep_aux in dep_schema:
                 dep_flat_slice = list(dep_args[offset:offset + n_children])
@@ -951,8 +950,7 @@ def _build_graph_call_fn(pipeline):
                         if getattr(param, '_call_fn', None) is None:
                             param.value = params[param.name]
                     for param in nvd:
-                        if getattr(param, '_call_fn', None) is not None:
-                            param._value = param._call_fn()
+                        param()
                     result = node()
                     node_state['was_called'] = True
                 else:
@@ -965,8 +963,7 @@ def _build_graph_call_fn(pipeline):
                         for param in free_nvd:
                             param.value = params[param.name]
                         for param in nvd:
-                            if getattr(param, '_call_fn', None) is not None:
-                                param._value = param._call_fn()
+                            param()  # _call_fn (derived parameters) if it is the case
                         result = node()
                         # Write back derived param values: after __call__ the node may have
                         # set self.<name> = computed_value, overwriting the Parameter reference.

@@ -806,8 +806,10 @@ class Parameter(Variable):
             Finite-difference accuracy order (must be a positive even integer). Defaults to 2.
         namespace : str, optional
             Namespace prefix prepended to the parsed name.
-        depends : dict, optional
-            Maps {placeholder} names in the derived expression to Parameter objects.
+        depends : dict or list, optional
+            Dependencies for the derived expression: either a dict mapping placeholder
+            names to Parameter/Variable objects, or a list of Parameter/Variable objects
+            whose ``.name`` attribute is used as the placeholder name.
         """
         if isinstance(name, Parameter):
             self.__dict__.update(name.__dict__)
@@ -863,7 +865,12 @@ class Parameter(Variable):
         self.fixed = bool(fixed)
 
         # derived expression and depends mapping
-        self.depends = dict(depends) if depends else {}
+        if not depends:
+            self.depends = {}
+        elif isinstance(depends, dict):
+            self.depends = dict(depends)
+        else:
+            self.depends = {dep.name: dep for dep in depends}
         if isinstance(derived, str):
             self._derived = derived
             self._call_fn = self._build_call_fn() if derived not in self._solved_values else None
@@ -903,12 +910,28 @@ class Parameter(Variable):
 
     def _build_call_fn(self):
         """Compile the derived expression once into a no-arg callable that reads dep.value."""
-        code = compile(self._derived, '<derived>', 'eval')
-        _ns = {'__builtins__': {}, 'np': np, 'jnp': jnp}
         _deps = dict(self.depends)
 
+        # Parameter names may contain dots (e.g. "LRG_ell0.b1"), which are not valid
+        # Python identifiers. Substitute dots before compiling; restore mapping in locals.
+        _safe_keys = {k: k.replace('.', '__dot__') for k in _deps}
+        expr = self._derived
+        for k in sorted(_safe_keys, key=len, reverse=True):
+            if '.' in k:
+                expr = expr.replace(k, _safe_keys[k])
+
+        code = compile(expr, '<derived>', 'eval')
+        _ns = {'__builtins__': {}, 'np': np, 'jnp': jnp}
+
         def _fn():
-            return eval(code, _ns, {k: dep.value for k, dep in _deps.items()})  # noqa: S307
+            return eval(code, _ns, {_safe_keys[k]: dep.value for k, dep in _deps.items()})  # noqa: S307
+
+        try:
+            _fn()
+        except NameError as exc:
+            raise NameError(f"derived expression {self._derived!r} references unknown name: {exc}") from exc
+        except Exception:
+            pass
 
         return _fn
 

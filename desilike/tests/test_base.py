@@ -1286,46 +1286,73 @@ def test_derived_expression_param():
     chi2 = Parameter('chi2', value=3.0, derived=True)
     assert chi2() == 3.0
 
+    # dotted parameter name (e.g. namespace separator) must not be mis-parsed as attribute access
+    lrg_b1 = Parameter('LRG_ell0.b1', value=1.5)
+    lrg_b2 = Parameter('LRG_ell0.b2', value=1.5 * 0.9984876216336505,
+                        derived='LRG_ell0.b1 * 0.9984876216336505',
+                        depends={'LRG_ell0.b1': lrg_b1})
+    assert abs(lrg_b2() - 1.5 * 0.9984876216336505) < 1e-12
+    lrg_b1.value = 2.0
+    assert abs(lrg_b2() - 2.0 * 0.9984876216336505) < 1e-12
+
+    # list-form depends: keys are inferred from dep.name
+    p_a = Parameter('a', value=3.0)
+    p_b = Parameter('b', value=4.0, derived='a * 2', depends=[p_a])
+    assert abs(p_b() - 6.0) < 1e-12
+    p_a.value = 5.0
+    assert abs(p_b() - 10.0) < 1e-12
+
 
 def test_graph_derived_expression_param():
-    """Derived-expression params in a Calculator must not crash _run_graph.
+    """Derived-expression params work inside a Posterior pipeline, including dotted names.
 
-    Regression test for AttributeError raised when _run_graph called
-    `param.value = params[param.name]` on a Parameter whose _call_fn was not None.
+    Regression tests:
+    - AttributeError when _run_graph set value on a param whose _call_fn was not None.
+    - NameError when a dotted param name (e.g. 'LRG_ell0.b1') appears in a derived expression.
     """
     SCALE = 0.9984876216336505
+    sigma_lik = 0.5
+    sigma_b2 = 0.1  # non-trivial Gaussian prior width on the derived b2
 
-    b1 = Parameter('b1', value=1.5, prior={'dist': 'uniform', 'limits': [0., 3.]})
-    # value= is provided so _value is set before _call_fn (which blocks the setter later)
-    b2 = Parameter('b2', value=1.5 * SCALE, derived=f'b1 * {SCALE!r}', depends={'b1': b1})
-
-    class ScaledBiasTheory(Calculator):
-        def __init__(self, b1_param, b2_param):
-            self.b1_param = b1_param
-            self.b2_param = b2_param
+    class BiasTheory(GaussianLikelihood):
+        def __init__(self, b1, b2, data, sigma):
+            self.b1 = b1
+            self.b2 = b2
+            self.flatdata = jnp.asarray(data)
+            self.precision = jnp.eye(2) / sigma ** 2
 
         def __call__(self):
-            self.output = jnp.array([self.b1_param, self.b2_param])
-            return self.output
+            self.flattheory = jnp.array([self.b1, self.b2])
+            return super().__call__()
 
-        def tree_flatten(self):
-            return [self.output], None
+    data_b = jnp.array([1.5, 1.5 * SCALE])
 
-        @classmethod
-        def tree_unflatten(cls, aux, children):
-            obj = object.__new__(cls)
-            obj.output = children[0]
-            return obj
+    # ── plain names ──────────────────────────────────────────────────────────
+    b1 = Parameter('b1', value=1.5, prior={'dist': 'uniform', 'limits': [0., 3.]})
+    b2 = Parameter('b2', value=1.5 * SCALE, derived=f'b1 * {SCALE!r}', depends=[b1],
+                   prior={'dist': 'norm', 'loc': 1.5 * SCALE, 'scale': sigma_b2})
+    pipe = compile(Posterior(BiasTheory(b1, b2, data_b, sigma_lik), Prior(b1=b1, b2=b2)))
 
-    pipe = compile(ScaledBiasTheory(b1, b2))
+    # at default params: logL = 0, b2 prior at centre (zero-lag) = 0 → total = 0
+    assert abs(float(pipe())) < 1e-8
+    # shifting b1 recomputes b2 = b1*SCALE, which is penalised by the b2 prior
+    assert float(pipe({'b1': 2.0})) < 0.
 
-    # default params: b2 must be computed as b1 * SCALE
-    result = pipe()
-    assert jnp.allclose(result, jnp.array([1.5, 1.5 * SCALE]))
+    # ── dotted names ('LRG_ell0.b1') ─────────────────────────────────────────
+    lrg_b1 = Parameter('LRG_ell0.b1', value=1.5, prior={'dist': 'uniform', 'limits': [0., 3.]})
+    lrg_b2 = Parameter('LRG_ell0.b2', value=1.5 * SCALE,
+                        derived=f'LRG_ell0.b1 * {SCALE!r}', depends=[lrg_b1],
+                        prior={'dist': 'norm', 'loc': 1.5 * SCALE, 'scale': sigma_b2})
+    pipe_dot = compile(Posterior(BiasTheory(lrg_b1, lrg_b2, data_b, sigma_lik),
+                                 Prior(lrg_b1=lrg_b1, lrg_b2=lrg_b2)))
 
-    # changing b1 must propagate through the derived expression
-    result2 = pipe({'b1': 2.0, 'b2': 0.0})  # stale b2 in dict; framework must recompute
-    assert jnp.allclose(result2, jnp.array([2.0, 2.0 * SCALE]))
+    assert abs(float(pipe_dot())) < 1e-8
+    result_shifted = float(pipe_dot({'LRG_ell0.b1': 2.0}))
+    assert result_shifted < 0.
+
+    # gradient w.r.t. lrg_b1 must flow through both logL and the b2 prior chain
+    grad = jax.grad(pipe_dot)({'LRG_ell0.b1': 1.5})
+    assert jnp.isfinite(grad['LRG_ell0.b1']) and float(grad['LRG_ell0.b1']) != 0.
 
 
 def test_eager_after_trace_no_stale_state():

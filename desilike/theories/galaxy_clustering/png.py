@@ -161,7 +161,7 @@ class PNGTracerSpectrum2Poles(Calculator):
             ]
         return propose_params_multitracer(auto_params, tracers, stochastic=('sn0',), shared=('fnl_loc',), cross=True)
 
-    def __init__(self, k=None, ells=(0, 2), z=1., method='prim', mu=10, mode='b-p',
+    def __init__(self, k=None, ells=(0, 2), method='prim', mu=10, mode='b-p',
                  tracers=None, nbar=1e-4, params=None, template=None):
         if mode not in ('b-p', 'bphi', 'bfnl'):
             raise ValueError(f"mode must be one of 'b-p', 'bphi', 'bfnl'; got {mode!r}")
@@ -170,14 +170,14 @@ class PNGTracerSpectrum2Poles(Calculator):
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
         if template is None:
-            template = FixedSpectrum2Template(z=z)
+            template = FixedSpectrum2Template()
         self.template = template
         k_arr = np.linspace(0.01, 0.2, 101) if k is None else np.asarray(k, dtype='f8')
         # Extend to 1e-4 at the low end so the 'transfer' normalization point is in-grid.
         kin_fine = np.geomspace(min(1e-4, k_arr[0] / 2.), max(1., k_arr[-1] * 2.), 1000)
         self.template.update(k=kin_fine)
 
-    def __post_init__(self, k=None, ells=(0, 2), z=1., method='prim', mu=10, mode='b-p',
+    def __post_init__(self, k=None, ells=(0, 2), method='prim', mu=10, mode='b-p',
                       tracers=None, nbar=1e-4, params=None, template=None):
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
@@ -185,12 +185,12 @@ class PNGTracerSpectrum2Poles(Calculator):
         self.ells = tuple(ells)
         self._mode = str(mode)
         self._method = str(method)
-        self._z = float(z)
+        self._z = float(self.template.z)
         self._nbar = float(nbar)
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
         reqs = {'primordial.pk': [{'k': self.template.k}]}
         if self._method == 'transfer':
-            reqs.update({'background.growth_factor': [{'z': float(z)}, {'z': 10.}],
+            reqs.update({'background.growth_factor': [{'z': self._z}, {'z': 10.}],
                          'params.Omega_m': None})
         self.template.cosmo.add_requirements(reqs)
         self.template.cosmo()
@@ -275,8 +275,6 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
         Output wavenumbers [h/Mpc]. Defaults to ``np.linspace(0.01, 0.2, 101)``.
     ells : tuple of int, default=(1, 3)
         Multipole orders (should be odd).
-    z : float, default=1.
-        Effective redshift.
     method : str, default='prim'
         How to compute :math:`\alpha(k)`; ``'prim'`` or ``'transfer'``.
     mu : int, default=10
@@ -288,7 +286,7 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
         and the underlying cosmology for :math:`\alpha(k)`.
     """
 
-    def __init__(self, k=None, ells=(1, 3), z=1., method='prim', mu=10, mode='b-p', template=None):
+    def __init__(self, k=None, ells=(1, 3), method='prim', mu=10, mode='b-p', template=None):
         self.b1 = Parameter('b1', value=2., prior=dict(limits=[0.1, 10.]),
                             ref=dict(limits=[1.5, 2.5]), fd_eps=0.1, latex='b_1')
         self.bv = Parameter('bv', value=1., prior=dict(limits=[0.1, 10.]),
@@ -313,26 +311,26 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
         else:
             raise ValueError(f"mode must be one of 'b-p', 'bphi', 'bfnl'; got {mode!r}")
         if template is None:
-            template = FixedSpectrum2Template(z=z)
+            template = FixedSpectrum2Template()
         self.template = template
         k_arr = np.linspace(0.01, 0.2, 101) if k is None else np.asarray(k, dtype='f8')
         kin_fine = np.geomspace(min(1e-4, k_arr[0] / 2.), max(1., k_arr[-1] * 2.), 1000)
         self.template.update(k=kin_fine)
 
-    def __post_init__(self, k=None, ells=(1, 3), z=1., method='prim', mu=10, mode='b-p', template=None):
+    def __post_init__(self, k=None, ells=(1, 3), method='prim', mu=10, mode='b-p', template=None):
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
         self.ells = tuple(ells)
         self._mode = str(mode)
         self._method = str(method)
-        self._z = float(z)
+        self._z = float(self.template.z)
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
-        self.template.cosmo.add_requirements({
-            'primordial.pk': [{'k': self.template.k}],
-            'background.growth_factor': [{'z': float(z)}, {'z': 10.}],
-            'params.Omega_m': None,
-        })
+        reqs = {'primordial.pk': [{'k': self.template.k}]}
+        if self._method == 'transfer':
+            reqs.update({'background.growth_factor': [{'z': self._z}, {'z': 10.}],
+                         'params.Omega_m': None})
+        self.template.cosmo.add_requirements(reqs)
         self.template.cosmo()
 
     def __call__(self):

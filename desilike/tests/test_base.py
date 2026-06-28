@@ -1350,8 +1350,9 @@ def test_graph_derived_expression_param():
     result_shifted = float(pipe_dot({'LRG_ell0.b1': 2.0}))
     assert result_shifted < 0.
 
-    # gradient w.r.t. lrg_b1 must flow through both logL and the b2 prior chain
-    grad = jax.grad(pipe_dot)({'LRG_ell0.b1': 1.5})
+    # gradient w.r.t. lrg_b1 must flow through both logL and the b2 prior chain;
+    # evaluate off-centre (b1=1.8) so the gradient is non-zero
+    grad = jax.grad(pipe_dot)({'LRG_ell0.b1': 1.8})
     assert jnp.isfinite(grad['LRG_ell0.b1']) and float(grad['LRG_ell0.b1']) != 0.
 
 

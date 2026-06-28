@@ -444,11 +444,11 @@ class Profiler:
         # Attach parameter metadata (priors, latex, …) so downstream consumers
         # (to_stats, select, plotting) have access to it.
         profiles.params = self.likelihood.params
-        # Carry likelihood bookkeeping (ndata, nvaried, ndof) into the result.
+        # Carry likelihood bookkeeping (ndata, nvaried) into the result.
         ndata = getattr(self.likelihood.root, 'ndata', None)
         if ndata is not None:
-            nvaried = sum(int(np.prod(param.shape, dtype='intp')) for param in self.likelihood.params.select(input=True))
-            profiles.attrs.update(ndata=ndata, ndof=ndata - nvaried)
+            nvaried = sum(int(np.prod(param.shape, dtype='intp')) for param in self.likelihood.params.select(input=True, varied=True))
+            profiles.attrs.update(ndata=ndata, nvaried=nvaried)
         if not derived_params or profiles.best is None:
             return profiles
         names   = self.varied_params.names()

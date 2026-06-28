@@ -350,7 +350,7 @@ class FixedSpectrum2Template(Spectrum2Template):
         """No free parameters at all."""
         return VariableCollection()
 
-    def __init__(self, k=None, z=1., fiducial='DESI', engine='eisenstein_hu', with_now='peakaverage', only_now=False):
+    def __init__(self, k=None, z=1., fiducial='DESI', engine='camb', with_now='peakaverage', only_now=False):
         self._fiducial = CosmoprimoCosmology(engine=engine, fiducial=fiducial)
         _get_fiducial(fiducial, calculator=self._fiducial)  # runs _fiducial at fiducial params (sets _cosmo)
 
@@ -358,7 +358,7 @@ class FixedSpectrum2Template(Spectrum2Template):
     def cosmo(self):
         return self._fiducial
 
-    def __post_init__(self, k=None, z=1., fiducial='DESI', engine='eisenstein_hu', with_now='peakaverage', only_now=False):
+    def __post_init__(self, k=None, z=1., fiducial='DESI', engine='camb', with_now='peakaverage', only_now=False):
         from cosmoprimo import PowerSpectrumBAOFilter
 
         self._only_now = bool(only_now)

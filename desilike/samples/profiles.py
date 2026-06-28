@@ -648,9 +648,12 @@ class Profiles:
             rows.append(row)
 
         chi2_str = f'{self.chi2min:.2f}'
-        ndof = self.attrs.get('ndof')
-        if ndof is not None:
-            chi2_str += f' / {int(ndof):d}'
+        ndata = self.attrs.get('ndata')
+        nvaried = self.attrs.get('nvaried')
+        if ndata is not None and nvaried is not None:
+            chi2_str += f' / ({int(ndata):d} - {int(nvaried):d})'
+        elif self.attrs.get('ndof') is not None:
+            chi2_str += f' / {int(self.attrs["ndof"]):d}'
         header_chi2 = (r'$\chi^2 = ' + chi2_str + '$') if is_latex else f'chi2 = {chi2_str}'
         headers = [header_chi2] + quantities
 

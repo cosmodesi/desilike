@@ -1098,6 +1098,37 @@ def _build_graph_call_fn(pipeline):
     return call_fn
 
 
+def _topo_sort_params(params):
+    """Return params in topological order w.r.t. their .depends DAG.
+
+    If param A has derived='B * 2' with depends containing param B, B is
+    guaranteed to appear before A so that param() calls evaluate in the
+    correct order. Only edges to params within this list are followed;
+    cross-node dependencies are ignored.
+    """
+    param_ids = {id(p) for p in params}
+    order = []
+    visiting = set()
+    visited = set()
+
+    def visit(param):
+        if id(param) in visited:
+            return
+        if id(param) in visiting:
+            raise ValueError(f"Cycle detected in derived-parameter depends involving '{param.name}'")
+        visiting.add(id(param))
+        for dep in getattr(param, 'depends', {}).values():
+            if id(dep) in param_ids:
+                visit(dep)
+        visiting.discard(id(param))
+        visited.add(id(param))
+        order.append(param)
+
+    for param in params:
+        visit(param)
+    return order
+
+
 # ── compiled pipeline ─────────────────────────────────────────────────────────
 
 class CompiledGraph:
@@ -1119,7 +1150,7 @@ class CompiledGraph:
         self._node_calc_deps = {}
         for node in self.nodes:
             deps = ctx.node_deps.get(id(node), [])
-            self._node_var_deps[id(node)] = [d for d in deps if isinstance(d, Variable)]
+            self._node_var_deps[id(node)] = _topo_sort_params([d for d in deps if isinstance(d, Variable)])
             self._node_calc_deps[id(node)] = [d for d in deps if isinstance(d, Calculator)]
 
         # Collect unique Variable objects preserving DAG order, deduplicated by identity.

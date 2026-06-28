@@ -65,6 +65,11 @@ class Calculator(Node):
         (incl. Nodes nested in list/tuple/dict) are auto-discovered as dependencies.
       __post_init__(*args, **kwargs): non-node setup only — numpy/scalar config and non-Node
         helper objects. May read what __init__ set; must NOT create Parameters or Calculator deps.
+        __post_init__ may be called more than once (e.g. when compile() is re-run). Any derived
+        quantity that is computed from a raw input (e.g. precision from covariance) must be
+        re-derived from the original value each time. Store the raw input under a private name
+        in __init__ (e.g. self._precision) and read it in __post_init__ rather than modifying
+        the already-derived value in place.
       __call__(self): read params via self.param.value and dep outputs via self.dep.attr;
         compute and store output attributes; return the output value (array, tuple, None, or self).
       tree_flatten(self) -> (children, aux): children = list of output arrays,

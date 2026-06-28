@@ -82,7 +82,7 @@ class ObservablesGaussianLikelihood(GaussianLikelihood):
                 raise ValueError('based on provided observables, {} expected to be a matrix of shape {} = {}, but found {}'.format(name, shape, shape_obs, mshape))
             return matrix
 
-        self.precision = check_matrix(precision, 'precision') if precision is not None else None
+        self._precision = check_matrix(precision, 'precision') if precision is not None else None
 
         self.covariance = None
         if isinstance(covariance, types.CovarianceMatrix):
@@ -93,7 +93,7 @@ class ObservablesGaussianLikelihood(GaussianLikelihood):
         for observable in self.observables:
             observable.covariance = self.covariance.at.observable.get(observables=observable.name)
 
-        if self.precision is None and self.covariance is None:
+        if self._precision is None and self.covariance is None:
             raise ValueError('if precision is not provided, provide covariance')
         self.correct_covariance = correct_covariance
         if self.correct_covariance['correction'] and self.correct_covariance['nobs'] is None:
@@ -106,6 +106,7 @@ class ObservablesGaussianLikelihood(GaussianLikelihood):
 
     def __post_init__(self, observables, covariance=None, scale_covariance=1.,
                       correct_covariance=None, precision=None):
+        self.precision = self._precision
         if self.precision is None:
             self.precision = self.covariance.inv(level=1) / scale_covariance
         if 'hartlap2007' in self.correct_covariance['correction']:

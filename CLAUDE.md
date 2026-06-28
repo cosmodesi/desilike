@@ -36,6 +36,10 @@ is what makes `replace()` / `share_params()` work and keeps construction cheap (
   Put numpy/scalar config (`self._nbar = ...`) and non-`Node` helper objects here
   (e.g. `ProjectToMultipoles`, `SpectrumToCorrelation`, pybird `Common`/`Resum`, cosmoprimo
   fiducial calls). **Must not create Parameters or Calculator deps, or call `update()`.**
+  **`__post_init__` may be called more than once** (e.g. when `compile()` is re-run with
+  different settings). Any quantity derived from a raw input (e.g. a rescaled precision matrix)
+  must be re-derived from the original each time: store the raw value under a private name in
+  `__init__` (e.g. `self._precision`) and read from it in `__post_init__`, never mutating it.
 - **`__call__`**: pure computation using already-defined nodes; must **not** introduce new node
   dependencies. It sets output attributes and may return an array, a tuple of arrays, `None`
   (outputs live in attributes), or `self`; the return value is forwarded as the pipeline output

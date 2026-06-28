@@ -103,6 +103,40 @@ def test_chi2_noise_near_posterior_peak(pipe_and_fiducial):
     )
 
 
+def test_h_stability(pipe_and_fiducial):
+    """
+    Varying h must produce no NaN predictions over a ±4-sigma range, and the
+    chi2 profile must be smooth.  This guards against the Omega_de<0 /
+    growth_factor_lambda NaN crash that occurs when h is pushed outside the
+    emulator's valid range.
+    """
+    pipe, params0, pred0, noise_std = pipe_and_fiducial
+    pname = 'h'
+    if pname not in params0:
+        pytest.skip('h not a free parameter')
+
+    sigma_h = 0.008  # typical 1-sigma from CMB+BAO
+    dvs = np.linspace(-2 * sigma_h, 2 * sigma_h, 50)
+    chi2 = np.zeros(len(dvs))
+    for idx, dv in enumerate(dvs):
+        pred = np.asarray(pipe({**params0, pname: params0[pname] + dv})).ravel()
+        assert not np.any(np.isnan(pred)), (
+            f'NaN in prediction at h={params0[pname] + dv:.4f} (offset {dv:+.4f})'
+        )
+        chi2[idx] = np.sum(((pred - pred0) / noise_std) ** 2)
+
+    # h shifts the spectrum shape strongly, so the GP noise is ~10x higher
+    # relative to other params; empirically ~4e-4 over ±2 sigma.
+    _h_relative_noise_bound = 1e-3
+    residuals = _high_freq_noise(chi2, dvs)
+    noise_rms = np.std(residuals)
+    relative_noise = noise_rms / chi2.max()
+    assert relative_noise < _h_relative_noise_bound, (
+        f'h: chi2_noise_rms={noise_rms:.4f}, chi2_max={chi2.max():.1f}, '
+        f'relative={relative_noise:.2e} > {_h_relative_noise_bound:.2e}'
+    )
+
+
 def test_gradient_stability(pipe_and_fiducial):
     """
     The first derivative estimate of the model prediction w.r.t. omega_cdm must

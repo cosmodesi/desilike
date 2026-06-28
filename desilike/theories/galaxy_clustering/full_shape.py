@@ -3094,7 +3094,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             params += [avir]
         return propose_params_multitracer(params, tracers)
 
-    def __init__(self, z=1.0, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, params=None, fsat=None, sigv=None, backend='jax'):
+    def __init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, params=None, fsat=None, sigv=None, backend='jax'):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model)
         if params is not None:
             vc = vc + VariableCollection(params)
@@ -3122,9 +3122,9 @@ class COMETTracerSpectrum2Poles(Calculator):
             if pt is None:
                 pt = COMETPTSpectrum2Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None, backend=backend)
             self.pt = pt
-            self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model)
+            self.pt.update(**({} if z is None else {'z': z}), k=k, ells=ells, tracers=tracers, model=model)
 
-    def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, fsat=None, sigv=None, params=None, **kwargs):
+    def __post_init__(self, z=None, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, fsat=None, sigv=None, params=None, **kwargs):
         if self._direct:
             _comet_register_cosmo_requirements(self.cosmo)
         self._nbar = float(nbar)
@@ -3133,7 +3133,7 @@ class COMETTracerSpectrum2Poles(Calculator):
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
         if self._direct:
             self._model = model
-            self.z = float(z)
+            self.z = float(1.0 if z is None else z)
             self.k = np.asarray(np.linspace(0.01, 0.2, 101) if k is None else k, dtype='f8')
             self.ells = tuple((0, 2, 4) if ells is None else ells)
             self._use_mpc = False
@@ -3414,7 +3414,7 @@ class COMETTracerSpectrum3Poles(Calculator):
         ], tracers)
         return params + extra
 
-    def __init__(self, z=1.0, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax'):
+    def __init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax'):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model)
         if params is not None:
             vc = vc + VariableCollection(params)
@@ -3448,9 +3448,9 @@ class COMETTracerSpectrum3Poles(Calculator):
             if pt is None:
                 pt = COMETPTSpectrum3Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None, backend=backend)
             self.pt = pt
-            self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model, quad_deg=quad_deg, mu12_transform=mu12_transform)
+            self.pt.update(**({} if z is None else {'z': z}), k=k, ells=ells, tracers=tracers, model=model, quad_deg=quad_deg, mu12_transform=mu12_transform)
 
-    def __post_init__(self, z=1.0, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', **kwargs):
+    def __post_init__(self, z=None, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', **kwargs):
         if self._direct:
             _comet_register_cosmo_requirements(self.cosmo)
         self._nbar = float(nbar)
@@ -3459,7 +3459,7 @@ class COMETTracerSpectrum3Poles(Calculator):
         self._sigv = float(sigv) if sigv is not None else settings['sigv']
         if self._direct:
             self._model = model
-            self.z = float(z)
+            self.z = float(1.0 if z is None else z)
             self.k = np.atleast_2d(np.asarray(np.column_stack([np.linspace(0.01, 0.1, 11)] * 2) if k is None else k, dtype='f8'))
             self.ells = tuple(tuple(int(e) for e in ell) for ell in (((0, 0, 0), (2, 0, 2)) if ells is None else ells))
             self._use_mpc = False

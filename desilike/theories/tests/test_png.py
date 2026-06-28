@@ -2,6 +2,7 @@
 
 import numpy as np
 import jax
+import jax.numpy as jnp
 import pytest
 
 
@@ -12,6 +13,11 @@ def _check(result, name=''):
     assert arr.ndim == 2, f"{name}: expected 2-D result, got shape {arr.shape}"
     assert arr.shape[0] > 0 and arr.shape[1] > 0, f"{name}: empty result"
     assert np.isfinite(arr).all(), f"{name}: non-finite values"
+
+
+def _make_template(z=1., engine='eisenstein_hu'):
+    from desilike.theories.galaxy_clustering import DirectSpectrum2Template
+    return DirectSpectrum2Template(z=z, engine=engine)
 
 
 def _eval(theory, output='poles', **overrides):
@@ -31,42 +37,50 @@ def _varied(theory):
     return list(params(theory).select(fixed=False))
 
 
-# ── _png_cosmo (fixed-fiducial alpha + pk) ────────────────────────────────────
+# ── _alpha_png ────────────────────────────────────────────────────────────────
 
-class TestPNGCosmo:
+class TestAlphaPNG:
 
-    def test_prim(self):
-        """method='prim': output shapes, finite values, and k-decreasing alpha."""
-        from desilike.theories.galaxy_clustering.png import _png_cosmo
-        k = np.geomspace(1e-3, 0.5, 100)
-        pk_dd, alpha, f = _png_cosmo('DESI', k, z=1., method='prim', engine='eisenstein_hu')
-        assert pk_dd.shape == (len(k),)
-        assert alpha.shape == (len(k),)
-        assert np.all(pk_dd > 0)
+    def _compute_alpha(self, method, k=None):
+        """Helper: compute alpha via a compiled PNG pipeline and extract it."""
+        from desilike.theories.galaxy_clustering.png import _alpha_png
+        from desilike.theories.primordial_cosmology import _get_fiducial, _kw_pk
+        import numpy as np
+        if k is None:
+            k = np.geomspace(1e-4, 1., 200)
+        fiducial = _get_fiducial('DESI').clone(engine='eisenstein_hu')
+        fo = fiducial.get_fourier()
+        pk_interp = fo.pk_interpolator(of='delta_cb', **_kw_pk).to_1d(z=1.)
+        pk_dd = pk_interp(k)
+        pk_prim = fiducial.get_primordial(mode='scalar').pk_interpolator()(k)
+        h = float(fiducial['h'])
+        Omega0_m = float(fiducial.Omega0_m)
+        g_z = float(fiducial.get_background().growth_factor(1.))
+        g_zn = float(fiducial.get_background().growth_factor(10.))
+        alpha = np.asarray(_alpha_png(k, pk_dd, pk_prim, h, method, Omega0_m=Omega0_m, growth_factor_z=g_z, growth_factor_znorm=g_zn))
+        return k, pk_dd, alpha
+
+    def test_prim_shape_finite_decreasing(self):
+        k, pk_dd, alpha = self._compute_alpha('prim')
+        assert alpha.shape == k.shape
         assert np.all(np.isfinite(alpha))
         assert alpha[0] > alpha[-1], "alpha should decrease with k"
-        assert 0. < f < 2.
 
-    def test_transfer(self):
-        """method='transfer': output shapes, finite values, and k-decreasing alpha."""
-        from desilike.theories.galaxy_clustering.png import _png_cosmo
-        k = np.geomspace(1e-3, 0.5, 100)
-        pk_dd, alpha, f = _png_cosmo('DESI', k, z=1., method='transfer', engine='eisenstein_hu')
-        assert pk_dd.shape == (len(k),)
-        assert alpha.shape == (len(k),)
+    def test_transfer_shape_finite_decreasing(self):
+        k, pk_dd, alpha = self._compute_alpha('transfer')
+        assert alpha.shape == k.shape
         assert np.all(np.isfinite(alpha))
         assert alpha[0] > alpha[-1], "alpha should decrease with k"
 
     def test_method_consistency(self):
-        """'prim' and 'transfer' alpha should agree in shape to ~5%."""
-        from desilike.theories.galaxy_clustering.png import _png_cosmo
+        """'prim' and 'transfer' alpha shapes should agree to ~5%."""
         k = np.geomspace(5e-3, 0.2, 50)
-        _, alpha_p, _ = _png_cosmo('DESI', k, z=1., method='prim', engine='eisenstein_hu')
-        _, alpha_t, _ = _png_cosmo('DESI', k, z=1., method='transfer', engine='eisenstein_hu')
+        _, _, alpha_p = self._compute_alpha('prim', k=k)
+        _, _, alpha_t = self._compute_alpha('transfer', k=k)
         mid = slice(5, -5)
         ratio = alpha_p[mid] / alpha_t[mid]
         assert np.allclose(ratio, ratio.mean(), rtol=0.05), \
-            f"'prim' and 'transfer' alpha shape differ by > 5%: ratio std/mean = {ratio.std() / ratio.mean():.3f}"
+            f"'prim' and 'transfer' alpha shape differ by >5%: std/mean = {ratio.std() / ratio.mean():.3f}"
 
 
 # ── PNGTracerSpectrum2Poles ───────────────────────────────────────────────────
@@ -74,12 +88,20 @@ class TestPNGCosmo:
 class TestPNGTracerSpectrum2Poles:
 
     def test_basic(self):
-        """Basic output shape and finite values."""
+        """Basic output shape and finite values; test both fixed (default) and live-cosmo templates."""
         from desilike.theories.galaxy_clustering import PNGTracerSpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
+
+        # Default: FixedSpectrum2Template (no free cosmo params)
         theory = PNGTracerSpectrum2Poles(k=k)
         result = _eval(theory, 'poles')
-        _check(result, 'PNGTracerSpectrum2Poles')
+        _check(result, 'PNGTracerSpectrum2Poles default')
+        assert result.shape == (len(theory.ells), len(k))
+
+        # Live cosmo template (engine='eisenstein_hu')
+        theory = PNGTracerSpectrum2Poles(k=k, template=_make_template())
+        result = _eval(theory, 'poles')
+        _check(result, 'PNGTracerSpectrum2Poles with template')
         assert result.shape == (len(theory.ells), len(k))
 
     def test_modes(self):
@@ -87,20 +109,20 @@ class TestPNGTracerSpectrum2Poles:
         from desilike.theories.galaxy_clustering import PNGTracerSpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
 
-        theory = PNGTracerSpectrum2Poles(k=k, mode='b-p')
+        theory = PNGTracerSpectrum2Poles(k=k, mode='b-p', template=_make_template())
         assert not np.allclose(_eval(theory, 'poles', fnl_loc=0.), _eval(theory, 'poles', fnl_loc=100.)), "b-p: fnl_loc had no effect"
 
-        theory = PNGTracerSpectrum2Poles(k=k, mode='bphi')
+        theory = PNGTracerSpectrum2Poles(k=k, mode='bphi', template=_make_template())
         assert not np.allclose(_eval(theory, 'poles', fnl_loc=0.), _eval(theory, 'poles', fnl_loc=100.)), "bphi: fnl_loc had no effect"
 
-        theory = PNGTracerSpectrum2Poles(k=k, mode='bfnl')
+        theory = PNGTracerSpectrum2Poles(k=k, mode='bfnl', template=_make_template())
         assert not np.allclose(_eval(theory, 'poles', bfnl_loc=0.), _eval(theory, 'poles', bfnl_loc=200.)), "bfnl: bfnl_loc had no effect"
 
     def test_no_png(self):
         """With fnl_loc=0 the monopole is positive (reduces to Kaiser-like bias)."""
         from desilike.theories.galaxy_clustering import PNGTracerSpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
-        theory = PNGTracerSpectrum2Poles(k=k, mode='b-p')
+        theory = PNGTracerSpectrum2Poles(k=k, mode='b-p', template=_make_template())
         result = _eval(theory, 'poles', b1=2., fnl_loc=0., p=1., sigmas=0., sn0=0.)
         _check(result, 'PNG fnl=0')
         assert np.all(result[0] > 0), "monopole at fnl=0 should be positive"
@@ -109,7 +131,7 @@ class TestPNGTracerSpectrum2Poles:
         """b1 variation changes the output."""
         from desilike.theories.galaxy_clustering import PNGTracerSpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
-        theory = PNGTracerSpectrum2Poles(k=k, mode='b-p')
+        theory = PNGTracerSpectrum2Poles(k=k, mode='b-p', template=_make_template())
         assert not np.allclose(_eval(theory, 'poles', b1=1.5), _eval(theory, 'poles', b1=3.0)), "b1 variation had no effect"
 
     def test_methods(self):
@@ -117,7 +139,7 @@ class TestPNGTracerSpectrum2Poles:
         from desilike.theories.galaxy_clustering import PNGTracerSpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
         for method in ['prim', 'transfer']:
-            theory = PNGTracerSpectrum2Poles(k=k, method=method)
+            theory = PNGTracerSpectrum2Poles(k=k, method=method, template=_make_template())
             _check(_eval(theory, 'poles', fnl_loc=50.), f'PNGTracerSpectrum2Poles method={method}')
 
     def test_ells(self):
@@ -125,10 +147,10 @@ class TestPNGTracerSpectrum2Poles:
         from desilike.theories.galaxy_clustering import PNGTracerSpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
 
-        theory = PNGTracerSpectrum2Poles(k=k, ells=(0,))
+        theory = PNGTracerSpectrum2Poles(k=k, ells=(0,), template=_make_template())
         assert _eval(theory, 'poles').shape[0] == 1
 
-        theory = PNGTracerSpectrum2Poles(k=k, ells=(0, 2, 4))
+        theory = PNGTracerSpectrum2Poles(k=k, ells=(0, 2, 4), template=_make_template())
         assert _eval(theory, 'poles').shape[0] == 3
 
     def test_cross(self):
@@ -136,7 +158,7 @@ class TestPNGTracerSpectrum2Poles:
         from desilike.theories.galaxy_clustering import PNGTracerSpectrum2Poles
         from desilike.base import params
         k = np.linspace(0.02, 0.3, 60)
-        theory = PNGTracerSpectrum2Poles(k=k, tracers=('LRG', 'QSO'), mode='b-p')
+        theory = PNGTracerSpectrum2Poles(k=k, tracers=('LRG', 'QSO'), mode='b-p', template=_make_template())
         names = [p.name for p in params(theory)]
         assert 'LRG.b1' in names and 'QSO.b1' in names
         assert 'LRGxQSO.sn0' in names
@@ -147,7 +169,7 @@ class TestPNGTracerSpectrum2Poles:
         """Each varied parameter changes the result."""
         from desilike.theories.galaxy_clustering import PNGTracerSpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
-        theory = PNGTracerSpectrum2Poles(k=k)
+        theory = PNGTracerSpectrum2Poles(k=k, template=_make_template())
         for param in _varied(theory):
             lo, hi = np.asarray(param.ref.sample(jax.random.key(0), shape=2))
             r0 = _eval(theory, 'poles', **{param.name: float(lo)})
@@ -156,6 +178,27 @@ class TestPNGTracerSpectrum2Poles:
             if not np.isclose(lo, hi):
                 assert not np.allclose(r0, r1), f"result invariant to {param.name}"
             break
+
+    def test_jax_grad(self):
+        """jax.grad runs without error through the full pipeline."""
+        from desilike.theories.galaxy_clustering import PNGTracerSpectrum2Poles
+        from desilike.base import compile
+        k = np.linspace(0.02, 0.3, 30)
+        theory = PNGTracerSpectrum2Poles(k=k, template=_make_template())
+        pipe = compile(theory)
+        from desilike.base import params as get_params
+        param_vals = {p.name: p._value for p in get_params(theory)}
+        grad = jax.grad(lambda pv: jnp.sum(pipe(pv)))(param_vals)
+        assert all(np.isfinite(np.asarray(v)) for v in grad.values()), "non-finite gradient"
+
+    def test_cosmo_sensitivity(self):
+        """Varying h changes the PNG poles (alpha depends on cosmo)."""
+        from desilike.theories.galaxy_clustering import PNGTracerSpectrum2Poles
+        k = np.linspace(0.02, 0.3, 60)
+        theory = PNGTracerSpectrum2Poles(k=k, template=_make_template())
+        r0 = _eval(theory, 'poles', fnl_loc=50.)
+        r1 = _eval(theory, 'poles', fnl_loc=50., h=0.65)
+        assert not np.allclose(r0, r1), "varying h had no effect on PNG poles"
 
 
 # ── PNGTracerVelocitySpectrum2Poles ──────────────────────────────────────────
@@ -166,7 +209,7 @@ class TestPNGTracerVelocitySpectrum2Poles:
         """Odd multipoles (ells=1, 3): basic shape and finite values."""
         from desilike.theories.galaxy_clustering import PNGTracerVelocitySpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
-        theory = PNGTracerVelocitySpectrum2Poles(k=k, ells=(1, 3))
+        theory = PNGTracerVelocitySpectrum2Poles(k=k, ells=(1, 3), template=_make_template())
         result = _eval(theory, 'poles')
         _check(result, 'PNGTracerVelocitySpectrum2Poles')
         assert result.shape == (2, len(k))
@@ -175,7 +218,7 @@ class TestPNGTracerVelocitySpectrum2Poles:
         """fnl_loc changes the velocity cross-spectrum."""
         from desilike.theories.galaxy_clustering import PNGTracerVelocitySpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
-        theory = PNGTracerVelocitySpectrum2Poles(k=k, mode='b-p')
+        theory = PNGTracerVelocitySpectrum2Poles(k=k, mode='b-p', template=_make_template())
         assert not np.allclose(_eval(theory, 'poles', fnl_loc=0.), _eval(theory, 'poles', fnl_loc=100.)), \
             "fnl_loc had no effect on velocity spectrum"
 
@@ -184,7 +227,7 @@ class TestPNGTracerVelocitySpectrum2Poles:
         from desilike.theories.galaxy_clustering import PNGTracerVelocitySpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
         for mode in ['b-p', 'bphi', 'bfnl']:
-            theory = PNGTracerVelocitySpectrum2Poles(k=k, mode=mode)
+            theory = PNGTracerVelocitySpectrum2Poles(k=k, mode=mode, template=_make_template())
             _check(_eval(theory, 'poles'), f'PNGTracerVelocitySpectrum2Poles mode={mode}')
 
     def test_methods(self):
@@ -192,14 +235,14 @@ class TestPNGTracerVelocitySpectrum2Poles:
         from desilike.theories.galaxy_clustering import PNGTracerVelocitySpectrum2Poles
         k = np.linspace(0.02, 0.3, 60)
         for method in ['prim', 'transfer']:
-            theory = PNGTracerVelocitySpectrum2Poles(k=k, method=method)
+            theory = PNGTracerVelocitySpectrum2Poles(k=k, method=method, template=_make_template())
             _check(_eval(theory, 'poles'), f'PNGTracerVelocitySpectrum2Poles method={method}')
 
 
 if __name__ == '__main__':
-    TestPNGCosmo().test_prim()
-    TestPNGCosmo().test_transfer()
-    TestPNGCosmo().test_method_consistency()
+    TestAlphaPNG().test_prim_shape_finite_decreasing()
+    TestAlphaPNG().test_transfer_shape_finite_decreasing()
+    TestAlphaPNG().test_method_consistency()
     TestPNGTracerSpectrum2Poles().test_basic()
     TestPNGTracerSpectrum2Poles().test_modes()
     TestPNGTracerSpectrum2Poles().test_no_png()
@@ -208,6 +251,8 @@ if __name__ == '__main__':
     TestPNGTracerSpectrum2Poles().test_ells()
     TestPNGTracerSpectrum2Poles().test_cross()
     TestPNGTracerSpectrum2Poles().test_param_variation()
+    TestPNGTracerSpectrum2Poles().test_jax_grad()
+    TestPNGTracerSpectrum2Poles().test_cosmo_sensitivity()
     TestPNGTracerVelocitySpectrum2Poles().test_basic()
     TestPNGTracerVelocitySpectrum2Poles().test_fnl_sensitivity()
     TestPNGTracerVelocitySpectrum2Poles().test_modes()

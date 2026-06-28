@@ -15,6 +15,10 @@ FOLPS full-shape with TaylorEmulator on FOLPSPTSpectrum2Poles:
     Same as above but the PT sub-graph is replaced by a degree-3 Taylor emulator
     fitted once before timing.
 
+FOLPS eisenstein_hu vs TaylorEmulator (``folps_vs_emu``):
+    Head-to-head: ``engine='eisenstein_hu'`` (JAX-native, no emulator) vs
+    ``engine='camb'`` + ``TaylorEmulator(order=1)`` on the PT sub-graph.
+
 COMET full-shape (GP-emulator-based):
     COMETTracerSpectrum2Poles (+ COMETTracerSpectrum3Poles, optionally) →
     Spectrum2(3)PolesObservable → ObservablesGaussianLikelihood → Posterior.
@@ -93,7 +97,7 @@ ELLS3_FOLPS = ((0, 0, 0), (2, 0, 2))
 
 
 def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False, emulator_order=None,
-                          include_3poles=False, k3=K3, ells3=ELLS3_FOLPS):
+                          include_3poles=False, k3=K3, ells3=ELLS3_FOLPS, engine='camb'):
     """FOLPS full-shape pipeline, optionally multi-tracer and/or with bispectrum.
 
     When ``tracers`` is ``None`` a single un-namespaced pipeline is built.
@@ -109,6 +113,7 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False,
     With ``include_3poles=True`` each tracer also gets a FOLPSTracerSpectrum3Poles
     (bispectrum) sharing the same PT sub-graph as the power spectrum.
     ``k3`` (shape (N, 2)) and ``ells3`` control the bispectrum k-grid and multipoles.
+    ``engine`` selects the Boltzmann solver (``'camb'``, ``'eisenstein_hu'``, …).
     """
     n2 = len(ells) * len(k)
     n3 = len(ells3) * len(k3)
@@ -118,7 +123,7 @@ def build_posterior_folps(k=K, ells=ELLS_FOLPS, tracers=None, marginalize=False,
     likelihoods = []
     for tracer in tracer_list:
         z = Z_TRACERS.get(tracer, 0.8)
-        cosmo = CosmoprimoCosmology(engine='camb')
+        cosmo = CosmoprimoCosmology(engine=engine, fiducial='DESI')
         for param in get_params(cosmo).select(basename=['w0_fld', 'wa_fld']):
             param.update(fixed=False)
         template = DirectSpectrum2Template(z=z, cosmo=cosmo)
@@ -207,8 +212,14 @@ def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='Eg
     # post-hoc get_params(theory).select('h').update(...) does *not* propagate -- the
     # Posterior/likelihood machinery ends up reading a different copy of the parameter).
     cosmo = CosmoprimoCosmology(engine='eisenstein_hu', fiducial='DESI')
-    for param in get_params(cosmo).select(basename='m_ncdm'):
-        param.update(fixed=False)
+    params = get_params(cosmo)
+    #for param in params.select(fixed=False):
+    #    if param.basename in ['h']:
+    #        param.update(fixed=True)
+    params['omega_b'].update(prior=dict(dist='norm', loc=params['omega_b'].value, scale=0.003))
+    cosmo.update(params=params)
+    #for param in get_params(cosmo).select(basename='m_ncdm'):
+    #    param.update(fixed=False)
     #get_params(cosmo).select(basename='h')[0].update(prior=dict(dist='uniform', limits=(0.55, 0.85)))
 
     if direct:
@@ -230,7 +241,7 @@ def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='Eg
     data2 = theory_pred2 #+ rng.normal(scale=noise_std2)
     observable2 = Spectrum2PolesObservable(data=data2, theory=theory, k=k, ells=ells)
     observables = [observable2]
-    covariances = [np.diag((100. + noise_std2)**2)]
+    covariances = [np.diag(800**2 * np.ones_like(data2))]
 
     if include_3poles:
         if direct:
@@ -244,7 +255,7 @@ def build_posterior_comet(k=K_COMET, ells=ELLS_COMET, z=Z_COMET, prior_basis='Eg
         data3 = theory_pred3 #+ rng.normal(scale=noise_std3)
         observable3 = Spectrum3PolesObservable(data=data3, theory=theory3, k=k3, ells=ells3)
         observables.append(observable3)
-        covariances.append(np.diag((100. + noise_std3)**2))
+        covariances.append(1000**2 * np.ones_like(data2))
 
     from scipy.linalg import block_diag
     likelihood = ObservablesGaussianLikelihood(observables=observables, covariance=block_diag(*covariances))
@@ -301,8 +312,11 @@ def run(label, build_fn, vary_param=None, batch_size=8, run=('eager', 'jit', 'gr
         dt = _bench(f'jit vmap call (n={batch_size})', lambda bench_idx: vpipe(batch(bench_idx)), **kwargs)
         print(f'  {"→ per-sample":<26s} {dt / batch_size:9.4f} ms/sample')
     if 'profile' in run:
+        #for i in range(2):
+        #    samples = {param.basename: param.ref.sample() for iparam, param in enumerate(pipe.params.select(fixed=False, derived=False))}
+        #    print(pipe(samples))
         from desilike import profilers
-        profiler = profilers.Profiler(pipe, kernel=profilers.Minuit(), rng=42)
+        profiler = profilers.Profiler(pipe, kernel=profilers.Minuit(), rng=69)
         t0 = time.perf_counter()
         profiler.maximize(**(profile_kwargs or {}))
         print(f'  {"profile (maximize)":<26s} {(time.perf_counter() - t0) * 1e3:9.1f} ms total')
@@ -310,7 +324,7 @@ def run(label, build_fn, vary_param=None, batch_size=8, run=('eager', 'jit', 'gr
         print(profiles.to_stats(tablefmt='pretty'))
 
 
-def main(test=('folps_multi', 'folps_multi_emu')):
+def main(test=('folps_multi', 'folps_multi_emu', 'folps_vs_emu')):
     if 'bao' in test:
         print(f'\n{"─" * 60}')
         print(f'BAO correlation: ells={ELLS_BAO}, s=arange(20, 180, 4) ({len(S)} points), '
@@ -347,6 +361,19 @@ def main(test=('folps_multi', 'folps_multi_emu')):
         print(f'{"─" * 60}')
         #run('without analytic marg.', lambda: build_posterior_folps(marginalize=False, emulator_order=1), vary_param='logA', warmup=2, number=10)
         run('with analytic marg. (alpha*+sn* → best)', lambda: build_posterior_folps(marginalize=True, emulator_order=1), vary_param='logA', warmup=2, number=10)
+
+    if 'folps_vs_emu' in test:
+        print(f'\n{"─" * 60}')
+        print(f'FOLPS: eisenstein_hu (no emulator) vs camb + TaylorEmulator(order=1)')
+        print(f'ells={ELLS_FOLPS}, k=linspace(0.02, 0.2, {len(K)}) ({len(K)} points), '
+            f'data size={len(ELLS_FOLPS) * len(K)}')
+        print(f'{"─" * 60}')
+        run('EH (no emulator), analytic marg.',
+            lambda: build_posterior_folps(marginalize=True, engine='eisenstein_hu'),
+            vary_param='logA', warmup=2, number=10, run=('eager', 'jit', 'grad')[1:2])
+        run('camb + TaylorEmu(order=1), analytic marg.',
+            lambda: build_posterior_folps(marginalize=True, emulator_order=1, engine='camb'),
+            vary_param='logA', warmup=2, number=10, run=('eager', 'jit', 'grad'))
 
     if 'folps_3poles' in test:
         print(f'\n{"─" * 60}')
@@ -399,9 +426,10 @@ def main(test=('folps_multi', 'folps_multi_emu')):
         # longer just rides a parameter to its prior boundary), which makes full
         # convergence much slower; cap iterations here purely for benchmark wall-clock
         # purposes, same reasoning as comet_3poles below.
-        profile_kwargs = dict(max_iterations=2000)
+        profile_kwargs = dict()
         run('shared PT (PX_ell)', lambda: build_posterior_comet(direct=False),
-            vary_param='b1', warmup=2, number=5, run=('jit', 'grad', 'profile'), profile_kwargs=profile_kwargs)
+            vary_param='n_s', warmup=2, number=5, run=('jit', 'grad', 'profile')[2:], profile_kwargs=profile_kwargs)
+        return
         run('direct (Pell, pt=False)', lambda: build_posterior_comet(direct=True),
             vary_param='b1', warmup=2, number=5, run=('jit', 'grad', 'profile'), profile_kwargs=profile_kwargs)
 
@@ -425,4 +453,4 @@ def main(test=('folps_multi', 'folps_multi_emu')):
 
 if __name__ == '__main__':
 
-    main(test=('comet',))
+    main(test=('folps_vs_emu',))

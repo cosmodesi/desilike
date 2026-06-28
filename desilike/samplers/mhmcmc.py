@@ -349,6 +349,7 @@ class MH(Kernel):
 
     logger = logging.getLogger('MH')
     _sampler_cls = 'MCMCSampler'
+    max_nparallel = None  # StandAloneMHSampler is fully vectorised over nchains
 
     def __init__(self, f_fast=1, f_drag=0, fast=None, covariance=None):
         """
@@ -391,7 +392,6 @@ class MH(Kernel):
             _posterior, fast=flat_fast_indices,
             f_fast=self.f_fast, f_drag=self.f_drag, rng=rng)
 
-        self._posterior = _posterior
         self._ndim = ndim
         self._cov = np.asarray(self.covariance) if self.covariance is not None else np.eye(ndim)
         self._initialized = False
@@ -404,27 +404,29 @@ class MH(Kernel):
         self._adaptation_steps = int(kwargs.get('steps', 0))
 
     def run(self, n_steps, state):
-        position, _, _ = state
+        position, _, log_post_state = state
+        position = np.asarray(position)
+        batched = position.ndim == 2  # True when multiple independent runs are batched
+
         if not self._initialized:
-            initial_flat = np.asarray(position).ravel()
-            initial_log_p = self._posterior(initial_flat)
+            pos_init = np.atleast_2d(position)
+            logp_init = np.atleast_1d(np.asarray(log_post_state))
             self._standalone.update(
-                pos=initial_flat[None, :],
-                log_p=np.array([initial_log_p]),
-                blobs=np.zeros((1, 0)),
+                pos=pos_init,
+                log_p=logp_init,
+                blobs=np.zeros((len(pos_init), 0)),
                 cov=self._cov)
             self._initialized = True
+
         chains, _blobs, log_p = self._standalone.make_n_steps(n_steps)
-        # chains: (1, n_steps, ndim); log_p: (1, n_steps)
-        samples  = chains[0]    # (n_steps, ndim)
-        log_post = log_p[0]     # (n_steps,)
+        # chains: (nchains, n_steps, ndim); log_p: (nchains, n_steps)
 
         self._total_steps += n_steps
 
         # Adapt the proposal covariance from accumulated samples while within
-        # the adaptation window.
+        # the adaptation window.  Pool all chains together for better estimation.
         if self._total_steps < self._adaptation_steps:
-            self._accumulated_samples.append(samples)
+            self._accumulated_samples.append(chains.reshape(-1, self._ndim))
             all_samps = np.concatenate(self._accumulated_samples, axis=0)
             if len(all_samps) > self._ndim:
                 try:
@@ -432,4 +434,6 @@ class MH(Kernel):
                 except np.linalg.LinAlgError:
                     pass
 
-        return samples, None, {'logposterior': log_post}
+        if batched:
+            return chains, None, {'logposterior': log_p}
+        return chains[0], None, {'logposterior': log_p[0]}

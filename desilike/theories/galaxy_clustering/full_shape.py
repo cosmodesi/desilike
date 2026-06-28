@@ -72,10 +72,6 @@ def get_nthreads(nthreads=None):
     return int(nthreads)
 
 
-#: Valid FOLPS prior_basis options (mirrors FOLPSv2 in desilike_bak).
-_FOLPS_PRIOR_BASES = ('standard', 'physical', 'physical_aap', 'tcm_chudaykin_aap')
-
-
 def get_physical_stochastic_settings(tracer=None):
     """Per-tracer satellite fraction ``fsat`` and velocity dispersion ``sigv`` for the
     physical_aap stochastic terms (Mark Maus, Ruiyang Zhao). ``tracer=None`` gives generic defaults."""
@@ -1858,6 +1854,9 @@ class FOLPSPTSpectrum2Poles(Calculator):
         return _get_spectrum3poles_folps(pars, k1k2, k_pkl_pklnw_fk, self.f0, self.qpar, self.qper, multipoles=multipoles, **options)
 
 
+_FOLPS_PRIOR_BASES = ('standard', 'physical', 'physical_aap', 'tcm_chudaykin_aap')
+
+
 class FOLPSTracerSpectrum2Poles(Calculator):
     r"""
     FOLPS tracer power spectrum multipoles.
@@ -2798,7 +2797,7 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         return obj
 
 
-def _apply_cosmo_range_comet_emulator(params, limits=None):
+def _apply_cosmo_range_comet_emulator(cosmo, limits=None):
 
     # https://comet-emu.readthedocs.io/en/latest/spaceparams.html#ranges-of-emulated-parameters
     if limits is None:
@@ -2811,15 +2810,31 @@ def _apply_cosmo_range_comet_emulator(params, limits=None):
         lo2, hi2 = limits2
         return (max(lo1, lo2), min(hi1, hi2))
 
+    params = get_params(cosmo)
     for basename, limits in limits.items():
         if param := params.get(basename, None):
             prior = param.prior
             limits = intersect(prior.limits, limits)
             param.update(prior=dict(dist=prior.dist, limits=limits, **prior.attrs))
+    # cosmo.update() calls __init__ which resets _requirements; preserve them across the call.
+    #saved_requirements = dict(cosmo._requirements)
+    #cosmo.update(params=params)
+    #cosmo._requirements.update(saved_requirements)
 
 
 _CONVERSION_COMET = {'wc': 'omega_cdm', 'wb': 'omega_b', 'h': 'h', 'ns': 'n_s', 'As': 'A_s', 'Mnu': 'm_ncdm_tot',
                      'w0': 'w0_fld', 'wa': 'wa_fld', 'Ok': 'Omega_k'}
+
+_COMET_MODEL_CACHE: dict = {}
+
+
+def _load_comet_model(model, use_Mpc=True):
+    """Return a (cached) PTEmu instance for *model*."""
+    key = (model, use_Mpc)
+    if key not in _COMET_MODEL_CACHE:
+        from comet.PTEmu import PTEmu
+        _COMET_MODEL_CACHE[key] = PTEmu(model=model, use_Mpc=use_Mpc)
+    return _COMET_MODEL_CACHE[key]
 
 
 def _cosmo_to_comet(cosmo):
@@ -2845,16 +2860,27 @@ def _comet_setup_cosmo(cosmo, fiducial):
     return cosmo
 
 
-def _comet_params_to_cosmology(params, z, de_model, use_mpc=False):
-    """Build a comet.cosmology.Cosmology from a comet-style params dict, a redshift, and de_model."""
-    from comet.cosmology import Cosmology
-    return Cosmology(wb=params['wb'], wc=params['wc'], ns=params['ns'], Mnu=params['Mnu'],
-                     As=params['As'], h=params['h'], z=float(z),
-                     Ok=params['Ok'], w0=params['w0'], wa=params['wa'], de_model=de_model,
-                     use_mpc=use_mpc)
+def _comet_params_to_cosmology(params, z, de_model, use_mpc=False, backend='jax'):
+    """Build a JAXCosmology (jax backend) or Cosmology (numpy backend) from a comet-style params dict.
+
+    ``z`` is accepted for API compatibility (callers always pass it) but is
+    *not* stored on the returned object — all methods require an explicit ``z``
+    argument so that JAX tracing stays correct under jit/grad.
+    """
+    wnu = params['Mnu'] / 93.14
+    h   = params['h']
+    Om0 = (params['wc'] + params['wb'] + wnu) / h ** 2
+    H0  = 100.0 * h
+    if backend == 'numpy':
+        from comet.cosmology import Cosmology
+        return Cosmology(Om0=float(Om0), H0=float(H0), Ok0=float(params['Ok']), As=float(params['As']),
+                         de_model=de_model, w0=float(params['w0']), wa=float(params['wa']))
+    from comet.cosmology import JAXCosmology
+    return JAXCosmology(Om0=Om0, H0=H0, Ok0=params['Ok'], As=params['As'],
+                        de_model=de_model, w0=params['w0'], wa=params['wa'])
 
 
-def _comet_setup_fiducial(cosmo, z, model, fiducial, use_mpc=False):
+def _comet_setup_fiducial(cosmo, z, model, fiducial, use_mpc=False, backend='jax'):
     """Shared cosmology-only __post_init__ setup (de_model detection, comet model
     loading, fiducial Cosmology), used by COMETPTSpectrum2Poles/3Poles and by
     direct-mode (pt=False) COMETTracerSpectrum2Poles/3Poles.
@@ -2865,11 +2891,9 @@ def _comet_setup_fiducial(cosmo, z, model, fiducial, use_mpc=False):
     if (w0_fixed, wa_fixed) == (True, True): de_model = 'lambda'
     elif (w0_fixed, wa_fixed) == (False, True): de_model = 'w0'
     else: de_model = 'w0wa'
-    import comet
-    from comet.model_io import load_model_h5
-    md = load_model_h5(comet.model_path(model))
+    md = _load_comet_model(model)
     fid_comet = _cosmo_to_comet(fiducial) | dict(z=float(z))
-    cosmo_fid = _comet_params_to_cosmology(fid_comet, z, de_model, use_mpc=use_mpc)
+    cosmo_fid = _comet_params_to_cosmology(fid_comet, z, de_model, use_mpc=use_mpc, backend=backend)
     return de_model, md, fid_comet, cosmo_fid
 
 
@@ -2894,7 +2918,7 @@ class COMETPTSpectrum2Poles(Calculator):
             params += [avir]
         return propose_params_multitracer(params, tracers)
 
-    def __init__(self, z=1.0, k=None, ells=(0, 2, 4), tracers=None, cosmo=None, fiducial='DESI', model='VDG_infty', params=None, **kwargs):
+    def __init__(self, z=1.0, k=None, ells=(0, 2, 4), tracers=None, cosmo=None, fiducial='DESI', model='VDG_infty', params=None, backend='jax', **kwargs):
         vc = self.propose_params(tracers=tracers, model=model)
         if params is not None:
             vc = vc + VariableCollection(params)
@@ -2907,55 +2931,63 @@ class COMETPTSpectrum2Poles(Calculator):
             ells = (0, 2, 4)
         self.ells = tuple(ells)
         self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
-        _apply_cosmo_range_comet_emulator(get_params(self.cosmo))
+        _apply_cosmo_range_comet_emulator(self.cosmo)
+        self._backend = backend
+        if backend == 'numpy':
+            self._is_external = True
 
     def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, **kwargs):
         self._use_mpc = False
         self._model = model
         self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
-            self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc)
+            self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
 
     def __call__(self):
-        from comet.pell import PX_ell_parts
-        params = _cosmo_to_comet(self.cosmo)
+        _use_jax = (self._backend == 'jax')
+        xp = jnp if _use_jax else np
+        _asarr = (lambda v: jnp.atleast_1d(jnp.asarray(v))) if _use_jax else (lambda v: float(np.asarray(v)))
+        params = {k: _asarr(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
+        params['z'] = np.atleast_1d(float(self.z))
         avir = self.avir.value if 'VDG' in self._model else None
         md = self._md
-        cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model)
+        cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
 
-        # comet's functions accept 0-d arrays/python scalars directly (no need to
-        # pre-wrap with jnp.atleast_1d -- see comet.cosmology._a1()'s docstring), but
-        # still return 1-d (batch-shaped) outputs, hence the jnp.squeeze (which stays
-        # jax-traceable under jit/grad, unlike float()) on the way out.
-        qpar, qper = cosmo_base.compute_ap_params(self._cosmo_fid.Hz(), self._cosmo_fid.comoving_transverse_distance())
-        # _get_canonical_params() only ever uses the *ratio* AsD/AsD_fid, so AsD_fid is
-        # fixed to 1 and AsD carries the full ratio (see
-        # comet.cosmology.Cosmology.compute_growth_amplitude's docstring for the (very good,
-        # exact when wb/wc match between fiducial and sampled cosmology) approximation
-        # this makes relative to a true sigma8(z) ratio -- AsD ("sqrt(As)*D(z)") is
-        # *not* an actual sigma8(z), just functionally analogous, hence the name).
-        AsD = cosmo_base.compute_growth_amplitude(self._cosmo_fid)
-        self.qpar, self.qper, self.AsD = jnp.squeeze(qpar), jnp.squeeze(qper), jnp.squeeze(AsD)
-        self.AsD_fid = jnp.ones_like(self.AsD)
+        # numpy Cosmology.Hz/comoving_transverse_distance/growth_rate require array z, not scalar
+        z_arr = np.atleast_1d(float(self.z))
+        Hz_fid = self._cosmo_fid.Hz(z_arr)
+        Dm_fid = self._cosmo_fid.comoving_transverse_distance(z_arr)
+        qpar, qper = cosmo_base.compute_ap_params(z_arr, Hz_fid, Dm_fid)
+        AsD = cosmo_base.compute_growth_amplitude(self.z, self._cosmo_fid)
+        self.qpar, self.qper, self.AsD = xp.squeeze(qpar), xp.squeeze(qper), xp.squeeze(AsD)
+        self.f = xp.squeeze(cosmo_base.growth_rate(z_arr))
 
         # table shape: (ndiagrams, nells, nk) -- only the 19 PT diagrams + 3 noise
         # templates (no octopole/P6 contribution), matching the original
         # PX_ell(X_list=self._diagrams) call's scope: P6 was never in self._diagrams,
         # so COMETTracerSpectrum2Poles's bias-recombination coeff array never included it.
-        diag_part, p6_part, noise_part, s12, f = PX_ell_parts(
-            jnp.asarray(self.k), list(self.ells), md, cosmo_base, cosmo_fid=self._cosmo_fid, avir=avir,
-            q_tr_lo=(self.qper, self.qpar))
-        self.table = jnp.transpose(jnp.concatenate([diag_part, noise_part], axis=2)[..., 0], (2, 1, 0))
-        self.f = jnp.squeeze(f)
+        # Pass dummy zero bias params so PX_ell runs the full diagram decomposition
+        # without any bias combination (each diagram is independent of bias coefficients).
+        if avir is not None:
+            params['avir'] = _asarr(avir)
+        params |= {k: _asarr(v) for k, v in
+                   dict(b1=1.0, b2=0.0, g2=0.0, g21=0.0, c0=0.0, c2=0.0, c4=0.0, cnlo=0.0,
+                        NP0=0.0, NP20=0.0, NP22=0.0).items()}
+        q_tr_lo = (_asarr(xp.squeeze(qper)), _asarr(xp.squeeze(qpar)))
+        px = md.PX_ell(self.k, params, list(self.ells), X_list=list(self._diagrams),
+                       de_model=self._de_model, q_tr_lo=q_tr_lo, ell_for_recon=[0, 2, 4, 6])
+        # px['ell0'] etc. each shape (nk, nX); asarray(list(...)) → (nell, nk, nX);
+        # moveaxis(2→0) → (nX, nell, nk)
+        self.table = xp.moveaxis(xp.asarray(list(px.values())), 2, 0)
 
     def tree_flatten(self):
-        children = [self.qpar, self.qper, self.table, self.f, self.AsD, self.AsD_fid]
+        children = [self.qpar, self.qper, self.table, self.f, self.AsD]
         auw = {'z': self.z, 'k': self.k, 'ells': self.ells}
         return children, auw
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.qpar, obj.qper, obj.table, obj.f, obj.AsD, obj.AsD_fid = children
+        obj.qpar, obj.qper, obj.table, obj.f, obj.AsD = children
         obj.z = aux['z']
         obj.k = aux['k']
         obj.ells = aux['ells']
@@ -3014,31 +3046,34 @@ class COMETTracerSpectrum2Poles(Calculator):
                 Parameter('c0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'c_0'),
                 Parameter('c2', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'c_2'),
                 Parameter('c4', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'c_4'),
-                Parameter('cnlo', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c_{\mathrm{nlo}}'),
                 Parameter('NP0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^P_0'),
                 Parameter('NP20', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^P_{2, 0}'),
                 Parameter('NP22', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^P_{2, 2}'),
             ]
+            if 'VDG' not in model:
+                params += [Parameter('cnlo', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c_{\mathrm{nlo}}')]
         elif counterterm_basis == 'ClassPT':
             params += [
                 Parameter('c0s', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'c_0^{\ast}'),
                 Parameter('c2s', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'c_2^{\ast}'),
                 Parameter('c4s', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'c_4^{\ast}'),
-                Parameter('cnlos', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c_{\mathrm{nlo}}^{\ast}'),
                 Parameter('NP0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^P_0'),
                 Parameter('NP20s', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^{P,\ast}_{2, 0}'),
                 Parameter('NP22s', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^{P,\ast}_{2, 2}'),
             ]
+            if 'VDG' not in model:
+                params += [Parameter('cnlos', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c_{\mathrm{nlo}}^{\ast}')]
         elif counterterm_basis == 'PBJ':
             params += [
                 Parameter('c0t', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'\tilde{c}_{0}'),
                 Parameter('c2t', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'\tilde{c}_{2}'),
                 Parameter('c4t', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=1.0), latex=R'\tilde{c}_{4}'),
-                Parameter('cnlo', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c_{\mathrm{nlo}}'),
                 Parameter('NP0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'N^P_0'),
                 Parameter('eps0', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'\epsilon_{0}'),
                 Parameter('eps2', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'\epsilon_{2}'),
             ]
+            if 'VDG' not in model:
+                params += [Parameter('cnlo', value=0.0, prior=None, ref=dict(dist='norm', loc=0.0, scale=0.1), latex=R'c_{\mathrm{nlo}}')]
         elif counterterm_basis == 'DESIct':
             # no nnlo counterterm
             params += [
@@ -3057,7 +3092,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             params += [avir]
         return propose_params_multitracer(params, tracers)
 
-    def __init__(self, z=1.0, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, params=None, fsat=None, sigv=None):
+    def __init__(self, z=1.0, k=None, ells=None, tracers=None, pt=None, cosmo=None, fiducial='DESI', model='VDG_infty', prior_basis='EggScoSmi+Comet', nbar=1e-4, params=None, fsat=None, sigv=None, backend='jax'):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model)
         if params is not None:
             vc = vc + VariableCollection(params)
@@ -3067,6 +3102,7 @@ class COMETTracerSpectrum2Poles(Calculator):
         assign_params(self, vc - avir_vc, tracers, mapping=(lambda name: name[:-1]) if physical else None)
         self._prior_basis = prior_basis
         self._direct = (pt is False)
+        self._backend = backend
         if self._direct:
             # No separate PT calculator dependency: own the cosmology dep directly
             # and evaluate comet's Pell() (monolithic, bias-combined) in __call__,
@@ -3076,11 +3112,13 @@ class COMETTracerSpectrum2Poles(Calculator):
             if len(avir_vc):
                 assign_params(self, avir_vc, tracers)
             self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
-            _apply_cosmo_range_comet_emulator(get_params(self.cosmo))
+            _apply_cosmo_range_comet_emulator(self.cosmo)
             self.pt = None
+            if backend == 'numpy':
+                self._is_external = True
         else:
             if pt is None:
-                pt = COMETPTSpectrum2Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None)
+                pt = COMETPTSpectrum2Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None, backend=backend)
             self.pt = pt
             self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model)
 
@@ -3096,7 +3134,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             self.ells = tuple((0, 2, 4) if ells is None else ells)
             self._use_mpc = False
             self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
-                self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc)
+                self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
         else:
             self.k = self.pt.k
             self.ells = self.pt.ells
@@ -3115,45 +3153,38 @@ class COMETTracerSpectrum2Poles(Calculator):
         return self.poles
 
     def _call_direct(self):
-        """pt=False path: comet's Pell() (monolithic, bias-combined -- no PX_ell()
+        """pt=False path: PTEmu.Pell() (monolithic, bias-combined -- no PX_ell()
         diagram decomposition) evaluated directly from this calculator's own
-        cosmology dep, bypassing COMETPTSpectrum2Poles entirely. Use this when there
-        is no need to share the expensive cosmology-only stage across several bias
-        points/tracers (the only reason to use the default, PX_ell()-based path).
-
-        Known desilike-framework caveat (not fixed yet, see TODO in
-        desilike/base.py's _run_graph): jax.grad w.r.t. a root-owned param (e.g.
-        b1/avir) followed by a *later, separate* eager call on the same compiled
-        pipe can leak a stale tracer from self.cosmo (CosmoprimoCosmology) and raise
-        jax.errors.UnexpectedTracerError. Harmless for jit/eager-only usage (the
-        pattern this module's own tests exercise); pre-exists this pt=False path
-        (reproduces on plain COMETPTSpectrum2Poles too, differentiating avir)."""
-        from comet.pell import Pell
-        params = _cosmo_to_comet(self.cosmo)
+        cosmology dep, bypassing COMETPTSpectrum2Poles entirely."""
+        _use_jax = (self._backend == 'jax')
+        xp = jnp if _use_jax else np
+        _asarr = (lambda v: jnp.atleast_1d(jnp.asarray(v))) if _use_jax else (lambda v: float(np.asarray(v)))
+        params = {k: _asarr(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
+        params['z'] = np.atleast_1d(float(self.z))
         avir = self.avir.value if 'VDG' in self._model else None
         md = self._md
-        cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model)
-        # comet's functions accept 0-d arrays/python scalars directly (no need to
-        # pre-wrap with jnp.atleast_1d -- see comet.cosmology._a1()'s docstring), but
-        # still return 1-d (batch-shaped) outputs, hence the jnp.squeeze below.
-        qpar, qper = cosmo_base.compute_ap_params(self._cosmo_fid.Hz(), self._cosmo_fid.comoving_transverse_distance())
-        # AsD ("sqrt(As)*D(z)") is not an actual sigma8(z), just functionally
-        # analogous -- see comet.cosmology.Cosmology.compute_growth_amplitude's docstring.
-        AsD = cosmo_base.compute_growth_amplitude(self._cosmo_fid)
-        self.qpar, self.qper, self.AsD = jnp.squeeze(qpar), jnp.squeeze(qper), jnp.squeeze(AsD)
-        self.AsD_fid = jnp.ones_like(self.AsD)
-        self.f = jnp.squeeze(cosmo_base.growth_rate())
+        cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
+        z_arr = np.atleast_1d(float(self.z))
+        Hz_fid = self._cosmo_fid.Hz(z_arr)
+        Dm_fid = self._cosmo_fid.comoving_transverse_distance(z_arr)
+        qpar, qper = cosmo_base.compute_ap_params(z_arr, Hz_fid, Dm_fid)
+        AsD = cosmo_base.compute_growth_amplitude(self.z, self._cosmo_fid)
+        self.qpar, self.qper, self.AsD = xp.squeeze(qpar), xp.squeeze(qper), xp.squeeze(AsD)
+        self.f = xp.squeeze(cosmo_base.growth_rate(z_arr))
 
+        # rescale_counterterms=False: PTEmu.Pell() applies h²/h⁴ rescaling to
+        # c0/c2/c4/cnlo internally, so we must not pre-scale them; NP*/h³ and NP*/nbar
+        # are always applied here because PTEmu.Pell()'s stochastic term uses NP0 as-is.
         canonical = self._get_canonical_params(rescale_counterterms=False)
-        b1, b2, g2, g21, c0, c2, c4, cnlo, NP0, NP20, NP22 = (
-            canonical[name] for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22'))
-        bias_params = dict(b1=b1, b2=b2, g2=g2, g21=g21, c0=c0, c2=c2, c4=c4, cnlo=cnlo,
-                           NP0=NP0, NP20=NP20, NP22=NP22)
+        for name in ('b1', 'b2', 'g2', 'g21', 'c0', 'c2', 'c4', 'cnlo', 'NP0', 'NP20', 'NP22'):
+            params[name] = _asarr(canonical[name])
         if avir is not None:
-            bias_params['avir'] = avir
-        poles = Pell(jnp.asarray(self.k), list(self.ells), md, cosmo_base, bias_params,
-                     cosmo_fid=self._cosmo_fid, ell_for_recon=(0, 2, 4))
-        self.poles = jnp.transpose(poles[..., 0], (1, 0))
+            params['avir'] = _asarr(avir)
+        poles = md.Pell(self.k, params, list(self.ells),
+                        de_model=self._de_model, q_tr_lo=(_asarr(xp.squeeze(qper)), _asarr(xp.squeeze(qpar))),
+                        ell_for_recon=[0, 2, 4, 6])
+        # Pell returns {'ell0': ndarray(nk,), 'ell2': ..., ...}; assemble (nell, nk).
+        self.poles = xp.stack([xp.asarray(poles[f'ell{m}']) for m in self.ells], axis=0)
         return self.poles
 
     def _get_canonical_params(self, rescale_counterterms=True):
@@ -3165,7 +3196,8 @@ class COMETTracerSpectrum2Poles(Calculator):
             bias_basis, counterterm_basis = self._prior_basis.split('+')
 
         A_AP = 1. / (pt.qper**2 * pt.qpar) if 'aap' in self._prior_basis else 1.
-        A = pt.AsD / pt.AsD_fid
+        if 'physical' in self._prior_basis:
+            A = pt.AsD
 
         def g(name):
             param = getattr(self, name, None)
@@ -3289,7 +3321,7 @@ class COMETPTSpectrum3Poles(Calculator):
         params += [cnloB]
         return propose_params_multitracer(params, tracers)
 
-    def __init__(self, z=1.0, k=None, ells=None, tracers=None, cosmo=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 16, 5), mu12_transform='k3'):
+    def __init__(self, z=1.0, k=None, ells=None, tracers=None, cosmo=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax'):
         vc = self.propose_params(tracers=tracers, model=model)
         if params is not None:
             vc = vc + VariableCollection(params)
@@ -3302,61 +3334,65 @@ class COMETPTSpectrum3Poles(Calculator):
             ells = ((0, 0, 0), (2, 0, 2))
         self.ells = tuple(tuple(int(e) for e in ell) for ell in ells)
         self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
-        _apply_cosmo_range_comet_emulator(get_params(self.cosmo))
+        _apply_cosmo_range_comet_emulator(self.cosmo)
+        self._backend = backend
+        if backend == 'numpy':
+            self._is_external = True
 
     def __post_init__(self, z=1.0, k=None, ells=None, tracers=None, fiducial='DESI', model='VDG_infty', params=None, quad_deg=(7, 16, 5), mu12_transform='k3', **kwargs):
         self._use_mpc = False
         self._model = model
         if mu12_transform != 'k3':
             raise NotImplementedError("Only mu12_transform='k3' is currently supported.")
-        from comet.bell import SugiBispectrumGrid
         self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
-            self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc)
+            self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
         self.quad_deg = tuple(quad_deg)
         self.mu12_transform = mu12_transform
-        # Sugiyama quadrature grids + per-pair (l1,l2,L) projection operators are
-        # cosmology-independent (only depend on self.k/self.ells/quad_deg) -- build them
-        # once here at __post_init__ time.
-        nmu1, nmu12, nphi = self.quad_deg
-        self._bgrid = SugiBispectrumGrid(self.k, list(self.ells), nmu1=nmu1, nmu12=nmu12, nphi=nphi, use_mpc=self._use_mpc)
 
     def __call__(self):
-        from comet.bell import BX_ell_Sugi_parts
-        params = _cosmo_to_comet(self.cosmo)
+        _use_jax = (self._backend == 'jax')
+        xp = jnp if _use_jax else np
+        _asarr = (lambda v: jnp.atleast_1d(jnp.asarray(v))) if _use_jax else (lambda v: float(np.asarray(v)))
+        params = {k: _asarr(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
+        params['z'] = np.atleast_1d(float(self.z))
         avir = self.avir.value if 'VDG' in self._model else None
         # cnloB is currently always 0 for this estimator (see comet.bell's module
         # docstring): EFT counterterms are only activated for 'EFT'/'VDG_infty_ctr' models,
         # which this estimator doesn't support, so self.cnloB has no effect here yet.
         md = self._md
-        cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model)
+        cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
 
-        # comet's functions accept 0-d arrays/python scalars directly (no need to
-        # pre-wrap with jnp.atleast_1d -- see comet.cosmology._a1()'s docstring), but
-        # still return 1-d (batch-shaped) outputs, hence the jnp.squeeze below.
-        qpar, qper = cosmo_base.compute_ap_params(self._cosmo_fid.Hz(), self._cosmo_fid.comoving_transverse_distance())
-        # AsD ("sqrt(As)*D(z)") is not an actual sigma8(z), just functionally
-        # analogous -- see COMETPTSpectrum2Poles.__call__'s comment /
-        # comet.cosmology.Cosmology.compute_growth_amplitude's docstring.
-        AsD = cosmo_base.compute_growth_amplitude(self._cosmo_fid)
-        self.qpar, self.qper, self.AsD = jnp.squeeze(qpar), jnp.squeeze(qper), jnp.squeeze(AsD)
-        self.AsD_fid = jnp.ones_like(self.AsD)
+        z_arr = np.atleast_1d(float(self.z))
+        Hz_fid = self._cosmo_fid.Hz(z_arr)
+        Dm_fid = self._cosmo_fid.comoving_transverse_distance(z_arr)
+        qpar, qper = cosmo_base.compute_ap_params(z_arr, Hz_fid, Dm_fid)
+        AsD = cosmo_base.compute_growth_amplitude(self.z, self._cosmo_fid)
+        self.qpar, self.qper, self.AsD = xp.squeeze(qpar), xp.squeeze(qper), xp.squeeze(AsD)
+        self.f = xp.squeeze(cosmo_base.growth_rate(z_arr))
 
-        parts = BX_ell_Sugi_parts(self._bgrid, md, cosmo_base, cosmo_fid=self._cosmo_fid, avir=avir)
-        # table shape: (ndiagrams, nells, nk); diagram order matches self._diagrams
-        # exactly (identical naming/ordering between the analytic and Sugiyama paths).
-        self.table = jnp.stack(
-            [jnp.stack([parts[ll][name][:, 0] for ll in self.ells], axis=0) for name in self._diagrams], axis=0)
-        self.f = jnp.squeeze(cosmo_base.growth_rate())
+        if avir is not None:
+            params['avir'] = _asarr(avir)
+        params |= {k: _asarr(v) for k, v in
+                   dict(b1=1.0, b2=0.0, g2=0.0, NP0=0.0, NB0=0.0, MB0=0.0, cB1=0.0, cB2=0.0, cnloB=0.0).items()}
+        q_tr_lo = (_asarr(xp.squeeze(qper)), _asarr(xp.squeeze(qpar)))
+        diagrams = list(self._diagrams)
+        parts = md.BX_ell_Sugi(self.k, params, ell=list(self.ells), X_list=diagrams,
+                                de_model=self._de_model, q_tr_lo=q_tr_lo,
+                                quad_deg=self.quad_deg, mu12_transform=self.mu12_transform)
+        # With X_list provided, parts = {(l1,l2,L): ndarray(npair, ndiag)} (nparams=1 already squeezed).
+        # Build table of shape (ndiag, nell, npair).
+        self.table = xp.stack(
+            [xp.stack([xp.asarray(parts[ll])[:, ix] for ll in self.ells], axis=0) for ix in range(len(diagrams))], axis=0)
 
     def tree_flatten(self):
-        children = [self.qpar, self.qper, self.table, self.f, self.AsD, self.AsD_fid]
+        children = [self.qpar, self.qper, self.table, self.f, self.AsD]
         auw = {'z': self.z, 'k': self.k, 'ells': self.ells}
         return children, auw
 
     @classmethod
     def tree_unflatten(cls, aux, children):
         obj = object.__new__(cls)
-        obj.qpar, obj.qper, obj.table, obj.f, obj.AsD, obj.AsD_fid = children
+        obj.qpar, obj.qper, obj.table, obj.f, obj.AsD = children
         obj.z = aux['z']
         obj.k = aux['k']
         obj.ells = aux['ells']
@@ -3375,7 +3411,7 @@ class COMETTracerSpectrum3Poles(Calculator):
         ], tracers)
         return params + extra
 
-    def __init__(self, z=1.0, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3'):
+    def __init__(self, z=1.0, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', backend='jax'):
         vc = type(self).propose_params(tracers=tracers, prior_basis=prior_basis, model=model)
         if params is not None:
             vc = vc + VariableCollection(params)
@@ -3385,6 +3421,7 @@ class COMETTracerSpectrum3Poles(Calculator):
         assign_params(self, vc - avir_vc, tracers, mapping=(lambda name: name[:-1]) if physical else None)
         self._prior_basis = prior_basis
         self._direct = (pt is False)
+        self._backend = backend
         if self._direct:
             # No separate PT calculator dependency: own the cosmology dep directly
             # and evaluate comet's Bell_Sugi() (monolithic, bias-combined) in
@@ -3400,15 +3437,17 @@ class COMETTracerSpectrum3Poles(Calculator):
             ], tracers)
             assign_params(self, cnloB_vc, tracers)
             self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
-            _apply_cosmo_range_comet_emulator(get_params(self.cosmo))
+            _apply_cosmo_range_comet_emulator(self.cosmo)
             self.pt = None
+            if backend == 'numpy':
+                self._is_external = True
         else:
             if pt is None:
-                pt = COMETPTSpectrum3Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None)
+                pt = COMETPTSpectrum3Poles(tracers=tracers, model=model, params=avir_vc if len(avir_vc) else None, backend=backend)
             self.pt = pt
             self.pt.update(z=z, k=k, ells=ells, tracers=tracers, model=model, quad_deg=quad_deg, mu12_transform=mu12_transform)
 
-    def __post_init__(self, z=1.0, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3'):
+    def __post_init__(self, z=1.0, k=None, pt=None, cosmo=None, fiducial='DESI', ells=None, tracers=None, model='VDG_infty', prior_basis='EggScoSmi+Comet', fsat=None, sigv=None, nbar=1e-4, params=None, quad_deg=(7, 16, 5), mu12_transform='k3', **kwargs):
         self._nbar = float(nbar)
         settings = get_physical_stochastic_settings()
         self._fsat = float(fsat) if fsat is not None else settings['fsat']
@@ -3421,13 +3460,10 @@ class COMETTracerSpectrum3Poles(Calculator):
             self._use_mpc = False
             if mu12_transform != 'k3':
                 raise NotImplementedError("Only mu12_transform='k3' is currently supported.")
-            from comet.bell import SugiBispectrumGrid
             self._de_model, self._md, self._fid_comet, self._cosmo_fid = _comet_setup_fiducial(
-                self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc)
+                self.cosmo, self.z, model, fiducial, use_mpc=self._use_mpc, backend=self._backend)
             self.quad_deg = tuple(quad_deg)
             self.mu12_transform = mu12_transform
-            nmu1, nmu12, nphi = self.quad_deg
-            self._bgrid = SugiBispectrumGrid(self.k, list(self.ells), nmu1=nmu1, nmu12=nmu12, nphi=nphi, use_mpc=self._use_mpc)
         else:
             self.k = self.pt.k
             self.ells = self.pt.ells
@@ -3445,34 +3481,41 @@ class COMETTracerSpectrum3Poles(Calculator):
         return self.poles
 
     def _call_direct(self):
-        """pt=False path: comet's Bell_Sugi() (monolithic, bias-combined -- no
+        """pt=False path: PTEmu.Bell_Sugi() (monolithic, bias-combined -- no
         BX_ell_Sugi() diagram decomposition) evaluated directly from this
         calculator's own cosmology dep -- see COMETTracerSpectrum2Poles._call_direct()."""
-        from comet.bell import Bell_Sugi
-        params = _cosmo_to_comet(self.cosmo)
+        _use_jax = (self._backend == 'jax')
+        xp = jnp if _use_jax else np
+        _asarr = (lambda v: jnp.atleast_1d(jnp.asarray(v))) if _use_jax else (lambda v: float(np.asarray(v)))
+        params = {k: _asarr(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
         avir = self.avir.value if 'VDG' in self._model else None
         # cnloB is currently always 0 for this estimator -- see COMETPTSpectrum3Poles.__call__'s comment.
         md = self._md
-        cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model)
-        # comet's functions accept 0-d arrays/python scalars directly (no need to
-        # pre-wrap with jnp.atleast_1d -- see comet.cosmology._a1()'s docstring), but
-        # still return 1-d (batch-shaped) outputs, hence the jnp.squeeze below.
-        qpar, qper = cosmo_base.compute_ap_params(self._cosmo_fid.Hz(), self._cosmo_fid.comoving_transverse_distance())
-        # AsD ("sqrt(As)*D(z)") is not an actual sigma8(z), just functionally
-        # analogous -- see COMETPTSpectrum2Poles.__call__'s comment /
-        # comet.cosmology.Cosmology.compute_growth_amplitude's docstring.
-        AsD = cosmo_base.compute_growth_amplitude(self._cosmo_fid)
-        self.qpar, self.qper, self.AsD = jnp.squeeze(qpar), jnp.squeeze(qper), jnp.squeeze(AsD)
-        self.AsD_fid = jnp.ones_like(self.AsD)
-        self.f = jnp.squeeze(cosmo_base.growth_rate())
+        cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
+        z_arr = np.atleast_1d(float(self.z))
+        Hz_fid = self._cosmo_fid.Hz(z_arr)
+        Dm_fid = self._cosmo_fid.comoving_transverse_distance(z_arr)
+        qpar, qper = cosmo_base.compute_ap_params(z_arr, Hz_fid, Dm_fid)
+        AsD = cosmo_base.compute_growth_amplitude(self.z, self._cosmo_fid)
+        self.qpar, self.qper, self.AsD = xp.squeeze(qpar), xp.squeeze(qper), xp.squeeze(AsD)
+        self.f = xp.squeeze(cosmo_base.growth_rate(z_arr))
 
-        canonical = self._get_canonical_params(rescale_counterterms=False)
-        b1, b2, g2, NP0, NB0, MB0 = (canonical[name] for name in ('b1', 'b2', 'g2', 'NP0', 'NB0', 'MB0'))
-        bias_params = dict(b1=b1, b2=b2, g2=g2, NP0=NP0, NB0=NB0, MB0=MB0)
+        # rescale_counterterms=True (default): NP0/NB0/MB0 are nbar-normalised but NOT
+        # h³-rescaled (no h-rescaling comment on these in _get_canonical_params applies
+        # to bispectrum params), ready to pass directly to PTEmu.Bell_Sugi() which
+        # uses them as-is (PTEmu.nbar = 1.0 so its internal 1/nbar division is a no-op).
+        canonical = self._get_canonical_params()
+        b1, b2, g2, NP0, NB0, MB0 = (_asarr(canonical[name]) for name in ('b1', 'b2', 'g2', 'NP0', 'NB0', 'MB0'))
+        params |= dict(b1=b1, b2=b2, g2=g2, NP0=NP0, NB0=NB0, MB0=MB0)
+        params['z'] = float(self.z)
         if avir is not None:
-            bias_params['avirB'] = avir
-        parts = Bell_Sugi(self._bgrid, md, cosmo_base, bias_params, cosmo_fid=self._cosmo_fid, nbar=self._nbar)
-        self.poles = jnp.stack([parts[ll][:, 0] for ll in self.ells], axis=0)
+            params['avirB'] = _asarr(avir)
+        parts = md.Bell_Sugi(self.k, params, ell=list(self.ells),
+                             de_model=self._de_model, q_tr_lo=(_asarr(self.qper), _asarr(self.qpar)),
+                             quad_deg=self.quad_deg, mu12_transform=self.mu12_transform)
+        # JAX path returns {ll: jnp(npair,)} (squeezed); numpy path returns {ll: ndarray(npair,1)};
+        # xp.squeeze handles both shapes uniformly.
+        self.poles = xp.stack([xp.squeeze(xp.asarray(parts[ll])) for ll in self.ells], axis=0)
         return self.poles
 
     def _get_canonical_params(self, rescale_counterterms=True):

@@ -40,6 +40,40 @@ def make_steps_factory(step):
     return jax.jit(make_steps)
 
 
+def make_steps_vmap_factory(step):
+    """Return a JIT-compiled function that advances a batch of BlackJAX states by N steps via vmap.
+
+    Parameters
+    ----------
+    step : callable
+        The BlackJAX kernel step function ``(rng_key, state) -> (state, info)``.
+
+    Returns
+    -------
+    callable
+        ``(batched_state, rng_keys) -> (final_states, (all_states, last_info))``
+        where batched_state has a leading chain dimension and rng_keys has shape
+        ``(nchains, n_steps, 2)``.
+    """
+
+    def make_one_step(state, rng_key):
+        state, info = step(rng_key, state)
+        return state, (state, info)
+
+    def scan_one_chain(args):
+        state, rng_keys = args
+        return jax.lax.scan(make_one_step, state, rng_keys)
+
+    batched = jax.vmap(scan_one_chain)
+
+    @jax.jit
+    def make_steps(args):
+        states, rng_keys = args
+        return batched((states, rng_keys))
+
+    return make_steps
+
+
 def _log_adaptation(logger, kernel_args):
     if 'step_size' in kernel_args:
         logger.info('step_size: %.3g', float(kernel_args['step_size']))
@@ -61,6 +95,7 @@ class _BlackJAXKernel(Kernel):
     logger = logging.getLogger('BlackJAXKernel')
     _kernel_type_name = None    # 'hmc', 'nuts', or 'mclmc'
     _adaptation_fn_name = None  # 'window_adaptation', 'mclmc_find_L_and_step_size'
+    max_nparallel = None  # blackjax handles any number of chains via jax.vmap
 
     @classmethod
     def install(cls, installer):
@@ -73,6 +108,7 @@ class _BlackJAXKernel(Kernel):
     def init(self, posterior, rng, **context):
         self._check_installed()
         self._rng = rng
+        self._nsamples_parallel = context.get('nsamples_parallel', 1)
 
         posterior_logpdf, _ = posterior
 
@@ -88,27 +124,48 @@ class _BlackJAXKernel(Kernel):
         self._adaptation_fn = adaptation_fn
 
         kernel = kernel_type(self._logposterior, **self.kernel_args, **self.fixed_kernel_args)
-        self._make_steps = make_steps_factory(kernel.step)
+        if self._nsamples_parallel > 1:
+            self._make_steps = make_steps_vmap_factory(kernel.step)
+        else:
+            self._make_steps = make_steps_factory(kernel.step)
         self._kernel = kernel
         self._state = None   # initialised lazily on first run / after adapt
         self._total_likelihood_evaluations = 0
 
+    def _init_state_single(self, initial_position):
+        try:
+            return self._kernel.init(initial_position)
+        except TypeError:
+            rng_key = jax.random.PRNGKey(int(self._rng.integers(2**32)))
+            return self._kernel.init(initial_position, rng_key)
+
     def _get_or_init_state(self, initial_position=None):
         if self._state is None:
-            try:
-                self._state = self._kernel.init(initial_position)
-            except TypeError:
-                rng_key = jax.random.PRNGKey(int(self._rng.integers(2**32)))
-                self._state = self._kernel.init(initial_position, rng_key)
+            if self._nsamples_parallel > 1:
+                # initial_position: (nchains, ndim)
+                self._state = jax.vmap(self._init_state_single)(initial_position)
+            else:
+                self._state = self._init_state_single(initial_position)
         return self._state
 
     def run(self, n_steps, state):
         position, _, _ = state
-        state = self._get_or_init_state(initial_position=position)
         rng_key = jax.random.PRNGKey(int(self._rng.integers(2**32)))
-        rng_keys = jax.random.split(rng_key, n_steps)
 
-        self._state, (all_states, last_info) = self._make_steps((state, rng_keys))
+        if self._nsamples_parallel > 1:
+            current_state = self._get_or_init_state(initial_position=position)
+            # rng_keys: (nchains, n_steps, 2)
+            rng_keys = jax.random.split(rng_key, self._nsamples_parallel * n_steps)
+            rng_keys = rng_keys.reshape(self._nsamples_parallel, n_steps, -1)
+            self._state, (all_states, last_info) = self._make_steps((current_state, rng_keys))
+            samples  = np.asarray(all_states.position).reshape(self._nsamples_parallel, n_steps, -1)
+            log_post = np.asarray(all_states.logdensity).reshape(self._nsamples_parallel, n_steps)
+        else:
+            current_state = self._get_or_init_state(initial_position=position)
+            rng_keys = jax.random.split(rng_key, n_steps)
+            self._state, (all_states, last_info) = self._make_steps((current_state, rng_keys))
+            samples  = np.asarray(all_states.position).reshape(n_steps, -1)
+            log_post = np.asarray(all_states.logdensity).reshape(n_steps)
 
         if hasattr(last_info, 'num_integration_steps'):
             nsteps = np.asarray(last_info.num_integration_steps).ravel()
@@ -121,8 +178,6 @@ class _BlackJAXKernel(Kernel):
         if self._total_likelihood_evaluations:
             self.logger.info('total likelihood evaluations(~): %d', self._total_likelihood_evaluations)
 
-        samples  = np.asarray(all_states.position).reshape(n_steps, -1)
-        log_post = np.asarray(all_states.logdensity).reshape(n_steps)
         return samples, None, {'logposterior': log_post}
 
 
@@ -162,19 +217,27 @@ class BlackjaxHMC(_BlackJAXKernel):
     def adapt(self, state, **kwargs):
         """Adapt step size and mass matrix via ``blackjax.window_adaptation``."""
         position, _, _ = state
+        # Use first chain's position if batched.
+        init_position = np.asarray(position)[0] if np.asarray(position).ndim > 1 else position
         steps = kwargs.pop('steps')
         rng_key = jax.random.PRNGKey(int(self._rng.integers(2**32)))
-        state = self._get_or_init_state(initial_position=position)
-        (state, parameters), _ = self._adaptation_fn(
+        single_state = self._init_state_single(init_position)
+        (single_state, parameters), _ = self._adaptation_fn(
             self._kernel_cls, self._logposterior,
             **self.fixed_kernel_args, **kwargs).run(
-            rng_key, state.position, num_steps=steps)
+            rng_key, single_state.position, num_steps=steps)
         self.kernel_args.update({k: v for k, v in parameters.items()
                                   if k not in self.fixed_kernel_args})
         self._kernel = self._kernel_cls(
             self._logposterior, **self.kernel_args, **self.fixed_kernel_args)
-        self._make_steps = make_steps_factory(self._kernel.step)
-        self._state = state
+        if self._nsamples_parallel > 1:
+            self._make_steps = make_steps_vmap_factory(self._kernel.step)
+            # Leave self._state = None so _get_or_init_state re-initialises from
+            # the batched position on the first run() call.
+            self._state = None
+        else:
+            self._make_steps = make_steps_factory(self._kernel.step)
+            self._state = single_state
         self.logger.info('Adaptation done.')
         _log_adaptation(self.logger, self.kernel_args)
 
@@ -213,19 +276,25 @@ class BlackjaxNUTS(_BlackJAXKernel):
     def adapt(self, state, **kwargs):
         """Adapt step size and mass matrix via ``blackjax.window_adaptation``."""
         position, _, _ = state
+        # Use first chain's position if batched.
+        init_position = np.asarray(position)[0] if np.asarray(position).ndim > 1 else position
         steps = kwargs.pop('steps')
         rng_key = jax.random.PRNGKey(int(self._rng.integers(2**32)))
-        state = self._get_or_init_state(initial_position=position)
-        (state, parameters), _ = self._adaptation_fn(
+        single_state = self._init_state_single(init_position)
+        (single_state, parameters), _ = self._adaptation_fn(
             self._kernel_cls, self._logposterior,
             **self.fixed_kernel_args, **kwargs).run(
-            rng_key, state.position, num_steps=steps)
+            rng_key, single_state.position, num_steps=steps)
         self.kernel_args.update({k: v for k, v in parameters.items()
                                   if k not in self.fixed_kernel_args})
         self._kernel = self._kernel_cls(
             self._logposterior, **self.kernel_args, **self.fixed_kernel_args)
-        self._make_steps = make_steps_factory(self._kernel.step)
-        self._state = state
+        if self._nsamples_parallel > 1:
+            self._make_steps = make_steps_vmap_factory(self._kernel.step)
+            self._state = None
+        else:
+            self._make_steps = make_steps_factory(self._kernel.step)
+            self._state = single_state
         self.logger.info('Adaptation done.')
         _log_adaptation(self.logger, self.kernel_args)
 
@@ -252,9 +321,11 @@ class BlackjaxMCLMC(_BlackJAXKernel):
         import blackjax.mcmc.mclmc as mclmc_mod
 
         position, _, _ = state
+        # Use first chain's position if batched.
+        init_position = np.asarray(position)[0] if np.asarray(position).ndim > 1 else position
         steps = kwargs.pop('steps')
 
-        state = self._get_or_init_state(initial_position=position)
+        single_state = self._init_state_single(init_position)
         rng_key = jax.random.PRNGKey(int(self._rng.integers(2**32)))
 
         _mass_matrix_kwarg = (
@@ -270,9 +341,9 @@ class BlackjaxMCLMC(_BlackJAXKernel):
                 mclmc_mod.isokinetic_mclachlan,
             )
 
-        state, params, *_ = self._adaptation_fn(
+        single_state, params, *_ = self._adaptation_fn(
             mclmc_kernel_factory, num_steps=steps,
-            state=state, rng_key=rng_key, **kwargs)
+            state=single_state, rng_key=rng_key, **kwargs)
 
         self.kernel_args.update(dict(L=float(params.L), step_size=float(params.step_size)))
         adapted_mass_matrix = np.asarray(getattr(params, _mass_matrix_kwarg))
@@ -280,8 +351,12 @@ class BlackjaxMCLMC(_BlackJAXKernel):
             self._logposterior,
             **self.kernel_args, **self.fixed_kernel_args,
             **{_mass_matrix_kwarg: adapted_mass_matrix})
-        self._make_steps = make_steps_factory(self._kernel.step)
-        self._state = state
+        if self._nsamples_parallel > 1:
+            self._make_steps = make_steps_vmap_factory(self._kernel.step)
+            self._state = None
+        else:
+            self._make_steps = make_steps_factory(self._kernel.step)
+            self._state = single_state
         self.logger.info('Adaptation done.')
         self.logger.info('L: %.3g  step_size: %.3g', self.kernel_args['L'], self.kernel_args['step_size'])
         imm = adapted_mass_matrix.ravel()

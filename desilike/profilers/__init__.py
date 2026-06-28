@@ -1,6 +1,7 @@
 """desilike.profilers — likelihood profiling (maximize, profile, grid, covariance)."""
 
 from .base import Profiler, Kernel
+from ..conditioning import AffineConditioner
 from .minuit import Minuit
 from .scipy import Scipy
 from .bobyqa import BOBYQA

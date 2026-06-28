@@ -661,13 +661,15 @@ class ParameterPrior:
         """
         return self._logpdf_fn(jnp.asarray(x)) - self._logpdf_center_val
 
-    def sample(self, key, shape=None):
+    def sample(self, key=None, shape=None):
         """Draw samples using JAX PRNG key; raises if prior is improper.
 
         shape defaults to self.shape (set by Parameter) when None; falls back to ().
         """
         if self._sample_fn is None:
             raise ValueError('Cannot sample from improper prior')
+        if key is None:
+            key = jax.random.PRNGKey(int(np.random.default_rng().integers(2**32)))
         shape = tuple(np.atleast_1d(shape)) + (self.shape or ()) if shape is not None else self.shape
         return self._sample_fn(key, shape)
 

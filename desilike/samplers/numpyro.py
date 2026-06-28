@@ -1,4 +1,4 @@
-"""NumPyro NUTS, HMC, BarkerMH, and SA kernels."""
+"""NumPyro NUTS, HMC, BarkerMH, SA, AIES, and ESS kernels."""
 
 import logging
 import inspect
@@ -40,6 +40,7 @@ class _NumpyroKernel(Kernel):
     logger = logging.getLogger('NumpyroKernel')
     _numpyro_cls = None
     _extra_fields = ('accept_prob', 'potential_energy')
+    max_nparallel = None  # numpyro handles any number of chains via num_chains
 
     @classmethod
     def install(cls, installer):
@@ -53,6 +54,7 @@ class _NumpyroKernel(Kernel):
 
         self._rng = rng
         self._ndim = context['ndim']
+        self._nsamples_parallel = context.get('nsamples_parallel', 1)
 
         import jax.numpy as _jnp
         def potential_fn(flat):
@@ -68,10 +70,15 @@ class _NumpyroKernel(Kernel):
     def adapt(self, state, **kwargs):
         """Run NumPyro warmup and rebuild the kernel with adapted parameters.
 
+        Always adapts from a single chain.  When ``nsamples_parallel > 1`` the
+        adapted position is replicated into a batch before the first :meth:`run`.
+
         Parameters
         ----------
         state : tuple
             ``(position, derived, logposterior)`` in rescaled space.
+            For multi-chain state ``position`` may have shape ``(nchains, ndim)``
+            — the first chain's position is used for the single-chain warmup.
         steps : int
             Number of warmup steps.
         adapt_step_size : bool, optional
@@ -83,6 +90,9 @@ class _NumpyroKernel(Kernel):
             Extra keyword arguments forwarded to the warmup kernel constructor.
         """
         position, _, _ = state
+        # Use first chain's position if batched.
+        if np.asarray(position).ndim > 1:
+            position = position[0]
         if self._current_position is None:
             self._current_position = position
         steps = kwargs.pop('steps')
@@ -119,18 +129,38 @@ class _NumpyroKernel(Kernel):
 
     def run(self, n_steps, state):
         position, _, _ = state
+        # For multi-chain: position shape is (nchains, ndim).
+        # On first call, seed from the provided state; afterward keep last_state.z.
         if self._current_position is None:
             self._current_position = position
+        elif self._nsamples_parallel > 1 and np.asarray(self._current_position).ndim == 1:
+            # Adapt left a single-chain position; tile it for the first parallel run.
+            self._current_position = np.broadcast_to(
+                self._current_position, (self._nsamples_parallel,) + np.asarray(self._current_position).shape)
+
         rng_key = jax.random.PRNGKey(int(self._rng.integers(2**32)))
         mcmc = numpyro.infer.MCMC(
-            self._numpyro_kernel, num_warmup=0, num_samples=n_steps, progress_bar=False)
+            self._numpyro_kernel,
+            num_warmup=0,
+            num_samples=n_steps,
+            num_chains=self._nsamples_parallel,
+            chain_method='vectorized',
+            progress_bar=False)
         mcmc.run(rng_key, extra_fields=self._extra_fields,
                  init_params=self._current_position)
         self._current_position = mcmc.last_state.z
 
-        samples = np.asarray(mcmc.get_samples()).reshape(n_steps, -1)
         extra = mcmc.get_extra_fields()
-        log_post = -np.asarray(extra['potential_energy']).reshape(n_steps)
+
+        if self._nsamples_parallel > 1:
+            # group_by_chain=True → (nchains, n_steps, ndim)
+            samples = np.asarray(mcmc.get_samples(group_by_chain=True)).reshape(
+                self._nsamples_parallel, n_steps, -1)
+            log_post = -np.asarray(extra['potential_energy']).reshape(
+                self._nsamples_parallel, n_steps)
+        else:
+            samples = np.asarray(mcmc.get_samples()).reshape(n_steps, -1)
+            log_post = -np.asarray(extra['potential_energy']).reshape(n_steps)
 
         if 'num_steps' in extra:
             nsteps = np.asarray(extra['num_steps']).ravel()
@@ -138,7 +168,7 @@ class _NumpyroKernel(Kernel):
             self.logger.info('number of integration steps: mean %.1f, max %d',
                              nsteps.mean(), nsteps.max())
         else:
-            self._total_likelihood_evaluations += n_steps
+            self._total_likelihood_evaluations += n_steps * self._nsamples_parallel
         if 'accept_prob' in extra:
             self.logger.info('acceptance rate: mean %.3f',
                              float(np.asarray(extra['accept_prob']).mean()))
@@ -236,3 +266,183 @@ class NumpyroSA(_NumpyroKernel):
 
     def __init__(self, **kwargs):
         self.kernel_kwargs = dict(**kwargs)
+
+
+class _NumpyroEnsembleKernel(Kernel):
+    """Common base for NumPyro ensemble MCMC kernels (AIES and ESS).
+
+    Both kernels require an even number of walkers (``num_chains`` in numpyro's MCMC
+    must be divisible by 2) and do not support extra fields collection via numpyro.
+    Log-posterior values and derived quantities are evaluated in a single pass after
+    each numpyro MCMC run.
+    """
+
+    logger = logging.getLogger('NumpyroEnsembleKernel')
+    _numpyro_cls = None
+    _sampler_cls = 'EnsembleSampler'
+    max_nparallel = 1  # walker-level parallelism is handled internally by the ensemble
+
+    @classmethod
+    def install(cls, installer):
+        installer.pip('numpyro')
+
+    def init(self, posterior, rng, **context):
+        if not NUMPYRO_INSTALLED:
+            raise ImportError("The 'numpyro' package is required but not installed.")
+
+        posterior_logpdf, posterior_logpdf_with_derived = posterior
+
+        self._rng = rng
+        self._ndim = context['ndim']
+
+        if self.nwalkers is None:
+            # 4 * ndim is always even; also satisfies the recommended nwalkers >= 2 * ndim.
+            self.nwalkers = 4 * self._ndim
+        if self.nwalkers % 2 != 0:
+            raise ValueError(f'nwalkers must be even for {self._numpyro_cls}, got {self.nwalkers}.')
+
+        self._posterior_logpdf_with_derived = posterior_logpdf_with_derived
+
+        def potential_fn(flat):
+            return -posterior_logpdf(jnp.asarray(flat)[None])[0]
+        self._potential_fn = potential_fn
+
+        self._numpyro_kernel = getattr(numpyro.infer, self._numpyro_cls)(
+            potential_fn=potential_fn, **self.kernel_kwargs)
+
+        self._current_position = None
+        self._total_likelihood_evaluations = 0
+
+    def adapt(self, state, **kwargs):
+        """No-op: ensemble samplers do not use step-size or mass-matrix adaptation."""
+
+    def _log_run_info(self, mcmc):
+        """Log kernel-specific run statistics from *mcmc.last_state*.  No-op by default."""
+
+    def run(self, n_steps, state):
+        position, _, _ = state
+        # position shape: (nwalkers, ndim) in conditioned space
+        if self._current_position is None:
+            self._current_position = position
+
+        rng_key = jax.random.PRNGKey(int(self._rng.integers(2**32)))
+        mcmc = numpyro.infer.MCMC(
+            self._numpyro_kernel,
+            num_warmup=0,
+            num_samples=n_steps,
+            num_chains=self.nwalkers,
+            chain_method='vectorized',
+            progress_bar=False)
+        mcmc.run(rng_key, init_params=self._current_position)
+        self._current_position = mcmc.last_state.z  # (nwalkers, ndim)
+        self._log_run_info(mcmc)
+
+        # get_samples(group_by_chain=True) → (nwalkers, n_steps, ndim); transpose → (n_steps, nwalkers, ndim)
+        samples = np.asarray(mcmc.get_samples(group_by_chain=True)).transpose(1, 0, 2)
+
+        # Evaluate log-posterior and derived quantities on all samples in one pass.
+        flat_samples = jnp.asarray(samples.reshape(-1, self._ndim))
+        results = self._posterior_logpdf_with_derived(flat_samples)
+        log_post = np.array([result[0] for result in results]).reshape(n_steps, self.nwalkers)
+        derived = np.array([result[1] for result in results]).reshape(n_steps, self.nwalkers, -1)
+
+        self._total_likelihood_evaluations += n_steps * self.nwalkers
+        self.logger.info('total likelihood evaluations: %d', self._total_likelihood_evaluations)
+
+        return samples, derived, {'logposterior': log_post}
+
+
+class NumpyroAIES(_NumpyroEnsembleKernel):
+    """Affine Invariant Ensemble Sampler (AIES) via NumPyro.
+
+    A gradient-free ensemble method that proposes moves using information from other
+    walkers (differential-evolution or stretch moves).  The number of walkers must be
+    even and at least ``2 * ndim``; ``4 * ndim`` (the default) is a safe choice.
+
+    .. rubric:: References
+    - https://num.pyro.ai/en/stable/mcmc.html#numpyro.infer.ensemble.AIES
+    - https://arxiv.org/abs/1202.3665 (emcee)
+    """
+
+    logger = logging.getLogger('NumpyroAIES')
+    _numpyro_cls = 'AIES'
+
+    def __init__(self, nwalkers=None, moves=None, randomize_split=False, **kwargs):
+        """
+        Parameters
+        ----------
+        nwalkers : int or None
+            Number of ensemble walkers.  Must be even and ``>= 2 * ndim``.
+            ``None`` defers to ``4 * ndim``, set during :meth:`init`.
+        moves : dict or None
+            Mapping of move objects to their selection probabilities, e.g.
+            ``{numpyro.infer.AIES.StretchMove(): 1.0}``.  ``None`` uses the
+            default ``DEMove``.
+        randomize_split : bool
+            Whether to randomly permute walker order at each iteration.  Default ``False``.
+        **kwargs
+            Extra keyword arguments forwarded to ``numpyro.infer.AIES``.
+        """
+        self.nwalkers = nwalkers
+        self.kernel_kwargs = dict(randomize_split=randomize_split, **kwargs)
+        if moves is not None:
+            self.kernel_kwargs['moves'] = moves
+
+    def _log_run_info(self, mcmc):
+        try:
+            mean_accept = float(mcmc.last_state.inner_state.mean_accept_prob)
+            self.logger.info('acceptance rate: mean %.3f', mean_accept)
+        except Exception:
+            pass
+
+
+class NumpyroESS(_NumpyroEnsembleKernel):
+    """Ensemble Slice Sampler (ESS) via NumPyro.
+
+    A gradient-free ensemble method that uses slice-sampling directions informed by
+    other walkers.  The number of walkers must be even and at least ``2 * ndim``;
+    ``4 * ndim`` (the default) is a safe choice.
+
+    .. rubric:: References
+    - https://num.pyro.ai/en/stable/mcmc.html#numpyro.infer.ensemble.ESS
+    - https://arxiv.org/abs/2002.06212 (Karamanis & Beutler)
+    """
+
+    logger = logging.getLogger('NumpyroESS')
+    _numpyro_cls = 'ESS'
+
+    def __init__(self, nwalkers=None, moves=None, randomize_split=True,
+                 init_mu=1.0, tune_mu=True, max_steps=10000, **kwargs):
+        """
+        Parameters
+        ----------
+        nwalkers : int or None
+            Number of ensemble walkers.  Must be even and ``>= 2 * ndim``.
+            ``None`` defers to ``4 * ndim``, set during :meth:`init`.
+        moves : dict or None
+            Mapping of move objects to their selection probabilities, e.g.
+            ``{numpyro.infer.ESS.GaussianMove(): 1.0}``.  ``None`` uses the
+            default ``DifferentialMove``.
+        randomize_split : bool
+            Whether to randomly permute walker order at each iteration.  Default ``True``.
+        init_mu : float
+            Initial scale factor for the slice width.  Default ``1.0``.
+        tune_mu : bool
+            Whether to adapt the scale factor during sampling.  Default ``True``.
+        max_steps : int
+            Maximum number of stepping-out steps per sample.  Default ``10000``.
+        **kwargs
+            Extra keyword arguments forwarded to ``numpyro.infer.ESS``.
+        """
+        self.nwalkers = nwalkers
+        self.kernel_kwargs = dict(randomize_split=randomize_split, init_mu=init_mu,
+                                  tune_mu=tune_mu, max_steps=max_steps, **kwargs)
+        if moves is not None:
+            self.kernel_kwargs['moves'] = moves
+
+    def _log_run_info(self, mcmc):
+        try:
+            mu = float(mcmc.last_state.inner_state.mu)
+            self.logger.info('slice scale mu: %.3g', mu)
+        except Exception:
+            pass

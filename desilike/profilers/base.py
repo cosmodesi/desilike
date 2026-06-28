@@ -10,9 +10,10 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-from ..parameter import Parameter, VariableCollection
+from ..parameter import VariableCollection
 from ..samples import Profiles, Covariance
 from ..distributed import default_mpicomm, get_mpicomm
+from ..conditioning import AffineConditioner
 
 
 # ── Kernel ────────────────────────────────────────────────────────────────────
@@ -150,54 +151,6 @@ def _build_error_from_cov(cov, varied_params):
     return error
 
 
-def _compute_flat_bounds(transformed_params):
-    """Return per-flat-element ``(lo, hi)`` bounds in transformed space.
-
-    Parameters
-    ----------
-    transformed_params : iterable of Parameter
-
-    Returns
-    -------
-    list of (float, float)
-        One entry per flat element (vector params contribute multiple entries).
-    """
-    bounds = []
-    for param in transformed_params:
-        flat_size = int(np.prod(param.shape)) if param.shape else 1
-        lo_all, hi_all = param.prior.limits
-        if flat_size == 1:
-            bounds.append((float(lo_all), float(hi_all)))
-        else:
-            lo_arr = np.broadcast_to(np.asarray(lo_all).ravel(), (flat_size,))
-            hi_arr = np.broadcast_to(np.asarray(hi_all).ravel(), (flat_size,))
-            for lo, hi in zip(lo_arr, hi_arr):
-                bounds.append((float(lo), float(hi)))
-    return bounds
-
-
-def _compute_flat_proposals(transformed_params):
-    """Return per-flat-element proposal step size in transformed space.
-
-    Parameters
-    ----------
-    transformed_params : iterable of Parameter
-
-    Returns
-    -------
-    list of float
-        One entry per flat element.  The step size is each parameter's ``ref.std()``.
-    """
-    proposals = []
-    for param in transformed_params:
-        flat_size = int(np.prod(param.shape)) if param.shape else 1
-        std = param.ref.std()
-        p_val = float(std) if (std is not None and np.isfinite(float(std))) else 1.0
-        for _ in range(flat_size):
-            proposals.append(p_val)
-    return proposals
-
-
 def _pool_map(mpicomm, fn, items):
     """Map *fn* over *items*, distributing the independent runs across *mpicomm*
     ranks (round-robin) and gathering results to every rank.
@@ -279,7 +232,7 @@ class Profiler:
 
     @default_mpicomm
     def __init__(self, likelihood, kernel, rng=None, max_tries=1000,
-                 profiles=None, rescale=False, covariance=None,
+                 profiles=None, conditioning=None,
                  output_fn=None, mpicomm=None):
 
         self.likelihood = likelihood
@@ -298,9 +251,6 @@ class Profiler:
                 self.logger.info('Profiles will be written to: %s', self.output_fn)
 
         # ── flat parameter layout ─────────────────────────────────────────
-        # Every parameter is flattened: shape () → 1 element, shape (n,) → n
-        # elements, etc.  ``_param_slices`` maps name → slice into the flat
-        # optimisation vector.
         flat_offset = 0
         self._param_slices = {}
         for param in self.varied_params:
@@ -309,48 +259,11 @@ class Profiler:
             flat_offset += flat_size
         self._flat_size = flat_offset
 
-        # ── rescaling transform ───────────────────────────────────────────
-        # _loc[k] and _scale[k] are the centre and step for flat element k.
-        loc_parts = []
-        for param in self.varied_params:
-            center = np.asarray(
-                param.value if param.value is not None else param.ref.center()
-            ).ravel()
-            flat_size = self._param_slices[param.name].stop - self._param_slices[param.name].start
-            if center.size == 1 and flat_size > 1:
-                center = np.full(flat_size, float(center[0]))
-            loc_parts.append(center.astype('f8'))
-        self._loc = np.concatenate(loc_parts) if loc_parts else np.array([], dtype='f8')
-
-        if rescale:
-            if covariance is not None:
-                self._scale = np.sqrt(np.diag(np.asarray(covariance)))
-            else:
-                scale_parts = []
-                for param in self.varied_params:
-                    std = param.ref.std()
-                    if std is None or not np.isfinite(std) or std <= 0.:
-                        raise ValueError(
-                            f'Parameter {param.name!r}: cannot determine rescale '
-                            f'scale from ref.std()={std!r}. '
-                            'Provide covariance or set a proper ref distribution.'
-                        )
-                    flat_size = self._param_slices[param.name].stop - self._param_slices[param.name].start
-                    scale_parts.append(np.full(flat_size, float(std), dtype='f8'))
-                self._scale = np.concatenate(scale_parts)
-        else:
-            self._scale = np.ones(self._flat_size, dtype='f8')
-
-        # Build transformed VariableCollection (limits/ref in rescaled space; the
-        # rescaled step size is recovered from the transformed ref.std()).
-        self._transformed_params = VariableCollection()
-        for param in self.varied_params:
-            slc = self._param_slices[param.name]
-            loc_p   = self._loc[slc].reshape(param.shape or ())
-            scale_p = self._scale[slc].reshape(param.shape or ())
-            prior = param.prior.affine_transform(loc=-loc_p / scale_p, scale=1. / scale_p)
-            ref   = param.ref.affine_transform(loc=-loc_p / scale_p, scale=1. / scale_p)
-            self._transformed_params.set(param.clone(prior=prior, ref=ref))
+        # ── conditioning transform ─────────────────────────────────────────
+        if conditioning is None:
+            conditioning = AffineConditioner()
+        self.conditioning = conditioning
+        self.conditioning.init(self.varied_params)
 
         # ── existing profiles ─────────────────────────────────────────────
         if profiles is not None and not isinstance(profiles, Profiles):
@@ -366,31 +279,15 @@ class Profiler:
         # ── kernel setup ──────────────────────────────────────────────────
         kernel.init()
 
-    # ── coordinate transforms ─────────────────────────────────────────────────
-
-    def _forward(self, x):
-        """Rescaled → original space.  ``x_original = x * scale + loc``.
-
-        Operates on the flat parameter vector.  JAX-safe under jit/grad.
-        """
-        return jnp.asarray(x) * self._scale + self._loc
-
-    def _backward(self, x):
-        """Original → rescaled space.  ``x_rescaled = (x - loc) / scale``.
-
-        Operates on the flat parameter vector.
-        """
-        return (np.asarray(x) - self._loc) / self._scale
-
     # ── chi2 ─────────────────────────────────────────────────────────────────
 
     def _chi2_rescaled(self, x):
-        """χ² in rescaled space — fully JAX-traceable.
+        """χ² in conditioned space — fully JAX-traceable.
 
         Unpacks the flat vector ``x`` into per-parameter arrays (handling
         non-trivial shapes) before calling the likelihood.
         """
-        x_orig = self._forward(x)
+        x_orig = self.conditioning.forward(x)
         params_dict = {}
         for name, param in zip(self.varied_params.names(), self.varied_params):
             slc = self._param_slices[name]
@@ -441,7 +338,7 @@ class Profiler:
                 cols.append(vals)  # each has shape (missing, flat_size_of_param)
 
             candidates_orig     = np.concatenate(cols, axis=1)            # (missing, flat_size)
-            candidates_rescaled = (candidates_orig - self._loc) / self._scale
+            candidates_rescaled = np.asarray(self.conditioning.inverse(candidates_orig))
 
             for candidate in candidates_rescaled:
                 if valid.all():
@@ -458,6 +355,26 @@ class Profiler:
             )
         return result
 
+    def _conditioned_bounds_and_proposals(self):
+        """Return ``(bounds, proposals)`` in conditioned parameter space.
+
+        *bounds* is a list of ``(lo, hi)`` tuples, one per flat element.
+        *proposals* is a list of step-size floats (``ref.std() / scale``).
+        """
+        prior_bounds = self.conditioning.prior_bounds()  # (ndim, 2)
+        bounds = [(float(prior_bounds[k, 0]), float(prior_bounds[k, 1]))
+                  for k in range(self._flat_size)]
+        _scale = self.conditioning._scale
+        proposals = []
+        for param in self.varied_params:
+            slc = self._param_slices[param.name]
+            flat_size = slc.stop - slc.start
+            std = param.ref.std()
+            scale_val = float(_scale[slc.start])
+            p_val = (float(std) / scale_val) if (std is not None and np.isfinite(float(std)) and float(std) > 0.) else 1.0
+            proposals.extend([p_val] * flat_size)
+        return bounds, proposals
+
     # ── transform profiles back to original space ─────────────────────────────
 
     def _transform_back(self, profiles):
@@ -465,6 +382,8 @@ class Profiler:
         if profiles is None:
             return profiles
         names = self.varied_params.names()
+        _scale = self.conditioning._scale
+        _loc = self.conditioning._loc
         for slot in ('best', 'start'):
             data = getattr(profiles, slot, None)
             if data is None:
@@ -473,8 +392,8 @@ class Profiler:
                 if name not in names:
                     continue
                 slc     = self._param_slices[name]
-                scale_p = self._scale[slc]
-                loc_p   = self._loc[slc]
+                scale_p = _scale[slc]
+                loc_p   = _loc[slc]
                 param   = self.varied_params[name]
                 if param.shape:
                     scale_p = scale_p.reshape(param.shape)
@@ -489,7 +408,7 @@ class Profiler:
                 if name not in names:
                     continue
                 slc     = self._param_slices[name]
-                scale_p = self._scale[slc]
+                scale_p = _scale[slc]
                 param   = self.varied_params[name]
                 if param.shape:
                     scale_p = scale_p.reshape(param.shape)
@@ -498,7 +417,7 @@ class Profiler:
                 error[name] = np.asarray(arr) * scale_p
         covariance = getattr(profiles, 'covariance', None)
         if covariance is not None:
-            cov_array = np.asarray(covariance) * self._scale[:, None] * self._scale[None, :]
+            cov_array = np.asarray(covariance) * _scale[:, None] * _scale[None, :]
             profiles.covariance = Covariance(cov_array, list(self.varied_params))
         return profiles
 
@@ -564,13 +483,12 @@ class Profiler:
         if start is not None:
             start_arr       = np.atleast_2d(np.asarray(start, dtype='f8'))
             niterations     = niterations or len(start_arr)
-            starts_rescaled = (start_arr - self._loc) / self._scale
+            starts_rescaled = np.asarray(self.conditioning.inverse(start_arr))
         else:
             niterations     = niterations or 1
             starts_rescaled = self._get_starts(niterations)
 
-        bounds   = _compute_flat_bounds(self._transformed_params)
-        proposals = _compute_flat_proposals(self._transformed_params)
+        bounds, proposals = self._conditioned_bounds_and_proposals()
 
         state_tmpl = ProfilerState(
             start=starts_rescaled[0],      # placeholder; replaced per run
@@ -582,7 +500,7 @@ class Profiler:
         run_one = functools.partial(_run_one_worker, self.kernel, state_tmpl, self._jit_chi2, self._grad_chi2, kwargs)
         raw = _pool_map(self.mpicomm, run_one, list(starts_rescaled))
 
-        profiles = self._merge_and_transform([_state_to_profiles(state, self._transformed_params) for state in raw])
+        profiles = self._merge_and_transform([_state_to_profiles(state, self.varied_params) for state in raw])
         self._add_derived(profiles)
 
         # Populate profiles.start with starting points in original space.
@@ -593,7 +511,7 @@ class Profiler:
                 if state.best is not None
             ])
             if successful_starts.size > 0:
-                starts_orig = successful_starts * self._scale + self._loc
+                starts_orig = np.asarray(self.conditioning.forward(successful_starts))
                 start_dict = {}
                 for name, param in zip(self.varied_params.names(), self.varied_params):
                     slc  = self._param_slices[name]
@@ -625,9 +543,9 @@ class Profiler:
             np.asarray(self.profiles.best[name][argmax]).ravel()
             for name in self.varied_params.names()
         ])
-        best_rescaled = self._backward(best_orig)
+        best_rescaled = np.asarray(self.conditioning.inverse(best_orig))
 
-        # Compute Hessian of χ² w.r.t. rescaled params via JAX
+        # Compute Hessian of χ² w.r.t. conditioned params via JAX
         hessian = np.asarray(jax.hessian(self._jit_chi2)(best_rescaled))
 
         try:
@@ -636,8 +554,9 @@ class Profiler:
             self.logger.warning('Hessian inversion failed; covariance set to NaN.')
             cov_rescaled = np.full((self._flat_size, self._flat_size), np.nan)
 
-        # x_original = x_rescaled * scale + loc  →  cov_orig[i,j] = cov_r[i,j]*scale[i]*scale[j]
-        cov_orig   = cov_rescaled * np.outer(self._scale, self._scale)
+        # cov_orig[i,j] = cov_r[i,j] * scale[i] * scale[j]  (diagonal conditioning only)
+        _scale = self.conditioning._scale
+        cov_orig = cov_rescaled * np.outer(_scale, _scale)
         nruns      = self.profiles.nruns
 
         error_dict = _build_error_from_cov(cov_orig, self.varied_params)
@@ -689,6 +608,12 @@ class Profiler:
         **kwargs
             Forwarded to ``_maximize_one``.
         """
+        if self.conditioning.is_mixing:
+            raise ValueError(
+                'interval() is not supported when the conditioner mixes parameter dimensions '
+                '(AffineConditioner with rescale="full" and a non-diagonal covariance). '
+                'Use AffineConditioner(rescale="diag") instead.')
+
         if 0. < cl < 1.:
             from scipy import stats
             cl = float(stats.chi2(df=1).ppf(cl)) ** 0.5   # probability → sigma
@@ -722,7 +647,7 @@ class Profiler:
             np.asarray(self.profiles.best[name][argmax]).ravel()
             for name in self.varied_params.names()
         ])
-        center_r = self._backward(best_orig)
+        center_r = np.asarray(self.conditioning.inverse(best_orig))
 
         cov_orig = np.asarray(self.profiles.covariance.value)
         interval_dict = {}
@@ -730,9 +655,9 @@ class Profiler:
         for name in param_names:
             flat_pidx = self._param_slices[name].start
 
-            # Standard deviation in rescaled space
+            # Standard deviation in conditioned space
             cov_orig_ii = float(cov_orig[flat_pidx, flat_pidx])
-            sigma_r     = float(np.sqrt(max(cov_orig_ii, 0.))) / float(self._scale[flat_pidx])
+            sigma_r     = float(np.sqrt(max(cov_orig_ii, 0.))) / float(self.conditioning._scale[flat_pidx])
 
             scan_ctx = self._build_scan_setup([flat_pidx])
             lo_off, hi_off = self._interval_one(
@@ -783,6 +708,12 @@ class Profiler:
         **kwargs
             Forwarded to ``_maximize_one``.
         """
+        if self.conditioning.is_mixing:
+            raise ValueError(
+                'contour() is not supported when the conditioner mixes parameter dimensions '
+                '(AffineConditioner with rescale="full" and a non-diagonal covariance). '
+                'Use AffineConditioner(rescale="diag") instead.')
+
         from scipy import stats
 
         if 0. < cl < 1.:
@@ -832,7 +763,7 @@ class Profiler:
             np.asarray(self.profiles.best[name][argmax]).ravel()
             for name in self.varied_params.names()
         ])
-        center_r = self._backward(best_orig)
+        center_r = np.asarray(self.conditioning.inverse(best_orig))
         cov_orig = np.asarray(self.profiles.covariance.value)
 
         contour_pairs = {}
@@ -840,8 +771,8 @@ class Profiler:
             flat_idx1 = self._param_slices[name1].start
             flat_idx2 = self._param_slices[name2].start
 
-            # 2×2 covariance in rescaled space
-            scale_2   = self._scale[[flat_idx1, flat_idx2]]
+            # 2×2 covariance in conditioned space
+            scale_2   = self.conditioning._scale[[flat_idx1, flat_idx2]]
             cov_r_2x2 = (cov_orig[np.ix_([flat_idx1, flat_idx2], [flat_idx1, flat_idx2])]
                          / np.outer(scale_2, scale_2))
 
@@ -885,6 +816,12 @@ class Profiler:
         niterations : int
             Restarts per scan point (to reduce chance of local minima).
         """
+        if self.conditioning.is_mixing:
+            raise ValueError(
+                'profile() is not supported when the conditioner mixes parameter dimensions '
+                '(AffineConditioner with rescale="full" and a non-diagonal covariance). '
+                'Use AffineConditioner(rescale="diag") instead.')
+
         if self.profiles is None or self.profiles.best is None:
             self.maximize()
         if self.profiles.error is None:
@@ -909,7 +846,7 @@ class Profiler:
             flat_pidx = self._param_slices[pname].start  # flat index of this scalar param
             scan = _build_1d_grid(pname, flat_pidx, grid_vals, npoints, cl_val, argmax, self.profiles, self.varied_params)
 
-            scan_r          = (scan - self._loc[flat_pidx]) / self._scale[flat_pidx]
+            scan_r = (scan - self.conditioning._loc[flat_pidx]) / self.conditioning._scale[flat_pidx]
             fixed_points_r  = scan_r.reshape(-1, 1)
             logposteriors   = self._scan([flat_pidx], fixed_points_r, niterations, **kwargs)
             profile_results[pname] = (scan, logposteriors)
@@ -964,9 +901,9 @@ class Profiler:
         grid_shape = mesh[0].shape
         flat_pts   = np.column_stack([m.ravel() for m in mesh])  # (N, n_grid)
 
-        # Rescale fixed points (vectorised over all grid points)
-        loc_grid        = self._loc[flat_grid_idx]
-        scale_grid      = self._scale[flat_grid_idx]
+        # Condition fixed points (vectorised over all grid points)
+        loc_grid        = self.conditioning._loc[flat_grid_idx]
+        scale_grid      = self.conditioning._scale[flat_grid_idx]
         fixed_points_r  = (flat_pts - loc_grid) / scale_grid  # (N, n_grid)
 
         lp_grid = self._scan(flat_grid_idx, fixed_points_r, niterations, **kwargs).reshape(grid_shape)
@@ -1010,7 +947,7 @@ class Profiler:
 
         # Free parameters: those whose every flat element is free.
         free_params = VariableCollection()
-        for param in self._transformed_params:
+        for param in self.varied_params:
             slc = self._param_slices[param.name]
             if set(range(slc.start, slc.stop)) <= set(free_flat_idx):
                 free_params.set(param)
@@ -1018,8 +955,7 @@ class Profiler:
         fixed_idx_arr = np.array(fixed_flat_idx, dtype=int)
         free_idx_arr  = np.array(free_flat_idx,  dtype=int) if free_flat_idx else np.array([], dtype=int)
 
-        all_bounds     = _compute_flat_bounds(self._transformed_params)
-        all_proposals  = _compute_flat_proposals(self._transformed_params)
+        all_bounds, all_proposals = self._conditioned_bounds_and_proposals()
         flat_bounds_free    = [all_bounds[k]    for k in free_flat_idx]
         flat_proposals_free = [all_proposals[k] for k in free_flat_idx]
 
@@ -1171,11 +1107,12 @@ class Profiler:
 
         factor       = cl ** 2
         center_val_r = float(center_r[flat_pidx])
-        scale_p      = float(self._scale[flat_pidx])
-        loc_p        = float(self._loc[flat_pidx])
+        scale_p      = float(self.conditioning._scale[flat_pidx])
+        loc_p        = float(self.conditioning._loc[flat_pidx])
         center_orig  = center_val_r * scale_p + loc_p
 
-        lim_lo_r, lim_hi_r = self._transformed_params[name].prior.limits
+        prior_bounds = self.conditioning.prior_bounds()
+        lim_lo_r, lim_hi_r = float(prior_bounds[flat_pidx, 0]), float(prior_bounds[flat_pidx, 1])
 
         def _get_point_r(z):
             """Rescaled param value at normalized displacement z."""
@@ -1267,14 +1204,15 @@ class Profiler:
         eigenvalues, U = np.linalg.eigh(cov_r_2x2)
         s = np.sqrt(np.maximum(eigenvalues * factor_2d, 0.))   # semi-axes in rescaled space
 
-        scale_1 = float(self._scale[flat_idx1])
-        scale_2 = float(self._scale[flat_idx2])
-        loc_1   = float(self._loc[flat_idx1])
-        loc_2   = float(self._loc[flat_idx2])
+        scale_1 = float(self.conditioning._scale[flat_idx1])
+        scale_2 = float(self.conditioning._scale[flat_idx2])
+        loc_1   = float(self.conditioning._loc[flat_idx1])
+        loc_2   = float(self.conditioning._loc[flat_idx2])
         center_12 = center_r[[flat_idx1, flat_idx2]].copy()
 
-        lim_lo_r1, lim_hi_r1 = self._transformed_params[name1].prior.limits
-        lim_lo_r2, lim_hi_r2 = self._transformed_params[name2].prior.limits
+        prior_bounds = self.conditioning.prior_bounds()
+        lim_lo_r1, lim_hi_r1 = float(prior_bounds[flat_idx1, 0]), float(prior_bounds[flat_idx1, 1])
+        lim_lo_r2, lim_hi_r2 = float(prior_bounds[flat_idx2, 0]), float(prior_bounds[flat_idx2, 1])
 
         def _get_point_r(phi, z):
             """2D rescaled point at angle *phi* and radius *z*."""

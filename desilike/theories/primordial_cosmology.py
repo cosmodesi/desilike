@@ -374,12 +374,15 @@ class CosmoprimoCosmology(PrimordialCosmology):
     * ``'background.efunc'``                        — kwargs: ``z``
     * ``'background.comoving_transverse_distance'`` — kwargs: ``z``
     * ``'background.luminosity_distance'``          — kwargs: ``z``
+    * ``'background.growth_factor'``                — kwargs: ``z``
+    * ``'primordial.pk'``                           — kwargs: ``k``;
+      the primordial scalar power spectrum :math:`P_R(k)` on the registered k grid.
     * ``'harmonic.lensed_cl'``                       — kwargs: ``ellmax``; returns a dict
       keyed by ``'tt', 'ee', 'bb', 'te'`` of raw (dimensionless) :math:`C_\ell`.
     * ``'harmonic.lens_potential_cl'``               — kwargs: ``ellmax``; returns a dict
       keyed by ``'pp', 'tp', 'ep'`` of raw (dimensionless) :math:`C_\ell`.
     * ``'thermodynamics.rs_drag'``                  —
-    * ``'background.N_eff'``                        —
+    * ``'params.N_eff'``                            — effective number of relativistic species :math:`N_\mathrm{eff}`.
     * ``'params.<name>'``                           — .
       A free parameter or derived quantity (e.g. ``'params.m_ncdm_tot'``), exposed as a
       tree_flatten leaf. Register this for any name an **external** (``_is_external=True``)
@@ -517,32 +520,33 @@ class CosmoprimoCosmology(PrimordialCosmology):
                 result = cosmo.get_background().luminosity_distance(**_kw_coords)
             elif method_key == 'background.growth_factor':
                 result = cosmo.get_background().growth_factor(**_kw_coords)
+            elif method_key == 'primordial.pk':
+                result = cosmo.get_primordial(mode='scalar').pk_interpolator()(_kw_coords['k'])
             elif method_key == 'background.growth_rate':
                 result = cosmo.get_background().growth_rate(**_kw_coords)
             elif method_key == 'harmonic.lensed_cl':
                 # Raw (dimensionless) Cl, indexed by ell from 0 to ellmax; unit conversion
                 # (e.g. to muK^2) is left to the consumer, matching e.g. background.* above.
                 cl = cosmo.get_harmonic().lensed_cl(ellmax=static['ellmax'])
-                result = {name: jnp.asarray(cl[name]) for name in ['tt', 'ee', 'bb', 'te']}
+                result = {name: cl[name] for name in ['tt', 'ee', 'bb', 'te']}
             elif method_key == 'harmonic.lens_potential_cl':
                 cl = cosmo.get_harmonic().lens_potential_cl(ellmax=static['ellmax'])
-                result = {name: jnp.asarray(cl[name]) for name in ['pp', 'tp', 'ep']}
+                result = {name: cl[name] for name in ['pp', 'tp', 'ep']}
             elif method_key == 'thermodynamics.rs_drag':
                 result = cosmo.get_thermodynamics().rs_drag
                 if 'z' in spec:
                     # z-independent; broadcast to the registered z grid so get()'s
                     # per-z searchsorted indexing below still applies cleanly.
                     result = jnp.full(spec['z'].shape, result)
-            elif method_key == 'background.N_eff':
-                result = cosmo.get_background().N_eff
-                if 'z' in spec:
-                    result = jnp.full(spec['z'].shape, result)
             elif method_key.startswith('params.'):
                 # Raw parameter/derived-quantity value, exposed as a tree_flatten leaf so
                 # external (pure_callback) consumers see the live, per-call value instead
                 # of a stale read off self._cosmo (see __getitem__).
                 name = method_key[len('params.'):]
-                result = jnp.asarray(params[name] if name in params else cosmo[name])
+                if name in params:
+                    result = jnp.asarray(params[name])
+                else:
+                    result = jnp.asarray(cosmo[name])
             else:
                 raise ValueError(f'Unknown requirement method key: {method_key!r}')
             self._results[spec_key] = result
@@ -692,6 +696,9 @@ class ACECosmology(PrimordialCosmology):
                     return self._param_values[name]
                 if name == 'H0':
                     return 100. * self._param_values['h']
+                if name == 'Omega_m':
+                    omega_m = self._param_values.get('omega_cdm', 0.) + self._param_values.get('omega_b', 0.) + self._param_values.get('m_ncdm', 0.) / 93.14
+                    return omega_m / self._param_values['h'] ** 2
                 raise KeyError(f'cannot resolve parameter {name!r}')
 
             jaxace_cosmo = {}
@@ -716,6 +723,17 @@ class ACECosmology(PrimordialCosmology):
                     result = jaxace_cosmo.D_z(**_kw_coords)
                 elif method_key == 'background.growth_rate':
                     result = jaxace_cosmo.f_z(**_kw_coords)
+                elif method_key == 'primordial.pk':
+                    k_arr = _kw_coords['k']
+                    n_s = get_param('n_s')
+                    logA = get_param('logA')
+                    A_s = jnp.exp(logA) * 1e-10
+                    h = get_param('h')
+                    k_piv_hMpc = 0.05 / h
+                    lnkkp = jnp.log(k_arr / k_piv_hMpc)
+                    alpha_s = self._param_values.get('alpha_s', 0.)
+                    beta_s = self._param_values.get('beta_s', 0.)
+                    result = h**3 * A_s * (k_arr / k_piv_hMpc) ** (n_s - 1. + alpha_s / 2. * lnkkp + beta_s / 6. * lnkkp**2)
                 elif method_key.startswith('params.'):
                     name = method_key[len('params.'):]
                     result = get_param(name)

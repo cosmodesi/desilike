@@ -39,6 +39,10 @@ class Nautilus(PopulationKernel):
         self._pool_sampler = None
         self._initialized = False
 
+    def reset_state(self):
+        self._sampler = None
+        self._initialized = False
+
     @classmethod
     def install(cls, installer):
         installer.pip('nautilus-sampler')

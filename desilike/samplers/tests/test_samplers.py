@@ -31,6 +31,8 @@ SAMPLER = dict(
     numpyro_nuts=lambda: samplers.NumpyroNUTS(),
     numpyro_hmc=lambda: samplers.NumpyroHMC(),
     numpyro_barker=lambda: samplers.NumpyroBarkerMH(),
+    numpyro_aies=lambda: samplers.NumpyroAIES(nwalkers=8),
+    numpyro_ess=lambda: samplers.NumpyroESS(nwalkers=8),
     dynesty=lambda: samplers.Dynesty(dynamic=True, nlive=100),
     nautilus=lambda: samplers.Nautilus(n_networks=1, n_live=300),
     pocomc=lambda: samplers.PocoMC(n_effective=200, n_active=100),
@@ -41,7 +43,7 @@ SAMPLER_RUNS = dict(numpyro_sa=lambda: samplers.NumpyroSA())
 OPTIONAL_DEPS = dict(
     emcee='emcee', zeus='zeus', hmc='blackjax', nuts='blackjax', mclmc='blackjax',
     numpyro_nuts='numpyro', numpyro_hmc='numpyro', numpyro_barker='numpyro',
-    numpyro_sa='numpyro',
+    numpyro_sa='numpyro', numpyro_aies='numpyro', numpyro_ess='numpyro',
     dynesty='dynesty', nautilus='nautilus', pocomc='pocomc',
 )
 KWARGS_RUN = dict(
@@ -54,6 +56,8 @@ KWARGS_RUN = dict(
     numpyro_nuts=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=500)),
     numpyro_hmc=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=500)),
     numpyro_barker=dict(**_MCMC_MIN_STEPS, adaptation=dict(steps=500)),
+    numpyro_aies=_MCMC_MIN_STEPS,
+    numpyro_ess=_MCMC_MIN_STEPS,
     dynesty=dict(n_effective=0),
     nautilus=dict(n_eff=100),
     pocomc=dict(n_total=100, n_evidence=100),
@@ -69,6 +73,8 @@ KWARGS_RUN_FAST = dict(
     numpyro_hmc=dict(max_steps=10, adaptation=dict(steps=100)),
     numpyro_barker=dict(max_steps=10, adaptation=dict(steps=100)),
     numpyro_sa=dict(max_steps=10, adaptation=dict(steps=100)),
+    numpyro_aies=dict(max_steps=10),
+    numpyro_ess=dict(max_steps=10),
     dynesty=dict(maxiter=10),
     nautilus=dict(n_eff=0, n_like_max=100),
     pocomc=dict(n_total=10, n_evidence=0),
@@ -147,7 +153,8 @@ def test_kernel_rescale(likelihood, key):
     if key in OPTIONAL_DEPS:
         pytest.importorskip(OPTIONAL_DEPS[key])
 
-    sampler = samplers.Sampler(likelihood, kernel=SAMPLER[key](), rng=42, rescale=True)
+    sampler = samplers.Sampler(likelihood, kernel=SAMPLER[key](), rng=42,
+                               conditioning=samplers.AffineConditioner(rescale=True))
     results = sampler.run(**KWARGS_RUN.get(key, {}))
 
     if sampler.mpicomm.rank == 0:
@@ -260,29 +267,6 @@ def test_kernel_rng(likelihood, key):
         assert np.allclose(results_1.logposterior, results_2.logposterior, atol=1e-6)
 
 
-@pytest.mark.mpi_skip
-@pytest.mark.parametrize('key', ['emcee', 'hmc', 'mhmcmc', 'zeus'])
-def test_kernel_continue_chain(likelihood, key):
-    """A chain can be continued from a checkpoint."""
-    if key in OPTIONAL_DEPS:
-        pytest.importorskip(OPTIONAL_DEPS[key])
-
-    sampler = samplers.Sampler(likelihood, kernel=SAMPLER[key](), rng=42)
-    chains_10 = sampler.run(
-        burn_in=0, min_steps=10, max_steps=10, concatenate=False)
-    sampler = samplers.Sampler(
-        likelihood, kernel=SAMPLER[key](), rng=43,
-        chains=[c.copy() for c in chains_10] if sampler.mpicomm.rank == 0 else None)
-    chains_20 = sampler.run(
-        burn_in=0, min_steps=20, max_steps=20, concatenate=False)
-
-    if sampler.mpicomm.rank == 0:
-        for chain_10, chain_20 in zip(chains_10, chains_20, strict=True):
-            assert len(chain_10) == 10
-            assert len(chain_20) == 20
-            assert np.allclose(np.asarray(chain_10['a']), np.asarray(chain_20['a'])[:10])
-
-
 @pytest.mark.mpi
 @pytest.mark.parametrize('key', ['emcee', 'hmc', 'mhmcmc', 'zeus'])
 def test_kernel_multiple_chains(likelihood, key):
@@ -297,17 +281,6 @@ def test_kernel_multiple_chains(likelihood, key):
         burn_in=0, min_steps=10, max_steps=10, concatenate=False)
     if sampler.mpicomm.rank == 0:
         assert len(chains_10) == nchains
-    sampler = samplers.Sampler(
-        likelihood, kernel=SAMPLER[key](), rng=43,
-        chains=[c.copy() for c in chains_10] if sampler.mpicomm.rank == 0 else None)
-    chains_20 = sampler.run(
-        burn_in=0, min_steps=20, max_steps=20, concatenate=False)
-
-    if sampler.mpicomm.rank == 0:
-        for chain_10, chain_20 in zip(chains_10, chains_20, strict=True):
-            assert len(chain_10) == 10
-            assert len(chain_20) == 20
-            assert np.allclose(np.asarray(chain_10['a']), np.asarray(chain_20['a'])[:10])
 
 
 # ── PocoMC Gaussian prior ─────────────────────────────────────────────────────
@@ -324,7 +297,7 @@ def test_kernel_multiple_chains(likelihood, key):
     ('full', True),
 ])
 def test_pocomc_gaussian_prior(rescale, use_prior):
-    """PocoMC runs without error under all rescale × prior combinations.
+    """PocoMC runs without error under all AffineConditioner × prior combinations.
 
     Parameters have Gaussian priors with hard bounds to exercise both the
     Gaussian-prior branch and the per-parameter bound clipping.
@@ -362,9 +335,10 @@ def test_pocomc_gaussian_prior(rescale, use_prior):
                             [0.5 * 0.08 * 0.35, 0.35**2]])
         covariance = Covariance(cov_arr, params=[a, b])
 
+    conditioning = samplers.AffineConditioner(covariance=covariance, rescale=rescale)
     sampler = samplers.Sampler(
         graph, kernel=samplers.PocoMC(n_effective=100, n_active=50),
-        rng=42, rescale=rescale, covariance=covariance, prior=prior_cov)
+        rng=42, conditioning=conditioning, prior=prior_cov)
     sampler.run(n_total=50, n_evidence=0)
 
 

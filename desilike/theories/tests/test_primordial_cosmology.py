@@ -75,7 +75,7 @@ class TestCosmoprimoCosmology:
             'fourier.sigma8_z': [{'of': 'delta_cb', 'z': 1.}],
             'background.efunc': [{'z': 1.}],
             'background.comoving_transverse_distance': [{'z': 1.}],
-            'background.N_eff': None,
+            'params.N_eff': None,
             'thermodynamics.rs_drag': None,
         })
         compile(cosmo)()
@@ -88,8 +88,8 @@ class TestCosmoprimoCosmology:
                                     cosmo.get('background.efunc', z=1.))
         np.testing.assert_allclose(cosmo.get_background().comoving_transverse_distance(z=1.),
                                     cosmo.get('background.comoving_transverse_distance', z=1.))
-        np.testing.assert_allclose(cosmo.get_background().N_eff,
-                                    cosmo.get('background.N_eff'))
+        np.testing.assert_allclose(cosmo['N_eff'],
+                                    cosmo.get('params.N_eff'))
         np.testing.assert_allclose(cosmo.get_thermodynamics().rs_drag,
                                     cosmo.get('thermodynamics.rs_drag'))
 

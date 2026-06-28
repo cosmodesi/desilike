@@ -20,12 +20,22 @@ class Minuit(Kernel):
     gradient : bool
         If ``True``, pass the JAX-computed gradient to Minuit (can speed up
         convergence significantly).
+    precision : float or None
+        Relative numerical precision of the cost function.  When ``None``
+        (default) iminuit assumes machine precision (~2e-16), which causes
+        HESSE to use finite-difference step sizes of order 1e-8 — too small
+        for emulator-backed likelihoods whose GP interpolation noise is
+        typically ~1e-4 to 1e-5.  Setting this to the emulator noise level
+        (e.g. ``1e-4``) makes HESSE use correspondingly larger steps, giving
+        reliable parabolic error estimates.  For COMET-emu a value around
+        ``1e-4`` is appropriate (the GP chi2 noise-to-signal ratio is ~3e-5).
     """
 
     logger = logging.getLogger('Minuit')
 
-    def __init__(self, gradient=False):
+    def __init__(self, gradient=False, precision=None):
         self.with_gradient = bool(gradient)
+        self.precision = precision
 
     @classmethod
     def install(cls, installer):
@@ -52,6 +62,8 @@ class Minuit(Kernel):
         minuit = iminuit.Minuit(chi2m, *state.start, **minuit_kw)
         minuit.errordef = 1.0
         minuit.strategy = 0 if state.fast else 1
+        if self.precision is not None:
+            minuit.precision = float(self.precision)
 
         for param_idx, ((lo, hi), proposal) in enumerate(zip(state.bounds, state.proposals)):
             minuit.limits[param_idx] = (None if np.isinf(lo) else lo,

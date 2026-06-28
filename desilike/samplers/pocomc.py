@@ -98,6 +98,9 @@ class PocoMC(PopulationKernel):
         self._kwargs = kwargs
         self._sampler = None
 
+    def reset_state(self):
+        self._sampler = None
+
     @classmethod
     def install(cls, installer):
         installer.pip('pocomc')

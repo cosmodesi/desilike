@@ -235,7 +235,7 @@ class BAOSpectrum2Template(Spectrum2Template):
         # Fiducial BAO distance ratios
         rd = self._fiducial.rs_drag
         DH_fid = constants.c / 1e3 / (100. * self._fiducial.efunc(z))
-        DM_fid = self._fiducial.comoving_angular_distance(z)
+        DM_fid = self._fiducial.comoving_transverse_distance(z)
         DV_fid = DH_fid**eta * DM_fid**(1. - eta) * z**(1. / 3.)
         self._DH_over_rd_fid = float(DH_fid / rd)
         self._DM_over_rd_fid = float(DM_fid / rd)
@@ -350,10 +350,15 @@ class FixedSpectrum2Template(Spectrum2Template):
         """No free parameters at all."""
         return VariableCollection()
 
-    def __init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage', only_now=False):
-        pass  # no Parameters/Calculator deps: this template has no free parameters
+    def __init__(self, k=None, z=1., fiducial='DESI', engine='eisenstein_hu', with_now='peakaverage', only_now=False):
+        self._fiducial = CosmoprimoCosmology(engine=engine, fiducial=fiducial)
+        _get_fiducial(fiducial, calculator=self._fiducial)  # runs _fiducial at fiducial params (sets _cosmo)
 
-    def __post_init__(self, k=None, z=1., fiducial='DESI', with_now='peakaverage', only_now=False):
+    @property
+    def cosmo(self):
+        return self._fiducial
+
+    def __post_init__(self, k=None, z=1., fiducial='DESI', engine='eisenstein_hu', with_now='peakaverage', only_now=False):
         from cosmoprimo import PowerSpectrumBAOFilter
 
         self._only_now = bool(only_now)
@@ -363,9 +368,9 @@ class FixedSpectrum2Template(Spectrum2Template):
         self.k = np.asarray(k, dtype='f8')
         self.z = float(z)
 
-        self._fiducial = _get_fiducial(fiducial)
+        _cosmo = self._fiducial._cosmo
 
-        fo = self._fiducial.get_fourier()
+        fo = _cosmo.get_fourier()
         sigma8 = fo.sigma8_z(z, of='delta_cb')
         fsigma8 = fo.sigma8_z(z, of='theta_cb')
         self._sigma8_fid = float(sigma8)
@@ -380,7 +385,7 @@ class FixedSpectrum2Template(Spectrum2Template):
         self._pk_dd_fid = pk_interp(self.k)
 
         if with_now:
-            bao_filter = PowerSpectrumBAOFilter(pk_interp, engine=with_now, cosmo=self._fiducial, cosmo_fid=self._fiducial)
+            bao_filter = PowerSpectrumBAOFilter(pk_interp, engine=with_now, cosmo=_cosmo, cosmo_fid=_cosmo)
             self._pknow_dd_fid = bao_filter.smooth_pk_interpolator()(self.k)
         else:
             self._pknow_dd_fid = self._pk_dd_fid
@@ -691,7 +696,7 @@ class DirectSpectrum2Template(Spectrum2Template):
 
         self._fiducial = _get_fiducial(fiducial)
         self._DH_fid = float(constants.c / 1e3 / (100. * self._fiducial.efunc(self.z)))
-        self._DM_fid = float(self._fiducial.comoving_angular_distance(self.z))
+        self._DM_fid = float(self._fiducial.comoving_transverse_distance(self.z))
 
         # Fiducial PK arrays (used by e.g. ResummedBAOWigglesPTSpectrum2Poles for damping scales).
         fo = self._fiducial.get_fourier()
@@ -947,7 +952,7 @@ class TurnOverSpectrum2Template(Spectrum2Template):
 
         # Fiducial distance combinations used for observable outputs.
         DH_fid = float(constants.c / 1e3 / (100. * self._fiducial.efunc(self.z)))
-        DM_fid = float(self._fiducial.comoving_angular_distance(self.z))
+        DM_fid = float(self._fiducial.comoving_transverse_distance(self.z))
         DV_fid = DH_fid ** eta * DM_fid ** (1. - eta) * self.z ** (1. / 3.)
         self._DV_times_kTO_fid = DV_fid * self._kTO_fid
         self._DH_over_DM_fid = DH_fid / DM_fid
@@ -1139,7 +1144,7 @@ class BAOExtractor(Calculator):
         self._fiducial = _get_fiducial(fiducial)
         rd_fid = self._fiducial.rs_drag
         DH_fid = constants.c / 1e3 / (100. * self._fiducial.efunc(self.z))
-        DM_fid = self._fiducial.comoving_angular_distance(self.z)
+        DM_fid = self._fiducial.comoving_transverse_distance(self.z)
         DV_fid = DH_fid ** self._eta * DM_fid ** (1. - self._eta) * self.z ** (1. / 3.)
         self._DH_over_rd_fid = DH_fid / rd_fid
         self._DM_over_rd_fid = DM_fid / rd_fid
@@ -1203,7 +1208,7 @@ class BAOPhaseShiftExtractor(BAOExtractor):
 
     def __init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
         super().__init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo)
-        self.cosmo.add_requirements({'background.N_eff': None})
+        self.cosmo.add_requirements({'params.N_eff': None})
 
     def __post_init__(self, z=1., eta=1./3., fiducial='DESI', cosmo=None):
         super().__post_init__(z=z, eta=eta, fiducial=fiducial, cosmo=cosmo)
@@ -1212,7 +1217,7 @@ class BAOPhaseShiftExtractor(BAOExtractor):
     def __call__(self):
         super().__call__()
         a_nu = 8.0 / 7.0 * (11.0 / 4.0) ** (4.0 / 3.0)
-        self.N_eff = self.cosmo.get_background().N_eff
+        self.N_eff = self.cosmo.get('params.N_eff')
         self.baoshift = (self.N_eff * (self._N_eff_fid + a_nu)) / (self._N_eff_fid * (self.N_eff + a_nu))
         return self
 
@@ -1299,7 +1304,7 @@ class TurnOverExtractor(Calculator):
         self._pkTO_dd_fid = float(pk_interp.to_1d(z=self.z)(self._kTO_fid))
         # Fiducial distance combinations.
         DH_fid = float(constants.c / 1e3 / (100. * self._fiducial.efunc(self.z)))
-        DM_fid = float(self._fiducial.comoving_angular_distance(self.z))
+        DM_fid = float(self._fiducial.comoving_transverse_distance(self.z))
         DV_fid = DH_fid ** self._eta * DM_fid ** (1. - self._eta) * self.z ** (1. / 3.)
         self._DH_over_DM_fid = DH_fid / DM_fid
         self._DV_times_kTO_fid = DV_fid * self._kTO_fid

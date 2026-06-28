@@ -8,10 +8,8 @@ PNGTracerSpectrum2Poles
 PNGTracerVelocitySpectrum2Poles
     Kaiser tracer-velocity cross power spectrum multipoles with local PNG scale-dependent bias.
 
-The scale-dependent function :math:`\\alpha(k)` is always precomputed from a fixed fiducial
-cosmology at compile time.  When no ``template`` is given, the matter power spectrum and growth
-rate are also fixed; when a ``template`` calculator is provided, those quantities and
-Alcock-Paczynski distortions are supplied by the template at each call.
+The scale-dependent function :math:`\\alpha(k)` is computed from the template's cosmo at each
+call (JAX-friendly), supporting automatic differentiation through all cosmological parameters.
 """
 
 import numpy as np
@@ -21,80 +19,54 @@ from ...base import Calculator
 from ...parameter import Parameter, VariableCollection
 from ..primordial_cosmology import _interp_loglog
 from .bao import ProjectToPoles
-from .template import _get_fiducial, _kw_pk
+from .template import FixedSpectrum2Template
 from ._multitracer import propose_params_multitracer, assign_params
 
 
 _delta_c = 1.686  # linear collapse threshold
+_C_KMS = 299792.458  # speed of light in km/s
 
 
-def _png_cosmo(fiducial, k, z, method, engine):
-    r"""Compute the PNG ingredients at wavenumbers *k* for a fixed fiducial cosmology.
+def _alpha_png(k, pk_dd, pk_prim, h, method, Omega0_m=None, growth_factor_z=None, growth_factor_znorm=None):
+    r"""Compute the PNG scale-dependent function :math:`\alpha(k)` from JAX arrays.
 
     Parameters
     ----------
-    fiducial : str, tuple, dict, or cosmoprimo.Cosmology
-        Fiducial cosmology.
-    k : array
-        Output wavenumbers [h/Mpc].
-    z : float
-        Effective redshift.
+    k : array, shape (n_k,)
+        Wavenumbers in h/Mpc.  For the ``'transfer'`` method, ``k[0]`` should be small
+        (~1e-4 h/Mpc) so that T(k[0]) ≈ 1 is a valid normalization point.
+    pk_dd : array, shape (n_k,)
+        Matter power spectrum in (Mpc/h)^3, same k grid.
+    pk_prim : array, shape (n_k,)
+        Primordial scalar power spectrum from cosmoprimo (same k grid).
+    h : scalar
+        Reduced Hubble constant H0 / (100 km/s/Mpc).
     method : str
-        How to compute :math:`\alpha(k)`:
-
-        - ``'prim'``: :math:`\alpha = \sqrt{P_\phi^\mathrm{prim}(k) / P_\delta(k)}`.
-        - ``'transfer'``: from the transfer function normalized in the matter-dominated
-          era at :math:`z_\mathrm{norm}=10`; see eq. 2.3 of arXiv:1904.08859.
-    engine : str
-        cosmoprimo Boltzmann engine.
+        ``'prim'`` or ``'transfer'``.
+    Omega0_m : scalar, optional
+        Total matter density parameter at z = 0 (required for ``'transfer'``).
+    growth_factor_z : scalar, optional
+        Linear growth factor D(z) (required for ``'transfer'``).
+    growth_factor_znorm : scalar, optional
+        Linear growth factor D(z_norm=10) (required for ``'transfer'``).
 
     Returns
     -------
-    pk_dd : ndarray, shape (n_k,)
-        Matter power spectrum.
-    alpha : ndarray, shape (n_k,)
-        Scale-dependent function linking primordial potential to density contrast.
-    f : float
-        Growth rate :math:`f = d\ln D / d\ln a`.
+    alpha : array, shape (n_k,)
 
     References
     ----------
     Dalal et al. 2008  https://arxiv.org/abs/0710.4560
-    Slosar et al. 2008  https://arxiv.org/abs/0805.3580
     Barreira 2020  https://arxiv.org/pdf/1904.08859.pdf
     """
-    from cosmoprimo import constants
-    k = np.asarray(k, dtype='f8')
-    cosmo = _get_fiducial(fiducial).clone(engine=engine)
-    fo = cosmo.get_fourier()
-
-    # Prepend k=1e-4 for transfer-function normalization in the 'transfer' method.
-    kin = np.concatenate([[1e-4], k])
-    pk_interp = fo.pk_interpolator(of='delta_cb', **_kw_pk).to_1d(z=z)
-    pk_dd_full = pk_interp(kin)
-    # Primordial power spectrum P_prim(k) ~ k^(n_s - 1).
-    pk_prim = cosmo.get_primordial(mode='scalar').pk_interpolator()(kin)
-
     if method == 'prim':
-        # alpha = sqrt(P_phi_prim / P_delta);
-        # P_phi_prim = (9/25) (2 pi^2 / k^3) P_prim / h^3   [Mpc^3 -> (h/Mpc)^3].
-        pphi_prim = 9. / 25. * 2. * np.pi**2 / kin**3 * pk_prim / cosmo.h**3
-        alpha_full = 1. / np.sqrt(pk_dd_full / pphi_prim)
-    else:
-        # Transfer-function method, normalized at z=10 (matter-dominated). arXiv:1904.08859 eq. 2.3.
-        tk = np.sqrt(pk_dd_full / pk_prim / kin / (pk_dd_full[0] / pk_prim[0] / kin[0]))
+        pphi_prim = 9. / 25. * 2. * jnp.pi**2 / k**3 * pk_prim / h**3
+        return 1. / jnp.sqrt(pk_dd / pphi_prim)
+    else:  # 'transfer'
         znorm = 10.
-        growth_ratio = float(cosmo.growth_factor(z) / cosmo.growth_factor(znorm) / (1. + znorm))
-        c_kms = float(constants.c / 1e3)
-        alpha_full = 3. * float(cosmo.Omega0_m) * 100.**2 / (2. * c_kms**2 * kin**2 * tk * growth_ratio)
-
-    # Strip the normalization point so arrays align with k.
-    pk_dd = pk_dd_full[1:]
-    alpha = alpha_full[1:]
-    sigma8 = float(fo.sigma8_z(z, of='delta_cb'))
-    fsigma8 = float(fo.sigma8_z(z, of='theta_cb'))
-    f = fsigma8 / sigma8
-    return pk_dd, alpha, f
+        growth_ratio = growth_factor_z / (growth_factor_znorm * (1. + znorm))
+        tk = jnp.sqrt(pk_dd / pk_prim / k / (pk_dd[0] / pk_prim[0] / k[0]))
+        return 3. * Omega0_m * 100.**2 / (2. * _C_KMS**2 * k**2 * tk * growth_ratio)
 
 
 class PNGTracerSpectrum2Poles(Calculator):
@@ -105,11 +77,9 @@ class PNGTracerSpectrum2Poles(Calculator):
     where :math:`b_{f_\mathrm{NL}} = b_\phi f_\mathrm{NL}` and :math:`b_\phi = 2 \delta_c (b_1 - p)`
     in the universal mass function approximation.
 
-    :math:`\alpha(k)` is always computed at the fiducial cosmology (once at compile time).
-    When ``template`` is ``None``, :math:`P_{dd}` and :math:`f` are also fixed to the fiducial and
-    there are no Alcock-Paczynski distortions.  When a ``template`` calculator is provided,
-    :math:`P_{dd}` and :math:`f` are taken from the template at each call, and AP distortions
-    are applied via ``template.ap_k_mu``.
+    :math:`\alpha(k)` is computed at each call from the template's cosmology, making the model
+    fully JAX-differentiable through all cosmological parameters.  AP distortions are applied
+    via ``template.ap_k_mu``.
 
     For cross-spectra between two tracers :math:`X` and :math:`Y`, the power spectrum is
     :math:`\mathrm{FoG}_X \mathrm{FoG}_Y (b^\mathrm{eff}_X + f\mu^2)(b^\mathrm{eff}_Y + f\mu^2) P_{dd}`.
@@ -123,7 +93,11 @@ class PNGTracerSpectrum2Poles(Calculator):
     z : float, default=1.
         Effective redshift.
     method : str, default='prim'
-        How to compute :math:`\alpha(k)` (``'prim'`` or ``'transfer'``); see :func:`_png_cosmo`.
+        How to compute :math:`\alpha(k)`:
+
+        - ``'prim'``: :math:`\alpha = \sqrt{P_\phi^\mathrm{prim}(k) / P_\delta(k)}`.
+        - ``'transfer'``: from the transfer function normalized in the matter-dominated
+          era at :math:`z_\mathrm{norm}=10`; see eq. 2.3 of arXiv:1904.08859.
     mu : int, default=10
         Number of Gauss-Legendre mu-bins in [0, 1].
     mode : str, default='b-p'
@@ -137,11 +111,11 @@ class PNGTracerSpectrum2Poles(Calculator):
     tracers : str, (str, str), or None, default=None
         Tracer namespacing of the bias parameters (auto, namespaced auto, or cross).
         ``fnl_loc`` stays unnamespaced (shared); ``sn0`` is stochastic.
-    shotnoise : float, default=1e4
-        Shot-noise scale [(h/Mpc)\ :sup:`3`]. The ``sn0`` parameter is in units of this.
-    template : Spectrum2Template or None, default=None
-        Power spectrum template providing :math:`P_{dd}`, :math:`f`, and AP distortions.
-        When ``None``, a fixed DESI fiducial cosmology is used (no AP distortions).
+    nbar : float, default=1e-4
+        Number density [(Mpc/h)\ :sup:`-3`]. The ``sn0`` parameter is in units of ``1/nbar``.
+    template : Spectrum2Template
+        Power spectrum template providing :math:`P_{dd}`, :math:`f`, AP distortions,
+        and the underlying cosmology for :math:`\alpha(k)`.
     """
 
     @classmethod
@@ -188,54 +162,60 @@ class PNGTracerSpectrum2Poles(Calculator):
         return propose_params_multitracer(auto_params, tracers, stochastic=('sn0',), shared=('fnl_loc',), cross=True)
 
     def __init__(self, k=None, ells=(0, 2), z=1., method='prim', mu=10, mode='b-p',
-                 tracers=None, shotnoise=1e4, params=None, template=None):
-        # Nodes (Parameters + optional Calculator dep) live in __init__.
+                 tracers=None, nbar=1e-4, params=None, template=None):
         if mode not in ('b-p', 'bphi', 'bfnl'):
             raise ValueError(f"mode must be one of 'b-p', 'bphi', 'bfnl'; got {mode!r}")
         vc = type(self).propose_params(tracers=tracers, mode=mode)
         if params is not None:
             vc = vc + VariableCollection(params)
         assign_params(self, vc, tracers)
-        if template is not None:
-            self.template = template
-            k_arr = np.linspace(0.01, 0.2, 101) if k is None else np.asarray(k, dtype='f8')
-            kin_fine = np.geomspace(min(1e-3, k_arr[0] / 2.), max(1., k_arr[-1] * 2.), 1000)
-            self.template.update(k=kin_fine)
+        if template is None:
+            template = FixedSpectrum2Template(z=z)
+        self.template = template
+        k_arr = np.linspace(0.01, 0.2, 101) if k is None else np.asarray(k, dtype='f8')
+        # Extend to 1e-4 at the low end so the 'transfer' normalization point is in-grid.
+        kin_fine = np.geomspace(min(1e-4, k_arr[0] / 2.), max(1., k_arr[-1] * 2.), 1000)
+        self.template.update(k=kin_fine)
+        z_req = float(z)
+        self.template.cosmo.add_requirements({
+            'primordial.pk': [{'k': kin_fine}],
+            'background.growth_factor': [{'z': z_req}, {'z': 10.}],
+            'params.Omega_m': None,
+        })
 
     def __post_init__(self, k=None, ells=(0, 2), z=1., method='prim', mu=10, mode='b-p',
-                      tracers=None, shotnoise=1e4, params=None, template=None):
-        # Non-node setup: precompute fixed-fiducial cosmo ingredients (numpy, once at compile).
+                      tracers=None, nbar=1e-4, params=None, template=None):
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
         self.ells = tuple(ells)
         self._mode = str(mode)
-        self._nbar = 1. / float(shotnoise)
+        self._method = str(method)
+        self._z = float(z)
+        self._nbar = float(nbar)
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
-        self._has_template = hasattr(self, 'template')
-        if not self._has_template:
-            self._pk_dd, self._alpha, self._f = _png_cosmo('DESI', self.k, float(z), str(method), 'eisenstein_hu')
-        else:
-            # alpha is precomputed at the fiducial cosmology on the template's fine k grid;
-            # pk_dd and f are taken from the template at each __call__.
-            fiducial = getattr(self.template, '_fiducial', 'DESI')
-            _, self._alpha_fine, _ = _png_cosmo(fiducial, self.template.k, float(z), str(method), 'eisenstein_hu')
+        self.template.cosmo()
 
     def __call__(self):
-        k = self.k[:, None]            # (n_k, 1)
-        mu = self._to_poles.mu          # (n_mu,)
+        k = self.k[:, None]       # (n_k, 1)
+        mu = self._to_poles.mu    # (n_mu,)
 
-        if self._has_template:
-            jac, kap, muap = self.template.ap_k_mu(k, mu)
-            pk_dd = jac * _interp_loglog(kap, self.template.k, self.template.pk_dd)
-            alpha = _interp_loglog(kap, self.template.k, self._alpha_fine)
-            f = self.template.f
+        jac, kap, muap = self.template.ap_k_mu(k, mu)
+        pk_dd = jac * _interp_loglog(kap, self.template.k, self.template.pk_dd)
+
+        pk_prim_fine = self.template.cosmo.get('primordial.pk', k=self.template.k)
+        h = self.template.cosmo['h']
+        if self._method == 'transfer':
+            Omega_m = self.template.cosmo.get('params.Omega_m')
+            growth_factor_z = self.template.cosmo.get('background.growth_factor', z=self._z)
+            growth_factor_znorm = self.template.cosmo.get('background.growth_factor', z=10.)
         else:
-            kap = k
-            muap = mu
-            pk_dd = jnp.asarray(self._pk_dd)[:, None]   # (n_k, 1)
-            alpha = jnp.asarray(self._alpha)[:, None]   # (n_k, 1)
-            f = self._f
+            Omega_m = growth_factor_z = growth_factor_znorm = None
+        alpha_fine = _alpha_png(self.template.k, self.template.pk_dd, pk_prim_fine, h, self._method,
+                                Omega0_m=Omega_m, growth_factor_z=growth_factor_z,
+                                growth_factor_znorm=growth_factor_znorm)
+        alpha = _interp_loglog(kap, self.template.k, alpha_fine)
+        f = self.template.f
 
         if isinstance(self.b1, tuple):  # cross-spectrum
             b1_X, b1_Y = self.b1
@@ -266,7 +246,7 @@ class PNGTracerSpectrum2Poles(Calculator):
             fog = 1. / (1. + self.sigmas**2 * kap**2 * muap**2 / 2.)**2
             pkmu = fog * (b_eff + f * muap**2)**2 * pk_dd
 
-        sn = np.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0 / self._nbar
+        sn = jnp.array([(ell == 0) for ell in self.ells], dtype='f8')[:, None] * self.sn0 / self._nbar
         self.poles = self._to_poles(pkmu) + sn
         return self.poles
 
@@ -288,8 +268,7 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
     the data estimator must be adjusted accordingly).  Computes odd multipoles :math:`\ell = 1, 3`.
 
     The velocity bias reads :math:`v(k, \mu) = b_v f \mu H_0 / [(1+z) k]`.  :math:`\alpha(k)` is
-    always precomputed at the fiducial cosmology; when a ``template`` is provided, :math:`P_{dd}`,
-    :math:`f`, and AP distortions are taken from it at each call.
+    computed at each call from the template's cosmology (JAX-friendly).
 
     Parameters
     ----------
@@ -300,18 +279,17 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
     z : float, default=1.
         Effective redshift.
     method : str, default='prim'
-        How to compute :math:`\alpha(k)`; see :func:`_png_cosmo`.
+        How to compute :math:`\alpha(k)`; ``'prim'`` or ``'transfer'``.
     mu : int, default=10
         Number of Gauss-Legendre mu-bins in [0, 1].
     mode : str, default='b-p'
         PNG bias parameterization; same options as :class:`PNGTracerSpectrum2Poles`.
-    template : Spectrum2Template or None, default=None
-        Power spectrum template providing :math:`P_{dd}`, :math:`f`, and AP distortions.
-        When ``None``, a fixed DESI fiducial cosmology is used (no AP distortions).
+    template : Spectrum2Template
+        Power spectrum template providing :math:`P_{dd}`, :math:`f`, AP distortions,
+        and the underlying cosmology for :math:`\alpha(k)`.
     """
 
     def __init__(self, k=None, ells=(1, 3), z=1., method='prim', mu=10, mode='b-p', template=None):
-        # Nodes (Parameters + optional Calculator dep) live in __init__.
         self.b1 = Parameter('b1', value=2., prior=dict(limits=[0.1, 10.]),
                             ref=dict(limits=[1.5, 2.5]), fd_eps=0.1, latex='b_1')
         self.bv = Parameter('bv', value=1., prior=dict(limits=[0.1, 10.]),
@@ -335,43 +313,50 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
                                       ref=dict(limits=[-50., 50.]), fd_eps=1., latex=r'b_{\phi}f_{\mathrm{NL}}^{\mathrm{loc}}')
         else:
             raise ValueError(f"mode must be one of 'b-p', 'bphi', 'bfnl'; got {mode!r}")
-        if template is not None:
-            self.template = template
-            k_arr = np.linspace(0.01, 0.2, 101) if k is None else np.asarray(k, dtype='f8')
-            kin_fine = np.geomspace(min(1e-3, k_arr[0] / 2.), max(1., k_arr[-1] * 2.), 1000)
-            self.template.update(k=kin_fine)
+        if template is None:
+            template = FixedSpectrum2Template(z=z)
+        self.template = template
+        k_arr = np.linspace(0.01, 0.2, 101) if k is None else np.asarray(k, dtype='f8')
+        kin_fine = np.geomspace(min(1e-4, k_arr[0] / 2.), max(1., k_arr[-1] * 2.), 1000)
+        self.template.update(k=kin_fine)
+        z_req = float(z)
+        self.template.cosmo.add_requirements({
+            'primordial.pk': [{'k': kin_fine}],
+            'background.growth_factor': [{'z': z_req}, {'z': 10.}],
+            'params.Omega_m': None,
+        })
 
     def __post_init__(self, k=None, ells=(1, 3), z=1., method='prim', mu=10, mode='b-p', template=None):
-        # Non-node setup: precompute fixed-fiducial cosmo ingredients.
         if k is None:
             k = np.linspace(0.01, 0.2, 101)
         self.k = np.asarray(k, dtype='f8')
         self.ells = tuple(ells)
         self._mode = str(mode)
+        self._method = str(method)
         self._z = float(z)
         self._to_poles = ProjectToPoles(mu=mu, ells=self.ells)
-        self._has_template = hasattr(self, 'template')
-        if not self._has_template:
-            self._pk_dd, self._alpha, self._f = _png_cosmo('DESI', self.k, self._z, str(method), 'eisenstein_hu')
-        else:
-            fiducial = getattr(self.template, '_fiducial', 'DESI')
-            _, self._alpha_fine, _ = _png_cosmo(fiducial, self.template.k, self._z, str(method), 'eisenstein_hu')
+        self.template.cosmo()
 
     def __call__(self):
-        k = self.k[:, None]            # (n_k, 1)
-        mu = self._to_poles.mu          # (n_mu,)
+        k = self.k[:, None]       # (n_k, 1)
+        mu = self._to_poles.mu    # (n_mu,)
 
-        if self._has_template:
-            jac, kap, muap = self.template.ap_k_mu(k, mu)
-            pk_dd = jac * _interp_loglog(kap, self.template.k, self.template.pk_dd)
-            alpha = _interp_loglog(kap, self.template.k, self._alpha_fine)
-            f = self.template.f
+        jac, kap, muap = self.template.ap_k_mu(k, mu)
+        pk_dd = jac * _interp_loglog(kap, self.template.k, self.template.pk_dd)
+
+        pk_prim_fine = self.template.cosmo.get('primordial.pk', k=self.template.k)
+        h = self.template.cosmo['h']
+        if self._method == 'transfer':
+            Omega_m = self.template.cosmo.get('params.Omega_m')
+            growth_factor_z = self.template.cosmo.get('background.growth_factor', z=self._z)
+            growth_factor_znorm = self.template.cosmo.get('background.growth_factor', z=10.)
         else:
-            kap = k
-            muap = mu
-            pk_dd = jnp.asarray(self._pk_dd)[:, None]
-            alpha = jnp.asarray(self._alpha)[:, None]
-            f = self._f
+            Omega_m = growth_factor_z = growth_factor_znorm = None
+        alpha_fine = _alpha_png(self.template.k, self.template.pk_dd, pk_prim_fine, h, self._method,
+                                Omega0_m=Omega_m, growth_factor_z=growth_factor_z,
+                                growth_factor_znorm=growth_factor_znorm)
+        alpha = _interp_loglog(kap, self.template.k, alpha_fine)
+        f = self.template.f
 
         if self._mode == 'b-p':
             bfnl_loc = 2. * _delta_c * (self.b1 - self.p) * self.fnl_loc
@@ -381,9 +366,7 @@ class PNGTracerVelocitySpectrum2Poles(Calculator):
             bfnl_loc = self.bfnl_loc
 
         b_eff = self.b1 + bfnl_loc * alpha
-        # FoG: density side (Lorentzian) x velocity side (sinc damping).
         fog = 1. / (1. + self.sigmas**2 * kap**2 * muap**2 / 2.) * jnp.sinc(self.sigmau * kap)
-        # Velocity bias: -i bv f mu H0 / [(1+z) k]; the -i convention is dropped.
         vel_bias = self.bv * f * muap * 100. / (1. + self._z) / kap
         pkmu = fog * (b_eff + f * muap**2) * vel_bias * pk_dd
         self.poles = self._to_poles(pkmu)

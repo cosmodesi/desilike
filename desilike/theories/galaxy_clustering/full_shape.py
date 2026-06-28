@@ -2949,9 +2949,9 @@ class COMETPTSpectrum2Poles(Calculator):
     def __call__(self):
         _use_jax = (self._backend == 'jax')
         xp = jnp if _use_jax else np
-        _wrap = jnp.atleast_1d if _use_jax else float
+        _wrap = jnp.asarray if _use_jax else float
         params = {k: _wrap(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
-        params['z'] = np.atleast_1d(float(self.z))
+        params['z'] = float(self.z)
         avir = self.avir.value if 'VDG' in self._model else None
         md = self._md
         cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
@@ -3162,9 +3162,9 @@ class COMETTracerSpectrum2Poles(Calculator):
         cosmology dep, bypassing COMETPTSpectrum2Poles entirely."""
         _use_jax = (self._backend == 'jax')
         xp = jnp if _use_jax else np
-        _wrap = jnp.atleast_1d if _use_jax else float
+        _wrap = jnp.asarray if _use_jax else float
         params = {k: _wrap(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
-        params['z'] = np.atleast_1d(float(self.z))
+        params['z'] = float(self.z)
         avir = self.avir.value if 'VDG' in self._model else None
         md = self._md
         cosmo_base = _comet_params_to_cosmology(params, self.z, self._de_model, backend=self._backend)
@@ -3356,9 +3356,9 @@ class COMETPTSpectrum3Poles(Calculator):
     def __call__(self):
         _use_jax = (self._backend == 'jax')
         xp = jnp if _use_jax else np
-        _wrap = jnp.atleast_1d if _use_jax else float
+        _wrap = jnp.asarray if _use_jax else float
         params = {k: _wrap(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
-        params['z'] = np.atleast_1d(float(self.z))
+        params['z'] = float(self.z)
         avir = self.avir.value if 'VDG' in self._model else None
         # cnloB is currently always 0 for this estimator (see comet.bell's module
         # docstring): EFT counterterms are only activated for 'EFT'/'VDG_infty_ctr' models,
@@ -3491,7 +3491,7 @@ class COMETTracerSpectrum3Poles(Calculator):
         calculator's own cosmology dep -- see COMETTracerSpectrum2Poles._call_direct()."""
         _use_jax = (self._backend == 'jax')
         xp = jnp if _use_jax else np
-        _wrap = jnp.atleast_1d if _use_jax else float
+        _wrap = jnp.asarray if _use_jax else float
         params = {k: _wrap(v) for k, v in _cosmo_to_comet(self.cosmo).items()}
         avir = self.avir.value if 'VDG' in self._model else None
         # cnloB is currently always 0 for this estimator -- see COMETPTSpectrum3Poles.__call__'s comment.

@@ -2797,29 +2797,33 @@ class JAXEffortTracerSpectrum2Poles(Calculator):
         return obj
 
 
-def _apply_cosmo_range_comet_emulator(cosmo, limits=None):
-
-    # https://comet-emu.readthedocs.io/en/latest/spaceparams.html#ranges-of-emulated-parameters
+def _apply_cosmo_range_comet_emulator(cosmo, model='VDG_infty', limits=None):
     if limits is None:
-        limits = dict(omega_cdm=(0.08, 0.16), omega_b=(0.01930, 0.02535), n_s=(0.90, 1.03), m_ncdm=(0.0, 1.0), A_s=(1e-9, 3.5e-9))
-        lo, hi = limits['A_s']
-        limits['logA'] = np.log(lo * 1e10), np.log(hi * 1e10)
-
-    def intersect(limits1, limits2):
-        lo1, hi1 = limits1
-        lo2, hi2 = limits2
-        return (max(lo1, lo2), min(hi1, hi2))
+        # Read ranges directly from the emulator FITS file (cached after first load).
+        md = _load_comet_model(model)
+        # _CONVERSION_COMET maps comet name → desilike cosmo param name.
+        # 'Mnu' → 'm_ncdm_tot' but the free parameter in CosmoprimoCosmology is 'm_ncdm'.
+        _comet_to_desilike = dict(_CONVERSION_COMET, Mnu='m_ncdm')
+        limits = {}
+        for comet_name, (lo, hi) in md.params_ranges.items():
+            desilike_name = _comet_to_desilike.get(comet_name)
+            if desilike_name is None:
+                continue  # s12, f are derived — not free cosmo params
+            if comet_name == 'As':
+                # comet As is in 1e-9 units; desilike A_s is in SI (×1e-9)
+                lo_si, hi_si = lo * 1e-9, hi * 1e-9
+                limits[desilike_name] = (lo_si, hi_si)
+                limits['logA'] = np.log(lo_si * 1e10), np.log(hi_si * 1e10)
+            else:
+                limits[desilike_name] = (lo, hi)
 
     params = get_params(cosmo)
-    for basename, limits in limits.items():
+    for basename, (lo, hi) in limits.items():
         if param := params.get(basename, None):
             prior = param.prior
-            limits = intersect(prior.limits, limits)
-            param.update(prior=dict(dist=prior.dist, limits=limits, **prior.attrs))
-    # cosmo.update() calls __init__ which resets _requirements; preserve them across the call.
-    #saved_requirements = dict(cosmo._requirements)
-    #cosmo.update(params=params)
-    #cosmo._requirements.update(saved_requirements)
+            new_lo = max(prior.limits[0], lo)
+            new_hi = min(prior.limits[1], hi)
+            param.update(prior=dict(dist=prior.dist, limits=(new_lo, new_hi), **prior.attrs))
 
 
 _CONVERSION_COMET = {'wc': 'omega_cdm', 'wb': 'omega_b', 'h': 'h', 'ns': 'n_s', 'As': 'A_s', 'Mnu': 'm_ncdm_tot',
@@ -2934,7 +2938,7 @@ class COMETPTSpectrum2Poles(Calculator):
             ells = (0, 2, 4)
         self.ells = tuple(ells)
         self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
-        _apply_cosmo_range_comet_emulator(self.cosmo)
+        _apply_cosmo_range_comet_emulator(self.cosmo, model=model)
         self._backend = backend
         if backend == 'numpy':
             self._is_external = True
@@ -3114,7 +3118,7 @@ class COMETTracerSpectrum2Poles(Calculator):
             if len(avir_vc):
                 assign_params(self, avir_vc, tracers)
             self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
-            _apply_cosmo_range_comet_emulator(self.cosmo)
+            _apply_cosmo_range_comet_emulator(self.cosmo, model=model)
             self.pt = None
             if backend == 'numpy':
                 self._is_external = True
@@ -3337,7 +3341,7 @@ class COMETPTSpectrum3Poles(Calculator):
             ells = ((0, 0, 0), (2, 0, 2))
         self.ells = tuple(tuple(int(e) for e in ell) for ell in ells)
         self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
-        _apply_cosmo_range_comet_emulator(self.cosmo)
+        _apply_cosmo_range_comet_emulator(self.cosmo, model=model)
         self._backend = backend
         if backend == 'numpy':
             self._is_external = True
@@ -3440,7 +3444,7 @@ class COMETTracerSpectrum3Poles(Calculator):
             ], tracers)
             assign_params(self, cnloB_vc, tracers)
             self.cosmo = _comet_setup_cosmo(cosmo, fiducial)  # Calculator dep; build_graph discovers it from __dict__
-            _apply_cosmo_range_comet_emulator(self.cosmo)
+            _apply_cosmo_range_comet_emulator(self.cosmo, model=model)
             self.pt = None
             if backend == 'numpy':
                 self._is_external = True

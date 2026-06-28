@@ -3530,9 +3530,14 @@ class COMETTracerSpectrum3Poles(Calculator):
         pt = self.pt if self.pt is not None else self  # pt=False: read qper/qpar/cnloB off self
         params = COMETTracerSpectrum2Poles._get_canonical_params(self, rescale_counterterms=rescale_counterterms)  # type: ignore
         cnloB = pt.cnloB.value
-        NP0 = self.NP0.value  # there's no need to normalize it by h**3 here
-        NB0 = self.NB0.value
-        MB0 = self.MB0.value
+
+        def g(name):
+            param = getattr(self, name, None)
+            return 0.0 if param is None else param.value
+
+        NP0 = g('NP0')  # no h**3 normalization needed here (unlike 2Poles _get_canonical_params)
+        NB0 = g('NB0')
+        MB0 = g('MB0')
         A_AP = 1. / (pt.qper**2 * pt.qpar) if 'aap' in self._prior_basis else 1.
         if 'physical' in self._prior_basis:
             NP0, NB0, MB0 = NP0 / A_AP, NB0 / A_AP, MB0 / A_AP
